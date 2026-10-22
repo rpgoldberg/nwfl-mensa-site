@@ -59,6 +59,15 @@ describe('makeSessionStep', () => {
     expect(await (res as Response).text()).toBe('built');
   });
 
+  it('never renews over a page that sets the session itself: sign-out expiring it, or a sign-in rotating it', async () => {
+    const later = NOW + 20 * 86400;
+    for (const own of [`${SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`, `${SESSION_COOKIE}=v1.new; Path=/; Max-Age=60; SameSite=Lax; HttpOnly; Secure`]) {
+      const page = new Response(null, { status: 303, headers: [['Location', '/'], ['Set-Cookie', '__Host-nwfl-auth=; Path=/; Max-Age=0'], ['Set-Cookie', own]] });
+      const res = await run(cookieFor(['nwfl-members']), later, page).result;
+      expect(res.headers.getSetCookie().filter((c) => c.startsWith(`${SESSION_COOKIE}=`))).toEqual([own]);
+    }
+  });
+
   it('sets nothing for a fresh session or an officer', async () => {
     expect((await run(cookieFor(['nwfl-members']), NOW + 86400).result).headers.get('set-cookie')).toBeNull();
     expect((await run(cookieFor(['nwfl-members', 'nwfl-officers']), NOW + 11 * 3600).result).headers.get('set-cookie')).toBeNull();

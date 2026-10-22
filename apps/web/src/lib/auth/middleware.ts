@@ -1,7 +1,7 @@
 // The signed-in reader, put on each on-request page (Astro.locals.session),
 // and a member's session renewed on use past half its life (R10).
 import type { MiddlewareHandler } from 'astro';
-import { readSession, renewIfDue, sessionSetCookie } from '../../../server/session.mjs';
+import { SESSION_COOKIE, readSession, renewIfDue, sessionSetCookie } from '../../../server/session.mjs';
 
 export function makeSessionStep(deps: () => { key: Buffer | undefined; now: () => number }): MiddlewareHandler {
   return async (context, next) => {
@@ -11,6 +11,8 @@ export function makeSessionStep(deps: () => { key: Buffer | undefined; now: () =
     const session = readSession(context.request.headers.get('cookie'), key, now());
     context.locals.session = session;
     const response = await next();
+    // A page that sets the session itself (sign-out, the callback) has the last word.
+    if (response.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_COOKIE}=`))) return response;
     const renewed = session && key ? renewIfDue(session, now()) : undefined;
     if (!renewed || !key) return response;
     const cookie = sessionSetCookie(renewed, key, now());
