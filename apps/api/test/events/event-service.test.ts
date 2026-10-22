@@ -37,7 +37,7 @@ describe.skipIf(!live)('EventService reads', () => {
     const { pool } = api;
     ids['vp'] = await insertId(pool, `INSERT INTO office (slug, title, kind, role_alias, role_alias_verified_on) VALUES ('vice-president', 'Vice President', 'elected', 'vp@nwflorida.us', '2026-10-01') RETURNING id`);
     ids['cafe'] = await insertId(pool, `INSERT INTO venue (kind, name, business_address, city, area, url) VALUES ('business', 'Example Cafe', '1 Example Way', 'Fort Walton Beach', 'okaloosa', 'https://example.org/cafe') RETURNING id`);
-    ids['home'] = await insertId(pool, `INSERT INTO venue (kind, name, city, area, host_office_id, accessibility_note) VALUES ('member_home', 'The Example family home', 'Niceville', 'okaloosa', $1, 'three steps up') RETURNING id`, [ids['vp']]);
+    ids['home'] = await insertId(pool, `INSERT INTO venue (kind, name, area, host_office_id, accessibility_note) VALUES ('member_home', 'The Example family home', 'okaloosa', $1, 'three steps up') RETURNING id`, [ids['vp']]);
     ids['lunch'] = await insertId(pool,
       `INSERT INTO event_series (slug, title, category, recurrence, starts_on, default_start, default_duration_minutes, default_venue_id, area, visibility)
        VALUES ('wednesday-lunch', 'Wednesday Lunch', 'lunch', 'FREQ=WEEKLY;BYDAY=WE', '2026-01-07', '11:30', 90, $1, 'okaloosa', 'public') RETURNING id`, [ids['cafe']]);
@@ -121,7 +121,7 @@ describe.skipIf(!live)('EventService reads', () => {
     const [party] = (await list('2026-11-01', '2026-11-30', {}, MEMBER)).filter((o) => o.seriesId === ids['party']);
     expect(party?.venue).toMatchObject({ kind: VenueKind.MEMBER_HOME, name: "A member's home", businessAddress: '', city: '', url: '', accessibilityNote: '', hostOfficeId: ids['vp'], area: Area.OKALOOSA });
     const venues = (await events.listVenues({}, MEMBER)).venues;
-    expect(JSON.stringify(venues)).not.toMatch(/Example family|Niceville|three steps/);
+    expect(JSON.stringify(venues)).not.toMatch(/Example family|three steps/);
     expect(venues.find((v) => v.id === ids['cafe'])).toMatchObject({ name: 'Example Cafe', businessAddress: '1 Example Way', city: 'Fort Walton Beach' });
   });
 

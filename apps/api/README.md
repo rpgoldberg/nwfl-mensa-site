@@ -119,12 +119,38 @@ row in `audit_event`, and prints counts only.
 
 Raw SQL in `migrations/NNNN_*.sql`, applied by `scripts/migrate.sh` (ported
 from fc-coordinator: psql, one transaction per file with its ledger row, a
-sha256 provenance check, an advisory lock). Two roles: `nwfl_migrator` owns
-the schema; `nwfl`, the role the service connects as, reads and writes rows
-only. `audit_event` is append-only by grant and by trigger. The CHECK
-constraints carry the data rules: a member's home has no street address, a
-`.docx` is officers-only, a sign-up's membership number is erased when the
-verifier reports, and `affiliate` needs a recorded grant.
+sha256 provenance check, an advisory lock). An applied file is never edited:
+fixes go forward in a new file (`0007_a2_fix.sql` carries the A2 challenge).
+Two roles: `nwfl_migrator` owns the schema; `nwfl`, the role the service
+connects as, reads and writes rows only, with no TRUNCATE and no temporary
+tables.
+
+The rules the database itself enforces:
+
+- the publishing workflow moves only along its transitions (a version:
+  draft, ready, approved, superseded or discarded; an item: draft, ready,
+  published, withdrawn), everything starts as a draft, a version's authored
+  content freezes at ready and everything freezes once it is decided, and an
+  item's live version is always an approved one;
+- `audit_event` is append-only by grant and by trigger, the database numbers
+  and times each event, and its payload never holds a membership number or a
+  last name under any spelling; `content_version_editor` is append-only and a
+  version is never deleted;
+- a member's home has no street address, city or link; a `.docx` is
+  officers-only; an edition's hosted PDF is a public file of that edition;
+- a sign-up's membership number and last name are erased when the verifier
+  reports and when an officer approves or rejects it; `affiliate` needs a
+  recorded grant.
+
+Accepted residual risks, with no code against them:
+
+- The schema owner can disable a trigger or drop a constraint. The migrator
+  role runs migrations only; the service never connects as it.
+- An erased membership number still exists in Postgres WAL and in backups
+  until they age out; pg-nwfl's backup retention bounds how long.
+- Free-text fields (an event's detail, a send-back note) could hold someone's
+  contact details if an officer types them. The approval screens for members
+  have no notes field at all.
 
 ## Versions
 

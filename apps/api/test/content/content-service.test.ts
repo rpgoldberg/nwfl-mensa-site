@@ -72,7 +72,8 @@ describe.skipIf(!live)('ContentService reads', () => {
       const edition = await insertId(pool, `INSERT INTO edition (slug, title, kind, period_start, period_end, status, volume, issue_number) VALUES ($1, $1, 'regular', $2, ($2::date + 60), $3, 30, 4) RETURNING id`, [slug, start, status]);
       if (fileAudience !== null) {
         const file = await insertId(pool, `INSERT INTO stored_file (edition_id, object_key, filename, mime_type, size_bytes, sha256, audience) VALUES ($1, $2, $2, 'application/pdf', 10, $3, $4) RETURNING id`, [edition, `pdf-${slug}`, Buffer.alloc(32, 2), fileAudience]);
-        await pool.query(`UPDATE edition SET public_pdf_file_id = $2 WHERE id = $1`, [edition, file]);
+        // Only a public file of the edition can be its hosted PDF (0007); a members file stays unlinked.
+        if (fileAudience === 'public') await pool.query(`UPDATE edition SET public_pdf_file_id = $2 WHERE id = $1`, [edition, file]);
         ids[`pdf-${slug}`] = file;
         await pool.query(`INSERT INTO edition_calendar_range (edition_id, starts_on, ends_on) VALUES ($1, $2, ($2::date + 30))`, [edition, start]);
       }

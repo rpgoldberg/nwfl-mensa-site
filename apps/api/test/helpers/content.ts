@@ -41,6 +41,7 @@ export async function publishItem(pool: pg.Pool, options: PublishOptions): Promi
        public_ast = $3, search_public = to_tsvector('english', $4), search_members = to_tsvector('english', $5) WHERE id = $1`,
     [versionId, options.approvedAt ?? '2026-10-01T12:00:00Z', JSON.stringify(options.publicAst ?? derived.publicAst), derived.publicText, derived.membersText],
   );
+  await pool.query(`UPDATE content_item SET state = 'ready' WHERE id = $1`, [itemId]);
   await pool.query(`UPDATE content_item SET state = 'published', live_version_id = $2 WHERE id = $1`, [itemId, versionId]);
   return { itemId, versionId };
 }

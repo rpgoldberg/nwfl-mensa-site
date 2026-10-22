@@ -375,7 +375,16 @@ describe.skipIf(!live)('schema', () => {
       const versionOfB = await version(b, officeId);
       expect(await sqlstate(app, `UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [a, versionOfB])).toBe(FK_VIOLATION);
       expect(await sqlstate(app, `UPDATE content_item SET working_version_id = $2 WHERE id = $1`, [a, versionOfB])).toBe(FK_VIOLATION);
+      // The workflow order (0007): draft -> ready -> published -> withdrawn.
+      await app.query(`UPDATE content_item SET state = 'ready' WHERE id = $1`, [a]);
       expect(await sqlstate(app, `UPDATE content_item SET state = 'published' WHERE id = $1`, [a])).toBe(CHECK_VIOLATION);
+      const live = await version(a, officeId);
+      await app.query(`UPDATE content_version SET status = 'ready', content_hash = $2 WHERE id = $1`, [live, HASH]);
+      await app.query(
+        `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`,
+        [live],
+      );
+      expect(await sqlstate(app, `UPDATE content_item SET state = 'published', live_version_id = $2 WHERE id = $1`, [a, live])).toBe('ok');
       expect(await sqlstate(app, `UPDATE content_item SET state = 'withdrawn' WHERE id = $1`, [a])).toBe(CHECK_VIOLATION);
       expect(await sqlstate(app, `UPDATE content_item SET state = 'withdrawn', withdrawn_at = now() WHERE id = $1`, [a])).toBe('ok');
     });
