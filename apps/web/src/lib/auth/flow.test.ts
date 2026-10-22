@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { SIZE_COOKIE, THEME_COOKIE } from '../../../server/prefs.mjs';
 import { AUTH_COOKIE, SESSION_COOKIE, TRANSACTION_SECONDS, newSession, readSession, sessionSetCookie } from '../../../server/session.mjs';
 import type { AuthConfig, AuthSetup } from '../../../server/auth-config.mjs';
-import { ConsumedStates, REFUSALS, TokenStore, beginSignIn, completeSignIn, depsFromEnv, signOut, type Deps } from './flow';
+import { TokenStore } from '../../../server/token-store.mjs';
+import { ConsumedStates, REFUSALS, beginSignIn, completeSignIn, depsFromEnv, signOut, type Deps } from './flow';
 
 const key = randomBytes(32);
 const NOW = 1_800_000_000;
@@ -62,7 +63,9 @@ describe('beginSignIn', () => {
 
   it('sends someone already signed in straight back, with no new sign-in', async () => {
     const d = deps();
-    const header = sessionSetCookie(newSession({ sub: 'u' }, NOW), key, NOW).split(';')[0];
+    const session = newSession({ sub: 'u' }, NOW);
+    d.tokens.put(session.sid, { access_token: 'a' }, session.exp);
+    const header = sessionSetCookie(session, key, NOW).split(';')[0];
     expect(await beginSignIn(d, { cookieHeader: header, back: '/calendar' })).toEqual({ kind: 'redirect', location: '/calendar', cookies: [] });
     expect(d.oidc.startSignIn).not.toHaveBeenCalled();
   });
@@ -90,7 +93,7 @@ describe('completeSignIn: the callback', () => {
     if (out.kind !== 'redirect') return;
     expect(out.location).toBe('/about');
     expect(out.cookies[0]).toBe(`${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`);
-    const session = readSession(jar(out.cookies), key, NOW);
+    const session = readSession(jar(out.cookies), key, NOW, d.tokens);
     expect(session).toMatchObject({ sub: 'user-1', name: 'Alex Sample', officer: true });
     expect(out.cookies.join()).not.toMatch(/access-1|id-1/);
     expect(d.tokens.get(session!.sid, NOW)).toMatchObject({ access_token: 'access-1', id_token: 'id-1' });
@@ -175,6 +178,18 @@ describe('signOut', () => {
     expect(out.location).toBe('https://login.nwflorida.us/end');
   });
 
+  it('kills the session at once: its cookie, kept and sent again, reads as nobody', async () => {
+    const d = deps();
+    const session = newSession({ sub: 'u', groups: ['nwfl-members'] }, NOW);
+    d.tokens.put(session.sid, { access_token: 'a', id_token: 'id-9' }, session.exp);
+    const kept = sessionSetCookie(session, key, NOW).split(';')[0]!;
+    expect(readSession(kept, key, NOW, d.tokens)).toBeDefined();
+    await signOut(d, { cookieHeader: kept });
+    expect(readSession(kept, key, NOW, d.tokens)).toBeUndefined();
+    // Sign-in no longer takes it for a signed-in reader either.
+    expect(await beginSignIn(d, { cookieHeader: kept, back: '/about' })).toMatchObject({ location: expect.stringMatching(/^https:\/\/login\.nwflorida\.us\//) });
+  });
+
   it('comes to the signed-out page directly when the provider offers no logout, or cannot be reached', async () => {
     const d = deps();
     vi.mocked(d.oidc.endSessionUrl).mockResolvedValueOnce(undefined);
@@ -189,20 +204,7 @@ describe('signOut', () => {
   });
 });
 
-describe('TokenStore and ConsumedStates (server-side, bounded)', () => {
-  it('forgets tokens when their session ends, and keeps at most the cap', () => {
-    const store = new TokenStore(2);
-    store.put('a', { access_token: '1' }, NOW + 10);
-    expect(store.get('a', NOW + 9)).toEqual({ access_token: '1' });
-    expect(store.get('a', NOW + 10)).toBeUndefined();
-    store.put('b', { access_token: '2' }, NOW + 10);
-    store.put('c', { access_token: '3' }, NOW + 10);
-    store.put('d', { access_token: '4' }, NOW + 10);
-    expect(['b', 'c', 'd'].filter((sid) => store.get(sid, NOW))).toEqual(['c', 'd']);
-    expect(store.take('c', NOW)).toEqual({ access_token: '3' });
-    expect(store.get('c', NOW)).toBeUndefined();
-  });
-
+describe('ConsumedStates (server-side, bounded)', () => {
   it('remembers a used state until its transaction could no longer be used anyway', () => {
     const used = new ConsumedStates(2);
     used.add('s1', NOW + 600);

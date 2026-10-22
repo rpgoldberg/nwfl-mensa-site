@@ -10,6 +10,7 @@ import { cacheControl, isHostOnlyCookie, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 import { resolveOldUrl } from './redirects.mjs';
 import { readSession } from './session.mjs';
+import { sharedTokenStore } from './token-store.mjs';
 
 /** @typedef {(req: http.IncomingMessage, res: http.ServerResponse) => unknown} Handler */
 
@@ -119,7 +120,7 @@ function applyPolicy(req, res, path, headers) {
  * @param {Buffer | undefined} key
  */
 function servePrerendered(req, res, html, key) {
-  const session = readSession(req.headers.cookie, key, Math.floor(Date.now() / 1000));
+  const session = readSession(req.headers.cookie, key, Math.floor(Date.now() / 1000), sharedTokenStore());
   const body = stampAccount(stampHtml(html, readPrefs(req.headers.cookie)), session);
   res.statusCode = 200;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');

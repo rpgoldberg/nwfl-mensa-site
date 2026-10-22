@@ -2,8 +2,9 @@
 // The signed-in session (W4, R10), sealed into a host-only cookie with
 // AES-256-GCM under a key from config (SESSION_KEY, never in the repo). The
 // cookie holds who the person is and their nwfl- roles only; their tokens stay
-// on the server (TokenStore, src/lib/auth/flow.ts). A sealed value also carries
-// the sign-in transaction (state, nonce, PKCE verifier) for ten minutes.
+// on the server (server/token-store.mjs), and the session is valid only while
+// that record is there. A sealed value also carries the sign-in transaction
+// (state, nonce, PKCE verifier) for ten minutes.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readCookie } from './cookies.mjs';
 import { SESSION_COOKIE } from './policy.mjs';
@@ -138,13 +139,14 @@ export function sessionSetCookie(session, key, now) {
  * @param {string | null | undefined} cookieHeader
  * @param {Buffer | undefined} key
  * @param {number} now
+ * @param {{ has(sid: string, now: number): boolean }} store the server's records: a session without one is over (signed out)
  * @returns {Session | undefined}
  */
-export function readSession(cookieHeader, key, now) {
+export function readSession(cookieHeader, key, now, store) {
   if (!key) return undefined;
   /** @type {Session | undefined} */
   const session = openValue(readCookie(cookieHeader, SESSION_COOKIE), key, SESSION_COOKIE);
-  return session && typeof session.exp === 'number' && session.exp > now ? session : undefined;
+  return session && typeof session.exp === 'number' && session.exp > now && store.has(session.sid, now) ? session : undefined;
 }
 
 /** @typedef {{ state: string, nonce: string, verifier: string, back: string }} Transaction */

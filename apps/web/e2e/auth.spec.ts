@@ -111,6 +111,24 @@ test('signing out expires the session, ends the provider’s session with its ow
   await expect(page.locator('input[name="login"]')).toBeVisible();
 });
 
+test('a session cookie kept from before sign-out, sent again, reads as nobody', async ({ page, context }) => {
+  await page.goto('/');
+  await signIn(page, 'officer');
+  const kept = (await cookie(context, '__Host-nwfl-session'))!;
+  await banner(page).getByRole('button', { name: 'Sign out' }).click();
+  await page.getByRole('button', { name: 'Yes, sign me out' }).click();
+  await expect(page).toHaveURL(/\/signed-out$/);
+
+  await context.addCookies([kept]);
+  for (const path of ['/', '/about']) {
+    await page.goto(path);
+    await expect(banner(page).getByRole('link', { name: 'Sign in', exact: true }), path).toBeVisible();
+    await expect(banner(page), path).not.toContainText('Alex Sample');
+  }
+  await page.goto('/officer-area');
+  await expect(page).toHaveURL(AT_PROVIDER);
+});
+
 test('sign-out answers a POST only, and only from this site; it clears cache and storage, never cookies', async ({ page, request, baseURL }) => {
   const get = await page.goto('/sign-out');
   expect(get?.status()).toBe(405);

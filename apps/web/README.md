@@ -38,7 +38,7 @@ The history may be published, so nothing secret and no real person's contact det
 
 Sign-in needs `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `OIDC_POST_LOGOUT_REDIRECT_URI` and `SESSION_KEY` (`openssl rand -base64 32`); without them the site runs with everyone signed out. In production the issuer must be on `https://login.nwflorida.us`. The provider must use `client_secret_post` and put the `nwfl-` groups in the ID token.
 
-Sessions and their tokens are held in the server's memory, so **the site runs as one replica until W5a**, which moves them to a shared store behind the API; the server logs `session_store: memory (single replica)` at start. A restart signs everyone out.
+Sessions and their tokens are held in the server's memory, so **the site runs as one replica until W5a**, which moves them to a shared store behind the API; the server logs `session_store: memory (single replica)` at start. A session is valid only while its record is there: sign-out deletes it, so a copy of the cookie is dead at once, and a restart signs everyone out.
 
 The public-only build (`npm run build:public-only`, or the image's `PUBLIC_ONLY=true` build argument) has no sign-in at all: every sign-in route is the 404 page however it is spelled, and the server ignores any `OIDC_*` or `SESSION_KEY` it is given, and logs that it did. The build writes `dist/build.json` so the server knows which build it is.
 

@@ -6,6 +6,7 @@ import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
 import { compileRedirects } from '../redirects.mjs';
 import { accountHtml } from '../account.mjs';
 import { newSession, sessionSetCookie } from '../session.mjs';
+import { sharedTokenStore } from '../token-store.mjs';
 import { randomBytes } from 'node:crypto';
 import { createSiteServer, normalisePath, withSitePolicy } from '../siteServer.mjs';
 
@@ -429,13 +430,22 @@ describe('signed in, on a prerendered page (W4)', () => {
 
   it('shows the reader’s own account area in place of Sign in, never cached', async () => {
     const base = await serveSigned();
-    const cookie = sessionSetCookie(newSession({ sub: 'u', name: 'Alex Sample', groups: ['nwfl-members', 'nwfl-officers'] }, now), key, now).split(';')[0]!;
+    const session = newSession({ sub: 'u', name: 'Alex Sample', groups: ['nwfl-members', 'nwfl-officers'] }, now);
+    sharedTokenStore().put(session.sid, {}, session.exp);
+    const cookie = sessionSetCookie(session, key, now).split(';')[0]!;
     const res = await fetch(`${base}/about`, { headers: { cookie } });
     const body = await res.text();
     expect(body).toContain('Alex Sample');
     expect(body).toContain('href="/officer-area"');
     expect(body).not.toContain('>Sign in<');
     expect(res.headers.get('cache-control')).toBe('private, no-store');
+  });
+
+  it('shows Sign in for a session signed out elsewhere: its record is gone', async () => {
+    const base = await serveSigned();
+    const session = newSession({ sub: 'u', name: 'Alex Sample', groups: ['nwfl-members'] }, now);
+    const cookie = sessionSetCookie(session, key, now).split(';')[0]!;
+    expect(await (await fetch(`${base}/about`, { headers: { cookie } })).text()).toBe(html);
   });
 
   it('shows Sign in to everyone else, a forged cookie included', async () => {

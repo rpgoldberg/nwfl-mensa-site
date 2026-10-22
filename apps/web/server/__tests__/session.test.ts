@@ -17,6 +17,7 @@ import {
   sessionSetCookie,
   transactionSetCookie,
 } from '../session.mjs';
+import { TokenStore } from '../token-store.mjs';
 
 const key = randomBytes(32);
 const other = randomBytes(32);
@@ -103,14 +104,26 @@ describe('the session cookie', () => {
     expect(sessionSetCookie(big, key, NOW).length).toBeLessThan(3500);
   });
 
-  it('is read back, and refused once expired or under another key', () => {
+  it('is read back while its record is on the server, and refused once expired or under another key', () => {
     const s = newSession(claims(['nwfl-members']), NOW);
+    const store = new TokenStore();
+    store.put(s.sid, {}, s.exp);
     const header = `a=1; ${sessionSetCookie(s, key, NOW).split(';')[0]}`;
-    expect(readSession(header, key, NOW + 10)).toEqual(s);
-    expect(readSession(header, key, s.exp)).toBeUndefined();
-    expect(readSession(header, other, NOW)).toBeUndefined();
-    expect(readSession(header, undefined, NOW)).toBeUndefined();
-    expect(readSession(undefined, key, NOW)).toBeUndefined();
+    expect(readSession(header, key, NOW + 10, store)).toEqual(s);
+    expect(readSession(header, key, s.exp, store)).toBeUndefined();
+    expect(readSession(header, other, NOW, store)).toBeUndefined();
+    expect(readSession(header, undefined, NOW, store)).toBeUndefined();
+    expect(readSession(undefined, key, NOW, store)).toBeUndefined();
+  });
+
+  it('is dead the moment its record goes: a copy of the cookie kept past sign-out reads as nobody', () => {
+    const s = newSession(claims(['nwfl-members']), NOW);
+    const store = new TokenStore();
+    store.put(s.sid, {}, s.exp);
+    const header = sessionSetCookie(s, key, NOW).split(';')[0];
+    store.take(s.sid, NOW);
+    expect(readSession(header, key, NOW, store)).toBeUndefined();
+    expect(readSession(header, key, NOW, new TokenStore())).toBeUndefined();
   });
 
   it('is cleared with an expired host-only cookie', () => {
@@ -152,7 +165,7 @@ describe('the sign-in transaction cookie', () => {
 
   it('is never mistaken for a session, nor a session for it', () => {
     const sealed = sealTransaction(tx, key, NOW);
-    expect(readSession(`${SESSION_COOKIE}=${sealed}`, key, NOW)).toBeUndefined();
+    expect(readSession(`${SESSION_COOKIE}=${sealed}`, key, NOW, { has: () => true })).toBeUndefined();
     const session = sessionSetCookie(newSession(claims([]), NOW), key, NOW).split(';')[0]!.split('=')[1];
     expect(openTransaction(`${AUTH_COOKIE}=${session}`, key, NOW)).toBeUndefined();
   });

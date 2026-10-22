@@ -1,20 +1,40 @@
 import { randomBytes } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SESSION_COOKIE, newSession, readSession, sessionSetCookie } from '../../../server/session.mjs';
+import { TokenStore } from '../../../server/token-store.mjs';
 import { makeSessionStep } from './middleware';
 
 const key = randomBytes(32);
 const NOW = 1_800_000_000;
+let tokens = new TokenStore();
 
 function run(cookie: string | undefined, now = NOW, response = new Response('page')) {
   const context = { request: new Request('https://nwflorida.us/', { headers: cookie ? { cookie } : {} }), locals: {} as App.Locals };
   const next = vi.fn(async () => response);
-  return { result: makeSessionStep(() => ({ key, now: () => now }))(context as never, next as never) as Promise<Response>, context };
+  return { result: makeSessionStep(() => ({ key, now: () => now, tokens }))(context as never, next as never) as Promise<Response>, context };
 }
 
-const cookieFor = (groups: string[]) => sessionSetCookie(newSession({ sub: 'u', name: 'Jordan Example', groups }, NOW), key, NOW).split(';')[0] as string;
+/** A signed-in session's cookie, its record on the server. */
+function cookieFor(groups: string[]) {
+  const session = newSession({ sub: 'u', name: 'Jordan Example', groups }, NOW);
+  tokens.put(session.sid, { id_token: 'id' }, session.exp);
+  return sessionSetCookie(session, key, NOW).split(';')[0] as string;
+}
+const sidOf = (cookie: string) => readSession(cookie, key, NOW, tokens)!.sid;
 
 describe('makeSessionStep', () => {
+  beforeEach(() => {
+    tokens = new TokenStore();
+  });
+
+  it('reads a cookie whose record is gone (signed out, or the server restarted) as nobody', async () => {
+    const cookie = cookieFor(['nwfl-members']);
+    tokens.take(sidOf(cookie), NOW);
+    const { result, context } = run(cookie);
+    await result;
+    expect(context.locals.session).toBeUndefined();
+  });
+
   it('puts the signed-in reader on the request for the page', async () => {
     const { result, context } = run(cookieFor(['nwfl-members']));
     await result;
@@ -28,15 +48,17 @@ describe('makeSessionStep', () => {
       expect(context.locals.session).toBeUndefined();
     }
     const context = { request: new Request('https://nwflorida.us/', { headers: { cookie: cookieFor([]) } }), locals: {} as App.Locals };
-    await makeSessionStep(() => ({ key: undefined, now: () => NOW }))(context as never, (async () => new Response('x')) as never);
+    await makeSessionStep(() => ({ key: undefined, now: () => NOW, tokens }))(context as never, (async () => new Response('x')) as never);
     expect(context.locals.session).toBeUndefined();
   });
 
   it('renews a member session past half its life, on the page that sees it', async () => {
     const { result } = run(cookieFor(['nwfl-members']), NOW + 20 * 86400);
     const res = await result;
-    const renewed = readSession(res.headers.get('set-cookie')!.split(';')[0], key, NOW + 20 * 86400);
+    const renewed = readSession(res.headers.get('set-cookie')!.split(';')[0], key, NOW + 20 * 86400, tokens);
     expect(renewed?.exp).toBe(NOW + 50 * 86400);
+    // Its record lives as long: the renewed session is not cut off at the first one's end.
+    expect(tokens.has(renewed!.sid, NOW + 45 * 86400)).toBe(true);
   });
 
   it('renews on a redirect too, whose headers cannot be changed in place', async () => {
@@ -55,7 +77,7 @@ describe('makeSessionStep', () => {
       },
       locals: {} as App.Locals,
     };
-    const res = await makeSessionStep(() => ({ key, now: () => NOW }))(context as never, (async () => new Response('built')) as never);
+    const res = await makeSessionStep(() => ({ key, now: () => NOW, tokens }))(context as never, (async () => new Response('built')) as never);
     expect(await (res as Response).text()).toBe('built');
   });
 

@@ -18,6 +18,7 @@ import {
   transactionSetCookie,
 } from '../../../server/session.mjs';
 import { authConfig, type AuthSetup } from '../../../server/auth-config.mjs';
+import { TokenStore, sharedTokenStore } from '../../../server/token-store.mjs';
 import * as realOidc from './oidc';
 import type { Tokens } from './oidc';
 
@@ -39,27 +40,6 @@ export type Outcome =
   | { kind: 'refused'; reason: Refusal; cookies: string[] }
   | { kind: 'unavailable' };
 
-/** Server-side token store: by session id, until the session ends, at most `cap` sessions. */
-export class TokenStore {
-  readonly #entries = new Map<string, { tokens: Tokens; until: number }>();
-  constructor(private readonly cap = 10_000) {}
-  put(sid: string, tokens: Tokens, until: number): void {
-    if (this.#entries.size >= this.cap) this.#entries.delete(this.#entries.keys().next().value as string);
-    this.#entries.set(sid, { tokens, until });
-  }
-  get(sid: string, now: number): Tokens | undefined {
-    const entry = this.#entries.get(sid);
-    if (entry && entry.until > now) return entry.tokens;
-    this.#entries.delete(sid);
-    return undefined;
-  }
-  take(sid: string, now: number): Tokens | undefined {
-    const tokens = this.get(sid, now);
-    this.#entries.delete(sid);
-    return tokens;
-  }
-}
-
 /** States already used, until their transaction would have expired anyway. */
 export class ConsumedStates {
   readonly #until = new Map<string, number>();
@@ -79,7 +59,7 @@ export interface Deps {
   /** Seconds. */
   now: () => number;
   oidc: Pick<typeof realOidc, 'startSignIn' | 'finishSignIn' | 'endSessionUrl'>;
-  tokens: TokenStore;
+  tokens: TokenStore<Tokens>;
   consumed: ConsumedStates;
   log: (line: string) => void;
 }
@@ -95,7 +75,7 @@ export async function beginSignIn(d: Deps, { cookieHeader, back }: { cookieHeade
     return { kind: 'unavailable' };
   }
   const to = safeBack(back);
-  if (readSession(cookieHeader, d.key, now)) return { kind: 'redirect', location: to, cookies: [] };
+  if (readSession(cookieHeader, d.key, now, d.tokens)) return { kind: 'redirect', location: to, cookies: [] };
   try {
     const start = await d.oidc.startSignIn(d.setup.config);
     const tx = { state: start.state, nonce: start.nonce, verifier: start.verifier, back: to };
@@ -151,7 +131,7 @@ export interface SignedOut {
 export async function signOut(d: Deps, { cookieHeader }: { cookieHeader: string | null | undefined }): Promise<SignedOut> {
   const now = d.now();
   const done = { cookies: [clearCookie(SESSION_COOKIE), clearCookie(AUTH_COOKIE)], clearSiteData: CLEAR_SITE_DATA, location: '/signed-out' };
-  const session = d.key ? readSession(cookieHeader, d.key, now) : undefined;
+  const session = d.key ? readSession(cookieHeader, d.key, now, d.tokens) : undefined;
   const idToken = session ? d.tokens.take(session.sid, now)?.id_token : undefined;
   if (!d.setup.enabled) return done;
   try {
@@ -174,7 +154,7 @@ export function depsFromEnv(env: Record<string, string | undefined>, logLine: (l
   return { setup: authConfig(env), key, now: () => Math.floor(Date.now() / 1000), oidc: realOidc, tokens: SHARED.tokens, consumed: SHARED.consumed, log: logLine };
 }
 
-const SHARED = { tokens: new TokenStore(), consumed: new ConsumedStates() };
+const SHARED = { tokens: sharedTokenStore() as TokenStore<Tokens>, consumed: new ConsumedStates() };
 
 let runtime: Deps | undefined;
 
