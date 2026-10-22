@@ -19,7 +19,7 @@ import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@co
 import { type Audience, callerOf } from '../auth/caller.js';
 import type { Db } from '../db/pool.js';
 import { ContentItemSchema, type ContentItem, ContentService, ContentVersionSchema, ItemState, StoredFileSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { OfficeSchema } from '../gen/nwfl/mensa/v1/roster_pb.js';
+import { type Office, OfficeSchema } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { protoDate, todayIn } from '../events/zone.js';
 import { decodeToken, encodeToken, pageSize } from '../grpc/paging.js';
 import {
@@ -165,6 +165,43 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[]): Conten
   });
 }
 
+/** The active offices with the terms current on `date` (an ISO date). Role aliases only once verified (R2). */
+export async function rosterAsOf(db: Pick<Db, 'query'>, date: string): Promise<Office[]> {
+  const [offices, terms] = await Promise.all([
+    db.query<{ id: string; slug: string; title: string; kind: string; sort_order: number; role_alias: string | null; active: boolean }>(
+      `SELECT id, slug, title, kind, sort_order, active,
+         CASE WHEN role_alias_verified_on IS NOT NULL THEN role_alias END AS role_alias
+       FROM office WHERE active ORDER BY sort_order, title`,
+    ),
+    db.query<{ id: string; office_id: string; holder_display_name: string | null; starts_on: string; ends_on: string | null; status: string }>(
+      `SELECT id, office_id, holder_display_name, starts_on::text AS starts_on, ends_on::text AS ends_on, status
+       FROM office_term WHERE starts_on <= $1 AND (ends_on IS NULL OR ends_on >= $1) ORDER BY starts_on, id`,
+      [date],
+    ),
+  ]);
+  return offices.rows.map((office) =>
+    create(OfficeSchema, {
+      id: office.id,
+      slug: office.slug,
+      title: office.title,
+      kind: OFFICE_KINDS[office.kind],
+      sortOrder: office.sort_order,
+      roleAlias: office.role_alias ?? '',
+      active: office.active,
+      terms: terms.rows
+        .filter((term) => term.office_id === office.id)
+        .map((term) => ({
+          id: term.id,
+          officeId: term.office_id,
+          holderDisplayName: term.holder_display_name ?? '',
+          startsOn: protoDate(term.starts_on),
+          ...(term.ends_on !== null ? { endsOn: protoDate(term.ends_on) } : {}),
+          status: TERM_STATUSES[term.status],
+        })),
+    }),
+  );
+}
+
 export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => void {
   const { db } = deps;
   const audienceOf = (ctx: HandlerContext): Audience => callerOf(ctx.values).audience;
@@ -185,44 +222,7 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
       // The officers' workflow (A4b): writes, working reads and the history.
       ...workflowHandlers({ db }),
       ...editionHandlers({ db }),
-      getRoster: async () => {
-        const today = todayIn(deps.now());
-        const [offices, terms] = await Promise.all([
-          db.query<{ id: string; slug: string; title: string; kind: string; sort_order: number; role_alias: string | null; active: boolean }>(
-            `SELECT id, slug, title, kind, sort_order, active,
-               CASE WHEN role_alias_verified_on IS NOT NULL THEN role_alias END AS role_alias
-             FROM office WHERE active ORDER BY sort_order, title`,
-          ),
-          db.query<{ id: string; office_id: string; holder_display_name: string | null; starts_on: string; ends_on: string | null; status: string }>(
-            `SELECT id, office_id, holder_display_name, starts_on::text AS starts_on, ends_on::text AS ends_on, status
-             FROM office_term WHERE starts_on <= $1 AND (ends_on IS NULL OR ends_on >= $1) ORDER BY starts_on, id`,
-            [today],
-          ),
-        ]);
-        return {
-          offices: offices.rows.map((office) =>
-            create(OfficeSchema, {
-              id: office.id,
-              slug: office.slug,
-              title: office.title,
-              kind: OFFICE_KINDS[office.kind],
-              sortOrder: office.sort_order,
-              roleAlias: office.role_alias ?? '',
-              active: office.active,
-              terms: terms.rows
-                .filter((term) => term.office_id === office.id)
-                .map((term) => ({
-                  id: term.id,
-                  officeId: term.office_id,
-                  holderDisplayName: term.holder_display_name ?? '',
-                  startsOn: protoDate(term.starts_on),
-                  ...(term.ends_on !== null ? { endsOn: protoDate(term.ends_on) } : {}),
-                  status: TERM_STATUSES[term.status],
-                })),
-            }),
-          ),
-        };
-      },
+      getRoster: async () => ({ offices: await rosterAsOf(db, todayIn(deps.now())) }),
 
       getPublishedItem: async (request, ctx) => {
         const audience = audienceOf(ctx);

@@ -291,9 +291,8 @@ export function generatedEntry(series: SeriesRow, date: string, venues: Map<stri
   };
 }
 
-export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
-  const { db, logger } = deps;
-
+/** The calendar's data access: venues, series, stored occurrences and the expansion. */
+export function calendarSource(db: Db, logger: StructuredLogger) {
   const loadVenues = async (): Promise<Map<string, VenueRow>> => {
     const { rows } = await db.query<VenueRow>(
       'SELECT id, kind, name, business_address, city, area, host_office_id, url, accessibility_note, active FROM venue',
@@ -327,6 +326,7 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
     }
   };
 
+  /** Every entry from `from` to `to`, stored rows overriding the rule on their date, in date order. */
   const calendar = async (from: string, to: string): Promise<Entry[]> => {
     const [venues, series, stored] = await Promise.all([loadVenues(), loadSeries(false), loadStored(from, to)]);
     const allSeries = new Map(series.map((row) => [row.id, row]));
@@ -351,6 +351,13 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
         a.title.localeCompare(b.title),
     );
   };
+
+  return { loadVenues, loadSeries, loadStored, ruleOf, calendar };
+}
+
+export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
+  const { db, logger } = deps;
+  const { loadVenues, loadSeries, loadStored, ruleOf, calendar } = calendarSource(db, logger);
 
   const audienceOf = (ctx: HandlerContext): Audience => callerOf(ctx.values).audience;
 
