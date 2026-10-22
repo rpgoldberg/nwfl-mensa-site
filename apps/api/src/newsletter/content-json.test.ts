@@ -175,6 +175,14 @@ describe('treeText', () => {
     expect(treeText(t, 'members')).toBe('Join us: Zoom room (https://example.org/zoom?pwd=s3cret)');
   });
 
+  it('keeps a link nested in an all-public link, as the site’s public tree does', () => {
+    const t = normalizeTree({
+      blocks: [{ type: 'paragraph', children: [{ type: 'link', href: 'https://example.org/a', children: [{ type: 'text', text: 'outer ' }, { type: 'link', href: 'https://example.org/b', children: [{ type: 'text', text: 'inner' }] }] }] }],
+    });
+    expect(treeText(t, 'public')).toBe('outer inner (https://example.org/b) (https://example.org/a)');
+    expect(treeText(filterForPublic(t), 'public')).toBe(treeText(t, 'public'));
+  });
+
   it('renders a members block in full for members', () => {
     expect(treeText(tree('::: members\nFirst.\n\nSecond.\n:::\n\nOpen.'), 'members')).toBe('First.\n\nSecond.\n\nOpen.');
   });

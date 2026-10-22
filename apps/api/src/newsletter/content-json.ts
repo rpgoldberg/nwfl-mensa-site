@@ -129,13 +129,21 @@ export interface ContentJson {
 
 const ROLE_ALIAS = /^mailto:([a-z0-9][a-z0-9.-]*@nwflorida\.us)$/;
 
+/** Whether an inline node is, or holds at any depth, something members-only or withheld. */
+function holdsMembers(node: Inline): boolean {
+  if (node.type === 'text') return false;
+  return node.type !== 'link' || node.children.some(holdsMembers);
+}
+
 function inlineText(node: Inline, audience: ExportAudience): string {
   switch (node.type) {
     case 'text':
       return node.text;
     case 'link': {
-      // A link whose text holds a members passage is members-only whole, target included (as the public filter has it).
-      if (audience === 'public' && node.children.some((child) => child.type !== 'text')) return PUBLIC_PLACEHOLDER;
+      // A link whose text holds a members passage, at any depth, is members-only whole,
+      // target included; a link of public text only, nested links too, is kept: both as
+      // the public filter has it (content/tree.ts), so the export says what the site says.
+      if (audience === 'public' && holdsMembers(node)) return PUBLIC_PLACEHOLDER;
       const label = node.children.map((child) => inlineText(child, audience)).join('');
       if (node.href.startsWith('https://')) return `${label} (${node.href})`;
       const alias = ROLE_ALIAS.exec(node.href)?.[1];
