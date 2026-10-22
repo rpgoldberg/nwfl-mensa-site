@@ -9,10 +9,18 @@ The gRPC API behind the NW Florida Mensa website.
 | 50051 | gRPC over h2c; Linkerd adds mTLS on the mesh hop | the RPC services and `grpc.health.v1.Health` |
 | 8081  | plain HTTP/1.1 | `/healthz` (liveness, never touches Postgres) and `/readyz` (Postgres answers, not draining) |
 
-The gRPC port speaks only the gRPC wire protocol. Connect-ES serves Connect
-and gRPC-Web by default; both are switched off, and a request in either is
-refused with 415 (`test/grpc/transport-rule.test.ts`). HTTP/1.1 is not spoken
-on that port at all.
+The gRPC port speaks only the gRPC wire protocol. Only `application/grpc`
+and `application/grpc+proto` get in; anything else, `+json` included, is
+refused with 415 before Connect sees it, and Connect itself has the Connect
+and gRPC-Web protocols switched off (`test/grpc/transport-rule.test.ts`).
+HTTP/1.1 is not spoken on that port at all.
+
+Bounds, so one caller cannot pin the pod's memory: 16 concurrent streams per
+connection, 32 active streams across connections (more get
+RESOURCE_EXHAUSTED), 4 MiB per message, and 10 s for a request body to
+arrive before its stream is cancelled. A call refused before the
+interceptors run still gets an access-log line (request id, method, code)
+and a fixed `grpc-message` per code that never repeats the caller's input.
 
 Request messages are never logged. The access log carries the method, the
 outcome and the duration only, and an unexpected error reaches the caller as
@@ -20,7 +28,10 @@ INTERNAL with no text.
 
 On SIGTERM the process drains: readiness flips to draining, the gRPC listener
 stops accepting, open sessions get GOAWAY, and running calls have
-`DRAIN_TIMEOUT_MS` (default 20 s) to finish before they are cancelled.
+`DRAIN_TIMEOUT_MS` (default 20 s) to finish before they are cancelled. If
+Postgres hangs during the drain, closing the pool can hang too; a backstop
+then exits with code 1, 5 s after the drain deadline and before the kubelet's
+SIGKILL. That exit code is accepted: the pod is going away either way.
 
 ## Testing
 

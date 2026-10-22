@@ -28,6 +28,7 @@ import {
 import { Code, ConnectError, type Interceptor } from '@connectrpc/connect';
 import { type AuthOptions, authInterceptor } from '../auth/caller.js';
 import type { StructuredLogger } from '../platform/logger.js';
+import { requestInfoOf } from './request.js';
 
 export const TRACER_NAME = 'nwfl-mensa-api/grpc';
 
@@ -70,18 +71,21 @@ export function accessLogInterceptor(logger: StructuredLogger): Interceptor {
   return (next) => async (req) => {
     const started = performance.now();
     const rpc = rpcName(req);
+    const info = requestInfoOf(req.contextValues);
+    if (info !== undefined) info.reached = true;
+    const requestId = info?.id;
     const duration = (): number => Math.round((performance.now() - started) * 10) / 10;
     try {
       const response = await next(req);
-      logger.info({ rpc, code: 'ok', duration_ms: duration() }, 'rpc');
+      logger.info({ rpc, code: 'ok', duration_ms: duration(), request_id: requestId }, 'rpc');
       return response;
     } catch (error) {
       if (error instanceof ConnectError) {
-        logger.info({ rpc, code: codeName(error.code), duration_ms: duration() }, 'rpc');
+        logger.info({ rpc, code: codeName(error.code), duration_ms: duration(), request_id: requestId }, 'rpc');
         throw error;
       }
       const name = error instanceof Error ? error.name : typeof error;
-      logger.error({ rpc, code: codeName(Code.Internal), error: name, duration_ms: duration() }, 'rpc');
+      logger.error({ rpc, code: codeName(Code.Internal), error: name, duration_ms: duration(), request_id: requestId }, 'rpc');
       throw new ConnectError('internal error', Code.Internal);
     }
   };

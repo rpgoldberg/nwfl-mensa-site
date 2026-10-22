@@ -45,6 +45,13 @@ describe('health port', () => {
     await app.close();
   });
 
+  it('registers exactly /healthz and /readyz, GET and HEAD only', async () => {
+    const app = buildHealthApp({ readiness: createReadiness(up) });
+    await app.ready();
+    expect(app.printRoutes({ commonPrefix: false })).toBe('├── /healthz (GET, HEAD)\n└── /readyz (GET, HEAD)\n');
+    await app.close();
+  });
+
   it('serves nothing else, and no write method', async () => {
     const app = buildHealthApp({ readiness: createReadiness(up) });
     expect((await app.inject({ method: 'GET', url: '/' })).statusCode).toBe(404);

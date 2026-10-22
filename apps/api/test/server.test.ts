@@ -4,8 +4,12 @@ import http2 from 'node:http2';
 import { describe, expect, it } from 'vitest';
 import { Health, HealthCheckResponse_ServingStatus as Status } from '../src/gen/grpc/health/v1/health_pb.js';
 import type { Db } from '../src/db/pool.js';
+import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
+import { READ_MAX_BYTES } from '../src/grpc/server.js';
 import { createStructuredLogger } from '../src/platform/logger.js';
+import { startTelemetry } from '../src/platform/telemetry.js';
 import { startServer } from '../src/server.js';
+import { h2Request } from './helpers/h2.js';
 import { captureLogs } from './helpers/servers.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -101,6 +105,44 @@ describe('startServer', () => {
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(await wedged).toBeInstanceOf(Error);
     expect(lines.map((l) => l['msg'])).toContain('drain deadline reached');
+  });
+
+  it('wires the production interceptors in order: trace, then access log, then auth', async () => {
+    const telemetry = startTelemetry();
+    const { lines, sink } = captureLogs();
+    const server = await startServer({ ...base, db: fakeDb(() => Promise.resolve({})), logger: createStructuredLogger({ sink }) });
+    try {
+      const caller = '4bf92f3577b34da6a3ce929d0e0e4736';
+      const baseUrl = `http://127.0.0.1:${server.grpcPort}`;
+      await createClient(Health, createGrpcTransport({ baseUrl })).check({ service: '' }, { headers: { traceparent: `00-${caller}-00f067aa0ba902b7-01` } });
+      // Inside the trace span: the access line carries the caller's trace id.
+      expect(lines.find((l) => l['msg'] === 'rpc')).toMatchObject({ component: 'grpc', rpc: 'grpc.health.v1.Health/Check', code: 'ok', traceId: caller });
+      // Auth inside the access log: a refused token is still logged.
+      await expect(createClient(EventService, createGrpcTransport({ baseUrl })).listVenues({}, { headers: { authorization: 'Bearer x' } })).rejects.toThrow();
+      const refused = lines.filter((l) => l['msg'] === 'rpc').at(-1);
+      expect(refused).toMatchObject({ rpc: 'nwfl.mensa.v1.EventService/ListVenues', code: 'unauthenticated' });
+      // Logged by the access log itself, not as an early error of the gRPC layer.
+      expect(refused?.['early']).toBeUndefined();
+      expect(typeof refused?.['duration_ms']).toBe('number');
+      // Early errors are logged too, by the gRPC layer itself.
+      const header = new Uint8Array(5);
+      new DataView(header.buffer).setUint32(1, READ_MAX_BYTES + 1);
+      await h2Request(baseUrl, { ':method': 'POST', ':path': '/grpc.health.v1.Health/Check', 'content-type': 'application/grpc', te: 'trailers' }, header);
+      await expect.poll(() => lines.filter((l) => l['msg'] === 'rpc').at(-1)).toMatchObject({ code: 'resource_exhausted', early: true, component: 'grpc' });
+    } finally {
+      await server.close();
+      await telemetry.shutdown();
+    }
+  });
+
+  it('sends GOAWAY to idle sessions at once, so close() does not wait for the deadline', async () => {
+    const { sink } = captureLogs();
+    const server = await startServer({ ...base, db: fakeDb(() => Promise.resolve({})), logger: createStructuredLogger({ sink }), drainTimeoutMs: 5_000 });
+    // The client keeps its session open after the call: idle, not in flight.
+    await createClient(Health, createGrpcTransport({ baseUrl: `http://127.0.0.1:${server.grpcPort}` })).check({ service: '' });
+    const started = Date.now();
+    await server.close();
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it('closes only once when asked twice', async () => {

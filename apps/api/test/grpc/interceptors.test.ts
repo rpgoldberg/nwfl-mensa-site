@@ -68,6 +68,26 @@ describe('gRPC interceptors', () => {
     expect(lines.find((l) => l['msg'] === 'rpc')).toMatchObject({ code: 'not_found' });
   });
 
+  it('never logs the request message when the call succeeds', async () => {
+    lines.length = 0;
+    const stand = createGrpcServer({
+      // A Health stand-in that accepts any service name, so a request carrying
+      // the canary SUCCEEDS and only the success path of the access log runs.
+      routes: (router) => {
+        router.service(Health, { check: () => ({ status: 1 }), list: () => ({ statuses: {} }) });
+      },
+      interceptors: [accessLogInterceptor(createStructuredLogger({ sink }))],
+    });
+    const url = await listen(stand);
+    try {
+      await createClient(Health, createGrpcTransport({ baseUrl: url })).check({ service: CANARY });
+      expect(lines.find((l) => l['msg'] === 'rpc')).toMatchObject({ code: 'ok' });
+      expect(JSON.stringify(lines)).not.toContain(CANARY);
+    } finally {
+      await closeHard(stand);
+    }
+  });
+
   it('masks an unexpected error: INTERNAL to the caller, no error text in the log or on the wire', async () => {
     lines.length = 0;
     behaviour = 'throw';
@@ -82,7 +102,7 @@ describe('gRPC interceptors', () => {
       behaviour = 'ok';
     }
     expect(JSON.stringify(lines)).not.toContain(CANARY);
-    expect(lines.find((l) => l['msg'] === 'rpc')).toMatchObject({ code: 'internal', error: 'Error' });
+    expect(lines.find((l) => l['msg'] === 'rpc')).toMatchObject({ level: 'error', code: 'internal', error: 'Error' });
   });
 
   it('masks a thrown non-Error value the same way, logging only its type', async () => {

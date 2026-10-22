@@ -1,16 +1,21 @@
 // N2: the gRPC port serves ONLY the gRPC wire protocol. The Connect protocol
-// (JSON or binary POST, and its GET form) and gRPC-Web are not gRPC on the
-// wire, so a caller speaking them must be refused, while a real gRPC call
-// succeeds. Each refusal also proves the handler never ran.
+// (JSON or binary POST, its streaming form and its GET form) and gRPC-Web are
+// not gRPC on the wire, so a caller speaking them must be refused, while a real
+// gRPC call succeeds. Each refusal also proves the handler never ran.
+//
+// These run against the Connect adapter ALONE (createConnectHandler), without
+// the content-type gate in front of it (transport-hardening.test.ts), so each
+// refusal here fails the moment Connect or gRPC-Web is switched on. The GET
+// form targets a NO_SIDE_EFFECTS method and the streaming content types target
+// a streaming method, the only places Connect would accept them.
 import { create, toBinary } from '@bufbuild/protobuf';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createConnectTransport, createGrpcTransport, createGrpcWebTransport } from '@connectrpc/connect-node';
-import type http2 from 'node:http2';
+import http2 from 'node:http2';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Health, HealthCheckRequestSchema, HealthCheckResponse_ServingStatus } from '../../src/gen/grpc/health/v1/health_pb.js';
-import { healthRoutes } from '../../src/grpc/health.js';
-import { GRPC_PROTOCOLS, READ_MAX_BYTES, createGrpcServer } from '../../src/grpc/server.js';
-import { createReadiness } from '../../src/readiness.js';
+import { EventService } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
+import { GRPC_PROTOCOLS, READ_MAX_BYTES, createConnectHandler } from '../../src/grpc/server.js';
 import { grpcFrame, h2Request, http1Post } from '../helpers/h2.js';
 import { closeHard, listen } from '../helpers/servers.js';
 
@@ -22,13 +27,28 @@ describe('gRPC port: gRPC wire protocol only (N2)', () => {
   let handled = 0;
 
   beforeAll(async () => {
-    const readiness = createReadiness({
-      query: () => {
-        handled += 1;
-        return Promise.resolve({});
+    const handler = createConnectHandler({
+      routes: (router) => {
+        router.service(Health, {
+          check: (request) => {
+            handled += 1;
+            if (request.service !== '') throw new ConnectError('unknown service', Code.NotFound);
+            return { status: HealthCheckResponse_ServingStatus.SERVING };
+          },
+          // eslint-disable-next-line require-yield, @typescript-eslint/require-await -- counts the call; streams nothing
+          watch: async function* () {
+            handled += 1;
+          },
+        });
+        router.service(EventService, {
+          listVenues: () => {
+            handled += 1;
+            return { venues: [] };
+          },
+        });
       },
     });
-    server = createGrpcServer({ routes: healthRoutes(readiness) });
+    server = http2.createServer(handler);
     baseUrl = await listen(server);
   });
 
@@ -94,14 +114,12 @@ describe('gRPC port: gRPC wire protocol only (N2)', () => {
   it.each([
     ['application/json', '{"service":""}'],
     ['application/proto', ''],
-    ['application/connect+json', '{}'],
-    ['application/connect+proto', ''],
     ['application/grpc-web', ''],
     ['application/grpc-web+proto', ''],
     ['application/grpc-web-text', ''],
     ['application/grpc-web+json', ''],
     ['text/plain', 'hello'],
-  ])('answers a raw POST of %s with 415 and no gRPC success', async (contentType, body) => {
+  ])('answers a raw unary POST of %s with 415 and no gRPC success', async (contentType, body) => {
     const ran = await handledDuring(async () => {
       const res = await h2Request(
         baseUrl,
@@ -116,14 +134,26 @@ describe('gRPC port: gRPC wire protocol only (N2)', () => {
     expect(ran).toBe(0);
   });
 
-  it('refuses the Connect GET form', async () => {
+  it.each(['application/connect+proto', 'application/connect+json'])('answers a streaming Connect POST of %s with 415', async (contentType) => {
+    const ran = await handledDuring(async () => {
+      const res = await h2Request(
+        baseUrl,
+        { ':method': 'POST', ':path': '/grpc.health.v1.Health/Watch', 'content-type': contentType, 'connect-protocol-version': '1' },
+        grpcFrame(new Uint8Array()),
+      );
+      expect(res.status).toBe(415);
+    });
+    expect(ran).toBe(0);
+  });
+
+  it('refuses the Connect GET form of a read RPC', async () => {
     const ran = await handledDuring(async () => {
       const res = await h2Request(baseUrl, {
         ':method': 'GET',
-        ':path': `${CHECK_PATH}?connect=v1&encoding=json&message=${encodeURIComponent('{"service":""}')}`,
+        ':path': `/nwfl.mensa.v1.EventService/ListVenues?connect=v1&encoding=json&message=${encodeURIComponent('{}')}`,
       });
       expect(res.status).toBeGreaterThanOrEqual(400);
-      expect(res.body.toString()).not.toMatch(/SERVING/);
+      expect(res.body.toString()).not.toMatch(/venues/);
     });
     expect(ran).toBe(0);
   });

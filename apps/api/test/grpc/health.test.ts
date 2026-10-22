@@ -44,6 +44,15 @@ describe('grpc.health.v1.Health', () => {
     expect(res.statuses['']?.status).toBe(Status.SERVING);
   });
 
+  it('lists NOT_SERVING when readiness fails', async () => {
+    dbUp = false;
+    try {
+      expect((await client().list({})).statuses['']?.status).toBe(Status.NOT_SERVING);
+    } finally {
+      dbUp = true;
+    }
+  });
+
   it('leaves Watch unimplemented, which tells clients not to retry it', async () => {
     const stream = client().watch({ service: '' });
     await expect(stream[Symbol.asyncIterator]().next()).rejects.toMatchObject({ code: Code.Unimplemented });
