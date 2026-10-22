@@ -181,3 +181,28 @@ test('the full build shows the submitted content the canary hides (the other hal
     expect(await (await request.get(path)).text(), path).toMatch(/data-source="submitted"/);
   }
 });
+
+/** A raw post to the server as cloudflared sends it, declared or chunked. */
+function bigPost(bytes: number, chunked: boolean) {
+  return new Promise<number>((resolve, reject) => {
+    const headers: Record<string, string> = {
+      host: 'nwflorida.us',
+      'x-forwarded-proto': 'https',
+      origin: 'https://nwflorida.us',
+      'content-type': 'application/x-www-form-urlencoded',
+    };
+    if (!chunked) headers['content-length'] = String(bytes + 5);
+    const req = http.request(`${BACKEND_URL}/prefs`, { method: 'POST', headers }, (res) => {
+      res.resume();
+      resolve(res.statusCode ?? 0);
+    });
+    req.on('error', reject);
+    req.write('back=');
+    req.end('a'.repeat(bytes));
+  });
+}
+
+test('a reader-control post bigger than the form is refused with 413, declared or chunked', async () => {
+  expect(await bigPost(2 * 1024 * 1024, false)).toBe(413);
+  expect(await bigPost(100 * 1024, true)).toBe(413);
+});

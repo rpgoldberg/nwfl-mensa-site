@@ -12,6 +12,65 @@ function post(fields: Record<string, string>, opts: { cookie?: string; origin?: 
   return POST({ request, url } as unknown as Ctx) as Promise<Response>;
 }
 
+const FORM = 'application/x-www-form-urlencoded';
+
+/** A body that arrives in pieces, with no Content-Length (chunked). */
+function chunked(parts: string[], fail?: string): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const part of parts) controller.enqueue(new TextEncoder().encode(part));
+      if (fail) controller.error(new Error(fail));
+      else controller.close();
+    },
+  });
+}
+
+function postBody(body: BodyInit, headers: Record<string, string>) {
+  const url = new URL('http://site.test/prefs');
+  const request = new Request(url, { method: 'POST', headers, body, duplex: 'half' } as RequestInit);
+  return POST({ request, url } as unknown as Ctx) as Promise<Response>;
+}
+
+describe('POST /prefs: what it will read (the memory blocker)', () => {
+  it('refuses a declared body over 4 KiB unread, and closes the connection', async () => {
+    const res = await postBody(`back=${'a'.repeat(4995)}`, { 'content-type': FORM, 'content-length': '5000' });
+    expect(res.status).toBe(413);
+    expect(res.headers.get('connection')).toBe('close');
+    expect(res.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('refuses a chunked body as soon as it runs over 4 KiB', async () => {
+    const res = await postBody(chunked([`back=${'a'.repeat(3000)}`, 'a'.repeat(3000)]), { 'content-type': FORM });
+    expect(res.status).toBe(413);
+    expect(res.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('still takes a chunked form that fits', async () => {
+    const res = await postBody(chunked(['size=lar', 'ger&back=%2Fabout']), { 'content-type': FORM });
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe('/about');
+  });
+
+  it('takes an empty form as no change, and sends the reader Home', async () => {
+    const url = new URL('http://site.test/prefs');
+    const request = new Request(url, { method: 'POST', headers: { 'content-type': FORM } });
+    const res = (await POST({ request, url } as unknown as Ctx)) as Response;
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe('/');
+  });
+
+  it('answers 400 to a form it cannot read, or a body that breaks off', async () => {
+    expect((await postBody('size=larger', { 'content-type': 'multipart/form-data' })).status).toBe(400);
+    expect((await postBody(chunked(['size=lar'], 'the client went away'), { 'content-type': FORM })).status).toBe(400);
+  });
+
+  it("answers 413 when Astro's own 64 KiB cap stops a chunked body before this handler sees it", async () => {
+    // Undici reads ahead, so Astro's limiter can fail the stream first.
+    const capped = chunked(['size=lar'], 'Body size limit exceeded: received more than 65536 bytes');
+    expect((await postBody(capped, { 'content-type': FORM })).status).toBe(413);
+  });
+});
+
 describe('POST /prefs', () => {
   it('writes the next size and redirects back to the page, with See Other', async () => {
     const res = await post({ size: 'larger', back: '/about' }, { cookie: `${SIZE_COOKIE}=2` });

@@ -7,7 +7,9 @@ export default defineConfig({
   output: 'server',
   // Standalone, but started by server/serve.mjs, which wraps Astro's handler so
   // the response policy reaches prerendered pages and assets too.
-  adapter: node({ mode: 'standalone' }),
+  // Every request body Astro reads is capped at 64 KiB: its 1 GB default let
+  // three large posts exhaust the pod's memory. /prefs caps its own at 4 KiB.
+  adapter: node({ mode: 'standalone', bodySizeLimit: 64 * 1024 }),
   server: { port: 8080, host: true },
   trailingSlash: 'never',
   build: {

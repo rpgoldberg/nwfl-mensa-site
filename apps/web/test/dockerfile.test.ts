@@ -52,3 +52,9 @@ describe('Dockerfile', () => {
     }
   });
 });
+
+describe('astro.config.mjs', () => {
+  it('caps every request body Astro reads at 64 KiB (its default is 1 GB)', () => {
+    expect(readFileSync('astro.config.mjs', 'utf8')).toMatch(/node\(\{ mode: 'standalone', bodySizeLimit: 64 \* 1024 \}\)/);
+  });
+});
