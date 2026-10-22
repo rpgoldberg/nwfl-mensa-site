@@ -35,6 +35,12 @@ describe('poolConfigFromEnv', () => {
     expect(config.ssl).toEqual({ rejectUnauthorized: false });
   });
 
+  it('times out a statement on the server and a query on the client, so a client hung on a dead connection is freed', () => {
+    expect(poolConfigFromEnv({})).toMatchObject({ statement_timeout: 10_000, query_timeout: 12_000, keepAlive: true });
+    expect(poolConfigFromEnv({ PG_STATEMENT_TIMEOUT_MS: '400', PG_QUERY_TIMEOUT_MS: '500' })).toMatchObject({ statement_timeout: 400, query_timeout: 500 });
+    expect(poolConfigFromEnv({ PG_STATEMENT_TIMEOUT_MS: 'soon', PG_QUERY_TIMEOUT_MS: '0' })).toMatchObject({ statement_timeout: 10_000, query_timeout: 12_000 });
+  });
+
   it('falls back to discrete PG* variables with local defaults', () => {
     expect(poolConfigFromEnv({})).toMatchObject({ host: '127.0.0.1', port: 5432, user: 'nwfl', database: 'nwfl' });
     expect(poolConfigFromEnv({ PGHOST: 'db', PGPORT: '6543', PGUSER: 'a', PGPASSWORD: 'b', PGDATABASE: 'c' })).toMatchObject({

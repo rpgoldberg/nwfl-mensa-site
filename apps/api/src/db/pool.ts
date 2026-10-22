@@ -15,6 +15,19 @@ const DEFAULT_POOL_MAX = 10;
 // database has gone away should fail its calls, not hang them.
 const CONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
+// Every query, not only the probe's: the server ends a statement after
+// statement_timeout, and the client gives up on a reply after query_timeout,
+// which is what frees a client whose connection went dark without a reset
+// (pool.query destroys a client its query failed on; inTransaction does too).
+// The client's limit is the longer, so a slow but live query gets the
+// server's own error first. keepAlive lets the kernel notice a dead peer.
+const DEFAULT_STATEMENT_TIMEOUT_MS = 10_000;
+const DEFAULT_QUERY_TIMEOUT_MS = 12_000;
+
+const positive = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
 
 /**
  * PGSSLMODE -> node-postgres `ssl`. verify-full reads the CA file CONTENTS:
@@ -34,7 +47,6 @@ export function sslFromEnv(env: Env = process.env): ConnectionOptions | undefine
 export function poolConfigFromEnv(env: Env = process.env): pg.PoolConfig {
   const url = env['DATABASE_URL'];
   const ssl = sslFromEnv(env);
-  const poolMax = Number(env['PG_POOL_MAX']);
   return {
     ...(url !== undefined
       ? { connectionString: url }
@@ -47,8 +59,11 @@ export function poolConfigFromEnv(env: Env = process.env): pg.PoolConfig {
         }),
     // After the URL, so PGSSLMODE beats any sslmode inside it.
     ...(ssl !== undefined ? { ssl } : {}),
-    max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : DEFAULT_POOL_MAX,
+    max: positive(env['PG_POOL_MAX'], DEFAULT_POOL_MAX),
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    statement_timeout: positive(env['PG_STATEMENT_TIMEOUT_MS'], DEFAULT_STATEMENT_TIMEOUT_MS),
+    query_timeout: positive(env['PG_QUERY_TIMEOUT_MS'], DEFAULT_QUERY_TIMEOUT_MS),
+    keepAlive: true,
   };
 }
 

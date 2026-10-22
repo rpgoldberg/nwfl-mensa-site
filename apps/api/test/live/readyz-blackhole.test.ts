@@ -88,4 +88,26 @@ describe.skipIf(url === undefined)('readyz after the database connections go dar
       await Promise.race([pool.end(), new Promise((resolve) => setTimeout(resolve, 1_000))]);
     }
   });
+  // STACK-FIX: with RPC queries in flight on the dead connections, the probe's
+  // own timeout is not enough: pool.query clients hung too and filled the pool.
+  // The pool's query timeout fails them, and pool.query destroys a client its
+  // query failed on, so new connections replace them.
+  it.each([2, 4])('recovers with %i handler queries hung on the dead connections, as every RPC runs them', async (inflight) => {
+    const through = new URL(url as string);
+    through.port = String(proxy.port);
+    const pool = createPool({ DATABASE_URL: through.toString(), PG_POOL_MAX: '2', PG_QUERY_TIMEOUT_MS: '500', PG_STATEMENT_TIMEOUT_MS: '400' });
+    const readiness = createReadiness(pool, { probeTimeoutMs: 300 });
+    try {
+      expect((await Promise.all([readiness.check(), readiness.check()])).map((r) => r.ready)).toEqual([true, true]);
+      proxy.blackhole();
+      const handlers = Array.from({ length: inflight }, () => pool.query('SELECT 1').then(() => 'answered', () => 'failed'));
+      const after: boolean[] = [];
+      for (let attempt = 0; attempt < 8 && after.at(-1) !== true; attempt += 1) after.push((await readiness.check()).ready);
+      expect(after.at(-1)).toBe(true);
+      expect(await Promise.all(handlers)).toContain('failed');
+      expect(await pool.query('SELECT 1 AS one')).toMatchObject({ rows: [{ one: 1 }] });
+    } finally {
+      await Promise.race([pool.end(), new Promise((resolve) => setTimeout(resolve, 1_000))]);
+    }
+  }, 60_000);
 });
