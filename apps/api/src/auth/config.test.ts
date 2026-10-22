@@ -47,11 +47,24 @@ describe('readAuthConfig', () => {
       AGENT_OIDC_AUDIENCE: 'def456',
       AGENT_SCOPE: 'newsletter:read',
       AGENT_SUBJECT: 'ak-agent',
-      EDGE_CLIENT_IDS: 'a.nwfl-edge.serviceaccount.identity.linkerd.cluster.local, b.x',
+      EDGE_CLIENT_IDS: 'a.nwfl-edge.serviceaccount.identity.linkerd.cluster.local, b.nwfl-edge.serviceaccount.identity.linkerd.mesh.example.org',
     });
     expect(config.clients[0]).toEqual({ kind: 'site', issuer: ISS, audience: 'abc123', jwksUrl: 'https://keys.example.org/site.json' });
     expect(config.clients[1]).toMatchObject({ audience: 'def456', scope: 'newsletter:read', subject: 'ak-agent' });
-    expect(config.edgeClientIds).toEqual(['a.nwfl-edge.serviceaccount.identity.linkerd.cluster.local', 'b.x']);
+    expect(config.edgeClientIds).toEqual(['a.nwfl-edge.serviceaccount.identity.linkerd.cluster.local', 'b.nwfl-edge.serviceaccount.identity.linkerd.mesh.example.org']);
+  });
+
+  it.each([
+    ['a short name', 'cloudflared'],
+    ['another namespace', 'cloudflared.nwfl.serviceaccount.identity.linkerd.cluster.local'],
+    ['the web identity', 'nwfl-web.nwfl.serviceaccount.identity.linkerd.cluster.local'],
+    ['the web service account in the edge namespace', 'nwfl-web.nwfl-edge.serviceaccount.identity.linkerd.cluster.local'],
+    ['the API service account in the edge namespace', 'nwfl-api.nwfl-edge.serviceaccount.identity.linkerd.cluster.local'],
+    ['a capital letter', 'Cloudflared.nwfl-edge.serviceaccount.identity.linkerd.cluster.local'],
+    ['no trust domain', 'cloudflared.nwfl-edge.serviceaccount.identity.linkerd'],
+    ['one good and one typo', 'cloudflared.nwfl-edge.serviceaccount.identity.linkerd.cluster.local,cloudflare'],
+  ])('refuses to start with EDGE_CLIENT_IDS naming %s', (_label, value) => {
+    expect(() => readAuthConfig({ EDGE_CLIENT_IDS: value })).toThrow(/is not an edge identity/);
   });
 
   it.each(['', ' ', ', ,'])('refuses to start with EDGE_CLIENT_IDS set but naming no identity (%j): the edge would go unnarrowed', (value) => {

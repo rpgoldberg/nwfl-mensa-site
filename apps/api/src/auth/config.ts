@@ -12,8 +12,10 @@
 //   VERIFIER_OIDC_JWKS_URL, VERIFIER_SCOPE (membership.verify),
 //   VERIFIER_SUBJECT (svc-nwfl-verifier)
 //   EDGE_CLIENT_IDS        the edge's mesh identities, comma-separated
-//                          (default cloudflared in nwfl-edge; set but
-//                          empty refuses to start)
+//                          (default cloudflared in nwfl-edge). Each must be
+//                          a full identity in the nwfl-edge namespace and
+//                          not the web's or the API's; set but empty, or
+//                          any entry that is not, refuses to start
 //
 // The scope and subject defaults follow the plan's names; the real values come
 // from the Authentik blueprint (I4) and are set here when they differ.
@@ -55,6 +57,12 @@ function https(name: string, value: string): string {
   return value;
 }
 
+// A Linkerd identity of a service account in the edge namespace: <sa>.nwfl-edge.serviceaccount.identity.linkerd.<trust domain>.
+const LABEL = '[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?';
+const EDGE_IDENTITY = new RegExp(`^(${LABEL})\\.nwfl-edge\\.serviceaccount\\.identity\\.linkerd\\.${LABEL}(?:\\.${LABEL})*$`);
+// The site's own workloads, never the edge.
+const NOT_EDGE_ACCOUNTS = new Set(['nwfl-web', 'nwfl-api']);
+
 export function readAuthConfig(env: Env): AuthConfig {
   const clients: ClientSpec[] = [];
   for (const kind of ['site', 'agent', 'verifier'] as const) {
@@ -79,6 +87,13 @@ export function readAuthConfig(env: Env): AuthConfig {
   const edgeClientIds = edge === undefined ? DEFAULT_EDGE_CLIENT_IDS : edge.split(',').map((id) => id.trim()).filter((id) => id !== '');
   // Set but empty would switch the edge narrowing and the edge budget off.
   if (edgeClientIds.length === 0) throw new Error('EDGE_CLIENT_IDS must name at least one identity (unset it for the default)');
+  // A typo, or the web's or the API's own identity, would leave the real edge unnarrowed.
+  for (const id of edgeClientIds) {
+    const account = EDGE_IDENTITY.exec(id)?.[1];
+    if (account === undefined || NOT_EDGE_ACCOUNTS.has(account)) {
+      throw new Error(`EDGE_CLIENT_IDS: ${id} is not an edge identity (<service account>.nwfl-edge.serviceaccount.identity.linkerd.<trust domain>)`);
+    }
+  }
   return { clients, edgeClientIds };
 }
 
