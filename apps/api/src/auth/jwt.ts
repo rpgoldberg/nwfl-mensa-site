@@ -13,8 +13,11 @@
 // A token is matched to exactly one client by its (unverified) issuer and
 // audience, then verified for real against that client only: signature by a
 // key in that client's set, an allowed algorithm (RS256, ES256; never none or
-// HMAC), the issuer, the audience, a subject and an expiry. A token naming two
-// of our audiences is refused, so one token never works for two clients.
+// HMAC), the issuer, the audience, a subject, an issue time and an expiry. A
+// token's lifetime (exp - iat), and its age, is at most MAX_LIFETIME_SECONDS
+// for its kind: 1 h for a site token, 24 h for a machine token, so a leaked
+// token cannot be minted to last for years. A token naming two of our
+// audiences is refused, so one token never works for two clients.
 // The reason a token fails is never returned to the caller (auth/caller.ts).
 // ============================================================================
 import { type JWTPayload, type JWTVerifyGetKey, decodeJwt, jwtVerify } from 'jose';
@@ -35,6 +38,7 @@ export interface ClientConfig {
 
 export const ALGORITHMS = ['RS256', 'ES256'];
 const CLOCK_TOLERANCE_SECONDS = 30;
+export const MAX_LIFETIME_SECONDS: Record<ClientKind, number> = { site: 3600, agent: 86_400, verifier: 86_400 };
 
 class TokenRefused extends Error {
   override name = 'TokenRefused';
@@ -57,8 +61,11 @@ export function createJwtVerifier(clients: ClientConfig[]): TokenVerifier {
         audience: client.audience,
         algorithms: ALGORITHMS,
         clockTolerance: CLOCK_TOLERANCE_SECONDS,
-        requiredClaims: ['exp', 'sub'],
+        requiredClaims: ['exp', 'sub', 'iat'],
+        // Requires iat, refuses one in the future, and bounds the age since it.
+        maxTokenAge: MAX_LIFETIME_SECONDS[client.kind],
       });
+      if ((payload.exp as number) - (payload.iat as number) > MAX_LIFETIME_SECONDS[client.kind]) throw new TokenRefused('token lifetime is too long');
       const subject = payload.sub as string;
       if (client.subject !== undefined && subject !== client.subject) throw new TokenRefused('unexpected subject');
       const scopes = typeof payload['scope'] === 'string' ? payload['scope'].split(' ').filter((scope) => scope !== '') : [];

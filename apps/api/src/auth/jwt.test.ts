@@ -95,6 +95,48 @@ describe('createJwtVerifier', () => {
     await expect(createJwtVerifier(clients()).verify(await make())).rejects.toThrow();
   });
 
+  describe('token lifetime (STACK-FIX): an issue time is required, and exp - iat is at most 1 h for a site token, 24 h for a machine token', () => {
+    const now = (): number => Math.floor(Date.now() / 1000);
+    const at = (claims: Record<string, unknown>, iat: number | undefined, exp: number): Promise<string> => {
+      let jwt = new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'rsa-1' }).setExpirationTime(exp);
+      if (iat !== undefined) jwt = jwt.setIssuedAt(iat);
+      return jwt.sign(rsa.privateKey);
+    };
+    const agent = { iss: AGENT_ISS, aud: 'nwfl-agent', sub: 'svc-nwfl-newsletter', scope: 'newsletter.read' };
+    const verifierClaims = { iss: VERIFIER_ISS, aud: 'nwfl-verifier', sub: 'svc-nwfl-verifier', scope: 'membership.verify' };
+
+    it('refuses a token without an issue time', async () => {
+      await expect(createJwtVerifier(clients()).verify(await at(site(), undefined, now() + 300))).rejects.toThrow(/"iat"/);
+    });
+
+    it('accepts a site token living exactly 1 h, and refuses one living longer', async () => {
+      const verifier = createJwtVerifier(clients());
+      const t = now();
+      expect((await verifier.verify(await at(site(), t, t + 3600))).client).toBe('site');
+      await expect(verifier.verify(await at(site(), t, t + 3601))).rejects.toThrow(/lifetime/);
+      await expect(verifier.verify(await at(site(), t, t + 10 * 365 * 86400))).rejects.toThrow(/lifetime/);
+    });
+
+    it('refuses a site token issued over 1 h ago even with a near expiry', async () => {
+      const t = now();
+      await expect(createJwtVerifier(clients()).verify(await at(site(), t - 7200, t + 300))).rejects.toThrow();
+    });
+
+    it('refuses a token issued in the future', async () => {
+      const t = now();
+      await expect(createJwtVerifier(clients()).verify(await at(site(), t + 600, t + 900))).rejects.toThrow(/"iat"/);
+    });
+
+    it('accepts a machine token living 24 h, and refuses one living longer', async () => {
+      const verifier = createJwtVerifier(clients());
+      const t = now();
+      expect((await verifier.verify(await at(agent, t, t + 86400))).client).toBe('agent');
+      await expect(verifier.verify(await at(agent, t, t + 86401))).rejects.toThrow(/lifetime/);
+      expect((await verifier.verify(await at(verifierClaims, t, t + 86400))).client).toBe('verifier');
+      await expect(verifier.verify(await at(verifierClaims, t, t + 86401))).rejects.toThrow(/lifetime/);
+    });
+  });
+
   it('refuses every token when no client is configured', async () => {
     await expect(createJwtVerifier([]).verify(await sign(site()))).rejects.toThrow();
   });
