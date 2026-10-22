@@ -12,14 +12,21 @@
 // not spoken at all. test/grpc/transport-rule.test.ts proves layer 2 on its
 // own; transport-hardening.test.ts proves layer 1 and the bounds below.
 //
-// BOUNDS, so one caller cannot pin the pod's memory:
+// BOUNDS, so one caller cannot pin the pod's memory or starve the others:
 //   - MAX_CONCURRENT_STREAMS per connection (HTTP/2 SETTINGS);
-//   - MAX_ACTIVE_STREAMS across all connections, refused RESOURCE_EXHAUSTED;
+//   - two budgets of active streams across all connections, each refused
+//     RESOURCE_EXHAUSTED when full: MAX_EDGE_STREAMS for calls that came
+//     through the edge (l5d-client-id names an edge identity, see
+//     auth/caller.ts) and MAX_ACTIVE_STREAMS for every other call. Slow
+//     senders on the internet side can fill only the first, and it is at
+//     most half of one connection, so the site keeps the other half even on
+//     a connection the mesh proxy shares;
 //   - READ_MAX_BYTES per message, checked on the envelope before buffering;
 //   - RECEIVE_DEADLINE_MS for the request body: a sender that has not
 //     finished by then has its stream cancelled, freeing what was buffered;
 //   - MAX_SESSION_MEMORY_MB for HTTP/2 session buffers.
-// Worst case held in request buffers: MAX_ACTIVE_STREAMS x READ_MAX_BYTES.
+// Worst case held in request buffers: (MAX_ACTIVE_STREAMS + MAX_EDGE_STREAMS)
+// x READ_MAX_BYTES, the same 128 MiB as before the edge budget was split off.
 //
 // EARLY ERRORS: a call refused before the interceptors run (a bad envelope,
 // the size cap, a bad header, a receive deadline) still gets one access-log
@@ -30,6 +37,7 @@ import { Code, type ConnectRouter, type Interceptor, createContextValues } from 
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
+import { DEFAULT_EDGE_CLIENT_IDS, isEdgePeer } from '../auth/caller.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { codeName } from './interceptors.js';
 import { REQUEST_INFO, type RequestInfo } from './request.js';
@@ -44,7 +52,8 @@ export const ACCEPTED_CONTENT_TYPES: ReadonlySet<string> = new Set(['application
  */
 export const READ_MAX_BYTES = 4 * 1024 * 1024;
 export const MAX_CONCURRENT_STREAMS = 16;
-export const MAX_ACTIVE_STREAMS = 32;
+export const MAX_ACTIVE_STREAMS = 24;
+export const MAX_EDGE_STREAMS = 8;
 export const RECEIVE_DEADLINE_MS = 10_000;
 export const MAX_SESSION_MEMORY_MB = 16;
 
@@ -67,6 +76,9 @@ export interface GrpcServerOptions {
   logger?: StructuredLogger;
   receiveDeadlineMs?: number;
   maxActiveStreams?: number;
+  maxEdgeStreams?: number;
+  /** Mesh identities of the edge (cloudflared), as the caller gate reads them. */
+  edgeClientIds?: readonly string[];
 }
 
 type NodeHandler = (request: http2.Http2ServerRequest, response: http2.Http2ServerResponse) => void;
@@ -98,13 +110,16 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
   const { logger } = options;
   const receiveDeadlineMs = options.receiveDeadlineMs ?? RECEIVE_DEADLINE_MS;
   const maxActiveStreams = options.maxActiveStreams ?? MAX_ACTIVE_STREAMS;
+  const maxEdgeStreams = options.maxEdgeStreams ?? MAX_EDGE_STREAMS;
+  const edgeIds = new Set(options.edgeClientIds ?? DEFAULT_EDGE_CLIENT_IDS);
   const infos = new WeakMap<http2.Http2ServerRequest, RequestInfo>();
   const connect = createConnectHandler(options, (request) => {
     const values = createContextValues();
     values.set(REQUEST_INFO, infos.get(request));
     return values;
   });
-  let active = 0;
+  // Active streams per budget.
+  const active = { site: 0, edge: 0 };
 
   const handler: NodeHandler = (request, response) => {
     const info: RequestInfo = { id: randomUUID(), reached: false };
@@ -133,7 +148,8 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
       addTrailers(trailers);
     };
 
-    active += 1;
+    const budget = isEdgePeer(request.headers['l5d-client-id'], edgeIds) ? 'edge' : 'site';
+    active[budget] += 1;
     const deadline = setTimeout(() => {
       if (!request.complete) {
         timedOut = true;
@@ -141,7 +157,7 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
       }
     }, receiveDeadlineMs);
     request.stream.once('close', () => {
-      active -= 1;
+      active[budget] -= 1;
       clearTimeout(deadline);
       if (info.reached || logger === undefined) return;
       const code = timedOut ? 'deadline_exceeded' : status !== undefined ? codeName(Number(status)) : undefined;
@@ -153,7 +169,7 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
       response.end();
       return;
     }
-    if (active > maxActiveStreams) {
+    if (active[budget] > (budget === 'edge' ? maxEdgeStreams : maxActiveStreams)) {
       response.writeHead(200, { 'content-type': 'application/grpc', 'grpc-status': STATUS_RESOURCE_EXHAUSTED });
       response.end();
       return;

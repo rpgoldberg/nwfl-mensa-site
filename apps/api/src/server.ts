@@ -62,6 +62,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
     }),
     shutdownSignal: shutdown.signal,
+    ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
     // Calls refused before the interceptors run are logged by the gRPC layer itself.
     logger: logger.child({ component: 'grpc' }),
   });

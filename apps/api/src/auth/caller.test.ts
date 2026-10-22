@@ -199,6 +199,11 @@ describe('authInterceptor: the mesh identity (l5d-client-id) only ever narrows',
     await expect(api.newsletter({ ...bearer('member-token'), 'l5d-client-id': WEB })).rejects.toMatchObject({ code: Code.PermissionDenied });
   });
 
+  it('reads the edge identity without regard to case, so a case variant is narrowed too', async () => {
+    await expect(api.events({ 'l5d-client-id': EDGE.toUpperCase() })).rejects.toMatchObject({ code: Code.PermissionDenied });
+    expect((await api.newsletter({ ...bearer('agent-token'), 'l5d-client-id': EDGE.toUpperCase() })).kind).toBe('agent');
+  });
+
   it('refuses a header carrying several identities, which the proxy never sends', async () => {
     await expect(api.newsletter({ ...bearer('agent-token'), 'l5d-client-id': `${WEB}, ${EDGE}` })).rejects.toMatchObject({ code: Code.PermissionDenied });
   });

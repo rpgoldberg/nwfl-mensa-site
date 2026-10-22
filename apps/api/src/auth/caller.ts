@@ -69,6 +69,17 @@ export const VERIFIER_SERVICE = 'nwfl.mensa.v1.MembershipVerifierService';
 const EDGE_SERVICES = new Set([AGENT_SERVICE, VERIFIER_SERVICE]);
 export const DEFAULT_EDGE_CLIENT_IDS: readonly string[] = ['cloudflared.nwfl-edge.serviceaccount.identity.linkerd.cluster.local'];
 
+/**
+ * Whether an l5d-client-id value names an edge identity. Compared without
+ * case, and any entry of a list counts: the header only ever narrows, so
+ * reading more values as the edge can only refuse more.
+ */
+export function isEdgePeer(header: string | readonly string[] | null | undefined, edge: ReadonlySet<string>): boolean {
+  if (header === null || header === undefined) return false;
+  const lower = new Set([...edge].map((id) => id.toLowerCase()));
+  return (typeof header === 'string' ? [header] : header).some((value) => value.split(',').some((id) => lower.has(id.trim().toLowerCase())));
+}
+
 export function audienceFor(groups: readonly string[], member: boolean): Audience {
   if (groups.includes('nwfl-officers')) return 'officers';
   return member ? 'members' : 'public';
@@ -128,7 +139,7 @@ export function authInterceptor(options: AuthOptions): Interceptor {
     const service = req.service.typeName;
     const peer = req.header.get('l5d-client-id');
     // One identity or none: the proxy replaces the header, so a list means it did not.
-    if (peer !== null && (peer.includes(',') || (edge.has(peer) && !EDGE_SERVICES.has(service)))) {
+    if (peer !== null && (peer.includes(',') || (isEdgePeer(peer, edge) && !EDGE_SERVICES.has(service)))) {
       throw new ConnectError('not served on this path', Code.PermissionDenied);
     }
     const caller = await establish(req.header.get('authorization'), options.verifier, standing);
