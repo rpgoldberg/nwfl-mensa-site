@@ -115,6 +115,8 @@ describe.skipIf(!live)('schema after API-FIX3', () => {
       expect(await failure(app, `DELETE FROM edition_item WHERE edition_id = $1`, [id])).toMatch(/pins are frozen/);
       expect(await failure(app, `UPDATE edition_item SET pinned_at = now() - interval '1 day' WHERE edition_id = $1`, [id])).toMatch(/pins are frozen/);
       expect(await failure(app, `UPDATE edition_item SET taken_down_at = now() WHERE edition_id = $1`, [id])).toBe('ok');
+      // Once: a later transaction cannot set the mark again, even to its own now().
+      expect(await failure(app, `UPDATE edition_item SET taken_down_at = now() WHERE edition_id = $1`, [id])).toMatch(/pins are frozen/);
       expect(await failure(app, `UPDATE edition_item SET taken_down_at = NULL WHERE edition_id = $1`, [id])).toMatch(/pins are frozen/);
       expect(await failure(app, `UPDATE edition_item SET taken_down_at = now() - interval '1 day' WHERE edition_id = $1`, [id])).toMatch(/pins are frozen/);
     });

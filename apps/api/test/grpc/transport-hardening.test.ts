@@ -277,7 +277,10 @@ describe('edge admission', () => {
     expect(await call(edgeHeaders(NEWSLETTER, 'agent-token'))).toBe('0');
   });
 
-  it('refuses at once an edge stream whose token belongs to another service or a site user', async () => {
+  it('refuses at once an edge stream whose token belongs to another service or a site user, so it holds no slot either', async () => {
+    const elsewhere = await hold(4, edgeHeaders(HEALTH, 'agent-token'));
+    expect(elsewhere.open()).toBe(0);
+    await elsewhere.release();
     expect(await call(edgeHeaders(VERIFIER, 'agent-token'))).toBe('7');
     expect(await call(edgeHeaders(NEWSLETTER, 'verifier-token'))).toBe('7');
     expect(await call(edgeHeaders(NEWSLETTER, 'site-token'))).toBe('7');
