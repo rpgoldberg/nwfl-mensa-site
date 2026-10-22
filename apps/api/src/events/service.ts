@@ -7,7 +7,10 @@
 // a request field (auth/caller.ts):
 //   - a members event read by the public is withheld: its id, its local date,
 //     its area and "members", nothing else (R3: "Members event, sign in for
-//     details");
+//     details"). Not its status either: the public sees a cancelled members
+//     event exactly as a scheduled one, whichever way the cancelled filter is
+//     set, under the id its series date would have;
+//   - the public venue list holds only the venues public events use;
 //   - a member's home is shown to EVERYONE as its area and host office only,
 //     under a fixed label, whatever was typed into its name (R3).
 // ============================================================================
@@ -221,7 +224,8 @@ function areaOf(entry: Entry): Area {
 export function occurrenceMessage(entry: Entry, audience: Audience): EventOccurrence {
   if (entry.visibility === 'members' && audience === 'public') {
     return create(EventOccurrenceSchema, {
-      id: entry.id,
+      // A stored row's own id would tell an override (a cancellation, a move) from a plain date.
+      id: entry.series !== undefined ? `${entry.series.id}:${entry.localDate}` : entry.id,
       localDate: protoDate(entry.localDate),
       area: areaOf(entry),
       visibility: EventVisibility.MEMBERS,
@@ -373,7 +377,7 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
         if (toDays(to) - toDays(from) > MAX_RANGE_DAYS) throw invalid(`the range is longer than ${MAX_RANGE_DAYS} days`);
         const areas = new Set(request.areas);
         const entries = (await calendar(from, to))
-          .filter((entry) => request.includeCancelled || entry.status !== 'cancelled')
+          .filter((entry) => request.includeCancelled || entry.status !== 'cancelled' || (audience === 'public' && entry.visibility === 'members'))
           .filter((entry) => areas.size === 0 || areas.has(areaOf(entry)));
         return { occurrences: entries.map((entry) => occurrenceMessage(entry, audience)) };
       },
@@ -411,8 +415,16 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
         return { series: rows.filter((row) => audience !== 'public' || row.visibility === 'public').map(seriesMessage) };
       },
 
-      listVenues: async (request) => {
-        const rows = [...(await loadVenues()).values()].filter((row) => request.includeInactive || row.active);
+      listVenues: async (request, ctx) => {
+        let used: Set<string> | undefined;
+        if (audienceOf(ctx) === 'public') {
+          const { rows } = await db.query<{ id: string }>(
+            `SELECT default_venue_id AS id FROM event_series WHERE visibility = 'public' AND default_venue_id IS NOT NULL
+             UNION SELECT venue_id FROM event_occurrence WHERE visibility = 'public' AND venue_id IS NOT NULL`,
+          );
+          used = new Set(rows.map((row) => row.id));
+        }
+        const rows = [...(await loadVenues()).values()].filter((row) => (request.includeInactive || row.active) && (used === undefined || used.has(row.id)));
         return { venues: rows.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)).map(venueMessage) };
       },
     });

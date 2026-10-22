@@ -56,6 +56,11 @@ describe.skipIf(!live)('EventService reads', () => {
     await pool.query(`INSERT INTO event_occurrence (series_id, starts_at, visibility) VALUES ($1, '2026-12-07T18:00:00Z', 'public')`, [ids['retired']]);
     ids['cancelled'] = await insertId(pool,
       `INSERT INTO event_occurrence (series_id, starts_at, status, status_note, visibility) VALUES ($1, '2026-10-28T16:30:00Z', 'cancelled', 'Happy Halloween', 'public') RETURNING id`, [ids['lunch']]);
+    // A cancelled date of the members series, and a venue only a members event uses.
+    ids['partyCancelled'] = await insertId(pool,
+      `INSERT INTO event_occurrence (series_id, starts_at, status, status_note, visibility) VALUES ($1, '2026-12-20T00:00:00Z', 'cancelled', 'Host is away', 'members') RETURNING id`, [ids['party']]);
+    ids['hideaway'] = await insertId(pool, `INSERT INTO venue (kind, name, business_address, city, area) VALUES ('business', 'Hideaway Example Bar', '9 Example Alley', 'Destin', 'okaloosa') RETURNING id`);
+    await pool.query(`INSERT INTO event_occurrence (title, starts_at, visibility, venue_id) VALUES ('Members social', '2026-12-10T00:00:00Z', 'members', $1)`, [ids['hideaway']]);
     ids['picnic'] = await insertId(pool,
       `INSERT INTO event_occurrence (title, starts_at, ends_at, venue_id, visibility, detail, url) VALUES ('Fall Picnic', '2026-11-14T17:00:00Z', '2026-11-14T21:00:00Z', $1, 'public', 'Bring a chair', 'https://example.org/picnic') RETURNING id`, [ids['cafe']]);
   });
@@ -115,6 +120,24 @@ describe.skipIf(!live)('EventService reads', () => {
     expect(withheld?.venue).toBeUndefined();
     const memberView = (await list('2026-11-01', '2026-11-30', {}, MEMBER)).filter((o) => o.visibility === EventVisibility.MEMBERS);
     expect(memberView[0]).toMatchObject({ detailsWithheld: false, title: 'Members house party', seriesId: ids['party'] });
+  });
+
+  it('shows the public no difference between a cancelled members event and a scheduled one, whichever way the filter is set', async () => {
+    const view = async (includeCancelled: boolean, options = {}) =>
+      (await list('2026-12-01', '2026-12-31', { includeCancelled }, options)).filter((o) => o.visibility === EventVisibility.MEMBERS);
+    const without = await view(false);
+    const withCancelled = await view(true);
+    expect(withCancelled).toEqual(without);
+    expect(without.map((o) => [o.id, iso(o.localDate), o.status, o.detailsWithheld])).toEqual([
+      [expect.any(String), '2026-12-09', OccurrenceStatus.UNSPECIFIED, true],
+      [`${ids['party']}:2026-12-19`, '2026-12-19', OccurrenceStatus.UNSPECIFIED, true],
+    ]);
+    // A member sees the cancellation, only when asked for cancelled events.
+    expect((await view(false, MEMBER)).map((o) => iso(o.localDate))).toEqual(['2026-12-09']);
+    expect((await view(true, MEMBER)).map((o) => [o.id, o.status, o.statusNote])).toEqual([
+      [expect.any(String), OccurrenceStatus.SCHEDULED, ''],
+      [ids['partyCancelled'], OccurrenceStatus.CANCELLED, 'Host is away'],
+    ]);
   });
 
   it("shows a member's home only as its area and host office, to everyone", async () => {
@@ -192,7 +215,13 @@ describe.skipIf(!live)('EventService reads', () => {
 
     it('includes inactive series on request', async () => {
       expect((await events.listSeries({ includeInactive: true })).series.map((s) => s.slug)).toContain('retired');
-      expect((await events.listVenues({ includeInactive: true })).venues.length).toBe(2);
+    });
+  });
+
+  describe('ListVenues', () => {
+    it('shows the public only the venues public events use, and a member every venue', async () => {
+      expect((await events.listVenues({ includeInactive: true })).venues.map((v) => v.id)).toEqual([ids['cafe']]);
+      expect((await events.listVenues({}, MEMBER)).venues.map((v) => v.id).sort()).toEqual([ids['cafe'], ids['hideaway'], ids['home']].sort());
     });
   });
 });
