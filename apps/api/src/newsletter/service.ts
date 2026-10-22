@@ -57,13 +57,17 @@ interface PinnedRow {
   public_ast: unknown;
 }
 
-/** The edition's items in print order: pinned versions once frozen, live ones before. Only approved versions either way. */
+/**
+ * The edition's items in print order: pinned versions once frozen, live ones
+ * before; only approved versions either way. A withdrawn item is left out even
+ * when pinned, as the site's edition listing does: withdrawal is the takedown.
+ */
 async function editionItems(db: Pick<Db, 'query'>, edition: EditionRow): Promise<PinnedRow[]> {
   const columns = `i.id AS item_id, v.id AS version_id, i.kind, i.office_id, v.title, v.summary, v.visibility, v.n, v.content_hash, v.body_ast, v.public_ast`;
   const { rows } = FROZEN.has(edition.status)
     ? await db.query<PinnedRow>(
         `SELECT ${columns} FROM edition_item ei JOIN content_item i ON i.id = ei.item_id JOIN content_version v ON v.id = ei.version_id
-         WHERE ei.edition_id = $1 AND v.status IN ('approved', 'superseded') ${PRINT_ORDER}`,
+         WHERE ei.edition_id = $1 AND i.state = 'published' AND v.status IN ('approved', 'superseded') ${PRINT_ORDER}`,
         [edition.id, KIND_ORDER],
       )
     : await db.query<PinnedRow>(

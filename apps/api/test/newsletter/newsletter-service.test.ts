@@ -113,6 +113,9 @@ describe.skipIf(!live)('NewsletterService', () => {
     await publish('excomm-minutes', ContentKind.MINUTES, 'Called to order at 10:02. Adjourned at 11:15.');
     await publish('puzzle-corner', ContentKind.ARTICLE, 'Which number comes next: 2, 3, 5, 7?');
     await publish('book-club', ContentKind.ARTICLE, 'This month: a made-up novel.');
+    // Published, then taken down: never in an edition.
+    await publish('withdrawn-note', ContentKind.ARTICLE, 'Taken down.');
+    await content.withdraw({ itemId: items['withdrawn-note']?.id as string }, PUB);
     await publish('website-only', ContentKind.ARTICLE, 'Not for print.', { newsletter: false });
     await publish('next-issue', ContentKind.ARTICLE, 'For April.', { edition: otherEditionId });
     // Ready, never approved: never in an edition.
@@ -230,6 +233,20 @@ describe.skipIf(!live)('NewsletterService', () => {
       const listed = (await newsletter.listEditionItems({ editionId }, AGENT)).items;
       expect(listed.find((i) => i.itemId === item.id)?.versionId).toBe(item.version);
       expect(JSON.stringify(await exportOf(Audience.MEMBERS))).not.toContain('A revision after print.');
+    });
+
+    it('leaves out a pinned item withdrawn after the freeze, and brings back its pinned version once it is republished', async () => {
+      const item = items['book-club'] as { id: string; version: string };
+      const listed = async (): Promise<string[]> => (await newsletter.listEditionItems({ editionId }, AGENT)).items.map((i) => i.versionId);
+      await content.withdraw({ itemId: item.id }, PUB);
+      expect(await listed()).not.toContain(item.version);
+      expect(JSON.stringify(await exportOf(Audience.MEMBERS))).not.toContain('made-up novel');
+      // Restore opens a draft; the item is published again only when that is approved.
+      await content.restore({ itemId: item.id }, PUB);
+      expect(await listed()).not.toContain(item.version);
+      const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
+      await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      expect(await listed()).toContain(item.version);
     });
 
     it('refuses no audience, and records every export with its audience', async () => {
