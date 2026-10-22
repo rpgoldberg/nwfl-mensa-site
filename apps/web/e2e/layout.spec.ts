@@ -299,6 +299,39 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 412, height: 915 }
   });
 }
 
+test.describe('the signed-in header on a wide screen', () => {
+  /** Top of each header piece, and whether any two overlap. */
+  const pieces = (page: Page) =>
+    page.evaluate(() => {
+      const boxes = [...document.querySelectorAll<HTMLElement>('.wordmark, .top-nav .nav-link, .header-tools .hbtn, .account .who')].map((el) => el.getBoundingClientRect());
+      const overlap = boxes.some((a, i) => boxes.some((b, j) => i < j && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5));
+      const tools = [...document.querySelectorAll<HTMLElement>('.header-tools .hbtn, .account .who')].map((el) => Math.round(el.getBoundingClientRect().top));
+      return { bar: document.querySelector('.site-header__bar')!.getBoundingClientRect().height, toolRows: new Set(tools).size, overlap };
+    });
+
+  test('is one row at 1280, as high as the signed-out header', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/');
+    const out = await pieces(page);
+    await signIn(page, 'officer');
+    const signedIn = await pieces(page);
+    expect(signedIn.bar).toBe(out.bar);
+    expect(signedIn.overlap).toBe(false);
+  });
+
+  for (const width of [900, 1024, 1180]) {
+    test(`wraps cleanly at ${width}: Aa, Help and the account together on one row, nothing overlapping`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto('/');
+      await signIn(page, 'officer');
+      const signedIn = await pieces(page);
+      expect(signedIn.toolRows).toBe(1);
+      expect(signedIn.overlap).toBe(false);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    });
+  }
+});
+
 test.describe('signed in, at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
