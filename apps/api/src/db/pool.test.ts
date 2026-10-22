@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createPool, describeTarget, poolConfigFromEnv, probeDatabase, sslFromEnv } from './pool.js';
 
 describe('sslFromEnv', () => {
@@ -99,10 +99,65 @@ describe('probeDatabase', () => {
     expect(odd.code).toBe('UNKNOWN');
   });
 
+  it('gives up after two seconds by default', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = probeDatabase({ query: () => new Promise(() => {}) });
+      await vi.advanceTimersByTimeAsync(1_999);
+      let settled = false;
+      void pending.then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({ reachable: false, code: 'TIMEOUT' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('gives up after the timeout so a hung database cannot hang the probe', async () => {
     const started = Date.now();
     const probe = await probeDatabase({ query: () => new Promise(() => {}) }, 50);
     expect(probe).toMatchObject({ reachable: false, code: 'TIMEOUT' });
     expect(Date.now() - started).toBeLessThan(1000);
   });
+
+  describe('through a pool checkout', () => {
+    const pool = (query: () => Promise<unknown>, connectDelayMs = 0) => {
+      const releases: unknown[] = [];
+      return {
+        releases,
+        db: {
+          query: () => Promise.reject(new Error('the probe must use its own client')),
+          connect: () =>
+            new Promise<{ query: () => Promise<unknown>; release: (destroy?: boolean) => void }>((resolve) =>
+              setTimeout(() => resolve({ query, release: (destroy?: boolean) => void releases.push(destroy) }), connectDelayMs),
+            ),
+        },
+      };
+    };
+
+    it('returns the client to the pool after a good probe', async () => {
+      const { db, releases } = pool(() => Promise.resolve({}));
+      expect((await probeDatabase(db)).reachable).toBe(true);
+      expect(releases).toEqual([undefined]);
+    });
+
+    it('destroys the client when the probe times out or fails', async () => {
+      const hung = pool(() => new Promise(() => {}));
+      expect(await probeDatabase(hung.db, 30)).toMatchObject({ reachable: false, code: 'TIMEOUT' });
+      expect(hung.releases).toEqual([true]);
+      const failing = pool(() => Promise.reject(Object.assign(new Error('x'), { code: '57P01' })));
+      expect(await probeDatabase(failing.db)).toMatchObject({ reachable: false, code: '57P01' });
+      expect(failing.releases).toEqual([true]);
+    });
+
+    it('destroys a client that arrives after the probe gave up', async () => {
+      const late = pool(() => Promise.resolve({}), 60);
+      expect(await probeDatabase(late.db, 20)).toMatchObject({ reachable: false, code: 'TIMEOUT' });
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(late.releases).toEqual([true]);
+    });
+  });
 });
+

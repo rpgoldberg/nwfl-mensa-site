@@ -79,6 +79,8 @@ export function createPool(env: Env = process.env): pg.Pool {
 /** The slice of pg.Pool a probe needs, so readiness is testable without a database. */
 export interface QueryableDb {
   query(text: string): Promise<unknown>;
+  /** A pool's checkout. When present the probe uses its own client, and destroys it on a timeout. */
+  connect?(): Promise<{ query(text: string): Promise<unknown>; release(destroy?: boolean): void }>;
 }
 
 /** The slice of pg.Pool the RPC handlers need: parameterised queries that return rows. */
@@ -100,10 +102,31 @@ export async function probeDatabase(db: QueryableDb, timeoutMs = DEFAULT_PROBE_T
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => reject(Object.assign(new Error('probe timeout'), { code: 'TIMEOUT' })), timeoutMs);
   });
+  // A pool: check out a client of our own, so a probe that times out can DESTROY it. Released
+  // normally, a client stuck on a black-holed connection would go back to the pool and the
+  // next probe would hang on it; kept checked out, hung clients fill the pool until readiness
+  // never recovers. release(true) drops the connection and lets the pool open a new one.
+  let client: Awaited<ReturnType<NonNullable<QueryableDb['connect']>>> | undefined;
+  let abandoned = false;
+  const attempt =
+    db.connect === undefined
+      ? db.query('SELECT 1')
+      : db.connect().then(async (checkedOut) => {
+          if (abandoned) {
+            checkedOut.release(true);
+            return;
+          }
+          client = checkedOut;
+          await checkedOut.query('SELECT 1');
+        });
+  attempt.catch(() => {});
   try {
-    await Promise.race([db.query('SELECT 1'), timeout]);
+    await Promise.race([attempt, timeout]);
+    client?.release();
     return { reachable: true, latencyMs: elapsed() };
   } catch (error) {
+    abandoned = true;
+    client?.release(true);
     const code =
       typeof error === 'object' && error !== null && typeof (error as { code?: unknown }).code === 'string'
         ? (error as { code: string }).code
