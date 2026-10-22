@@ -1,0 +1,21 @@
+---
+// Breadcrumbs and a visible Back link on every page but Home: a home-screen
+// app on iOS has no Back button of its own (R27).
+import type { Crumb } from '../lib/site';
+
+interface Props {
+  trail: Crumb[];
+}
+const { trail } = Astro.props;
+const parent = trail.at(-2);
+const here = trail.at(-1);
+---
+{parent && here && (
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a class="back-link" href={parent.href}>Back to {parent.label}</a>
+    <ol>
+      {trail.slice(0, -1).map((c) => <li><a href={c.href}>{c.label}</a></li>)}
+      <li><span aria-current="page">{here.label}</span></li>
+    </ol>
+  </nav>
+)}

@@ -1,0 +1,13 @@
+---
+// After sign-out (W4), back from the provider: a plain page. Sign-out never
+// clears the reader's text size and theme, so there is nothing to put back.
+import Base from '../layouts/Base.astro';
+import { page } from '../lib/site';
+
+const p = page('/signed-out');
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">{p.description}</p>
+  <p><a href="/">Go to the home page</a></p>
+</Base>

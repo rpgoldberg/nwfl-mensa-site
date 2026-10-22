@@ -1,0 +1,12 @@
+---
+// A mailto link whose address may wrap after its @ on a narrow phone, as a
+// line wraps after a hyphen, never inside a word. Its name stays the address.
+interface Props {
+  email: string;
+  class?: string;
+}
+const { email, class: className } = Astro.props;
+const at = email.indexOf('@');
+const [user, domain] = at > 0 ? [email.slice(0, at + 1), email.slice(at + 1)] : [email, ''];
+---
+<a class={className} href={`mailto:${email}`} aria-label={email}>{user}{domain && <wbr />}{domain}</a>

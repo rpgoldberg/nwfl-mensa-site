@@ -1,0 +1,570 @@
+/*
+ * Layout for the Northwest Florida Mensa site, after the design draft
+ * (design/mensa-design.html). Every colour and size comes from tokens.css (the
+ * design's file, copied verbatim) except --sand, which the draft defines beside
+ * it for the header stripe. Sizes are in rem, so the reader's text size grows
+ * the whole page, targets included.
+ */
+
+/* The stripe's second colour, per theme, in the same cascade order as tokens.css. */
+:root { --sand: #e9dcc0; }
+@media (prefers-color-scheme: dark) { html:not([data-theme]) { --sand: #5a4d33; } }
+html[data-theme="dark"] { --sand: #5a4d33; }
+@media (prefers-contrast: more) { html:not([data-theme]) { --sand: #ffffff; } }
+html[data-theme="contrast"] { --sand: #ffffff; }
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  /* The bottom bar sits at the foot of a short page too. */
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  /* The reading bar asks how wide the page is (below). */
+  container: page / inline-size;
+}
+
+/* Lines wrap at spaces, never inside a word: on a narrow phone at a large
+   size a heading shrinks with the screen until its longest word fits. */
+h1, h2, h3 { font-weight: 600; }
+h1 { font-size: min(var(--fs-h1), 10.5vw); margin: var(--space-4) 0 var(--space-3); }
+h2 { font-size: min(var(--fs-h2), 9.5vw); }
+h3 { font-size: min(var(--fs-h3), 9vw); }
+.lead { font-size: var(--fs-lead); color: var(--muted); margin-top: 0; }
+.muted { color: var(--muted); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Skip link: off screen until focused, then the first thing you see. */
+.skip-link {
+  position: absolute;
+  left: var(--space-2);
+  top: var(--space-2);
+  transform: translateY(-200%);
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 0 var(--space-4);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  border-radius: var(--radius);
+}
+.skip-link:focus { transform: none; }
+
+/* Header: the site name as text (no logo until its use is confirmed), the
+   wide-screen nav, then Aa, Help and Sign in; the teal-and-sand stripe below. */
+.site-header { background: var(--surface); }
+.site-header__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-4);
+}
+.wordmark {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: var(--target);
+  font-family: var(--font-head);
+  line-height: 1.05;
+  color: var(--ink);
+  text-decoration: none;
+}
+.wordmark__place { font-size: var(--fs-small); font-weight: 500; color: var(--muted); }
+.wordmark__name { font-size: 1.6rem; font-weight: 600; }
+.header-tools {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.hbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  min-height: var(--target);
+  min-width: var(--target);
+  padding: 0 var(--space-3);
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: var(--fs-small);
+  text-decoration: none;
+}
+.hbtn svg { width: 1.5rem; height: 1.5rem; flex: none; }
+button.hbtn { cursor: pointer; }
+/* The account area: Sign in, or the reader's name, Officer area and Sign out. */
+.account { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.account:empty { display: none; }
+.account .who {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 0 var(--space-2);
+  font-weight: 700;
+}
+.sign-out { margin: 0; }
+.hbtn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.horizon {
+  height: 0.375rem;
+  background: linear-gradient(90deg, var(--accent) 0 70%, var(--sand) 70% 100%);
+}
+
+/* Inside Facebook's or Instagram's browser only (install.js shows it). */
+.in-app-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4);
+  background: var(--warn-bg);
+  color: var(--ink);
+  border-bottom: var(--border) solid var(--warn);
+}
+.in-app-hint[hidden] { display: none; }
+.in-app-hint p { margin: 0; flex: 1 1 18rem; max-width: var(--measure); }
+.in-app-hint b:first-child { display: block; }
+.button[hidden], .hbtn[hidden] { display: none; }
+
+/* The Aa panel: shown while it is the link target, so it opens with no script. */
+.reader-panel {
+  display: none;
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-4);
+  /* Arriving at the panel keeps the header in view. */
+  scroll-margin-top: 100vh;
+}
+.reader-panel:target {
+  display: grid;
+  gap: var(--space-4);
+  justify-items: start;
+  background: var(--surface);
+  border-bottom: var(--border) solid var(--line);
+}
+.reader-panel h2 { margin: 0; font-size: var(--fs-h3); }
+.reader-panel p { margin: 0; max-width: var(--measure); }
+
+/* The controls in the panel. Which size and theme are current comes from the
+   <html> attributes, so the same markup is right on a prerendered page. */
+.reader-form { display: grid; gap: var(--space-4); width: 100%; max-width: 30rem; }
+.reader-group {
+  display: grid;
+  gap: var(--space-3);
+  /* A fieldset is never narrower than its content by default; at 200 % on the
+     narrowest phone that would push the page sideways. */
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: var(--border) solid var(--line-soft);
+  border-radius: var(--radius);
+}
+.reader-group legend { padding: 0 var(--space-2); font-weight: 700; }
+.sizes { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.size-btn { font-family: var(--font-head); font-size: var(--fs-body); cursor: pointer; }
+.size-steps { display: flex; flex: 1 1 6rem; gap: var(--space-1); }
+.size-step {
+  flex: 1;
+  height: 0.875rem;
+  border: var(--border) solid var(--line);
+  border-radius: 0.4375rem;
+}
+html[data-size="1"] .size-step:nth-child(-n+1),
+html[data-size="2"] .size-step:nth-child(-n+2),
+html[data-size="3"] .size-step:nth-child(-n+3),
+html[data-size="4"] .size-step:nth-child(-n+4),
+html[data-size="5"] .size-step:nth-child(-n+5) { background: var(--accent); border-color: var(--accent); }
+.size-now [data-for-size] { display: none; }
+html[data-size="1"] .size-now [data-for-size="1"],
+html[data-size="2"] .size-now [data-for-size="2"],
+html[data-size="3"] .size-now [data-for-size="3"],
+html[data-size="4"] .size-now [data-for-size="4"],
+html[data-size="5"] .size-now [data-for-size="5"] { display: inline; }
+
+.theme-options { display: grid; gap: var(--space-2); }
+.theme-btn {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--target);
+  padding: var(--space-2) var(--space-4);
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.chosen {
+  display: none;
+  padding: 0 var(--space-3);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--fs-small);
+}
+html:not([data-theme]) .theme-btn[value="system"],
+html[data-theme="light"] .theme-btn[value="light"],
+html[data-theme="dark"] .theme-btn[value="dark"],
+html[data-theme="contrast"] .theme-btn[value="contrast"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0.375rem 0 0 var(--accent);
+}
+html:not([data-theme]) .theme-btn[value="system"] .chosen,
+html[data-theme="light"] .theme-btn[value="light"] .chosen,
+html[data-theme="dark"] .theme-btn[value="dark"] .chosen,
+html[data-theme="contrast"] .theme-btn[value="contrast"] .chosen { display: inline-flex; }
+
+/* The reading bar: the same controls, one press each, at the foot of the screen. */
+.reading-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-around;
+  gap: var(--space-1);
+  /* Tight sides, so the three stay in one row at 200 % on a 412 px phone. */
+  padding: var(--space-1);
+  background: var(--surface);
+  border-top: var(--border) solid var(--line);
+}
+.rb {
+  display: flex;
+  /* As wide as its word at least; the bar wraps rather than break one. */
+  flex: 1 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 3.6rem;
+  max-width: 12rem;
+  white-space: nowrap;
+  padding: 0.125rem var(--space-1);
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink);
+  font-weight: 700;
+  font-size: var(--fs-small);
+  line-height: 1.2;
+  cursor: pointer;
+}
+.rb svg { width: 1.5rem; height: 1.5rem; }
+.rb-big { font-family: var(--font-head); font-size: 1.4rem; line-height: 1.1; }
+.reading-bar [data-for-theme] { display: none; }
+html:not([data-theme]) .reading-bar [data-for-theme="system"],
+html[data-theme="light"] .reading-bar [data-for-theme="light"],
+html[data-theme="dark"] .reading-bar [data-for-theme="dark"],
+html[data-theme="contrast"] .reading-bar [data-for-theme="contrast"] { display: inline; }
+
+/* Primary nav: the same five links, words at the top on wide screens, icons
+   and words in a bottom bar on phones. */
+.nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.nav-link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  min-height: var(--target);
+  height: 100%;
+  padding: var(--space-2) var(--space-1);
+  color: var(--ink);
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+}
+.nav-link svg { width: 1.5rem; height: 1.5rem; flex: none; }
+.nav-label {
+  font-size: var(--fs-small);
+  line-height: 1.2;
+  /* A label is never broken inside the word; the bar takes more rows instead. */
+  white-space: nowrap;
+}
+/* The current place: ink on the soft tint (13:1) with an accent bar. The draft's
+   accent-on-tint text is 6.8:1 in the light theme, under the 7:1 AAA line. */
+.nav-link[aria-current="page"] { color: var(--ink); background: var(--accent-soft); }
+.nav-link[aria-current="page"] svg { color: var(--accent); }
+
+.top-nav { display: none; }
+.bottom-nav {
+  background: var(--surface);
+  border-top: var(--border) solid var(--line);
+}
+/* Five across only where five whole labels fit; otherwise three and two, and at
+   the largest sizes on the narrowest phones two or one across, so no word is
+   ever broken and no type shrinks. A column needs the widest label
+   ("Newsletter", 5.2rem in Atkinson Hyperlegible bold) plus its padding and a
+   margin: 6rem. The queries are in rem of the page, so they follow the
+   reader's text size. */
+.bottom-nav { container: bottom-nav / inline-size; }
+.bottom-nav .nav-list { grid-template-columns: minmax(0, 1fr); }
+@container bottom-nav (min-width: 12rem) { .bottom-nav .nav-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container bottom-nav (min-width: 18rem) { .bottom-nav .nav-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container bottom-nav (min-width: 30rem) { .bottom-nav .nav-list { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.bottom-nav .nav-link {
+  min-height: 4.25rem;
+  border-top: 0.25rem solid transparent;
+  margin-top: calc(-1 * var(--border));
+}
+.bottom-nav .nav-link[aria-current="page"] { border-top-color: var(--accent); }
+
+/* The dock holds the reading bar and the phone's bottom bar. At the two
+   smaller text sizes on a phone both stay at the foot of the screen while the
+   page scrolls. Otherwise (a wide screen, a larger size, a short landscape
+   screen) the dock dissolves, the reading bar alone stays at the foot, and the
+   bottom bar sits after the content so it never takes over the screen. Sticky,
+   not fixed: each keeps its own space, so neither covers the end of the page. */
+.dock { display: contents; }
+/* The reading bar stays on screen only where it fits one row and takes a
+   quarter of the screen's height at most; anywhere else it sits at the end of
+   the page, after the footer. One row needs 12.38rem on a phone (buttons of
+   11.38rem, two gaps and the padding), hence the container query; one row is
+   about 4.2rem high, so the screen must be 17rem high, in px per size, as a
+   media query cannot use the reader's rem. */
+.reading-bar { position: static; }
+@container page (min-width: 12.5rem) { .reading-bar { position: sticky; bottom: 0; z-index: 10; } }
+@media (max-height: 271.98px) { html[data-size="1"] .reading-bar { position: static; } }
+@media (max-height: 339.98px) { html[data-size="2"] .reading-bar { position: static; } }
+@media (max-height: 407.98px) { html[data-size="3"] .reading-bar { position: static; } }
+@media (max-height: 475.98px) { html[data-size="4"] .reading-bar { position: static; } }
+@media (max-height: 543.98px) { html[data-size="5"] .reading-bar { position: static; } }
+@media (max-width: 899.98px) and (min-height: 480px) {
+  html[data-size="1"] .dock,
+  html[data-size="2"] .dock {
+    display: block;
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+  }
+  /* Keyboard focus scrolls clear of the dock, never under it: up to two rows
+     of the bottom bar (2 x 4.25rem) and the reading bar (about 4.25rem). */
+  html[data-size="1"],
+  html[data-size="2"] { scroll-padding-bottom: 13.5em; }
+}
+/* On a reading page only the reading bar stays on screen, at every size: with
+   the bottom bar under it the two took over 200 px of a phone. The bottom bar
+   sits at the end of the page there, and focus scrolls clear of the reading bar. */
+html[data-size] .dock.dock--reading { display: contents; position: static; }
+/* em, not rem: on the root element WebKit resolves rem against the initial
+   16 px, not the reader's size, and focus then landed under the bar at 200 %. */
+html[data-size]:has(.dock--reading) { scroll-padding-bottom: 6em; }
+
+@media (min-width: 900px) {
+  .top-nav { display: block; }
+  .bottom-nav { display: none; }
+  .top-nav .nav-list { grid-template-columns: repeat(5, auto); gap: 0.125rem; }
+  .top-nav .nav-link { padding: 0 0.875rem; border-radius: var(--radius); }
+  .top-nav .nav-link[aria-current="page"] { box-shadow: inset 0 -0.25rem 0 var(--accent); }
+  /* The page column's own sides, so the wordmark lines up with the page and
+     a signed-in header (name, Officer area, Sign out) is one row at 1280. */
+  .site-header__bar { padding: var(--space-3) var(--space-4); }
+  .account .who { padding: 0 var(--space-1); font-size: var(--fs-small); }
+  .reading-bar { justify-content: center; gap: var(--space-5); }
+}
+
+/* The page column. */
+.page {
+  flex: 1 0 auto;
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 var(--space-4) var(--space-6);
+}
+main > * { max-width: var(--measure); }
+main:focus:not(:focus-visible) { outline: none; }
+
+/* Back link and breadcrumbs on every page but Home. */
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-4);
+  padding-top: var(--space-3);
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target);
+  font-weight: 700;
+}
+.back-link::before { content: "\2039"; content: "\2039" / ""; font-size: 1.5em; line-height: 1; }
+.crumbs ol {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  margin: 0;
+  padding: 0;
+  font-size: var(--fs-small);
+}
+.crumbs li { display: inline-flex; align-items: center; min-height: var(--target); }
+.crumbs li + li::before { content: "\203A"; content: "\203A" / ""; margin-right: var(--space-2); color: var(--muted); }
+.crumbs a { display: inline-flex; align-items: center; min-height: var(--target); }
+.crumbs [aria-current="page"] { color: var(--muted); }
+
+/* Forms: plain HTML, large and labelled. */
+.search-form { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: end; }
+.search-form label { flex-basis: 100%; font-weight: 700; }
+.search-form input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink);
+  background: var(--surface);
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+}
+.button,
+.search-form button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--target);
+  min-width: var(--target);
+  padding: 0 var(--space-5);
+  color: var(--on-accent);
+  background: var(--accent);
+  border: var(--border) solid var(--accent);
+  border-radius: var(--radius);
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.link-list { list-style: none; padding: 0; }
+.link-list li { margin: 0 0 var(--space-2); }
+.link-list a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+
+.site-footer {
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-6);
+  border-top: var(--border) solid var(--line-soft);
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+.site-footer p { margin: 0 0 var(--space-3); max-width: var(--measure); }
+.site-footer a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+
+/* The home-screen how-to: a drawn phone beside each step. */
+.steps { display: grid; gap: var(--space-6); padding-left: 1.5em; }
+.steps li { display: grid; gap: var(--space-3); }
+.steps p { margin: 0; }
+.phone-step { width: min(100%, 14rem); height: auto; }
+.ph-frame { fill: var(--ink); }
+.ph-screen, .ph-menu { fill: var(--surface); }
+.ph-menu { stroke: var(--line); stroke-width: 1.5; }
+.ph-bar { fill: var(--accent-soft); }
+.ph-field, .ph-line { fill: var(--line-soft); }
+.ph-dot { fill: var(--ink); }
+.ph-shade { fill: var(--ink); opacity: 0.35; }
+.ph-icon { fill: var(--accent); }
+.ph-small { font-size: 11px; fill: var(--ink); font-family: var(--font-body); }
+.ph-strong { font-weight: 700; }
+.ph-mark { fill: none; stroke: var(--focus); stroke-width: 4; }
+
+/* The site's own texts (content/site/). */
+.prose { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); max-width: var(--measure); }
+.prose > * { margin: 0; }
+.prose h2 { margin-top: var(--space-5); }
+.prose ul { padding-left: 1.5em; display: grid; gap: var(--space-2); }
+.prose li a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+.prose blockquote { margin: 0; padding: var(--space-2) var(--space-4); border-left: 0.375rem solid var(--accent); background: var(--surface); }
+.prose blockquote p { margin: 0; }
+
+/* A plain-words note: sample data, or content this copy does not carry. */
+.notice {
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 0.375rem solid var(--warn);
+  background: var(--warn-bg);
+  color: var(--ink);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.card {
+  display: grid;
+  /* The column may shrink below its longest word, so 200 % text wraps on a narrow phone. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: var(--border) solid var(--line-soft);
+  border-radius: var(--radius);
+}
+.card > * { margin: 0; }
+.eyebrow { font-weight: 700; color: var(--muted); }
+
+/* Officers: by office, with the role address. */
+.offices { list-style: none; padding: 0; margin: var(--space-4) 0; }
+.offices li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.125rem; padding: var(--space-3) 0; border-top: var(--border) solid var(--line-soft); }
+.offices li:first-child { border-top: 0; }
+.offices .role { font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); }
+.addr { display: inline-flex; flex-wrap: wrap; align-items: center; min-height: var(--target); font-weight: 700; }
+
+/* Newsletter: past issues by year. */
+.yr h3 { margin: var(--space-5) 0 var(--space-2); }
+.issues { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
+.issues li {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border) solid var(--line-soft); border-radius: var(--radius); background: var(--surface);
+}
+.issues li.missing { border-style: dashed; background: transparent; }
+
+/* Minutes and finances. */
+.meeting { scroll-margin-top: var(--space-4); }
+.meeting h2 { font-size: var(--fs-h3); }
+.meeting h3 { font-size: var(--fs-body); }
+.meeting ul { margin: 0; padding-left: 1.5em; }
+/* A table cannot shrink below its widest row: should one ever be wider, its
+   own box scrolls sideways, never the page. */
+.table-wrap { overflow-x: auto; max-width: 100%; container: money / inline-size; }
+.money { width: 100%; max-width: 30rem; border-collapse: collapse; font-variant-numeric: tabular-nums; margin-top: var(--space-5); }
+.money caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); padding-bottom: var(--space-2); }
+.money th { text-align: left; font-weight: 400; }
+.money th, .money td { padding: var(--space-2) 0; border-top: var(--border) solid var(--line-soft); }
+.money td { text-align: right; font-weight: 700; white-space: nowrap; }
+.money tr.total th, .money tr.total td { border-top: 3px solid var(--line); font-weight: 700; }
+/* Too narrow for a label and its amount side by side (a phone at large text;
+   em follows the reader's size): each label sits above its amount. The rows
+   carry their roles in the markup, as display: block can drop a table's. */
+@container money (width < 15em) {
+  .money, .money tbody, .money tr, .money th, .money td { display: block; }
+  .money th { padding-bottom: 0; }
+  .money td { text-align: left; border-top: 0; padding-top: var(--space-1); }
+  .money tr.total td { border-top: 0; }
+}

@@ -1,0 +1,26 @@
+---
+// The five primary links (R30). Rendered twice by the layout: words only in the
+// header for wide screens, and with an icon over each word in the bottom bar for
+// phones; CSS shows one, so a reader and a screen reader only ever meet one "Main" nav.
+import { PRIMARY_NAV, currentNav } from '../lib/site';
+import Icon from './Icon.astro';
+
+interface Props {
+  path: string;
+  variant: 'top' | 'bottom';
+}
+const { path, variant } = Astro.props;
+const current = currentNav(path);
+---
+<nav class={`primary-nav ${variant}-nav`} aria-label="Main">
+  <ul class="nav-list">
+    {PRIMARY_NAV.map((item) => (
+      <li>
+        <a class="nav-link" href={item.href} aria-current={item.href === current ? 'page' : undefined}>
+          {variant === 'bottom' && <Icon name={item.icon} />}
+          <span class="nav-label">{item.label}</span>
+        </a>
+      </li>
+    ))}
+  </ul>
+</nav>

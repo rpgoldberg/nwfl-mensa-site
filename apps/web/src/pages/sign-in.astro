@@ -1,0 +1,22 @@
+---
+// Sign in (W4): starts the authorization code flow at the club's sign-in
+// provider, and comes back to the page the reader was on. Someone already
+// signed in goes straight back. If sign-in is not set up, or the provider
+// cannot be reached, the reader is told so in plain words.
+import Base from '../layouts/Base.astro';
+import { beginSignIn, runtimeDeps } from '../lib/auth/flow';
+import { page } from '../lib/site';
+
+const out = await beginSignIn(runtimeDeps(), { cookieHeader: Astro.request.headers.get('cookie'), back: Astro.url.searchParams.get('return') });
+if (out.kind === 'redirect') {
+  const headers = new Headers({ Location: out.location });
+  for (const cookie of out.cookies) headers.append('Set-Cookie', cookie);
+  return new Response(null, { status: 303, headers });
+}
+Astro.response.status = 503;
+const p = page('/sign-in');
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">Signing in is not available just now. Please try again later; if it keeps happening, ask any of our officers.</p>
+</Base>

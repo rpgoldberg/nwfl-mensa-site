@@ -1,0 +1,132 @@
+/*
+ * NW Florida Mensa site: design tokens (draft 1, 2026-10-22).
+ *
+ * Themes: light (default), dark, high contrast.
+ *   html[data-theme="light" | "dark" | "contrast"] is set by the server from the reader's cookie.
+ *   No cookie: prefers-color-scheme picks light or dark, and prefers-contrast: more picks contrast.
+ * Text size: html[data-size="1".."5"] = 100, 125, 150, 175, 200 %. Every size below is in rem,
+ *   so the whole page (type, spacing, targets) grows with it. Browser zoom is never blocked.
+ *
+ * Measured WCAG contrast (node script, sRGB relative luminance):
+ *   light    ink/bg 14.96, ink/surface 15.96, muted/bg 8.76, accent/bg 7.74, accent/surface 8.26,
+ *            on-accent/accent 8.26, ok/ok-bg 7.08, warn/warn-bg 7.41, stop/stop-bg 7.91,
+ *            members/members-bg 7.33, line/bg 3.46 (non-text, needs 3:1), focus/bg 5.15
+ *   dark     ink/bg 15.95, ink/surface 14.19, muted/bg 11.51, accent/bg 10.67, accent/surface 9.50,
+ *            on-accent/accent 10.06, ok/ok-bg 9.07, warn/warn-bg 8.91, stop/stop-bg 8.78,
+ *            members/members-bg 8.92, line/bg 3.74, focus/bg 9.63
+ *   contrast ink/bg 21.00, accent/bg 16.13, on-accent/accent 16.13, ok/bg 16.64, stop/bg 10.49,
+ *            members/bg 14.31, focus/bg 13.65
+ * Every text pair is at or above 7:1 (WCAG AAA); borders and focus rings are at or above 3:1.
+ */
+
+:root {
+  /* Type: Atkinson Hyperlegible for reading (designed for low-vision readers), Lexend for headings. */
+  --font-body: "Atkinson Hyperlegible", "Verdana", "Segoe UI", system-ui, sans-serif;
+  --font-head: "Lexend", "Atkinson Hyperlegible", "Verdana", system-ui, sans-serif;
+
+  --fs-small: 1rem;       /* 16 px at size 1. Nothing on the site is smaller. */
+  --fs-body: 1.125rem;    /* 18 px */
+  --fs-lead: 1.3125rem;   /* 21 px */
+  --fs-h3: 1.375rem;      /* 22 px */
+  --fs-h2: 1.75rem;       /* 28 px */
+  --fs-h1: 2.25rem;       /* 36 px */
+  --lh-body: 1.6;
+  --lh-head: 1.25;
+  --measure: 70ch;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --target: 3rem;         /* 48 px minimum for anything you can tap */
+  --input-fs: 1.125rem;   /* inputs never under 16 px, so phones do not zoom on focus */
+  --radius: 0.5rem;
+  --border: 2px;
+  --focus-width: 3px;
+  --bottom-nav-h: 4.5rem;
+  --nav-breakpoint: 900px; /* below: bottom bar; at or above: top nav (same items) */
+
+  /* Light theme (default) */
+  --bg: #f5f8f9;
+  --surface: #ffffff;
+  --ink: #11242e;
+  --muted: #34495a;
+  --accent: #00566b;      /* Gulf teal: links, primary buttons, current tab */
+  --on-accent: #ffffff;
+  --accent-soft: #dcecef;
+  --line: #6f8996;
+  --line-soft: #d3dee3;
+  --focus: #b3470b;
+  --ok: #1b5a2a;      --ok-bg: #e3f1e6;       /* Scheduled */
+  --warn: #6e4400;    --warn-bg: #fbefd9;     /* Moved, Tentative */
+  --stop: #8a1414;    --stop-bg: #fbe4e4;     /* Cancelled */
+  --members: #563a8e; --members-bg: #eee8f7;  /* members-only passages and events */
+  color-scheme: light;
+}
+
+html[data-size="1"] { font-size: 100%; }
+html[data-size="2"] { font-size: 125%; }
+html[data-size="3"] { font-size: 150%; }
+/* No word ever breaks, so the longest words (17 letters) must fit a line: on a
+   phone narrower than about 390 px the two largest sizes stop at 8.25vw
+   (26.4 px on a 320 px screen, about 165 %). */
+html[data-size="4"] { font-size: min(175%, 8.25vw); }
+html[data-size="5"] { font-size: min(200%, 8.25vw); }
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    --bg: #0d1a20; --surface: #14252d; --ink: #eef4f6; --muted: #c3d3da;
+    --accent: #86d5e4; --on-accent: #062129; --accent-soft: #173640;
+    --line: #5d7783; --line-soft: #263b45; --focus: #ffad66;
+    --ok: #9fdcae; --ok-bg: #13301d; --warn: #f3c27a; --warn-bg: #33270f;
+    --stop: #ffaaa5; --stop-bg: #3a1717; --members: #cdb8f5; --members-bg: #261d3a;
+    color-scheme: dark;
+  }
+}
+html[data-theme="dark"] {
+  --bg: #0d1a20; --surface: #14252d; --ink: #eef4f6; --muted: #c3d3da;
+  --accent: #86d5e4; --on-accent: #062129; --accent-soft: #173640;
+  --line: #5d7783; --line-soft: #263b45; --focus: #ffad66;
+  --ok: #9fdcae; --ok-bg: #13301d; --warn: #f3c27a; --warn-bg: #33270f;
+  --stop: #ffaaa5; --stop-bg: #3a1717; --members: #cdb8f5; --members-bg: #261d3a;
+  color-scheme: dark;
+}
+
+@media (prefers-contrast: more) {
+  html:not([data-theme]) {
+    --bg: #000000; --surface: #000000; --ink: #ffffff; --muted: #ffffff;
+    --accent: #ffe14d; --on-accent: #000000; --accent-soft: #000000;
+    --line: #ffffff; --line-soft: #ffffff; --focus: #00e5ff;
+    --ok: #7dff9a; --ok-bg: #000000; --warn: #ffe14d; --warn-bg: #000000;
+    --stop: #ff9c9c; --stop-bg: #000000; --members: #e2ccff; --members-bg: #000000;
+    color-scheme: dark;
+  }
+}
+html[data-theme="contrast"] {
+  --bg: #000000; --surface: #000000; --ink: #ffffff; --muted: #ffffff;
+  --accent: #ffe14d; --on-accent: #000000; --accent-soft: #000000;
+  --line: #ffffff; --line-soft: #ffffff; --focus: #00e5ff;
+  --ok: #7dff9a; --ok-bg: #000000; --warn: #ffe14d; --warn-bg: #000000;
+  --stop: #ff9c9c; --stop-bg: #000000; --members: #e2ccff; --members-bg: #000000;
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* Base rules the layout relies on. */
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: var(--fs-body) / var(--lh-body) var(--font-body);
+}
+h1, h2, h3 { font-family: var(--font-head); line-height: var(--lh-head); text-wrap: balance; }
+a { color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+:focus-visible { outline: var(--focus-width) solid var(--focus); outline-offset: 2px; }
+input, select, textarea, button { font: inherit; font-size: max(var(--input-fs), 1rem); }
+button, .button, input, select { min-height: var(--target); }

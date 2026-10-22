@@ -1,0 +1,7 @@
+---
+import SitePage from '../components/SitePage.astro';
+import { page } from '../lib/site';
+
+export const prerender = true;
+---
+<SitePage page={page('/about')} entry="about" />

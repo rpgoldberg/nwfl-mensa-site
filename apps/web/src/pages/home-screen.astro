@@ -1,0 +1,44 @@
+---
+// "Put the club on your home screen" (R27): Android steps in words and drawn
+// pictures, the Facebook case, and the iPhone steps in words. The install
+// button appears only when the browser offers installation; the page works
+// without it.
+import AndroidStep from '../components/AndroidStep.astro';
+import Base from '../layouts/Base.astro';
+import { page } from '../lib/site';
+
+const p = page('/home-screen');
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">{p.description}</p>
+  <p><button type="button" class="button" data-install hidden>Install the club app</button></p>
+
+  <section aria-labelledby="android-title">
+    <h2 id="android-title">On an Android phone</h2>
+    <ol class="steps">
+      <li>
+        <AndroidStep step={1} />
+        <p>Open <b>nwflorida.us</b> in Chrome. Tap the menu button: three dots (⋮) at the top right.</p>
+      </li>
+      <li>
+        <AndroidStep step={2} />
+        <p>Tap <b>Add to Home screen</b>. On some phones it says <b>Install app</b>.</p>
+      </li>
+      <li>
+        <AndroidStep step={3} />
+        <p>Tap <b>Install</b> (or <b>Add</b>). The club's icon is now on your home screen; tap it to open the site.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="facebook-title">
+    <h2 id="facebook-title">Opened this from Facebook?</h2>
+    <p>Facebook's own browser cannot add the icon. Tap ⋯ or ⋮ at the top of the screen, choose <b>Open in browser</b> (or <b>Open in Chrome</b>), then follow the steps above.</p>
+  </section>
+
+  <section aria-labelledby="iphone-title">
+    <h2 id="iphone-title">On an iPhone</h2>
+    <p>In Safari, tap the Share button (a square with an arrow pointing up), then <b>Add to Home Screen</b>, then <b>Add</b>. Pictures for iPhone are coming.</p>
+  </section>
+</Base>

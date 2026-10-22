@@ -1,0 +1,51 @@
+{
+  "name": "nwfl-mensa-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.22.1"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "build:public-only": "PUBLIC_ONLY=true astro build",
+    "start": "node server/serve.mjs",
+    "lint": "eslint .",
+    "typecheck": "astro check",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "e2e": "playwright test",
+    "e2e:public-only": "playwright test -c playwright.public-only.config.ts",
+    "secrets:scan": "sh scripts/gitleaks.sh git --log-opts=--all",
+    "prepare": "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
+  },
+  "dependencies": {
+    "@astrojs/node": "11.1.9",
+    "astro": "7.4.2",
+    "cookie": "2.0.1",
+    "openid-client": "6.8.8"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.12",
+    "@axe-core/playwright": "4.14.0",
+    "@eslint/js": "10.0.1",
+    "@fontsource/atkinson-hyperlegible": "5.3.0",
+    "@fontsource/lexend": "5.3.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/oidc-provider": "9.12.1",
+    "@vitest/coverage-v8": "5.0.5",
+    "astro-eslint-parser": "3.2.0",
+    "eslint": "10.13.0",
+    "eslint-plugin-astro": "3.2.1",
+    "eslint-plugin-jsx-a11y-x": "0.2.0",
+    "globals": "17.13.0",
+    "jose": "6.2.13",
+    "oidc-provider": "9.12.2",
+    "sharp": "0.35.5",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
+  }
+}
