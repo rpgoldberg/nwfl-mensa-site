@@ -14,6 +14,13 @@ npm start            # http://localhost:8080
 
 Every cookie the site sets is host-only (`__Host-` prefix, `Secure`, `Path=/`, no `Domain`). Chromium keeps such cookies on `http://localhost`, so local work in Chromium needs nothing more. WebKit (Safari) refuses them over plain http even on loopback; for it, run the test TLS edge in a second terminal (`TLS_PORT=8443 UPSTREAM=http://127.0.0.1:8080 node e2e/tls-proxy.mjs`) and open `https://localhost:8443`.
 
+## Request limits
+
+- Astro reads at most 64 KiB of any request body (`bodySizeLimit`; its default is 1 GB). `/prefs` reads at most 4 KiB and answers 413, whether the body is declared or chunked.
+- A POST, PUT, PATCH or DELETE that carries neither an `Origin` header nor `Sec-Fetch-Site: same-origin` is refused with 403 before Astro sees it; with either, Astro's origin check decides.
+- The server decides on the path the static handler serves, percent-decoded. A path with an encoded `/`, `\` or NUL, or broken encoding, is a 400. Only a plain file name under `/_astro/` is cached for a year.
+- Node's own HTTP parser answers a malformed request (400) or oversized headers (431) before any of this code runs, so those two responses carry none of the site's headers. Their bodies are empty, and Cloudflare fronts the site.
+
 ## Check it
 
 ```sh
