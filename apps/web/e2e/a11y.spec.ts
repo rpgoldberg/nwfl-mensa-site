@@ -15,43 +15,35 @@ async function axe(page: Page): Promise<string[]> {
   return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
 }
 
-for (const scheme of ['light', 'dark'] as const) {
-  test.describe(`${scheme} (system setting)`, () => {
-    test.use({ colorScheme: scheme });
-
-    test('every page passes axe', async ({ page }) => {
-      for (const path of ALL_PAGES) {
+// One test per page and setting, so a failure names both and the runs spread out.
+for (const path of ALL_PAGES) {
+  test.describe(`axe on ${path}`, () => {
+    for (const scheme of ['light', 'dark'] as const) {
+      test(`${scheme} system setting`, async ({ page }) => {
+        await page.emulateMedia({ colorScheme: scheme });
         await page.goto(path);
-        expect(await axe(page), path).toEqual([]);
-      }
+        expect(await axe(page)).toEqual([]);
+      });
+    }
+
+    test('high-contrast system setting', async ({ page }) => {
+      await page.emulateMedia({ contrast: 'more' });
+      await page.goto(path);
+      expect(await axe(page)).toEqual([]);
     });
 
-  });
-}
-
-test.describe('high contrast (system setting)', () => {
-  test.use({ contrast: 'more' });
-
-  test('every page passes axe', async ({ page }) => {
-    for (const path of ALL_PAGES) {
-      await page.goto(path);
-      expect(await axe(page), path).toEqual([]);
+    // The reader's own choice, by cookie, at 100 % and 200 %, with the Aa panel
+    // open so its controls are checked too.
+    for (const theme of THEMES) {
+      for (const size of [1, 5]) {
+        test(`${theme} theme at ${size === 1 ? 100 : 200} % text, Aa panel open`, async ({ page, context, baseURL }) => {
+          await setPrefs(context, baseURL!, { size, theme });
+          await page.goto(`${path}#reader-menu`);
+          await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+          await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
+          expect(await axe(page)).toEqual([]);
+        });
+      }
     }
   });
-});
-
-// The reader's own choice, by cookie, at 100 % and 200 %, with the Aa panel open
-// so its controls are checked too.
-for (const theme of THEMES) {
-  for (const size of [1, 5]) {
-    test(`every page passes axe in the ${theme} theme at ${size === 1 ? 100 : 200} % text, Aa panel open`, async ({ page, context, baseURL }) => {
-      await setPrefs(context, baseURL!, { size, theme });
-      for (const path of ALL_PAGES) {
-        await page.goto(`${path}#reader-menu`);
-        await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
-        await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
-        expect(await axe(page), `${path} ${theme} ${size}`).toEqual([]);
-      }
-    });
-  }
 }

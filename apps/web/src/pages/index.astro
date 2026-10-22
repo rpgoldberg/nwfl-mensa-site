@@ -7,4 +7,9 @@ const p = page('/');
 <Base {...p}>
   <h1>{SITE_NAME}</h1>
   <p class="lead">{p.description}</p>
+  <section aria-labelledby="phone-title">
+    <h2 id="phone-title">Our club on your phone</h2>
+    <p><a href="/home-screen">Put the club on your home screen</a>, so the site opens like an app.</p>
+    <p><button type="button" class="button" data-install hidden>Install the club app</button></p>
+  </section>
 </Base>

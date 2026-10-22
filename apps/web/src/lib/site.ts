@@ -63,12 +63,19 @@ const HELP: Page = {
   description: 'How to use this site, and who to ask when something is hard.',
 };
 
-/** What the More page lists: every section but Home, then Help. */
-export const MORE_PAGES: readonly Page[] = [...SECTIONS.filter((s) => s.path !== '/'), HELP];
+const HOME_SCREEN: Page = {
+  path: '/home-screen',
+  title: 'Put the club on your home screen',
+  description: "Add the club's icon to your phone, so the site opens like an app.",
+};
+
+/** What the More page lists: every section but Home, then Help and the home-screen how-to. */
+export const MORE_PAGES: readonly Page[] = [...SECTIONS.filter((s) => s.path !== '/'), HELP, HOME_SCREEN];
 
 const PAGES: readonly Page[] = [
   ...SECTIONS,
   HELP,
+  HOME_SCREEN,
   { path: '/search', title: 'Search', description: 'Search the newsletter archive.' },
   { path: '/more', title: 'More', description: 'Every part of the site in one list.' },
   {

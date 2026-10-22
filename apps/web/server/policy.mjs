@@ -9,8 +9,9 @@ export const SESSION_COOKIE = '__Host-nwfl-session';
 
 const CSP = [
   "default-src 'self'",
-  // The site ships no JavaScript; the service worker (R27) will need 'self'.
-  "script-src 'none'",
+  // Same-origin files only, never inline: the install button (R27) now, the
+  // service worker later. Every page works without them.
+  "script-src 'self'",
   "style-src 'self'",
   "img-src 'self'",
   "font-src 'self'",

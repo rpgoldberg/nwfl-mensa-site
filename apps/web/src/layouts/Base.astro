@@ -41,6 +41,13 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
     <meta name="color-scheme" content="light dark" />
     <title>{documentTitle}</title>
     <meta name="description" content={description} />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="theme-color" content="#00566b" />
+    <meta name="apple-mobile-web-app-title" content="NWFL Mensa" />
+    {/* Progressive enhancement only (install button, in-app browser hint); a same-origin file, never inline. */}
+    <script is:inline type="module" src="/scripts/install.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to main content</a>
@@ -56,6 +63,10 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
       </div>
       <div class="horizon" aria-hidden="true"></div>
     </header>
+    <div class="in-app-hint" role="note" aria-labelledby="in-app-hint-title" data-in-app-hint hidden>
+      <p><b id="in-app-hint-title">Open in your browser</b> You are reading this inside Facebook or Instagram, which cannot put the club on your home screen. Tap ⋯ or ⋮ at the top, then <b>Open in browser</b>.</p>
+      <button type="button" class="hbtn" data-in-app-hint-close>Close this hint</button>
+    </div>
     <section class="reader-panel" id="reader-menu" aria-labelledby="reader-menu-title" tabindex="-1">
       <h2 id="reader-menu-title">Text size and theme</h2>
       <ReaderControls back={back} />
@@ -70,6 +81,7 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
       </main>
     </div>
     <footer class="site-footer">
+      <p><a href="/home-screen">Put the club on your home screen</a></p>
       <p>{SITE_NAME} is the local group of American Mensa for the Florida Panhandle, west of the Apalachicola River.</p>
     </footer>
     <div class="dock">

@@ -27,8 +27,8 @@ describe('security headers', () => {
   it('pins the directives the site needs and nothing wider', () => {
     const csp = parseCsp(SECURITY_HEADERS['Content-Security-Policy'] as string);
     expect(csp['default-src']).toEqual(["'self'"]);
-    // The site ships no JavaScript at all; the service worker (R27) will need 'self' here.
-    expect(csp['script-src']).toEqual(["'none'"]);
+    // Same-origin script files only (the install button; the service worker later), never inline.
+    expect(csp['script-src']).toEqual(["'self'"]);
     expect(csp['style-src']).toEqual(["'self'"]);
     expect(csp['img-src']).toEqual(["'self'"]);
     expect(csp['font-src']).toEqual(["'self'"]);

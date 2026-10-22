@@ -1,0 +1,49 @@
+---
+// Drawn pictures of the three Android steps for the home-screen how-to (R27).
+// Inline SVG, so it takes the reader's theme and text size. One picture per
+// step, named for a screen reader; iPhone pictures come later (MB8).
+interface Props {
+  step: 1 | 2 | 3;
+}
+const { step } = Astro.props;
+const labels = {
+  1: 'A phone showing nwflorida.us in Chrome, with the menu button, three dots at the top right, circled.',
+  2: "Chrome's menu open on the phone, with Add to Home screen circled.",
+  3: 'A box on the phone asking to install NW Florida Mensa, with the Install button circled.',
+};
+---
+<svg class="phone-step" viewBox="0 0 200 340" role="img" aria-label={labels[step]}>
+  <rect class="ph-frame" x="10" y="6" width="180" height="328" rx="22" />
+  <rect class="ph-screen" x="20" y="28" width="160" height="284" rx="6" />
+  <rect class="ph-bar" x="20" y="28" width="160" height="34" rx="6" />
+  <rect class="ph-field" x="28" y="36" width="118" height="18" rx="9" />
+  <text class="ph-small" x="38" y="49">nwflorida.us</text>
+  <circle class="ph-dot" cx="164" cy="39" r="2" /><circle class="ph-dot" cx="164" cy="45" r="2" /><circle class="ph-dot" cx="164" cy="51" r="2" />
+  <rect class="ph-line" x="32" y="78" width="120" height="8" rx="4" />
+  <rect class="ph-line" x="32" y="94" width="96" height="8" rx="4" />
+  <rect class="ph-line" x="32" y="110" width="110" height="8" rx="4" />
+  {step === 1 && <circle class="ph-mark" cx="164" cy="45" r="13" />}
+  {step === 2 && (
+    <>
+      <rect class="ph-menu" x="74" y="34" width="102" height="132" rx="6" />
+      <text class="ph-small" x="84" y="58">New tab</text>
+      <text class="ph-small" x="84" y="84">Bookmarks</text>
+      <text class="ph-small ph-strong" x="84" y="110">Add to Home</text>
+      <text class="ph-small ph-strong" x="84" y="124">screen</text>
+      <text class="ph-small" x="84" y="152">Settings</text>
+      <rect class="ph-mark" x="78" y="96" width="94" height="36" rx="8" />
+    </>
+  )}
+  {step === 3 && (
+    <>
+      <rect class="ph-shade" x="20" y="28" width="160" height="284" rx="6" />
+      <rect class="ph-menu" x="30" y="110" width="140" height="112" rx="10" />
+      <text class="ph-small ph-strong" x="42" y="134">Install app?</text>
+      <rect class="ph-icon" x="42" y="146" width="24" height="24" rx="5" />
+      <text class="ph-small" x="74" y="163">NW Florida Mensa</text>
+      <text class="ph-small" x="72" y="206">Cancel</text>
+      <text class="ph-small ph-strong" x="122" y="206">Install</text>
+      <rect class="ph-mark" x="114" y="188" width="50" height="26" rx="8" />
+    </>
+  )}
+</svg>

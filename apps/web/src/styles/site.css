@@ -114,6 +114,24 @@ h3 { font-size: var(--fs-h3); }
   background: linear-gradient(90deg, var(--accent) 0 70%, var(--sand) 70% 100%);
 }
 
+/* Inside Facebook's or Instagram's browser only (install.js shows it). */
+.in-app-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-3) var(--space-4);
+  background: var(--warn-bg);
+  color: var(--ink);
+  border-bottom: var(--border) solid var(--warn);
+}
+.in-app-hint[hidden] { display: none; }
+.in-app-hint p { margin: 0; flex: 1 1 18rem; max-width: var(--measure); }
+.in-app-hint b:first-child { display: block; }
+.button[hidden], .hbtn[hidden] { display: none; }
+
 /* The Aa panel: shown while it is the link target, so it opens with no script. */
 .reader-panel {
   display: none;
@@ -419,4 +437,22 @@ main:focus:not(:focus-visible) { outline: none; }
   color: var(--muted);
   font-size: var(--fs-small);
 }
-.site-footer p { margin: 0; max-width: var(--measure); }
+.site-footer p { margin: 0 0 var(--space-3); max-width: var(--measure); }
+.site-footer a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+
+/* The home-screen how-to: a drawn phone beside each step. */
+.steps { display: grid; gap: var(--space-6); padding-left: 1.5em; }
+.steps li { display: grid; gap: var(--space-3); }
+.steps p { margin: 0; }
+.phone-step { width: min(100%, 14rem); height: auto; }
+.ph-frame { fill: var(--ink); }
+.ph-screen, .ph-menu { fill: var(--surface); }
+.ph-menu { stroke: var(--line); stroke-width: 1.5; }
+.ph-bar { fill: var(--accent-soft); }
+.ph-field, .ph-line { fill: var(--line-soft); }
+.ph-dot { fill: var(--ink); }
+.ph-shade { fill: var(--ink); opacity: 0.35; }
+.ph-icon { fill: var(--accent); }
+.ph-small { font-size: 11px; fill: var(--ink); font-family: var(--font-body); }
+.ph-strong { font-weight: 700; }
+.ph-mark { fill: none; stroke: var(--focus); stroke-width: 4; }

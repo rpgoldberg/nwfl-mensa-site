@@ -5,7 +5,7 @@ export default defineConfig({
     include: ['server/**/*.test.{ts,mjs}', 'src/**/*.test.ts', 'test/**/*.test.ts'],
     coverage: {
       provider: 'v8',
-      include: ['server/**/*.mjs', 'src/lib/**/*.ts', 'src/middleware.ts', 'src/pages/**/*.ts'],
+      include: ['server/**/*.mjs', 'src/lib/**/*.ts', 'src/middleware.ts', 'src/pages/**/*.ts', 'public/scripts/**/*.js'],
       exclude: ['**/*.test.*'],
       reporter: ['text', 'lcov'],
       // The 85 % line AND branch gate, here so CI and a local run fail alike.

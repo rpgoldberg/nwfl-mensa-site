@@ -54,6 +54,7 @@ describe('MORE_PAGES', () => {
       '/calendar',
       '/finances',
       '/help',
+      '/home-screen',
     ]);
   });
 });
@@ -64,6 +65,7 @@ describe('sectionFor', () => {
     expect(sectionFor('/about/')?.title).toBe('About us');
     expect(sectionFor('/help')?.title).toBe('Help');
     expect(sectionFor('/sign-in')?.title).toBe('Sign in');
+    expect(sectionFor('/home-screen')?.title).toBe('Put the club on your home screen');
     expect(sectionFor('/nowhere')).toBeUndefined();
   });
 });
@@ -87,7 +89,7 @@ describe('currentNav', () => {
   });
 
   it('puts the pages listed on More under More', () => {
-    for (const path of ['/about', '/join', '/officers', '/governance', '/minutes', '/finances', '/help']) {
+    for (const path of ['/about', '/join', '/officers', '/governance', '/minutes', '/finances', '/help', '/home-screen']) {
       expect(currentNav(path), path).toBe('/more');
     }
   });

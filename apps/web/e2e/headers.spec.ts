@@ -70,10 +70,14 @@ test('a post from another site is refused and sets nothing', async ({ request })
   expect(res.headers()['set-cookie']).toBeUndefined();
 });
 
-test('the stylesheet is a hashed file, cached for a year, and the pages ship no script', async ({ request }) => {
+test('the stylesheet is a hashed file, cached for a year, and no page has an inline script or style', async ({ request }) => {
+  for (const path of ALL_PAGES) {
+    const page = await (await request.get(path)).text();
+    expect(page, path).not.toMatch(/<style/i);
+    // Script only as same-origin files (CSP script-src 'self'); the page works without them.
+    for (const tag of page.match(/<script\b[^>]*>[\s\S]*?<\/script>/gi) ?? []) expect(tag, path).toMatch(/^<script\b[^>]*\bsrc="\/[^/][^"]*"[^>]*><\/script>$/);
+  }
   const html = await (await request.get('/')).text();
-  expect(html).not.toMatch(/<script/i);
-  expect(html).not.toMatch(/<style/i);
   const href = /<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"/.exec(html)?.[1] ?? /href="(\/_astro\/[^"]+\.css)"/.exec(html)?.[1];
   expect(href).toMatch(/^\/_astro\//);
   const css = await request.get(href as string);
