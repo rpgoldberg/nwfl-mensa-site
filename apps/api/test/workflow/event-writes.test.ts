@@ -200,4 +200,85 @@ describe.skipIf(!live)('event writes', () => {
       expect(await audits('event_occurrence')).toEqual(['create', 'save', 'create', 'save', 'create', 'save']);
     });
   });
+
+  // API-FIX3 (blocker): only the current owner office, or the Admin, changes an
+  // occurrence; a series or owner id in the request never moves it.
+  describe('ownership of an occurrence', () => {
+    const row = async (id: string) =>
+      (
+        await api.pool.query<{ title: string; status: string; series_id: string | null; owner_office_id: string | null }>(
+          `SELECT title, status, series_id, owner_office_id FROM event_occurrence WHERE id = $1`,
+          [id],
+        )
+      ).rows[0];
+    let treasurerSeries: string;
+    let picnic: string;
+
+    beforeAll(async () => {
+      treasurerSeries = await insertId(
+        api.pool,
+        `INSERT INTO event_series (slug, title, category, recurrence, starts_on, area, visibility, host_office_id)
+         VALUES ('treasurer-dinner', 'Treasurer dinner', 'dinner', 'FREQ=MONTHLY;BYDAY=1FR', '2026-01-02', 'bay', 'public', $1) RETURNING id`,
+        [offices['treasurer']],
+      );
+      picnic = must(
+        (
+          await events.saveOccurrence(
+            {
+              occurrence: create(EventOccurrenceSchema, {
+                title: 'Publications picnic',
+                startsAt: timestampFromDate(new Date('2026-12-12T17:00:00Z')),
+                visibility: EventVisibility.PUBLIC,
+                ownerOfficeId: offices['publications'] as string,
+              }),
+            },
+            PUB,
+          )
+        ).occurrence,
+      ).id;
+    });
+
+    it('refuses another office, whether it names its own series or its own office in the request', async () => {
+      const hijack = (extra: Record<string, unknown>) =>
+        events.saveOccurrence({ occurrence: create(EventOccurrenceSchema, { id: picnic, title: 'Hijacked', status: OccurrenceStatus.CANCELLED, visibility: EventVisibility.PUBLIC, ...extra }) }, TREASURER);
+      await expect(hijack({})).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(hijack({ seriesId: treasurerSeries })).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(hijack({ ownerOfficeId: offices['treasurer'] })).rejects.toMatchObject({ code: Code.PermissionDenied });
+      expect(await row(picnic)).toEqual({ title: 'Publications picnic', status: 'scheduled', series_id: null, owner_office_id: offices['publications'] });
+    });
+
+    it('keeps an occurrence in its series and with its owner, even for the owner', async () => {
+      const save = (extra: Record<string, unknown>) =>
+        events.saveOccurrence({ occurrence: create(EventOccurrenceSchema, { id: picnic, title: 'Moved', visibility: EventVisibility.PUBLIC, ...extra }) }, PUB);
+      await expect(save({ seriesId: treasurerSeries })).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: 'an occurrence keeps its series and its owning office' });
+      await expect(save({ ownerOfficeId: offices['treasurer'] })).rejects.toMatchObject({ code: Code.InvalidArgument });
+      // Sending back what it read keeps working.
+      expect(must((await save({ ownerOfficeId: offices['publications'] })).occurrence).title).toBe('Moved');
+      expect(await row(picnic)).toMatchObject({ series_id: null, owner_office_id: offices['publications'] });
+    });
+
+    it('leaves a seeded event with no owning office to the Admin alone, and the Admin keeps it unowned', async () => {
+      const seeded = await insertId(api.pool, `INSERT INTO event_occurrence (title, starts_at, visibility) VALUES ('Seeded social', '2026-12-19T23:00:00Z', 'public') RETURNING id`);
+      const claim = (options: { headers: Record<string, string> }, extra: Record<string, unknown> = {}) =>
+        events.saveOccurrence({ occurrence: create(EventOccurrenceSchema, { id: seeded, title: 'Claimed', visibility: EventVisibility.PUBLIC, ...extra }) }, options);
+      await expect(claim(TREASURER, { ownerOfficeId: offices['treasurer'] })).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(claim(PUB, { seriesId: treasurerSeries })).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(claim(ADMIN, { ownerOfficeId: offices['treasurer'] })).rejects.toMatchObject({ code: Code.InvalidArgument });
+      await claim(ADMIN);
+      expect(await row(seeded)).toEqual({ title: 'Claimed', status: 'scheduled', series_id: null, owner_office_id: null });
+    });
+
+    it('refuses another office on a stored date of a series, by its id or by its date', async () => {
+      const lunch = (await events.listSeries({})).series.find((s) => s.slug === 'wednesday-lunch');
+      const stored = (await api.pool.query<{ id: string }>(`SELECT id FROM event_occurrence WHERE series_id = $1 LIMIT 1`, [lunch?.id])).rows[0]?.id as string;
+      const save = (id: string, extra: Record<string, unknown> = {}) =>
+        events.saveOccurrence({ occurrence: create(EventOccurrenceSchema, { id, status: OccurrenceStatus.CANCELLED, visibility: EventVisibility.PUBLIC, ...extra }) }, TREASURER);
+      await expect(save(stored, { ownerOfficeId: offices['treasurer'] })).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(save(stored, { seriesId: treasurerSeries })).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(save(`${lunch?.id as string}:2026-12-02`, { seriesId: treasurerSeries })).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(
+        events.saveOccurrence({ occurrence: create(EventOccurrenceSchema, { id: `${lunch?.id as string}:2026-12-02`, seriesId: treasurerSeries, visibility: EventVisibility.PUBLIC }) }, PUB),
+      ).rejects.toMatchObject({ code: Code.InvalidArgument });
+    });
+  });
 });

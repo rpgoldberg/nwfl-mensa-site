@@ -249,7 +249,9 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
           existing = (await client.query<OccurrenceRow>(`SELECT ${OCCURRENCE_COLUMNS} FROM event_occurrence WHERE id = $1 FOR UPDATE`, [matchedId])).rows[0];
           if (existing === undefined) throw new ConnectError('occurrence not found', Code.NotFound);
         }
-        const seriesId = existing?.series_id ?? (date !== undefined ? (matchedId) : idOrNull(occurrence.seriesId, 'series_id'));
+        // A stored row keeps its series (none, for a one-off), and a date of a series is in that
+        // series: a series named in the request never moves an occurrence.
+        const seriesId = existing !== undefined ? existing.series_id : date !== undefined ? (matchedId as string) : idOrNull(occurrence.seriesId, 'series_id');
         if (seriesId !== null) {
           series = (await client.query<SeriesRow>(`SELECT ${SERIES_COLUMNS} FROM event_series WHERE id = $1`, [seriesId])).rows[0];
           if (series === undefined) throw new ConnectError('series not found', Code.NotFound);
@@ -271,8 +273,16 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
             )
           ).rows.find((row) => storedEntry(row, series, new Map()).localDate === date);
         }
-        const ownerOfficeId = series !== undefined ? series.host_office_id : (existing?.owner_office_id ?? idOrNull(occurrence.ownerOfficeId, 'owner_office_id'));
+        // The owner is the series' host office, or a stored one-off's own office (none: the Admin's
+        // alone), never an id in the request; only a new one-off takes its owner from the request.
+        const ownerOfficeId =
+          series !== undefined ? series.host_office_id : existing !== undefined ? existing.owner_office_id : idOrNull(occurrence.ownerOfficeId, 'owner_office_id');
         await requireOwner(client, caller, ownerOfficeId);
+        if (existing !== undefined || date !== undefined) {
+          const keptSeries = occurrence.seriesId === '' || occurrence.seriesId === (seriesId ?? '');
+          const keptOwner = occurrence.ownerOfficeId === '' || occurrence.ownerOfficeId === (ownerOfficeId ?? '');
+          if (!keptSeries || !keptOwner) throw invalid('an occurrence keeps its series and its owning office');
+        }
 
         const startsAt = occurrence.startsAt !== undefined ? timestampDate(occurrence.startsAt) : (existing?.starts_at ?? generatedStart);
         if (startsAt === null) throw invalid('starts_at is required');
