@@ -3,6 +3,7 @@ import { createGrpcTransport } from '@connectrpc/connect-node';
 import http2 from 'node:http2';
 import { describe, expect, it } from 'vitest';
 import { Health, HealthCheckResponse_ServingStatus as Status } from '../src/gen/grpc/health/v1/health_pb.js';
+import type { Db } from '../src/db/pool.js';
 import { createStructuredLogger } from '../src/platform/logger.js';
 import { startServer } from '../src/server.js';
 import { captureLogs } from './helpers/servers.js';
@@ -31,10 +32,13 @@ function connectRefused(port: number): Promise<boolean> {
 
 const base = { host: '127.0.0.1', grpcPort: 0, healthPort: 0 };
 
+/** Readiness probes only: these tests never reach a handler that needs rows. */
+const fakeDb = (query: () => Promise<unknown>): Db => ({ query }) as unknown as Db;
+
 describe('startServer', () => {
   it('serves gRPC and health on two separate ports', async () => {
     const { sink } = captureLogs();
-    const server = await startServer({ ...base, db: { query: () => Promise.resolve({}) }, logger: createStructuredLogger({ sink }) });
+    const server = await startServer({ ...base, db: fakeDb(() => Promise.resolve({})), logger: createStructuredLogger({ sink }) });
     try {
       expect(server.grpcPort).not.toBe(server.healthPort);
       const client = createClient(Health, createGrpcTransport({ baseUrl: `http://127.0.0.1:${server.grpcPort}` }));
@@ -51,13 +55,11 @@ describe('startServer', () => {
     const { lines, sink } = captureLogs();
     const gate = deferred();
     let calls = 0;
-    const db = {
-      query: () => {
-        calls += 1;
-        // The first call (the in-flight RPC) waits on the gate; probes do not.
-        return calls === 1 ? gate.promise : Promise.resolve({});
-      },
-    };
+    const db = fakeDb(() => {
+      calls += 1;
+      // The first call (the in-flight RPC) waits on the gate; probes do not.
+      return calls === 1 ? gate.promise : Promise.resolve({});
+    });
     const server = await startServer({ ...base, db, logger: createStructuredLogger({ sink }), drainTimeoutMs: 5_000 });
     const client = createClient(Health, createGrpcTransport({ baseUrl: `http://127.0.0.1:${server.grpcPort}` }));
 
@@ -83,7 +85,7 @@ describe('startServer', () => {
   it('stops waiting at the drain deadline and cancels a wedged call', async () => {
     const { lines, sink } = captureLogs();
     let calls = 0;
-    const db = { query: () => (++calls === 1 ? new Promise<never>(() => {}) : Promise.resolve({})) };
+    const db = fakeDb(() => (++calls === 1 ? new Promise<never>(() => {}) : Promise.resolve({})));
     const server = await startServer({ ...base, db, logger: createStructuredLogger({ sink }), drainTimeoutMs: 100 });
     const client = createClient(Health, createGrpcTransport({ baseUrl: `http://127.0.0.1:${server.grpcPort}` }));
 
@@ -103,7 +105,7 @@ describe('startServer', () => {
 
   it('closes only once when asked twice', async () => {
     const { sink } = captureLogs();
-    const server = await startServer({ ...base, db: { query: () => Promise.resolve({}) }, logger: createStructuredLogger({ sink }) });
+    const server = await startServer({ ...base, db: fakeDb(() => Promise.resolve({})), logger: createStructuredLogger({ sink }) });
     const first = server.close();
     const second = server.close();
     expect(second).toBe(first);

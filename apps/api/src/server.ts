@@ -13,9 +13,10 @@
 // ============================================================================
 import type http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
-import type { QueryableDb } from './db/pool.js';
-import { healthRoutes } from './grpc/health.js';
-import { accessLogInterceptor, traceServerInterceptor } from './grpc/interceptors.js';
+import { type TokenVerifier, rejectAllTokens } from './auth/caller.js';
+import type { Db } from './db/pool.js';
+import { apiInterceptors } from './grpc/interceptors.js';
+import { apiRoutes } from './grpc/routes.js';
 import { createGrpcServer } from './grpc/server.js';
 import { buildHealthApp } from './health/app.js';
 import type { StructuredLogger } from './platform/logger.js';
@@ -25,9 +26,11 @@ export interface ServerOptions {
   host: string;
   grpcPort: number;
   healthPort: number;
-  db: QueryableDb;
+  db: Db;
   logger: StructuredLogger;
   drainTimeoutMs?: number;
+  /** Verifies bearer tokens. Default: refuse every token, so callers are public only (A3 supplies the JWKS verifier). */
+  verifier?: TokenVerifier;
 }
 
 export interface RunningServer {
@@ -46,8 +49,8 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   const shutdown = new AbortController();
 
   const grpc = createGrpcServer({
-    routes: healthRoutes(readiness),
-    interceptors: [traceServerInterceptor(), accessLogInterceptor(logger.child({ component: 'grpc' }))],
+    routes: apiRoutes({ db: options.db, logger, readiness }),
+    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? rejectAllTokens }),
     shutdownSignal: shutdown.signal,
   });
   const sessions = new Set<http2.ServerHttp2Session>();

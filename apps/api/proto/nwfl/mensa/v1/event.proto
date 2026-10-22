@@ -93,6 +93,8 @@ message EventSeries {
   string description = 12;
   EventVisibility visibility = 13;
   bool active = 14;
+  // The first date: the anchor the recurrence counts from (DTSTART).
+  Date starts_on = 15;
 }
 
 message EventOccurrence {
@@ -116,6 +118,11 @@ message EventOccurrence {
   // Set on a members event read without a member token: every detail beyond
   // the date and the area has been left out.
   bool details_withheld = 13;
+  // The local (Central) date. Always set, including when details are withheld
+  // or the time is not known yet.
+  Date local_date = 14;
+  // From the venue, or the series when the venue is not decided.
+  Area area = 15;
 }
 
 // The calendar. Reads return what the caller's token may see.

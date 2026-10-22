@@ -81,6 +81,11 @@ export interface QueryableDb {
   query(text: string): Promise<unknown>;
 }
 
+/** The slice of pg.Pool the RPC handlers need: parameterised queries that return rows. */
+export interface Db extends QueryableDb {
+  query<R extends pg.QueryResultRow = pg.QueryResultRow>(text: string, values?: unknown[]): Promise<{ rows: R[] }>;
+}
+
 export interface DatabaseProbe {
   reachable: boolean;
   latencyMs: number;

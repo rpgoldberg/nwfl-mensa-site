@@ -268,15 +268,19 @@ describe.skipIf(!live)('schema', () => {
       expect(await sqlstate(app, `INSERT INTO venue (kind, name, area) VALUES ('business', 'V', 'mobile')`)).toBe(CHECK_VIOLATION);
       const series = await one<{ id: string }>(
         app,
-        `INSERT INTO event_series (slug, title, category, recurrence, area, visibility)
-         VALUES ('happy-hour', 'Happy Hour', 'happy_hour', 'FREQ=MONTHLY;BYDAY=2FR', 'okaloosa', 'public') RETURNING id`,
+        `INSERT INTO event_series (slug, title, category, recurrence, starts_on, area, visibility)
+         VALUES ('happy-hour', 'Happy Hour', 'happy_hour', 'FREQ=MONTHLY;BYDAY=2FR', '2026-01-01', 'okaloosa', 'public') RETURNING id`,
       );
       const occurrence = (status: string, visibility: string): Promise<string> =>
         sqlstate(app, `INSERT INTO event_occurrence (series_id, starts_at, status, visibility) VALUES ($1, now() + random() * interval '300 days', $2, $3)`, [series.id, status, visibility]);
       for (const status of ['scheduled', 'tentative', 'cancelled', 'moved']) expect(await occurrence(status, 'members'), status).toBe('ok');
       expect(await occurrence('postponed', 'public')).toBe(CHECK_VIOLATION);
       expect(await occurrence('scheduled', 'officers')).toBe(CHECK_VIOLATION);
-      expect(await sqlstate(app, `INSERT INTO event_series (slug, title, category, recurrence, area) VALUES ('x', 'X', 'lunch', 'every wednesday', 'bay')`)).toBe(CHECK_VIOLATION);
+      expect(await sqlstate(app, `INSERT INTO event_series (slug, title, category, recurrence, starts_on, area) VALUES ('x', 'X', 'lunch', 'every wednesday', '2026-01-01', 'bay')`)).toBe(CHECK_VIOLATION);
+    });
+
+    it('anchors every series on its first date, the DTSTART its rule counts from', async () => {
+      expect(await sqlstate(app, `INSERT INTO event_series (slug, title, category, recurrence, area) VALUES ('y', 'Y', 'lunch', 'FREQ=WEEKLY;BYDAY=WE', 'bay')`)).toBe('23502');
     });
 
     it('needs a title on a one-off event', async () => {

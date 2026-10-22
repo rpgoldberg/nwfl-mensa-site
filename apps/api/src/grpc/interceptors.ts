@@ -5,6 +5,9 @@
 //                           a SERVER span for the call, so every line logged
 //                           while it runs carries the caller's trace id.
 //   accessLogInterceptor    one line per call: method, outcome, duration.
+//   authInterceptor         the verified caller, and from it the audience
+//                           (auth/caller.ts). Inside the access log, so a
+//                           refused token is logged as unauthenticated.
 //
 // THE ACCESS LOG NEVER READS THE REQUEST MESSAGE (R15). Officer reports,
 // minutes and member-typed text all arrive as request messages; the only safe
@@ -23,6 +26,7 @@ import {
   type TextMapGetter,
 } from '@opentelemetry/api';
 import { Code, ConnectError, type Interceptor } from '@connectrpc/connect';
+import { type TokenVerifier, authInterceptor } from '../auth/caller.js';
 import type { StructuredLogger } from '../platform/logger.js';
 
 export const TRACER_NAME = 'nwfl-mensa-api/grpc';
@@ -81,4 +85,9 @@ export function accessLogInterceptor(logger: StructuredLogger): Interceptor {
       throw new ConnectError('internal error', Code.Internal);
     }
   };
+}
+
+/** The production chain, outermost first. */
+export function apiInterceptors(options: { logger: StructuredLogger; verifier: TokenVerifier }): Interceptor[] {
+  return [traceServerInterceptor(), accessLogInterceptor(options.logger.child({ component: 'grpc' })), authInterceptor(options.verifier)];
 }
