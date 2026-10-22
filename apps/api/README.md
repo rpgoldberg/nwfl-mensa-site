@@ -42,6 +42,25 @@ skip locally; with `CI=true` they fail instead. The migration suites run
 `scripts/migrate.sh` inside that container (`docker exec`), against the repo
 mounted read-only at `/repo`, each in a database of its own.
 
+## Secrets and fixtures
+
+This repository's whole history is meant to be publishable.
+
+- `npm run hooks:install` points git at `.githooks`, whose pre-commit hook
+  runs gitleaks over the staged changes and refuses a commit that adds a
+  secret. CI runs it over every commit (`npm run secrets:scan` does the same
+  locally). The version and image digest are pinned in `scripts/gitleaks.sh`;
+  a local gitleaks is used only if it is exactly that version, otherwise the
+  image runs (Docker needed).
+- Fixtures and tests use made-up people only: no real officer or member
+  names, emails, phones or addresses. `test/tooling/made-up-people.test.ts`
+  allows email addresses only at example domains or nwflorida.us role aliases,
+  and phone numbers only in the fictional 555-01xx range. A seed script takes
+  its data from a path outside the repository, given as an argument.
+- Commit only what you wrote or what carries a compatible open licence.
+  `proto/grpc/health/v1/health.proto` is Apache-2.0 (header kept);
+  `vendor/` holds fc-shared 1.7.0, MIT (its LICENSE is inside the tarball).
+
 ## Contract
 
 `proto/nwfl/mensa/v1` holds the API: `EventService`, `ContentService`,
