@@ -161,23 +161,22 @@ describe('finishSignIn', () => {
 
 describe('endSessionUrl', () => {
   it('ends the provider’s session too, and brings the reader back to the signed-out page', async () => {
-    const url = await endSessionUrl(config(), { idToken: 'id-1', state: 'st' });
+    const url = await endSessionUrl(config(), { idToken: 'id-1' });
     expect(`${url?.origin}${url?.pathname}`).toBe(`${issuer}/session/end`);
     expect(Object.fromEntries(url!.searchParams)).toEqual({
       client_id: 'nwfl-site',
       post_logout_redirect_uri: 'https://localhost:8443/signed-out',
       id_token_hint: 'id-1',
-      state: 'st',
     });
   });
 
   it('is undefined when the provider offers no logout', async () => {
     offerLogout = false;
-    expect(await endSessionUrl(config(), { state: 'st' })).toBeUndefined();
+    expect(await endSessionUrl(config(), {})).toBeUndefined();
   });
 
   it('leaves out the hint when the ID token is no longer held', async () => {
-    const url = await endSessionUrl(config(), { state: 'st' });
+    const url = await endSessionUrl(config(), {});
     expect(url?.searchParams.has('id_token_hint')).toBe(false);
   });
 });

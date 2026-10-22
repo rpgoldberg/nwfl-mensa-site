@@ -93,12 +93,11 @@ export async function finishSignIn(cfg: AuthConfig, responseUrl: URL, tx: Pick<S
 }
 
 /** RP-initiated logout at the provider, or undefined when it offers none. */
-export async function endSessionUrl(cfg: AuthConfig, { idToken, state }: { idToken?: string | undefined; state: string }): Promise<URL | undefined> {
+export async function endSessionUrl(cfg: AuthConfig, { idToken }: { idToken?: string | undefined }): Promise<URL | undefined> {
   const config = await discover(cfg);
   if (!config.serverMetadata().end_session_endpoint) return undefined;
   return client.buildEndSessionUrl(config, {
     post_logout_redirect_uri: cfg.postLogoutRedirectUri,
     ...(idToken ? { id_token_hint: idToken } : {}),
-    state,
   });
 }

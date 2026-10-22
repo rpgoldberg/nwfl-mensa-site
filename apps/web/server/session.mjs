@@ -10,8 +10,6 @@ import { SESSION_COOKIE } from './policy.mjs';
 
 export { SESSION_COOKIE };
 export const AUTH_COOKIE = '__Host-nwfl-auth';
-/** Binds the way back from the provider's sign-out to the browser that signed out. */
-export const OUT_COOKIE = '__Host-nwfl-out';
 export const TRANSACTION_SECONDS = 600;
 
 const OFFICER_SECONDS = 12 * 3600;
@@ -122,7 +120,7 @@ export function renewIfDue(session, now) {
 }
 
 /** @param {string} name @param {string} value @param {number} maxAge */
-export const hostOnly = (name, value, maxAge) => `${name}=${value}; Path=/; Max-Age=${maxAge}; SameSite=Lax; HttpOnly; Secure`;
+const hostOnly = (name, value, maxAge) => `${name}=${value}; Path=/; Max-Age=${maxAge}; SameSite=Lax; HttpOnly; Secure`;
 
 /** @param {string} name */
 export const clearCookie = (name) => hostOnly(name, '', 0);

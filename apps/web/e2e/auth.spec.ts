@@ -72,62 +72,68 @@ test('the Officer area sends someone not signed in to sign in first', async ({ p
   await expect(page).toHaveURL(AT_PROVIDER);
 });
 
-test('signing out ends the provider’s session too, then clears the site, and keeps text size and theme', async ({ page, context }) => {
+test('signing out expires the session, ends the provider’s session with its own cookie, and keeps text size and theme', async ({ page, context, browserName }) => {
   await page.goto('/about#reader-menu');
   await page.locator('#reader-menu').getByRole('button', { name: /^A\+ Larger/ }).click();
   await page.locator('#reader-menu').getByRole('button', { name: /^Dark/ }).click();
   await signIn(page, 'member');
-  await expect(banner(page)).toContainText('Jordan Example');
 
-  const landed = page.waitForResponse((r) => r.url().includes('/signed-out?state='));
+  // Every Clear-Site-Data the browser sees, from here to the signed-out page.
+  const cleared: string[] = [];
+  page.on('response', async (r) => {
+    const value = (await r.allHeaders())['clear-site-data'];
+    if (value) cleared.push(value);
+  });
+  const endSession = page.waitForRequest((r) => r.url().startsWith(`${IDP_ORIGIN}/session/end?`));
   await banner(page).getByRole('button', { name: 'Sign out' }).click();
-  // The provider still has its session, so it asks to end it.
-  await expect(page).toHaveURL(AT_PROVIDER);
+  const end = await endSession;
+  expect(new URL(end.url()).searchParams.get('id_token_hint')).toBeTruthy();
+  // The provider got its own session cookie: it asks to end that session (with
+  // none, it would skip this page). Chromium reports the header too.
+  await expect(page.locator('h1')).toHaveText('Sign out of the provider?');
+  if (browserName === 'chromium') expect((await end.allHeaders())['cookie']).toMatch(/(^|; )_session=/);
   await page.getByRole('button', { name: 'Yes, sign me out' }).click();
-  // Bound to this browser, the way back clears the site (its header is checked
-  // below, from the API: WebKit's tooling does not report it on a redirect).
-  expect((await landed).headers()['location']).toMatch(/^\/signed-out\?restore=v1\./);
 
   await expect(page).toHaveURL(/\/signed-out$/);
-  await expect(page.locator('h1')).toHaveText('You are signed out');
+  await expect(page.locator('h1')).toHaveText("You're signed out");
   await expect(page.locator('html')).toHaveAttribute('data-size', '2');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  expect((await context.cookies()).map((c) => c.name).filter((n) => n.startsWith('__Host-')).sort()).toEqual(['__Host-nwfl-size', '__Host-nwfl-theme']);
+  const ours = (await context.cookies()).filter((c) => c.name.startsWith('__Host-'));
+  expect(ours.map((c) => `${c.name}=${c.value}`).sort()).toEqual(['__Host-nwfl-size=2', '__Host-nwfl-theme=dark']);
   await expect(banner(page).getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
+  // Never "cookies" (nor "*"). Chromium reports the header on the redirect;
+  // WebKit's tooling does not, and the API test below covers it there.
+  for (const value of cleared) expect(value).not.toMatch(/"cookies"|"\*"/);
+  if (browserName === 'chromium') expect(cleared).toContain('"cache", "storage"');
 
   // The provider's session ended: signing in asks who you are again.
   await banner(page).getByRole('link', { name: 'Sign in', exact: true }).click();
   await expect(page.locator('input[name="login"]')).toBeVisible();
 });
 
-test('sign-out answers a POST only, and only from this site', async ({ page, request, baseURL }) => {
+test('sign-out answers a POST only, and only from this site; it clears cache and storage, never cookies', async ({ page, request, baseURL }) => {
   const get = await page.goto('/sign-out');
   expect(get?.status()).toBe(405);
   const foreign = await request.post('/sign-out', { headers: { Origin: 'https://evil.example' }, maxRedirects: 0 });
   expect(foreign.status()).toBe(403);
   const ours = await request.post('/sign-out', { headers: { Origin: baseURL! }, maxRedirects: 0 });
   expect(ours.status()).toBe(303);
-  expect(ours.headers()['clear-site-data']).toBe('"storage"');
+  expect(ours.headers()['clear-site-data']).toBe('"cache", "storage"');
   expect(ours.headers()['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/session/end\\?`));
+  expect(new URL(ours.headers()['location']!).searchParams.get('post_logout_redirect_uri')).toBe(`${baseURL}/signed-out`);
+  expect(ours.headersArray().filter((h) => h.name.toLowerCase() === 'set-cookie').map((h) => h.value)).toEqual([
+    '__Host-nwfl-session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure',
+    '__Host-nwfl-auth=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure',
+  ]);
 });
 
-test('the way back from sign-out clears the site for the browser that signed out, and for no one else', async ({ request, playwright, baseURL }) => {
-  const ours = await request.post('/sign-out', { headers: { Origin: baseURL! }, maxRedirects: 0 });
-  const state = new URL(ours.headers()['location']!).searchParams.get('state')!;
-
-  const stranger = await playwright.request.newContext({ baseURL: baseURL!, ignoreHTTPSErrors: true });
-  const forged = await stranger.get(`/signed-out?state=${state}`, { maxRedirects: 0 });
-  expect(forged.status()).toBe(303);
-  expect(forged.headers()['location']).toBe('/signed-out');
-  expect(forged.headers()['clear-site-data']).toBeUndefined();
-  await stranger.dispose();
-
-  const back = await request.get(`/signed-out?state=${state}`, { maxRedirects: 0 });
-  expect(back.status()).toBe(303);
-  expect(back.headers()['location']).toBe(`/signed-out?restore=${state}`);
-  expect(back.headers()['clear-site-data']).toBe('"cookies", "storage"');
-  // Once only: the binding went with it.
-  expect((await request.get(`/signed-out?state=${state}`, { maxRedirects: 0 })).headers()['clear-site-data']).toBeUndefined();
+test('the signed-out page is plain: it checks nothing and sets no cookie', async ({ request }) => {
+  for (const path of ['/signed-out', '/signed-out?state=anything']) {
+    const res = await request.get(path, { maxRedirects: 0 });
+    expect(res.status(), path).toBe(200);
+    expect(res.headers()['set-cookie'], path).toBeUndefined();
+    expect(res.headers()['clear-site-data'], path).toBeUndefined();
+  }
 });
 
 test.describe('the callback refuses, in plain words', () => {

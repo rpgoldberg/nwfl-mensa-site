@@ -79,7 +79,7 @@ const PAGES: readonly Page[] = [
   { path: '/search', title: 'Search', description: 'Search the newsletter archive.' },
   { path: '/more', title: 'More', description: 'Every part of the site in one list.' },
   { path: '/sign-in', title: 'Sign in', description: 'Sign in to the site, for officers and members.' },
-  { path: '/signed-out', title: 'You are signed out', description: 'You have signed out of this site. You can sign in again at any time.' },
+  { path: '/signed-out', title: "You're signed out", description: 'You have signed out of this site. You can sign in again at any time.' },
   { path: '/officer-area', title: 'Officer area', description: 'Where officers write reports and approve what goes on the site.' },
 ];
 
