@@ -1,19 +1,13 @@
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { sectionFor } from '../../src/lib/site';
 import { compileRedirects, resolveOldUrl } from '../redirects.mjs';
 
-const sha = (key: string) => createHash('sha256').update(key).digest('hex');
-
 /** A small table in the real file's shape. */
 const tables = compileRedirects({
   moved: { '/calendar': '/calendar', '/join-mensa': '/join', '/excom-meeting-minutes-11-nov-2022': '/minutes#2022-11-11' },
   interim: { '/photos': '/' },
-  movedHashed: { [sha('/someone-letter')]: '/newsletter' },
-  interimHashed: { [sha('/someone-bio')]: '/about' },
   gone: ['/2015-mind-games'],
-  goneHashed: [sha('/someone-essay')],
   uploads: { '/uploads/3/4/4/5/34456428/march_2023_minutes.pdf': '/minutes#2023-03-12' },
   goneUploads: ['/uploads/3/4/4/5/34456428/membership_report_apr_2024.pdf'],
   goneDirs: ['/w_api/', '/images/spider/'],
@@ -39,10 +33,8 @@ describe('resolveOldUrl (R16)', () => {
     expect(resolveOldUrl('/photos.html', tables)).toEqual({ status: 302, location: '/' });
   });
 
-  it("finds a page whose slug names a person by the slug's hash", () => {
-    expect(resolveOldUrl('/someone-letter.html', tables)).toEqual({ status: 301, location: '/newsletter' });
-    expect(resolveOldUrl('/mobile/someone-bio.html', tables)).toEqual({ status: 302, location: '/about' });
-    expect(resolveOldUrl('/someone-essay.html', tables)).toEqual({ status: 410 });
+  it('leaves a page whose slug named a person to the site, as any unknown path', () => {
+    for (const path of ['/someone-letter.html', '/mobile/someone-bio.html', '/someone-essay']) expect(resolveOldUrl(path, tables), path).toBeUndefined();
   });
 
   it('answers retired pages, PHP, the Weebly machinery and the spam folder with 410 Gone', () => {
@@ -75,8 +67,6 @@ describe('the old-site table (server/old-site.json)', () => {
   const targets = [
     ...Object.values(data['moved'] as Record<string, string>),
     ...Object.values(data['interim'] as Record<string, string>),
-    ...Object.values(data['movedHashed'] as Record<string, string>),
-    ...Object.values(data['interimHashed'] as Record<string, string>),
     ...Object.values(data['uploads'] as Record<string, string>),
   ];
 
@@ -95,9 +85,15 @@ describe('the old-site table (server/old-site.json)', () => {
     for (const from of data['gone'] as string[]) expect(sectionFor(from), from).toBeUndefined();
   });
 
-  it('keeps every slug that names a person as a hash, never as text', () => {
-    for (const key of [...Object.keys(data['movedHashed'] as object), ...Object.keys(data['interimHashed'] as object), ...(data['goneHashed'] as string[])]) {
-      expect(key).toMatch(/^[0-9a-f]{64}$/);
+  it('holds no slug that names a person, not even hashed: an unsalted hash of a name is reversed from a list of names', () => {
+    expect(Object.keys(data).sort()).toEqual(['about', 'gone', 'goneDirs', 'goneUploads', 'interim', 'moved', 'uploads']);
+    expect(JSON.stringify(data)).not.toMatch(/[0-9a-f]{64}/);
+  });
+
+  it('never answers a path of the new site with 410: the 404 page, the gone page and sign-in among them', () => {
+    for (const path of ['/404', '/gone', '/sign-in', '/sign-out', '/signed-out', '/auth/callback', '/officer-area', '/prefs', '/robots.txt', '/healthz']) {
+      expect((data['gone'] as string[]).includes(path), path).toBe(false);
+      expect(resolveOldUrl(path, real)?.status, path).not.toBe(410);
     }
   });
 

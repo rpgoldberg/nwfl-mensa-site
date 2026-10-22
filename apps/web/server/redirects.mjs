@@ -3,21 +3,14 @@
 // pages and files, so each old URL is redirected to its new home or answered
 // 410 Gone. The table is server/old-site.json; its "about" field explains the
 // sections. Applied by the server wrapper before anything else.
-import { createHash } from 'node:crypto';
-
 /**
  * @typedef {{
- *   moved: Record<string, string>, interim: Record<string, string>,
- *   movedHashed: Record<string, string>, interimHashed: Record<string, string>,
- *   gone: string[], goneHashed: string[],
+ *   moved: Record<string, string>, interim: Record<string, string>, gone: string[],
  *   uploads: Record<string, string>, goneUploads: string[], goneDirs: string[],
  * }} OldSite
  * @typedef {{ status: 301 | 302, location: string } | { status: 410 }} Answer
  * @typedef {{ pages: Map<string, Answer>, uploads: Map<string, Answer>, goneDirs: string[] }} Tables
  */
-
-/** @param {string} key */
-const sha = (key) => createHash('sha256').update(key).digest('hex');
 
 /**
  * @param {OldSite} data
@@ -28,9 +21,7 @@ export function compileRedirects(data) {
   const pages = new Map();
   for (const [from, to] of Object.entries(data.moved)) pages.set(from, { status: 301, location: to });
   for (const [from, to] of Object.entries(data.interim)) pages.set(from, { status: 302, location: to });
-  for (const [hash, to] of Object.entries(data.movedHashed)) pages.set(hash, { status: 301, location: to });
-  for (const [hash, to] of Object.entries(data.interimHashed)) pages.set(hash, { status: 302, location: to });
-  for (const key of [...data.gone, ...data.goneHashed]) pages.set(key, { status: 410 });
+  for (const key of data.gone) pages.set(key, { status: 410 });
   /** @type {Map<string, Answer>} */
   const uploads = new Map();
   for (const [from, to] of Object.entries(data.uploads)) uploads.set(from, { status: 302, location: to });
@@ -56,7 +47,7 @@ export function resolveOldUrl(pathname, tables) {
   const page = OLD_PAGE.exec(path);
   if (!page) return undefined;
   const key = `/${page[1]}`;
-  const answer = tables.pages.get(key) ?? tables.pages.get(sha(key));
+  const answer = tables.pages.get(key);
   // A bare path that is already a page of the new site is that page, never a loop.
   if (!answer || ('location' in answer && answer.location === path)) return undefined;
   return answer;

@@ -371,10 +371,7 @@ describe('old URLs (R16)', () => {
   const redirects = compileRedirects({
     moved: { '/join-mensa': '/join' },
     interim: {},
-    movedHashed: {},
-    interimHashed: {},
     gone: ['/2015-mind-games'],
-    goneHashed: [],
     uploads: {},
     goneUploads: [],
     goneDirs: ['/w_api/'],

@@ -1,5 +1,5 @@
 {
-  "about": "Old nwflorida.us URLs (R16). A key /<slug> also answers /<slug>.html and /mobile/<slug>.html. moved: 301; interim: 302, the new home is not built yet; gone: 410. A slug that names a person is stored as the SHA-256 of its key, never as text. uploads: 302 to where the content lives until storage serves the files; every other /uploads/ path is 410, goneUploads lists the files retired for personal data. goneDirs: 410 for everything under them; every .php is 410 except /login.php, which goes to /sign-in.",
+  "about": "Old nwflorida.us URLs (R16). A key /<slug> also answers /<slug>.html and /mobile/<slug>.html. moved: 301; interim: 302, the new home is not built yet; gone: 410. A slug that names a person is not kept at all, not even hashed: such a page answers as any unknown path. uploads: 302 to where the content lives until storage serves the files; every other /uploads/ path is 410, goneUploads lists the files retired for personal data. goneDirs: 410 for everything under them; every .php is 410 except /login.php, which goes to /sign-in.",
   "moved": {
     "/2014-awards": "/about",
     "/2020-annual-financial-report": "/finances",
@@ -107,20 +107,6 @@
     "/odd-peilcan-freeport": "/",
     "/photos": "/"
   },
-  "movedHashed": {
-    "REDACTED-OLD-SLUG": "/newsletter",
-    "REDACTED-OLD-SLUG": "/newsletter",
-    "REDACTED-OLD-SLUG": "/newsletter"
-  },
-  "interimHashed": {
-    "REDACTED-OLD-SLUG": "/about",
-    "REDACTED-OLD-SLUG": "/about",
-    "REDACTED-OLD-SLUG": "/about",
-    "REDACTED-OLD-SLUG": "/about",
-    "REDACTED-OLD-SLUG": "/about",
-    "REDACTED-OLD-SLUG": "/about",
-    "REDACTED-OLD-SLUG": "/about"
-  },
   "gone": [
     "/2013-scholarship-winners",
     "/2014-local-group-participatory-winning-essay",
@@ -131,7 +117,6 @@
     "/2015-culturequest",
     "/2015-mind-games",
     "/2015-winning-essays",
-    "/404",
     "/aml-retreat-planning-guide",
     "/event-photos",
     "/happy-hour-12-march-2021",
@@ -142,9 +127,6 @@
     "/national-award-winner-600",
     "/northwest-florida-mensa-300-scholarship",
     "/retreat-agenda"
-  ],
-  "goneHashed": [
-    "REDACTED-OLD-SLUG"
   ],
   "uploads": {
     "/uploads/3/4/4/5/34456428/2022_nwflorida_mensa_financial_report.pdf": "/finances",

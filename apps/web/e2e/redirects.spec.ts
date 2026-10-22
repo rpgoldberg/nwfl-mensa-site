@@ -97,3 +97,11 @@ test('sitemap.xml lists the public pages on the canonical host', async ({ reques
   expect(urls).toContain('https://nwflorida.us/calendar');
   expect(urls).not.toContain('https://nwflorida.us/sign-in');
 });
+
+test('the 404 page itself answers 404, never 410', async ({ request }) => {
+  for (const path of ['/404', '/404.html']) {
+    const res = await request.get(path, { maxRedirects: 0 });
+    expect(res.status(), path).toBe(404);
+    expect(await res.text(), path).toContain('Page not found');
+  }
+});
