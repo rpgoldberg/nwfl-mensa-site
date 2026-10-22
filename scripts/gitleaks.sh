@@ -3,16 +3,17 @@
 # gitleaks.sh <gitleaks args> - secret scanning at ONE pinned version, for the
 # pre-commit hook, CI and a run by hand:
 #
-#   sh scripts/gitleaks.sh git --pre-commit --staged     (the hook)
+#   sh scripts/gitleaks.sh git --pre-commit --staged     (the root's hook)
 #   sh scripts/gitleaks.sh git --log-opts=--all          (CI: every commit)
 #
-# Scans the repository the CALLER is in, so the hook works from any checkout
-# that points core.hooksPath at .githooks. A local gitleaks is used only when
+# One script for the whole repository, at its root. It scans the repository
+# the CALLER is in, from its top, whichever folder it runs from (an app's
+# `npm run secrets:scan` runs it from apps/<app>), so the hook works from any
+# checkout that points core.hooksPath at .githooks. A local gitleaks is used only when
 # it is exactly the pinned version; otherwise the official image runs, pinned
 # by digest, with no network and the repository mounted read-only. Findings
 # are listed (file, line, rule) with the value redacted, so a leaked value
-# never reaches a terminal or a CI log. Same version and digest as
-# nwfl-mensa-api.
+# never reaches a terminal or a CI log.
 #
 # Version chosen 2026-10-22: 8.30.1, the latest release (gitleaks/gitleaks).
 # ============================================================================

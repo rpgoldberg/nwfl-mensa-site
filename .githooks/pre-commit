@@ -1,0 +1,6 @@
+#!/bin/sh
+# Refuse a commit whose staged changes add a secret, anywhere in the
+# repository. `npm install` in either app wires it through the prepare script
+# (core.hooksPath=.githooks, which git reads from the top of the work tree).
+# gitleaks 8.x replaced `gitleaks protect` with `gitleaks git --pre-commit`.
+exec sh "$(dirname -- "$0")/../scripts/gitleaks.sh" git --pre-commit --staged

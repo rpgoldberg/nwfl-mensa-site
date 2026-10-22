@@ -1,18 +1,20 @@
-// The secret-scanning gate: .githooks/pre-commit runs the pinned gitleaks over
-// the staged changes and refuses a commit that adds a secret, and CI scans the
-// whole history. Proven on a throwaway repository that uses this repo's hook,
+// The secret-scanning gate, one for the whole repository: the root's
+// .githooks/pre-commit runs the pinned gitleaks (scripts/gitleaks.sh) over the
+// staged changes and refuses a commit that adds a secret, and the root's
+// secrets workflow scans the whole history. Proven on a throwaway repository that uses this repo's hook,
 // so nothing here commits to the real one. The fake token is assembled at run
 // time; a literal would make gitleaks flag this file.
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const REPO = process.cwd();
-const HOOKS = path.join(REPO, '.githooks');
-const WRAPPER = path.join(REPO, 'scripts', 'gitleaks.sh');
+const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+const HOOKS = path.join(ROOT, '.githooks');
+const WRAPPER = path.join(ROOT, 'scripts', 'gitleaks.sh');
 
 function run(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
@@ -39,7 +41,13 @@ describe('gitleaks', () => {
     expect(readFileSync(hook, 'utf8')).toMatch(/gitleaks\.sh" git --pre-commit --staged/);
   });
 
-  it('is wired by npm prepare in a git checkout, and is a no-op outside one', async () => {
+  it('has no copy of its own in the app: one hook and one script for the repository', () => {
+    for (const own of ['.githooks', path.join('scripts', 'gitleaks.sh'), '.github']) expect(existsSync(path.join(REPO, own)), own).toBe(false);
+    const pkg = JSON.parse(readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['secrets:scan']).toBe('sh ../../scripts/gitleaks.sh git --log-opts=--all');
+  });
+
+  it('is wired by npm prepare from the app folder, pointing git at the root hooks, and is a no-op outside a checkout', async () => {
     const pkg = JSON.parse(readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
     const prepare = pkg.scripts['prepare'] ?? '';
     expect(prepare).not.toBe('');
@@ -47,7 +55,10 @@ describe('gitleaks', () => {
     const bare = mkdtempSync(path.join(os.tmpdir(), 'nwfl-prepare-nogit-'));
     try {
       await run('git', ['init', '-q'], checkout);
-      expect((await run('sh', ['-c', prepare], checkout)).code).toBe(0);
+      const app = path.join(checkout, 'apps', 'web');
+      mkdirSync(app, { recursive: true });
+      expect((await run('sh', ['-c', prepare], app)).code).toBe(0);
+      // Relative to the top of the work tree, where git runs hooks: the root's .githooks.
       expect((await run('git', ['config', 'core.hooksPath'], checkout)).out.trim()).toBe('.githooks');
       expect((await run('sh', ['-c', prepare], bare)).code).toBe(0);
     } finally {
@@ -56,10 +67,11 @@ describe('gitleaks', () => {
     }
   });
 
-  it('runs in CI over every commit', () => {
-    const ci = readFileSync(path.join(REPO, '.github', 'workflows', 'ci.yml'), 'utf8');
+  it('runs in CI once, from the root, over every commit', () => {
+    const ci = readFileSync(path.join(ROOT, '.github', 'workflows', 'secrets.yml'), 'utf8');
     expect(ci).toMatch(/fetch-depth: 0/);
     expect(ci).toMatch(/run: sh scripts\/gitleaks\.sh git --log-opts=--all$/m);
+    expect(ci).not.toMatch(/working-directory/);
   });
 
   it('uses a local gitleaks only when it is exactly the pinned version', async () => {
@@ -67,12 +79,16 @@ describe('gitleaks', () => {
     const stub = (reported: string): void => {
       writeFileSync(path.join(stubDir, 'gitleaks'), `#!/bin/sh\nif [ "$1" = version ]; then echo ${reported}; else echo "STUB $*"; fi\n`, { mode: 0o755 });
     };
+    // A fake docker proves the image fallback is chosen without pulling the real image, which is slow on a cold runner.
+    writeFileSync(path.join(stubDir, 'docker'), '#!/bin/sh\necho "DOCKER $*"\n', { mode: 0o755 });
     const env = { ...process.env, PATH: `${stubDir}:${process.env['PATH'] ?? ''}` };
     try {
       stub('8.30.1');
       expect((await run('sh', [WRAPPER, 'git', '--help'], REPO, env)).out).toBe('STUB git --help --redact --verbose --no-banner .\n');
       stub('8.0.0');
-      expect((await run('sh', [WRAPPER, 'git', '--help'], REPO, env)).out).not.toContain('STUB');
+      const fallback = (await run('sh', [WRAPPER, 'git', '--help'], REPO, env)).out;
+      expect(fallback).not.toContain('STUB');
+      expect(fallback).toContain('DOCKER run');
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
     }
@@ -84,6 +100,11 @@ describe('gitleaks', () => {
 
     beforeAll(async () => {
       canRun = await dockerUp();
+      if (canRun) {
+        // Pull the pinned image once, so a cold runner doesn't spend each test's time limit downloading it.
+        const image = /^IMAGE=(\S+)$/m.exec(readFileSync(WRAPPER, 'utf8'))?.[1];
+        if (image) await run('docker', ['pull', '-q', image], REPO);
+      }
       dir = mkdtempSync(path.join(os.tmpdir(), 'nwfl-gitleaks-'));
       for (const args of [
         ['init', '-q', '-b', 'main'],
@@ -94,7 +115,7 @@ describe('gitleaks', () => {
       ]) {
         await run('git', args, dir);
       }
-    });
+    }, 180_000);
 
     afterAll(() => {
       rmSync(dir, { recursive: true, force: true });
@@ -110,7 +131,7 @@ describe('gitleaks', () => {
       await run('git', ['add', 'notes.md'], dir);
       const commit = await run('git', ['commit', '-q', '-m', 'Add notes'], dir);
       expect(commit.code, commit.out).toBe(0);
-    });
+    }, 60_000);
 
     it('refuses a commit that adds a token, and redacts it in the report', async ({ skip }) => {
       if (!canRun) skip();
@@ -122,6 +143,6 @@ describe('gitleaks', () => {
       expect(commit.out).toMatch(/leaks found: [1-9]/);
       expect(commit.out).not.toContain(token);
       expect((await run('git', ['log', '--oneline'], dir)).out).not.toMatch(/Add config/);
-    });
+    }, 60_000);
   });
 });

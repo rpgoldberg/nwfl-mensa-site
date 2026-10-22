@@ -1,19 +1,21 @@
-// The secret-scanning gate: .githooks/pre-commit runs the pinned gitleaks over
-// the staged changes and refuses a commit that adds a secret. Proven on a
+// The secret-scanning gate, one for the whole repository: the root's
+// .githooks/pre-commit runs the pinned gitleaks (scripts/gitleaks.sh) over the
+// staged changes and refuses a commit that adds a secret. Proven on a
 // throwaway repository that uses this repo's hook, so nothing here commits to
 // the real one. The fake token is assembled at run time; a literal would make
 // gitleaks flag this file.
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const HOOKS = path.join(REPO, '.githooks');
-const WRAPPER = path.join(REPO, 'scripts', 'gitleaks.sh');
+const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: REPO, encoding: 'utf8' }).trim();
+const HOOKS = path.join(ROOT, '.githooks');
+const WRAPPER = path.join(ROOT, 'scripts', 'gitleaks.sh');
 
 function run(cmd: string, args: string[], cwd: string): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
@@ -40,7 +42,13 @@ describe('gitleaks', () => {
     expect(readFileSync(hook, 'utf8')).toMatch(/gitleaks\.sh" git --pre-commit --staged/);
   });
 
-  it('is wired by npm prepare in a git checkout, and is a no-op outside one', async () => {
+  it('has no copy of its own in the app: one hook and one script for the repository', () => {
+    for (const own of ['.githooks', path.join('scripts', 'gitleaks.sh'), '.github']) expect(existsSync(path.join(REPO, own)), own).toBe(false);
+    const pkg = JSON.parse(readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    expect(pkg.scripts['secrets:scan']).toBe('sh ../../scripts/gitleaks.sh git --log-opts=--all');
+  });
+
+  it('is wired by npm prepare from the app folder, pointing git at the root hooks, and is a no-op outside a checkout', async () => {
     const pkg = JSON.parse(readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
     const prepare = pkg.scripts['prepare'];
     expect(prepare).toBeDefined();
@@ -48,7 +56,10 @@ describe('gitleaks', () => {
     const bare = mkdtempSync(path.join(os.tmpdir(), 'nwfl-prepare-nogit-'));
     try {
       await run('git', ['init', '-q'], checkout);
-      expect((await run('sh', ['-c', prepare as string], checkout)).code).toBe(0);
+      const app = path.join(checkout, 'apps', 'api');
+      mkdirSync(app, { recursive: true });
+      expect((await run('sh', ['-c', prepare as string], app)).code).toBe(0);
+      // Relative to the top of the work tree, where git runs hooks: the root's .githooks.
       expect((await run('git', ['config', 'core.hooksPath'], checkout)).out.trim()).toBe('.githooks');
       expect((await run('sh', ['-c', prepare as string], bare)).code).toBe(0);
     } finally {
@@ -57,9 +68,10 @@ describe('gitleaks', () => {
     }
   });
 
-  it('runs in CI over the whole history', () => {
-    const ci = readFileSync(path.join(REPO, '.github', 'workflows', 'ci.yml'), 'utf8');
-    expect(ci).toMatch(/sh scripts\/gitleaks\.sh git --log-opts=--all/);
+  it('runs in CI once, from the root, over the whole history', () => {
+    const ci = readFileSync(path.join(ROOT, '.github', 'workflows', 'secrets.yml'), 'utf8');
+    expect(ci).toMatch(/fetch-depth: 0/);
+    expect(ci).toMatch(/run: sh scripts\/gitleaks\.sh git --log-opts=--all$/m);
   });
 
   it('uses a local gitleaks only when it is exactly the pinned version', async () => {

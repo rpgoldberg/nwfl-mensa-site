@@ -32,7 +32,9 @@ npm run build && npm run e2e   # Playwright: Chromium and WebKit (iPhone), axe, 
 
 ## Secrets and people
 
-The history may be published, so nothing secret and no real person's contact details go in. `npm install` points git at `.githooks/`, whose pre-commit hook runs gitleaks 8.30.1 (pinned in `scripts/gitleaks.sh`, by image digest when no local copy of that exact version exists) over the staged changes. CI scans every commit; `npm run secrets:scan` does the same by hand. Fixtures and placeholders use made-up people, example.org addresses and 555-01xx numbers; a test checks the addresses and numbers.
+The repository is public with its whole history, so nothing secret and no real person's contact details go in. `npm install` points git at the repository root's `.githooks/`, whose pre-commit hook runs gitleaks 8.30.1 (pinned in the root's `scripts/gitleaks.sh`, by image digest when no local copy of that exact version exists) over the staged changes. The root's `secrets` workflow scans every commit; `npm run secrets:scan` does the same by hand. Fixtures and placeholders use made-up people, example.org addresses and 555-01xx numbers; the root's `scripts/made-up-people.mjs` checks the addresses and numbers across the repository, in CI and in the unit tests.
+
+CI for this app is the root's `.github/workflows/web.yml`; it runs when `apps/web` changes.
 
 ## Sign-in and sessions
 
