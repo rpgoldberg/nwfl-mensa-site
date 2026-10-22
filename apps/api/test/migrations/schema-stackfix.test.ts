@@ -199,7 +199,8 @@ describe.skipIf(!live)('schema after STACK-FIX', () => {
       expect(await failure(app, `UPDATE stored_file SET audience = 'public' WHERE id = $1`, [file])).toMatch(/its version is approved/);
       const draft = await newVersion(itemId);
       expect(await failure(app, `UPDATE stored_file SET version_id = $2 WHERE id = $1`, [file, draft])).toMatch(/its version is approved/);
-      expect(await failure(app, `UPDATE stored_file SET filename = 'roster-2027.pdf' WHERE id = $1`, [file])).toBe('ok');
+      // 0011 freezes the rest of the row as well.
+      expect(await failure(app, `UPDATE stored_file SET filename = 'roster-2027.pdf' WHERE id = $1`, [file])).toMatch(/its files are frozen/);
     });
   });
 });

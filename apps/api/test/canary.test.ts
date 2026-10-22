@@ -108,6 +108,7 @@ describe.skipIf(!live)('the members-only canary', () => {
       title: 'Picnic',
       summary: 'Saturday',
       body: { blocks: [paragraph(text('Meet at '), membersSpan(`Span ${TOKEN}`), text('.')), { type: 'members', children: [paragraph(text(`Block ${TOKEN}`))] }] },
+      files: [{ objectKey: `${TOKEN}.pdf`, audience: 'members' }],
     });
     // What `[:members[Zoom room]](https://example.org/zoom?pwd=...)` parses to: the target is the secret.
     await publishItem(pool, {
@@ -117,10 +118,6 @@ describe.skipIf(!live)('the members-only canary', () => {
       body: { blocks: [paragraph(text('Join us: '), { type: 'link', href: `https://example.org/zoom?pwd=${TOKEN}`, children: [membersSpan('Zoom room')] })] },
     });
     ids['publicItem'] = publicItem.itemId;
-    await pool.query(
-      `INSERT INTO stored_file (version_id, object_key, filename, mime_type, size_bytes, sha256, audience) VALUES ($1, $2, $2, 'application/pdf', 10, $3, 'members')`,
-      [publicItem.versionId, `${TOKEN}.pdf`, Buffer.alloc(32, 3)],
-    );
     await publishItem(pool, { slug: 'canary-members', officeId: office, visibility: 'members', title: 'Members notice', body: { blocks: [paragraph(text(`Notice ${TOKEN}`))] } });
     await publishItem(pool, { slug: 'canary-officers', officeId: office, visibility: 'officers', title: `Officers ${TOKEN}`, body: { blocks: [paragraph(text(TOKEN))] } });
     ids['series'] = await insertId(pool,

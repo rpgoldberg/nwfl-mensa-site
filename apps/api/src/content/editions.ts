@@ -177,13 +177,14 @@ export function editionHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof Co
       return tx(async (client) => {
         const edition = await load(client, request.editionId);
         if (!OPEN.has(edition.status)) throw new ConnectError('the edition is already frozen', Code.FailedPrecondition);
-        await client.query(`UPDATE edition SET status = 'proof', frozen_at = now(), updated_at = now() WHERE id = $1`, [edition.id]);
+        // Pin while the edition is still open, then freeze it: a frozen edition's pins are frozen (0011).
         const pinned = await client.query(
           `INSERT INTO edition_item (edition_id, item_id, version_id)
            SELECT $1, i.id, i.live_version_id FROM content_item i JOIN content_version v ON v.id = i.live_version_id
            WHERE i.state = 'published' AND v.target_newsletter AND v.edition_id = $1`,
           [edition.id],
         );
+        await client.query(`UPDATE edition SET status = 'proof', frozen_at = now(), updated_at = now() WHERE id = $1`, [edition.id]);
         const pinnedItems = pinned.rowCount ?? 0;
         await recordAudit(client, caller, { action: 'freeze', subjectKind: 'edition', subjectId: edition.id, fromState: edition.status, toState: 'proof', payload: { pinned_items: pinnedItems } });
         const [message] = await editionMessages(client, [await load(client, edition.id)]);

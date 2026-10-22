@@ -16,6 +16,8 @@ export interface PublishOptions {
   approvedAt?: string;
   /** Overrides the derived public tree, to prove which column a read loads. */
   publicAst?: unknown;
+  /** Files attached to the version before it is approved: an approved version's files are frozen (0011). */
+  files?: Array<{ objectKey: string; audience: 'public' | 'members' | 'officers'; mimeType?: string; role?: string }>;
 }
 
 export async function publishItem(pool: pg.Pool, options: PublishOptions): Promise<{ itemId: string; versionId: string }> {
@@ -34,6 +36,12 @@ export async function publishItem(pool: pg.Pool, options: PublishOptions): Promi
     [itemId, options.title, options.summary ?? null, visibility, JSON.stringify(options.body), options.officeId, distributed],
   );
   const versionId = (version.rows[0] as { id: string }).id;
+  for (const file of options.files ?? []) {
+    await pool.query(
+      `INSERT INTO stored_file (version_id, object_key, filename, mime_type, size_bytes, sha256, audience, role) VALUES ($1, $2, $2, $3, 10, $4, $5, $6)`,
+      [versionId, file.objectKey, file.mimeType ?? 'application/pdf', createHash('sha256').update(file.objectKey).digest(), file.audience, file.role ?? 'primary'],
+    );
+  }
   const hash = createHash('sha256').update(JSON.stringify(options.body)).digest();
   await pool.query(`UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [versionId, hash]);
   await pool.query(

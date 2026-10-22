@@ -37,19 +37,14 @@ describe.skipIf(!live)('ContentService reads', () => {
       summary: 'October',
       body: { blocks: [paragraph(text('The picnic is at '), membersSpan(HIDDEN), text('.'))] },
       approvedAt: '2026-10-10T12:00:00Z',
+      files: [
+        { objectKey: 'flyer.pdf', audience: 'public' },
+        { objectKey: 'map.pdf', audience: 'members' },
+        { objectKey: 'draft.docx', audience: 'officers', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', role: 'source' },
+      ],
     });
     ids['report'] = report.itemId;
     ids['reportVersion'] = report.versionId;
-    for (const [name, audience, mime, role] of [
-      ['flyer.pdf', 'public', 'application/pdf', 'primary'],
-      ['map.pdf', 'members', 'application/pdf', 'primary'],
-      ['draft.docx', 'officers', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'source'],
-    ] as const) {
-      await pool.query(
-        `INSERT INTO stored_file (version_id, object_key, filename, mime_type, size_bytes, sha256, audience, role) VALUES ($1, $2, $2, $3, 10, $4, $5, $6)`,
-        [report.versionId, name, mime, Buffer.alloc(32, 1), audience, role],
-      );
-    }
     await publishItem(pool, { slug: 'members-notice', officeId: ids['president'], kind: 'announcement', visibility: 'members', title: 'Dues reminder', summary: 'For members', body: { blocks: [paragraph(text(HIDDEN))] }, approvedAt: '2026-10-12T12:00:00Z' });
     await publishItem(pool, { slug: 'officers-memo', officeId: ids['treasurer'], kind: 'document', visibility: 'officers', title: 'Bank signatories', body: { blocks: [paragraph(text(HIDDEN))] }, approvedAt: '2026-10-14T12:00:00Z' });
     await publishItem(pool, {
