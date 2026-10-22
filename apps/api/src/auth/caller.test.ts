@@ -19,6 +19,7 @@ import {
   audienceFor,
   authInterceptor,
   callerOf,
+  isEdgePeer,
   noStanding,
   rejectAllTokens,
 } from './caller.js';
@@ -202,6 +203,14 @@ describe('authInterceptor: the mesh identity (l5d-client-id) only ever narrows',
   it('reads the edge identity without regard to case, so a case variant is narrowed too', async () => {
     await expect(api.events({ 'l5d-client-id': EDGE.toUpperCase() })).rejects.toMatchObject({ code: Code.PermissionDenied });
     expect((await api.newsletter({ ...bearer('agent-token'), 'l5d-client-id': EDGE.toUpperCase() })).kind).toBe('agent');
+  });
+
+  it('reads a header given as several values, and no header as no edge', () => {
+    const edge = new Set([EDGE]);
+    expect(isEdgePeer([WEB, EDGE.toUpperCase()], edge)).toBe(true);
+    expect(isEdgePeer([WEB], edge)).toBe(false);
+    expect(isEdgePeer(undefined, edge)).toBe(false);
+    expect(isEdgePeer(null, edge)).toBe(false);
   });
 
   it('refuses a header carrying several identities, which the proxy never sends', async () => {

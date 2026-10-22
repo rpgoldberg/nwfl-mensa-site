@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { Health, HealthCheckResponse_ServingStatus as Status } from '../src/gen/grpc/health/v1/health_pb.js';
 import type { Db } from '../src/db/pool.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
-import { READ_MAX_BYTES } from '../src/grpc/server.js';
+import { MAX_EDGE_STREAMS, READ_MAX_BYTES } from '../src/grpc/server.js';
 import { createStructuredLogger } from '../src/platform/logger.js';
 import { startTelemetry } from '../src/platform/telemetry.js';
 import { startServer } from '../src/server.js';
@@ -51,6 +51,39 @@ describe('startServer', () => {
       // The health port is plain HTTP/1.1 and serves no RPC.
       expect((await fetch(`http://127.0.0.1:${server.healthPort}/grpc.health.v1.Health/Check`, { method: 'POST' })).status).toBe(404);
     } finally {
+      await server.close();
+    }
+  });
+
+  it('hands the configured edge identities to both the caller gate and the edge budget', async () => {
+    const { sink } = captureLogs();
+    const server = await startServer({ ...base, db: fakeDb(() => Promise.resolve({})), logger: createStructuredLogger({ sink }), edgeClientIds: ['edge.example'] });
+    const baseUrl = `http://127.0.0.1:${server.grpcPort}`;
+    const headers = (extra: http2.OutgoingHttpHeaders = {}): http2.OutgoingHttpHeaders => ({
+      ':method': 'POST',
+      ':path': '/grpc.health.v1.Health/Check',
+      'content-type': 'application/grpc',
+      te: 'trailers',
+      ...extra,
+    });
+    const statusOf = (res: Awaited<ReturnType<typeof h2Request>>): unknown => res.trailers['grpc-status'] ?? res.headers['grpc-status'];
+    const session = http2.connect(baseUrl);
+    try {
+      // The gate: an edge call reaches only the agent and verifier services.
+      expect(statusOf(await h2Request(baseUrl, headers({ 'l5d-client-id': 'edge.example' }), new Uint8Array(5)))).toBe('7');
+      // The budget: the edge's streams held, the next edge call is refused and a site call is not.
+      const held = Array.from({ length: MAX_EDGE_STREAMS }, () => {
+        const stream = session.request(headers({ 'l5d-client-id': 'edge.example' }));
+        stream.on('error', () => {});
+        stream.write(new Uint8Array([0, 0, 0, 0, 10]));
+        return stream;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(statusOf(await h2Request(baseUrl, headers({ 'l5d-client-id': 'edge.example' }), new Uint8Array(5)))).toBe('8');
+      expect(statusOf(await h2Request(baseUrl, headers(), new Uint8Array(5)))).toBe('0');
+      held.forEach((stream) => stream.close());
+    } finally {
+      session.destroy();
       await server.close();
     }
   });
