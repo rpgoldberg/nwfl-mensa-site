@@ -37,8 +37,36 @@ the id the script printed:
     npm run test:coverage
     sh scripts/test-db.sh stop "$NWFL_TEST_PG_CONTAINER"
 
-Without `NWFL_TEST_DATABASE_URL` the live suites skip locally; with `CI=true`
-they fail instead.
+Without `NWFL_TEST_DATABASE_URL` and `NWFL_TEST_PG_CONTAINER` the live suites
+skip locally; with `CI=true` they fail instead. The migration suites run
+`scripts/migrate.sh` inside that container (`docker exec`), against the repo
+mounted read-only at `/repo`, each in a database of its own.
+
+## Contract
+
+`proto/nwfl/mensa/v1` holds the API: `EventService`, `ContentService`,
+`MembershipService`, `NewsletterService` and `MembershipVerifierService`. The
+generated code under `src/gen` is committed; CI regenerates it and fails on a
+diff. `test/proto/contract.test.ts` walks the generated descriptors and holds
+the rules a handler cannot be trusted to keep:
+
+- no RPC takes an audience from the caller except `ExportEdition`, and no
+  read RPC takes a visibility filter;
+- the membership number reaches only `ListPendingVerifications` (out) and
+  `SubmitSignup` (in);
+- no message has a phone, birthday or home-address field, and the membership
+  messages have no free-text note.
+
+## Schema
+
+Raw SQL in `migrations/NNNN_*.sql`, applied by `scripts/migrate.sh` (ported
+from fc-coordinator: psql, one transaction per file with its ledger row, a
+sha256 provenance check, an advisory lock). Two roles: `nwfl_migrator` owns
+the schema; `nwfl`, the role the service connects as, reads and writes rows
+only. `audit_event` is append-only by grant and by trigger. The CHECK
+constraints carry the data rules: a member's home has no street address, a
+`.docx` is officers-only, a sign-up's membership number is erased when the
+verifier reports, and `affiliate` needs a recorded grant.
 
 ## Versions
 
