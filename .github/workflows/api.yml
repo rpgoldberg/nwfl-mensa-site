@@ -126,7 +126,7 @@ jobs:
           id=$(docker run -d --read-only --cap-drop ALL --security-opt no-new-privileges \
             -p 127.0.0.1::8081 nwfl-mensa-api:ci)
           # On the way out, pass or fail, say how the container ended before removing it.
-          trap 'docker inspect "$id" --format "state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"; docker logs "$id" 2>&1 | tail -30; docker rm -f "$id" >/dev/null; docker run --rm --entrypoint sh nwfl-mensa-api:ci -c "id; stat -c \"%a %U %n\" dist dist/auth; ls dist/auth | head"' EXIT
+          trap 'docker inspect "$id" --format "state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}"; docker logs "$id" 2>&1 | tail -30; docker rm -f "$id" >/dev/null' EXIT
           port=$(docker port "$id" 8081/tcp | head -1 | sed 's/.*://')
           for _ in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:${port}/healthz"; then break; fi
