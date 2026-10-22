@@ -158,8 +158,12 @@ function publicInline(node: Inline): Inline {
   switch (node.type) {
     case 'text':
       return node;
-    case 'link':
-      return { ...node, children: node.children.map(publicInline) };
+    case 'link': {
+      // A link whose text holds a members passage is members-only whole: its
+      // target is what the passage hides (`[:members[Zoom room]](https://...pwd=...)`).
+      const children = node.children.map(publicInline);
+      return children.some((child) => child.type === 'redacted') ? REDACTED : { ...node, children };
+    }
     default:
       return REDACTED;
   }
@@ -186,31 +190,37 @@ export function filterForPublic(tree: Tree): Tree {
   return { blocks: tree.blocks.map(publicBlock) };
 }
 
+// Every node but a text run is a word boundary: list items, nested blocks,
+// links, members passages and placeholders. Adjacent text runs are joined as
+// they are, since emphasis can change inside a word.
 function words(node: Block | Inline, out: string[]): void {
+  if (node.type === 'text') {
+    out.push(node.text);
+    return;
+  }
+  out.push(' ');
   switch (node.type) {
-    case 'text':
-      out.push(node.text);
-      return;
     case 'image':
       out.push(node.alt);
-      return;
+      break;
     case 'list':
       node.items.forEach((item) => item.forEach((child) => words(child, out)));
-      return;
+      break;
     case 'redacted':
-      return;
+      break;
     default:
       (node.children as Array<Block | Inline>).forEach((child) => words(child, out));
   }
+  out.push(' ');
 }
 
-/** The searchable words of a tree, one block per line. Placeholders contribute nothing. */
+/** The searchable words of a tree, one block per line. Placeholders contribute nothing but a word boundary. */
 export function plainText(tree: Tree): string {
   return tree.blocks
     .map((node) => {
       const out: string[] = [];
       words(node, out);
-      return out.join('');
+      return out.join('').replace(/\s+/g, ' ').trim();
     })
     .filter((line) => line !== '')
     .join('\n');

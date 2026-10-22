@@ -146,14 +146,29 @@ describe('filterForPublic', () => {
     expect(serialized).toContain('Bring a chair');
   });
 
-  it('keeps a public link with its target, filtering inside its text', () => {
+  it('makes a link members-only whole when its text holds a members passage: neither the text nor the target reaches the public', () => {
+    // What `[:members[Zoom room]](https://zoom.example/j/1?pwd=...)` parses to.
     const tree = normalizeTree({
-      blocks: [{ type: 'paragraph', children: [{ type: 'link', href: 'https://us.mensa.org', children: [text('AML'), { type: 'members', children: [text(SECRET)] }] }] }],
+      blocks: [{ type: 'paragraph', children: [text('Join us: '), { type: 'link', href: `https://zoom.example/j/1?pwd=${SECRET}`, children: [{ type: 'members', children: [text('Zoom room')] }] }] }],
     });
+    expect(filterForPublic(tree).blocks[0]).toEqual({ type: 'paragraph', children: [{ type: 'text', text: 'Join us: ', bold: false, italic: false }, { type: 'redacted' }] });
+    const mixed = normalizeTree({
+      blocks: [{ type: 'paragraph', children: [{ type: 'link', href: 'https://us.mensa.org/x', children: [text('AML'), { type: 'members', children: [text(SECRET)] }] }] }],
+    });
+    expect(filterForPublic(mixed).blocks[0]).toEqual({ type: 'paragraph', children: [{ type: 'redacted' }] });
+  });
+
+  it('keeps a public link whose text is all public, with its target', () => {
+    const tree = normalizeTree({ blocks: [{ type: 'paragraph', children: [{ type: 'link', href: 'https://us.mensa.org', children: [text('AML')] }] }] });
     expect(filterForPublic(tree).blocks[0]).toEqual({
       type: 'paragraph',
-      children: [{ type: 'link', href: 'https://us.mensa.org', children: [{ type: 'text', text: 'AML', bold: false, italic: false }, { type: 'redacted' }] }],
+      children: [{ type: 'link', href: 'https://us.mensa.org', children: [{ type: 'text', text: 'AML', bold: false, italic: false }] }],
     });
+  });
+
+  it('re-filters a public tree stored before the link rule, so an old stored target does not reach the public either', () => {
+    const stored = { blocks: [{ type: 'paragraph', children: [{ type: 'link', href: `https://zoom.example/j/1?pwd=${SECRET}`, children: [{ type: 'redacted' }] }] }] };
+    expect(JSON.stringify(filterForPublic(normalizeTree(stored)))).not.toContain(SECRET);
   });
 
   it('is idempotent, so re-filtering a stored public_ast changes nothing', () => {
@@ -169,6 +184,22 @@ describe('plainText, referencedFiles and deriveForApproval', () => {
     expect(plainText(tree)).toContain('Pavilion');
     expect(plainText(filterForPublic(tree))).not.toContain(SECRET);
     expect(plainText(filterForPublic(tree))).toContain('Flyer');
+  });
+
+  it('keeps a word boundary between list items, blocks, links and placeholders, but not inside a word split by emphasis', () => {
+    const para = (...children: unknown[]): Record<string, unknown> => ({ type: 'paragraph', children });
+    const t = normalizeTree({
+      blocks: [
+        { type: 'list', ordered: false, items: [[para(text('Apples'))], [para(text('Bananas'))]] },
+        para(text('Meet at'), { type: 'members', children: [text('x')] }, text('noon')),
+        { type: 'quote', children: [para(text('First')), para(text('Second'))] },
+        { type: 'members', children: [para(text('Inside')), para(text('Block'))] },
+        para(text('see'), { type: 'link', href: 'https://example.org', children: [text('site')] }, text('now')),
+        para(text('un'), { ...text('believ'), bold: true }, text('able')),
+      ],
+    });
+    expect(plainText(t).split('\n')).toEqual(['Apples Bananas', 'Meet at x noon', 'First Second', 'Inside Block', 'see site now', 'unbelievable']);
+    expect(plainText(filterForPublic(t)).split('\n')).toEqual(['Apples Bananas', 'Meet at noon', 'First Second', 'see site now', 'unbelievable']);
   });
 
   it('separates files referenced publicly from files referenced only inside members passages', () => {

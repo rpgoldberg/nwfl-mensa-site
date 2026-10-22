@@ -115,7 +115,7 @@ describe('parseMarkup: problems block "mark ready", and broken markers fail clos
   it('reports an unclosed members span, and hides the rest of its paragraph', () => {
     const { tree, problems } = parseMarkup('Meet at :members[gate 4417 and more.\n\nNext paragraph.');
     expect(problems).toEqual([{ line: 1, message: 'unclosed :members[' }]);
-    expect(plainText(filterForPublic(normalizeTree(tree)))).toBe('Meet at \nNext paragraph.');
+    expect(plainText(filterForPublic(normalizeTree(tree)))).toBe('Meet at\nNext paragraph.');
   });
 
   it('reports an unclosed members block, and hides everything after it', () => {
