@@ -1,0 +1,10 @@
+---
+import Base from '../layouts/Base.astro';
+
+const title = 'Page not found';
+---
+<Base path={Astro.url.pathname} title={title} description="We could not find that page.">
+  <h1>{title}</h1>
+  <p class="lead">We could not find that page. It may have moved when the site was rebuilt.</p>
+  <p><a href="/more">See every part of the site</a></p>
+</Base>

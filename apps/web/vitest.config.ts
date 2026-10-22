@@ -1,0 +1,15 @@
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    include: ['server/**/*.test.{ts,mjs}', 'src/**/*.test.ts', 'test/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['server/**/*.mjs', 'src/lib/**/*.ts', 'src/middleware.ts', 'src/pages/**/*.ts'],
+      exclude: ['**/*.test.*'],
+      reporter: ['text', 'lcov'],
+      // The 85 % line AND branch gate, here so CI and a local run fail alike.
+      thresholds: { lines: 85, branches: 85 },
+    },
+  },
+});

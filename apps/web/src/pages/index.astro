@@ -1,0 +1,10 @@
+---
+import Base from '../layouts/Base.astro';
+import { SITE_NAME, page } from '../lib/site';
+
+const p = page('/');
+---
+<Base {...p}>
+  <h1>{SITE_NAME}</h1>
+  <p class="lead">{p.description}</p>
+</Base>

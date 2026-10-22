@@ -1,0 +1,33 @@
+// @ts-check
+import node from '@astrojs/node';
+import { defineConfig } from 'astro/config';
+
+export default defineConfig({
+  site: 'https://nwflorida.us',
+  output: 'server',
+  // Standalone, but started by server/serve.mjs, which wraps Astro's handler so
+  // the response policy reaches prerendered pages and assets too.
+  adapter: node({ mode: 'standalone' }),
+  server: { port: 8080, host: true },
+  trailingSlash: 'never',
+  build: {
+    // `/about` is about.html on disk, so a clean URL needs no redirect.
+    format: 'file',
+    // Every stylesheet is a file, so the CSP needs no 'unsafe-inline' or hashes.
+    inlineStylesheets: 'never',
+  },
+  prefetch: false,
+  // The session lives in our own encrypted cookie (W4); Astro's filesystem
+  // session store would also need a writable disk, and the root is read-only.
+  session: false,
+  devToolbar: { enabled: false },
+  security: {
+    checkOrigin: true,
+    // cloudflared sends X-Forwarded-Proto: https; trust it only for our own hosts,
+    // so the origin check sees the browser's https origin.
+    allowedDomains: [
+      { hostname: 'nwflorida.us', protocol: 'https' },
+      { hostname: 'nwfl-canary.mindsignals1.com', protocol: 'https' },
+    ],
+  },
+});

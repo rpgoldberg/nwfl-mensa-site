@@ -1,0 +1,294 @@
+/*
+ * Layout for the Northwest Florida Mensa site, after the design draft
+ * (design/mensa-design.html). Every colour and size comes from tokens.css (the
+ * design's file, copied verbatim) except --sand, which the draft defines beside
+ * it for the header stripe. Sizes are in rem, so the reader's text size grows
+ * the whole page, targets included.
+ */
+
+/* The stripe's second colour, per theme, in the same cascade order as tokens.css. */
+:root { --sand: #e9dcc0; }
+@media (prefers-color-scheme: dark) { html:not([data-theme]) { --sand: #5a4d33; } }
+html[data-theme="dark"] { --sand: #5a4d33; }
+@media (prefers-contrast: more) { html:not([data-theme]) { --sand: #ffffff; } }
+html[data-theme="contrast"] { --sand: #ffffff; }
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  /* The bottom bar sits at the foot of a short page too. */
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  /* A long word at 200 % text wraps instead of pushing the page sideways. */
+  overflow-wrap: break-word;
+}
+
+h1, h2, h3 { hyphens: auto; font-weight: 600; }
+h1 { font-size: var(--fs-h1); margin: var(--space-4) 0 var(--space-3); }
+h2 { font-size: var(--fs-h2); }
+h3 { font-size: var(--fs-h3); }
+.lead { font-size: var(--fs-lead); color: var(--muted); margin-top: 0; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Skip link: off screen until focused, then the first thing you see. */
+.skip-link {
+  position: absolute;
+  left: var(--space-2);
+  top: var(--space-2);
+  transform: translateY(-200%);
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 0 var(--space-4);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  border-radius: var(--radius);
+}
+.skip-link:focus { transform: none; }
+
+/* Header: the site name as text (no logo until its use is confirmed), the
+   wide-screen nav, then Aa, Help and Sign in; the teal-and-sand stripe below. */
+.site-header { background: var(--surface); }
+.site-header__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-4);
+}
+.wordmark {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: var(--target);
+  font-family: var(--font-head);
+  line-height: 1.05;
+  color: var(--ink);
+  text-decoration: none;
+}
+.wordmark__place { font-size: var(--fs-small); font-weight: 500; color: var(--muted); }
+.wordmark__name { font-size: 1.6rem; font-weight: 600; }
+.header-tools {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.hbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  min-height: var(--target);
+  min-width: var(--target);
+  padding: 0 var(--space-3);
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 700;
+  font-size: var(--fs-small);
+  text-decoration: none;
+}
+.hbtn svg { width: 1.5rem; height: 1.5rem; flex: none; }
+.hbtn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.horizon {
+  height: 0.375rem;
+  background: linear-gradient(90deg, var(--accent) 0 70%, var(--sand) 70% 100%);
+}
+
+/* The Aa panel: shown while it is the link target, so it opens with no script. */
+.reader-panel {
+  display: none;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-4);
+  /* Arriving at the panel keeps the header in view. */
+  scroll-margin-top: 100vh;
+}
+.reader-panel:target {
+  display: grid;
+  gap: var(--space-4);
+  justify-items: start;
+  background: var(--surface);
+  border-bottom: var(--border) solid var(--line);
+}
+.reader-panel h2 { margin: 0; font-size: var(--fs-h3); }
+.reader-panel p { margin: 0; max-width: var(--measure); }
+
+/* Primary nav: the same five links, words at the top on wide screens, icons
+   and words in a bottom bar on phones. */
+.nav-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.nav-link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  min-height: var(--target);
+  height: 100%;
+  padding: var(--space-2) var(--space-1);
+  color: var(--ink);
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+}
+.nav-link svg { width: 1.5rem; height: 1.5rem; flex: none; }
+.nav-label {
+  font-size: var(--fs-small);
+  line-height: 1.2;
+  /* The last resort on the narrowest phone at the largest text: break, never overflow. */
+  overflow-wrap: anywhere;
+}
+/* The current place: ink on the soft tint (13:1) with an accent bar. The draft's
+   accent-on-tint text is 6.8:1 in the light theme, under the 7:1 AAA line. */
+.nav-link[aria-current="page"] { color: var(--ink); background: var(--accent-soft); }
+.nav-link[aria-current="page"] svg { color: var(--accent); }
+
+.top-nav { display: none; }
+.bottom-nav {
+  background: var(--surface);
+  border-top: var(--border) solid var(--line);
+}
+/* Five across while each keeps a full target; at the largest sizes on the
+   narrowest phones the bar wraps to a second row instead of overflowing. */
+.bottom-nav .nav-list { grid-template-columns: repeat(auto-fit, minmax(var(--target), 1fr)); }
+.bottom-nav .nav-link {
+  min-height: 4.25rem;
+  border-top: 0.25rem solid transparent;
+  margin-top: calc(-1 * var(--border));
+}
+.bottom-nav .nav-link[aria-current="page"] { border-top-color: var(--accent); }
+
+/* The dock holds the phone's bottom bar. At the two smaller text sizes it
+   stays at the foot of the screen while the page scrolls; at larger sizes, or
+   on a short (landscape) screen, it sits after the content so it never takes
+   over the screen. Sticky, not fixed: it keeps its own space, so it never
+   covers the end of the page. */
+@media (max-width: 899.98px) and (min-height: 480px) {
+  html[data-size="1"] .dock,
+  html[data-size="2"] .dock {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+  }
+  /* Keyboard focus scrolls clear of the bar, never under it. */
+  html[data-size="1"],
+  html[data-size="2"] { scroll-padding-bottom: 6rem; }
+}
+@media (min-width: 900px) {
+  .top-nav { display: block; }
+  .bottom-nav { display: none; }
+  .top-nav .nav-list { grid-template-columns: repeat(5, auto); gap: 0.125rem; }
+  .top-nav .nav-link { padding: 0 0.875rem; border-radius: var(--radius); }
+  .top-nav .nav-link[aria-current="page"] { box-shadow: inset 0 -0.25rem 0 var(--accent); }
+  .site-header__bar { padding: var(--space-3) var(--space-6); }
+}
+
+/* The page column. */
+.page {
+  flex: 1 0 auto;
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 var(--space-4) var(--space-6);
+}
+main > * { max-width: var(--measure); }
+main:focus:not(:focus-visible) { outline: none; }
+
+/* Back link and breadcrumbs on every page but Home. */
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-4);
+  padding-top: var(--space-3);
+}
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--target);
+  font-weight: 700;
+}
+.back-link::before { content: "\2039"; content: "\2039" / ""; font-size: 1.5em; line-height: 1; }
+.crumbs ol {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  margin: 0;
+  padding: 0;
+  font-size: var(--fs-small);
+}
+.crumbs li { display: inline-flex; align-items: center; min-height: var(--target); }
+.crumbs li + li::before { content: "\203A"; content: "\203A" / ""; margin-right: var(--space-2); color: var(--muted); }
+.crumbs a { display: inline-flex; align-items: center; min-height: var(--target); }
+.crumbs [aria-current="page"] { color: var(--muted); }
+
+/* Forms: plain HTML, large and labelled. */
+.search-form { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: end; }
+.search-form label { flex-basis: 100%; font-weight: 700; }
+.search-form input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink);
+  background: var(--surface);
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+}
+.button,
+.search-form button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--target);
+  min-width: var(--target);
+  padding: 0 var(--space-5);
+  color: var(--on-accent);
+  background: var(--accent);
+  border: var(--border) solid var(--accent);
+  border-radius: var(--radius);
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.link-list { list-style: none; padding: 0; }
+.link-list li { margin: 0 0 var(--space-2); }
+.link-list a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+
+.site-footer {
+  width: 100%;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-6);
+  border-top: var(--border) solid var(--line-soft);
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+.site-footer p { margin: 0; max-width: var(--measure); }

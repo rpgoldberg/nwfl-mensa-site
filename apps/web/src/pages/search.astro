@@ -1,0 +1,19 @@
+---
+// A plain GET form, so it works with no JavaScript. Results arrive with the
+// archive search (R29); until then the page says so.
+import Base from '../layouts/Base.astro';
+import { page } from '../lib/site';
+
+const p = page('/search');
+const q = Astro.url.searchParams.get('q')?.trim() ?? '';
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">{p.description}</p>
+  <form class="search-form" role="search" method="get" action="/search">
+    <label for="q">Search the newsletter archive</label>
+    <input id="q" name="q" type="search" value={q} autocomplete="off" />
+    <button type="submit">Search</button>
+  </form>
+  {q && <p>Searching for “{q}” is not ready yet. The archive search arrives in a later update.</p>}
+</Base>

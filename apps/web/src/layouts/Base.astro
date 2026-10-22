@@ -1,0 +1,68 @@
+---
+// The frame of every page, after the design draft: skip link; header with the
+// site name as text over the teal-and-sand stripe, the wide-screen nav, Aa,
+// Help and Sign in; the Aa panel; breadcrumbs and Back; the footer; and the
+// phone's bottom bar. No script: Aa opens its panel as a link target.
+import '@fontsource/atkinson-hyperlegible/400.css';
+import '@fontsource/atkinson-hyperlegible/400-italic.css';
+import '@fontsource/atkinson-hyperlegible/700.css';
+import '@fontsource/lexend/500.css';
+import '@fontsource/lexend/600.css';
+import '../styles/tokens.css';
+import '../styles/site.css';
+import Breadcrumbs from '../components/Breadcrumbs.astro';
+import Icon from '../components/Icon.astro';
+import PrimaryNav from '../components/PrimaryNav.astro';
+import { SITE_NAME, trailFor } from '../lib/site';
+
+interface Props {
+  path: string;
+  title: string;
+  description: string;
+}
+const { path, title, description } = Astro.props;
+const trail = trailFor(path, title);
+const documentTitle = path === '/' ? SITE_NAME : `${title} | ${SITE_NAME}`;
+---
+<!doctype html>
+<html lang="en" data-size="1">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>{documentTitle}</title>
+    <meta name="description" content={description} />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to main content</a>
+    <header class="site-header">
+      <div class="site-header__bar">
+        <a class="wordmark" href="/"><span class="wordmark__place">Northwest Florida</span> <span class="wordmark__name">Mensa</span></a>
+        <PrimaryNav path={path} variant="top" />
+        <div class="header-tools">
+          <a class="hbtn" id="reader-toggle" href="#reader-menu"><Icon name="theme" />Aa<span class="visually-hidden"> Text size and theme</span></a>
+          <a class="hbtn" href="/help">Help</a>
+          <a class="hbtn hbtn--primary" href="/sign-in">Sign in</a>
+        </div>
+      </div>
+      <div class="horizon" aria-hidden="true"></div>
+    </header>
+    <section class="reader-panel" id="reader-menu" aria-labelledby="reader-menu-title" tabindex="-1">
+      <h2 id="reader-menu-title">Text size and theme</h2>
+      <p>To make everything larger now, zoom in: spread two fingers on a phone or tablet, or hold Ctrl (⌘ on a Mac) and press + on a computer.</p>
+      <a class="button" href="#reader-toggle">Done</a>
+    </section>
+    <div class="page">
+      <Breadcrumbs trail={trail} />
+      <main id="main" tabindex="-1">
+        <slot />
+      </main>
+    </div>
+    <footer class="site-footer">
+      <p>{SITE_NAME} is the local group of American Mensa for the Florida Panhandle, west of the Apalachicola River.</p>
+    </footer>
+    <div class="dock">
+      <PrimaryNav path={path} variant="bottom" />
+    </div>
+  </body>
+</html>

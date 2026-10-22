@@ -1,0 +1,11 @@
+---
+// A placeholder until sign-in through the group's own Authentik page (W4).
+import Base from '../layouts/Base.astro';
+import { page } from '../lib/site';
+
+const p = page('/sign-in');
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">{p.description}</p>
+</Base>

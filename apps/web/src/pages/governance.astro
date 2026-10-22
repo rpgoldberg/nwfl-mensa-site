@@ -1,0 +1,12 @@
+---
+import Base from '../layouts/Base.astro';
+import { page } from '../lib/site';
+
+export const prerender = true;
+
+const p = page('/governance');
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">{p.description}</p>
+</Base>
