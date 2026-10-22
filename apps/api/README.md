@@ -77,6 +77,33 @@ the rules a handler cannot be trusted to keep:
 - no message has a phone, birthday or home-address field, and the membership
   messages have no free-text note.
 
+## Reads and the audience
+
+The read RPCs (`EventService` and the `ContentService` reads) take the
+audience from the verified bearer token and from nothing else
+(`src/auth/caller.ts`): no token is public, `nwfl-members` or
+`nwfl-affiliates` is members, `nwfl-officers` is officers, and a token that
+does not verify is refused rather than downgraded. Until A3 supplies the JWKS
+verifier, every presented token is refused.
+
+Members-only content is filtered in one place (`src/content/tree.ts`,
+`bodyFor` in `src/content/service.ts`): a members passage becomes a bare
+placeholder with no text, length, link or image; a node the API cannot vouch
+for, or a broken members marker, is treated as members-only. Anonymous reads
+load `public_ast` only. `test/canary.test.ts` seeds a random token into every
+members-only place, calls every read RPC anonymously, and fails if the token
+appears; a read RPC without a canary request fails it too.
+
+## Seeding the calendar and roster
+
+    node dist/seed/cli.js /path/outside/the/repo/seed.json
+
+The file holds offices, terms, business or virtual venues, series and
+occurrences (`test/fixtures/seed.example.json` shows the shape with made-up
+people). A path inside the repository is refused, as are a member's home and
+any unknown field. It runs in one transaction, is idempotent, records each
+row in `audit_event`, and prints counts only.
+
 ## Schema
 
 Raw SQL in `migrations/NNNN_*.sql`, applied by `scripts/migrate.sh` (ported

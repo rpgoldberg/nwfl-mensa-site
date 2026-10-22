@@ -1,0 +1,32 @@
+{
+  "offices": [
+    { "slug": "president", "title": "President", "kind": "elected", "sortOrder": 1, "roleAlias": "president@nwflorida.us" },
+    { "slug": "vice-president", "title": "Vice President", "kind": "elected", "sortOrder": 2, "roleAlias": "vp@nwflorida.us" },
+    { "slug": "treasurer", "title": "Treasurer", "kind": "elected", "sortOrder": 3 },
+    { "slug": "membership", "title": "Membership Officer", "kind": "appointed", "sortOrder": 4 },
+    { "slug": "publications", "title": "Publications Officer", "kind": "appointed", "sortOrder": 5 }
+  ],
+  "terms": [
+    { "office": "president", "holder": "Pat Example", "startsOn": "2026-10-01", "status": "active" },
+    { "office": "vice-president", "holder": "Sam Sample", "startsOn": "2026-10-01", "status": "active" },
+    { "office": "treasurer", "holder": "Alex Placeholder", "startsOn": "2026-10-01", "status": "active" },
+    { "office": "membership", "startsOn": "2026-10-01", "status": "vacant" },
+    { "office": "publications", "holder": "Jordan Fictional", "startsOn": "2026-10-01", "status": "active" }
+  ],
+  "venues": [
+    { "name": "Example Grill", "kind": "business", "businessAddress": "100 Example Parkway", "city": "Panama City", "area": "bay" },
+    { "name": "Sample Bistro", "kind": "business", "businessAddress": "200 Sample Street", "city": "Pensacola", "area": "escambia_santa_rosa", "url": "https://example.org/bistro" },
+    { "name": "Video meeting", "kind": "virtual", "area": "virtual" }
+  ],
+  "series": [
+    { "slug": "wednesday-lunch", "title": "Wednesday Lunch", "category": "lunch", "recurrence": "FREQ=WEEKLY;BYDAY=WE", "cadenceLabel": "Every Wednesday", "startsOn": "2026-01-07", "defaultStart": "11:30", "durationMinutes": 90, "area": "okaloosa", "hostOffice": "president" },
+    { "slug": "happy-hour", "title": "Happy Hour", "category": "happy_hour", "recurrence": "FREQ=MONTHLY;BYDAY=2FR", "cadenceLabel": "Second Friday", "startsOn": "2026-01-09", "defaultStart": "17:00", "area": "okaloosa" },
+    { "slug": "panama-city-lunch", "title": "Panama City Lunch", "category": "lunch", "recurrence": "FREQ=MONTHLY;BYDAY=1SA", "cadenceLabel": "First Saturday", "startsOn": "2026-01-03", "defaultStart": "11:30", "venue": "Example Grill", "area": "bay" },
+    { "slug": "pensacola-dinner", "title": "Pensacola Dinner", "category": "dinner", "recurrence": "FREQ=MONTHLY;BYDAY=3FR", "cadenceLabel": "Third Friday", "startsOn": "2026-01-16", "defaultStart": "17:30", "venue": "Sample Bistro", "area": "escambia_santa_rosa", "hostOffice": "vice-president" },
+    { "slug": "excomm", "title": "Executive Committee", "category": "excomm", "recurrence": "FREQ=MONTHLY;INTERVAL=2;BYDAY=3SA", "cadenceLabel": "Every other month", "startsOn": "2026-09-19", "defaultStart": "10:00", "venue": "Video meeting", "area": "virtual" }
+  ],
+  "occurrences": [
+    { "series": "wednesday-lunch", "startsAt": "2026-11-25T17:30:00Z", "status": "cancelled", "statusNote": "Thanksgiving week" },
+    { "title": "Fall Picnic", "startsAt": "2026-11-14T17:00:00Z", "endsAt": "2026-11-14T21:00:00Z", "venue": "Example Grill", "visibility": "public", "detail": "Bring a chair" }
+  ]
+}
