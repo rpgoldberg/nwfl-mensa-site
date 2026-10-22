@@ -18,8 +18,8 @@ export function encodeToken(kind: string, key: string[]): string {
   return Buffer.from(JSON.stringify([kind, ...key])).toString('base64url');
 }
 
-/** The key of a token this RPC issued, or undefined for the first page. */
-export function decodeToken(kind: string, token: string, arity: number): string[] | undefined {
+/** The key of a token this RPC issued, or undefined for the first page. Each part must pass its check, so nothing made up reaches the database. */
+export function decodeToken(kind: string, token: string, checks: ReadonlyArray<(part: string) => boolean>): string[] | undefined {
   if (token === '') return undefined;
   let parsed: unknown;
   try {
@@ -29,11 +29,29 @@ export function decodeToken(kind: string, token: string, arity: number): string[
   }
   if (
     !Array.isArray(parsed) ||
-    parsed.length !== arity + 1 ||
+    parsed.length !== checks.length + 1 ||
     parsed[0] !== kind ||
-    !parsed.every((part) => typeof part === 'string')
+    !parsed.slice(1).every((part, index) => typeof part === 'string' && (checks[index] as (part: string) => boolean)(part))
   ) {
     throw new ConnectError('invalid page_token', Code.InvalidArgument);
   }
-  return parsed.slice(1);
+  return parsed.slice(1) as string[];
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export const isUuid = (value: string): boolean => UUID.test(value);
+
+/** A real calendar date, YYYY-MM-DD, year 1000 or later. */
+export function isIsoDate(value: string): boolean {
+  if (!/^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)) return false;
+  const time = Date.parse(`${value}T00:00:00Z`);
+  return !Number.isNaN(time) && new Date(time).toISOString().slice(0, 10) === value;
+}
+
+/** A UTC instant to the microsecond, as Postgres keeps it: YYYY-MM-DDTHH:MM:SS.ffffffZ. */
+export function isMicroTimestamp(value: string): boolean {
+  if (!/^[1-9]\d{3}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value)) return false;
+  const time = Date.parse(`${value.slice(0, 19)}Z`);
+  return !Number.isNaN(time) && new Date(time).toISOString().slice(0, 19) === value.slice(0, 19);
 }

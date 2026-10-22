@@ -18,10 +18,11 @@ import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@connectrpc/connect';
 import { type Audience, callerOf } from '../auth/caller.js';
 import type { Db } from '../db/pool.js';
+import type { StructuredLogger } from '../platform/logger.js';
 import { ContentItemSchema, type ContentItem, ContentService, ContentVersionSchema, ItemState, StoredFileSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { type Office, OfficeSchema } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { protoDate, todayIn } from '../events/zone.js';
-import { decodeToken, encodeToken, pageSize } from '../grpc/paging.js';
+import { decodeToken, encodeToken, isIsoDate, isMicroTimestamp, isUuid, pageSize } from '../grpc/paging.js';
 import {
   FILE_AUDIENCES,
   FILE_ROLES,
@@ -39,6 +40,7 @@ import { workflowHandlers } from './workflow.js';
 
 export interface ContentDeps {
   db: Db;
+  logger: StructuredLogger;
   now: () => Date;
 }
 
@@ -74,6 +76,8 @@ interface ItemRow {
   on_behalf_of: string | null;
   ready_at: Date | null;
   approved_at: Date;
+  /** approved_at to the microsecond, for the page token: a JS Date keeps milliseconds only. */
+  approved_key: string;
 }
 
 interface FileRow {
@@ -99,7 +103,8 @@ function itemQuery(audience: Audience): { select: string; visible: string } {
     select: `SELECT i.id, i.slug, i.kind, i.office_id, i.state, i.withdrawn_at,
        v.id AS version_id, v.n, v.status, v.title, v.summary, v.visibility, ${body} AS body, v.content_hash,
        v.target_website, v.target_newsletter, v.target_email, v.edition_id, v.print_as_is, v.on_behalf_of,
-       v.ready_at, v.approved_at
+       v.ready_at, v.approved_at,
+       to_char(v.approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS approved_key
      FROM content_item i JOIN content_version v ON v.id = i.live_version_id`,
     visible: audience === 'officers' ? 'true' : `v.visibility <> 'officers'`,
   };
@@ -206,6 +211,16 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
   const { db } = deps;
   const audienceOf = (ctx: HandlerContext): Audience => callerOf(ctx.values).audience;
 
+  /** A page token's key; a refused token is logged as a warning, by list only, never by its content. */
+  const pageKey = (list: string, token: string, checks: ReadonlyArray<(part: string) => boolean>): string[] | undefined => {
+    try {
+      return decodeToken(list, token, checks);
+    } catch (error) {
+      deps.logger.warn({ list }, 'invalid page token');
+      throw error;
+    }
+  };
+
   const filesFor = async (rows: ItemRow[], audience: Audience): Promise<FileRow[]> => {
     const versions = rows.filter((row) => row.state !== 'withdrawn').map((row) => row.version_id);
     if (versions.length === 0) return [];
@@ -239,10 +254,7 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
       listPublishedItems: async (request, ctx) => {
         const audience = audienceOf(ctx);
         const size = pageSize(request.pageSize);
-        const after = decodeToken('items', request.pageToken, 2);
-        if (after !== undefined && (Number.isNaN(Date.parse(after[0] as string)) || !UUID.test(after[1] as string))) {
-          throw new ConnectError('invalid page_token', Code.InvalidArgument);
-        }
+        const after = pageKey('items', request.pageToken, [isMicroTimestamp, isUuid]);
         if (request.officeId !== '' && !UUID.test(request.officeId)) throw new ConnectError('office_id is not an id', Code.InvalidArgument);
         const query = itemQuery(audience);
         const { rows } = await db.query<ItemRow>(
@@ -266,16 +278,13 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
         const files = await filesFor(page, audience);
         return {
           items: page.map((row) => itemMessage(row, audience, files)),
-          nextPageToken: rows.length > size && last !== undefined ? encodeToken('items', [last.approved_at.toISOString(), last.id]) : '',
+          nextPageToken: rows.length > size && last !== undefined ? encodeToken('items', [last.approved_key, last.id]) : '',
         };
       },
 
       listPublishedEditions: async (request) => {
         const size = pageSize(request.pageSize);
-        const after = decodeToken('editions', request.pageToken, 2);
-        if (after !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(after[0] as string) || !UUID.test(after[1] as string))) {
-          throw new ConnectError('invalid page_token', Code.InvalidArgument);
-        }
+        const after = pageKey('editions', request.pageToken, [isIsoDate, isUuid]);
         const { rows } = await db.query<EditionRow>(
           `${EDITION_SELECT}
            WHERE e.status = 'published' AND ($1::date IS NULL OR (e.period_start, e.id) < ($1, $2::uuid))

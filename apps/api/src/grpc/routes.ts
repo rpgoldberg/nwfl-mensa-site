@@ -43,7 +43,7 @@ export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
   const routes = [
     healthRoutes(deps.readiness),
     eventRoutes({ db: deps.db, logger: deps.logger.child({ component: 'events' }), now }),
-    contentRoutes({ db: deps.db, now }),
+    contentRoutes({ db: deps.db, logger: deps.logger.child({ component: 'content' }), now }),
     newsletterRoutes({ db: deps.db, logger: deps.logger.child({ component: 'newsletter' }) }),
     // Registered with no handlers yet (A5), so the caller gate already applies
     // to them: an unregistered service would answer before any interceptor

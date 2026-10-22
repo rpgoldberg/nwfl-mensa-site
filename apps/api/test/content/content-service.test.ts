@@ -188,6 +188,35 @@ describe.skipIf(!live)('ContentService reads', () => {
       expect(second.nextPageToken).toBe('');
     });
 
+    it('pages through items approved within the same millisecond without skipping any', async () => {
+      for (const n of [1, 2, 3, 4]) {
+        await publishItem(api.pool, { slug: `same-ms-${n}`, officeId: ids['president'] as string, title: `Same ${n}`, body: { blocks: [] }, approvedAt: `2026-10-05T12:00:00.12345${n}Z` });
+      }
+      const seen: string[] = [];
+      let token = '';
+      for (let page = 0; page < 20; page += 1) {
+        const res = await content.listPublishedItems({ pageSize: 1, pageToken: token }, OFFICER);
+        seen.push(...res.items.map((i) => i.slug));
+        token = res.nextPageToken;
+        if (token === '') break;
+      }
+      expect(seen.filter((slug) => slug.startsWith('same-ms-'))).toEqual(['same-ms-4', 'same-ms-3', 'same-ms-2', 'same-ms-1']);
+    });
+
+    it('answers a token whose date Postgres cannot read INVALID_ARGUMENT, not INTERNAL, and logs a warning without the token', async () => {
+      const forged = (parts: string[]): string => Buffer.from(JSON.stringify(parts)).toString('base64url');
+      const before = api.logs.length;
+      const bad = forged(['items', '2026-02-30T12:00:00.000000Z', ids['president'] as string]);
+      await expect(content.listPublishedItems({ pageToken: bad })).rejects.toMatchObject({ code: Code.InvalidArgument });
+      await expect(content.listPublishedEditions({ pageToken: forged(['editions', '2026-13-45', ids['president'] as string]) })).rejects.toMatchObject({ code: Code.InvalidArgument });
+      const warnings = api.logs.slice(before).filter((line) => line['msg'] === 'invalid page token');
+      expect(warnings.map((line) => [line['level'], line['list']])).toEqual([
+        ['warn', 'items'],
+        ['warn', 'editions'],
+      ]);
+      expect(JSON.stringify(api.logs.slice(before))).not.toContain(bad);
+    });
+
     it('refuses a page token it did not issue and a negative page size', async () => {
       const forged = (parts: string[]): string => Buffer.from(JSON.stringify(parts)).toString('base64url');
       await expect(content.listPublishedItems({ pageToken: 'garbage' })).rejects.toMatchObject({ code: Code.InvalidArgument });
