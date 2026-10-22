@@ -28,6 +28,9 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      - name: No FigureCollecting credential or registry (MT-06)
+        run: sh scripts/no-fc-credentials.sh
+
       - name: Install dependencies
         # fc-shared is vendored (vendor/README.md), so no registry token.
         run: npm ci --ignore-scripts
