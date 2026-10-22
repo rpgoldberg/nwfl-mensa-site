@@ -14,7 +14,8 @@ import { EditionKind, EditionStatus } from '../../src/gen/nwfl/mensa/v1/edition_
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
 import { PUBLIC_PLACEHOLDER } from '../../src/newsletter/content-json.js';
 import { type Api, as, insertId, startApi } from '../helpers/api.js';
-import { live } from '../helpers/pg.js';
+import pg from 'pg';
+import { MIGRATOR, MIGRATOR_PW, live, urlFor } from '../helpers/pg.js';
 
 const AGENT = as('agent-token');
 const PUB = as('pub-token');
@@ -283,6 +284,39 @@ describe.skipIf(!live)('NewsletterService', () => {
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
       for (const audience of [Audience.PUBLIC, Audience.MEMBERS]) expect(JSON.stringify(await exportOf(audience))).not.toContain('made-up memoir');
       expect((await newsletter.listEditionItems({ editionId }, AGENT)).items.map((i) => i.itemId)).not.toContain(item.id);
+    });
+
+    // Folded in from the round-2 challenge (N2-LEAK): what the PUBLIC export never carries.
+    it('carries no venue note, home address, event detail, members event note or link, or personal email in the PUBLIC export', async () => {
+      const hall = await insertId(api.pool, `INSERT INTO venue (kind, name, business_address, city, area, accessibility_note) VALUES ('business', 'Example Hall', '1 Example Way', 'Destin', 'okaloosa', 'ACCESSNOTE77') RETURNING id`);
+      const home = await insertId(api.pool, `INSERT INTO venue (kind, name, area, host_office_id) VALUES ('member_home', '12 Secret Lane HOMEADDR77', 'walton', $1) RETURNING id`, [publications]);
+      await api.pool.query(
+        `INSERT INTO event_occurrence (title, starts_at, visibility, venue_id, detail, status_note, url, owner_office_id) VALUES
+           ('Members only MEVTITLE77', '2027-02-26T23:00:00Z', 'members', $1, 'MDETAIL77', 'MNOTE77', 'https://example.org/MURL77', $3),
+           ('Public potluck', '2027-02-27T23:00:00Z', 'public', $2, 'PDETAIL77', '', NULL, $3)`,
+        [hall, home, publications],
+      );
+      const pub = JSON.stringify(await exportOf(Audience.PUBLIC));
+      const mem = JSON.stringify(await exportOf(Audience.MEMBERS));
+      for (const secret of ['ACCESSNOTE77', 'HOMEADDR77', 'MDETAIL77', 'PDETAIL77', 'MEVTITLE77', 'MNOTE77', 'MURL77']) expect(pub, secret).not.toContain(secret);
+      // Members read the members event, never a home address, a venue note or an event detail.
+      for (const secret of ['MEVTITLE77', 'MNOTE77', 'MURL77']) expect(mem, secret).toContain(secret);
+      for (const secret of ['ACCESSNOTE77', 'HOMEADDR77', 'MDETAIL77', 'PDETAIL77']) expect(mem, secret).not.toContain(secret);
+    });
+
+    // Folded in from the round-2 challenge (N2-AUDIT): an export that cannot be audited is not given.
+    it('gives no export when its audit row is refused', async () => {
+      const db = new URL(api.pool.options.connectionString as string).pathname.slice(1);
+      const owner = new pg.Client({ connectionString: urlFor(MIGRATOR, MIGRATOR_PW, db) });
+      await owner.connect();
+      try {
+        await owner.query(`ALTER TABLE audit_event ADD CONSTRAINT test_no_export CHECK (action <> 'export_read') NOT VALID`);
+        await expect(newsletter.exportEdition({ editionId, audience: Audience.PUBLIC }, AGENT)).rejects.toMatchObject({ code: Code.Internal });
+      } finally {
+        await owner.query(`ALTER TABLE audit_event DROP CONSTRAINT IF EXISTS test_no_export`);
+        await owner.end();
+      }
+      expect((await newsletter.exportEdition({ editionId, audience: Audience.PUBLIC }, AGENT)).contractVersion).toBe('1');
     });
 
     it('refuses no audience, and records every export with its audience', async () => {
