@@ -1,0 +1,17 @@
+---
+// The officer area (W5 fills it in). Officers only: anyone not signed in is
+// sent to sign in first; a member who is not an officer is told it is not theirs.
+import Base from '../../layouts/Base.astro';
+import { page } from '../../lib/site';
+
+const session = Astro.locals.session;
+if (!session) return Astro.redirect('/sign-in?return=%2Fofficer-area', 303);
+if (!session.officer) Astro.response.status = 403;
+const p = page('/officer-area');
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  {session.officer
+    ? <p class="lead">Welcome, {session.name}. Writing reports, the approval queue and events come here in the next update.</p>
+    : <p class="lead">This area is for the club's officers. If you are an officer and see this, ask the Webmaster to check your account.</p>}
+</Base>

@@ -12,6 +12,7 @@ import '@fontsource/lexend/600.css';
 import '../styles/tokens.css';
 import '../styles/site.css';
 import { PUBLIC_ONLY } from 'astro:env/server';
+import { accountHtml } from '../../server/account.mjs';
 import { htmlAttributes, readPrefs } from '../../server/prefs.mjs';
 import Breadcrumbs from '../components/Breadcrumbs.astro';
 import Icon from '../components/Icon.astro';
@@ -59,7 +60,8 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
         <div class="header-tools">
           <a class="hbtn" id="reader-toggle" href="#reader-menu"><Icon name="theme" />Aa<span class="visually-hidden"> Text size and theme</span></a>
           <a class="hbtn" href="/help">Help</a>
-          {!PUBLIC_ONLY && <a class="hbtn hbtn--primary" href="/sign-in">Sign in</a>}
+          {/* One renderer (server/account.mjs): the server wrapper puts the signed-in version on prerendered pages. */}
+          <Fragment set:html={accountHtml(Astro.locals.session, { back, signIn: !PUBLIC_ONLY })} />
         </div>
       </div>
       <div class="horizon" aria-hidden="true"></div>

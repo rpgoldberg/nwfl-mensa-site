@@ -5,7 +5,7 @@ describe('robots.txt', () => {
   it('lets search engines index the canonical host, apart from sign-in and the reader controls', () => {
     expect(CANONICAL_HOST).toBe('nwflorida.us');
     expect(robotsTxt('nwflorida.us')).toBe(
-      ['User-agent: *', 'Disallow: /prefs', 'Disallow: /sign-in', 'Disallow: /auth/', 'Disallow: /officer-area/', '', 'Sitemap: https://nwflorida.us/sitemap.xml', ''].join('\n'),
+      ['User-agent: *', 'Disallow: /prefs', 'Disallow: /sign-in', 'Disallow: /sign-out', 'Disallow: /signed-out', 'Disallow: /auth/', 'Disallow: /officer-area', '', 'Sitemap: https://nwflorida.us/sitemap.xml', ''].join('\n'),
     );
   });
 

@@ -1,0 +1,31 @@
+---
+// After sign-out (W4), back from the provider. The way back clears every
+// cookie and storage (in the browser that signed out only), sets the reader's
+// text size and theme again, and shows the page at its plain address
+// (src/lib/auth/flow.ts, landSignedOut).
+import Base from '../layouts/Base.astro';
+import { landSignedOut, runtimeDeps } from '../lib/auth/flow';
+import { page } from '../lib/site';
+
+const out = landSignedOut(runtimeDeps(), { url: Astro.url, cookieHeader: Astro.request.headers.get('cookie') });
+if (out.kind === 'redirect') {
+  const headers = new Headers({ Location: out.location });
+  if (out.clearSiteData) headers.set('Clear-Site-Data', out.clearSiteData);
+  for (const cookie of out.cookies) headers.append('Set-Cookie', cookie);
+  return new Response(null, { status: 303, headers });
+}
+const p = page('/signed-out');
+const session = Astro.locals.session;
+---
+<Base {...p}>
+  {session
+    ? <>
+        <h1>You are still signed in</h1>
+        <p class="lead">To sign out, use Sign out at the top of any page.</p>
+      </>
+    : <>
+        <h1>{p.title}</h1>
+        <p class="lead">{p.description}</p>
+      </>}
+  <p><a href="/">Go to the home page</a></p>
+</Base>

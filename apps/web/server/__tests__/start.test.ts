@@ -79,6 +79,31 @@ describe('loadPrerendered', () => {
   });
 });
 
+describe('start: sign-in settings from the environment (W4)', () => {
+  const auth = {
+    OIDC_ISSUER: 'http://localhost:9090',
+    OIDC_CLIENT_ID: 'nwfl-site',
+    OIDC_CLIENT_SECRET: 'x',
+    OIDC_REDIRECT_URI: 'https://localhost:8443/auth/callback',
+    OIDC_POST_LOGOUT_REDIRECT_URI: 'https://localhost:8443/signed-out',
+  };
+
+  it('lets forms lead to the issuer, when sign-in is set up', async () => {
+    const { base } = await boot((_req, res) => res.end('x'), { env: auth });
+    expect((await fetch(base)).headers.get('content-security-policy')).toMatch(/form-action 'self' http:\/\/localhost:9090$/);
+  });
+
+  it('names no issuer when sign-in is not validly set up (here: production refuses a local one)', async () => {
+    const { base } = await boot((_req, res) => res.end('x'), { env: { ...auth, NODE_ENV: 'production' } });
+    expect((await fetch(base)).headers.get('content-security-policy')).toMatch(/form-action 'self'$/);
+  });
+
+  it('logs a malformed session key, and runs with everyone anonymous', async () => {
+    const { log } = await boot((_req, res) => res.end('x'), { env: { SESSION_KEY: 'short' } });
+    expect(log.mock.calls.map((c) => String(c[0])).join()).toContain('SESSION_KEY must be 32 bytes');
+  });
+});
+
 describe('start', () => {
   it('answers old URLs from the table it is given', async () => {
     const { base } = await boot(() => {}, { oldSite: new URL('./fixtures/old-site.json', import.meta.url) });

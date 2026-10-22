@@ -2,14 +2,16 @@
 // The signed-in session (W4, R10), sealed into a host-only cookie with
 // AES-256-GCM under a key from config (SESSION_KEY, never in the repo). The
 // cookie holds who the person is and their nwfl- roles only; their tokens stay
-// on the server (src/lib/auth/token-store.ts). A sealed value also carries the
-// sign-in transaction (state, nonce, PKCE verifier) for ten minutes.
+// on the server (TokenStore, src/lib/auth/flow.ts). A sealed value also carries
+// the sign-in transaction (state, nonce, PKCE verifier) for ten minutes.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readCookie } from './cookies.mjs';
 import { SESSION_COOKIE } from './policy.mjs';
 
 export { SESSION_COOKIE };
 export const AUTH_COOKIE = '__Host-nwfl-auth';
+/** Binds the way back from the provider's sign-out to the browser that signed out. */
+export const OUT_COOKIE = '__Host-nwfl-out';
 export const TRANSACTION_SECONDS = 600;
 
 const OFFICER_SECONDS = 12 * 3600;
@@ -120,7 +122,7 @@ export function renewIfDue(session, now) {
 }
 
 /** @param {string} name @param {string} value @param {number} maxAge */
-const hostOnly = (name, value, maxAge) => `${name}=${value}; Path=/; Max-Age=${maxAge}; SameSite=Lax; HttpOnly; Secure`;
+export const hostOnly = (name, value, maxAge) => `${name}=${value}; Path=/; Max-Age=${maxAge}; SameSite=Lax; HttpOnly; Secure`;
 
 /** @param {string} name */
 export const clearCookie = (name) => hostOnly(name, '', 0);

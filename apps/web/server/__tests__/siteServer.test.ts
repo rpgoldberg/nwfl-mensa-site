@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
 import { compileRedirects } from '../redirects.mjs';
+import { accountHtml } from '../account.mjs';
+import { newSession, sessionSetCookie } from '../session.mjs';
+import { randomBytes } from 'node:crypto';
 import { createSiteServer, normalisePath, withSitePolicy } from '../siteServer.mjs';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
@@ -371,6 +374,43 @@ describe('old URLs (R16)', () => {
   it('leaves new pages to the handler', async () => {
     const base = await serve((_req, res) => res.end('new'), undefined, redirects);
     expect(await (await fetch(`${base}/join`)).text()).toBe('new');
+  });
+});
+
+describe('signed in, on a prerendered page (W4)', () => {
+  const key = randomBytes(32);
+  const now = Math.floor(Date.now() / 1000);
+  const html = `<!DOCTYPE html><html lang="en" data-size="1"><body><header>${accountHtml(undefined, { back: '/about', signIn: true })}</header>About</body></html>`;
+  const serveSigned = async () => {
+    server = http.createServer(withSitePolicy(() => {}, { pages: new Map([['/about', html]]), sessionKey: key }));
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  };
+
+  it('shows the reader’s own account area in place of Sign in, never cached', async () => {
+    const base = await serveSigned();
+    const cookie = sessionSetCookie(newSession({ sub: 'u', name: 'Alex Sample', groups: ['nwfl-members', 'nwfl-officers'] }, now), key, now).split(';')[0]!;
+    const res = await fetch(`${base}/about`, { headers: { cookie } });
+    const body = await res.text();
+    expect(body).toContain('Alex Sample');
+    expect(body).toContain('href="/officer-area"');
+    expect(body).not.toContain('>Sign in<');
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+  });
+
+  it('shows Sign in to everyone else, a forged cookie included', async () => {
+    const base = await serveSigned();
+    const res = await fetch(`${base}/about`, { headers: { cookie: '__Host-nwfl-session=v1.forged' } });
+    expect(await res.text()).toBe(html);
+  });
+});
+
+describe('the sign-in provider in form-action (W4)', () => {
+  it('is named only when the server is told it', async () => {
+    server = http.createServer(withSitePolicy((_req, res) => res.end('x'), { formAction: ['https://login.nwflorida.us'] }));
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const res = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
+    expect(res.headers.get('content-security-policy')).toMatch(/form-action 'self' https:\/\/login\.nwflorida\.us$/);
   });
 });
 

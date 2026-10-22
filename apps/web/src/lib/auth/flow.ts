@@ -2,14 +2,18 @@
 // callback takes a transaction only from this browser's own cookie, matches its
 // state exactly, uses it once, within ten minutes, and has openid-client check
 // the nonce. A refusal is told to the reader in plain words; what the provider
-// said is never repeated, and only its error code (tidied) is logged.
-import { timingSafeEqual } from 'node:crypto';
+// said is never repeated, and only its error code (tidied) is logged. Sign-out
+// ends the provider's session before it clears the site's cookies.
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { readCookie } from '../../../server/cookies.mjs';
 import { prefsCookies, readPrefs, safeBack, SIZE_COOKIE, THEME_COOKIE } from '../../../server/prefs.mjs';
 import {
   AUTH_COOKIE,
+  OUT_COOKIE,
   SESSION_COOKIE,
   TRANSACTION_SECONDS,
   clearCookie,
+  hostOnly,
   newSession,
   openTransaction,
   openValue,
@@ -34,6 +38,8 @@ export const REFUSALS: Record<Refusal, string> = {
 };
 
 export const CLEAR_SITE_DATA = '"cookies", "storage"';
+/** This origin's storage only: cookies wait until the provider has ended its session. */
+export const CLEAR_STORAGE = '"storage"';
 
 export type Outcome =
   | { kind: 'redirect'; location: string; cookies: string[]; clearSiteData?: string }
@@ -136,15 +142,29 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
   }
 }
 
-export async function signOut(d: Deps, { cookieHeader }: { cookieHeader: string | null | undefined }): Promise<Outcome> {
+/** Where sign-out sends the reader, with what it clears. */
+export interface SignedOut {
+  location: string;
+  cookies: string[];
+  clearSiteData: string;
+}
+
+/**
+ * Sign out: the session and its tokens go now, and the reader goes on to end
+ * the provider's session. Clear-Site-Data "cookies" waits for the way back
+ * (landSignedOut): it clears the whole registered domain, the provider's
+ * cookies too (login.nwflorida.us), which would leave it no session to end.
+ */
+export async function signOut(d: Deps, { cookieHeader }: { cookieHeader: string | null | undefined }): Promise<SignedOut> {
   const now = d.now();
-  const done = { kind: 'redirect' as const, cookies: [clearCookie(SESSION_COOKIE), clearCookie(AUTH_COOKIE)], clearSiteData: CLEAR_SITE_DATA };
-  if (!d.key) return { ...done, location: '/signed-out' };
+  const cookies = [clearCookie(SESSION_COOKIE), clearCookie(AUTH_COOKIE)];
+  if (!d.key) return { cookies, clearSiteData: CLEAR_SITE_DATA, location: '/signed-out' };
   const session = readSession(cookieHeader, d.key, now);
   const idToken = session ? d.tokens.take(session.sid, now)?.id_token : undefined;
-  // Clear-Site-Data takes the reader's text size and theme too; the signed-out
-  // page sets them again from this, sealed and short-lived.
-  const state = sealValue({ prefs: readPrefs(cookieHeader), exp: now + TRANSACTION_SECONDS }, d.key, 'signed-out');
+  // The way back carries the reader's text size and theme, sealed and
+  // short-lived, and is bound to this browser by the out cookie.
+  const out = randomBytes(18).toString('base64url');
+  const state = sealValue({ prefs: readPrefs(cookieHeader), out, exp: now + TRANSACTION_SECONDS }, d.key, 'signed-out');
   let location = `/signed-out?state=${state}`;
   if (d.setup.enabled) {
     try {
@@ -154,16 +174,44 @@ export async function signOut(d: Deps, { cookieHeader }: { cookieHeader: string 
       log(d, 'warn', 'the sign-in provider could not be reached to end its session', { err: String(error).slice(0, 200) });
     }
   }
-  return { ...done, location };
+  return { cookies: [...cookies, hostOnly(OUT_COOKIE, out, TRANSACTION_SECONDS)], clearSiteData: CLEAR_STORAGE, location };
 }
 
-/** The reader's text size and theme again, from the state sign-out sealed. */
-export function restorePrefs(d: Deps, state: string | null): string[] {
-  if (!d.key || !state) return [];
-  const sealed = openValue(state, d.key, 'signed-out') as { prefs?: { size?: unknown; theme?: unknown }; exp?: number } | undefined;
-  if (!sealed || typeof sealed.exp !== 'number' || sealed.exp <= d.now()) return [];
-  // Read back through the cookie parser, so only a size and theme it knows pass.
-  return prefsCookies(readPrefs(`${SIZE_COOKIE}=${sealed.prefs?.size}; ${THEME_COOKIE}=${sealed.prefs?.theme}`));
+type Landing = { kind: 'redirect'; location: string; cookies: string[]; clearSiteData?: string } | { kind: 'page' };
+
+interface SignedOutState {
+  prefs?: { size?: unknown; theme?: unknown };
+  out?: unknown;
+  exp?: unknown;
+}
+
+function openSignedOut(d: Deps, state: string): SignedOutState | undefined {
+  const sealed = d.key ? (openValue(state, d.key, 'signed-out') as SignedOutState | undefined) : undefined;
+  return sealed && typeof sealed.exp === 'number' && sealed.exp > d.now() ? sealed : undefined;
+}
+
+/**
+ * Back from the provider's sign-out, in three steps: with `state`, clear every
+ * cookie and storage, but only in the browser that signed out (a link from
+ * elsewhere signs no one out); with `restore`, set text size and theme again;
+ * then the page itself.
+ */
+export function landSignedOut(d: Deps, { url, cookieHeader }: { url: URL; cookieHeader: string | null | undefined }): Landing {
+  const plain = { kind: 'redirect' as const, location: '/signed-out', cookies: [] };
+  const state = url.searchParams.get('state');
+  if (state !== null) {
+    const out = openSignedOut(d, state)?.out;
+    const bound = readCookie(cookieHeader, OUT_COOKIE);
+    if (typeof out !== 'string' || !bound || !sameText(bound, out)) return plain;
+    return { ...plain, location: `/signed-out?restore=${encodeURIComponent(state)}`, cookies: [clearCookie(OUT_COOKIE)], clearSiteData: CLEAR_SITE_DATA };
+  }
+  const restore = url.searchParams.get('restore');
+  if (restore !== null) {
+    const prefs = openSignedOut(d, restore)?.prefs;
+    // Read back through the cookie parser, so only a size and theme it knows pass.
+    return { ...plain, cookies: prefs ? prefsCookies(readPrefs(`${SIZE_COOKIE}=${prefs.size}; ${THEME_COOKIE}=${prefs.theme}`)) : [] };
+  }
+  return { kind: 'page' };
 }
 
 /** The real dependencies, from the server's environment. */
@@ -178,3 +226,11 @@ export function depsFromEnv(env: Record<string, string | undefined>, logLine: (l
 }
 
 const SHARED = { tokens: new TokenStore(), consumed: new ConsumedStates() };
+
+let runtime: Deps | undefined;
+
+/** The server's own dependencies, read from its environment once. */
+export function runtimeDeps(): Deps {
+  runtime ??= depsFromEnv(process.env);
+  return runtime;
+}

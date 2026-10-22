@@ -3,7 +3,9 @@
 // prerendered pages, put the site policy in front of both, listen, and drain
 // on SIGTERM or SIGINT.
 import { readFile, readdir } from 'node:fs/promises';
+import { authConfig } from './auth-config.mjs';
 import { compileRedirects } from './redirects.mjs';
+import { sessionKey } from './session.mjs';
 import { createSiteServer } from './siteServer.mjs';
 
 /** @typedef {Record<string, string | undefined>} Env */
@@ -66,7 +68,22 @@ export async function start({ env, loadHandler, proc, clientDir, oldSite, log = 
   const { port, host } = listenOptions(env);
   const pages = clientDir ? await loadPrerendered(clientDir) : new Map();
   const redirects = oldSite ? compileRedirects(JSON.parse(await readFile(oldSite, 'utf8'))) : undefined;
-  const server = createSiteServer(handler, { pages, ...(redirects ? { redirects } : {}) });
+  // Sign-in (W4): forms may lead to a validly set-up issuer (sign-out ends its
+  // session there), and prerendered pages read the session with the key.
+  const auth = authConfig(env);
+  /** @type {Buffer | undefined} */
+  let key;
+  try {
+    key = sessionKey(env);
+  } catch (error) {
+    log(JSON.stringify({ level: 'error', msg: String(error) }));
+  }
+  const server = createSiteServer(handler, {
+    pages,
+    ...(redirects ? { redirects } : {}),
+    sessionKey: key,
+    formAction: auth.enabled ? [auth.config.issuer.origin] : [],
+  });
   await new Promise((resolve) => server.listen(port, host, () => resolve(undefined)));
   const address = /** @type {import('node:net').AddressInfo} */ (server.address());
   log(JSON.stringify({ level: 'info', msg: 'listening', host, port: address.port }));

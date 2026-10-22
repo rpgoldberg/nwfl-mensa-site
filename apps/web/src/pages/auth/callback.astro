@@ -1,0 +1,24 @@
+---
+// Where the sign-in provider sends the reader back (W4). A good answer signs
+// them in and returns them to their page; anything else is refused in plain
+// words (src/lib/auth/flow.ts), never with what the provider said.
+import Base from '../../layouts/Base.astro';
+import { REFUSALS, completeSignIn, runtimeDeps } from '../../lib/auth/flow';
+
+const out = await completeSignIn(runtimeDeps(), { url: Astro.url, cookieHeader: Astro.request.headers.get('cookie') });
+if (out.kind === 'redirect') {
+  const headers = new Headers({ Location: out.location });
+  for (const cookie of out.cookies) headers.append('Set-Cookie', cookie);
+  return new Response(null, { status: 303, headers });
+}
+if (out.kind === 'refused') for (const cookie of out.cookies) Astro.response.headers.append('Set-Cookie', cookie);
+Astro.response.status = out.kind === 'refused' ? 400 : 503;
+const message = out.kind === 'refused' ? REFUSALS[out.reason] : 'Signing in is not available just now. Please try again later.';
+const title = 'We could not sign you in';
+---
+<Base path="/auth/callback" title={title} description="Signing in did not finish.">
+  <h1>{title}</h1>
+  <p class="lead">{message}</p>
+  <p><a class="button" href="/sign-in">Start signing in again</a></p>
+  <p><a href="/help">Get help with signing in</a></p>
+</Base>

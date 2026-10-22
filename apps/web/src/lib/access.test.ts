@@ -3,8 +3,8 @@ import { SIGN_IN_PATHS, isSignInPath, makeGate } from './access';
 
 describe('isSignInPath', () => {
   it('covers sign-in, every OIDC route under /auth and the officer area', () => {
-    expect(SIGN_IN_PATHS).toEqual(['/sign-in', '/auth', '/officer-area']);
-    for (const path of ['/sign-in', '/sign-in/', '/auth', '/auth/callback', '/auth/sign-out', '/officer-area', '/officer-area/new', '/officer-area/queue']) {
+    expect(SIGN_IN_PATHS).toEqual(['/sign-in', '/sign-out', '/signed-out', '/auth', '/officer-area']);
+    for (const path of ['/sign-in', '/sign-in/', '/sign-out', '/signed-out', '/auth', '/auth/callback', '/auth/sign-out', '/officer-area', '/officer-area/new', '/officer-area/queue']) {
       expect(isSignInPath(path), path).toBe(true);
     }
   });

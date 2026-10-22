@@ -1,0 +1,66 @@
+import { randomBytes } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
+import { SESSION_COOKIE, newSession, readSession, sessionSetCookie } from '../../../server/session.mjs';
+import { makeSessionStep } from './middleware';
+
+const key = randomBytes(32);
+const NOW = 1_800_000_000;
+
+function run(cookie: string | undefined, now = NOW, response = new Response('page')) {
+  const context = { request: new Request('https://nwflorida.us/', { headers: cookie ? { cookie } : {} }), locals: {} as App.Locals };
+  const next = vi.fn(async () => response);
+  return { result: makeSessionStep(() => ({ key, now: () => now }))(context as never, next as never) as Promise<Response>, context };
+}
+
+const cookieFor = (groups: string[]) => sessionSetCookie(newSession({ sub: 'u', name: 'Jordan Example', groups }, NOW), key, NOW).split(';')[0] as string;
+
+describe('makeSessionStep', () => {
+  it('puts the signed-in reader on the request for the page', async () => {
+    const { result, context } = run(cookieFor(['nwfl-members']));
+    await result;
+    expect(context.locals.session).toMatchObject({ name: 'Jordan Example', member: true });
+  });
+
+  it('leaves the request anonymous with no cookie, a bad one, or no key', async () => {
+    for (const cookie of [undefined, `${SESSION_COOKIE}=v1.forged`]) {
+      const { result, context } = run(cookie);
+      await result;
+      expect(context.locals.session).toBeUndefined();
+    }
+    const context = { request: new Request('https://nwflorida.us/', { headers: { cookie: cookieFor([]) } }), locals: {} as App.Locals };
+    await makeSessionStep(() => ({ key: undefined, now: () => NOW }))(context as never, (async () => new Response('x')) as never);
+    expect(context.locals.session).toBeUndefined();
+  });
+
+  it('renews a member session past half its life, on the page that sees it', async () => {
+    const { result } = run(cookieFor(['nwfl-members']), NOW + 20 * 86400);
+    const res = await result;
+    const renewed = readSession(res.headers.get('set-cookie')!.split(';')[0], key, NOW + 20 * 86400);
+    expect(renewed?.exp).toBe(NOW + 50 * 86400);
+  });
+
+  it('renews on a redirect too, whose headers cannot be changed in place', async () => {
+    const { result } = run(cookieFor(['nwfl-members']), NOW + 20 * 86400, Response.redirect('https://nwflorida.us/about', 303));
+    const res = await result;
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe('https://nwflorida.us/about');
+    expect(res.headers.get('set-cookie')).toMatch(new RegExp(`^${SESSION_COOKIE}=v1\\.`));
+  });
+
+  it('leaves a page being prerendered alone: there is no reader at build time', async () => {
+    const context = {
+      isPrerendered: true,
+      get request(): Request {
+        throw new Error('headers are not available while prerendering');
+      },
+      locals: {} as App.Locals,
+    };
+    const res = await makeSessionStep(() => ({ key, now: () => NOW }))(context as never, (async () => new Response('built')) as never);
+    expect(await (res as Response).text()).toBe('built');
+  });
+
+  it('sets nothing for a fresh session or an officer', async () => {
+    expect((await run(cookieFor(['nwfl-members']), NOW + 86400).result).headers.get('set-cookie')).toBeNull();
+    expect((await run(cookieFor(['nwfl-members', 'nwfl-officers']), NOW + 11 * 3600).result).headers.get('set-cookie')).toBeNull();
+  });
+});

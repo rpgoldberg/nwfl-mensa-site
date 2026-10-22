@@ -5,9 +5,11 @@
 // Prerendered pages are served from memory with the reader's text size and
 // theme stamped on <html>, as the layout does for on-request pages.
 import http from 'node:http';
-import { SECURITY_HEADERS, cacheControl, isHostOnlyCookie } from './policy.mjs';
+import { stampAccount } from './account.mjs';
+import { cacheControl, isHostOnlyCookie, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 import { resolveOldUrl } from './redirects.mjs';
+import { readSession } from './session.mjs';
 
 /** @typedef {(req: http.IncomingMessage, res: http.ServerResponse) => unknown} Handler */
 
@@ -71,9 +73,10 @@ function keepHostOnlyCookies(res, path) {
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  * @param {string} path
+ * @param {Readonly<Record<string, string>>} headers the security headers
  */
-function applyPolicy(req, res, path) {
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+function applyPolicy(req, res, path, headers) {
+  for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
   const setsCookie = res.hasHeader('set-cookie');
   if (setsCookie) keepHostOnlyCookies(res, path);
   const cache = cacheControl({
@@ -89,12 +92,17 @@ function applyPolicy(req, res, path) {
 }
 
 /**
+ * A prerendered page, in the reader's text size and theme, and with their own
+ * account area when signed in (it was built with Sign in).
+ *
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  * @param {string} html
+ * @param {Buffer | undefined} key
  */
-function servePrerendered(req, res, html) {
-  const body = stampHtml(html, readPrefs(req.headers.cookie));
+function servePrerendered(req, res, html, key) {
+  const session = readSession(req.headers.cookie, key, Math.floor(Date.now() / 1000));
+  const body = stampAccount(stampHtml(html, readPrefs(req.headers.cookie)), session);
   res.statusCode = 200;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Length', Buffer.byteLength(body));
@@ -102,6 +110,12 @@ function servePrerendered(req, res, html) {
 }
 
 /** @typedef {import('./redirects.mjs').Tables} Redirects */
+/**
+ * @typedef {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects, sessionKey?: Buffer | undefined, formAction?: string[] }} SiteOptions
+ * pages: prerendered HTML by path; redirects: the old-site table; sessionKey: to
+ * read the session on prerendered pages; formAction: origins a form may lead to
+ * (the sign-in provider)
+ */
 
 const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
@@ -141,11 +155,11 @@ export function normalisePath(raw) {
  * without touching Astro.
  *
  * @param {Handler} handler
- * @param {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects }} [opts]
- *   prerendered HTML by path, and the old-site table
+ * @param {SiteOptions} [opts]
  * @returns {http.RequestListener}
  */
-export function withSitePolicy(handler, { pages = new Map(), redirects } = {}) {
+export function withSitePolicy(handler, { pages = new Map(), redirects, sessionKey, formAction = [] } = {}) {
+  const headers = securityHeaders({ formAction });
   return (req, res) => {
     const raw = new URL(req.url ?? '/', 'http://site.invalid').pathname;
     const path = normalisePath(raw);
@@ -153,7 +167,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects } = {}) {
     beforeHeaders(res, () => {
       if (old?.status === 410) res.statusCode = 410;
       // The cache rule reads the raw path: only a plain /_astro/ name is immutable.
-      applyPolicy(req, res, raw);
+      applyPolicy(req, res, raw, headers);
     });
     if (path === undefined) {
       res.statusCode = 400;
@@ -188,7 +202,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects } = {}) {
     }
     const html = pages.get(path);
     if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
-      servePrerendered(req, res, html);
+      servePrerendered(req, res, html, sessionKey);
       return;
     }
     /** @param {unknown} err */
@@ -212,7 +226,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects } = {}) {
 
 /**
  * @param {Handler} handler
- * @param {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects }} [opts]
+ * @param {SiteOptions} [opts]
  */
 export function createSiteServer(handler, opts) {
   return http.createServer(withSitePolicy(handler, opts));

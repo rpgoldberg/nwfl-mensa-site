@@ -78,11 +78,9 @@ const PAGES: readonly Page[] = [
   HOME_SCREEN,
   { path: '/search', title: 'Search', description: 'Search the newsletter archive.' },
   { path: '/more', title: 'More', description: 'Every part of the site in one list.' },
-  {
-    path: '/sign-in',
-    title: 'Sign in',
-    description: 'Officers and members will sign in here once accounts open.',
-  },
+  { path: '/sign-in', title: 'Sign in', description: 'Sign in to the site, for officers and members.' },
+  { path: '/signed-out', title: 'You are signed out', description: 'You have signed out of this site. You can sign in again at any time.' },
+  { path: '/officer-area', title: 'Officer area', description: 'Where officers write reports and approve what goes on the site.' },
 ];
 
 export type NavIcon = 'home' | 'calendar' | 'newsletter' | 'search' | 'more';

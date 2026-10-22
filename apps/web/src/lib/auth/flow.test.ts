@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { SIZE_COOKIE, THEME_COOKIE } from '../../../server/prefs.mjs';
-import { AUTH_COOKIE, SESSION_COOKIE, TRANSACTION_SECONDS, newSession, readSession, sealValue, sessionSetCookie } from '../../../server/session.mjs';
+import { AUTH_COOKIE, OUT_COOKIE, SESSION_COOKIE, TRANSACTION_SECONDS, newSession, readSession, sealValue, sessionSetCookie } from '../../../server/session.mjs';
 import type { AuthConfig, AuthSetup } from '../../../server/auth-config.mjs';
-import { ConsumedStates, REFUSALS, TokenStore, beginSignIn, completeSignIn, depsFromEnv, restorePrefs, signOut, type Deps } from './flow';
+import { ConsumedStates, REFUSALS, TokenStore, beginSignIn, completeSignIn, depsFromEnv, landSignedOut, signOut, type Deps } from './flow';
 
 const key = randomBytes(32);
 const NOW = 1_800_000_000;
@@ -158,16 +158,17 @@ describe('completeSignIn: the callback', () => {
 });
 
 describe('signOut', () => {
-  it('drops the session and its tokens, clears the site, and ends the provider’s session too', async () => {
+  it('drops the session and its tokens, clears storage, and goes on to end the provider’s session too', async () => {
     const d = deps();
     const session = newSession({ sub: 'u', groups: ['nwfl-members'] }, NOW);
     d.tokens.put(session.sid, { access_token: 'a', id_token: 'id-9' }, session.exp);
     const header = `${sessionSetCookie(session, key, NOW).split(';')[0]}; ${SIZE_COOKIE}=4; ${THEME_COOKIE}=dark`;
     const out = await signOut(d, { cookieHeader: header });
-    expect(out.kind).toBe('redirect');
-    if (out.kind !== 'redirect') return;
-    expect(out.clearSiteData).toBe('"cookies", "storage"');
-    expect(out.cookies).toEqual([`${SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`, `${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`]);
+    // Not "cookies" yet: that would clear the provider's cookies too (the same
+    // registered domain), and it could not end its session.
+    expect(out.clearSiteData).toBe('"storage"');
+    expect(out.cookies.slice(0, 2)).toEqual([`${SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`, `${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`]);
+    expect(out.cookies[2]).toMatch(new RegExp(`^${OUT_COOKIE}=[\\w-]{20,}; Path=/; Max-Age=600; SameSite=Lax; HttpOnly; Secure$`));
     expect(d.tokens.get(session.sid, NOW)).toBeUndefined();
     expect(d.oidc.endSessionUrl).toHaveBeenCalledWith(cfg, { idToken: 'id-9', state: expect.stringMatching(/^v1\./) });
     expect(out.location).toMatch(/^https:\/\/login\.nwflorida\.us\/end\?state=v1\./);
@@ -176,34 +177,82 @@ describe('signOut', () => {
   it('comes back to the signed-out page directly when the provider offers no logout, or cannot be reached', async () => {
     const d = deps();
     vi.mocked(d.oidc.endSessionUrl).mockResolvedValueOnce(undefined);
-    expect((await signOut(d, { cookieHeader: undefined }))).toMatchObject({ kind: 'redirect', location: expect.stringMatching(/^\/signed-out\?state=v1\./) });
+    expect(await signOut(d, { cookieHeader: undefined })).toMatchObject({ location: expect.stringMatching(/^\/signed-out\?state=v1\./) });
     vi.mocked(d.oidc.endSessionUrl).mockRejectedValueOnce(new Error('down'));
-    expect((await signOut(d, { cookieHeader: undefined }))).toMatchObject({ kind: 'redirect', location: expect.stringMatching(/^\/signed-out\?state=v1\./) });
+    expect(await signOut(d, { cookieHeader: undefined })).toMatchObject({ location: expect.stringMatching(/^\/signed-out\?state=v1\./) });
   });
 
-  it('still clears everything when sign-in is not set up', async () => {
+  it('with no key, clears everything at once: there is no session, and nothing to bring back', async () => {
     const out = await signOut(deps({ key: undefined, setup: { enabled: false, reason: 'x' } }), { cookieHeader: undefined });
-    expect(out).toMatchObject({ kind: 'redirect', location: '/signed-out', clearSiteData: '"cookies", "storage"' });
+    expect(out).toMatchObject({ location: '/signed-out', clearSiteData: '"cookies", "storage"' });
+    expect(out.cookies).toHaveLength(2);
   });
 });
 
-describe('restorePrefs: the reader keeps their text size and theme after sign-out', () => {
-  it('sets them again from the sealed state the signed-out page comes back with', async () => {
-    const d = deps();
+describe('landSignedOut: back from the provider', () => {
+  const page = 'https://nwflorida.us/signed-out';
+  /** Sign out with these prefs; the URL and cookies the browser then comes back with. */
+  async function signedOut(d: Deps) {
     const out = await signOut(d, { cookieHeader: `${SIZE_COOKIE}=4; ${THEME_COOKIE}=dark` });
-    const state = out.kind === 'redirect' ? new URL(out.location).searchParams.get('state') : null;
-    expect(restorePrefs(d, state)).toEqual([
-      `${SIZE_COOKIE}=4; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
-      `${THEME_COOKIE}=dark; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
-    ]);
+    const state = new URL(out.location, page).searchParams.get('state')!;
+    const binding = out.cookies[2]!.split(';')[0]!;
+    return { state, binding };
+  }
+
+  it('clears every cookie and storage now, then sets text size and theme again', async () => {
+    const d = deps();
+    const { state, binding } = await signedOut(d);
+    const cleared = landSignedOut(d, { url: new URL(`${page}?state=${state}`), cookieHeader: binding });
+    // The binding goes too, by name, for a browser that does not know Clear-Site-Data: it works once.
+    expect(cleared).toEqual({
+      kind: 'redirect',
+      location: `/signed-out?restore=${state}`,
+      cookies: [`${OUT_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`],
+      clearSiteData: '"cookies", "storage"',
+    });
+    const restored = landSignedOut(d, { url: new URL(`${page}?restore=${state}`), cookieHeader: null });
+    expect(restored).toEqual({
+      kind: 'redirect',
+      location: '/signed-out',
+      cookies: [`${SIZE_COOKIE}=4; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`, `${THEME_COOKIE}=dark; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`],
+    });
   });
 
-  it('ignores a state it did not seal, one too old, and none at all', () => {
+  it('clears nothing for a link from elsewhere: only the browser that signed out may', async () => {
     const d = deps();
-    expect(restorePrefs(d, sealValue({ prefs: { size: 5, theme: 'dark' }, exp: NOW + 600 }, randomBytes(32), 'signed-out'))).toEqual([]);
-    expect(restorePrefs(d, sealValue({ prefs: { size: 5, theme: 'dark' }, exp: NOW - 1 }, key, 'signed-out'))).toEqual([]);
-    expect(restorePrefs(d, null)).toEqual([]);
-    expect(restorePrefs(deps({ key: undefined }), 'v1.x')).toEqual([]);
+    const { state } = await signedOut(d);
+    const other = await signedOut(d);
+    for (const cookieHeader of [null, other.binding, `${OUT_COOKIE}=`]) {
+      expect(landSignedOut(d, { url: new URL(`${page}?state=${state}`), cookieHeader })).toEqual({ kind: 'redirect', location: '/signed-out', cookies: [] });
+    }
+  });
+
+  it('clears nothing for a state it did not seal, or one too old', async () => {
+    const d = deps();
+    const { binding } = await signedOut(d);
+    const out = binding.split('=')[1];
+    for (const state of [
+      sealValue({ prefs: {}, out, exp: NOW + 600 }, randomBytes(32), 'signed-out'),
+      sealValue({ prefs: {}, out, exp: NOW - 1 }, key, 'signed-out'),
+      sealValue({ prefs: {}, exp: NOW + 600 }, key, 'signed-out'),
+      'v1.x',
+    ]) {
+      expect(landSignedOut(d, { url: new URL(`${page}?state=${state}`), cookieHeader: binding })).toEqual({ kind: 'redirect', location: '/signed-out', cookies: [] });
+    }
+  });
+
+  it('restores nothing from a state it did not seal, one too old, or with no key', () => {
+    const d = deps();
+    const restore = (state: string, over: Partial<Deps> = {}) => landSignedOut(deps(over), { url: new URL(`${page}?restore=${state}`), cookieHeader: null });
+    expect(restore(sealValue({ prefs: { size: 5, theme: 'dark' }, exp: NOW + 600 }, randomBytes(32), 'signed-out'))).toMatchObject({ cookies: [] });
+    expect(restore(sealValue({ prefs: { size: 5, theme: 'dark' }, exp: NOW - 1 }, key, 'signed-out'))).toMatchObject({ cookies: [] });
+    expect(restore('v1.x', { key: undefined })).toMatchObject({ cookies: [] });
+    expect(d.lines).toEqual([]);
+  });
+
+  it('shows the page itself at its plain address', () => {
+    expect(landSignedOut(deps(), { url: new URL(page), cookieHeader: null })).toEqual({ kind: 'page' });
+    expect(landSignedOut(deps({ key: undefined }), { url: new URL(`${page}?state=v1.x`), cookieHeader: null })).toEqual({ kind: 'redirect', location: '/signed-out', cookies: [] });
   });
 });
 
