@@ -47,3 +47,9 @@ for (const path of ALL_PAGES) {
     }
   });
 }
+
+test('axe on the page a retired old URL shows (410)', async ({ page }) => {
+  const res = await page.goto('/2015-mind-games.html');
+  expect(res?.status()).toBe(410);
+  expect(await axe(page)).toEqual([]);
+});

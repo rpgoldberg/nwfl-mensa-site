@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
+import { compileRedirects } from '../redirects.mjs';
 import { createSiteServer, withSitePolicy } from '../siteServer.mjs';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
@@ -14,8 +15,8 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function serve(handler: Handler, pages?: Map<string, string>): Promise<string> {
-  server = http.createServer(withSitePolicy(handler, pages ? { pages } : undefined));
+async function serve(handler: Handler, pages?: Map<string, string>, redirects?: ReturnType<typeof compileRedirects>): Promise<string> {
+  server = http.createServer(withSitePolicy(handler, { ...(pages ? { pages } : {}), ...(redirects ? { redirects } : {}) }));
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
@@ -234,6 +235,59 @@ describe('prerendered pages', () => {
     expect(await (await fetch(`${base}/officers`)).text()).toBe('from astro');
     expect(await (await fetch(`${base}/about`, { method: 'POST', body: 'x' })).text()).toBe('from astro');
     expect(seen).toEqual(['GET /officers', 'POST /about']);
+  });
+});
+
+describe('old URLs (R16)', () => {
+  const redirects = compileRedirects({
+    moved: { '/join-mensa': '/join' },
+    interim: {},
+    movedHashed: {},
+    interimHashed: {},
+    gone: ['/2015-mind-games'],
+    goneHashed: [],
+    uploads: {},
+    goneUploads: [],
+    goneDirs: ['/w_api/'],
+  });
+
+  it('redirects an old page under the site policy, and the handler never sees it', async () => {
+    const base = await serve(() => {
+      throw new Error('the handler must not see an old URL');
+    }, undefined, redirects);
+    const res = await fetch(`${base}/join-mensa.html`, { redirect: 'manual' });
+    expect(res.status).toBe(301);
+    expect(res.headers.get('location')).toBe('/join');
+    expectSecurityHeaders(res);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+  });
+
+  it("answers a retired URL with 410 and the site's own gone page", async () => {
+    const seen: string[] = [];
+    const base = await serve((req, res) => {
+      seen.push(`${req.method} ${req.url}`);
+      res.statusCode = 200;
+      res.end('<h1>This page is no longer here</h1>');
+    }, undefined, redirects);
+    const res = await fetch(`${base}/2015-mind-games.html?x=1`);
+    expect(res.status).toBe(410);
+    expect(await res.text()).toContain('no longer here');
+    expect(seen).toEqual(['GET /gone']);
+    expectSecurityHeaders(res);
+  });
+
+  it('answers any other method on a retired URL with a bare 410, without the handler', async () => {
+    const base = await serve(() => {
+      throw new Error('the handler must not see a POST to a retired URL');
+    }, undefined, redirects);
+    const res = await fetch(`${base}/w_api/APIHandler.php`, { method: 'POST', body: 'x' });
+    expect(res.status).toBe(410);
+    expectSecurityHeaders(res);
+  });
+
+  it('leaves new pages to the handler', async () => {
+    const base = await serve((_req, res) => res.end('new'), undefined, redirects);
+    expect(await (await fetch(`${base}/join`)).text()).toBe('new');
   });
 });
 

@@ -3,6 +3,7 @@
 // prerendered pages, put the site policy in front of both, listen, and drain
 // on SIGTERM or SIGINT.
 import { readFile, readdir } from 'node:fs/promises';
+import { compileRedirects } from './redirects.mjs';
 import { createSiteServer } from './siteServer.mjs';
 
 /** @typedef {Record<string, string | undefined>} Env */
@@ -53,17 +54,19 @@ export async function loadPrerendered(clientDir) {
  *   loadHandler: () => Promise<{ handler: Handler }>,
  *   proc: Proc,
  *   clientDir?: URL,
+ *   oldSite?: URL,
  *   log?: (line: string) => void,
  *   graceMs?: number,
  * }} opts
  */
-export async function start({ env, loadHandler, proc, clientDir, log = console.log, graceMs = 10_000 }) {
+export async function start({ env, loadHandler, proc, clientDir, oldSite, log = console.log, graceMs = 10_000 }) {
   // Astro's entry starts its own server on import unless told not to.
   env['ASTRO_NODE_AUTOSTART'] = 'disabled';
   const { handler } = await loadHandler();
   const { port, host } = listenOptions(env);
   const pages = clientDir ? await loadPrerendered(clientDir) : new Map();
-  const server = createSiteServer(handler, { pages });
+  const redirects = oldSite ? compileRedirects(JSON.parse(await readFile(oldSite, 'utf8'))) : undefined;
+  const server = createSiteServer(handler, { pages, ...(redirects ? { redirects } : {}) });
   await new Promise((resolve) => server.listen(port, host, () => resolve(undefined)));
   const address = /** @type {import('node:net').AddressInfo} */ (server.address());
   log(JSON.stringify({ level: 'info', msg: 'listening', host, port: address.port }));

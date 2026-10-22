@@ -7,6 +7,7 @@
 import http from 'node:http';
 import { SECURITY_HEADERS, cacheControl, isHostOnlyCookie } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
+import { resolveOldUrl } from './redirects.mjs';
 
 /** @typedef {(req: http.IncomingMessage, res: http.ServerResponse) => unknown} Handler */
 
@@ -37,7 +38,10 @@ function beforeHeaders(res, listener) {
     this.statusCode = status;
     listener();
     res.writeHead = writeHead;
-    return reason === undefined ? writeHead.call(this, status) : writeHead.call(this, status, reason);
+    // The policy may change the status (a retired URL's page is always 410).
+    return reason === undefined || this.statusCode !== status
+      ? writeHead.call(this, this.statusCode)
+      : writeHead.call(this, status, reason);
   }
   // writeHead returns the polymorphic `this`, which a plain function cannot state.
   res.writeHead = /** @type {typeof res.writeHead} */ (/** @type {unknown} */ (patched));
@@ -97,23 +101,44 @@ function servePrerendered(req, res, html) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
+/** @typedef {import('./redirects.mjs').Tables} Redirects */
+
 /**
- * Wrap a request handler so every response carries the site policy, serve the
- * prerendered pages, and answer the health probe without touching Astro.
+ * Wrap a request handler so every response carries the site policy, answer
+ * old URLs (R16), serve the prerendered pages, and answer the health probe
+ * without touching Astro.
  *
  * @param {Handler} handler
- * @param {{ pages?: ReadonlyMap<string, string> }} [opts] prerendered HTML by path
+ * @param {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects }} [opts]
+ *   prerendered HTML by path, and the old-site table
  * @returns {http.RequestListener}
  */
-export function withSitePolicy(handler, { pages = new Map() } = {}) {
+export function withSitePolicy(handler, { pages = new Map(), redirects } = {}) {
   return (req, res) => {
     const path = new URL(req.url ?? '/', 'http://site.invalid').pathname;
-    beforeHeaders(res, () => applyPolicy(req, res, path));
+    const old = redirects && resolveOldUrl(path, redirects);
+    beforeHeaders(res, () => {
+      if (old?.status === 410) res.statusCode = 410;
+      applyPolicy(req, res, path);
+    });
     if (req.url === '/healthz') {
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('ok');
       return;
+    }
+    if (old && 'location' in old) {
+      res.writeHead(old.status, { Location: old.location });
+      res.end();
+      return;
+    }
+    if (old) {
+      // GET and HEAD get the site's own gone page; anything else a bare 410.
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.end();
+        return;
+      }
+      req.url = '/gone';
     }
     const html = pages.get(path);
     if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -141,7 +166,7 @@ export function withSitePolicy(handler, { pages = new Map() } = {}) {
 
 /**
  * @param {Handler} handler
- * @param {{ pages?: ReadonlyMap<string, string> }} [opts]
+ * @param {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects }} [opts]
  */
 export function createSiteServer(handler, opts) {
   return http.createServer(withSitePolicy(handler, opts));

@@ -257,6 +257,14 @@ test.describe('with JavaScript off', () => {
     }
   });
 
+  test('a link to an old page lands on its new page', async ({ page }) => {
+    await page.goto('/calendar.html');
+    await expect(page).toHaveURL(/\/calendar$/);
+    await expect(page.locator('h1')).toHaveText('Calendar');
+    await page.goto('/2015-mind-games.html');
+    await expect(page.locator('h1')).toHaveText('This page is no longer here');
+  });
+
   test('the nav and the search form work', async ({ page }) => {
     await page.goto('/');
     await mainNav(page).getByRole('link', { name: 'Calendar', exact: true }).click();

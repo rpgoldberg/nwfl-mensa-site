@@ -25,7 +25,7 @@ afterEach(async () => {
 
 async function boot(
   handler: Handler,
-  opts: { env?: Record<string, string | undefined>; graceMs?: number; clientDir?: URL } = {},
+  opts: { env?: Record<string, string | undefined>; graceMs?: number; clientDir?: URL; oldSite?: URL } = {},
 ) {
   const env: Record<string, string | undefined> = { PORT: '0', HOST: '127.0.0.1', ...opts.env };
   const proc = new FakeProcess();
@@ -37,6 +37,7 @@ async function boot(
     log,
     graceMs: opts.graceMs ?? 10_000,
     ...(opts.clientDir ? { clientDir: opts.clientDir } : {}),
+    ...(opts.oldSite ? { oldSite: opts.oldSite } : {}),
     loadHandler: async () => {
       autostartWhenLoaded = env['ASTRO_NODE_AUTOSTART'];
       return { handler };
@@ -79,6 +80,13 @@ describe('loadPrerendered', () => {
 });
 
 describe('start', () => {
+  it('answers old URLs from the table it is given', async () => {
+    const { base } = await boot(() => {}, { oldSite: new URL('./fixtures/old-site.json', import.meta.url) });
+    const res = await fetch(`${base}/join-mensa.html`, { redirect: 'manual' });
+    expect(res.status).toBe(301);
+    expect(res.headers.get('location')).toBe('/join');
+  });
+
   it("serves the prerendered pages it finds, with the reader's settings", async () => {
     const { base } = await boot(() => {}, { clientDir: FIXTURE_CLIENT });
     const body = await (await fetch(`${base}/about`, { headers: { cookie: `${SIZE_COOKIE}=2` } })).text();
