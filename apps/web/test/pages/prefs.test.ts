@@ -39,6 +39,16 @@ describe('POST /prefs: what it will read (the memory blocker)', () => {
     expect(res.headers.getSetCookie()).toEqual([]);
   });
 
+  it('refuses on the declared length alone, before reading a byte', async () => {
+    const untouchable = new ReadableStream({
+      pull() {
+        throw new Error('the body was read');
+      },
+    });
+    const res = await postBody(untouchable, { 'content-type': FORM, 'content-length': String(100 * 1024 * 1024) });
+    expect(res.status).toBe(413);
+  });
+
   it('refuses a chunked body as soon as it runs over 4 KiB', async () => {
     const res = await postBody(chunked([`back=${'a'.repeat(3000)}`, 'a'.repeat(3000)]), { 'content-type': FORM });
     expect(res.status).toBe(413);

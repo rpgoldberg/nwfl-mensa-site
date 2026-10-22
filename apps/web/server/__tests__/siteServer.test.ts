@@ -265,6 +265,12 @@ describe('a path the handler would read differently', () => {
     }
   });
 
+  it('caches for a year only on the raw path: an encoded letter in an asset name is not immutable', async () => {
+    const base = await serve((_req, res) => res.end('body{}'));
+    const res = await fetch(`${base}/_astro/%42ase.5t8Gl8HW.css`);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+  });
+
   it('finds a prerendered page by its decoded path', async () => {
     const html = '<!DOCTYPE html><html lang="en" data-size="1"><body>About</body></html>';
     const base = await serve(() => {
