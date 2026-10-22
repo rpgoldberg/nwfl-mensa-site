@@ -1,0 +1,110 @@
+{
+  "contract_version": "1",
+  "audience": "members",
+  "config": {
+    "organization": "Northwest Florida Mensa",
+    "volume": "31",
+    "issue": "1",
+    "month_year": "February and March 2027",
+    "calendar_months": [
+      {
+        "month": 2,
+        "year": 2027
+      },
+      {
+        "month": 3,
+        "year": 2027
+      }
+    ]
+  },
+  "officers": {
+    "President": "Pat Example",
+    "Vice President": "Sam Sample",
+    "Treasurer": "Vacant",
+    "Membership Officer": "Vacant",
+    "Member at Large": "Vacant",
+    "Past President": "Vacant",
+    "Editor": "Vacant",
+    "Publications Officer": "Jordan Fictional",
+    "Webmaster": "Vacant"
+  },
+  "roster": [
+    {
+      "office": "President",
+      "holder": "Pat Example",
+      "role_alias": "president@nwflorida.us"
+    },
+    {
+      "office": "Vice President",
+      "holder": "Sam Sample",
+      "role_alias": "vp@nwflorida.us"
+    },
+    {
+      "office": "Membership Officer",
+      "holder": "Vacant",
+      "role_alias": ""
+    },
+    {
+      "office": "Publications Officer",
+      "holder": "Jordan Fictional",
+      "role_alias": ""
+    }
+  ],
+  "articles": [
+    {
+      "title": "presidents report",
+      "content": "Welcome back.\n\nThe game night code is canarygatecode4417.\n\nWrite to the board (president@nwflorida.us)."
+    },
+    {
+      "title": "dues notice",
+      "content": "Members only: canarygatecode4417 dues details."
+    },
+    {
+      "title": "book club",
+      "content": "This month: a made-up novel."
+    },
+    {
+      "title": "puzzle corner",
+      "content": "Which number comes next: 2, 3, 5, 7?"
+    }
+  ],
+  "minutes": "excomm minutes\n\nCalled to order at 10:02. Adjourned at 11:15.",
+  "events": {
+    "2027-02-06": [
+      {
+        "time": "11:30 AM",
+        "title": "Panama City Lunch",
+        "location": "Example Grill, 100 Example Parkway, Panama City",
+        "url": "https://example.org/grill"
+      }
+    ],
+    "2027-02-19": [
+      {
+        "time": "6:00 PM",
+        "title": "Game night",
+        "location": "A member's home, Okaloosa (contact vp@nwflorida.us)"
+      }
+    ],
+    "2027-03-06": [
+      {
+        "time": "11:30 AM",
+        "title": "Panama City Lunch",
+        "location": "Example Grill, 100 Example Parkway, Panama City",
+        "url": "https://example.org/grill"
+      }
+    ],
+    "2027-03-13": [
+      {
+        "time": "11:00 AM",
+        "title": "Fall picnic (cancelled: Rain)"
+      }
+    ],
+    "2027-03-19": [
+      {
+        "time": "6:00 PM",
+        "title": "Game night",
+        "location": "A member's home, Okaloosa (contact vp@nwflorida.us)"
+      }
+    ]
+  }
+}

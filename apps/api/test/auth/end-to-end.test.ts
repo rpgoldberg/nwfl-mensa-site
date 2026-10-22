@@ -59,8 +59,8 @@ describe.skipIf(!live)('auth end to end', () => {
     await expect(api.client(EventService).listVenues({}, auth(agent))).rejects.toMatchObject({ code: Code.PermissionDenied });
     const member = await sign({ iss: SITE, aud: 'nwfl-site', sub: 'sub-member', groups: ['nwfl-members'] });
     await expect(api.client(NewsletterService).listEditions({}, auth(member))).rejects.toMatchObject({ code: Code.PermissionDenied });
-    // The agent passes the gate; the service itself arrives with A4b.
-    await expect(api.client(NewsletterService).listEditions({}, auth(agent))).rejects.toMatchObject({ code: Code.Unimplemented });
+    // The agent passes the gate and is answered.
+    await expect(api.client(NewsletterService).listEditions({}, auth(agent))).resolves.toMatchObject({ editions: [] });
   });
 
   it('refuses a site call that came through the edge, even with a forged web identity alongside', async () => {

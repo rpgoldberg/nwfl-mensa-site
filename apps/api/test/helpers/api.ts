@@ -33,6 +33,9 @@ export const PEOPLE: Record<string, VerifiedToken> = {
     groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-office-editor', 'nwfl-admin'],
     scopes: [],
   },
+  // The newsletter agent and the membership verifier (machine clients).
+  'agent-token': { client: 'agent', subject: 'svc-nwfl-newsletter', groups: [], scopes: ['newsletter.read'] },
+  'verifier-token': { client: 'verifier', subject: 'svc-nwfl-verifier', groups: [], scopes: ['membership.verify'] },
   // The Webmaster, who also holds the webmaster seat.
   'webmaster-token': { client: 'site', subject: 'sub-webmaster', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-webmaster', 'nwfl-webmaster'], scopes: [] },
 };
