@@ -2,10 +2,16 @@
 // that members-only content stays in the API's chokepoint.
 //
 // A random token is seeded into every members-only place there is: a passage
-// inside a public item, a members file attached to it, a whole members item,
-// an officers item, a members event series and a members one-off event. Then
+// inside a public item, a members block, a members file attached to it, the
+// target of a link whose text is a members passage, a whole members item, an
+// officers item, a members event series and a members one-off event. Then
 // EVERY read RPC the port serves is called with no token, and the token must
 // appear in no response and no error. Called as a member, it must appear.
+//
+// Positive controls (STACK-FIX): each seeded place is read, by itself, by the
+// audience allowed to see it, and must show its own marker. A seed that is
+// lost or never reaches its place fails the canary instead of leaving the
+// public half passing vacuously.
 //
 // The list of reads is not hand-kept: it is every NO_SIDE_EFFECTS method of
 // every served service, and a read without a request here fails the test, so
@@ -19,7 +25,7 @@ import { Audience } from '../src/gen/nwfl/mensa/v1/common_pb.js';
 import { ContentService } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { SERVED_SERVICES } from '../src/grpc/routes.js';
-import { type Api, MEMBER, dump, insertId, startApi } from './helpers/api.js';
+import { type Api, MEMBER, OFFICER, dump, insertId, startApi } from './helpers/api.js';
 import { membersSpan, paragraph, publishItem, text } from './helpers/content.js';
 import { live } from './helpers/pg.js';
 
@@ -42,7 +48,7 @@ describe.skipIf(!live)('the members-only canary', () => {
     },
     'nwfl.mensa.v1.ContentService': {
       ListPublishedItems: () => [{}, { pageSize: 50 }],
-      GetPublishedItem: () => [{ slug: 'canary-public' }, { slug: 'canary-members' }, { slug: 'canary-officers' }],
+      GetPublishedItem: () => [{ slug: 'canary-public' }, { slug: 'canary-link' }, { slug: 'canary-members' }, { slug: 'canary-officers' }],
       GetRoster: () => [{}],
       ListPublishedEditions: () => [{}],
       ListWorkingItems: () => [{}],
@@ -96,14 +102,21 @@ describe.skipIf(!live)('the members-only canary', () => {
       officeId: office,
       title: 'Picnic',
       summary: 'Saturday',
-      body: { blocks: [paragraph(text('Meet at '), membersSpan(TOKEN), text('.')), { type: 'members', children: [paragraph(text(`Block ${TOKEN}`))] }] },
+      body: { blocks: [paragraph(text('Meet at '), membersSpan(`Span ${TOKEN}`), text('.')), { type: 'members', children: [paragraph(text(`Block ${TOKEN}`))] }] },
+    });
+    // What `[:members[Zoom room]](https://example.org/zoom?pwd=...)` parses to: the target is the secret.
+    await publishItem(pool, {
+      slug: 'canary-link',
+      officeId: office,
+      title: 'Monthly meeting',
+      body: { blocks: [paragraph(text('Join us: '), { type: 'link', href: `https://example.org/zoom?pwd=${TOKEN}`, children: [membersSpan('Zoom room')] })] },
     });
     ids['publicItem'] = publicItem.itemId;
     await pool.query(
       `INSERT INTO stored_file (version_id, object_key, filename, mime_type, size_bytes, sha256, audience) VALUES ($1, $2, $2, 'application/pdf', 10, $3, 'members')`,
       [publicItem.versionId, `${TOKEN}.pdf`, Buffer.alloc(32, 3)],
     );
-    await publishItem(pool, { slug: 'canary-members', officeId: office, visibility: 'members', title: 'Members notice', body: { blocks: [paragraph(text(TOKEN))] } });
+    await publishItem(pool, { slug: 'canary-members', officeId: office, visibility: 'members', title: 'Members notice', body: { blocks: [paragraph(text(`Notice ${TOKEN}`))] } });
     await publishItem(pool, { slug: 'canary-officers', officeId: office, visibility: 'officers', title: `Officers ${TOKEN}`, body: { blocks: [paragraph(text(TOKEN))] } });
     ids['series'] = await insertId(pool,
       `INSERT INTO event_series (slug, title, category, recurrence, starts_on, default_start, area, visibility, description, cadence_label)
@@ -135,6 +148,29 @@ describe.skipIf(!live)('the members-only canary', () => {
     expect(item).toContain(TOKEN);
     const events = dump(await api.client(EventService).listOccurrences(RANGE, MEMBER));
     expect(events).toContain(`Event ${TOKEN}`);
+  });
+
+  describe('positive controls: each seeded place shows its own marker to the audience allowed to see it', () => {
+    const content = () => api.client(ContentService);
+    const places: Array<[string, () => Promise<unknown>, () => string]> = [
+      ['the members span in a public item', () => content().getPublishedItem({ slug: 'canary-public' }, MEMBER), () => `Span ${TOKEN}`],
+      ['the members block in a public item', () => content().getPublishedItem({ slug: 'canary-public' }, MEMBER), () => `Block ${TOKEN}`],
+      ['the members file of a public item', () => content().getPublishedItem({ slug: 'canary-public' }, MEMBER), () => `${TOKEN}.pdf`],
+      ['the target of a members link', () => content().getPublishedItem({ slug: 'canary-link' }, MEMBER), () => `pwd=${TOKEN}`],
+      ['the members item', () => content().getPublishedItem({ slug: 'canary-members' }, MEMBER), () => `Notice ${TOKEN}`],
+      ['the officers item, to an officer', () => content().getPublishedItem({ slug: 'canary-officers' }, OFFICER), () => `Officers ${TOKEN}`],
+      ['the members series', () => api.client(EventService).listSeries({}, MEMBER), () => `Series ${TOKEN}`],
+      ['the members one-off event', () => api.client(EventService).listOccurrences(RANGE, MEMBER), () => `Event ${TOKEN}`],
+      ['the members one-off event link', () => api.client(EventService).getOccurrence({ id: ids['oneOff'] as string }, MEMBER), () => `https://example.org/${TOKEN}`],
+    ];
+
+    it.each(places)('%s', async (_place, read, marker) => {
+      expect(dump(await read())).toContain(marker());
+    });
+
+    it('keeps the officers item from a member', async () => {
+      await expect(content().getPublishedItem({ slug: 'canary-officers' }, MEMBER)).rejects.toMatchObject({ code: Code.NotFound });
+    });
   });
 
   it('keeps the token out of the public search index and in the members index', async () => {
