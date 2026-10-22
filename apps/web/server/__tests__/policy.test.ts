@@ -94,6 +94,14 @@ describe('cacheControl (R26)', () => {
     expect(cacheControl({ ...anon, path: '/_astro/site.abc123.css' })).toBe('public, max-age=31536000, immutable');
   });
 
+  it('caches only a plain file name under /_astro/ for a year, never an encoded path out of it', () => {
+    // The static handler decodes %2f, so /_astro/..%2fabout would be the About page.
+    for (const path of ['/_astro/..%2fabout', '/_astro/..%2fabout.html', '/_astro/%2e%2e%2fjoin.html', '/_astro/x/y.css', '/_astro/']) {
+      expect(cacheControl({ ...anon, path }), path).toBe('public, max-age=60');
+    }
+    expect(cacheControl({ ...anon, path: '/_astro/Base.5t8Gl8HW.css' })).toBe('public, max-age=31536000, immutable');
+  });
+
   it('does not cache a missing asset for a year', () => {
     expect(cacheControl({ ...anon, path: '/_astro/gone.css', status: 404 })).toBe('public, max-age=60');
   });

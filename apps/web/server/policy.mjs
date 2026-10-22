@@ -76,8 +76,12 @@ export function isHostOnlyCookie(setCookie) {
   );
 }
 
-/** Astro's build output: the file name carries a content hash, so it never changes. */
-const HASHED_ASSET = /^\/_astro\//;
+/**
+ * Astro's build output: the file name carries a content hash, so it never
+ * changes. A plain name on the raw path only: an encoded path such as
+ * /_astro/..%2fabout would otherwise be a page, cached for a year.
+ */
+const HASHED_ASSET = /^\/_astro\/[\w.-]+$/;
 
 /**
  * The Cache-Control for one response. Anonymous pages are public for 60 s; a

@@ -104,6 +104,24 @@ function servePrerendered(req, res, html) {
 /** @typedef {import('./redirects.mjs').Tables} Redirects */
 
 /**
+ * The path as the static handler will read it: percent-decoded. undefined when
+ * decoding would make it another path (an encoded / or \\, which the handler
+ * would follow out of a folder), when it holds an encoded NUL, or when the
+ * encoding is broken. The policy then decides on the very path served.
+ *
+ * @param {string} raw the URL's pathname, dot segments already resolved
+ * @returns {string | undefined}
+ */
+export function normalisePath(raw) {
+  if (/%(2f|5c|00)/i.test(raw)) return undefined;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Wrap a request handler so every response carries the site policy, answer
  * old URLs (R16), serve the prerendered pages, and answer the health probe
  * without touching Astro.
@@ -115,12 +133,20 @@ function servePrerendered(req, res, html) {
  */
 export function withSitePolicy(handler, { pages = new Map(), redirects } = {}) {
   return (req, res) => {
-    const path = new URL(req.url ?? '/', 'http://site.invalid').pathname;
-    const old = redirects && resolveOldUrl(path, redirects);
+    const raw = new URL(req.url ?? '/', 'http://site.invalid').pathname;
+    const path = normalisePath(raw);
+    const old = redirects && path !== undefined ? resolveOldUrl(path, redirects) : undefined;
     beforeHeaders(res, () => {
       if (old?.status === 410) res.statusCode = 410;
-      applyPolicy(req, res, path);
+      // The cache rule reads the raw path: only a plain /_astro/ name is immutable.
+      applyPolicy(req, res, raw);
     });
+    if (path === undefined) {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Bad request');
+      return;
+    }
     if (req.url === '/healthz') {
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');

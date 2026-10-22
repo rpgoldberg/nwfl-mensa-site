@@ -206,3 +206,12 @@ test('a reader-control post bigger than the form is refused with 413, declared o
   expect(await bigPost(2 * 1024 * 1024, false)).toBe(413);
   expect(await bigPost(100 * 1024, true)).toBe(413);
 });
+
+test('an encoded path out of /_astro/ is refused, never served as a page cached for a year', async ({ request }) => {
+  for (const path of ['/_astro/..%2fabout', '/_astro/..%2fabout.html', '/_astro/%2e%2e%2fjoin.html']) {
+    const res = await request.get(path);
+    expect(res.status(), path).toBe(400);
+    expect(res.headers()['cache-control'], path).not.toMatch(/immutable/);
+    expect(await res.text(), path).not.toContain('<h1>About us</h1>');
+  }
+});

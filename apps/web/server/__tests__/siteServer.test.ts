@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
 import { compileRedirects } from '../redirects.mjs';
-import { createSiteServer, withSitePolicy } from '../siteServer.mjs';
+import { createSiteServer, normalisePath, withSitePolicy } from '../siteServer.mjs';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
 
@@ -235,6 +235,43 @@ describe('prerendered pages', () => {
     expect(await (await fetch(`${base}/officers`)).text()).toBe('from astro');
     expect(await (await fetch(`${base}/about`, { method: 'POST', body: 'x' })).text()).toBe('from astro');
     expect(seen).toEqual(['GET /officers', 'POST /about']);
+  });
+});
+
+describe('normalisePath (the policy decides on the path the handler serves)', () => {
+  it('decodes the path as the static handler does', () => {
+    expect(normalisePath('/about')).toBe('/about');
+    expect(normalisePath('/%61bout')).toBe('/about');
+    expect(normalisePath('/caf%C3%A9')).toBe('/café');
+  });
+
+  it('refuses an encoded separator or NUL, which would decode into another path, and broken encoding', () => {
+    for (const raw of ['/_astro/..%2fabout', '/_astro/..%2Fabout', '/a%5cb', '/a%5Cb', '/a%00b', '/%E0%A4%A']) {
+      expect(normalisePath(raw), raw).toBeUndefined();
+    }
+  });
+});
+
+describe('a path the handler would read differently', () => {
+  it('is a 400 under the site policy, and the handler never sees it', async () => {
+    const base = await serve(() => {
+      throw new Error('the handler must not see an ambiguous path');
+    });
+    for (const path of ['/_astro/..%2fabout', '/x%5c..%5cabout', '/%E0%A4%A']) {
+      const res = await fetch(`${base}${path}`);
+      expect(res.status, path).toBe(400);
+      expectSecurityHeaders(res);
+      expect(res.headers.get('cache-control'), path).toBe('public, max-age=60');
+    }
+  });
+
+  it('finds a prerendered page by its decoded path', async () => {
+    const html = '<!DOCTYPE html><html lang="en" data-size="1"><body>About</body></html>';
+    const base = await serve(() => {
+      throw new Error('a prerendered page is served from memory');
+    }, new Map([['/about', html]]));
+    const res = await fetch(`${base}/%61bout`, { headers: { cookie: `${SIZE_COOKIE}=3` } });
+    expect(await res.text()).toContain('data-size="3"');
   });
 });
 
