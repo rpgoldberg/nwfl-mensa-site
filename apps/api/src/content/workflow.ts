@@ -464,6 +464,8 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         if (!roles.admin && !roles.webmaster && !roles.offices.includes(item.office_slug)) throw new ConnectError('not permitted', Code.PermissionDenied);
         if (item.state !== 'published') throw precondition('only a published item can be withdrawn');
         await client.query(`UPDATE content_item SET state = 'withdrawn', withdrawn_at = now(), updated_at = now() WHERE id = $1`, [item.id]);
+        // A takedown beats the pin: the item stays out of every frozen edition it is pinned in, even once republished.
+        await client.query(`UPDATE edition_item SET taken_down_at = now() WHERE item_id = $1 AND taken_down_at IS NULL`, [item.id]);
         await recordAudit(client, caller, { action: 'withdraw', subjectKind: 'content_item', subjectId: item.id, itemId: item.id, fromState: 'published', toState: 'withdrawn' });
         return { item: await officerItem(client, item.id) };
       });

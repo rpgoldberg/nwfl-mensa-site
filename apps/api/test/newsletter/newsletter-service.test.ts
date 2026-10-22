@@ -250,18 +250,39 @@ describe.skipIf(!live)('NewsletterService', () => {
       expect(JSON.stringify(await exportOf(Audience.MEMBERS))).not.toContain('A revision after print.');
     });
 
-    it('leaves out a pinned item withdrawn after the freeze, and brings back its pinned version once it is republished', async () => {
+    it('leaves out a pinned item withdrawn after the freeze, even once it is republished: a takedown beats the pin', async () => {
       const item = items['zz-book-club'] as { id: string; version: string };
       const listed = async (): Promise<string[]> => (await newsletter.listEditionItems({ editionId }, AGENT)).items.map((i) => i.versionId);
       await content.withdraw({ itemId: item.id }, PUB);
       expect(await listed()).not.toContain(item.version);
       expect(JSON.stringify(await exportOf(Audience.MEMBERS))).not.toContain('made-up novel');
-      // Restore opens a draft; the item is published again only when that is approved.
+      // Restore opens a draft; approving it publishes the item again, but not in the printed issue.
       await content.restore({ itemId: item.id }, PUB);
-      expect(await listed()).not.toContain(item.version);
       const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
-      expect(await listed()).toContain(item.version);
+      expect(await listed()).not.toContain(item.version);
+      expect(JSON.stringify(await exportOf(Audience.MEMBERS))).not.toContain('made-up novel');
+      expect(JSON.stringify(await exportOf(Audience.PUBLIC))).not.toContain('made-up novel');
+    });
+
+    it('leaves a pinned item tightened to members after the freeze out of the PUBLIC export, and keeps it for members', async () => {
+      const item = items['puzzle-corner'] as { id: string; version: string };
+      await content.saveDraft({ itemId: item.id, title: 'puzzle corner', bodyMarkup: 'Now for members.', visibility: ItemVisibility.MEMBERS }, PUB);
+      const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
+      await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      const pub = await exportOf(Audience.PUBLIC);
+      expect(JSON.stringify(pub)).not.toContain('puzzle corner');
+      expect(JSON.stringify(pub)).not.toContain('Which number comes next');
+      expect(JSON.stringify(await exportOf(Audience.MEMBERS))).toContain('Which number comes next: 2, 3, 5, 7?');
+    });
+
+    it('leaves a pinned item tightened to officers after the freeze out of both exports and the edition items', async () => {
+      const item = items['book-club-extra'] as { id: string; version: string };
+      await content.saveDraft({ itemId: item.id, title: 'book club', bodyMarkup: 'Officers only now.', visibility: ItemVisibility.OFFICERS }, PUB);
+      const hash = (await content.markReady({ itemId: item.id, targets: { website: true, newsletter: false, email: false } }, PUB)).item?.working?.contentHash as Uint8Array;
+      await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      for (const audience of [Audience.PUBLIC, Audience.MEMBERS]) expect(JSON.stringify(await exportOf(audience))).not.toContain('made-up memoir');
+      expect((await newsletter.listEditionItems({ editionId }, AGENT)).items.map((i) => i.itemId)).not.toContain(item.id);
     });
 
     it('refuses no audience, and records every export with its audience', async () => {

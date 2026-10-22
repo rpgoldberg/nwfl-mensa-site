@@ -50,6 +50,8 @@ interface PinnedRow {
   title: string;
   summary: string | null;
   visibility: 'public' | 'members';
+  /** The item's visibility now: a pin never outlives a tightening. */
+  live_visibility: 'public' | 'members' | 'officers';
   n: number;
   content_hash: Buffer;
   body_ast: unknown;
@@ -58,23 +60,39 @@ interface PinnedRow {
 
 /**
  * The edition's items in print order: pinned versions once frozen, live ones
- * before; only approved versions either way. A withdrawn item is left out even
- * when pinned, as the site's edition listing does: withdrawal is the takedown.
+ * before; only approved versions either way. A takedown beats the pin
+ * (API-FIX3 ruling): a pin marked taken down when its item was withdrawn
+ * stays out even once the item is republished, and each row carries the
+ * item's visibility now, so a pin tightened since is left out where it may no
+ * longer be read (see readable).
  */
 async function editionItems(db: Pick<Db, 'query'>, edition: EditionRow): Promise<PinnedRow[]> {
   const columns = `i.id AS item_id, v.id AS version_id, i.kind, i.office_id, v.title, v.summary, v.visibility, v.n, v.content_hash, v.body_ast, v.public_ast`;
   const { rows } = FROZEN.has(edition.status)
     ? await db.query<PinnedRow>(
-        `SELECT ${columns} FROM edition_item ei JOIN content_item i ON i.id = ei.item_id JOIN content_version v ON v.id = ei.version_id
-         WHERE ei.edition_id = $1 AND i.state = 'published' AND v.status IN ('approved', 'superseded') ${PRINT_ORDER}`,
+        `SELECT ${columns}, lv.visibility AS live_visibility
+         FROM edition_item ei JOIN content_item i ON i.id = ei.item_id JOIN content_version v ON v.id = ei.version_id
+           JOIN content_version lv ON lv.id = i.live_version_id
+         WHERE ei.edition_id = $1 AND ei.taken_down_at IS NULL AND i.state = 'published' AND v.status IN ('approved', 'superseded') ${PRINT_ORDER}`,
         [edition.id, KIND_ORDER],
       )
     : await db.query<PinnedRow>(
-        `SELECT ${columns} FROM content_item i JOIN content_version v ON v.id = i.live_version_id
+        `SELECT ${columns}, v.visibility AS live_visibility FROM content_item i JOIN content_version v ON v.id = i.live_version_id
          WHERE i.state = 'published' AND v.status = 'approved' AND v.target_newsletter AND v.edition_id = $1 ${PRINT_ORDER}`,
         [edition.id, KIND_ORDER],
       );
   return rows;
+}
+
+const STRICTNESS = { public: 0, members: 1, officers: 2 } as const;
+
+/**
+ * Whether a pinned item may still be read by this audience: never once it is
+ * officers-only, and not by the public once it has been tightened to members.
+ */
+function readable(row: PinnedRow, audience: ExportAudience): boolean {
+  if (row.live_visibility === 'officers') return false;
+  return audience === 'members' || STRICTNESS[row.live_visibility] <= STRICTNESS[row.visibility];
 }
 
 /** The dates the edition's calendar grids cover, from its ranges or else its period. */
@@ -120,7 +138,7 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
 
       listEditionItems: async (request) => {
         const edition = await loadEdition(request.editionId);
-        const rows = await editionItems(db, edition);
+        const rows = (await editionItems(db, edition)).filter((row) => readable(row, 'members'));
         return {
           items: rows.map((row) =>
             create(EditionItemSchema, {
@@ -163,7 +181,7 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
         const input: ExportInput = {
           audience,
           edition: { slug: edition.slug, title: edition.title, volume: edition.volume, issueNumber: edition.issue_number, calendarMonths: monthsBetween(grid.from, grid.to) },
-          items: items.map((row) => ({
+          items: items.filter((row) => readable(row, audience)).map((row) => ({
             kind: row.kind,
             title: row.title,
             summary: row.summary,
