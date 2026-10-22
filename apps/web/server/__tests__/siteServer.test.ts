@@ -126,6 +126,27 @@ describe('withSitePolicy', () => {
     error.mockRestore();
   });
 
+  it('never lets Clear-Site-Data clear cookies: they belong to the whole registered domain, the sign-in provider’s too', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const [sent, kept] of [
+      ['"cookies", "storage"', '"storage"'],
+      ['"cache","cookies"', '"cache"'],
+      ['"*"', null],
+      ['"cookies"', null],
+      ['"cache", "storage"', '"cache", "storage"'],
+    ] as const) {
+      const base = await serve((_req, res) => {
+        res.setHeader('Clear-Site-Data', sent);
+        res.end('page');
+      });
+      expect((await fetch(base)).headers.get('clear-site-data'), sent).toBe(kept);
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = undefined;
+    }
+    expect(error.mock.calls.map((c) => String(c[0]))).toContain(JSON.stringify({ level: 'error', msg: 'dropped Clear-Site-Data directives that clear cookies', path: '/' }));
+    error.mockRestore();
+  });
+
   it('removes the header when no cookie in it is host-only', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const base = await serve((_req, res) => {

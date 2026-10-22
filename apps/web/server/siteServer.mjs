@@ -70,6 +70,23 @@ function keepHostOnlyCookies(res, path) {
 }
 
 /**
+ * Clear-Site-Data never clears cookies: "cookies" (and "*") reach every cookie
+ * of the registered domain, the sign-in provider's at login.nwflorida.us too.
+ * The other directives are this origin's own, and stay.
+ *
+ * @param {http.ServerResponse} res
+ * @param {string} path
+ */
+function keepOwnSiteData(res, path) {
+  const directives = String(res.getHeader('clear-site-data')).split(',').map((d) => d.trim());
+  const kept = directives.filter((d) => d !== '"cookies"' && d !== '"*"');
+  if (kept.length === directives.length) return;
+  console.error(JSON.stringify({ level: 'error', msg: 'dropped Clear-Site-Data directives that clear cookies', path }));
+  if (kept.length > 0) res.setHeader('Clear-Site-Data', kept.join(', '));
+  else res.removeHeader('Clear-Site-Data');
+}
+
+/**
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  * @param {string} path
@@ -79,6 +96,7 @@ function applyPolicy(req, res, path, headers) {
   for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
   const setsCookie = res.hasHeader('set-cookie');
   if (setsCookie) keepHostOnlyCookies(res, path);
+  if (res.hasHeader('clear-site-data')) keepOwnSiteData(res, path);
   const cache = cacheControl({
     path,
     cookieHeader: req.headers.cookie,
