@@ -1,6 +1,6 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
 import { createSiteServer, withSitePolicy } from '../siteServer.mjs';
@@ -91,13 +91,46 @@ describe('withSitePolicy', () => {
 
   it('makes a response that sets a cookie private and unstored, and keeps every cookie', async () => {
     const base = await serve((_req, res) => {
-      res.writeHead(303, { Location: '/', 'Set-Cookie': ['a=1; Path=/', 'b=2; Path=/'] });
+      res.writeHead(303, { Location: '/', 'Set-Cookie': ['__Host-a=1; Path=/; Secure', '__Host-b=2; Path=/; Secure'] });
       res.end();
     });
     const res = await fetch(base, { redirect: 'manual' });
     expect(res.status).toBe(303);
     expect(res.headers.get('cache-control')).toBe('private, no-store');
-    expect(res.headers.getSetCookie()).toEqual(['a=1; Path=/', 'b=2; Path=/']);
+    expect(res.headers.getSetCookie()).toEqual(['__Host-a=1; Path=/; Secure', '__Host-b=2; Path=/; Secure']);
+  });
+
+  it('never lets a cookie out that is not host-only, and says which (MT-30)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const base = await serve((_req, res) => {
+      res.setHeader('Set-Cookie', [
+        '__Host-ok=1; Path=/; Secure; HttpOnly; SameSite=Lax',
+        'plain=secret-value; Path=/',
+        '__Host-wide=2; Path=/; Secure; Domain=mindsignals1.com',
+      ]);
+      res.end('page');
+    });
+    const res = await fetch(`${base}/`);
+    expect(res.headers.getSetCookie()).toEqual(['__Host-ok=1; Path=/; Secure; HttpOnly; SameSite=Lax']);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    const logged = error.mock.calls.map((c) => String(c[0]));
+    expect(logged).toEqual([
+      JSON.stringify({ level: 'error', msg: 'dropped a cookie that is not host-only', path: '/', cookie: 'plain' }),
+      JSON.stringify({ level: 'error', msg: 'dropped a cookie that is not host-only', path: '/', cookie: '__Host-wide' }),
+    ]);
+    expect(logged.join()).not.toContain('secret-value');
+    error.mockRestore();
+  });
+
+  it('removes the header when no cookie in it is host-only', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const base = await serve((_req, res) => {
+      res.writeHead(200, { 'Set-Cookie': 'a=1; Domain=example.org' });
+      res.end();
+    });
+    const res = await fetch(base);
+    expect(res.headers.has('set-cookie')).toBe(false);
+    error.mockRestore();
   });
 
   it('overrides a Cache-Control the handler set', async () => {

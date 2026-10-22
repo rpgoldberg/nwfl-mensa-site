@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, hasCookie, parseCsp } from '../policy.mjs';
+import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, hasCookie, isHostOnlyCookie, parseCsp } from '../policy.mjs';
 
 describe('security headers', () => {
   it('sends CSP, HSTS, nosniff, Referrer-Policy, Permissions-Policy and COOP, and nothing else', () => {
@@ -95,5 +95,27 @@ describe('cacheControl (R26)', () => {
   it('never stores a server error', () => {
     expect(cacheControl({ ...anon, status: 500 })).toBe('no-store');
     expect(cacheControl({ ...anon, status: 503 })).toBe('no-store');
+  });
+});
+
+describe('isHostOnlyCookie (MT-30)', () => {
+  it('accepts a __Host- cookie that is Secure, on Path=/, with no Domain', () => {
+    expect(isHostOnlyCookie('__Host-nwfl-size=3; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure')).toBe(true);
+    expect(isHostOnlyCookie('__Host-a=; path=/; secure')).toBe(true);
+  });
+
+  it('refuses anything a parent domain or another path could share', () => {
+    for (const cookie of [
+      'nwfl-size=3; Path=/; Secure',
+      '__host-a=1; Path=/; Secure',
+      '__Host-a=1; Path=/',
+      '__Host-a=1; Secure',
+      '__Host-a=1; Path=/x; Secure',
+      '__Host-a=1; Path=/; Secure; Domain=mindsignals1.com',
+      '__Host-a=1; Path=/; Secure; domain=.nwflorida.us',
+      '__Secure-a=1; Path=/; Secure',
+    ]) {
+      expect(isHostOnlyCookie(cookie), cookie).toBe(false);
+    }
   });
 });

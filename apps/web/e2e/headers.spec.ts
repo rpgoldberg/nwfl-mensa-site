@@ -136,7 +136,7 @@ test('behind the tunnel, a post from the site itself is accepted and its cookies
   expect(forged.headers['set-cookie']).toBeUndefined();
 });
 
-test('every cookie the site sets is host-only: __Host-, Secure, Path=/, no Domain, SameSite=Lax', async ({ request, baseURL }) => {
+test('MT-30: no response sets a cookie with Domain=, and every cookie is host-only: __Host-, Secure, Path=/, SameSite=Lax', async ({ request, baseURL }) => {
   for (const path of ALL_PAGES) expect((await request.get(path)).headers()['set-cookie'], path).toBeUndefined();
   const res = await request.post('/prefs', {
     headers: { Origin: baseURL! },

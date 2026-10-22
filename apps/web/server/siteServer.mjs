@@ -5,7 +5,7 @@
 // Prerendered pages are served from memory with the reader's text size and
 // theme stamped on <html>, as the layout does for on-request pages.
 import http from 'node:http';
-import { SECURITY_HEADERS, cacheControl } from './policy.mjs';
+import { SECURITY_HEADERS, cacheControl, isHostOnlyCookie } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 
 /** @typedef {(req: http.IncomingMessage, res: http.ServerResponse) => unknown} Handler */
@@ -44,17 +44,39 @@ function beforeHeaders(res, listener) {
 }
 
 /**
+ * MT-30: whatever a page or handler tries, only host-only cookies leave the
+ * server. Any other is dropped and logged by name (never by value).
+ *
+ * @param {http.ServerResponse} res
+ * @param {string} path
+ */
+function keepHostOnlyCookies(res, path) {
+  const header = res.getHeader('set-cookie');
+  const cookies = Array.isArray(header) ? header : [String(header)];
+  const kept = cookies.filter((cookie) => {
+    if (isHostOnlyCookie(cookie)) return true;
+    const name = cookie.replace(/=.*$/s, '').trim();
+    console.error(JSON.stringify({ level: 'error', msg: 'dropped a cookie that is not host-only', path, cookie: name }));
+    return false;
+  });
+  if (kept.length > 0) res.setHeader('Set-Cookie', kept);
+  else res.removeHeader('Set-Cookie');
+}
+
+/**
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  * @param {string} path
  */
 function applyPolicy(req, res, path) {
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+  const setsCookie = res.hasHeader('set-cookie');
+  if (setsCookie) keepHostOnlyCookies(res, path);
   const cache = cacheControl({
     path,
     cookieHeader: req.headers.cookie,
     status: res.statusCode,
-    setsCookie: res.hasHeader('set-cookie'),
+    setsCookie,
   });
   res.setHeader('Cache-Control', cache);
   // A page differs by cookie (session, reader settings), so a cache keyed on

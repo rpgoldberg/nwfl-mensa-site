@@ -25,6 +25,9 @@ jobs:
       # The pinned version and image digest live in scripts/gitleaks.sh, shared
       # with the pre-commit hook.
       - run: sh scripts/gitleaks.sh git --log-opts=--all
+      # MT-06: public npm only. The bracket classes keep this line from matching itself.
+      - name: No private registry or its token variable
+        run: '! git grep -nE ''NODE_AUTH_TOKE[N]|npm\.pkg\.github\.co[m]'''
 
   lint:
     name: Lint

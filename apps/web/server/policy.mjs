@@ -57,6 +57,24 @@ export function hasCookie(cookieHeader, name) {
   return cookieHeader.split(';').some((pair) => pair.trim().startsWith(`${name}=`));
 }
 
+/**
+ * MT-30: a cookie this site may set. Only a __Host- cookie (Secure, Path=/, no
+ * Domain) stays on this exact host; the staging host shares a parent domain
+ * with other apps, so anything wider could reach or be shadowed by them.
+ *
+ * @param {string} setCookie one Set-Cookie value
+ */
+export function isHostOnlyCookie(setCookie) {
+  const [pair = '', ...rest] = setCookie.split(';').map((part) => part.trim());
+  const attrs = rest.map((a) => a.toLowerCase());
+  return (
+    pair.startsWith('__Host-') &&
+    attrs.includes('secure') &&
+    attrs.includes('path=/') &&
+    !attrs.some((a) => a.startsWith('domain'))
+  );
+}
+
 /** Astro's build output: the file name carries a content hash, so it never changes. */
 const HASHED_ASSET = /^\/_astro\//;
 
