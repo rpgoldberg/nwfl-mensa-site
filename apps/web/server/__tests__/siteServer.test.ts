@@ -151,6 +151,16 @@ describe('withSitePolicy', () => {
     expectSecurityHeaders(res);
   });
 
+  it('never stores a server error the handler writes with writeHead (challenger)', async () => {
+    const base = await serve((_req, res) => {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('boom');
+    });
+    const res = await fetch(`${base}/calendar`);
+    expect(res.status).toBe(500);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
+
   it('answers a handler that throws with a 500 that is never stored', async () => {
     const base = await serve(() => {
       throw new Error('boom');
