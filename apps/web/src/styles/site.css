@@ -22,16 +22,16 @@ body {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  /* A long word at 200 % text wraps instead of pushing the page sideways. */
-  overflow-wrap: break-word;
   /* The reading bar asks how wide the page is (below). */
   container: page / inline-size;
 }
 
-h1, h2, h3 { hyphens: auto; font-weight: 600; }
-h1 { font-size: var(--fs-h1); margin: var(--space-4) 0 var(--space-3); }
-h2 { font-size: var(--fs-h2); }
-h3 { font-size: var(--fs-h3); }
+/* Lines wrap at spaces, never inside a word: on a narrow phone at a large
+   size a heading shrinks with the screen until its longest word fits. */
+h1, h2, h3 { font-weight: 600; }
+h1 { font-size: min(var(--fs-h1), 10.5vw); margin: var(--space-4) 0 var(--space-3); }
+h2 { font-size: min(var(--fs-h2), 9.5vw); }
+h3 { font-size: min(var(--fs-h3), 9vw); }
 .lead { font-size: var(--fs-lead); color: var(--muted); margin-top: 0; }
 .muted { color: var(--muted); }
 
@@ -120,7 +120,6 @@ button.hbtn { cursor: pointer; }
   min-height: var(--target);
   padding: 0 var(--space-2);
   font-weight: 700;
-  overflow-wrap: anywhere;
 }
 .sign-out { margin: 0; }
 .hbtn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -529,11 +528,9 @@ main:focus:not(:focus-visible) { outline: none; }
 /* Officers: by office, with the role address. */
 .offices { list-style: none; padding: 0; margin: var(--space-4) 0; }
 .offices li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.125rem; padding: var(--space-3) 0; border-top: var(--border) solid var(--line-soft); }
-/* An address is one long word: at 200 % on a narrow phone it may wrap anywhere. */
-.offices a { overflow-wrap: anywhere; }
 .offices li:first-child { border-top: 0; }
 .offices .role { font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); }
-.addr { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; overflow-wrap: anywhere; }
+.addr { display: inline-flex; flex-wrap: wrap; align-items: center; min-height: var(--target); font-weight: 700; }
 
 /* Newsletter: past issues by year. */
 .yr h3 { margin: var(--space-5) 0 var(--space-2); }

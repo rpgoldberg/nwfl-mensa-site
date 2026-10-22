@@ -2,6 +2,7 @@
 // The roster by office (R2), on request. Role addresses only, and only once
 // mail to them has been seen to arrive; a vacant seat says so.
 import { PUBLIC_ONLY } from 'astro:env/server';
+import Address from '../components/Address.astro';
 import PublicOnlyNote from '../components/PublicOnlyNote.astro';
 import SampleNotice from '../components/SampleNotice.astro';
 import { siteData } from '../data';
@@ -24,9 +25,9 @@ const president = roster.find((o) => o.slug === 'president')?.email;
         <li data-source={o.source}>
           <span class="role">{o.title}</span>
           {o.vacant
-            ? <span>Vacant. Interested? {president ? <>Write to <a href={`mailto:${president}`}>{president}</a>.</> : <>Ask any officer.</>}</span>
+            ? <span>Vacant. Interested? {president ? <>Write to <Address email={president} />.</> : <>Ask any officer.</>}</span>
             : <span>{o.holder}</span>}
-          {!o.vacant && o.email && <a class="addr" href={`mailto:${o.email}`}>{o.email}</a>}
+          {!o.vacant && o.email && <Address class="addr" email={o.email} />}
         </li>
       ))}
     </ul>

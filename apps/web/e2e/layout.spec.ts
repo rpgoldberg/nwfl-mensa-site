@@ -254,6 +254,51 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 375, height: 667 }
   });
 }
 
+/**
+ * Words split over two lines anywhere on the page. Lines wrap at spaces, and
+ * after a hyphen or an address's @ already there, never inside a word.
+ */
+async function splitWords(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const split: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement!;
+      if (parent.closest('.visually-hidden, [hidden], script, style') || parent.getClientRects().length === 0) continue;
+      for (const match of node.textContent!.matchAll(/[^\s\u00a0@-]+[@-]?/g)) {
+        const range = document.createRange();
+        range.setStart(node, match.index);
+        range.setEnd(node, match.index + match[0].length);
+        const tops = new Set([...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)));
+        if (tops.size > 1) split.push(match[0]);
+      }
+    }
+    return split;
+  });
+}
+
+for (const viewport of [{ width: 320, height: 640 }, { width: 412, height: 915 }]) {
+  test.describe(`at ${viewport.width}px wide, every word whole`, () => {
+    test.use({ viewport });
+
+    for (const size of [1, 2, 3, 4, 5]) {
+      test(`no page breaks a word at text size ${size}`, async ({ page, context, baseURL }) => {
+        test.slow(); // every page, every word
+        await setPrefs(context, baseURL!, { size });
+        const broken: string[] = [];
+        for (const path of ALL_PAGES) {
+          await page.goto(path);
+          await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
+          for (const word of await splitWords(page)) broken.push(`${path}: "${word}"`);
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+          expect(overflow, `${path} scrolls sideways`).toBeLessThanOrEqual(0);
+        }
+        expect(broken).toEqual([]);
+      });
+    }
+  });
+}
+
 test.describe('signed in, at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
