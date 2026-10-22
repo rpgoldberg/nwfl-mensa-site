@@ -48,6 +48,12 @@ describe('CI workflow', () => {
     expect(docker).toMatch(/\/healthz/);
   });
 
+  it('scans every commit for secrets with the pinned gitleaks', () => {
+    const secrets = job('secrets');
+    expect(secrets).toMatch(/fetch-depth: 0/);
+    expect(secrets).toMatch(/run: sh scripts\/gitleaks\.sh git --log-opts=--all$/m);
+  });
+
   it('installs with npm ci and never runs dependency install scripts', () => {
     for (const line of ci.match(/run: npm (ci|install).*$/gm) ?? []) expect(line).toMatch(/^run: npm ci --ignore-scripts/);
   });

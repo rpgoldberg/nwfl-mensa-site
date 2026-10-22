@@ -14,7 +14,9 @@
     "typecheck": "astro check",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "secrets:scan": "sh scripts/gitleaks.sh git --log-opts=--all",
+    "prepare": "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@astrojs/node": "11.1.9",

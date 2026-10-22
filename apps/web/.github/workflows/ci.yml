@@ -13,6 +13,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secrets:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          # Every commit, not only the tip: the whole history must be safe to publish.
+          fetch-depth: 0
+      # The pinned version and image digest live in scripts/gitleaks.sh, shared
+      # with the pre-commit hook.
+      - run: sh scripts/gitleaks.sh git --log-opts=--all
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
