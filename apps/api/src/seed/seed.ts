@@ -6,8 +6,9 @@
 //
 // Rules, each enforced here:
 //   - The data lives OUTSIDE the repository, and outside any git work tree;
-//     a path inside one, or a file with a second hard link (which could be a
-//     name for a file inside one), is refused. The repository may be
+//     a path inside one, a file with a second hard link (which could be a
+//     name for a file inside one), or anything but a regular file (a pipe
+//     from <(...), a device) is refused. The repository may be
 //     published, and roster names are real people.
 //   - Known fields only, as own keys: __proto__, constructor and the like are
 //     unknown fields like any other.
@@ -21,7 +22,7 @@
 //   - Every row written is recorded in audit_event as the system, with no
 //     payload, and the command prints counts only, never the data.
 // ============================================================================
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type pg from 'pg';
@@ -178,8 +179,9 @@ function gitWorkTreeOf(dir: string): string | undefined {
 }
 
 /**
- * Refuses a seed file inside the repository (or the image's /app), inside any
- * git work tree, or with more than one hard link; symlinks resolved.
+ * Refuses a seed file inside the repository (or the image's /app) or inside
+ * any git work tree; symlinks resolved. What the file IS (a regular file with
+ * one link) is checked on the descriptor it is read through (readRegularFile).
  */
 export function assertOutsideRepo(file: string): void {
   let resolved = path.resolve(file);
@@ -195,13 +197,29 @@ export function assertOutsideRepo(file: string): void {
   if (gitWorkTreeOf(path.dirname(resolved)) !== undefined) {
     throw new SeedError('the seed file must live outside any git work tree: it holds real names');
   }
-  let links = 1;
+}
+
+/**
+ * The file's text, read through one descriptor whose fstat says it is a
+ * regular file: a pipe (what a shell's <(...) gives), a device or a directory
+ * is refused before a byte is read, and nothing is swapped in between the
+ * check and the read. O_NONBLOCK, so opening a pipe does not wait for a writer.
+ */
+function readRegularFile(file: string): string {
+  let fd: number;
   try {
-    links = statSync(resolved).nlink;
+    fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
   } catch {
-    // As above.
+    throw new SeedError('cannot read the seed file');
   }
-  if (links > 1) throw new SeedError('the seed file has more than one link: copy it to a file of its own');
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) throw new SeedError('the seed file must be a regular file');
+    if (stat.nlink > 1) throw new SeedError('the seed file has more than one link: copy it to a file of its own');
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 export interface SeedSummary {
@@ -389,12 +407,7 @@ export async function runSeed(argv: string[], env: Env, say: (line: string) => v
   try {
     const file = argv[0] as string;
     assertOutsideRepo(file);
-    let text: string;
-    try {
-      text = readFileSync(file, 'utf8');
-    } catch {
-      throw new SeedError('cannot read the seed file');
-    }
+    const text = readRegularFile(file);
     let json: unknown;
     try {
       json = JSON.parse(text);

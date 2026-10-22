@@ -2,6 +2,7 @@
 // contacts, read from a file OUTSIDE the repository, applied in one
 // transaction, idempotent, and audited.
 import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,12 +82,16 @@ describe('assertOutsideRepo', () => {
     expect(() => assertOutsideRepo(path.join(linked, 'seed.json'))).toThrow(/outside any git work tree/);
   });
 
-  it('refuses a file with a second hard link, which could be a name for a file inside a repository', () => {
+  it('refuses a file with a second hard link, which could be a name for a file inside a repository', async () => {
     const plain = path.join(dir, 'plain.json');
-    writeFileSync(plain, '{}');
-    expect(() => assertOutsideRepo(plain)).not.toThrow();
+    writeFileSync(plain, '{"offices": []}');
+    const lines: string[] = [];
+    const say = (line: string): void => {
+      lines.push(line);
+    };
     linkSync(plain, path.join(dir, 'second-name.json'));
-    expect(() => assertOutsideRepo(plain)).toThrow(/more than one link/);
+    expect(await runSeed([plain], {}, say)).toBe(2);
+    expect(lines).toEqual(['seed: the seed file has more than one link: copy it to a file of its own']);
   });
 });
 
@@ -186,6 +191,20 @@ describe.skipIf(!live)('applySeed and runSeed', () => {
       "seed failed, nothing applied: unknown series 'no-such-series'",
     ]);
     expect(lines.join('\n')).not.toContain('pat.private');
+  });
+
+  it('refuses anything but a regular file: a pipe (what <(...) gives), a device, a directory', async () => {
+    const lines: string[] = [];
+    const say = (line: string): void => {
+      lines.push(line);
+    };
+    const fifo = path.join(dir, 'seed.fifo');
+    execFileSync('mkfifo', [fifo]);
+    for (const target of [fifo, '/dev/null', dir]) {
+      lines.length = 0;
+      expect(await runSeed([target], {}, say), target).toBe(2);
+      expect(lines, target).toEqual(['seed: the seed file must be a regular file']);
+    }
   });
 
   it('refuses no argument, a file inside the repository, a missing file, and a bad file', async () => {
