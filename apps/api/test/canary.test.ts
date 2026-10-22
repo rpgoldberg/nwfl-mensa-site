@@ -11,18 +11,19 @@
 // every served service, and a read without a request here fails the test, so
 // a new read RPC cannot ship without passing the canary.
 import { randomBytes } from 'node:crypto';
-import type { DescMessage, DescMethod, DescService, MessageInitShape } from '@bufbuild/protobuf';
+import type { DescMessage, DescMethod, MessageInitShape } from '@bufbuild/protobuf';
 import { MethodOptions_IdempotencyLevel as Idempotency } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Audience } from '../src/gen/nwfl/mensa/v1/common_pb.js';
 import { ContentService } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
+import { SERVED_SERVICES } from '../src/grpc/routes.js';
 import { type Api, MEMBER, dump, insertId, startApi } from './helpers/api.js';
 import { membersSpan, paragraph, publishItem, text } from './helpers/content.js';
 import { live } from './helpers/pg.js';
 
 const TOKEN = `canary${randomBytes(8).toString('hex')}`;
-const SERVED: DescService[] = [EventService, ContentService];
 const RANGE = { from: { year: 2026, month: 10, day: 22 }, to: { year: 2027, month: 1, day: 31 } };
 
 type Requests = Record<string, () => Array<MessageInitShape<DescMessage>>>;
@@ -47,10 +48,24 @@ describe.skipIf(!live)('the members-only canary', () => {
       ListWorkingItems: () => [{}],
       GetWorkingItem: () => [{ itemId: ids['publicItem'] }],
     },
+    'nwfl.mensa.v1.MembershipService': {
+      GetMyAccount: () => [{}],
+      ListSignupRequests: () => [{}],
+    },
+    'nwfl.mensa.v1.NewsletterService': {
+      ListEditions: () => [{}],
+      ListEditionItems: () => [{ editionId: ids['publicItem'] }],
+      GetEditionCalendar: () => [{}],
+      GetEditionRoster: () => [{}],
+      ExportEdition: () => [{ audience: Audience.MEMBERS }],
+    },
+    'nwfl.mensa.v1.MembershipVerifierService': {
+      ListPendingVerifications: () => [{}],
+    },
   };
 
   const readMethods = (): DescMethod[] =>
-    SERVED.flatMap((service) => service.methods).filter((method) => method.idempotency === Idempotency.NO_SIDE_EFFECTS);
+    SERVED_SERVICES.flatMap((service) => service.methods).filter((method) => method.idempotency === Idempotency.NO_SIDE_EFFECTS);
 
   /** Every read, every request: the responses and the error messages, as text. */
   async function sweep(options: { headers?: Record<string, string> }): Promise<{ text: string; calls: number }> {
@@ -63,7 +78,7 @@ describe.skipIf(!live)('the members-only canary', () => {
           parts.push(dump(await call(request, options)));
         } catch (error) {
           const connectError = ConnectError.from(error);
-          expect([Code.NotFound, Code.Unimplemented], `${method.name}: ${connectError.message}`).toContain(connectError.code);
+          expect([Code.NotFound, Code.Unimplemented, Code.Unauthenticated, Code.PermissionDenied], `${method.name}: ${connectError.message}`).toContain(connectError.code);
           parts.push(connectError.message, dump(connectError.details), dump(connectError.metadata));
         }
       }
@@ -108,7 +123,7 @@ describe.skipIf(!live)('the members-only canary', () => {
 
   it('never shows the token to the public, in any response or error', async () => {
     const { text: everything, calls } = await sweep({});
-    expect(calls).toBeGreaterThanOrEqual(15);
+    expect(calls).toBeGreaterThanOrEqual(23);
     expect(everything.includes(TOKEN)).toBe(false);
   });
 

@@ -26,7 +26,7 @@ import {
   type TextMapGetter,
 } from '@opentelemetry/api';
 import { Code, ConnectError, type Interceptor } from '@connectrpc/connect';
-import { type TokenVerifier, authInterceptor } from '../auth/caller.js';
+import { type AuthOptions, authInterceptor } from '../auth/caller.js';
 import type { StructuredLogger } from '../platform/logger.js';
 
 export const TRACER_NAME = 'nwfl-mensa-api/grpc';
@@ -88,6 +88,7 @@ export function accessLogInterceptor(logger: StructuredLogger): Interceptor {
 }
 
 /** The production chain, outermost first. */
-export function apiInterceptors(options: { logger: StructuredLogger; verifier: TokenVerifier }): Interceptor[] {
-  return [traceServerInterceptor(), accessLogInterceptor(options.logger.child({ component: 'grpc' })), authInterceptor(options.verifier)];
+export function apiInterceptors(options: { logger: StructuredLogger } & AuthOptions): Interceptor[] {
+  const { logger, ...auth } = options;
+  return [traceServerInterceptor(), accessLogInterceptor(logger.child({ component: 'grpc' })), authInterceptor(auth)];
 }

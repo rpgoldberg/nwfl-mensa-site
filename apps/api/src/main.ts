@@ -6,6 +6,7 @@
 // Telemetry starts BEFORE anything logs, so the first line already has a real
 // provider behind it.
 // ============================================================================
+import { readAuthConfig, verifierFrom } from './auth/config.js';
 import { readConfig } from './config.js';
 import { createPool, describeTarget } from './db/pool.js';
 import { createStructuredLogger } from './platform/logger.js';
@@ -13,12 +14,15 @@ import { startTelemetry } from './platform/telemetry.js';
 import { startServer } from './server.js';
 
 const config = readConfig();
+const auth = readAuthConfig(process.env);
 const telemetry = startTelemetry();
 const logger = createStructuredLogger({ name: telemetry.state.serviceName, level: config.logLevel });
 const pool = createPool();
 
 // The database target is logged once here, for operators; no endpoint reports it.
 logger.info({ db_target: describeTarget(), service_version: process.env['SERVICE_VERSION'] ?? 'dev' }, 'starting');
+// Which token clients are on, by kind only (a key named token_* is redacted). With none, every token is refused.
+logger.info({ enabled_clients: auth.clients.map((client) => client.kind) }, 'auth');
 
 const server = await startServer({
   host: config.host,
@@ -27,6 +31,8 @@ const server = await startServer({
   db: pool,
   logger,
   drainTimeoutMs: config.drainTimeoutMs,
+  verifier: verifierFrom(auth),
+  edgeClientIds: auth.edgeClientIds,
 });
 
 let stopping = false;

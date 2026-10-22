@@ -13,7 +13,8 @@
 // ============================================================================
 import type http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
-import { type TokenVerifier, rejectAllTokens } from './auth/caller.js';
+import { type MemberStanding, type TokenVerifier, rejectAllTokens } from './auth/caller.js';
+import { dbStanding } from './auth/standing.js';
 import type { Db } from './db/pool.js';
 import { apiInterceptors } from './grpc/interceptors.js';
 import { apiRoutes } from './grpc/routes.js';
@@ -29,8 +30,12 @@ export interface ServerOptions {
   db: Db;
   logger: StructuredLogger;
   drainTimeoutMs?: number;
-  /** Verifies bearer tokens. Default: refuse every token, so callers are public only (A3 supplies the JWKS verifier). */
+  /** Verifies bearer tokens. Default: refuse every token, so every caller is public. */
   verifier?: TokenVerifier;
+  /** Member standing. Default: member_account in `db`. */
+  standing?: MemberStanding;
+  /** The edge's mesh identities (auth/caller.ts). */
+  edgeClientIds?: readonly string[];
 }
 
 export interface RunningServer {
@@ -50,7 +55,12 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
 
   const grpc = createGrpcServer({
     routes: apiRoutes({ db: options.db, logger, readiness }),
-    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? rejectAllTokens }),
+    interceptors: apiInterceptors({
+      logger,
+      verifier: options.verifier ?? rejectAllTokens,
+      standing: options.standing ?? dbStanding(options.db),
+      ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
+    }),
     shutdownSignal: shutdown.signal,
   });
   const sessions = new Set<http2.ServerHttp2Session>();

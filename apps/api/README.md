@@ -77,14 +77,25 @@ the rules a handler cannot be trusted to keep:
 - no message has a phone, birthday or home-address field, and the membership
   messages have no free-text note.
 
-## Reads and the audience
+## Callers, tokens and the audience
 
-The read RPCs (`EventService` and the `ContentService` reads) take the
-audience from the verified bearer token and from nothing else
-(`src/auth/caller.ts`): no token is public, `nwfl-members` or
-`nwfl-affiliates` is members, `nwfl-officers` is officers, and a token that
-does not verify is refused rather than downgraded. Until A3 supplies the JWKS
-verifier, every presented token is refused.
+A bearer token is verified with jose against the JWKS of the client it names
+(`src/auth/jwt.ts`), and the caller and audience come from it alone
+(`src/auth/caller.ts`):
+
+| Client | Env (issuer turns it on) | Caller | Reaches |
+|---|---|---|---|
+| `nwfl-site` | `SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`, `SITE_OIDC_JWKS_URL` | a user: officers by the `nwfl-officers` group, members by `member_account` | every service but the two below |
+| `nwfl-agent` | `AGENT_OIDC_*`, `AGENT_SCOPE`, `AGENT_SUBJECT` | the newsletter agent | `NewsletterService` only |
+| `nwfl-verifier` | `VERIFIER_OIDC_*`, `VERIFIER_SCOPE`, `VERIFIER_SUBJECT` | the membership verifier | `MembershipVerifierService` only |
+
+No token is public; a token that does not verify is refused. Member-level
+reading comes from `member_account` on each call (AC6 b), not from the
+token's groups; an account unverified for 13 months reads as public.
+`src/auth/roles.ts` holds the own-office rule and the approver checks for the
+write handlers. A call that arrived through the edge (its `l5d-client-id` is
+in `EDGE_CLIENT_IDS`) reaches only the agent and verifier services; the
+header never grants anything. With no issuer set, every token is refused.
 
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
@@ -124,3 +135,4 @@ verifier reports, and `affiliate` needs a recorded grant.
 - fc-shared 1.7.0 is vendored; see `vendor/README.md`.
 - buf comes from the `@bufbuild/buf` npm package, so CI and a laptop run the
   same version.
+- jose 6.2.13 verifies tokens (RS256 and ES256 only).

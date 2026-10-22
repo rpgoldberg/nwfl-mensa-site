@@ -35,11 +35,14 @@ describe('apiRoutes', () => {
     await expect(createClient(ContentService, transport).getRoster({})).resolves.toEqual(expect.objectContaining({ offices: [] }));
   });
 
+  it('registers MembershipService with no handlers yet', async () => {
+    await expect(createClient(MembershipService, transport).getMyAccount({})).rejects.toMatchObject({ code: Code.Unimplemented });
+  });
+
   it.each([
-    ['MembershipService', () => createClient(MembershipService, transport).getMyAccount({})],
     ['NewsletterService', () => createClient(NewsletterService, transport).listEditions({})],
     ['MembershipVerifierService', () => createClient(MembershipVerifierService, transport).listPendingVerifications({})],
-  ])('does not serve %s yet', async (_name, call) => {
-    await expect(call()).rejects.toMatchObject({ code: Code.Unimplemented });
+  ])('registers %s, so the caller gate runs before the missing handler', async (_name, call) => {
+    await expect(call()).rejects.toMatchObject({ code: Code.Unauthenticated });
   });
 });
