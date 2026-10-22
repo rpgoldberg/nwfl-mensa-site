@@ -12,7 +12,8 @@
 //   VERIFIER_OIDC_JWKS_URL, VERIFIER_SCOPE (membership.verify),
 //   VERIFIER_SUBJECT (svc-nwfl-verifier)
 //   EDGE_CLIENT_IDS        the edge's mesh identities, comma-separated
-//                          (default cloudflared in nwfl-edge)
+//                          (default cloudflared in nwfl-edge; set but
+//                          empty refuses to start)
 //
 // The scope and subject defaults follow the plan's names; the real values come
 // from the Authentik blueprint (I4) and are set here when they differ.
@@ -75,10 +76,10 @@ export function readAuthConfig(env: Env): AuthConfig {
     throw new Error('the clients audiences must differ: one token must never be valid for two clients');
   }
   const edge = env['EDGE_CLIENT_IDS'];
-  return {
-    clients,
-    edgeClientIds: edge === undefined ? DEFAULT_EDGE_CLIENT_IDS : edge.split(',').map((id) => id.trim()).filter((id) => id !== ''),
-  };
+  const edgeClientIds = edge === undefined ? DEFAULT_EDGE_CLIENT_IDS : edge.split(',').map((id) => id.trim()).filter((id) => id !== '');
+  // Set but empty would switch the edge narrowing and the edge budget off.
+  if (edgeClientIds.length === 0) throw new Error('EDGE_CLIENT_IDS must name at least one identity (unset it for the default)');
+  return { clients, edgeClientIds };
 }
 
 /** A remote, cached key set per client (jose's defaults: 5 s timeout, 10 min cache, 30 s cooldown). */

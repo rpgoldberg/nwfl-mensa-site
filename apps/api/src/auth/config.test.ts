@@ -54,6 +54,10 @@ describe('readAuthConfig', () => {
     expect(config.edgeClientIds).toEqual(['a.nwfl-edge.serviceaccount.identity.linkerd.cluster.local', 'b.x']);
   });
 
+  it.each(['', ' ', ', ,'])('refuses to start with EDGE_CLIENT_IDS set but naming no identity (%j): the edge would go unnarrowed', (value) => {
+    expect(() => readAuthConfig({ EDGE_CLIENT_IDS: value })).toThrow(/EDGE_CLIENT_IDS must name at least one identity/);
+  });
+
   it.each([
     [{ SITE_OIDC_ISSUER: 'http://login.nwflorida.us/' }, /SITE_OIDC_ISSUER must be an https URL/],
     [{ SITE_OIDC_ISSUER: ISS, SITE_OIDC_JWKS_URL: 'http://keys/' }, /SITE_OIDC_JWKS_URL must be an https URL/],
