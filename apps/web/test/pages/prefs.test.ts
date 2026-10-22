@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
-import { GET, POST } from './prefs';
+import { GET, POST } from '../../src/pages/prefs';
 
 type Ctx = Parameters<typeof POST>[0];
 

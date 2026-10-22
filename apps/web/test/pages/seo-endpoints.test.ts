@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { GET as robots, prerender as robotsPrerendered } from './robots.txt';
-import { GET as sitemap, prerender as sitemapPrerendered } from './sitemap.xml';
+import { GET as robots, prerender as robotsPrerendered } from '../../src/pages/robots.txt';
+import { GET as sitemap, prerender as sitemapPrerendered } from '../../src/pages/sitemap.xml';
 
 type Ctx = Parameters<typeof robots>[0];
 
