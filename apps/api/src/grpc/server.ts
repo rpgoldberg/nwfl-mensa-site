@@ -13,14 +13,16 @@
 // own; transport-hardening.test.ts proves layer 1 and the bounds below.
 //
 // BOUNDS, so one caller cannot pin the pod's memory or starve the others:
-//   - MAX_CONCURRENT_STREAMS per connection (HTTP/2 SETTINGS);
+//   - MAX_CONCURRENT_STREAMS per connection (HTTP/2 SETTINGS), exactly the
+//     two budgets below together: the mesh proxy may carry all of the pod's
+//     traffic over one connection, and a lower cap would bind before the
+//     budgets and leave the site queued behind the edge;
 //   - two budgets of active streams across all connections, each refused
 //     RESOURCE_EXHAUSTED when full: MAX_EDGE_STREAMS for calls that came
 //     through the edge (l5d-client-id names an edge identity, see
 //     auth/caller.ts) and MAX_ACTIVE_STREAMS for every other call. Slow
-//     senders on the internet side can fill only the first, and it is at
-//     most half of one connection, so the site keeps the other half even on
-//     a connection the mesh proxy shares;
+//     senders on the internet side can fill only the first, so the site
+//     keeps its whole budget even on a connection the mesh proxy shares;
 //   - READ_MAX_BYTES per message, checked on the envelope before buffering;
 //   - RECEIVE_DEADLINE_MS for the request body: a sender that has not
 //     finished by then has its stream cancelled, freeing what was buffered;
@@ -51,9 +53,9 @@ export const ACCEPTED_CONTENT_TYPES: ReadonlySet<string> = new Set(['application
  * messages; uploads (R11, PW6) will stream rather than raise this.
  */
 export const READ_MAX_BYTES = 4 * 1024 * 1024;
-export const MAX_CONCURRENT_STREAMS = 16;
 export const MAX_ACTIVE_STREAMS = 24;
 export const MAX_EDGE_STREAMS = 8;
+export const MAX_CONCURRENT_STREAMS = MAX_ACTIVE_STREAMS + MAX_EDGE_STREAMS;
 export const RECEIVE_DEADLINE_MS = 10_000;
 export const MAX_SESSION_MEMORY_MB = 16;
 

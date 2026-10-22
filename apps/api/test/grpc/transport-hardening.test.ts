@@ -148,8 +148,8 @@ describe('the gRPC port after A1-FIX', () => {
       expect((MAX_ACTIVE_STREAMS + MAX_EDGE_STREAMS) * READ_MAX_BYTES).toBeLessThanOrEqual(128 * 1024 * 1024);
     });
 
-    it(`advertises at most ${MAX_CONCURRENT_STREAMS} concurrent streams per connection`, async () => {
-      expect(MAX_CONCURRENT_STREAMS).toBeLessThanOrEqual(16);
+    it(`advertises ${MAX_CONCURRENT_STREAMS} concurrent streams per connection: room for both budgets, and no more`, async () => {
+      expect(MAX_CONCURRENT_STREAMS).toBe(MAX_ACTIVE_STREAMS + MAX_EDGE_STREAMS);
       const session = http2.connect(baseUrl);
       try {
         await new Promise<void>((resolve) => session.once('remoteSettings', () => resolve()));
@@ -284,5 +284,100 @@ describe('the edge budget', () => {
   it('is at most half of one connection, so on a connection the proxy shares the edge leaves the site half', () => {
     expect(MAX_EDGE_STREAMS).toBe(8);
     expect(MAX_EDGE_STREAMS * 2).toBeLessThanOrEqual(MAX_CONCURRENT_STREAMS);
+  });
+});
+
+// One connection can hold both budgets at once: the mesh proxy may carry all
+// of the pod's traffic over a single connection, and then a per-connection cap
+// below the two budgets would bind first and starve the site behind the edge.
+describe('the per-connection cap and the budgets, on one connection', () => {
+  const EDGE = 'cloudflared.edge.example';
+  let server: http2.Http2Server;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    const readiness = createReadiness({ query: () => Promise.resolve({}) });
+    server = createGrpcServer({ routes: healthRoutes(readiness), receiveDeadlineMs: 5_000, edgeClientIds: [EDGE] });
+    baseUrl = await listen(server);
+  });
+
+  afterAll(async () => {
+    await closeHard(server);
+  });
+
+  /** A Check on an existing session; resolves to its grpc-status, or 'queued' if it never got a stream. */
+  const check = (session: http2.ClientHttp2Session, extra: http2.OutgoingHttpHeaders = {}): Promise<string> =>
+    new Promise((resolve) => {
+      const stream = session.request(grpcHeaders(extra));
+      let status = 'queued';
+      const timer = setTimeout(() => resolve(status), 1_500);
+      stream.on('response', (headers) => {
+        if (headers['grpc-status'] !== undefined) status = String(headers['grpc-status']);
+      });
+      stream.on('trailers', (trailers: http2.IncomingHttpHeaders) => {
+        status = String(trailers['grpc-status']);
+      });
+      stream.on('error', () => {});
+      stream.on('close', () => {
+        clearTimeout(timer);
+        resolve(status);
+      });
+      stream.resume();
+      stream.end(checkFrame());
+    });
+
+  const holder = (session: http2.ClientHttp2Session) => {
+    const held: http2.ClientHttp2Stream[] = [];
+    return {
+      hold: (count: number, extra: http2.OutgoingHttpHeaders = {}): void => {
+        for (let i = 0; i < count; i += 1) {
+          const stream = session.request(grpcHeaders(extra));
+          stream.on('error', () => {});
+          stream.write(new Uint8Array([0, 0, 0, 0, 10]));
+          held.push(stream);
+        }
+      },
+      /** How many held streams the server has not closed: all of them, or the budget refused one. */
+      open: (): number => held.filter((stream) => !stream.closed).length,
+      release: async (): Promise<void> => {
+        held.forEach((stream) => stream.close());
+        // Let the server see them go, so the next test starts with empty budgets.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      },
+    };
+  };
+
+  it('runs the full edge budget and the full site budget on a single connection', async () => {
+    const session = http2.connect(baseUrl);
+    session.on('error', () => {});
+    const { hold, open, release } = holder(session);
+    try {
+      await new Promise<void>((resolve) => session.once('remoteSettings', () => resolve()));
+      hold(MAX_EDGE_STREAMS, { 'l5d-client-id': EDGE });
+      hold(MAX_ACTIVE_STREAMS - 1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(open()).toBe(MAX_EDGE_STREAMS + MAX_ACTIVE_STREAMS - 1);
+      // The site's last slot, on the same connection: served, not queued behind the cap.
+      expect(await check(session)).toBe('0');
+    } finally {
+      await release();
+      session.destroy();
+    }
+  });
+
+  it('refuses a site call over its budget at once, on the same connection, instead of queueing it', async () => {
+    const session = http2.connect(baseUrl);
+    session.on('error', () => {});
+    const { hold, open, release } = holder(session);
+    try {
+      await new Promise<void>((resolve) => session.once('remoteSettings', () => resolve()));
+      hold(MAX_ACTIVE_STREAMS);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(open()).toBe(MAX_ACTIVE_STREAMS);
+      expect(await check(session)).toBe('8');
+    } finally {
+      await release();
+      session.destroy();
+    }
   });
 });
