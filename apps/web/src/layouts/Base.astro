@@ -85,7 +85,7 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
       <p><a href="/home-screen">Put the club on your home screen</a></p>
       <p>{SITE_NAME} is the local group of American Mensa for the Florida Panhandle, west of the Apalachicola River.</p>
     </footer>
-    <div class="dock">
+    <div class={reading ? 'dock dock--reading' : 'dock'}>
       {reading && <ReadingBar back={back} />}
       <PrimaryNav path={path} variant="bottom" />
     </div>

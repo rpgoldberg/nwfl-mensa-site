@@ -81,16 +81,18 @@ test.describe('with JavaScript off', () => {
   });
 });
 
-test('the reading bar sits at the foot of the screen, above the bottom bar on a phone', async ({ page }) => {
+test('the reading bar sits at the foot of the screen, with the bottom bar at the end of the page', async ({ page }) => {
   await page.goto('/about');
   const bar = (await readingBar(page).boundingBox())!;
   const { width, height } = page.viewportSize()!;
+  expect(bar.y + bar.height).toBeCloseTo(height, 0);
   if (width < 900) {
-    const nav = (await page.locator('.bottom-nav').boundingBox())!;
-    expect(bar.y + bar.height).toBeLessThanOrEqual(nav.y + 1);
-    expect(nav.y + nav.height).toBeCloseTo(height, 0);
-  } else {
-    expect(bar.y + bar.height).toBeCloseTo(height, 0);
+    const nav = page.locator('.bottom-nav');
+    expect((await nav.boundingBox())!.y).toBeGreaterThanOrEqual(height);
+    await nav.scrollIntoViewIfNeeded();
+    // At the end of the page the reading bar comes to rest above it.
+    const atEnd = (await readingBar(page).boundingBox())!;
+    expect(atEnd.y + atEnd.height).toBeLessThanOrEqual((await nav.boundingBox())!.y + 1);
   }
 });
 
@@ -139,3 +141,45 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     expect(moving).toEqual([]);
   });
 }
+
+/** The class of every element that stays on screen while the page scrolls. */
+const pinned = (page: Page) =>
+  page.evaluate(() =>
+    [...document.querySelectorAll('body *')]
+      .filter((el) => ['sticky', 'fixed'].includes(getComputedStyle(el).position) && getComputedStyle(el).display !== 'none')
+      .map((el) => el.className),
+  );
+
+test.describe('on a reading page on a phone (412 x 915)', () => {
+  test.use({ viewport: { width: 412, height: 915 } });
+
+  for (const size of [1, 2, 3, 4, 5]) {
+    test(`at text size ${size} only the reading bar stays on screen, in one row, and the bottom bar sits at the end of the page`, async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { size });
+      await page.goto('/about');
+      expect(await pinned(page)).toEqual(['reading-bar']);
+      const tops = await readingBar(page).getByRole('button').evaluateAll((buttons) => buttons.map((b) => Math.round(b.getBoundingClientRect().top)));
+      expect(new Set(tops).size).toBe(1);
+      expect((await page.locator('.bottom-nav').boundingBox())!.y).toBeGreaterThanOrEqual(915);
+    });
+  }
+
+  for (const size of [1, 5]) {
+    test(`at text size ${size} keyboard focus is never hidden behind the reading bar`, async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { size });
+      await page.goto('/about');
+      for (const link of await page.getByRole('main').getByRole('link').all()) {
+        await link.focus();
+        const box = (await link.boundingBox())!;
+        const bar = (await readingBar(page).boundingBox())!;
+        expect(box.y + box.height, (await link.textContent()) ?? '').toBeLessThanOrEqual(bar.y + 1);
+      }
+    });
+  }
+
+  test('elsewhere the rule is unchanged: at the two smaller sizes the bottom bar stays on screen', async ({ page, context, baseURL }) => {
+    await setPrefs(context, baseURL!, { size: 1 });
+    await page.goto('/more');
+    expect(await pinned(page)).toEqual(['dock']);
+  });
+});

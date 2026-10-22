@@ -232,7 +232,8 @@ html[data-theme="contrast"] .theme-btn[value="contrast"] .chosen { display: inli
   flex-wrap: wrap;
   justify-content: space-around;
   gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
+  /* Tight sides, so the three stay in one row at 200 % on a 412 px phone. */
+  padding: var(--space-1);
   background: var(--surface);
   border-top: var(--border) solid var(--line);
 }
@@ -246,7 +247,7 @@ html[data-theme="contrast"] .theme-btn[value="contrast"] .chosen { display: inli
   min-height: 3.6rem;
   max-width: 12rem;
   white-space: nowrap;
-  padding: 0.125rem var(--space-2);
+  padding: 0.125rem var(--space-1);
   border: 0;
   border-radius: var(--radius);
   background: none;
@@ -341,8 +342,16 @@ html[data-theme="contrast"] .reading-bar [data-for-theme="contrast"] { display: 
   /* Keyboard focus scrolls clear of the dock, never under it: up to two rows
      of the bottom bar (2 x 4.25rem) and the reading bar (about 4.25rem). */
   html[data-size="1"],
-  html[data-size="2"] { scroll-padding-bottom: 13.5rem; }
+  html[data-size="2"] { scroll-padding-bottom: 13.5em; }
 }
+/* On a reading page only the reading bar stays on screen, at every size: with
+   the bottom bar under it the two took over 200 px of a phone. The bottom bar
+   sits at the end of the page there, and focus scrolls clear of the reading bar. */
+html[data-size] .dock.dock--reading { display: contents; position: static; }
+/* em, not rem: on the root element WebKit resolves rem against the initial
+   16 px, not the reader's size, and focus then landed under the bar at 200 %. */
+html[data-size]:has(.dock--reading) { scroll-padding-bottom: 6em; }
+
 @media (min-width: 900px) {
   .top-nav { display: block; }
   .bottom-nav { display: none; }

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { PRIMARY_NAV, SITE_NAME, currentNav, trailFor } from '../src/lib/site';
+import { PRIMARY_NAV, SITE_NAME, currentNav, sectionFor, trailFor } from '../src/lib/site';
 import { ALL_PAGES, titleOf } from './pages';
 import { setPrefs } from './prefs';
 
@@ -91,6 +91,8 @@ for (const path of ALL_PAGES) {
       const links = nav.getByRole('link');
       await expect(links).toHaveText(PRIMARY_NAV.map((n) => n.label));
       const bottomBar = page.viewportSize()!.width < 900;
+      // On a reading page the bottom bar sits at the end of the page (reader.spec.ts).
+      if (bottomBar && sectionFor(path)?.reading) await nav.scrollIntoViewIfNeeded();
       for (const item of PRIMARY_NAV) {
         const link = nav.getByRole('link', { name: item.label, exact: true });
         await expect(link).toHaveAttribute('href', item.href);
@@ -132,7 +134,8 @@ test('uses the self-hosted reading and heading fonts, and asks no other origin f
 });
 
 test('phones get the nav at the bottom, wide screens at the top', async ({ page }) => {
-  await page.goto('/about');
+  // Join is not a reading page: there the bottom bar stays on screen (reader.spec.ts).
+  await page.goto('/join');
   const box = (await mainNav(page).boundingBox())!;
   const { height, width } = page.viewportSize()!;
   if (width < 900) expect(box.y + box.height).toBeCloseTo(height, 0);
