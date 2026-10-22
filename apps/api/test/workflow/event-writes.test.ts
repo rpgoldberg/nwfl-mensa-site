@@ -149,7 +149,7 @@ describe.skipIf(!live)('event writes', () => {
 
     it('edits the stored row when a cancelled date is saved again by its generated id, and resolves its venue', async () => {
       const series = (await events.listSeries({})).series.find((s) => s.slug === 'wednesday-lunch');
-      const venue = (await events.listVenues({})).venues[0];
+      const venue = (await events.listVenues({}, PUB)).venues[0];
       const id = `${series?.id as string}:2026-11-18`;
       const generated = must((await events.getOccurrence({ id })).occurrence);
       const first = (await events.saveOccurrence({ occurrence: { ...generated, status: OccurrenceStatus.TENTATIVE } }, PUB)).occurrence;
