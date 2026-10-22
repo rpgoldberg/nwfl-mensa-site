@@ -14,7 +14,7 @@ function field(form: FormData, name: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-export const POST: APIRoute = async ({ request, url }) => {
+export const POST: APIRoute = async ({ request }) => {
   const type = request.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? '';
   if (!FORM_TYPES.includes(type)) return new Response('Send the form.', { status: 415 });
   const form = await request.formData();
@@ -25,7 +25,7 @@ export const POST: APIRoute = async ({ request, url }) => {
   const headers = new Headers({
     Location: `${safeBack(field(form, 'back'))}${field(form, 'from') === 'menu' ? '#reader-menu' : ''}`,
   });
-  for (const cookie of prefsCookies(prefs, { secure: url.protocol === 'https:' })) headers.append('Set-Cookie', cookie);
+  for (const cookie of prefsCookies(prefs)) headers.append('Set-Cookie', cookie);
   return new Response(null, { status: 303, headers });
 };
 

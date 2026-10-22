@@ -1,7 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-
-const PORT = Number(process.env['E2E_PORT'] ?? 8087);
-const baseURL = `http://127.0.0.1:${PORT}`;
+import { BACKEND_PORT, BACKEND_URL, SITE_URL, TLS_PORT } from './e2e/servers';
 
 export default defineConfig({
   testDir: 'e2e',
@@ -9,15 +7,26 @@ export default defineConfig({
   forbidOnly: !!process.env['CI'],
   retries: process.env['CI'] ? 1 : 0,
   reporter: process.env['CI'] ? [['list'], ['html', { open: 'never' }]] : 'list',
-  use: { baseURL, trace: 'retain-on-failure' },
+  // Over https, as readers arrive: the site's cookies are __Host- and Secure.
+  use: { baseURL: SITE_URL, ignoreHTTPSErrors: true, trace: 'retain-on-failure' },
   // The built server, behind the same wrapper the container runs, so every
-  // test sees the shipped headers. Run `npm run build` first.
-  webServer: {
-    command: 'node server/serve.mjs',
-    url: `${baseURL}/healthz`,
-    env: { PORT: String(PORT), HOST: '127.0.0.1' },
-    reuseExistingServer: false,
-  },
+  // test sees the shipped headers, and in front of it the test TLS edge.
+  // Run `npm run build` first.
+  webServer: [
+    {
+      command: 'node server/serve.mjs',
+      url: `${BACKEND_URL}/healthz`,
+      env: { PORT: String(BACKEND_PORT), HOST: '127.0.0.1' },
+      reuseExistingServer: false,
+    },
+    {
+      command: 'node e2e/tls-proxy.mjs',
+      url: `${SITE_URL}/healthz`,
+      ignoreHTTPSErrors: true,
+      env: { TLS_PORT: String(TLS_PORT), UPSTREAM: BACKEND_URL },
+      reuseExistingServer: false,
+    },
+  ],
   projects: [
     // Headers and cache rules: plain HTTP, no browser needed.
     { name: 'http', testMatch: /headers\.spec\.ts/ },

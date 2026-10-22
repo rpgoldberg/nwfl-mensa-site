@@ -4,6 +4,7 @@ import { expect, test, type APIResponse } from '@playwright/test';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../server/policy.mjs';
 import { SIZE_COOKIE, THEME_COOKIE } from '../server/prefs.mjs';
 import { ALL_PAGES, PRERENDERED } from './pages';
+import { BACKEND_URL } from './servers';
 
 function expectSecurityHeaders(res: APIResponse): void {
   const headers = res.headers();
@@ -114,23 +115,42 @@ test('the fonts are our own files, and their licences are served beside them', a
 });
 
 /** A raw request, so the test can send the Host header cloudflared sends. */
-function rawPost(baseURL: string, headers: Record<string, string>, body: string) {
+function rawPost(headers: Record<string, string>, body: string) {
   return new Promise<http.IncomingMessage>((resolve, reject) => {
-    const req = http.request(`${baseURL}/prefs`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers } }, resolve);
+    const req = http.request(`${BACKEND_URL}/prefs`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers } }, resolve);
     req.on('error', reject);
     req.end(body);
   });
 }
 
-test('behind the tunnel, a post from the site itself is accepted and its cookies are Secure', async ({ baseURL }) => {
+test('behind the tunnel, a post from the site itself is accepted and its cookies are Secure', async () => {
   const tunnel = { host: 'nwflorida.us', 'x-forwarded-proto': 'https' };
-  const ok = await rawPost(baseURL!, { ...tunnel, origin: 'https://nwflorida.us' }, 'theme=dark&back=%2Fabout');
+  const ok = await rawPost({ ...tunnel, origin: 'https://nwflorida.us' }, 'theme=dark&back=%2Fabout');
   expect(ok.statusCode).toBe(303);
   expect(ok.headers['location']).toBe('/about');
   const cookies = ok.headers['set-cookie'] ?? [];
   expect(cookies.length).toBe(2);
-  for (const c of cookies) expect(c).toMatch(/; Secure$/);
-  const forged = await rawPost(baseURL!, { ...tunnel, origin: 'https://evil.example' }, 'theme=dark&back=%2F');
+  for (const c of cookies) expect(c).toMatch(/^__Host-.*; Secure$/);
+  const forged = await rawPost({ ...tunnel, origin: 'https://evil.example' }, 'theme=dark&back=%2F');
   expect(forged.statusCode).toBe(403);
   expect(forged.headers['set-cookie']).toBeUndefined();
+});
+
+test('every cookie the site sets is host-only: __Host-, Secure, Path=/, no Domain, SameSite=Lax', async ({ request, baseURL }) => {
+  for (const path of ALL_PAGES) expect((await request.get(path)).headers()['set-cookie'], path).toBeUndefined();
+  const res = await request.post('/prefs', {
+    headers: { Origin: baseURL! },
+    form: { size: 'larger', theme: 'dark', back: '/' },
+    maxRedirects: 0,
+  });
+  expect(res.status()).toBe(303);
+  const cookies = res.headersArray().filter((h) => h.name.toLowerCase() === 'set-cookie').map((h) => h.value);
+  expect(cookies.length).toBe(2);
+  for (const cookie of cookies) {
+    const [pair, ...rest] = cookie.split(';').map((part) => part.trim());
+    const attrs = rest.map((a) => a.toLowerCase());
+    expect(pair).toMatch(/^__Host-[\w-]+=/);
+    expect(attrs).toEqual(expect.arrayContaining(['secure', 'path=/', 'samesite=lax', 'httponly']));
+    expect(attrs.filter((a) => a.startsWith('domain'))).toEqual([]);
+  }
 });

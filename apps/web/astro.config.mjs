@@ -30,9 +30,10 @@ export default defineConfig({
     allowedDomains: [
       { hostname: 'nwflorida.us', protocol: 'https' },
       { hostname: 'nwfl-canary.mindsignals1.com', protocol: 'https' },
-      // Local runs (npm start, the e2e suite) reach the server by loopback.
+      // Local runs: `npm start` in Chromium over http://localhost (which keeps
+      // Secure cookies on loopback), and the e2e suite through its TLS edge.
       { hostname: 'localhost', protocol: 'http' },
-      { hostname: '127.0.0.1', protocol: 'http' },
+      { hostname: 'localhost', protocol: 'https' },
     ],
   },
 });

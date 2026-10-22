@@ -42,9 +42,10 @@ test.describe('with JavaScript off', () => {
         await expect(html(page), other).toHaveAttribute('data-theme', 'dark');
       }
 
+      // The browser kept both as host-only cookies: no leading dot, so no subdomain or parent shares them.
       const jar = Object.fromEntries((await context.cookies()).map((c) => [c.name, c]));
-      expect(jar[SIZE_COOKIE]).toMatchObject({ value: '2', path: '/', httpOnly: true, sameSite: 'Lax' });
-      expect(jar[THEME_COOKIE]).toMatchObject({ value: 'dark', path: '/', httpOnly: true, sameSite: 'Lax' });
+      expect(jar[SIZE_COOKIE]).toMatchObject({ value: '2', domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
+      expect(jar[THEME_COOKIE]).toMatchObject({ value: 'dark', domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
       expect(jar[SIZE_COOKIE]!.expires - Date.now() / 1000).toBeGreaterThan(360 * 24 * 3600);
 
       await page.goto(`${path}#reader-menu`);

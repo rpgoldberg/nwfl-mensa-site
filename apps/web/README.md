@@ -12,13 +12,15 @@ npm start            # http://localhost:8080
 
 `npm start` runs `server/serve.mjs`: Astro's standalone handler behind the site policy (`server/policy.mjs`), which puts the security headers and the cache rule on every response, prerendered pages and assets included.
 
+Every cookie the site sets is host-only (`__Host-` prefix, `Secure`, `Path=/`, no `Domain`). Chromium keeps such cookies on `http://localhost`, so local work in Chromium needs nothing more. WebKit (Safari) refuses them over plain http even on loopback; for it, run the test TLS edge in a second terminal (`TLS_PORT=8443 UPSTREAM=http://127.0.0.1:8080 node e2e/tls-proxy.mjs`) and open `https://localhost:8443`.
+
 ## Check it
 
 ```sh
 npm run lint
 npm run typecheck
 npm run test:coverage   # unit tests, 85 % line and branch gate
-npm run build && npm run e2e   # Playwright: Chromium and WebKit (iPhone), axe
+npm run build && npm run e2e   # Playwright: Chromium and WebKit (iPhone), axe, over https
 ```
 
 ## Secrets and people

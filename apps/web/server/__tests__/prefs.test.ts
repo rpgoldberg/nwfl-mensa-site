@@ -11,6 +11,13 @@ import {
   stampHtml,
 } from '../prefs.mjs';
 
+describe('cookie names', () => {
+  it('are host-only by prefix, so no other app on a parent domain can set them', () => {
+    expect(SIZE_COOKIE).toBe('__Host-nwfl-size');
+    expect(THEME_COOKIE).toBe('__Host-nwfl-theme');
+  });
+});
+
 describe('readPrefs', () => {
   it('is size 1 and the device theme with no cookie', () => {
     expect(readPrefs(undefined)).toEqual({ size: 1, theme: undefined });
@@ -31,6 +38,10 @@ describe('readPrefs', () => {
       expect(readPrefs(`${THEME_COOKIE}=${theme}`).theme, theme).toBeUndefined();
     }
     expect(readPrefs(`x${SIZE_COOKIE}=4; x${THEME_COOKIE}=dark`)).toEqual(DEFAULT_PREFS);
+  });
+
+  it('ignores the same names without the prefix, which a sibling subdomain could set', () => {
+    expect(readPrefs('nwfl-size=5; nwfl-theme=dark')).toEqual(DEFAULT_PREFS);
   });
 });
 
@@ -71,21 +82,29 @@ describe('applyChange', () => {
 
 describe('prefsCookies', () => {
   it('stores a choice for a year, for the whole site, unreadable to scripts', () => {
-    expect(prefsCookies({ size: 3, theme: 'dark' }, { secure: false })).toEqual([
-      `${SIZE_COOKIE}=3; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`,
-      `${THEME_COOKIE}=dark; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`,
+    expect(prefsCookies({ size: 3, theme: 'dark' })).toEqual([
+      `${SIZE_COOKIE}=3; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
+      `${THEME_COOKIE}=dark; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
     ]);
-  });
-
-  it('marks the cookies Secure over https', () => {
-    for (const c of prefsCookies({ size: 2, theme: 'light' }, { secure: true })) expect(c).toMatch(/; Secure$/);
   });
 
   it('removes a cookie that holds the default, so an untouched reader sends none', () => {
-    expect(prefsCookies(DEFAULT_PREFS, { secure: false })).toEqual([
-      `${SIZE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly`,
-      `${THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly`,
+    expect(prefsCookies(DEFAULT_PREFS)).toEqual([
+      `${SIZE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`,
+      `${THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`,
     ]);
+  });
+
+  it('makes every cookie host-only: __Host-, Secure, Path=/, no Domain, SameSite=Lax', () => {
+    for (const prefs of [DEFAULT_PREFS, { size: 5 as const, theme: 'contrast' as const }, { size: 2 as const, theme: undefined }]) {
+      for (const cookie of prefsCookies(prefs)) {
+        const [pair, ...rest] = cookie.split(';').map((part) => part.trim());
+        const attrs = rest.map((a) => a.toLowerCase());
+        expect(pair).toMatch(/^__Host-[\w-]+=/);
+        expect(attrs).toEqual(expect.arrayContaining(['secure', 'path=/', 'samesite=lax', 'httponly']));
+        expect(attrs.filter((a) => a.startsWith('domain'))).toEqual([]);
+      }
+    }
   });
 });
 

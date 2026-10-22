@@ -3,9 +3,14 @@
 // render <html data-size data-theme>, so pages arrive in the reader's settings
 // with no script. Shared by the Astro layout, the /prefs form handler and the
 // server wrapper, which stamps them on prerendered pages.
+//
+// Host-only by the __Host- prefix (Secure, Path=/, no Domain): the staging host
+// sits under a parent domain shared with other apps, and a browser refuses a
+// __Host- cookie from anywhere but this exact host. A same-named cookie without
+// the prefix, which a sibling could set on the parent domain, is never read.
 
-export const SIZE_COOKIE = 'nwfl-size';
-export const THEME_COOKIE = 'nwfl-theme';
+export const SIZE_COOKIE = '__Host-nwfl-size';
+export const THEME_COOKIE = '__Host-nwfl-theme';
 
 /** @typedef {1 | 2 | 3 | 4 | 5} Size */
 /** @typedef {'light' | 'dark' | 'contrast'} Theme */
@@ -83,14 +88,15 @@ export function applyChange(prefs, change) {
 
 /**
  * The Set-Cookie values for `prefs`. A default is removed rather than stored,
- * so a reader who never changed anything sends no cookie at all.
+ * so a reader who never changed anything sends no cookie at all. SameSite=Lax,
+ * not Strict: a reader who follows a link from the emailed newsletter must
+ * arrive at their own text size.
  *
  * @param {Prefs} prefs
- * @param {{ secure: boolean }} opts
  * @returns {string[]}
  */
-export function prefsCookies(prefs, { secure }) {
-  const tail = `; Path=/; Max-Age=%s; SameSite=Lax; HttpOnly${secure ? '; Secure' : ''}`;
+export function prefsCookies(prefs) {
+  const tail = '; Path=/; Max-Age=%s; SameSite=Lax; HttpOnly; Secure';
   /** @param {string} name @param {string | undefined} value */
   const cookie = (name, value) => `${name}=${value ?? ''}${tail.replace('%s', value === undefined ? '0' : String(YEAR))}`;
   return [

@@ -17,18 +17,26 @@ describe('POST /prefs', () => {
     const res = await post({ size: 'larger', back: '/about' }, { cookie: `${SIZE_COOKIE}=2` });
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe('/about');
-    expect(res.headers.getSetCookie()).toContain(`${SIZE_COOKIE}=3; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`);
+    expect(res.headers.getSetCookie()).toContain(`${SIZE_COOKIE}=3; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`);
   });
 
   it('reopens the Aa panel when the change came from it', async () => {
     const res = await post({ theme: 'dark', back: '/officers', from: 'menu' });
     expect(res.headers.get('location')).toBe('/officers#reader-menu');
-    expect(res.headers.getSetCookie()).toContain(`${THEME_COOKIE}=dark; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`);
+    expect(res.headers.getSetCookie()).toContain(`${THEME_COOKIE}=dark; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`);
   });
 
-  it('marks the cookies Secure when the site is reached over https', async () => {
-    const res = await post({ theme: 'contrast', back: '/' }, { origin: 'https://nwflorida.us' });
-    for (const c of res.headers.getSetCookie()) expect(c).toMatch(/; Secure$/);
+  it('sets only host-only cookies, Secure whatever the scheme the server saw', async () => {
+    for (const origin of ['https://nwflorida.us', 'http://localhost:8080']) {
+      const res = await post({ theme: 'contrast', back: '/' }, { origin });
+      const cookies = res.headers.getSetCookie();
+      expect(cookies.length).toBe(2);
+      for (const c of cookies) {
+        expect(c).toMatch(/^__Host-/);
+        expect(c).toMatch(/; Secure$/);
+        expect(c).not.toMatch(/domain=/i);
+      }
+    }
   });
 
   it('never redirects off the site', async () => {
