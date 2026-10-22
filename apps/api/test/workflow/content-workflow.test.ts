@@ -389,4 +389,52 @@ describe.skipIf(!live)('the publishing workflow', () => {
       expect(entries[2]?.contentHash).toHaveLength(32);
     });
   });
+
+  // API-FIX3 notes.
+  describe('what a caller can learn, late approvals, and markers outside the body', () => {
+    it('answers a caller who cannot see working items the same for an item that exists and one that does not', async () => {
+      const item = await published();
+      const missing = '6a1f0c8e-0000-4000-8000-000000000000';
+      for (const options of [MEMBER, as('joiner-token')]) {
+        const answers = await Promise.all(
+          [item.id, missing].flatMap((itemId) => [
+            content.saveDraft({ itemId, title: 'x', bodyMarkup: 'x' }, options),
+            content.markReady({ itemId }, options),
+            content.withdraw({ itemId }, options),
+            content.restore({ itemId }, options),
+          ].map((call) => call.then(() => 'accepted', (e: { code: Code; rawMessage: string }) => `${e.code} ${e.rawMessage}`))),
+        );
+        expect(new Set(answers)).toEqual(new Set([`${Code.NotFound} item not found`]));
+      }
+      // An officer of another office sees working items anyway, so it is told why.
+      await expect(content.withdraw({ itemId: item.id }, TREASURER)).rejects.toMatchObject({ code: Code.PermissionDenied });
+    });
+
+    it('refuses to approve a version whose edition was frozen after it was marked ready, and says to pick an open one', async () => {
+      const march = await insertId(
+        api.pool,
+        `INSERT INTO edition (slug, title, kind, period_start, period_end, status) VALUES ('2027-03', 'March 2027', 'regular', '2027-03-01', '2027-03-31', 'collecting') RETURNING id`,
+      );
+      const item = await create();
+      await save(item.id, 'Late text.');
+      const hash = await ready(item.id, PUB, { editionId: march, targets: { website: true, newsletter: true, email: false } });
+      await content.freezeEdition({ editionId: march }, ADMIN);
+      await expect(content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER)).rejects.toMatchObject({
+        code: Code.FailedPrecondition,
+        rawMessage: 'March 2027 is already frozen for print: pick an open edition, then approve',
+      });
+      // Choosing an open edition at approval is the way through.
+      expect((await content.approve({ itemId: item.id, contentHash: hash, editionId }, WEBMASTER)).item?.state).toBe(ItemState.PUBLISHED);
+    });
+
+    it('refuses members markers in a title or a summary, which are always public', async () => {
+      const message = 'a title or summary is always public: put members-only words in the body';
+      await expect(create(PUB, 'publications', { title: 'Party, gate :members[4417]' })).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: message });
+      const item = await create();
+      for (const extra of [{ title: 'Party, gate :members[4417]' }, { summary: 'Code :members[4417]' }, { summary: 'Open\n::: members\nHidden\n:::' }]) {
+        await expect(save(item.id, 'Body.', PUB, extra)).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: message });
+      }
+      expect((await save(item.id, 'Body.', PUB, { title: 'Party: members welcome', summary: 'Bring a friend [to share]' })).problems).toEqual([]);
+    });
+  });
 });

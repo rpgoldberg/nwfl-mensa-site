@@ -113,15 +113,37 @@ async function loadItem(client: TxClient, itemId: string): Promise<ItemRow> {
   return row;
 }
 
+/**
+ * loadItem for a caller about to act on the item. A caller who cannot see
+ * working items at all (not an officer, Admin or Webmaster) is told "not
+ * found" whether the item exists or not, so the answer gives nothing away.
+ */
+async function loadItemAs(client: TxClient, caller: Caller, itemId: string): Promise<ItemRow> {
+  const roles = requireUser(caller);
+  const id = requireId(itemId, 'item_id');
+  if (!roles.officer && !roles.admin && !roles.webmaster && roles.offices.length === 0) throw notFound();
+  return loadItem(client, id);
+}
+
+// Marker syntax: a members span, or a ::: fence line. A title or summary is always public.
+const MARKER = /:members\[|^\s*:::/m;
+
+function publicLine(value: string): string {
+  if (MARKER.test(value)) throw invalid('a title or summary is always public: put members-only words in the body');
+  return value;
+}
+
 async function loadVersion(client: TxClient, versionId: string): Promise<VersionRow> {
   const { rows } = await client.query<VersionRow>(`SELECT * FROM content_version WHERE id = $1 FOR UPDATE`, [versionId]);
   return rows[0] as VersionRow;
 }
 
+const FROZEN_EDITION = new Set(['proof', 'published']);
+
 async function openEdition(client: TxClient, editionId: string): Promise<void> {
   const { rows } = await client.query<{ status: string }>(`SELECT status FROM edition WHERE id = $1`, [requireId(editionId, 'edition_id')]);
   const status = rows[0]?.status;
-  if (status === undefined || status === 'proof' || status === 'published') throw precondition('that edition is not open');
+  if (status === undefined || FROZEN_EDITION.has(status)) throw precondition('that edition is not open');
 }
 
 /** Plain flags: a proto message also carries its type name, which must not reach the hash. */
@@ -239,7 +261,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
       requireUser(caller);
       const kind = KIND_NAMES.get(request.kind);
       if (kind === undefined) throw invalid('kind is required');
-      const title = request.title.trim();
+      const title = publicLine(request.title.trim());
       if (title === '') throw invalid('title is required');
       return tx(async (client) => {
         const { rows } = await client.query<{ slug: string }>(`SELECT slug FROM office WHERE id = $1`, [requireId(request.officeId, 'office_id')]);
@@ -273,7 +295,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
     saveDraft: async (request, ctx) => {
       const caller = callerIn(ctx);
       return tx(async (client) => {
-        const item = await loadItem(client, request.itemId);
+        const item = await loadItemAs(client, caller, request.itemId);
         requireOffice(caller, item.office_slug);
         let version =
           item.working_version_id !== null
@@ -285,8 +307,9 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           await client.query(`UPDATE content_version SET status = 'draft' WHERE id = $1`, [version.id]);
           if (item.state === 'ready') await client.query(`UPDATE content_item SET state = 'draft' WHERE id = $1`, [item.id]);
         }
-        const title = request.title.trim();
+        const title = publicLine(request.title.trim());
         if (title === '') throw invalid('title is required');
+        publicLine(request.summary);
         const visibility = VISIBILITY_NAMES.get(request.visibility) ?? version.visibility;
         const { tree, problems } = parseMarkup(request.bodyMarkup);
         version = (
@@ -315,7 +338,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
     markReady: async (request, ctx) => {
       const caller = callerIn(ctx);
       return tx(async (client) => {
-        const item = await loadItem(client, request.itemId);
+        const item = await loadItemAs(client, caller, request.itemId);
         requireOffice(caller, item.office_slug);
         if (item.working_version_id === null) throw precondition('there is no draft to mark ready');
         const version = await loadVersion(client, item.working_version_id);
@@ -405,6 +428,13 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           await openEdition(client, request.editionId);
           editionId = request.editionId;
         }
+        // A version for a frozen edition would land in no issue: the approver picks an open one.
+        if (targets.newsletter && editionId !== null) {
+          const edition = (await client.query<{ title: string; status: string }>(`SELECT title, status FROM edition WHERE id = $1`, [editionId])).rows[0];
+          if (edition !== undefined && FROZEN_EDITION.has(edition.status)) {
+            throw precondition(`${edition.title} is already frozen for print: pick an open edition, then approve`);
+          }
+        }
         const targetsChanged = targets.website !== before.website || targets.newsletter !== before.newsletter || targets.email !== before.email;
         const editionChanged = editionId !== beforeEdition;
         if (targetsChanged || editionChanged) {
@@ -460,7 +490,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
       const caller = callerIn(ctx);
       const roles = requireUser(caller);
       return tx(async (client) => {
-        const item = await loadItem(client, request.itemId);
+        const item = await loadItemAs(client, caller, request.itemId);
         if (!roles.admin && !roles.webmaster && !roles.offices.includes(item.office_slug)) throw new ConnectError('not permitted', Code.PermissionDenied);
         if (item.state !== 'published') throw precondition('only a published item can be withdrawn');
         await client.query(`UPDATE content_item SET state = 'withdrawn', withdrawn_at = now(), updated_at = now() WHERE id = $1`, [item.id]);
@@ -474,7 +504,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
     restore: async (request, ctx) => {
       const caller = callerIn(ctx);
       return tx(async (client) => {
-        const item = await loadItem(client, request.itemId);
+        const item = await loadItemAs(client, caller, request.itemId);
         requireOffice(caller, item.office_slug);
         if (item.state !== 'withdrawn') throw precondition('only a withdrawn item can be restored');
         if (item.working_version_id !== null) throw precondition('a restored draft already exists');
