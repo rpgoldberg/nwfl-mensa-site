@@ -33,7 +33,7 @@ describe('the fc-shared seam', () => {
 });
 
 describe('NWFL_SENSITIVE_KEY_PATTERN', () => {
-  it.each(['body', 'body_src', 'body_ast', 'public_ast', 'request.body', 'note', 'approval_reason', 'email', 'display_name', 'password', 'token', 'membership_number', 'pending.membership_number', 'last_name', 'body_markup', 'break_glass_reason'])(
+  it.each(['body', 'body_src', 'body_ast', 'public_ast', 'request.body', 'note', 'approval_reason', 'email', 'display_name', 'password', 'token', 'membership_number', 'pending.membership_number', 'last_name', 'body_markup', 'break_glass_reason', 'membershipNumber', 'pending.membershipNumber', 'lastName', 'membership_no'])(
     'redacts the value under %s',
     (key) => {
       expect(NWFL_SENSITIVE_KEY_PATTERN.test(key)).toBe(true);

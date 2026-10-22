@@ -45,7 +45,10 @@ const SITE_KEYS = [
   'display_name',
   // Sign-up: typed by the member, read only by the verifier (R33).
   'membership_number',
+  'membershipnumber',
+  'membership_no',
   'last_name',
+  'lastname',
   'break_glass_reason',
 ];
 

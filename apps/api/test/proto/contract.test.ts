@@ -196,3 +196,31 @@ describe(`${PKG}: nothing National-sourced has a field`, () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// A2-FIX: the same rules by NAME as well as by type, so a bool or string
+// "audience", an extra field beside the verifier's list, or another spelling of
+// the membership number cannot slip past.
+describe(`${PKG}: rules by name as well as by type`, () => {
+  const AUDIENCE_LIKE = /audience|visibility|member|officer|role|redact|public|private|as_/;
+  const NUMBER_LIKE = /^(member(ship)?_?(number|num|no|nr|id)|mensa_?(number|num|no|id)|aml_?(number|id))$/;
+
+  it('gives no read RPC an audience-like field of any type, except ExportEdition.audience', () => {
+    const offenders = methods()
+      .filter((m) => m.idempotency === Idempotency.NO_SIDE_EFFECTS)
+      .flatMap((m) => reachableFields(m.input).filter((f) => AUDIENCE_LIKE.test(f.name)).map((f) => `${rpc(m)}.${f.name}`));
+    expect(offenders).toEqual(['NewsletterService.ExportEdition.audience']);
+  });
+
+  it('returns the verifier exactly its pending list of three fields, nothing reachable besides', () => {
+    const list = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ListPendingVerifications');
+    expect(list === undefined ? [] : reachableFields(list.output).map((f) => f.name)).toEqual(['pending', 'request_id', 'membership_number', 'last_name']);
+  });
+
+  it('lets a membership number under any name reach only the pending list (out) and the sign-up call (in)', () => {
+    const carriers = methods().flatMap((m) => [
+      ...(reachableFields(m.input).some((f) => NUMBER_LIKE.test(f.name)) ? [`${rpc(m)} in`] : []),
+      ...(reachableFields(m.output).some((f) => NUMBER_LIKE.test(f.name)) ? [`${rpc(m)} out`] : []),
+    ]);
+    expect(carriers.sort()).toEqual(['MembershipService.SubmitSignup in', 'MembershipVerifierService.ListPendingVerifications out']);
+  });
+});
