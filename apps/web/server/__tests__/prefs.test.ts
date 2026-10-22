@@ -43,6 +43,21 @@ describe('readPrefs', () => {
   it('ignores the same names without the prefix, which a sibling subdomain could set', () => {
     expect(readPrefs('nwfl-size=5; nwfl-theme=dark')).toEqual(DEFAULT_PREFS);
   });
+
+  it('ignores a name that becomes ours only once a no-break space is trimmed off (the 0xA0 toss)', () => {
+    // A sibling sets "\xa0__Host-nwfl-size" on the parent domain: not a __Host-
+    // name to the browser, so it is stored with the Domain, and sent back with the 0xA0.
+    expect(readPrefs('\u00a0__Host-nwfl-size=5; \u00a0__Host-nwfl-theme=dark')).toEqual(DEFAULT_PREFS);
+    expect(readPrefs('x=1;\u00a0__Host-nwfl-size=5')).toEqual(DEFAULT_PREFS);
+  });
+
+  it('matches names case-sensitively: a __HOST- variant is not ours', () => {
+    expect(readPrefs('__HOST-nwfl-size=5; __host-nwfl-theme=dark')).toEqual(DEFAULT_PREFS);
+  });
+
+  it('trims only the space and tab a Cookie header may carry around a name', () => {
+    expect(readPrefs(` \t${SIZE_COOKIE} = 3 ;${THEME_COOKIE}=dark`)).toEqual({ size: 3, theme: 'dark' });
+  });
 });
 
 describe('applyChange', () => {

@@ -3,6 +3,7 @@
 // (ported from fc-mobile's nginx config) and the cache rule (R26). The server
 // wrapper (serve.mjs) applies both, so prerendered pages, build assets and
 // on-request pages all carry the same set.
+import { readCookie } from './cookies.mjs';
 
 /** The cookie the OIDC session will live in (W7). Its presence makes a response private. */
 export const SESSION_COOKIE = '__Host-nwfl-session';
@@ -54,8 +55,7 @@ export function parseCsp(policy) {
  * @param {string} name
  */
 export function hasCookie(cookieHeader, name) {
-  if (!cookieHeader) return false;
-  return cookieHeader.split(';').some((pair) => pair.trim().startsWith(`${name}=`));
+  return readCookie(cookieHeader, name) !== undefined;
 }
 
 /**

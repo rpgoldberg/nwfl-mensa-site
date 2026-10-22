@@ -8,6 +8,7 @@
 // sits under a parent domain shared with other apps, and a browser refuses a
 // __Host- cookie from anywhere but this exact host. A same-named cookie without
 // the prefix, which a sibling could set on the parent domain, is never read.
+import { readCookie } from './cookies.mjs';
 
 export const SIZE_COOKIE = '__Host-nwfl-size';
 export const THEME_COOKIE = '__Host-nwfl-theme';
@@ -24,18 +25,6 @@ export const THEMES = /** @type {const} */ (['light', 'dark', 'contrast']);
 export const DEFAULT_PREFS = Object.freeze(/** @type {Prefs} */ ({ size: 1, theme: undefined }));
 
 const YEAR = 60 * 60 * 24 * 365;
-
-/**
- * @param {string | null | undefined} cookieHeader
- * @param {string} name
- */
-function cookieValue(cookieHeader, name) {
-  for (const pair of (cookieHeader ?? '').split(';')) {
-    const at = pair.indexOf('=');
-    if (at !== -1 && pair.slice(0, at).trim() === name) return pair.slice(at + 1).trim();
-  }
-  return undefined;
-}
 
 /**
  * @param {string | undefined} value
@@ -59,8 +48,8 @@ function toTheme(value) {
  */
 export function readPrefs(cookieHeader) {
   return {
-    size: toSize(cookieValue(cookieHeader, SIZE_COOKIE)) ?? DEFAULT_PREFS.size,
-    theme: toTheme(cookieValue(cookieHeader, THEME_COOKIE)),
+    size: toSize(readCookie(cookieHeader, SIZE_COOKIE)) ?? DEFAULT_PREFS.size,
+    theme: toTheme(readCookie(cookieHeader, THEME_COOKIE)),
   };
 }
 

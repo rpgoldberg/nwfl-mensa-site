@@ -51,6 +51,16 @@ describe('security headers', () => {
 });
 
 describe('hasCookie', () => {
+  it('reads the header as the session code will (cookie@2): a spaced name is still the session', () => {
+    expect(hasCookie(`${SESSION_COOKIE} =abc`, SESSION_COOKIE)).toBe(true);
+    expect(cacheControl({ path: '/', cookieHeader: `${SESSION_COOKIE} =abc`, status: 200, setsCookie: false })).toBe('private, no-store');
+  });
+
+  it('never takes a look-alike name for the session: a no-break space or another case', () => {
+    expect(hasCookie(`\u00a0${SESSION_COOKIE}=abc`, SESSION_COOKIE)).toBe(false);
+    expect(hasCookie('__HOST-nwfl-session=abc', SESSION_COOKIE)).toBe(false);
+  });
+
   it('finds a cookie by exact name only', () => {
     expect(hasCookie('a=1; __Host-nwfl-session=x', SESSION_COOKIE)).toBe(true);
     expect(hasCookie(`${SESSION_COOKIE}=x`, SESSION_COOKIE)).toBe(true);
