@@ -18,8 +18,7 @@ const current = currentNav(path);
       <li>
         <a class="nav-link" href={item.href} aria-current={item.href === current ? 'page' : undefined}>
           {variant === 'bottom' && <Icon name={item.icon} />}
-          {/* <wbr> lets "News letter" break on the narrowest phones without changing the word. */}
-          <span class="nav-label">{item.label.split(/(?<=^News)/).map((part, i) => (i > 0 ? <><wbr />{part}</> : part))}</span>
+          <span class="nav-label">{item.label}</span>
         </a>
       </li>
     ))}

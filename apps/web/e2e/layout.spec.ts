@@ -177,6 +177,63 @@ test.describe('at 320px wide', () => {
   }
 });
 
+/** Labels whose words are split over two lines; a word split by the line box shows as two rects. */
+async function brokenWords(page: Page, selector: string): Promise<string[]> {
+  return page.evaluate((sel) => {
+    const broken: string[] = [];
+    for (const label of document.querySelectorAll<HTMLElement>(sel)) {
+      // A nav label is one word, even where markup splits it (<wbr>): one line, whole.
+      if (label.matches('.nav-label')) {
+        const whole = document.createRange();
+        whole.selectNodeContents(label);
+        if (new Set([...whole.getClientRects()].map((r) => Math.round(r.top))).size > 1) broken.push(label.textContent ?? '');
+      }
+      const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const text = node.textContent ?? '';
+        for (const m of text.matchAll(/\S+/g)) {
+          const range = document.createRange();
+          range.setStart(node, m.index);
+          range.setEnd(node, m.index + m[0].length);
+          const lines = new Set([...range.getClientRects()].map((r) => Math.round(r.top)));
+          if (lines.size > 1) broken.push(m[0]);
+        }
+      }
+      // A whole word that does not fit its cell would spill over the next one.
+      const cell = label.closest('a, button') as HTMLElement;
+      if (label.getBoundingClientRect().right > cell.getBoundingClientRect().right + 0.5) broken.push(`${label.textContent} (spills)`);
+    }
+    return broken;
+  }, selector);
+}
+
+for (const width of [320, 412]) {
+  test.describe(`bottom bar at ${width}px`, () => {
+    test.use({ viewport: { width, height: 800 } });
+
+    for (const size of [1, 2, 3, 4, 5]) {
+      test(`at text size ${size}, never breaks a word; when five do not fit, the first row holds three`, async ({ page, context, baseURL }) => {
+        await setPrefs(context, baseURL!, { size });
+        await page.goto('/about');
+        await page.evaluate(() => document.fonts.ready);
+        expect(await brokenWords(page, '.bottom-nav .nav-label, .reading-bar .rb')).toEqual([]);
+        const tops = await page.locator('.bottom-nav li').evaluateAll((items) => items.map((li) => Math.round(li.getBoundingClientRect().top)));
+        const rows = [...new Set(tops)].map((top) => tops.filter((t) => t === top).length);
+        expect([[5], [3, 2], [2, 2, 1], [1, 1, 1, 1, 1]]).toContainEqual(rows);
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        expect(overflow).toBeLessThanOrEqual(0);
+      });
+    }
+  });
+}
+
+test('the bottom bar keeps all five in one row where they fit whole', async ({ page }) => {
+  await page.setViewportSize({ width: 720, height: 900 });
+  await page.goto('/');
+  const tops = await page.locator('.bottom-nav li').evaluateAll((items) => items.map((li) => Math.round(li.getBoundingClientRect().top)));
+  expect(new Set(tops).size).toBe(1);
+});
+
 test.describe('with JavaScript off', () => {
   test.use({ javaScriptEnabled: false });
 
