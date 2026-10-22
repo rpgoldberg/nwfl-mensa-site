@@ -1,4 +1,0 @@
-#!/bin/sh
-# Refuse a commit whose staged changes add a secret. `npm install` wires it
-# through the prepare script (core.hooksPath=.githooks).
-exec sh "$(dirname -- "$0")/../scripts/gitleaks.sh" git --pre-commit --staged

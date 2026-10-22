@@ -1,34 +1,26 @@
-name: CI
+name: web
 
+# The web gateway (apps/web). The secret scan, MT-06 and the made-up people
+# guard run once for the whole repository, in secrets.yml.
 on:
   push:
     branches: [main, develop]
+    paths: ['apps/web/**', '.github/workflows/web.yml']
   pull_request:
+    paths: ['apps/web/**', '.github/workflows/web.yml']
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: web-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  secrets:
-    name: Secret scan (gitleaks)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-          # Every commit, not only the tip: the whole history must be safe to publish.
-          fetch-depth: 0
-      # The pinned version and image digest live in scripts/gitleaks.sh, shared
-      # with the pre-commit hook.
-      - run: sh scripts/gitleaks.sh git --log-opts=--all
-      # MT-06: public npm only. The bracket classes keep this line from matching itself.
-      - name: No private registry or its token variable
-        run: '! git grep -nE ''NODE_AUTH_TOKE[N]|npm\.pkg\.github\.co[m]'''
+defaults:
+  run:
+    working-directory: apps/web
 
+jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -38,8 +30,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
-          node-version: '24'
+          node-version-file: apps/web/.nvmrc
           cache: npm
+          cache-dependency-path: apps/web/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run lint
 
@@ -52,8 +45,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
-          node-version: '24'
+          node-version-file: apps/web/.nvmrc
           cache: npm
+          cache-dependency-path: apps/web/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
 
@@ -66,20 +60,21 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
-          node-version: '24'
+          node-version-file: apps/web/.nvmrc
           cache: npm
+          cache-dependency-path: apps/web/package-lock.json
       - run: npm ci --ignore-scripts
       # vitest.config.ts holds the 85 % line and branch gate.
       - run: npm run test:coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()
         with:
-          name: coverage
-          path: coverage/
+          name: web-coverage
+          path: apps/web/coverage/
           retention-days: 7
 
   e2e:
-    name: E2E (Chromium, WebKit iPhone, axe)
+    name: E2E (Chromium, WebKit iPhone, axe), then the public-only canary
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -87,36 +82,25 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
-          node-version: '24'
+          node-version-file: apps/web/.nvmrc
           cache: npm
+          cache-dependency-path: apps/web/package-lock.json
       - run: npm ci --ignore-scripts
-      - run: npm run build
+      # One browser install for both suites.
       - run: npx playwright install --with-deps chromium webkit
+      - run: npm run build
       - run: npm run e2e
+      # The canary: the same site built with sign-in off.
+      - run: npm run build:public-only
+      - run: npm run e2e:public-only
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: failure()
         with:
-          name: playwright-report
+          name: web-playwright-report
           path: |
-            playwright-report/
-            test-results/
+            apps/web/playwright-report/
+            apps/web/test-results/
           retention-days: 7
-
-  e2e-public-only:
-    name: E2E public-only canary (sign-in off)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
-        with:
-          node-version: '24'
-          cache: npm
-      - run: npm ci --ignore-scripts
-      - run: npm run build:public-only
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run e2e:public-only
 
   docker:
     name: Image build and read-only start
@@ -128,7 +112,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
-          context: .
+          context: apps/web
           push: false
           load: true
           tags: nwfl-mensa-web:ci
@@ -155,3 +139,34 @@ jobs:
             test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8081$path")" = "404"
           done
           docker stop canary
+
+  publish:
+    name: Publish the image (main only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, typecheck, unit, e2e, docker]
+    runs-on: ubuntu-latest
+    # The only job that may write packages; it never runs on a pull request.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: apps/web
+          push: true
+          tags: ghcr.io/rpgoldberg/nwfl-mensa-site/web:${{ steps.sha.outputs.short }}
+      # Deploy by this digest, never by the tag.
+      - name: The pushed digest
+        run: echo "ghcr.io/rpgoldberg/nwfl-mensa-site/web@${{ steps.image.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"

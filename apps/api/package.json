@@ -18,7 +18,7 @@
     "proto:generate": "buf generate",
     "proto:lint": "buf lint",
     "prepare": "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
-    "secrets:scan": "sh scripts/gitleaks.sh git --log-opts=--all"
+    "secrets:scan": "sh ../../scripts/gitleaks.sh git --log-opts=--all"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.16.0",

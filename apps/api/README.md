@@ -58,17 +58,24 @@ mounted read-only at `/repo`, each in a database of its own.
 This repository's whole history is meant to be publishable.
 
 - `npm install` (its `prepare` script; `npm run prepare` by hand) points git
-  at `.githooks`, whose pre-commit hook runs gitleaks over the staged changes
-  and refuses a commit that adds a secret. CI and the Docker build install
-  with `--ignore-scripts`, so they never touch git config. CI runs it over every commit (`npm run secrets:scan` does the same
-  locally). The version and image digest are pinned in `scripts/gitleaks.sh`;
-  a local gitleaks is used only if it is exactly that version, otherwise the
-  image runs (Docker needed).
+  at the repository root's `.githooks`, whose pre-commit hook runs gitleaks
+  over the staged changes and refuses a commit that adds a secret. CI and the
+  Docker build install with `--ignore-scripts`, so they never touch git
+  config. The root's `secrets` workflow runs it over every commit
+  (`npm run secrets:scan` does the same locally). The version and image digest
+  are pinned in the root's `scripts/gitleaks.sh`; a local gitleaks is used
+  only if it is exactly that version, otherwise the image runs (Docker
+  needed).
 - Fixtures and tests use made-up people only: no real officer or member
-  names, emails, phones or addresses. `test/tooling/made-up-people.test.ts`
-  allows email addresses only at example domains or nwflorida.us role aliases,
-  and phone numbers only in the fictional 555-01xx range. A seed script takes
-  its data from a path outside the repository, given as an argument.
+  names, emails, phones or addresses. The root's `scripts/made-up-people.mjs`
+  (run in CI and by `test/tooling/made-up-people.test.ts`) allows email
+  addresses only at example domains or nwflorida.us role aliases, and phone
+  numbers only in the fictional 555-01xx range, across the repository. A seed
+  script takes its data from a path outside the repository, given as an
+  argument.
+- CI for this app is the root's `.github/workflows/api.yml`; it runs when
+  `apps/api` changes. MT-06 (no FigureCollecting registry or token) is checked
+  for the whole repository by the root's `scripts/no-fc-credentials.sh`.
 - Commit only what you wrote or what carries a compatible open licence.
   `proto/grpc/health/v1/health.proto` is Apache-2.0 (header kept);
   `vendor/` holds fc-shared 1.7.0, MIT (its LICENSE is inside the tarball).
