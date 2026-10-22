@@ -28,7 +28,6 @@ import { type Entry, calendarSource, occurrenceMessage, seriesMessage } from '..
 import { Audience } from '../gen/nwfl/mensa/v1/common_pb.js';
 import { EditionItemSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { NewsletterService } from '../gen/nwfl/mensa/v1/newsletter_pb.js';
-import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { CONTRACT_VERSION, type ExportAudience, type ExportInput, buildContentJson, exportEvent, monthsBetween } from './content-json.js';
 
@@ -40,9 +39,9 @@ export interface NewsletterDeps {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const STATUS_NAMES = namesOf(EDITION_STATUSES);
 const FROZEN = new Set(['proof', 'published']);
-// Print order: the President first, minutes last; by title within a kind.
+// Print order: the President first, minutes last; by title within a kind, then slug, so it is the same on every export.
 const KIND_ORDER = ['president_report', 'announcement', 'article', 'treasurer_summary', 'document', 'page', 'minutes'];
-const PRINT_ORDER = 'ORDER BY array_position($2::text[], i.kind::text), v.title, i.id';
+const PRINT_ORDER = 'ORDER BY array_position($2::text[], i.kind::text), v.title, i.slug';
 interface PinnedRow {
   item_id: string;
   version_id: string;
@@ -175,7 +174,8 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
           offices: offices.map((office) => ({
             slug: office.slug,
             title: office.title,
-            holders: office.terms.filter((term) => term.status !== TermStatus.VACANT && term.holderDisplayName !== '').map((term) => term.holderDisplayName),
+            // A vacant term has no holder (office_term_holder_unless_vacant).
+            holders: office.terms.filter((term) => term.holderDisplayName !== '').map((term) => term.holderDisplayName),
             roleAlias: office.roleAlias,
           })),
           events: entries.map((entry) => exportEvent(entry, aliasOf)),

@@ -32,9 +32,15 @@ describe.skipIf(!live)('NewsletterService', () => {
   const items: Record<string, { id: string; version: string }> = {};
   let publications: string;
 
-  const publish = async (slug: string, kind: ContentKind, markup: string, extra: { visibility?: ItemVisibility; edition?: string; newsletter?: boolean; summary?: string } = {}) => {
-    const itemId = (await content.createItem({ kind, officeId: publications, slug, title: slug.replace(/-/g, ' ') }, PUB)).item?.id as string;
-    await content.saveDraft({ itemId, title: slug.replace(/-/g, ' '), summary: extra.summary ?? '', bodyMarkup: markup, visibility: extra.visibility ?? ItemVisibility.PUBLIC }, PUB);
+  const publish = async (
+    slug: string,
+    kind: ContentKind,
+    markup: string,
+    extra: { visibility?: ItemVisibility; edition?: string; newsletter?: boolean; summary?: string; title?: string } = {},
+  ) => {
+    const title = extra.title ?? slug.replace(/-/g, ' ');
+    const itemId = (await content.createItem({ kind, officeId: publications, slug, title }, PUB)).item?.id as string;
+    await content.saveDraft({ itemId, title, summary: extra.summary ?? '', bodyMarkup: markup, visibility: extra.visibility ?? ItemVisibility.PUBLIC }, PUB);
     const hash = (await content.markReady({ itemId, editionId: extra.edition ?? editionId, targets: { website: true, newsletter: extra.newsletter ?? true, email: false } }, PUB)).item
       ?.working?.contentHash as Uint8Array;
     const version = (await content.approve({ itemId, contentHash: hash }, WEBMASTER)).item?.live?.id as string;
@@ -111,8 +117,10 @@ describe.skipIf(!live)('NewsletterService', () => {
     await publish('presidents-report', ContentKind.PRESIDENT_REPORT, `Welcome back.\n\nThe game night code is :members[${CANARY}].\n\nWrite to [the board](mailto:president@nwflorida.us).`);
     await publish('dues-notice', ContentKind.ANNOUNCEMENT, `Members only: ${CANARY} dues details.`, { visibility: ItemVisibility.MEMBERS, summary: 'Dues for 2027' });
     await publish('excomm-minutes', ContentKind.MINUTES, 'Called to order at 10:02. Adjourned at 11:15.');
+    // Print order within a kind is by title, then slug; neither agrees with the order these are made in.
     await publish('puzzle-corner', ContentKind.ARTICLE, 'Which number comes next: 2, 3, 5, 7?');
-    await publish('book-club', ContentKind.ARTICLE, 'This month: a made-up novel.');
+    await publish('zz-book-club', ContentKind.ARTICLE, 'This month: a made-up novel.', { title: 'book club' });
+    await publish('book-club-extra', ContentKind.ARTICLE, 'Also: a made-up memoir.', { title: 'book club' });
     // Published, then taken down: never in an edition.
     await publish('withdrawn-note', ContentKind.ARTICLE, 'Taken down.');
     await content.withdraw({ itemId: items['withdrawn-note']?.id as string }, PUB);
@@ -148,7 +156,8 @@ describe.skipIf(!live)('NewsletterService', () => {
 
   it('lists the approved newsletter items of the edition only, each with its hash', async () => {
     const listed = (await newsletter.listEditionItems({ editionId }, AGENT)).items;
-    expect(listed.map((i) => i.title)).toEqual(['presidents report', 'dues notice', 'book club', 'puzzle corner', 'excomm minutes']);
+    expect(listed.map((i) => i.title)).toEqual(['presidents report', 'dues notice', 'book club', 'book club', 'puzzle corner', 'excomm minutes']);
+    expect(listed.slice(2, 4).map((i) => i.itemId)).toEqual([items['book-club-extra']?.id, items['zz-book-club']?.id]);
     expect(listed.every((i) => i.contentHash.length === 32 && i.versionNumber === 1)).toBe(true);
     await expect(newsletter.listEditionItems({ editionId: 'nope' }, AGENT)).rejects.toMatchObject({ code: Code.InvalidArgument });
     await expect(newsletter.listEditionItems({ editionId: '6a1f0c8e-0000-4000-8000-000000000000' }, AGENT)).rejects.toMatchObject({ code: Code.NotFound });
@@ -236,7 +245,7 @@ describe.skipIf(!live)('NewsletterService', () => {
     });
 
     it('leaves out a pinned item withdrawn after the freeze, and brings back its pinned version once it is republished', async () => {
-      const item = items['book-club'] as { id: string; version: string };
+      const item = items['zz-book-club'] as { id: string; version: string };
       const listed = async (): Promise<string[]> => (await newsletter.listEditionItems({ editionId }, AGENT)).items.map((i) => i.versionId);
       await content.withdraw({ itemId: item.id }, PUB);
       expect(await listed()).not.toContain(item.version);
