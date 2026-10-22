@@ -42,7 +42,7 @@ describe('apiRoutes', () => {
   it.each([
     ['NewsletterService', () => createClient(NewsletterService, transport).listEditions({})],
     ['MembershipVerifierService', () => createClient(MembershipVerifierService, transport).listPendingVerifications({})],
-  ])('registers %s, so the caller gate runs before the missing handler', async (_name, call) => {
+  ])('serves %s behind the caller gate: no token, no answer', async (_name, call) => {
     await expect(call()).rejects.toMatchObject({ code: Code.Unauthenticated });
   });
 });
