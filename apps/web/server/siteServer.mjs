@@ -103,6 +103,20 @@ function servePrerendered(req, res, html) {
 
 /** @typedef {import('./redirects.mjs').Tables} Redirects */
 
+const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
+
+/**
+ * A state-changing request must say where it comes from. Astro's origin check
+ * lets one through that carries neither an Origin nor a Sec-Fetch-Site header;
+ * every browser sends at least one, so such a request is refused here. One that
+ * does carry them goes on to Astro, which compares the origin.
+ *
+ * @param {http.IncomingMessage} req
+ */
+function originUnknown(req) {
+  return !SAFE_METHODS.includes(String(req.method)) && !req.headers.origin && req.headers['sec-fetch-site'] !== 'same-origin';
+}
+
 /**
  * The path as the static handler will read it: percent-decoded. undefined when
  * decoding would make it another path (an encoded / or \\, which the handler
@@ -165,6 +179,12 @@ export function withSitePolicy(handler, { pages = new Map(), redirects } = {}) {
         return;
       }
       req.url = '/gone';
+    }
+    if (originUnknown(req)) {
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Forbidden');
+      return;
     }
     const html = pages.get(path);
     if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {

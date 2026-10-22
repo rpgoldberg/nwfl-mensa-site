@@ -233,7 +233,7 @@ describe('prerendered pages', () => {
       res.end('from astro');
     }, pages);
     expect(await (await fetch(`${base}/officers`)).text()).toBe('from astro');
-    expect(await (await fetch(`${base}/about`, { method: 'POST', body: 'x' })).text()).toBe('from astro');
+    expect(await (await fetch(`${base}/about`, { method: 'POST', body: 'x', headers: { origin: base } })).text()).toBe('from astro');
     expect(seen).toEqual(['GET /officers', 'POST /about']);
   });
 });
@@ -272,6 +272,36 @@ describe('a path the handler would read differently', () => {
     }, new Map([['/about', html]]));
     const res = await fetch(`${base}/%61bout`, { headers: { cookie: `${SIZE_COOKIE}=3` } });
     expect(await res.text()).toContain('data-size="3"');
+  });
+});
+
+describe('a state-changing request with no origin to check', () => {
+  const seen: string[] = [];
+  const handler: Handler = (req, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    res.end('handled');
+  };
+
+  it('is refused with 403 when it has neither Origin nor Sec-Fetch-Site: same-origin', async () => {
+    seen.length = 0;
+    const base = await serve(handler);
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      const res = await fetch(`${base}/prefs`, { method, body: 'size=larger', headers: { referer: 'https://evil.example/page' } });
+      expect(res.status, method).toBe(403);
+      expectSecurityHeaders(res);
+    }
+    const crossSite = await fetch(`${base}/prefs`, { method: 'POST', body: 'x', headers: { 'sec-fetch-site': 'cross-site' } });
+    expect(crossSite.status).toBe(403);
+    expect(seen).toEqual([]);
+  });
+
+  it('goes on to the handler, whose origin check decides, when it says where it comes from', async () => {
+    seen.length = 0;
+    const base = await serve(handler);
+    await fetch(`${base}/prefs`, { method: 'POST', body: 'x', headers: { origin: 'https://evil.example' } });
+    await fetch(`${base}/prefs`, { method: 'POST', body: 'x', headers: { 'sec-fetch-site': 'same-origin' } });
+    await fetch(`${base}/about`);
+    expect(seen).toEqual(['POST /prefs', 'POST /prefs', 'GET /about']);
   });
 });
 

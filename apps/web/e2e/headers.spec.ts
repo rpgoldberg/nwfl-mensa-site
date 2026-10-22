@@ -215,3 +215,9 @@ test('an encoded path out of /_astro/ is refused, never served as a page cached 
     expect(await res.text(), path).not.toContain('<h1>About us</h1>');
   }
 });
+
+test('a post with no Origin, from a foreign page, is refused with 403 and sets nothing', async () => {
+  const res = await rawPost({ host: 'nwflorida.us', 'x-forwarded-proto': 'https', referer: 'https://evil.example/' }, 'size=larger&back=%2F');
+  expect(res.statusCode).toBe(403);
+  expect(res.headers['set-cookie']).toBeUndefined();
+});
