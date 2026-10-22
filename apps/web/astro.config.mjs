@@ -1,6 +1,6 @@
 // @ts-check
 import node from '@astrojs/node';
-import { defineConfig } from 'astro/config';
+import { defineConfig, envField } from 'astro/config';
 
 export default defineConfig({
   site: 'https://nwflorida.us',
@@ -21,6 +21,13 @@ export default defineConfig({
   // session store would also need a writable disk, and the root is read-only.
   session: false,
   devToolbar: { enabled: false },
+  env: {
+    schema: {
+      // MT-50: `PUBLIC_ONLY=true astro build` makes a deployment with no sign-in
+      // at all (src/lib/access.ts). Fixed at build time; off by default.
+      PUBLIC_ONLY: envField.boolean({ context: 'server', access: 'public', default: false }),
+    },
+  },
   security: {
     checkOrigin: true,
     // cloudflared sends X-Forwarded-Proto: https; trust it only for our own hosts,

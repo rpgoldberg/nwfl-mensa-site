@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // Astro's virtual modules do not exist outside its build; unit tests see a full build.
+  resolve: { alias: { 'astro:env/server': new URL('./test/stubs/astro-env-server.ts', import.meta.url).pathname } },
   test: {
     include: ['server/**/*.test.{ts,mjs}', 'src/**/*.test.ts', 'test/**/*.test.ts'],
     coverage: {

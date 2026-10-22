@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import { expect, test, type APIResponse } from '@playwright/test';
-import { SECURITY_HEADERS, SESSION_COOKIE } from '../server/policy.mjs';
+import { SECURITY_HEADERS, SESSION_COOKIE, parseCsp } from '../server/policy.mjs';
 import { SIZE_COOKIE, THEME_COOKIE } from '../server/prefs.mjs';
 import { ALL_PAGES, PRERENDERED } from './pages';
 import { BACKEND_URL } from './servers';
@@ -157,4 +157,21 @@ test('MT-30: no response sets a cookie with Domain=, and every cookie is host-on
     expect(attrs).toEqual(expect.arrayContaining(['secure', 'path=/', 'samesite=lax', 'httponly']));
     expect(attrs.filter((a) => a.startsWith('domain'))).toEqual([]);
   }
+});
+
+test('the full build has the same strict CSP on every response as the canary', async ({ request }) => {
+  for (const path of [...ALL_PAGES, '/no-such-page', '/manifest.webmanifest', '/scripts/install.js']) {
+    const policy = (await request.get(path)).headers()['content-security-policy'] ?? '';
+    const csp = parseCsp(policy);
+    expect(csp['script-src'], path).toEqual(["'self'"]);
+    expect(policy, path).not.toMatch(/unsafe-/);
+    expect(csp['object-src'], path).toEqual(["'none'"]);
+    expect(csp['base-uri'], path).toEqual(["'none'"]);
+    expect(csp['frame-ancestors'], path).toEqual(["'none'"]);
+  }
+});
+
+test('the full build keeps sign-in: the page answers, and the header links to it', async ({ request }) => {
+  expect((await request.get('/sign-in')).status()).toBe(200);
+  expect(await (await request.get('/about')).text()).toMatch(/href="\/sign-in"/);
 });

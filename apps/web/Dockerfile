@@ -25,7 +25,9 @@ COPY public ./public
 COPY src ./src
 # The layout imports server/prefs.mjs, so the server code is in place for the build.
 COPY server ./server
-RUN npx astro build
+# --build-arg PUBLIC_ONLY=true makes the public-only canary image: no sign-in at all.
+ARG PUBLIC_ONLY=false
+RUN PUBLIC_ONLY=${PUBLIC_ONLY} npx astro build
 # Readable to the runtime user whatever mode the checkout gave the sources.
 RUN chmod -R a+rX dist server
 

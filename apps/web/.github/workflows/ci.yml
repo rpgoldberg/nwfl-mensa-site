@@ -102,6 +102,22 @@ jobs:
             test-results/
           retention-days: 7
 
+  e2e-public-only:
+    name: E2E public-only canary (sign-in off)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build:public-only
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run e2e:public-only
+
   docker:
     name: Image build and read-only start
     runs-on: ubuntu-latest
@@ -127,3 +143,15 @@ jobs:
           test "$(docker inspect web --format '{{.Config.User}}')" = "10001:10001"
           docker stop web
           test "$(docker inspect web --format '{{.State.ExitCode}}')" = "0"
+      - name: The public-only canary image answers its sign-in routes with 404
+        run: |
+          docker build --build-arg PUBLIC_ONLY=true -t nwfl-mensa-web:canary .
+          docker run -d --name canary --read-only --tmpfs /tmp -p 127.0.0.1:8081:8080 nwfl-mensa-web:canary
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8081/healthz; then break; fi
+            sleep 1
+          done
+          for path in /sign-in /auth/callback /officer-area/new; do
+            test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8081$path")" = "404"
+          done
+          docker stop canary

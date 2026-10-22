@@ -36,6 +36,11 @@ describe('Dockerfile', () => {
     expect(runtime).toMatch(/^COPY --from=build --chown=root:root \/app\/server \.\/server$/m);
   });
 
+  it('builds a public-only image when asked, and a full one by default', () => {
+    expect(stages[0]).toMatch(/^ARG PUBLIC_ONLY=false$/m);
+    expect(stages[0]).toMatch(/^RUN PUBLIC_ONLY=\$\{PUBLIC_ONLY\} npx astro build$/m);
+  });
+
   it('keeps the build context small and secret-free', () => {
     const ignore = readFileSync('.dockerignore', 'utf8').split('\n').map((l) => l.trim());
     for (const entry of ['node_modules', 'dist', '.git', '.env', 'coverage', 'test-results', '.astro']) {

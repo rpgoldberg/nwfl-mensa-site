@@ -3,6 +3,8 @@ import { BACKEND_PORT, BACKEND_URL, SITE_URL, TLS_PORT } from './e2e/servers';
 
 export default defineConfig({
   testDir: 'e2e',
+  // The canary checks need the public-only build: playwright.public-only.config.ts.
+  testIgnore: /public-only\//,
   fullyParallel: true,
   forbidOnly: !!process.env['CI'],
   retries: process.env['CI'] ? 1 : 0,
@@ -30,8 +32,8 @@ export default defineConfig({
   projects: [
     // Headers and cache rules: plain HTTP, no browser needed.
     { name: 'http', testMatch: /headers\.spec\.ts/ },
-    { name: 'chromium-desktop', testIgnore: /headers\.spec\.ts/, use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
-    { name: 'chromium-phone', testIgnore: /headers\.spec\.ts/, use: { ...devices['Pixel 7'] } },
-    { name: 'webkit-iphone', testIgnore: /headers\.spec\.ts/, use: { ...devices['iPhone 17'] } },
+    { name: 'chromium-desktop', testIgnore: [/headers\.spec\.ts/, /public-only\//], use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
+    { name: 'chromium-phone', testIgnore: [/headers\.spec\.ts/, /public-only\//], use: { ...devices['Pixel 7'] } },
+    { name: 'webkit-iphone', testIgnore: [/headers\.spec\.ts/, /public-only\//], use: { ...devices['iPhone 17'] } },
   ],
 });

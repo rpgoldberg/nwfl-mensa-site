@@ -40,12 +40,22 @@ describe('CI workflow', () => {
     expect(e2e).toMatch(/run: npm run e2e$/m);
   });
 
+  it('runs the public-only canary checks on a public-only build', () => {
+    const canary = job('e2e-public-only');
+    expect(canary).toMatch(/run: npm run build:public-only$/m);
+    expect(canary).toMatch(/playwright install --with-deps chromium webkit$/m);
+    expect(canary).toMatch(/run: npm run e2e:public-only$/m);
+  });
+
   it('builds the image and starts it with a read-only root', () => {
     const docker = job('docker');
     expect(docker).toMatch(/docker\/build-push-action@/);
     expect(docker).toMatch(/push: false/);
     expect(docker).toMatch(/docker run .*--read-only .*--tmpfs \/tmp/);
     expect(docker).toMatch(/\/healthz/);
+    // The canary image: built with sign-in off, and its sign-in routes answer 404.
+    expect(docker).toMatch(/--build-arg PUBLIC_ONLY=true/);
+    expect(docker).toMatch(/\/auth\/callback/);
   });
 
   it('scans every commit for secrets with the pinned gitleaks', () => {
