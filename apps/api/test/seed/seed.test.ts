@@ -1,7 +1,7 @@
 // The calendar and roster seed (P13): business venues only, no personal
 // contacts, read from a file OUTSIDE the repository, applied in one
 // transaction, idempotent, and audited.
-import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +60,12 @@ describe('assertOutsideRepo', () => {
   it('refuses a file inside the repository, and accepts one outside it', () => {
     expect(() => assertOutsideRepo(FIXTURE)).toThrow(/outside the repository/);
     expect(() => assertOutsideRepo(path.join(os.tmpdir(), 'seed.json'))).not.toThrow();
+  });
+
+  it('follows a symlink outside the repository to the file it names', () => {
+    const link = path.join(dir, 'looks-outside.json');
+    symlinkSync(FIXTURE, link);
+    expect(() => assertOutsideRepo(link)).toThrow(/outside the repository/);
   });
 
   it('refuses a file inside any git work tree, a linked worktree (a .git file) included', () => {

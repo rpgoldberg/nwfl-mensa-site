@@ -105,8 +105,10 @@ describe('createJwtVerifier', () => {
     const agent = { iss: AGENT_ISS, aud: 'nwfl-agent', sub: 'svc-nwfl-newsletter', scope: 'newsletter.read' };
     const verifierClaims = { iss: VERIFIER_ISS, aud: 'nwfl-verifier', sub: 'svc-nwfl-verifier', scope: 'membership.verify' };
 
-    it('refuses a token without an issue time', async () => {
+    it('refuses a token without an issue time, and one with an issue time but no expiry', async () => {
       await expect(createJwtVerifier(clients()).verify(await at(site(), undefined, now() + 300))).rejects.toThrow(/"iat"/);
+      const noExpiry = await new SignJWT(site()).setProtectedHeader({ alg: 'RS256', kid: 'rsa-1' }).setIssuedAt().sign(rsa.privateKey);
+      await expect(createJwtVerifier(clients()).verify(noExpiry)).rejects.toThrow(/"exp"/);
     });
 
     it('accepts a site token living exactly 1 h, and refuses one living longer', async () => {
