@@ -25,9 +25,14 @@ export default defineConfig({
     checkOrigin: true,
     // cloudflared sends X-Forwarded-Proto: https; trust it only for our own hosts,
     // so the origin check sees the browser's https origin.
+    // Only a listed Host sets the request's origin; any other falls back to
+    // localhost, and the origin check then refuses the site's own form posts.
     allowedDomains: [
       { hostname: 'nwflorida.us', protocol: 'https' },
       { hostname: 'nwfl-canary.mindsignals1.com', protocol: 'https' },
+      // Local runs (npm start, the e2e suite) reach the server by loopback.
+      { hostname: 'localhost', protocol: 'http' },
+      { hostname: '127.0.0.1', protocol: 'http' },
     ],
   },
 });

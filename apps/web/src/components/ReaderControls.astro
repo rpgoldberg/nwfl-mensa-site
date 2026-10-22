@@ -1,0 +1,49 @@
+---
+// Text size and theme in the Aa panel (R30): one plain form, one button per
+// choice, so it works with no script. Which size and theme are current is shown
+// by CSS from <html data-size data-theme>, so a prerendered page shows it too.
+interface Props {
+  /** Where the reader returns after a press. */
+  back: string;
+}
+const { back } = Astro.props;
+
+const SIZES = [1, 2, 3, 4, 5] as const;
+const percent = (size: number) => 75 + 25 * size;
+const THEME_OPTIONS = [
+  { value: 'system', label: 'Match my phone or computer' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'contrast', label: 'High contrast (white on black)' },
+];
+---
+<form class="reader-form" method="post" action="/prefs">
+  <input type="hidden" name="back" value={back} />
+  <input type="hidden" name="from" value="menu" />
+  <fieldset class="reader-group">
+    <legend>Text size</legend>
+    <div class="sizes">
+      <button class="hbtn size-btn" type="submit" name="size" value="smaller">A− Smaller</button>
+      <span class="size-steps" aria-hidden="true">{SIZES.map(() => <span class="size-step" />)}</span>
+      <button class="hbtn size-btn" type="submit" name="size" value="larger">A+ Larger</button>
+    </div>
+    <p class="size-now">
+      {SIZES.map((size) => (
+        <span data-for-size={size}>
+          Now {percent(size)}&nbsp;%{size === 1 ? ', the smallest' : ''}{size === 5 ? ', the largest' : ''}.
+        </span>
+      ))}{' '}
+      The whole site grows, menus included.
+    </p>
+  </fieldset>
+  <fieldset class="reader-group">
+    <legend>Theme</legend>
+    <div class="theme-options">
+      {THEME_OPTIONS.map((o) => (
+        <button class="theme-btn" type="submit" name="theme" value={o.value}>
+          {o.label} <span class="chosen">Chosen</span>
+        </button>
+      ))}
+    </div>
+  </fieldset>
+</form>

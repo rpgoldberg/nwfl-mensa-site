@@ -1,0 +1,26 @@
+---
+// The reading bar on long-read pages (R30): smaller, larger and the next theme,
+// one press each, at the foot of the screen. Read aloud (MB4) and the printed
+// page (MB3) join it later.
+import Icon from './Icon.astro';
+
+interface Props {
+  back: string;
+}
+const { back } = Astro.props;
+
+const THEME_NAMES = [
+  { value: 'system', label: 'matching your device' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'contrast', label: 'High contrast' },
+];
+---
+<form class="reading-bar" method="post" action="/prefs" aria-label="Reading">
+  <input type="hidden" name="back" value={back} />
+  <button class="rb" type="submit" name="size" value="smaller"><span class="rb-big">A−</span> Smaller</button>
+  <button class="rb" type="submit" name="size" value="larger"><span class="rb-big">A+</span> Larger</button>
+  <button class="rb" type="submit" name="theme" value="next">
+    <Icon name="theme" /> Theme<span class="visually-hidden"> {THEME_NAMES.map((t) => <span data-for-theme={t.value}>(now {t.label})</span>)}</span>
+  </button>
+</form>

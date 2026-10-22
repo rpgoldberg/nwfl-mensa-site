@@ -2,8 +2,11 @@
 // The http server in front of Astro's standalone handler. Astro middleware runs
 // only for on-request pages; prerendered pages and build assets are served as
 // files, so the response policy is applied here, once, for every response.
+// Prerendered pages are served from memory with the reader's text size and
+// theme stamped on <html>, as the layout does for on-request pages.
 import http from 'node:http';
 import { SECURITY_HEADERS, cacheControl } from './policy.mjs';
+import { readPrefs, stampHtml } from './prefs.mjs';
 
 /** @typedef {(req: http.IncomingMessage, res: http.ServerResponse) => unknown} Handler */
 
@@ -43,9 +46,9 @@ function beforeHeaders(res, listener) {
 /**
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
+ * @param {string} path
  */
-function applyPolicy(req, res) {
-  const path = new URL(req.url ?? '/', 'http://site.invalid').pathname;
+function applyPolicy(req, res, path) {
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
   const cache = cacheControl({
     path,
@@ -60,19 +63,39 @@ function applyPolicy(req, res) {
 }
 
 /**
- * Wrap a request handler so every response carries the site policy, and
- * answer the health probe without touching Astro.
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {string} html
+ */
+function servePrerendered(req, res, html) {
+  const body = stampHtml(html, readPrefs(req.headers.cookie));
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Length', Buffer.byteLength(body));
+  res.end(req.method === 'HEAD' ? undefined : body);
+}
+
+/**
+ * Wrap a request handler so every response carries the site policy, serve the
+ * prerendered pages, and answer the health probe without touching Astro.
  *
  * @param {Handler} handler
+ * @param {{ pages?: ReadonlyMap<string, string> }} [opts] prerendered HTML by path
  * @returns {http.RequestListener}
  */
-export function withSitePolicy(handler) {
+export function withSitePolicy(handler, { pages = new Map() } = {}) {
   return (req, res) => {
-    beforeHeaders(res, () => applyPolicy(req, res));
+    const path = new URL(req.url ?? '/', 'http://site.invalid').pathname;
+    beforeHeaders(res, () => applyPolicy(req, res, path));
     if (req.url === '/healthz') {
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('ok');
+      return;
+    }
+    const html = pages.get(path);
+    if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
+      servePrerendered(req, res, html);
       return;
     }
     /** @param {unknown} err */
@@ -94,7 +117,10 @@ export function withSitePolicy(handler) {
   };
 }
 
-/** @param {Handler} handler */
-export function createSiteServer(handler) {
-  return http.createServer(withSitePolicy(handler));
+/**
+ * @param {Handler} handler
+ * @param {{ pages?: ReadonlyMap<string, string> }} [opts]
+ */
+export function createSiteServer(handler, opts) {
+  return http.createServer(withSitePolicy(handler, opts));
 }

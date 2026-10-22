@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { PRIMARY_NAV, SITE_NAME, currentNav, trailFor } from '../src/lib/site';
 import { ALL_PAGES, titleOf } from './pages';
+import { setPrefs } from './prefs';
 
 const headingOf = (path: string): string => (path === '/' ? SITE_NAME : titleOf(path));
 
@@ -161,13 +162,16 @@ test('search inputs are at least 16px, so phones do not zoom on focus', async ({
 test.describe('at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
-  for (const size of ['1', '5']) {
-    test(`no page scrolls sideways at text size ${size}`, async ({ page }) => {
+  for (const size of [1, 5]) {
+    test(`no page scrolls sideways at text size ${size}, with the Aa panel open or closed`, async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { size });
       for (const path of ALL_PAGES) {
-        await page.goto(path);
-        await page.evaluate((s) => (document.documentElement.dataset['size'] = s), size);
-        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-        expect(overflow, `${path} at size ${size}`).toBeLessThanOrEqual(0);
+        for (const url of [path, `${path}#reader-menu`]) {
+          await page.goto(url);
+          await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+          expect(overflow, `${url} at size ${size}`).toBeLessThanOrEqual(0);
+        }
       }
     });
   }

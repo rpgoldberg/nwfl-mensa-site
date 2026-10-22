@@ -1,5 +1,8 @@
+import { existsSync, readFileSync } from 'node:fs';
+import http from 'node:http';
 import { expect, test, type APIResponse } from '@playwright/test';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../server/policy.mjs';
+import { SIZE_COOKIE, THEME_COOKIE } from '../server/prefs.mjs';
 import { ALL_PAGES, PRERENDERED } from './pages';
 
 function expectSecurityHeaders(res: APIResponse): void {
@@ -25,14 +28,45 @@ test('a request with the session cookie gets private, no-store, on prerendered a
   }
 });
 
-test('About, Join and Governance are served as files built at deploy time', async ({ request }) => {
+test('About, Join and Governance are the files built at deploy time; the rest render on request', async ({ request }) => {
   for (const path of PRERENDERED) {
     const res = await request.get(path);
-    // `send` serves files with a validator; an on-request render has none.
-    expect(res.headers()['last-modified'], path).toBeTruthy();
+    expect(await res.text(), path).toBe(readFileSync(`dist/client${path}.html`, 'utf8'));
   }
-  const ssr = await request.get('/officers');
-  expect(ssr.headers()['last-modified']).toBeUndefined();
+  for (const path of ALL_PAGES.filter((p) => !PRERENDERED.includes(p))) {
+    expect(existsSync(`dist/client${path === '/' ? '/index' : path}.html`), path).toBe(false);
+  }
+});
+
+test("a prerendered page differs from the built file only in the reader's html tag", async ({ request }) => {
+  const built = readFileSync('dist/client/about.html', 'utf8');
+  const res = await request.get('/about', { headers: { cookie: `${SIZE_COOKIE}=5; ${THEME_COOKIE}=contrast` } });
+  expect(await res.text()).toBe(built.replace(/<html[^>]*>/, '<html lang="en" data-size="5" data-theme="contrast">'));
+  expect(res.headers()['cache-control']).toBe('public, max-age=60');
+  expect(res.headers()['vary']).toBe('Cookie');
+});
+
+test('the reader controls post to a handler that sets the cookies, is never stored, and stays on this site', async ({ request, baseURL }) => {
+  const res = await request.post('/prefs', {
+    headers: { Origin: baseURL! },
+    form: { size: 'larger', back: '//evil.example/' },
+    maxRedirects: 0,
+  });
+  expect(res.status()).toBe(303);
+  expect(res.headers()['location']).toBe('/');
+  expect(res.headers()['set-cookie']).toContain(`${SIZE_COOKIE}=2`);
+  expect(res.headers()['cache-control']).toBe('private, no-store');
+  expectSecurityHeaders(res);
+});
+
+test('a post from another site is refused and sets nothing', async ({ request }) => {
+  const res = await request.post('/prefs', {
+    headers: { Origin: 'https://evil.example' },
+    form: { size: 'larger', back: '/' },
+    maxRedirects: 0,
+  });
+  expect(res.status()).toBe(403);
+  expect(res.headers()['set-cookie']).toBeUndefined();
 });
 
 test('the stylesheet is a hashed file, cached for a year, and the pages ship no script', async ({ request }) => {
@@ -77,4 +111,26 @@ test('the fonts are our own files, and their licences are served beside them', a
     expect(licence.status(), name).toBe(200);
     expect(await licence.text(), name).toMatch(/SIL OPEN FONT LICENSE Version 1\.1/i);
   }
+});
+
+/** A raw request, so the test can send the Host header cloudflared sends. */
+function rawPost(baseURL: string, headers: Record<string, string>, body: string) {
+  return new Promise<http.IncomingMessage>((resolve, reject) => {
+    const req = http.request(`${baseURL}/prefs`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers } }, resolve);
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+test('behind the tunnel, a post from the site itself is accepted and its cookies are Secure', async ({ baseURL }) => {
+  const tunnel = { host: 'nwflorida.us', 'x-forwarded-proto': 'https' };
+  const ok = await rawPost(baseURL!, { ...tunnel, origin: 'https://nwflorida.us' }, 'theme=dark&back=%2Fabout');
+  expect(ok.statusCode).toBe(303);
+  expect(ok.headers['location']).toBe('/about');
+  const cookies = ok.headers['set-cookie'] ?? [];
+  expect(cookies.length).toBe(2);
+  for (const c of cookies) expect(c).toMatch(/; Secure$/);
+  const forged = await rawPost(baseURL!, { ...tunnel, origin: 'https://evil.example' }, 'theme=dark&back=%2F');
+  expect(forged.statusCode).toBe(403);
+  expect(forged.headers['set-cookie']).toBeUndefined();
 });

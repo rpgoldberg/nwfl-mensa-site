@@ -10,6 +10,8 @@ export interface Page {
   description: string;
   /** Built once at deploy time: the page reads nothing from the API. */
   prerender?: boolean;
+  /** A long read: the reading bar (text size and theme) sits at the foot of the screen. */
+  reading?: boolean;
 }
 
 export interface Crumb {
@@ -24,6 +26,7 @@ export const SECTIONS: readonly Page[] = [
     title: 'About us',
     description: 'Who we are: the Northwest Florida local group of American Mensa, and our history.',
     prerender: true,
+    reading: true,
   },
   {
     path: '/join',
@@ -37,6 +40,7 @@ export const SECTIONS: readonly Page[] = [
     title: 'Governance',
     description: 'Our charter, our bylaws and the rules for elections.',
     prerender: true,
+    reading: true,
   },
   { path: '/newsletter', title: 'Newsletter', description: 'The current issue, and every past issue we can share.' },
   {

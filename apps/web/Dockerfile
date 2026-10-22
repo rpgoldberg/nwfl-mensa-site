@@ -23,8 +23,9 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY astro.config.mjs tsconfig.json ./
 COPY public ./public
 COPY src ./src
-RUN npx astro build
+# The layout imports server/prefs.mjs, so the server code is in place for the build.
 COPY server ./server
+RUN npx astro build
 # Readable to the runtime user whatever mode the checkout gave the sources.
 RUN chmod -R a+rX dist server
 

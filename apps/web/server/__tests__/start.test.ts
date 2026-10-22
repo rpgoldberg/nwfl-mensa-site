@@ -3,7 +3,10 @@ import type http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS } from '../policy.mjs';
-import { listenOptions, start } from '../start.mjs';
+import { SIZE_COOKIE } from '../prefs.mjs';
+import { listenOptions, loadPrerendered, start } from '../start.mjs';
+
+const FIXTURE_CLIENT = new URL('./fixtures/client/', import.meta.url);
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
 
@@ -20,7 +23,10 @@ afterEach(async () => {
   }
 });
 
-async function boot(handler: Handler, opts: { env?: Record<string, string | undefined>; graceMs?: number } = {}) {
+async function boot(
+  handler: Handler,
+  opts: { env?: Record<string, string | undefined>; graceMs?: number; clientDir?: URL } = {},
+) {
   const env: Record<string, string | undefined> = { PORT: '0', HOST: '127.0.0.1', ...opts.env };
   const proc = new FakeProcess();
   const log = vi.fn();
@@ -30,6 +36,7 @@ async function boot(handler: Handler, opts: { env?: Record<string, string | unde
     proc,
     log,
     graceMs: opts.graceMs ?? 10_000,
+    ...(opts.clientDir ? { clientDir: opts.clientDir } : {}),
     loadHandler: async () => {
       autostartWhenLoaded = env['ASTRO_NODE_AUTOSTART'];
       return { handler };
@@ -56,7 +63,28 @@ describe('listenOptions', () => {
   });
 });
 
+describe('loadPrerendered', () => {
+  it("maps each built page's clean path, and its .html path, to its HTML", async () => {
+    const pages = await loadPrerendered(FIXTURE_CLIENT);
+    expect([...pages.keys()].sort()).toEqual(['/', '/about', '/about.html', '/index.html', '/nested/deep', '/nested/deep.html']);
+    expect(pages.get('/about')).toContain('<body>About</body>');
+    expect(pages.get('/about.html')).toBe(pages.get('/about'));
+    expect(pages.get('/nested/deep')).toContain('Deep');
+    expect(pages.get('/')).toContain('Home');
+  });
+
+  it('finds nothing in a folder that does not exist', async () => {
+    expect((await loadPrerendered(new URL('./fixtures/none/', import.meta.url))).size).toBe(0);
+  });
+});
+
 describe('start', () => {
+  it("serves the prerendered pages it finds, with the reader's settings", async () => {
+    const { base } = await boot(() => {}, { clientDir: FIXTURE_CLIENT });
+    const body = await (await fetch(`${base}/about`, { headers: { cookie: `${SIZE_COOKIE}=2` } })).text();
+    expect(body).toContain('<html lang="en" data-size="2">');
+  });
+
   it("turns off the Astro entry's own server before loading it", async () => {
     const { autostartWhenLoaded, env } = await boot((_req, res) => res.end('ok'));
     expect(autostartWhenLoaded).toBe('disabled');

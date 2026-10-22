@@ -24,6 +24,10 @@ describe('SECTIONS (R1)', () => {
   it('prerenders About, Join and Governance only', () => {
     expect(SECTIONS.filter((s) => s.prerender).map((s) => s.path)).toEqual(['/about', '/join', '/governance']);
   });
+
+  it('gives the long-read pages, About and Governance, the reading bar (R30)', () => {
+    expect(SECTIONS.filter((s) => s.reading).map((s) => s.path)).toEqual(['/about', '/governance']);
+  });
 });
 
 describe('PRIMARY_NAV (R30)', () => {

@@ -1,8 +1,9 @@
 ---
 // The frame of every page, after the design draft: skip link; header with the
 // site name as text over the teal-and-sand stripe, the wide-screen nav, Aa,
-// Help and Sign in; the Aa panel; breadcrumbs and Back; the footer; and the
-// phone's bottom bar. No script: Aa opens its panel as a link target.
+// Help and Sign in; the Aa panel; breadcrumbs and Back; the footer; the
+// reading bar on long reads; and the phone's bottom bar. No script: Aa opens its
+// panel as a link target, and the reader's size and theme come from cookies.
 import '@fontsource/atkinson-hyperlegible/400.css';
 import '@fontsource/atkinson-hyperlegible/400-italic.css';
 import '@fontsource/atkinson-hyperlegible/700.css';
@@ -10,22 +11,30 @@ import '@fontsource/lexend/500.css';
 import '@fontsource/lexend/600.css';
 import '../styles/tokens.css';
 import '../styles/site.css';
+import { htmlAttributes, readPrefs } from '../../server/prefs.mjs';
 import Breadcrumbs from '../components/Breadcrumbs.astro';
 import Icon from '../components/Icon.astro';
 import PrimaryNav from '../components/PrimaryNav.astro';
+import ReaderControls from '../components/ReaderControls.astro';
+import ReadingBar from '../components/ReadingBar.astro';
 import { SITE_NAME, trailFor } from '../lib/site';
 
 interface Props {
   path: string;
   title: string;
   description: string;
+  reading?: boolean | undefined;
 }
-const { path, title, description } = Astro.props;
+const { path, title, description, reading = false } = Astro.props;
 const trail = trailFor(path, title);
 const documentTitle = path === '/' ? SITE_NAME : `${title} | ${SITE_NAME}`;
+// A prerendered page is built with the defaults; the server wrapper stamps the
+// reader's settings on its <html> tag when it serves the file.
+const attrs = htmlAttributes(readPrefs(Astro.isPrerendered ? undefined : Astro.request.headers.get('cookie')));
+const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.search}`;
 ---
 <!doctype html>
-<html lang="en" data-size="1">
+<html lang="en" data-size={attrs['data-size']} data-theme={attrs['data-theme']}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -49,7 +58,9 @@ const documentTitle = path === '/' ? SITE_NAME : `${title} | ${SITE_NAME}`;
     </header>
     <section class="reader-panel" id="reader-menu" aria-labelledby="reader-menu-title" tabindex="-1">
       <h2 id="reader-menu-title">Text size and theme</h2>
-      <p>To make everything larger now, zoom in: spread two fingers on a phone or tablet, or hold Ctrl (⌘ on a Mac) and press + on a computer.</p>
+      <ReaderControls back={back} />
+      <p class="muted">Saved on this device. No account needed.</p>
+      <p>Your browser's zoom works too: spread two fingers on a phone or tablet, or hold Ctrl (⌘ on a Mac) and press + on a computer.</p>
       <a class="button" href="#reader-toggle">Done</a>
     </section>
     <div class="page">
@@ -62,6 +73,7 @@ const documentTitle = path === '/' ? SITE_NAME : `${title} | ${SITE_NAME}`;
       <p>{SITE_NAME} is the local group of American Mensa for the Florida Panhandle, west of the Apalachicola River.</p>
     </footer>
     <div class="dock">
+      {reading && <ReadingBar back={back} />}
       <PrimaryNav path={path} variant="bottom" />
     </div>
   </body>

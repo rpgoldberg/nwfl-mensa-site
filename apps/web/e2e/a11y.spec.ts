@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { ALL_PAGES } from './pages';
+import { THEMES, setPrefs } from './prefs';
 
 // WCAG 2.2 A and AA, plus AAA (color-contrast-enhanced: 7:1 body text) and best practice.
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
@@ -25,12 +26,32 @@ for (const scheme of ['light', 'dark'] as const) {
       }
     });
 
-    test('every page passes axe at 200 % text', async ({ page }) => {
+  });
+}
+
+test.describe('high contrast (system setting)', () => {
+  test.use({ contrast: 'more' });
+
+  test('every page passes axe', async ({ page }) => {
+    for (const path of ALL_PAGES) {
+      await page.goto(path);
+      expect(await axe(page), path).toEqual([]);
+    }
+  });
+});
+
+// The reader's own choice, by cookie, at 100 % and 200 %, with the Aa panel open
+// so its controls are checked too.
+for (const theme of THEMES) {
+  for (const size of [1, 5]) {
+    test(`every page passes axe in the ${theme} theme at ${size === 1 ? 100 : 200} % text, Aa panel open`, async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { size, theme });
       for (const path of ALL_PAGES) {
-        await page.goto(path);
-        await page.evaluate(() => (document.documentElement.dataset['size'] = '5'));
-        expect(await axe(page), path).toEqual([]);
+        await page.goto(`${path}#reader-menu`);
+        await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+        await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
+        expect(await axe(page), `${path} ${theme} ${size}`).toEqual([]);
       }
     });
-  });
+  }
 }

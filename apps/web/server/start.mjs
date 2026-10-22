@@ -1,6 +1,8 @@
 // @ts-check
-// Boot: load Astro's standalone handler without its own server, put the site
-// policy in front of it, listen, and drain on SIGTERM or SIGINT.
+// Boot: load Astro's standalone handler without its own server, read the
+// prerendered pages, put the site policy in front of both, listen, and drain
+// on SIGTERM or SIGINT.
+import { readFile, readdir } from 'node:fs/promises';
 import { createSiteServer } from './siteServer.mjs';
 
 /** @typedef {Record<string, string | undefined>} Env */
@@ -19,20 +21,49 @@ export function listenOptions(env) {
 }
 
 /**
+ * Every .html file Astro prerendered into `clientDir`, by the paths it answers:
+ * `about.html` is /about and /about.html, `index.html` is / and /index.html.
+ *
+ * @param {URL} clientDir
+ * @returns {Promise<Map<string, string>>}
+ */
+export async function loadPrerendered(clientDir) {
+  /** @type {Map<string, string>} */
+  const pages = new Map();
+  /** @type {string[]} */
+  let files;
+  try {
+    files = await readdir(clientDir, { recursive: true });
+  } catch {
+    return pages;
+  }
+  for (const file of files.filter((f) => f.endsWith('.html'))) {
+    const html = await readFile(new URL(file, clientDir), 'utf8');
+    const path = `/${file}`;
+    const clean = path.replace(/(?:\/index)?\.html$/, '') || '/';
+    pages.set(clean, html);
+    pages.set(path, html);
+  }
+  return pages;
+}
+
+/**
  * @param {{
  *   env: Env,
  *   loadHandler: () => Promise<{ handler: Handler }>,
  *   proc: Proc,
+ *   clientDir?: URL,
  *   log?: (line: string) => void,
  *   graceMs?: number,
  * }} opts
  */
-export async function start({ env, loadHandler, proc, log = console.log, graceMs = 10_000 }) {
+export async function start({ env, loadHandler, proc, clientDir, log = console.log, graceMs = 10_000 }) {
   // Astro's entry starts its own server on import unless told not to.
   env['ASTRO_NODE_AUTOSTART'] = 'disabled';
   const { handler } = await loadHandler();
   const { port, host } = listenOptions(env);
-  const server = createSiteServer(handler);
+  const pages = clientDir ? await loadPrerendered(clientDir) : new Map();
+  const server = createSiteServer(handler, { pages });
   await new Promise((resolve) => server.listen(port, host, () => resolve(undefined)));
   const address = /** @type {import('node:net').AddressInfo} */ (server.address());
   log(JSON.stringify({ level: 'info', msg: 'listening', host, port: address.port }));

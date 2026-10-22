@@ -2,6 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
+import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
 import { createSiteServer, withSitePolicy } from '../siteServer.mjs';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
@@ -13,8 +14,8 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function serve(handler: Handler): Promise<string> {
-  server = http.createServer(withSitePolicy(handler));
+async function serve(handler: Handler, pages?: Map<string, string>): Promise<string> {
+  server = http.createServer(withSitePolicy(handler, pages ? { pages } : undefined));
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
@@ -60,6 +61,16 @@ describe('withSitePolicy', () => {
     expect(res.headers.get('x-one')).toBe('1');
     expect(res.headers.get('x-two')).toBe('2');
     expectSecurityHeaders(res);
+  });
+
+  it('skips a header the handler left undefined', async () => {
+    const base = await serve((_req, res) => {
+      res.writeHead(200, { 'X-Set': 'yes', 'X-Unset': undefined });
+      res.end();
+    });
+    const res = await fetch(base);
+    expect(res.headers.get('x-set')).toBe('yes');
+    expect(res.headers.has('x-unset')).toBe(false);
   });
 
   it('keeps a reason phrase passed without headers', async () => {
@@ -144,6 +155,52 @@ describe('withSitePolicy', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
     expectSecurityHeaders(res);
     expect(called).toBe(false);
+  });
+});
+
+describe('prerendered pages', () => {
+  const html = '<!DOCTYPE html><html lang="en" data-size="1"><body>About ✓</body></html>';
+  const pages = new Map([['/about', html]]);
+  const neverCalled: Handler = () => {
+    throw new Error('the handler must not see a prerendered page');
+  };
+
+  it("serves a prerendered page with the reader's size and theme from the cookie", async () => {
+    const base = await serve(neverCalled, pages);
+    const res = await fetch(`${base}/about`, { headers: { cookie: `${SIZE_COOKIE}=4; ${THEME_COOKIE}=dark` } });
+    const body = await res.text();
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(body).toBe(html.replace('data-size="1"', 'data-size="4" data-theme="dark"'));
+    expect(Number(res.headers.get('content-length'))).toBe(Buffer.byteLength(body));
+    expectSecurityHeaders(res);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('vary')).toBe('Cookie');
+  });
+
+  it('serves the built file unchanged to a reader with no settings, whatever the query', async () => {
+    const base = await serve(neverCalled, pages);
+    const res = await fetch(`${base}/about?from=newsletter`);
+    expect(await res.text()).toBe(html);
+  });
+
+  it('answers HEAD with the headers and no body', async () => {
+    const base = await serve(neverCalled, pages);
+    const res = await fetch(`${base}/about`, { method: 'HEAD' });
+    expect(res.status).toBe(200);
+    expect(Number(res.headers.get('content-length'))).toBe(Buffer.byteLength(html));
+    expect(await res.text()).toBe('');
+  });
+
+  it('leaves other paths and other methods to the handler', async () => {
+    const seen: string[] = [];
+    const base = await serve((req, res) => {
+      seen.push(`${req.method} ${req.url}`);
+      res.end('from astro');
+    }, pages);
+    expect(await (await fetch(`${base}/officers`)).text()).toBe('from astro');
+    expect(await (await fetch(`${base}/about`, { method: 'POST', body: 'x' })).text()).toBe('from astro');
+    expect(seen).toEqual(['GET /officers', 'POST /about']);
   });
 });
 
