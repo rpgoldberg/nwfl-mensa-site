@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, hasCookie, isHostOnlyCookie, parseCsp } from '../policy.mjs';
+import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, hasCookie, isHostOnlyCookie, parseCsp, securityHeaders } from '../policy.mjs';
 
 describe('security headers', () => {
   it('sends CSP, HSTS, nosniff, Referrer-Policy, Permissions-Policy and COOP, and nothing else', () => {
@@ -40,6 +40,16 @@ describe('security headers', () => {
     expect(csp['object-src']).toEqual(["'none'"]);
     expect(csp['base-uri']).toEqual(["'none'"]);
     expect(csp['form-action']).toEqual(["'self'"]);
+  });
+
+  it('lets a form lead to the sign-in provider (sign-out ends its session there), and to nothing else', () => {
+    const headers = securityHeaders({ formAction: ['https://login.nwflorida.us'] });
+    expect(parseCsp(headers['Content-Security-Policy'] as string)['form-action']).toEqual(["'self'", 'https://login.nwflorida.us']);
+    const { ['Content-Security-Policy']: csp, ...rest } = headers;
+    const { ['Content-Security-Policy']: base, ...baseRest } = SECURITY_HEADERS;
+    expect(rest).toEqual(baseRest);
+    expect(csp?.replace(" https://login.nwflorida.us", '')).toBe(base);
+    expect(securityHeaders({})).toEqual(SECURITY_HEADERS);
   });
 
   it('parses a policy with stray separators', () => {

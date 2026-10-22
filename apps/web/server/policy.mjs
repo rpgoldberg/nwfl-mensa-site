@@ -8,33 +8,45 @@ import { readCookie } from './cookies.mjs';
 /** The cookie the OIDC session will live in (W7). Its presence makes a response private. */
 export const SESSION_COOKIE = '__Host-nwfl-session';
 
-const CSP = [
-  "default-src 'self'",
-  // Same-origin files only, never inline: the install button (R27) now, the
-  // service worker later. Every page works without them.
-  "script-src 'self'",
-  "style-src 'self'",
-  "img-src 'self'",
-  "font-src 'self'",
-  "connect-src 'self'",
-  "manifest-src 'self'",
-  "worker-src 'self'",
-  "frame-src 'none'",
-  "frame-ancestors 'none'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'self'",
-].join('; ');
+/** @param {string[]} formAction origins a form may lead to, besides this site */
+const csp = (formAction) =>
+  [
+    "default-src 'self'",
+    // Same-origin files only, never inline: the install button (R27) now, the
+    // service worker later. Every page works without them.
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self'",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "manifest-src 'self'",
+    "worker-src 'self'",
+    "frame-src 'none'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    // Sign-out posts here and is redirected to the sign-in provider, which
+    // browsers check against form-action: its origin comes from config (W4).
+    ["form-action 'self'", ...formAction].join(' '),
+  ].join('; ');
 
-/** @type {Readonly<Record<string, string>>} */
-export const SECURITY_HEADERS = Object.freeze({
-  'Content-Security-Policy': CSP,
-  'Strict-Transport-Security': 'max-age=31536000',
-  'X-Content-Type-Options': 'nosniff',
-  'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
-  'Cross-Origin-Opener-Policy': 'same-origin',
-});
+/**
+ * @param {{ formAction?: string[] }} opts
+ * @returns {Readonly<Record<string, string>>}
+ */
+export function securityHeaders({ formAction = [] }) {
+  return Object.freeze({
+    'Content-Security-Policy': csp(formAction),
+    'Strict-Transport-Security': 'max-age=31536000',
+    'X-Content-Type-Options': 'nosniff',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+  });
+}
+
+/** The headers with no sign-in provider configured. */
+export const SECURITY_HEADERS = securityHeaders({});
 
 /**
  * @param {string} policy

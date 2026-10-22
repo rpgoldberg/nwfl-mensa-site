@@ -1,0 +1,180 @@
+// Sign-in, the callback and sign-out (W4), as plain steps the pages call. The
+// callback takes a transaction only from this browser's own cookie, matches its
+// state exactly, uses it once, within ten minutes, and has openid-client check
+// the nonce. A refusal is told to the reader in plain words; what the provider
+// said is never repeated, and only its error code (tidied) is logged.
+import { timingSafeEqual } from 'node:crypto';
+import { prefsCookies, readPrefs, safeBack, SIZE_COOKIE, THEME_COOKIE } from '../../../server/prefs.mjs';
+import {
+  AUTH_COOKIE,
+  SESSION_COOKIE,
+  TRANSACTION_SECONDS,
+  clearCookie,
+  newSession,
+  openTransaction,
+  openValue,
+  readSession,
+  sealValue,
+  sessionKey,
+  sessionSetCookie,
+  transactionSetCookie,
+} from '../../../server/session.mjs';
+import { authConfig, type AuthSetup } from '../../../server/auth-config.mjs';
+import * as realOidc from './oidc';
+import type { Tokens } from './oidc';
+
+export type Refusal = 'expired' | 'mismatch' | 'used' | 'cancelled' | 'failed';
+
+export const REFUSALS: Record<Refusal, string> = {
+  expired: 'This sign-in took more than ten minutes, or was started in another window. Please start again.',
+  mismatch: 'This sign-in does not match the one started in this browser. Please start again.',
+  used: 'This sign-in has already been used. Please start again.',
+  cancelled: 'Sign-in was cancelled. You can start again whenever you like.',
+  failed: 'Something went wrong while signing you in. Please start again, and ask for help if it happens again.',
+};
+
+export const CLEAR_SITE_DATA = '"cookies", "storage"';
+
+export type Outcome =
+  | { kind: 'redirect'; location: string; cookies: string[]; clearSiteData?: string }
+  | { kind: 'refused'; reason: Refusal; cookies: string[] }
+  | { kind: 'unavailable' };
+
+/** Server-side token store: by session id, until the session ends, at most `cap` sessions. */
+export class TokenStore {
+  readonly #entries = new Map<string, { tokens: Tokens; until: number }>();
+  constructor(private readonly cap = 10_000) {}
+  put(sid: string, tokens: Tokens, until: number): void {
+    if (this.#entries.size >= this.cap) this.#entries.delete(this.#entries.keys().next().value as string);
+    this.#entries.set(sid, { tokens, until });
+  }
+  get(sid: string, now: number): Tokens | undefined {
+    const entry = this.#entries.get(sid);
+    if (entry && entry.until > now) return entry.tokens;
+    this.#entries.delete(sid);
+    return undefined;
+  }
+  take(sid: string, now: number): Tokens | undefined {
+    const tokens = this.get(sid, now);
+    this.#entries.delete(sid);
+    return tokens;
+  }
+}
+
+/** States already used, until their transaction would have expired anyway. */
+export class ConsumedStates {
+  readonly #until = new Map<string, number>();
+  constructor(private readonly cap = 10_000) {}
+  add(state: string, until: number): void {
+    if (this.#until.size >= this.cap) this.#until.delete(this.#until.keys().next().value as string);
+    this.#until.set(state, until);
+  }
+  has(state: string, now: number): boolean {
+    return (this.#until.get(state) ?? 0) > now;
+  }
+}
+
+export interface Deps {
+  setup: AuthSetup;
+  key: Buffer | undefined;
+  /** Seconds. */
+  now: () => number;
+  oidc: Pick<typeof realOidc, 'startSignIn' | 'finishSignIn' | 'endSessionUrl'>;
+  tokens: TokenStore;
+  consumed: ConsumedStates;
+  log: (line: string) => void;
+}
+
+const log = (d: Deps, level: string, msg: string, extra: Record<string, unknown> = {}) => d.log(JSON.stringify({ level, msg, ...extra }));
+
+const sameText = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+
+export async function beginSignIn(d: Deps, { cookieHeader, back }: { cookieHeader: string | null | undefined; back: string | null | undefined }): Promise<Outcome> {
+  const now = d.now();
+  if (!d.setup.enabled || !d.key) {
+    log(d, 'error', 'sign-in is not set up', { reason: d.setup.enabled ? 'SESSION_KEY is not set' : d.setup.reason });
+    return { kind: 'unavailable' };
+  }
+  const to = safeBack(back);
+  if (readSession(cookieHeader, d.key, now)) return { kind: 'redirect', location: to, cookies: [] };
+  try {
+    const start = await d.oidc.startSignIn(d.setup.config);
+    const tx = { state: start.state, nonce: start.nonce, verifier: start.verifier, back: to };
+    return { kind: 'redirect', location: start.location.href, cookies: [transactionSetCookie(tx, d.key, now)] };
+  } catch (error) {
+    log(d, 'error', 'the sign-in provider could not be reached', { err: String(error).slice(0, 200) });
+    return { kind: 'unavailable' };
+  }
+}
+
+export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL; cookieHeader: string | null | undefined }): Promise<Outcome> {
+  if (!d.setup.enabled || !d.key) return { kind: 'unavailable' };
+  const now = d.now();
+  const cookies = [clearCookie(AUTH_COOKIE)];
+  const refuse = (reason: Refusal, extra: Record<string, unknown> = {}): Outcome => {
+    log(d, 'warn', 'sign-in refused', { reason, ...extra });
+    return { kind: 'refused', reason, cookies };
+  };
+  const tx = openTransaction(cookieHeader, d.key, now);
+  if (!tx) return refuse('expired');
+  const state = url.searchParams.get('state') ?? '';
+  if (!sameText(state, tx.state)) return refuse('mismatch');
+  if (d.consumed.has(state, now)) return refuse('used');
+  d.consumed.add(state, tx.at + TRANSACTION_SECONDS);
+  const error = url.searchParams.get('error');
+  if (error !== null) {
+    return refuse(error === 'access_denied' ? 'cancelled' : 'failed', { error: error.replace(/[^a-z_]/g, '').slice(0, 40) });
+  }
+  try {
+    const signedIn = await d.oidc.finishSignIn(d.setup.config, url, tx);
+    const session = newSession(signedIn.claims, now);
+    d.tokens.put(session.sid, signedIn.tokens, session.exp);
+    log(d, 'info', 'signed in', { officer: session.officer, member: session.member });
+    return { kind: 'redirect', location: tx.back, cookies: [...cookies, sessionSetCookie(session, d.key, now)] };
+  } catch (err) {
+    return refuse('failed', { err: String(err).slice(0, 200) });
+  }
+}
+
+export async function signOut(d: Deps, { cookieHeader }: { cookieHeader: string | null | undefined }): Promise<Outcome> {
+  const now = d.now();
+  const done = { kind: 'redirect' as const, cookies: [clearCookie(SESSION_COOKIE), clearCookie(AUTH_COOKIE)], clearSiteData: CLEAR_SITE_DATA };
+  if (!d.key) return { ...done, location: '/signed-out' };
+  const session = readSession(cookieHeader, d.key, now);
+  const idToken = session ? d.tokens.take(session.sid, now)?.id_token : undefined;
+  // Clear-Site-Data takes the reader's text size and theme too; the signed-out
+  // page sets them again from this, sealed and short-lived.
+  const state = sealValue({ prefs: readPrefs(cookieHeader), exp: now + TRANSACTION_SECONDS }, d.key, 'signed-out');
+  let location = `/signed-out?state=${state}`;
+  if (d.setup.enabled) {
+    try {
+      const end = await d.oidc.endSessionUrl(d.setup.config, { idToken, state });
+      if (end) location = end.href;
+    } catch (error) {
+      log(d, 'warn', 'the sign-in provider could not be reached to end its session', { err: String(error).slice(0, 200) });
+    }
+  }
+  return { ...done, location };
+}
+
+/** The reader's text size and theme again, from the state sign-out sealed. */
+export function restorePrefs(d: Deps, state: string | null): string[] {
+  if (!d.key || !state) return [];
+  const sealed = openValue(state, d.key, 'signed-out') as { prefs?: { size?: unknown; theme?: unknown }; exp?: number } | undefined;
+  if (!sealed || typeof sealed.exp !== 'number' || sealed.exp <= d.now()) return [];
+  // Read back through the cookie parser, so only a size and theme it knows pass.
+  return prefsCookies(readPrefs(`${SIZE_COOKIE}=${sealed.prefs?.size}; ${THEME_COOKIE}=${sealed.prefs?.theme}`));
+}
+
+/** The real dependencies, from the server's environment. */
+export function depsFromEnv(env: Record<string, string | undefined>, logLine: (line: string) => void = console.log): Deps {
+  let key: Buffer | undefined;
+  try {
+    key = sessionKey(env);
+  } catch (error) {
+    logLine(JSON.stringify({ level: 'error', msg: String(error) }));
+  }
+  return { setup: authConfig(env), key, now: () => Math.floor(Date.now() / 1000), oidc: realOidc, tokens: SHARED.tokens, consumed: SHARED.consumed, log: logLine };
+}
+
+const SHARED = { tokens: new TokenStore(), consumed: new ConsumedStates() };

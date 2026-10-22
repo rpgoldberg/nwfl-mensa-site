@@ -19,6 +19,10 @@ describe('Dockerfile', () => {
     expect(user).toMatch(/^[1-9]\d{3,}:[1-9]\d{3,}$/);
   });
 
+  it('runs in production mode, where sign-in accepts only login.nwflorida.us', () => {
+    expect(runtime).toMatch(/^ENV NODE_ENV=production /m);
+  });
+
   it('starts the site server under an init that forwards SIGTERM', () => {
     expect(runtime).toMatch(/^ENTRYPOINT \["dumb-init", "--"\]$/m);
     expect(runtime).toMatch(/^CMD \["node", "server\/serve\.mjs"\]$/m);
