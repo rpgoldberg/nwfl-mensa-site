@@ -5,7 +5,8 @@
 // (Authentik gives every provider its own issuer and JWKS unless the issuer
 // mode is global; selection works either way):
 //
-//   site      nwfl-site: a user's token forwarded by the BFF. Groups count.
+//   site      nwfl-site: a user's token forwarded by the BFF. Groups count;
+//             its name and email claims are read for the sign-up only.
 //   agent     nwfl-agent: the newsletter agent's client-credentials token.
 //             Needs its scope and its service-account subject. No groups.
 //   verifier  nwfl-verifier: the membership verifier, likewise.
@@ -77,7 +78,16 @@ export function createJwtVerifier(clients: ClientConfig[]): TokenVerifier {
         if (!Array.isArray(claim) || !claim.every((group) => typeof group === 'string')) throw new TokenRefused('malformed groups claim');
         groups = claim;
       }
-      return { client: client.kind, subject, groups, scopes };
+      // The name and email the member typed into their own account, for the sign-up row.
+      const profile = client.kind === 'site' ? { name: payload['name'], email: payload['email'] } : {};
+      return {
+        client: client.kind,
+        subject,
+        groups,
+        scopes,
+        ...(typeof profile.name === 'string' ? { name: profile.name } : {}),
+        ...(typeof profile.email === 'string' ? { email: profile.email } : {}),
+      };
     },
   };
 }

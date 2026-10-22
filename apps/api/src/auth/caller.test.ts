@@ -46,6 +46,7 @@ const fakeVerifier: TokenVerifier = {
   verify: (token) => {
     if (token === 'member-token') return Promise.resolve({ client: 'site', subject: 'sub-member', groups: ['nwfl-members', 'other-tenant'], scopes: [] });
     if (token === 'lapsed-token') return Promise.resolve({ client: 'site', subject: 'sub-lapsed', groups: ['nwfl-members'], scopes: [] });
+    if (token === 'named-token') return Promise.resolve({ client: 'site', subject: 'sub-named', groups: [], scopes: [], name: 'Pat Example', email: 'pat@example.org' });
     if (token === 'officer-token') return Promise.resolve({ client: 'site', subject: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'], scopes: [] });
     if (token === 'agent-token') return Promise.resolve({ client: 'agent', subject: 'svc-nwfl-newsletter', groups: [], scopes: ['newsletter.read'] });
     if (token === 'verifier-token') return Promise.resolve({ client: 'verifier', subject: 'svc-nwfl-verifier', groups: [], scopes: ['membership.verify'] });
@@ -116,6 +117,11 @@ describe('authInterceptor: who is calling', () => {
   it('makes a site caller a member only when member_account says so, whatever the token groups say', async () => {
     expect(await api.events(bearer('member-token'))).toEqual({ kind: 'user', subject: 'sub-member', groups: ['nwfl-members'], scopes: [], audience: 'members' });
     expect(await api.events(bearer('lapsed-token'))).toMatchObject({ kind: 'user', audience: 'public' });
+  });
+
+  it('carries a site caller’s name and email from the token, and a machine caller has none', async () => {
+    expect(await api.events(bearer('named-token'))).toMatchObject({ kind: 'user', subject: 'sub-named', name: 'Pat Example', email: 'pat@example.org' });
+    expect(await api.newsletter(bearer('agent-token'))).not.toHaveProperty('email');
   });
 
   it('makes a site caller an officer from the nwfl-officers group', async () => {

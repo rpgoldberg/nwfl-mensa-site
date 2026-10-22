@@ -41,6 +41,9 @@ export interface VerifiedToken {
   subject: string;
   groups: readonly string[];
   scopes: readonly string[];
+  /** A site token's name and email claims (Authentik's profile and email scopes), for the sign-up only. */
+  name?: string;
+  email?: string;
 }
 
 /** Resolves only for a token it has verified; rejects otherwise. */
@@ -60,6 +63,9 @@ export interface Caller {
   groups: readonly string[];
   scopes: readonly string[];
   audience: Audience;
+  /** A site user's name and email, as their token carries them; never a machine caller's. */
+  name?: string;
+  email?: string;
 }
 
 export const ANONYMOUS: Caller = Object.freeze({ kind: 'anonymous', subject: null, groups: Object.freeze([]), scopes: Object.freeze([]), audience: 'public' });
@@ -119,7 +125,15 @@ async function establish(header: string | null, verifier: TokenVerifier, standin
   if (verified.client === 'verifier') return { kind: 'verifier', subject: verified.subject, groups: [], scopes, audience: 'public' };
   const groups = verified.groups.filter((group) => group.startsWith('nwfl-'));
   const member = await standing.isMember(verified.subject);
-  return { kind: 'user', subject: verified.subject, groups, scopes, audience: audienceFor(groups, member) };
+  return {
+    kind: 'user',
+    subject: verified.subject,
+    groups,
+    scopes,
+    audience: audienceFor(groups, member),
+    ...(verified.name !== undefined ? { name: verified.name } : {}),
+    ...(verified.email !== undefined ? { email: verified.email } : {}),
+  };
 }
 
 function admit(service: string, caller: Caller): void {

@@ -62,6 +62,17 @@ describe('createJwtVerifier', () => {
     expect(await verifier.verify(token)).toEqual({ client: 'site', subject: 'user-123', groups: ['nwfl-members', 'nwfl-office-treasurer'], scopes: ['openid', 'profile'] });
   });
 
+  it('reads the name and email a site token carries, for the sign-up; a machine token gives none', async () => {
+    const verifier = createJwtVerifier(clients());
+    expect(await verifier.verify(await sign(site({ name: 'Pat Example', email: 'pat@example.org' })))).toMatchObject({ name: 'Pat Example', email: 'pat@example.org' });
+    const odd = await verifier.verify(await sign(site({ name: 42, email: ['pat@example.org'] })));
+    expect(odd.name).toBeUndefined();
+    expect(odd.email).toBeUndefined();
+    const agent = await verifier.verify(await sign({ iss: AGENT_ISS, aud: 'nwfl-agent', sub: 'svc-nwfl-newsletter', scope: 'newsletter.read', name: 'Bot', email: 'bot@example.org' }));
+    expect(agent.name).toBeUndefined();
+    expect(agent.email).toBeUndefined();
+  });
+
   it('accepts ES256 as well as RS256', async () => {
     const verifier = createJwtVerifier(clients());
     expect((await verifier.verify(await sign(site(), { keys: ec, alg: 'ES256' }))).client).toBe('site');
