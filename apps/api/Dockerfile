@@ -43,7 +43,6 @@ ARG CACHE_BUST=2026-10-22
 LABEL org.opencontainers.image.title="nwfl-mensa-api"
 LABEL org.opencontainers.image.description="gRPC API for the NW Florida Mensa website"
 LABEL org.opencontainers.image.version="${SERVICE_VERSION}"
-LABEL org.opencontainers.image.licenses="MIT"
 
 # Security patches, dumb-init, the runtime user. npm, npx, corepack and yarn
 # are build tools; removing them drops their bundled dependencies (and their

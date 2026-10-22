@@ -51,6 +51,10 @@ describe('Dockerfile', () => {
     expect(finalStage().find((line) => line.startsWith('ENTRYPOINT'))).toBe('ENTRYPOINT ["dumb-init", "--"]');
   });
 
+  it('claims no licence: there is no LICENSE decision yet', () => {
+    expect(dockerfile).not.toMatch(/licen[cs]e/i);
+  });
+
   it('declares no VOLUME, so a read-only root filesystem needs no writable mount', () => {
     expect(lines.some((line) => /^VOLUME\s/.test(line))).toBe(false);
   });
