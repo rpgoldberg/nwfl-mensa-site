@@ -5,8 +5,12 @@
 //   node dist/seed/cli.js <seed-file>        DATABASE_URL (or PG*) as for the service
 //
 // Rules, each enforced here:
-//   - The data lives OUTSIDE the repository; a path inside it is refused. The
-//     repository may be published, and roster names are real people.
+//   - The data lives OUTSIDE the repository, and outside any git work tree;
+//     a path inside one, or a file with a second hard link (which could be a
+//     name for a file inside one), is refused. The repository may be
+//     published, and roster names are real people.
+//   - Known fields only, as own keys: __proto__, constructor and the like are
+//     unknown fields like any other.
 //   - Business and virtual venues only: a member's home is refused (R3).
 //   - Known fields only, so no phone, email or address field can ride along;
 //     contact goes through role aliases, which the schema keeps at
@@ -17,7 +21,7 @@
 //   - Every row written is recorded in audit_event as the system, with no
 //     payload, and the command prints counts only, never the data.
 // ============================================================================
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type pg from 'pg';
@@ -127,7 +131,7 @@ function row(section: string, index: number, value: unknown): Row {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new SeedError(`${where} must be an object`);
   const spec = SPECS[section] as Spec;
   const record = value as Record<string, unknown>;
-  for (const field of Object.keys(record)) if (!(field in spec)) throw new SeedError(`${where}: unknown field ${field}`);
+  for (const field of Object.keys(record)) if (!Object.hasOwn(spec, field)) throw new SeedError(`${where}: unknown field ${field}`);
   for (const [field, [kind, need]] of Object.entries(spec)) {
     const present = record[field] !== undefined;
     if (!present && need === 'required') throw new SeedError(`${where}.${field} is required`);
@@ -165,7 +169,18 @@ export function parseSeed(json: unknown): Seed {
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** Refuses a seed file inside the repository (or the image's /app), symlinks resolved. */
+/** The nearest directory at or above `dir` holding a .git entry (a directory, or a linked worktree's file). */
+function gitWorkTreeOf(dir: string): string | undefined {
+  for (let current = dir; ; current = path.dirname(current)) {
+    if (existsSync(path.join(current, '.git'))) return current;
+    if (path.dirname(current) === current) return undefined;
+  }
+}
+
+/**
+ * Refuses a seed file inside the repository (or the image's /app), inside any
+ * git work tree, or with more than one hard link; symlinks resolved.
+ */
 export function assertOutsideRepo(file: string): void {
   let resolved = path.resolve(file);
   try {
@@ -177,6 +192,16 @@ export function assertOutsideRepo(file: string): void {
   if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
     throw new SeedError('the seed file must live outside the repository: it holds real names');
   }
+  if (gitWorkTreeOf(path.dirname(resolved)) !== undefined) {
+    throw new SeedError('the seed file must live outside any git work tree: it holds real names');
+  }
+  let links = 1;
+  try {
+    links = statSync(resolved).nlink;
+  } catch {
+    // As above.
+  }
+  if (links > 1) throw new SeedError('the seed file has more than one link: copy it to a file of its own');
 }
 
 export interface SeedSummary {

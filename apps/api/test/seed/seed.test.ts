@@ -1,7 +1,7 @@
 // The calendar and roster seed (P13): business venues only, no personal
 // contacts, read from a file OUTSIDE the repository, applied in one
 // transaction, idempotent, and audited.
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,10 @@ describe('parseSeed', () => {
     ['a date the calendar does not have', { terms: [{ office: 'president', startsOn: '2026-02-30', status: 'vacant' }] }, /terms\[0\]\.startsOn/],
     ['a time that is not HH:MM', { series: [{ slug: 'x', title: 'X', category: 'lunch', recurrence: 'FREQ=WEEKLY', startsOn: '2026-01-01', defaultStart: '25:00', area: 'bay' }] }, /defaultStart/],
     ['an instant without a zone', { occurrences: [{ title: 'X', startsAt: '2026-11-14T17:00:00' }] }, /startsAt/],
+    ['a __proto__ field', JSON.parse('{"venues": [{"name": "Cafe", "kind": "business", "area": "bay", "__proto__": {"x": 1}}]}') as unknown, /venues\[0\]: unknown field __proto__/],
+    ['a constructor field', { venues: [{ name: 'Cafe', kind: 'business', area: 'bay', constructor: 'x' }] }, /venues\[0\]: unknown field constructor/],
+    ['a toString field', { offices: [{ slug: 'p', title: 'P', kind: 'elected', toString: 'x' }] }, /offices\[0\]: unknown field toString/],
+    ['a __proto__ section', JSON.parse('{"__proto__": []}') as unknown, /unknown section __proto__/],
   ])('refuses %s', (_label, json, message) => {
     expect(() => parseSeed(json)).toThrow(SeedError);
     expect(() => parseSeed(json)).toThrow(message);
@@ -43,9 +47,40 @@ describe('parseSeed', () => {
 });
 
 describe('assertOutsideRepo', () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'nwfl-seed-path-'));
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('refuses a file inside the repository, and accepts one outside it', () => {
     expect(() => assertOutsideRepo(FIXTURE)).toThrow(/outside the repository/);
     expect(() => assertOutsideRepo(path.join(os.tmpdir(), 'seed.json'))).not.toThrow();
+  });
+
+  it('refuses a file inside any git work tree, a linked worktree (a .git file) included', () => {
+    const other = path.join(dir, 'other-repo', 'data');
+    mkdirSync(path.join(dir, 'other-repo', '.git'), { recursive: true });
+    mkdirSync(other, { recursive: true });
+    writeFileSync(path.join(other, 'seed.json'), '{}');
+    expect(() => assertOutsideRepo(path.join(other, 'seed.json'))).toThrow(/outside any git work tree/);
+    const linked = path.join(dir, 'linked-worktree');
+    mkdirSync(linked);
+    writeFileSync(path.join(linked, '.git'), 'gitdir: /elsewhere/.git/worktrees/linked\n');
+    writeFileSync(path.join(linked, 'seed.json'), '{}');
+    expect(() => assertOutsideRepo(path.join(linked, 'seed.json'))).toThrow(/outside any git work tree/);
+  });
+
+  it('refuses a file with a second hard link, which could be a name for a file inside a repository', () => {
+    const plain = path.join(dir, 'plain.json');
+    writeFileSync(plain, '{}');
+    expect(() => assertOutsideRepo(plain)).not.toThrow();
+    linkSync(plain, path.join(dir, 'second-name.json'));
+    expect(() => assertOutsideRepo(plain)).toThrow(/more than one link/);
   });
 });
 
