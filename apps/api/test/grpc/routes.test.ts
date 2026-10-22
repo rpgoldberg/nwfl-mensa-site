@@ -35,8 +35,8 @@ describe('apiRoutes', () => {
     await expect(createClient(ContentService, transport).getRoster({})).resolves.toEqual(expect.objectContaining({ offices: [] }));
   });
 
-  it('registers MembershipService with no handlers yet', async () => {
-    await expect(createClient(MembershipService, transport).getMyAccount({})).rejects.toMatchObject({ code: Code.Unimplemented });
+  it('serves MembershipService, which needs a signed-in caller', async () => {
+    await expect(createClient(MembershipService, transport).getMyAccount({})).rejects.toMatchObject({ code: Code.Unauthenticated });
   });
 
   it.each([

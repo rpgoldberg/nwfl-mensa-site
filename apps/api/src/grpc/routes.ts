@@ -12,6 +12,7 @@ import { ContentService } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../gen/nwfl/mensa/v1/event_pb.js';
 import type { Db } from '../db/pool.js';
 import { eventRoutes } from '../events/service.js';
+import { membershipRoutes } from '../membership/service.js';
 import { newsletterRoutes } from '../newsletter/service.js';
 import { MembershipService } from '../gen/nwfl/mensa/v1/membership_pb.js';
 import { MembershipVerifierService } from '../gen/nwfl/mensa/v1/membership_verifier_pb.js';
@@ -45,12 +46,12 @@ export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
     eventRoutes({ db: deps.db, logger: deps.logger.child({ component: 'events' }), now }),
     contentRoutes({ db: deps.db, logger: deps.logger.child({ component: 'content' }), now }),
     newsletterRoutes({ db: deps.db, logger: deps.logger.child({ component: 'newsletter' }) }),
-    // Registered with no handlers yet (A5), so the caller gate already applies
-    // to them: an unregistered service would answer before any interceptor
-    // ran. Each method answers UNIMPLEMENTED once past the gate.
+    membershipRoutes({ db: deps.db, now }),
+    // Registered with no handlers yet (A5, next commit), so the caller gate
+    // already applies: an unregistered service would answer before any
+    // interceptor ran. Each method answers UNIMPLEMENTED once past the gate.
     (router: ConnectRouter) => {
       router.service(MembershipVerifierService, {});
-      router.service(MembershipService, {});
     },
   ];
   return (router) => routes.forEach((register) => register(router));

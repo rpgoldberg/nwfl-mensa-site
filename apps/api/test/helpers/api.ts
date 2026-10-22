@@ -33,6 +33,23 @@ export const PEOPLE: Record<string, VerifiedToken> = {
     groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-office-editor', 'nwfl-admin'],
     scopes: [],
   },
+  // People signing up: pending, with the name and email their token carries.
+  'joiner-token': { client: 'site', subject: 'sub-joiner', groups: ['nwfl-pending'], scopes: [], name: 'Jamie Example', email: 'jamie@example.org' },
+  'joiner2-token': { client: 'site', subject: 'sub-joiner2', groups: ['nwfl-pending'], scopes: [], name: 'Robin Sample', email: 'robin@example.org' },
+  'joiner3-token': { client: 'site', subject: 'sub-joiner3', groups: ['nwfl-pending'], scopes: [], name: 'Morgan Fictional', email: 'morgan@example.org' },
+  'affiliate-token': { client: 'site', subject: 'sub-affiliate', groups: ['nwfl-affiliates', 'nwfl-role-rvc'], scopes: [], name: 'Avery Madeup', email: 'avery@example.org' },
+  'noprofile-token': { client: 'site', subject: 'sub-noprofile', groups: ['nwfl-pending'], scopes: [] },
+  'bademail-token': { client: 'site', subject: 'sub-bademail', groups: ['nwfl-pending'], scopes: [], name: 'Lee Example', email: 'not an address' },
+  'racer-token': { client: 'site', subject: 'sub-racer', groups: ['nwfl-pending'], scopes: [], name: 'Quinn Example', email: 'quinn@example.org' },
+  // The Membership Officer: approves sign-ups; also signs up once, to show no one decides their own.
+  'approver-token': {
+    client: 'site',
+    subject: 'sub-approver',
+    groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers'],
+    scopes: [],
+    name: 'Casey Placeholder',
+    email: 'casey@example.org',
+  },
   // The newsletter agent and the membership verifier (machine clients).
   'agent-token': { client: 'agent', subject: 'svc-nwfl-newsletter', groups: [], scopes: ['newsletter.read'] },
   'verifier-token': { client: 'verifier', subject: 'svc-nwfl-verifier', groups: [], scopes: ['membership.verify'] },
@@ -61,7 +78,8 @@ export interface Api {
 /** Thursday 2026-10-22, 10:00 Central. */
 export const NOW = new Date('2026-10-22T15:00:00Z');
 
-export async function startApi(prefix: string, options: { verifier?: TokenVerifier } = {}): Promise<Api> {
+export async function startApi(prefix: string, options: { verifier?: TokenVerifier; now?: () => Date } = {}): Promise<Api> {
+  const now = options.now ?? ((): Date => NOW);
   const db = await freshDatabase(prefix);
   const run = await migrate(db);
   if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
@@ -73,8 +91,8 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const { lines, sink } = captureLogs();
   const logger = createStructuredLogger({ sink });
   const server: http2.Http2Server = createGrpcServer({
-    routes: apiRoutes({ db: pool, logger, now: () => NOW, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
-    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, () => NOW) }),
+    routes: apiRoutes({ db: pool, logger, now, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
+    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now) }),
   });
   const baseUrl = await listen(server);
   const transport = createGrpcTransport({ baseUrl });
