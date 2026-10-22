@@ -4,9 +4,10 @@
 // 30-day session can leave a month stale. An approval or a removal therefore
 // takes effect on the next call.
 //
-//   member     yes, while verified within the last 13 months (R24: accounts
-//              unverified for 13 months fall back to public access)
-//   affiliate  yes, by an Admin or Webmaster grant (R33)
+//   member, affiliate  yes, while verified within the last 13 months (R24:
+//                      accounts unverified for 13 months fall back to public
+//                      access; STACK-FIX ruling: an affiliate, granted by an
+//                      Admin or Webmaster (R33), lapses the same way)
 //   pending, lapsed, removed, no row: no
 // ============================================================================
 import type { Db } from '../db/pool.js';
@@ -19,8 +20,7 @@ export function dbStanding(db: Db, now: () => Date = () => new Date()): MemberSt
   return {
     isMember: async (subject) => {
       const { rows } = await db.query<{ member: boolean }>(
-        `SELECT status = 'affiliate'
-             OR (status = 'member' AND verified_on >= ($2::date - make_interval(months => $3))) AS member
+        `SELECT status IN ('member', 'affiliate') AND verified_on >= ($2::date - make_interval(months => $3)) AS member
          FROM member_account WHERE sub = $1`,
         [subject, todayIn(now()), VERIFICATION_MONTHS],
       );

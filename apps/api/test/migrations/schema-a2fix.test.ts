@@ -166,12 +166,16 @@ describe.skipIf(!live)('schema after A2-FIX', () => {
       await toApproved(id);
       expect(await sqlstate(app, `UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, id])).toBe('ok');
       expect(await sqlstate(app, `UPDATE content_version SET status = 'superseded' WHERE id = $1`, [id])).toBe(FK_VIOLATION);
-      // The revision path: approve the next version, repoint live, then supersede the old one.
+      // The revision path, in one transaction as approval runs it (0009 checks at commit that
+      // live is the newest approved version): approve the next version, repoint live, then
+      // supersede the old one.
       const next = (await newVersion(itemId)).id;
       await toReady(next);
+      await app.query('BEGIN');
       await toApproved(next);
       expect(await sqlstate(app, `UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, next])).toBe('ok');
       expect(await sqlstate(app, `UPDATE content_version SET status = 'superseded' WHERE id = $1`, [id])).toBe('ok');
+      await app.query('COMMIT');
     });
   });
 

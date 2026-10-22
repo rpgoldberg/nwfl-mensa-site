@@ -1,7 +1,8 @@
 // Member standing from member_account (AC6 b): the database decides who reads
 // at member level, not the groups in a token that can be a month old.
-// Affiliates read at member level by grant; a member unverified for 13 months
-// falls back to public (R24).
+// A member or an affiliate reads at member level while verified within the
+// last 13 months; unverified for longer, either falls back to public (R24;
+// STACK-FIX ruling: affiliates lapse like members).
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbStanding } from '../../src/auth/standing.js';
@@ -35,7 +36,10 @@ describe.skipIf(!live)('dbStanding', () => {
     await insert('current', 'member', '2026-10-01');
     await insert('thirteen-months', 'member', '2025-09-22');
     await insert('just-over', 'member', '2025-09-21');
-    await insert('affiliate', 'affiliate', null);
+    await insert('affiliate', 'affiliate', '2026-10-01');
+    await insert('affiliate-never-verified', 'affiliate', null);
+    await insert('affiliate-2020', 'affiliate', '2020-01-01');
+    await insert('affiliate-just-over', 'affiliate', '2025-09-21');
     await insert('pending', 'pending', null);
     await insert('lapsed', 'lapsed', '2026-10-01');
     await insert('removed', 'removed', '2026-10-01');
@@ -58,6 +62,9 @@ describe.skipIf(!live)('dbStanding', () => {
     ['thirteen-months', true],
     ['just-over', false],
     ['affiliate', true],
+    ['affiliate-never-verified', false],
+    ['affiliate-2020', false],
+    ['affiliate-just-over', false],
     ['pending', false],
     ['lapsed', false],
     ['removed', false],
