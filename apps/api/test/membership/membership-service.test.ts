@@ -208,6 +208,24 @@ describe.skipIf(!live)('MembershipService', () => {
       expect(await signupRow('sub-racer')).toMatchObject({ decision: 'pending' });
     });
 
+    it('dates an approval on the officer’s word when the verifier did not find the member, whatever date it reported', async () => {
+      await api.pool.query(`INSERT INTO signup_request (sub, display_name, email) VALUES ('sub-notfound', 'Drew Example', 'drew@example.org')`);
+      const row = await signupRow('sub-notfound');
+      await report(row?.id as string, 'not_found');
+      const { account: approved } = await membership.approveSignup({ requestId: row?.id as string }, APPROVER);
+      expect(approved?.verifiedOn).toEqual(expect.objectContaining({ year: 2026, month: 10, day: 22 }));
+      expect((await audits('sub-notfound')).map((a) => a.action)).toEqual(['approve_attested']);
+    });
+
+    it('gives an approved member and a removed account trying again the same one answer', async () => {
+      for (const options of [JOINER, as('racer-token')]) {
+        await expect(membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, options)).rejects.toMatchObject({
+          code: Code.AlreadyExists,
+          rawMessage: 'a sign-up is already on file for this account',
+        });
+      }
+    });
+
     it('decides a sign-up once, and refuses an id it does not have or cannot read', async () => {
       const decided = (await signupRow('sub-joiner'))?.id as string;
       await expect(membership.approveSignup({ requestId: decided }, APPROVER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
@@ -226,6 +244,14 @@ describe.skipIf(!live)('MembershipService', () => {
       expect(await account('sub-affiliate')).toMatchObject({ status: 'affiliate', affiliate_granted_by_sub: 'sub-webmaster', verified_on: '2026-10-20' });
       expect(await signupRow('sub-affiliate')).toMatchObject({ decision: 'approved', decided_by_sub: 'sub-webmaster' });
       expect((await audits('sub-affiliate')).map((a) => [a.action, a.payload])).toEqual([['grant_affiliate_verified', {}]]);
+    });
+
+    it('grants on the grantor’s attestation when the verifier’s result was not an other-group match', async () => {
+      await api.pool.query(`INSERT INTO signup_request (sub, display_name, email) VALUES ('sub-rvc-notfound', 'Sage Example', 'sage@example.org')`);
+      await report((await signupRow('sub-rvc-notfound'))?.id as string, 'not_found');
+      const { account: granted } = await membership.grantAffiliate({ subject: 'sub-rvc-notfound' }, ADMIN);
+      expect(granted?.verifiedOn).toEqual(expect.objectContaining({ year: 2026, month: 10, day: 22 }));
+      expect((await audits('sub-rvc-notfound')).map((a) => a.action)).toEqual(['grant_affiliate_attested']);
     });
 
     it('grants an invited affiliate with no verifier result on the grantor’s attestation, as of today', async () => {
