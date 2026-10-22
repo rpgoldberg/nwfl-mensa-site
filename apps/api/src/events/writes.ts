@@ -154,13 +154,14 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
         const { rows } =
           id === null
             ? await client.query<VenueRow>(
-                `INSERT INTO venue (kind, name, business_address, city, area, host_office_id, url, accessibility_note) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-                values,
+                `INSERT INTO venue (kind, name, business_address, city, area, host_office_id, url, accessibility_note, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+                [...values, request.active ?? true],
               )
             : await client.query<VenueRow>(
+                // Without the request's own active field, the venue keeps what it has.
                 `UPDATE venue SET kind = $1, name = $2, business_address = $3, city = $4, area = $5, host_office_id = $6, url = $7, accessibility_note = $8,
-                   active = $9, updated_at = now() WHERE id = $10 RETURNING *`,
-                [...values, venue.active, id],
+                   active = coalesce($9, active), updated_at = now() WHERE id = $10 RETURNING *`,
+                [...values, request.active ?? null, id],
               );
         const row = rows[0];
         if (row === undefined) throw new ConnectError('venue not found', Code.NotFound);
@@ -218,14 +219,15 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
           id === null
             ? await client.query<SeriesRow>(
                 `INSERT INTO event_series (slug, title, category, recurrence, cadence_label, starts_on, default_start, default_duration_minutes, default_venue_id,
-                   area, host_office_id, description, visibility) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING ${SERIES_COLUMNS}`,
-                values,
+                   area, host_office_id, description, visibility, active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING ${SERIES_COLUMNS}`,
+                [...values, request.active ?? true],
               )
             : await client.query<SeriesRow>(
+                // Without the request's own active field, the series keeps what it has.
                 `UPDATE event_series SET slug = $1, title = $2, category = $3, recurrence = $4, cadence_label = $5, starts_on = $6, default_start = $7,
                    default_duration_minutes = $8, default_venue_id = $9, area = $10, host_office_id = $11, description = $12, visibility = $13,
-                   active = $14, updated_at = now() WHERE id = $15 RETURNING ${SERIES_COLUMNS}`,
-                [...values, series.active, id],
+                   active = coalesce($14, active), updated_at = now() WHERE id = $15 RETURNING ${SERIES_COLUMNS}`,
+                [...values, request.active ?? null, id],
               );
         const row = rows[0] as SeriesRow;
         await recordAudit(client, caller, { action: id === null ? 'create' : 'save', subjectKind: 'event_series', subjectId: row.id, actingOfficeId: hostOfficeId });

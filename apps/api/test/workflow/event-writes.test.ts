@@ -201,6 +201,41 @@ describe.skipIf(!live)('event writes', () => {
     });
   });
 
+  // API-FIX3 note: a save that does not say whether a series or venue is active
+  // keeps it as it is; only the request's own active field switches it.
+  describe('switching a series or a venue on and off', () => {
+    it('keeps a series active through an edit that does not say, and switches it only when asked', async () => {
+      const base = create(EventSeriesSchema, {
+        slug: 'active-check',
+        title: 'Book club',
+        category: EventCategory.OTHER,
+        recurrence: 'FREQ=MONTHLY;BYDAY=2TU',
+        area: Area.BAY,
+        hostOfficeId: offices['publications'] as string,
+        visibility: EventVisibility.PUBLIC,
+        startsOn: { year: 2026, month: 1, day: 13 },
+      });
+      const created = must((await events.saveSeries({ series: base }, PUB)).series);
+      expect(created.active).toBe(true);
+      const save = async (extra: { active?: boolean } = {}) => must((await events.saveSeries({ series: { ...base, id: created.id, title: 'Book club (new room)' }, ...extra }, PUB)).series).active;
+      expect(await save()).toBe(true);
+      expect(await save({ active: false })).toBe(false);
+      expect(await save()).toBe(false);
+      expect(await save({ active: true })).toBe(true);
+      expect(must((await events.saveSeries({ series: { ...base, slug: 'born-off' }, active: false }, PUB)).series).active).toBe(false);
+    });
+
+    it('does the same for a venue', async () => {
+      const base = create(VenueSchema, { kind: VenueKind.BUSINESS, name: 'Example Library', businessAddress: '2 Example Way', area: Area.BAY });
+      const created = must((await events.saveVenue({ venue: base }, OFFICER)).venue);
+      const save = async (extra: { active?: boolean } = {}) => must((await events.saveVenue({ venue: { ...base, id: created.id, name: 'Example Library, room 2' }, ...extra }, OFFICER)).venue).active;
+      expect(await save()).toBe(true);
+      expect(await save({ active: false })).toBe(false);
+      expect(await save()).toBe(false);
+      expect(must((await events.saveVenue({ venue: { ...base, name: 'Example Annex' }, active: false }, OFFICER)).venue).active).toBe(false);
+    });
+  });
+
   // API-FIX3 (blocker): only the current owner office, or the Admin, changes an
   // occurrence; a series or owner id in the request never moves it.
   describe('ownership of an occurrence', () => {

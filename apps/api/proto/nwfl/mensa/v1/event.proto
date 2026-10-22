@@ -185,8 +185,12 @@ message ListVenuesResponse {
 }
 
 message SaveSeriesRequest {
-  // An empty id creates.
+  // An empty id creates. series.active is not read: a save changes whether
+  // the series is active only through the field below.
   EventSeries series = 1;
+  // Present: switch the series on or off. Absent: keep it as it is (a new
+  // series is active).
+  optional bool active = 2;
 }
 
 message SaveSeriesResponse {
@@ -203,8 +207,12 @@ message SaveOccurrenceResponse {
 }
 
 message SaveVenueRequest {
-  // An empty id creates.
+  // An empty id creates. venue.active is not read: a save changes whether the
+  // venue is active only through the field below.
   Venue venue = 1;
+  // Present: switch the venue on or off. Absent: keep it as it is (a new
+  // venue is active).
+  optional bool active = 2;
 }
 
 message SaveVenueResponse {
