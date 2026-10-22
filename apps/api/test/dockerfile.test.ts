@@ -51,6 +51,16 @@ describe('Dockerfile', () => {
     expect(finalStage().find((line) => line.startsWith('ENTRYPOINT'))).toBe('ENTRYPOINT ["dumb-init", "--"]');
   });
 
+  it('pins the Dockerfile frontend by version and digest', () => {
+    expect(dockerfile.split('\n')[0]).toMatch(/^# syntax=docker\/dockerfile:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/);
+  });
+
+  it('sets the mode of everything the runtime stage copies, so a umask 077 checkout still runs', () => {
+    const copies = finalStage().filter((line) => line.startsWith('COPY'));
+    expect(copies.length).toBeGreaterThan(0);
+    for (const copy of copies) expect(copy, copy).toMatch(/--chown=root:root --chmod=u=rwX,go=rX /);
+  });
+
   it('claims no licence: there is no LICENSE decision yet', () => {
     expect(dockerfile).not.toMatch(/licen[cs]e/i);
   });

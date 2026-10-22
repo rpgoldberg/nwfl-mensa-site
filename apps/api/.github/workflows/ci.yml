@@ -118,6 +118,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      - name: Make the checkout look like a umask 077 one
+        # Files 0600 and directories 0700, as a checkout made under umask 077
+        # leaves them. The image must set its own modes and still run.
+        run: chmod -R go-rwx .
+
       - name: Build the production image
         run: docker build --build-arg SERVICE_VERSION="$(node -pe "require('./package.json').version")" -t nwfl-mensa-api:ci .
 

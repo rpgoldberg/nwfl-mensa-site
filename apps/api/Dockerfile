@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 # nwfl-mensa-api image. Stages: builder (compiles TypeScript) -> deps
 # (production node_modules) -> production (runtime only).
 #
@@ -58,10 +58,12 @@ RUN apt-get update && \
     useradd -u 10001 -g nwfl -M -s /usr/sbin/nologin nwfl
 
 WORKDIR /app
-# Owned by root and read-only to the runtime user.
-COPY --from=deps --chown=root:root /app/node_modules ./node_modules
-COPY --from=builder --chown=root:root /app/dist ./dist
-COPY --chown=root:root package.json ./
+# Owned by root and read-only to the runtime user. The mode is set, not
+# inherited: a checkout made under umask 077 leaves files 0600, which the
+# runtime user could not read (symbolic --chmod needs frontend 1.14 or later).
+COPY --from=deps --chown=root:root --chmod=u=rwX,go=rX /app/node_modules ./node_modules
+COPY --from=builder --chown=root:root --chmod=u=rwX,go=rX /app/dist ./dist
+COPY --chown=root:root --chmod=u=rwX,go=rX package.json ./
 
 ENV NODE_ENV=production \
     GRPC_PORT=50051 \
