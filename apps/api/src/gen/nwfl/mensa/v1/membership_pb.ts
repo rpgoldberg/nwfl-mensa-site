@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file nwfl/mensa/v1/membership.proto.
  */
 export const file_nwfl_mensa_v1_membership: GenFile = /*@__PURE__*/
-  fileDesc("Ch5ud2ZsL21lbnNhL3YxL21lbWJlcnNoaXAucHJvdG8SDW53ZmwubWVuc2EudjEikgEKDU1lbWJlckFjY291bnQSKwoGc3RhdHVzGAEgASgOMhsubndmbC5tZW5zYS52MS5NZW1iZXJTdGF0dXMSKgoFcm91dGUYAiABKA4yGy5ud2ZsLm1lbnNhLnYxLkFjY291bnRSb3V0ZRIoCgt2ZXJpZmllZF9vbhgDIAEoCzITLm53ZmwubWVuc2EudjEuRGF0ZSLVAQoNU2lnbnVwUmVxdWVzdBISCgpyZXF1ZXN0X2lkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRINCgVlbWFpbBgDIAEoCRIxCgx2ZXJpZmljYXRpb24YBCABKA4yGy5ud2ZsLm1lbnNhLnYxLlZlcmlmaWNhdGlvbhIoCgt2ZXJpZmllZF9vbhgFIAEoCzITLm53ZmwubWVuc2EudjEuRGF0ZRIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCJDChNTdWJtaXRTaWdudXBSZXF1ZXN0EhEKCWxhc3RfbmFtZRgBIAEoCRIZChFtZW1iZXJzaGlwX251bWJlchgCIAEoCSIqChRTdWJtaXRTaWdudXBSZXNwb25zZRISCgpyZXF1ZXN0X2lkGAEgASgJIhUKE0dldE15QWNjb3VudFJlcXVlc3QiRQoUR2V0TXlBY2NvdW50UmVzcG9uc2USLQoHYWNjb3VudBgBIAEoCzIcLm53ZmwubWVuc2EudjEuTWVtYmVyQWNjb3VudCIbChlMaXN0U2lnbnVwUmVxdWVzdHNSZXF1ZXN0IkwKGkxpc3RTaWdudXBSZXF1ZXN0c1Jlc3BvbnNlEi4KCHJlcXVlc3RzGAEgAygLMhwubndmbC5tZW5zYS52MS5TaWdudXBSZXF1ZXN0IioKFEFwcHJvdmVTaWdudXBSZXF1ZXN0EhIKCnJlcXVlc3RfaWQYASABKAkiRgoVQXBwcm92ZVNpZ251cFJlc3BvbnNlEi0KB2FjY291bnQYASABKAsyHC5ud2ZsLm1lbnNhLnYxLk1lbWJlckFjY291bnQiJgoTUmVtb3ZlTWVtYmVyUmVxdWVzdBIPCgdzdWJqZWN0GAEgASgJIhYKFFJlbW92ZU1lbWJlclJlc3BvbnNlIigKFUdyYW50QWZmaWxpYXRlUmVxdWVzdBIPCgdzdWJqZWN0GAEgASgJIkcKFkdyYW50QWZmaWxpYXRlUmVzcG9uc2USLQoHYWNjb3VudBgBIAEoCzIcLm53ZmwubWVuc2EudjEuTWVtYmVyQWNjb3VudCq0AQoMTWVtYmVyU3RhdHVzEh0KGU1FTUJFUl9TVEFUVVNfVU5TUEVDSUZJRUQQABIZChVNRU1CRVJfU1RBVFVTX1BFTkRJTkcQARIYChRNRU1CRVJfU1RBVFVTX01FTUJFUhACEhsKF01FTUJFUl9TVEFUVVNfQUZGSUxJQVRFEAMSGAoUTUVNQkVSX1NUQVRVU19MQVBTRUQQBBIZChVNRU1CRVJfU1RBVFVTX1JFTU9WRUQQBSqAAQoMQWNjb3VudFJvdXRlEh0KGUFDQ09VTlRfUk9VVEVfVU5TUEVDSUZJRUQQABIYChRBQ0NPVU5UX1JPVVRFX0lOVklURRABEhgKFEFDQ09VTlRfUk9VVEVfU0lHTlVQEAISHQoZQUNDT1VOVF9ST1VURV9BRE1JTl9HUkFOVBADKsQBCgxWZXJpZmljYXRpb24SHAoYVkVSSUZJQ0FUSU9OX1VOU1BFQ0lGSUVEEAASGgoWVkVSSUZJQ0FUSU9OX1VOQ0hFQ0tFRBABEh8KG1ZFUklGSUNBVElPTl9WRVJJRklFRF9MT0NBTBACEiUKIVZFUklGSUNBVElPTl9WRVJJRklFRF9PVEhFUl9HUk9VUBADEhoKFlZFUklGSUNBVElPTl9OT1RfRk9VTkQQBBIWChJWRVJJRklDQVRJT05fRVJST1IQBTLOBAoRTWVtYmVyc2hpcFNlcnZpY2USVwoMU3VibWl0U2lnbnVwEiIubndmbC5tZW5zYS52MS5TdWJtaXRTaWdudXBSZXF1ZXN0GiMubndmbC5tZW5zYS52MS5TdWJtaXRTaWdudXBSZXNwb25zZRJcCgxHZXRNeUFjY291bnQSIi5ud2ZsLm1lbnNhLnYxLkdldE15QWNjb3VudFJlcXVlc3QaIy5ud2ZsLm1lbnNhLnYxLkdldE15QWNjb3VudFJlc3BvbnNlIgOQAgESbgoSTGlzdFNpZ251cFJlcXVlc3RzEigubndmbC5tZW5zYS52MS5MaXN0U2lnbnVwUmVxdWVzdHNSZXF1ZXN0GikubndmbC5tZW5zYS52MS5MaXN0U2lnbnVwUmVxdWVzdHNSZXNwb25zZSIDkAIBEloKDUFwcHJvdmVTaWdudXASIy5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVTaWdudXBSZXF1ZXN0GiQubndmbC5tZW5zYS52MS5BcHByb3ZlU2lnbnVwUmVzcG9uc2USVwoMUmVtb3ZlTWVtYmVyEiIubndmbC5tZW5zYS52MS5SZW1vdmVNZW1iZXJSZXF1ZXN0GiMubndmbC5tZW5zYS52MS5SZW1vdmVNZW1iZXJSZXNwb25zZRJdCg5HcmFudEFmZmlsaWF0ZRIkLm53ZmwubWVuc2EudjEuR3JhbnRBZmZpbGlhdGVSZXF1ZXN0GiUubndmbC5tZW5zYS52MS5HcmFudEFmZmlsaWF0ZVJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp, file_nwfl_mensa_v1_common]);
+  fileDesc("Ch5ud2ZsL21lbnNhL3YxL21lbWJlcnNoaXAucHJvdG8SDW53ZmwubWVuc2EudjEikgEKDU1lbWJlckFjY291bnQSKwoGc3RhdHVzGAEgASgOMhsubndmbC5tZW5zYS52MS5NZW1iZXJTdGF0dXMSKgoFcm91dGUYAiABKA4yGy5ud2ZsLm1lbnNhLnYxLkFjY291bnRSb3V0ZRIoCgt2ZXJpZmllZF9vbhgDIAEoCzITLm53ZmwubWVuc2EudjEuRGF0ZSKBAgoNU2lnbnVwUmVxdWVzdBISCgpyZXF1ZXN0X2lkGAEgASgJEhQKDGRpc3BsYXlfbmFtZRgCIAEoCRINCgVlbWFpbBgDIAEoCRIxCgx2ZXJpZmljYXRpb24YBCABKA4yGy5ud2ZsLm1lbnNhLnYxLlZlcmlmaWNhdGlvbhIoCgt2ZXJpZmllZF9vbhgFIAEoCzITLm53ZmwubWVuc2EudjEuRGF0ZRIuCgpjcmVhdGVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIqCgVyb3V0ZRgHIAEoDjIbLm53ZmwubWVuc2EudjEuQWNjb3VudFJvdXRlItYBCgZNZW1iZXISDwoHc3ViamVjdBgBIAEoCRIUCgxkaXNwbGF5X25hbWUYAiABKAkSDQoFZW1haWwYAyABKAkSKwoGc3RhdHVzGAQgASgOMhsubndmbC5tZW5zYS52MS5NZW1iZXJTdGF0dXMSKgoFcm91dGUYBSABKA4yGy5ud2ZsLm1lbnNhLnYxLkFjY291bnRSb3V0ZRIoCgt2ZXJpZmllZF9vbhgGIAEoCzITLm53ZmwubWVuc2EudjEuRGF0ZRITCgtyZWNoZWNrX2R1ZRgHIAEoCCJDChNTdWJtaXRTaWdudXBSZXF1ZXN0EhEKCWxhc3RfbmFtZRgBIAEoCRIZChFtZW1iZXJzaGlwX251bWJlchgCIAEoCSIqChRTdWJtaXRTaWdudXBSZXNwb25zZRISCgpyZXF1ZXN0X2lkGAEgASgJIhUKE0dldE15QWNjb3VudFJlcXVlc3QiRQoUR2V0TXlBY2NvdW50UmVzcG9uc2USLQoHYWNjb3VudBgBIAEoCzIcLm53ZmwubWVuc2EudjEuTWVtYmVyQWNjb3VudCIbChlMaXN0U2lnbnVwUmVxdWVzdHNSZXF1ZXN0IkwKGkxpc3RTaWdudXBSZXF1ZXN0c1Jlc3BvbnNlEi4KCHJlcXVlc3RzGAEgAygLMhwubndmbC5tZW5zYS52MS5TaWdudXBSZXF1ZXN0IioKFEFwcHJvdmVTaWdudXBSZXF1ZXN0EhIKCnJlcXVlc3RfaWQYASABKAkiRgoVQXBwcm92ZVNpZ251cFJlc3BvbnNlEi0KB2FjY291bnQYASABKAsyHC5ud2ZsLm1lbnNhLnYxLk1lbWJlckFjY291bnQiKQoTUmVqZWN0U2lnbnVwUmVxdWVzdBISCgpyZXF1ZXN0X2lkGAEgASgJIhYKFFJlamVjdFNpZ251cFJlc3BvbnNlIi4KEkxpc3RNZW1iZXJzUmVxdWVzdBIYChByZWNoZWNrX2R1ZV9vbmx5GAEgASgIIj0KE0xpc3RNZW1iZXJzUmVzcG9uc2USJgoHbWVtYmVycxgBIAMoCzIVLm53ZmwubWVuc2EudjEuTWVtYmVyIiYKE1JlbW92ZU1lbWJlclJlcXVlc3QSDwoHc3ViamVjdBgBIAEoCSIWChRSZW1vdmVNZW1iZXJSZXNwb25zZSIoChVHcmFudEFmZmlsaWF0ZVJlcXVlc3QSDwoHc3ViamVjdBgBIAEoCSJHChZHcmFudEFmZmlsaWF0ZVJlc3BvbnNlEi0KB2FjY291bnQYASABKAsyHC5ud2ZsLm1lbnNhLnYxLk1lbWJlckFjY291bnQqtAEKDE1lbWJlclN0YXR1cxIdChlNRU1CRVJfU1RBVFVTX1VOU1BFQ0lGSUVEEAASGQoVTUVNQkVSX1NUQVRVU19QRU5ESU5HEAESGAoUTUVNQkVSX1NUQVRVU19NRU1CRVIQAhIbChdNRU1CRVJfU1RBVFVTX0FGRklMSUFURRADEhgKFE1FTUJFUl9TVEFUVVNfTEFQU0VEEAQSGQoVTUVNQkVSX1NUQVRVU19SRU1PVkVEEAUqgAEKDEFjY291bnRSb3V0ZRIdChlBQ0NPVU5UX1JPVVRFX1VOU1BFQ0lGSUVEEAASGAoUQUNDT1VOVF9ST1VURV9JTlZJVEUQARIYChRBQ0NPVU5UX1JPVVRFX1NJR05VUBACEh0KGUFDQ09VTlRfUk9VVEVfQURNSU5fR1JBTlQQAyrEAQoMVmVyaWZpY2F0aW9uEhwKGFZFUklGSUNBVElPTl9VTlNQRUNJRklFRBAAEhoKFlZFUklGSUNBVElPTl9VTkNIRUNLRUQQARIfChtWRVJJRklDQVRJT05fVkVSSUZJRURfTE9DQUwQAhIlCiFWRVJJRklDQVRJT05fVkVSSUZJRURfT1RIRVJfR1JPVVAQAxIaChZWRVJJRklDQVRJT05fTk9UX0ZPVU5EEAQSFgoSVkVSSUZJQ0FUSU9OX0VSUk9SEAUyggYKEU1lbWJlcnNoaXBTZXJ2aWNlElcKDFN1Ym1pdFNpZ251cBIiLm53ZmwubWVuc2EudjEuU3VibWl0U2lnbnVwUmVxdWVzdBojLm53ZmwubWVuc2EudjEuU3VibWl0U2lnbnVwUmVzcG9uc2USXAoMR2V0TXlBY2NvdW50EiIubndmbC5tZW5zYS52MS5HZXRNeUFjY291bnRSZXF1ZXN0GiMubndmbC5tZW5zYS52MS5HZXRNeUFjY291bnRSZXNwb25zZSIDkAIBEm4KEkxpc3RTaWdudXBSZXF1ZXN0cxIoLm53ZmwubWVuc2EudjEuTGlzdFNpZ251cFJlcXVlc3RzUmVxdWVzdBopLm53ZmwubWVuc2EudjEuTGlzdFNpZ251cFJlcXVlc3RzUmVzcG9uc2UiA5ACARJaCg1BcHByb3ZlU2lnbnVwEiMubndmbC5tZW5zYS52MS5BcHByb3ZlU2lnbnVwUmVxdWVzdBokLm53ZmwubWVuc2EudjEuQXBwcm92ZVNpZ251cFJlc3BvbnNlElcKDFJlamVjdFNpZ251cBIiLm53ZmwubWVuc2EudjEuUmVqZWN0U2lnbnVwUmVxdWVzdBojLm53ZmwubWVuc2EudjEuUmVqZWN0U2lnbnVwUmVzcG9uc2USWQoLTGlzdE1lbWJlcnMSIS5ud2ZsLm1lbnNhLnYxLkxpc3RNZW1iZXJzUmVxdWVzdBoiLm53ZmwubWVuc2EudjEuTGlzdE1lbWJlcnNSZXNwb25zZSIDkAIBElcKDFJlbW92ZU1lbWJlchIiLm53ZmwubWVuc2EudjEuUmVtb3ZlTWVtYmVyUmVxdWVzdBojLm53ZmwubWVuc2EudjEuUmVtb3ZlTWVtYmVyUmVzcG9uc2USXQoOR3JhbnRBZmZpbGlhdGUSJC5ud2ZsLm1lbnNhLnYxLkdyYW50QWZmaWxpYXRlUmVxdWVzdBolLm53ZmwubWVuc2EudjEuR3JhbnRBZmZpbGlhdGVSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp, file_nwfl_mensa_v1_common]);
 
 /**
  * @generated from message nwfl.mensa.v1.MemberAccount
@@ -50,8 +50,9 @@ export const MemberAccountSchema: GenMessage<MemberAccount> = /*@__PURE__*/
   messageDesc(file_nwfl_mensa_v1_membership, 0);
 
 /**
- * A pending sign-up as the approver sees it. The membership number is never
- * shown: only whether and when it was verified.
+ * A pending sign-up as the approver sees it. The membership number and the
+ * last name are never shown: only whether and when the number was verified,
+ * and with what outcome.
  *
  * @generated from message nwfl.mensa.v1.SignupRequest
  */
@@ -87,6 +88,13 @@ export type SignupRequest = Message<"nwfl.mensa.v1.SignupRequest"> & {
    * @generated from field: google.protobuf.Timestamp created_at = 6;
    */
   createdAt?: Timestamp | undefined;
+
+  /**
+   * How the account came to be: a sign-up, or an invitation that then signed up.
+   *
+   * @generated from field: nwfl.mensa.v1.AccountRoute route = 7;
+   */
+  route: AccountRoute;
 };
 
 /**
@@ -95,6 +103,62 @@ export type SignupRequest = Message<"nwfl.mensa.v1.SignupRequest"> & {
  */
 export const SignupRequestSchema: GenMessage<SignupRequest> = /*@__PURE__*/
   messageDesc(file_nwfl_mensa_v1_membership, 1);
+
+/**
+ * An account as the approvers see it, for removal and the yearly re-check.
+ *
+ * @generated from message nwfl.mensa.v1.Member
+ */
+export type Member = Message<"nwfl.mensa.v1.Member"> & {
+  /**
+   * The Authentik subject.
+   *
+   * @generated from field: string subject = 1;
+   */
+  subject: string;
+
+  /**
+   * As the member typed it at sign-up; empty for an account that never signed up.
+   *
+   * @generated from field: string display_name = 2;
+   */
+  displayName: string;
+
+  /**
+   * @generated from field: string email = 3;
+   */
+  email: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.MemberStatus status = 4;
+   */
+  status: MemberStatus;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.AccountRoute route = 5;
+   */
+  route: AccountRoute;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.Date verified_on = 6;
+   */
+  verifiedOn?: Date | undefined;
+
+  /**
+   * Verified more than 12 months ago: due for the yearly re-check. After 13
+   * months the account reads at public level until it is verified again.
+   *
+   * @generated from field: bool recheck_due = 7;
+   */
+  recheckDue: boolean;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.Member.
+ * Use `create(MemberSchema)` to create a new message.
+ */
+export const MemberSchema: GenMessage<Member> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_membership, 2);
 
 /**
  * @generated from message nwfl.mensa.v1.SubmitSignupRequest
@@ -121,7 +185,7 @@ export type SubmitSignupRequest = Message<"nwfl.mensa.v1.SubmitSignupRequest"> &
  * Use `create(SubmitSignupRequestSchema)` to create a new message.
  */
 export const SubmitSignupRequestSchema: GenMessage<SubmitSignupRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 2);
+  messageDesc(file_nwfl_mensa_v1_membership, 3);
 
 /**
  * @generated from message nwfl.mensa.v1.SubmitSignupResponse
@@ -138,7 +202,7 @@ export type SubmitSignupResponse = Message<"nwfl.mensa.v1.SubmitSignupResponse">
  * Use `create(SubmitSignupResponseSchema)` to create a new message.
  */
 export const SubmitSignupResponseSchema: GenMessage<SubmitSignupResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 3);
+  messageDesc(file_nwfl_mensa_v1_membership, 4);
 
 /**
  * @generated from message nwfl.mensa.v1.GetMyAccountRequest
@@ -151,7 +215,7 @@ export type GetMyAccountRequest = Message<"nwfl.mensa.v1.GetMyAccountRequest"> &
  * Use `create(GetMyAccountRequestSchema)` to create a new message.
  */
 export const GetMyAccountRequestSchema: GenMessage<GetMyAccountRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 4);
+  messageDesc(file_nwfl_mensa_v1_membership, 5);
 
 /**
  * @generated from message nwfl.mensa.v1.GetMyAccountResponse
@@ -168,7 +232,7 @@ export type GetMyAccountResponse = Message<"nwfl.mensa.v1.GetMyAccountResponse">
  * Use `create(GetMyAccountResponseSchema)` to create a new message.
  */
 export const GetMyAccountResponseSchema: GenMessage<GetMyAccountResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 5);
+  messageDesc(file_nwfl_mensa_v1_membership, 6);
 
 /**
  * @generated from message nwfl.mensa.v1.ListSignupRequestsRequest
@@ -181,7 +245,7 @@ export type ListSignupRequestsRequest = Message<"nwfl.mensa.v1.ListSignupRequest
  * Use `create(ListSignupRequestsRequestSchema)` to create a new message.
  */
 export const ListSignupRequestsRequestSchema: GenMessage<ListSignupRequestsRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 6);
+  messageDesc(file_nwfl_mensa_v1_membership, 7);
 
 /**
  * @generated from message nwfl.mensa.v1.ListSignupRequestsResponse
@@ -198,7 +262,7 @@ export type ListSignupRequestsResponse = Message<"nwfl.mensa.v1.ListSignupReques
  * Use `create(ListSignupRequestsResponseSchema)` to create a new message.
  */
 export const ListSignupRequestsResponseSchema: GenMessage<ListSignupRequestsResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 7);
+  messageDesc(file_nwfl_mensa_v1_membership, 8);
 
 /**
  * @generated from message nwfl.mensa.v1.ApproveSignupRequest
@@ -215,7 +279,7 @@ export type ApproveSignupRequest = Message<"nwfl.mensa.v1.ApproveSignupRequest">
  * Use `create(ApproveSignupRequestSchema)` to create a new message.
  */
 export const ApproveSignupRequestSchema: GenMessage<ApproveSignupRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 8);
+  messageDesc(file_nwfl_mensa_v1_membership, 9);
 
 /**
  * @generated from message nwfl.mensa.v1.ApproveSignupResponse
@@ -232,7 +296,73 @@ export type ApproveSignupResponse = Message<"nwfl.mensa.v1.ApproveSignupResponse
  * Use `create(ApproveSignupResponseSchema)` to create a new message.
  */
 export const ApproveSignupResponseSchema: GenMessage<ApproveSignupResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 9);
+  messageDesc(file_nwfl_mensa_v1_membership, 10);
+
+/**
+ * @generated from message nwfl.mensa.v1.RejectSignupRequest
+ */
+export type RejectSignupRequest = Message<"nwfl.mensa.v1.RejectSignupRequest"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.RejectSignupRequest.
+ * Use `create(RejectSignupRequestSchema)` to create a new message.
+ */
+export const RejectSignupRequestSchema: GenMessage<RejectSignupRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_membership, 11);
+
+/**
+ * @generated from message nwfl.mensa.v1.RejectSignupResponse
+ */
+export type RejectSignupResponse = Message<"nwfl.mensa.v1.RejectSignupResponse"> & {
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.RejectSignupResponse.
+ * Use `create(RejectSignupResponseSchema)` to create a new message.
+ */
+export const RejectSignupResponseSchema: GenMessage<RejectSignupResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_membership, 12);
+
+/**
+ * @generated from message nwfl.mensa.v1.ListMembersRequest
+ */
+export type ListMembersRequest = Message<"nwfl.mensa.v1.ListMembersRequest"> & {
+  /**
+   * Only the accounts due for the yearly re-check.
+   *
+   * @generated from field: bool recheck_due_only = 1;
+   */
+  recheckDueOnly: boolean;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ListMembersRequest.
+ * Use `create(ListMembersRequestSchema)` to create a new message.
+ */
+export const ListMembersRequestSchema: GenMessage<ListMembersRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_membership, 13);
+
+/**
+ * @generated from message nwfl.mensa.v1.ListMembersResponse
+ */
+export type ListMembersResponse = Message<"nwfl.mensa.v1.ListMembersResponse"> & {
+  /**
+   * @generated from field: repeated nwfl.mensa.v1.Member members = 1;
+   */
+  members: Member[];
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ListMembersResponse.
+ * Use `create(ListMembersResponseSchema)` to create a new message.
+ */
+export const ListMembersResponseSchema: GenMessage<ListMembersResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_membership, 14);
 
 /**
  * @generated from message nwfl.mensa.v1.RemoveMemberRequest
@@ -251,7 +381,7 @@ export type RemoveMemberRequest = Message<"nwfl.mensa.v1.RemoveMemberRequest"> &
  * Use `create(RemoveMemberRequestSchema)` to create a new message.
  */
 export const RemoveMemberRequestSchema: GenMessage<RemoveMemberRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 10);
+  messageDesc(file_nwfl_mensa_v1_membership, 15);
 
 /**
  * @generated from message nwfl.mensa.v1.RemoveMemberResponse
@@ -264,7 +394,7 @@ export type RemoveMemberResponse = Message<"nwfl.mensa.v1.RemoveMemberResponse">
  * Use `create(RemoveMemberResponseSchema)` to create a new message.
  */
 export const RemoveMemberResponseSchema: GenMessage<RemoveMemberResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 11);
+  messageDesc(file_nwfl_mensa_v1_membership, 16);
 
 /**
  * @generated from message nwfl.mensa.v1.GrantAffiliateRequest
@@ -283,7 +413,7 @@ export type GrantAffiliateRequest = Message<"nwfl.mensa.v1.GrantAffiliateRequest
  * Use `create(GrantAffiliateRequestSchema)` to create a new message.
  */
 export const GrantAffiliateRequestSchema: GenMessage<GrantAffiliateRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 12);
+  messageDesc(file_nwfl_mensa_v1_membership, 17);
 
 /**
  * @generated from message nwfl.mensa.v1.GrantAffiliateResponse
@@ -300,7 +430,7 @@ export type GrantAffiliateResponse = Message<"nwfl.mensa.v1.GrantAffiliateRespon
  * Use `create(GrantAffiliateResponseSchema)` to create a new message.
  */
 export const GrantAffiliateResponseSchema: GenMessage<GrantAffiliateResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_membership, 13);
+  messageDesc(file_nwfl_mensa_v1_membership, 18);
 
 /**
  * @generated from enum nwfl.mensa.v1.MemberStatus
@@ -462,12 +592,35 @@ export const MembershipService: GenService<{
     output: typeof ListSignupRequestsResponseSchema;
   },
   /**
+   * Approves or rejects a pending sign-up, erasing its number and last name.
+   * No approver decides their own sign-up. A sign-up the verifier found in
+   * another local group is not approved as a member: it is rejected, or the
+   * account is granted affiliate standing.
+   *
    * @generated from rpc nwfl.mensa.v1.MembershipService.ApproveSignup
    */
   approveSignup: {
     methodKind: "unary";
     input: typeof ApproveSignupRequestSchema;
     output: typeof ApproveSignupResponseSchema;
+  },
+  /**
+   * @generated from rpc nwfl.mensa.v1.MembershipService.RejectSignup
+   */
+  rejectSignup: {
+    methodKind: "unary";
+    input: typeof RejectSignupRequestSchema;
+    output: typeof RejectSignupResponseSchema;
+  },
+  /**
+   * Accounts with member-level standing or past it: for removal and the yearly re-check.
+   *
+   * @generated from rpc nwfl.mensa.v1.MembershipService.ListMembers
+   */
+  listMembers: {
+    methodKind: "unary";
+    input: typeof ListMembersRequestSchema;
+    output: typeof ListMembersResponseSchema;
   },
   /**
    * @generated from rpc nwfl.mensa.v1.MembershipService.RemoveMember
@@ -478,7 +631,9 @@ export const MembershipService: GenService<{
     output: typeof RemoveMemberResponseSchema;
   },
   /**
-   * Admin or Webmaster only.
+   * Admin or Webmaster only. Member-level reading for an invited affiliate,
+   * with the verifier's other-group result as its verification when there is
+   * one, and the grantor's attestation otherwise.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.GrantAffiliate
    */

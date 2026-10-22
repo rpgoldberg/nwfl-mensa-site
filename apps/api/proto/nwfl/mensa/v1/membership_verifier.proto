@@ -11,11 +11,17 @@ service MembershipVerifierService {
   rpc ListPendingVerifications(ListPendingVerificationsRequest) returns (ListPendingVerificationsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
-  // Records the outcome and the date, and erases the number.
+  // Records the outcome and the date, and erases the number and the last name
+  // in the same statement. A local match does not approve the sign-up: an
+  // officer still does.
   rpc ReportVerification(ReportVerificationRequest) returns (ReportVerificationResponse);
 }
 
-message ListPendingVerificationsRequest {}
+message ListPendingVerificationsRequest {
+  // At most 10, the default: oldest first, and a reported sign-up leaves the
+  // list, so the next call returns the next ones.
+  int32 page_size = 1;
+}
 
 message ListPendingVerificationsResponse {
   repeated PendingVerification pending = 1;

@@ -46,8 +46,9 @@ message MemberAccount {
   Date verified_on = 3;
 }
 
-// A pending sign-up as the approver sees it. The membership number is never
-// shown: only whether and when it was verified.
+// A pending sign-up as the approver sees it. The membership number and the
+// last name are never shown: only whether and when the number was verified,
+// and with what outcome.
 message SignupRequest {
   string request_id = 1;
   string display_name = 2;
@@ -56,6 +57,23 @@ message SignupRequest {
   Verification verification = 4;
   Date verified_on = 5;
   google.protobuf.Timestamp created_at = 6;
+  // How the account came to be: a sign-up, or an invitation that then signed up.
+  AccountRoute route = 7;
+}
+
+// An account as the approvers see it, for removal and the yearly re-check.
+message Member {
+  // The Authentik subject.
+  string subject = 1;
+  // As the member typed it at sign-up; empty for an account that never signed up.
+  string display_name = 2;
+  string email = 3;
+  MemberStatus status = 4;
+  AccountRoute route = 5;
+  Date verified_on = 6;
+  // Verified more than 12 months ago: due for the yearly re-check. After 13
+  // months the account reads at public level until it is verified again.
+  bool recheck_due = 7;
 }
 
 // Accounts and approvals. The subject, display name and email come from the
@@ -71,9 +89,20 @@ service MembershipService {
   rpc ListSignupRequests(ListSignupRequestsRequest) returns (ListSignupRequestsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+  // Approves or rejects a pending sign-up, erasing its number and last name.
+  // No approver decides their own sign-up. A sign-up the verifier found in
+  // another local group is not approved as a member: it is rejected, or the
+  // account is granted affiliate standing.
   rpc ApproveSignup(ApproveSignupRequest) returns (ApproveSignupResponse);
+  rpc RejectSignup(RejectSignupRequest) returns (RejectSignupResponse);
+  // Accounts with member-level standing or past it: for removal and the yearly re-check.
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
   rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
-  // Admin or Webmaster only.
+  // Admin or Webmaster only. Member-level reading for an invited affiliate,
+  // with the verifier's other-group result as its verification when there is
+  // one, and the grantor's attestation otherwise.
   rpc GrantAffiliate(GrantAffiliateRequest) returns (GrantAffiliateResponse);
 }
 
@@ -107,6 +136,21 @@ message ApproveSignupRequest {
 
 message ApproveSignupResponse {
   MemberAccount account = 1;
+}
+
+message RejectSignupRequest {
+  string request_id = 1;
+}
+
+message RejectSignupResponse {}
+
+message ListMembersRequest {
+  // Only the accounts due for the yearly re-check.
+  bool recheck_due_only = 1;
+}
+
+message ListMembersResponse {
+  repeated Member members = 1;
 }
 
 message RemoveMemberRequest {

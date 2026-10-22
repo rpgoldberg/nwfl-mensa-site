@@ -118,9 +118,9 @@ describe(`${PKG}: the membership verifier`, () => {
     ]);
   });
 
-  it('lists a pending verification as request id, membership number and last name only', () => {
+  it('lists a pending verification as request id, membership number and last name only, a page at a time', () => {
     const list = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ListPendingVerifications');
-    expect(fieldNames(list?.input)).toEqual([]);
+    expect(fieldNames(list?.input)).toEqual(['page_size']);
     const item = list?.output.fields.map(fieldMessage).find((m) => m !== undefined);
     expect(fieldNames(item)).toEqual(['request_id', 'membership_number', 'last_name']);
   });
@@ -143,6 +143,17 @@ describe(`${PKG}: the membership verifier`, () => {
     const carriers = methods().flatMap((m) => [
       ...(reachableFields(m.input).some((f) => f.name === 'membership_number') ? [`${rpc(m)} in`] : []),
       ...(reachableFields(m.output).some((f) => f.name === 'membership_number') ? [`${rpc(m)} out`] : []),
+    ]);
+    expect(carriers.sort()).toEqual([
+      'MembershipService.SubmitSignup in',
+      'MembershipVerifierService.ListPendingVerifications out',
+    ]);
+  });
+
+  it('lets the last name reach only the same two places', () => {
+    const carriers = methods().flatMap((m) => [
+      ...(reachableFields(m.input).some((f) => f.name === 'last_name') ? [`${rpc(m)} in`] : []),
+      ...(reachableFields(m.output).some((f) => f.name === 'last_name') ? [`${rpc(m)} out`] : []),
     ]);
     expect(carriers.sort()).toEqual([
       'MembershipService.SubmitSignup in',
