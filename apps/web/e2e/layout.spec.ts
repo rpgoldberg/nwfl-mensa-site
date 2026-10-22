@@ -217,6 +217,43 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 568, height: 320 }
   });
 }
 
+// The reading bar stays on screen only where it fits one row and takes at most
+// a quarter of the screen's height; anywhere else it sits at the end of the page.
+for (const viewport of [{ width: 320, height: 640 }, { width: 375, height: 667 }, { width: 412, height: 915 }, { width: 568, height: 320 }, { width: 1280, height: 800 }]) {
+  test(`the reading bar at ${viewport.width}x${viewport.height} is sticky only in one row, a quarter of the screen at most`, async ({ page, context, baseURL }) => {
+    await page.setViewportSize(viewport);
+    const seen: string[] = [];
+    for (const size of [1, 2, 3, 4, 5]) {
+      await setPrefs(context, baseURL!, { size });
+      await page.goto('/about');
+      await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
+      const bar = await page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>('.reading-bar')!;
+        const rows = new Set([...el.querySelectorAll('button')].map((b) => Math.round(b.getBoundingClientRect().top))).size;
+        const footer = document.querySelector('.site-footer')!;
+        return {
+          rows,
+          sticky: getComputedStyle(el).position === 'sticky',
+          share: el.getBoundingClientRect().height / innerHeight,
+          afterFooter: el.getBoundingClientRect().top + scrollY >= footer.getBoundingClientRect().bottom + scrollY - 0.5,
+        };
+      });
+      seen.push(`size ${size}: ${bar.sticky ? 'sticky' : 'static'}, ${bar.rows} row(s), ${Math.round(bar.share * 100)} %`);
+      if (bar.sticky) {
+        expect(bar.rows, seen.at(-1)).toBe(1);
+        expect(bar.share, seen.at(-1)).toBeLessThanOrEqual(0.25);
+      } else {
+        expect(bar.rows > 1 || bar.share > 0.25, seen.at(-1)).toBe(true);
+        expect(bar.afterFooter, `${seen.at(-1)}: at the end of the page`).toBe(true);
+      }
+    }
+    // The challenger's cases: at 200 % on 320x640 and 568x320 the bar is not on screen while reading.
+    if ((viewport.width === 320 && viewport.height === 640) || viewport.width === 568) expect(seen.at(-1)).toMatch(/static/);
+    // A 412 px phone at 200 % keeps it: one row, and a seventh of the screen.
+    if (viewport.width === 412) expect(seen.at(-1)).toMatch(/sticky/);
+  });
+}
+
 test.describe('signed in, at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 

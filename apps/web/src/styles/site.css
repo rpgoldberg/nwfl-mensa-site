@@ -24,6 +24,8 @@ body {
   flex-direction: column;
   /* A long word at 200 % text wraps instead of pushing the page sideways. */
   overflow-wrap: break-word;
+  /* The reading bar asks how wide the page is (below). */
+  container: page / inline-size;
 }
 
 h1, h2, h3 { hyphens: auto; font-weight: 600; }
@@ -343,7 +345,19 @@ html[data-theme="contrast"] .reading-bar [data-for-theme="contrast"] { display: 
    bottom bar sits after the content so it never takes over the screen. Sticky,
    not fixed: each keeps its own space, so neither covers the end of the page. */
 .dock { display: contents; }
-.reading-bar { position: sticky; bottom: 0; z-index: 10; }
+/* The reading bar stays on screen only where it fits one row and takes a
+   quarter of the screen's height at most; anywhere else it sits at the end of
+   the page, after the footer. One row needs 12.38rem on a phone (buttons of
+   11.38rem, two gaps and the padding), hence the container query; one row is
+   about 4.2rem high, so the screen must be 17rem high, in px per size, as a
+   media query cannot use the reader's rem. */
+.reading-bar { position: static; }
+@container page (min-width: 12.5rem) { .reading-bar { position: sticky; bottom: 0; z-index: 10; } }
+@media (max-height: 271.98px) { html[data-size="1"] .reading-bar { position: static; } }
+@media (max-height: 339.98px) { html[data-size="2"] .reading-bar { position: static; } }
+@media (max-height: 407.98px) { html[data-size="3"] .reading-bar { position: static; } }
+@media (max-height: 475.98px) { html[data-size="4"] .reading-bar { position: static; } }
+@media (max-height: 543.98px) { html[data-size="5"] .reading-bar { position: static; } }
 @media (max-width: 899.98px) and (min-height: 480px) {
   html[data-size="1"] .dock,
   html[data-size="2"] .dock {
