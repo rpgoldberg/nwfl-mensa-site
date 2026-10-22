@@ -226,3 +226,24 @@ test('a post with no Origin, from a foreign page, is refused with 403 and sets n
   expect(res.statusCode).toBe(403);
   expect(res.headers['set-cookie']).toBeUndefined();
 });
+
+/** A request to the server as cloudflared sends it, with the Host given. */
+function asked(path: string, headers: Record<string, string>): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${BACKEND_URL}${path}`, { headers: { 'X-Forwarded-Proto': 'https', ...headers } });
+    req.on('response', (res) => {
+      let body = '';
+      res.on('data', (chunk) => (body += chunk));
+      res.on('end', () => resolve(body));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('robots.txt answers for the Host asked for: a forwarded host cannot make the canary indexable', async () => {
+  expect(await asked('/robots.txt', { Host: 'nwflorida.us' })).toContain('Sitemap: https://nwflorida.us/sitemap.xml');
+  for (const spoof of [{ 'X-Forwarded-Host': 'nwflorida.us' }, { 'X-Forwarded-Host': 'nwflorida.us', 'X-Forwarded-Port': '443' }]) {
+    expect(await asked('/robots.txt', { Host: 'nwfl-canary.mindsignals1.com', ...spoof })).toBe('User-agent: *\nDisallow: /\n');
+  }
+});

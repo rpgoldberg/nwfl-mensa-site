@@ -147,6 +147,28 @@ describe('withSitePolicy', () => {
     error.mockRestore();
   });
 
+  it('hands the site the Host the reader asked for: never a forwarded host or port', async () => {
+    let seen: { headers: http.IncomingHttpHeaders; raw: string[] } | undefined;
+    const base = await serve((req, res) => {
+      seen = { headers: { ...req.headers }, raw: [...req.rawHeaders] };
+      res.end('page');
+    });
+    await new Promise<void>((resolve, reject) => {
+      const req = http.request(`${base}/robots.txt`, {
+        headers: { Host: 'nwfl-canary.example.org', 'X-Forwarded-Host': 'nwflorida.us', 'X-Forwarded-Port': '443', 'X-Forwarded-Proto': 'https' },
+      });
+      req.on('response', (res) => res.resume().on('end', resolve));
+      req.on('error', reject);
+      req.end();
+    });
+    expect(seen!.headers['host']).toBe('nwfl-canary.example.org');
+    expect(seen!.headers['x-forwarded-proto']).toBe('https');
+    expect(seen!.headers).not.toHaveProperty('x-forwarded-host');
+    expect(seen!.headers).not.toHaveProperty('x-forwarded-port');
+    expect(seen!.raw.map((h) => h.toLowerCase())).not.toContain('x-forwarded-host');
+    expect(seen!.raw.map((h) => h.toLowerCase())).not.toContain('x-forwarded-port');
+  });
+
   it('removes the header when no cookie in it is host-only', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const base = await serve((_req, res) => {

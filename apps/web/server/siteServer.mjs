@@ -136,6 +136,20 @@ function servePrerendered(req, res, html, key) {
  */
 
 const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
+const FORWARDED_HOST = ['x-forwarded-host', 'x-forwarded-port'];
+
+/**
+ * The site sees the Host the reader asked for, never a forwarded host or port:
+ * Astro would build the request URL from them, so a spoofed one could make the
+ * canary's robots.txt the canonical one. The edge's X-Forwarded-Proto stays.
+ *
+ * @param {http.IncomingMessage} req
+ */
+function dropForwardedHost(req) {
+  for (const name of FORWARDED_HOST) delete req.headers[name];
+  const raw = req.rawHeaders;
+  for (let i = raw.length - 2; i >= 0; i -= 2) if (FORWARDED_HOST.includes(String(raw[i]).toLowerCase())) raw.splice(i, 2);
+}
 
 /**
  * A state-changing request must say where it comes from. Astro's origin check
@@ -179,6 +193,7 @@ export function normalisePath(raw) {
 export function withSitePolicy(handler, { pages = new Map(), redirects, sessionKey, formAction = [] } = {}) {
   const headers = securityHeaders({ formAction });
   return (req, res) => {
+    dropForwardedHost(req);
     const raw = new URL(req.url ?? '/', 'http://site.invalid').pathname;
     const path = normalisePath(raw);
     const old = redirects && path !== undefined ? resolveOldUrl(path, redirects) : undefined;
