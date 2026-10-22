@@ -114,7 +114,11 @@ describe.skipIf(!live)('NewsletterService', () => {
       )
     ).edition?.id as string;
 
-    await publish('presidents-report', ContentKind.PRESIDENT_REPORT, `Welcome back.\n\nThe game night code is :members[${CANARY}].\n\nWrite to [the board](mailto:president@nwflorida.us).`);
+    await publish(
+      'presidents-report',
+      ContentKind.PRESIDENT_REPORT,
+      `Welcome back.\n\nThe game night code is :members[${CANARY}].\n\nJoin online: [:members[Zoom room]](https://example.org/zoom?pwd=${CANARY}).\n\nWrite to [the board](mailto:president@nwflorida.us).`,
+    );
     await publish('dues-notice', ContentKind.ANNOUNCEMENT, `Members only: ${CANARY} dues details.`, { visibility: ItemVisibility.MEMBERS, summary: 'Dues for 2027' });
     await publish('excomm-minutes', ContentKind.MINUTES, 'Called to order at 10:02. Adjourned at 11:15.');
     // Print order within a kind is by title, then slug; neither agrees with the order these are made in.
@@ -212,13 +216,15 @@ describe.skipIf(!live)('NewsletterService', () => {
     it('matches the golden made-up MEMBERS export, members text resolved', async () => {
       const members = await exportOf(Audience.MEMBERS);
       expect(JSON.stringify(members)).toContain(CANARY);
+      expect(JSON.stringify(members)).toContain(`Zoom room (https://example.org/zoom?pwd=${CANARY})`);
       golden('export.members.golden.json', members);
     });
 
-    it('matches the golden made-up PUBLIC export, with no members text anywhere', async () => {
+    it('matches the golden made-up PUBLIC export, with no members text anywhere, the target of a members link included', async () => {
       const exported = await exportOf(Audience.PUBLIC);
       const text = JSON.stringify(exported);
       expect(text).not.toContain(CANARY);
+      expect(text).not.toContain('example.org/zoom');
       expect(text).toContain(PUBLIC_PLACEHOLDER);
       golden('export.public.golden.json', exported);
     });

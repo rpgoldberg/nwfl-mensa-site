@@ -167,6 +167,14 @@ describe('treeText', () => {
     expect(treeText(tree('See :members[the map].'), 'public')).toBe(`See ${PUBLIC_PLACEHOLDER}.`);
   });
 
+  it('fails closed on a members link too: handed an unfiltered tree, the public render carries neither its text nor its target', () => {
+    const t = normalizeTree({
+      blocks: [{ type: 'paragraph', children: [{ type: 'text', text: 'Join us: ' }, { type: 'link', href: 'https://example.org/zoom?pwd=s3cret', children: [{ type: 'members', children: [{ type: 'text', text: 'Zoom room' }] }] }] }],
+    });
+    expect(treeText(t, 'public')).toBe(`Join us: ${PUBLIC_PLACEHOLDER}`);
+    expect(treeText(t, 'members')).toBe('Join us: Zoom room (https://example.org/zoom?pwd=s3cret)');
+  });
+
   it('renders a members block in full for members', () => {
     expect(treeText(tree('::: members\nFirst.\n\nSecond.\n:::\n\nOpen.'), 'members')).toBe('First.\n\nSecond.\n\nOpen.');
   });

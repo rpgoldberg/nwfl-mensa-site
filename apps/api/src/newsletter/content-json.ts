@@ -134,6 +134,8 @@ function inlineText(node: Inline, audience: ExportAudience): string {
     case 'text':
       return node.text;
     case 'link': {
+      // A link whose text holds a members passage is members-only whole, target included (as the public filter has it).
+      if (audience === 'public' && node.children.some((child) => child.type !== 'text')) return PUBLIC_PLACEHOLDER;
       const label = node.children.map((child) => inlineText(child, audience)).join('');
       if (node.href.startsWith('https://')) return `${label} (${node.href})`;
       const alias = ROLE_ALIAS.exec(node.href)?.[1];
