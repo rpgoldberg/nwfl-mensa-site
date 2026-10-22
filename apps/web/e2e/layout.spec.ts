@@ -181,6 +181,42 @@ test.describe('at 320px wide', () => {
   }
 });
 
+// The challenger's finding: at 320 px and 200 % every amount was cut off
+// mid-number inside the scrolling table. Each amount must show whole, on one line.
+for (const viewport of [{ width: 320, height: 640 }, { width: 568, height: 320 }, { width: 412, height: 915 }]) {
+  test.describe(`/finances at ${viewport.width}x${viewport.height}`, () => {
+    test.use({ viewport });
+
+    test('shows every amount whole, on one line, at text sizes 1 to 5', async ({ page, context, baseURL }) => {
+      const cut: string[] = [];
+      for (const size of [1, 2, 3, 4, 5]) {
+        await setPrefs(context, baseURL!, { size });
+        await page.goto('/finances');
+        await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
+        cut.push(
+          ...(await page.evaluate((s) => {
+            const out: string[] = [];
+            for (const wrap of document.querySelectorAll<HTMLElement>('.table-wrap')) {
+              const box = wrap.getBoundingClientRect();
+              if (wrap.scrollWidth > wrap.clientWidth) out.push(`size ${s}: the table scrolls sideways`);
+              for (const td of wrap.querySelectorAll<HTMLElement>('.money td')) {
+                const range = document.createRange();
+                range.selectNodeContents(td);
+                const lines = [...range.getClientRects()].filter((r) => r.width > 0);
+                const r = range.getBoundingClientRect();
+                if (r.left < box.left - 0.5 || r.right > box.right + 0.5) out.push(`size ${s}: ${td.textContent} is cut off`);
+                if (new Set(lines.map((l) => Math.round(l.top))).size > 1) out.push(`size ${s}: ${td.textContent} breaks over lines`);
+              }
+            }
+            return out;
+          }, size)),
+        );
+      }
+      expect(cut).toEqual([]);
+    });
+  });
+}
+
 test.describe('signed in, at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 

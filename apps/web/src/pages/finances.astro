@@ -21,13 +21,17 @@ const periods = visibleContent(await siteData.finances(), { publicOnly: PUBLIC_O
   {PUBLIC_ONLY ? <PublicOnlyNote what="The treasurer's summary" /> : periods.map((period) => (
     <section class="finance" data-source={period.source}>
       <div class="table-wrap" role="region" aria-label={`Figures for ${period.label}`} tabindex="0">
-      <table class="money">
+      {/* Explicit roles: on a narrow phone the rows stack (site.css), and display: block can drop a table's.
+          jsx-a11y counts a td as interactive (a grid cell); here it is a plain cell. */}
+      <table class="money" role="table">
         <caption>{period.label}</caption>
         <tbody>
-          <tr><th scope="row">Opening balance</th><td>{formatMoney(period.opening)}</td></tr>
-          <tr><th scope="row">Deposits</th><td>{formatMoney(period.deposits)}</td></tr>
-          <tr><th scope="row">Debits</th><td>{formatMoney(-period.debits)}</td></tr>
-          <tr class="total"><th scope="row">Closing balance</th><td>{formatMoney(period.closing)}</td></tr>
+          {/* eslint-disable astro/jsx-a11y/no-interactive-element-to-noninteractive-role */}
+          <tr role="row"><th scope="row" role="rowheader">Opening balance</th><td role="cell">{formatMoney(period.opening)}</td></tr>
+          <tr role="row"><th scope="row" role="rowheader">Deposits</th><td role="cell">{formatMoney(period.deposits)}</td></tr>
+          <tr role="row"><th scope="row" role="rowheader">Debits</th><td role="cell">{formatMoney(-period.debits)}</td></tr>
+          <tr role="row" class="total"><th scope="row" role="rowheader">Closing balance</th><td role="cell">{formatMoney(period.closing)}</td></tr>
+          {/* eslint-enable astro/jsx-a11y/no-interactive-element-to-noninteractive-role */}
         </tbody>
       </table>
       </div>

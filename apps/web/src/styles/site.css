@@ -536,12 +536,21 @@ main:focus:not(:focus-visible) { outline: none; }
 .meeting h2 { font-size: var(--fs-h3); }
 .meeting h3 { font-size: var(--fs-body); }
 .meeting ul { margin: 0; padding-left: 1.5em; }
-/* A table cannot shrink below its widest row: at 200 % on the narrowest phone
-   its own box scrolls sideways, never the page. */
-.table-wrap { overflow-x: auto; max-width: 100%; }
+/* A table cannot shrink below its widest row: should one ever be wider, its
+   own box scrolls sideways, never the page. */
+.table-wrap { overflow-x: auto; max-width: 100%; container: money / inline-size; }
 .money { width: 100%; max-width: 30rem; border-collapse: collapse; font-variant-numeric: tabular-nums; margin-top: var(--space-5); }
 .money caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); padding-bottom: var(--space-2); }
 .money th { text-align: left; font-weight: 400; }
 .money th, .money td { padding: var(--space-2) 0; border-top: var(--border) solid var(--line-soft); }
-.money td { text-align: right; font-weight: 700; }
+.money td { text-align: right; font-weight: 700; white-space: nowrap; }
 .money tr.total th, .money tr.total td { border-top: 3px solid var(--line); font-weight: 700; }
+/* Too narrow for a label and its amount side by side (a phone at large text;
+   em follows the reader's size): each label sits above its amount. The rows
+   carry their roles in the markup, as display: block can drop a table's. */
+@container money (width < 15em) {
+  .money, .money tbody, .money tr, .money th, .money td { display: block; }
+  .money th { padding-bottom: 0; }
+  .money td { text-align: left; border-top: 0; padding-top: var(--space-1); }
+  .money tr.total td { border-top: 0; }
+}
