@@ -1,0 +1,45 @@
+// The membership verifier's own service (R33). Its caller is nwfl-verifier,
+// which runs on the home box; the API refuses its token on every other
+// service, and every other token on this one.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+service MembershipVerifierService {
+  // The sign-ups that typed a number and have not been checked yet. This is
+  // the only RPC that returns a membership number.
+  rpc ListPendingVerifications(ListPendingVerificationsRequest) returns (ListPendingVerificationsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // Records the outcome and the date, and erases the number.
+  rpc ReportVerification(ReportVerificationRequest) returns (ReportVerificationResponse);
+}
+
+message ListPendingVerificationsRequest {}
+
+message ListPendingVerificationsResponse {
+  repeated PendingVerification pending = 1;
+}
+
+message PendingVerification {
+  string request_id = 1;
+  string membership_number = 2;
+  string last_name = 3;
+}
+
+enum VerificationOutcome {
+  VERIFICATION_OUTCOME_UNSPECIFIED = 0;
+  // An active member of Northwest Florida Mensa.
+  VERIFICATION_OUTCOME_VERIFIED_LOCAL = 1;
+  // An active AML member in another local group.
+  VERIFICATION_OUTCOME_VERIFIED_OTHER_GROUP = 2;
+  VERIFICATION_OUTCOME_NOT_FOUND = 3;
+  VERIFICATION_OUTCOME_ERROR = 4;
+}
+
+message ReportVerificationRequest {
+  string request_id = 1;
+  VerificationOutcome outcome = 2;
+}
+
+message ReportVerificationResponse {}

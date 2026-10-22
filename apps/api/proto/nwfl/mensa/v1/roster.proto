@@ -1,0 +1,54 @@
+// The officer roster: offices (seats) and the terms that fill them. The roster
+// is live on save, outside the approval queue (R2, P19).
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "nwfl/mensa/v1/common.proto";
+
+enum OfficeKind {
+  OFFICE_KIND_UNSPECIFIED = 0;
+  OFFICE_KIND_ELECTED = 1;
+  OFFICE_KIND_APPOINTED = 2;
+  OFFICE_KIND_EX_OFFICIO = 3;
+  OFFICE_KIND_COMMITTEE = 4;
+  // Above the chapter, such as the Region 10 RVC.
+  OFFICE_KIND_REGIONAL_EXTERNAL = 5;
+}
+
+// A seat. The Authentik group for its holders is nwfl-office-<slug>.
+message Office {
+  string id = 1;
+  // "president".
+  string slug = 2;
+  // "President".
+  string title = 3;
+  OfficeKind kind = 4;
+  int32 sort_order = 5;
+  // "president@nwflorida.us". Empty until a test message to it has been
+  // delivered (R2), so the page never shows an alias that bounces.
+  string role_alias = 6;
+  bool active = 7;
+  // The current terms. A vacancy is a term with TERM_STATUS_VACANT.
+  repeated OfficeTerm terms = 8;
+}
+
+enum TermStatus {
+  TERM_STATUS_UNSPECIFIED = 0;
+  TERM_STATUS_ACTIVE = 1;
+  TERM_STATUS_ACTING = 2;
+  TERM_STATUS_VACANT = 3;
+}
+
+// One holder of one seat for a period. Display name only: no personal email
+// or phone; contact goes through the office's role alias.
+message OfficeTerm {
+  string id = 1;
+  string office_id = 2;
+  // Empty when vacant.
+  string holder_display_name = 3;
+  Date starts_on = 4;
+  // Unset while the term runs.
+  Date ends_on = 5;
+  TermStatus status = 6;
+}

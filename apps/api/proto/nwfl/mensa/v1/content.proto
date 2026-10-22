@@ -1,0 +1,392 @@
+// Officer content and the publishing workflow (R11, R25, R26): items owned by
+// offices, numbered versions, the body tree, files with an audience.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nwfl/mensa/v1/edition.proto";
+import "nwfl/mensa/v1/roster.proto";
+
+enum ContentKind {
+  CONTENT_KIND_UNSPECIFIED = 0;
+  CONTENT_KIND_ARTICLE = 1;
+  CONTENT_KIND_PRESIDENT_REPORT = 2;
+  CONTENT_KIND_ANNOUNCEMENT = 3;
+  CONTENT_KIND_MINUTES = 4;
+  CONTENT_KIND_TREASURER_SUMMARY = 5;
+  CONTENT_KIND_DOCUMENT = 6;
+  CONTENT_KIND_PAGE = 7;
+}
+
+enum ItemState {
+  ITEM_STATE_UNSPECIFIED = 0;
+  ITEM_STATE_DRAFT = 1;
+  ITEM_STATE_READY = 2;
+  ITEM_STATE_PUBLISHED = 3;
+  ITEM_STATE_WITHDRAWN = 4;
+}
+
+enum VersionStatus {
+  VERSION_STATUS_UNSPECIFIED = 0;
+  VERSION_STATUS_DRAFT = 1;
+  VERSION_STATUS_READY = 2;
+  VERSION_STATUS_APPROVED = 3;
+  VERSION_STATUS_SUPERSEDED = 4;
+  VERSION_STATUS_DISCARDED = 5;
+}
+
+// The whole-item floor. Passages inside a public item can still be members-only.
+enum ItemVisibility {
+  ITEM_VISIBILITY_UNSPECIFIED = 0;
+  ITEM_VISIBILITY_PUBLIC = 1;
+  ITEM_VISIBILITY_MEMBERS = 2;
+  // 404 to everyone but officers. Cannot target the newsletter or email.
+  ITEM_VISIBILITY_OFFICERS = 3;
+}
+
+message Targets {
+  bool website = 1;
+  bool newsletter = 2;
+  bool email = 3;
+}
+
+// The body tree: the editor's allow-list and nothing else (R11). The API
+// filters it for the caller's audience before it leaves the service.
+message Document {
+  repeated Block blocks = 1;
+}
+
+message Block {
+  oneof kind {
+    Paragraph paragraph = 1;
+    Heading heading = 2;
+    ListBlock list = 3;
+    Quote quote = 4;
+    Image image = 5;
+    MembersBlock members = 6;
+    Redacted redacted = 7;
+  }
+}
+
+message Paragraph {
+  repeated Inline inlines = 1;
+}
+
+message Heading {
+  // 1 or 2.
+  int32 level = 1;
+  repeated Inline inlines = 2;
+}
+
+message ListBlock {
+  bool ordered = 1;
+  repeated ListItem items = 2;
+}
+
+message ListItem {
+  repeated Block blocks = 1;
+}
+
+message Quote {
+  repeated Block blocks = 1;
+}
+
+message Image {
+  string file_id = 1;
+  // Required.
+  string alt = 2;
+}
+
+message MembersBlock {
+  repeated Block blocks = 1;
+}
+
+// Where members-only content was, in a tree read without a member token. It
+// carries no text, length, link or image (R26).
+message Redacted {}
+
+message Inline {
+  oneof kind {
+    Text text = 1;
+    Link link = 2;
+    MembersInline members = 3;
+    Redacted redacted = 4;
+  }
+}
+
+message Text {
+  string text = 1;
+  bool bold = 2;
+  bool italic = 3;
+}
+
+message Link {
+  // https: or mailto: only.
+  string href = 1;
+  repeated Inline inlines = 2;
+}
+
+message MembersInline {
+  repeated Inline inlines = 1;
+}
+
+enum FileAudience {
+  FILE_AUDIENCE_UNSPECIFIED = 0;
+  FILE_AUDIENCE_PUBLIC = 1;
+  FILE_AUDIENCE_MEMBERS = 2;
+  FILE_AUDIENCE_OFFICERS = 3;
+}
+
+enum FileRole {
+  FILE_ROLE_UNSPECIFIED = 0;
+  FILE_ROLE_PRIMARY = 1;
+  // The public copy of a members or officers file.
+  FILE_ROLE_PUBLIC_COPY = 2;
+  // The original .docx, always officers-only.
+  FILE_ROLE_SOURCE = 3;
+}
+
+// An uploaded file. Served only through the web gateway, after an audience check.
+message StoredFile {
+  string id = 1;
+  string filename = 2;
+  string mime_type = 3;
+  int64 size_bytes = 4;
+  bytes sha256 = 5;
+  FileAudience audience = 6;
+  FileRole role = 7;
+  // For a public copy: the file it is a copy of.
+  string public_copy_of = 8;
+}
+
+message ContentVersion {
+  string id = 1;
+  string item_id = 2;
+  int32 number = 3;
+  VersionStatus status = 4;
+  // Always public (D-P5).
+  string title = 5;
+  // Always public (D-P5).
+  string summary = 6;
+  ItemVisibility visibility = 7;
+  // Filtered for the caller's audience.
+  Document body = 8;
+  // The markup the author typed. Returned only on officer edit reads.
+  string body_markup = 9;
+  // SHA-256 over the canonical body, title, summary, visibility, targets,
+  // edition and file hashes. Set when the version is marked ready.
+  bytes content_hash = 10;
+  Targets targets = 11;
+  string edition_id = 12;
+  // Editorial policy: once ready, approve or send back, never edit.
+  bool print_as_is = 13;
+  // An external contributor's name and role, when an officer types for them.
+  string on_behalf_of = 14;
+  google.protobuf.Timestamp ready_at = 15;
+  google.protobuf.Timestamp approved_at = 16;
+  repeated StoredFile files = 17;
+}
+
+message ContentItem {
+  string id = 1;
+  string slug = 2;
+  ContentKind kind = 3;
+  // The owning office, not a person.
+  string office_id = 4;
+  ItemState state = 5;
+  // What the public and members see, filtered for the caller.
+  ContentVersion live = 6;
+  // The draft or ready revision. Officer reads only.
+  ContentVersion working = 7;
+  google.protobuf.Timestamp withdrawn_at = 8;
+}
+
+// The pinned (frozen edition) or live version of an item in an edition.
+message EditionItem {
+  string edition_id = 1;
+  string item_id = 2;
+  string version_id = 3;
+  ContentKind kind = 4;
+  string office_id = 5;
+  string title = 6;
+  int32 version_number = 7;
+  bytes content_hash = 8;
+}
+
+// Items, the roster and published editions for the site. Reads return what
+// the caller's token may see; the workflow RPCs need an officer token.
+service ContentService {
+  rpc ListPublishedItems(ListPublishedItemsRequest) returns (ListPublishedItemsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc GetPublishedItem(GetPublishedItemRequest) returns (GetPublishedItemResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc GetRoster(GetRosterRequest) returns (GetRosterResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc ListPublishedEditions(ListPublishedEditionsRequest) returns (ListPublishedEditionsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc ListWorkingItems(ListWorkingItemsRequest) returns (ListWorkingItemsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc GetWorkingItem(GetWorkingItemRequest) returns (GetWorkingItemResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc CreateItem(CreateItemRequest) returns (CreateItemResponse);
+  rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
+  rpc MarkReady(MarkReadyRequest) returns (MarkReadyResponse);
+  rpc SendBack(SendBackRequest) returns (SendBackResponse);
+  rpc Approve(ApproveRequest) returns (ApproveResponse);
+  rpc Withdraw(WithdrawRequest) returns (WithdrawResponse);
+  rpc Restore(RestoreRequest) returns (RestoreResponse);
+  // The roster is live on save (R2).
+  rpc SaveOfficeTerm(SaveOfficeTermRequest) returns (SaveOfficeTermResponse);
+}
+
+message ListPublishedItemsRequest {
+  // Unspecified means every kind.
+  ContentKind kind = 1;
+  // Empty means every office.
+  string office_id = 2;
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+message ListPublishedItemsResponse {
+  repeated ContentItem items = 1;
+  string next_page_token = 2;
+}
+
+message GetPublishedItemRequest {
+  string slug = 1;
+}
+
+message GetPublishedItemResponse {
+  ContentItem item = 1;
+}
+
+message GetRosterRequest {}
+
+message GetRosterResponse {
+  repeated Office offices = 1;
+}
+
+message ListPublishedEditionsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListPublishedEditionsResponse {
+  repeated Edition editions = 1;
+  string next_page_token = 2;
+}
+
+message ListWorkingItemsRequest {
+  // Empty means draft and ready.
+  repeated ItemState states = 1;
+  string office_id = 2;
+  string edition_id = 3;
+}
+
+message ListWorkingItemsResponse {
+  repeated ContentItem items = 1;
+}
+
+message GetWorkingItemRequest {
+  string item_id = 1;
+}
+
+message GetWorkingItemResponse {
+  ContentItem item = 1;
+}
+
+message CreateItemRequest {
+  ContentKind kind = 1;
+  // "Posting as": one of the caller's own offices.
+  string office_id = 2;
+  string slug = 3;
+  string title = 4;
+  string on_behalf_of = 5;
+}
+
+message CreateItemResponse {
+  ContentItem item = 1;
+}
+
+message SaveDraftRequest {
+  string item_id = 1;
+  string title = 2;
+  string summary = 3;
+  ItemVisibility visibility = 4;
+  string body_markup = 5;
+}
+
+message SaveDraftResponse {
+  ContentItem item = 1;
+}
+
+message MarkReadyRequest {
+  string item_id = 1;
+  Targets targets = 2;
+  string edition_id = 3;
+  bool print_as_is = 4;
+}
+
+message MarkReadyResponse {
+  ContentItem item = 1;
+}
+
+message SendBackRequest {
+  string item_id = 1;
+  // Required; the author sees it.
+  string note = 2;
+}
+
+message SendBackResponse {
+  ContentItem item = 1;
+}
+
+message ApproveRequest {
+  string item_id = 1;
+  // The hash the approver saw. A version changed since then is not approved.
+  bytes content_hash = 2;
+  // Unset keeps the targets chosen at "mark ready". A change is logged.
+  Targets targets = 3;
+  // Empty keeps the edition chosen at "mark ready". A change is logged.
+  string edition_id = 4;
+  // Admin only: approve a version the caller edited. Needs a reason.
+  bool break_glass = 5;
+  string break_glass_reason = 6;
+}
+
+message ApproveResponse {
+  ContentItem item = 1;
+}
+
+message WithdrawRequest {
+  string item_id = 1;
+}
+
+message WithdrawResponse {
+  ContentItem item = 1;
+}
+
+message RestoreRequest {
+  string item_id = 1;
+}
+
+message RestoreResponse {
+  ContentItem item = 1;
+}
+
+message SaveOfficeTermRequest {
+  // An empty id creates.
+  OfficeTerm term = 1;
+}
+
+message SaveOfficeTermResponse {
+  OfficeTerm term = 1;
+}

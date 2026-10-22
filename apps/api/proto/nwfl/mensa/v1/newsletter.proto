@@ -1,0 +1,80 @@
+// The newsletter agent's read API (R12). On api.nwflorida.us only this service
+// answers. Drafts and ready items are never returned.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "nwfl/mensa/v1/common.proto";
+import "nwfl/mensa/v1/content.proto";
+import "nwfl/mensa/v1/edition.proto";
+import "nwfl/mensa/v1/event.proto";
+import "nwfl/mensa/v1/roster.proto";
+
+service NewsletterService {
+  rpc ListEditions(ListEditionsRequest) returns (ListEditionsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // Approved items with the newsletter target: the pinned versions once the
+  // edition is frozen, the live versions before that.
+  rpc ListEditionItems(ListEditionItemsRequest) returns (ListEditionItemsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc GetEditionCalendar(GetEditionCalendarRequest) returns (GetEditionCalendarResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc GetEditionRoster(GetEditionRosterRequest) returns (GetEditionRosterResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // The content JSON the generator reads, with members-only passages resolved
+  // for the requested audience. The only RPC that takes an audience.
+  rpc ExportEdition(ExportEditionRequest) returns (ExportEditionResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+message ListEditionsRequest {
+  // Empty means every status.
+  repeated EditionStatus statuses = 1;
+}
+
+message ListEditionsResponse {
+  repeated Edition editions = 1;
+}
+
+message ListEditionItemsRequest {
+  string edition_id = 1;
+}
+
+message ListEditionItemsResponse {
+  repeated EditionItem items = 1;
+}
+
+message GetEditionCalendarRequest {
+  string edition_id = 1;
+}
+
+message GetEditionCalendarResponse {
+  repeated EventSeries series = 1;
+  repeated EventOccurrence occurrences = 2;
+}
+
+message GetEditionRosterRequest {
+  string edition_id = 1;
+}
+
+message GetEditionRosterResponse {
+  repeated Office offices = 1;
+}
+
+message ExportEditionRequest {
+  string edition_id = 1;
+  Audience audience = 2;
+}
+
+message ExportEditionResponse {
+  // Contract v1: the generator's content JSON, with the fixed 9-key officers
+  // dict plus the variable-length roster beside it. No personal emails,
+  // phones or home addresses.
+  string content_json = 1;
+  string contract_version = 2;
+}

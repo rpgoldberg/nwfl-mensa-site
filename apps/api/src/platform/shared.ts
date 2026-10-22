@@ -43,6 +43,10 @@ const SITE_KEYS = [
   'approval_reason',
   'email',
   'display_name',
+  // Sign-up: typed by the member, read only by the verifier (R33).
+  'membership_number',
+  'last_name',
+  'break_glass_reason',
 ];
 
 export const NWFL_SENSITIVE_KEY_PATTERN = new RegExp(

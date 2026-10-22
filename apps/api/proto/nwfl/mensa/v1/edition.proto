@@ -1,0 +1,45 @@
+// Newsletter editions. An edition is named by its period, never by its printed
+// Vol/No (R5).
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nwfl/mensa/v1/common.proto";
+
+enum EditionKind {
+  EDITION_KIND_UNSPECIFIED = 0;
+  EDITION_KIND_REGULAR = 1;
+  EDITION_KIND_XTRA = 2;
+}
+
+enum EditionStatus {
+  EDITION_STATUS_UNSPECIFIED = 0;
+  EDITION_STATUS_PLANNING = 1;
+  EDITION_STATUS_COLLECTING = 2;
+  EDITION_STATUS_DRAFTING = 3;
+  // Frozen for print: each item's version is pinned.
+  EDITION_STATUS_PROOF = 4;
+  EDITION_STATUS_PUBLISHED = 5;
+}
+
+message Edition {
+  string id = 1;
+  // The period, such as "2026-10".
+  string slug = 2;
+  int32 volume = 3;
+  int32 issue_number = 4;
+  // "October and November 2026".
+  string title = 5;
+  EditionKind kind = 6;
+  Date period_start = 7;
+  Date period_end = 8;
+  // The calendar grids printed in the issue.
+  repeated DateRange calendar_ranges = 9;
+  Date submission_deadline = 10;
+  EditionStatus status = 11;
+  // When the edition moved to proof.
+  google.protobuf.Timestamp frozen_at = 12;
+  // The hosted PDF, always the PUBLIC render. Empty until one is uploaded.
+  string public_pdf_file_id = 13;
+}

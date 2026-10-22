@@ -1,0 +1,126 @@
+// Member accounts and the sign-up queue (R24, R33). Only what the member typed
+// is stored, plus the account's status; never anything National-sourced. The
+// approval screens have no free-text notes.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "google/protobuf/timestamp.proto";
+import "nwfl/mensa/v1/common.proto";
+
+enum MemberStatus {
+  MEMBER_STATUS_UNSPECIFIED = 0;
+  MEMBER_STATUS_PENDING = 1;
+  MEMBER_STATUS_MEMBER = 2;
+  // Member-level reading for an affiliated officer, such as the RVC. Set only
+  // by an Admin or Webmaster grant, never by a verification.
+  MEMBER_STATUS_AFFILIATE = 3;
+  MEMBER_STATUS_LAPSED = 4;
+  MEMBER_STATUS_REMOVED = 5;
+}
+
+enum AccountRoute {
+  ACCOUNT_ROUTE_UNSPECIFIED = 0;
+  ACCOUNT_ROUTE_INVITE = 1;
+  ACCOUNT_ROUTE_SIGNUP = 2;
+  ACCOUNT_ROUTE_ADMIN_GRANT = 3;
+}
+
+// The verifier's result for a sign-up, as the approver sees it.
+enum Verification {
+  VERIFICATION_UNSPECIFIED = 0;
+  VERIFICATION_UNCHECKED = 1;
+  VERIFICATION_VERIFIED_LOCAL = 2;
+  // An active member of another local group. Goes to officer review; it never
+  // grants member access by itself.
+  VERIFICATION_VERIFIED_OTHER_GROUP = 3;
+  // Never rejects by itself: opted-out and lapsed members may not appear.
+  VERIFICATION_NOT_FOUND = 4;
+  VERIFICATION_ERROR = 5;
+}
+
+message MemberAccount {
+  MemberStatus status = 1;
+  AccountRoute route = 2;
+  // The last time the account was checked against the roster.
+  Date verified_on = 3;
+}
+
+// A pending sign-up as the approver sees it. The membership number is never
+// shown: only whether and when it was verified.
+message SignupRequest {
+  string request_id = 1;
+  string display_name = 2;
+  // As the member typed it.
+  string email = 3;
+  Verification verification = 4;
+  Date verified_on = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// Accounts and approvals. The subject, display name and email come from the
+// verified token, never from a request field.
+service MembershipService {
+  // Called by a signed-in pending user. The number is optional; without it
+  // the sign-up still goes to officer approval.
+  rpc SubmitSignup(SubmitSignupRequest) returns (SubmitSignupResponse);
+  rpc GetMyAccount(GetMyAccountRequest) returns (GetMyAccountResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // Approvers only.
+  rpc ListSignupRequests(ListSignupRequestsRequest) returns (ListSignupRequestsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc ApproveSignup(ApproveSignupRequest) returns (ApproveSignupResponse);
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+  // Admin or Webmaster only.
+  rpc GrantAffiliate(GrantAffiliateRequest) returns (GrantAffiliateResponse);
+}
+
+message SubmitSignupRequest {
+  // Matched with the number by the verifier.
+  string last_name = 1;
+  // Typed by the member from their card or renewal email. Erased as soon as
+  // the verifier reports.
+  string membership_number = 2;
+}
+
+message SubmitSignupResponse {
+  string request_id = 1;
+}
+
+message GetMyAccountRequest {}
+
+message GetMyAccountResponse {
+  MemberAccount account = 1;
+}
+
+message ListSignupRequestsRequest {}
+
+message ListSignupRequestsResponse {
+  repeated SignupRequest requests = 1;
+}
+
+message ApproveSignupRequest {
+  string request_id = 1;
+}
+
+message ApproveSignupResponse {
+  MemberAccount account = 1;
+}
+
+message RemoveMemberRequest {
+  // The Authentik subject of the account.
+  string subject = 1;
+}
+
+message RemoveMemberResponse {}
+
+message GrantAffiliateRequest {
+  // The Authentik subject of the account.
+  string subject = 1;
+}
+
+message GrantAffiliateResponse {
+  MemberAccount account = 1;
+}

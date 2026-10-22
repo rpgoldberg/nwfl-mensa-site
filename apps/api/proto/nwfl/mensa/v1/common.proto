@@ -1,0 +1,39 @@
+// Types shared by every nwfl.mensa.v1 service.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+// A calendar date with no time zone. All ten counties the group covers are
+// US Central, and the site shows dates as dates.
+message Date {
+  int32 year = 1;
+  // 1 to 12.
+  int32 month = 2;
+  // 1 to 31.
+  int32 day = 3;
+}
+
+// A wall-clock time of day in America/Chicago.
+message TimeOfDay {
+  // 0 to 23.
+  int32 hours = 1;
+  // 0 to 59.
+  int32 minutes = 2;
+}
+
+// An inclusive range of dates.
+message DateRange {
+  Date start = 1;
+  Date end = 2;
+}
+
+// Who a rendering is for. Only NewsletterService.ExportEdition takes it from
+// the caller, under the agent scope. Every other read works the audience out
+// from the verified token, never from a request field (P17).
+enum Audience {
+  AUDIENCE_UNSPECIFIED = 0;
+  // Members-only passages become the fixed "sign in to read" string.
+  AUDIENCE_PUBLIC = 1;
+  // Members-only passages are included as ordinary text.
+  AUDIENCE_MEMBERS = 2;
+}
