@@ -98,6 +98,14 @@ describe('POST /prefs', () => {
     }
   });
 
+  it('sends a back path with a control or non-ASCII character Home, never a 500', async () => {
+    for (const back of ['/\u0001x', '/\u007f', '/\u20ac']) {
+      const res = await post({ size: 'larger', back });
+      expect(res.status, JSON.stringify(back)).toBe(303);
+      expect(res.headers.get('location')).toBe('/');
+    }
+  });
+
   it('never redirects off the site', async () => {
     const res = await post({ size: 'larger', back: '//evil.example/' });
     expect(res.headers.get('location')).toBe('/');

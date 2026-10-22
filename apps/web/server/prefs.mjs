@@ -122,12 +122,15 @@ export function stampHtml(html, prefs) {
 }
 
 /**
- * Where a reader control sends the reader afterwards: a path on this site, or
- * Home. Never another origin, never a header-splitting character.
+ * Where a reader control sends the reader afterwards: a path on this site, in
+ * printable ASCII, or Home. Never another origin, never a header-splitting character.
  *
  * @param {string | null | undefined} back
  */
 export function safeBack(back) {
-  if (!back || back.length > 1024 || !/^\/(?![/\\])[^\s\\]*$/.test(back)) return '/';
+  // Printable ASCII bar space and backslash: a page's own path and query are
+  // percent-encoded, and anything else is not a legal Location value (a
+  // control character or non-ASCII made the redirect throw).
+  if (!back || back.length > 1024 || !/^\/(?![/\\])[!-[\]-~]*$/.test(back)) return '/';
   return back.replace(/#.*$/, '');
 }

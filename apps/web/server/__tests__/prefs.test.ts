@@ -143,7 +143,8 @@ describe('htmlAttributes and stampHtml', () => {
 });
 
 describe('safeBack', () => {
-  it('keeps a path on this site, with its query', () => {
+  it('keeps a path on this site, with its query, in printable ASCII', () => {
+    expect(safeBack('/search?q=caf%C3%A9&page=2')).toBe('/search?q=caf%C3%A9&page=2');
     expect(safeBack('/about')).toBe('/about');
     expect(safeBack('/search?q=picnic+lunch')).toBe('/search?q=picnic+lunch');
     expect(safeBack('/')).toBe('/');
@@ -165,6 +166,12 @@ describe('safeBack', () => {
       'javascript:alert(1)',
       '/a\r\nSet-Cookie: x=1',
       `/${'a'.repeat(2048)}`,
+      '/\u0000x',
+      '/\u0001x',
+      '/a\u001fb',
+      '/\u007fx',
+      '/\u20acx',
+      '/caf\u00e9',
     ]) {
       expect(safeBack(back), String(back).slice(0, 40)).toBe('/');
     }
