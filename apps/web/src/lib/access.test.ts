@@ -17,10 +17,10 @@ describe('isSignInPath', () => {
 });
 
 describe('makeGate (the public-only build flag)', () => {
-  function call(publicOnly: boolean, path: string) {
+  function call(publicOnly: boolean, path: string, routePattern?: string) {
     const next = vi.fn(async () => new Response('page'));
     const rewrite = vi.fn(async () => new Response('not found', { status: 404 }));
-    const context = { url: new URL(`https://nwfl-canary.example.org${path}`), rewrite };
+    const context = { url: new URL(`https://nwfl-canary.example.org${path}`), rewrite, routePattern };
     const result = makeGate(publicOnly)(context as never, next as never) as Promise<Response>;
     return { result, next, rewrite };
   }
@@ -34,10 +34,36 @@ describe('makeGate (the public-only build flag)', () => {
     }
   });
 
+  it('gates on the route that will render, however the URL spells it', async () => {
+    // With build.format 'file', Astro also renders /sign-in for /sign-in.html.
+    for (const [path, pattern] of [
+      ['/sign-in.html', '/sign-in'],
+      ['/%73ign-in.html', '/sign-in'],
+      ['/sign-in%2ehtml', '/sign-in'],
+      ['/auth/callback.html', '/auth/callback'],
+      ['/officer-area/new', '/officer-area/[...rest]'],
+    ] as const) {
+      const { result, next, rewrite } = call(true, path, pattern);
+      expect((await result).status, path).toBe(404);
+      expect(rewrite).toHaveBeenCalledWith('/404');
+      expect(next).not.toHaveBeenCalled();
+    }
+  });
+
+  it('with no route known, gates on the path decoded, its slashes collapsed and .html dropped', async () => {
+    for (const path of ['/sign-in.html', '/%73ign-in.html', '/sign-in%2ehtml', '//sign-in.html', '/SIGN-OUT', '/%2fsigned-out', '/officer-area/index.html', '/auth//callback', '/officer-area/%E0%A4%A']) {
+      const { result, next } = call(true, path);
+      expect((await result).status, path).toBe(404);
+      expect(next, path).not.toHaveBeenCalled();
+    }
+  });
+
   it('serves the public pages as usual when sign-in is off', async () => {
-    const { result, next } = call(true, '/officers');
-    expect(await (await result).text()).toBe('page');
-    expect(next).toHaveBeenCalledOnce();
+    for (const [path, pattern] of [['/officers', '/officers'], ['/officers.html', '/officers'], ['/sign-in-help', undefined], ['/about', undefined]] as const) {
+      const { result, next } = call(true, path, pattern);
+      expect(await (await result).text(), path).toBe('page');
+      expect(next).toHaveBeenCalledOnce();
+    }
   });
 
   it('changes nothing in a full build', async () => {

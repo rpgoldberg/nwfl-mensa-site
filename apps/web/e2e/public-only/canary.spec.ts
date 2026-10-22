@@ -70,3 +70,26 @@ test('the reader still has the header controls, with no Sign in, and the site wo
   await page.locator('#reader-menu').getByRole('button', { name: /^A\+ Larger/ }).click();
   await expect(page.locator('html')).toHaveAttribute('data-size', '2');
 });
+
+// Every way the challenger found to spell a gated route (.html, encoded
+// letters and dots, doubled slashes, a query), for every W4 route, by GET,
+// HEAD and POST: Astro serves /sign-in for /sign-in.html.
+const SPELLINGS = (route: string) => {
+  const rest = route.slice(2);
+  const first = route.charCodeAt(1).toString(16);
+  return [route, `${route}.html`, `/%${first}${rest}.html`, `/%${first}${rest}`, `${route}%2ehtml`, `/${route}.html`, `/${route}`, `${route}.html?x=1`, `/.${route}.html`, `${route}/index.html`];
+};
+
+test('(5) the gate holds however the path is spelled, for every sign-in route and method', async ({ request, baseURL }) => {
+  for (const route of ['/sign-in', '/sign-out', '/signed-out', '/auth/callback', '/officer-area', '/officer-area/new']) {
+    for (const path of SPELLINGS(route)) {
+      // Joined by hand: a leading // would otherwise be read as another host.
+      const url = `${baseURL}${path}`;
+      const get = await request.get(url, { maxRedirects: 0 });
+      expect(get.status(), `GET ${path}`).toBe(404);
+      expect(await get.text(), `GET ${path}`).toContain('Page not found');
+      expect((await request.head(url, { maxRedirects: 0 })).status(), `HEAD ${path}`).toBe(404);
+      expect((await request.post(url, { headers: { Origin: baseURL! }, form: { a: 'b' }, maxRedirects: 0 })).status(), `POST ${path}`).toBe(404);
+    }
+  }
+});
