@@ -4,10 +4,11 @@
 import { expect, test, type APIResponse } from '@playwright/test';
 import { isHostOnlyCookie, parseCsp } from '../../server/policy.mjs';
 import { SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
+import { isSignInPath } from '../../src/lib/access';
 import { ALL_PAGES } from '../pages';
 
-const GATED = ['/sign-in', '/auth', '/auth/callback', '/auth/callback?code=x&state=y', '/auth/sign-out', '/officer-area', '/officer-area/new', '/officer-area/queue'];
-const PUBLIC = ALL_PAGES.filter((path) => path !== '/sign-in');
+const GATED = ['/sign-in', '/sign-out', '/signed-out', '/auth', '/auth/callback', '/auth/callback?code=x&state=y', '/auth/sign-out', '/officer-area', '/officer-area/new', '/officer-area/queue'];
+const PUBLIC = ALL_PAGES.filter((path) => !isSignInPath(path));
 
 const setCookies = (res: APIResponse) => res.headersArray().filter((h) => h.name.toLowerCase() === 'set-cookie').map((h) => h.value);
 

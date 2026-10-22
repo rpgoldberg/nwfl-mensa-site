@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { PRIMARY_NAV, SITE_NAME, currentNav, sectionFor, trailFor } from '../src/lib/site';
 import { ALL_PAGES, titleOf } from './pages';
 import { setPrefs } from './prefs';
+import { signIn } from './signin';
 
 const headingOf = (path: string): string => (path === '/' ? SITE_NAME : titleOf(path));
 
@@ -53,7 +54,7 @@ for (const path of ALL_PAGES) {
       const controls = [
         [banner.getByRole('link', { name: /^Aa\b/ }), '#reader-menu'],
         [banner.getByRole('link', { name: 'Help', exact: true }), '/help'],
-        [banner.getByRole('link', { name: 'Sign in', exact: true }), '/sign-in'],
+        [banner.getByRole('link', { name: 'Sign in', exact: true }), `/sign-in?return=${encodeURIComponent(path)}`],
       ] as const;
       for (const [link, href] of controls) {
         await expect(link).toBeVisible();
@@ -174,6 +175,31 @@ test.describe('at 320px wide', () => {
           await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
           const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
           expect(overflow, `${url} at size ${size}`).toBeLessThanOrEqual(0);
+        }
+      }
+    });
+  }
+});
+
+test.describe('signed in, at 320px wide', () => {
+  test.use({ viewport: { width: 320, height: 640 } });
+
+  for (const size of [1, 5]) {
+    test(`a long name, the Officer area and Sign out fit at text size ${size}, each control a 48px target`, async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { size });
+      await page.goto('/');
+      await signIn(page, 'long-name');
+      for (const path of ['/', '/about', '/officer-area']) {
+        await page.goto(path);
+        const banner = page.getByRole('banner');
+        await expect(banner).toContainText('Maximiliana Bartholomew-Fitzgerald Examplesworth');
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        expect(overflow, `${path} at size ${size}`).toBeLessThanOrEqual(0);
+        for (const control of [banner.getByRole('link', { name: 'Officer area' }), banner.getByRole('button', { name: 'Sign out' })]) {
+          await expect(control).toBeVisible();
+          const box = (await control.boundingBox())!;
+          expect(box.width).toBeGreaterThanOrEqual(48);
+          expect(box.height).toBeGreaterThanOrEqual(48);
         }
       }
     });

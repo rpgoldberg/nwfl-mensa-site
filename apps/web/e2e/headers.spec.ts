@@ -1,10 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import { expect, test, type APIResponse } from '@playwright/test';
-import { SECURITY_HEADERS, SESSION_COOKIE, parseCsp } from '../server/policy.mjs';
+import { SESSION_COOKIE, parseCsp, securityHeaders } from '../server/policy.mjs';
 import { SIZE_COOKIE, THEME_COOKIE } from '../server/prefs.mjs';
 import { ALL_PAGES, PRERENDERED } from './pages';
-import { BACKEND_URL } from './servers';
+import { BACKEND_URL, IDP_ORIGIN } from './servers';
+
+// With the test identity provider configured, forms may lead to it (sign-out).
+const SECURITY_HEADERS = securityHeaders({ formAction: [IDP_ORIGIN] });
 
 function expectSecurityHeaders(res: APIResponse): void {
   const headers = res.headers();
@@ -171,9 +174,11 @@ test('the full build has the same strict CSP on every response as the canary', a
   }
 });
 
-test('the full build keeps sign-in: the page answers, and the header links to it', async ({ request }) => {
-  expect((await request.get('/sign-in')).status()).toBe(200);
-  expect(await (await request.get('/about')).text()).toMatch(/href="\/sign-in"/);
+test('the full build keeps sign-in: it starts at the provider, and the header links to it', async ({ request }) => {
+  const res = await request.get('/sign-in', { maxRedirects: 0 });
+  expect(res.status()).toBe(303);
+  expect(res.headers()['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/auth\\?`));
+  expect(await (await request.get('/about')).text()).toMatch(/href="\/sign-in\?return=%2Fabout"/);
 });
 
 test('the full build shows the submitted content the canary hides (the other half of canary condition 3)', async ({ request }) => {

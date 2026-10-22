@@ -2,8 +2,10 @@
 // person are checked in the unit tests with made-up slugs, never here.
 import http from 'node:http';
 import { expect, test, type APIResponse } from '@playwright/test';
-import { SECURITY_HEADERS } from '../server/policy.mjs';
-import { BACKEND_URL } from './servers';
+import { securityHeaders } from '../server/policy.mjs';
+import { BACKEND_URL, IDP_ORIGIN } from './servers';
+
+const SECURITY_HEADERS = securityHeaders({ formAction: [IDP_ORIGIN] });
 
 const U = '/uploads/3/4/4/5/34456428';
 const go = (res: APIResponse) => [res.status(), res.headers()['location']];

@@ -34,6 +34,7 @@
     "@fontsource/lexend": "5.3.0",
     "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
+    "@types/oidc-provider": "9.12.1",
     "@vitest/coverage-v8": "5.0.5",
     "astro-eslint-parser": "3.2.0",
     "eslint": "10.13.0",
