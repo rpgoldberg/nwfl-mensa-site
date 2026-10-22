@@ -104,6 +104,8 @@ test('at 200 % the reading bar keeps its place at the foot of the screen', async
 
 test('every reader control shows a focus ring of at least 3px when reached by keyboard', async ({ page }) => {
   await page.goto('/about#reader-menu');
+  // .all() does not wait: let the panel open on its fragment first.
+  await expect(panel(page)).toBeVisible();
   const controls = [
     ...(await panel(page).getByRole('button').all()),
     ...(await readingBar(page).getByRole('button').all()),
