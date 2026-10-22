@@ -40,6 +40,23 @@ describe('gitleaks', () => {
     expect(readFileSync(hook, 'utf8')).toMatch(/gitleaks\.sh" git --pre-commit --staged/);
   });
 
+  it('is wired by npm prepare in a git checkout, and is a no-op outside one', async () => {
+    const pkg = JSON.parse(readFileSync(path.join(REPO, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+    const prepare = pkg.scripts['prepare'];
+    expect(prepare).toBeDefined();
+    const checkout = mkdtempSync(path.join(os.tmpdir(), 'nwfl-prepare-'));
+    const bare = mkdtempSync(path.join(os.tmpdir(), 'nwfl-prepare-nogit-'));
+    try {
+      await run('git', ['init', '-q'], checkout);
+      expect((await run('sh', ['-c', prepare as string], checkout)).code).toBe(0);
+      expect((await run('git', ['config', 'core.hooksPath'], checkout)).out.trim()).toBe('.githooks');
+      expect((await run('sh', ['-c', prepare as string], bare)).code).toBe(0);
+    } finally {
+      rmSync(checkout, { recursive: true, force: true });
+      rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
   it('runs in CI over the whole history', () => {
     const ci = readFileSync(path.join(REPO, '.github', 'workflows', 'ci.yml'), 'utf8');
     expect(ci).toMatch(/sh scripts\/gitleaks\.sh git --log-opts=--all/);

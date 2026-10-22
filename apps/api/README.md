@@ -46,9 +46,10 @@ mounted read-only at `/repo`, each in a database of its own.
 
 This repository's whole history is meant to be publishable.
 
-- `npm run hooks:install` points git at `.githooks`, whose pre-commit hook
-  runs gitleaks over the staged changes and refuses a commit that adds a
-  secret. CI runs it over every commit (`npm run secrets:scan` does the same
+- `npm install` (its `prepare` script; `npm run prepare` by hand) points git
+  at `.githooks`, whose pre-commit hook runs gitleaks over the staged changes
+  and refuses a commit that adds a secret. CI and the Docker build install
+  with `--ignore-scripts`, so they never touch git config. CI runs it over every commit (`npm run secrets:scan` does the same
   locally). The version and image digest are pinned in `scripts/gitleaks.sh`;
   a local gitleaks is used only if it is exactly that version, otherwise the
   image runs (Docker needed).

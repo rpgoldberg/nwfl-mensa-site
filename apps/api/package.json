@@ -17,7 +17,7 @@
     "test:coverage": "vitest run --coverage",
     "proto:generate": "buf generate",
     "proto:lint": "buf lint",
-    "hooks:install": "git config core.hooksPath .githooks",
+    "prepare": "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "secrets:scan": "sh scripts/gitleaks.sh git --log-opts=--all"
   },
   "dependencies": {
