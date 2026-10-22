@@ -17,12 +17,16 @@
 //     two budgets below together: the mesh proxy may carry all of the pod's
 //     traffic over one connection, and a lower cap would bind before the
 //     budgets and leave the site queued behind the edge;
-//   - two budgets of active streams across all connections, each refused
-//     RESOURCE_EXHAUSTED when full: MAX_EDGE_STREAMS for calls that came
-//     through the edge (l5d-client-id names an edge identity, see
-//     auth/caller.ts) and MAX_ACTIVE_STREAMS for every other call. Slow
-//     senders on the internet side can fill only the first, so the site
-//     keeps its whole budget even on a connection the mesh proxy shares;
+//   - budgets of active streams across all connections, each refused
+//     RESOURCE_EXHAUSTED when full: MAX_ACTIVE_STREAMS for the site's calls,
+//     and for calls that came through the edge (l5d-client-id names an edge
+//     identity, see auth/caller.ts) MAX_EDGE_STREAMS_PER_CLIENT each for the
+//     agent and the verifier. An edge stream is admitted only once its bearer
+//     token is verified, at stream start: one with no valid token, or with a
+//     token for another service, is refused at once and holds no slot. So
+//     slow senders on the internet side can fill nothing, one edge client's
+//     slow calls cannot take the other's slots, and the site keeps its whole
+//     budget even on a connection the mesh proxy shares;
 //   - READ_MAX_BYTES per message, checked on the envelope before buffering;
 //   - RECEIVE_DEADLINE_MS for the request body: a sender that has not
 //     finished by then has its stream cancelled, freeing what was buffered;
@@ -39,7 +43,7 @@ import { Code, type ConnectRouter, type Interceptor, createContextValues } from 
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
-import { DEFAULT_EDGE_CLIENT_IDS, isEdgePeer } from '../auth/caller.js';
+import { AGENT_SERVICE, DEFAULT_EDGE_CLIENT_IDS, type TokenVerifier, VERIFIER_SERVICE, isEdgePeer, rejectAllTokens } from '../auth/caller.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { codeName } from './interceptors.js';
 import { REQUEST_INFO, type RequestInfo } from './request.js';
@@ -54,13 +58,42 @@ export const ACCEPTED_CONTENT_TYPES: ReadonlySet<string> = new Set(['application
  */
 export const READ_MAX_BYTES = 4 * 1024 * 1024;
 export const MAX_ACTIVE_STREAMS = 24;
-export const MAX_EDGE_STREAMS = 8;
+export const MAX_EDGE_STREAMS_PER_CLIENT = 4;
+/** The agent's and the verifier's budgets together. */
+export const MAX_EDGE_STREAMS = 2 * MAX_EDGE_STREAMS_PER_CLIENT;
 export const MAX_CONCURRENT_STREAMS = MAX_ACTIVE_STREAMS + MAX_EDGE_STREAMS;
 export const RECEIVE_DEADLINE_MS = 10_000;
 export const MAX_SESSION_MEMORY_MB = 16;
 
 const STATUS_UNIMPLEMENTED = String(Code.Unimplemented);
 const STATUS_RESOURCE_EXHAUSTED = String(Code.ResourceExhausted);
+const STATUS_UNAUTHENTICATED = String(Code.Unauthenticated);
+const STATUS_PERMISSION_DENIED = String(Code.PermissionDenied);
+// RFC 6750 b64token, as the caller gate reads it.
+const BEARER = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i;
+// The one service each edge client may call.
+const EDGE_SERVICE = { agent: AGENT_SERVICE, verifier: VERIFIER_SERVICE } as const;
+
+type Budget = 'site' | 'agent' | 'verifier';
+
+/**
+ * The budget an edge stream is admitted to, decided before it takes a slot:
+ * its client's, or a refusal (no valid token: UNAUTHENTICATED; a token for
+ * another service, or a site user's: PERMISSION_DENIED). The caller gate
+ * checks the token again on the call itself; this only decides admission.
+ */
+async function edgeBudget(request: http2.Http2ServerRequest, rpc: string, verifier: TokenVerifier): Promise<{ budget: Budget } | { refuse: string }> {
+  const token = BEARER.exec(String(request.headers['authorization'] ?? ''))?.[1];
+  if (token === undefined) return { refuse: STATUS_UNAUTHENTICATED };
+  let client: string;
+  try {
+    client = (await verifier.verify(token)).client;
+  } catch {
+    return { refuse: STATUS_UNAUTHENTICATED };
+  }
+  if ((client === 'agent' || client === 'verifier') && rpc.startsWith(`${EDGE_SERVICE[client]}/`)) return { budget: client };
+  return { refuse: STATUS_PERMISSION_DENIED };
+}
 // A gRPC path as Connect routes it; anything else is logged as "unknown".
 const RPC_PATH = /^\/([A-Za-z0-9_.]+\/[A-Za-z0-9_]+)$/;
 
@@ -78,9 +111,11 @@ export interface GrpcServerOptions {
   logger?: StructuredLogger;
   receiveDeadlineMs?: number;
   maxActiveStreams?: number;
-  maxEdgeStreams?: number;
+  maxEdgeStreamsPerClient?: number;
   /** Mesh identities of the edge (cloudflared), as the caller gate reads them. */
   edgeClientIds?: readonly string[];
+  /** The caller gate's verifier: an edge stream's token is checked with it before admission. Without one, every edge stream is refused. */
+  verifier?: TokenVerifier;
 }
 
 type NodeHandler = (request: http2.Http2ServerRequest, response: http2.Http2ServerResponse) => void;
@@ -112,8 +147,10 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
   const { logger } = options;
   const receiveDeadlineMs = options.receiveDeadlineMs ?? RECEIVE_DEADLINE_MS;
   const maxActiveStreams = options.maxActiveStreams ?? MAX_ACTIVE_STREAMS;
-  const maxEdgeStreams = options.maxEdgeStreams ?? MAX_EDGE_STREAMS;
+  const maxEdgeStreamsPerClient = options.maxEdgeStreamsPerClient ?? MAX_EDGE_STREAMS_PER_CLIENT;
   const edgeIds = new Set(options.edgeClientIds ?? DEFAULT_EDGE_CLIENT_IDS);
+  const verifier = options.verifier ?? rejectAllTokens;
+  const limit: Record<Budget, number> = { site: maxActiveStreams, agent: maxEdgeStreamsPerClient, verifier: maxEdgeStreamsPerClient };
   const infos = new WeakMap<http2.Http2ServerRequest, RequestInfo>();
   const connect = createConnectHandler(options, (request) => {
     const values = createContextValues();
@@ -121,7 +158,7 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
     return values;
   });
   // Active streams per budget.
-  const active = { site: 0, edge: 0 };
+  const active: Record<Budget, number> = { site: 0, agent: 0, verifier: 0 };
 
   const handler: NodeHandler = (request, response) => {
     const info: RequestInfo = { id: randomUUID(), reached: false };
@@ -150,8 +187,8 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
       addTrailers(trailers);
     };
 
-    const budget = isEdgePeer(request.headers['l5d-client-id'], edgeIds) ? 'edge' : 'site';
-    active[budget] += 1;
+    // The budget this stream counts against, once it is admitted to one.
+    let counted: Budget | undefined;
     const deadline = setTimeout(() => {
       if (!request.complete) {
         timedOut = true;
@@ -159,24 +196,40 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
       }
     }, receiveDeadlineMs);
     request.stream.once('close', () => {
-      active[budget] -= 1;
+      if (counted !== undefined) active[counted] -= 1;
       clearTimeout(deadline);
       if (info.reached || logger === undefined) return;
       const code = timedOut ? 'deadline_exceeded' : status !== undefined ? codeName(Number(status)) : undefined;
       logger.info({ rpc, code, http_status: response.statusCode, request_id: info.id, early: true }, 'rpc');
     });
+    const refuse = (grpcStatus: string): void => {
+      response.writeHead(200, { 'content-type': 'application/grpc', 'grpc-status': grpcStatus });
+      response.end();
+    };
+    const admit = (budget: Budget): void => {
+      if (request.stream.closed || request.stream.destroyed) return;
+      counted = budget;
+      active[budget] += 1;
+      if (active[budget] > limit[budget]) {
+        refuse(STATUS_RESOURCE_EXHAUSTED);
+        return;
+      }
+      connect(request, response);
+    };
 
     if (!ACCEPTED_CONTENT_TYPES.has(String(request.headers['content-type'] ?? '').toLowerCase())) {
       response.writeHead(415);
       response.end();
       return;
     }
-    if (active[budget] > (budget === 'edge' ? maxEdgeStreams : maxActiveStreams)) {
-      response.writeHead(200, { 'content-type': 'application/grpc', 'grpc-status': STATUS_RESOURCE_EXHAUSTED });
-      response.end();
+    if (!isEdgePeer(request.headers['l5d-client-id'], edgeIds)) {
+      admit('site');
       return;
     }
-    connect(request, response);
+    void edgeBudget(request, rpc, verifier).then((decision) => {
+      if ('budget' in decision) admit(decision.budget);
+      else if (!request.stream.closed && !request.stream.destroyed) refuse(decision.refuse);
+    });
   };
 
   return http2.createServer({ settings: { maxConcurrentStreams: MAX_CONCURRENT_STREAMS }, maxSessionMemory: MAX_SESSION_MEMORY_MB }, handler);

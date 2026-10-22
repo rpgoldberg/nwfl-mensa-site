@@ -93,6 +93,8 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const server: http2.Http2Server = createGrpcServer({
     routes: apiRoutes({ db: pool, logger, now, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
     interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now) }),
+    // As in production: the gate's verifier also admits edge streams.
+    verifier: options.verifier ?? fakeVerifier,
   });
   const baseUrl = await listen(server);
   const transport = createGrpcTransport({ baseUrl });

@@ -63,6 +63,8 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
     }),
     shutdownSignal: shutdown.signal,
     ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
+    // The same verifier as the caller gate, for edge admission.
+    verifier: options.verifier ?? rejectAllTokens,
     // Calls refused before the interceptors run are logged by the gRPC layer itself.
     logger: logger.child({ component: 'grpc' }),
   });
