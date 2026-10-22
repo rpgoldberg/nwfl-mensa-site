@@ -1,0 +1,15 @@
+# One module: our own nwfl.mensa.v1 package plus the vendored, unmodified
+# grpc.health.v1 proto (canonical copy from grpc/grpc-proto). The health proto
+# predates buf's STANDARD naming rules and cannot be renamed without breaking
+# every gRPC health client, so it is excluded from lint and only from lint.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  ignore:
+    - proto/grpc/health/v1/health.proto
+breaking:
+  use:
+    - FILE

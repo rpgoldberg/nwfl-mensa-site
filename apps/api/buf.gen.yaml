@@ -1,0 +1,13 @@
+# TypeScript via protoc-gen-es, resolved from node_modules/.bin when run as
+# `npm run proto:generate`. The output is COMMITTED under src/gen; CI
+# regenerates and fails on any diff, so the committed code always matches the
+# protos. `clean: true` removes output whose proto was deleted.
+version: v2
+clean: true
+plugins:
+  - local: protoc-gen-es
+    out: src/gen
+    opt:
+      - target=ts
+      # Node16/NodeNext resolution requires the extension on relative imports.
+      - import_extension=js

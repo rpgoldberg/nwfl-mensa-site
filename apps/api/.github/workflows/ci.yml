@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Read-only everywhere. Nothing here publishes: the registry owner is not
+# decided yet, so an image push job arrives with it, in its own job, as the
+# only holder of `packages: write`.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          # .nvmrc pins the same Node 24 LTS release the Dockerfile runs.
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        # fc-shared is vendored (vendor/README.md), so no registry token.
+        run: npm ci --ignore-scripts
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Start a throwaway Postgres
+        # Writes NWFL_TEST_PG_CONTAINER and NWFL_TEST_DATABASE_URL for the
+        # live suites; with CI=true a missing database fails them.
+        run: sh scripts/test-db.sh start >> "$GITHUB_ENV"
+
+      - name: Test with coverage
+        # The 85 % line AND branch gate, per file, lives in vitest.config.ts,
+        # so it fails here and locally on the same thresholds.
+        run: npm run test:coverage
+
+      - name: Remove the throwaway Postgres
+        if: always() && env.NWFL_TEST_PG_CONTAINER != ''
+        run: sh scripts/test-db.sh stop "$NWFL_TEST_PG_CONTAINER"
+
+      - name: Build
+        run: npm run build
+
+  proto:
+    name: Proto lint, breaking, codegen
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # buf breaking reads the base commit from the local history.
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: buf lint
+        run: npm run proto:lint
+
+      - name: buf breaking
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: sh scripts/buf-breaking.sh "$BASE"
+
+      - name: Generated code matches the protos
+        run: |
+          npm run proto:generate
+          git add -N src/gen
+          git diff --exit-code -- src/gen
+
+  image:
+    name: Build and run the image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Build the production image
+        run: docker build --build-arg SERVICE_VERSION="$(node -pe "require('./package.json').version")" -t nwfl-mensa-api:ci .
+
+      - name: The image runs as a numeric non-root user
+        run: |
+          user=$(docker inspect nwfl-mensa-api:ci --format '{{.Config.User}}')
+          echo "image user: ${user}"
+          case "$user" in
+            ''|root|0|0:*) echo "::error::the image runs as root"; exit 1 ;;
+          esac
+
+      - name: It serves on a read-only root filesystem and drains on SIGTERM
+        run: |
+          id=$(docker run -d --read-only --cap-drop ALL --security-opt no-new-privileges \
+            -p 127.0.0.1::8081 nwfl-mensa-api:ci)
+          trap 'docker rm -f "$id" >/dev/null' EXIT
+          port=$(docker port "$id" 8081/tcp | head -1 | sed 's/.*://')
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${port}/healthz"; then break; fi
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:${port}/healthz"
+          docker stop --time 30 "$id" >/dev/null
+          code=$(docker inspect "$id" --format '{{.State.ExitCode}}')
+          docker logs "$id" | tail -5
+          [ "$code" = "0" ] || { echo "::error::exit code ${code} after SIGTERM"; exit 1; }
