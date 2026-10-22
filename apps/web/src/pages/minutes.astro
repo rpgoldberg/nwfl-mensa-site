@@ -1,10 +1,40 @@
 ---
+// Approved minutes, newest first (R6), on request. Each meeting sits at its
+// date (#YYYY-MM-DD), and each month at #YYYY-MM, which old links use when
+// they had no day (W6). Attendance is by office and a count of others.
+import { PUBLIC_ONLY } from 'astro:env/server';
+import PublicOnlyNote from '../components/PublicOnlyNote.astro';
+import SampleNotice from '../components/SampleNotice.astro';
+import { siteData } from '../data';
+import { formatDate, monthOf } from '../data/format';
+import { attendanceText } from '../data/site-data';
 import Base from '../layouts/Base.astro';
+import { visibleContent } from '../lib/content';
 import { page } from '../lib/site';
 
 const p = page('/minutes');
+const meetings = visibleContent(await siteData.meetings(), { publicOnly: PUBLIC_ONLY });
+const firstOfMonth = new Set(meetings.filter((m, i) => i === 0 || monthOf(meetings[i - 1]!.date) !== monthOf(m.date)));
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
   <p class="lead">{p.description}</p>
+  {siteData.isSample && <SampleNotice />}
+  {PUBLIC_ONLY ? <PublicOnlyNote what="The minutes list" /> : meetings.map((m) => (
+    <>
+      {firstOfMonth.has(m) && <span class="month-anchor" id={monthOf(m.date)}></span>}
+      <article class="meeting card" id={m.date} data-source={m.source}>
+        <h2>{formatDate(m.date)}</h2>
+        <p class="muted">{m.kind}, {m.place}</p>
+        <p>{m.summary}</p>
+        <p><b>Present:</b> {attendanceText(m.attendance)}</p>
+        {m.reports.length > 0 && (
+          <>
+            <h3>Reports</h3>
+            <ul>{m.reports.map((r) => <li>{r.title} ({r.office})</li>)}</ul>
+          </>
+        )}
+      </article>
+    </>
+  ))}
 </Base>

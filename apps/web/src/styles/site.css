@@ -456,3 +456,70 @@ main:focus:not(:focus-visible) { outline: none; }
 .ph-small { font-size: 11px; fill: var(--ink); font-family: var(--font-body); }
 .ph-strong { font-weight: 700; }
 .ph-mark { fill: none; stroke: var(--focus); stroke-width: 4; }
+
+/* The site's own texts (content/site/). */
+.prose { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); max-width: var(--measure); }
+.prose > * { margin: 0; }
+.prose h2 { margin-top: var(--space-5); }
+.prose ul { padding-left: 1.5em; display: grid; gap: var(--space-2); }
+.prose li a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+.prose blockquote { margin: 0; padding: var(--space-2) var(--space-4); border-left: 0.375rem solid var(--accent); background: var(--surface); }
+.prose blockquote p { margin: 0; }
+
+/* A plain-words note: sample data, or content this copy does not carry. */
+.notice {
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 0.375rem solid var(--warn);
+  background: var(--warn-bg);
+  color: var(--ink);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.card {
+  display: grid;
+  /* The column may shrink below its longest word, so 200 % text wraps on a narrow phone. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: var(--border) solid var(--line-soft);
+  border-radius: var(--radius);
+}
+.card > * { margin: 0; }
+.eyebrow { font-weight: 700; color: var(--muted); }
+
+/* Officers: by office, with the role address. */
+.offices { list-style: none; padding: 0; margin: var(--space-4) 0; }
+.offices li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.125rem; padding: var(--space-3) 0; border-top: var(--border) solid var(--line-soft); }
+/* An address is one long word: at 200 % on a narrow phone it may wrap anywhere. */
+.offices a { overflow-wrap: anywhere; }
+.offices li:first-child { border-top: 0; }
+.offices .role { font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); }
+.addr { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; overflow-wrap: anywhere; }
+
+/* Newsletter: past issues by year. */
+.yr h3 { margin: var(--space-5) 0 var(--space-2); }
+.issues { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
+.issues li {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border) solid var(--line-soft); border-radius: var(--radius); background: var(--surface);
+}
+.issues li.missing { border-style: dashed; background: transparent; }
+
+/* Minutes and finances. */
+.meeting { scroll-margin-top: var(--space-4); }
+.meeting h2 { font-size: var(--fs-h3); }
+.meeting h3 { font-size: var(--fs-body); }
+.meeting ul { margin: 0; padding-left: 1.5em; }
+/* A table cannot shrink below its widest row: at 200 % on the narrowest phone
+   its own box scrolls sideways, never the page. */
+.table-wrap { overflow-x: auto; max-width: 100%; }
+.money { width: 100%; max-width: 30rem; border-collapse: collapse; font-variant-numeric: tabular-nums; margin-top: var(--space-5); }
+.money caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); padding-bottom: var(--space-2); }
+.money th { text-align: left; font-weight: 400; }
+.money th, .money td { padding: var(--space-2) 0; border-top: var(--border) solid var(--line-soft); }
+.money td { text-align: right; font-weight: 700; }
+.money tr.total th, .money tr.total td { border-top: 3px solid var(--line); font-weight: 700; }

@@ -1,10 +1,48 @@
 ---
+// Pensa Mensa: the current issue, then every other issue by year (R5), on
+// request. Missing issues are listed honestly. Reading views and PDFs arrive
+// with the archive (MB3, C1).
+import { PUBLIC_ONLY } from 'astro:env/server';
+import SampleNotice from '../components/SampleNotice.astro';
+import { siteData } from '../data';
+import { currentIssue, issuesByYear } from '../data/site-data';
 import Base from '../layouts/Base.astro';
+import { visibleContent } from '../lib/content';
 import { page } from '../lib/site';
 
 const p = page('/newsletter');
+const issues = visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY });
+const current = currentIssue(issues);
+const past = issuesByYear(issues);
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
-  <p class="lead">{p.description}</p>
+  <p class="lead">Pensa Mensa, our newsletter: {p.description.charAt(0).toLowerCase()}{p.description.slice(1)}</p>
+  {siteData.isSample && <SampleNotice />}
+  {current && (
+    <section class="card issue" aria-labelledby="current-title" data-source={current.source}>
+      <p class="eyebrow">Current issue</p>
+      <h2 id="current-title">{current.label}</h2>
+      {current.volume !== undefined && <p class="muted">Volume {current.volume}, Number {current.number}</p>}
+      <p>Large-type reading and the PDF arrive with the archive.</p>
+    </section>
+  )}
+  <section aria-labelledby="past-title">
+    <h2 id="past-title">Past issues</h2>
+    {past.map(([year, list]) => (
+      <div class="yr">
+        <h3>{year}</h3>
+        <ul class="issues">
+          {list.map((i) => (
+            <li data-source={i.source} class={i.missing ? 'missing' : undefined}>
+              <span>{i.label}</span>
+              {i.missing ? <span class="muted">No copy known. If you have a paper copy, please tell the Editor.</span>
+                : i.volume !== undefined && <span class="muted">Volume {i.volume}, Number {i.number}</span>}
+            </li>
+          ))}
+        </ul>
+      </div>
+    ))}
+  </section>
+  <p><a href="/search">Search the newsletter archive</a></p>
 </Base>

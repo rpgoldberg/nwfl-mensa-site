@@ -1,10 +1,34 @@
 ---
+// The roster by office (R2), on request. Role addresses only, and only once
+// mail to them has been seen to arrive; a vacant seat says so.
+import { PUBLIC_ONLY } from 'astro:env/server';
+import PublicOnlyNote from '../components/PublicOnlyNote.astro';
+import SampleNotice from '../components/SampleNotice.astro';
+import { siteData } from '../data';
+import { rosterView } from '../data/site-data';
 import Base from '../layouts/Base.astro';
+import { visibleContent } from '../lib/content';
 import { page } from '../lib/site';
 
 const p = page('/officers');
+const roster = rosterView(visibleContent(await siteData.offices(), { publicOnly: PUBLIC_ONLY }));
+const president = roster.find((o) => o.slug === 'president')?.email;
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
   <p class="lead">{p.description}</p>
+  {siteData.isSample && <SampleNotice />}
+  {PUBLIC_ONLY ? <PublicOnlyNote what="The officer list" /> : (
+    <ul class="offices" aria-label="Officers">
+      {roster.map((o) => (
+        <li data-source={o.source}>
+          <span class="role">{o.title}</span>
+          {o.vacant
+            ? <span>Vacant. Interested? {president ? <>Write to <a href={`mailto:${president}`}>{president}</a>.</> : <>Ask any officer.</>}</span>
+            : <span>{o.holder}</span>}
+          {!o.vacant && o.email && <a class="addr" href={`mailto:${o.email}`}>{o.email}</a>}
+        </li>
+      ))}
+    </ul>
+  )}
 </Base>

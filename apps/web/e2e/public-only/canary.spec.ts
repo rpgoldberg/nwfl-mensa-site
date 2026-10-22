@@ -43,6 +43,8 @@ test('(3) no officer- or member-submitted content, and no way to sign in, on any
     expect(html, path).not.toMatch(/data-source="submitted"/);
     expect(html, path).not.toMatch(/href="\/(sign-in|auth|officer-area)\b/);
   }
+  // The archive pipeline's items still show.
+  expect(await (await request.get('/newsletter')).text()).toMatch(/data-source="pipeline"/);
 });
 
 test('(4) the CSP on every response: script-src self only, no unsafe-*, object-src, base-uri and frame-ancestors none', async ({ request }) => {

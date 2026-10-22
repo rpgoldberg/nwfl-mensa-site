@@ -23,6 +23,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY astro.config.mjs tsconfig.json ./
 COPY public ./public
 COPY src ./src
+COPY content ./content
 # The layout imports server/prefs.mjs, so the server code is in place for the build.
 COPY server ./server
 # --build-arg PUBLIC_ONLY=true makes the public-only canary image: no sign-in at all.

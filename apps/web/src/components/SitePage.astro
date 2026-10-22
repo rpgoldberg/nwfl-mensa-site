@@ -1,0 +1,19 @@
+---
+// A page whose body is one of the site's own texts in content/site/.
+import { getEntry, render } from 'astro:content';
+import Base from '../layouts/Base.astro';
+import type { Page } from '../lib/site';
+
+interface Props {
+  page: Page;
+  entry: 'about' | 'join' | 'governance';
+}
+const { page, entry } = Astro.props;
+const text = await getEntry('site', entry);
+if (!text) throw new Error(`content/site/${entry}.md is missing`);
+const { Content } = await render(text);
+---
+<Base {...page}>
+  <h1>{page.title}</h1>
+  <div class="prose" data-source="static"><Content /></div>
+</Base>

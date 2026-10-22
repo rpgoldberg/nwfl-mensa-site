@@ -1,0 +1,8 @@
+---
+// In a public-only build (MT-50), in place of officer- or member-submitted content.
+interface Props {
+  what: string;
+}
+const { what } = Astro.props;
+---
+<div class="notice" role="note">{what} is not shown on this copy of the site, which carries only the public pages.</div>

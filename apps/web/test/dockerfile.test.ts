@@ -36,6 +36,10 @@ describe('Dockerfile', () => {
     expect(runtime).toMatch(/^COPY --from=build --chown=root:root \/app\/server \.\/server$/m);
   });
 
+  it("gives the build everything the site is made from, the site's own texts included", () => {
+    for (const dir of ['public', 'src', 'content', 'server']) expect(stages[0], dir).toMatch(new RegExp(`^COPY ${dir} \\./${dir}$`, 'm'));
+  });
+
   it('builds a public-only image when asked, and a full one by default', () => {
     expect(stages[0]).toMatch(/^ARG PUBLIC_ONLY=false$/m);
     expect(stages[0]).toMatch(/^RUN PUBLIC_ONLY=\$\{PUBLIC_ONLY\} npx astro build$/m);

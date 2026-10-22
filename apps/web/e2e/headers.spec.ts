@@ -175,3 +175,9 @@ test('the full build keeps sign-in: the page answers, and the header links to it
   expect((await request.get('/sign-in')).status()).toBe(200);
   expect(await (await request.get('/about')).text()).toMatch(/href="\/sign-in"/);
 });
+
+test('the full build shows the submitted content the canary hides (the other half of canary condition 3)', async ({ request }) => {
+  for (const path of ['/officers', '/minutes', '/finances']) {
+    expect(await (await request.get(path)).text(), path).toMatch(/data-source="submitted"/);
+  }
+});
