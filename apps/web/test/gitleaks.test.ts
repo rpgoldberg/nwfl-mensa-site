@@ -79,12 +79,16 @@ describe('gitleaks', () => {
     const stub = (reported: string): void => {
       writeFileSync(path.join(stubDir, 'gitleaks'), `#!/bin/sh\nif [ "$1" = version ]; then echo ${reported}; else echo "STUB $*"; fi\n`, { mode: 0o755 });
     };
+    // A fake docker proves the image fallback is chosen without pulling the real image, which is slow on a cold runner.
+    writeFileSync(path.join(stubDir, 'docker'), '#!/bin/sh\necho "DOCKER $*"\n', { mode: 0o755 });
     const env = { ...process.env, PATH: `${stubDir}:${process.env['PATH'] ?? ''}` };
     try {
       stub('8.30.1');
       expect((await run('sh', [WRAPPER, 'git', '--help'], REPO, env)).out).toBe('STUB git --help --redact --verbose --no-banner .\n');
       stub('8.0.0');
-      expect((await run('sh', [WRAPPER, 'git', '--help'], REPO, env)).out).not.toContain('STUB');
+      const fallback = (await run('sh', [WRAPPER, 'git', '--help'], REPO, env)).out;
+      expect(fallback).not.toContain('STUB');
+      expect(fallback).toContain('DOCKER run');
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
     }
