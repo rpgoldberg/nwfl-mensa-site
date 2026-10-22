@@ -100,6 +100,11 @@ describe('gitleaks', () => {
 
     beforeAll(async () => {
       canRun = await dockerUp();
+      if (canRun) {
+        // Pull the pinned image once, so a cold runner doesn't spend each test's time limit downloading it.
+        const image = /^IMAGE=(\S+)$/m.exec(readFileSync(WRAPPER, 'utf8'))?.[1];
+        if (image) await run('docker', ['pull', '-q', image], REPO);
+      }
       dir = mkdtempSync(path.join(os.tmpdir(), 'nwfl-gitleaks-'));
       for (const args of [
         ['init', '-q', '-b', 'main'],
@@ -110,7 +115,7 @@ describe('gitleaks', () => {
       ]) {
         await run('git', args, dir);
       }
-    });
+    }, 180_000);
 
     afterAll(() => {
       rmSync(dir, { recursive: true, force: true });
@@ -126,7 +131,7 @@ describe('gitleaks', () => {
       await run('git', ['add', 'notes.md'], dir);
       const commit = await run('git', ['commit', '-q', '-m', 'Add notes'], dir);
       expect(commit.code, commit.out).toBe(0);
-    });
+    }, 60_000);
 
     it('refuses a commit that adds a token, and redacts it in the report', async ({ skip }) => {
       if (!canRun) skip();
@@ -138,6 +143,6 @@ describe('gitleaks', () => {
       expect(commit.out).toMatch(/leaks found: [1-9]/);
       expect(commit.out).not.toContain(token);
       expect((await run('git', ['log', '--oneline'], dir)).out).not.toMatch(/Add config/);
-    });
+    }, 60_000);
   });
 });
