@@ -21,7 +21,8 @@
 //                       standing or past it, flagged for the yearly re-check
 //                       once verified more than 12 months ago (the 13th month
 //                       is grace; after it standing lapses by itself)
-//   RemoveMember        approvers and the Admin
+//   RemoveMember        approvers and the Admin; a sign-up still open for the
+//                       account is rejected with it, erasing its inputs
 //   GrantAffiliate      the Admin or the Webmaster: member-level reading for
 //                       an invited affiliate, from the verifier's other-group
 //                       date when there is one, else from today on the
@@ -308,6 +309,12 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           if (row.status === 'removed') throw precondition('this account is already removed');
           await client.query(`UPDATE member_account SET status = 'removed', removed_at = now(), updated_at = now() WHERE sub = $1`, [sub]);
           await recordAudit(client, caller, { action: 'remove', subjectKind: 'member_account', subjectId: sub, fromState: row.status, toState: 'removed' });
+          // A sign-up still open for the account is rejected with it, so its number leaves both queues.
+          const open = (await client.query<{ id: string }>(`SELECT id FROM signup_request WHERE sub = $1 AND decision = 'pending' FOR UPDATE`, [sub])).rows[0];
+          if (open !== undefined) {
+            await decide(client, open.id, 'rejected', caller.subject as string);
+            await recordAudit(client, caller, { action: 'reject', subjectKind: 'signup_request', subjectId: open.id, fromState: 'pending', toState: 'rejected' });
+          }
           return {};
         });
       },
