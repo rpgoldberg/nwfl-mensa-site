@@ -24,14 +24,16 @@ COPY vendor ./vendor
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
-RUN npm run build
+# Readable and searchable by everyone, folders included, before the runtime
+# stage copies it (see there).
+RUN npm run build && chmod -R u=rwX,go=rX dist
 
 # ============================================================================
 FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY vendor ./vendor
-RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force && chmod -R u=rwX,go=rX node_modules
 
 # ============================================================================
 FROM ${NODE_IMAGE} AS production
@@ -60,10 +62,12 @@ RUN apt-get update && \
 WORKDIR /app
 # Owned by root and read-only to the runtime user. The mode is set, not
 # inherited: a checkout made under umask 077 leaves files 0600, which the
-# runtime user could not read (symbolic --chmod needs frontend 1.14 or later).
-COPY --from=deps --chown=root:root --chmod=u=rwX,go=rX /app/node_modules ./node_modules
-COPY --from=builder --chown=root:root --chmod=u=rwX,go=rX /app/dist ./dist
-COPY --chown=root:root --chmod=u=rwX,go=rX package.json ./
+# runtime user could not read. The build stages set it with chmod, which gives
+# every folder its search bit; a symbolic COPY --chmod did not on GitHub's
+# runners (dist/auth came out 644).
+COPY --from=deps --chown=root:root /app/node_modules ./node_modules
+COPY --from=builder --chown=root:root /app/dist ./dist
+COPY --chown=root:root --chmod=0644 package.json ./
 
 ENV NODE_ENV=production \
     GRPC_PORT=50051 \

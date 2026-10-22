@@ -58,7 +58,15 @@ describe('Dockerfile', () => {
   it('sets the mode of everything the runtime stage copies, so a umask 077 checkout still runs', () => {
     const copies = finalStage().filter((line) => line.startsWith('COPY'));
     expect(copies.length).toBeGreaterThan(0);
-    for (const copy of copies) expect(copy, copy).toMatch(/--chown=root:root --chmod=u=rwX,go=rX /);
+    for (const copy of copies) expect(copy, copy).toMatch(/--chown=root:root /);
+    // The folders are made readable and searchable where they are built, by
+    // chmod: the BuildKit on GitHub's runners applied COPY --chmod=u=rwX,go=rX
+    // without the X on subfolders (dist/auth came out 644, so the runtime user
+    // could not load dist/auth/config.js). A single file takes an octal mode.
+    expect(dockerfile).not.toMatch(/--chmod=[^0-9\s]/);
+    expect(lines).toContain('RUN npm run build && chmod -R u=rwX,go=rX dist');
+    expect(lines).toContain('RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force && chmod -R u=rwX,go=rX node_modules');
+    expect(finalStage()).toContain('COPY --chown=root:root --chmod=0644 package.json ./');
   });
 
   it('claims no licence: there is no LICENSE decision yet', () => {
