@@ -57,6 +57,8 @@ test('(4) the CSP on every response: script-src self only, no unsafe-*, object-s
     expect(csp['object-src'], path).toEqual(["'none'"]);
     expect(csp['base-uri'], path).toEqual(["'none'"]);
     expect(csp['frame-ancestors'], path).toEqual(["'none'"]);
+    // No sign-in provider to lead a form to.
+    expect(csp['form-action'], path).toEqual(["'self'"]);
   }
 });
 

@@ -1,10 +1,9 @@
 {
-  "moved": { "/join-mensa": "/join" },
+  "moved": {
+    "/join-mensa": "/join"
+  },
   "interim": {},
-  "movedHashed": {},
-  "interimHashed": {},
   "gone": [],
-  "goneHashed": [],
   "uploads": {},
   "goneUploads": [],
   "goneDirs": []

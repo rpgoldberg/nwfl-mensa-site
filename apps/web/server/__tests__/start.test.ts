@@ -25,7 +25,7 @@ afterEach(async () => {
 
 async function boot(
   handler: Handler,
-  opts: { env?: Record<string, string | undefined>; graceMs?: number; clientDir?: URL; oldSite?: URL } = {},
+  opts: { env?: Record<string, string | undefined>; graceMs?: number; clientDir?: URL; oldSite?: URL; buildInfo?: URL } = {},
 ) {
   const env: Record<string, string | undefined> = { PORT: '0', HOST: '127.0.0.1', ...opts.env };
   const proc = new FakeProcess();
@@ -38,6 +38,7 @@ async function boot(
     graceMs: opts.graceMs ?? 10_000,
     ...(opts.clientDir ? { clientDir: opts.clientDir } : {}),
     ...(opts.oldSite ? { oldSite: opts.oldSite } : {}),
+    ...(opts.buildInfo ? { buildInfo: opts.buildInfo } : {}),
     loadHandler: async () => {
       autostartWhenLoaded = env['ASTRO_NODE_AUTOSTART'];
       return { handler };
@@ -101,6 +102,28 @@ describe('start: sign-in settings from the environment (W4)', () => {
   it('logs a malformed session key, and runs with everyone anonymous', async () => {
     const { log } = await boot((_req, res) => res.end('x'), { env: { SESSION_KEY: 'short' } });
     expect(log.mock.calls.map((c) => String(c[0])).join()).toContain('SESSION_KEY must be 32 bytes');
+  });
+
+  it('says where sessions live: in memory, so the site runs as one replica until W5a', async () => {
+    const { log } = await boot((_req, res) => res.end('x'), { env: auth });
+    expect(log.mock.calls.map((c) => String(c[0]))).toContain(JSON.stringify({ level: 'info', msg: 'session_store: memory (single replica)' }));
+  });
+
+  it('ignores sign-in settings and the session key in a public-only build, and says so: forms lead nowhere else', async () => {
+    const key = Buffer.alloc(32, 7).toString('base64');
+    const { base, log } = await boot((_req, res) => res.end('x'), {
+      env: { ...auth, SESSION_KEY: key },
+      buildInfo: new URL('./fixtures/build-public-only.json', import.meta.url),
+    });
+    expect((await fetch(base)).headers.get('content-security-policy')).toMatch(/form-action 'self'$/);
+    const lines = log.mock.calls.map((c) => String(c[0]));
+    expect(lines).toContain(JSON.stringify({ level: 'error', msg: 'a public-only build has no sign-in: OIDC_* and SESSION_KEY are ignored' }));
+    expect(lines).toContain(JSON.stringify({ level: 'info', msg: 'session_store: none (public-only build)' }));
+  });
+
+  it('logs nothing amiss for a public-only build set up as it should be, with an empty value counting as unset', async () => {
+    const { log } = await boot((_req, res) => res.end('x'), { env: { OIDC_ISSUER: '' }, buildInfo: new URL('./fixtures/build-public-only.json', import.meta.url) });
+    expect(log.mock.calls.map((c) => String(c[0])).join()).not.toContain('"level":"error"');
   });
 });
 

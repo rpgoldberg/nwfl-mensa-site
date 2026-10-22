@@ -7,5 +7,6 @@ await start({
   proc: process,
   clientDir: new URL('../dist/client/', import.meta.url),
   oldSite: new URL('./old-site.json', import.meta.url),
+  buildInfo: new URL('../dist/build.json', import.meta.url),
   loadHandler: () => import('../dist/server/entry.mjs'),
 });

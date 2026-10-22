@@ -34,6 +34,14 @@ npm run build && npm run e2e   # Playwright: Chromium and WebKit (iPhone), axe, 
 
 The history may be published, so nothing secret and no real person's contact details go in. `npm install` points git at `.githooks/`, whose pre-commit hook runs gitleaks 8.30.1 (pinned in `scripts/gitleaks.sh`, by image digest when no local copy of that exact version exists) over the staged changes. CI scans every commit; `npm run secrets:scan` does the same by hand. Fixtures and placeholders use made-up people, example.org addresses and 555-01xx numbers; a test checks the addresses and numbers.
 
+## Sign-in and sessions
+
+Sign-in needs `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `OIDC_POST_LOGOUT_REDIRECT_URI` and `SESSION_KEY` (`openssl rand -base64 32`); without them the site runs with everyone signed out. In production the issuer must be on `https://login.nwflorida.us`. The provider must use `client_secret_post` and put the `nwfl-` groups in the ID token.
+
+Sessions and their tokens are held in the server's memory, so **the site runs as one replica until W5a**, which moves them to a shared store behind the API; the server logs `session_store: memory (single replica)` at start. A restart signs everyone out.
+
+The public-only build (`npm run build:public-only`, or the image's `PUBLIC_ONLY=true` build argument) has no sign-in at all: every sign-in route is the 404 page however it is spelled, and the server ignores any `OIDC_*` or `SESSION_KEY` it is given, and logs that it did. The build writes `dist/build.json` so the server knows which build it is.
+
 ## Image
 
 `docker build -t nwfl-mensa-web .` builds a Node 24 image that runs as uid 10001 with a read-only root; mount `/tmp` writable and nothing else. It listens on 8080 and answers `/healthz`.

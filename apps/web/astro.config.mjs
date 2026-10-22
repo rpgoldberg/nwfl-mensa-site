@@ -1,6 +1,7 @@
 // @ts-check
 import node from '@astrojs/node';
 import { defineConfig, envField } from 'astro/config';
+import { buildInfoIntegration } from './server/build-info.mjs';
 
 export default defineConfig({
   site: 'https://nwflorida.us',
@@ -10,6 +11,8 @@ export default defineConfig({
   // Every request body Astro reads is capped at 64 KiB: its 1 GB default let
   // three large posts exhaust the pod's memory. /prefs caps its own at 4 KiB.
   adapter: node({ mode: 'standalone', bodySizeLimit: 64 * 1024 }),
+  // dist/build.json: tells the server wrapper whether this is the public-only build.
+  integrations: [buildInfoIntegration()],
   server: { port: 8080, host: true },
   trailingSlash: 'never',
   build: {
