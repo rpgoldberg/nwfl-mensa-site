@@ -42,6 +42,8 @@ describe('makeGate (the public-only build flag)', () => {
       ['/sign-in%2ehtml', '/sign-in'],
       ['/auth/callback.html', '/auth/callback'],
       ['/officer-area/new', '/officer-area/[...rest]'],
+      // A URL that names no sign-in path at all, yet renders one: the route decides.
+      ['/elsewhere', '/sign-in'],
     ] as const) {
       const { result, next, rewrite } = call(true, path, pattern);
       expect((await result).status, path).toBe(404);

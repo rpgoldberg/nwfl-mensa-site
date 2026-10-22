@@ -13,8 +13,9 @@ export function isSignInPath(path: string): boolean {
 }
 
 /**
- * The path as a route: decoded, slashes collapsed, .html and /index dropped,
- * lower case. Astro renders /sign-in for /sign-in.html and /%73ign-in.html.
+ * The path as a route: decoded, slashes collapsed, .html dropped, lower case.
+ * Astro renders /sign-in for /sign-in.html and /%73ign-in.html; /sign-in/index
+ * is under /sign-in already.
  */
 function asRoute(pathname: string): string {
   let path = pathname;
@@ -23,7 +24,7 @@ function asRoute(pathname: string): string {
   } catch {
     // Broken encoding: the server wrapper answers 400 before Astro sees it.
   }
-  return path.replace(/\/{2,}/g, '/').replace(/\.html$/i, '').replace(/\/index$/i, '').toLowerCase();
+  return path.replace(/\/{2,}/g, '/').replace(/\.html$/i, '').toLowerCase();
 }
 
 /** Gated: the route that will render, or failing that the path read as one. */
