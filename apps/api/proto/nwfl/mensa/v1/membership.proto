@@ -100,6 +100,10 @@ service MembershipService {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
   rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+  // The yearly re-check: an approver confirms a member against the offline
+  // roster, which dates its verification today (a lapsed account becomes a
+  // member again). No one confirms themselves.
+  rpc ConfirmMember(ConfirmMemberRequest) returns (ConfirmMemberResponse);
   // Admin or Webmaster only. Member-level reading for an invited affiliate,
   // with the verifier's other-group result as its verification when there is
   // one, and the grantor's attestation otherwise.
@@ -159,6 +163,15 @@ message RemoveMemberRequest {
 }
 
 message RemoveMemberResponse {}
+
+message ConfirmMemberRequest {
+  // The Authentik subject of the account.
+  string subject = 1;
+}
+
+message ConfirmMemberResponse {
+  MemberAccount account = 1;
+}
 
 message GrantAffiliateRequest {
   // The Authentik subject of the account.

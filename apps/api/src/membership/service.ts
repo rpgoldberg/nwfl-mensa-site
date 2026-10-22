@@ -23,6 +23,9 @@
 //                       is grace; after it standing lapses by itself)
 //   RemoveMember        approvers and the Admin; a sign-up still open for the
 //                       account is rejected with it, erasing its inputs
+//   ConfirmMember       approvers and the Admin, never on themselves: the
+//                       yearly re-check against the offline roster dates a
+//                       member's (or a lapsed account's) verification today
 //   GrantAffiliate      the Admin or the Webmaster: member-level reading for
 //                       an invited affiliate, from the verifier's other-group
 //                       date when there is one, else from today on the
@@ -316,6 +319,26 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
             await recordAudit(client, caller, { action: 'reject', subjectKind: 'signup_request', subjectId: open.id, fromState: 'pending', toState: 'rejected' });
           }
           return {};
+        });
+      },
+
+      confirmMember: async (request, ctx) => {
+        const caller = callerIn(ctx);
+        requireMembershipApprover(caller);
+        const sub = subjectOf(request.subject);
+        if (sub === caller.subject) throw new ConnectError('no one confirms themselves', Code.PermissionDenied);
+        return tx(async (client) => {
+          const row = (await client.query<{ status: string }>(`SELECT status FROM member_account WHERE sub = $1 FOR UPDATE`, [sub])).rows[0];
+          if (row === undefined) throw new ConnectError('account not found', Code.NotFound);
+          if (row.status !== 'member' && row.status !== 'lapsed') throw precondition('only a member or a lapsed account is confirmed');
+          const { rows } = await client.query<AccountRow>(
+            `UPDATE member_account SET status = 'member', verified_on = $2, approved_by_sub = coalesce(approved_by_sub, $3),
+               approved_at = coalesce(approved_at, now()), updated_at = now()
+             WHERE sub = $1 RETURNING status, route, verified_on::text AS verified_on`,
+            [sub, today(), caller.subject],
+          );
+          await recordAudit(client, caller, { action: 'confirm_attested', subjectKind: 'member_account', subjectId: sub, fromState: row.status, toState: 'member' });
+          return { account: accountMessage(rows[0] as AccountRow) };
         });
       },
 

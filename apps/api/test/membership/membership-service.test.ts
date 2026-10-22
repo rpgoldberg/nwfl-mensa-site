@@ -304,6 +304,34 @@ describe.skipIf(!live)('MembershipService', () => {
     });
   });
 
+  describe('ConfirmMember', () => {
+    it('confirms a member at the yearly re-check: verified today, the re-check no longer due, audited with no payload', async () => {
+      expect((await membership.listMembers({ recheckDueOnly: true }, APPROVER)).members.map((m) => m.subject)).toContain('sub-old');
+      const { account: confirmed } = await membership.confirmMember({ subject: 'sub-old' }, APPROVER);
+      expect(confirmed).toMatchObject({ status: MemberStatus.MEMBER, verifiedOn: { year: 2026, month: 10, day: 22 } });
+      expect(await account('sub-old')).toMatchObject({ status: 'member', verified_on: '2026-10-22' });
+      expect((await membership.listMembers({ recheckDueOnly: true }, APPROVER)).members.map((m) => m.subject)).not.toContain('sub-old');
+      expect((await audits('sub-old')).map((a) => [a.action, a.payload, a.note])).toEqual([['confirm_attested', {}, null]]);
+    });
+
+    it('brings a lapsed account back to member', async () => {
+      await api.pool.query(`INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES ('sub-lapsed', 'lapsed', 'invite', 'sub-admin', now(), '2024-01-10')`);
+      expect((await membership.confirmMember({ subject: 'sub-lapsed' }, ADMIN)).account?.status).toBe(MemberStatus.MEMBER);
+      expect(await account('sub-lapsed')).toMatchObject({ status: 'member', verified_on: '2026-10-22' });
+    });
+
+    it('lets no one confirm themselves, and confirms only members and lapsed accounts, for approvers and the Admin', async () => {
+      await expect(membership.confirmMember({ subject: 'sub-approver' }, APPROVER)).rejects.toMatchObject({ code: Code.PermissionDenied, rawMessage: 'no one confirms themselves' });
+      await expect(membership.confirmMember({ subject: 'sub-grace' }, WEBMASTER)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(membership.confirmMember({ subject: 'sub-grace' }, MEMBER)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      for (const subject of ['sub-affiliate', 'sub-joiner', 'sub-joiner2']) {
+        await expect(membership.confirmMember({ subject }, APPROVER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+      }
+      await expect(membership.confirmMember({ subject: 'sub-nobody' }, APPROVER)).rejects.toMatchObject({ code: Code.NotFound });
+      await expect(membership.confirmMember({ subject: '' }, APPROVER)).rejects.toMatchObject({ code: Code.InvalidArgument });
+    });
+  });
+
   describe('GetMyAccount', () => {
     it('answers a signed-in person with no account with no account, and an anonymous caller not at all', async () => {
       expect((await membership.getMyAccount({}, as('pub-token'))).account).toBeUndefined();

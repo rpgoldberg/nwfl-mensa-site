@@ -73,3 +73,42 @@ describe.skipIf(!live)('a sign-up from submission to lapse', () => {
     expect((await membership.getMyAccount({}, JOINER)).account?.status).toBe(MemberStatus.MEMBER);
   });
 });
+
+// API-FIX3: the yearly re-check keeps a member. The walk runs two years back,
+// so every date it writes is in the past: a verification date is never in the
+// future (0009), and the walk's month 24 is today.
+describe.skipIf(!live)('a member confirmed at the yearly re-check', () => {
+  let api: Api;
+  let clock = new Date('2024-10-22T15:00:00Z');
+
+  beforeAll(async () => {
+    api = await startApi('nwfl_walk_confirm', { now: () => clock });
+    const office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('membership', 'Membership Officer', 'appointed') RETURNING id`);
+    await publishItem(api.pool, { slug: 'members-notice', officeId: office, visibility: 'members', title: 'Members notice', body: { blocks: [paragraph(text(SECRET))] } });
+  });
+
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  const reads = async (): Promise<boolean> => dump(await api.client(ContentService).getPublishedItem({ slug: 'members-notice' }, JOINER)).includes(SECRET);
+
+  it('walks: approved at month 0, confirmed at month 12, still a member at month 24', async () => {
+    const membership = api.client(MembershipService);
+    const { requestId } = await membership.submitSignup({ lastName: 'Examplesson', membershipNumber: '40417233' }, JOINER);
+    await api.client(MembershipVerifierService).reportVerification({ requestId, outcome: VerificationOutcome.VERIFIED_LOCAL }, as('verifier-token'));
+    await membership.approveSignup({ requestId }, as('approver-token'));
+    expect(await reads()).toBe(true);
+
+    // Month 12: the approver checks the offline roster and confirms.
+    clock = new Date('2025-10-22T15:00:00Z');
+    expect((await membership.confirmMember({ subject: 'sub-joiner' }, as('approver-token'))).account?.verifiedOn).toEqual(expect.objectContaining({ year: 2025, month: 10, day: 22 }));
+
+    // Month 24: two years from approval, a member still, and not yet due again.
+    clock = NOW;
+    expect(await reads()).toBe(true);
+    expect((await membership.listMembers({}, as('approver-token'))).members.find((m) => m.subject === 'sub-joiner')?.recheckDue).toBe(false);
+    expect((await membership.getMyAccount({}, JOINER)).account?.status).toBe(MemberStatus.MEMBER);
+  });
+});
+
