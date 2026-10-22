@@ -244,6 +244,15 @@ service ContentService {
   rpc Restore(RestoreRequest) returns (RestoreResponse);
   // The roster is live on save (R2).
   rpc SaveOfficeTerm(SaveOfficeTermRequest) returns (SaveOfficeTermResponse);
+  // An item's history: every audited step, for officers (R25).
+  rpc ListItemHistory(ListItemHistoryRequest) returns (ListItemHistoryResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // Edition setup and the freeze for print (the Editor or the Admin).
+  rpc SaveEdition(SaveEditionRequest) returns (SaveEditionResponse);
+  // Moves the edition to proof and pins the live version of each item with
+  // the newsletter target in it.
+  rpc FreezeEdition(FreezeEditionRequest) returns (FreezeEditionResponse);
 }
 
 message ListPublishedItemsRequest {
@@ -326,6 +335,14 @@ message SaveDraftRequest {
 
 message SaveDraftResponse {
   ContentItem item = 1;
+  // What the markup parser refused. A draft with problems is saved, but it
+  // cannot be marked ready.
+  repeated MarkupProblem problems = 2;
+}
+
+message MarkupProblem {
+  int32 line = 1;
+  string message = 2;
 }
 
 message MarkReadyRequest {
@@ -389,4 +406,47 @@ message SaveOfficeTermRequest {
 
 message SaveOfficeTermResponse {
   OfficeTerm term = 1;
+}
+
+message ListItemHistoryRequest {
+  string item_id = 1;
+}
+
+message ListItemHistoryResponse {
+  // Oldest first.
+  repeated HistoryEntry entries = 1;
+}
+
+message HistoryEntry {
+  google.protobuf.Timestamp at = 1;
+  // create, save, ready, send_back, approve, approve_self, withdraw, restore,
+  // targets_changed, edition_changed.
+  string action = 2;
+  // The Authentik subject; the web resolves it to a name for officers.
+  string actor_subject = 3;
+  string acting_office_id = 4;
+  int32 version_number = 5;
+  bytes content_hash = 6;
+  string from_state = 7;
+  string to_state = 8;
+  // A send-back note or a break-glass reason.
+  string note = 9;
+}
+
+message SaveEditionRequest {
+  // An empty id creates.
+  Edition edition = 1;
+}
+
+message SaveEditionResponse {
+  Edition edition = 1;
+}
+
+message FreezeEditionRequest {
+  string edition_id = 1;
+}
+
+message FreezeEditionResponse {
+  Edition edition = 1;
+  int32 pinned_items = 2;
 }

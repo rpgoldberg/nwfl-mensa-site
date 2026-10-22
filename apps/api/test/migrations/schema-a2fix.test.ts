@@ -342,6 +342,11 @@ describe.skipIf(!live)('schema after A2-FIX', () => {
       expect(await sqlstate(app, `INSERT INTO office_term (office_id, starts_on, ends_on, status) VALUES ($1, '2027-01-02', '2027-01-01', 'vacant')`, [officeId])).toBe(CHECK_VIOLATION);
     });
 
+    it('gives a one-off event an owning office that must exist (0008)', async () => {
+      expect(await sqlstate(app, `INSERT INTO event_occurrence (title, starts_at, visibility, owner_office_id) VALUES ('Owned', now(), 'public', $1)`, [officeId])).toBe('ok');
+      expect(await sqlstate(app, `INSERT INTO event_occurrence (title, starts_at, visibility, owner_office_id) VALUES ('Orphan', now(), 'public', gen_random_uuid())`)).toBe(FK_VIOLATION);
+    });
+
     it('keeps one sign-up per subject and a plausible email', async () => {
       const signup = (sub: string, email: string): Promise<string> => sqlstate(app, `INSERT INTO signup_request (sub, display_name, email) VALUES ($1, 'P', $2)`, [sub, email]);
       expect(await signup('one-sub', 'p@example.org')).toBe('ok');

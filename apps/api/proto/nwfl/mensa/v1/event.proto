@@ -123,6 +123,9 @@ message EventOccurrence {
   Date local_date = 14;
   // From the venue, or the series when the venue is not decided.
   Area area = 15;
+  // A one-off event's owning office; a series occurrence belongs to the
+  // series' host office.
+  string owner_office_id = 16;
 }
 
 // The calendar. Reads return what the caller's token may see.
