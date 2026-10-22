@@ -33,6 +33,7 @@ import {
 import type { Date as ProtoDate } from '../gen/nwfl/mensa/v1/common_pb.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { type Rule, RecurrenceError, expand, parseRule } from './recurrence.js';
+import { eventWriteHandlers } from './writes.js';
 import { addDays, isoDate, localDateOf, protoDate, toDays, todayIn, zonedToUtc } from './zone.js';
 
 export interface EventDeps {
@@ -81,7 +82,7 @@ const VISIBILITIES: Record<string, EventVisibility> = {
   members: EventVisibility.MEMBERS,
 };
 
-interface VenueRow {
+export interface VenueRow {
   id: string;
   kind: string;
   name: string;
@@ -94,7 +95,7 @@ interface VenueRow {
   active: boolean;
 }
 
-interface SeriesRow {
+export interface SeriesRow {
   id: string;
   slug: string;
   title: string;
@@ -112,8 +113,9 @@ interface SeriesRow {
   active: boolean;
 }
 
-interface OccurrenceRow {
+export interface OccurrenceRow {
   id: string;
+  owner_office_id: string | null;
   series_id: string | null;
   title: string | null;
   starts_at: Date;
@@ -127,8 +129,9 @@ interface OccurrenceRow {
 }
 
 /** One calendar entry before it is shaped for an audience. */
-interface Entry {
+export interface Entry {
   id: string;
+  ownerOfficeId: string;
   localDate: string;
   series: SeriesRow | undefined;
   title: string;
@@ -145,10 +148,10 @@ interface Entry {
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const OCCURRENCE_ID = new RegExp(`^(${UUID})(?::(\\d{4}-\\d{2}-\\d{2}))?$`);
 
-const SERIES_COLUMNS = `id, slug, title, category, recurrence, cadence_label, starts_on::text AS starts_on,
+export const SERIES_COLUMNS = `id, slug, title, category, recurrence, cadence_label, starts_on::text AS starts_on,
   to_char(default_start, 'HH24:MI') AS default_start, default_duration_minutes, default_venue_id, area,
   host_office_id, description, visibility, active`;
-const OCCURRENCE_COLUMNS = 'id, series_id, title, starts_at, ends_at, venue_id, status, status_note, detail, url, visibility';
+export const OCCURRENCE_COLUMNS = 'id, series_id, title, starts_at, ends_at, venue_id, status, status_note, detail, url, visibility, owner_office_id';
 
 function invalid(message: string): ConnectError {
   return new ConnectError(message, Code.InvalidArgument);
@@ -189,7 +192,7 @@ export function venueMessage(row: VenueRow): Venue {
   });
 }
 
-function seriesMessage(row: SeriesRow): EventSeries {
+export function seriesMessage(row: SeriesRow): EventSeries {
   const [hours, minutes] = (row.default_start ?? '').split(':').map(Number);
   return create(EventSeriesSchema, {
     id: row.id,
@@ -241,12 +244,14 @@ export function occurrenceMessage(entry: Entry, audience: Audience): EventOccurr
     detailsWithheld: false,
     localDate: protoDate(entry.localDate),
     area: areaOf(entry),
+    ownerOfficeId: entry.ownerOfficeId,
   });
 }
 
-function storedEntry(row: OccurrenceRow, series: SeriesRow | undefined, venues: Map<string, VenueRow>): Entry {
+export function storedEntry(row: OccurrenceRow, series: SeriesRow | undefined, venues: Map<string, VenueRow>): Entry {
   return {
     id: row.id,
+    ownerOfficeId: row.owner_office_id ?? '',
     localDate: localDateOf(row.starts_at),
     series,
     title: row.title ?? series?.title ?? '',
@@ -261,7 +266,7 @@ function storedEntry(row: OccurrenceRow, series: SeriesRow | undefined, venues: 
   };
 }
 
-function generatedEntry(series: SeriesRow, date: string, venues: Map<string, VenueRow>): Entry {
+export function generatedEntry(series: SeriesRow, date: string, venues: Map<string, VenueRow>): Entry {
   let startsAt: Date | null = null;
   let endsAt: Date | null = null;
   if (series.default_start !== null) {
@@ -271,6 +276,7 @@ function generatedEntry(series: SeriesRow, date: string, venues: Map<string, Ven
   }
   return {
     id: `${series.id}:${date}`,
+    ownerOfficeId: '',
     localDate: date,
     series,
     title: series.title,
@@ -350,6 +356,8 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
 
   return (router) => {
     router.service(EventService, {
+      // Officer writes (A4b), live on save.
+      ...eventWriteHandlers({ db }),
       listOccurrences: async (request, ctx) => {
         const audience = audienceOf(ctx);
         const from = requestDate(request.from, todayIn(deps.now()), 'from');

@@ -6,7 +6,7 @@ import { createGrpcTransport } from '@connectrpc/connect-node';
 import type { DescService } from '@bufbuild/protobuf';
 import type http2 from 'node:http2';
 import pg from 'pg';
-import type { TokenVerifier } from '../../src/auth/caller.js';
+import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
 import { dbStanding } from '../../src/auth/standing.js';
 import { apiRoutes } from '../../src/grpc/routes.js';
 import { apiInterceptors } from '../../src/grpc/interceptors.js';
@@ -18,13 +18,34 @@ import { captureLogs, closeHard, listen } from './servers.js';
 export const MEMBER = { headers: { authorization: 'Bearer member-token' } };
 export const OFFICER = { headers: { authorization: 'Bearer officer-token' } };
 
+/** Made-up people, by token. Groups as the nwfl-site provider would emit them. */
+export const PEOPLE: Record<string, VerifiedToken> = {
+  'member-token': { client: 'site', subject: 'sub-member', groups: ['nwfl-members'], scopes: [] },
+  'officer-token': { client: 'site', subject: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'], scopes: [] },
+  // Publications Officer.
+  'pub-token': { client: 'site', subject: 'sub-pub', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications'], scopes: [] },
+  // Treasurer.
+  'treasurer-token': { client: 'site', subject: 'sub-treasurer', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer'], scopes: [] },
+  // The Admin, who also holds two offices (the Ross pattern, with a made-up subject).
+  'admin-token': {
+    client: 'site',
+    subject: 'sub-admin',
+    groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-office-editor', 'nwfl-admin'],
+    scopes: [],
+  },
+  // The Webmaster, who also holds the webmaster seat.
+  'webmaster-token': { client: 'site', subject: 'sub-webmaster', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-webmaster', 'nwfl-webmaster'], scopes: [] },
+};
+
 export const fakeVerifier: TokenVerifier = {
   verify: (token) => {
-    if (token === 'member-token') return Promise.resolve({ client: 'site', subject: 'sub-member', groups: ['nwfl-members'], scopes: [] });
-    if (token === 'officer-token') return Promise.resolve({ client: 'site', subject: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'], scopes: [] });
-    return Promise.reject(new Error('unknown token'));
+    const person = PEOPLE[token];
+    return person === undefined ? Promise.reject(new Error('unknown token')) : Promise.resolve(person);
   },
 };
+
+/** Call options carrying a made-up person's bearer token. */
+export const as = (token: keyof typeof PEOPLE  ): { headers: Record<string, string> } => ({ headers: { authorization: `Bearer ${token}` } });
 
 export interface Api {
   pool: pg.Pool;

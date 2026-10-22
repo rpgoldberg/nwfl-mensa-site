@@ -47,6 +47,7 @@ describe.skipIf(!live)('the members-only canary', () => {
       ListPublishedEditions: () => [{}],
       ListWorkingItems: () => [{}],
       GetWorkingItem: () => [{ itemId: ids['publicItem'] }],
+      ListItemHistory: () => [{ itemId: ids['publicItem'] }],
     },
     'nwfl.mensa.v1.MembershipService': {
       GetMyAccount: () => [{}],

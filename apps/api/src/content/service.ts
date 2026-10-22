@@ -1,7 +1,6 @@
 // ============================================================================
 // ContentService reads (R2, R5, R22, R26): the roster, published items and
-// published editions. The officer workflow RPCs arrive with A4b; until then
-// they answer UNIMPLEMENTED.
+// published editions. The officers' workflow is in workflow.ts and editions.ts.
 //
 // The body a caller gets is decided HERE, from the audience the verified token
 // gave (auth/caller.ts), in one place: itemMessage().
@@ -19,88 +18,29 @@ import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@connectrpc/connect';
 import { type Audience, callerOf } from '../auth/caller.js';
 import type { Db } from '../db/pool.js';
-import {
-  ContentItemSchema,
-  ContentKind,
-  type ContentItem,
-  ContentService,
-  ContentVersionSchema,
-  FileAudience,
-  FileRole,
-  ItemState,
-  ItemVisibility,
-  StoredFileSchema,
-  VersionStatus,
-} from '../gen/nwfl/mensa/v1/content_pb.js';
-import { EditionKind, EditionSchema, EditionStatus } from '../gen/nwfl/mensa/v1/edition_pb.js';
-import { OfficeKind, OfficeSchema, TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
+import { ContentItemSchema, type ContentItem, ContentService, ContentVersionSchema, ItemState, StoredFileSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
+import { OfficeSchema } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { protoDate, todayIn } from '../events/zone.js';
 import { decodeToken, encodeToken, pageSize } from '../grpc/paging.js';
+import {
+  FILE_AUDIENCES,
+  FILE_ROLES,
+  ITEM_VISIBILITIES,
+  KINDS,
+  KIND_NAMES,
+  OFFICE_KINDS,
+  STATES,
+  TERM_STATUSES,
+  VERSION_STATUSES,
+} from './enums.js';
 import { type Tree, filterForPublic, normalizeTree, toProtoDocument } from './tree.js';
+import { EDITION_SELECT, type EditionRow, editionHandlers, editionMessages } from './editions.js';
+import { workflowHandlers } from './workflow.js';
 
 export interface ContentDeps {
   db: Db;
   now: () => Date;
 }
-
-const KINDS: Record<string, ContentKind> = {
-  article: ContentKind.ARTICLE,
-  president_report: ContentKind.PRESIDENT_REPORT,
-  announcement: ContentKind.ANNOUNCEMENT,
-  minutes: ContentKind.MINUTES,
-  treasurer_summary: ContentKind.TREASURER_SUMMARY,
-  document: ContentKind.DOCUMENT,
-  page: ContentKind.PAGE,
-};
-const KIND_NAMES = new Map(Object.entries(KINDS).map(([name, kind]) => [kind, name]));
-const STATES: Record<string, ItemState> = {
-  draft: ItemState.DRAFT,
-  ready: ItemState.READY,
-  published: ItemState.PUBLISHED,
-  withdrawn: ItemState.WITHDRAWN,
-};
-const VERSION_STATUSES: Record<string, VersionStatus> = {
-  draft: VersionStatus.DRAFT,
-  ready: VersionStatus.READY,
-  approved: VersionStatus.APPROVED,
-  superseded: VersionStatus.SUPERSEDED,
-  discarded: VersionStatus.DISCARDED,
-};
-const ITEM_VISIBILITIES: Record<string, ItemVisibility> = {
-  public: ItemVisibility.PUBLIC,
-  members: ItemVisibility.MEMBERS,
-  officers: ItemVisibility.OFFICERS,
-};
-const FILE_AUDIENCES: Record<string, FileAudience> = {
-  public: FileAudience.PUBLIC,
-  members: FileAudience.MEMBERS,
-  officers: FileAudience.OFFICERS,
-};
-const FILE_ROLES: Record<string, FileRole> = {
-  primary: FileRole.PRIMARY,
-  public_copy: FileRole.PUBLIC_COPY,
-  source: FileRole.SOURCE,
-};
-const OFFICE_KINDS: Record<string, OfficeKind> = {
-  elected: OfficeKind.ELECTED,
-  appointed: OfficeKind.APPOINTED,
-  ex_officio: OfficeKind.EX_OFFICIO,
-  committee: OfficeKind.COMMITTEE,
-  regional_external: OfficeKind.REGIONAL_EXTERNAL,
-};
-const TERM_STATUSES: Record<string, TermStatus> = {
-  active: TermStatus.ACTIVE,
-  acting: TermStatus.ACTING,
-  vacant: TermStatus.VACANT,
-};
-const EDITION_KINDS: Record<string, EditionKind> = { regular: EditionKind.REGULAR, xtra: EditionKind.XTRA };
-const EDITION_STATUSES: Record<string, EditionStatus> = {
-  planning: EditionStatus.PLANNING,
-  collecting: EditionStatus.COLLECTING,
-  drafting: EditionStatus.DRAFTING,
-  proof: EditionStatus.PROOF,
-  published: EditionStatus.PUBLISHED,
-};
 
 /** Which file audiences each caller audience may list. */
 const FILE_AUDIENCES_FOR: Record<Audience, string[]> = {
@@ -242,6 +182,9 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
 
   return (router) => {
     router.service(ContentService, {
+      // The officers' workflow (A4b): writes, working reads and the history.
+      ...workflowHandlers({ db }),
+      ...editionHandlers({ db }),
       getRoster: async () => {
         const today = todayIn(deps.now());
         const [offices, terms] = await Promise.all([
@@ -333,61 +276,17 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
         if (after !== undefined && (!/^\d{4}-\d{2}-\d{2}$/.test(after[0] as string) || !UUID.test(after[1] as string))) {
           throw new ConnectError('invalid page_token', Code.InvalidArgument);
         }
-        const { rows } = await db.query<{
-          id: string;
-          slug: string;
-          volume: number | null;
-          issue_number: number | null;
-          title: string;
-          kind: string;
-          period_start: string;
-          period_end: string;
-          submission_deadline: string | null;
-          status: string;
-          frozen_at: Date | null;
-          public_pdf_file_id: string | null;
-        }>(
-          `SELECT e.id, e.slug, e.volume, e.issue_number, e.title, e.kind, e.period_start::text AS period_start,
-             e.period_end::text AS period_end, e.submission_deadline::text AS submission_deadline, e.status, e.frozen_at,
-             CASE WHEN f.audience = 'public' THEN f.id END AS public_pdf_file_id
-           FROM edition e LEFT JOIN stored_file f ON f.id = e.public_pdf_file_id
+        const { rows } = await db.query<EditionRow>(
+          `${EDITION_SELECT}
            WHERE e.status = 'published' AND ($1::date IS NULL OR (e.period_start, e.id) < ($1, $2::uuid))
            ORDER BY e.period_start DESC, e.id DESC
            LIMIT $3`,
           [after?.[0] ?? null, after?.[1] ?? null, size + 1],
         );
         const page = rows.slice(0, size);
-        const ranges =
-          page.length === 0
-            ? []
-            : (
-                await db.query<{ edition_id: string; starts_on: string; ends_on: string }>(
-                  `SELECT edition_id, starts_on::text AS starts_on, ends_on::text AS ends_on FROM edition_calendar_range
-                   WHERE edition_id = ANY($1) ORDER BY starts_on`,
-                  [page.map((row) => row.id)],
-                )
-              ).rows;
         const last = page.at(-1);
         return {
-          editions: page.map((row) =>
-            create(EditionSchema, {
-              id: row.id,
-              slug: row.slug,
-              volume: row.volume ?? 0,
-              issueNumber: row.issue_number ?? 0,
-              title: row.title,
-              kind: EDITION_KINDS[row.kind],
-              periodStart: protoDate(row.period_start),
-              periodEnd: protoDate(row.period_end),
-              calendarRanges: ranges
-                .filter((range) => range.edition_id === row.id)
-                .map((range) => ({ start: protoDate(range.starts_on), end: protoDate(range.ends_on) })),
-              ...(row.submission_deadline !== null ? { submissionDeadline: protoDate(row.submission_deadline) } : {}),
-              status: EDITION_STATUSES[row.status],
-              ...(row.frozen_at !== null ? { frozenAt: timestampFromDate(row.frozen_at) } : {}),
-              publicPdfFileId: row.public_pdf_file_id ?? '',
-            }),
-          ),
+          editions: await editionMessages(db, page),
           nextPageToken: rows.length > size && last !== undefined ? encodeToken('editions', [last.period_start, last.id]) : '',
         };
       },

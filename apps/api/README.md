@@ -116,6 +116,30 @@ load `public_ast` only. `test/canary.test.ts` seeds a random token into every
 members-only place, calls every read RPC anonymously, and fails if the token
 appears; a read RPC without a canary request fails it too.
 
+## The officers' writes
+
+Every write is one transaction, audited in `audit_event`, and checked twice:
+by the handler for a precise answer, and by the database (`0007`).
+
+- **Content** (`src/content/workflow.ts`): a holder of the office creates,
+  saves and marks ready ("Posting as" an office they hold; the Admin may post
+  for any office, audited as such). Markup is parsed on save
+  (`src/content/markup.ts`); a version with problems cannot be marked ready.
+  "Mark ready" records the content hash (`src/content/hash.ts`), with website
+  and newsletter on and email off by default. An approver (Admin or Webmaster)
+  approves only with the hash they saw, never a version they edited, except
+  the Admin's break-glass with a written reason (`approve_self` in the
+  history). Approval derives the public tree and both search indexes, then
+  repoints the live version before superseding the old one. Withdraw is 410
+  at once; restore makes a draft that stays withdrawn until approved.
+- **Events** (`src/events/writes.ts`): live on save. Venues by any officer,
+  series by their host office, a one-off event by its owning office, and the
+  Admin for any.
+- **Editions** (`src/content/editions.ts`): the Editor or the Admin sets them
+  up; the freeze moves one to proof and pins the live version of each
+  approved newsletter item in it.
+- Officers read drafts, ready items and each item's history.
+
 ## Seeding the calendar and roster
 
     node dist/seed/cli.js /path/outside/the/repo/seed.json

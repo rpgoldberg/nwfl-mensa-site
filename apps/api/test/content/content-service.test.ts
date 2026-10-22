@@ -219,7 +219,7 @@ describe.skipIf(!live)('ContentService reads', () => {
     });
   });
 
-  it('leaves the officer workflow RPCs unimplemented until A4b', async () => {
-    await expect(content.listWorkingItems({}, OFFICER)).rejects.toMatchObject({ code: Code.Unimplemented });
+  it('leaves the roster writes unimplemented: the roster is kept from the seed for now (R2)', async () => {
+    await expect(content.saveOfficeTerm({}, OFFICER)).rejects.toMatchObject({ code: Code.Unimplemented });
   });
 });
