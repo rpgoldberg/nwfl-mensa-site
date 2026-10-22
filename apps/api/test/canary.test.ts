@@ -16,7 +16,7 @@
 // The list of reads is not hand-kept: it is every NO_SIDE_EFFECTS method of
 // every served service, and a read without a request here fails the test, so
 // a new read RPC cannot ship without passing the canary.
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import type { DescMessage, DescMethod, MessageInitShape } from '@bufbuild/protobuf';
 import { MethodOptions_IdempotencyLevel as Idempotency } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -24,12 +24,16 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Audience } from '../src/gen/nwfl/mensa/v1/common_pb.js';
 import { ContentService } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
+import { MembershipService } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { SERVED_SERVICES } from '../src/grpc/routes.js';
-import { type Api, MEMBER, OFFICER, dump, insertId, startApi } from './helpers/api.js';
+import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from './helpers/api.js';
 import { membersSpan, paragraph, publishItem, text } from './helpers/content.js';
 import { live } from './helpers/pg.js';
 
 const TOKEN = `canary${randomBytes(8).toString('hex')}`;
+// What a member typed at sign-up for the verifier: shown to the verifier and to no one else.
+const NUMBER = String(randomInt(100_000_000_000, 999_999_999_999));
+const LAST_NAME = `Canary${randomBytes(4).toString('hex')}`;
 const RANGE = { from: { year: 2026, month: 10, day: 22 }, to: { year: 2027, month: 1, day: 31 } };
 
 type Requests = Record<string, () => Array<MessageInitShape<DescMessage>>>;
@@ -63,9 +67,9 @@ describe.skipIf(!live)('the members-only canary', () => {
     'nwfl.mensa.v1.NewsletterService': {
       ListEditions: () => [{}],
       ListEditionItems: () => [{ editionId: ids['publicItem'] }],
-      GetEditionCalendar: () => [{}],
-      GetEditionRoster: () => [{}],
-      ExportEdition: () => [{ audience: Audience.MEMBERS }],
+      GetEditionCalendar: () => [{ editionId: ids['publicItem'] }],
+      GetEditionRoster: () => [{ editionId: ids['publicItem'] }],
+      ExportEdition: () => [{ editionId: ids['publicItem'], audience: Audience.MEMBERS }, { editionId: ids['publicItem'], audience: Audience.PUBLIC }],
     },
     'nwfl.mensa.v1.MembershipVerifierService': {
       ListPendingVerifications: () => [{}],
@@ -131,6 +135,13 @@ describe.skipIf(!live)('the members-only canary', () => {
     await api?.close();
   });
 
+  beforeAll(async () => {
+    await api.pool.query(
+      `INSERT INTO signup_request (sub, display_name, email, last_name, membership_number) VALUES ('sub-canary-signup', 'Canary Signup', 'canary@example.org', $1, $2)`,
+      [LAST_NAME, NUMBER],
+    );
+  });
+
   it('has a request for every read RPC the port serves', () => {
     const uncovered = readMethods().filter((method) => (reads[method.parent.typeName]?.[method.name]?.() ?? []).length === 0);
     expect(uncovered.map((method) => `${method.parent.name}.${method.name}`)).toEqual([]);
@@ -171,6 +182,36 @@ describe.skipIf(!live)('the members-only canary', () => {
 
     it('keeps the officers item from a member', async () => {
       await expect(content().getPublishedItem({ slug: 'canary-officers' }, MEMBER)).rejects.toMatchObject({ code: Code.NotFound });
+    });
+  });
+
+  describe('the membership number and last name (R33)', () => {
+    const anyone: Array<[string, { headers?: Record<string, string> }]> = [
+      ['the public', {}],
+      ['a member', MEMBER],
+      ['an officer', OFFICER],
+      ['the Membership Officer', as('approver-token')],
+      ['the Admin', as('admin-token')],
+      ['the Webmaster', as('webmaster-token')],
+      ['the newsletter agent', as('agent-token')],
+    ];
+
+    it.each(anyone)('never reach %s, in any read or error', async (_who, options) => {
+      const { text: everything } = await sweep(options);
+      expect(everything.includes(NUMBER)).toBe(false);
+      expect(everything.includes(LAST_NAME)).toBe(false);
+    });
+
+    it('reach the verifier, through its one read: the positive control', async () => {
+      const { text: everything } = await sweep(as('verifier-token'));
+      expect(everything).toContain(NUMBER);
+      expect(everything).toContain(LAST_NAME);
+    });
+
+    it('leave the approver’s view of the same sign-up with its name only: the row is reached, the inputs are not', async () => {
+      const listed = dump(await api.client(MembershipService).listSignupRequests({}, as('approver-token')));
+      expect(listed).toContain('Canary Signup');
+      expect(listed).not.toContain(NUMBER);
     });
   });
 
