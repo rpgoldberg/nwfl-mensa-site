@@ -1,0 +1,24 @@
+---
+// The newsletter's card, after the design draft: a drawn cover, the issue and
+// what to do with it. Until the archive is real (MB3, C1) it names no issue
+// and leads to every issue we can share.
+import type { Issue } from '../data/site-data';
+import Icon from './Icon.astro';
+
+interface Props {
+  issue: Issue | undefined;
+  /** On Home: the newsletter's own name leads, and the button goes to its page. */
+  home?: boolean;
+}
+const { issue, home = false } = Astro.props;
+---
+<section class="card issue" aria-labelledby="issue-title" data-source={issue?.source}>
+  <div class="cover" aria-hidden="true"><b>Pensa Mensa</b><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="issue-text">
+    <p class="eyebrow">{home ? 'The newsletter' : 'Current issue'}</p>
+    <h2 id="issue-title">{issue ? (home ? `Pensa Mensa for ${issue.label}` : issue.label) : 'Pensa Mensa'}</h2>
+    {issue?.volume !== undefined && <p class="muted">Volume {issue.volume}, Number {issue.number}</p>}
+    {!home && <p>Large-type reading and the PDF arrive with the archive.</p>}
+  </div>
+  {home && <p class="btns"><a class="button button--secondary" href="/news"><Icon name="newsletter" />See every issue</a></p>}
+</section>

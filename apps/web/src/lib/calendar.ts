@@ -180,7 +180,7 @@ const PARAM = new RegExp(`^(${UUID})(?:_(\\d{4}-\\d{2}-\\d{2}))?$`);
 
 /** An event's page: a stored event by its id, a series date as <series>_<date>. */
 export function eventPath(id: string): string {
-  return `/calendar/event/${id.replace(':', '_')}`;
+  return `/events/${id.replace(':', '_')}`;
 }
 
 /** The API id an event page's path names, or undefined for anything malformed. */

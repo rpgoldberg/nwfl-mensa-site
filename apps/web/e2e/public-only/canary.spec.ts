@@ -45,11 +45,11 @@ test('(3) no officer- or member-submitted content, and no way to sign in, on any
     expect(html, path).not.toMatch(/href="\/(sign-in|auth|officer-area)\b/);
   }
   // The archive pipeline's items still show.
-  expect(await (await request.get('/newsletter')).text()).toMatch(/data-source="pipeline"/);
+  expect(await (await request.get('/news')).text()).toMatch(/data-source="pipeline"/);
 });
 
 test('(4) the CSP on every response: script-src self only, no unsafe-*, object-src, base-uri and frame-ancestors none', async ({ request }) => {
-  for (const path of [...PUBLIC, ...GATED, '/manifest.webmanifest', '/scripts/install.js']) {
+  for (const path of [...PUBLIC, ...GATED, '/manifest.webmanifest', '/scripts/install.js', '/scripts/size.js']) {
     const policy = (await request.get(path, { maxRedirects: 0 })).headers()['content-security-policy'] ?? '';
     const csp = parseCsp(policy);
     expect(csp['script-src'], path).toEqual(["'self'"]);
@@ -63,30 +63,37 @@ test('(4) the CSP on every response: script-src self only, no unsafe-*, object-s
 });
 
 test('(6) with no API, the live pages keep their bundled content: no events, no roster, an empty calendar file', async ({ request }) => {
-  for (const path of ['/', '/calendar', '/officers', '/finances']) {
+  for (const path of ['/', '/events', '/officers', '/finances']) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(200);
     const html = await res.text();
     expect(html, path).not.toMatch(/temporarily unavailable|class="evs"|<table class="month"/);
   }
+  // W-LOOK: the calendar says that no events are listed yet, and who to ask, never a bare heading.
+  for (const path of ['/', '/events']) {
+    const text = (await (await request.get(path)).text()).replace(/<[^>]+>/g, '');
+    expect(text, path).toContain('No events are listed');
+    expect(text, path).toContain('Check back soon, or ask any of our officers.');
+  }
+  expect((await request.get('/events.ics')).status()).toBe(200);
   const feed = await request.get('/calendar.ics');
   expect(feed.status()).toBe(200);
   expect(feed.headers()['content-type']).toBe('text/calendar; charset=utf-8');
   const text = await feed.text();
   expect(text).toMatch(/^BEGIN:VCALENDAR\r\n/);
   expect(text).not.toContain('BEGIN:VEVENT');
-  expect((await request.get('/calendar/event/0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20')).status()).toBe(404);
+  expect((await request.get('/events/0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20')).status()).toBe(404);
 });
 
 test('the reader still has the header controls, with no Sign in, and the site works', async ({ page }) => {
   await page.goto('/about');
   const banner = page.getByRole('banner');
   await expect(banner.getByRole('link', { name: /^Aa\b/ })).toBeVisible();
-  await expect(banner.getByRole('link', { name: 'Help', exact: true })).toBeVisible();
   await expect(banner.getByRole('link', { name: 'Sign in' })).toHaveCount(0);
+  await expect(page.getByRole('contentinfo').getByRole('link', { name: 'Help', exact: true })).toBeVisible();
   await page.goto('/about#reader-menu');
-  await page.locator('#reader-menu').getByRole('button', { name: /^A\+ Larger/ }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-size', '2');
+  await page.locator('#reader-menu').getByRole('button', { name: 'A+ Larger' }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-size', '125');
 });
 
 // Every way the challenger found to spell a gated route (.html, encoded

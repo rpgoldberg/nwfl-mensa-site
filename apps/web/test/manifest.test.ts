@@ -49,10 +49,10 @@ describe('web manifest (R27)', () => {
     }
   });
 
-  it('has shortcuts to the current newsletter, the calendar and search, each to a real page with a 96 px icon', () => {
+  it('has shortcuts to the current newsletter, the events and search, each to a real page with a 96 px icon', () => {
     expect(manifest.shortcuts.map((s) => [s.name, s.url])).toEqual([
-      ['Current newsletter', '/newsletter'],
-      ['Calendar', '/calendar'],
+      ['Current newsletter', '/news'],
+      ['Events', '/events'],
       ['Search', '/search'],
     ]);
     for (const shortcut of manifest.shortcuts) {

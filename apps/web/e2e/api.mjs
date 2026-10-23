@@ -110,7 +110,8 @@ function calendar(from, to) {
   const today = central(new Date()).date;
   /** @type {import('../src/gen/nwfl/mensa/v1/event_pb.js').EventOccurrence[]} */
   const out = [];
-  for (let date = from; date <= to; date = addDays(date, 1)) {
+  // Nothing before 2020: a month with no events at all, for the empty state.
+  for (let date = from < '2020-01-01' ? '2020-01-01' : from; date <= to; date = addDays(date, 1)) {
     const day = weekday(date);
     if (day === 3) {
       // The third Wednesday from today is cancelled.

@@ -10,9 +10,9 @@ test.use({ javaScriptEnabled: false });
 const cookie = async (context: BrowserContext, name: string) => (await context.cookies()).find((c) => c.name === name);
 
 test('a member signs in from a page, comes back to it, and the header names them', async ({ page, context }) => {
-  await page.goto('/calendar');
+  await page.goto('/events');
   await signIn(page, 'member');
-  await expect(page).toHaveURL(/\/calendar$/);
+  await expect(page).toHaveURL(/\/events$/);
   await expect(banner(page)).toContainText('Jordan Example');
   await expect(banner(page).getByRole('button', { name: 'Sign out' })).toBeVisible();
   await expect(banner(page).getByRole('link', { name: 'Sign in', exact: true })).toHaveCount(0);
@@ -74,7 +74,7 @@ test('the Officer area sends someone not signed in to sign in first', async ({ p
 
 test('signing out expires the session, ends the provider’s session with its own cookie, and keeps text size and theme', async ({ page, context, browserName }) => {
   await page.goto('/about#reader-menu');
-  await page.locator('#reader-menu').getByRole('button', { name: /^A\+ Larger/ }).click();
+  await page.locator('#reader-menu').getByRole('button', { name: 'A+ Larger' }).click();
   await page.locator('#reader-menu').getByRole('button', { name: /^Dark/ }).click();
   await signIn(page, 'member');
 
@@ -96,10 +96,10 @@ test('signing out expires the session, ends the provider’s session with its ow
 
   await expect(page).toHaveURL(/\/signed-out$/);
   await expect(page.locator('h1')).toHaveText("You're signed out");
-  await expect(page.locator('html')).toHaveAttribute('data-size', '2');
+  await expect(page.locator('html')).toHaveAttribute('data-size', '125');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   const ours = (await context.cookies()).filter((c) => c.name.startsWith('__Host-'));
-  expect(ours.map((c) => `${c.name}=${c.value}`).sort()).toEqual(['__Host-nwfl-size=2', '__Host-nwfl-theme=dark']);
+  expect(ours.map((c) => `${c.name}=${c.value}`).sort()).toEqual(['__Host-nwfl-size=125', '__Host-nwfl-theme=dark']);
   await expect(banner(page).getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
   // Never "cookies" (nor "*"). Chromium reports the header on the redirect;
   // WebKit's tooling does not, and the API test below covers it there.

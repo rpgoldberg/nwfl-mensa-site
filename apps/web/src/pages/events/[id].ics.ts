@@ -1,7 +1,7 @@
 // One public event as a calendar file: "Add to my calendar" (R4). On request.
 import type { APIRoute } from 'astro';
-import { liveData } from '../../../data';
-import { eventFeed } from '../../../lib/feeds';
+import { liveData } from '../../data';
+import { eventFeed } from '../../lib/feeds';
 
 export const prerender = false;
 

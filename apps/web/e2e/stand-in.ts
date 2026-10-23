@@ -13,6 +13,9 @@ export const LUNCH_SERIES = '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20';
 /** Three days from today, at a member's home (the President hosts). */
 export const BOARD_GAMES = '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7';
 
+/** A month with no events at all (api.mjs lists nothing before 2020). */
+export const EMPTY_MONTH = '2019-06';
+
 /** Today in Central, YYYY-MM-DD. */
 export function centralToday(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());

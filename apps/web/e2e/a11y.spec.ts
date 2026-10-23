@@ -27,17 +27,17 @@ for (const path of ALL_PAGES) {
       });
     }
 
-    test('high-contrast system setting', async ({ page }) => {
+    test('high-contrast system setting (warm white)', async ({ page }) => {
       await page.emulateMedia({ contrast: 'more' });
       await page.goto(path);
       expect(await axe(page)).toEqual([]);
     });
 
-    // The reader's own choice, by cookie, at 100 % and 200 %, with the Aa panel
-    // open so its controls are checked too.
+    // The reader's own choice, by cookie, at the smallest and largest sizes, with
+    // the Aa panel open so its controls are checked too.
     for (const theme of THEMES) {
-      for (const size of [1, 5]) {
-        test(`${theme} theme at ${size === 1 ? 100 : 200} % text, Aa panel open`, async ({ page, context, baseURL }) => {
+      for (const size of [75, 175]) {
+        test(`${theme} theme at ${size} % text, Aa panel open`, async ({ page, context, baseURL }) => {
           await setPrefs(context, baseURL!, { size, theme });
           await page.goto(`${path}#reader-menu`);
           await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
@@ -59,8 +59,8 @@ test('axe on the page a retired old URL shows (410)', async ({ page }) => {
 // sign-in can end on.
 test.describe('axe, signed in', () => {
   for (const theme of THEMES) {
-    for (const size of [1, 5]) {
-      test(`an officer, ${theme} theme at ${size === 1 ? 100 : 200} % text: Home and the Officer area`, async ({ page, context, baseURL }) => {
+    for (const size of [75, 175]) {
+      test(`an officer, ${theme} theme at ${size} % text: Home and the Officer area`, async ({ page, context, baseURL }) => {
         await setPrefs(context, baseURL!, { size, theme });
         await page.goto('/');
         await signIn(page, 'officer');

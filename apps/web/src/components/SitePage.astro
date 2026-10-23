@@ -2,7 +2,8 @@
 // A page whose body is one of the site's own texts in content/site/.
 import { getEntry, render } from 'astro:content';
 import Base from '../layouts/Base.astro';
-import type { Page } from '../lib/site';
+import { ABOUT_NAV, type Page } from '../lib/site';
+import AboutNav from './AboutNav.astro';
 
 interface Props {
   page: Page;
@@ -15,5 +16,6 @@ const { Content } = await render(text);
 ---
 <Base {...page}>
   <h1>{page.title}</h1>
+  {ABOUT_NAV.some((n) => n.href === page.path) && <AboutNav path={page.path} />}
   <div class="prose" data-source="static"><Content /></div>
 </Base>

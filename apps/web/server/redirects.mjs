@@ -29,6 +29,30 @@ export function compileRedirects(data) {
   return { pages, uploads, goneDirs: data.goneDirs };
 }
 
+/**
+ * The site's own renamed pages (W-LOOK): the nav says Events and News, so the
+ * calendar and the newsletter live at /events and /news, and an event's page
+ * at /events/<id>. /calendar.ics stays where it is, as phones subscribed to it
+ * must keep their feed; /events.ics is the same feed under the new name.
+ */
+const RENAMED = /** @type {const} */ ([
+  [/^\/calendar\/?$/, '/events'],
+  [/^\/calendar\/event\/([^/]+)$/, '/events/$1'],
+  [/^\/newsletter\/?$/, '/news'],
+  [/^\/newsletter\/(.+)$/, '/news/$1'],
+]);
+
+/**
+ * The new path of a renamed page, or undefined when `pathname` was not renamed.
+ *
+ * @param {string} pathname
+ * @returns {string | undefined}
+ */
+export function renamedPath(pathname) {
+  for (const [from, to] of RENAMED) if (from.test(pathname)) return pathname.replace(from, to);
+  return undefined;
+}
+
 /** /slug, /slug.html or /mobile/slug.html: the old site's three forms of one page. */
 const OLD_PAGE = /^(?:\/mobile)?\/([a-z0-9][a-z0-9-]*?)(\.html)?$/;
 

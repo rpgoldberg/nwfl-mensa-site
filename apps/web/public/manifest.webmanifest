@@ -18,13 +18,13 @@
   "shortcuts": [
     {
       "name": "Current newsletter",
-      "short_name": "Newsletter",
-      "url": "/newsletter",
+      "short_name": "News",
+      "url": "/news",
       "icons": [{ "src": "/icons/shortcut-newsletter-96.png", "sizes": "96x96", "type": "image/png" }]
     },
     {
-      "name": "Calendar",
-      "url": "/calendar",
+      "name": "Events",
+      "url": "/events",
       "icons": [{ "src": "/icons/shortcut-calendar-96.png", "sizes": "96x96", "type": "image/png" }]
     },
     {

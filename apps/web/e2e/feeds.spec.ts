@@ -37,8 +37,17 @@ test('/calendar.ics is the public calendar as RFC 5545: CRLF lines folded at 75 
   expect(text).toContain('DESCRIPTION:Bring a friend\\, a book\\; and an appetite.');
 });
 
+test('/events.ics is the same feed as /calendar.ics, which stays for the phones already subscribed', async ({ request }) => {
+  const [old, renamed] = await Promise.all([request.get('/calendar.ics', { maxRedirects: 0 }), request.get('/events.ics', { maxRedirects: 0 })]);
+  expect([old.status(), renamed.status()]).toEqual([200, 200]);
+  expect(renamed.headers()['content-type']).toBe('text/calendar; charset=utf-8');
+  // DTSTAMP is the time of each answer; everything else is the same.
+  const strip = (text: string) => text.replace(/\r\nDTSTAMP:[^\r]+/g, '');
+  expect(strip(await renamed.text())).toBe(strip(await old.text()));
+});
+
 test("one event's .ics holds that event alone; a member's home by its area only", async ({ request }) => {
-  const res = await request.get(`/calendar/event/${BOARD_GAMES}.ics`);
+  const res = await request.get(`/events/${BOARD_GAMES}.ics`);
   expect(res.status()).toBe(200);
   expect(res.headers()['content-type']).toBe('text/calendar; charset=utf-8');
   expect(res.headers()['content-disposition']).toMatch(/^inline; filename="board-games-afternoon-\d{4}-\d{2}-\d{2}\.ics"$/);
@@ -50,7 +59,7 @@ test("one event's .ics holds that event alone; a member's home by its area only"
 
 test('a members event or one with no status never appears, in any view or feed, and its own page and file are not found', async ({ request }) => {
   const month = centralToday().slice(0, 7);
-  for (const path of ['/', '/calendar', `/calendar?month=${month}`, `/calendar?month=${monthAfter(month)}`, '/calendar.ics']) {
+  for (const path of ['/', '/events', `/events?month=${month}`, `/events?month=${monthAfter(month)}`, '/calendar.ics', '/events.ics']) {
     const body = await (await request.get(path)).text();
     for (const canary of Object.values(CANARIES)) {
       expect(body, path).not.toContain(canary.title);
@@ -60,7 +69,7 @@ test('a members event or one with no status never appears, in any view or feed, 
     expect(body, path).not.toMatch(/members event/i);
   }
   for (const id of [CANARIES.membersInFull.id, CANARIES.noStatus.id, `${MEMBERS_SERIES}_${nextSunday()}`]) {
-    for (const path of [`/calendar/event/${id}`, `/calendar/event/${id}.ics`]) {
+    for (const path of [`/events/${id}`, `/events/${id}.ics`]) {
       const res = await request.get(path);
       expect(res.status(), path).toBe(404);
       expect(res.headers()['cache-control'], path).toBe('no-store');
@@ -69,7 +78,7 @@ test('a members event or one with no status never appears, in any view or feed, 
 });
 
 test('cache by audience: public pages briefly and stale-while-revalidate, a session never, an error never', async ({ request }) => {
-  const live = ['/', '/calendar', '/officers', '/finances', '/calendar.ics', `/calendar/event/${BOARD_GAMES}`, `/calendar/event/${BOARD_GAMES}.ics`];
+  const live = ['/', '/events', '/officers', '/finances', '/calendar.ics', '/events.ics', `/events/${BOARD_GAMES}`, `/events/${BOARD_GAMES}.ics`];
   for (const path of live) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(200);
@@ -78,7 +87,7 @@ test('cache by audience: public pages briefly and stale-while-revalidate, a sess
     const signedIn = await request.get(path, { headers: { cookie: `${SESSION_COOKIE}=x` } });
     expect(signedIn.headers()['cache-control'], path).toBe('private, no-store');
   }
-  for (const path of ['/no-such-page', '/calendar?month=2026-13', '/calendar/event/not-an-id']) {
+  for (const path of ['/no-such-page', '/events?month=2026-13', '/events/not-an-id']) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(404);
     expect(res.headers()['cache-control'], path).toBe('no-store');
@@ -101,7 +110,7 @@ function getDown(path: string): Promise<{ status: number; headers: http.Incoming
 }
 
 test('when the API does not answer, each live page says so in plain words, with 503 and no-store, and no error detail', async () => {
-  for (const path of ['/', '/calendar', '/officers', '/finances', `/calendar/event/${BOARD_GAMES}`]) {
+  for (const path of ['/', '/events', '/officers', '/finances', `/events/${BOARD_GAMES}`]) {
     const res = await getDown(path);
     expect(res.status, path).toBe(503);
     expect(res.headers['cache-control'], path).toBe('no-store');
@@ -114,5 +123,5 @@ test('when the API does not answer, each live page says so in plain words, with 
   expect(feed.headers['cache-control']).toBe('no-store');
   expect(feed.body).toBe('The calendar is temporarily unavailable. Please try again in a few minutes.\n');
   // The pages that never read the API are untouched.
-  for (const path of ['/about', '/join', '/newsletter']) expect((await getDown(path)).status, path).toBe(200);
+  for (const path of ['/about', '/join', '/news']) expect((await getDown(path)).status, path).toBe(200);
 });

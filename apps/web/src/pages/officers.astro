@@ -10,6 +10,7 @@ import SampleNotice from '../components/SampleNotice.astro';
 import Unavailable from '../components/Unavailable.astro';
 import { liveData, siteData } from '../data';
 import { rosterView } from '../data/site-data';
+import AboutNav from '../components/AboutNav.astro';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
 import { visibleContent } from '../lib/content';
@@ -24,6 +25,7 @@ const president = roster.find((o) => o.slug === 'president')?.email;
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
+  <AboutNav path={p.path} />
   <p class="lead">{p.description}</p>
   {!live && siteData.isSample && <SampleNotice />}
   {PUBLIC_ONLY ? <PublicOnlyNote what="The officer list" /> : !loaded.ok ? <Unavailable what="The officer list" /> : (

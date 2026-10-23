@@ -5,7 +5,7 @@ Mensa is open to anyone who scores in the top 2 percent on an accepted intellige
 
 ## Visit us first
 
-Everyone is welcome at our events: lunches, dinners and meetups in the Fort Walton Beach, Panama City and Pensacola areas. See the [calendar](/calendar) for what is on, and ask any of our [officers](/officers) if you have a question.
+Everyone is welcome at our events: lunches, dinners and meetups in the Fort Walton Beach, Panama City and Pensacola areas. See our [events](/events) for what is on, and ask any of our [officers](/officers) if you have a question.
 
 ## Your local group
 

@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
-import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
+import { SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../prefs.mjs';
 import { compileRedirects } from '../redirects.mjs';
 import { accountHtml } from '../account.mjs';
 import { newSession, sessionSetCookie } from '../session.mjs';
@@ -250,7 +250,7 @@ describe('withSitePolicy', () => {
 });
 
 describe('prerendered pages', () => {
-  const html = '<!DOCTYPE html><html lang="en" data-size="1"><body>About ✓</body></html>';
+  const html = `<!DOCTYPE html><html lang="en" data-size="100"><body>About ✓ ${sizeSlider(100)}</body></html>`;
   const pages = new Map([['/about', html]]);
   const neverCalled: Handler = () => {
     throw new Error('the handler must not see a prerendered page');
@@ -262,7 +262,8 @@ describe('prerendered pages', () => {
     const body = await res.text();
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
-    expect(body).toBe(html.replace('data-size="1"', 'data-size="4" data-theme="dark"'));
+    // An old size 4 is 175 % now, on the page and on its slider.
+    expect(body).toBe(html.replace('data-size="100"', 'data-size="175" data-theme="dark"').replace(sizeSlider(100), sizeSlider(175)));
     expect(Number(res.headers.get('content-length'))).toBe(Buffer.byteLength(body));
     expectSecurityHeaders(res);
     expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
@@ -329,12 +330,12 @@ describe('a path the handler would read differently', () => {
   });
 
   it('finds a prerendered page by its decoded path', async () => {
-    const html = '<!DOCTYPE html><html lang="en" data-size="1"><body>About</body></html>';
+    const html = '<!DOCTYPE html><html lang="en" data-size="100"><body>About</body></html>';
     const base = await serve(() => {
       throw new Error('a prerendered page is served from memory');
     }, new Map([['/about', html]]));
-    const res = await fetch(`${base}/%61bout`, { headers: { cookie: `${SIZE_COOKIE}=3` } });
-    expect(await res.text()).toContain('data-size="3"');
+    const res = await fetch(`${base}/%61bout`, { headers: { cookie: `${SIZE_COOKIE}=150` } });
+    expect(await res.text()).toContain('data-size="150"');
   });
 });
 
@@ -365,6 +366,31 @@ describe('a state-changing request with no origin to check', () => {
     await fetch(`${base}/prefs`, { method: 'POST', body: 'x', headers: { 'sec-fetch-site': 'same-origin' } });
     await fetch(`${base}/about`);
     expect(seen).toEqual(['POST /prefs', 'POST /prefs', 'GET /about']);
+  });
+});
+
+describe('renamed pages (W-LOOK)', () => {
+  it('answers /calendar and /newsletter with 301 to /events and /news, query kept, under the site policy', async () => {
+    const base = await serve(() => {
+      throw new Error('the handler must not see a renamed path');
+    });
+    for (const [from, to] of [
+      ['/calendar', '/events'],
+      ['/calendar?month=2026-11', '/events?month=2026-11'],
+      ['/calendar/event/1b4e28ba-2fa1-11d2-883f-0016d3cca427.ics', '/events/1b4e28ba-2fa1-11d2-883f-0016d3cca427.ics'],
+      ['/newsletter', '/news'],
+    ]) {
+      const res = await fetch(`${base}${from}`, { redirect: 'manual' });
+      expect(res.status, from).toBe(301);
+      expect(res.headers.get('location'), from).toBe(to);
+      expectSecurityHeaders(res);
+      expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
+    }
+  });
+
+  it('leaves /calendar.ics, the feed phones subscribe to, to the handler', async () => {
+    const base = await serve((req, res) => res.end(`feed ${req.url}`));
+    expect(await (await fetch(`${base}/calendar.ics`)).text()).toBe('feed /calendar.ics');
   });
 });
 
@@ -421,7 +447,7 @@ describe('old URLs (R16)', () => {
 describe('signed in, on a prerendered page (W4)', () => {
   const key = randomBytes(32);
   const now = Math.floor(Date.now() / 1000);
-  const html = `<!DOCTYPE html><html lang="en" data-size="1"><body><header>${accountHtml(undefined, { back: '/about', signIn: true })}</header>About</body></html>`;
+  const html = `<!DOCTYPE html><html lang="en" data-size="100"><body><header>${accountHtml(undefined, { back: '/about', signIn: true })}</header>About</body></html>`;
   const serveSigned = async () => {
     server = http.createServer(withSitePolicy(() => {}, { pages: new Map([['/about', html]]), sessionKey: key }));
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));

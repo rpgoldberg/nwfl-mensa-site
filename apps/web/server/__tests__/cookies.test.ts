@@ -12,9 +12,9 @@ describe('readCookie (one parser for every cookie the site reads)', () => {
   });
 
   it('is what hasCookie and readPrefs see, so the two never disagree', () => {
-    for (const header of [`${SIZE_COOKIE} =4; ${SESSION_COOKIE} =x`, `\u00a0${SIZE_COOKIE}=4; \u00a0${SESSION_COOKIE}=x`, `__HOST-nwfl-size=4; __HOST-nwfl-session=x`]) {
+    for (const header of [`${SIZE_COOKIE} =150; ${SESSION_COOKIE} =x`, `\u00a0${SIZE_COOKIE}=150; \u00a0${SESSION_COOKIE}=x`, `__HOST-nwfl-size=150; __HOST-nwfl-session=x`]) {
       expect(hasCookie(header, SESSION_COOKIE), header).toBe(readCookie(header, SESSION_COOKIE) !== undefined);
-      expect(readPrefs(header).size === 4, header).toBe(readCookie(header, SIZE_COOKIE) === '4');
+      expect(readPrefs(header).size === 150, header).toBe(readCookie(header, SIZE_COOKIE) === '150');
     }
   });
 });

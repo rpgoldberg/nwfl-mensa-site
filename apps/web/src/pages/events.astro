@@ -1,9 +1,12 @@
 ---
-// The calendar (R4), on request: public events only. This month as a grid and
-// what is coming up as a list, or one month (?month=YYYY-MM) as both; a phone
-// gets the list. The whole calendar as a subscription, and each event's page.
-// With no API (the canary) the page keeps its bundled content: the heading.
+// Events, the calendar (R4), on request: public events only. This month as a
+// grid and what is coming up as a list, or one month (?month=YYYY-MM) as both;
+// a phone gets the list. The whole calendar as a subscription, and each
+// event's page. With no API (the canary), or none in the range, it says that
+// no events are listed yet, and who to ask.
+import EmptyEvents from '../components/EmptyEvents.astro';
 import EventList from '../components/EventList.astro';
+import Icon from '../components/Icon.astro';
 import MonthGrid from '../components/MonthGrid.astro';
 import Unavailable from '../components/Unavailable.astro';
 import { liveData } from '../data';
@@ -12,7 +15,7 @@ import { attempt, markUnavailable } from '../lib/api/page';
 import { calendarRange, monthGrid, monthLabel, shiftMonth, todayCentral } from '../lib/calendar';
 import { page } from '../lib/site';
 
-const p = page('/calendar');
+const p = page('/events');
 const live = liveData();
 const today = todayCentral(new Date());
 const range = calendarRange(Astro.url.searchParams.get('month'), today);
@@ -25,28 +28,31 @@ const listed = events.filter((e) => e.date >= range.list.from && e.date <= range
 const label = monthLabel(range.month);
 const [previous, next] = [shiftMonth(range.month, -1), shiftMonth(range.month, 1)];
 const listTitle = range.current ? 'Coming up' : `${label}, as a list`;
+// Nothing to list: who to ask. The roster read failing only drops the address.
+const roster = live && loaded?.ok && listed.length === 0 ? await attempt(() => live.offices()) : undefined;
+const president = roster?.ok ? roster.value.find((o) => o.slug === 'president' && o.aliasVerified)?.alias : undefined;
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
   <p class="lead">{p.description}</p>
-  {live && (
+  {live ? (
     <>
       <p>All times are Central. Choose an event for the place and who to ask.</p>
       <section class="card" aria-labelledby="subscribe-title">
         <h2 id="subscribe-title">Add our calendar to your phone</h2>
         <p>Your phone's calendar then shows our public events, and keeps them up to date by itself.</p>
         <p class="btns">
-          <a class="button" href={`webcal://${Astro.url.host}/calendar.ics`}>Add our calendar</a>
-          <a class="hbtn" href="/calendar.ics">Download the calendar file</a>
+          <a class="button" href={`webcal://${Astro.url.host}/calendar.ics`}><Icon name="add-calendar" />Add our calendar</a>
+          <a class="button button--secondary" href="/calendar.ics"><Icon name="download" />Download the calendar file</a>
         </p>
         <p class="muted">On an iPhone, iPad or Mac, Add our calendar subscribes your Calendar app. For Google Calendar, copy the link of Download the calendar file, then on a computer choose Other calendars, From URL, and paste it.</p>
       </section>
       {loaded && !loaded.ok ? <Unavailable what="The calendar" /> : (
         <div class="calendar">
           <nav class="month-nav" aria-label="Months">
-            <a class="hbtn" href={`/calendar?month=${previous}`}><span aria-hidden="true">‹ </span>{monthLabel(previous)}</a>
-            {!range.current && <a class="hbtn" href="/calendar">This month</a>}
-            <a class="hbtn" href={`/calendar?month=${next}`}>{monthLabel(next)}<span aria-hidden="true"> ›</span></a>
+            <a class="hbtn" href={`/events?month=${previous}`}><Icon name="back" />{monthLabel(previous)}</a>
+            {!range.current && <a class="hbtn" href="/events">This month</a>}
+            <a class="hbtn" href={`/events?month=${next}`}>{monthLabel(next)}<Icon name="forward" /></a>
           </nav>
           <div class="calgrid">
             <section class="monthbox" aria-label={`${label}, as a grid`}>
@@ -54,11 +60,11 @@ const listTitle = range.current ? 'Coming up' : `${label}, as a list`;
             </section>
             <section class="agenda" aria-labelledby="list-title">
               <h2 id="list-title">{listTitle}</h2>
-              {listed.length > 0 ? <EventList events={listed} label={listTitle} /> : <p>Nothing is listed {range.current ? 'for the next eight weeks' : `for ${label}`} yet.</p>}
+              {listed.length > 0 ? <EventList events={listed} label={listTitle} /> : <EmptyEvents when={range.current ? 'for the next eight weeks' : `for ${label}`} president={president} />}
             </section>
           </div>
         </div>
       )}
     </>
-  )}
+  ) : <EmptyEvents />}
 </Base>

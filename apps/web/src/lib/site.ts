@@ -42,16 +42,17 @@ export const SECTIONS: readonly Page[] = [
     prerender: true,
     reading: true,
   },
-  { path: '/newsletter', title: 'Newsletter', description: 'The current issue, and every past issue we can share.' },
+  // The newsletter; "News" is its word in the nav (W-LOOK), and the page's heading.
+  { path: '/news', title: 'News', description: 'The current issue, and every past issue we can share.' },
   {
     path: '/minutes',
     title: 'Meeting minutes',
     description: 'The approved minutes of each Executive Committee meeting, newest first.',
   },
-  // R1's Events section; "Calendar" is its word in the nav and in the design draft's URLs.
+  // R1's Events section, the calendar. /calendar and /newsletter answer 301 (server/redirects.mjs).
   {
-    path: '/calendar',
-    title: 'Calendar',
+    path: '/events',
+    title: 'Events',
     description: 'Lunches, happy hours, meetups and meetings, with dates and places.',
   },
   { path: '/finances', title: 'Finances', description: "The treasurer's summary for each period." },
@@ -69,21 +70,23 @@ const HOME_SCREEN: Page = {
   description: "Add the club's icon to your phone, so the site opens like an app.",
 };
 
-/** What the More page lists: every section but Home, then Help and the home-screen how-to. */
-export const MORE_PAGES: readonly Page[] = [...SECTIONS.filter((s) => s.path !== '/'), HELP, HOME_SCREEN];
+const SEARCH: Page = { path: '/search', title: 'Search', description: 'Search the newsletter archive.' };
+
+/** What the More page lists: every section but Home, then Search, Help and the home-screen how-to. */
+export const MORE_PAGES: readonly Page[] = [...SECTIONS.filter((s) => s.path !== '/'), SEARCH, HELP, HOME_SCREEN];
 
 const PAGES: readonly Page[] = [
   ...SECTIONS,
+  SEARCH,
   HELP,
   HOME_SCREEN,
-  { path: '/search', title: 'Search', description: 'Search the newsletter archive.' },
   { path: '/more', title: 'More', description: 'Every part of the site in one list.' },
   { path: '/sign-in', title: 'Sign in', description: 'Sign in to the site, for officers and members.' },
   { path: '/signed-out', title: "You're signed out", description: 'You have signed out of this site. You can sign in again at any time.' },
   { path: '/officer-area', title: 'Officer area', description: 'Where officers write reports and approve what goes on the site.' },
 ];
 
-export type NavIcon = 'home' | 'calendar' | 'newsletter' | 'search' | 'more';
+export type NavIcon = 'home' | 'calendar' | 'newsletter' | 'more';
 
 export interface NavItem {
   label: string;
@@ -91,12 +94,34 @@ export interface NavItem {
   icon: NavIcon;
 }
 
+/** Four, so the bottom bar is always one row; Search and Help are on More (W-LOOK). */
 export const PRIMARY_NAV: readonly NavItem[] = [
   { label: 'Home', href: '/', icon: 'home' },
-  { label: 'Calendar', href: '/calendar', icon: 'calendar' },
-  { label: 'Newsletter', href: '/newsletter', icon: 'newsletter' },
-  { label: 'Search', href: '/search', icon: 'search' },
+  { label: 'Events', href: '/events', icon: 'calendar' },
+  { label: 'News', href: '/news', icon: 'newsletter' },
   { label: 'More', href: '/more', icon: 'more' },
+];
+
+export interface Link {
+  label: string;
+  href: string;
+}
+
+/** The design draft's About subnav, on each page it names. */
+export const ABOUT_NAV: readonly Link[] = [
+  { label: 'Who we are', href: '/about' },
+  { label: 'Officers', href: '/officers' },
+  { label: 'Governance', href: '/governance' },
+  { label: 'Minutes', href: '/minutes' },
+  { label: 'Finances', href: '/finances' },
+];
+
+/** The old Home page's outbound links (R1), on Home and in About. */
+export const MENSA_LINKS: readonly Link[] = [
+  { label: 'American Mensa', href: 'https://www.us.mensa.org/' },
+  { label: 'Region 10 of American Mensa', href: 'https://region10.us.mensa.org/' },
+  { label: 'Mensa International', href: 'https://www.mensa.org/' },
+  { label: 'Our group on Facebook', href: 'https://www.facebook.com/groups/167192940095851/' },
 ];
 
 function normalise(path: string): string {

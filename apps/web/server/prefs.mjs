@@ -1,7 +1,7 @@
 // @ts-check
 // The reader's text size and theme (R30): two cookies the server reads to
 // render <html data-size data-theme>, so pages arrive in the reader's settings
-// with no script. Shared by the Astro layout, the /prefs form handler and the
+// with no script. Seven sizes, 75 to 175 %, and four themes besides the device's. Shared by the Astro layout, the /prefs form handler and the
 // server wrapper, which stamps them on prerendered pages.
 //
 // Host-only by the __Host- prefix (Secure, Path=/, no Domain): the staging host
@@ -13,16 +13,22 @@ import { readCookie } from './cookies.mjs';
 export const SIZE_COOKIE = '__Host-nwfl-size';
 export const THEME_COOKIE = '__Host-nwfl-theme';
 
-/** @typedef {1 | 2 | 3 | 4 | 5} Size */
-/** @typedef {'light' | 'dark' | 'contrast'} Theme */
+/** @typedef {75 | 80 | 90 | 100 | 125 | 150 | 175} Size */
+/** @typedef {'light' | 'dark' | 'contrast-yellow' | 'contrast-white'} Theme */
 /** @typedef {{ size: Size, theme: Theme | undefined }} Prefs */
 
-/** Size 1 is 100 %, each step adds 25, size 5 is 200 % (tokens.css). */
-export const SIZES = /** @type {const} */ ([1, 2, 3, 4, 5]);
-export const THEMES = /** @type {const} */ (['light', 'dark', 'contrast']);
+/** The seven text sizes in percent, the slider's notches 0 to 6 (tokens.css). */
+export const SIZES = /** @type {const} */ ([75, 80, 90, 100, 125, 150, 175]);
+/** In menu order; undefined, the device setting, comes first. */
+export const THEMES = /** @type {const} */ (['light', 'dark', 'contrast-yellow', 'contrast-white']);
 
 /** No cookie: 100 % and whatever the device asks for. */
-export const DEFAULT_PREFS = Object.freeze(/** @type {Prefs} */ ({ size: 1, theme: undefined }));
+export const DEFAULT_PREFS = Object.freeze(/** @type {Prefs} */ ({ size: 100, theme: undefined }));
+
+/** The cookies of the five-step scale (100 to 200 %): 175 % is the largest now. */
+const OLD_SIZES = /** @type {Record<string, Size>} */ ({ 1: 100, 2: 125, 3: 150, 4: 175, 5: 175 });
+/** Yellow on black is gone; warm white is the high contrast theme a device asks for. */
+const OLD_THEMES = /** @type {Record<string, Theme>} */ ({ contrast: 'contrast-white' });
 
 const YEAR = 60 * 60 * 24 * 365;
 
@@ -47,28 +53,33 @@ function toTheme(value) {
  * @returns {Prefs}
  */
 export function readPrefs(cookieHeader) {
+  const size = readCookie(cookieHeader, SIZE_COOKIE);
+  const theme = readCookie(cookieHeader, THEME_COOKIE);
   return {
-    size: toSize(readCookie(cookieHeader, SIZE_COOKIE)) ?? DEFAULT_PREFS.size,
-    theme: toTheme(readCookie(cookieHeader, THEME_COOKIE)),
+    size: toSize(size) ?? (size !== undefined && Object.hasOwn(OLD_SIZES, size) ? OLD_SIZES[size] : undefined) ?? DEFAULT_PREFS.size,
+    theme: toTheme(theme) ?? (theme !== undefined && Object.hasOwn(OLD_THEMES, theme) ? OLD_THEMES[theme] : undefined),
   };
 }
 
 /** The reading bar's Theme button walks this ring; undefined is the device setting. */
-const THEME_RING = /** @type {const} */ ([undefined, 'light', 'dark', 'contrast']);
+const THEME_RING = /** @type {const} */ ([undefined, ...THEMES]);
 
 /**
- * One press of a reader control. `size` is "smaller" or "larger"; `theme` is a
- * theme, "system" for the device setting, or "next" for the reading bar's cycle.
- * Anything else changes nothing.
+ * One press of a reader control. `size` is "smaller" or "larger", or "set" for
+ * the slider's Use this size, which takes the notch in `step` (0 to 6); `theme`
+ * is a theme, "system" for the device setting, or "next" for the reading bar's
+ * cycle. Anything else changes nothing.
  *
  * @param {Prefs} prefs
- * @param {{ size?: string | undefined, theme?: string | undefined }} change
+ * @param {{ size?: string | undefined, step?: string | undefined, theme?: string | undefined }} change
  * @returns {Prefs}
  */
 export function applyChange(prefs, change) {
   let { size, theme } = prefs;
-  if (change.size === 'larger') size = /** @type {Size} */ (Math.min(size + 1, 5));
-  if (change.size === 'smaller') size = /** @type {Size} */ (Math.max(size - 1, 1));
+  const at = SIZES.indexOf(size);
+  if (change.size === 'larger') size = SIZES[Math.min(at + 1, SIZES.length - 1)] ?? size;
+  if (change.size === 'smaller') size = SIZES[Math.max(at - 1, 0)] ?? size;
+  if (change.size === 'set' && /^[0-6]$/.test(change.step ?? '')) size = SIZES[Number(change.step)] ?? size;
   if (change.theme === 'system') theme = undefined;
   else if (change.theme === 'next') theme = THEME_RING[(THEME_RING.indexOf(theme) + 1) % THEME_RING.length];
   else theme = toTheme(change.theme) ?? theme;
@@ -108,8 +119,25 @@ export function htmlAttributes(prefs) {
 }
 
 /**
- * A prerendered page with its <html> start tag rewritten for `prefs`. The tag
- * is the first one in Astro's output, so nothing in the body is touched.
+ * The text size slider in the Aa panel at `size`: rendered by the layout, and
+ * put on a prerendered page by stampHtml, as only its value differs by reader
+ * (everything else in the panel follows <html data-size> in CSS).
+ *
+ * @param {Size} size
+ */
+export function sizeSlider(size) {
+  return (
+    `<input id="text-size" class="sl-input" type="range" name="step" min="0" max="${SIZES.length - 1}" step="1"` +
+    ` value="${SIZES.indexOf(size)}" aria-valuetext="${size} percent" data-sizes="${SIZES.join(' ')}">`
+  );
+}
+
+const SLIDER = /<input id="text-size" [^>]*>/;
+
+/**
+ * A prerendered page with its <html> start tag and its size slider rewritten
+ * for `prefs`. The tag is the first one in Astro's output, and the slider is
+ * found by its id, so nothing else in the body is touched.
  *
  * @param {string} html
  * @param {Prefs} prefs
@@ -118,7 +146,7 @@ export function stampHtml(html, prefs) {
   const attrs = Object.entries(htmlAttributes(prefs))
     .map(([name, value]) => ` ${name}="${value}"`)
     .join('');
-  return html.replace(/<html\b[^>]*>/i, `<html${attrs}>`);
+  return html.replace(/<html\b[^>]*>/i, `<html${attrs}>`).replace(SLIDER, () => sizeSlider(prefs.size));
 }
 
 /**

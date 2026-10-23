@@ -137,8 +137,8 @@ describe('start', () => {
 
   it("serves the prerendered pages it finds, with the reader's settings", async () => {
     const { base } = await boot(() => {}, { clientDir: FIXTURE_CLIENT });
-    const body = await (await fetch(`${base}/about`, { headers: { cookie: `${SIZE_COOKIE}=2` } })).text();
-    expect(body).toContain('<html lang="en" data-size="2">');
+    const body = await (await fetch(`${base}/about`, { headers: { cookie: `${SIZE_COOKIE}=125` } })).text();
+    expect(body).toContain('<html lang="en" data-size="125">');
   });
 
   it("turns off the Astro entry's own server before loading it", async () => {

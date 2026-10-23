@@ -1,0 +1,15 @@
+---
+// The design draft's About subnav, on each page it names: who we are, the
+// officers, governance, the minutes and the finances.
+import { ABOUT_NAV } from '../lib/site';
+
+interface Props {
+  path: string;
+}
+const { path } = Astro.props;
+---
+<nav class="subnav" aria-label="About the group">
+  <ul>
+    {ABOUT_NAV.map((n) => <li><a href={n.href} aria-current={n.href === path ? 'page' : undefined}>{n.label}</a></li>)}
+  </ul>
+</nav>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MORE_PAGES, PRIMARY_NAV, SECTIONS, currentNav, page, sectionFor, trailFor } from './site';
+import { ABOUT_NAV, MENSA_LINKS, MORE_PAGES, PRIMARY_NAV, SECTIONS, currentNav, page, sectionFor, trailFor } from './site';
 
 describe('SECTIONS (R1)', () => {
   it('has the nine public sections, each with a heading and a one-line description', () => {
@@ -9,9 +9,9 @@ describe('SECTIONS (R1)', () => {
       '/join',
       '/officers',
       '/governance',
-      '/newsletter',
+      '/news',
       '/minutes',
-      '/calendar',
+      '/events',
       '/finances',
     ]);
     for (const s of SECTIONS) {
@@ -28,34 +28,59 @@ describe('SECTIONS (R1)', () => {
   it('gives the long-read pages, About and Governance, the reading bar (R30)', () => {
     expect(SECTIONS.filter((s) => s.reading).map((s) => s.path)).toEqual(['/about', '/governance']);
   });
+
+  it('heads the calendar and the newsletter with their nav words, Events and News', () => {
+    expect(page('/events').title).toBe('Events');
+    expect(page('/news').title).toBe('News');
+  });
 });
 
 describe('PRIMARY_NAV (R30)', () => {
-  it('is Home, Calendar, Newsletter, Search, More, each with a word', () => {
-    expect(PRIMARY_NAV.map((n) => [n.label, n.href])).toEqual([
-      ['Home', '/'],
-      ['Calendar', '/calendar'],
-      ['Newsletter', '/newsletter'],
-      ['Search', '/search'],
-      ['More', '/more'],
+  it('is four, always one row: Home, Events, News, More, each with a word and an icon', () => {
+    expect(PRIMARY_NAV.map((n) => [n.label, n.href, n.icon])).toEqual([
+      ['Home', '/', 'home'],
+      ['Events', '/events', 'calendar'],
+      ['News', '/news', 'newsletter'],
+      ['More', '/more', 'more'],
     ]);
   });
 });
 
 describe('MORE_PAGES', () => {
-  it('lists every section but Home, then Help, and not the sign-in page', () => {
+  it('lists every section but Home, then Search and Help (no longer in the header or the bar), and not the sign-in page', () => {
     expect(MORE_PAGES.map((p) => p.path)).toEqual([
       '/about',
       '/join',
       '/officers',
       '/governance',
-      '/newsletter',
+      '/news',
       '/minutes',
-      '/calendar',
+      '/events',
       '/finances',
+      '/search',
       '/help',
       '/home-screen',
     ]);
+  });
+});
+
+describe('ABOUT_NAV', () => {
+  it("is the design draft's About subnav: who we are, officers, governance, minutes and finances", () => {
+    expect(ABOUT_NAV.map((n) => [n.label, n.href])).toEqual([
+      ['Who we are', '/about'],
+      ['Officers', '/officers'],
+      ['Governance', '/governance'],
+      ['Minutes', '/minutes'],
+      ['Finances', '/finances'],
+    ]);
+    for (const n of ABOUT_NAV) expect(sectionFor(n.href), n.href).toBeDefined();
+  });
+});
+
+describe('MENSA_LINKS', () => {
+  it("are the old Home page's outbound links, each to Mensa's own sites or our Facebook group, over https", () => {
+    expect(MENSA_LINKS.map((l) => l.label)).toEqual(['American Mensa', 'Region 10 of American Mensa', 'Mensa International', 'Our group on Facebook']);
+    for (const l of MENSA_LINKS) expect(new URL(l.href).protocol, l.href).toBe('https:');
   });
 });
 
@@ -80,16 +105,15 @@ describe('page', () => {
 describe('currentNav', () => {
   it('marks the nav item a page belongs to', () => {
     expect(currentNav('/')).toBe('/');
-    expect(currentNav('/calendar')).toBe('/calendar');
-    expect(currentNav('/calendar/2026-11-13-happy-hour')).toBe('/calendar');
-    expect(currentNav('/newsletter')).toBe('/newsletter');
-    expect(currentNav('/newsletter/2014-03')).toBe('/newsletter');
-    expect(currentNav('/search')).toBe('/search');
+    expect(currentNav('/events')).toBe('/events');
+    expect(currentNav('/events/1b4e28ba-2fa1-11d2-883f-0016d3cca427')).toBe('/events');
+    expect(currentNav('/news')).toBe('/news');
+    expect(currentNav('/news/2014-03')).toBe('/news');
     expect(currentNav('/more')).toBe('/more');
   });
 
   it('puts the pages listed on More under More', () => {
-    for (const path of ['/about', '/join', '/officers', '/governance', '/minutes', '/finances', '/help', '/home-screen']) {
+    for (const path of ['/about', '/join', '/officers', '/governance', '/minutes', '/finances', '/search', '/help', '/home-screen']) {
       expect(currentNav(path), path).toBe('/more');
     }
   });
@@ -113,11 +137,12 @@ describe('trailFor (breadcrumbs and Back)', () => {
   });
 
   it('names each known ancestor of a deeper page', () => {
-    expect(trailFor('/newsletter/2014-03', 'March 2014')).toEqual([
+    expect(trailFor('/news/2014-03', 'March 2014')).toEqual([
       { label: 'Home', href: '/' },
-      { label: 'Newsletter', href: '/newsletter' },
-      { label: 'March 2014', href: '/newsletter/2014-03' },
+      { label: 'News', href: '/news' },
+      { label: 'March 2014', href: '/news/2014-03' },
     ]);
+    expect(trailFor('/events/1b4e28ba-2fa1-11d2-883f-0016d3cca427', 'Happy Hour').map((c) => c.label)).toEqual(['Home', 'Events', 'Happy Hour']);
   });
 
   it('skips an ancestor it has no name for', () => {

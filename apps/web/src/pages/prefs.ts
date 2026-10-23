@@ -8,7 +8,7 @@ import { applyChange, prefsCookies, readPrefs, safeBack } from '../../server/pre
 export const prerender = false;
 
 const FORM_TYPES = ['application/x-www-form-urlencoded', 'multipart/form-data'];
-/** Four short fields; a body bigger than this is not the form, and is never buffered. */
+/** Five short fields; a body bigger than this is not the form, and is never buffered. */
 const MAX_FORM_BYTES = 4096;
 const TOO_LARGE = Symbol('too large');
 
@@ -62,6 +62,7 @@ export const POST: APIRoute = async ({ request }) => {
   }
   const prefs = applyChange(readPrefs(request.headers.get('cookie')), {
     size: field(form, 'size'),
+    step: field(form, 'step'),
     theme: field(form, 'theme'),
   });
   const headers = new Headers({
