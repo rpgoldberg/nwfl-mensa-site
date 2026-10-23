@@ -183,3 +183,68 @@ test.describe('on a reading page on a phone (412 x 915)', () => {
     expect(await pinned(page)).toEqual(['dock']);
   });
 });
+
+// W3: on a narrow screen sizes 4 and 5 render the same (both stop at 8.25vw),
+// so A+ at size 4 would change nothing. Wherever it would, A+ gives way to a
+// disabled "Largest size for this screen"; everywhere else a press makes the
+// text larger. Checked in the Aa panel and in the reading bar.
+test.describe('A+ never silently does nothing', () => {
+  const rootSize = (page: Page) => page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+
+  for (const width of [280, 320, 390, 1280]) {
+    test(`at ${width}px wide, each A+ press makes the text larger, or A+ says this is the largest size for this screen`, async ({ page, context, baseURL }) => {
+      await page.setViewportSize({ width, height: 800 });
+      for (const [where, controls] of [
+        ['Aa panel', () => panel(page)],
+        ['reading bar', () => readingBar(page)],
+      ] as const) {
+        for (const size of [1, 2, 3, 4, 5]) {
+          const label = `${where}, size ${size}`;
+          await setPrefs(context, baseURL!, { size });
+          // From a blank page, so the same URL with a #fragment is loaded again, not just scrolled to.
+          await page.goto('about:blank');
+          await page.goto('/about#reader-menu');
+          const larger = controls().getByRole('button', { name: /A\+ Larger/ });
+          const largest = controls().getByRole('button', { name: /Largest size for this screen/ });
+          const before = await rootSize(page);
+          if (await larger.isVisible()) {
+            await expect(largest, label).toBeHidden();
+            await larger.click();
+            await expect(html(page), label).toHaveAttribute('data-size', String(size + 1));
+            expect(await rootSize(page), label).toBeGreaterThan(before);
+          } else {
+            await expect(largest, label).toBeVisible();
+            await expect(largest, label).toBeDisabled();
+            // Truly the largest here: the next size, if there is one, is no larger.
+            if (size < 5) {
+              await setPrefs(context, baseURL!, { size: size + 1 });
+              await page.goto('/about');
+              expect(await rootSize(page), label).toBeLessThanOrEqual(before);
+            }
+          }
+        }
+      }
+    });
+  }
+
+  test.describe('at 320px wide', () => {
+    test.use({ viewport: { width: 320, height: 640 } });
+
+    test('size 4 is the largest: A+ is disabled and says so, in both places; at size 3 A+ still works', async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { size: 4 });
+      await page.goto('/about#reader-menu');
+      for (const controls of [panel(page), readingBar(page)]) {
+        await expect(controls.getByRole('button', { name: /Largest size for this screen/ })).toBeDisabled();
+        await expect(controls.getByRole('button', { name: /A\+ Larger/ })).toBeHidden();
+      }
+      // In full in the panel; one word, as on its neighbours, in the reading bar.
+      await expect(panel(page).getByText('Largest size for this screen')).toBeVisible();
+      await expect(readingBar(page).getByRole('button', { name: /Largest size for this screen/ })).toHaveText(/^\s*A\+\s*Largest/);
+      await setPrefs(context, baseURL!, { size: 3 });
+      await page.goto('about:blank');
+      await page.goto('/about#reader-menu');
+      await expect(panel(page).getByRole('button', { name: /A\+ Larger/ })).toBeEnabled();
+      await expect(panel(page).getByText('Largest size for this screen')).toBeHidden();
+    });
+  });
+});

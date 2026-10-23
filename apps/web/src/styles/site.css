@@ -568,3 +568,23 @@ main:focus:not(:focus-visible) { outline: none; }
   .money td { text-align: left; border-top: 0; padding-top: var(--space-1); }
   .money tr.total td { border-top: 0; }
 }
+
+/* A+ never does nothing (W3). At size 5, and where the screen caps the larger
+   sizes alike (tokens.css: 8.25vw, so 4 and 5 match below 21.21em and 3 is
+   the cap below 18.18em, in the browser's own em as the cap is), A+ gives
+   way to a disabled "Largest size for this screen". */
+.size-max { display: none; }
+.size-max:disabled { cursor: default; border-style: dashed; color: var(--ink); }
+html[data-size="5"] .size-up { display: none; }
+html[data-size="5"] .size-max { display: inline-flex; }
+html[data-size="5"] .rb.size-max { display: flex; }
+@media (max-width: 21.2121em) {
+  html[data-size="4"] .size-up { display: none; }
+  html[data-size="4"] .size-max { display: inline-flex; }
+  html[data-size="4"] .rb.size-max { display: flex; }
+}
+@media (max-width: 18.1818em) {
+  html[data-size="3"] .size-up { display: none; }
+  html[data-size="3"] .size-max { display: inline-flex; }
+  html[data-size="3"] .rb.size-max { display: flex; }
+}

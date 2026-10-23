@@ -25,7 +25,9 @@ const THEME_OPTIONS = [
     <div class="sizes">
       <button class="hbtn size-btn" type="submit" name="size" value="smaller">A− Smaller</button>
       <span class="size-steps" aria-hidden="true">{SIZES.map(() => <span class="size-step" />)}</span>
-      <button class="hbtn size-btn" type="submit" name="size" value="larger">A+ Larger</button>
+      <button class="hbtn size-btn size-up" type="submit" name="size" value="larger">A+ Larger</button>
+      {/* Shown instead of A+ where it would change nothing (site.css): at size 5, and on a screen too narrow for the larger sizes to differ. */}
+      <button class="hbtn size-btn size-max" type="button" disabled>Largest size for this screen</button>
     </div>
     <p class="size-now">
       {SIZES.map((size) => (
