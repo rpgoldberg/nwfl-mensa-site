@@ -138,10 +138,38 @@ jobs:
           docker logs "$id" | tail -5
           [ "$code" = "0" ] || { echo "::error::exit code ${code} after SIGTERM"; exit 1; }
 
+  migrate-image:
+    name: Build and run the migration image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Make the checkout look like a umask 077 one
+        # As in the image job: the image must set its own modes and still run.
+        run: chmod -R go-rwx .
+
+      - name: Build the migration image
+        run: docker build -f Dockerfile.migrate -t nwfl-mensa-api-migrate:ci .
+
+      - name: The image runs as a numeric non-root user
+        run: |
+          user=$(docker inspect nwfl-mensa-api-migrate:ci --format '{{.Config.User}}')
+          echo "image user: ${user}"
+          case "$user" in
+            ''|root|0|0:*) echo "::error::the image runs as root"; exit 1 ;;
+          esac
+
+      - name: It applies every migration on a read-only root filesystem, then applies none
+        # Against a throwaway Postgres: run 1 applies all, run 2 is a no-op.
+        run: sh scripts/smoke-migrate-image.sh nwfl-mensa-api-migrate:ci
+
   publish:
     name: Publish the image (main only)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, proto, image]
+    needs: [test, proto, image, migrate-image]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # The only job that may write packages; it never runs on a pull request.
@@ -180,3 +208,15 @@ jobs:
       # Deploy by this digest, never by the tag.
       - name: The pushed digest
         run: echo "ghcr.io/rpgoldberg/nwfl-mensa-site/api@${{ steps.image.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push the migration image
+        id: migrate-image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile.migrate
+          push: true
+          tags: ghcr.io/rpgoldberg/nwfl-mensa-site/api-migrate:${{ steps.sha.outputs.short }}
+
+      - name: The pushed migration digest
+        run: echo "ghcr.io/rpgoldberg/nwfl-mensa-site/api-migrate@${{ steps.migrate-image.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
