@@ -3,7 +3,7 @@
 // against that build; the four conditions from the multi-tenancy audit.
 import { expect, test, type APIResponse } from '@playwright/test';
 import { isHostOnlyCookie, parseCsp } from '../../server/policy.mjs';
-import { SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
+import { SIZES, SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
 import { isSignInPath } from '../../src/lib/access';
 import { ALL_PAGES } from '../pages';
 
@@ -93,7 +93,7 @@ test('the reader still has the header controls, with no Sign in, and the site wo
   await expect(page.getByRole('contentinfo').getByRole('link', { name: 'Help', exact: true })).toBeVisible();
   await page.goto('/about#reader-menu');
   await page.locator('#reader-menu').getByRole('button', { name: 'A+ Larger' }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-size', '125');
+  await expect(page.locator('html')).toHaveAttribute('data-size', String(SIZES[4]));
 });
 
 // Every way the challenger found to spell a gated route (.html, encoded

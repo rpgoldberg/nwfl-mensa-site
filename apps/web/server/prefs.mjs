@@ -13,20 +13,24 @@ import { readCookie } from './cookies.mjs';
 export const SIZE_COOKIE = '__Host-nwfl-size';
 export const THEME_COOKIE = '__Host-nwfl-theme';
 
-/** @typedef {75 | 80 | 90 | 100 | 125 | 150 | 175} Size */
+/** @typedef {(typeof SIZES)[number]} Size */
 /** @typedef {'light' | 'dark' | 'contrast-yellow' | 'contrast-white'} Theme */
 /** @typedef {{ size: Size, theme: Theme | undefined }} Prefs */
 
-/** The seven text sizes in percent, the slider's notches 0 to 6 (tokens.css). */
-export const SIZES = /** @type {const} */ ([75, 80, 90, 100, 125, 150, 175]);
+/**
+ * The seven text sizes in percent, the slider's notches 0 to 6 (Ross, 2026-10-23).
+ * The one list: the code and the tests read it, and test/size-css.test.ts
+ * checks the stylesheets' size rules against it.
+ */
+export const SIZES = /** @type {const} */ ([75, 80, 90, 100, 115, 140, 175]);
 /** In menu order; undefined, the device setting, comes first. */
 export const THEMES = /** @type {const} */ (['light', 'dark', 'contrast-yellow', 'contrast-white']);
 
 /** No cookie: 100 % and whatever the device asks for. */
 export const DEFAULT_PREFS = Object.freeze(/** @type {Prefs} */ ({ size: 100, theme: undefined }));
 
-/** The cookies of the five-step scale (100 to 200 %): 175 % is the largest now. */
-const OLD_SIZES = /** @type {Record<string, Size>} */ ({ 1: 100, 2: 125, 3: 150, 4: 175, 5: 175 });
+/** The cookies of the five-step scale (100, 125, 150, 175, 200 %): the default, the next two notches, then the largest. */
+const OLD_SIZES = /** @type {Record<string, Size>} */ ({ 1: SIZES[3], 2: SIZES[4], 3: SIZES[5], 4: SIZES[6], 5: SIZES[6] });
 /** Yellow on black is gone; warm white is the high contrast theme a device asks for. */
 const OLD_THEMES = /** @type {Record<string, Theme>} */ ({ contrast: 'contrast-white' });
 

@@ -3,7 +3,7 @@ import type http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS } from '../policy.mjs';
-import { SIZE_COOKIE } from '../prefs.mjs';
+import { SIZES, SIZE_COOKIE } from '../prefs.mjs';
 import { listenOptions, loadPrerendered, start } from '../start.mjs';
 
 const FIXTURE_CLIENT = new URL('./fixtures/client/', import.meta.url);
@@ -137,8 +137,8 @@ describe('start', () => {
 
   it("serves the prerendered pages it finds, with the reader's settings", async () => {
     const { base } = await boot(() => {}, { clientDir: FIXTURE_CLIENT });
-    const body = await (await fetch(`${base}/about`, { headers: { cookie: `${SIZE_COOKIE}=125` } })).text();
-    expect(body).toContain('<html lang="en" data-size="125">');
+    const body = await (await fetch(`${base}/about`, { headers: { cookie: `${SIZE_COOKIE}=${SIZES[4]}` } })).text();
+    expect(body).toContain(`<html lang="en" data-size="${SIZES[4]}">`);
   });
 
   it("turns off the Astro entry's own server before loading it", async () => {

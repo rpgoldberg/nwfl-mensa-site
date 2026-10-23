@@ -29,15 +29,17 @@ describe('readPrefs', () => {
   });
 
   it('reads the size and theme cookies', () => {
-    expect(readPrefs(`${SIZE_COOKIE}=150; ${THEME_COOKIE}=dark`)).toEqual({ size: 150, theme: 'dark' });
+    expect(readPrefs(`${SIZE_COOKIE}=${SIZES[5]}; ${THEME_COOKIE}=dark`)).toEqual({ size: SIZES[5], theme: 'dark' });
     expect(readPrefs(`a=1;${THEME_COOKIE}=contrast-yellow ; ${SIZE_COOKIE}=75`)).toEqual({ size: 75, theme: 'contrast-yellow' });
     expect(readPrefs(`${THEME_COOKIE}=contrast-white`)).toEqual({ size: 100, theme: 'contrast-white' });
     expect(readPrefs(`${THEME_COOKIE}=light`)).toEqual({ size: 100, theme: 'light' });
     for (const size of SIZES) expect(readPrefs(`${SIZE_COOKIE}=${size}`).size).toBe(size);
   });
 
-  it('maps the old five-step sizes to the new steps: 2 and 3 keep 125 and 150 %, 4 and 5 become 175 %', () => {
-    expect([1, 2, 3, 4, 5].map((old) => readPrefs(`${SIZE_COOKIE}=${old}`).size)).toEqual([100, 125, 150, 175, 175]);
+  it("maps the old five-step sizes to the new steps: 1 is 100 %, 2 is 115 %, 3 is 140 %, 4 and 5 are 175 % (Ross's map)", () => {
+    for (const [old, now] of [['1', SIZES[3]], ['2', SIZES[4]], ['3', SIZES[5]], ['4', SIZES[6]], ['5', SIZES[6]]] as const) {
+      expect(readPrefs(`${SIZE_COOKIE}=${old}`).size, `old size ${old}`).toBe(now);
+    }
   });
 
   it('maps the old high contrast theme (yellow on black, now dropped) to warm white', () => {
@@ -51,7 +53,7 @@ describe('readPrefs', () => {
     for (const theme of ['neon', '', 'Dark', 'system', 'contrast-black']) {
       expect(readPrefs(`${THEME_COOKIE}=${theme}`).theme, theme).toBeUndefined();
     }
-    expect(readPrefs(`x${SIZE_COOKIE}=150; x${THEME_COOKIE}=dark`)).toEqual(DEFAULT_PREFS);
+    expect(readPrefs(`x${SIZE_COOKIE}=${SIZES[5]}; x${THEME_COOKIE}=dark`)).toEqual(DEFAULT_PREFS);
   });
 
   it('ignores the same names without the prefix, which a sibling subdomain could set', () => {
@@ -70,13 +72,14 @@ describe('readPrefs', () => {
   });
 
   it('trims only the space and tab a Cookie header may carry around a name', () => {
-    expect(readPrefs(` \t${SIZE_COOKIE} = 150 ;${THEME_COOKIE}=dark`)).toEqual({ size: 150, theme: 'dark' });
+    expect(readPrefs(` \t${SIZE_COOKIE} = ${SIZES[5]} ;${THEME_COOKIE}=dark`)).toEqual({ size: SIZES[5], theme: 'dark' });
   });
 });
 
 describe('SIZES and THEMES', () => {
   it('are the seven sizes, 100 % the fourth, and the four themes in menu order', () => {
-    expect(SIZES).toEqual([75, 80, 90, 100, 125, 150, 175]);
+    // Ross's list (2026-10-23, 12:0xC); every other test reads SIZES.
+    expect(SIZES).toEqual([75, 80, 90, 100, 115, 140, 175]);
     expect(SIZES.indexOf(DEFAULT_PREFS.size)).toBe(3);
     expect(THEMES).toEqual(['light', 'dark', 'contrast-yellow', 'contrast-white']);
   });
@@ -86,12 +89,12 @@ describe('applyChange', () => {
   const at = (size: Size) => ({ size, theme: undefined });
 
   it('steps the size up and down through the seven sizes, and stops at each end', () => {
-    expect(applyChange(at(100), { size: 'larger' }).size).toBe(125);
-    expect(applyChange(at(150), { size: 'larger' }).size).toBe(175);
-    expect(applyChange(at(175), { size: 'larger' }).size).toBe(175);
-    expect(applyChange(at(100), { size: 'smaller' }).size).toBe(90);
-    expect(applyChange(at(80), { size: 'smaller' }).size).toBe(75);
-    expect(applyChange(at(75), { size: 'smaller' }).size).toBe(75);
+    expect(applyChange(at(100), { size: 'larger' }).size).toBe(SIZES[4]);
+    expect(applyChange(at(SIZES[5]), { size: 'larger' }).size).toBe(SIZES[6]);
+    expect(applyChange(at(SIZES[6]), { size: 'larger' }).size).toBe(SIZES[6]);
+    expect(applyChange(at(SIZES[3]), { size: 'smaller' }).size).toBe(SIZES[2]);
+    expect(applyChange(at(SIZES[1]), { size: 'smaller' }).size).toBe(SIZES[0]);
+    expect(applyChange(at(SIZES[0]), { size: 'smaller' }).size).toBe(SIZES[0]);
   });
 
   it("sets the slider's notch with Use this size: notch 0 is 75 %, notch 6 is 175 %", () => {
@@ -100,18 +103,18 @@ describe('applyChange', () => {
 
   it('changes nothing for a notch it does not know, or a notch without Use this size', () => {
     for (const step of [undefined, '', '7', '-1', '1.5', '03', ' 3', 'x', '1e0']) {
-      expect(applyChange(at(150), { size: 'set', step }).size, String(step)).toBe(150);
+      expect(applyChange(at(SIZES[5]), { size: 'set', step }).size, String(step)).toBe(SIZES[5]);
     }
     // A theme button submits the same form, slider and all: the size stays.
-    expect(applyChange(at(150), { step: '0', theme: 'dark' })).toEqual({ size: 150, theme: 'dark' });
+    expect(applyChange(at(SIZES[5]), { step: '0', theme: 'dark' })).toEqual({ size: SIZES[5], theme: 'dark' });
   });
 
   it('sets a theme, or goes back to the device setting', () => {
     expect(applyChange(DEFAULT_PREFS, { theme: 'dark' })).toEqual({ size: 100, theme: 'dark' });
-    expect(applyChange({ size: 125, theme: 'dark' }, { theme: 'contrast-yellow' })).toEqual({ size: 125, theme: 'contrast-yellow' });
-    expect(applyChange({ size: 125, theme: 'dark' }, { theme: 'contrast-white' })).toEqual({ size: 125, theme: 'contrast-white' });
-    expect(applyChange({ size: 125, theme: 'dark' }, { theme: 'light' })).toEqual({ size: 125, theme: 'light' });
-    expect(applyChange({ size: 125, theme: 'dark' }, { theme: 'system' })).toEqual({ size: 125, theme: undefined });
+    expect(applyChange({ size: SIZES[4], theme: 'dark' }, { theme: 'contrast-yellow' })).toEqual({ size: SIZES[4], theme: 'contrast-yellow' });
+    expect(applyChange({ size: SIZES[4], theme: 'dark' }, { theme: 'contrast-white' })).toEqual({ size: SIZES[4], theme: 'contrast-white' });
+    expect(applyChange({ size: SIZES[4], theme: 'dark' }, { theme: 'light' })).toEqual({ size: SIZES[4], theme: 'light' });
+    expect(applyChange({ size: SIZES[4], theme: 'dark' }, { theme: 'system' })).toEqual({ size: SIZES[4], theme: undefined });
   });
 
   it('cycles the theme for the reading bar in menu order: device, light, dark, soft yellow, warm white, device', () => {
@@ -125,7 +128,7 @@ describe('applyChange', () => {
   });
 
   it('changes nothing for a value it does not know', () => {
-    const prefs = { size: 150 as const, theme: 'dark' as const };
+    const prefs = { size: SIZES[5], theme: 'dark' as const };
     expect(applyChange(prefs, { size: 'huge', theme: 'neon' })).toEqual(prefs);
     expect(applyChange(prefs, { theme: 'contrast' })).toEqual(prefs);
     expect(applyChange(prefs, {})).toEqual(prefs);
@@ -134,8 +137,8 @@ describe('applyChange', () => {
 
 describe('prefsCookies', () => {
   it('stores a choice for a year, for the whole site, unreadable to scripts', () => {
-    expect(prefsCookies({ size: 150, theme: 'dark' })).toEqual([
-      `${SIZE_COOKIE}=150; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
+    expect(prefsCookies({ size: SIZES[5], theme: 'dark' })).toEqual([
+      `${SIZE_COOKIE}=${SIZES[5]}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
       `${THEME_COOKIE}=dark; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
     ]);
   });
@@ -149,11 +152,11 @@ describe('prefsCookies', () => {
 
   it('rewrites an old cookie in the new form on the next press', () => {
     const prefs = applyChange(readPrefs(`${SIZE_COOKIE}=5; ${THEME_COOKIE}=contrast`), { size: 'smaller' });
-    expect(prefsCookies(prefs).map((c) => c.split(';')[0])).toEqual([`${SIZE_COOKIE}=150`, `${THEME_COOKIE}=contrast-white`]);
+    expect(prefsCookies(prefs).map((c) => c.split(';')[0])).toEqual([`${SIZE_COOKIE}=${SIZES[5]}`, `${THEME_COOKIE}=contrast-white`]);
   });
 
   it('makes every cookie host-only: __Host-, Secure, Path=/, no Domain, SameSite=Lax', () => {
-    for (const prefs of [DEFAULT_PREFS, { size: 175 as const, theme: 'contrast-white' as const }, { size: 75 as const, theme: undefined }]) {
+    for (const prefs of [DEFAULT_PREFS, { size: SIZES[6], theme: 'contrast-white' as const }, { size: SIZES[0], theme: undefined }]) {
       for (const cookie of prefsCookies(prefs)) {
         const [pair, ...rest] = cookie.split(';').map((part) => part.trim());
         const attrs = rest.map((a) => a.toLowerCase());
@@ -168,29 +171,28 @@ describe('prefsCookies', () => {
 describe('sizeSlider', () => {
   it("is a native range of seven notches at the reader's size, named for a screen reader in percent", () => {
     expect(sizeSlider(100)).toBe(
-      '<input id="text-size" class="sl-input" type="range" name="step" min="0" max="6" step="1" value="3" aria-valuetext="100 percent" data-sizes="75 80 90 100 125 150 175">',
+      `<input id="text-size" class="sl-input" type="range" name="step" min="0" max="6" step="1" value="3" aria-valuetext="100 percent" data-sizes="${SIZES.join(' ')}">`,
     );
-    expect(sizeSlider(75)).toContain(' value="0" aria-valuetext="75 percent"');
-    expect(sizeSlider(175)).toContain(' value="6" aria-valuetext="175 percent"');
+    SIZES.forEach((size, i) => expect(sizeSlider(size)).toContain(` value="${i}" aria-valuetext="${size} percent"`));
   });
 });
 
 describe('htmlAttributes and stampHtml', () => {
   it('names the size always, and the theme only when the reader chose one', () => {
     expect(htmlAttributes(DEFAULT_PREFS)).toEqual({ lang: 'en', 'data-size': '100' });
-    expect(htmlAttributes({ size: 175, theme: 'contrast-white' })).toEqual({ lang: 'en', 'data-size': '175', 'data-theme': 'contrast-white' });
+    expect(htmlAttributes({ size: SIZES[6], theme: 'contrast-white' })).toEqual({ lang: 'en', 'data-size': String(SIZES[6]), 'data-theme': 'contrast-white' });
   });
 
   it("rewrites only a prerendered page's html start tag and its size slider", () => {
     const page = `<!DOCTYPE html><html lang="en" data-size="100"><head></head><body><p>&lt;html data-size="100"&gt;</p><label for="text-size">Text size</label>${sizeSlider(100)}</body></html>`;
-    expect(stampHtml(page, { size: 175, theme: 'dark' })).toBe(
-      `<!DOCTYPE html><html lang="en" data-size="175" data-theme="dark"><head></head><body><p>&lt;html data-size="100"&gt;</p><label for="text-size">Text size</label>${sizeSlider(175)}</body></html>`,
+    expect(stampHtml(page, { size: SIZES[6], theme: 'dark' })).toBe(
+      `<!DOCTYPE html><html lang="en" data-size="${SIZES[6]}" data-theme="dark"><head></head><body><p>&lt;html data-size="100"&gt;</p><label for="text-size">Text size</label>${sizeSlider(SIZES[6])}</body></html>`,
     );
     expect(stampHtml(page, DEFAULT_PREFS)).toBe(page);
   });
 
   it('leaves a document with no html tag or slider alone', () => {
-    expect(stampHtml('<p>hi</p>', { size: 125, theme: undefined })).toBe('<p>hi</p>');
+    expect(stampHtml('<p>hi</p>', { size: SIZES[4], theme: undefined })).toBe('<p>hi</p>');
   });
 });
 

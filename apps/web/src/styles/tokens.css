@@ -5,7 +5,8 @@
  *   and high contrast warm white. html[data-theme="light" | "dark" | "contrast-yellow" |
  *   "contrast-white"] is set by the server from the reader's cookie. No cookie: prefers-color-scheme
  *   picks light or dark, and prefers-contrast: more picks warm white.
- * Text size: html[data-size="75" .. "175"], seven sizes in percent, 100 the default. Content is in
+ * Text size: html[data-size="75" .. "175"], the seven sizes in percent of SIZES (server/prefs.mjs),
+ *   100 the default. Content is in
  *   rem, so it grows with the size; the chrome (header, bottom bar, breadcrumbs, the Aa panel) is
  *   in px and never does (site.css). Browser zoom is never blocked.
  *
@@ -65,8 +66,8 @@ html[data-size="75"] { font-size: 75%; }
 html[data-size="80"] { font-size: 80%; }
 html[data-size="90"] { font-size: 90%; }
 html[data-size="100"] { font-size: 100%; }
-html[data-size="125"] { font-size: 125%; }
-html[data-size="150"] { font-size: 150%; }
+html[data-size="115"] { font-size: 115%; }
+html[data-size="140"] { font-size: 140%; }
 /* No word ever breaks, so the longest words (17 letters) must fit a line. With
    the chrome in px, 175 % fits a 320 px phone whole (W-LOOK, measured on every
    page); on a narrower screen the largest size stops at 8.75vw (24.5 px at 280). */

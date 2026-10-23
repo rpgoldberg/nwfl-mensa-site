@@ -2,6 +2,7 @@
 // (e2e/idp.mjs), with JavaScript off: the site needs none, and neither do the
 // provider's own forms.
 import { expect, test, type BrowserContext } from '@playwright/test';
+import { SIZES } from '../server/prefs.mjs';
 import { IDP_ORIGIN } from './servers';
 import { AT_PROVIDER, banner, signIn } from './signin';
 
@@ -96,10 +97,10 @@ test('signing out expires the session, ends the provider’s session with its ow
 
   await expect(page).toHaveURL(/\/signed-out$/);
   await expect(page.locator('h1')).toHaveText("You're signed out");
-  await expect(page.locator('html')).toHaveAttribute('data-size', '125');
+  await expect(page.locator('html')).toHaveAttribute('data-size', String(SIZES[4]));
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   const ours = (await context.cookies()).filter((c) => c.name.startsWith('__Host-'));
-  expect(ours.map((c) => `${c.name}=${c.value}`).sort()).toEqual(['__Host-nwfl-size=125', '__Host-nwfl-theme=dark']);
+  expect(ours.map((c) => `${c.name}=${c.value}`).sort()).toEqual([`__Host-nwfl-size=${SIZES[4]}`, '__Host-nwfl-theme=dark']);
   await expect(banner(page).getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
   // Never "cookies" (nor "*"). Chromium reports the header on the redirect;
   // WebKit's tooling does not, and the API test below covers it there.

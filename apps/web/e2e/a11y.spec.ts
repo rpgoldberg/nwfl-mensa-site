@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { ALL_PAGES } from './pages';
+import { SIZES } from '../server/prefs.mjs';
 import { THEMES, setPrefs } from './prefs';
 import { banner, signIn } from './signin';
 
@@ -36,7 +37,7 @@ for (const path of ALL_PAGES) {
     // The reader's own choice, by cookie, at the smallest and largest sizes, with
     // the Aa panel open so its controls are checked too.
     for (const theme of THEMES) {
-      for (const size of [75, 175]) {
+      for (const size of [SIZES[0], SIZES[6]]) {
         test(`${theme} theme at ${size} % text, Aa panel open`, async ({ page, context, baseURL }) => {
           await setPrefs(context, baseURL!, { size, theme });
           await page.goto(`${path}#reader-menu`);
@@ -59,7 +60,7 @@ test('axe on the page a retired old URL shows (410)', async ({ page }) => {
 // sign-in can end on.
 test.describe('axe, signed in', () => {
   for (const theme of THEMES) {
-    for (const size of [75, 175]) {
+    for (const size of [SIZES[0], SIZES[6]]) {
       test(`an officer, ${theme} theme at ${size} % text: Home and the Officer area`, async ({ page, context, baseURL }) => {
         await setPrefs(context, baseURL!, { size, theme });
         await page.goto('/');

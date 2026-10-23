@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
-import { SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../prefs.mjs';
+import { SIZES, SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../prefs.mjs';
 import { compileRedirects } from '../redirects.mjs';
 import { accountHtml } from '../account.mjs';
 import { newSession, sessionSetCookie } from '../session.mjs';
@@ -334,8 +334,8 @@ describe('a path the handler would read differently', () => {
     const base = await serve(() => {
       throw new Error('a prerendered page is served from memory');
     }, new Map([['/about', html]]));
-    const res = await fetch(`${base}/%61bout`, { headers: { cookie: `${SIZE_COOKIE}=150` } });
-    expect(await res.text()).toContain('data-size="150"');
+    const res = await fetch(`${base}/%61bout`, { headers: { cookie: `${SIZE_COOKIE}=${SIZES[5]}` } });
+    expect(await res.text()).toContain(`data-size="${SIZES[5]}"`);
   });
 });
 

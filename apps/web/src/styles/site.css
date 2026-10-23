@@ -243,8 +243,8 @@ html[data-size="75"] .sz-now [data-for-size="75"],
 html[data-size="80"] .sz-now [data-for-size="80"],
 html[data-size="90"] .sz-now [data-for-size="90"],
 html[data-size="100"] .sz-now [data-for-size="100"],
-html[data-size="125"] .sz-now [data-for-size="125"],
-html[data-size="150"] .sz-now [data-for-size="150"],
+html[data-size="115"] .sz-now [data-for-size="115"],
+html[data-size="140"] .sz-now [data-for-size="140"],
 html[data-size="175"] .sz-now [data-for-size="175"] { display: inline; }
 
 /* The slider: seven notches end to end, a 36 px thumb, ticks under the thumb's
@@ -296,14 +296,14 @@ html[data-size="175"] .sz-now [data-for-size="175"] { display: inline; }
 html[data-size="75"] .sl-input { --fill: 0%; }
 html[data-size="80"] .sl-input { --fill: 16.667%; }
 html[data-size="90"] .sl-input { --fill: 33.333%; }
-html[data-size="125"] .sl-input { --fill: 66.667%; }
-html[data-size="150"] .sl-input { --fill: 83.333%; }
+html[data-size="115"] .sl-input { --fill: 66.667%; }
+html[data-size="140"] .sl-input { --fill: 83.333%; }
 html[data-size="175"] .sl-input { --fill: 100%; }
 
 /* The notch numbers grow with the size. All seven ticks always show, and the
    first and last numbers; the middle five only where they fit with 0.8em
    between neighbours, in symmetric steps: 75/175, then 75/100/175, then
-   75/90/125/175, then all seven. The breakpoints are in the numbers' own em
+   75/90/115/175, then all seven. The breakpoints are in the numbers' own em
    (a container query reads em from its container). A number is 1.8em wide
    at most (measured: "100" in Atkinson Hyperlegible bold), so seven need the
    box to be 6 x (1.8 + 0.8) = 15.6em, four 3 x 2.6 = 7.8em, three 2 x 2.6 = 5.2em. */
@@ -353,8 +353,8 @@ html[data-size="75"] .tick[data-for-size="75"],
 html[data-size="80"] .tick[data-for-size="80"],
 html[data-size="90"] .tick[data-for-size="90"],
 html[data-size="100"] .tick[data-for-size="100"],
-html[data-size="125"] .tick[data-for-size="125"],
-html[data-size="150"] .tick[data-for-size="150"],
+html[data-size="115"] .tick[data-for-size="115"],
+html[data-size="140"] .tick[data-for-size="140"],
 html[data-size="175"] .tick[data-for-size="175"] { color: var(--accent); font-weight: 700; }
 .reader-panel .sz-set { justify-self: start; }
 .sz-set[hidden] { display: none; }
@@ -765,8 +765,8 @@ main > .cols { max-width: none; }
 /* A+ never does nothing (W3), and A− neither. At 175 % A+ gives way to a
    disabled "Largest size for this screen", and at 75 % A− to a disabled
    "Smallest size". Where the screen caps 175 % (tokens.css: 8.75vw, under
-   150 % below 17.14em, in the browser's own em as the cap is), 150 % is the
-   largest there, so A+ gives way at 150 % too. */
+   140 % below 16em, in the browser's own em as the cap is), 140 % is the
+   largest there, so A+ gives way at 140 % too. */
 .size-max, .size-min, .size-max-note { display: none; }
 .size-max:disabled, .size-min:disabled { cursor: default; border-style: dashed; color: var(--ink); }
 html[data-size="175"] .size-up,
@@ -776,11 +776,11 @@ html[data-size="75"] .size-min { display: inline-flex; }
 html[data-size="175"] .rb.size-max,
 html[data-size="75"] .rb.size-min { display: flex; }
 html[data-size="175"] .size-max-note { display: block; }
-@media (max-width: 17.1429em) {
-  html[data-size="150"] .size-up { display: none; }
-  html[data-size="150"] .size-max { display: inline-flex; }
-  html[data-size="150"] .rb.size-max { display: flex; }
-  html[data-size="150"] .size-max-note { display: block; }
+@media (max-width: 16em) {
+  html[data-size="140"] .size-up { display: none; }
+  html[data-size="140"] .size-max { display: inline-flex; }
+  html[data-size="140"] .rb.size-max { display: flex; }
+  html[data-size="140"] .size-max-note { display: block; }
 }
 
 /* The calendar (R4): status chips, the agenda, the month grid, one event. */

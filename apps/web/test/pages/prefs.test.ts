@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
+import { SIZES, SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
 import { GET, POST } from '../../src/pages/prefs';
 
 type Ctx = Parameters<typeof POST>[0];
@@ -83,21 +83,21 @@ describe('POST /prefs: what it will read (the memory blocker)', () => {
 
 describe('POST /prefs', () => {
   it('writes the next size and redirects back to the page, with See Other', async () => {
-    const res = await post({ size: 'larger', back: '/about' }, { cookie: `${SIZE_COOKIE}=125` });
+    const res = await post({ size: 'larger', back: '/about' }, { cookie: `${SIZE_COOKIE}=${SIZES[4]}` });
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe('/about');
-    expect(res.headers.getSetCookie()).toContain(`${SIZE_COOKIE}=150; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`);
+    expect(res.headers.getSetCookie()).toContain(`${SIZE_COOKIE}=${SIZES[5]}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`);
   });
 
   it("writes the slider's notch on Use this size, and only then", async () => {
     const set = await post({ size: 'set', step: '0', back: '/about', from: 'menu' });
     expect(set.headers.get('location')).toBe('/about#reader-menu');
-    expect(set.headers.getSetCookie()).toContain(`${SIZE_COOKIE}=75; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`);
+    expect(set.headers.getSetCookie()).toContain(`${SIZE_COOKIE}=${SIZES[0]}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`);
     // A− and the theme buttons submit the same form, slider value and all.
-    const smaller = await post({ size: 'smaller', step: '6', back: '/about' }, { cookie: `${SIZE_COOKIE}=150` });
-    expect(smaller.headers.getSetCookie()[0]).toMatch(new RegExp(`^${SIZE_COOKIE}=125;`));
-    const theme = await post({ theme: 'dark', step: '6', back: '/about' }, { cookie: `${SIZE_COOKIE}=125` });
-    expect(theme.headers.getSetCookie()[0]).toMatch(new RegExp(`^${SIZE_COOKIE}=125;`));
+    const smaller = await post({ size: 'smaller', step: '6', back: '/about' }, { cookie: `${SIZE_COOKIE}=${SIZES[5]}` });
+    expect(smaller.headers.getSetCookie()[0]).toMatch(new RegExp(`^${SIZE_COOKIE}=${SIZES[4]};`));
+    const theme = await post({ theme: 'dark', step: '6', back: '/about' }, { cookie: `${SIZE_COOKIE}=${SIZES[4]}` });
+    expect(theme.headers.getSetCookie()[0]).toMatch(new RegExp(`^${SIZE_COOKIE}=${SIZES[4]};`));
   });
 
   it('reopens the Aa panel when the change came from it', async () => {
@@ -141,7 +141,7 @@ describe('POST /prefs', () => {
     const res = (await POST({ request, url } as unknown as Ctx)) as Response;
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe('/');
-    expect(res.headers.getSetCookie()[0]).toMatch(new RegExp(`^${SIZE_COOKIE}=125;`));
+    expect(res.headers.getSetCookie()[0]).toMatch(new RegExp(`^${SIZE_COOKIE}=${SIZES[4]};`));
   });
 
   it('refuses a body that is not a form, and stores nothing', async () => {

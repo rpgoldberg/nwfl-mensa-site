@@ -2,6 +2,7 @@
 // in the Aa panel's form with a Use this size button, and A− and A+ post the
 // form. Here it runs against small stand-ins for the document and the form.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SIZES } from '../server/prefs.mjs';
 import { postSize, wireSize } from '../public/scripts/size.js';
 
 class FakeElement extends EventTarget {
@@ -22,7 +23,7 @@ class FakeElement extends EventTarget {
 
 class FakeSlider extends FakeElement {
   value = '3';
-  dataset = { sizes: '75 80 90 100 125 150 175' };
+  dataset = { sizes: SIZES.join(' ') };
   constructor(readonly form: FakeForm | null) {
     super();
   }
@@ -77,8 +78,8 @@ describe('the text size slider, with JavaScript', () => {
     const { slider, root, save } = setup();
     slider.value = '5';
     slider.dispatchEvent(new Event('input'));
-    expect(root.dataset['size']).toBe('150');
-    expect(slider.attrs.get('aria-valuetext')).toBe('150 percent');
+    expect(root.dataset['size']).toBe(String(SIZES[5]));
+    expect(slider.attrs.get('aria-valuetext')).toBe(`${SIZES[5]} percent`);
     expect(save).not.toHaveBeenCalled();
   });
 
@@ -86,17 +87,17 @@ describe('the text size slider, with JavaScript', () => {
     const { slider, root, save } = setup();
     slider.value = '0';
     slider.dispatchEvent(new Event('change'));
-    expect(root.dataset['size']).toBe('75');
+    expect(root.dataset['size']).toBe(String(SIZES[0]));
     expect(save).toHaveBeenCalledWith(0);
   });
 
   it('turns A− and A+ into one step of the slider, saved, with no page load', () => {
     const { form, slider, root, save } = setup();
     expect(click(form!.larger).defaultPrevented).toBe(true);
-    expect([slider.value, root.dataset['size'], slider.attrs.get('aria-valuetext')]).toEqual(['4', '125', '125 percent']);
+    expect([slider.value, root.dataset['size'], slider.attrs.get('aria-valuetext')]).toEqual(['4', String(SIZES[4]), `${SIZES[4]} percent`]);
     expect(click(form!.smaller).defaultPrevented).toBe(true);
     click(form!.smaller);
-    expect([slider.value, root.dataset['size']]).toEqual(['2', '90']);
+    expect([slider.value, root.dataset['size']]).toEqual(['2', String(SIZES[2])]);
     expect(save.mock.calls.map(([step]) => step)).toEqual([4, 3, 2]);
   });
 
@@ -137,7 +138,7 @@ describe('the text size slider, with JavaScript', () => {
     const { slider, root, save } = setup(undefined, false);
     slider.value = '1';
     slider.dispatchEvent(new Event('change'));
-    expect(root.dataset['size']).toBe('80');
+    expect(root.dataset['size']).toBe(String(SIZES[1]));
     expect(save).toHaveBeenCalledWith(1);
   });
 
@@ -147,7 +148,7 @@ describe('the text size slider, with JavaScript', () => {
     slider.value = '2';
     slider.dispatchEvent(new Event('change'));
     await vi.waitFor(() => expect(save).toHaveBeenCalledWith(2));
-    expect(root.dataset['size']).toBe('90');
+    expect(root.dataset['size']).toBe(String(SIZES[2]));
   });
 
   it('wires itself up when a page loads it', async () => {

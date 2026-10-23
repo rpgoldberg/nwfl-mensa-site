@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import { expect, test, type APIResponse } from '@playwright/test';
 import { SESSION_COOKIE, parseCsp, securityHeaders } from '../server/policy.mjs';
-import { SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../server/prefs.mjs';
+import { SIZES, SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../server/prefs.mjs';
 import { ALL_PAGES, PRERENDERED } from './pages';
 import { BACKEND_URL, IDP_ORIGIN } from './servers';
 
@@ -46,8 +46,8 @@ test("a prerendered page differs from the built file only in the reader's html t
   const built = readFileSync('dist/client/about.html', 'utf8');
   // Old cookies, read in the new terms: size 5 is 175 %, and the old high contrast is warm white.
   const res = await request.get('/about', { headers: { cookie: `${SIZE_COOKIE}=5; ${THEME_COOKIE}=contrast` } });
-  expect(built).toContain(sizeSlider(100));
-  expect(await res.text()).toBe(built.replace(/<html[^>]*>/, '<html lang="en" data-size="175" data-theme="contrast-white">').replace(sizeSlider(100), sizeSlider(175)));
+  expect(built).toContain(sizeSlider(SIZES[3]));
+  expect(await res.text()).toBe(built.replace(/<html[^>]*>/, `<html lang="en" data-size="${SIZES[6]}" data-theme="contrast-white">`).replace(sizeSlider(SIZES[3]), sizeSlider(SIZES[6])));
   expect(res.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
   expect(res.headers()['vary']).toBe('Cookie');
 });
@@ -60,7 +60,7 @@ test('the reader controls post to a handler that sets the cookies, is never stor
   });
   expect(res.status()).toBe(303);
   expect(res.headers()['location']).toBe('/');
-  expect(res.headers()['set-cookie']).toContain(`${SIZE_COOKIE}=125`);
+  expect(res.headers()['set-cookie']).toContain(`${SIZE_COOKIE}=${SIZES[4]}`);
   expect(res.headers()['cache-control']).toBe('private, no-store');
   expectSecurityHeaders(res);
 });

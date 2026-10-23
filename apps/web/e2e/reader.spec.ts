@@ -16,30 +16,30 @@ test.describe('with JavaScript off', () => {
   for (const path of ['/officers', '/about']) {
     test(`the Aa panel's size and theme round-trip through the cookie, from ${path}`, async ({ page, context }) => {
       await page.goto(path);
-      await expect(html(page)).toHaveAttribute('data-size', '100');
+      await expect(html(page)).toHaveAttribute('data-size', String(SIZES[3]));
       await expect(html(page)).not.toHaveAttribute('data-theme', /.*/);
       await page.getByRole('banner').getByRole('link', { name: /^Aa\b/ }).click();
-      await expect(readout(page)).toHaveText('100 %');
+      await expect(readout(page)).toHaveText(`${SIZES[3]} %`);
       await expect(slider(page)).toHaveValue('3');
-      await expect(slider(page)).toHaveAttribute('aria-valuetext', '100 percent');
+      await expect(slider(page)).toHaveAttribute('aria-valuetext', `${SIZES[3]} percent`);
 
       await panel(page).getByRole('button', { name: 'A+ Larger' }).click();
       await expect(page).toHaveURL(new RegExp(`${path}#reader-menu$`));
-      await expect(html(page)).toHaveAttribute('data-size', '125');
+      await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
       // The panel stays open for the next press, and says where the size is now.
       await expect(panel(page)).toBeVisible();
-      await expect(readout(page)).toHaveText('125 %');
+      await expect(readout(page)).toHaveText(`${SIZES[4]} %`);
       await expect(slider(page)).toHaveValue('4');
-      await expect(slider(page)).toHaveAttribute('aria-valuetext', '125 percent');
+      await expect(slider(page)).toHaveAttribute('aria-valuetext', `${SIZES[4]} percent`);
       await panel(page).getByRole('button', { name: 'A+ Larger' }).click();
-      await expect(html(page)).toHaveAttribute('data-size', '150');
+      await expect(html(page)).toHaveAttribute('data-size', String(SIZES[5]));
       await panel(page).getByRole('button', { name: 'A− Smaller' }).click();
-      await expect(html(page)).toHaveAttribute('data-size', '125');
+      await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
 
       // The slider with no script: move it, then Use this size.
       await slider(page).fill('1');
       await panel(page).getByRole('button', { name: 'Use this size' }).click();
-      await expect(html(page)).toHaveAttribute('data-size', '80');
+      await expect(html(page)).toHaveAttribute('data-size', String(SIZES[1]));
       await expect(slider(page)).toHaveValue('1');
 
       await expect(panel(page).getByRole('button', { name: 'Match my phone or computer Chosen', exact: true })).toBeVisible();
@@ -50,17 +50,17 @@ test.describe('with JavaScript off', () => {
       await expect(panel(page).getByRole('button', { name: 'Light', exact: true })).toBeVisible();
       await expect(panel(page).getByRole('button', { name: 'Match my phone or computer', exact: true })).toBeVisible();
       // A theme press keeps the size, though the form carries the slider too.
-      await expect(html(page)).toHaveAttribute('data-size', '80');
+      await expect(html(page)).toHaveAttribute('data-size', String(SIZES[1]));
 
       for (const other of ['/', '/governance', '/events', '/no-such-page']) {
         await page.goto(other);
-        await expect(html(page), other).toHaveAttribute('data-size', '80');
+        await expect(html(page), other).toHaveAttribute('data-size', String(SIZES[1]));
         await expect(html(page), other).toHaveAttribute('data-theme', 'dark');
       }
 
       // The browser kept both as host-only cookies: no leading dot, so no subdomain or parent shares them.
       const jar = Object.fromEntries((await context.cookies()).map((c) => [c.name, c]));
-      expect(jar[SIZE_COOKIE]).toMatchObject({ value: '80', domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
+      expect(jar[SIZE_COOKIE]).toMatchObject({ value: String(SIZES[1]), domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
       expect(jar[THEME_COOKIE]).toMatchObject({ value: 'dark', domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
       expect(jar[SIZE_COOKIE]!.expires - Date.now() / 1000).toBeGreaterThan(360 * 24 * 3600);
 
@@ -87,11 +87,16 @@ test.describe('with JavaScript off', () => {
     }
   });
 
-  test('an old cookie keeps its reader: size 5 is 175 %, and the old high contrast is warm white', async ({ page, context, baseURL }) => {
+  test(`an old cookie keeps its reader: sizes 2, 3, 4 and 5 are ${SIZES[4]}, ${SIZES[5]}, ${SIZES[6]} and ${SIZES[6]} %, and the old high contrast is warm white`, async ({ page, context, baseURL }) => {
+    for (const [old, now] of [[2, SIZES[4]], [3, SIZES[5]], [4, SIZES[6]]] as const) {
+      await setPrefs(context, baseURL!, { size: old });
+      await page.goto(`/officers?old=${old}`);
+      await expect(html(page), `old size ${old}`).toHaveAttribute('data-size', String(now));
+    }
     await setPrefs(context, baseURL!, { size: 5, theme: 'contrast' });
     for (const path of ['/about#reader-menu', '/officers#reader-menu']) {
       await page.goto(path);
-      await expect(html(page), path).toHaveAttribute('data-size', '175');
+      await expect(html(page), path).toHaveAttribute('data-size', String(SIZES[6]));
       await expect(html(page), path).toHaveAttribute('data-theme', 'contrast-white');
       await expect(slider(page), path).toHaveValue('6');
       await expect(panel(page).getByRole('button', { name: 'High contrast, warm white Chosen', exact: true }), path).toBeVisible();
@@ -106,9 +111,9 @@ test.describe('with JavaScript off', () => {
     await page.goto('/about');
     await readingBar(page).getByRole('button', { name: /^A\+ Larger/ }).click();
     await expect(page).toHaveURL(/\/about$/);
-    await expect(html(page)).toHaveAttribute('data-size', '125');
+    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
     await readingBar(page).getByRole('button', { name: /^A− Smaller/ }).click();
-    await expect(html(page)).toHaveAttribute('data-size', '100');
+    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[3]));
     // Each press moves to the next theme, in menu order; a screen reader hears which one is on.
     for (const [theme, label] of [
       ['light', 'Light'],
@@ -132,34 +137,34 @@ test.describe('with JavaScript', () => {
     const saved = page.waitForResponse((r) => r.url().endsWith('/prefs') && r.request().method() === 'POST');
     await slider(page).focus();
     await page.keyboard.press('ArrowRight');
-    await expect(html(page)).toHaveAttribute('data-size', '125');
-    await expect(slider(page)).toHaveAttribute('aria-valuetext', '125 percent');
-    await expect(readout(page)).toHaveText('125 %');
+    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
+    await expect(slider(page)).toHaveAttribute('aria-valuetext', `${SIZES[4]} percent`);
+    await expect(readout(page)).toHaveText(`${SIZES[4]} %`);
     expect((await saved).status()).toBe(303);
     await expect(page).toHaveURL(/\/about#reader-menu$/);
     // The device keeps it as its size: every page, every visit.
     await page.goto('/officers');
-    await expect(html(page)).toHaveAttribute('data-size', '125');
+    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
   });
 
   test('A− and A+ change the size at once, without loading the page again, and it stays', async ({ page }) => {
     await page.goto('/officers#reader-menu');
     await page.evaluate(() => ((window as unknown as { marker: number }).marker = 1));
     await panel(page).getByRole('button', { name: 'A+ Larger' }).click();
-    await expect(html(page)).toHaveAttribute('data-size', '125');
+    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
     await panel(page).getByRole('button', { name: 'A+ Larger' }).click();
-    await expect(html(page)).toHaveAttribute('data-size', '150');
+    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[5]));
     await panel(page).getByRole('button', { name: 'A− Smaller' }).click();
-    await expect(html(page)).toHaveAttribute('data-size', '125');
+    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
     await expect(slider(page)).toHaveValue('4');
     expect(await page.evaluate(() => (window as unknown as { marker?: number }).marker)).toBe(1);
     // Every mark and number is still drawn after a change made in place (inside a
     // fieldset, Chromium dropped them all).
     const drawn = await panel(page).locator('.tick').evaluateAll((ticks) => ticks.map((t) => t.getBoundingClientRect().width > 0));
     expect(drawn).toEqual(Array(7).fill(true));
-    await expect.poll(async () => (await page.context().cookies()).find((c) => c.name === SIZE_COOKIE)?.value).toBe('125');
+    await expect.poll(async () => (await page.context().cookies()).find((c) => c.name === SIZE_COOKIE)?.value).toBe(String(SIZES[4]));
     await page.reload();
-    await expect(html(page)).toHaveAttribute('data-size', '125');
+    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
   });
 
   test('a tap on a mark takes that size: the marks sit under the thumb’s centre at each notch', async ({ page }) => {
@@ -196,12 +201,8 @@ const notches = (page: Page) =>
       }),
     );
 
-const PATTERNS = [
-  ['75', '80', '90', '100', '125', '150', '175'],
-  ['75', '90', '125', '175'],
-  ['75', '100', '175'],
-  ['75', '175'],
-];
+// Ross's thinning, densest first: all seven, then 75/90/115/175, 75/100/175 and 75/175.
+const PATTERNS = [[0, 1, 2, 3, 4, 5, 6], [0, 2, 4, 6], [0, 3, 6], [0, 6]].map((notches) => notches.map((k) => String(SIZES[k])));
 
 for (const width of [320, 360, 412, 1280]) {
   test(`at ${width}px the notch numbers grow with the size and thin out symmetrically, never closer than 0.8em`, async ({ page, context, baseURL }) => {
@@ -233,7 +234,7 @@ for (const width of [320, 360, 412, 1280]) {
     }
     // The numbers grow with the size.
     const sizes = [];
-    for (const size of [75, 175]) {
+    for (const size of [SIZES[0], SIZES[6]]) {
       await setPrefs(context, baseURL!, { size });
       await page.goto('about:blank');
       await page.goto('/about#reader-menu');
@@ -341,7 +342,7 @@ const pinned = (page: Page) =>
 test.describe('on a phone (412 x 915)', () => {
   test.use({ viewport: { width: 412, height: 915 } });
 
-  for (const size of [75, 125, 175]) {
+  for (const size of [SIZES[0], SIZES[4], SIZES[6]]) {
     test(`at ${size} % on a reading page only the reading bar stays on screen, in one row, and the bottom bar sits at the end of the page`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       await page.goto('/about');
@@ -358,7 +359,7 @@ test.describe('on a phone (412 x 915)', () => {
     });
   }
 
-  for (const size of [75, 175]) {
+  for (const size of [SIZES[0], SIZES[6]]) {
     test(`at ${size} % keyboard focus is never hidden behind the reading bar`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       await page.goto('/about');
@@ -374,13 +375,13 @@ test.describe('on a phone (412 x 915)', () => {
 
 // W3, kept for seven sizes: A+ never silently does nothing, and A− neither. At
 // 175 % A+ gives way to a disabled "Largest size for this screen"; on a screen
-// so narrow that 175 % is capped under 150 % (below about 274 px), at 150 %
+// so narrow that 175 % is capped under 140 % (below 256 px), at 140 %
 // too. At 75 % A− gives way to a disabled "Smallest size". Checked in the Aa
 // panel and in the reading bar.
 test.describe('A+ and A− never silently do nothing', () => {
   const rootSize = (page: Page) => page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
 
-  for (const width of [260, 320, 390, 1280]) {
+  for (const width of [250, 320, 390, 1280]) {
     test(`at ${width}px wide, each A+ press makes the text larger, or A+ says this is the largest size for this screen`, async ({ page, context, baseURL }) => {
       await page.setViewportSize({ width, height: 800 });
       for (const [where, controls] of [
@@ -417,8 +418,8 @@ test.describe('A+ and A− never silently do nothing', () => {
     });
   }
 
-  test('at 175 % A+ is disabled and says so, in both places; at 75 % A− is', async ({ page, context, baseURL }) => {
-    await setPrefs(context, baseURL!, { size: 175 });
+  test(`at ${SIZES[6]} % A+ is disabled and says so, in both places; at ${SIZES[0]} % A− is`, async ({ page, context, baseURL }) => {
+    await setPrefs(context, baseURL!, { size: SIZES[6] });
     await page.goto('/about#reader-menu');
     for (const controls of [panel(page), readingBar(page)]) {
       await expect(controls.getByRole('button', { name: /Largest size for this screen/ })).toBeDisabled();
@@ -427,7 +428,7 @@ test.describe('A+ and A− never silently do nothing', () => {
     // In words in the panel; one word, as on its neighbours, in the reading bar.
     await expect(panel(page).getByText('Largest size for this screen.')).toBeVisible();
     await expect(readingBar(page).getByRole('button', { name: /Largest size for this screen/ })).toHaveText(/^\s*A\+\s*Largest/);
-    await setPrefs(context, baseURL!, { size: 75 });
+    await setPrefs(context, baseURL!, { size: SIZES[0] });
     await page.goto('about:blank');
     await page.goto('/about#reader-menu');
     for (const controls of [panel(page), readingBar(page)]) {
@@ -437,15 +438,15 @@ test.describe('A+ and A− never silently do nothing', () => {
     await expect(panel(page).getByText('Largest size for this screen.')).toBeHidden();
   });
 
-  test.describe('at 260px wide', () => {
-    test.use({ viewport: { width: 260, height: 640 } });
+  test.describe('at 250px wide', () => {
+    test.use({ viewport: { width: 250, height: 640 } });
 
-    test('150 % is the largest for this screen: A+ is disabled there and says so; at 125 % A+ still works', async ({ page, context, baseURL }) => {
-      await setPrefs(context, baseURL!, { size: 150 });
+    test(`${SIZES[5]} % is the largest for this screen: A+ is disabled there and says so; at ${SIZES[4]} % A+ still works`, async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { size: SIZES[5] });
       await page.goto('/about#reader-menu');
       await expect(panel(page).getByRole('button', { name: /Largest size for this screen/ })).toBeDisabled();
       await expect(panel(page).getByText('Largest size for this screen.')).toBeVisible();
-      await setPrefs(context, baseURL!, { size: 125 });
+      await setPrefs(context, baseURL!, { size: SIZES[4] });
       await page.goto('about:blank');
       await page.goto('/about#reader-menu');
       await expect(panel(page).getByRole('button', { name: /A\+ Larger/ })).toBeEnabled();

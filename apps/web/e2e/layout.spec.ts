@@ -177,7 +177,7 @@ test('search inputs are at least 16px, so phones do not zoom on focus', async ({
 test.describe('at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
-  for (const size of [75, 175]) {
+  for (const size of [SIZES[0], SIZES[6]]) {
     test(`no page scrolls sideways at ${size} %, with the Aa panel open or closed`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       for (const path of ALL_PAGES) {
@@ -234,7 +234,7 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 375, height: 667 }
   test(`the reading bar at ${viewport.width}x${viewport.height} is one row, the same at every size, a quarter of the screen at most`, async ({ page, context, baseURL }) => {
     await page.setViewportSize(viewport);
     const heights = new Set<number>();
-    for (const size of [75, 100, 175]) {
+    for (const size of [SIZES[0], SIZES[3], SIZES[6]]) {
       await setPrefs(context, baseURL!, { size });
       await page.goto('/about');
       await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
@@ -285,7 +285,7 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 412, height: 915 }
   test.describe(`at ${viewport.width}px wide, every word whole`, () => {
     test.use({ viewport });
 
-    for (const size of [75, 100, 150, 175]) {
+    for (const size of [SIZES[0], SIZES[3], SIZES[5], SIZES[6]]) {
       test(`no page breaks a word at ${size} %`, async ({ page, context, baseURL }) => {
         test.slow(); // every page, every word
         await setPrefs(context, baseURL!, { size });
@@ -339,7 +339,7 @@ test.describe('the signed-in header on a wide screen', () => {
 test.describe('signed in, at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
-  for (const size of [75, 175]) {
+  for (const size of [SIZES[0], SIZES[6]]) {
     test(`a long name, the Officer area and Sign out fit at ${size} %, each control a 48px target`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       await page.goto('/');
@@ -436,7 +436,7 @@ test('the header, the breadcrumbs and the Aa panel stay the same size at every t
       };
     });
   const seen = [];
-  for (const size of [75, 100, 175]) {
+  for (const size of [SIZES[0], SIZES[3], SIZES[6]]) {
     await setPrefs(context, baseURL!, { size });
     // From a blank page, so the same URL with a #fragment is loaded again, not just scrolled to.
     await page.goto('about:blank');
