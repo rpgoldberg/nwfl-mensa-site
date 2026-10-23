@@ -1,5 +1,5 @@
 // The public pages (W2): About, Join and Governance from content/site/, and
-// the on-request pages from the fixture adapter's made-up data.
+// the newsletter and minutes from the fixture adapter's made-up data.
 import { expect, test } from '@playwright/test';
 
 test.describe('About', () => {
@@ -39,25 +39,14 @@ test('Governance covers the charter, the bylaws and elections, and links out to 
   await expect(main.locator('a[href="/minutes"]')).toHaveCount(1);
 });
 
-test.describe('pages filled from the API (sample data for now)', () => {
-  for (const path of ['/officers', '/newsletter', '/minutes', '/finances']) {
+// Officers, Finances, Home and the calendar read the API now: live.spec.ts.
+test.describe('pages still filled from the bundled sample data', () => {
+  for (const path of ['/newsletter', '/minutes']) {
     test(`${path} says its entries are samples`, async ({ page }) => {
       await page.goto(path);
       await expect(page.getByRole('note').filter({ hasText: 'Sample entries' })).toBeVisible();
     });
   }
-
-  test('Officers lists each office by role, shows a vacant seat, and only addresses known to work', async ({ page }) => {
-    await page.goto('/officers');
-    const roster = page.getByRole('list', { name: 'Officers' });
-    await expect(roster.getByRole('listitem')).toHaveCount(6);
-    const president = roster.getByRole('listitem').filter({ hasText: 'President' }).first();
-    await expect(president.getByRole('link', { name: 'president@nwflorida.us' })).toHaveAttribute('href', 'mailto:president@nwflorida.us');
-    await expect(roster.getByRole('listitem').filter({ hasText: 'Membership Officer' })).toContainText('Vacant');
-    // The treasurer alias has not been seen to deliver yet: no address shown.
-    await expect(roster.getByRole('listitem').filter({ hasText: 'Treasurer' })).not.toContainText('@');
-    await expect(page.locator('[data-source="submitted"]')).toHaveCount(6);
-  });
 
   test('Newsletter shows the current issue, then past issues by year, missing ones honestly', async ({ page }) => {
     await page.goto('/newsletter');
@@ -78,20 +67,5 @@ test.describe('pages filled from the API (sample data for now)', () => {
     await expect(page.locator('[id="2026-09"]')).toHaveCount(1);
     await page.goto('/minutes#2026-06-20');
     await expect(page.locator('article.meeting#\\32 026-06-20')).toBeInViewport();
-  });
-
-  test('Finances shows each period’s totals, which add up', async ({ page }) => {
-    await page.goto('/finances');
-    const table = page.getByRole('table', { name: 'July to September 2026' });
-    await expect(table).toBeVisible();
-    for (const [row, value] of [
-      ['Opening balance', '$2,543.10'],
-      ['Deposits', '$420.00'],
-      ['Debits', '−$185.75'],
-      ['Closing balance', '$2,777.35'],
-    ] as const) {
-      await expect(table.getByRole('row', { name: new RegExp(`^${row}`) }), row).toContainText(value);
-    }
-    await expect(page.getByRole('main')).toContainText('Accepted by the Executive Committee on Saturday, 19 September 2026');
   });
 });

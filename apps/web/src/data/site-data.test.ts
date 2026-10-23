@@ -37,15 +37,20 @@ describe('the fixture adapter (made-up data until the API lands)', () => {
 describe('rosterView (R2)', () => {
   it('shows a vacant seat as vacant, and an address only once mail to it has been seen to arrive', () => {
     const view = rosterView([
-      { slug: 'president', title: 'President', holder: 'Alex Sample', alias: 'president@nwflorida.us', aliasVerified: true, source: 'submitted' },
-      { slug: 'treasurer', title: 'Treasurer', holder: 'Jordan Example', alias: 'treasurer@nwflorida.us', aliasVerified: false, source: 'submitted' },
-      { slug: 'membership', title: 'Membership Officer', alias: 'membership@nwflorida.us', aliasVerified: true, source: 'submitted' },
+      { slug: 'president', title: 'President', holders: ['Alex Sample'], alias: 'president@nwflorida.us', aliasVerified: true, source: 'submitted' },
+      { slug: 'treasurer', title: 'Treasurer', holders: ['Jordan Example'], alias: 'treasurer@nwflorida.us', aliasVerified: false, source: 'submitted' },
+      { slug: 'membership', title: 'Membership Officer', holders: [], alias: 'membership@nwflorida.us', aliasVerified: true, source: 'submitted' },
     ]);
     expect(view).toEqual([
-      { slug: 'president', title: 'President', holder: 'Alex Sample', email: 'president@nwflorida.us', vacant: false, source: 'submitted' },
-      { slug: 'treasurer', title: 'Treasurer', holder: 'Jordan Example', email: undefined, vacant: false, source: 'submitted' },
-      { slug: 'membership', title: 'Membership Officer', holder: undefined, email: 'membership@nwflorida.us', vacant: true, source: 'submitted' },
+      { slug: 'president', title: 'President', holders: ['Alex Sample'], email: 'president@nwflorida.us', vacant: false, source: 'submitted' },
+      { slug: 'treasurer', title: 'Treasurer', holders: ['Jordan Example'], email: undefined, vacant: false, source: 'submitted' },
+      { slug: 'membership', title: 'Membership Officer', holders: [], email: 'membership@nwflorida.us', vacant: true, source: 'submitted' },
     ]);
+  });
+
+  it('keeps every holder of a seat that has several, in order', () => {
+    const [mal] = rosterView([{ slug: 'member-at-large', title: 'Member at Large', holders: ['Casey Placeholder', 'Jordan Example'], alias: 'mal@nwflorida.us', aliasVerified: true, source: 'submitted' }]);
+    expect(mal).toMatchObject({ holders: ['Casey Placeholder', 'Jordan Example'], vacant: false });
   });
 });
 

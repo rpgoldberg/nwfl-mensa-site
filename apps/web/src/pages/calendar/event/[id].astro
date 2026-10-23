@@ -1,0 +1,74 @@
+---
+// One public event (R4), on request: when and where in words, who to ask by
+// role address, Add to my calendar, and what the labels mean. A members event,
+// or one that is not there, is the 404 page.
+import Address from '../../../components/Address.astro';
+import StatusChip from '../../../components/StatusChip.astro';
+import Unavailable from '../../../components/Unavailable.astro';
+import { liveData } from '../../../data';
+import Base from '../../../layouts/Base.astro';
+import { attempt, markUnavailable } from '../../../lib/api/page';
+import { eventIdFromParam, whenText } from '../../../lib/calendar';
+
+const id = eventIdFromParam(Astro.params['id']);
+const live = liveData();
+if (id === undefined || live === undefined) return Astro.rewrite('/404');
+const loaded = await attempt(() => live.event(id));
+if (loaded.ok && loaded.value === undefined) return Astro.rewrite('/404');
+if (!loaded.ok) markUnavailable(Astro.response);
+const details = loaded.ok ? loaded.value : undefined;
+const event = details?.event;
+const venue = event?.venue;
+const paragraphs = (text: string) => text.split(/\n\s*\n/).map((t) => t.trim()).filter(Boolean);
+---
+<Base path={Astro.url.pathname} title={event?.title ?? 'Event'} description={event ? whenText(event) : 'One event on the calendar.'}>
+  {details && event ? (
+    <>
+      {details.cadence && <p class="eyebrow">{details.cadence}</p>}
+      <h1>{event.title}</h1>
+      <StatusChip status={event.status} note={event.statusNote} />
+      <dl class="facts card" data-source={event.source}>
+        <div><dt>When</dt><dd>{whenText(event)}</dd></div>
+        <div>
+          <dt>Where</dt>
+          <dd>
+            {venue?.kind === 'home' ? <>A member's home in {event.area}. {details.contact ? <>Ask <Address email={details.contact} /> for the address.</> : 'Ask any officer for the address.'}</>
+              : venue?.kind === 'virtual' ? <>Online: {venue.name}</>
+              : venue ? <>{[venue.name, venue.address, venue.city].filter(Boolean).join(', ')}<br /><span class="muted">{event.area}</span></>
+              : <>{event.area}. The place is to be decided.</>}
+          </dd>
+        </div>
+        {venue?.accessibilityNote && <div><dt>Getting in</dt><dd>{venue.accessibilityNote}</dd></div>}
+        {details.contact && venue?.kind !== 'home' && <div><dt>Who to ask</dt><dd><Address class="addr" email={details.contact} /></dd></div>}
+      </dl>
+      <p class="btns">
+        <a class="button" href={`${event.path}.ics`}>Add to my calendar</a>
+        {venue?.url && <a class="hbtn" href={venue.url}>{venue.kind === 'virtual' ? 'Join online' : 'Website or map'}</a>}
+        {event.url && <a class="hbtn" href={event.url}>More about this event</a>}
+      </p>
+      {(event.detail || details.about) && (
+        <section aria-labelledby="about-title">
+          <h2 id="about-title">About {event.title}</h2>
+          {paragraphs(event.detail).map((t) => <p>{t}</p>)}
+          {paragraphs(details.about).map((t) => <p>{t}</p>)}
+        </section>
+      )}
+      <section class="card" aria-labelledby="legend-title">
+        <h2 id="legend-title">What the labels mean</h2>
+        <ul class="legend">
+          <li><span class="chip ok">Scheduled</span> Going ahead as listed.</li>
+          <li><span class="chip warn">Tentative</span> Not confirmed yet. Check again the day before.</li>
+          <li><span class="chip warn">Moved</span> New date or place. The note says where it went.</li>
+          <li><span class="chip stop">Cancelled</span> Not happening. It stays listed so nobody is surprised.</li>
+        </ul>
+      </section>
+      <p><a href="/calendar">See the whole calendar</a></p>
+    </>
+  ) : (
+    <>
+      <h1>Event</h1>
+      <Unavailable what="This event" />
+      <p><a href="/calendar">See the whole calendar</a></p>
+    </>
+  )}
+</Base>

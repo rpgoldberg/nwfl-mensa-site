@@ -62,6 +62,22 @@ test('(4) the CSP on every response: script-src self only, no unsafe-*, object-s
   }
 });
 
+test('(6) with no API, the live pages keep their bundled content: no events, no roster, an empty calendar file', async ({ request }) => {
+  for (const path of ['/', '/calendar', '/officers', '/finances']) {
+    const res = await request.get(path);
+    expect(res.status(), path).toBe(200);
+    const html = await res.text();
+    expect(html, path).not.toMatch(/temporarily unavailable|class="evs"|<table class="month"/);
+  }
+  const feed = await request.get('/calendar.ics');
+  expect(feed.status()).toBe(200);
+  expect(feed.headers()['content-type']).toBe('text/calendar; charset=utf-8');
+  const text = await feed.text();
+  expect(text).toMatch(/^BEGIN:VCALENDAR\r\n/);
+  expect(text).not.toContain('BEGIN:VEVENT');
+  expect((await request.get('/calendar/event/0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20')).status()).toBe(404);
+});
+
 test('the reader still has the header controls, with no Sign in, and the site works', async ({ page }) => {
   await page.goto('/about');
   const banner = page.getByRole('banner');
