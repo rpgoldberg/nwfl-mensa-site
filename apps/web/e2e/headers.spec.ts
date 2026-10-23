@@ -19,7 +19,7 @@ test('every page, prerendered or not, carries the security headers and the anony
     const res = await request.get(path);
     expect(res.status(), path).toBe(200);
     expectSecurityHeaders(res);
-    expect(res.headers()['cache-control'], path).toBe('public, max-age=60');
+    expect(res.headers()['cache-control'], path).toBe('public, max-age=60, stale-while-revalidate=60');
     expect(res.headers()['vary'], path).toBe('Cookie');
   }
 });
@@ -46,7 +46,7 @@ test("a prerendered page differs from the built file only in the reader's html t
   const built = readFileSync('dist/client/about.html', 'utf8');
   const res = await request.get('/about', { headers: { cookie: `${SIZE_COOKIE}=5; ${THEME_COOKIE}=contrast` } });
   expect(await res.text()).toBe(built.replace(/<html[^>]*>/, '<html lang="en" data-size="5" data-theme="contrast">'));
-  expect(res.headers()['cache-control']).toBe('public, max-age=60');
+  expect(res.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
   expect(res.headers()['vary']).toBe('Cookie');
 });
 
@@ -89,11 +89,11 @@ test('the stylesheet is a hashed file, cached for a year, and no page has an inl
   expectSecurityHeaders(css);
 });
 
-test('a missing page is a 404 with the same headers', async ({ request }) => {
+test('a missing page is a 404 with the same headers, never stored', async ({ request }) => {
   const res = await request.get('/no-such-page');
   expect(res.status()).toBe(404);
   expectSecurityHeaders(res);
-  expect(res.headers()['cache-control']).toBe('public, max-age=60');
+  expect(res.headers()['cache-control']).toBe('no-store');
 });
 
 test('the health probe answers ok and is never stored', async ({ request }) => {

@@ -39,7 +39,7 @@ describe('withSitePolicy', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/html');
     expectSecurityHeaders(res);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
     expect(res.headers.get('vary')).toBe('Cookie');
   });
 
@@ -52,7 +52,7 @@ describe('withSitePolicy', () => {
     const res = await fetch(`${base}/nope`);
     expect(res.status).toBe(404);
     expectSecurityHeaders(res);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('no-store');
   });
 
   it('keeps a reason phrase and a flat header array passed to writeHead', async () => {
@@ -265,7 +265,7 @@ describe('prerendered pages', () => {
     expect(body).toBe(html.replace('data-size="1"', 'data-size="4" data-theme="dark"'));
     expect(Number(res.headers.get('content-length'))).toBe(Buffer.byteLength(body));
     expectSecurityHeaders(res);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
     expect(res.headers.get('vary')).toBe('Cookie');
   });
 
@@ -318,14 +318,14 @@ describe('a path the handler would read differently', () => {
       const res = await fetch(`${base}${path}`);
       expect(res.status, path).toBe(400);
       expectSecurityHeaders(res);
-      expect(res.headers.get('cache-control'), path).toBe('public, max-age=60');
+      expect(res.headers.get('cache-control'), path).toBe('no-store');
     }
   });
 
   it('caches for a year only on the raw path: an encoded letter in an asset name is not immutable', async () => {
     const base = await serve((_req, res) => res.end('body{}'));
     const res = await fetch(`${base}/_astro/%42ase.5t8Gl8HW.css`);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
   });
 
   it('finds a prerendered page by its decoded path', async () => {
@@ -386,7 +386,7 @@ describe('old URLs (R16)', () => {
     expect(res.status).toBe(301);
     expect(res.headers.get('location')).toBe('/join');
     expectSecurityHeaders(res);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
   });
 
   it("answers a retired URL with 410 and the site's own gone page", async () => {

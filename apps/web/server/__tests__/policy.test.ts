@@ -82,11 +82,16 @@ describe('hasCookie', () => {
 
 describe('cacheControl (R26)', () => {
   const anon = { path: '/', cookieHeader: undefined, status: 200, setsCookie: false };
+  const PUBLIC = 'public, max-age=60, stale-while-revalidate=60';
 
-  it('lets anyone cache an anonymous page for 60 seconds', () => {
-    expect(cacheControl(anon)).toBe('public, max-age=60');
-    expect(cacheControl({ ...anon, path: '/about', cookieHeader: 'other=1' })).toBe('public, max-age=60');
-    expect(cacheControl({ ...anon, status: 404 })).toBe('public, max-age=60');
+  it('lets anyone cache an anonymous page for 60 seconds, and serve it a minute stale while it fetches a fresh copy', () => {
+    expect(cacheControl(anon)).toBe(PUBLIC);
+    expect(cacheControl({ ...anon, path: '/about', cookieHeader: 'other=1' })).toBe(PUBLIC);
+    expect(cacheControl({ ...anon, path: '/calendar.ics' })).toBe(PUBLIC);
+  });
+
+  it('caches a redirect like a page: it is not an error', () => {
+    for (const status of [301, 302, 303, 307, 308]) expect(cacheControl({ ...anon, status }), String(status)).toBe(PUBLIC);
   });
 
   it('never stores a response to a request that carries the session cookie', () => {
@@ -94,6 +99,7 @@ describe('cacheControl (R26)', () => {
     expect(cacheControl({ ...anon, path: '/_astro/site.abc123.css', cookieHeader: `${SESSION_COOKIE}=abc` })).toBe(
       'private, no-store',
     );
+    expect(cacheControl({ ...anon, status: 503, cookieHeader: `${SESSION_COOKIE}=abc` })).toBe('private, no-store');
   });
 
   it('never stores a response that sets a cookie', () => {
@@ -107,22 +113,21 @@ describe('cacheControl (R26)', () => {
   it('caches only a plain file name under /_astro/ for a year, never an encoded path out of it', () => {
     // The static handler decodes %2f, so /_astro/..%2fabout would be the About page.
     for (const path of ['/_astro/..%2fabout', '/_astro/..%2fabout.html', '/_astro/%2e%2e%2fjoin.html', '/_astro/x/y.css', '/_astro/']) {
-      expect(cacheControl({ ...anon, path }), path).toBe('public, max-age=60');
+      expect(cacheControl({ ...anon, path }), path).toBe(PUBLIC);
     }
     expect(cacheControl({ ...anon, path: '/_astro/Base.5t8Gl8HW.css' })).toBe('public, max-age=31536000, immutable');
   });
 
-  it('does not cache a missing asset for a year', () => {
-    expect(cacheControl({ ...anon, path: '/_astro/gone.css', status: 404 })).toBe('public, max-age=60');
+  it('never stores a missing asset', () => {
+    expect(cacheControl({ ...anon, path: '/_astro/gone.css', status: 404 })).toBe('no-store');
   });
 
   it('never stores the health probe', () => {
     expect(cacheControl({ ...anon, path: '/healthz' })).toBe('no-store');
   });
 
-  it('never stores a server error', () => {
-    expect(cacheControl({ ...anon, status: 500 })).toBe('no-store');
-    expect(cacheControl({ ...anon, status: 503 })).toBe('no-store');
+  it("never stores an error, the reader's or the server's: a page that is back a moment later must not stay missing", () => {
+    for (const status of [400, 403, 404, 410, 413, 500, 502, 503]) expect(cacheControl({ ...anon, status }), String(status)).toBe('no-store');
   });
 });
 

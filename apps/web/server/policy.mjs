@@ -95,16 +95,20 @@ export function isHostOnlyCookie(setCookie) {
  */
 const HASHED_ASSET = /^\/_astro\/[\w.-]+$/;
 
+/** An anonymous page: shared caches keep it a minute, and may serve it a minute stale while they fetch a fresh copy. */
+export const PUBLIC_CACHE = 'public, max-age=60, stale-while-revalidate=60';
+
 /**
- * The Cache-Control for one response. Anonymous pages are public for 60 s; a
+ * The Cache-Control for one response. Anonymous pages are public, briefly; a
  * request with the session cookie, or a response that sets any cookie, is never
- * stored (R26); a server error and the health probe are never stored.
+ * stored (R26); an error, the reader's or the server's, and the health probe
+ * are never stored, so a page that is back a moment later is not kept missing.
  *
  * @param {{ path: string, cookieHeader: string | undefined, status: number, setsCookie: boolean }} r
  */
 export function cacheControl(r) {
   if (r.setsCookie || hasCookie(r.cookieHeader, SESSION_COOKIE)) return 'private, no-store';
-  if (r.status >= 500 || r.path === '/healthz') return 'no-store';
+  if (r.status >= 400 || r.path === '/healthz') return 'no-store';
   if (HASHED_ASSET.test(r.path) && r.status === 200) return 'public, max-age=31536000, immutable';
-  return 'public, max-age=60';
+  return PUBLIC_CACHE;
 }
