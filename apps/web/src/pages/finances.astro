@@ -9,6 +9,7 @@ import Unavailable from '../components/Unavailable.astro';
 import { liveData, siteData } from '../data';
 import { formatDate, formatMoney } from '../data/format';
 import { balanced } from '../data/site-data';
+import AboutNav from '../components/AboutNav.astro';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
 import { visibleContent } from '../lib/content';
@@ -22,6 +23,7 @@ const periods = live ? [] : visibleContent(await siteData.finances(), { publicOn
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
+  <AboutNav path={p.path} />
   <p class="lead">{p.description} The same figures appear in the newsletter and in the Executive Committee's minutes.</p>
   {!live && siteData.isSample && <SampleNotice />}
   {PUBLIC_ONLY ? <PublicOnlyNote what="The treasurer's summary" /> : summaries ? (
@@ -36,7 +38,7 @@ const periods = live ? [] : visibleContent(await siteData.finances(), { publicOn
         </section>
       ))
   ) : periods.map((period) => (
-    <section class="finance" data-source={period.source}>
+    <section class="finance card" data-source={period.source}>
       <div class="table-wrap" role="region" aria-label={`Figures for ${period.label}`} tabindex="0">
       {/* Explicit roles: on a narrow phone the rows stack (site.css), and display: block can drop a table's.
           jsx-a11y counts a td as interactive (a grid cell); here it is a plain cell. */}

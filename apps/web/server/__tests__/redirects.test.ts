@@ -1,16 +1,45 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { sectionFor } from '../../src/lib/site';
-import { compileRedirects, resolveOldUrl } from '../redirects.mjs';
+import { compileRedirects, renamedPath, resolveOldUrl } from '../redirects.mjs';
 
 /** A small table in the real file's shape. */
 const tables = compileRedirects({
-  moved: { '/calendar': '/calendar', '/join-mensa': '/join', '/excom-meeting-minutes-11-nov-2022': '/minutes#2022-11-11' },
+  moved: { '/officers': '/officers', '/join-mensa': '/join', '/excom-meeting-minutes-11-nov-2022': '/minutes#2022-11-11' },
   interim: { '/photos': '/' },
   gone: ['/2015-mind-games'],
   uploads: { '/uploads/3/4/4/5/34456428/march_2023_minutes.pdf': '/minutes#2023-03-12' },
   goneUploads: ['/uploads/3/4/4/5/34456428/membership_report_apr_2024.pdf'],
   goneDirs: ['/w_api/', '/images/spider/'],
+});
+
+describe('renamedPath (W-LOOK: the Calendar is Events, the Newsletter is News)', () => {
+  it('moves the calendar and its event pages under /events, and their calendar files with them', () => {
+    expect(renamedPath('/calendar')).toBe('/events');
+    expect(renamedPath('/calendar/')).toBe('/events');
+    expect(renamedPath('/calendar/event/1b4e28ba-2fa1-11d2-883f-0016d3cca427')).toBe('/events/1b4e28ba-2fa1-11d2-883f-0016d3cca427');
+    expect(renamedPath('/calendar/event/1b4e28ba-2fa1-11d2-883f-0016d3cca427_2026-11-04.ics')).toBe('/events/1b4e28ba-2fa1-11d2-883f-0016d3cca427_2026-11-04.ics');
+  });
+
+  it('moves the newsletter, and anything under it, to /news', () => {
+    expect(renamedPath('/newsletter')).toBe('/news');
+    expect(renamedPath('/newsletter/')).toBe('/news');
+    expect(renamedPath('/newsletter/2014-03')).toBe('/news/2014-03');
+  });
+
+  it('keeps /calendar.ics where it is: phones subscribed to it must keep their feed', () => {
+    expect(renamedPath('/calendar.ics')).toBeUndefined();
+  });
+
+  it('leaves every other path alone, the new ones and look-alikes included', () => {
+    for (const path of ['/', '/events', '/events.ics', '/news', '/calendars', '/calendar/event', '/calendar/event/', '/calendar/other', '/newsletters', '/Calendar', '/about/calendar']) {
+      expect(renamedPath(path), path).toBeUndefined();
+    }
+  });
+
+  it('only ever names a page of the new site', () => {
+    for (const path of ['/calendar', '/newsletter']) expect(sectionFor(renamedPath(path)!), path).toBeDefined();
+  });
 });
 
 describe('resolveOldUrl (R16)', () => {
@@ -25,8 +54,8 @@ describe('resolveOldUrl (R16)', () => {
   });
 
   it('never redirects a new page to itself', () => {
-    expect(resolveOldUrl('/calendar', tables)).toBeUndefined();
-    expect(resolveOldUrl('/calendar.html', tables)).toEqual({ status: 301, location: '/calendar' });
+    expect(resolveOldUrl('/officers', tables)).toBeUndefined();
+    expect(resolveOldUrl('/officers.html', tables)).toEqual({ status: 301, location: '/officers' });
   });
 
   it('sends a page whose new home does not exist yet with a temporary redirect', () => {

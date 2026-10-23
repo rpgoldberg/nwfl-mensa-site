@@ -2,13 +2,14 @@
 // One public event (R4), on request: when and where in words, who to ask by
 // role address, Add to my calendar, and what the labels mean. A members event,
 // or one that is not there, is the 404 page.
-import Address from '../../../components/Address.astro';
-import StatusChip from '../../../components/StatusChip.astro';
-import Unavailable from '../../../components/Unavailable.astro';
-import { liveData } from '../../../data';
-import Base from '../../../layouts/Base.astro';
-import { attempt, markUnavailable } from '../../../lib/api/page';
-import { eventIdFromParam, whenText } from '../../../lib/calendar';
+import Address from '../../components/Address.astro';
+import Icon from '../../components/Icon.astro';
+import StatusChip from '../../components/StatusChip.astro';
+import Unavailable from '../../components/Unavailable.astro';
+import { liveData } from '../../data';
+import Base from '../../layouts/Base.astro';
+import { attempt, markUnavailable } from '../../lib/api/page';
+import { eventIdFromParam, whenText } from '../../lib/calendar';
 
 const id = eventIdFromParam(Astro.params['id']);
 const live = liveData();
@@ -42,9 +43,9 @@ const paragraphs = (text: string) => text.split(/\n\s*\n/).map((t) => t.trim()).
         {details.contact && venue?.kind !== 'home' && <div><dt>Who to ask</dt><dd><Address class="addr" email={details.contact} /></dd></div>}
       </dl>
       <p class="btns">
-        <a class="button" href={`${event.path}.ics`}>Add to my calendar</a>
-        {venue?.url && <a class="hbtn" href={venue.url}>{venue.kind === 'virtual' ? 'Join online' : 'Website or map'}</a>}
-        {event.url && <a class="hbtn" href={event.url}>More about this event</a>}
+        <a class="button" href={`${event.path}.ics`}><Icon name="add-calendar" />Add to my calendar</a>
+        {venue?.url && <a class="button button--secondary" href={venue.url}><Icon name={venue.kind === 'virtual' ? 'external' : 'pin'} />{venue.kind === 'virtual' ? 'Join online' : 'Website or map'}</a>}
+        {event.url && <a class="button button--secondary" href={event.url}><Icon name="external" />More about this event</a>}
       </p>
       {(event.detail || details.about) && (
         <section aria-labelledby="about-title">
@@ -62,13 +63,13 @@ const paragraphs = (text: string) => text.split(/\n\s*\n/).map((t) => t.trim()).
           <li><span class="chip stop">Cancelled</span> Not happening. It stays listed so nobody is surprised.</li>
         </ul>
       </section>
-      <p><a href="/calendar">See the whole calendar</a></p>
+      <p><a href="/events">See all events</a></p>
     </>
   ) : (
     <>
       <h1>Event</h1>
       <Unavailable what="This event" />
-      <p><a href="/calendar">See the whole calendar</a></p>
+      <p><a href="/events">See all events</a></p>
     </>
   )}
 </Base>

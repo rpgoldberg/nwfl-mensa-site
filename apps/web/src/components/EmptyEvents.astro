@@ -1,0 +1,17 @@
+---
+// No public events in the range shown (W-LOOK): plain words, and who to ask.
+// The President's address only once the API says mail to it arrives (R2);
+// otherwise any officer, on the Officers page.
+import Address from './Address.astro';
+
+interface Props {
+  /** "for the next seven days", "for March 2027"; nothing for the whole calendar. */
+  when?: string;
+  /** The President's role address, verified. */
+  president?: string | undefined;
+}
+const { when, president } = Astro.props;
+---
+<p class="card empty" role="note">
+  <span>No events are listed{when ? ` ${when}` : ''} yet. Check back soon, or ask {president ? <Address email={president} /> : <>any of <a href="/officers">our officers</a></>}.</span>
+</p>

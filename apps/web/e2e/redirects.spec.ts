@@ -23,7 +23,9 @@ test('an old page in each of its three forms goes to its new page', async ({ req
   expect(go(await request.get('/officers-and-appointees.html', { maxRedirects: 0 }))).toEqual([301, '/officers']);
   expect(go(await request.get('/history.html', { maxRedirects: 0 }))).toEqual([301, '/about']);
   expect(go(await request.get('/policy-documents.html', { maxRedirects: 0 }))).toEqual([301, '/governance']);
-  expect(go(await request.get('/pensa-mensa-current.html', { maxRedirects: 0 }))).toEqual([301, '/newsletter']);
+  expect(go(await request.get('/pensa-mensa-current.html', { maxRedirects: 0 }))).toEqual([301, '/news']);
+  // Straight to the new page, never through /calendar (one hop, not two).
+  expect(go(await request.get('/calendar.html', { maxRedirects: 0 }))).toEqual([301, '/events']);
 });
 
 test('a minutes page goes to its meeting on the minutes page', async ({ request }) => {
@@ -72,7 +74,23 @@ test('a kept old file goes to where its content now lives', async ({ request }) 
 });
 
 test('a new page that shares an old slug is the new page, not a loop', async ({ request }) => {
-  for (const path of ['/calendar', '/finances']) expect((await request.get(path, { maxRedirects: 0 })).status(), path).toBe(200);
+  for (const path of ['/events', '/finances']) expect((await request.get(path, { maxRedirects: 0 })).status(), path).toBe(200);
+});
+
+// W-LOOK: the nav says Events and News, and the pages moved with the words.
+test('/calendar and /newsletter answer 301 to /events and /news, the query kept; /calendar.ics stays put', async ({ request }) => {
+  for (const [from, to] of [
+    ['/calendar', '/events'],
+    ['/calendar?month=2026-11', '/events?month=2026-11'],
+    ['/newsletter', '/news'],
+  ] as const) {
+    const res = await request.get(from, { maxRedirects: 0 });
+    expect(go(res), from).toEqual([301, to]);
+    expectPolicy(res);
+  }
+  const feed = await request.get('/calendar.ics', { maxRedirects: 0 });
+  expect(feed.status()).toBe(200);
+  expect(feed.headers()['content-type']).toBe('text/calendar; charset=utf-8');
 });
 
 test('robots.txt keeps this host out of search engines, and indexes the canonical host', async ({ request }) => {
@@ -94,7 +112,8 @@ test('sitemap.xml lists the public pages on the canonical host', async ({ reques
   const res = await request.get('/sitemap.xml');
   expect(res.headers()['content-type']).toMatch(/^application\/xml/);
   const urls = [...(await res.text()).matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
-  expect(urls).toContain('https://nwflorida.us/calendar');
+  expect(urls).toContain('https://nwflorida.us/events');
+  expect(urls).not.toContain('https://nwflorida.us/calendar');
   expect(urls).not.toContain('https://nwflorida.us/sign-in');
 });
 

@@ -21,11 +21,11 @@ test.describe('About', () => {
   });
 });
 
-test('Join points to American Mensa, the calendar and the officers', async ({ page }) => {
+test('Join points to American Mensa, the events and the officers', async ({ page }) => {
   await page.goto('/join');
   const main = page.getByRole('main');
   await expect(main.locator('a[href="https://www.us.mensa.org/join/"]')).toHaveCount(1);
-  await expect(main.locator('a[href="/calendar"]')).toHaveCount(1);
+  await expect(main.locator('a[href="/events"]')).toHaveCount(1);
   await expect(main.locator('a[href="/officers"]')).toHaveCount(1);
   await expect(main).toContainText('top 2 percent');
 });
@@ -36,20 +36,33 @@ test('Governance covers the charter, the bylaws and elections, and links out to 
   for (const name of ['Our charter', 'Our bylaws', 'Elections']) await expect(main.getByRole('heading', { level: 2, name }), name).toBeVisible();
   await expect(main.locator('a[href="https://www.us.mensa.org/lead/policydocuments/bylaws/"]')).toHaveCount(1);
   await expect(main.locator('a[href="https://www.mensa.org/about-us/"]')).toHaveCount(1);
-  await expect(main.locator('a[href="/minutes"]')).toHaveCount(1);
+  await expect(main.locator('.prose a[href="/minutes"]')).toHaveCount(1);
+});
+
+// The design draft's About subnav (W-LOOK), on each page it names, the current one marked.
+test('About, Officers, Governance, Minutes and Finances share the About subnav', async ({ page }) => {
+  for (const path of ['/about', '/officers', '/governance', '/minutes', '/finances']) {
+    await page.goto(path);
+    const subnav = page.getByRole('navigation', { name: 'About the group' });
+    await expect(subnav.getByRole('link'), path).toHaveText(['Who we are', 'Officers', 'Governance', 'Minutes', 'Finances']);
+    await expect(subnav.locator('[aria-current="page"]'), path).toHaveAttribute('href', path);
+  }
+  await page.goto('/join');
+  await expect(page.getByRole('navigation', { name: 'About the group' })).toHaveCount(0);
 });
 
 // Officers, Finances, Home and the calendar read the API now: live.spec.ts.
 test.describe('pages still filled from the bundled sample data', () => {
-  for (const path of ['/newsletter', '/minutes']) {
+  for (const path of ['/news', '/minutes']) {
     test(`${path} says its entries are samples`, async ({ page }) => {
       await page.goto(path);
       await expect(page.getByRole('note').filter({ hasText: 'Sample entries' })).toBeVisible();
     });
   }
 
-  test('Newsletter shows the current issue, then past issues by year, missing ones honestly', async ({ page }) => {
-    await page.goto('/newsletter');
+  test('News, the newsletter, shows the current issue, then past issues by year, missing ones honestly', async ({ page }) => {
+    await page.goto('/news');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('News');
     await expect(page.getByRole('heading', { level: 2, name: 'October and November 2026' })).toBeVisible();
     await expect(page.getByRole('heading', { level: 2, name: 'Past issues' })).toBeVisible();
     await expect(page.getByRole('heading', { level: 3, name: '2026' })).toBeVisible();

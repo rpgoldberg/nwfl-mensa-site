@@ -148,8 +148,8 @@ describe('agendaDays', () => {
 
 describe('event paths', () => {
   it('turns an API id into a page path and back: a stored event by its id, a series date by series and date', () => {
-    expect(eventPath(STORED)).toBe(`/calendar/event/${STORED}`);
-    expect(eventPath(`${SERIES}:2026-11-04`)).toBe(`/calendar/event/${SERIES}_2026-11-04`);
+    expect(eventPath(STORED)).toBe(`/events/${STORED}`);
+    expect(eventPath(`${SERIES}:2026-11-04`)).toBe(`/events/${SERIES}_2026-11-04`);
     expect(eventIdFromParam(STORED)).toBe(STORED);
     expect(eventIdFromParam(`${SERIES}_2026-11-04`)).toBe(`${SERIES}:2026-11-04`);
   });
@@ -171,8 +171,8 @@ describe('toIcsEvent', () => {
       end: { date: '2026-11-04', time: '13:00' },
       summary: 'Wednesday Lunchers',
       location: 'Sample Bistro, 100 Example Way, Destin',
-      description: `At the long table.\nMore: https://example.org/menu\nOn our calendar: ${origin}/calendar/event/${SERIES}_2026-11-04`,
-      url: `${origin}/calendar/event/${SERIES}_2026-11-04`,
+      description: `At the long table.\nMore: https://example.org/menu\nOn our calendar: ${origin}/events/${SERIES}_2026-11-04`,
+      url: `${origin}/events/${SERIES}_2026-11-04`,
       status: 'CONFIRMED',
     });
   });

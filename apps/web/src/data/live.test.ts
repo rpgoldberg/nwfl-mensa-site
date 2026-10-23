@@ -111,7 +111,7 @@ describe('liveData.events', () => {
     const [event] = await liveData(reads({ listOccurrences: () => Promise.resolve([occurrence({ detail: 'At the back', url: 'https://example.org/menu' })]) })).events('2026-11-01', '2026-11-30');
     expect(event).toEqual({
       id: `${SERIES}:2026-11-04`,
-      path: `/calendar/event/${SERIES}_2026-11-04`,
+      path: `/events/${SERIES}_2026-11-04`,
       title: 'Wednesday Lunchers',
       date: '2026-11-04',
       start: '11:30',

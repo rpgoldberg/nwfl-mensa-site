@@ -1,17 +1,18 @@
 /*
  * Layout for the Northwest Florida Mensa site, after the design draft
- * (design/mensa-design.html). Every colour and size comes from tokens.css (the
- * design's file, copied verbatim) except --sand, which the draft defines beside
- * it for the header stripe. Sizes are in rem, so the reader's text size grows
- * the whole page, targets included.
+ * (design/mensa-design.html). Every colour comes from tokens.css except --sand,
+ * which the draft defines beside it for the header stripe. The content is in
+ * rem, so the reader's text size grows it, targets included; the chrome is in
+ * px and does not grow (W-LOOK).
  */
 
 /* The stripe's second colour, per theme, in the same cascade order as tokens.css. */
 :root { --sand: #e9dcc0; }
 @media (prefers-color-scheme: dark) { html:not([data-theme]) { --sand: #5a4d33; } }
 html[data-theme="dark"] { --sand: #5a4d33; }
-@media (prefers-contrast: more) { html:not([data-theme]) { --sand: #ffffff; } }
-html[data-theme="contrast"] { --sand: #ffffff; }
+html[data-theme="contrast-yellow"] { --sand: #00205b; }
+@media (prefers-contrast: more) { html:not([data-theme]) { --sand: #c9a227; } }
+html[data-theme="contrast-white"] { --sand: #c9a227; }
 
 *, *::before, *::after { box-sizing: border-box; }
 
@@ -63,41 +64,54 @@ h3 { font-size: min(var(--fs-h3), 9vw); }
 }
 .skip-link:focus { transform: none; }
 
-/* Header: the site name as text (no logo until its use is confirmed), the
-   wide-screen nav, then Aa, Help and Sign in; the teal-and-sand stripe below. */
-.site-header { background: var(--surface); }
+/* The chrome (W-LOOK): the header, the breadcrumbs, the Aa panel, the reading
+   bar and the bottom bar are in px and stay one row, so they never grow with
+   the reader's size; only the content does. Every target is 48 px at least. */
+
+/* Header: the NWFL monogram and the site name as text, the wide-screen nav,
+   then Aa and Sign in; the teal-and-sand stripe below. */
+.site-header { background: var(--surface); font-size: 16px; line-height: 1.25; }
 .site-header__bar {
   display: flex;
+  /* A signed-in officer's name, Officer area and Sign out may take a second
+     row on a phone; a reader who is not signed in always gets one row. */
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2) var(--space-4);
-  max-width: 72rem;
+  gap: 8px;
+  max-width: 1152px;
+  min-height: 64px;
   margin: 0 auto;
-  padding: var(--space-2) var(--space-4);
+  padding: 8px 12px;
 }
 .wordmark {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-height: var(--target);
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  margin-right: auto;
   font-family: var(--font-head);
   line-height: 1.05;
   color: var(--ink);
   text-decoration: none;
 }
-.wordmark__place { font-size: var(--fs-small); font-weight: 500; color: var(--muted); }
-.wordmark__name { font-size: 1.6rem; font-weight: 600; }
+.monogram { display: block; width: 40px; height: 40px; flex: none; border-radius: 8px; }
+.wordmark__text { display: flex; flex-direction: column; }
+.wordmark__place { font-size: 13px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.wordmark__name { font-size: 21px; font-weight: 600; }
+/* Where the monogram, the name, Aa and Sign in would not fit one row, the
+   monogram (decoration only) gives way. */
+@media (max-width: 359.98px) { .monogram { display: none; } }
 .header-tools {
-  margin-left: auto;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  justify-content: flex-end;
+  gap: 8px;
 }
 .hbtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.375rem;
+  gap: 6px;
   min-height: var(--target);
   min-width: var(--target);
   padding: 0 var(--space-3);
@@ -111,20 +125,22 @@ h3 { font-size: min(var(--fs-h3), 9vw); }
 }
 .hbtn svg { width: 1.5rem; height: 1.5rem; flex: none; }
 button.hbtn { cursor: pointer; }
+.site-header .hbtn { min-height: 48px; min-width: 48px; padding: 0 12px; border-radius: 8px; font-size: 16px; white-space: nowrap; }
+.site-header .hbtn svg { width: 22px; height: 22px; }
 /* The account area: Sign in, or the reader's name, Officer area and Sign out. */
-.account { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.account { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .account:empty { display: none; }
 .account .who {
   display: inline-flex;
   align-items: center;
-  min-height: var(--target);
-  padding: 0 var(--space-2);
+  min-height: 48px;
+  padding: 0 8px;
   font-weight: 700;
 }
 .sign-out { margin: 0; }
 .hbtn--primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .horizon {
-  height: 0.375rem;
+  height: 6px;
   background: linear-gradient(90deg, var(--accent) 0 70%, var(--sand) 70% 100%);
 }
 
@@ -146,71 +162,212 @@ button.hbtn { cursor: pointer; }
 .in-app-hint b:first-child { display: block; }
 .button[hidden], .hbtn[hidden] { display: none; }
 
-/* The Aa panel: shown while it is the link target, so it opens with no script. */
+/* The Aa panel: shown while it is the link target, so it opens with no script.
+   Fixed in px, but for the size row, the note and the notch numbers, which
+   grow with the size chosen, a live preview of it. */
 .reader-panel {
   display: none;
   width: 100%;
-  max-width: 72rem;
+  max-width: 1152px;
   margin: 0 auto;
-  padding: var(--space-4);
+  padding: 16px;
+  font-size: 16px;
+  line-height: 1.5;
   /* Arriving at the panel keeps the header in view. */
   scroll-margin-top: 100vh;
 }
 .reader-panel:target {
   display: grid;
-  gap: var(--space-4);
+  gap: 16px;
   justify-items: start;
   background: var(--surface);
   border-bottom: var(--border) solid var(--line);
 }
-.reader-panel h2 { margin: 0; font-size: var(--fs-h3); }
-.reader-panel p { margin: 0; max-width: var(--measure); }
+.reader-panel h2 { margin: 0; font-size: 22px; }
+.reader-panel p { margin: 0; max-width: 40em; }
+.reader-panel button, .reader-panel .button { font-size: 16px; min-height: 48px; }
 
 /* The controls in the panel. Which size and theme are current comes from the
    <html> attributes, so the same markup is right on a prerendered page. */
-.reader-form { display: grid; gap: var(--space-4); width: 100%; max-width: 30rem; }
+.reader-form { display: grid; gap: 16px; width: 100%; max-width: 480px; }
 .reader-group {
   display: grid;
-  gap: var(--space-3);
-  /* A fieldset is never narrower than its content by default; at 200 % on the
-     narrowest phone that would push the page sideways. */
+  gap: 12px;
+  /* A fieldset is never narrower than its content by default; on the narrowest
+     phone that would push the page sideways. */
   min-width: 0;
   margin: 0;
-  padding: var(--space-3) var(--space-4) var(--space-4);
+  padding: 10px 12px 14px;
   border: var(--border) solid var(--line-soft);
   border-radius: var(--radius);
 }
-.reader-group legend { padding: 0 var(--space-2); font-weight: 700; }
-.sizes { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-.size-btn { font-family: var(--font-head); font-size: var(--fs-body); cursor: pointer; }
-.size-steps { display: flex; flex: 1 1 6rem; gap: var(--space-1); }
-.size-step {
-  flex: 1;
-  height: 0.875rem;
-  border: var(--border) solid var(--line);
-  border-radius: 0.4375rem;
-}
-html[data-size="1"] .size-step:nth-child(-n+1),
-html[data-size="2"] .size-step:nth-child(-n+2),
-html[data-size="3"] .size-step:nth-child(-n+3),
-html[data-size="4"] .size-step:nth-child(-n+4),
-html[data-size="5"] .size-step:nth-child(-n+5) { background: var(--accent); border-color: var(--accent); }
-.size-now [data-for-size] { display: none; }
-html[data-size="1"] .size-now [data-for-size="1"],
-html[data-size="2"] .size-now [data-for-size="2"],
-html[data-size="3"] .size-now [data-for-size="3"],
-html[data-size="4"] .size-now [data-for-size="4"],
-html[data-size="5"] .size-now [data-for-size="5"] { display: inline; }
+/* The size group's label sits on its border, as the theme fieldset's legend does. */
+.reader-group legend, .reader-panel .group-label { padding: 0 6px; font-weight: 700; }
+.reader-panel .group-label { justify-self: start; margin: -24px 0 0; background: var(--surface); line-height: 1.5; }
+.reader-group.sz { margin-top: 12px; }
 
-.theme-options { display: grid; gap: var(--space-2); }
+/* Text size: A−, the size in percent and A+ on one row, capped by the panel's
+   width (cqi) so the row never wraps, and A− and A+ never under 48 px. */
+.sz-row { container: sz / inline-size; display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* display alone, at low specificity: the disabled twins (below) stay hidden until they are needed. */
+.sz-btn { display: inline-flex; }
+.reader-panel .sz-btn {
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: max(48px, min(3.5rem, 19cqi));
+  min-height: max(48px, min(3.5rem, 19cqi));
+  padding: 0;
+  border: var(--border) solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: min(1.375rem, 8cqi);
+  cursor: pointer;
+}
+.sz-now {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: min(1.875rem, 13cqi);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.reader-panel .sz-note { color: var(--muted); font-size: 1rem; line-height: 1.5; }
+.sz-now [data-for-size] { display: none; }
+html[data-size="75"] .sz-now [data-for-size="75"],
+html[data-size="80"] .sz-now [data-for-size="80"],
+html[data-size="90"] .sz-now [data-for-size="90"],
+html[data-size="100"] .sz-now [data-for-size="100"],
+html[data-size="115"] .sz-now [data-for-size="115"],
+html[data-size="140"] .sz-now [data-for-size="140"],
+html[data-size="175"] .sz-now [data-for-size="175"] { display: inline; }
+
+/* The slider: seven notches end to end, a 36 px thumb, ticks under the thumb's
+   centres. The thumb travels 18 px in from each end, so the ticks' box is
+   inset by as much, and tick k sits at k/6 of it. */
+.sl { padding: 4px 0 0; }
+.sl-input {
+  display: block;
+  width: 100%;
+  height: 48px;
+  min-height: 48px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  --fill: 50%;
+}
+.sl-input::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--accent) 0 var(--fill), var(--line) var(--fill) 100%);
+}
+.sl-input::-moz-range-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--accent) 0 var(--fill), var(--line) var(--fill) 100%);
+}
+.sl-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  margin-top: -13px;
+  border: 4px solid var(--accent);
+  border-radius: 50%;
+  background: var(--surface);
+}
+.sl-input::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  border: 4px solid var(--accent);
+  border-radius: 50%;
+  background: var(--surface);
+}
+html[data-size="75"] .sl-input { --fill: 0%; }
+html[data-size="80"] .sl-input { --fill: 16.667%; }
+html[data-size="90"] .sl-input { --fill: 33.333%; }
+html[data-size="115"] .sl-input { --fill: 66.667%; }
+html[data-size="140"] .sl-input { --fill: 83.333%; }
+html[data-size="175"] .sl-input { --fill: 100%; }
+
+/* The notch numbers grow with the size. All seven ticks always show, and the
+   first and last numbers; the middle five only where they fit with 0.8em
+   between neighbours, in symmetric steps: 75/175, then 75/100/175, then
+   75/90/115/175, then all seven. The breakpoints are in the numbers' own em
+   (a container query reads em from its container). A number is 1.8em wide
+   at most (measured: "100" in Atkinson Hyperlegible bold), so seven need the
+   box to be 6 x (1.8 + 0.8) = 15.6em, four 3 x 2.6 = 7.8em, three 2 x 2.6 = 5.2em. */
+.sl-ticks {
+  container: ticks / inline-size;
+  position: relative;
+  height: calc(10px + 1.5em);
+  margin: 0 18px;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+.tick {
+  position: absolute;
+  top: 0;
+  padding-top: 10px;
+  transform: translateX(-50%);
+  color: var(--muted);
+  white-space: nowrap;
+  visibility: hidden;
+}
+.tick::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 2px;
+  height: 8px;
+  transform: translateX(-50%);
+  background: var(--line);
+  visibility: visible;
+}
+.tick:nth-child(1) { left: 0; }
+.tick:nth-child(2) { left: 16.667%; }
+.tick:nth-child(3) { left: 33.333%; }
+.tick:nth-child(4) { left: 50%; }
+.tick:nth-child(5) { left: 66.667%; }
+.tick:nth-child(6) { left: 83.333%; }
+.tick:nth-child(7) { left: 100%; }
+.tick:first-child, .tick:last-child { visibility: visible; }
+@container ticks (width >= 5.2em) { .tick:nth-child(4) { visibility: visible; } }
+@container ticks (width >= 7.8em) {
+  .tick:nth-child(4) { visibility: hidden; }
+  .tick:nth-child(3), .tick:nth-child(5) { visibility: visible; }
+}
+@container ticks (width >= 15.6em) { .tick:nth-child(n) { visibility: visible; } }
+html[data-size="75"] .tick[data-for-size="75"],
+html[data-size="80"] .tick[data-for-size="80"],
+html[data-size="90"] .tick[data-for-size="90"],
+html[data-size="100"] .tick[data-for-size="100"],
+html[data-size="115"] .tick[data-for-size="115"],
+html[data-size="140"] .tick[data-for-size="140"],
+html[data-size="175"] .tick[data-for-size="175"] { color: var(--accent); font-weight: 700; }
+.reader-panel .sz-set { justify-self: start; }
+.sz-set[hidden] { display: none; }
+
+.theme-options { display: grid; gap: 8px; }
 .theme-btn {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2);
-  min-height: var(--target);
-  padding: var(--space-2) var(--space-4);
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 16px;
   border: var(--border) solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -221,92 +378,92 @@ html[data-size="5"] .size-now [data-for-size="5"] { display: inline; }
 }
 .chosen {
   display: none;
-  padding: 0 var(--space-3);
+  padding: 0 12px;
   border-radius: 999px;
   background: var(--accent);
   color: var(--on-accent);
-  font-size: var(--fs-small);
+  font-size: 16px;
 }
 html:not([data-theme]) .theme-btn[value="system"],
 html[data-theme="light"] .theme-btn[value="light"],
 html[data-theme="dark"] .theme-btn[value="dark"],
-html[data-theme="contrast"] .theme-btn[value="contrast"] {
+html[data-theme="contrast-yellow"] .theme-btn[value="contrast-yellow"],
+html[data-theme="contrast-white"] .theme-btn[value="contrast-white"] {
   border-color: var(--accent);
   background: var(--accent-soft);
-  box-shadow: inset 0.375rem 0 0 var(--accent);
+  box-shadow: inset 6px 0 0 var(--accent);
 }
 html:not([data-theme]) .theme-btn[value="system"] .chosen,
 html[data-theme="light"] .theme-btn[value="light"] .chosen,
 html[data-theme="dark"] .theme-btn[value="dark"] .chosen,
-html[data-theme="contrast"] .theme-btn[value="contrast"] .chosen { display: inline-flex; }
+html[data-theme="contrast-yellow"] .theme-btn[value="contrast-yellow"] .chosen,
+html[data-theme="contrast-white"] .theme-btn[value="contrast-white"] .chosen { display: inline-flex; }
 
 /* The reading bar: the same controls, one press each, at the foot of the screen. */
 .reading-bar {
   display: flex;
-  flex-wrap: wrap;
   justify-content: space-around;
-  gap: var(--space-1);
-  /* Tight sides, so the three stay in one row at 200 % on a 412 px phone. */
-  padding: var(--space-1);
+  gap: 4px;
+  padding: 4px;
   background: var(--surface);
   border-top: var(--border) solid var(--line);
+  font-size: 14px;
 }
 .rb {
   display: flex;
-  /* As wide as its word at least; the bar wraps rather than break one. */
-  flex: 1 0 auto;
+  flex: 1 1 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 3.6rem;
-  max-width: 12rem;
+  min-height: 58px;
+  max-width: 192px;
   white-space: nowrap;
-  padding: 0.125rem var(--space-1);
+  padding: 2px 4px;
   border: 0;
   border-radius: var(--radius);
   background: none;
   color: var(--ink);
   font-weight: 700;
-  font-size: var(--fs-small);
+  font-size: 14px;
   line-height: 1.2;
   cursor: pointer;
 }
-.rb svg { width: 1.5rem; height: 1.5rem; }
-.rb-big { font-family: var(--font-head); font-size: 1.4rem; line-height: 1.1; }
+.rb svg { width: 24px; height: 24px; }
+.rb-big { font-family: var(--font-head); font-size: 22px; line-height: 1.1; }
 .reading-bar [data-for-theme] { display: none; }
 html:not([data-theme]) .reading-bar [data-for-theme="system"],
 html[data-theme="light"] .reading-bar [data-for-theme="light"],
 html[data-theme="dark"] .reading-bar [data-for-theme="dark"],
-html[data-theme="contrast"] .reading-bar [data-for-theme="contrast"] { display: inline; }
+html[data-theme="contrast-yellow"] .reading-bar [data-for-theme="contrast-yellow"],
+html[data-theme="contrast-white"] .reading-bar [data-for-theme="contrast-white"] { display: inline; }
 
-/* Primary nav: the same five links, words at the top on wide screens, icons
-   and words in a bottom bar on phones. */
+/* Primary nav: the same four links, words at the top on wide screens, icons
+   and words in a bottom bar on phones. Fixed in px: one row of four, always. */
 .nav-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .nav-link {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.125rem;
-  min-height: var(--target);
+  gap: 2px;
+  min-height: 48px;
   height: 100%;
-  padding: var(--space-2) var(--space-1);
+  padding: 4px 2px;
   color: var(--ink);
   font-weight: 700;
   text-align: center;
   text-decoration: none;
 }
-.nav-link svg { width: 1.5rem; height: 1.5rem; flex: none; }
+.nav-link svg { width: 24px; height: 24px; flex: none; }
 .nav-label {
-  font-size: var(--fs-small);
+  font-size: 14px;
   line-height: 1.2;
-  /* A label is never broken inside the word; the bar takes more rows instead. */
   white-space: nowrap;
 }
 /* The current place: ink on the soft tint (13:1) with an accent bar. The draft's
@@ -319,76 +476,49 @@ html[data-theme="contrast"] .reading-bar [data-for-theme="contrast"] { display: 
   background: var(--surface);
   border-top: var(--border) solid var(--line);
 }
-/* Five across only where five whole labels fit; otherwise three and two, and at
-   the largest sizes on the narrowest phones two or one across, so no word is
-   ever broken and no type shrinks. A column needs the widest label
-   ("Newsletter", 5.2rem in Atkinson Hyperlegible bold) plus its padding and a
-   margin: 6rem. The queries are in rem of the page, so they follow the
-   reader's text size. */
-.bottom-nav { container: bottom-nav / inline-size; }
-.bottom-nav .nav-list { grid-template-columns: minmax(0, 1fr); }
-@container bottom-nav (min-width: 12rem) { .bottom-nav .nav-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@container bottom-nav (min-width: 18rem) { .bottom-nav .nav-list { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@container bottom-nav (min-width: 30rem) { .bottom-nav .nav-list { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 .bottom-nav .nav-link {
-  min-height: 4.25rem;
-  border-top: 0.25rem solid transparent;
+  min-height: 58px;
+  border-top: 4px solid transparent;
   margin-top: calc(-1 * var(--border));
 }
 .bottom-nav .nav-link[aria-current="page"] { border-top-color: var(--accent); }
 
-/* The dock holds the reading bar and the phone's bottom bar. At the two
-   smaller text sizes on a phone both stay at the foot of the screen while the
-   page scrolls. Otherwise (a wide screen, a larger size, a short landscape
-   screen) the dock dissolves, the reading bar alone stays at the foot, and the
-   bottom bar sits after the content so it never takes over the screen. Sticky,
-   not fixed: each keeps its own space, so neither covers the end of the page. */
+/* The dock holds the reading bar and the phone's bottom bar, at the foot of
+   the screen while the page scrolls (both are fixed in px, so they never take
+   over the screen). On a reading page only the reading bar stays there, and
+   the bottom bar sits at the end of the page. On a short screen (landscape)
+   neither does. Sticky, not fixed: each keeps its own space, so neither
+   covers the end of the page. */
 .dock { display: contents; }
-/* The reading bar stays on screen only where it fits one row and takes a
-   quarter of the screen's height at most; anywhere else it sits at the end of
-   the page, after the footer. One row needs 12.38rem on a phone (buttons of
-   11.38rem, two gaps and the padding), hence the container query; one row is
-   about 4.2rem high, so the screen must be 17rem high, in px per size, as a
-   media query cannot use the reader's rem. */
-.reading-bar { position: static; }
-@container page (min-width: 12.5rem) { .reading-bar { position: sticky; bottom: 0; z-index: 10; } }
-@media (max-height: 271.98px) { html[data-size="1"] .reading-bar { position: static; } }
-@media (max-height: 339.98px) { html[data-size="2"] .reading-bar { position: static; } }
-@media (max-height: 407.98px) { html[data-size="3"] .reading-bar { position: static; } }
-@media (max-height: 475.98px) { html[data-size="4"] .reading-bar { position: static; } }
-@media (max-height: 543.98px) { html[data-size="5"] .reading-bar { position: static; } }
+.reading-bar { position: sticky; bottom: 0; z-index: 10; }
+@media (max-height: 299.98px) { .reading-bar { position: static; } }
 @media (max-width: 899.98px) and (min-height: 480px) {
-  html[data-size="1"] .dock,
-  html[data-size="2"] .dock {
+  .dock:not(.dock--reading) {
     display: block;
     position: sticky;
     bottom: 0;
     z-index: 10;
   }
-  /* Keyboard focus scrolls clear of the dock, never under it: up to two rows
-     of the bottom bar (2 x 4.25rem) and the reading bar (about 4.25rem). */
-  html[data-size="1"],
-  html[data-size="2"] { scroll-padding-bottom: 13.5em; }
 }
-/* On a reading page only the reading bar stays on screen, at every size: with
-   the bottom bar under it the two took over 200 px of a phone. The bottom bar
-   sits at the end of the page there, and focus scrolls clear of the reading bar. */
-html[data-size] .dock.dock--reading { display: contents; position: static; }
-/* em, not rem: on the root element WebKit resolves rem against the initial
-   16 px, not the reader's size, and focus then landed under the bar at 200 %. */
-html[data-size]:has(.dock--reading) { scroll-padding-bottom: 6em; }
+/* Keyboard focus scrolls clear of the bar at the foot, never under it. */
+html { scroll-padding-bottom: 72px; }
 
 @media (min-width: 900px) {
   .top-nav { display: block; }
   .bottom-nav { display: none; }
-  .top-nav .nav-list { grid-template-columns: repeat(5, auto); gap: 0.125rem; }
-  .top-nav .nav-link { padding: 0 0.875rem; border-radius: var(--radius); }
-  .top-nav .nav-link[aria-current="page"] { box-shadow: inset 0 -0.25rem 0 var(--accent); }
-  /* The page column's own sides, so the wordmark lines up with the page and
-     a signed-in header (name, Officer area, Sign out) is one row at 1280. */
-  .site-header__bar { padding: var(--space-3) var(--space-4); }
-  .account .who { padding: 0 var(--space-1); font-size: var(--fs-small); }
-  .reading-bar { justify-content: center; gap: var(--space-5); }
+  .top-nav .nav-list { grid-template-columns: repeat(4, auto); gap: 2px; }
+  .top-nav .nav-link { padding: 0 14px; border-radius: 8px; }
+  .top-nav .nav-label { font-size: 17px; }
+  /* The current tab: the accent bar on top and bottom alike (Ross, 2026-10-23). */
+  .top-nav .nav-link[aria-current="page"] { box-shadow: inset 0 4px 0 var(--accent), inset 0 -4px 0 var(--accent); }
+  .site-header__bar { gap: 8px 16px; padding: 10px 16px; }
+  .wordmark { margin-right: 0; }
+  .top-nav { margin-right: auto; }
+  .wordmark__place { font-size: 16px; }
+  .wordmark__name { font-size: 26px; }
+  .account .who { padding: 0 4px; }
+  .reading-bar { justify-content: center; gap: 24px; }
+  .rb { flex: 0 0 auto; padding: 2px 12px; }
 }
 
 /* The page column. */
@@ -402,19 +532,21 @@ html[data-size]:has(.dock--reading) { scroll-padding-bottom: 6em; }
 main > * { max-width: var(--measure); }
 main:focus:not(:focus-visible) { outline: none; }
 
-/* Back link and breadcrumbs on every page but Home. */
+/* Back link and breadcrumbs on every page but Home: chrome, in px. */
 .crumbs {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0 var(--space-4);
-  padding-top: var(--space-3);
+  gap: 0 16px;
+  padding-top: 12px;
+  font-size: 16px;
+  line-height: 1.25;
 }
 .back-link {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  min-height: var(--target);
+  gap: 8px;
+  min-height: 48px;
   font-weight: 700;
 }
 .back-link::before { content: "\2039"; content: "\2039" / ""; font-size: 1.5em; line-height: 1; }
@@ -423,14 +555,13 @@ main:focus:not(:focus-visible) { outline: none; }
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0 var(--space-2);
+  gap: 0 8px;
   margin: 0;
   padding: 0;
-  font-size: var(--fs-small);
 }
-.crumbs li { display: inline-flex; align-items: center; min-height: var(--target); }
-.crumbs li + li::before { content: "\203A"; content: "\203A" / ""; margin-right: var(--space-2); color: var(--muted); }
-.crumbs a { display: inline-flex; align-items: center; min-height: var(--target); }
+.crumbs li { display: inline-flex; align-items: center; min-height: 48px; }
+.crumbs li + li::before { content: "\203A"; content: "\203A" / ""; margin-right: 8px; color: var(--muted); }
+.crumbs a { display: inline-flex; align-items: center; min-height: 48px; }
 .crumbs [aria-current="page"] { color: var(--muted); }
 
 /* Forms: plain HTML, large and labelled. */
@@ -450,6 +581,7 @@ main:focus:not(:focus-visible) { outline: none; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: var(--space-2);
   min-height: var(--target);
   min-width: var(--target);
   padding: 0 var(--space-5);
@@ -461,6 +593,10 @@ main:focus:not(:focus-visible) { outline: none; }
   text-decoration: none;
   cursor: pointer;
 }
+
+.button svg { width: 1.5rem; height: 1.5rem; flex: none; }
+/* The draft's secondary button: outlined in the accent, on the surface. */
+.button--secondary { background: var(--surface); color: var(--accent); }
 
 .link-list { list-style: none; padding: 0; }
 .link-list li { margin: 0 0 var(--space-2); }
@@ -477,6 +613,7 @@ main:focus:not(:focus-visible) { outline: none; }
 }
 .site-footer p { margin: 0 0 var(--space-3); max-width: var(--measure); }
 .site-footer a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+.foot-links { display: flex; flex-wrap: wrap; gap: 0 var(--space-5); }
 
 /* The home-screen how-to: a drawn phone beside each step. */
 .steps { display: grid; gap: var(--space-6); padding-left: 1.5em; }
@@ -514,19 +651,75 @@ main:focus:not(:focus-visible) { outline: none; }
   border-radius: 0 var(--radius) var(--radius) 0;
 }
 
+/* The design draft's card: surface, a soft border, rounded, its parts spaced. */
 .card {
   display: grid;
-  /* The column may shrink below its longest word, so 200 % text wraps on a narrow phone. */
+  /* The column may shrink below its longest word, so large text wraps on a narrow phone. */
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-2);
+  gap: var(--space-3);
+  align-content: start;
   margin: var(--space-4) 0;
   padding: var(--space-4);
   background: var(--surface);
   border: var(--border) solid var(--line-soft);
-  border-radius: var(--radius);
+  border-radius: 0.625rem;
 }
 .card > * { margin: 0; }
+.card h2 { font-size: min(1.5rem, 9.5vw); }
 .eyebrow { font-weight: 700; color: var(--muted); }
+.card.empty { color: var(--ink); }
+
+/* Home: the draft's two columns where they fit (2 : 1), one below the other on a phone. */
+main > .cols { max-width: none; }
+.cols { display: grid; gap: 1.25rem; margin-top: var(--space-4); }
+.cols > * { display: grid; gap: 1.25rem; align-content: start; min-width: 0; }
+.cols .card { margin: 0; }
+@container page (min-width: 56rem) { .cols.side { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); } }
+
+/* The newsletter's card: a drawn cover beside the issue, the buttons below. */
+.issue { grid-template-columns: auto minmax(0, 1fr); align-items: start; column-gap: var(--space-4); }
+.issue .btns { grid-column: 1 / -1; }
+.issue-text { display: grid; gap: var(--space-1); }
+.issue-text > * { margin: 0; }
+.cover {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  width: 6.5rem;
+  aspect-ratio: 8.5 / 11;
+  padding: 7px;
+  border: var(--border) solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+}
+.cover b { font-family: var(--font-head); font-size: 1rem; line-height: 1; color: var(--accent); }
+.cover i { display: block; height: 5px; background: var(--line-soft); border-radius: 2px; }
+.cover i:nth-child(3) { width: 70%; }
+/* Too narrow for the cover beside the words (a phone at a large size): words only. */
+@container page (width < 26rem) {
+  .issue { grid-template-columns: minmax(0, 1fr); }
+  .cover { display: none; }
+}
+
+/* Lists of links out, each with its icon. */
+.docs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.docs a { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--target); font-weight: 700; }
+.docs svg { width: 1.25rem; height: 1.25rem; flex: none; }
+
+/* The About subnav: the draft's row of boxes, the current one tinted. */
+.subnav ul { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.subnav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target);
+  padding: 0 0.875rem;
+  border: var(--border) solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-weight: 700;
+  text-decoration: none;
+}
+.subnav a[aria-current="page"] { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
 
 /* Officers: by office, with the role address. */
 .offices { list-style: none; padding: 0; margin: var(--space-4) 0; }
@@ -569,34 +762,39 @@ main:focus:not(:focus-visible) { outline: none; }
   .money tr.total td { border-top: 0; }
 }
 
-/* A+ never does nothing (W3). At size 5, and where the screen caps the larger
-   sizes alike (tokens.css: 8.25vw, so 4 and 5 match below 21.21em and 3 is
-   the cap below 18.18em, in the browser's own em as the cap is), A+ gives
-   way to a disabled "Largest size for this screen". */
-.size-max { display: none; }
-.size-max:disabled { cursor: default; border-style: dashed; color: var(--ink); }
-html[data-size="5"] .size-up { display: none; }
-html[data-size="5"] .size-max { display: inline-flex; }
-html[data-size="5"] .rb.size-max { display: flex; }
-@media (max-width: 21.2121em) {
-  html[data-size="4"] .size-up { display: none; }
-  html[data-size="4"] .size-max { display: inline-flex; }
-  html[data-size="4"] .rb.size-max { display: flex; }
-}
-@media (max-width: 18.1818em) {
-  html[data-size="3"] .size-up { display: none; }
-  html[data-size="3"] .size-max { display: inline-flex; }
-  html[data-size="3"] .rb.size-max { display: flex; }
+/* A+ never does nothing (W3), and A− neither. At 175 % A+ gives way to a
+   disabled "Largest size for this screen", and at 75 % A− to a disabled
+   "Smallest size". Where the screen caps 175 % (tokens.css: 8.75vw, under
+   140 % below 16em, in the browser's own em as the cap is), 140 % is the
+   largest there, so A+ gives way at 140 % too. */
+.size-max, .size-min, .size-max-note { display: none; }
+.size-max:disabled, .size-min:disabled { cursor: default; border-style: dashed; color: var(--ink); }
+html[data-size="175"] .size-up,
+html[data-size="75"] .size-down { display: none; }
+html[data-size="175"] .size-max,
+html[data-size="75"] .size-min { display: inline-flex; }
+html[data-size="175"] .rb.size-max,
+html[data-size="75"] .rb.size-min { display: flex; }
+html[data-size="175"] .size-max-note { display: block; }
+@media (max-width: 16em) {
+  html[data-size="140"] .size-up { display: none; }
+  html[data-size="140"] .size-max { display: inline-flex; }
+  html[data-size="140"] .rb.size-max { display: flex; }
+  html[data-size="140"] .size-max-note { display: block; }
 }
 
 /* The calendar (R4): status chips, the agenda, the month grid, one event. */
+/* The draft's status chip: a pill in the status colour on its tint. */
 .chip {
-  display: inline-block;
-  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  padding: 0.0625rem 0.625rem;
   border: var(--border) solid currentColor;
-  border-radius: var(--radius);
+  border-radius: 999px;
   font-weight: 700;
   font-size: var(--fs-small);
+  line-height: 1.5;
+  white-space: nowrap;
 }
 .chip.ok { color: var(--ok); background: var(--ok-bg); }
 .chip.warn { color: var(--warn); background: var(--warn-bg); }
@@ -609,7 +807,8 @@ html[data-size="5"] .rb.size-max { display: flex; }
 .ev:first-child { border-top: 0; }
 .ev .t { display: grid; gap: var(--space-1); align-content: start; }
 .ev .t > * { margin: 0; }
-.ev h2, .ev h3 { font-size: min(var(--fs-h3), 9vw); }
+.ev h2 a, .ev h3 a { color: var(--ink); }
+.ev h2, .ev h3 { font-size: min(1.25rem, 9vw); }
 .ev.cx h2 a, .ev.cx h3 a { color: var(--muted); }
 .dt {
   margin: 0;
@@ -625,7 +824,7 @@ html[data-size="5"] .rb.size-max { display: flex; }
 .dt span, .dt b { display: block; }
 .dt b { font-family: var(--font-head); font-size: 1.75rem; font-weight: 600; }
 /* Too narrow for the date box beside the text: it becomes one line above it. */
-@container evs (width < 20rem) {
+@container evs (width < 17rem) {
   .ev { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
   .dt { justify-self: start; display: flex; align-items: baseline; gap: var(--space-2); padding: 0 var(--space-2); }
   .dt b { font-size: 1.25rem; }

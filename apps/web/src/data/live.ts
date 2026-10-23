@@ -157,6 +157,8 @@ export function liveData(reads: ApiReads): LiveData {
           .filter((t) => (t.status === TermStatus.ACTIVE || t.status === TermStatus.ACTING) && t.holderDisplayName !== '')
           .map((t) => (t.status === TermStatus.ACTING ? `${t.holderDisplayName} (acting)` : t.holderDisplayName)),
         alias: office.roleAlias,
+        // The API sends role_alias only once role_alias_verified_on is set (rosterAsOf
+        // in the API, R2): a non-empty alias on the wire is the API's word that it is verified.
         aliasVerified: office.roleAlias !== '',
         source: 'submitted' as const,
       })),

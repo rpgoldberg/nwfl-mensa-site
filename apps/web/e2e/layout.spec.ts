@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { SIZES } from '../server/prefs.mjs';
 import { PRIMARY_NAV, SITE_NAME, currentNav, sectionFor, trailFor } from '../src/lib/site';
 import { ALL_PAGES, titleOf } from './pages';
 import { setPrefs } from './prefs';
@@ -40,20 +41,27 @@ for (const path of ALL_PAGES) {
       await expect(page).toHaveURL(/#main$/);
     });
 
-    test('names the site as text over the teal-and-sand stripe, with Aa, Help and Sign in, each a 48px target', async ({ page }) => {
+    test('names the site as text beside the NWFL monogram, over the teal-and-sand stripe, with Aa and Sign in in one row, each a 48px target', async ({ page }) => {
       await page.goto(path);
       const banner = page.getByRole('banner');
       const name = banner.getByRole('link', { name: SITE_NAME, exact: true });
       await expect(name).toBeVisible();
       await expect(name).toHaveAttribute('href', '/');
-      await expect(banner.locator('img')).toHaveCount(0);
+      // The monogram is decoration: the link's name stays the site's name.
+      const monogram = banner.locator('img');
+      await expect(monogram).toHaveCount(1);
+      await expect(monogram).toHaveAttribute('alt', '');
+      await expect(monogram).toHaveAttribute('src', '/icons/icon-192.png');
+      if (page.viewportSize()!.width >= 360) expect((await monogram.boundingBox())!.width).toBe(40);
+      // Help is on More and in the footer now, not in the header.
+      await expect(banner.getByRole('link', { name: 'Help', exact: true })).toHaveCount(0);
+      await expect(page.getByRole('contentinfo').getByRole('link', { name: 'Help', exact: true })).toHaveAttribute('href', '/help');
       const stripe = banner.locator('.horizon');
       await expect(stripe).toBeVisible();
       expect((await stripe.boundingBox())!.height).toBeGreaterThanOrEqual(4);
       expect(await stripe.evaluate((el) => getComputedStyle(el).backgroundImage)).toMatch(/linear-gradient/);
       const controls = [
         [banner.getByRole('link', { name: /^Aa\b/ }), '#reader-menu'],
-        [banner.getByRole('link', { name: 'Help', exact: true }), '/help'],
         [banner.getByRole('link', { name: 'Sign in', exact: true }), `/sign-in?return=${encodeURIComponent(path)}`],
       ] as const;
       for (const [link, href] of controls) {
@@ -63,6 +71,9 @@ for (const path of ALL_PAGES) {
         expect(box.width, href).toBeGreaterThanOrEqual(48);
         expect(box.height, href).toBeGreaterThanOrEqual(48);
       }
+      // One row: the name, Aa and Sign in share a line.
+      const boxes = await Promise.all([name, ...controls.map(([link]) => link)].map(async (l) => (await l.boundingBox())!));
+      for (const b of boxes) expect(b.y < boxes[0]!.y + boxes[0]!.height && b.y + b.height > boxes[0]!.y).toBe(true);
     });
 
     test('shows breadcrumbs and a Back link everywhere but Home', async ({ page }) => {
@@ -85,7 +96,7 @@ for (const path of ALL_PAGES) {
       await expect(back).toHaveAttribute('href', parent.href);
     });
 
-    test('has the five nav items, each a 48px target with a word (under its icon in the bottom bar)', async ({ page }) => {
+    test('has the four nav items, each a 48px target with a word (under its icon in the bottom bar)', async ({ page }) => {
       await page.goto(path);
       const nav = mainNav(page);
       await expect(nav).toHaveCount(1);
@@ -166,8 +177,8 @@ test('search inputs are at least 16px, so phones do not zoom on focus', async ({
 test.describe('at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
-  for (const size of [1, 5]) {
-    test(`no page scrolls sideways at text size ${size}, with the Aa panel open or closed`, async ({ page, context, baseURL }) => {
+  for (const size of [SIZES[0], SIZES[6]]) {
+    test(`no page scrolls sideways at ${size} %, with the Aa panel open or closed`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       for (const path of ALL_PAGES) {
         for (const url of [path, `${path}#reader-menu`]) {
@@ -187,9 +198,9 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 568, height: 320 }
   test.describe(`/finances at ${viewport.width}x${viewport.height}`, () => {
     test.use({ viewport });
 
-    test('shows every amount whole, on one line, at text sizes 1 to 5', async ({ page, context, baseURL }) => {
+    test('shows every amount whole, on one line, at every text size', async ({ page, context, baseURL }) => {
       const cut: string[] = [];
-      for (const size of [1, 2, 3, 4, 5]) {
+      for (const size of SIZES) {
         await setPrefs(context, baseURL!, { size });
         await page.goto('/finances');
         await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
@@ -217,13 +228,13 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 568, height: 320 }
   });
 }
 
-// The reading bar stays on screen only where it fits one row and takes at most
-// a quarter of the screen's height; anywhere else it sits at the end of the page.
+// The reading bar is chrome, in px: one row at every size, at most a quarter of
+// the screen's height, and on screen while reading except on a very short one.
 for (const viewport of [{ width: 320, height: 640 }, { width: 375, height: 667 }, { width: 412, height: 915 }, { width: 568, height: 320 }, { width: 1280, height: 800 }]) {
-  test(`the reading bar at ${viewport.width}x${viewport.height} is sticky only in one row, a quarter of the screen at most`, async ({ page, context, baseURL }) => {
+  test(`the reading bar at ${viewport.width}x${viewport.height} is one row, the same at every size, a quarter of the screen at most`, async ({ page, context, baseURL }) => {
     await page.setViewportSize(viewport);
-    const seen: string[] = [];
-    for (const size of [1, 2, 3, 4, 5]) {
+    const heights = new Set<number>();
+    for (const size of [SIZES[0], SIZES[3], SIZES[6]]) {
       await setPrefs(context, baseURL!, { size });
       await page.goto('/about');
       await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
@@ -231,28 +242,19 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 375, height: 667 }
         const el = document.querySelector<HTMLElement>('.reading-bar')!;
         // The buttons shown: A+ and "Largest size for this screen" take turns (W3).
         const shown = [...el.querySelectorAll('button')].filter((b) => b.getClientRects().length > 0);
-        const rows = new Set(shown.map((b) => Math.round(b.getBoundingClientRect().top))).size;
-        const footer = document.querySelector('.site-footer')!;
         return {
-          rows,
+          rows: new Set(shown.map((b) => Math.round(b.getBoundingClientRect().top))).size,
           sticky: getComputedStyle(el).position === 'sticky',
-          share: el.getBoundingClientRect().height / innerHeight,
-          afterFooter: el.getBoundingClientRect().top + scrollY >= footer.getBoundingClientRect().bottom + scrollY - 0.5,
+          height: Math.round(el.getBoundingClientRect().height),
         };
       });
-      seen.push(`size ${size}: ${bar.sticky ? 'sticky' : 'static'}, ${bar.rows} row(s), ${Math.round(bar.share * 100)} %`);
-      if (bar.sticky) {
-        expect(bar.rows, seen.at(-1)).toBe(1);
-        expect(bar.share, seen.at(-1)).toBeLessThanOrEqual(0.25);
-      } else {
-        expect(bar.rows > 1 || bar.share > 0.25, seen.at(-1)).toBe(true);
-        expect(bar.afterFooter, `${seen.at(-1)}: at the end of the page`).toBe(true);
-      }
+      const label = `${size} %`;
+      expect(bar.rows, label).toBe(1);
+      expect(bar.sticky, label).toBe(true);
+      expect(bar.height / viewport.height, label).toBeLessThanOrEqual(0.25);
+      heights.add(bar.height);
     }
-    // The challenger's cases: at 200 % on 320x640 and 568x320 the bar is not on screen while reading.
-    if ((viewport.width === 320 && viewport.height === 640) || viewport.width === 568) expect(seen.at(-1)).toMatch(/static/);
-    // A 412 px phone at 200 % keeps it: one row, and a seventh of the screen.
-    if (viewport.width === 412) expect(seen.at(-1)).toMatch(/sticky/);
+    expect(heights.size).toBe(1);
   });
 }
 
@@ -283,8 +285,8 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 412, height: 915 }
   test.describe(`at ${viewport.width}px wide, every word whole`, () => {
     test.use({ viewport });
 
-    for (const size of [1, 2, 3, 4, 5]) {
-      test(`no page breaks a word at text size ${size}`, async ({ page, context, baseURL }) => {
+    for (const size of [SIZES[0], SIZES[3], SIZES[5], SIZES[6]]) {
+      test(`no page breaks a word at ${size} %`, async ({ page, context, baseURL }) => {
         test.slow(); // every page, every word
         await setPrefs(context, baseURL!, { size });
         const broken: string[] = [];
@@ -337,8 +339,8 @@ test.describe('the signed-in header on a wide screen', () => {
 test.describe('signed in, at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
-  for (const size of [1, 5]) {
-    test(`a long name, the Officer area and Sign out fit at text size ${size}, each control a 48px target`, async ({ page, context, baseURL }) => {
+  for (const size of [SIZES[0], SIZES[6]]) {
+    test(`a long name, the Officer area and Sign out fit at ${size} %, each control a 48px target`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       await page.goto('/');
       await signIn(page, 'long-name');
@@ -389,31 +391,72 @@ async function brokenWords(page: Page, selector: string): Promise<string[]> {
   }, selector);
 }
 
-for (const width of [320, 412]) {
+// W-LOOK: the chrome is fixed in px and one row, so it never grows with the
+// reader's size; only the content does.
+for (const width of [320, 360, 412]) {
   test.describe(`bottom bar at ${width}px`, () => {
-    test.use({ viewport: { width, height: 800 } });
+    test.use({ viewport: { width, height: 740 } });
 
-    for (const size of [1, 2, 3, 4, 5]) {
-      test(`at text size ${size}, never breaks a word; when five do not fit, the first row holds three`, async ({ page, context, baseURL }) => {
+    test('is one row of four at every size, never breaking a word, with 24 px icons and 14 px labels, always the same height', async ({ page, context, baseURL }) => {
+      const heights = new Set<number>();
+      for (const size of SIZES) {
         await setPrefs(context, baseURL!, { size });
-        await page.goto('/about');
+        await page.goto('/more');
         await page.evaluate(() => document.fonts.ready);
-        expect(await brokenWords(page, '.bottom-nav .nav-label, .reading-bar .rb')).toEqual([]);
+        expect(await brokenWords(page, '.bottom-nav .nav-label, .reading-bar .rb'), `${size} %`).toEqual([]);
         const tops = await page.locator('.bottom-nav li').evaluateAll((items) => items.map((li) => Math.round(li.getBoundingClientRect().top)));
-        const rows = [...new Set(tops)].map((top) => tops.filter((t) => t === top).length);
-        expect([[5], [3, 2], [2, 2, 1], [1, 1, 1, 1, 1]]).toContainEqual(rows);
-        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-        expect(overflow).toBeLessThanOrEqual(0);
-      });
-    }
+        expect(tops, `${size} %`).toHaveLength(4);
+        expect(new Set(tops).size, `${size} %`).toBe(1);
+        const look = await page.locator('.bottom-nav .nav-link').first().evaluate((a) => ({
+          icon: a.querySelector('svg')!.getBoundingClientRect().width,
+          label: parseFloat(getComputedStyle(a.querySelector('.nav-label')!).fontSize),
+        }));
+        expect(look, `${size} %`).toEqual({ icon: 24, label: 14 });
+        heights.add(Math.round((await page.locator('.bottom-nav').boundingBox())!.height));
+        expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+      }
+      expect([...heights]).toHaveLength(1);
+      // About an eleventh of a Galaxy S8's screen, at 175 % as at 75 %.
+      expect([...heights][0]!).toBeLessThanOrEqual(64);
+    });
   });
 }
 
-test('the bottom bar keeps all five in one row where they fit whole', async ({ page }) => {
-  await page.setViewportSize({ width: 720, height: 900 });
-  await page.goto('/');
-  const tops = await page.locator('.bottom-nav li').evaluateAll((items) => items.map((li) => Math.round(li.getBoundingClientRect().top)));
-  expect(new Set(tops).size).toBe(1);
+test('the header, the breadcrumbs and the Aa panel stay the same size at every text size; the content grows', async ({ page, context, baseURL }) => {
+  await page.setViewportSize({ width: 360, height: 740 });
+  const measure = () =>
+    page.evaluate(() => {
+      const px = (sel: string) => parseFloat(getComputedStyle(document.querySelector(sel)!).fontSize);
+      return {
+        header: Math.round(document.querySelector('.site-header')!.getBoundingClientRect().height),
+        crumbs: px('.crumbs ol'),
+        panel: px('.reader-panel .theme-btn'),
+        legend: px('.reader-panel legend'),
+        content: px('main .lead'),
+      };
+    });
+  const seen = [];
+  for (const size of [SIZES[0], SIZES[3], SIZES[6]]) {
+    await setPrefs(context, baseURL!, { size });
+    // From a blank page, so the same URL with a #fragment is loaded again, not just scrolled to.
+    await page.goto('about:blank');
+    await page.goto('/officers#reader-menu');
+    seen.push(await measure());
+  }
+  const [small, , large] = seen;
+  expect({ ...large!, content: 0 }).toEqual({ ...small!, content: 0 });
+  expect(large!.content).toBeGreaterThan(small!.content * 2);
+});
+
+test('on a wide screen the current tab has the accent bar on top and bottom alike', async ({ page }) => {
+  test.skip(page.viewportSize()!.width < 900, 'the top nav is a wide-screen layout');
+  await page.goto('/events');
+  const current = page.getByRole('navigation', { name: 'Main' }).locator('[aria-current="page"]');
+  await expect(current).toHaveAttribute('href', '/events');
+  const shadow = await current.evaluate((el) => getComputedStyle(el).boxShadow);
+  expect(shadow).toMatch(/(^|, |\) )0px 4px 0px/);
+  expect(shadow).toMatch(/(^|, |\) )0px -4px 0px/);
+  expect(shadow.match(/inset/g)).toHaveLength(2);
 });
 
 test.describe('with JavaScript off', () => {
@@ -441,17 +484,24 @@ test.describe('with JavaScript off', () => {
 
   test('a link to an old page lands on its new page', async ({ page }) => {
     await page.goto('/calendar.html');
-    await expect(page).toHaveURL(/\/calendar$/);
-    await expect(page.locator('h1')).toHaveText('Calendar');
+    await expect(page).toHaveURL(/\/events$/);
+    await expect(page.locator('h1')).toHaveText('Events');
+    await page.goto('/newsletter');
+    await expect(page).toHaveURL(/\/news$/);
+    await expect(page.locator('h1')).toHaveText('News');
     await page.goto('/2015-mind-games.html');
     await expect(page.locator('h1')).toHaveText('This page is no longer here');
   });
 
-  test('the nav and the search form work', async ({ page }) => {
+  test('the nav and the search form work; Search and Help are on More', async ({ page }) => {
     await page.goto('/');
-    await mainNav(page).getByRole('link', { name: 'Calendar', exact: true }).click();
-    await expect(page).toHaveURL(/\/calendar$/);
-    await mainNav(page).getByRole('link', { name: 'Search', exact: true }).click();
+    await mainNav(page).getByRole('link', { name: 'Events', exact: true }).click();
+    await expect(page).toHaveURL(/\/events$/);
+    await mainNav(page).getByRole('link', { name: 'News', exact: true }).click();
+    await expect(page).toHaveURL(/\/news$/);
+    await mainNav(page).getByRole('link', { name: 'More', exact: true }).click();
+    await expect(page.getByRole('main').getByRole('link', { name: 'Help', exact: true })).toHaveAttribute('href', '/help');
+    await page.getByRole('main').getByRole('link', { name: 'Search', exact: true }).click();
     await page.getByRole('searchbox', { name: 'Search the newsletter archive' }).fill('picnic');
     await page.getByRole('button', { name: 'Search' }).click();
     await expect(page).toHaveURL(/\/search\?q=picnic$/);

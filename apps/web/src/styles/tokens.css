@@ -1,22 +1,17 @@
 /*
- * NW Florida Mensa site: design tokens (draft 1, 2026-10-22).
+ * NW Florida Mensa site: design tokens (draft 1, 2026-10-22; themes and sizes W-LOOK, 2026-10-23).
  *
- * Themes: light (default), dark, high contrast.
- *   html[data-theme="light" | "dark" | "contrast"] is set by the server from the reader's cookie.
- *   No cookie: prefers-color-scheme picks light or dark, and prefers-contrast: more picks contrast.
- * Text size: html[data-size="1".."5"] = 100, 125, 150, 175, 200 %. Every size below is in rem,
- *   so the whole page (type, spacing, targets) grows with it. Browser zoom is never blocked.
+ * Themes, in the menu's order: the device's (no attribute), light, dark, high contrast soft yellow
+ *   and high contrast warm white. html[data-theme="light" | "dark" | "contrast-yellow" |
+ *   "contrast-white"] is set by the server from the reader's cookie. No cookie: prefers-color-scheme
+ *   picks light or dark, and prefers-contrast: more picks warm white.
+ * Text size: html[data-size="75" .. "175"], the seven sizes in percent of SIZES (server/prefs.mjs),
+ *   100 the default. Content is in
+ *   rem, so it grows with the size; the chrome (header, bottom bar, breadcrumbs, the Aa panel) is
+ *   in px and never does (site.css). Browser zoom is never blocked.
  *
- * Measured WCAG contrast (node script, sRGB relative luminance):
- *   light    ink/bg 14.96, ink/surface 15.96, muted/bg 8.76, accent/bg 7.74, accent/surface 8.26,
- *            on-accent/accent 8.26, ok/ok-bg 7.08, warn/warn-bg 7.41, stop/stop-bg 7.91,
- *            members/members-bg 7.33, line/bg 3.46 (non-text, needs 3:1), focus/bg 5.15
- *   dark     ink/bg 15.95, ink/surface 14.19, muted/bg 11.51, accent/bg 10.67, accent/surface 9.50,
- *            on-accent/accent 10.06, ok/ok-bg 9.07, warn/warn-bg 8.91, stop/stop-bg 8.78,
- *            members/members-bg 8.92, line/bg 3.74, focus/bg 9.63
- *   contrast ink/bg 21.00, accent/bg 16.13, on-accent/accent 16.13, ok/bg 16.64, stop/bg 10.49,
- *            members/bg 14.31, focus/bg 13.65
- * Every text pair is at or above 7:1 (WCAG AAA); borders and focus rings are at or above 3:1.
+ * Contrast: test/contrast.test.ts computes every pair from this file (WCAG, sRGB relative
+ * luminance). Every text pair is at or above 7:1 (AAA); borders and focus rings at or above 3:1.
  */
 
 :root {
@@ -24,7 +19,7 @@
   --font-body: "Atkinson Hyperlegible", "Verdana", "Segoe UI", system-ui, sans-serif;
   --font-head: "Lexend", "Atkinson Hyperlegible", "Verdana", system-ui, sans-serif;
 
-  --fs-small: 1rem;       /* 16 px at size 1. Nothing on the site is smaller. */
+  --fs-small: 1rem;       /* 16 px at 100 %. Nothing in the content is smaller. */
   --fs-body: 1.125rem;    /* 18 px */
   --fs-lead: 1.3125rem;   /* 21 px */
   --fs-h3: 1.375rem;      /* 22 px */
@@ -42,12 +37,11 @@
   --space-6: 2rem;
   --space-7: 3rem;
 
-  --target: 3rem;         /* 48 px minimum for anything you can tap */
-  --input-fs: 1.125rem;   /* inputs never under 16 px, so phones do not zoom on focus */
+  --target: max(3rem, 48px); /* 48 px at least for anything you can tap, at 75 % too */
+  --input-fs: 1.125rem;   /* inputs never under 16 px (below), so phones do not zoom on focus */
   --radius: 0.5rem;
   --border: 2px;
   --focus-width: 3px;
-  --bottom-nav-h: 4.5rem;
   --nav-breakpoint: 900px; /* below: bottom bar; at or above: top nav (same items) */
 
   /* Light theme (default) */
@@ -68,14 +62,16 @@
   color-scheme: light;
 }
 
-html[data-size="1"] { font-size: 100%; }
-html[data-size="2"] { font-size: 125%; }
-html[data-size="3"] { font-size: 150%; }
-/* No word ever breaks, so the longest words (17 letters) must fit a line: on a
-   phone narrower than about 390 px the two largest sizes stop at 8.25vw
-   (26.4 px on a 320 px screen, about 165 %). */
-html[data-size="4"] { font-size: min(175%, 8.25vw); }
-html[data-size="5"] { font-size: min(200%, 8.25vw); }
+html[data-size="75"] { font-size: 75%; }
+html[data-size="80"] { font-size: 80%; }
+html[data-size="90"] { font-size: 90%; }
+html[data-size="100"] { font-size: 100%; }
+html[data-size="115"] { font-size: 115%; }
+html[data-size="140"] { font-size: 140%; }
+/* No word ever breaks, so the longest words (17 letters) must fit a line. With
+   the chrome in px, 175 % fits a 320 px phone whole (W-LOOK, measured on every
+   page); on a narrower screen the largest size stops at 8.75vw (24.5 px at 280). */
+html[data-size="175"] { font-size: min(175%, 8.75vw); }
 
 @media (prefers-color-scheme: dark) {
   html:not([data-theme]) {
@@ -96,23 +92,34 @@ html[data-theme="dark"] {
   color-scheme: dark;
 }
 
+/* High contrast, soft yellow: black on a soft yellow, navy links (a classic low-vision pairing). */
+html[data-theme="contrast-yellow"] {
+  --bg: #fff7c2; --surface: #fffbe0; --ink: #000000; --muted: #1a1a1a;
+  --accent: #00205b; --on-accent: #ffffff; --accent-soft: #f0e7a8;
+  --line: #000000; --line-soft: #3d3d3d; --focus: #b3470b;
+  --ok: #0b4f1c; --ok-bg: #e3f0d0; --warn: #4d3200; --warn-bg: #ffe9a8;
+  --stop: #8a0000; --stop-bg: #fbe0d0; --members: #3b1f80; --members-bg: #ece3f0;
+  color-scheme: light;
+}
+
+/* High contrast, warm white: black on warm white, deep blue links. A device that asks for more contrast gets it. */
 @media (prefers-contrast: more) {
   html:not([data-theme]) {
-    --bg: #000000; --surface: #000000; --ink: #ffffff; --muted: #ffffff;
-    --accent: #ffe14d; --on-accent: #000000; --accent-soft: #000000;
-    --line: #ffffff; --line-soft: #ffffff; --focus: #00e5ff;
-    --ok: #7dff9a; --ok-bg: #000000; --warn: #ffe14d; --warn-bg: #000000;
-    --stop: #ff9c9c; --stop-bg: #000000; --members: #e2ccff; --members-bg: #000000;
-    color-scheme: dark;
+    --bg: #fffaef; --surface: #ffffff; --ink: #000000; --muted: #1f1f1f;
+    --accent: #00308f; --on-accent: #ffffff; --accent-soft: #e6ecfa;
+    --line: #000000; --line-soft: #3d3d3d; --focus: #b3470b;
+    --ok: #0b4f1c; --ok-bg: #e6f4ea; --warn: #5a3a00; --warn-bg: #fff1cc;
+    --stop: #8a0000; --stop-bg: #fde8e8; --members: #3b1f80; --members-bg: #efe9fb;
+    color-scheme: light;
   }
 }
-html[data-theme="contrast"] {
-  --bg: #000000; --surface: #000000; --ink: #ffffff; --muted: #ffffff;
-  --accent: #ffe14d; --on-accent: #000000; --accent-soft: #000000;
-  --line: #ffffff; --line-soft: #ffffff; --focus: #00e5ff;
-  --ok: #7dff9a; --ok-bg: #000000; --warn: #ffe14d; --warn-bg: #000000;
-  --stop: #ff9c9c; --stop-bg: #000000; --members: #e2ccff; --members-bg: #000000;
-  color-scheme: dark;
+html[data-theme="contrast-white"] {
+  --bg: #fffaef; --surface: #ffffff; --ink: #000000; --muted: #1f1f1f;
+  --accent: #00308f; --on-accent: #ffffff; --accent-soft: #e6ecfa;
+  --line: #000000; --line-soft: #3d3d3d; --focus: #b3470b;
+  --ok: #0b4f1c; --ok-bg: #e6f4ea; --warn: #5a3a00; --warn-bg: #fff1cc;
+  --stop: #8a0000; --stop-bg: #fde8e8; --members: #3b1f80; --members-bg: #efe9fb;
+  color-scheme: light;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -128,5 +135,5 @@ body {
 h1, h2, h3 { font-family: var(--font-head); line-height: var(--lh-head); text-wrap: balance; }
 a { color: var(--accent); text-decoration-thickness: 2px; text-underline-offset: 3px; }
 :focus-visible { outline: var(--focus-width) solid var(--focus); outline-offset: 2px; }
-input, select, textarea, button { font: inherit; font-size: max(var(--input-fs), 1rem); }
+input, select, textarea, button { font: inherit; font-size: max(var(--input-fs), 16px); }
 button, .button, input, select { min-height: var(--target); }

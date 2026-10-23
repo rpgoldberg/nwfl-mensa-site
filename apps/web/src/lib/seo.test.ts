@@ -25,9 +25,9 @@ describe('sitemap.xml', () => {
     for (const url of urls) expect(url).toMatch(/^https:\/\/nwflorida\.us\//);
   });
 
-  it('lists the nine sections, Help and the home-screen how-to, and nothing behind sign-in', () => {
+  it('lists the nine sections, Search, Help and the home-screen how-to, and nothing behind sign-in', () => {
     expect(urls).toEqual(
-      ['/', '/about', '/join', '/officers', '/governance', '/newsletter', '/minutes', '/calendar', '/finances', '/help', '/home-screen'].map((p) => `https://nwflorida.us${p}`),
+      ['/', '/about', '/join', '/officers', '/governance', '/news', '/minutes', '/events', '/finances', '/search', '/help', '/home-screen'].map((p) => `https://nwflorida.us${p}`),
     );
   });
 });

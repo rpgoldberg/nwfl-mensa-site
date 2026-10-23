@@ -1,9 +1,11 @@
 ---
 // The frame of every page, after the design draft: skip link; header with the
-// site name as text over the teal-and-sand stripe, the wide-screen nav, Aa,
-// Help and Sign in; the Aa panel; breadcrumbs and Back; the footer; the
-// reading bar on long reads; and the phone's bottom bar. No script: Aa opens its
-// panel as a link target, and the reader's size and theme come from cookies.
+// NWFL monogram and the site name as text over the teal-and-sand stripe, the
+// wide-screen nav, Aa and Sign in (Help is on More); the Aa panel; breadcrumbs
+// and Back; the footer; the reading bar on long reads; and the phone's bottom
+// bar. The chrome is in px and one row, so only the content grows with the
+// reader's size (W-LOOK). No script needed: Aa opens its panel as a link
+// target, and the reader's size and theme come from cookies.
 import '@fontsource/atkinson-hyperlegible/400.css';
 import '@fontsource/atkinson-hyperlegible/400-italic.css';
 import '@fontsource/atkinson-hyperlegible/700.css';
@@ -32,7 +34,8 @@ const trail = trailFor(path, title);
 const documentTitle = path === '/' ? SITE_NAME : `${title} | ${SITE_NAME}`;
 // A prerendered page is built with the defaults; the server wrapper stamps the
 // reader's settings on its <html> tag when it serves the file.
-const attrs = htmlAttributes(readPrefs(Astro.isPrerendered ? undefined : Astro.request.headers.get('cookie')));
+const prefs = readPrefs(Astro.isPrerendered ? undefined : Astro.request.headers.get('cookie'));
+const attrs = htmlAttributes(prefs);
 const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.search}`;
 ---
 <!doctype html>
@@ -50,16 +53,16 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
     <meta name="apple-mobile-web-app-title" content="NWFL Mensa" />
     {/* Progressive enhancement only (install button, in-app browser hint); a same-origin file, never inline. */}
     <script is:inline type="module" src="/scripts/install.js"></script>
+    <script is:inline type="module" src="/scripts/size.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to main content</a>
     <header class="site-header">
       <div class="site-header__bar">
-        <a class="wordmark" href="/"><span class="wordmark__place">Northwest Florida</span> <span class="wordmark__name">Mensa</span></a>
+        <a class="wordmark" href="/"><img class="monogram" src="/icons/icon-192.png" alt="" width="40" height="40" /><span class="wordmark__text"><span class="wordmark__place">Northwest Florida</span> <span class="wordmark__name">Mensa</span></span></a>
         <PrimaryNav path={path} variant="top" />
         <div class="header-tools">
           <a class="hbtn" id="reader-toggle" href="#reader-menu"><Icon name="theme" />Aa<span class="visually-hidden"> Text size and theme</span></a>
-          <a class="hbtn" href="/help">Help</a>
           {/* One renderer (server/account.mjs): the server wrapper puts the signed-in version on prerendered pages. */}
           <Fragment set:html={accountHtml(Astro.locals.session, { back, signIn: !PUBLIC_ONLY })} />
         </div>
@@ -72,7 +75,7 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
     </div>
     <section class="reader-panel" id="reader-menu" aria-labelledby="reader-menu-title" tabindex="-1">
       <h2 id="reader-menu-title">Text size and theme</h2>
-      <ReaderControls back={back} />
+      <ReaderControls back={back} size={prefs.size} />
       <p class="muted">Saved on this device. No account needed.</p>
       <p>Your browser's zoom works too: spread two fingers on a phone or tablet, or hold Ctrl (⌘ on a Mac) and press + on a computer.</p>
       <a class="button" href="#reader-toggle">Done</a>
@@ -84,7 +87,7 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
       </main>
     </div>
     <footer class="site-footer">
-      <p><a href="/home-screen">Put the club on your home screen</a></p>
+      <p class="foot-links"><a href="/help">Help</a> <a href="/officers">Contact an officer</a> <a href="/home-screen">Put the club on your home screen</a></p>
       <p>{SITE_NAME} is the local group of American Mensa for the Florida Panhandle, west of the Apalachicola River.</p>
     </footer>
     <div class={reading ? 'dock dock--reading' : 'dock'}>

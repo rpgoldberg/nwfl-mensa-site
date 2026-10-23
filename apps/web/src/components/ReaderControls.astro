@@ -1,43 +1,51 @@
 ---
-// Text size and theme in the Aa panel (R30): one plain form, one button per
-// choice, so it works with no script. Which size and theme are current is shown
-// by CSS from <html data-size data-theme>, so a prerendered page shows it too.
+// Text size and theme in the Aa panel (R30, W-LOOK): one plain form, so it works
+// with no script. Text size: A− and A+ either side of the size in percent, then
+// a slider of seven notches with a Use this size button; size.js saves a slide
+// at once and hides the button. Which size and theme are current is shown by
+// CSS from <html data-size data-theme>, so a prerendered page shows it too; only
+// the slider's value differs by reader, and the server stamps it (prefs.mjs).
+import { SIZES, sizeSlider, type Size } from '../../server/prefs.mjs';
+
 interface Props {
   /** Where the reader returns after a press. */
   back: string;
+  size: Size;
 }
-const { back } = Astro.props;
+const { back, size } = Astro.props;
 
-const SIZES = [1, 2, 3, 4, 5] as const;
-const percent = (size: number) => 75 + 25 * size;
 const THEME_OPTIONS = [
   { value: 'system', label: 'Match my phone or computer' },
   { value: 'light', label: 'Light' },
   { value: 'dark', label: 'Dark' },
-  { value: 'contrast', label: 'High contrast (white on black)' },
+  { value: 'contrast-yellow', label: 'High contrast, soft yellow' },
+  { value: 'contrast-white', label: 'High contrast, warm white' },
 ];
 ---
 <form class="reader-form" method="post" action="/prefs">
   <input type="hidden" name="back" value={back} />
   <input type="hidden" name="from" value="menu" />
-  <fieldset class="reader-group">
-    <legend>Text size</legend>
-    <div class="sizes">
-      <button class="hbtn size-btn" type="submit" name="size" value="smaller">A− Smaller</button>
-      <span class="size-steps" aria-hidden="true">{SIZES.map(() => <span class="size-step" />)}</span>
-      <button class="hbtn size-btn size-up" type="submit" name="size" value="larger">A+ Larger</button>
-      {/* Shown instead of A+ where it would change nothing (site.css): at size 5, and on a screen too narrow for the larger sizes to differ. */}
-      <button class="hbtn size-btn size-max" type="button" disabled>Largest size for this screen</button>
+  {/* A group, not a fieldset: Chromium drops the notch numbers when the size
+      changes under a size container inside a fieldset (W-LOOK, measured). */}
+  <div class="reader-group sz" role="group" aria-labelledby="text-size-group">
+    <p class="group-label" id="text-size-group">Text size</p>
+    <div class="sz-row">
+      <button class="sz-btn size-down" type="submit" name="size" value="smaller" data-size-step="-1">A−<span class="visually-hidden"> Smaller</span></button>
+      {/* In place of A− or A+ where a press would change nothing (site.css). */}
+      <button class="sz-btn size-min" type="button" disabled>A−<span class="visually-hidden"> Smallest size</span></button>
+      <p class="sz-now" aria-hidden="true">{SIZES.map((s) => <span data-for-size={s}>{s}&nbsp;%</span>)}</p>
+      <button class="sz-btn size-up" type="submit" name="size" value="larger" data-size-step="1">A+<span class="visually-hidden"> Larger</span></button>
+      <button class="sz-btn size-max" type="button" disabled>A+<span class="visually-hidden"> Largest size for this screen</span></button>
     </div>
-    <p class="size-now">
-      {SIZES.map((size) => (
-        <span data-for-size={size}>
-          Now {percent(size)}&nbsp;%{size === 1 ? ', the smallest' : ''}{size === 5 ? ', the largest' : ''}.
-        </span>
-      ))}{' '}
-      The whole site grows, menus included.
-    </p>
-  </fieldset>
+    <p class="size-max-note" aria-hidden="true">Largest size for this screen.</p>
+    <div class="sl">
+      <label class="visually-hidden" for="text-size">Text size</label>
+      <Fragment set:html={sizeSlider(size)} />
+      <div class="sl-ticks" aria-hidden="true">{SIZES.map((s) => <span class="tick" data-for-size={s}>{s}</span>)}</div>
+    </div>
+    <button class="hbtn sz-set" type="submit" name="size" value="set" data-size-set>Use this size</button>
+    <p class="sz-note">Slide, tap a mark, or use A− and A+. Saved on this device as your size.</p>
+  </div>
   <fieldset class="reader-group">
     <legend>Theme</legend>
     <div class="theme-options">

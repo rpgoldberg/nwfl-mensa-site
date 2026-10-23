@@ -14,13 +14,14 @@ npm start            # http://localhost:8080
 
 ## The API
 
-Home, the calendar (`/calendar`, `/calendar/event/<id>`, `/calendar.ics` and each event's `.ics`), Officers and Finances read nwfl-mensa-api when `API_URL` is set, for example `http://nwfl-mensa-api.nwfl-site.svc.cluster.local:50051`: an origin only, `http:` (h2c; the Linkerd proxy adds mTLS on the hop) or `https:`. `API_TIMEOUT_MS` (default 3000) bounds each call.
+Home, Events, the calendar (`/events`, `/events/<id>`, `/calendar.ics`, also at `/events.ics`, and each event's `.ics`), Officers and Finances read nwfl-mensa-api when `API_URL` is set, for example `http://nwfl-mensa-api.nwfl-site.svc.cluster.local:50051`: an origin only, `http:` (h2c; the Linkerd proxy adds mTLS on the hop) or `https:`. `API_TIMEOUT_MS` (default 3000) bounds each call.
 
 - The site speaks the gRPC wire protocol only (`@connectrpc/connect-node`'s gRPC transport over HTTP/2), never Connect or gRPC-Web, and reads only: `ListOccurrences`, `GetOccurrence`, `ListSeries`, `GetRoster`, `ListPublishedItems` (`src/lib/api/client.ts`).
 - Every call goes out as the public: no Authorization header and no cookie, whoever is reading. The API decides the audience from what it receives; the site never claims one.
 - Public events and public items only: a members event or item never reaches a page or a feed, even if the API sent it in full (`src/data/live.ts`).
 - When the API fails or does not answer in time, the page says in plain words that the section is temporarily unavailable, with status 503 and `no-store`. The API's own message is never shown, and is logged only by call and code.
-- Without `API_URL` the pages keep their bundled content, as the public-only canary runs: no events, an empty `/calendar.ics`, and the sample roster and figures. A public-only build never reads the API. A malformed `API_URL` is logged at the first read and every live page answers 503.
+- Without `API_URL` the pages keep their bundled content, as the public-only canary runs: no events (Home and Events say so, and who to ask), an empty `/calendar.ics`, and the sample roster and figures.
+- The calendar and the newsletter moved with their nav words: `/calendar` and `/newsletter` answer 301 to `/events` and `/news` (query kept), and an old event page to `/events/<id>`. `/calendar.ics` stays, as phones subscribed to it must keep their feed (`server/redirects.mjs`). A public-only build never reads the API. A malformed `API_URL` is logged at the first read and every live page answers 503.
 
 The client code under `src/gen` is generated from the API's protos (`../api/proto`, the one source of truth) by `npm run proto:generate` (`buf.gen.yaml`) and committed; `test/proto-gen.test.ts` regenerates it and fails on any difference, and `web.yml` also runs when the protos change. The e2e suite runs the site against `e2e/api.mjs`, a stand-in that serves made-up data from the same generated descriptors over the gRPC wire protocol only, and against a second server whose API never answers.
 

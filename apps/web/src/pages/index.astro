@@ -1,16 +1,25 @@
 ---
-// Home (R1): this week's public events, the President's latest report and the
-// announcements, from the API on request (R22), then the club on your phone.
-// With no API (the canary) it keeps its bundled content. A section the API
-// could not give says so, and the page is a 503 that nothing stores.
+// Home (R1), in the design draft's cards: what is coming up this week, the
+// newsletter, the President's latest report, then beside them the
+// announcements, how to join, Mensa's own sites and the club on your phone.
+// Events, the report and the announcements come from the API on request
+// (R22); with no API (the canary) the page keeps its bundled content. A
+// section the API could not give says so, and the page is a 503 that nothing
+// stores.
+import { PUBLIC_ONLY } from 'astro:env/server';
+import EmptyEvents from '../components/EmptyEvents.astro';
 import EventList from '../components/EventList.astro';
+import Icon from '../components/Icon.astro';
+import IssueCard from '../components/IssueCard.astro';
 import Unavailable from '../components/Unavailable.astro';
-import { liveData } from '../data';
+import { liveData, siteData } from '../data';
 import { formatDate } from '../data/format';
+import { currentIssue } from '../data/site-data';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
 import { addDays, todayCentral } from '../lib/calendar';
-import { SITE_NAME, page } from '../lib/site';
+import { visibleContent } from '../lib/content';
+import { MENSA_LINKS, SITE_NAME, page } from '../lib/site';
 
 const p = page('/');
 const live = liveData();
@@ -19,49 +28,75 @@ const [week, report, announcements] = live
   ? await Promise.all([attempt(() => live.events(today, addDays(today, 6))), attempt(() => live.presidentReport()), attempt(() => live.announcements())])
   : [];
 if ([week, report, announcements].some((loaded) => loaded && !loaded.ok)) markUnavailable(Astro.response);
+// The fixture issues are made up: the card names no issue until the archive is real.
+const issue = siteData.isSample ? undefined : currentIssue(visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY }));
 ---
 <Base {...p}>
   <h1>{SITE_NAME}</h1>
-  <p class="lead">{p.description}</p>
-  {week && (
-    <section class="card" aria-labelledby="week-title">
-      <h2 id="week-title">This week</h2>
-      {!week.ok ? <Unavailable what="This week's calendar" />
-        : week.value.length > 0 ? <EventList events={week.value} label="This week" />
-        : <p>Nothing is listed for the next seven days.</p>}
-      <p><a class="hbtn" href="/calendar">See the whole calendar</a></p>
-    </section>
-  )}
-  {report && (
-    <section aria-labelledby="president-title">
-      <h2 id="president-title">From the President</h2>
-      {!report.ok ? <Unavailable what="The President's report" />
-        : report.value ? (
-          <article class="item" data-source={report.value.source}>
-            <h3>{report.value.title}</h3>
-            {report.value.summary && <p class="lead">{report.value.summary}</p>}
-            <div class="prose" set:html={report.value.bodyHtml} />
-            {report.value.publishedOn && <p class="muted">Published on {formatDate(report.value.publishedOn)}.</p>}
-          </article>
-        ) : <p>There is no report from the President yet.</p>}
-    </section>
-  )}
-  {announcements && (
-    <section aria-labelledby="announcements-title">
-      <h2 id="announcements-title">Announcements</h2>
-      {!announcements.ok ? <Unavailable what="The announcements" />
-        : announcements.value.length > 0 ? announcements.value.map((a) => (
-          <article class="item" data-source={a.source}>
-            <h3>{a.title}</h3>
-            {a.summary && <p>{a.summary}</p>}
-            <div class="prose" set:html={a.bodyHtml} />
-          </article>
-        )) : <p>There are no announcements just now.</p>}
-    </section>
-  )}
-  <section aria-labelledby="phone-title">
-    <h2 id="phone-title">Our club on your phone</h2>
-    <p><a href="/home-screen">Put the club on your home screen</a>, so the site opens like an app.</p>
-    <p><button type="button" class="button" data-install hidden>Install the club app</button></p>
-  </section>
+  <p class="lead">Lunches, dinners and good conversation from Pensacola to Panama City. Everyone is welcome to visit.</p>
+  <div class="cols side">
+    <div>
+      <section class="card" aria-labelledby="week-title">
+        <h2 id="week-title">Coming up</h2>
+        {week && !week.ok ? <Unavailable what="This week's calendar" />
+          : week && week.value.length > 0 ? <EventList events={week.value} label="Coming up this week" />
+          : <EmptyEvents when="for the next seven days" />}
+        <p class="btns"><a class="button button--secondary" href="/events"><Icon name="calendar" />See all events</a></p>
+      </section>
+      <IssueCard issue={issue} home />
+      {report && (
+        <section class="card" aria-labelledby="president-title">
+          {!report.ok ? (
+            <>
+              <h2 id="president-title">From the President</h2>
+              <Unavailable what="The President's report" />
+            </>
+          ) : report.value ? (
+            <article class="item" data-source={report.value.source}>
+              <p class="eyebrow" id="president-title">From the President{report.value.publishedOn && <> · {formatDate(report.value.publishedOn)}</>}</p>
+              <h2>{report.value.title}</h2>
+              {report.value.summary && <p class="lead">{report.value.summary}</p>}
+              <div class="prose" set:html={report.value.bodyHtml} />
+            </article>
+          ) : (
+            <>
+              <h2 id="president-title">From the President</h2>
+              <p>There is no report from the President yet.</p>
+            </>
+          )}
+        </section>
+      )}
+    </div>
+    <div>
+      {announcements && (
+        <section class="card" aria-labelledby="announcements-title">
+          <h2 id="announcements-title">Announcements</h2>
+          {!announcements.ok ? <Unavailable what="The announcements" />
+            : announcements.value.length > 0 ? announcements.value.map((a) => (
+              <article class="item" data-source={a.source}>
+                <h3>{a.title}</h3>
+                {a.summary && <p>{a.summary}</p>}
+                <div class="prose" set:html={a.bodyHtml} />
+              </article>
+            )) : <p>There are no announcements just now.</p>}
+        </section>
+      )}
+      <section class="card" aria-labelledby="join-title">
+        <h2 id="join-title">Join Mensa</h2>
+        <p>Mensa is open to anyone who scores in the top 2 percent on an accepted intelligence test.</p>
+        <p class="btns"><a class="button" href="/join">How to join</a></p>
+      </section>
+      <section class="card" aria-labelledby="links-title">
+        <h2 id="links-title">Mensa links</h2>
+        <ul class="docs">
+          {MENSA_LINKS.map((l) => <li><a href={l.href}>{l.label}<Icon name="external" /></a></li>)}
+        </ul>
+      </section>
+      <section class="card" aria-labelledby="phone-title">
+        <h2 id="phone-title">Our club on your phone</h2>
+        <p><a href="/home-screen">Put the club on your home screen</a>, so the site opens like an app.</p>
+        <p><button type="button" class="button" data-install hidden>Install the club app</button></p>
+      </section>
+    </div>
+  </div>
 </Base>

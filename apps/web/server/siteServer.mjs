@@ -8,7 +8,7 @@ import http from 'node:http';
 import { stampAccount } from './account.mjs';
 import { cacheControl, isHostOnlyCookie, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
-import { resolveOldUrl } from './redirects.mjs';
+import { renamedPath, resolveOldUrl } from './redirects.mjs';
 import { readSession } from './session.mjs';
 import { sharedTokenStore } from './token-store.mjs';
 
@@ -184,7 +184,7 @@ export function normalisePath(raw) {
 
 /**
  * Wrap a request handler so every response carries the site policy, answer
- * old URLs (R16), serve the prerendered pages, and answer the health probe
+ * old URLs (R16) and the site's own renamed pages, serve the prerendered pages, and answer the health probe
  * without touching Astro.
  *
  * @param {Handler} handler
@@ -195,9 +195,11 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
   const headers = securityHeaders({ formAction });
   return (req, res) => {
     dropForwardedHost(req);
-    const raw = new URL(req.url ?? '/', 'http://site.invalid').pathname;
+    const url = new URL(req.url ?? '/', 'http://site.invalid');
+    const raw = url.pathname;
     const path = normalisePath(raw);
-    const old = redirects && path !== undefined ? resolveOldUrl(path, redirects) : undefined;
+    const renamed = path === undefined ? undefined : renamedPath(path);
+    const old = redirects && path !== undefined && !renamed ? resolveOldUrl(path, redirects) : undefined;
     beforeHeaders(res, () => {
       if (old?.status === 410) res.statusCode = 410;
       // The cache rule reads the raw path: only a plain /_astro/ name is immutable.
@@ -213,6 +215,12 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('ok');
+      return;
+    }
+    if (renamed) {
+      // The query goes along: a month of the calendar is still that month.
+      res.writeHead(301, { Location: `${renamed}${url.search}` });
+      res.end();
       return;
     }
     if (old && 'location' in old) {
