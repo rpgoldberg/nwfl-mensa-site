@@ -1,13 +1,14 @@
 name: web
 
 # The web gateway (apps/web). The secret scan, MT-06 and the made-up people
-# guard run once for the whole repository, in secrets.yml.
+# guard run once for the whole repository, in secrets.yml. A change to the
+# API protos runs it too: the site's gRPC client is generated from them.
 on:
   push:
     branches: [main, develop]
-    paths: ['apps/web/**', '.github/workflows/web.yml']
+    paths: ['apps/web/**', 'apps/api/proto/**', '.github/workflows/web.yml']
   pull_request:
-    paths: ['apps/web/**', '.github/workflows/web.yml']
+    paths: ['apps/web/**', 'apps/api/proto/**', '.github/workflows/web.yml']
 
 permissions:
   contents: read

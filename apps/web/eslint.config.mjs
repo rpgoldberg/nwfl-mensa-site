@@ -5,7 +5,8 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/', '.astro/', 'coverage/', 'test-results/', 'playwright-report/', 'blob-report/'] },
+  // src/gen: generated from the API's protos (buf.gen.yaml).
+  { ignores: ['dist/', '.astro/', 'coverage/', 'test-results/', 'playwright-report/', 'blob-report/', 'src/gen/'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...astro.configs.recommended,

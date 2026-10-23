@@ -21,9 +21,9 @@ function job(name: string): string {
 const JOBS = ['lint', 'typecheck', 'unit', 'e2e', 'docker', 'publish'];
 
 describe('web workflow', () => {
-  it('runs only for changes to the web app or to itself, on pushes and pull requests', () => {
+  it('runs only for changes to the web app, the API protos its client is generated from, or itself, on pushes and pull requests', () => {
     const triggers = ci.slice(0, ci.search(/^permissions:/m));
-    for (const event of ['push', 'pull_request']) expect(triggers).toMatch(new RegExp(`^  ${event}:\\n(?:    .*\\n)*?    paths: \\['apps/web/\\*\\*', '\\.github/workflows/web\\.yml'\\]$`, 'm'));
+    for (const event of ['push', 'pull_request']) expect(triggers).toMatch(new RegExp(`^  ${event}:\\n(?:    .*\\n)*?    paths: \\['apps/web/\\*\\*', 'apps/api/proto/\\*\\*', '\\.github/workflows/web\\.yml'\\]$`, 'm'));
   });
 
   it('runs every step inside apps/web', () => {
