@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
+# nwfl-mensa-api-migrate image: the migration Job's whole runtime. It is the
+# official Postgres 17 alpine image (it carries psql, and the estate's CNPG
+# clusters run 17) with scripts/migrate.sh and migrations/ added. It starts no
+# server and holds no secret: the Job supplies the standard libpq environment
+# (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, PGSSLMODE, PGSSLROOTCERT).
+#
+# Base: postgres 17.11 on Alpine 3.24, pinned by tag AND digest, so a retagged
+# upstream image cannot change the runtime under us. The digest matches the
+# one scripts/test-db.sh runs the live suites against.
+#
+# Runtime contract:
+#   - non-root, numeric uid/gid 10001, so a pod can enforce runAsNonRoot;
+#   - read-only root filesystem: migrate.sh's scratch directory (mktemp, the
+#     advisory-lock FIFO) and psql's home both live under /tmp, which the Job
+#     mounts as an emptyDir;
+#   - exit codes are migrate.sh's own (0, 2, 4, 5, 6, or psql's).
+FROM postgres:17.11-alpine3.24@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
+
+LABEL org.opencontainers.image.title="nwfl-mensa-api-migrate"
+LABEL org.opencontainers.image.description="Database migrations for the NW Florida Mensa API"
+
+WORKDIR /app
+# Owned by root and read-only to the runtime user. The mode is set by chmod
+# after the copy, not by COPY --chmod: a checkout made under umask 077 leaves
+# files 0600 and folders 0700, which the runtime user could not read.
+COPY --chown=root:root scripts/migrate.sh /app/scripts/migrate.sh
+COPY --chown=root:root migrations /app/migrations
+RUN find /app -type d -exec chmod 0555 {} + && find /app -type f -exec chmod 0444 {} +
+
+ENV HOME=/tmp \
+    TMPDIR=/tmp
+
+USER 10001:10001
+
+ENTRYPOINT ["sh", "/app/scripts/migrate.sh", "/app/migrations"]
+CMD []

@@ -40,7 +40,7 @@ describe('api workflow', () => {
   });
 
   it('keeps its jobs, with the repository-wide checks moved out', () => {
-    expect([...ci.matchAll(/^ {2}([\w-]+):$/gm)].map((m) => m[1]).filter((name) => !['push', 'pull_request', 'run'].includes(name!))).toEqual(['test', 'proto', 'image', 'publish']);
+    expect([...ci.matchAll(/^ {2}([\w-]+):$/gm)].map((m) => m[1]).filter((name) => !['push', 'pull_request', 'run'].includes(name!))).toEqual(['test', 'proto', 'image', 'migrate-image', 'publish']);
     expect(ci).not.toMatch(/gitleaks|no-fc-credentials/);
   });
 
@@ -69,15 +69,28 @@ describe('api workflow', () => {
     expect(image).toMatch(/docker run -d --read-only/);
   });
 
+  it('builds the migration image from apps/api and smoke-runs it against a throwaway Postgres', () => {
+    const migrate = job('migrate-image');
+    expect(migrate).toMatch(/docker build -f Dockerfile\.migrate -t nwfl-mensa-api-migrate:ci \.$/m);
+    expect(migrate).toContain('run: sh scripts/smoke-migrate-image.sh nwfl-mensa-api-migrate:ci');
+  });
+
   it('publishes to ghcr.io/rpgoldberg/nwfl-mensa-site/api on a push to main only, once every check passed', () => {
     const publish = job('publish');
     expect(publish).toMatch(/^ {4}if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m);
-    expect(publish).toMatch(/^ {4}needs: \[test, proto, image\]$/m);
+    expect(publish).toMatch(/^ {4}needs: \[test, proto, image, migrate-image\]$/m);
     expect(publish).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}packages: write$/m);
     expect(publish).toMatch(/uses: docker\/login-action@[0-9a-f]{40}/);
     expect(publish).toMatch(/password: \$\{\{ secrets\.GITHUB_TOKEN \}\}$/m);
     expect(publish).toMatch(/context: apps\/api$/m);
     expect(publish).toMatch(/tags: ghcr\.io\/rpgoldberg\/nwfl-mensa-site\/api:\$\{\{ steps\.sha\.outputs\.short \}\}$/m);
     expect(publish).toMatch(/echo .*ghcr\.io\/rpgoldberg\/nwfl-mensa-site\/api@\$\{\{ steps\.image\.outputs\.digest \}\}/);
+  });
+
+  it('also publishes the migration image as api-migrate and prints its digest', () => {
+    const publish = job('publish');
+    expect(publish).toMatch(/file: apps\/api\/Dockerfile\.migrate$/m);
+    expect(publish).toMatch(/tags: ghcr\.io\/rpgoldberg\/nwfl-mensa-site\/api-migrate:\$\{\{ steps\.sha\.outputs\.short \}\}$/m);
+    expect(publish).toMatch(/echo .*ghcr\.io\/rpgoldberg\/nwfl-mensa-site\/api-migrate@\$\{\{ steps\.migrate-image\.outputs\.digest \}\}/);
   });
 });
