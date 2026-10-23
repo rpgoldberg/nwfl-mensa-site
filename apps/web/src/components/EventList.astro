@@ -1,0 +1,40 @@
+---
+// The agenda (R4): one entry per event, in date order, each with its date in a
+// box, its time and place in words, and its status. Phones get this list; it
+// sits beside the month grid on a wide screen.
+import StatusChip from './StatusChip.astro';
+import { type CalendarEvent, formatTime, placeText } from '../lib/calendar';
+import { formatDate } from '../data/format';
+
+interface Props {
+  events: CalendarEvent[];
+  /** The accessible name of the list. */
+  label: string;
+  /** The level of each event's heading. */
+  level?: 2 | 3;
+}
+const { events, label, level = 3 } = Astro.props;
+const Heading = `h${level}` as 'h2' | 'h3';
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const box = (date: string) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  return { day: DAYS[d.getUTCDay()], n: d.getUTCDate(), month: MONTHS[d.getUTCMonth()] };
+};
+---
+<ul class="evs" aria-label={label}>
+  {events.map((e) => {
+    const b = box(e.date);
+    return (
+      <li class={e.status === 'cancelled' ? 'ev cx' : 'ev'} data-source={e.source}>
+        <p class="dt" aria-hidden="true"><span>{b.day}</span> <b>{b.n}</b> <span>{b.month}</span></p>
+        <div class="t">
+          <Heading><a href={e.path}>{e.title}</a></Heading>
+          <p><span class="visually-hidden">{formatDate(e.date)}, </span>{e.start ? formatTime(e.start) : 'Time to be decided'} · {placeText(e)}</p>
+          {e.venue?.kind === 'business' && <p class="muted">{e.area}</p>}
+          <StatusChip status={e.status} note={e.statusNote} />
+        </div>
+      </li>
+    );
+  })}
+</ul>

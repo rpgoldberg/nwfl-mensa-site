@@ -1,0 +1,20 @@
+# The API client's types, generated from the API's own protos (apps/api/proto),
+# the one source of truth. Only the read side the site uses: the calendar,
+# the roster and published items, and the messages they import. JavaScript
+# with declarations, so plain Node (the e2e stand-in API) can load it too.
+# The output is COMMITTED under src/gen; test/proto-gen.test.ts regenerates it
+# and fails on any difference.
+version: v2
+clean: true
+inputs:
+  - directory: ../api/proto
+    paths:
+      - ../api/proto/nwfl/mensa/v1/event.proto
+      - ../api/proto/nwfl/mensa/v1/content.proto
+plugins:
+  - local: protoc-gen-es
+    out: src/gen
+    include_imports: true
+    opt:
+      - target=js+dts
+      - import_extension=js

@@ -6,8 +6,8 @@ import type { ContentSource } from '../lib/content';
 export interface Office {
   slug: string;
   title: string;
-  /** The holder's display name; none for a vacant seat. */
-  holder?: string;
+  /** Every current holder's display name, in order; none for a vacant seat. A seat such as Member at Large can have several. */
+  holders: string[];
   /** The role address, e.g. president@nwflorida.us. */
   alias: string;
   /** Shown only once a test message to it has been delivered (R2, C2a). */
@@ -62,7 +62,7 @@ export interface SiteData {
 export interface RosterEntry {
   slug: string;
   title: string;
-  holder: string | undefined;
+  holders: string[];
   email: string | undefined;
   vacant: boolean;
   source: ContentSource;
@@ -72,9 +72,9 @@ export function rosterView(offices: readonly Office[]): RosterEntry[] {
   return offices.map((o) => ({
     slug: o.slug,
     title: o.title,
-    holder: o.holder,
+    holders: o.holders,
     email: o.aliasVerified ? o.alias : undefined,
-    vacant: o.holder === undefined,
+    vacant: o.holders.length === 0,
     source: o.source,
   }));
 }

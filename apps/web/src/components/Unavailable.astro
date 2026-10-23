@@ -1,0 +1,10 @@
+---
+// In place of a section the API could not give us (W3): plain words, no
+// error codes. The page answers 503, so nothing stores it.
+interface Props {
+  /** "The calendar", "The officer list". */
+  what: string;
+}
+const { what } = Astro.props;
+---
+<div class="notice" role="note"><b>{what} is temporarily unavailable.</b> Please try again in a few minutes. The rest of the site still works.</div>

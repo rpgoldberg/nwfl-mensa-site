@@ -229,7 +229,9 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 375, height: 667 }
       await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
       const bar = await page.evaluate(() => {
         const el = document.querySelector<HTMLElement>('.reading-bar')!;
-        const rows = new Set([...el.querySelectorAll('button')].map((b) => Math.round(b.getBoundingClientRect().top))).size;
+        // The buttons shown: A+ and "Largest size for this screen" take turns (W3).
+        const shown = [...el.querySelectorAll('button')].filter((b) => b.getClientRects().length > 0);
+        const rows = new Set(shown.map((b) => Math.round(b.getBoundingClientRect().top))).size;
         const footer = document.querySelector('.site-footer')!;
         return {
           rows,

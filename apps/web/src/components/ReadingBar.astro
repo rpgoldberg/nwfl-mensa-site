@@ -19,7 +19,9 @@ const THEME_NAMES = [
 <form class="reading-bar" method="post" action="/prefs" aria-label="Reading">
   <input type="hidden" name="back" value={back} />
   <button class="rb" type="submit" name="size" value="smaller"><span class="rb-big">A−</span> Smaller</button>
-  <button class="rb" type="submit" name="size" value="larger"><span class="rb-big">A+</span> Larger</button>
+  <button class="rb size-up" type="submit" name="size" value="larger"><span class="rb-big">A+</span> Larger</button>
+  {/* In place of A+ where it would change nothing (site.css). One word shows, as on the other buttons, so the bar stays one row; the Aa panel says it in full. */}
+  <button class="rb size-max" type="button" disabled><span class="rb-big">A+</span> Largest<span class="visually-hidden"> size for this screen</span></button>
   <button class="rb" type="submit" name="theme" value="next">
     <Icon name="theme" /> Theme<span class="visually-hidden"> {THEME_NAMES.map((t) => <span data-for-theme={t.value}>(now {t.label})</span>)}</span>
   </button>

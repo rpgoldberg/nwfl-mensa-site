@@ -1,12 +1,64 @@
 ---
+// Home (R1): this week's public events, the President's latest report and the
+// announcements, from the API on request (R22), then the club on your phone.
+// With no API (the canary) it keeps its bundled content. A section the API
+// could not give says so, and the page is a 503 that nothing stores.
+import EventList from '../components/EventList.astro';
+import Unavailable from '../components/Unavailable.astro';
+import { liveData } from '../data';
+import { formatDate } from '../data/format';
 import Base from '../layouts/Base.astro';
+import { attempt, markUnavailable } from '../lib/api/page';
+import { addDays, todayCentral } from '../lib/calendar';
 import { SITE_NAME, page } from '../lib/site';
 
 const p = page('/');
+const live = liveData();
+const today = todayCentral(new Date());
+const [week, report, announcements] = live
+  ? await Promise.all([attempt(() => live.events(today, addDays(today, 6))), attempt(() => live.presidentReport()), attempt(() => live.announcements())])
+  : [];
+if ([week, report, announcements].some((loaded) => loaded && !loaded.ok)) markUnavailable(Astro.response);
 ---
 <Base {...p}>
   <h1>{SITE_NAME}</h1>
   <p class="lead">{p.description}</p>
+  {week && (
+    <section class="card" aria-labelledby="week-title">
+      <h2 id="week-title">This week</h2>
+      {!week.ok ? <Unavailable what="This week's calendar" />
+        : week.value.length > 0 ? <EventList events={week.value} label="This week" />
+        : <p>Nothing is listed for the next seven days.</p>}
+      <p><a class="hbtn" href="/calendar">See the whole calendar</a></p>
+    </section>
+  )}
+  {report && (
+    <section aria-labelledby="president-title">
+      <h2 id="president-title">From the President</h2>
+      {!report.ok ? <Unavailable what="The President's report" />
+        : report.value ? (
+          <article class="item" data-source={report.value.source}>
+            <h3>{report.value.title}</h3>
+            {report.value.summary && <p class="lead">{report.value.summary}</p>}
+            <div class="prose" set:html={report.value.bodyHtml} />
+            {report.value.publishedOn && <p class="muted">Published on {formatDate(report.value.publishedOn)}.</p>}
+          </article>
+        ) : <p>There is no report from the President yet.</p>}
+    </section>
+  )}
+  {announcements && (
+    <section aria-labelledby="announcements-title">
+      <h2 id="announcements-title">Announcements</h2>
+      {!announcements.ok ? <Unavailable what="The announcements" />
+        : announcements.value.length > 0 ? announcements.value.map((a) => (
+          <article class="item" data-source={a.source}>
+            <h3>{a.title}</h3>
+            {a.summary && <p>{a.summary}</p>}
+            <div class="prose" set:html={a.bodyHtml} />
+          </article>
+        )) : <p>There are no announcements just now.</p>}
+    </section>
+  )}
   <section aria-labelledby="phone-title">
     <h2 id="phone-title">Our club on your phone</h2>
     <p><a href="/home-screen">Put the club on your home screen</a>, so the site opens like an app.</p>

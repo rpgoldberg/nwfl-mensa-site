@@ -1,24 +1,41 @@
 ---
-// The treasurer's summary per period, totals only (R7), on request, once the
-// Executive Committee has accepted it.
+// The treasurer's summary per period (R7), on request, once the Executive
+// Committee has accepted it. From the API when it is set (W3): each published
+// summary as the Treasurer wrote it. Otherwise the bundled sample totals.
 import { PUBLIC_ONLY } from 'astro:env/server';
 import PublicOnlyNote from '../components/PublicOnlyNote.astro';
 import SampleNotice from '../components/SampleNotice.astro';
-import { siteData } from '../data';
+import Unavailable from '../components/Unavailable.astro';
+import { liveData, siteData } from '../data';
 import { formatDate, formatMoney } from '../data/format';
 import { balanced } from '../data/site-data';
 import Base from '../layouts/Base.astro';
+import { attempt, markUnavailable } from '../lib/api/page';
 import { visibleContent } from '../lib/content';
 import { page } from '../lib/site';
 
 const p = page('/finances');
-const periods = visibleContent(await siteData.finances(), { publicOnly: PUBLIC_ONLY });
+const live = liveData();
+const summaries = live ? await attempt(() => live.treasurerSummaries()) : undefined;
+if (summaries && !summaries.ok) markUnavailable(Astro.response);
+const periods = live ? [] : visibleContent(await siteData.finances(), { publicOnly: PUBLIC_ONLY });
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
   <p class="lead">{p.description} The same figures appear in the newsletter and in the Executive Committee's minutes.</p>
-  {siteData.isSample && <SampleNotice />}
-  {PUBLIC_ONLY ? <PublicOnlyNote what="The treasurer's summary" /> : periods.map((period) => (
+  {!live && siteData.isSample && <SampleNotice />}
+  {PUBLIC_ONLY ? <PublicOnlyNote what="The treasurer's summary" /> : summaries ? (
+    !summaries.ok ? <Unavailable what="The treasurer's summary" />
+      : summaries.value.length === 0 ? <p>No summary has been published yet.</p>
+      : summaries.value.map((s) => (
+        <section class="finance item" data-source={s.source} aria-labelledby={`summary-${s.slug}`}>
+          <h2 id={`summary-${s.slug}`}>{s.title}</h2>
+          {s.summary && <p>{s.summary}</p>}
+          <div class="prose" set:html={s.bodyHtml} />
+          {s.publishedOn && <p class="muted">Published on {formatDate(s.publishedOn)}.</p>}
+        </section>
+      ))
+  ) : periods.map((period) => (
     <section class="finance" data-source={period.source}>
       <div class="table-wrap" role="region" aria-label={`Figures for ${period.label}`} tabindex="0">
       {/* Explicit roles: on a narrow phone the rows stack (site.css), and display: block can drop a table's.

@@ -4,12 +4,12 @@
 import type { FinancePeriod, Issue, Meeting, Office, SiteData } from './site-data';
 
 const offices: Office[] = [
-  { slug: 'president', title: 'President', holder: 'Alex Sample', alias: 'president@nwflorida.us', aliasVerified: true, source: 'submitted' },
-  { slug: 'vice-president', title: 'Vice President', holder: 'Jordan Example', alias: 'vp@nwflorida.us', aliasVerified: true, source: 'submitted' },
-  { slug: 'secretary', title: 'Secretary', holder: 'Casey Placeholder', alias: 'secretary@nwflorida.us', aliasVerified: true, source: 'submitted' },
-  { slug: 'treasurer', title: 'Treasurer', holder: 'Riley Testcase', alias: 'treasurer@nwflorida.us', aliasVerified: false, source: 'submitted' },
-  { slug: 'membership', title: 'Membership Officer', alias: 'membership@nwflorida.us', aliasVerified: true, source: 'submitted' },
-  { slug: 'editor', title: 'Newsletter Editor', holder: 'Morgan Dummy', alias: 'editor@nwflorida.us', aliasVerified: true, source: 'submitted' },
+  { slug: 'president', title: 'President', holders: ['Alex Sample'], alias: 'president@nwflorida.us', aliasVerified: true, source: 'submitted' },
+  { slug: 'vice-president', title: 'Vice President', holders: ['Jordan Example'], alias: 'vp@nwflorida.us', aliasVerified: true, source: 'submitted' },
+  { slug: 'secretary', title: 'Secretary', holders: ['Casey Placeholder'], alias: 'secretary@nwflorida.us', aliasVerified: true, source: 'submitted' },
+  { slug: 'treasurer', title: 'Treasurer', holders: ['Riley Testcase'], alias: 'treasurer@nwflorida.us', aliasVerified: false, source: 'submitted' },
+  { slug: 'membership', title: 'Membership Officer', holders: [], alias: 'membership@nwflorida.us', aliasVerified: true, source: 'submitted' },
+  { slug: 'editor', title: 'Newsletter Editor', holders: ['Morgan Dummy'], alias: 'editor@nwflorida.us', aliasVerified: true, source: 'submitted' },
 ];
 
 const issues: Issue[] = [

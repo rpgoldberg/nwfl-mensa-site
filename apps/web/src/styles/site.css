@@ -568,3 +568,101 @@ main:focus:not(:focus-visible) { outline: none; }
   .money td { text-align: left; border-top: 0; padding-top: var(--space-1); }
   .money tr.total td { border-top: 0; }
 }
+
+/* A+ never does nothing (W3). At size 5, and where the screen caps the larger
+   sizes alike (tokens.css: 8.25vw, so 4 and 5 match below 21.21em and 3 is
+   the cap below 18.18em, in the browser's own em as the cap is), A+ gives
+   way to a disabled "Largest size for this screen". */
+.size-max { display: none; }
+.size-max:disabled { cursor: default; border-style: dashed; color: var(--ink); }
+html[data-size="5"] .size-up { display: none; }
+html[data-size="5"] .size-max { display: inline-flex; }
+html[data-size="5"] .rb.size-max { display: flex; }
+@media (max-width: 21.2121em) {
+  html[data-size="4"] .size-up { display: none; }
+  html[data-size="4"] .size-max { display: inline-flex; }
+  html[data-size="4"] .rb.size-max { display: flex; }
+}
+@media (max-width: 18.1818em) {
+  html[data-size="3"] .size-up { display: none; }
+  html[data-size="3"] .size-max { display: inline-flex; }
+  html[data-size="3"] .rb.size-max { display: flex; }
+}
+
+/* The calendar (R4): status chips, the agenda, the month grid, one event. */
+.chip {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: var(--border) solid currentColor;
+  border-radius: var(--radius);
+  font-weight: 700;
+  font-size: var(--fs-small);
+}
+.chip.ok { color: var(--ok); background: var(--ok-bg); }
+.chip.warn { color: var(--warn); background: var(--warn-bg); }
+.chip.stop { color: var(--stop); background: var(--stop-bg); }
+.status { margin: 0; }
+.btns { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.evs { list-style: none; padding: 0; margin: 0; display: grid; container: evs / inline-size; }
+.ev { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3) 0; border-top: var(--border) solid var(--line-soft); }
+.ev:first-child { border-top: 0; }
+.ev .t { display: grid; gap: var(--space-1); align-content: start; }
+.ev .t > * { margin: 0; }
+.ev h2, .ev h3 { font-size: min(var(--fs-h3), 9vw); }
+.ev.cx h2 a, .ev.cx h3 a { color: var(--muted); }
+.dt {
+  margin: 0;
+  align-self: start;
+  padding: var(--space-1) 0.125rem;
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+  line-height: 1.15;
+  font-size: var(--fs-small);
+}
+.dt span, .dt b { display: block; }
+.dt b { font-family: var(--font-head); font-size: 1.75rem; font-weight: 600; }
+/* Too narrow for the date box beside the text: it becomes one line above it. */
+@container evs (width < 20rem) {
+  .ev { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .dt { justify-self: start; display: flex; align-items: baseline; gap: var(--space-2); padding: 0 var(--space-2); }
+  .dt b { font-size: 1.25rem; }
+}
+
+main > .calendar { max-width: none; }
+.calendar { container: calendar / inline-size; display: grid; gap: var(--space-4); }
+.month-nav { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.calgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.calgrid h2 { margin-top: 0; }
+/* The grid only where seven columns are readable at the reader's size; the
+   list beside it always carries the same events. */
+.monthbox { display: none; }
+@container calendar (min-width: 46rem) { .monthbox { display: block; } }
+@container calendar (min-width: 64rem) { .calgrid { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); } }
+.month { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--surface); }
+.month caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); padding-bottom: var(--space-2); }
+.month th { padding: var(--space-2) 0.125rem; background: var(--bg); border: var(--border) solid var(--line-soft); font-weight: 700; }
+.month abbr { text-decoration: none; }
+.month td { height: 6.75rem; padding: var(--space-1); vertical-align: top; border: var(--border) solid var(--line-soft); font-size: var(--fs-small); line-height: 1.25; overflow-wrap: break-word; }
+.month td.out { background: var(--bg); }
+.month td[aria-current="date"] { box-shadow: inset 0 0 0 0.1875rem var(--accent); }
+.month .n { display: block; font-weight: 700; }
+.month ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: var(--space-1); }
+.month a { display: block; min-height: 1.5rem; font-weight: 700; }
+.month .x a { color: var(--stop); text-decoration: line-through; }
+
+dl.facts { display: grid; gap: var(--space-3); }
+dl.facts div { display: grid; gap: 0; }
+dl.facts dt { font-weight: 700; color: var(--muted); }
+dl.facts dd { margin: 0; }
+.legend { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+
+/* Published items: the President's report, announcements, the treasurer's summaries. */
+.item { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); margin: var(--space-4) 0; }
+.item > * { margin: 0; }
+.offices .holder { display: block; }
+.members-note { padding: var(--space-2) var(--space-3); border-left: 0.375rem solid var(--members); background: var(--members-bg); color: var(--ink); }
+span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
+.picture-note { font-style: italic; color: var(--muted); }

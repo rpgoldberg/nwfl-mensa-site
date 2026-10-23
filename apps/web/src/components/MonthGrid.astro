@@ -1,0 +1,41 @@
+---
+// The month as a real table (R4): a caption, a header for each day of the
+// week, and each day's events as links. On a phone, or wherever it would be
+// too narrow to read, it is not shown and the list beside it carries the same
+// events (site.css).
+import { type GridDay, formatTime } from '../lib/calendar';
+import { formatDate } from '../data/format';
+
+interface Props {
+  caption: string;
+  weeks: GridDay[][];
+}
+const { caption, weeks } = Astro.props;
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+---
+<table class="month">
+  <caption>{caption}</caption>
+  <thead>
+    <tr>{DAYS.map((d) => <th scope="col"><abbr title={d}>{d.slice(0, 3)}</abbr></th>)}</tr>
+  </thead>
+  <tbody>
+    {weeks.map((week) => (
+      <tr>
+        {week.map((day) => day.inMonth ? (
+          <td aria-current={day.today ? 'date' : undefined}>
+            <span class="n"><span aria-hidden="true">{Number(day.date.slice(8))}</span><span class="visually-hidden">{formatDate(day.date)}</span></span>
+            {day.events.length > 0 && (
+              <ul>
+                {day.events.map((e) => (
+                  <li class={e.status === 'cancelled' ? 'x' : undefined} data-source={e.source}>
+                    <a href={e.path}>{e.status === 'cancelled' && 'Cancelled: '}{e.start && `${formatTime(e.start)} `}{e.title}</a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </td>
+        ) : <td class="out" />)}
+      </tr>
+    ))}
+  </tbody>
+</table>

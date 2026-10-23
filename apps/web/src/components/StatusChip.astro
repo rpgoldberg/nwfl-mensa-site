@@ -1,0 +1,19 @@
+---
+// An event's status in words, with its colour (design draft: Scheduled,
+// Tentative, Moved, Cancelled), and the officer's note beside it.
+import type { EventStatus } from '../lib/calendar';
+
+interface Props {
+  status: EventStatus;
+  note?: string;
+}
+const { status, note = '' } = Astro.props;
+const CHIPS: Record<EventStatus, { label: string; tone: string }> = {
+  scheduled: { label: 'Scheduled', tone: 'ok' },
+  tentative: { label: 'Tentative', tone: 'warn' },
+  moved: { label: 'Moved', tone: 'warn' },
+  cancelled: { label: 'Cancelled', tone: 'stop' },
+};
+const chip = CHIPS[status];
+---
+<p class="status"><span class={`chip ${chip.tone}`}>{chip.label}</span>{note && <span> {note}</span>}</p>
