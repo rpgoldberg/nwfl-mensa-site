@@ -3,7 +3,7 @@
 // box, its time and place in words, and its status. Phones get this list; it
 // sits beside the month grid on a wide screen.
 import StatusChip from './StatusChip.astro';
-import { type CalendarEvent, formatTime, placeText } from '../lib/calendar';
+import { type CalendarEvent, chipStatus, formatTime, placeText } from '../lib/calendar';
 import { formatDate } from '../data/format';
 
 interface Props {
@@ -14,6 +14,7 @@ interface Props {
   level?: 2 | 3;
 }
 const { events, label, level = 3 } = Astro.props;
+const now = new Date();
 const Heading = `h${level}` as 'h2' | 'h3';
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -32,7 +33,7 @@ const box = (date: string) => {
           <Heading><a href={e.path}>{e.title}</a></Heading>
           <p><span class="visually-hidden">{formatDate(e.date)}, </span>{e.start ? formatTime(e.start) : 'Time to be decided'} · {placeText(e)}</p>
           {e.venue?.kind === 'business' && <p class="muted">{e.area}</p>}
-          <StatusChip status={e.status} note={e.statusNote} />
+          <StatusChip status={chipStatus(e, now)} note={e.statusNote} />
         </div>
       </li>
     );
