@@ -42,13 +42,13 @@ test.describe('with JavaScript off', () => {
       await expect(html(page)).toHaveAttribute('data-size', String(SIZES[1]));
       await expect(slider(page)).toHaveValue('1');
 
-      await expect(panel(page).getByRole('button', { name: 'Match my phone or computer Chosen', exact: true })).toBeVisible();
+      await expect(panel(page).getByRole('button', { name: 'Match my current device Chosen', exact: true })).toBeVisible();
       await panel(page).getByRole('button', { name: /^Dark/ }).click();
       await expect(html(page)).toHaveAttribute('data-theme', 'dark');
       // The current choice says so, to the eye and to a screen reader.
       await expect(panel(page).getByRole('button', { name: 'Dark Chosen', exact: true })).toBeVisible();
       await expect(panel(page).getByRole('button', { name: 'Light', exact: true })).toBeVisible();
-      await expect(panel(page).getByRole('button', { name: 'Match my phone or computer', exact: true })).toBeVisible();
+      await expect(panel(page).getByRole('button', { name: 'Match my current device', exact: true })).toBeVisible();
       // A theme press keeps the size, though the form carries the slider too.
       await expect(html(page)).toHaveAttribute('data-size', String(SIZES[1]));
 
@@ -65,7 +65,7 @@ test.describe('with JavaScript off', () => {
       expect(jar[SIZE_COOKIE]!.expires - Date.now() / 1000).toBeGreaterThan(360 * 24 * 3600);
 
       await page.goto(`${path}#reader-menu`);
-      await panel(page).getByRole('button', { name: /^Match my phone or computer/ }).click();
+      await panel(page).getByRole('button', { name: /^Match my current device/ }).click();
       await expect(html(page)).not.toHaveAttribute('data-theme', /.*/);
       expect((await context.cookies()).map((c) => c.name)).not.toContain(THEME_COOKIE);
     });
@@ -74,7 +74,7 @@ test.describe('with JavaScript off', () => {
   test('offers the five themes in the menu order Ross chose', async ({ page }) => {
     await page.goto('/about#reader-menu');
     await expect(panel(page).locator('.theme-btn')).toHaveText([
-      /^Match my phone or computer/,
+      /^Match my current device/,
       /^Light/,
       /^Dark/,
       /^High contrast, soft yellow/,

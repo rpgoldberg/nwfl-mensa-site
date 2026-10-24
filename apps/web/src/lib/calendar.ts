@@ -78,6 +78,11 @@ export function chipStatus(e: Pick<CalendarEvent, 'date' | 'start' | 'end' | 'st
   return `${at.date} ${at.time}` < `${here.date} ${here.time}` ? 'past' : e.status;
 }
 
+/** The Google Calendar page that subscribes to a webcal:// feed (a plain link, no sign-in of ours). */
+export function googleCalendarUrl(webcalFeed: string): string {
+  return `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(webcalFeed)}`;
+}
+
 export function addDays(date: string, days: number): string {
   const day = new Date(`${date}T00:00:00Z`);
   day.setUTCDate(day.getUTCDate() + days);
