@@ -9,6 +9,7 @@ import {
   chipStatus,
   eventIdFromParam,
   eventPath,
+  googleCalendarUrl,
   formatTime,
   monthGrid,
   monthLabel,
@@ -227,5 +228,19 @@ describe('chipStatus', () => {
     expect(chipStatus({ ...ends('2026-10-03', '13:00'), status: 'tentative' }, noon)).toBe('past');
     expect(chipStatus({ ...ends('2026-10-03', '13:00'), status: 'moved' }, noon)).toBe('moved');
     expect(chipStatus({ ...ends('2026-10-03', '13:00'), status: 'cancelled' }, noon)).toBe('cancelled');
+  });
+});
+
+describe('googleCalendarUrl', () => {
+  it('puts the whole webcal feed URL, encoded, in the cid parameter', () => {
+    const feed = 'webcal://www.nwflorida.us/calendar.ics';
+    const url = googleCalendarUrl(feed);
+    expect(url).toBe('https://calendar.google.com/calendar/render?cid=webcal%3A%2F%2Fwww.nwflorida.us%2Fcalendar.ics');
+    expect(decodeURIComponent(new URL(url).search.slice('?cid='.length))).toBe(feed);
+  });
+
+  it('keeps a port in the feed URL', () => {
+    const url = googleCalendarUrl('webcal://localhost:4321/calendar.ics');
+    expect(new URL(url).searchParams.get('cid')).toBe('webcal://localhost:4321/calendar.ics');
   });
 });

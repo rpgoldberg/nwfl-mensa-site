@@ -86,6 +86,29 @@ test.describe('Events, the calendar', () => {
     await expect(page.getByRole('link', { name: 'Download the calendar file' })).toHaveAttribute('href', '/calendar.ics');
   });
 
+  test('offers Add to Google Calendar, a plain same-tab link to the same feed', async ({ page, baseURL }) => {
+    await page.goto('/events');
+    const host = new URL(baseURL!).host;
+    const google = page.getByRole('link', { name: 'Add to Google Calendar', exact: true });
+    await expect(google).toBeVisible();
+    await expect(google).not.toHaveAttribute('target', /.+/);
+    const href = (await google.getAttribute('href'))!;
+    const url = new URL(href);
+    expect(`${url.origin}${url.pathname}`).toBe('https://calendar.google.com/calendar/render');
+    expect(href).toBe(`https://calendar.google.com/calendar/render?cid=${encodeURIComponent(`webcal://${host}/calendar.ics`)}`);
+    expect(url.searchParams.get('cid')).toBe(`webcal://${host}/calendar.ics`);
+    await expect(page.getByRole('link', { name: 'Add our calendar', exact: true })).toHaveAttribute('href', `webcal://${host}/calendar.ics`);
+  });
+
+  test('tells Apple, Android and download readers apart in a short note', async ({ page }) => {
+    await page.goto('/events');
+    const note = page.locator('#subscribe-title').locator('xpath=..').locator('p.muted');
+    await expect(note).toContainText('iPhone, iPad and Mac');
+    await expect(note).toContainText('ICSx⁵');
+    await expect(note).toContainText("won't update");
+    await expect(note).not.toContainText('Other calendars');
+  });
+
   test('says when a month has no events, and asks the reader to write to the President at the verified address', async ({ page }) => {
     await page.goto(`/events?month=${EMPTY_MONTH}`);
     const empty = page.getByRole('note').filter({ hasText: 'No events are listed' });
