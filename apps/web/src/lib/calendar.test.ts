@@ -6,6 +6,7 @@ import {
   calendarRange,
   COMING_UP_DAYS,
   centralParts,
+  chipStatus,
   eventIdFromParam,
   eventPath,
   formatTime,
@@ -191,5 +192,40 @@ describe('toIcsEvent', () => {
 
   it('leaves out an end it does not know, and a time not yet set', () => {
     expect(toIcsEvent(event({ start: undefined, end: undefined }), origin)).toMatchObject({ start: { date: '2026-11-04', time: undefined }, end: undefined });
+  });
+});
+
+describe('chipStatus', () => {
+  // 2026-11-04 is CST (UTC-6): 18:00Z is 12:00 Central.
+  const noon = new Date('2026-11-04T18:00:00Z');
+  const ends = (date: string, time: string) => event({ date, end: { date, time } });
+
+  it('calls a scheduled occurrence whose end has passed "past"', () => {
+    expect(chipStatus(ends('2026-11-04', '11:59'), noon)).toBe('past');
+    expect(chipStatus(ends('2026-10-03', '13:00'), noon)).toBe('past');
+  });
+
+  it('keeps it scheduled while it runs, at its end minute, and when it is ahead', () => {
+    expect(chipStatus(ends('2026-11-04', '12:00'), noon)).toBe('scheduled');
+    expect(chipStatus(ends('2026-11-04', '13:00'), noon)).toBe('scheduled');
+    expect(chipStatus(ends('2026-11-05', '09:00'), noon)).toBe('scheduled');
+  });
+
+  it('uses the start when there is no end, and the whole day when there is no time', () => {
+    expect(chipStatus(event({ end: undefined, start: '11:30' }), noon)).toBe('past');
+    expect(chipStatus(event({ end: undefined, start: '12:30' }), noon)).toBe('scheduled');
+    expect(chipStatus(event({ end: undefined, start: undefined }), noon)).toBe('scheduled');
+    expect(chipStatus(event({ end: undefined, start: undefined, date: '2026-11-03' }), noon)).toBe('past');
+  });
+
+  it('judges the Central clock, not UTC', () => {
+    // 2026-11-05T01:00Z is still 19:00 on 11-04 in Central.
+    expect(chipStatus(ends('2026-11-04', '20:00'), new Date('2026-11-05T01:00:00Z'))).toBe('scheduled');
+  });
+
+  it('treats tentative like scheduled, and leaves moved and cancelled as they are', () => {
+    expect(chipStatus({ ...ends('2026-10-03', '13:00'), status: 'tentative' }, noon)).toBe('past');
+    expect(chipStatus({ ...ends('2026-10-03', '13:00'), status: 'moved' }, noon)).toBe('moved');
+    expect(chipStatus({ ...ends('2026-10-03', '13:00'), status: 'cancelled' }, noon)).toBe('cancelled');
   });
 });

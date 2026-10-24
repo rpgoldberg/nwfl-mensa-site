@@ -799,6 +799,7 @@ html[data-size="175"] .size-max-note { display: block; }
 .chip.ok { color: var(--ok); background: var(--ok-bg); }
 .chip.warn { color: var(--warn); background: var(--warn-bg); }
 .chip.stop { color: var(--stop); background: var(--stop-bg); }
+.chip.past { color: var(--ink); background: transparent; } /* neutral: plain text and its outline, 7:1+ on bg and surface in every theme */
 .status { margin: 0; }
 .btns { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 

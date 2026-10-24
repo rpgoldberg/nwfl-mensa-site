@@ -66,6 +66,18 @@ export function todayCentral(now: Date): string {
   return centralParts(now).date;
 }
 
+/**
+ * The status a chip shows. A scheduled or tentative occurrence that has ended
+ * (or started, with no end; or whose day is over, with no time) reads "past";
+ * moved and cancelled keep their own words. The API and the .ics are untouched.
+ */
+export function chipStatus(e: Pick<CalendarEvent, 'date' | 'start' | 'end' | 'status'>, now: Date): EventStatus | 'past' {
+  if (e.status !== 'scheduled' && e.status !== 'tentative') return e.status;
+  const at = e.end ?? { date: e.date, time: e.start ?? '23:59' };
+  const here = centralParts(now);
+  return `${at.date} ${at.time}` < `${here.date} ${here.time}` ? 'past' : e.status;
+}
+
 export function addDays(date: string, days: number): string {
   const day = new Date(`${date}T00:00:00Z`);
   day.setUTCDate(day.getUTCDate() + days);

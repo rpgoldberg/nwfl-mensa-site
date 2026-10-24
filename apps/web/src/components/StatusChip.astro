@@ -1,18 +1,20 @@
 ---
 // An event's status in words, with its colour (design draft: Scheduled,
-// Tentative, Moved, Cancelled), and the officer's note beside it.
+// Tentative, Moved, Cancelled; Past once it has happened), and the officer's
+// note beside it. Callers pass chipStatus(event, now).
 import type { EventStatus } from '../lib/calendar';
 
 interface Props {
-  status: EventStatus;
+  status: EventStatus | 'past';
   note?: string;
 }
 const { status, note = '' } = Astro.props;
-const CHIPS: Record<EventStatus, { label: string; tone: string }> = {
+const CHIPS: Record<EventStatus | 'past', { label: string; tone: string }> = {
   scheduled: { label: 'Scheduled', tone: 'ok' },
   tentative: { label: 'Tentative', tone: 'warn' },
   moved: { label: 'Moved', tone: 'warn' },
   cancelled: { label: 'Cancelled', tone: 'stop' },
+  past: { label: 'Past', tone: 'past' },
 };
 const chip = CHIPS[status];
 ---

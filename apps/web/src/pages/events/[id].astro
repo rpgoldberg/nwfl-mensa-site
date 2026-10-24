@@ -9,7 +9,7 @@ import Unavailable from '../../components/Unavailable.astro';
 import { liveData } from '../../data';
 import Base from '../../layouts/Base.astro';
 import { attempt, markUnavailable } from '../../lib/api/page';
-import { eventIdFromParam, whenText } from '../../lib/calendar';
+import { chipStatus, eventIdFromParam, whenText } from '../../lib/calendar';
 
 const id = eventIdFromParam(Astro.params['id']);
 const live = liveData();
@@ -27,7 +27,7 @@ const paragraphs = (text: string) => text.split(/\n\s*\n/).map((t) => t.trim()).
     <>
       {details.cadence && <p class="eyebrow">{details.cadence}</p>}
       <h1>{event.title}</h1>
-      <StatusChip status={event.status} note={event.statusNote} />
+      <StatusChip status={chipStatus(event, new Date())} note={event.statusNote} />
       <dl class="facts card" data-source={event.source}>
         <div><dt>When</dt><dd>{whenText(event)}</dd></div>
         <div>
@@ -61,6 +61,7 @@ const paragraphs = (text: string) => text.split(/\n\s*\n/).map((t) => t.trim()).
           <li><span class="chip warn">Tentative</span> Not confirmed yet. Check again the day before.</li>
           <li><span class="chip warn">Moved</span> New date or place. The note says where it went.</li>
           <li><span class="chip stop">Cancelled</span> Not happening. It stays listed so nobody is surprised.</li>
+          <li><span class="chip past">Past</span> This has already happened.</li>
         </ul>
       </section>
       <p><a href="/events">See all events</a></p>
