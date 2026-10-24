@@ -2,8 +2,7 @@
 // The frame of every page, after the design draft: skip link; header with the
 // NWFL monogram and the site name as text over the teal-and-sand stripe, the
 // wide-screen nav, Aa and Sign in (Help is on More); the Aa panel; breadcrumbs
-// and Back; the footer; the reading bar on long reads; and the phone's bottom
-// bar. The chrome is in px and one row, so only the content grows with the
+// and Back; the footer; and the phone's bottom bar. The chrome is in px and one row, so only the content grows with the
 // reader's size (W-LOOK). No script needed: Aa opens its panel as a link
 // target, and the reader's size and theme come from cookies.
 import '@fontsource/atkinson-hyperlegible/400.css';
@@ -20,16 +19,14 @@ import Breadcrumbs from '../components/Breadcrumbs.astro';
 import Icon from '../components/Icon.astro';
 import PrimaryNav from '../components/PrimaryNav.astro';
 import ReaderControls from '../components/ReaderControls.astro';
-import ReadingBar from '../components/ReadingBar.astro';
 import { SITE_NAME, trailFor } from '../lib/site';
 
 interface Props {
   path: string;
   title: string;
   description: string;
-  reading?: boolean | undefined;
 }
-const { path, title, description, reading = false } = Astro.props;
+const { path, title, description } = Astro.props;
 const trail = trailFor(path, title);
 const documentTitle = path === '/' ? SITE_NAME : `${title} | ${SITE_NAME}`;
 // A prerendered page is built with the defaults; the server wrapper stamps the
@@ -90,8 +87,7 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
       <p class="foot-links"><a href="/help">Help</a> <a href="/officers">Contact an officer</a> <a href="/home-screen">Put the club on your home screen</a></p>
       <p>{SITE_NAME} is the local group of American Mensa for the Florida Panhandle, west of the Apalachicola River.</p>
     </footer>
-    <div class={reading ? 'dock dock--reading' : 'dock'}>
-      {reading && <ReadingBar back={back} />}
+    <div class="dock">
       <PrimaryNav path={path} variant="bottom" />
     </div>
   </body>

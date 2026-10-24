@@ -65,14 +65,10 @@ export function readPrefs(cookieHeader) {
   };
 }
 
-/** The reading bar's Theme button walks this ring; undefined is the device setting. */
-const THEME_RING = /** @type {const} */ ([undefined, ...THEMES]);
-
 /**
  * One press of a reader control. `size` is "smaller" or "larger", or "set" for
  * the slider's Use this size, which takes the notch in `step` (0 to 6); `theme`
- * is a theme, "system" for the device setting, or "next" for the reading bar's
- * cycle. Anything else changes nothing.
+ * is a theme, or "system" for the device setting. Anything else changes nothing.
  *
  * @param {Prefs} prefs
  * @param {{ size?: string | undefined, step?: string | undefined, theme?: string | undefined }} change
@@ -85,7 +81,6 @@ export function applyChange(prefs, change) {
   if (change.size === 'smaller') size = SIZES[Math.max(at - 1, 0)] ?? size;
   if (change.size === 'set' && /^[0-6]$/.test(change.step ?? '')) size = SIZES[Number(change.step)] ?? size;
   if (change.theme === 'system') theme = undefined;
-  else if (change.theme === 'next') theme = THEME_RING[(THEME_RING.indexOf(theme) + 1) % THEME_RING.length];
   else theme = toTheme(change.theme) ?? theme;
   return { size, theme };
 }

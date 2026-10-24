@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
-import { PRIMARY_NAV, SITE_NAME, currentNav, sectionFor, trailFor } from '../src/lib/site';
+import { PRIMARY_NAV, SITE_NAME, currentNav, trailFor } from '../src/lib/site';
 import { ALL_PAGES, titleOf } from './pages';
 import { setPrefs } from './prefs';
 import { signIn } from './signin';
@@ -103,8 +103,6 @@ for (const path of ALL_PAGES) {
       const links = nav.getByRole('link');
       await expect(links).toHaveText(PRIMARY_NAV.map((n) => n.label));
       const bottomBar = page.viewportSize()!.width < 900;
-      // On a reading page the bottom bar sits at the end of the page (reader.spec.ts).
-      if (bottomBar && sectionFor(path)?.reading) await nav.scrollIntoViewIfNeeded();
       for (const item of PRIMARY_NAV) {
         const link = nav.getByRole('link', { name: item.label, exact: true });
         await expect(link).toHaveAttribute('href', item.href);
@@ -146,7 +144,6 @@ test('uses the self-hosted reading and heading fonts, and asks no other origin f
 });
 
 test('phones get the nav at the bottom, wide screens at the top', async ({ page }) => {
-  // Join is not a reading page: there the bottom bar stays on screen (reader.spec.ts).
   await page.goto('/join');
   const box = (await mainNav(page).boundingBox())!;
   const { height, width } = page.viewportSize()!;
@@ -225,36 +222,6 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 568, height: 320 }
       }
       expect(cut).toEqual([]);
     });
-  });
-}
-
-// The reading bar is chrome, in px: one row at every size, at most a quarter of
-// the screen's height, and on screen while reading except on a very short one.
-for (const viewport of [{ width: 320, height: 640 }, { width: 375, height: 667 }, { width: 412, height: 915 }, { width: 568, height: 320 }, { width: 1280, height: 800 }]) {
-  test(`the reading bar at ${viewport.width}x${viewport.height} is one row, the same at every size, a quarter of the screen at most`, async ({ page, context, baseURL }) => {
-    await page.setViewportSize(viewport);
-    const heights = new Set<number>();
-    for (const size of [SIZES[0], SIZES[3], SIZES[6]]) {
-      await setPrefs(context, baseURL!, { size });
-      await page.goto('/about');
-      await expect(page.locator('html')).toHaveAttribute('data-size', String(size));
-      const bar = await page.evaluate(() => {
-        const el = document.querySelector<HTMLElement>('.reading-bar')!;
-        // The buttons shown: A+ and "Largest size for this screen" take turns (W3).
-        const shown = [...el.querySelectorAll('button')].filter((b) => b.getClientRects().length > 0);
-        return {
-          rows: new Set(shown.map((b) => Math.round(b.getBoundingClientRect().top))).size,
-          sticky: getComputedStyle(el).position === 'sticky',
-          height: Math.round(el.getBoundingClientRect().height),
-        };
-      });
-      const label = `${size} %`;
-      expect(bar.rows, label).toBe(1);
-      expect(bar.sticky, label).toBe(true);
-      expect(bar.height / viewport.height, label).toBeLessThanOrEqual(0.25);
-      heights.add(bar.height);
-    }
-    expect(heights.size).toBe(1);
   });
 }
 
@@ -403,7 +370,7 @@ for (const width of [320, 360, 412]) {
         await setPrefs(context, baseURL!, { size });
         await page.goto('/more');
         await page.evaluate(() => document.fonts.ready);
-        expect(await brokenWords(page, '.bottom-nav .nav-label, .reading-bar .rb'), `${size} %`).toEqual([]);
+        expect(await brokenWords(page, '.bottom-nav .nav-label'), `${size} %`).toEqual([]);
         const tops = await page.locator('.bottom-nav li').evaluateAll((items) => items.map((li) => Math.round(li.getBoundingClientRect().top)));
         expect(tops, `${size} %`).toHaveLength(4);
         expect(new Set(tops).size, `${size} %`).toBe(1);

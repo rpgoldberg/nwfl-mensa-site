@@ -25,10 +25,6 @@ describe('SECTIONS (R1)', () => {
     expect(SECTIONS.filter((s) => s.prerender).map((s) => s.path)).toEqual(['/about', '/join', '/governance']);
   });
 
-  it('gives the long-read pages, About and Governance, the reading bar (R30)', () => {
-    expect(SECTIONS.filter((s) => s.reading).map((s) => s.path)).toEqual(['/about', '/governance']);
-  });
-
   it('heads the calendar and the newsletter with their nav words, Events and News', () => {
     expect(page('/events').title).toBe('Events');
     expect(page('/news').title).toBe('News');

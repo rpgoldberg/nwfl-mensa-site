@@ -5,7 +5,6 @@ import { setPrefs } from './prefs';
 const html = (page: Page) => page.locator('html');
 const panel = (page: Page) => page.locator('#reader-menu');
 const slider = (page: Page) => panel(page).getByRole('slider', { name: 'Text size' });
-const readingBar = (page: Page) => page.getByRole('form', { name: 'Reading' });
 /** The size the panel shows in large figures. */
 const readout = (page: Page) => panel(page).locator('.sz-now [data-for-size]:visible');
 
@@ -100,32 +99,6 @@ test.describe('with JavaScript off', () => {
       await expect(html(page), path).toHaveAttribute('data-theme', 'contrast-white');
       await expect(slider(page), path).toHaveValue('6');
       await expect(panel(page).getByRole('button', { name: 'High contrast, warm white Chosen', exact: true }), path).toBeVisible();
-    }
-  });
-
-  test('the reading bar is on reading pages only, and changes size and theme in one press each', async ({ page }) => {
-    await page.goto('/');
-    await expect(readingBar(page)).toHaveCount(0);
-    await page.goto('/governance');
-    await expect(readingBar(page)).toBeVisible();
-    await page.goto('/about');
-    await readingBar(page).getByRole('button', { name: /^A\+ Larger/ }).click();
-    await expect(page).toHaveURL(/\/about$/);
-    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[4]));
-    await readingBar(page).getByRole('button', { name: /^A− Smaller/ }).click();
-    await expect(html(page)).toHaveAttribute('data-size', String(SIZES[3]));
-    // Each press moves to the next theme, in menu order; a screen reader hears which one is on.
-    for (const [theme, label] of [
-      ['light', 'Light'],
-      ['dark', 'Dark'],
-      ['contrast-yellow', 'High contrast, soft yellow'],
-      ['contrast-white', 'High contrast, warm white'],
-      [null, 'matching your device'],
-    ] as const) {
-      await readingBar(page).getByRole('button', { name: /^Theme/ }).click();
-      if (theme) await expect(html(page)).toHaveAttribute('data-theme', theme);
-      else await expect(html(page)).not.toHaveAttribute('data-theme', /.*/);
-      await expect(readingBar(page).getByRole('button', { name: `Theme (now ${label})`, exact: true })).toBeVisible();
     }
   });
 });
@@ -276,21 +249,6 @@ test('the slider is a native range of seven notches, with a thumb of at least 36
   if (!Number.isNaN(thumb)) expect(thumb).toBeGreaterThanOrEqual(36);
 });
 
-test('the reading bar sits at the foot of the screen, with the bottom bar at the end of the page', async ({ page }) => {
-  await page.goto('/about');
-  const bar = (await readingBar(page).boundingBox())!;
-  const { width, height } = page.viewportSize()!;
-  expect(bar.y + bar.height).toBeCloseTo(height, 0);
-  if (width < 900) {
-    const nav = page.locator('.bottom-nav');
-    expect((await nav.boundingBox())!.y).toBeGreaterThanOrEqual(height);
-    await nav.scrollIntoViewIfNeeded();
-    // At the end of the page the reading bar comes to rest above it.
-    const atEnd = (await readingBar(page).boundingBox())!;
-    expect(atEnd.y + atEnd.height).toBeLessThanOrEqual((await nav.boundingBox())!.y + 1);
-  }
-});
-
 test('every reader control shows a focus ring of at least 3px when reached by keyboard', async ({ page }) => {
   await page.goto('/about#reader-menu');
   // .all() does not wait: let the panel open on its fragment first.
@@ -298,10 +256,9 @@ test('every reader control shows a focus ring of at least 3px when reached by ke
   const controls = [
     ...(await panel(page).getByRole('button').all()),
     slider(page),
-    ...(await readingBar(page).getByRole('button').all()),
   ];
-  // A−, A+, five themes and the slider; Smaller, Larger and Theme (Use this size is hidden with a script).
-  expect(controls.length).toBe(11);
+  // A−, A+, five themes and the slider (Use this size is hidden with a script).
+  expect(controls.length).toBe(8);
   for (const control of controls) {
     // Arrive by keyboard: step off the control and back with the Tab key.
     await control.focus();
@@ -342,31 +299,40 @@ const pinned = (page: Page) =>
 test.describe('on a phone (412 x 915)', () => {
   test.use({ viewport: { width: 412, height: 915 } });
 
-  for (const size of [SIZES[0], SIZES[4], SIZES[6]]) {
-    test(`at ${size} % on a reading page only the reading bar stays on screen, in one row, and the bottom bar sits at the end of the page`, async ({ page, context, baseURL }) => {
-      await setPrefs(context, baseURL!, { size });
-      await page.goto('/about');
-      expect(await pinned(page)).toEqual(['reading-bar']);
-      const tops = await readingBar(page).getByRole('button').evaluateAll((buttons) => buttons.map((b) => Math.round(b.getBoundingClientRect().top)));
-      expect(new Set(tops).size).toBe(1);
-      expect((await page.locator('.bottom-nav').boundingBox())!.y).toBeGreaterThanOrEqual(915);
-    });
-
-    test(`at ${size} % elsewhere the bottom bar stays on screen, one row of four`, async ({ page, context, baseURL }) => {
-      await setPrefs(context, baseURL!, { size });
-      await page.goto('/more');
+  // Ross, 10-24: no reading bar. Every page keeps the main navigation; text size and theme live in the Aa panel only.
+  for (const path of ['/about', '/governance']) {
+    test(`${path} shows the bottom nav on screen and no size or theme buttons outside the Aa panel`, async ({ page }) => {
+      await page.goto(path);
+      const nav = page.getByRole('navigation', { name: 'Main' }).and(page.locator('.bottom-nav'));
+      await expect(nav.getByRole('link')).toHaveText(['Home', 'Events', 'News', 'More']);
+      for (const link of await nav.getByRole('link').all()) await expect(link).toBeInViewport();
+      await expect(page.getByRole('form', { name: 'Reading' })).toHaveCount(0);
+      await expect(page.locator('button:not(#reader-menu button)').filter({ hasText: /Smallest|Smaller|Larger|Largest|Theme/ })).toHaveCount(0);
       expect(await pinned(page)).toEqual(['dock']);
     });
   }
 
+  for (const size of [SIZES[0], SIZES[4], SIZES[6]]) {
+    for (const path of ['/about', '/more']) {
+      test(`at ${size} % on ${path} the bottom bar stays on screen, one row of four`, async ({ page, context, baseURL }) => {
+        await setPrefs(context, baseURL!, { size });
+        await page.goto(path);
+        expect(await pinned(page)).toEqual(['dock']);
+        const tops = await page.locator('.bottom-nav li').evaluateAll((items) => items.map((li) => Math.round(li.getBoundingClientRect().top)));
+        expect(tops).toHaveLength(4);
+        expect(new Set(tops).size).toBe(1);
+      });
+    }
+  }
+
   for (const size of [SIZES[0], SIZES[6]]) {
-    test(`at ${size} % keyboard focus is never hidden behind the reading bar`, async ({ page, context, baseURL }) => {
+    test(`at ${size} % keyboard focus is never hidden behind the bottom bar`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       await page.goto('/about');
       for (const link of await page.getByRole('main').getByRole('link').all()) {
         await link.focus();
         const box = (await link.boundingBox())!;
-        const bar = (await readingBar(page).boundingBox())!;
+        const bar = (await page.locator('.dock').boundingBox())!;
         expect(box.y + box.height, (await link.textContent()) ?? '').toBeLessThanOrEqual(bar.y + 1);
       }
     });
@@ -377,7 +343,7 @@ test.describe('on a phone (412 x 915)', () => {
 // 175 % A+ gives way to a disabled "Largest size for this screen"; on a screen
 // so narrow that 175 % is capped under 140 % (below 256 px), at 140 %
 // too. At 75 % A− gives way to a disabled "Smallest size". Checked in the Aa
-// panel and in the reading bar.
+// panel.
 test.describe('A+ and A− never silently do nothing', () => {
   const rootSize = (page: Page) => page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
 
@@ -386,7 +352,6 @@ test.describe('A+ and A− never silently do nothing', () => {
       await page.setViewportSize({ width, height: 800 });
       for (const [where, controls] of [
         ['Aa panel', () => panel(page)],
-        ['reading bar', () => readingBar(page)],
       ] as const) {
         for (const size of SIZES) {
           const label = `${where}, ${size} %`;
@@ -418,20 +383,18 @@ test.describe('A+ and A− never silently do nothing', () => {
     });
   }
 
-  test(`at ${SIZES[6]} % A+ is disabled and says so, in both places; at ${SIZES[0]} % A− is`, async ({ page, context, baseURL }) => {
+  test(`at ${SIZES[6]} % A+ is disabled and says so, in the Aa panel; at ${SIZES[0]} % A− is`, async ({ page, context, baseURL }) => {
     await setPrefs(context, baseURL!, { size: SIZES[6] });
     await page.goto('/about#reader-menu');
-    for (const controls of [panel(page), readingBar(page)]) {
+    for (const controls of [panel(page)]) {
       await expect(controls.getByRole('button', { name: /Largest size for this screen/ })).toBeDisabled();
       await expect(controls.getByRole('button', { name: /A\+ Larger/ })).toBeHidden();
     }
-    // In words in the panel; one word, as on its neighbours, in the reading bar.
     await expect(panel(page).getByText('Largest size for this screen.')).toBeVisible();
-    await expect(readingBar(page).getByRole('button', { name: /Largest size for this screen/ })).toHaveText(/^\s*A\+\s*Largest/);
     await setPrefs(context, baseURL!, { size: SIZES[0] });
     await page.goto('about:blank');
     await page.goto('/about#reader-menu');
-    for (const controls of [panel(page), readingBar(page)]) {
+    for (const controls of [panel(page)]) {
       await expect(controls.getByRole('button', { name: /Smallest size/ })).toBeDisabled();
       await expect(controls.getByRole('button', { name: /A− Smaller/ })).toBeHidden();
     }

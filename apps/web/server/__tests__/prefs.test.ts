@@ -117,19 +117,11 @@ describe('applyChange', () => {
     expect(applyChange({ size: SIZES[4], theme: 'dark' }, { theme: 'system' })).toEqual({ size: SIZES[4], theme: undefined });
   });
 
-  it('cycles the theme for the reading bar in menu order: device, light, dark, soft yellow, warm white, device', () => {
-    const seen: (string | undefined)[] = [];
-    let prefs = applyChange(DEFAULT_PREFS, {});
-    for (let i = 0; i < 5; i++) {
-      prefs = applyChange(prefs, { theme: 'next' });
-      seen.push(prefs.theme);
-    }
-    expect(seen).toEqual(['light', 'dark', 'contrast-yellow', 'contrast-white', undefined]);
-  });
-
   it('changes nothing for a value it does not know', () => {
     const prefs = { size: SIZES[5], theme: 'dark' as const };
     expect(applyChange(prefs, { size: 'huge', theme: 'neon' })).toEqual(prefs);
+    // The reading bar's cycle is gone: "next" is a value it does not know.
+    expect(applyChange(prefs, { theme: 'next' })).toEqual(prefs);
     expect(applyChange(prefs, { theme: 'contrast' })).toEqual(prefs);
     expect(applyChange(prefs, {})).toEqual(prefs);
   });
