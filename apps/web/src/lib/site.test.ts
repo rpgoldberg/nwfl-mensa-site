@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ABOUT_NAV, MENSA_LINKS, MORE_PAGES, PRIMARY_NAV, SECTIONS, currentNav, page, sectionFor, trailFor } from './site';
+import { ABOUT_NAV, MENSA_LINKS, MORE_GROUPS, MORE_PAGES, PRIMARY_NAV, SECTIONS, currentNav, page, sectionFor, trailFor } from './site';
 
 describe('SECTIONS (R1)', () => {
   it('has the nine public sections, each with a heading and a one-line description', () => {
@@ -23,10 +23,6 @@ describe('SECTIONS (R1)', () => {
 
   it('prerenders About, Join and Governance only', () => {
     expect(SECTIONS.filter((s) => s.prerender).map((s) => s.path)).toEqual(['/about', '/join', '/governance']);
-  });
-
-  it('gives the long-read pages, About and Governance, the reading bar (R30)', () => {
-    expect(SECTIONS.filter((s) => s.reading).map((s) => s.path)).toEqual(['/about', '/governance']);
   });
 
   it('heads the calendar and the newsletter with their nav words, Events and News', () => {
@@ -157,5 +153,26 @@ describe('trailFor (breadcrumbs and Back)', () => {
       { label: 'Home', href: '/' },
       { label: 'Join', href: '/join' },
     ]);
+  });
+});
+
+describe('MORE_GROUPS', () => {
+  it('has three groups, in order, each with the rows the More page shows', () => {
+    expect(MORE_GROUPS.map((g) => [g.id, g.title, g.rows.map((r) => [r.title, r.href])])).toEqual([
+      ['club', 'The club', [['About us', '/about'], ['Officers', '/officers'], ['Governance', '/governance'], ['Meeting minutes', '/minutes'], ['Finances', '/finances']]],
+      ['on', "What\u2019s on", [['Events', '/events'], ['News', '/news'], ['Search', '/search']]],
+      ['join', 'Join and get help', [['Join Mensa', '/join'], ['Help', '/help'], ['Contact an officer', '/officers'], ['Put the club on your home screen', '/home-screen']]],
+    ]);
+  });
+
+  it('gives every row a one-line description, and lists every page MORE_PAGES lists', () => {
+    const rows = MORE_GROUPS.flatMap((g) => g.rows);
+    expect(rows).toHaveLength(12);
+    for (const r of rows) expect(r.description, r.title).toMatch(/^[A-Z][^\n]+[^.]$/);
+    for (const p of MORE_PAGES) expect(rows.map((r) => r.href), p.path).toContain(p.path);
+  });
+
+  it('keeps the More page description off the retired line', () => {
+    expect(page('/more').description).not.toMatch(/^Every part/);
   });
 });

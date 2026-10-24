@@ -23,7 +23,7 @@ body {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  /* The reading bar asks how wide the page is (below). */
+  /* Content blocks ask how wide the page is (@container page, below). */
   container: page / inline-size;
 }
 
@@ -64,8 +64,8 @@ h3 { font-size: min(var(--fs-h3), 9vw); }
 }
 .skip-link:focus { transform: none; }
 
-/* The chrome (W-LOOK): the header, the breadcrumbs, the Aa panel, the reading
-   bar and the bottom bar are in px and stay one row, so they never grow with
+/* The chrome (W-LOOK): the header, the breadcrumbs, the Aa panel and the
+   bottom bar are in px and stay one row, so they never grow with
    the reader's size; only the content does. Every target is 48 px at least. */
 
 /* Header: the NWFL monogram and the site name as text, the wide-screen nav,
@@ -399,44 +399,6 @@ html[data-theme="dark"] .theme-btn[value="dark"] .chosen,
 html[data-theme="contrast-yellow"] .theme-btn[value="contrast-yellow"] .chosen,
 html[data-theme="contrast-white"] .theme-btn[value="contrast-white"] .chosen { display: inline-flex; }
 
-/* The reading bar: the same controls, one press each, at the foot of the screen. */
-.reading-bar {
-  display: flex;
-  justify-content: space-around;
-  gap: 4px;
-  padding: 4px;
-  background: var(--surface);
-  border-top: var(--border) solid var(--line);
-  font-size: 14px;
-}
-.rb {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 58px;
-  max-width: 192px;
-  white-space: nowrap;
-  padding: 2px 4px;
-  border: 0;
-  border-radius: var(--radius);
-  background: none;
-  color: var(--ink);
-  font-weight: 700;
-  font-size: 14px;
-  line-height: 1.2;
-  cursor: pointer;
-}
-.rb svg { width: 24px; height: 24px; }
-.rb-big { font-family: var(--font-head); font-size: 22px; line-height: 1.1; }
-.reading-bar [data-for-theme] { display: none; }
-html:not([data-theme]) .reading-bar [data-for-theme="system"],
-html[data-theme="light"] .reading-bar [data-for-theme="light"],
-html[data-theme="dark"] .reading-bar [data-for-theme="dark"],
-html[data-theme="contrast-yellow"] .reading-bar [data-for-theme="contrast-yellow"],
-html[data-theme="contrast-white"] .reading-bar [data-for-theme="contrast-white"] { display: inline; }
-
 /* Primary nav: the same four links, words at the top on wide screens, icons
    and words in a bottom bar on phones. Fixed in px: one row of four, always. */
 .nav-list {
@@ -483,17 +445,13 @@ html[data-theme="contrast-white"] .reading-bar [data-for-theme="contrast-white"]
 }
 .bottom-nav .nav-link[aria-current="page"] { border-top-color: var(--accent); }
 
-/* The dock holds the reading bar and the phone's bottom bar, at the foot of
-   the screen while the page scrolls (both are fixed in px, so they never take
-   over the screen). On a reading page only the reading bar stays there, and
-   the bottom bar sits at the end of the page. On a short screen (landscape)
-   neither does. Sticky, not fixed: each keeps its own space, so neither
-   covers the end of the page. */
+/* The dock holds the phone's bottom bar, at the foot of the screen while the
+   page scrolls (fixed in px, so it never takes over the screen). On a short
+   screen (landscape) it does not. Sticky, not fixed: it keeps its own space,
+   so it never covers the end of the page. */
 .dock { display: contents; }
-.reading-bar { position: sticky; bottom: 0; z-index: 10; }
-@media (max-height: 299.98px) { .reading-bar { position: static; } }
 @media (max-width: 899.98px) and (min-height: 480px) {
-  .dock:not(.dock--reading) {
+  .dock {
     display: block;
     position: sticky;
     bottom: 0;
@@ -517,8 +475,6 @@ html { scroll-padding-bottom: 72px; }
   .wordmark__place { font-size: 16px; }
   .wordmark__name { font-size: 26px; }
   .account .who { padding: 0 4px; }
-  .reading-bar { justify-content: center; gap: 24px; }
-  .rb { flex: 0 0 auto; padding: 2px 12px; }
 }
 
 /* The page column. */
@@ -601,6 +557,67 @@ main:focus:not(:focus-visible) { outline: none; }
 .link-list { list-style: none; padding: 0; }
 .link-list li { margin: 0 0 var(--space-2); }
 .link-list a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+
+/* More: three groups, each an h2 over one card of whole-row links (W-LOOK, option B with plum).
+   Colour is only the icon tile and the card's 4 px top edge; the text keeps ink, accent and muted.
+   Tile, gap and padding are px like the chrome; type is rem, so rows grow and titles wrap at 175 %. */
+.more-group--club { --tile: var(--grp-club-tile); --icon: var(--grp-club-icon); --edge: var(--grp-club-edge); }
+.more-group--on { --tile: var(--grp-on-tile); --icon: var(--grp-on-icon); --edge: var(--grp-on-edge); }
+.more-group--join { --tile: var(--grp-join-tile); --icon: var(--grp-join-icon); --edge: var(--grp-join-edge); }
+.more-group h2 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: var(--fs-small);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.more-card {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--edge);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.more-card li + li { border-top: 1px solid var(--line-soft); }
+/* The row is one link: the title's link stretches over the whole row (its ::after), so the
+   link's name is the title alone, and the line under it, the icon and the chevron are all clickable. */
+.more-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px;
+}
+.more-row:hover { background: var(--bg); }
+.more-title::after { content: ""; position: absolute; inset: 0; }
+.more-title:focus-visible { outline: none; }
+.more-title:focus-visible::after { outline: var(--focus-width) solid var(--focus); outline-offset: -3px; }
+.more-tile {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--tile);
+  color: var(--icon);
+}
+.more-tile svg { width: 26px; height: 26px; }
+.more-text { min-width: 0; }
+.more-title { display: block; font-size: 1.15rem; font-weight: 700; line-height: 1.3; text-decoration: none; }
+.more-desc { margin: 2px 0 0; font-size: var(--fs-small); line-height: 1.35; color: var(--muted); }
+.more-go { display: grid; place-items: center; color: var(--muted); }
+.more-go svg { width: 24px; height: 24px; }
+@media (min-width: 900px) {
+  main > .more-groups { max-width: none; display: grid; grid-template-columns: 1fr 1fr; column-gap: var(--space-6); align-items: start; }
+  /* The five-row club card runs down the left; the other two stack on the right. */
+  .more-group--club { grid-row: span 2; }
+  .more-group h2 { margin-top: var(--space-4); }
+}
 
 .site-footer {
   width: 100%;
@@ -773,13 +790,10 @@ html[data-size="175"] .size-up,
 html[data-size="75"] .size-down { display: none; }
 html[data-size="175"] .size-max,
 html[data-size="75"] .size-min { display: inline-flex; }
-html[data-size="175"] .rb.size-max,
-html[data-size="75"] .rb.size-min { display: flex; }
 html[data-size="175"] .size-max-note { display: block; }
 @media (max-width: 16em) {
   html[data-size="140"] .size-up { display: none; }
   html[data-size="140"] .size-max { display: inline-flex; }
-  html[data-size="140"] .rb.size-max { display: flex; }
   html[data-size="140"] .size-max-note { display: block; }
 }
 

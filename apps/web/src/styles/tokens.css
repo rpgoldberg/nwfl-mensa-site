@@ -59,6 +59,10 @@
   --warn: #6e4400;    --warn-bg: #fbefd9;     /* Moved, Tentative */
   --stop: #8a1414;    --stop-bg: #fbe4e4;     /* Cancelled */
   --members: #563a8e; --members-bg: #eee8f7;  /* members-only passages and events */
+  /* The More page's three groups: icon tile, icon and the card's 4 px top edge. Colour only there; text keeps ink and accent. */
+  --grp-club-tile: #d9ecef; --grp-club-icon: #0b5c6e; --grp-club-edge: #0b5c6e;
+  --grp-on-tile: #ede4f7;   --grp-on-icon: #5b2d91;   --grp-on-edge: #6b3fa0;
+  --grp-join-tile: #e3e6f5; --grp-join-icon: #2a3a8f; --grp-join-edge: #2a3a8f;
   color-scheme: light;
 }
 
@@ -80,6 +84,9 @@ html[data-size="175"] { font-size: min(175%, 8.75vw); }
     --line: #5d7783; --line-soft: #263b45; --focus: #ffad66;
     --ok: #9fdcae; --ok-bg: #13301d; --warn: #f3c27a; --warn-bg: #33270f;
     --stop: #ffaaa5; --stop-bg: #3a1717; --members: #cdb8f5; --members-bg: #261d3a;
+    --grp-club-tile: #1d4550; --grp-club-icon: #9fdbe8; --grp-club-edge: #5fb8cb;
+    --grp-on-tile: #3a2860; --grp-on-icon: #d4c0f5; --grp-on-edge: #a98be0;
+    --grp-join-tile: #2a3466; --grp-join-icon: #c3caf5; --grp-join-edge: #8f9be0;
     color-scheme: dark;
   }
 }
@@ -89,6 +96,9 @@ html[data-theme="dark"] {
   --line: #5d7783; --line-soft: #263b45; --focus: #ffad66;
   --ok: #9fdcae; --ok-bg: #13301d; --warn: #f3c27a; --warn-bg: #33270f;
   --stop: #ffaaa5; --stop-bg: #3a1717; --members: #cdb8f5; --members-bg: #261d3a;
+  --grp-club-tile: #1d4550; --grp-club-icon: #9fdbe8; --grp-club-edge: #5fb8cb;
+  --grp-on-tile: #3a2860; --grp-on-icon: #d4c0f5; --grp-on-edge: #a98be0;
+  --grp-join-tile: #2a3466; --grp-join-icon: #c3caf5; --grp-join-edge: #8f9be0;
   color-scheme: dark;
 }
 
@@ -99,6 +109,9 @@ html[data-theme="contrast-yellow"] {
   --line: #000000; --line-soft: #3d3d3d; --focus: #b3470b;
   --ok: #0b4f1c; --ok-bg: #e3f0d0; --warn: #4d3200; --warn-bg: #ffe9a8;
   --stop: #8a0000; --stop-bg: #fbe0d0; --members: #3b1f80; --members-bg: #ece3f0;
+  --grp-club-tile: #f0e7a8; --grp-club-icon: #000000; --grp-club-edge: #0b5c6e;
+  --grp-on-tile: #f0e7a8; --grp-on-icon: #000000; --grp-on-edge: #6b3fa0;
+  --grp-join-tile: #f0e7a8; --grp-join-icon: #000000; --grp-join-edge: #2a3a8f;
   color-scheme: light;
 }
 
@@ -110,6 +123,9 @@ html[data-theme="contrast-yellow"] {
     --line: #000000; --line-soft: #3d3d3d; --focus: #b3470b;
     --ok: #0b4f1c; --ok-bg: #e6f4ea; --warn: #5a3a00; --warn-bg: #fff1cc;
     --stop: #8a0000; --stop-bg: #fde8e8; --members: #3b1f80; --members-bg: #efe9fb;
+    --grp-club-tile: #e6ecfa; --grp-club-icon: #000000; --grp-club-edge: #0b5c6e;
+    --grp-on-tile: #e6ecfa; --grp-on-icon: #000000; --grp-on-edge: #6b3fa0;
+    --grp-join-tile: #e6ecfa; --grp-join-icon: #000000; --grp-join-edge: #2a3a8f;
     color-scheme: light;
   }
 }
@@ -119,6 +135,9 @@ html[data-theme="contrast-white"] {
   --line: #000000; --line-soft: #3d3d3d; --focus: #b3470b;
   --ok: #0b4f1c; --ok-bg: #e6f4ea; --warn: #5a3a00; --warn-bg: #fff1cc;
   --stop: #8a0000; --stop-bg: #fde8e8; --members: #3b1f80; --members-bg: #efe9fb;
+  --grp-club-tile: #e6ecfa; --grp-club-icon: #000000; --grp-club-edge: #0b5c6e;
+  --grp-on-tile: #e6ecfa; --grp-on-icon: #000000; --grp-on-edge: #6b3fa0;
+  --grp-join-tile: #e6ecfa; --grp-join-icon: #000000; --grp-join-edge: #2a3a8f;
   color-scheme: light;
 }
 
