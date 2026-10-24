@@ -13,7 +13,11 @@ function block(selector: RegExp): Record<string, string> {
   return Object.fromEntries([...m[1]!.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})\b/gi)].map(([, name, value]) => [name!, value!.toLowerCase()]));
 }
 
-const COLOURS = ['bg', 'surface', 'ink', 'muted', 'accent', 'on-accent', 'accent-soft', 'line', 'line-soft', 'focus', 'ok', 'ok-bg', 'warn', 'warn-bg', 'stop', 'stop-bg', 'members', 'members-bg'];
+/** The More page's group colours (tile, icon, 4 px top edge), per theme. */
+const GROUPS = ['club', 'on', 'join'] as const;
+const GROUP_COLOURS = GROUPS.flatMap((g) => [`grp-${g}-tile`, `grp-${g}-icon`, `grp-${g}-edge`]);
+
+const COLOURS = ['bg', 'surface', 'ink', 'muted', 'accent', 'on-accent', 'accent-soft', 'line', 'line-soft', 'focus', 'ok', 'ok-bg', 'warn', 'warn-bg', 'stop', 'stop-bg', 'members', 'members-bg', ...GROUP_COLOURS];
 
 const light = block(/:root/);
 const THEMES: Record<string, Record<string, string>> = {
@@ -68,6 +72,17 @@ describe('contrast, computed from tokens.css', () => {
         ...TEXT.filter(([fg, bg]) => contrast(theme[fg]!, theme[bg]!) < 7).map(([fg, bg]) => `${fg}/${bg} ${contrast(theme[fg]!, theme[bg]!).toFixed(2)}`),
         ...NON_TEXT.filter(([fg, bg]) => contrast(theme[fg]!, theme[bg]!) < 3).map(([fg, bg]) => `${fg}/${bg} ${contrast(theme[fg]!, theme[bg]!).toFixed(2)}`),
       ];
+      expect(low).toEqual([]);
+    });
+  }
+
+  for (const [name, theme] of Object.entries(THEMES)) {
+    it(`${name}: each More group's icon is at least 3:1 on its tile, and its edge at least 3:1 on the page and the card`, () => {
+      const low = GROUPS.flatMap((g) => [
+        [`grp-${g}-icon`, `grp-${g}-tile`],
+        [`grp-${g}-edge`, 'bg'],
+        [`grp-${g}-edge`, 'surface'],
+      ] as const).filter(([fg, bg]) => contrast(theme[fg]!, theme[bg]!) < 3).map(([fg, bg]) => `${fg}/${bg} ${contrast(theme[fg]!, theme[bg]!).toFixed(2)}`);
       expect(low).toEqual([]);
     });
   }

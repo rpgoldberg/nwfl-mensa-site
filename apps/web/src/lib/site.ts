@@ -75,12 +75,63 @@ const SEARCH: Page = { path: '/search', title: 'Search', description: 'Search th
 /** What the More page lists: every section but Home, then Search, Help and the home-screen how-to. */
 export const MORE_PAGES: readonly Page[] = [...SECTIONS.filter((s) => s.path !== '/'), SEARCH, HELP, HOME_SCREEN];
 
+/** Icons the More page's rows use (drawn in components/Icon.astro). */
+export type MoreIcon = 'info' | 'users' | 'scale' | 'doc' | 'coin' | 'calendar' | 'newsletter' | 'search' | 'join' | 'help' | 'mail' | 'phone';
+
+export interface MoreRow {
+  title: string;
+  description: string;
+  href: string;
+  icon: MoreIcon;
+}
+
+export interface MoreGroup {
+  /** Names the group's colour tokens (--grp-<id>-tile, -icon, -edge). */
+  id: 'club' | 'on' | 'join';
+  title: string;
+  rows: readonly MoreRow[];
+}
+
+/** The More page: three groups of rows (Ross approved, 2026-10-24). Every page in MORE_PAGES is a row. */
+export const MORE_GROUPS: readonly MoreGroup[] = [
+  {
+    id: 'club',
+    title: 'The club',
+    rows: [
+      { title: 'About us', description: 'Who we are and how to visit', href: '/about', icon: 'info' },
+      { title: 'Officers', description: 'Who holds each office, and how to reach them', href: '/officers', icon: 'users' },
+      { title: 'Governance', description: 'Bylaws and how the group is run', href: '/governance', icon: 'scale' },
+      { title: 'Meeting minutes', description: 'What the ExComm decided', href: '/minutes', icon: 'doc' },
+      { title: 'Finances', description: 'Treasurer reports', href: '/finances', icon: 'coin' },
+    ],
+  },
+  {
+    id: 'on',
+    title: 'What\u2019s on',
+    rows: [
+      { title: 'Events', description: 'Lunches, happy hours and meetings', href: '/events', icon: 'calendar' },
+      { title: 'News', description: 'Pensa Mensa, the newsletter, and every issue', href: '/news', icon: 'newsletter' },
+      { title: 'Search', description: 'Find anything on the site', href: '/search', icon: 'search' },
+    ],
+  },
+  {
+    id: 'join',
+    title: 'Join and get help',
+    rows: [
+      { title: 'Join Mensa', description: 'Take the test or bring a qualifying score', href: '/join', icon: 'join' },
+      { title: 'Help', description: 'Using this site, step by step', href: '/help', icon: 'help' },
+      { title: 'Contact an officer', description: 'Ask a question or send an idea', href: '/officers', icon: 'mail' },
+      { title: 'Put the club on your home screen', description: 'One tap from your phone, like an app', href: '/home-screen', icon: 'phone' },
+    ],
+  },
+];
+
 const PAGES: readonly Page[] = [
   ...SECTIONS,
   SEARCH,
   HELP,
   HOME_SCREEN,
-  { path: '/more', title: 'More', description: 'Every part of the site in one list.' },
+  { path: '/more', title: 'More', description: 'The club, what\u2019s on, and how to join or get help.' },
   { path: '/sign-in', title: 'Sign in', description: 'Sign in to the site, for officers and members.' },
   { path: '/signed-out', title: "You're signed out", description: 'You have signed out of this site. You can sign in again at any time.' },
   { path: '/officer-area', title: 'Officer area', description: 'Where officers write reports and approve what goes on the site.' },

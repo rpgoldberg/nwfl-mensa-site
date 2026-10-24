@@ -1,13 +1,29 @@
 ---
 import Base from '../layouts/Base.astro';
-import { MORE_PAGES, page } from '../lib/site';
+import Icon from '../components/Icon.astro';
+import { MORE_GROUPS, page } from '../lib/site';
 
 const p = page('/more');
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
-  <p class="lead">{p.description}</p>
-  <ul class="link-list">
-    {MORE_PAGES.map((s) => <li><a href={s.path}>{s.title}</a></li>)}
-  </ul>
+  <div class="more-groups">
+    {MORE_GROUPS.map((g) => (
+      <section class={`more-group more-group--${g.id}`} aria-labelledby={`more-${g.id}`}>
+        <h2 id={`more-${g.id}`}>{g.title}</h2>
+        <ul class="more-card">
+          {g.rows.map((r, i) => (
+            <li class="more-row">
+              <span class="more-tile"><Icon name={r.icon} /></span>
+              <div class="more-text">
+                <a class="more-title" href={r.href} aria-describedby={`more-${g.id}-${i}-d`}>{r.title}</a>
+                <p class="more-desc" id={`more-${g.id}-${i}-d`}>{r.description}</p>
+              </div>
+              <span class="more-go"><Icon name="forward" /></span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    ))}
+  </div>
 </Base>

@@ -602,6 +602,67 @@ main:focus:not(:focus-visible) { outline: none; }
 .link-list li { margin: 0 0 var(--space-2); }
 .link-list a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
 
+/* More: three groups, each an h2 over one card of whole-row links (W-LOOK, option B with plum).
+   Colour is only the icon tile and the card's 4 px top edge; the text keeps ink, accent and muted.
+   Tile, gap and padding are px like the chrome; type is rem, so rows grow and titles wrap at 175 %. */
+.more-group--club { --tile: var(--grp-club-tile); --icon: var(--grp-club-icon); --edge: var(--grp-club-edge); }
+.more-group--on { --tile: var(--grp-on-tile); --icon: var(--grp-on-icon); --edge: var(--grp-on-edge); }
+.more-group--join { --tile: var(--grp-join-tile); --icon: var(--grp-join-icon); --edge: var(--grp-join-edge); }
+.more-group h2 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: var(--fs-small);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.more-card {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--edge);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.more-card li + li { border-top: 1px solid var(--line-soft); }
+/* The row is one link: the title's link stretches over the whole row (its ::after), so the
+   link's name is the title alone, and the line under it, the icon and the chevron are all clickable. */
+.more-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px;
+}
+.more-row:hover { background: var(--bg); }
+.more-title::after { content: ""; position: absolute; inset: 0; }
+.more-title:focus-visible { outline: none; }
+.more-title:focus-visible::after { outline: var(--focus-width) solid var(--focus); outline-offset: -3px; }
+.more-tile {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--tile);
+  color: var(--icon);
+}
+.more-tile svg { width: 26px; height: 26px; }
+.more-text { min-width: 0; }
+.more-title { display: block; font-size: 1.15rem; font-weight: 700; line-height: 1.3; text-decoration: none; }
+.more-desc { margin: 2px 0 0; font-size: var(--fs-small); line-height: 1.35; color: var(--muted); }
+.more-go { display: grid; place-items: center; color: var(--muted); }
+.more-go svg { width: 24px; height: 24px; }
+@media (min-width: 900px) {
+  main > .more-groups { max-width: none; display: grid; grid-template-columns: 1fr 1fr; column-gap: var(--space-6); align-items: start; }
+  /* The five-row club card runs down the left; the other two stack on the right. */
+  .more-group--club { grid-row: span 2; }
+  .more-group h2 { margin-top: var(--space-4); }
+}
+
 .site-footer {
   width: 100%;
   max-width: 72rem;
