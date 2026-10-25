@@ -181,10 +181,19 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await readPdf(pool, file, 'nobody')).toEqual({ kind: 'not_found' });
     });
 
-    it('shares one copy between audiences whose settings for the file are the same', async () => {
+    it('keys a copy by the image action too: public photos blur, members\' show', async () => {
       calls.length = 0;
       expect(await drain(pool, { redact: stub() })).toBe(1);
-      expect(calls).toEqual([{ quotes: [], redactsAny: true }]);
+      expect(calls).toEqual(expect.arrayContaining([{ quotes: [], redactsAny: true, image: 'blur' }, { quotes: [], redactsAny: true, image: 'show' }]));
+      expect(calls).toHaveLength(2);
+      expect((await copies(file)).length).toBe(2);
+    });
+
+    it('shares one copy between audiences whose settings for the file are the same', async () => {
+      await propose('members', 'image', 'blur');
+      calls.length = 0;
+      expect(await drain(pool, { redact: stub() })).toBe(1);
+      expect(calls).toEqual([]);
       expect(text(await readPdf(pool, file, 'public'))).toBe('copy:');
       expect(text(await readPdf(pool, file, 'members'))).toBe('copy:');
       expect((await copies(file)).map((c) => [c.status, c.stale])).toEqual([['ready', false]]);
@@ -203,7 +212,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(text(await readPdf(pool, file, 'members'))).toBe('copy:');
       calls.length = 0;
       expect(await drain(pool, { redact: stub() })).toBe(1);
-      expect(calls).toEqual([{ quotes: [PHONE_NAME], redactsAny: true }]);
+      expect(calls).toEqual([{ quotes: [PHONE_NAME], redactsAny: true, image: 'blur' }]);
       expect(text(await readPdf(pool, file, 'public'))).toBe(`copy:${PHONE_NAME}`);
       const after = await copies(file);
       expect(after.map((c) => [c.stale, c.status])).toEqual([[false, 'ready'], [false, 'ready']]);
@@ -349,6 +358,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     it('gives an audience the original once its policy shows everything, and never a file above its audience', async () => {
       await propose('members', 'member_address', 'show');
       await propose('members', 'member_email', 'show');
+      await propose('members', 'image', 'show');
       const { version: v } = await newItem('members-all');
       const bytes = pdfBytes('members-all');
       const id = await newFile({ version: v }, bytes, 'members');
@@ -359,6 +369,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await sqlstate(pool as unknown as pg.Client, `SELECT pdf_original_read($1, 'members')`, [off])).toBe('42501');
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'not_found' });
       await propose('members', 'member_address', 'redact');
+      await propose('members', 'image', 'blur');
     });
   });
 

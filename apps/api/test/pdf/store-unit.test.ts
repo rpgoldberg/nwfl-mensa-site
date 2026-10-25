@@ -22,11 +22,14 @@ describe('inputHash', () => {
     expect(inputHash(SHA, { quotes: ['Quillon Brask', 'Bo', 'Bo', ''], redactsAny: true }).equals(a)).toBe(true);
   });
 
-  it('changes with the original, the quotes, redactsAny and the engine', () => {
+  it('changes with the original, the quotes, redactsAny, the image action and the engine', () => {
     const base = inputHash(SHA, { quotes: ['Bo'], redactsAny: true });
     expect(inputHash(Buffer.alloc(32, 2), { quotes: ['Bo'], redactsAny: true }).equals(base)).toBe(false);
     expect(inputHash(SHA, { quotes: ['Bob'], redactsAny: true }).equals(base)).toBe(false);
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: false }).equals(base)).toBe(false);
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true }, 'another-engine').equals(base)).toBe(false);
+    expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'show' }).equals(base)).toBe(true);
+    expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'blur' }).equals(base)).toBe(false);
+    expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'hide' }).equals(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'blur' }))).toBe(false);
   });
 });
