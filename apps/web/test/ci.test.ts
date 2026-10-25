@@ -21,9 +21,10 @@ function job(name: string): string {
 const JOBS = ['lint', 'typecheck', 'unit', 'e2e', 'docker', 'publish'];
 
 describe('web workflow', () => {
-  it('runs only for changes to the web app, the API protos its client is generated from, or itself, on pushes and pull requests', () => {
+  it('runs only for changes to the web app, the API protos its client is generated from, the API the leak test runs, or itself, on pushes and pull requests', () => {
     const triggers = ci.slice(0, ci.search(/^permissions:/m));
-    for (const event of ['push', 'pull_request']) expect(triggers).toMatch(new RegExp(`^  ${event}:\\n(?:    .*\\n)*?    paths: \\['apps/web/\\*\\*', 'apps/api/proto/\\*\\*', '\\.github/workflows/web\\.yml'\\]$`, 'm'));
+    const paths = String.raw`    paths: \['apps/web/\*\*', 'apps/api/proto/\*\*', 'apps/api/src/\*\*', 'apps/api/migrations/\*\*', 'apps/api/scripts/\*\*', '\.github/workflows/web\.yml'\]$`;
+    for (const event of ['push', 'pull_request']) expect(triggers).toMatch(new RegExp(`^  ${event}:\\n(?:    .*\\n)*?${paths}`, 'm'));
   });
 
   it('runs every step inside apps/web', () => {
@@ -75,6 +76,21 @@ describe('web workflow', () => {
     for (const at of order) expect(at).toBeGreaterThan(-1);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(e2e).toMatch(/apps\/web\/playwright-report\//);
+  });
+
+  it('runs the redaction leak test against the real API, on the full build, before the canary build replaces it (REDACT R2b)', () => {
+    const e2e = job('e2e');
+    const order = [
+      'run: npm run e2e$',
+      'run: npm ci --ignore-scripts && npm run build\\n {8}working-directory: apps/api$',
+      'run: sh \\.\\./api/scripts/test-db\\.sh start >> "\\$GITHUB_ENV"$',
+      'run: npm run e2e:redaction$',
+      'run: npm run build:public-only$',
+    ].map((step) => e2e.search(new RegExp(step, 'm')));
+    for (const at of order) expect(at).toBeGreaterThan(-1);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // The throwaway database goes, by the id it was started with, whatever happened.
+    expect(e2e).toMatch(/^ {6}- if: always\(\) && env\.NWFL_TEST_PG_CONTAINER != ''\n {8}run: sh \.\.\/api\/scripts\/test-db\.sh stop "\$NWFL_TEST_PG_CONTAINER"$/m);
   });
 
   it('builds the image from apps/web and starts it with a read-only root, the canary image too', () => {

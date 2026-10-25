@@ -2,13 +2,15 @@ name: web
 
 # The web gateway (apps/web). The secret scan, MT-06 and the made-up people
 # guard run once for the whole repository, in secrets.yml. A change to the
-# API protos runs it too: the site's gRPC client is generated from them.
+# API protos runs it too: the site's gRPC client is generated from them. So
+# does a change to the API's code, migrations or scripts: the redaction leak
+# test runs the real API.
 on:
   push:
     branches: [main, develop]
-    paths: ['apps/web/**', 'apps/api/proto/**', '.github/workflows/web.yml']
+    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', '.github/workflows/web.yml']
   pull_request:
-    paths: ['apps/web/**', 'apps/api/proto/**', '.github/workflows/web.yml']
+    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', '.github/workflows/web.yml']
 
 permissions:
   contents: read
@@ -91,6 +93,14 @@ jobs:
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run build
       - run: npm run e2e
+      # The redaction leak test (REDACT R2b): this full build in front of the
+      # real API over a throwaway Postgres seeded with canaries.
+      - run: npm ci --ignore-scripts && npm run build
+        working-directory: apps/api
+      - run: sh ../api/scripts/test-db.sh start >> "$GITHUB_ENV"
+      - run: npm run e2e:redaction
+      - if: always() && env.NWFL_TEST_PG_CONTAINER != ''
+        run: sh ../api/scripts/test-db.sh stop "$NWFL_TEST_PG_CONTAINER"
       # The canary: the same site built with sign-in off.
       - run: npm run build:public-only
       - run: npm run e2e:public-only
