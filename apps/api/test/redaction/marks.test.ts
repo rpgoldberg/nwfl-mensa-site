@@ -202,13 +202,15 @@ describe.skipIf(!live)('redaction marks', () => {
       expect(await publicBody(slug)).toContain('850-555-0199');
       const added = await add('850-555-0199', { subject: carpool });
       expect(added.mark).toMatchObject({ status: MarkStatus.ACTIVE, quote: '850-555-0199', field: MarkField.BODY, createdBy: 'sub-officer' });
-      expect(await publicBody(slug)).not.toContain('850-555-0199');
-      expect(await publicBody(slug)).toContain('[withheld]');
+      // While the mark applies, the public reaches the item by its id, never by its slug (B2).
+      expect(await publicBody(carpool)).not.toContain('850-555-0199');
+      expect(await publicBody(carpool)).toContain('[withheld]');
+      await expect(api.client(ContentService).getPublishedItem({ slug })).rejects.toMatchObject({ code: Code.NotFound });
       expect(dump(await api.client(ContentService).getPublishedItem({ slug }, MEMBER))).toContain('850-555-0199');
 
       const removal = await marks.proposeMarkRemoval({ markId: added.mark?.markId as string }, OFFICER);
       expect(removal.removal).toMatchObject({ applied: false, proposedBy: 'sub-officer' });
-      expect(await publicBody(slug)).not.toContain('850-555-0199');
+      expect(await publicBody(carpool)).not.toContain('850-555-0199');
       const listed = await marks.listRedactionMarks({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: carpool }, OFFICER);
       expect(listed.marks).toEqual([expect.objectContaining({ pendingRemovalId: removal.removal?.removalId, removalProposedBy: 'sub-officer' })]);
 
@@ -393,7 +395,8 @@ describe.skipIf(!live)('redaction marks', () => {
 });
 
 // S2: one mark, the officers' policy tightened to redact names. The markup can split a name with its
-// own syntax (**John** Smith), and a hash covers what was withheld: both are left out.
+// own syntax (Jo**hn** Smith), where the lens cannot find it, and a hash covers what was withheld:
+// both are left out.
 describe.skipIf(!live)('an officer who may not see a name (S2)', () => {
   let api: Api;
   afterAll(async () => {
@@ -401,14 +404,15 @@ describe.skipIf(!live)('an officer who may not see a name (S2)', () => {
   });
 
   it('gets no markup and no hash for an item with one marked name, live or working, nor in its history', async () => {
+    const MARKUP = 'Jo**hn** Smith and **John** Smith host';
     api = await startApi('nwfl_marks_s2');
     const office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
     const picnic = (await publishItem(api.pool, { slug: 'picnic', officeId: office, title: 'Picnic with John Smith', body: { blocks: [paragraph(text('Noon at the pier'))] } })).itemId;
     const working = await insertId(
       api.pool,
       `INSERT INTO content_version (item_id, n, title, visibility, body_ast, body_src, content_hash, created_by_sub, acting_office_id)
-       VALUES ($1, 2, 'Picnic with John Smith', 'public', $2, '**John** Smith hosts', $3, 'sub-author', $4) RETURNING id`,
-      [picnic, JSON.stringify({ blocks: [paragraph(text('John Smith hosts'))] }), createHash('sha256').update('v2').digest(), office],
+       VALUES ($1, 2, 'Picnic with John Smith', 'public', $2, $3, $4, 'sub-author', $5) RETURNING id`,
+      [picnic, JSON.stringify({ blocks: [paragraph(text('John Smith and John Smith host'))] }), MARKUP, createHash('sha256').update('v2').digest(), office],
     );
     await api.pool.query(`UPDATE content_item SET working_version_id = $2 WHERE id = $1`, [picnic, working]);
     await api.pool.query(
@@ -423,10 +427,11 @@ describe.skipIf(!live)('an officer who may not see a name (S2)', () => {
     const content = api.client(ContentService);
     // Control: before the policy changes, an officer sees the markup and the hashes.
     const before = (await content.getWorkingItem({ itemId: picnic }, OFFICER)).item;
-    expect(before?.working).toMatchObject({ bodyMarkup: '**John** Smith hosts' });
+    expect(before?.working).toMatchObject({ bodyMarkup: MARKUP });
     expect(before?.working?.contentHash.length).toBe(32);
     await api.client(RedactionPolicyService).proposeRedactionChange({ audience: RedactionAudience.OFFICERS, category: Category.MEMBER_NAME, action: RedactionAction.REDACT }, OFFICER);
     const item = (await content.getWorkingItem({ itemId: picnic }, OFFICER)).item;
+    expect(item?.working?.bodyMarkup).not.toMatch(/\*\*John\*\* Smith|Jo\*\*hn\*\* Smith/);
     // The working version is shown (not dropped), redacted.
     expect(item?.working).toMatchObject({ id: working, title: `Picnic with ${WITHHELD}`, bodyMarkup: '' });
     expect(item?.live).toMatchObject({ title: `Picnic with ${WITHHELD}`, bodyMarkup: '' });

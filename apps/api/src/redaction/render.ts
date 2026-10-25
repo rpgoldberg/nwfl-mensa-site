@@ -11,8 +11,10 @@
 //   An item is dropped when a passage mark's category is HIDDEN, or when a
 //   whole-item mark's category is anything but SHOWN, or when a passage mark
 //   this audience redacts no longer matches the item's text anywhere (fail
-//   closed, until an officer re-marks it or two officers remove it). An unknown audience,
-//   category or action reads as HIDE (policy.ts).
+//   closed). Adding a new mark does not lift that: only removing the stale
+//   mark does, and removal needs two officers, because showing the item again
+//   is a public loosening. An unknown audience, category or action reads as
+//   HIDE (policy.ts).
 //
 // In a body tree the text is matched across emphasis runs and links within a
 // block, a link whose target carries the text loses the target, and if the
@@ -20,6 +22,7 @@
 // whole body is withheld.
 // ============================================================================
 import type { Block, Inline, Tree } from '../content/tree.js';
+import { LOOKALIKES } from './confusables.js';
 import { type Action, type Policy, resolveAction } from './policy.js';
 
 export const WITHHELD = '[withheld]';
@@ -64,15 +67,24 @@ const PLACEHOLDER: Tree = { blocks: [{ type: 'redacted' }] };
 // ---------------------------------------------------------------------------
 // Matching. Text and quote are both folded before they are compared: percent-
 // encodings decoded (twice-encoded too), combining marks kept with their base
-// letter, NFKC (full-width and compatibility forms), a full case fold (ß and
-// SS alike), and Default_Ignorable_Code_Point characters (soft hyphens, zero-
-// width spaces and joiners) removed. Each folded character remembers the span
-// of the original it came from, so a match cuts the original text.
+// letter, NFKD (full-width and compatibility forms), a full case fold (ß and
+// SS alike, \u0130 and I alike), NFKD again, then combining marks (accents)
+// and Default_Ignorable_Code_Point characters (soft hyphens, zero-width
+// spaces and joiners) removed. Each folded character remembers the span of
+// the original it came from, so a match cuts the original text.
 //
-// A quote matches as whole words: its words in order, separated by any run of
-// characters that are not letters, digits or marks (spaces, dots, hyphens, a
-// "+" in a link), and never inside a longer word: "Ann" does not match
-// "Annual".
+// Look-alike letters (UTS #39 skeletons, confusables.ts): each letter of the
+// folded quote also matches every letter or digit that Unicode lists as
+// confusable with it, so a Cyrillic or Greek look-alike of a marked name is
+// withheld like the name, alone or beside it.
+//
+// A quote matches as whole words: its words (runs of letters, runs of digits,
+// runs of CJK characters) in order, separated by any run of characters that
+// are not letters, digits or marks (spaces, dots, hyphens, a "+" in a link),
+// and never inside a longer word: "Ann" does not match "Annual", "555" does
+// not match "8555". A digit, an emoji or a CJK character ends a word of
+// letters, so "Ann2" holds "Ann"; CJK text has no spaces, so a CJK word
+// matches anywhere.
 // ---------------------------------------------------------------------------
 
 interface Unit {
@@ -81,10 +93,17 @@ interface Unit {
   end: number;
 }
 
-const WORD = '\\p{L}\\p{N}\\p{M}';
-const NOT_WORD = new RegExp(`[^${WORD}]+`, 'u');
+/** Scripts written without spaces between words. */
+const CJK = '\\p{sc=Han}\\p{sc=Hiragana}\\p{sc=Katakana}\\p{sc=Hangul}\\p{sc=Bopomofo}';
+/** A letter that belongs to a word: any letter or mark but a CJK one (a `v`-flag class). */
+const LETTER = `[[\\p{L}\\p{M}]--[${CJK}]]`;
+const TOKEN = new RegExp(`${LETTER}+|\\p{N}+|[${CJK}]+`, 'gv');
+const SEPARATOR = '[^\\p{L}\\p{N}\\p{M}]*';
+const LETTER_FIRST = new RegExp(`^${LETTER}`, 'v');
+const DIGIT_FIRST = /^\p{N}/u;
 const HEX = /^[0-9a-f]$/i;
 const COMBINING = /^\p{M}/u;
+const MARKS = /\p{M}/gu;
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
 const utf8 = new TextDecoder('utf-8');
 
@@ -123,7 +142,7 @@ function fold(value: string): Unit[] {
     if (decoded.length === units.length) break;
     units = decoded;
   }
-  // A combining mark stays with its base, so NFKC can compose them.
+  // A combining mark stays with its base: the base keeps the mark's span when the mark is removed.
   const clusters: Unit[] = [];
   for (const unit of units) {
     const last = clusters.at(-1);
@@ -134,7 +153,7 @@ function fold(value: string): Unit[] {
   }
   const out: Unit[] = [];
   for (const cluster of clusters) {
-    const folded = cluster.text.normalize('NFKC').toUpperCase().toLowerCase().normalize('NFKC').replace(IGNORABLE, '');
+    const folded = cluster.text.normalize('NFKD').toUpperCase().toLowerCase().normalize('NFKD').replace(MARKS, '').replace(IGNORABLE, '');
     for (const ch of folded) out.push({ text: ch, start: cluster.start, end: cluster.end });
   }
   return out;
@@ -142,13 +161,33 @@ function fold(value: string): Unit[] {
 
 const foldedText = (value: string): string => fold(value).map((unit) => unit.text).join('');
 
+/** Each folded look-alike's Latin letters, and each Latin letter's folded look-alikes. */
+const LATIN_OF = new Map<string, string[]>();
+const LOOKALIKES_OF = new Map<string, string[]>();
+for (const [latin, sources] of Object.entries(LOOKALIKES)) {
+  const folded = [...new Set([...sources].map(foldedText))];
+  LOOKALIKES_OF.set(latin, folded);
+  for (const char of folded) LATIN_OF.set(char, [...(LATIN_OF.get(char) ?? []), latin]);
+}
+
+/** A folded character as a pattern: itself, the Latin letters it looks like, and their other look-alikes. */
+function lookalikes(char: string): string {
+  const latin = /^[a-z]$/.test(char) ? [char] : (LATIN_OF.get(char) ?? []);
+  const all = new Set([char, ...latin, ...latin.flatMap((letter) => LOOKALIKES_OF.get(letter) ?? [])]);
+  return all.size === 1 ? char : `[${[...all].join('')}]`;
+}
+
 /** The quote as a pattern over folded text: whole words, any non-word run between them. */
 function patternOf(quote: string): RegExp {
   const folded = foldedText(quote);
-  const escape = (word: string): string => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const words = folded.split(NOT_WORD).filter((word) => word !== '');
-  if (words.length === 0) return new RegExp(escape(folded.trim()), 'gu');
-  return new RegExp(`(?<![${WORD}])${words.map(escape).join(`[^${WORD}]*`)}(?![${WORD}])`, 'gu');
+  const words = folded.match(TOKEN);
+  if (words === null) return new RegExp(folded.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gu');
+  // A word of letters or of digits may not run on into more of the same; a CJK word may.
+  const edge = (word: string): string => (LETTER_FIRST.test(word) ? LETTER : DIGIT_FIRST.test(word) ? '\\p{N}' : '');
+  const before = edge(words[0]);
+  const after = edge(words.at(-1) as string);
+  const body = words.map((word) => [...word].map(lookalikes).join('')).join(SEPARATOR);
+  return new RegExp(`${before === '' ? '' : `(?<!${before})`}${body}${after === '' ? '' : `(?!${after})`}`, 'gv');
 }
 
 /** Every match of every pattern, as spans of the ORIGINAL text, merged where they touch or overlap, in order. */

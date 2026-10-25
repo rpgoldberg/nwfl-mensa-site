@@ -257,7 +257,7 @@ async function officerItem(client: TxClient, itemId: string, audience: string): 
   const working = workingRow === undefined ? undefined : await versionMessage(client, workingRow, lens);
   return create(ContentItemSchema, {
     id: item.id,
-    slug: slugFor(item, [liveRow, workingRow].flatMap((version) => (version === undefined ? [] : [version.title])), lens),
+    slug: slugFor(item, lens),
     kind: KINDS[item.kind],
     officeId: item.office_id,
     state: STATES[item.state],

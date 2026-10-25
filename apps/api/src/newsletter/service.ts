@@ -81,7 +81,7 @@ function inPrintOrder(rows: readonly PinnedRow[], lens: Lens): PinnedRow[] {
   const key = (row: PinnedRow): [number, string, string] => [
     KIND_ORDER.indexOf(row.kind),
     lens.text(row.title, [subjectKey('content_item', row.item_id)]),
-    slugFor({ id: row.item_id, slug: row.slug }, [row.title], lens),
+    slugFor({ id: row.item_id, slug: row.slug }, lens),
   ];
   return [...rows].sort((a, b) => {
     const [ka, ta, ia] = key(a);

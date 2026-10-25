@@ -130,7 +130,7 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[], lens: L
   if (row.state === 'withdrawn') {
     return create(ContentItemSchema, {
       id: row.id,
-      slug: slugFor(row, [row.title], lens),
+      slug: slugFor(row, lens),
       kind: KINDS[row.kind],
       officeId: row.office_id,
       state: ItemState.WITHDRAWN,
@@ -142,7 +142,7 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[], lens: L
   const hashed = audience === 'officers' && row.content_hash !== null && !lens.affected(subjects) && (row.on_behalf_of === null || lens.action('member_name') === 'show');
   return create(ContentItemSchema, {
     id: row.id,
-    slug: slugFor(row, [row.title], lens),
+    slug: slugFor(row, lens),
     kind: KINDS[row.kind],
     officeId: row.office_id,
     state: STATES[row.state],
@@ -264,7 +264,7 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
         // Not there, for this audience: an item the lens hides, and an item asked for by a slug the
         // audience may not see (so a guessed slug confirms nothing). Each is answered exactly as a
         // slug that never existed, after the same queries (uniform). By its id, the item is found.
-        if (row === undefined || itemHidden(row, row.version_id, lens) || (row.id !== request.slug && slugFor(row, [row.title], lens) !== row.slug)) {
+        if (row === undefined || itemHidden(row, row.version_id, lens) || (row.id !== request.slug && slugFor(row, lens) !== row.slug)) {
           throw new ConnectError('item not found', Code.NotFound);
         }
         return { item: itemMessage(row, audience, await filesFor(rows, audience), lens) };

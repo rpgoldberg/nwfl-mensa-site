@@ -21,12 +21,11 @@ export function bylineFor(value: string | null, subjects: readonly string[], len
 }
 
 /**
- * The slug an audience may see. A slug is written from the title, so where the lens withholds any
- * of the title, or of the slug itself, the audience gets the item's id instead, and is never told
- * the slug in any field.
+ * The slug an audience may see. A slug is written from the title, in ASCII (0003), so it cannot be
+ * checked against a mark on an accented name ("José Núñez" in memorial-jose-nunez). Fail closed:
+ * an audience with anything withheld from the item, in any field, gets the item's id instead, and
+ * is never told the slug in any field.
  */
-export function slugFor(item: { id: string; slug: string }, titles: readonly string[], lens: Lens): string {
-  const subjects = [subjectKey('content_item', item.id)];
-  const withheld = lens.text(item.slug, subjects) !== item.slug || titles.some((title) => lens.text(title, subjects) !== title);
-  return withheld ? item.id : item.slug;
+export function slugFor(item: { id: string; slug: string }, lens: Lens): string {
+  return lens.affected([subjectKey('content_item', item.id)]) ? item.id : item.slug;
 }

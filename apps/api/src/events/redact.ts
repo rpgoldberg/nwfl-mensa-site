@@ -45,8 +45,9 @@ export function seriesFor(row: SeriesRow, lens: Lens): SeriesRow | undefined {
   if (lens.hidden(subjects)) return undefined;
   const text = (value: string | null): string | null => (value === null ? null : lens.text(value, subjects));
   const title = lens.text(row.title, subjects);
-  // A slug is written from the title: where any of either is withheld, the series' id stands in.
-  const slug = title !== row.title || lens.text(row.slug, subjects) !== row.slug ? row.id : row.slug;
+  // A slug is written from the title, in ASCII, so a mark on an accented name cannot be found in
+  // it: where anything in the series is withheld, its id stands in (fail closed, as slugFor).
+  const slug = lens.affected(subjects) ? row.id : row.slug;
   return { ...row, slug, title, description: text(row.description), cadence_label: text(row.cadence_label) };
 }
 
