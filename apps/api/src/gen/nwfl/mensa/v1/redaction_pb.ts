@@ -20,7 +20,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file nwfl/mensa/v1/redaction.proto.
  */
 export const file_nwfl_mensa_v1_redaction: GenFile = /*@__PURE__*/
-  fileDesc("Ch1ud2ZsL21lbnNhL3YxL3JlZGFjdGlvbi5wcm90bxINbndmbC5tZW5zYS52MSKnAQoNUmVkYWN0aW9uQ2VsbBIyCghhdWRpZW5jZRgBIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQXVkaWVuY2USMgoIY2F0ZWdvcnkYAiABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNhdGVnb3J5Ei4KBmFjdGlvbhgDIAEoDjIeLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQWN0aW9uIrYDCg9SZWRhY3Rpb25DaGFuZ2USEQoJY2hhbmdlX2lkGAEgASgJEjIKCGF1ZGllbmNlGAIgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25BdWRpZW5jZRIyCghjYXRlZ29yeRgDIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQ2F0ZWdvcnkSMwoLZnJvbV9hY3Rpb24YBCABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbhIxCgl0b19hY3Rpb24YBSABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbhI0CgZzdGF0dXMYBiABKA4yJC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZVN0YXR1cxITCgtwcm9wb3NlZF9ieRgHIAEoCRIvCgtwcm9wb3NlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoLYXBwcm92ZWRfYnkYCSABKAkSLwoLYXBwcm92ZWRfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIv4CCg1SZWRhY3Rpb25NYXJrEg8KB21hcmtfaWQYASABKAkSNAoMc3ViamVjdF9raW5kGAIgASgOMh4ubndmbC5tZW5zYS52MS5NYXJrU3ViamVjdEtpbmQSEgoKc3ViamVjdF9pZBgDIAEoCRInCgVmaWVsZBgEIAEoDjIYLm53ZmwubWVuc2EudjEuTWFya0ZpZWxkEg0KBXF1b3RlGAUgASgJEjIKCGNhdGVnb3J5GAYgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeRIpCgZzdGF0dXMYByABKA4yGS5ud2ZsLm1lbnNhLnYxLk1hcmtTdGF0dXMSEgoKY3JlYXRlZF9ieRgIIAEoCRIuCgpjcmVhdGVkX2F0GAkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIaChJwZW5kaW5nX3JlbW92YWxfaWQYCiABKAkSGwoTcmVtb3ZhbF9wcm9wb3NlZF9ieRgLIAEoCSLPAQoLTWFya1JlbW92YWwSEgoKcmVtb3ZhbF9pZBgBIAEoCRIPCgdtYXJrX2lkGAIgASgJEg8KB2FwcGxpZWQYAyABKAgSEwoLcHJvcG9zZWRfYnkYBCABKAkSLwoLcHJvcG9zZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhMKC2FwcHJvdmVkX2J5GAYgASgJEi8KC2FwcHJvdmVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLPAQoXQWRkUmVkYWN0aW9uTWFya1JlcXVlc3QSNAoMc3ViamVjdF9raW5kGAEgASgOMh4ubndmbC5tZW5zYS52MS5NYXJrU3ViamVjdEtpbmQSEgoKc3ViamVjdF9pZBgCIAEoCRInCgVmaWVsZBgDIAEoDjIYLm53ZmwubWVuc2EudjEuTWFya0ZpZWxkEg0KBXF1b3RlGAQgASgJEjIKCGNhdGVnb3J5GAUgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeSJGChhBZGRSZWRhY3Rpb25NYXJrUmVzcG9uc2USKgoEbWFyaxgBIAEoCzIcLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uTWFyayJlChlMaXN0UmVkYWN0aW9uTWFya3NSZXF1ZXN0EjQKDHN1YmplY3Rfa2luZBgBIAEoDjIeLm53ZmwubWVuc2EudjEuTWFya1N1YmplY3RLaW5kEhIKCnN1YmplY3RfaWQYAiABKAkiSQoaTGlzdFJlZGFjdGlvbk1hcmtzUmVzcG9uc2USKwoFbWFya3MYASADKAsyHC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbk1hcmsiLAoZUHJvcG9zZU1hcmtSZW1vdmFsUmVxdWVzdBIPCgdtYXJrX2lkGAEgASgJIkkKGlByb3Bvc2VNYXJrUmVtb3ZhbFJlc3BvbnNlEisKB3JlbW92YWwYASABKAsyGi5ud2ZsLm1lbnNhLnYxLk1hcmtSZW1vdmFsIi8KGUFwcHJvdmVNYXJrUmVtb3ZhbFJlcXVlc3QSEgoKcmVtb3ZhbF9pZBgBIAEoCSJJChpBcHByb3ZlTWFya1JlbW92YWxSZXNwb25zZRIrCgdyZW1vdmFsGAEgASgLMhoubndmbC5tZW5zYS52MS5NYXJrUmVtb3ZhbCIbChlHZXRSZWRhY3Rpb25Qb2xpY3lSZXF1ZXN0InoKGkdldFJlZGFjdGlvblBvbGljeVJlc3BvbnNlEisKBWNlbGxzGAEgAygLMhwubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DZWxsEi8KB3BlbmRpbmcYAiADKAsyHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZSK3AQodUHJvcG9zZVJlZGFjdGlvbkNoYW5nZVJlcXVlc3QSMgoIYXVkaWVuY2UYASABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkF1ZGllbmNlEjIKCGNhdGVnb3J5GAIgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeRIuCgZhY3Rpb24YAyABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbiJQCh5Qcm9wb3NlUmVkYWN0aW9uQ2hhbmdlUmVzcG9uc2USLgoGY2hhbmdlGAEgASgLMh4ubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DaGFuZ2UiMgodQXBwcm92ZVJlZGFjdGlvbkNoYW5nZVJlcXVlc3QSEQoJY2hhbmdlX2lkGAEgASgJIlAKHkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2VSZXNwb25zZRIuCgZjaGFuZ2UYASABKAsyHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZSqXAQoRUmVkYWN0aW9uQXVkaWVuY2USIgoeUkVEQUNUSU9OX0FVRElFTkNFX1VOU1BFQ0lGSUVEEAASHQoZUkVEQUNUSU9OX0FVRElFTkNFX1BVQkxJQxABEh4KGlJFREFDVElPTl9BVURJRU5DRV9NRU1CRVJTEAISHwobUkVEQUNUSU9OX0FVRElFTkNFX09GRklDRVJTEAMq3wIKEVJlZGFjdGlvbkNhdGVnb3J5EiIKHlJFREFDVElPTl9DQVRFR09SWV9VTlNQRUNJRklFRBAAEiIKHlJFREFDVElPTl9DQVRFR09SWV9NRU1CRVJfTkFNRRABEiUKIVJFREFDVElPTl9DQVRFR09SWV9NRU1CRVJfQUREUkVTUxACEiMKH1JFREFDVElPTl9DQVRFR09SWV9NRU1CRVJfUEhPTkUQAxIjCh9SRURBQ1RJT05fQ0FURUdPUllfTUVNQkVSX0VNQUlMEAQSJAogUkVEQUNUSU9OX0NBVEVHT1JZX1BSSVZBVEVfVkVOVUUQBRIlCiFSRURBQ1RJT05fQ0FURUdPUllfQlVTSU5FU1NfVkVOVUUQBhImCiJSRURBQ1RJT05fQ0FURUdPUllfT0ZGSUNFUl9DT05UQUNUEAcSHAoYUkVEQUNUSU9OX0NBVEVHT1JZX0lNQUdFEAgqoQEKD1JlZGFjdGlvbkFjdGlvbhIgChxSRURBQ1RJT05fQUNUSU9OX1VOU1BFQ0lGSUVEEAASGQoVUkVEQUNUSU9OX0FDVElPTl9TSE9XEAESGwoXUkVEQUNUSU9OX0FDVElPTl9SRURBQ1QQAhIZChVSRURBQ1RJT05fQUNUSU9OX0hJREUQAxIZChVSRURBQ1RJT05fQUNUSU9OX0JMVVIQBCqyAQoVUmVkYWN0aW9uQ2hhbmdlU3RhdHVzEicKI1JFREFDVElPTl9DSEFOR0VfU1RBVFVTX1VOU1BFQ0lGSUVEEAASIwofUkVEQUNUSU9OX0NIQU5HRV9TVEFUVVNfUEVORElORxABEiMKH1JFREFDVElPTl9DSEFOR0VfU1RBVFVTX0FQUExJRUQQAhImCiJSRURBQ1RJT05fQ0hBTkdFX1NUQVRVU19TVVBFUlNFREVEEAMqpAEKD01hcmtTdWJqZWN0S2luZBIhCh1NQVJLX1NVQkpFQ1RfS0lORF9VTlNQRUNJRklFRBAAEiIKHk1BUktfU1VCSkVDVF9LSU5EX0NPTlRFTlRfSVRFTRABEiIKHk1BUktfU1VCSkVDVF9LSU5EX0VWRU5UX1NFUklFUxACEiYKIk1BUktfU1VCSkVDVF9LSU5EX0VWRU5UX09DQ1VSUkVOQ0UQAyqIAgoJTWFya0ZpZWxkEhoKFk1BUktfRklFTERfVU5TUEVDSUZJRUQQABIUChBNQVJLX0ZJRUxEX1RJVExFEAESFgoSTUFSS19GSUVMRF9TVU1NQVJZEAISEwoPTUFSS19GSUVMRF9CT0RZEAMSGwoXTUFSS19GSUVMRF9PTl9CRUhBTEZfT0YQBBIaChZNQVJLX0ZJRUxEX0RFU0NSSVBUSU9OEAUSHAoYTUFSS19GSUVMRF9DQURFTkNFX0xBQkVMEAYSFQoRTUFSS19GSUVMRF9ERVRBSUwQBxIaChZNQVJLX0ZJRUxEX1NUQVRVU19OT1RFEAgSEgoOTUFSS19GSUVMRF9VUkwQCSpaCgpNYXJrU3RhdHVzEhsKF01BUktfU1RBVFVTX1VOU1BFQ0lGSUVEEAASFgoSTUFSS19TVEFUVVNfQUNUSVZFEAESFwoTTUFSS19TVEFUVVNfUkVNT1ZFRBACMqEGChZSZWRhY3Rpb25Qb2xpY3lTZXJ2aWNlEm4KEkdldFJlZGFjdGlvblBvbGljeRIoLm53ZmwubWVuc2EudjEuR2V0UmVkYWN0aW9uUG9saWN5UmVxdWVzdBopLm53ZmwubWVuc2EudjEuR2V0UmVkYWN0aW9uUG9saWN5UmVzcG9uc2UiA5ACARJ1ChZQcm9wb3NlUmVkYWN0aW9uQ2hhbmdlEiwubndmbC5tZW5zYS52MS5Qcm9wb3NlUmVkYWN0aW9uQ2hhbmdlUmVxdWVzdBotLm53ZmwubWVuc2EudjEuUHJvcG9zZVJlZGFjdGlvbkNoYW5nZVJlc3BvbnNlEnUKFkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2USLC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2VSZXF1ZXN0Gi0ubndmbC5tZW5zYS52MS5BcHByb3ZlUmVkYWN0aW9uQ2hhbmdlUmVzcG9uc2USYwoQQWRkUmVkYWN0aW9uTWFyaxImLm53ZmwubWVuc2EudjEuQWRkUmVkYWN0aW9uTWFya1JlcXVlc3QaJy5ud2ZsLm1lbnNhLnYxLkFkZFJlZGFjdGlvbk1hcmtSZXNwb25zZRJuChJMaXN0UmVkYWN0aW9uTWFya3MSKC5ud2ZsLm1lbnNhLnYxLkxpc3RSZWRhY3Rpb25NYXJrc1JlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkxpc3RSZWRhY3Rpb25NYXJrc1Jlc3BvbnNlIgOQAgESaQoSUHJvcG9zZU1hcmtSZW1vdmFsEigubndmbC5tZW5zYS52MS5Qcm9wb3NlTWFya1JlbW92YWxSZXF1ZXN0GikubndmbC5tZW5zYS52MS5Qcm9wb3NlTWFya1JlbW92YWxSZXNwb25zZRJpChJBcHByb3ZlTWFya1JlbW92YWwSKC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVNYXJrUmVtb3ZhbFJlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVNYXJrUmVtb3ZhbFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("Ch1ud2ZsL21lbnNhL3YxL3JlZGFjdGlvbi5wcm90bxINbndmbC5tZW5zYS52MSKnAQoNUmVkYWN0aW9uQ2VsbBIyCghhdWRpZW5jZRgBIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQXVkaWVuY2USMgoIY2F0ZWdvcnkYAiABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNhdGVnb3J5Ei4KBmFjdGlvbhgDIAEoDjIeLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQWN0aW9uIrYDCg9SZWRhY3Rpb25DaGFuZ2USEQoJY2hhbmdlX2lkGAEgASgJEjIKCGF1ZGllbmNlGAIgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25BdWRpZW5jZRIyCghjYXRlZ29yeRgDIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQ2F0ZWdvcnkSMwoLZnJvbV9hY3Rpb24YBCABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbhIxCgl0b19hY3Rpb24YBSABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbhI0CgZzdGF0dXMYBiABKA4yJC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZVN0YXR1cxITCgtwcm9wb3NlZF9ieRgHIAEoCRIvCgtwcm9wb3NlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoLYXBwcm92ZWRfYnkYCSABKAkSLwoLYXBwcm92ZWRfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIv4CCg1SZWRhY3Rpb25NYXJrEg8KB21hcmtfaWQYASABKAkSNAoMc3ViamVjdF9raW5kGAIgASgOMh4ubndmbC5tZW5zYS52MS5NYXJrU3ViamVjdEtpbmQSEgoKc3ViamVjdF9pZBgDIAEoCRInCgVmaWVsZBgEIAEoDjIYLm53ZmwubWVuc2EudjEuTWFya0ZpZWxkEg0KBXF1b3RlGAUgASgJEjIKCGNhdGVnb3J5GAYgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeRIpCgZzdGF0dXMYByABKA4yGS5ud2ZsLm1lbnNhLnYxLk1hcmtTdGF0dXMSEgoKY3JlYXRlZF9ieRgIIAEoCRIuCgpjcmVhdGVkX2F0GAkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIaChJwZW5kaW5nX3JlbW92YWxfaWQYCiABKAkSGwoTcmVtb3ZhbF9wcm9wb3NlZF9ieRgLIAEoCSLPAQoLTWFya1JlbW92YWwSEgoKcmVtb3ZhbF9pZBgBIAEoCRIPCgdtYXJrX2lkGAIgASgJEg8KB2FwcGxpZWQYAyABKAgSEwoLcHJvcG9zZWRfYnkYBCABKAkSLwoLcHJvcG9zZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhMKC2FwcHJvdmVkX2J5GAYgASgJEi8KC2FwcHJvdmVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLPAQoXQWRkUmVkYWN0aW9uTWFya1JlcXVlc3QSNAoMc3ViamVjdF9raW5kGAEgASgOMh4ubndmbC5tZW5zYS52MS5NYXJrU3ViamVjdEtpbmQSEgoKc3ViamVjdF9pZBgCIAEoCRInCgVmaWVsZBgDIAEoDjIYLm53ZmwubWVuc2EudjEuTWFya0ZpZWxkEg0KBXF1b3RlGAQgASgJEjIKCGNhdGVnb3J5GAUgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeSJGChhBZGRSZWRhY3Rpb25NYXJrUmVzcG9uc2USKgoEbWFyaxgBIAEoCzIcLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uTWFyayJlChlMaXN0UmVkYWN0aW9uTWFya3NSZXF1ZXN0EjQKDHN1YmplY3Rfa2luZBgBIAEoDjIeLm53ZmwubWVuc2EudjEuTWFya1N1YmplY3RLaW5kEhIKCnN1YmplY3RfaWQYAiABKAkiSQoaTGlzdFJlZGFjdGlvbk1hcmtzUmVzcG9uc2USKwoFbWFya3MYASADKAsyHC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbk1hcmsiLAoZUHJvcG9zZU1hcmtSZW1vdmFsUmVxdWVzdBIPCgdtYXJrX2lkGAEgASgJIkkKGlByb3Bvc2VNYXJrUmVtb3ZhbFJlc3BvbnNlEisKB3JlbW92YWwYASABKAsyGi5ud2ZsLm1lbnNhLnYxLk1hcmtSZW1vdmFsIi8KGUFwcHJvdmVNYXJrUmVtb3ZhbFJlcXVlc3QSEgoKcmVtb3ZhbF9pZBgBIAEoCSJJChpBcHByb3ZlTWFya1JlbW92YWxSZXNwb25zZRIrCgdyZW1vdmFsGAEgASgLMhoubndmbC5tZW5zYS52MS5NYXJrUmVtb3ZhbCIbChlHZXRSZWRhY3Rpb25Qb2xpY3lSZXF1ZXN0InoKGkdldFJlZGFjdGlvblBvbGljeVJlc3BvbnNlEisKBWNlbGxzGAEgAygLMhwubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DZWxsEi8KB3BlbmRpbmcYAiADKAsyHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZSK3AQodUHJvcG9zZVJlZGFjdGlvbkNoYW5nZVJlcXVlc3QSMgoIYXVkaWVuY2UYASABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkF1ZGllbmNlEjIKCGNhdGVnb3J5GAIgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeRIuCgZhY3Rpb24YAyABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbiJQCh5Qcm9wb3NlUmVkYWN0aW9uQ2hhbmdlUmVzcG9uc2USLgoGY2hhbmdlGAEgASgLMh4ubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DaGFuZ2UiMgodQXBwcm92ZVJlZGFjdGlvbkNoYW5nZVJlcXVlc3QSEQoJY2hhbmdlX2lkGAEgASgJIlAKHkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2VSZXNwb25zZRIuCgZjaGFuZ2UYASABKAsyHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZSLmAgoJTGVkZ2VyUm93EgsKA3NlcRgBIAEoAxI2CgxzdWJqZWN0X2tpbmQYAiABKA4yIC5ud2ZsLm1lbnNhLnYxLkxlZGdlclN1YmplY3RLaW5kEhIKCnN1YmplY3RfaWQYAyABKAkSMgoIYXVkaWVuY2UYBCABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkF1ZGllbmNlEhUKDW91dHB1dF9zaGEyNTYYBSABKAwSEwoLaW5wdXRzX2pzb24YBiABKAkSGQoRcGFzc2FnZXNfd2l0aGhlbGQYByABKAUSMAoMY3VycmVudF9mcm9tGAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIuCgpjdXJyZW50X3RvGAkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIRCglwcmV2X2hhc2gYCiABKAwSEAoIcm93X2hhc2gYCyABKAwiuwEKEUxlZGdlckFzT2ZSZXF1ZXN0EjYKDHN1YmplY3Rfa2luZBgBIAEoDjIgLm53ZmwubWVuc2EudjEuTGVkZ2VyU3ViamVjdEtpbmQSEgoKc3ViamVjdF9pZBgCIAEoCRIyCghhdWRpZW5jZRgDIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQXVkaWVuY2USJgoCYXQYBCABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wInUKEkxlZGdlckFzT2ZSZXNwb25zZRIlCgNyb3cYASABKAsyGC5ud2ZsLm1lbnNhLnYxLkxlZGdlclJvdxIXCg9yZXJlbmRlcl9zaGEyNTYYAiABKAwSDwoHbWF0Y2hlcxgDIAEoCBIOCgZkZXRhaWwYBCABKAkiFQoTVmVyaWZ5TGVkZ2VyUmVxdWVzdCJxChRWZXJpZnlMZWRnZXJSZXNwb25zZRIOCgZpbnRhY3QYASABKAgSDAoEcm93cxgCIAEoAxIXCg9maXJzdF9icmVha19zZXEYAyABKAMSDwoHcHJvYmxlbRgEIAEoCRIRCgloZWFkX2hhc2gYBSABKAwqlwEKEVJlZGFjdGlvbkF1ZGllbmNlEiIKHlJFREFDVElPTl9BVURJRU5DRV9VTlNQRUNJRklFRBAAEh0KGVJFREFDVElPTl9BVURJRU5DRV9QVUJMSUMQARIeChpSRURBQ1RJT05fQVVESUVOQ0VfTUVNQkVSUxACEh8KG1JFREFDVElPTl9BVURJRU5DRV9PRkZJQ0VSUxADKt8CChFSZWRhY3Rpb25DYXRlZ29yeRIiCh5SRURBQ1RJT05fQ0FURUdPUllfVU5TUEVDSUZJRUQQABIiCh5SRURBQ1RJT05fQ0FURUdPUllfTUVNQkVSX05BTUUQARIlCiFSRURBQ1RJT05fQ0FURUdPUllfTUVNQkVSX0FERFJFU1MQAhIjCh9SRURBQ1RJT05fQ0FURUdPUllfTUVNQkVSX1BIT05FEAMSIwofUkVEQUNUSU9OX0NBVEVHT1JZX01FTUJFUl9FTUFJTBAEEiQKIFJFREFDVElPTl9DQVRFR09SWV9QUklWQVRFX1ZFTlVFEAUSJQohUkVEQUNUSU9OX0NBVEVHT1JZX0JVU0lORVNTX1ZFTlVFEAYSJgoiUkVEQUNUSU9OX0NBVEVHT1JZX09GRklDRVJfQ09OVEFDVBAHEhwKGFJFREFDVElPTl9DQVRFR09SWV9JTUFHRRAIKqEBCg9SZWRhY3Rpb25BY3Rpb24SIAocUkVEQUNUSU9OX0FDVElPTl9VTlNQRUNJRklFRBAAEhkKFVJFREFDVElPTl9BQ1RJT05fU0hPVxABEhsKF1JFREFDVElPTl9BQ1RJT05fUkVEQUNUEAISGQoVUkVEQUNUSU9OX0FDVElPTl9ISURFEAMSGQoVUkVEQUNUSU9OX0FDVElPTl9CTFVSEAQqsgEKFVJlZGFjdGlvbkNoYW5nZVN0YXR1cxInCiNSRURBQ1RJT05fQ0hBTkdFX1NUQVRVU19VTlNQRUNJRklFRBAAEiMKH1JFREFDVElPTl9DSEFOR0VfU1RBVFVTX1BFTkRJTkcQARIjCh9SRURBQ1RJT05fQ0hBTkdFX1NUQVRVU19BUFBMSUVEEAISJgoiUkVEQUNUSU9OX0NIQU5HRV9TVEFUVVNfU1VQRVJTRURFRBADKqQBCg9NYXJrU3ViamVjdEtpbmQSIQodTUFSS19TVUJKRUNUX0tJTkRfVU5TUEVDSUZJRUQQABIiCh5NQVJLX1NVQkpFQ1RfS0lORF9DT05URU5UX0lURU0QARIiCh5NQVJLX1NVQkpFQ1RfS0lORF9FVkVOVF9TRVJJRVMQAhImCiJNQVJLX1NVQkpFQ1RfS0lORF9FVkVOVF9PQ0NVUlJFTkNFEAMqiAIKCU1hcmtGaWVsZBIaChZNQVJLX0ZJRUxEX1VOU1BFQ0lGSUVEEAASFAoQTUFSS19GSUVMRF9USVRMRRABEhYKEk1BUktfRklFTERfU1VNTUFSWRACEhMKD01BUktfRklFTERfQk9EWRADEhsKF01BUktfRklFTERfT05fQkVIQUxGX09GEAQSGgoWTUFSS19GSUVMRF9ERVNDUklQVElPThAFEhwKGE1BUktfRklFTERfQ0FERU5DRV9MQUJFTBAGEhUKEU1BUktfRklFTERfREVUQUlMEAcSGgoWTUFSS19GSUVMRF9TVEFUVVNfTk9URRAIEhIKDk1BUktfRklFTERfVVJMEAkqWgoKTWFya1N0YXR1cxIbChdNQVJLX1NUQVRVU19VTlNQRUNJRklFRBAAEhYKEk1BUktfU1RBVFVTX0FDVElWRRABEhcKE01BUktfU1RBVFVTX1JFTU9WRUQQAiqGAQoRTGVkZ2VyU3ViamVjdEtpbmQSIwofTEVER0VSX1NVQkpFQ1RfS0lORF9VTlNQRUNJRklFRBAAEicKI0xFREdFUl9TVUJKRUNUX0tJTkRfQ09OVEVOVF9WRVJTSU9OEAESIwofTEVER0VSX1NVQkpFQ1RfS0lORF9TVE9SRURfRklMRRACMs0HChZSZWRhY3Rpb25Qb2xpY3lTZXJ2aWNlEm4KEkdldFJlZGFjdGlvblBvbGljeRIoLm53ZmwubWVuc2EudjEuR2V0UmVkYWN0aW9uUG9saWN5UmVxdWVzdBopLm53ZmwubWVuc2EudjEuR2V0UmVkYWN0aW9uUG9saWN5UmVzcG9uc2UiA5ACARJ1ChZQcm9wb3NlUmVkYWN0aW9uQ2hhbmdlEiwubndmbC5tZW5zYS52MS5Qcm9wb3NlUmVkYWN0aW9uQ2hhbmdlUmVxdWVzdBotLm53ZmwubWVuc2EudjEuUHJvcG9zZVJlZGFjdGlvbkNoYW5nZVJlc3BvbnNlEnUKFkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2USLC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2VSZXF1ZXN0Gi0ubndmbC5tZW5zYS52MS5BcHByb3ZlUmVkYWN0aW9uQ2hhbmdlUmVzcG9uc2USYwoQQWRkUmVkYWN0aW9uTWFyaxImLm53ZmwubWVuc2EudjEuQWRkUmVkYWN0aW9uTWFya1JlcXVlc3QaJy5ud2ZsLm1lbnNhLnYxLkFkZFJlZGFjdGlvbk1hcmtSZXNwb25zZRJuChJMaXN0UmVkYWN0aW9uTWFya3MSKC5ud2ZsLm1lbnNhLnYxLkxpc3RSZWRhY3Rpb25NYXJrc1JlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkxpc3RSZWRhY3Rpb25NYXJrc1Jlc3BvbnNlIgOQAgESaQoSUHJvcG9zZU1hcmtSZW1vdmFsEigubndmbC5tZW5zYS52MS5Qcm9wb3NlTWFya1JlbW92YWxSZXF1ZXN0GikubndmbC5tZW5zYS52MS5Qcm9wb3NlTWFya1JlbW92YWxSZXNwb25zZRJpChJBcHByb3ZlTWFya1JlbW92YWwSKC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVNYXJrUmVtb3ZhbFJlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVNYXJrUmVtb3ZhbFJlc3BvbnNlElEKCkxlZGdlckFzT2YSIC5ud2ZsLm1lbnNhLnYxLkxlZGdlckFzT2ZSZXF1ZXN0GiEubndmbC5tZW5zYS52MS5MZWRnZXJBc09mUmVzcG9uc2USVwoMVmVyaWZ5TGVkZ2VyEiIubndmbC5tZW5zYS52MS5WZXJpZnlMZWRnZXJSZXF1ZXN0GiMubndmbC5tZW5zYS52MS5WZXJpZnlMZWRnZXJSZXNwb25zZWIGcHJvdG8z", [file_google_protobuf_timestamp]);
 
 /**
  * One cell of the policy, as it is in effect.
@@ -523,6 +523,201 @@ export const ApproveRedactionChangeResponseSchema: GenMessage<ApproveRedactionCh
   messageDesc(file_nwfl_mensa_v1_redaction, 17);
 
 /**
+ * One ledger row. output_sha256 is empty when the audience was given nothing.
+ *
+ * @generated from message nwfl.mensa.v1.LedgerRow
+ */
+export type LedgerRow = Message<"nwfl.mensa.v1.LedgerRow"> & {
+  /**
+   * @generated from field: int64 seq = 1;
+   */
+  seq: bigint;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.LedgerSubjectKind subject_kind = 2;
+   */
+  subjectKind: LedgerSubjectKind;
+
+  /**
+   * @generated from field: string subject_id = 3;
+   */
+  subjectId: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.RedactionAudience audience = 4;
+   */
+  audience: RedactionAudience;
+
+  /**
+   * @generated from field: bytes output_sha256 = 5;
+   */
+  outputSha256: Uint8Array;
+
+  /**
+   * The inputs manifest, as JSON: ids, hashes, policy cells and engine only.
+   *
+   * @generated from field: string inputs_json = 6;
+   */
+  inputsJson: string;
+
+  /**
+   * @generated from field: int32 passages_withheld = 7;
+   */
+  passagesWithheld: number;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp current_from = 8;
+   */
+  currentFrom?: Timestamp | undefined;
+
+  /**
+   * Unset while the row is current.
+   *
+   * @generated from field: google.protobuf.Timestamp current_to = 9;
+   */
+  currentTo?: Timestamp | undefined;
+
+  /**
+   * @generated from field: bytes prev_hash = 10;
+   */
+  prevHash: Uint8Array;
+
+  /**
+   * @generated from field: bytes row_hash = 11;
+   */
+  rowHash: Uint8Array;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.LedgerRow.
+ * Use `create(LedgerRowSchema)` to create a new message.
+ */
+export const LedgerRowSchema: GenMessage<LedgerRow> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 18);
+
+/**
+ * @generated from message nwfl.mensa.v1.LedgerAsOfRequest
+ */
+export type LedgerAsOfRequest = Message<"nwfl.mensa.v1.LedgerAsOfRequest"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.LedgerSubjectKind subject_kind = 1;
+   */
+  subjectKind: LedgerSubjectKind;
+
+  /**
+   * @generated from field: string subject_id = 2;
+   */
+  subjectId: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.RedactionAudience audience = 3;
+   */
+  audience: RedactionAudience;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp at = 4;
+   */
+  at?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.LedgerAsOfRequest.
+ * Use `create(LedgerAsOfRequestSchema)` to create a new message.
+ */
+export const LedgerAsOfRequestSchema: GenMessage<LedgerAsOfRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 19);
+
+/**
+ * @generated from message nwfl.mensa.v1.LedgerAsOfResponse
+ */
+export type LedgerAsOfResponse = Message<"nwfl.mensa.v1.LedgerAsOfResponse"> & {
+  /**
+   * Unset when no row was current then.
+   *
+   * @generated from field: nwfl.mensa.v1.LedgerRow row = 1;
+   */
+  row?: LedgerRow | undefined;
+
+  /**
+   * The hash of the output rendered again as of `at`; empty when nothing was given.
+   *
+   * @generated from field: bytes rerender_sha256 = 2;
+   */
+  rerenderSha256: Uint8Array;
+
+  /**
+   * @generated from field: bool matches = 3;
+   */
+  matches: boolean;
+
+  /**
+   * Why it does not match, or what could not be rendered again.
+   *
+   * @generated from field: string detail = 4;
+   */
+  detail: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.LedgerAsOfResponse.
+ * Use `create(LedgerAsOfResponseSchema)` to create a new message.
+ */
+export const LedgerAsOfResponseSchema: GenMessage<LedgerAsOfResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 20);
+
+/**
+ * @generated from message nwfl.mensa.v1.VerifyLedgerRequest
+ */
+export type VerifyLedgerRequest = Message<"nwfl.mensa.v1.VerifyLedgerRequest"> & {
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.VerifyLedgerRequest.
+ * Use `create(VerifyLedgerRequestSchema)` to create a new message.
+ */
+export const VerifyLedgerRequestSchema: GenMessage<VerifyLedgerRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 21);
+
+/**
+ * @generated from message nwfl.mensa.v1.VerifyLedgerResponse
+ */
+export type VerifyLedgerResponse = Message<"nwfl.mensa.v1.VerifyLedgerResponse"> & {
+  /**
+   * @generated from field: bool intact = 1;
+   */
+  intact: boolean;
+
+  /**
+   * @generated from field: int64 rows = 2;
+   */
+  rows: bigint;
+
+  /**
+   * 0 when intact.
+   *
+   * @generated from field: int64 first_break_seq = 3;
+   */
+  firstBreakSeq: bigint;
+
+  /**
+   * @generated from field: string problem = 4;
+   */
+  problem: string;
+
+  /**
+   * @generated from field: bytes head_hash = 5;
+   */
+  headHash: Uint8Array;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.VerifyLedgerResponse.
+ * Use `create(VerifyLedgerResponseSchema)` to create a new message.
+ */
+export const VerifyLedgerResponseSchema: GenMessage<VerifyLedgerResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 22);
+
+/**
  * Who a policy cell is for.
  *
  * @generated from enum nwfl.mensa.v1.RedactionAudience
@@ -820,6 +1015,38 @@ export const MarkStatusSchema: GenEnum<MarkStatus> = /*@__PURE__*/
   enumDesc(file_nwfl_mensa_v1_redaction, 6);
 
 /**
+ * What a ledger row is about.
+ *
+ * @generated from enum nwfl.mensa.v1.LedgerSubjectKind
+ */
+export enum LedgerSubjectKind {
+  /**
+   * @generated from enum value: LEDGER_SUBJECT_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * A content version, as the published item reads give it.
+   *
+   * @generated from enum value: LEDGER_SUBJECT_KIND_CONTENT_VERSION = 1;
+   */
+  CONTENT_VERSION = 1,
+
+  /**
+   * A PDF file, as ReadFile gives it.
+   *
+   * @generated from enum value: LEDGER_SUBJECT_KIND_STORED_FILE = 2;
+   */
+  STORED_FILE = 2,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.LedgerSubjectKind.
+ */
+export const LedgerSubjectKindSchema: GenEnum<LedgerSubjectKind> = /*@__PURE__*/
+  enumDesc(file_nwfl_mensa_v1_redaction, 7);
+
+/**
  * Officers only. A change that loosens the public audience waits for a second,
  * different officer; any other change applies at once. Every change and
  * approval is audit-logged.
@@ -894,6 +1121,27 @@ export const RedactionPolicyService: GenService<{
     methodKind: "unary";
     input: typeof ApproveMarkRemovalRequestSchema;
     output: typeof ApproveMarkRemovalResponseSchema;
+  },
+  /**
+   * The publication ledger (R-LEDGER), officers only. LedgerAsOf returns the
+   * row current at a time for one subject and audience, and renders it again
+   * from the kept history to check its hash. VerifyLedger walks the hash chain
+   * and names the first row that breaks it. Neither returns any content.
+   *
+   * @generated from rpc nwfl.mensa.v1.RedactionPolicyService.LedgerAsOf
+   */
+  ledgerAsOf: {
+    methodKind: "unary";
+    input: typeof LedgerAsOfRequestSchema;
+    output: typeof LedgerAsOfResponseSchema;
+  },
+  /**
+   * @generated from rpc nwfl.mensa.v1.RedactionPolicyService.VerifyLedger
+   */
+  verifyLedger: {
+    methodKind: "unary";
+    input: typeof VerifyLedgerRequestSchema;
+    output: typeof VerifyLedgerResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_nwfl_mensa_v1_redaction, 0);
