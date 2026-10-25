@@ -3,7 +3,7 @@
 import { deflateSync } from 'node:zlib';
 import { type PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, decodePDFRawStream } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
-import { FILL_GRAY, applyImagePolicy, blurred, hasInlinePicture } from '../../src/pdf/images.js';
+import { FILL_GRAY, applyImagePolicy, blurred, hasInlinePicture, keepsPicture, pictureWindows } from '../../src/pdf/images.js';
 
 type Dict = Record<string, unknown>;
 
@@ -72,5 +72,27 @@ describe('hasInlinePicture', () => {
     expect(t('q BI /W 1 /H 1 ID x EI Q')).toBe(true);
     expect(t('BI\n/W 1')).toBe(true);
     expect(t('<4142> Tj /FBI Do 0 BIG')).toBe(false);
+    // PDF whitespace is NUL, tab, LF, FF, CR and space; nothing else (not U+00A0).
+    expect(t('q\x00BI\x00/W 1')).toBe(true);
+    expect(t('q\fBI\f/W 1')).toBe(true);
+    expect(t('q\xa0BI\xa0/W 1')).toBe(false);
+  });
+});
+
+describe('pictureWindows and keepsPicture', () => {
+  it('keeps windows of varied samples at a stride of 32 and finds any of them at any offset', async () => {
+    const doc = await PDFDocument.create({ updateMetadata: false });
+    const varied = new Uint8Array(Array.from({ length: 640 }, (_, i) => (i * 131 + 7) & 0xff));
+    doc.context.register(PDFRawStream.of(doc.context.obj({ Type: 'XObject', Subtype: 'Image', ...base, Width: 32, Height: 20 }) as unknown as PDFDict, varied));
+    // A flat picture says nothing about anyone: its windows are not kept (they would match any run of one byte).
+    doc.context.register(PDFRawStream.of(doc.context.obj({ Type: 'XObject', Subtype: 'Image', ...base, Width: 32, Height: 20 }) as unknown as PDFDict, new Uint8Array(640).fill(255)));
+    const windows = await pictureWindows(await doc.save());
+    expect(windows.size).toBe(19);
+    const copyWith = (run: Uint8Array) => new Uint8Array(Buffer.concat([Buffer.from('%PDF-1.7\n1 0 obj\n<< /Length ' + run.length + ' >>\nstream\n'), run, Buffer.from('\nendstream\nendobj\n%%EOF\n')]));
+    expect(await keepsPicture(copyWith(varied.subarray(101, 197)), windows)).toBe(true);
+    expect(await keepsPicture(copyWith(varied.subarray(101, 160)), windows)).toBe(false);
+    expect(await keepsPicture(copyWith(new Uint8Array(300).fill(255)), windows)).toBe(false);
+    expect(await keepsPicture(new Uint8Array(Buffer.from('not a pdf')), windows)).toBe(false);
+    expect((await pictureWindows(new Uint8Array(Buffer.from('not a pdf')))).size).toBe(0);
   });
 });

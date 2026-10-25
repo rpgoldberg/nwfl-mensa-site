@@ -422,4 +422,26 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await readPdf(pool, id, 'officers')).toMatchObject({ kind: 'pdf', original: true });
     }, 120_000);
   });
+
+  // Documented, not closed (fix 2): the database takes the groups the app passes on trust, as it
+  // does for R1's approver. So the app role, or anyone who has taken it over, can say it is an
+  // officer, add a mark (which queues the file), claim the file and read its original. Closing this
+  // needs a separate worker role, which needs CREATEROLE (filed with fc).
+  describe('the trust the worker path rests on', () => {
+    it('lets the app role read an original by claiming officer groups, adding a mark and claiming the file', async () => {
+      const self = { sub: 'sub-anyone', groups: ['nwfl-officers'] };
+      for (const audience of ['public', 'members', 'officers']) {
+        if (audience !== 'officers') expect(await sqlstate(pool as unknown as pg.Client, `SELECT pdf_original_read($1, $2)`, [file, audience])).toBe('42501');
+      }
+      await mark(item, 'zzz nowhere', 'member_phone', self);
+      let claim: { file_id: string; claim: string } | undefined;
+      for (let i = 0; i < 50; i++) {
+        claim = (await q<{ file_id: string; claim: string }>(`SELECT * FROM pdf_regen_claim(60)`)).rows[0];
+        if (claim === undefined || claim.file_id === file) break;
+      }
+      expect(claim?.file_id).toBe(file);
+      const got = (await q<{ b: Buffer }>(`SELECT pdf_regen_original($1, $2) AS b`, [file, claim!.claim])).rows[0]!.b;
+      expect(got.equals(Buffer.from(original))).toBe(true);
+    });
+  });
 });
