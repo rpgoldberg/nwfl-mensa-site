@@ -74,6 +74,9 @@ describe.skipIf(!live)('the members-only canary', () => {
     'nwfl.mensa.v1.MembershipVerifierService': {
       ListPendingVerifications: () => [{}],
     },
+    'nwfl.mensa.v1.RedactionPolicyService': {
+      GetRedactionPolicy: () => [{}],
+    },
   };
 
   const readMethods = (): DescMethod[] =>

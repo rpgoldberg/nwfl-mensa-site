@@ -7,6 +7,7 @@ import { EventService } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
 import { MembershipService } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { MembershipVerifierService } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
+import { RedactionPolicyService } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { apiInterceptors } from '../../src/grpc/interceptors.js';
 import { apiRoutes } from '../../src/grpc/routes.js';
 import { createStructuredLogger } from '../../src/platform/logger.js';
@@ -42,6 +43,7 @@ describe('apiRoutes', () => {
   it.each([
     ['NewsletterService', () => createClient(NewsletterService, transport).listEditions({})],
     ['MembershipVerifierService', () => createClient(MembershipVerifierService, transport).listPendingVerifications({})],
+    ['RedactionPolicyService', () => createClient(RedactionPolicyService, transport).getRedactionPolicy({})],
   ])('serves %s behind the caller gate: no token, no answer', async (_name, call) => {
     await expect(call()).rejects.toMatchObject({ code: Code.Unauthenticated });
   });

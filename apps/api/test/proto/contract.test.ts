@@ -4,7 +4,7 @@
 // proto file is checked without touching this test.
 //
 // The rules:
-//   - five services, each with a separate caller (the BFF, the newsletter
+//   - six services, each with a separate caller (the BFF, the newsletter
 //     agent, the membership verifier);
 //   - no RPC takes an audience from the caller, except ExportEdition, and no
 //     read RPC takes a visibility filter either (P17: the audience comes from
@@ -91,9 +91,9 @@ beforeAll(async () => {
 });
 
 describe(`${PKG}: services`, () => {
-  it('declares the five services and nothing else', () => {
+  it('declares the six services and nothing else', () => {
     expect(services().map((s) => s.name).sort()).toEqual(
-      ['ContentService', 'EventService', 'MembershipService', 'MembershipVerifierService', 'NewsletterService'].sort(),
+      ['ContentService', 'EventService', 'MembershipService', 'MembershipVerifierService', 'NewsletterService', 'RedactionPolicyService'].sort(),
     );
   });
 
