@@ -15,16 +15,29 @@
 //      A JPEG is searched as it is. A filter it cannot decode means no copy.
 //   3. The file as written, for anything outside the objects.
 //
+// A short quote (fewer than SHORT_QUOTE folded letters and digits, "Bo") is
+// found by chance in picture samples and font programs, so those, and their
+// bytes in the file as written, are searched only for the longer quotes.
+// Their dictionaries, and everything else, are searched for every quote.
+//
 // Each text is matched as a page is (match.ts: folded, look-alikes, line
 // breaks, hyphens, letter spacing). Any hit means no copy, with the reason.
 // ============================================================================
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, type PDFObject, PDFRawStream, PDFString, decodePDFRawStream } from '@cantoo/pdf-lib';
+import { probeFolded } from '../redaction/render.js';
 import { textMatches } from './match.js';
 
 type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 let pdfjs: Promise<PdfJs> | undefined;
 
 const UNREADABLE = 'the copy could not be read';
+
+/** The fewest folded letters and digits a quote needs before picture samples and font programs are searched for it. */
+export const SHORT_QUOTE = 5;
+/** A quote's folded letters and digits, counted. */
+export const normalizedLength = (quote: string): number => (probeFolded(quote).match(/[\p{L}\p{N}]/gu) ?? []).length;
+const FONT_FILES = ['FontFile', 'FontFile2', 'FontFile3'].map((key) => PDFName.of(key));
+const IMAGE = PDFName.of('Image');
 const DECODABLE = new Set(['/FlateDecode', '/LZWDecode', '/ASCIIHexDecode', '/ASCII85Decode', '/RunLengthDecode']);
 
 interface Item {
@@ -190,17 +203,48 @@ function streamForms(bytes: Uint8Array): string[] {
   return [text, text.replace(/[^\x20-\x7e\t]/g, '\n'), CP1252.decode(bytes), UTF16BE.decode(bytes), UTF16BE.decode(bytes.subarray(1)), UTF16LE.decode(bytes), UTF16LE.decode(bytes.subarray(1)), ...contentForms(text)];
 }
 
+/** The picture XObjects and embedded font programs in the copy: bytes a short quote turns up in by chance. */
+function binaryStreams(doc: PDFDocument): Set<PDFRawStream> {
+  const out = new Set<PDFRawStream>();
+  for (const [, object] of doc.context.enumerateIndirectObjects()) {
+    const dict = object instanceof PDFRawStream ? object.dict : object instanceof PDFDict ? object : undefined;
+    if (dict === undefined) continue;
+    if (object instanceof PDFRawStream && dict.lookup(PDFName.of('Subtype')) === IMAGE) out.add(object);
+    for (const key of FONT_FILES) {
+      const program = dict.lookup(key);
+      if (program instanceof PDFRawStream) out.add(program);
+    }
+  }
+  return out;
+}
+
+/** The file as written with these streams' bytes blanked out. */
+function without(pdf: Uint8Array, streams: Iterable<PDFRawStream>): Uint8Array {
+  const out = Buffer.from(pdf);
+  for (const stream of streams) {
+    if (stream.contents.length === 0) continue;
+    const at = out.indexOf(stream.contents);
+    if (at >= 0) out.fill(0x0a, at, at + stream.contents.length);
+  }
+  return out;
+}
+
 /** Why a quote can be found in an object of the copy, or in its bytes; null when in none. */
 function objectFinds(pdf: Uint8Array, doc: PDFDocument, quotes: readonly string[]): string | null {
+  const long = quotes.filter((quote) => normalizedLength(quote) >= SHORT_QUOTE);
+  const short = quotes.filter((quote) => !long.includes(quote));
+  const binary = binaryStreams(doc);
   for (const [ref, object] of doc.context.enumerateIndirectObjects()) {
     const where = `object ${ref.objectNumber}`;
     if (textMatches(stringsIn(object).join('\n'), quotes)) return `${where}: withheld text is still in the file`;
     if (!(object instanceof PDFRawStream)) continue;
     const bytes = decoded(object);
     if (typeof bytes === 'string') return `${where}: ${bytes}`;
-    if (streamForms(bytes).some((form) => textMatches(form, quotes))) return `${where}: withheld text is still in the file`;
+    const searched = binary.has(object) ? long : quotes;
+    if (streamForms(bytes).some((form) => textMatches(form, searched))) return `${where}: withheld text is still in the file`;
   }
-  return streamForms(pdf).some((form) => textMatches(form, quotes)) ? 'withheld text is still in the file' : null;
+  const found = streamForms(pdf).some((form) => textMatches(form, long)) || streamForms(without(pdf, binary)).some((form) => textMatches(form, short));
+  return found ? 'withheld text is still in the file' : null;
 }
 
 /** Null when no quote can be found anywhere in the copy, else why it must not be given. */

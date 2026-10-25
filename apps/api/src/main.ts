@@ -9,6 +9,7 @@
 import { readAuthConfig, verifierFrom } from './auth/config.js';
 import { readConfig } from './config.js';
 import { createPool, describeTarget } from './db/pool.js';
+import { startRegenerator } from './pdf/regenerate.js';
 import { createStructuredLogger } from './platform/logger.js';
 import { startTelemetry } from './platform/telemetry.js';
 import { startServer } from './server.js';
@@ -35,6 +36,12 @@ const server = await startServer({
   edgeClientIds: auth.edgeClientIds,
 });
 
+// REDACT R3b: redacted PDF copies are made in the background, never on a read.
+const regenerator = startRegenerator({
+  db: pool,
+  onError: (error) => logger.error({ error_name: error instanceof Error ? error.name : 'unknown', error_code: (error as { code?: string }).code }, 'pdf regeneration failed'),
+});
+
 let stopping = false;
 const stop = (signal: string): void => {
   if (stopping) return;
@@ -45,6 +52,7 @@ const stop = (signal: string): void => {
   setTimeout(() => process.exit(1), config.drainTimeoutMs + 5_000).unref();
   void server
     .close()
+    .then(() => regenerator.stop())
     .then(() => pool.end())
     .then(() => telemetry.shutdown())
     .then(() => process.exit(0));

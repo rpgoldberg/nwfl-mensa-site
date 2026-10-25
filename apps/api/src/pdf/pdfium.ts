@@ -196,6 +196,20 @@ export class Page {
     }
   }
 
+  /**
+   * Rewrites the page's content from its objects: PDFium writes each inline picture as a picture
+   * XObject. It rewrites only a stream with a changed object, so each picture is first moved by
+   * the identity, which changes nothing it draws.
+   */
+  regenerate(): boolean {
+    const m = this.m;
+    for (let i = 0; i < this.objectCount; i++) {
+      const object = m.FPDFPage_GetObject(this.handle, i);
+      if (m.FPDFPageObj_GetType(object) === FPDF_PAGEOBJ_IMAGE) m.FPDFPageObj_Transform(object, 1, 0, 0, 1, 0, 0);
+    }
+    return m.FPDFPage_GenerateContent(this.handle);
+  }
+
   /** An opaque box over each region, labelled "withheld" in white where the label fits. */
   drawBoxes(regions: readonly Region[]): void {
     const m = this.m;

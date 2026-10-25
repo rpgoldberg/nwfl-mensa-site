@@ -14,6 +14,8 @@
 // resources list, or that a page lists but never draws, is not copied on.
 // A JPEG keeps only what draws it (jpeg.ts). Objects nothing points at any
 // more are deleted before saving.
+// Pictures follow the audience's image policy (images.ts); under "blur" or
+// "hide", an inline picture left in any content stream means no copy.
 // No date or id is written, so the same input gives the same bytes.
 // ============================================================================
 import {
@@ -27,7 +29,8 @@ import {
   PDFStream,
   decodePDFRawStream,
 } from '@cantoo/pdf-lib';
-import { stripMarkedContentProperties } from './content.js';
+import { PDF_WS, stripMarkedContentProperties } from './content.js';
+import { type ImageAction, applyImagePolicy, hasInlinePicture } from './images.js';
 import { stripJpeg } from './jpeg.js';
 
 const PAGE_KEYS = new Set(['/Type', '/Parent', '/Resources', '/Contents', '/MediaBox', '/CropBox', '/BleedBox', '/TrimBox', '/ArtBox', '/Rotate', '/UserUnit', '/Group']);
@@ -52,6 +55,17 @@ function contentStreams(doc: PDFDocument): Set<PDFRef> {
     const dict = context.lookupMaybe(value, PDFDict);
     if (dict === undefined || seen.has(dict)) return;
     seen.add(dict);
+    // A soft mask's group (ExtGState /SMask /G) is a form the page draws too.
+    const states = context.lookupMaybe(dict.get(PDFName.of('ExtGState')), PDFDict);
+    for (const [, state] of states?.entries() ?? []) {
+      const mask = context.lookupMaybe(context.lookupMaybe(state, PDFDict)?.get(PDFName.of('SMask')), PDFDict);
+      const group = mask?.get(PDFName.of('G'));
+      const form = context.lookup(group);
+      if (group instanceof PDFRef && form instanceof PDFStream) {
+        out.add(group);
+        resources(form.dict.get(PDFName.of('Resources')));
+      }
+    }
     for (const kind of ['XObject', 'Pattern', 'Font']) {
       const entries = context.lookupMaybe(dict.get(PDFName.of(kind)), PDFDict);
       for (const [, ref] of entries?.entries() ?? []) {
@@ -78,7 +92,7 @@ const decoded = (value: PDFObject | undefined): Uint8Array => (value instanceof 
 
 /** Every name a content stream writes (operands included, so this keeps more than it must, never less). */
 const namesIn = (content: Uint8Array): Set<PDFName> =>
-  new Set([...Buffer.from(content).toString('latin1').matchAll(/\/([^\s/<>[\]()%{}]*)/g)].map((m) => PDFName.of(m[1] as string)));
+  new Set([...Buffer.from(content).toString('latin1').matchAll(new RegExp(`/([^${PDF_WS}/<>[\\]()%{}]*)`, 'g'))].map((m) => PDFName.of(m[1] as string)));
 
 /** Each page, and each form, tiling pattern and Type 3 font it reaches, given resources holding only what its content names. */
 function pruneResources(doc: PDFDocument): void {
@@ -154,7 +168,7 @@ function reachable(doc: PDFDocument): Set<string> {
 }
 
 /** The pages of `bytes`, alone in a new document, with nothing beside the drawing. Throws when a content stream or a JPEG cannot be read. */
-export async function sanitize(bytes: Uint8Array): Promise<Uint8Array> {
+export async function sanitize(bytes: Uint8Array, image: ImageAction = 'show'): Promise<Uint8Array> {
   const source = await PDFDocument.load(bytes, { updateMetadata: false });
   for (const page of source.getPages()) {
     for (const key of page.node.keys()) if (!PAGE_KEYS.has(key.toString())) page.node.delete(key);
@@ -167,10 +181,13 @@ export async function sanitize(bytes: Uint8Array): Promise<Uint8Array> {
   for (const ref of contentStreams(out)) {
     const stream = context.lookup(ref);
     if (!(stream instanceof PDFRawStream)) throw new Error('a page has content that is not a stream');
-    const stripped = context.flateStream(stripMarkedContentProperties(decodePDFRawStream(stream).decode()));
+    const content = stripMarkedContentProperties(decodePDFRawStream(stream).decode());
+    if (image !== 'show' && hasInlinePicture(content)) throw new Error('an inline picture cannot be replaced');
+    const stripped = context.flateStream(content);
     for (const [key, value] of stream.dict.entries()) if (!STREAM_KEYS.has(key.toString())) stripped.dict.set(key, value);
     context.assign(ref, stripped);
   }
+  applyImagePolicy(out, image);
   const keep = reachable(out);
   for (const [ref] of context.enumerateIndirectObjects()) if (!keep.has(ref.toString())) context.delete(ref);
   stripJpegs(out);

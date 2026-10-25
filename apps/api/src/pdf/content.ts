@@ -13,6 +13,8 @@
 // ============================================================================
 
 const WHITESPACE = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20]);
+/** PDF whitespace (NUL, tab, LF, FF, CR, space) as the inside of a regular-expression class: never \s, which misses NUL and takes U+00A0. */
+export const PDF_WS = '\\x00\\t\\n\\f\\r ';
 const DELIMITERS = new Set([...'()<>[]{}/%'].map((c) => c.charCodeAt(0)));
 const REGULAR = /^(?:[+-]?(?:\d+\.?\d*|\.\d+)|true|false|null)$/;
 
@@ -54,11 +56,11 @@ function regularEnd(s: string, at: number): number {
 
 /** The end of an inline image's data: just past the EI that follows ID, standing alone. */
 function inlineImageEnd(s: string, at: number): number {
-  const id = /(^|[\s\0])ID[\s\0]/g;
+  const id = new RegExp(`(^|[${PDF_WS}])ID[${PDF_WS}]`, 'g');
   id.lastIndex = at;
   const found = id.exec(s);
   if (found === null) throw new Unreadable();
-  const ei = /[\s\0]EI(?=[\s\0]|$|[()<>[\]{}/%])/g;
+  const ei = new RegExp(`[${PDF_WS}]EI(?=[${PDF_WS}]|$|[()<>[\\]{}/%])`, 'g');
   ei.lastIndex = found.index + found[0].length;
   const end = ei.exec(s);
   if (end === null) throw new Unreadable();
