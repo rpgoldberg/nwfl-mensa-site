@@ -49,6 +49,7 @@ const fontProgram = (bytes: string, key = 'FontFile2'): Uint8Array =>
 describe('normalizedLength', () => {
   it('counts the folded letters and digits only', () => {
     expect(normalizedLength('Bo')).toBe(2);
+    expect(normalizedLength(' -- ')).toBe(0);
     expect(normalizedLength('  B-o. ')).toBe(2);
     expect(normalizedLength('Bo Ek')).toBe(4);
     expect(normalizedLength('Ébo 12')).toBe(5);
@@ -74,7 +75,7 @@ describe('the gate with a short quote', () => {
     expect(await checkCopy(pdf(PAGE, [stream('', '(Bo) Tj')]), ['Bo'])).toMatch(/object 6/);
     expect(await checkCopy(pdf(PAGE, ['<< /Author (Bo) >>']), ['Bo'])).toMatch(/object 6/);
     expect(await checkCopy(image('\x00\x00\x00\x00', '/Name (Bo)'), ['Bo'])).toMatch(/object 6/);
-    const trailing = Buffer.concat([B(pdf(PAGE)), B('% Bo\n')]);
+    const trailing = Buffer.concat([Buffer.from(pdf(PAGE)), B('% Bo\n')]);
     expect(await checkCopy(new Uint8Array(trailing), ['Bo'])).toBe('withheld text is still in the file');
   });
 });

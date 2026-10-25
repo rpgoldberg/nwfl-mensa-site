@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { RedactRequest, RedactResult } from '../../src/pdf/redact.js';
+import type { RedactRequest } from '../../src/pdf/redact.js';
 import { type Redact, drain, regenerateOne, startRegenerator } from '../../src/pdf/regenerate.js';
 import { MAX_ORIGINAL_BYTES, inputsFor, readPdf, storeOriginal } from '../../src/pdf/store.js';
 import { checkCopy } from '../../src/pdf/gate.js';
@@ -14,7 +14,6 @@ import { APP, APP_PW, dropDatabase, failure, freshDatabase, live, migrate, sqlst
 import { leakFixture } from './fixtures.js';
 
 const OFFICER = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
-const SECOND = { sub: 'sub-second', groups: ['nwfl-members', 'nwfl-officers'] };
 const AUTHOR = { sub: 'sub-author', groups: ['nwfl-members'] };
 const STRANGER = { sub: 'sub-stranger', groups: ['nwfl-members'] };
 const PHONE_NAME = 'Quillon Brask';
@@ -31,7 +30,7 @@ const stub =
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     if (request.quotes.includes('Refuse Me')) return { kind: 'refused', reason: 'page 1 is a scan: pictures cover most of it' };
     if (request.quotes.includes('Throw Me')) throw new Error('wasm trap');
-    if (request.quotes.includes('Give Original')) return { kind: 'original' } as RedactResult;
+    if (request.quotes.includes('Give Original')) return { kind: 'original' };
     return { kind: 'redacted', pdf: new Uint8Array(Buffer.from(`copy:${[...request.quotes].sort().join('|')}`)), boxes: [] };
   };
 const text = (result: Awaited<ReturnType<typeof readPdf>>): string => {
@@ -107,7 +106,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const big = Buffer.alloc(MAX_ORIGINAL_BYTES + 1, 0x20);
       const bigFile = await newFile({ version }, pdfBytes('x'));
       expect(await asApp(bigFile, big)).toMatch(/^22023: .*10 MiB/);
-      expect(await asApp(file, pdfBytes('not the flyer'))).toMatch(/^22023: .*does not match/);
+      expect(await asApp(file, pdfBytes('not the flyer'))).toMatch(/^22023: .*do not match/);
       const word = await newFile({ version }, pdfBytes('w'), 'officers', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
       expect(await asApp(word, pdfBytes('w'))).toMatch(/^22023: .*not a PDF/);
       expect(await asApp(file, original, STRANGER)).toMatch(/^42501: /);
@@ -333,13 +332,13 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     });
 
     it('keeps an edition PDF in step with the marks on the items it prints', async () => {
-      const edition = (await q<{ id: string }>(`INSERT INTO edition (slug, title, kind, period_start, period_end) VALUES ('fall', 'Fall', 'regular', '2026-10-01', '2026-11-30') RETURNING id`)).rows[0]!.id;
+      const edition = (await q<{ id: string }>(`INSERT INTO edition (slug, title, kind, period_start, period_end) VALUES ('2026-10', 'Fall', 'regular', '2026-10-01', '2026-11-30') RETURNING id`)).rows[0]!.id;
       const bytes = pdfBytes('issue');
       const id = await newFile({ edition }, bytes);
       await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
       await drain(pool, { redact: stub() });
       expect(text(await readPdf(pool, id, 'public'))).toBe('copy:');
-      await owner.query(`INSERT INTO edition_item (edition_id, item_id, version_id) VALUES ($1, $2, $3)`, [edition, item, version]);
+      await q(`INSERT INTO edition_item (edition_id, item_id, version_id) VALUES ($1, $2, $3)`, [edition, item, version]);
       expect(await queued(id)).toBe(1);
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'not_ready' });
       await drain(pool, { redact: stub() });
@@ -379,6 +378,22 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       await broken.stop();
       await broken.stop();
       expect(String(errors[0])).toMatch(/db down/);
+    });
+
+    it('lets any other database failure through, and the file is taken again once the lease ends', async () => {
+      const { version: v } = await newItem('db-fails');
+      const bytes = pdfBytes('db-fails');
+      const id = await newFile({ version: v }, bytes);
+      await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
+      const failing = {
+        query: (sql: string, values?: unknown[]) =>
+          sql.includes('pdf_copy_put') ? Promise.reject(Object.assign(new Error('disk full'), { code: '53100' })) : pool.query(sql, values),
+      } as unknown as pg.Pool;
+      await expect(regenerateOne(failing, { redact: stub(), leaseSeconds: 1 })).rejects.toThrow('disk full');
+      expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'not_ready' });
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect(await drain(pool, { redact: stub() })).toBe(1);
+      expect(text(await readPdf(pool, id, 'public'))).toBe('copy:');
     });
 
     it('makes a real copy with the engine that passes the gate', async () => {
