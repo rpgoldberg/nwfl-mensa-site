@@ -25,6 +25,7 @@ import { Audience } from '../src/gen/nwfl/mensa/v1/common_pb.js';
 import { ContentService } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { MembershipService } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { MarkSubjectKind } from '../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { SERVED_SERVICES } from '../src/grpc/routes.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from './helpers/api.js';
 import { membersSpan, paragraph, publishItem, text } from './helpers/content.js';
@@ -76,6 +77,7 @@ describe.skipIf(!live)('the members-only canary', () => {
     },
     'nwfl.mensa.v1.RedactionPolicyService': {
       GetRedactionPolicy: () => [{}],
+      ListRedactionMarks: () => [{ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: ids['publicItem'] }],
     },
   };
 

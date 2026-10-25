@@ -88,6 +88,119 @@ service RedactionPolicyService {
   rpc ProposeRedactionChange(ProposeRedactionChangeRequest) returns (ProposeRedactionChangeResponse);
   // No officer approves their own proposal.
   rpc ApproveRedactionChange(ApproveRedactionChangeRequest) returns (ApproveRedactionChangeResponse);
+
+  // Marks (REDACT R2a). An officer, or the person who wrote the item, marks a
+  // passage or a whole item; it applies at once. Removing a mark is proposed by
+  // one officer and approved by a different one.
+  rpc AddRedactionMark(AddRedactionMarkRequest) returns (AddRedactionMarkResponse);
+  // Officers only: the marks on one item or event, with removals waiting.
+  rpc ListRedactionMarks(ListRedactionMarksRequest) returns (ListRedactionMarksResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc ProposeMarkRemoval(ProposeMarkRemovalRequest) returns (ProposeMarkRemovalResponse);
+  // No officer approves their own proposal.
+  rpc ApproveMarkRemoval(ApproveMarkRemovalRequest) returns (ApproveMarkRemovalResponse);
+}
+
+// What a mark is on.
+enum MarkSubjectKind {
+  MARK_SUBJECT_KIND_UNSPECIFIED = 0;
+  MARK_SUBJECT_KIND_CONTENT_ITEM = 1;
+  MARK_SUBJECT_KIND_EVENT_SERIES = 2;
+  // A stored occurrence: a one-off event, or a dated change to a series.
+  MARK_SUBJECT_KIND_EVENT_OCCURRENCE = 3;
+}
+
+// The text field a passage was marked in. A content item has title, summary,
+// body and on_behalf_of; a series title, description and cadence_label; an
+// occurrence title, detail, status_note and url.
+enum MarkField {
+  MARK_FIELD_UNSPECIFIED = 0;
+  MARK_FIELD_TITLE = 1;
+  MARK_FIELD_SUMMARY = 2;
+  MARK_FIELD_BODY = 3;
+  MARK_FIELD_ON_BEHALF_OF = 4;
+  MARK_FIELD_DESCRIPTION = 5;
+  MARK_FIELD_CADENCE_LABEL = 6;
+  MARK_FIELD_DETAIL = 7;
+  MARK_FIELD_STATUS_NOTE = 8;
+  MARK_FIELD_URL = 9;
+}
+
+enum MarkStatus {
+  MARK_STATUS_UNSPECIFIED = 0;
+  MARK_STATUS_ACTIVE = 1;
+  MARK_STATUS_REMOVED = 2;
+}
+
+// A passage or a whole item marked as one category of personal data. The
+// passage is anchored by its exact text: wherever that text appears in the
+// item, matched without regard to case or spacing, it is withheld from an
+// audience whose policy redacts the category.
+message RedactionMark {
+  string mark_id = 1;
+  MarkSubjectKind subject_kind = 2;
+  string subject_id = 3;
+  // Unspecified for a whole-item mark.
+  MarkField field = 4;
+  // The marked text. Empty for a whole-item mark.
+  string quote = 5;
+  RedactionCategory category = 6;
+  MarkStatus status = 7;
+  string created_by = 8;
+  google.protobuf.Timestamp created_at = 9;
+  // A removal waiting for a second officer, if any.
+  string pending_removal_id = 10;
+  string removal_proposed_by = 11;
+}
+
+message MarkRemoval {
+  string removal_id = 1;
+  string mark_id = 2;
+  // True once a second officer approved it.
+  bool applied = 3;
+  string proposed_by = 4;
+  google.protobuf.Timestamp proposed_at = 5;
+  string approved_by = 6;
+  google.protobuf.Timestamp approved_at = 7;
+}
+
+message AddRedactionMarkRequest {
+  MarkSubjectKind subject_kind = 1;
+  string subject_id = 2;
+  // Unspecified, with an empty quote, marks the whole item.
+  MarkField field = 3;
+  string quote = 4;
+  RedactionCategory category = 5;
+}
+
+message AddRedactionMarkResponse {
+  RedactionMark mark = 1;
+}
+
+message ListRedactionMarksRequest {
+  MarkSubjectKind subject_kind = 1;
+  string subject_id = 2;
+}
+
+message ListRedactionMarksResponse {
+  repeated RedactionMark marks = 1;
+}
+
+message ProposeMarkRemovalRequest {
+  string mark_id = 1;
+}
+
+message ProposeMarkRemovalResponse {
+  MarkRemoval removal = 1;
+}
+
+message ApproveMarkRemovalRequest {
+  string removal_id = 1;
+}
+
+message ApproveMarkRemovalResponse {
+  MarkRemoval removal = 1;
 }
 
 message GetRedactionPolicyRequest {}

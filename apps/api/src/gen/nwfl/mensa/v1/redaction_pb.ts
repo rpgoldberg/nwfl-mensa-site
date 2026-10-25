@@ -20,7 +20,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file nwfl/mensa/v1/redaction.proto.
  */
 export const file_nwfl_mensa_v1_redaction: GenFile = /*@__PURE__*/
-  fileDesc("Ch1ud2ZsL21lbnNhL3YxL3JlZGFjdGlvbi5wcm90bxINbndmbC5tZW5zYS52MSKnAQoNUmVkYWN0aW9uQ2VsbBIyCghhdWRpZW5jZRgBIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQXVkaWVuY2USMgoIY2F0ZWdvcnkYAiABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNhdGVnb3J5Ei4KBmFjdGlvbhgDIAEoDjIeLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQWN0aW9uIrYDCg9SZWRhY3Rpb25DaGFuZ2USEQoJY2hhbmdlX2lkGAEgASgJEjIKCGF1ZGllbmNlGAIgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25BdWRpZW5jZRIyCghjYXRlZ29yeRgDIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQ2F0ZWdvcnkSMwoLZnJvbV9hY3Rpb24YBCABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbhIxCgl0b19hY3Rpb24YBSABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbhI0CgZzdGF0dXMYBiABKA4yJC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZVN0YXR1cxITCgtwcm9wb3NlZF9ieRgHIAEoCRIvCgtwcm9wb3NlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoLYXBwcm92ZWRfYnkYCSABKAkSLwoLYXBwcm92ZWRfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIhsKGUdldFJlZGFjdGlvblBvbGljeVJlcXVlc3QiegoaR2V0UmVkYWN0aW9uUG9saWN5UmVzcG9uc2USKwoFY2VsbHMYASADKAsyHC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNlbGwSLwoHcGVuZGluZxgCIAMoCzIeLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQ2hhbmdlIrcBCh1Qcm9wb3NlUmVkYWN0aW9uQ2hhbmdlUmVxdWVzdBIyCghhdWRpZW5jZRgBIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQXVkaWVuY2USMgoIY2F0ZWdvcnkYAiABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNhdGVnb3J5Ei4KBmFjdGlvbhgDIAEoDjIeLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQWN0aW9uIlAKHlByb3Bvc2VSZWRhY3Rpb25DaGFuZ2VSZXNwb25zZRIuCgZjaGFuZ2UYASABKAsyHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZSIyCh1BcHByb3ZlUmVkYWN0aW9uQ2hhbmdlUmVxdWVzdBIRCgljaGFuZ2VfaWQYASABKAkiUAoeQXBwcm92ZVJlZGFjdGlvbkNoYW5nZVJlc3BvbnNlEi4KBmNoYW5nZRgBIAEoCzIeLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQ2hhbmdlKpcBChFSZWRhY3Rpb25BdWRpZW5jZRIiCh5SRURBQ1RJT05fQVVESUVOQ0VfVU5TUEVDSUZJRUQQABIdChlSRURBQ1RJT05fQVVESUVOQ0VfUFVCTElDEAESHgoaUkVEQUNUSU9OX0FVRElFTkNFX01FTUJFUlMQAhIfChtSRURBQ1RJT05fQVVESUVOQ0VfT0ZGSUNFUlMQAyrfAgoRUmVkYWN0aW9uQ2F0ZWdvcnkSIgoeUkVEQUNUSU9OX0NBVEVHT1JZX1VOU1BFQ0lGSUVEEAASIgoeUkVEQUNUSU9OX0NBVEVHT1JZX01FTUJFUl9OQU1FEAESJQohUkVEQUNUSU9OX0NBVEVHT1JZX01FTUJFUl9BRERSRVNTEAISIwofUkVEQUNUSU9OX0NBVEVHT1JZX01FTUJFUl9QSE9ORRADEiMKH1JFREFDVElPTl9DQVRFR09SWV9NRU1CRVJfRU1BSUwQBBIkCiBSRURBQ1RJT05fQ0FURUdPUllfUFJJVkFURV9WRU5VRRAFEiUKIVJFREFDVElPTl9DQVRFR09SWV9CVVNJTkVTU19WRU5VRRAGEiYKIlJFREFDVElPTl9DQVRFR09SWV9PRkZJQ0VSX0NPTlRBQ1QQBxIcChhSRURBQ1RJT05fQ0FURUdPUllfSU1BR0UQCCqhAQoPUmVkYWN0aW9uQWN0aW9uEiAKHFJFREFDVElPTl9BQ1RJT05fVU5TUEVDSUZJRUQQABIZChVSRURBQ1RJT05fQUNUSU9OX1NIT1cQARIbChdSRURBQ1RJT05fQUNUSU9OX1JFREFDVBACEhkKFVJFREFDVElPTl9BQ1RJT05fSElERRADEhkKFVJFREFDVElPTl9BQ1RJT05fQkxVUhAEKrIBChVSZWRhY3Rpb25DaGFuZ2VTdGF0dXMSJwojUkVEQUNUSU9OX0NIQU5HRV9TVEFUVVNfVU5TUEVDSUZJRUQQABIjCh9SRURBQ1RJT05fQ0hBTkdFX1NUQVRVU19QRU5ESU5HEAESIwofUkVEQUNUSU9OX0NIQU5HRV9TVEFUVVNfQVBQTElFRBACEiYKIlJFREFDVElPTl9DSEFOR0VfU1RBVFVTX1NVUEVSU0VERUQQAzL2AgoWUmVkYWN0aW9uUG9saWN5U2VydmljZRJuChJHZXRSZWRhY3Rpb25Qb2xpY3kSKC5ud2ZsLm1lbnNhLnYxLkdldFJlZGFjdGlvblBvbGljeVJlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkdldFJlZGFjdGlvblBvbGljeVJlc3BvbnNlIgOQAgESdQoWUHJvcG9zZVJlZGFjdGlvbkNoYW5nZRIsLm53ZmwubWVuc2EudjEuUHJvcG9zZVJlZGFjdGlvbkNoYW5nZVJlcXVlc3QaLS5ud2ZsLm1lbnNhLnYxLlByb3Bvc2VSZWRhY3Rpb25DaGFuZ2VSZXNwb25zZRJ1ChZBcHByb3ZlUmVkYWN0aW9uQ2hhbmdlEiwubndmbC5tZW5zYS52MS5BcHByb3ZlUmVkYWN0aW9uQ2hhbmdlUmVxdWVzdBotLm53ZmwubWVuc2EudjEuQXBwcm92ZVJlZGFjdGlvbkNoYW5nZVJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("Ch1ud2ZsL21lbnNhL3YxL3JlZGFjdGlvbi5wcm90bxINbndmbC5tZW5zYS52MSKnAQoNUmVkYWN0aW9uQ2VsbBIyCghhdWRpZW5jZRgBIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQXVkaWVuY2USMgoIY2F0ZWdvcnkYAiABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNhdGVnb3J5Ei4KBmFjdGlvbhgDIAEoDjIeLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQWN0aW9uIrYDCg9SZWRhY3Rpb25DaGFuZ2USEQoJY2hhbmdlX2lkGAEgASgJEjIKCGF1ZGllbmNlGAIgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25BdWRpZW5jZRIyCghjYXRlZ29yeRgDIAEoDjIgLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uQ2F0ZWdvcnkSMwoLZnJvbV9hY3Rpb24YBCABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbhIxCgl0b19hY3Rpb24YBSABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbhI0CgZzdGF0dXMYBiABKA4yJC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZVN0YXR1cxITCgtwcm9wb3NlZF9ieRgHIAEoCRIvCgtwcm9wb3NlZF9hdBgIIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEwoLYXBwcm92ZWRfYnkYCSABKAkSLwoLYXBwcm92ZWRfYXQYCiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIv4CCg1SZWRhY3Rpb25NYXJrEg8KB21hcmtfaWQYASABKAkSNAoMc3ViamVjdF9raW5kGAIgASgOMh4ubndmbC5tZW5zYS52MS5NYXJrU3ViamVjdEtpbmQSEgoKc3ViamVjdF9pZBgDIAEoCRInCgVmaWVsZBgEIAEoDjIYLm53ZmwubWVuc2EudjEuTWFya0ZpZWxkEg0KBXF1b3RlGAUgASgJEjIKCGNhdGVnb3J5GAYgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeRIpCgZzdGF0dXMYByABKA4yGS5ud2ZsLm1lbnNhLnYxLk1hcmtTdGF0dXMSEgoKY3JlYXRlZF9ieRgIIAEoCRIuCgpjcmVhdGVkX2F0GAkgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIaChJwZW5kaW5nX3JlbW92YWxfaWQYCiABKAkSGwoTcmVtb3ZhbF9wcm9wb3NlZF9ieRgLIAEoCSLPAQoLTWFya1JlbW92YWwSEgoKcmVtb3ZhbF9pZBgBIAEoCRIPCgdtYXJrX2lkGAIgASgJEg8KB2FwcGxpZWQYAyABKAgSEwoLcHJvcG9zZWRfYnkYBCABKAkSLwoLcHJvcG9zZWRfYXQYBSABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEhMKC2FwcHJvdmVkX2J5GAYgASgJEi8KC2FwcHJvdmVkX2F0GAcgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLPAQoXQWRkUmVkYWN0aW9uTWFya1JlcXVlc3QSNAoMc3ViamVjdF9raW5kGAEgASgOMh4ubndmbC5tZW5zYS52MS5NYXJrU3ViamVjdEtpbmQSEgoKc3ViamVjdF9pZBgCIAEoCRInCgVmaWVsZBgDIAEoDjIYLm53ZmwubWVuc2EudjEuTWFya0ZpZWxkEg0KBXF1b3RlGAQgASgJEjIKCGNhdGVnb3J5GAUgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeSJGChhBZGRSZWRhY3Rpb25NYXJrUmVzcG9uc2USKgoEbWFyaxgBIAEoCzIcLm53ZmwubWVuc2EudjEuUmVkYWN0aW9uTWFyayJlChlMaXN0UmVkYWN0aW9uTWFya3NSZXF1ZXN0EjQKDHN1YmplY3Rfa2luZBgBIAEoDjIeLm53ZmwubWVuc2EudjEuTWFya1N1YmplY3RLaW5kEhIKCnN1YmplY3RfaWQYAiABKAkiSQoaTGlzdFJlZGFjdGlvbk1hcmtzUmVzcG9uc2USKwoFbWFya3MYASADKAsyHC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbk1hcmsiLAoZUHJvcG9zZU1hcmtSZW1vdmFsUmVxdWVzdBIPCgdtYXJrX2lkGAEgASgJIkkKGlByb3Bvc2VNYXJrUmVtb3ZhbFJlc3BvbnNlEisKB3JlbW92YWwYASABKAsyGi5ud2ZsLm1lbnNhLnYxLk1hcmtSZW1vdmFsIi8KGUFwcHJvdmVNYXJrUmVtb3ZhbFJlcXVlc3QSEgoKcmVtb3ZhbF9pZBgBIAEoCSJJChpBcHByb3ZlTWFya1JlbW92YWxSZXNwb25zZRIrCgdyZW1vdmFsGAEgASgLMhoubndmbC5tZW5zYS52MS5NYXJrUmVtb3ZhbCIbChlHZXRSZWRhY3Rpb25Qb2xpY3lSZXF1ZXN0InoKGkdldFJlZGFjdGlvblBvbGljeVJlc3BvbnNlEisKBWNlbGxzGAEgAygLMhwubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DZWxsEi8KB3BlbmRpbmcYAiADKAsyHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZSK3AQodUHJvcG9zZVJlZGFjdGlvbkNoYW5nZVJlcXVlc3QSMgoIYXVkaWVuY2UYASABKA4yIC5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkF1ZGllbmNlEjIKCGNhdGVnb3J5GAIgASgOMiAubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DYXRlZ29yeRIuCgZhY3Rpb24YAyABKA4yHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkFjdGlvbiJQCh5Qcm9wb3NlUmVkYWN0aW9uQ2hhbmdlUmVzcG9uc2USLgoGY2hhbmdlGAEgASgLMh4ubndmbC5tZW5zYS52MS5SZWRhY3Rpb25DaGFuZ2UiMgodQXBwcm92ZVJlZGFjdGlvbkNoYW5nZVJlcXVlc3QSEQoJY2hhbmdlX2lkGAEgASgJIlAKHkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2VSZXNwb25zZRIuCgZjaGFuZ2UYASABKAsyHi5ud2ZsLm1lbnNhLnYxLlJlZGFjdGlvbkNoYW5nZSqXAQoRUmVkYWN0aW9uQXVkaWVuY2USIgoeUkVEQUNUSU9OX0FVRElFTkNFX1VOU1BFQ0lGSUVEEAASHQoZUkVEQUNUSU9OX0FVRElFTkNFX1BVQkxJQxABEh4KGlJFREFDVElPTl9BVURJRU5DRV9NRU1CRVJTEAISHwobUkVEQUNUSU9OX0FVRElFTkNFX09GRklDRVJTEAMq3wIKEVJlZGFjdGlvbkNhdGVnb3J5EiIKHlJFREFDVElPTl9DQVRFR09SWV9VTlNQRUNJRklFRBAAEiIKHlJFREFDVElPTl9DQVRFR09SWV9NRU1CRVJfTkFNRRABEiUKIVJFREFDVElPTl9DQVRFR09SWV9NRU1CRVJfQUREUkVTUxACEiMKH1JFREFDVElPTl9DQVRFR09SWV9NRU1CRVJfUEhPTkUQAxIjCh9SRURBQ1RJT05fQ0FURUdPUllfTUVNQkVSX0VNQUlMEAQSJAogUkVEQUNUSU9OX0NBVEVHT1JZX1BSSVZBVEVfVkVOVUUQBRIlCiFSRURBQ1RJT05fQ0FURUdPUllfQlVTSU5FU1NfVkVOVUUQBhImCiJSRURBQ1RJT05fQ0FURUdPUllfT0ZGSUNFUl9DT05UQUNUEAcSHAoYUkVEQUNUSU9OX0NBVEVHT1JZX0lNQUdFEAgqoQEKD1JlZGFjdGlvbkFjdGlvbhIgChxSRURBQ1RJT05fQUNUSU9OX1VOU1BFQ0lGSUVEEAASGQoVUkVEQUNUSU9OX0FDVElPTl9TSE9XEAESGwoXUkVEQUNUSU9OX0FDVElPTl9SRURBQ1QQAhIZChVSRURBQ1RJT05fQUNUSU9OX0hJREUQAxIZChVSRURBQ1RJT05fQUNUSU9OX0JMVVIQBCqyAQoVUmVkYWN0aW9uQ2hhbmdlU3RhdHVzEicKI1JFREFDVElPTl9DSEFOR0VfU1RBVFVTX1VOU1BFQ0lGSUVEEAASIwofUkVEQUNUSU9OX0NIQU5HRV9TVEFUVVNfUEVORElORxABEiMKH1JFREFDVElPTl9DSEFOR0VfU1RBVFVTX0FQUExJRUQQAhImCiJSRURBQ1RJT05fQ0hBTkdFX1NUQVRVU19TVVBFUlNFREVEEAMqpAEKD01hcmtTdWJqZWN0S2luZBIhCh1NQVJLX1NVQkpFQ1RfS0lORF9VTlNQRUNJRklFRBAAEiIKHk1BUktfU1VCSkVDVF9LSU5EX0NPTlRFTlRfSVRFTRABEiIKHk1BUktfU1VCSkVDVF9LSU5EX0VWRU5UX1NFUklFUxACEiYKIk1BUktfU1VCSkVDVF9LSU5EX0VWRU5UX09DQ1VSUkVOQ0UQAyqIAgoJTWFya0ZpZWxkEhoKFk1BUktfRklFTERfVU5TUEVDSUZJRUQQABIUChBNQVJLX0ZJRUxEX1RJVExFEAESFgoSTUFSS19GSUVMRF9TVU1NQVJZEAISEwoPTUFSS19GSUVMRF9CT0RZEAMSGwoXTUFSS19GSUVMRF9PTl9CRUhBTEZfT0YQBBIaChZNQVJLX0ZJRUxEX0RFU0NSSVBUSU9OEAUSHAoYTUFSS19GSUVMRF9DQURFTkNFX0xBQkVMEAYSFQoRTUFSS19GSUVMRF9ERVRBSUwQBxIaChZNQVJLX0ZJRUxEX1NUQVRVU19OT1RFEAgSEgoOTUFSS19GSUVMRF9VUkwQCSpaCgpNYXJrU3RhdHVzEhsKF01BUktfU1RBVFVTX1VOU1BFQ0lGSUVEEAASFgoSTUFSS19TVEFUVVNfQUNUSVZFEAESFwoTTUFSS19TVEFUVVNfUkVNT1ZFRBACMqEGChZSZWRhY3Rpb25Qb2xpY3lTZXJ2aWNlEm4KEkdldFJlZGFjdGlvblBvbGljeRIoLm53ZmwubWVuc2EudjEuR2V0UmVkYWN0aW9uUG9saWN5UmVxdWVzdBopLm53ZmwubWVuc2EudjEuR2V0UmVkYWN0aW9uUG9saWN5UmVzcG9uc2UiA5ACARJ1ChZQcm9wb3NlUmVkYWN0aW9uQ2hhbmdlEiwubndmbC5tZW5zYS52MS5Qcm9wb3NlUmVkYWN0aW9uQ2hhbmdlUmVxdWVzdBotLm53ZmwubWVuc2EudjEuUHJvcG9zZVJlZGFjdGlvbkNoYW5nZVJlc3BvbnNlEnUKFkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2USLC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVSZWRhY3Rpb25DaGFuZ2VSZXF1ZXN0Gi0ubndmbC5tZW5zYS52MS5BcHByb3ZlUmVkYWN0aW9uQ2hhbmdlUmVzcG9uc2USYwoQQWRkUmVkYWN0aW9uTWFyaxImLm53ZmwubWVuc2EudjEuQWRkUmVkYWN0aW9uTWFya1JlcXVlc3QaJy5ud2ZsLm1lbnNhLnYxLkFkZFJlZGFjdGlvbk1hcmtSZXNwb25zZRJuChJMaXN0UmVkYWN0aW9uTWFya3MSKC5ud2ZsLm1lbnNhLnYxLkxpc3RSZWRhY3Rpb25NYXJrc1JlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkxpc3RSZWRhY3Rpb25NYXJrc1Jlc3BvbnNlIgOQAgESaQoSUHJvcG9zZU1hcmtSZW1vdmFsEigubndmbC5tZW5zYS52MS5Qcm9wb3NlTWFya1JlbW92YWxSZXF1ZXN0GikubndmbC5tZW5zYS52MS5Qcm9wb3NlTWFya1JlbW92YWxSZXNwb25zZRJpChJBcHByb3ZlTWFya1JlbW92YWwSKC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVNYXJrUmVtb3ZhbFJlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkFwcHJvdmVNYXJrUmVtb3ZhbFJlc3BvbnNlYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * One cell of the policy, as it is in effect.
@@ -120,6 +120,296 @@ export const RedactionChangeSchema: GenMessage<RedactionChange> = /*@__PURE__*/
   messageDesc(file_nwfl_mensa_v1_redaction, 1);
 
 /**
+ * A passage or a whole item marked as one category of personal data. The
+ * passage is anchored by its exact text: wherever that text appears in the
+ * item, matched without regard to case or spacing, it is withheld from an
+ * audience whose policy redacts the category.
+ *
+ * @generated from message nwfl.mensa.v1.RedactionMark
+ */
+export type RedactionMark = Message<"nwfl.mensa.v1.RedactionMark"> & {
+  /**
+   * @generated from field: string mark_id = 1;
+   */
+  markId: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.MarkSubjectKind subject_kind = 2;
+   */
+  subjectKind: MarkSubjectKind;
+
+  /**
+   * @generated from field: string subject_id = 3;
+   */
+  subjectId: string;
+
+  /**
+   * Unspecified for a whole-item mark.
+   *
+   * @generated from field: nwfl.mensa.v1.MarkField field = 4;
+   */
+  field: MarkField;
+
+  /**
+   * The marked text. Empty for a whole-item mark.
+   *
+   * @generated from field: string quote = 5;
+   */
+  quote: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.RedactionCategory category = 6;
+   */
+  category: RedactionCategory;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.MarkStatus status = 7;
+   */
+  status: MarkStatus;
+
+  /**
+   * @generated from field: string created_by = 8;
+   */
+  createdBy: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp created_at = 9;
+   */
+  createdAt?: Timestamp | undefined;
+
+  /**
+   * A removal waiting for a second officer, if any.
+   *
+   * @generated from field: string pending_removal_id = 10;
+   */
+  pendingRemovalId: string;
+
+  /**
+   * @generated from field: string removal_proposed_by = 11;
+   */
+  removalProposedBy: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.RedactionMark.
+ * Use `create(RedactionMarkSchema)` to create a new message.
+ */
+export const RedactionMarkSchema: GenMessage<RedactionMark> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 2);
+
+/**
+ * @generated from message nwfl.mensa.v1.MarkRemoval
+ */
+export type MarkRemoval = Message<"nwfl.mensa.v1.MarkRemoval"> & {
+  /**
+   * @generated from field: string removal_id = 1;
+   */
+  removalId: string;
+
+  /**
+   * @generated from field: string mark_id = 2;
+   */
+  markId: string;
+
+  /**
+   * True once a second officer approved it.
+   *
+   * @generated from field: bool applied = 3;
+   */
+  applied: boolean;
+
+  /**
+   * @generated from field: string proposed_by = 4;
+   */
+  proposedBy: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp proposed_at = 5;
+   */
+  proposedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: string approved_by = 6;
+   */
+  approvedBy: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp approved_at = 7;
+   */
+  approvedAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.MarkRemoval.
+ * Use `create(MarkRemovalSchema)` to create a new message.
+ */
+export const MarkRemovalSchema: GenMessage<MarkRemoval> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 3);
+
+/**
+ * @generated from message nwfl.mensa.v1.AddRedactionMarkRequest
+ */
+export type AddRedactionMarkRequest = Message<"nwfl.mensa.v1.AddRedactionMarkRequest"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.MarkSubjectKind subject_kind = 1;
+   */
+  subjectKind: MarkSubjectKind;
+
+  /**
+   * @generated from field: string subject_id = 2;
+   */
+  subjectId: string;
+
+  /**
+   * Unspecified, with an empty quote, marks the whole item.
+   *
+   * @generated from field: nwfl.mensa.v1.MarkField field = 3;
+   */
+  field: MarkField;
+
+  /**
+   * @generated from field: string quote = 4;
+   */
+  quote: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.RedactionCategory category = 5;
+   */
+  category: RedactionCategory;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.AddRedactionMarkRequest.
+ * Use `create(AddRedactionMarkRequestSchema)` to create a new message.
+ */
+export const AddRedactionMarkRequestSchema: GenMessage<AddRedactionMarkRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 4);
+
+/**
+ * @generated from message nwfl.mensa.v1.AddRedactionMarkResponse
+ */
+export type AddRedactionMarkResponse = Message<"nwfl.mensa.v1.AddRedactionMarkResponse"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.RedactionMark mark = 1;
+   */
+  mark?: RedactionMark | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.AddRedactionMarkResponse.
+ * Use `create(AddRedactionMarkResponseSchema)` to create a new message.
+ */
+export const AddRedactionMarkResponseSchema: GenMessage<AddRedactionMarkResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 5);
+
+/**
+ * @generated from message nwfl.mensa.v1.ListRedactionMarksRequest
+ */
+export type ListRedactionMarksRequest = Message<"nwfl.mensa.v1.ListRedactionMarksRequest"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.MarkSubjectKind subject_kind = 1;
+   */
+  subjectKind: MarkSubjectKind;
+
+  /**
+   * @generated from field: string subject_id = 2;
+   */
+  subjectId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ListRedactionMarksRequest.
+ * Use `create(ListRedactionMarksRequestSchema)` to create a new message.
+ */
+export const ListRedactionMarksRequestSchema: GenMessage<ListRedactionMarksRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 6);
+
+/**
+ * @generated from message nwfl.mensa.v1.ListRedactionMarksResponse
+ */
+export type ListRedactionMarksResponse = Message<"nwfl.mensa.v1.ListRedactionMarksResponse"> & {
+  /**
+   * @generated from field: repeated nwfl.mensa.v1.RedactionMark marks = 1;
+   */
+  marks: RedactionMark[];
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ListRedactionMarksResponse.
+ * Use `create(ListRedactionMarksResponseSchema)` to create a new message.
+ */
+export const ListRedactionMarksResponseSchema: GenMessage<ListRedactionMarksResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 7);
+
+/**
+ * @generated from message nwfl.mensa.v1.ProposeMarkRemovalRequest
+ */
+export type ProposeMarkRemovalRequest = Message<"nwfl.mensa.v1.ProposeMarkRemovalRequest"> & {
+  /**
+   * @generated from field: string mark_id = 1;
+   */
+  markId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ProposeMarkRemovalRequest.
+ * Use `create(ProposeMarkRemovalRequestSchema)` to create a new message.
+ */
+export const ProposeMarkRemovalRequestSchema: GenMessage<ProposeMarkRemovalRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 8);
+
+/**
+ * @generated from message nwfl.mensa.v1.ProposeMarkRemovalResponse
+ */
+export type ProposeMarkRemovalResponse = Message<"nwfl.mensa.v1.ProposeMarkRemovalResponse"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.MarkRemoval removal = 1;
+   */
+  removal?: MarkRemoval | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ProposeMarkRemovalResponse.
+ * Use `create(ProposeMarkRemovalResponseSchema)` to create a new message.
+ */
+export const ProposeMarkRemovalResponseSchema: GenMessage<ProposeMarkRemovalResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 9);
+
+/**
+ * @generated from message nwfl.mensa.v1.ApproveMarkRemovalRequest
+ */
+export type ApproveMarkRemovalRequest = Message<"nwfl.mensa.v1.ApproveMarkRemovalRequest"> & {
+  /**
+   * @generated from field: string removal_id = 1;
+   */
+  removalId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ApproveMarkRemovalRequest.
+ * Use `create(ApproveMarkRemovalRequestSchema)` to create a new message.
+ */
+export const ApproveMarkRemovalRequestSchema: GenMessage<ApproveMarkRemovalRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 10);
+
+/**
+ * @generated from message nwfl.mensa.v1.ApproveMarkRemovalResponse
+ */
+export type ApproveMarkRemovalResponse = Message<"nwfl.mensa.v1.ApproveMarkRemovalResponse"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.MarkRemoval removal = 1;
+   */
+  removal?: MarkRemoval | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ApproveMarkRemovalResponse.
+ * Use `create(ApproveMarkRemovalResponseSchema)` to create a new message.
+ */
+export const ApproveMarkRemovalResponseSchema: GenMessage<ApproveMarkRemovalResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_redaction, 11);
+
+/**
  * @generated from message nwfl.mensa.v1.GetRedactionPolicyRequest
  */
 export type GetRedactionPolicyRequest = Message<"nwfl.mensa.v1.GetRedactionPolicyRequest"> & {
@@ -130,7 +420,7 @@ export type GetRedactionPolicyRequest = Message<"nwfl.mensa.v1.GetRedactionPolic
  * Use `create(GetRedactionPolicyRequestSchema)` to create a new message.
  */
 export const GetRedactionPolicyRequestSchema: GenMessage<GetRedactionPolicyRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_redaction, 2);
+  messageDesc(file_nwfl_mensa_v1_redaction, 12);
 
 /**
  * @generated from message nwfl.mensa.v1.GetRedactionPolicyResponse
@@ -152,7 +442,7 @@ export type GetRedactionPolicyResponse = Message<"nwfl.mensa.v1.GetRedactionPoli
  * Use `create(GetRedactionPolicyResponseSchema)` to create a new message.
  */
 export const GetRedactionPolicyResponseSchema: GenMessage<GetRedactionPolicyResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_redaction, 3);
+  messageDesc(file_nwfl_mensa_v1_redaction, 13);
 
 /**
  * @generated from message nwfl.mensa.v1.ProposeRedactionChangeRequest
@@ -179,7 +469,7 @@ export type ProposeRedactionChangeRequest = Message<"nwfl.mensa.v1.ProposeRedact
  * Use `create(ProposeRedactionChangeRequestSchema)` to create a new message.
  */
 export const ProposeRedactionChangeRequestSchema: GenMessage<ProposeRedactionChangeRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_redaction, 4);
+  messageDesc(file_nwfl_mensa_v1_redaction, 14);
 
 /**
  * @generated from message nwfl.mensa.v1.ProposeRedactionChangeResponse
@@ -196,7 +486,7 @@ export type ProposeRedactionChangeResponse = Message<"nwfl.mensa.v1.ProposeRedac
  * Use `create(ProposeRedactionChangeResponseSchema)` to create a new message.
  */
 export const ProposeRedactionChangeResponseSchema: GenMessage<ProposeRedactionChangeResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_redaction, 5);
+  messageDesc(file_nwfl_mensa_v1_redaction, 15);
 
 /**
  * @generated from message nwfl.mensa.v1.ApproveRedactionChangeRequest
@@ -213,7 +503,7 @@ export type ApproveRedactionChangeRequest = Message<"nwfl.mensa.v1.ApproveRedact
  * Use `create(ApproveRedactionChangeRequestSchema)` to create a new message.
  */
 export const ApproveRedactionChangeRequestSchema: GenMessage<ApproveRedactionChangeRequest> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_redaction, 6);
+  messageDesc(file_nwfl_mensa_v1_redaction, 16);
 
 /**
  * @generated from message nwfl.mensa.v1.ApproveRedactionChangeResponse
@@ -230,7 +520,7 @@ export type ApproveRedactionChangeResponse = Message<"nwfl.mensa.v1.ApproveRedac
  * Use `create(ApproveRedactionChangeResponseSchema)` to create a new message.
  */
 export const ApproveRedactionChangeResponseSchema: GenMessage<ApproveRedactionChangeResponse> = /*@__PURE__*/
-  messageDesc(file_nwfl_mensa_v1_redaction, 7);
+  messageDesc(file_nwfl_mensa_v1_redaction, 17);
 
 /**
  * Who a policy cell is for.
@@ -404,6 +694,132 @@ export const RedactionChangeStatusSchema: GenEnum<RedactionChangeStatus> = /*@__
   enumDesc(file_nwfl_mensa_v1_redaction, 3);
 
 /**
+ * What a mark is on.
+ *
+ * @generated from enum nwfl.mensa.v1.MarkSubjectKind
+ */
+export enum MarkSubjectKind {
+  /**
+   * @generated from enum value: MARK_SUBJECT_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: MARK_SUBJECT_KIND_CONTENT_ITEM = 1;
+   */
+  CONTENT_ITEM = 1,
+
+  /**
+   * @generated from enum value: MARK_SUBJECT_KIND_EVENT_SERIES = 2;
+   */
+  EVENT_SERIES = 2,
+
+  /**
+   * A stored occurrence: a one-off event, or a dated change to a series.
+   *
+   * @generated from enum value: MARK_SUBJECT_KIND_EVENT_OCCURRENCE = 3;
+   */
+  EVENT_OCCURRENCE = 3,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.MarkSubjectKind.
+ */
+export const MarkSubjectKindSchema: GenEnum<MarkSubjectKind> = /*@__PURE__*/
+  enumDesc(file_nwfl_mensa_v1_redaction, 4);
+
+/**
+ * The text field a passage was marked in. A content item has title, summary,
+ * body and on_behalf_of; a series title, description and cadence_label; an
+ * occurrence title, detail, status_note and url.
+ *
+ * @generated from enum nwfl.mensa.v1.MarkField
+ */
+export enum MarkField {
+  /**
+   * @generated from enum value: MARK_FIELD_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: MARK_FIELD_TITLE = 1;
+   */
+  TITLE = 1,
+
+  /**
+   * @generated from enum value: MARK_FIELD_SUMMARY = 2;
+   */
+  SUMMARY = 2,
+
+  /**
+   * @generated from enum value: MARK_FIELD_BODY = 3;
+   */
+  BODY = 3,
+
+  /**
+   * @generated from enum value: MARK_FIELD_ON_BEHALF_OF = 4;
+   */
+  ON_BEHALF_OF = 4,
+
+  /**
+   * @generated from enum value: MARK_FIELD_DESCRIPTION = 5;
+   */
+  DESCRIPTION = 5,
+
+  /**
+   * @generated from enum value: MARK_FIELD_CADENCE_LABEL = 6;
+   */
+  CADENCE_LABEL = 6,
+
+  /**
+   * @generated from enum value: MARK_FIELD_DETAIL = 7;
+   */
+  DETAIL = 7,
+
+  /**
+   * @generated from enum value: MARK_FIELD_STATUS_NOTE = 8;
+   */
+  STATUS_NOTE = 8,
+
+  /**
+   * @generated from enum value: MARK_FIELD_URL = 9;
+   */
+  URL = 9,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.MarkField.
+ */
+export const MarkFieldSchema: GenEnum<MarkField> = /*@__PURE__*/
+  enumDesc(file_nwfl_mensa_v1_redaction, 5);
+
+/**
+ * @generated from enum nwfl.mensa.v1.MarkStatus
+ */
+export enum MarkStatus {
+  /**
+   * @generated from enum value: MARK_STATUS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: MARK_STATUS_ACTIVE = 1;
+   */
+  ACTIVE = 1,
+
+  /**
+   * @generated from enum value: MARK_STATUS_REMOVED = 2;
+   */
+  REMOVED = 2,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.MarkStatus.
+ */
+export const MarkStatusSchema: GenEnum<MarkStatus> = /*@__PURE__*/
+  enumDesc(file_nwfl_mensa_v1_redaction, 6);
+
+/**
  * Officers only. A change that loosens the public audience waits for a second,
  * different officer; any other change applies at once. Every change and
  * approval is audit-logged.
@@ -438,6 +854,46 @@ export const RedactionPolicyService: GenService<{
     methodKind: "unary";
     input: typeof ApproveRedactionChangeRequestSchema;
     output: typeof ApproveRedactionChangeResponseSchema;
+  },
+  /**
+   * Marks (REDACT R2a). An officer, or the person who wrote the item, marks a
+   * passage or a whole item; it applies at once. Removing a mark is proposed by
+   * one officer and approved by a different one.
+   *
+   * @generated from rpc nwfl.mensa.v1.RedactionPolicyService.AddRedactionMark
+   */
+  addRedactionMark: {
+    methodKind: "unary";
+    input: typeof AddRedactionMarkRequestSchema;
+    output: typeof AddRedactionMarkResponseSchema;
+  },
+  /**
+   * Officers only: the marks on one item or event, with removals waiting.
+   *
+   * @generated from rpc nwfl.mensa.v1.RedactionPolicyService.ListRedactionMarks
+   */
+  listRedactionMarks: {
+    methodKind: "unary";
+    input: typeof ListRedactionMarksRequestSchema;
+    output: typeof ListRedactionMarksResponseSchema;
+  },
+  /**
+   * @generated from rpc nwfl.mensa.v1.RedactionPolicyService.ProposeMarkRemoval
+   */
+  proposeMarkRemoval: {
+    methodKind: "unary";
+    input: typeof ProposeMarkRemovalRequestSchema;
+    output: typeof ProposeMarkRemovalResponseSchema;
+  },
+  /**
+   * No officer approves their own proposal.
+   *
+   * @generated from rpc nwfl.mensa.v1.RedactionPolicyService.ApproveMarkRemoval
+   */
+  approveMarkRemoval: {
+    methodKind: "unary";
+    input: typeof ApproveMarkRemovalRequestSchema;
+    output: typeof ApproveMarkRemovalResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_nwfl_mensa_v1_redaction, 0);

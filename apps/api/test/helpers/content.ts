@@ -18,6 +18,8 @@ export interface PublishOptions {
   publicAst?: unknown;
   /** Files attached to the version before it is approved: an approved version's files are frozen (0011). */
   files?: Array<{ objectKey: string; audience: 'public' | 'members' | 'officers'; mimeType?: string; role?: string }>;
+  onBehalfOf?: string;
+  editionId?: string;
 }
 
 export async function publishItem(pool: pg.Pool, options: PublishOptions): Promise<{ itemId: string; versionId: string }> {
@@ -31,9 +33,9 @@ export async function publishItem(pool: pg.Pool, options: PublishOptions): Promi
   const itemId = (item.rows[0] as { id: string }).id;
   const distributed = visibility !== 'officers';
   const version = await pool.query<{ id: string }>(
-    `INSERT INTO content_version (item_id, n, title, summary, visibility, body_ast, created_by_sub, acting_office_id, target_newsletter)
-     VALUES ($1, 1, $2, $3, $4, $5, 'sub-author', $6, $7) RETURNING id`,
-    [itemId, options.title, options.summary ?? null, visibility, JSON.stringify(options.body), options.officeId, distributed],
+    `INSERT INTO content_version (item_id, n, title, summary, visibility, body_ast, created_by_sub, acting_office_id, target_newsletter, on_behalf_of, edition_id)
+     VALUES ($1, 1, $2, $3, $4, $5, 'sub-author', $6, $7, $8, $9) RETURNING id`,
+    [itemId, options.title, options.summary ?? null, visibility, JSON.stringify(options.body), options.officeId, distributed, options.onBehalfOf ?? null, options.editionId ?? null],
   );
   const versionId = (version.rows[0] as { id: string }).id;
   for (const file of options.files ?? []) {
