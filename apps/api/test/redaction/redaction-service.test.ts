@@ -267,36 +267,137 @@ describe.skipIf(!live)('RedactionPolicyService', () => {
     });
   });
 
-  describe('the tables, as the application role', () => {
+  describe('the tables, as the application role (challenge A1-A4)', () => {
+    const asApp = (text: string, values: unknown[] = []): Promise<string> => sqlstate(api.pool as unknown as pg.Client, text, values);
+    let applied: string;
+
+    beforeAll(async () => {
+      const { change } = await policy.proposeRedactionChange({ audience: Audience.MEMBERS, category: Category.BUSINESS_VENUE, action: Action.HIDE }, OFFICER);
+      applied = change?.changeId as string;
+    });
+
     it('never lets the app role delete a cell or a change, or touch the tenant list', async () => {
-      const app = await api.pool.connect();
-      try {
-        expect(await sqlstate(app as unknown as pg.Client, `DELETE FROM redaction_policy`)).toBe('42501');
-        expect(await sqlstate(app as unknown as pg.Client, `DELETE FROM redaction_change`)).toBe('42501');
-        expect(await sqlstate(app as unknown as pg.Client, `INSERT INTO tenant (id, name) VALUES ('other', 'Other')`)).toBe('42501');
-      } finally {
-        app.release();
+      expect(await asApp(`DELETE FROM redaction_policy`)).toBe('42501');
+      expect(await asApp(`DELETE FROM redaction_change`)).toBe('42501');
+      expect(await asApp(`INSERT INTO tenant (id, name) VALUES ('other', 'Other')`)).toBe('42501');
+    });
+
+    it('A1: refuses a direct write to a policy cell, which would leave no change row and no audit row', async () => {
+      expect(await asApp(`UPDATE redaction_policy SET action = 'show' WHERE audience = 'public' AND category = 'member_name'`)).toBe('42501');
+      expect(await asApp(`INSERT INTO redaction_policy (audience, category, action) VALUES ('public', 'member_name', 'show') ON CONFLICT DO NOTHING`)).toBe('42501');
+      expect((await cell('public', 'member_name'))?.action).not.toBe('show');
+    });
+
+    it('A2: refuses an applied public loosening inserted directly, approver or not', async () => {
+      expect(
+        await asApp(
+          `INSERT INTO redaction_change (audience, category, from_action, to_action, status, proposed_by_sub, approved_by_sub, approved_at, decided_at)
+           VALUES ('public', 'member_name', 'redact', 'show', 'applied', 'sub-officer', 'ghost', now(), now())`,
+        ),
+      ).toBe('42501');
+      expect(await asApp(`INSERT INTO redaction_change (audience, category, from_action, to_action, status, proposed_by_sub) VALUES ('public', 'member_name', 'redact', 'show', 'pending', 'sub-officer')`)).toBe('42501');
+    });
+
+    it('A3: refuses a rewrite of an applied change’s proposer, approver or action', async () => {
+      expect(await asApp(`UPDATE redaction_change SET proposed_by_sub = 'alice', approved_by_sub = 'bob', to_action = 'hide' WHERE id = $1`, [applied])).toBe('42501');
+    });
+
+    it('A4: refuses to set an applied change back to pending', async () => {
+      expect(await asApp(`UPDATE redaction_change SET status = 'pending', decided_at = NULL WHERE id = $1`, [applied])).toBe('42501');
+    });
+
+    it('keeps the change history immutable for the owner too: no rewrite, no reopening, no delete', async () => {
+      await asOwner(async (owner) => {
+        expect(await sqlstate(owner, `UPDATE redaction_change SET proposed_by_sub = 'alice' WHERE id = $1`, [applied])).toBe('55000');
+        expect(await sqlstate(owner, `UPDATE redaction_change SET status = 'pending', decided_at = NULL WHERE id = $1`, [applied])).toBe('55000');
+        expect(await sqlstate(owner, `DELETE FROM redaction_change WHERE id = $1`, [applied])).toBe('55000');
+      });
+      expect((await api.pool.query(`SELECT status, proposed_by_sub FROM redaction_change WHERE id = $1`, [applied])).rows[0]).toEqual({ status: 'applied', proposed_by_sub: 'sub-officer' });
+    });
+
+    it('holds four-eyes in the narrow path itself, whatever the app role passes it', async () => {
+      const proposed = (
+        await api.pool.query<{ id: string; status: string }>(
+          `SELECT id, status FROM redaction_propose('nwflorida', 'public', 'member_name', 'show', 'sub-officer', '{nwfl-officers}', NULL)`,
+        )
+      ).rows[0];
+      expect(proposed?.status).toBe('pending');
+      expect((await cell('public', 'member_name'))?.action).toBe('redact');
+      expect(await asApp(`SELECT redaction_approve($1, 'sub-officer', '{nwfl-officers}', NULL)`, [proposed?.id])).toBe('42501');
+      expect(await asApp(`SELECT redaction_approve($1, '', '{nwfl-officers}', NULL)`, [proposed?.id])).toBe('42501');
+      // The cell no longer matches the change's from_action: the approval is refused.
+      await asOwner((owner) => owner.query(`UPDATE redaction_policy SET action = 'hide' WHERE audience = 'public' AND category = 'member_name'`));
+      expect(await asApp(`SELECT redaction_approve($1, 'sub-pub', '{nwfl-officers}', NULL)`, [proposed?.id])).toBe('55000');
+      expect((await cell('public', 'member_name'))?.action).toBe('hide');
+      expect((await audits(proposed?.id as string)).map((a) => [a.action, a.actor_sub])).toEqual([['redaction_propose', 'sub-officer']]);
+    });
+
+    it('refuses an action the category does not allow, even from the owner', async () => {
+      await asOwner(async (owner) => {
+        expect(await sqlstate(owner, `UPDATE redaction_policy SET action = 'blur' WHERE audience = 'members' AND category = 'member_name'`)).toBe('23514');
+        expect(await sqlstate(owner, `UPDATE redaction_policy SET action = 'redact' WHERE audience = 'members' AND category = 'image'`)).toBe('23514');
+      });
+    });
+
+    it('refuses a self-approved change, and an applied public loosening with no approver, even from the owner', async () => {
+      await asOwner(async (owner) => {
+        const insert = (status: string, from: string, to: string, approver: string | null): Promise<string> =>
+          sqlstate(
+            owner,
+            `INSERT INTO redaction_change (audience, category, from_action, to_action, status, proposed_by_sub, approved_by_sub, approved_at, decided_at)
+             VALUES ('public', 'member_address', $1, $2, $3, 'sub-officer', $4::text, CASE WHEN $4::text IS NULL THEN NULL ELSE now() END, now())`,
+            [from, to, status, approver],
+          );
+        expect(await insert('applied', 'redact', 'show', 'sub-officer')).toBe('23514');
+        expect(await insert('applied', 'redact', 'show', null)).toBe('23514');
+        expect(await insert('applied', 'hide', 'redact', null)).toBe('23514');
+        expect(await insert('applied', 'show', 'hide', null)).toBe('ok');
+        expect(await insert('applied', 'redact', 'show', 'sub-pub')).toBe('ok');
+      });
+    });
+  });
+
+  describe('concurrency (challenge SHOULD)', () => {
+    const APPROVERS = ['pub-token', 'treasurer-token', 'webmaster-token', 'admin-token'] as const;
+    const outcome = (call: Promise<{ change?: { status: Status } }>): Promise<Status | Code> =>
+      call.then(
+        (response) => response.change?.status ?? Status.UNSPECIFIED,
+        (error: { code: Code }) => error.code,
+      );
+
+    it.each([Category.MEMBER_ADDRESS, Category.PRIVATE_VENUE, Category.MEMBER_EMAIL])(
+      'four officers approving one proposal at once give one applied change and one approval row (category %i)',
+      async (category) => {
+        const { change } = await policy.proposeRedactionChange({ audience: Audience.PUBLIC, category, action: Action.SHOW }, OFFICER);
+        expect(change?.status).toBe(Status.PENDING);
+        const id = change?.changeId as string;
+        const results = await Promise.all(APPROVERS.map((token) => outcome(policy.approveRedactionChange({ changeId: id }, as(token)))));
+        expect(results.filter((r) => r === Status.APPLIED)).toHaveLength(1);
+        expect(results.filter((r) => r === Code.FailedPrecondition)).toHaveLength(3);
+        const rows = await api.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM audit_event WHERE subject_id = $1 AND action = 'redaction_approve'`, [id]);
+        expect(rows.rows[0]?.n).toBe(1);
+        const sets = await api.pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM audit_event WHERE action = 'redaction_set' AND payload->>'change_id' = $1`, [id]);
+        expect(sets.rows[0]?.n).toBe(1);
+      },
+    );
+
+    it('an approval racing a tightening of the same cell never ends at show', async () => {
+      for (let round = 0; round < 6; round += 1) {
+        // Start each round at redact, the default, through the path itself.
+        const now = (await cell('public', 'officer_contact'))?.action;
+        if (now !== 'redact') {
+          const { change } = await policy.proposeRedactionChange({ audience: Audience.PUBLIC, category: Category.OFFICER_CONTACT, action: Action.REDACT }, OFFICER);
+          if (change?.status === Status.PENDING) await policy.approveRedactionChange({ changeId: change.changeId }, SECOND);
+        }
+        const { change } = await policy.proposeRedactionChange({ audience: Audience.PUBLIC, category: Category.OFFICER_CONTACT, action: Action.SHOW }, OFFICER);
+        const [approved, tightened] = await Promise.all([
+          outcome(policy.approveRedactionChange({ changeId: change?.changeId as string }, SECOND)),
+          outcome(policy.proposeRedactionChange({ audience: Audience.PUBLIC, category: Category.OFFICER_CONTACT, action: Action.HIDE }, as('treasurer-token'))),
+        ]);
+        expect(tightened, `round ${round}`).toBe(Status.APPLIED);
+        expect([Status.APPLIED, Code.FailedPrecondition], `round ${round}`).toContain(approved);
+        expect((await cell('public', 'officer_contact'))?.action, `round ${round}`).toBe('hide');
       }
-    });
-
-    it('refuses an action the category does not allow', async () => {
-      expect(await sqlstate(api.pool as unknown as pg.Client, `UPDATE redaction_policy SET action = 'blur' WHERE audience = 'members' AND category = 'member_name'`)).toBe('23514');
-      expect(await sqlstate(api.pool as unknown as pg.Client, `UPDATE redaction_policy SET action = 'redact' WHERE audience = 'members' AND category = 'image'`)).toBe('23514');
-    });
-
-    it('refuses a self-approved change, and an applied public loosening with no approver', async () => {
-      const insert = (status: string, from: string, to: string, approver: string | null): Promise<string> =>
-        sqlstate(
-          api.pool as unknown as pg.Client,
-          `INSERT INTO redaction_change (audience, category, from_action, to_action, status, proposed_by_sub, approved_by_sub, approved_at)
-           VALUES ('public', 'member_name', $1, $2, $3, 'sub-officer', $4::text, CASE WHEN $4::text IS NULL THEN NULL ELSE now() END)`,
-          [from, to, status, approver],
-        );
-      expect(await insert('applied', 'redact', 'show', 'sub-officer')).toBe('23514');
-      expect(await insert('applied', 'redact', 'show', null)).toBe('23514');
-      expect(await insert('applied', 'hide', 'redact', null)).toBe('23514');
-      expect(await insert('applied', 'show', 'hide', null)).toBe('ok');
-      expect(await insert('applied', 'redact', 'show', 'sub-pub')).toBe('ok');
     });
   });
 });
