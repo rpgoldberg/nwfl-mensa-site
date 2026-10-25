@@ -26,7 +26,7 @@ async function build(kind: string): Promise<Uint8Array> {
   const page = doc.addPage([612, 792]);
   const { context } = doc;
   page.node.setFontDictionary(PDFName.of('F1'), context.register(context.obj({ Type: 'Font', Subtype: 'Type1', BaseFont: 'Helvetica', Encoding: 'WinAnsiEncoding' })));
-  let extra = Buffer.alloc(0);
+  let extra: Buffer = Buffer.alloc(0);
   if (kind === 'smask-form') {
     const form = context.register(PDFRawStream.of(context.obj({ Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 612, 792], Group: { S: 'Transparency', CS: 'DeviceGray' } }), inline(' ')));
     const gs = context.obj({ Type: 'ExtGState', SMask: { Type: 'Mask', S: 'Luminosity', G: form } });

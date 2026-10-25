@@ -29,7 +29,7 @@ import {
   PDFStream,
   decodePDFRawStream,
 } from '@cantoo/pdf-lib';
-import { stripMarkedContentProperties } from './content.js';
+import { PDF_WS, stripMarkedContentProperties } from './content.js';
 import { type ImageAction, applyImagePolicy, hasInlinePicture } from './images.js';
 import { stripJpeg } from './jpeg.js';
 
@@ -55,6 +55,17 @@ function contentStreams(doc: PDFDocument): Set<PDFRef> {
     const dict = context.lookupMaybe(value, PDFDict);
     if (dict === undefined || seen.has(dict)) return;
     seen.add(dict);
+    // A soft mask's group (ExtGState /SMask /G) is a form the page draws too.
+    const states = context.lookupMaybe(dict.get(PDFName.of('ExtGState')), PDFDict);
+    for (const [, state] of states?.entries() ?? []) {
+      const mask = context.lookupMaybe(context.lookupMaybe(state, PDFDict)?.get(PDFName.of('SMask')), PDFDict);
+      const group = mask?.get(PDFName.of('G'));
+      const form = context.lookup(group);
+      if (group instanceof PDFRef && form instanceof PDFStream) {
+        out.add(group);
+        resources(form.dict.get(PDFName.of('Resources')));
+      }
+    }
     for (const kind of ['XObject', 'Pattern', 'Font']) {
       const entries = context.lookupMaybe(dict.get(PDFName.of(kind)), PDFDict);
       for (const [, ref] of entries?.entries() ?? []) {
@@ -81,7 +92,7 @@ const decoded = (value: PDFObject | undefined): Uint8Array => (value instanceof 
 
 /** Every name a content stream writes (operands included, so this keeps more than it must, never less). */
 const namesIn = (content: Uint8Array): Set<PDFName> =>
-  new Set([...Buffer.from(content).toString('latin1').matchAll(/\/([^\s/<>[\]()%{}]*)/g)].map((m) => PDFName.of(m[1] as string)));
+  new Set([...Buffer.from(content).toString('latin1').matchAll(new RegExp(`/([^${PDF_WS}/<>[\\]()%{}]*)`, 'g'))].map((m) => PDFName.of(m[1] as string)));
 
 /** Each page, and each form, tiling pattern and Type 3 font it reaches, given resources holding only what its content names. */
 function pruneResources(doc: PDFDocument): void {

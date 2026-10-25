@@ -13,7 +13,8 @@
 -- inputs now; anything else is "not ready", never a stale copy and never the original.
 --
 -- The app role (as in 0013 and 0014):
---   * may not read an original's bytes (only that it exists), nor write any of these tables;
+--   * may not read an original's bytes directly (only that it exists), nor write any of these
+--     tables (but see the worker path below);
 --   * stores an original only through pdf_original_put: an officer, or the writer of the version
 --     the file belongs to, and only bytes whose size and sha256 are the stored_file's;
 --   * reads an original only through pdf_original_read, for an audience whose every policy cell
@@ -27,8 +28,12 @@
 -- For every role, the owner included: an original is never rewritten, and a copy changes only in
 -- its stale flag.
 --
--- The worker and the server are the same database role, so a claim limits when, not who, may
--- read an original for regeneration; the claim is only taken for a file that is queued.
+-- The worker path is a trust, not a wall. The worker and the server are the same database role,
+-- and, as with R1's approver, the database takes the groups the app passes on trust. So the app
+-- role, or anyone who takes it over, can call itself an officer in redaction_mark_add (which
+-- queues the file), claim the file with pdf_regen_claim and read the original with
+-- pdf_regen_original (tested in test/pdf/store.test.ts). Closing this needs a separate worker role
+-- holding the claim functions alone; creating it needs CREATEROLE, which only fc grants (filed).
 
 CREATE TABLE pdf_original (
   file_id       uuid        PRIMARY KEY REFERENCES stored_file (id) ON DELETE CASCADE,

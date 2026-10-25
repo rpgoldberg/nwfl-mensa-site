@@ -143,7 +143,7 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
   } catch (error) {
     return { kind: 'refused', reason: error instanceof Error ? error.message : String(error) };
   }
-  if (image !== 'show' && keepsPicture(pdf, await pictureWindows(original))) return { kind: 'refused', reason: 'an original picture is still in the copy' };
+  if (image !== 'show' && (await keepsPicture(pdf, await pictureWindows(original)))) return { kind: 'refused', reason: 'an original picture is still in the copy' };
   const left = (await verifyRedacted(pdf, quotes)) ?? (await checkCopy(pdf, quotes));
   return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes } : { kind: 'refused', reason: left };
 }

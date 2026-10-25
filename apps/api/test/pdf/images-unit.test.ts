@@ -82,10 +82,10 @@ describe('hasInlinePicture', () => {
 describe('pictureWindows and keepsPicture', () => {
   it('keeps windows of varied samples at a stride of 32 and finds any of them at any offset', async () => {
     const doc = await PDFDocument.create({ updateMetadata: false });
-    const varied = new Uint8Array(Array.from({ length: 640 }, (_, i) => (i * 131 + 7) & 0xff));
-    doc.context.register(PDFRawStream.of(doc.context.obj({ Type: 'XObject', Subtype: 'Image', ...base, Width: 32, Height: 20 }) as unknown as PDFDict, varied));
+    const varied = new Uint8Array(Array.from({ length: 640 }, (_, i) => (Math.imul(i + 1, 2654435761) >>> 13) & 0xff));
+    doc.context.register(PDFRawStream.of(doc.context.obj({ Type: 'XObject', Subtype: 'Image', ...base, Width: 32, Height: 20 }), varied));
     // A flat picture says nothing about anyone: its windows are not kept (they would match any run of one byte).
-    doc.context.register(PDFRawStream.of(doc.context.obj({ Type: 'XObject', Subtype: 'Image', ...base, Width: 32, Height: 20 }) as unknown as PDFDict, new Uint8Array(640).fill(255)));
+    doc.context.register(PDFRawStream.of(doc.context.obj({ Type: 'XObject', Subtype: 'Image', ...base, Width: 32, Height: 20 }), new Uint8Array(640).fill(255)));
     const windows = await pictureWindows(await doc.save());
     expect(windows.size).toBe(19);
     const copyWith = (run: Uint8Array) => new Uint8Array(Buffer.concat([Buffer.from('%PDF-1.7\n1 0 obj\n<< /Length ' + run.length + ' >>\nstream\n'), run, Buffer.from('\nendstream\nendobj\n%%EOF\n')]));
