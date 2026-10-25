@@ -18,8 +18,10 @@ import { newsletterRoutes } from '../newsletter/service.js';
 import { MembershipService } from '../gen/nwfl/mensa/v1/membership_pb.js';
 import { MembershipVerifierService } from '../gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { NewsletterService } from '../gen/nwfl/mensa/v1/newsletter_pb.js';
+import { RedactionPolicyService } from '../gen/nwfl/mensa/v1/redaction_pb.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import type { Readiness } from '../readiness.js';
+import { redactionRoutes } from '../redaction/service.js';
 import { healthRoutes } from './health.js';
 
 /** Every service apiRoutes registers. The canary sweeps the reads of each. */
@@ -30,6 +32,7 @@ export const SERVED_SERVICES: readonly DescService[] = [
   NewsletterService,
   MembershipVerifierService,
   MembershipService,
+  RedactionPolicyService,
 ];
 
 export interface ApiDeps {
@@ -49,6 +52,7 @@ export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
     newsletterRoutes({ db: deps.db, logger: deps.logger.child({ component: 'newsletter' }) }),
     membershipRoutes({ db: deps.db, now }),
     verifierRoutes({ db: deps.db, now }),
+    redactionRoutes({ db: deps.db }),
   ];
   return (router) => routes.forEach((register) => register(router));
 }
