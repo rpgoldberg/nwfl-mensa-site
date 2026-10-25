@@ -13,6 +13,10 @@
 //   - the public venue list holds only the venues public events use;
 //   - a member's home is shown to EVERYONE as its area and host office only,
 //     under a fixed label, whatever was typed into its name (R3).
+//   - REDACT R2a: every series, venue and entry passes through the caller's
+//     lens (events/redact.ts) before a message is built from it: marked
+//     passages withheld, private venues per the policy (host offices stay),
+//     and anything the lens hides dropped (NOT_FOUND for a single read).
 // ============================================================================
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
@@ -36,6 +40,7 @@ import {
 import type { Date as ProtoDate } from '../gen/nwfl/mensa/v1/common_pb.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { type Rule, RecurrenceError, expand, parseRule } from './recurrence.js';
+import { bySlug, calendarLens, entryFor, inCalendarOrder, seriesFor, venueFor, visible } from './redact.js';
 import { eventWriteHandlers } from './writes.js';
 import { addDays, isoDate, localDateOf, protoDate, toDays, todayIn, zonedToUtc } from './zone.js';
 
@@ -379,7 +384,8 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
         const entries = (await calendar(from, to))
           .filter((entry) => request.includeCancelled || entry.status !== 'cancelled' || (audience === 'public' && entry.visibility === 'members'))
           .filter((entry) => areas.size === 0 || areas.has(areaOf(entry)));
-        return { occurrences: entries.map((entry) => occurrenceMessage(entry, audience)) };
+        const lens = await calendarLens(db, audience, entries);
+        return { occurrences: inCalendarOrder(visible(entries, (entry) => entryFor(entry, lens)), audience).map((entry) => occurrenceMessage(entry, audience)) };
       },
 
       getOccurrence: async (request, ctx) => {
@@ -388,13 +394,19 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
         if (!match) throw invalid('malformed occurrence id');
         const [, id, date] = match as unknown as [string, string, string | undefined];
         const notFound = new ConnectError('occurrence not found', Code.NotFound);
+        /** The entry as this audience may see it; NOT_FOUND when the lens hides it. */
+        const shown = async (entry: Entry): Promise<Entry> => {
+          const view = entryFor(entry, await calendarLens(db, audience, [entry]));
+          if (view === undefined) throw notFound;
+          return view;
+        };
         const venues = await loadVenues();
         if (date === undefined) {
           const { rows } = await db.query<OccurrenceRow>(`SELECT ${OCCURRENCE_COLUMNS} FROM event_occurrence WHERE id = $1`, [id]);
           const row = rows[0];
           if (row === undefined) throw notFound;
           const series = row.series_id === null ? undefined : (await db.query<SeriesRow>(`SELECT ${SERIES_COLUMNS} FROM event_series WHERE id = $1`, [row.series_id])).rows[0];
-          return { occurrence: occurrenceMessage(storedEntry(row, series, venues), audience) };
+          return { occurrence: occurrenceMessage(await shown(storedEntry(row, series, venues)), audience) };
         }
         try {
           isoDate({ year: Number(date.slice(0, 4)), month: Number(date.slice(5, 7)), day: Number(date.slice(8, 10)) });
@@ -406,18 +418,20 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
         if (series === undefined || rule === undefined || expand(rule, series.starts_on, date, date).length === 0) throw notFound;
         const [stored] = await loadStored(date, date, series.id);
         const entry = stored !== undefined ? storedEntry(stored, series, venues) : generatedEntry(series, date, venues);
-        return { occurrence: occurrenceMessage(entry, audience) };
+        return { occurrence: occurrenceMessage(await shown(entry), audience) };
       },
 
       listSeries: async (request, ctx) => {
         const audience = audienceOf(ctx);
-        const rows = await loadSeries(request.includeInactive);
-        return { series: rows.filter((row) => audience !== 'public' || row.visibility === 'public').map(seriesMessage) };
+        const rows = (await loadSeries(request.includeInactive)).filter((row) => audience !== 'public' || row.visibility === 'public');
+        const lens = await calendarLens(db, audience, [], rows);
+        return { series: bySlug(visible(rows, (row) => seriesFor(row, lens))).map(seriesMessage) };
       },
 
       listVenues: async (request, ctx) => {
+        const audience = audienceOf(ctx);
         let used: Set<string> | undefined;
-        if (audienceOf(ctx) === 'public') {
+        if (audience === 'public') {
           const { rows } = await db.query<{ id: string }>(
             `SELECT default_venue_id AS id FROM event_series WHERE visibility = 'public' AND default_venue_id IS NOT NULL
              UNION SELECT venue_id FROM event_occurrence WHERE visibility = 'public' AND venue_id IS NOT NULL`,
@@ -425,7 +439,9 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
           used = new Set(rows.map((row) => row.id));
         }
         const rows = [...(await loadVenues()).values()].filter((row) => (request.includeInactive || row.active) && (used === undefined || used.has(row.id)));
-        return { venues: rows.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)).map(venueMessage) };
+        const lens = await calendarLens(db, audience, []);
+        // Sorted by the name this audience sees, so a withheld name's place in the list gives nothing away.
+        return { venues: visible(rows, (row) => venueFor(row, lens)).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)).map(venueMessage) };
       },
     });
   };

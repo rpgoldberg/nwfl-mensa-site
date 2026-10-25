@@ -28,7 +28,8 @@ describe('apiRoutes', () => {
 
   it('reads "today" from the real clock when none is pinned', async () => {
     await createClient(EventService, transport).listOccurrences({});
-    const lower = queries.at(-1)?.[0] as Date;
+    // The calendar's own read: the redaction lens reads the policy after it.
+    const lower = queries.findLast((values) => values[0] instanceof Date)?.[0] as Date;
     expect(Math.abs(lower.getTime() - Date.now())).toBeLessThan(3 * 86_400_000);
   });
 

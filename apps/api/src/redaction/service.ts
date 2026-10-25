@@ -34,6 +34,7 @@ import {
   RedactionChangeStatus,
   RedactionPolicyService,
 } from '../gen/nwfl/mensa/v1/redaction_pb.js';
+import { markHandlers } from './marks.js';
 import {
   AUDIENCES,
   type Action,
@@ -143,6 +144,8 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
 
   return (router) => {
     router.service(RedactionPolicyService, {
+      // Marks (R2a): add, list, and the four-eyes removal.
+      ...markHandlers({ db }),
       getRedactionPolicy: async (_request, ctx) => {
         requireOfficer(callerIn(ctx));
         const cells = await db.query<{ audience: string; category: string; action: string }>(
