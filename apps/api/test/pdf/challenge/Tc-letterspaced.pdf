@@ -1,0 +1,46 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R  >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 5 0 R >>  >> /Contents 6 0 R  >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<<  /Length 256 >>
+stream
+BT /F1 12 Tf 72 740 Td (Hello from the editor of the newsletter.) Tj ET
+BT /F1 12 Tf 6 Tc 72 700 Td (Juno Blackwood) Tj ET
+BT /F1 12 Tf 0 Tc 72 680 Td (Phone J u n o Blackwood now.) Tj ET
+BT /F1 12 Tf 72 660 Td (Phone J u n o  B l a c k w o o d now.) Tj ET
+endstream
+endobj
+xref
+0 1
+0000000000 65535 f 
+1 1
+0000000015 00000 n 
+2 1
+0000000065 00000 n 
+3 1
+0000000122 00000 n 
+4 1
+0000000260 00000 n 
+5 1
+0000000357 00000 n 
+6 1
+0000000459 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R   >>
+startxref
+767
+%%EOF

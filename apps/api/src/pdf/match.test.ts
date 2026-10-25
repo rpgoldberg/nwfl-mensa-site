@@ -3,7 +3,7 @@
 // characters as PDFium reports them (text, generated or not, a line-end
 // hyphen or not, a box). Every name here is made up.
 import { describe, expect, it } from 'vitest';
-import { type PageChar, WIDTH_STEP_EM, matchedChars, regionsFor } from './match.js';
+import { type PageChar, WIDTH_STEP_EM, matchedChars, regionsFor, textMatches } from './match.js';
 
 const SIZE = 12;
 const ADVANCE = 6;
@@ -107,6 +107,35 @@ describe('matchedChars', () => {
   it('matches nothing without quotes', () => {
     expect(matchedChars(page(['anything']), []).size).toBe(0);
   });
+
+  it('finds a name whose first word alone is letter-spaced', () => {
+    const chars = page(['Phone J u n o Blackwood now.']);
+    expect(textOf(chars, matchedChars(chars, ['Juno Blackwood']))).toBe('J u n o Blackwood');
+  });
+});
+
+describe('textMatches (a plain string, as the output gate reads it)', () => {
+  it('finds a passage as whole words, folded, across a line break and a line-end hyphen', () => {
+    expect(textMatches('call KESTREL\nWren-\nhallow now', ['Kestrel Wrenhallow'])).toBe(true);
+    expect(textMatches('Smith-\r\nJones', ['Smith-Jones'])).toBe(true);
+  });
+
+  it('finds letter-spaced and mixed-spaced passages', () => {
+    expect(textMatches('x K e s t r e l y', ['Kestrel'])).toBe(true);
+    expect(textMatches('Phone J u n o Blackwood now.', ['Juno Blackwood'])).toBe(true);
+  });
+
+  it('does not match inside a longer word, or without quotes', () => {
+    expect(textMatches('Ann Leek', ['Ann Lee'])).toBe(false);
+    expect(textMatches('anything', [])).toBe(false);
+  });
+
+  it('finds a passage across the seam of a long text read in pieces', () => {
+    const long = `${'x'.repeat(70_000)} Kestrel ${'y'.repeat(70_000)}`;
+    expect(textMatches(long, ['Kestrel'])).toBe(true);
+    const seam = `${'x '.repeat(32_766)}Kestrel Wrenhallow`;
+    expect(textMatches(seam, ['Kestrel Wrenhallow'])).toBe(true);
+  });
 });
 
 describe('regionsFor', () => {
@@ -180,6 +209,37 @@ describe('regionsFor', () => {
 
   it('gives no regions for no matches', () => {
     expect(regionsFor(page(['nothing']), new Set())).toEqual({ ok: true, regions: [] });
+  });
+
+  it('runs a box that reaches the line end on to the page\'s right margin, so its edge does not show where the passage ends', () => {
+    // 612 pt page, text from 72: the right margin mirrors the left, at 540.
+    const lee = page(['Please phone our club treasurer, Ann Lee']);
+    const leek = page(['Please phone our club treasurer, Ann Leek']);
+    const boxOf = (chars: PageChar[], quote: string): number[] => {
+      const result = regionsFor(chars, matchedChars(chars, [quote]), 0, 612);
+      if (!result.ok) throw new Error(result.reason);
+      return result.regions.map((r) => [r.left, r.right]).flat();
+    };
+    const annAt = 72 + 33 * ADVANCE;
+    expect(boxOf(lee, 'Ann Lee')).toEqual([annAt, 540]);
+    expect(boxOf(leek, 'Ann Leek')).toEqual([annAt, 540]);
+  });
+
+  it('stops a line-end box short of text further right in the same band (a second column)', () => {
+    const left = page(['some words then Ann Lee']);
+    const right = page(['other column']).map((c) => ({ ...c, box: c.box && { ...c.box, left: c.box.left + 300, right: c.box.right + 300 } }));
+    const chars = [...left, { text: '\n', generated: true, hyphen: false, box: null, fontSize: 0 }, ...right];
+    const result = regionsFor(chars, matchedChars(chars, ['Ann Lee']), 0, 612);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.regions.map((r) => [r.left, r.right])).toEqual([[72 + 16 * ADVANCE, 372]]);
+  });
+
+  it('keeps a line-end box at the line when the line already passes the right margin', () => {
+    const chars = page(['a long line that ends with Bo']);
+    const result = regionsFor(chars, matchedChars(chars, ['Bo']), 0, 72 + 29 * ADVANCE + 10);
+    if (!result.ok) throw new Error(result.reason);
+    const lineRight = 72 + 29 * ADVANCE;
+    expect(result.regions.map((r) => [r.left, r.right])).toEqual([[lineRight - step, lineRight]]);
   });
 
   it('numbers the page it is given', () => {

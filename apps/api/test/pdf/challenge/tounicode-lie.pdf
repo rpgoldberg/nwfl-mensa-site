@@ -1,0 +1,155 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R  >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> /Font << /F1 4 0 R /F3 7 0 R >> >> /Contents 6 0 R  >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<<  /Length 116 >>
+stream
+BT /F1 12 Tf 72 740 Td (Hello from the editor of the newsletter.) Tj ET
+BT /F3 12 Tf 72 700 Td (Quint Gorvath) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode 8 0 R >>
+endobj
+8 0 obj
+<<  /Length 1443 >>
+stream
+/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def /CMapName /X def /CMapType 2 def 1 begincodespacerange <00> <FF> endcodespacerange
+95 beginbfchar
+<20> <0020>
+<21> <0022>
+<22> <0023>
+<23> <0024>
+<24> <0025>
+<25> <0026>
+<26> <0027>
+<27> <0028>
+<28> <0029>
+<29> <002a>
+<2a> <002b>
+<2b> <002c>
+<2c> <002d>
+<2d> <002e>
+<2e> <002f>
+<2f> <0030>
+<30> <0031>
+<31> <0032>
+<32> <0033>
+<33> <0034>
+<34> <0035>
+<35> <0036>
+<36> <0037>
+<37> <0038>
+<38> <0039>
+<39> <003a>
+<3a> <003b>
+<3b> <003c>
+<3c> <003d>
+<3d> <003e>
+<3e> <003f>
+<3f> <0040>
+<40> <0041>
+<41> <0042>
+<42> <0043>
+<43> <0044>
+<44> <0045>
+<45> <0046>
+<46> <0047>
+<47> <0048>
+<48> <0049>
+<49> <004a>
+<4a> <004b>
+<4b> <004c>
+<4c> <004d>
+<4d> <004e>
+<4e> <004f>
+<4f> <0050>
+<50> <0051>
+<51> <0052>
+<52> <0053>
+<53> <0054>
+<54> <0055>
+<55> <0056>
+<56> <0057>
+<57> <0058>
+<58> <0059>
+<59> <005a>
+<5a> <005b>
+<5b> <005c>
+<5c> <005d>
+<5d> <005e>
+<5e> <005f>
+<5f> <0060>
+<60> <0061>
+<61> <0062>
+<62> <0063>
+<63> <0064>
+<64> <0065>
+<65> <0066>
+<66> <0067>
+<67> <0068>
+<68> <0069>
+<69> <006a>
+<6a> <006b>
+<6b> <006c>
+<6c> <006d>
+<6d> <006e>
+<6e> <006f>
+<6f> <0070>
+<70> <0071>
+<71> <0072>
+<72> <0073>
+<73> <0074>
+<74> <0075>
+<75> <0076>
+<76> <0077>
+<77> <0078>
+<78> <0079>
+<79> <007a>
+<7a> <007b>
+<7b> <007c>
+<7c> <007d>
+<7d> <007e>
+<7e> <007f>
+endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end
+endstream
+endobj
+xref
+0 1
+0000000000 65535 f 
+1 1
+0000000015 00000 n 
+2 1
+0000000065 00000 n 
+3 1
+0000000122 00000 n 
+4 1
+0000000291 00000 n 
+5 1
+0000000388 00000 n 
+6 1
+0000000490 00000 n 
+7 1
+0000000658 00000 n 
+8 1
+0000000772 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R   >>
+startxref
+2268
+%%EOF
