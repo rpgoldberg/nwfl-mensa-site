@@ -3,8 +3,10 @@
 // provider's own forms.
 import { expect, test, type BrowserContext } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
+import { crawlSeeds } from './routes';
 import { IDP_ORIGIN } from './servers';
 import { AT_PROVIDER, banner, signIn } from './signin';
+import { BOARD_GAMES, centralToday } from './stand-in';
 
 test.use({ javaScriptEnabled: false });
 
@@ -31,6 +33,21 @@ test('a member signs in from a page, comes back to it, and the header names them
   expect(session!.value.length).toBeLessThan(3500);
   for (const c of await context.cookies()) expect(c.value, c.name).not.toMatch(/^eyJ|\.eyJ/);
   expect(await cookie(context, '__Host-nwfl-auth')).toBeUndefined();
+});
+
+// REDACT R2b: whatever a page shows a signed-in reader is theirs alone, so no shared cache may keep it.
+test('signed in, every route under src/pages answers private, no-store: nothing a reader sees is stored publicly', async ({ page }) => {
+  await page.goto('/about');
+  await signIn(page, 'officer');
+  const wrong: string[] = [];
+  for (const url of crawlSeeds({ eventIds: [BOARD_GAMES], months: [centralToday().slice(0, 7)] })) {
+    const res = await page.request.get(url, { maxRedirects: 0 });
+    if (res.headers()['cache-control'] !== 'private, no-store') wrong.push(`${url}: ${res.status()} ${res.headers()['cache-control']}`);
+  }
+  expect(wrong).toEqual([]);
+  // Still signed in after the crawl, so every request above was a signed-in one.
+  await page.goto('/about');
+  await expect(banner(page).getByRole('button', { name: 'Sign out' })).toBeVisible();
 });
 
 test('the sign-in transaction is a host-only cookie that lasts ten minutes, and asks for PKCE, state and nonce', async ({ page, context }) => {

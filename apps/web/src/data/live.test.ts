@@ -268,4 +268,14 @@ describe('liveData items', () => {
     const [summary] = await liveData(reads({ listPublishedItems: () => Promise.resolve([bare, create(ContentItemSchema, { slug: 'no-version' })]) })).treasurerSummaries();
     expect(summary).toEqual({ slug: 'bare', title: 'Bare', summary: '', bodyHtml: '', publishedOn: undefined, source: 'submitted' });
   });
+
+  // REDACT R2b: an item with anything withheld from the public comes with its id in the slug field (R2a).
+  it('keys an item by whatever the API put in the slug field, its id when the slug is withheld, and never by nothing', async () => {
+    const ID = '9c51279e-6426-43e6-a52c-3fa78711e10b';
+    const withheld = create(ContentItemSchema, { id: ID, slug: ID, live: { title: 'Report by [withheld]', visibility: ItemVisibility.PUBLIC } });
+    const unmarked = create(ContentItemSchema, { id: 'b0e5a1d2-0000-4000-8000-000000000001', slug: 'april-to-june', live: { title: 'April to June', visibility: ItemVisibility.PUBLIC } });
+    const noSlug = create(ContentItemSchema, { id: 'b0e5a1d2-0000-4000-8000-000000000002', slug: '', live: { title: 'No slug', visibility: ItemVisibility.PUBLIC } });
+    const summaries = await liveData(reads({ listPublishedItems: () => Promise.resolve([withheld, unmarked, noSlug]) })).treasurerSummaries();
+    expect(summaries.map((s) => s.slug)).toEqual([ID, 'april-to-june', 'b0e5a1d2-0000-4000-8000-000000000002']);
+  });
 });

@@ -9,7 +9,7 @@ const redirects = { REDIRECT_URI: `${SITE_URL}/auth/callback`, POST_LOGOUT_REDIR
 export default defineConfig({
   testDir: 'e2e',
   // The canary checks need the public-only build: playwright.public-only.config.ts.
-  testIgnore: /public-only\//,
+  testIgnore: /(public-only|redaction)\//,
   fullyParallel: true,
   forbidOnly: !!process.env['CI'],
   retries: process.env['CI'] ? 1 : 0,
@@ -67,8 +67,8 @@ export default defineConfig({
   projects: [
     // Headers and cache rules: plain HTTP, no browser needed.
     { name: 'http', testMatch: /(headers|redirects|feeds)\.spec\.ts/ },
-    { name: 'chromium-desktop', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /public-only\//], use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
-    { name: 'chromium-phone', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /public-only\//], use: { ...devices['Pixel 7'] } },
-    { name: 'webkit-iphone', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /public-only\//], use: { ...devices['iPhone 17'] } },
+    { name: 'chromium-desktop', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
+    { name: 'chromium-phone', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['Pixel 7'] } },
+    { name: 'webkit-iphone', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['iPhone 17'] } },
   ],
 });
