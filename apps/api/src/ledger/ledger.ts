@@ -30,12 +30,16 @@ import { type ItemRow, itemQuery, publishedItem } from '../content/service.js';
 import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { ContentItemSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { ENGINE_VERSION, inputsFor } from '../pdf/store.js';
+import { type RedactRequest, redactPdf } from '../pdf/redact.js';
+import { ENGINE_VERSION, type Inputs, inputsFor } from '../pdf/store.js';
 import { loadLens, markActive, policyCells } from '../redaction/lens.js';
 import { AUDIENCES, CATEGORIES, TENANT, cellKey, resolveAction } from '../redaction/policy.js';
 import { subjectKey } from '../redaction/render.js';
 
 type Query = Pick<Db, 'query'>;
+
+/** The engine's signature (regenerate.ts). */
+export type Redact = (original: Uint8Array, request: RedactRequest) => ReturnType<typeof redactPdf>;
 
 export type LedgerKind = 'content_version' | 'stored_file';
 
@@ -290,21 +294,49 @@ export interface AsOf {
 
 const same = (a: Buffer | null, b: Buffer | null): boolean => (a === null ? b === null : b !== null && a.equals(b));
 
-/** Whether a re-render of a file row agrees with it; the bytes of a copy no longer kept cannot be checked. */
-function fileVerdict(row: LedgerRowData, again: Rendering): string {
+/** Who asks for a copy to be made again (0016's publication_ledger_original audits it), and with which engine. */
+export interface AsOfOptions {
+  caller?: { sub: string; groups: readonly string[]; trace?: string | null };
+  redact?: Redact;
+  /** The running engine's version; a row made by another cannot be made again byte for byte. */
+  engine?: string;
+}
+
+const MISMATCH = 'the re-render does not match the row';
+
+/** Makes a copy no longer kept again: the original, the inputs as of `at`, the same engine. */
+async function remake(db: Query, row: LedgerRowData, audience: Audience, at: Date, options: AsOfOptions): Promise<{ detail: string; rerender: Buffer | null }> {
+  if (row.inputs['engine'] !== (options.engine ?? ENGINE_VERSION)) return { detail: 'engine changed, inputs verified only', rerender: null };
+  if (options.caller === undefined) return { detail: 'the copy is no longer kept: an officer makes it again', rerender: null };
+  const inputs = (await inputsFor(db, row.subject_id, audience, at)) as Extract<Inputs, { kind: 'copy' }>;
+  const original = await db.query<{ bytes: Buffer }>(`SELECT publication_ledger_original($1, $2, $3, $4) AS bytes`, [
+    row.seq,
+    options.caller.sub,
+    [...options.caller.groups],
+    options.caller.trace ?? null,
+  ]);
+  const result = await (options.redact ?? redactPdf)(new Uint8Array((original.rows[0] as { bytes: Buffer }).bytes), inputs.request);
+  if (result.kind !== 'redacted') return { detail: 'the engine refused to make the copy again', rerender: null };
+  const rerender = sha256(result.pdf);
+  return { detail: same(rerender, row.output_sha256) ? '' : MISMATCH, rerender };
+}
+
+/** Whether a re-render of a file row agrees with it; a copy no longer kept is made again. */
+async function fileVerdict(db: Query, row: LedgerRowData, again: Rendering, audience: Audience, at: Date, options: AsOfOptions): Promise<{ detail: string; rerender: Buffer | null }> {
   const was = row.inputs['served'];
   const now = again.inputs['served'];
+  const verdict = (ok: boolean): { detail: string; rerender: Buffer | null } => ({ detail: ok ? '' : MISMATCH, rerender: again.output });
   if (was === 'copy' || was === 'not_ready' || was === 'refused') {
-    if (again.inputs['input_hash'] !== row.inputs['input_hash']) return 'the inputs rebuilt from the history do not match the row';
-    if (was !== 'copy') return '';
-    if (now === 'not_ready') return 'the copy is no longer kept: its inputs match, its bytes cannot be checked';
-    return same(again.output, row.output_sha256) ? '' : 'the re-render does not match the row';
+    if (again.inputs['input_hash'] !== row.inputs['input_hash']) return { detail: 'the inputs rebuilt from the history do not match the row', rerender: again.output };
+    if (was !== 'copy') return verdict(true);
+    if (now === 'not_ready') return remake(db, row, audience, at, options);
+    return verdict(same(again.output, row.output_sha256));
   }
-  return now === was && same(again.output, row.output_sha256) ? '' : 'the re-render does not match the row';
+  return verdict(now === was && same(again.output, row.output_sha256));
 }
 
 /** The row current at `at` for this subject and audience, rendered again from the history as of `at`. */
-export async function ledgerAsOf(db: Query, kind: LedgerKind, subject: string, audience: Audience, at: Date): Promise<AsOf> {
+export async function ledgerAsOf(db: Query, kind: LedgerKind, subject: string, audience: Audience, at: Date, options: AsOfOptions = {}): Promise<AsOf> {
   const { rows } = await db.query<LedgerRowData>(
     `SELECT seq::text AS seq, subject_kind, subject_id, audience, output_sha256, inputs, passages_withheld, current_from, current_to, prev_hash, row_hash
      FROM publication_ledger
@@ -313,17 +345,22 @@ export async function ledgerAsOf(db: Query, kind: LedgerKind, subject: string, a
   );
   const row = rows[0];
   if (row === undefined) return { row: null, rerender: null, matches: false, detail: 'no row was current then' };
-  const again =
-    kind === 'content_version'
-      ? await renderVersion(db, subject, audience, {
-          at,
-          itemState: (row.inputs['item_state'] as string | null) ?? null,
-          withdrawnAt: (row.inputs['withdrawn_at'] as string | null | undefined) ?? null,
-        })
-      : await renderFile(db, subject, audience, at);
-  let detail = kind === 'content_version' ? (same(again.output, row.output_sha256) ? '' : 'the re-render does not match the row') : fileVerdict(row, again);
+  let again: Rendering;
+  let verdict: { detail: string; rerender: Buffer | null };
+  if (kind === 'content_version') {
+    again = await renderVersion(db, subject, audience, {
+      at,
+      itemState: (row.inputs['item_state'] as string | null) ?? null,
+      withdrawnAt: (row.inputs['withdrawn_at'] as string | null | undefined) ?? null,
+    });
+    verdict = { detail: same(again.output, row.output_sha256) ? '' : MISMATCH, rerender: again.output };
+  } else {
+    again = await renderFile(db, subject, audience, at);
+    verdict = await fileVerdict(db, row, again, audience, at, options);
+  }
+  let detail = verdict.detail;
   if (detail === '' && again.withheld !== row.passages_withheld) detail = 'the re-render withholds a different number of passages';
-  return { row, rerender: again.output, matches: detail === '', detail };
+  return { row, rerender: verdict.rerender, matches: detail === '', detail };
 }
 
 export interface Verification {

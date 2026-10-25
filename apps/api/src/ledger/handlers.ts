@@ -9,6 +9,7 @@ import { Code, ConnectError, type HandlerContext, type ServiceImpl } from '@conn
 import type { Audience } from '../auth/caller.js';
 import { callerOf } from '../auth/caller.js';
 import { requireOfficer } from '../auth/roles.js';
+import { traceId } from '../audit/audit.js';
 import type { Db } from '../db/pool.js';
 import { LedgerRowSchema, LedgerSubjectKind, RedactionAudience, type RedactionPolicyService } from '../gen/nwfl/mensa/v1/redaction_pb.js';
 import { type LedgerKind, type LedgerRowData, ledgerAsOf, verifyLedger } from './ledger.js';
@@ -55,7 +56,10 @@ export function ledgerHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof Red
       if (audience === undefined) throw invalid('choose an audience');
       if (!UUID.test(subject)) throw invalid('a subject id is a UUID');
       if (request.at === undefined) throw invalid('choose a time');
-      const result = await ledgerAsOf(db, kind, subject, audience, timestampDate(request.at));
+      const caller = callerOf(ctx.values);
+      const result = await ledgerAsOf(db, kind, subject, audience, timestampDate(request.at), {
+        caller: { sub: caller.subject ?? '', groups: caller.groups, trace: traceId() },
+      });
       return {
         ...(result.row !== null ? { row: rowMessage(result.row) } : {}),
         rerenderSha256: result.rerender ?? new Uint8Array(),
