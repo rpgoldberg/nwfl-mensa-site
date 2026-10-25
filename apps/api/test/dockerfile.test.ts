@@ -65,8 +65,18 @@ describe('Dockerfile', () => {
     // could not load dist/auth/config.js). A single file takes an octal mode.
     expect(dockerfile).not.toMatch(/--chmod=[^0-9\s]/);
     expect(lines).toContain('RUN npm run build && chmod -R u=rwX,go=rX dist');
-    expect(lines).toContain('RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force && chmod -R u=rwX,go=rX node_modules');
+    expect(lines.some((line) => line.startsWith('RUN npm ci --omit=dev ') && line.endsWith(' && chmod -R u=rwX,go=rX node_modules'))).toBe(true);
     expect(finalStage()).toContain('COPY --chown=root:root --chmod=0644 package.json ./');
+  });
+
+  // REDACT R3b: pdf.js's optional canvas (about 71 MB) is never used (text only, no rendering), and
+  // @cantoo/pdf-lib's CommonJS build, sources and UMD bundles are never loaded (Node takes es/).
+  it('omits optional packages and the pdf-lib files nothing loads from the production install', () => {
+    const deps = lines.find((line) => line.startsWith('RUN npm ci --omit=dev '));
+    expect(deps).toBe(
+      'RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund && npm cache clean --force && ' +
+        'cd node_modules/@cantoo/pdf-lib && rm -rf cjs src ts3.4 dist/*.js dist/*.map && cd /app && chmod -R u=rwX,go=rX node_modules',
+    );
   });
 
   it('claims no licence: there is no LICENSE decision yet', () => {
