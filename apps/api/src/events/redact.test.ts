@@ -99,6 +99,15 @@ describe('the calendar through the lens', () => {
     expect(seriesFor(series, lensFor('public', policy('show', 'hide'), marks))).toBeUndefined();
   });
 
+  it('never gives the slug of a series with a withheld passage anywhere in it, even one the slug spells without accents', () => {
+    const memorial = { ...series, slug: 'memorial-walk-jose-nunez', title: 'Memorial walk', description: 'For José Núñez' };
+    const marks = [{ subject: subjectKey('event_series', SERIES_ID), quote: 'José Núñez', category: 'member_name' }];
+    expect(seriesFor(memorial, lensFor('public', policy('show'), marks))).toMatchObject({ slug: SERIES_ID, title: 'Memorial walk', description: `For ${WITHHELD}` });
+    const members = lensFor('members', new Map([[cellKey('members', 'member_name'), 'show']]), marks);
+    expect(seriesFor(memorial, members)?.slug).toBe('memorial-walk-jose-nunez');
+    expect(seriesFor(memorial, lensFor('public', policy('show'), []))?.slug).toBe('memorial-walk-jose-nunez');
+  });
+
   it('loads the lens for the entries’ series and stored occurrences only', async () => {
     const calls: unknown[][] = [];
     const db = { query: (_text: string, values: unknown[] = []) => (calls.push(values), Promise.resolve({ rows: [] })) };

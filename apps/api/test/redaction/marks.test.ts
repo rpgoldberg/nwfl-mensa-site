@@ -4,6 +4,7 @@
 // holds that: the app role cannot write either table, only 0014's SECURITY
 // DEFINER functions can, and the history cannot be rewritten by anyone.
 // Every person here is made up.
+import { createHash } from 'node:crypto';
 import { type Client, Code } from '@connectrpc/connect';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -15,11 +16,14 @@ import {
   MarkField,
   MarkStatus,
   MarkSubjectKind,
+  RedactionAction,
+  RedactionAudience,
   RedactionCategory as Category,
   RedactionPolicyService,
 } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
+import { WITHHELD } from '../../src/redaction/render.js';
 import { live, sqlstate, url } from '../helpers/pg.js';
 
 const SECOND = as('pub-token');
@@ -47,6 +51,19 @@ describe.skipIf(!live)('redaction marks', () => {
     }
   };
   const publicBody = async (slug: string) => dump(await api.client(ContentService).getPublishedItem({ slug }));
+  /** GetPublishedItem as the public, raw: status, headers but the date, trailers and body. */
+  const raw = async (asked: string) => {
+    const message = toBinary(GetPublishedItemRequestSchema, create(GetPublishedItemRequestSchema, { slug: asked }));
+    const frame = Buffer.concat([Buffer.from([0, 0, 0, 0, message.length]), Buffer.from(message)]);
+    const response = await h2Request(
+      api.baseUrl,
+      { ':method': 'POST', ':path': '/nwfl.mensa.v1.ContentService/GetPublishedItem', 'content-type': 'application/grpc', te: 'trailers' },
+      frame,
+    );
+    // The date header is the clock, not the answer.
+    const headers = Object.fromEntries(Object.entries(response.headers).filter(([name]) => name !== 'date'));
+    return JSON.stringify({ status: response.status, headers, trailers: response.trailers, body: response.body.toString('hex') });
+  };
   const add = (quote: string, options: { subject?: string; kind?: MarkSubjectKind; field?: MarkField; category?: Category } = {}, who = OFFICER) =>
     marks.addRedactionMark(
       {
@@ -299,18 +316,6 @@ describe.skipIf(!live)('redaction marks', () => {
         field: MarkField.TITLE,
         category: Category.MEMBER_NAME,
       });
-      const raw = async (asked: string) => {
-        const message = toBinary(GetPublishedItemRequestSchema, create(GetPublishedItemRequestSchema, { slug: asked }));
-        const frame = Buffer.concat([Buffer.from([0, 0, 0, 0, message.length]), Buffer.from(message)]);
-        const response = await h2Request(
-          api.baseUrl,
-          { ':method': 'POST', ':path': '/nwfl.mensa.v1.ContentService/GetPublishedItem', 'content-type': 'application/grpc', te: 'trailers' },
-          frame,
-        );
-        // The date header is the clock, not the answer.
-        const headers = Object.fromEntries(Object.entries(response.headers).filter(([name]) => name !== 'date'));
-        return JSON.stringify({ status: response.status, headers, trailers: response.trailers, body: response.body.toString('hex') });
-      };
       const withheld = await raw(slug);
       expect(withheld).toContain('"grpc-message":"item%20not%20found","grpc-status":"5"');
       expect(withheld).toBe(await raw('supper-that-never-was'));
@@ -325,6 +330,37 @@ describe.skipIf(!live)('redaction marks', () => {
       expect((await content.getPublishedItem({ slug: party }, MEMBER)).item).toMatchObject({ slug: party, live: { title: 'Party at [withheld]' } });
       // Officers see addresses (the default), so the slug is theirs to use.
       expect((await content.getPublishedItem({ slug }, OFFICER)).item?.slug).toBe(slug);
+    });
+
+    it('never gives the public the slug of an item with a withheld passage anywhere, though the slug spells the name without its accents (B2)', async () => {
+      const slug = 'memorial-jose-nunez';
+      const memorial = (await publishItem(api.pool, { slug, officeId: office, title: 'In memoriam', body: { blocks: [paragraph(text('We remember José Núñez.'))] } })).itemId;
+      await add('José Núñez', { subject: memorial, category: Category.MEMBER_NAME });
+      const content = api.client(ContentService);
+      const listed = dump(await content.listPublishedItems({ pageSize: 50 }));
+      expect(listed).toContain('In memoriam');
+      expect(listed).toContain(memorial);
+      expect(listed).not.toContain(slug);
+      // By the slug, exactly as a slug that never existed; by the id, found and redacted.
+      const withheld = await raw(slug);
+      expect(withheld).toContain('"grpc-message":"item%20not%20found","grpc-status":"5"');
+      expect(withheld).toBe(await raw('memorial-that-never-was'));
+      const byId = dump(await content.getPublishedItem({ slug: memorial }));
+      expect(byId).toContain(`We remember ${WITHHELD}.`);
+      expect(byId).not.toContain(slug);
+      // Members see names (the default): the slug is theirs.
+      expect((await content.getPublishedItem({ slug }, MEMBER)).item?.slug).toBe(slug);
+      // A series the same way, the mark in its description.
+      const walk = await insertId(
+        api.pool,
+        `INSERT INTO event_series (slug, title, category, recurrence, starts_on, area, description) VALUES ('memorial-walk-jose-nunez', 'Memorial walk', 'other', 'FREQ=MONTHLY;BYDAY=3SA', '2026-01-17', 'bay', 'For José Núñez') RETURNING id`,
+      );
+      await add('José Núñez', { kind: MarkSubjectKind.EVENT_SERIES, subject: walk, field: MarkField.DESCRIPTION, category: Category.MEMBER_NAME });
+      const series = dump(await api.client(EventService).listSeries({}));
+      expect(series).toContain(walk);
+      expect(series).toContain(`For ${WITHHELD}`);
+      expect(series).not.toContain('memorial-walk-jose-nunez');
+      expect(dump(await api.client(EventService).listSeries({}, MEMBER))).toContain('memorial-walk-jose-nunez');
     });
 
     it('refuses a malformed mark', async () => {
@@ -353,5 +389,52 @@ describe.skipIf(!live)('redaction marks', () => {
       const added = await add('  for a ride  ', { category: Category.MEMBER_NAME });
       expect(added.mark?.quote).toBe('for a ride');
     });
+  });
+});
+
+// S2: one mark, the officers' policy tightened to redact names. The markup can split a name with its
+// own syntax (**John** Smith), and a hash covers what was withheld: both are left out.
+describe.skipIf(!live)('an officer who may not see a name (S2)', () => {
+  let api: Api;
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  it('gets no markup and no hash for an item with one marked name, live or working, nor in its history', async () => {
+    api = await startApi('nwfl_marks_s2');
+    const office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
+    const picnic = (await publishItem(api.pool, { slug: 'picnic', officeId: office, title: 'Picnic with John Smith', body: { blocks: [paragraph(text('Noon at the pier'))] } })).itemId;
+    const working = await insertId(
+      api.pool,
+      `INSERT INTO content_version (item_id, n, title, visibility, body_ast, body_src, content_hash, created_by_sub, acting_office_id)
+       VALUES ($1, 2, 'Picnic with John Smith', 'public', $2, '**John** Smith hosts', $3, 'sub-author', $4) RETURNING id`,
+      [picnic, JSON.stringify({ blocks: [paragraph(text('John Smith hosts'))] }), createHash('sha256').update('v2').digest(), office],
+    );
+    await api.pool.query(`UPDATE content_item SET working_version_id = $2 WHERE id = $1`, [picnic, working]);
+    await api.pool.query(
+      `INSERT INTO audit_event (actor_kind, actor_sub, action, subject_kind, subject_id, item_id, version_id, content_hash)
+       VALUES ('user', 'sub-pub', 'ready', 'content_version', $2::text, $1, $2::uuid, $3)`,
+      [picnic, working, createHash('sha256').update('v2').digest()],
+    );
+    await api.client(RedactionPolicyService).addRedactionMark(
+      { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: picnic, field: MarkField.TITLE, quote: 'John Smith', category: Category.MEMBER_NAME },
+      OFFICER,
+    );
+    const content = api.client(ContentService);
+    // Control: before the policy changes, an officer sees the markup and the hashes.
+    const before = (await content.getWorkingItem({ itemId: picnic }, OFFICER)).item;
+    expect(before?.working).toMatchObject({ bodyMarkup: '**John** Smith hosts' });
+    expect(before?.working?.contentHash.length).toBe(32);
+    await api.client(RedactionPolicyService).proposeRedactionChange({ audience: RedactionAudience.OFFICERS, category: Category.MEMBER_NAME, action: RedactionAction.REDACT }, OFFICER);
+    const item = (await content.getWorkingItem({ itemId: picnic }, OFFICER)).item;
+    // The working version is shown (not dropped), redacted.
+    expect(item?.working).toMatchObject({ id: working, title: `Picnic with ${WITHHELD}`, bodyMarkup: '' });
+    expect(item?.live).toMatchObject({ title: `Picnic with ${WITHHELD}`, bodyMarkup: '' });
+    expect(dump(item)).not.toMatch(/John\W+Smith/);
+    expect(item?.working?.contentHash.length).toBe(0);
+    expect(item?.live?.contentHash.length).toBe(0);
+    const history = await content.listItemHistory({ itemId: picnic }, OFFICER);
+    expect(history.entries.length).toBeGreaterThan(0);
+    expect(history.entries.filter((entry) => entry.contentHash.length > 0)).toEqual([]);
   });
 });

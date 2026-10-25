@@ -4,6 +4,7 @@
 // and number here is made up.
 import { describe, expect, it } from 'vitest';
 import type { Block, Inline, Tree } from '../content/tree.js';
+import { LOOKALIKES } from './confusables.js';
 import { cellKey } from './policy.js';
 import { type MarkRow, WITHHELD, lensFor, quoteMatches, subjectKey, venueCategory } from './render.js';
 
@@ -184,5 +185,87 @@ describe('the lens: whole words, normalized', () => {
   it('withholds a name inside an address or a link, but not inside a longer word', () => {
     expect(lens.text('Mail pat.example@example.org', [ITEM])).toBe(`Mail ${WITHHELD}@example.org`);
     expect(lens.text('Patricia Examples', [ITEM])).toBe('Patricia Examples');
+  });
+});
+
+describe('the lens: look-alike letters (UTS #39 skeleton, after folding)', () => {
+  const name = (quote: string) => lensFor('public', POLICY, [span(quote, 'member_name')]);
+  const CYRILLIC_J = '\u{0408}';
+  const CYRILLIC_O = '\u{043E}';
+  const GREEK_OMICRON = '\u{03BF}';
+
+  it('withholds a marked name written with a Cyrillic or Greek look-alike in place of a letter', () => {
+    const lens = name('John Smith');
+    expect(lens.text(`Call ${CYRILLIC_J}ohn Smith`, [ITEM])).toBe(`Call ${WITHHELD}`);
+    expect(lens.text(`Call J${CYRILLIC_O}hn Smith`, [ITEM])).toBe(`Call ${WITHHELD}`);
+    expect(lens.text(`Call J${GREEK_OMICRON}hn Smith`, [ITEM])).toBe(`Call ${WITHHELD}`);
+    expect(lens.text('Call \u{0410}nn', [ITEM])).toBe('Call \u{0410}nn');
+    expect(name('Ann').text('Call \u{0410}nn', [ITEM])).toBe(`Call ${WITHHELD}`);
+  });
+
+  it('withholds a look-alike copy added beside the real name, and keeps the mark anchored', () => {
+    const text = `Call John Smith. Later: ${CYRILLIC_J}ohn Smith drives.`;
+    const anchored: MarkRow = { subject: ITEM, quote: 'John Smith', category: 'member_name', anchoredIn: new Set(['v1']) };
+    const lens = lensFor('public', POLICY, [anchored]);
+    expect(lens.hidden([ITEM], 'v1')).toBe(false);
+    expect(lens.text(text, [ITEM])).toBe(`Call ${WITHHELD}. Later: ${WITHHELD} drives.`);
+    expect(quoteMatches('John Smith', [`Call ${CYRILLIC_J}ohn Smith`])).toBe(true);
+  });
+
+  it('matches a mark typed with a look-alike against the plain Latin name', () => {
+    expect(name(`${CYRILLIC_J}ohn Smith`).text('Call John Smith', [ITEM])).toBe(`Call ${WITHHELD}`);
+  });
+
+  it('withholds a digit look-alike, and keeps unrelated letters apart', () => {
+    expect(name('John').text('Call J0hn or Jahn', [ITEM])).toBe(`Call ${WITHHELD} or Jahn`);
+  });
+
+  // One case per entry of the generated table: the source in place of its Latin letter, both
+  // ways, alone and beside the real letter.
+  const entries = Object.entries(LOOKALIKES).flatMap(([latin, sources]) => [...sources].map((source) => [latin, source] as const));
+  it('covers every Latin-confusable Cyrillic and Greek letter, from the table', () => {
+    const scripts = (script: string) => entries.filter(([, source]) => new RegExp(`\\p{Script=${script}}`, 'u').test(source)).map(([, source]) => source);
+    // Lower and upper case of the Latin-looking Cyrillic and Greek letters UTS #39 lists.
+    expect(scripts('Cyrillic')).toEqual(expect.arrayContaining(['\u{0430}', '\u{0410}', '\u{0435}', '\u{043E}', '\u{0440}', '\u{0441}', '\u{0445}', '\u{0458}', '\u{0408}', '\u{0455}', '\u{0456}']));
+    expect(scripts('Greek')).toEqual(expect.arrayContaining(['\u{0391}', '\u{03B1}', '\u{039F}', '\u{03BF}', '\u{03BD}', '\u{03C1}', '\u{0397}', '\u{039A}', '\u{03A4}']));
+    expect(entries.length).toBeGreaterThan(700);
+  });
+  it.each(entries)('treats %s and %s alike', (latin, source) => {
+    const plain = `zq${latin}qz`;
+    const lookalike = `zq${source}qz`;
+    expect(name(plain).text(`a ${lookalike} b`, [ITEM])).toBe(`a ${WITHHELD} b`);
+    expect(name(lookalike).text(`a ${plain} b`, [ITEM])).toBe(`a ${WITHHELD} b`);
+    expect(name(plain).text(`a ${plain} ${lookalike.toUpperCase()} b`, [ITEM])).toBe(`a ${WITHHELD} ${WITHHELD} b`);
+  });
+});
+
+describe('the lens: word edges', () => {
+  const name = (quote: string) => lensFor('public', POLICY, [span(quote, 'member_name')]);
+
+  it('reads a digit as a word edge', () => {
+    expect(name('Ann').text('user Ann2 and Ann 2, 2Ann', [ITEM])).toBe(`user ${WITHHELD}2 and ${WITHHELD} 2, 2${WITHHELD}`);
+    expect(name('Ann').text('Annual Anna', [ITEM])).toBe('Annual Anna');
+  });
+
+  it('finds a name inside CJK text, which has no spaces', () => {
+    expect(name('\u5C0F\u660E').text('\u738B\u5C0F\u660E\u6765\u4E86', [ITEM])).toBe(`\u738B${WITHHELD}\u6765\u4E86`);
+    expect(name('Ann').text('\u738BAnn\u6765', [ITEM])).toBe(`\u738B${WITHHELD}\u6765`);
+    expect(name('\u30A2\u30F3 Lee').text('\u3067\u30A2\u30F3 Lee\u3067\u3059', [ITEM])).toBe(`\u3067${WITHHELD}\u3067\u3059`);
+  });
+
+  it('reads an emoji as a word edge', () => {
+    expect(name('Ann').text('Ann\u{1F600} and \u{1F600}Ann', [ITEM])).toBe(`${WITHHELD}\u{1F600} and \u{1F600}${WITHHELD}`);
+  });
+
+  it('folds case fully, then strips accents: \u0130smail is ismail, and a combining accent does not hide a name', () => {
+    expect(name('ismail').text('\u0130smail drives', [ITEM])).toBe(`${WITHHELD} drives`);
+    expect(name('Ismail').text('\u0130SMA\u0130L and Isma\u0131l', [ITEM])).toBe(`${WITHHELD} and ${WITHHELD}`);
+    expect(name('Ann').text('An\u0301n drives', [ITEM])).toBe(`${WITHHELD} drives`);
+    expect(name('Jos\u00E9 N\u00FA\u00F1ez').text('Jose Nunez and JOSE\u0301 NU\u0301N\u0303EZ', [ITEM])).toBe(`${WITHHELD} and ${WITHHELD}`);
+  });
+
+  it('still matches numbers as numbers, whole', () => {
+    const lens = lensFor('public', POLICY, [span('555-0142')]);
+    expect(lens.text('Ring 555-0142 or 5550142, not 85550142', [ITEM])).toBe(`Ring ${WITHHELD} or ${WITHHELD}, not 85550142`);
   });
 });
