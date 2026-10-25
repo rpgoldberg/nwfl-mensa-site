@@ -1,0 +1,14 @@
+---
+// An item's PDFs (REDACT R3c), each a plain link that opens the file.
+import type { FileLink } from '../data/live';
+
+interface Props {
+  files: readonly FileLink[];
+}
+const { files } = Astro.props;
+---
+{files.length > 0 && (
+  <ul class="item-files">
+    {files.map((f) => <li><a href={f.href}>{f.label} (PDF)</a></li>)}
+  </ul>
+)}

@@ -5,10 +5,10 @@
 // members event or item never reaches a page or a feed, even if the API sent
 // more than it should.
 import { timestampDate } from '@bufbuild/protobuf/wkt';
-import { type ContentItem, ContentKind, ItemVisibility } from '../gen/nwfl/mensa/v1/content_pb.js';
+import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { Area, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
-import { ApiNotFound, type ApiReads } from '../lib/api/client';
+import { ApiNotFound, type ApiReads, type FileRead } from '../lib/api/client';
 import { type CalendarEvent, type CalendarVenue, type EventStatus, centralParts, eventPath } from '../lib/calendar';
 import { documentHtml } from '../lib/document';
 import type { Office } from './site-data';
@@ -23,7 +23,16 @@ export interface ItemView {
   /** The Central date it was published. */
   publishedOn: string | undefined;
   source: 'submitted';
+  /** The item's public PDFs, each served at /documents/<id>.pdf (REDACT R3c). */
+  files: FileLink[];
 }
+
+export interface FileLink {
+  href: string;
+  label: string;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export interface EventDetails {
   event: CalendarEvent;
@@ -43,6 +52,8 @@ export interface LiveData {
   treasurerSummaries(): Promise<ItemView[]>;
   presidentReport(): Promise<ItemView | undefined>;
   announcements(): Promise<ItemView[]>;
+  /** A PDF as the public may have it; not found for anything that is not a file id. */
+  file(id: string): Promise<FileRead>;
 }
 
 export const AREAS: Record<Area, string> = {
@@ -126,6 +137,9 @@ function itemView(item: ContentItem): ItemView {
     bodyHtml: documentHtml(live.body),
     publishedOn: live.approvedAt === undefined ? undefined : centralParts(timestampDate(live.approvedAt)).date,
     source: 'submitted',
+    files: live.files
+      .filter((f) => f.mimeType === 'application/pdf' && f.audience === FileAudience.PUBLIC && f.role !== FileRole.SOURCE && UUID.test(f.id))
+      .map((f) => ({ href: `/documents/${f.id}.pdf`, label: f.filename })),
   };
 }
 
@@ -168,5 +182,6 @@ export function liveData(reads: ApiReads): LiveData {
     treasurerSummaries: async () => publicItems(await reads.listPublishedItems(ContentKind.TREASURER_SUMMARY, 12)),
     presidentReport: async () => publicItems(await reads.listPublishedItems(ContentKind.PRESIDENT_REPORT, 5))[0],
     announcements: async () => publicItems(await reads.listPublishedItems(ContentKind.ANNOUNCEMENT, 3)),
+    file: (id) => (UUID.test(id) ? reads.readFile(id) : Promise.resolve({ kind: 'not_found' })),
   };
 }
