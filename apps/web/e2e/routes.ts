@@ -14,6 +14,8 @@ export interface RouteContext {
   eventIds: readonly string[];
   /** YYYY-MM months to open the calendar at. */
   months: readonly string[];
+  /** API file ids: a published item's PDF (REDACT R3c). */
+  fileIds?: readonly string[];
 }
 
 export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
@@ -23,6 +25,7 @@ export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
   '/events/[id].ics': (c) => c.eventIds.map((id) => `${eventPath(id)}.ics`),
   '/calendar.ics': () => ['/calendar.ics'],
   '/events.ics': () => ['/events.ics'],
+  '/documents/[id].pdf': (c) => (c.fileIds ?? []).map((id) => `/documents/${id}.pdf`),
   '/finances': () => ['/finances'],
   '/officers': () => ['/officers'],
 };

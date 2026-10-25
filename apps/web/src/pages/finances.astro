@@ -10,6 +10,7 @@ import { liveData, siteData } from '../data';
 import { formatDate, formatMoney } from '../data/format';
 import { balanced } from '../data/site-data';
 import AboutNav from '../components/AboutNav.astro';
+import ItemFiles from '../components/ItemFiles.astro';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
 import { visibleContent } from '../lib/content';
@@ -34,6 +35,7 @@ const periods = live ? [] : visibleContent(await siteData.finances(), { publicOn
           <h2 id={`summary-${s.slug}`}>{s.title}</h2>
           {s.summary && <p>{s.summary}</p>}
           <div class="prose" set:html={s.bodyHtml} />
+          <ItemFiles files={s.files} />
           {s.publishedOn && <p class="muted">Published on {formatDate(s.publishedOn)}.</p>}
         </section>
       ))

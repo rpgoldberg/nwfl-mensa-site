@@ -13,11 +13,16 @@
 // get every one (the positive control: a seed that never reached its place
 // would otherwise pass vacuously).
 //
+//
+// A PDF carries the marked canaries too (REDACT R3c): ReadFile's streamed
+// bytes are searched as served and with every Flate stream inflated.
+//
 // The reads are enumerated from the service definitions (every
 // NO_SIDE_EFFECTS method of every served service), and a read with no request
 // here fails the first test, so a new read RPC cannot ship without joining it.
 import { randomBytes } from 'node:crypto';
-import { type DescMessage, type DescMethod, type MessageInitShape, toBinary } from '@bufbuild/protobuf';
+import { inflateSync } from 'node:zlib';
+import { type DescMessage, type DescMethod, type MessageInitShape, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { MethodOptions_IdempotencyLevel as Idempotency } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -36,6 +41,10 @@ import { SERVED_SERVICES } from '../../src/grpc/routes.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
 import { live } from '../helpers/pg.js';
+import { drain } from '../../src/pdf/regenerate.js';
+import { storeOriginal } from '../../src/pdf/store.js';
+import { extractAll } from '../pdf/extract.js';
+import { linesPdf } from '../pdf/fixtures.js';
 
 const canary = (name: string): string => `${name}${randomBytes(6).toString('hex')}`;
 const C = {
@@ -74,6 +83,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       ListWorkingItems: () => [{}, { states: [] }],
       GetWorkingItem: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
       ListItemHistory: () => [{ itemId: ids['public'] }],
+      ReadFile: () => [{ fileId: ids['publicFile'] }, { fileId: ids['wholeFile'] }],
     },
     'nwfl.mensa.v1.MembershipService': {
       GetMyAccount: () => [{}],
@@ -138,6 +148,23 @@ describe.skipIf(!live)('the redaction leak contract', () => {
   const allMethods = (): DescMethod[] => SERVED_SERVICES.flatMap((service) => service.methods);
   const readMethods = (): DescMethod[] => allMethods().filter((method) => !WRITES.has(rpcName(method)));
 
+  /** A served PDF's Flate streams, inflated. */
+  const inflated = (bytes: Buffer): Buffer[] => {
+    const out: Buffer[] = [];
+    const text = bytes.toString('latin1');
+    for (const m of text.matchAll(/stream\r?\n/g)) {
+      const start = m.index + m[0].length;
+      const end = text.indexOf('endstream', start);
+      if (end < 0) continue;
+      try {
+        out.push(inflateSync(bytes.subarray(start, end)));
+      } catch {
+        // Not a Flate stream.
+      }
+    }
+    return out;
+  };
+
   /** Every read (or those of one service), every request: the serialized responses and the errors, by RPC. */
   async function sweep(options: { headers?: Record<string, string> }, only?: string): Promise<Map<string, Buffer>> {
     const out = new Map<string, Buffer>();
@@ -147,6 +174,23 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       const parts: Buffer[] = [];
       for (const request of reads[method.parent.typeName]?.[method.name]?.() ?? []) {
         try {
+          // A stream (ReadFile): each message, the PDF it carries with every Flate stream inflated, and its text as pdf.js reads it.
+          if (method.methodKind === 'server_streaming') {
+            const served: Buffer[] = [];
+            for await (const message of call(request, options) as unknown as AsyncIterable<unknown>) {
+              served.push(Buffer.from(toBinary(method.output, message as never)));
+              parts.push(Buffer.from(dump(message)));
+            }
+            const pdf = Buffer.concat(
+              served.flatMap((bytes) => {
+                const part = fromBinary(method.output, bytes) as unknown as { part: { case?: string; value?: unknown } };
+                return part.part.case === 'chunk' ? [Buffer.from(part.part.value as Uint8Array)] : [];
+              }),
+            );
+            parts.push(...served, ...inflated(pdf));
+            if (pdf.length > 0) parts.push(Buffer.from(await extractAll(pdf)));
+            continue;
+          }
           const response = await call(request, options);
           parts.push(Buffer.from(toBinary(method.output, response as never)), Buffer.from(dump(response)));
         } catch (error) {
@@ -186,8 +230,11 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     );
     const edition = ids['edition'];
 
+    const publicPdf = await linesPdf([`Picnic with ${C.name}`, `Rides: call ${C.phone} by Friday.`]);
+    const wholePdf = await linesPdf([`Words by ${C.whole}`]);
     ids['public'] = (
       await publishItem(pool, {
+        files: [{ objectKey: 'leak-public.pdf', audience: 'public', bytes: publicPdf }],
         slug: 'leak-public',
         officeId: office,
         title: `Picnic with ${C.name}`,
@@ -196,8 +243,19 @@ describe.skipIf(!live)('the redaction leak contract', () => {
         body: { blocks: [paragraph(text('Rides: call '), text(C.phone), text(' by Friday.'))] },
       })
     ).itemId;
-    ids['whole'] = (await publishItem(pool, { slug: 'leak-whole', officeId: office, title: 'Remembering a friend', editionId: edition, body: { blocks: [paragraph(text(`Words by ${C.whole}`))] } }))
-      .itemId;
+    ids['whole'] = (
+      await publishItem(pool, {
+        slug: 'leak-whole',
+        officeId: office,
+        title: 'Remembering a friend',
+        editionId: edition,
+        body: { blocks: [paragraph(text(`Words by ${C.whole}`))] },
+        files: [{ objectKey: 'leak-whole.pdf', audience: 'public', bytes: wholePdf }],
+      })
+    ).itemId;
+    const fileOf = async (key: string) => (await pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE object_key = $1`, [key])).rows[0]!.id;
+    ids['publicFile'] = await fileOf('leak-public.pdf');
+    ids['wholeFile'] = await fileOf('leak-whole.pdf');
     ids['hidden'] = (await publishItem(pool, { slug: 'leak-hidden', officeId: office, title: 'Mailing list', editionId: edition, body: { blocks: [paragraph(text(`Write to ${C.email}`))] } }))
       .itemId;
 
@@ -230,7 +288,12 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     await mark(MarkSubjectKind.EVENT_SERIES, ids['series'], MarkField.DESCRIPTION, C.description, RedactionCategory.MEMBER_PHONE);
     // A tightening applies at once: the public no longer gets items with a marked email at all.
     await policy.proposeRedactionChange({ audience: RedactionAudience.PUBLIC, category: RedactionCategory.MEMBER_EMAIL, action: RedactionAction.HIDE }, OFFICER);
-  });
+    // The originals, then their copies, made by the real engine as the background job would.
+    const storer = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
+    await storeOriginal(pool, { fileId: ids['publicFile'], bytes: publicPdf, ...storer });
+    await storeOriginal(pool, { fileId: ids['wholeFile'], bytes: wholePdf, ...storer });
+    await drain(pool);
+  }, 60_000);
 
   afterAll(async () => {
     await api?.close();
@@ -253,6 +316,17 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     expect(responses.size).toBeGreaterThanOrEqual(20);
     expect(found(responses, C)).toEqual({});
     expect(whole(responses)).toContain('[withheld]');
+    // The public was served the PDF itself (a redacted copy), not only "not ready".
+    expect(responses.get('ContentService.ReadFile')?.includes('%PDF-')).toBe(true);
+  });
+
+  it('serves an officer the PDF with its canaries: the PDF positive control', async () => {
+    const files = await sweep(OFFICER, 'nwfl.mensa.v1.ContentService');
+    expect(found(new Map([['ReadFile', files.get('ContentService.ReadFile') as Buffer]]), { name: C.name, phone: C.phone, whole: C.whole })).toEqual({
+      name: ['ReadFile'],
+      phone: ['ReadFile'],
+      whole: ['ReadFile'],
+    });
   });
 
   it('never gives the public a length-revealing mask', async () => {

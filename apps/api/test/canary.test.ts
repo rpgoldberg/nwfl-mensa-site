@@ -3,7 +3,7 @@
 //
 // A random token is seeded into every members-only place there is: a passage
 // inside a public item, a members block, a members file attached to it, the
-// target of a link whose text is a members passage, a whole members item, an
+// target of a link whose text is a members passage, a members PDF's text, a whole members item, an
 // officers item, a members event series and a members one-off event. Then
 // EVERY read RPC the port serves is called with no token, and the token must
 // appear in no response and no error. Called as a member, it must appear.
@@ -30,6 +30,10 @@ import { SERVED_SERVICES } from '../src/grpc/routes.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from './helpers/api.js';
 import { membersSpan, paragraph, publishItem, text } from './helpers/content.js';
 import { live } from './helpers/pg.js';
+import { drain } from '../src/pdf/regenerate.js';
+import { storeOriginal } from '../src/pdf/store.js';
+import { extractAll } from './pdf/extract.js';
+import { linesPdf } from './pdf/fixtures.js';
 
 const TOKEN = `canary${randomBytes(8).toString('hex')}`;
 // What a member typed at sign-up for the verifier: shown to the verifier and to no one else.
@@ -59,6 +63,7 @@ describe.skipIf(!live)('the members-only canary', () => {
       ListWorkingItems: () => [{}],
       GetWorkingItem: () => [{ itemId: ids['publicItem'] }],
       ListItemHistory: () => [{ itemId: ids['publicItem'] }],
+      ReadFile: () => [{ fileId: ids['pdf'] }],
     },
     'nwfl.mensa.v1.MembershipService': {
       GetMyAccount: () => [{}],
@@ -84,6 +89,19 @@ describe.skipIf(!live)('the members-only canary', () => {
   const readMethods = (): DescMethod[] =>
     SERVED_SERVICES.flatMap((service) => service.methods).filter((method) => method.idempotency === Idempotency.NO_SIDE_EFFECTS);
 
+  /** A streamed read (ReadFile): each message, and the text of the PDF it carries as pdf.js reads it. */
+  async function streamed(messages: AsyncIterable<unknown>): Promise<string> {
+    const parts: string[] = [];
+    const chunks: Buffer[] = [];
+    for await (const message of messages) {
+      parts.push(dump(message));
+      const part = (message as { part: { case?: string; value?: unknown } }).part;
+      if (part.case === 'chunk') chunks.push(Buffer.from(part.value as Uint8Array));
+    }
+    if (chunks.length > 0) parts.push(await extractAll(Buffer.concat(chunks)));
+    return parts.join('\n');
+  }
+
   /** Every read, every request: the responses and the error messages, as text. */
   async function sweep(options: { headers?: Record<string, string> }): Promise<{ text: string; calls: number }> {
     const parts: string[] = [];
@@ -92,7 +110,8 @@ describe.skipIf(!live)('the members-only canary', () => {
       const call = client[method.localName] as (request: unknown, options: unknown) => Promise<unknown>;
       for (const request of reads[method.parent.typeName]?.[method.name]?.() ?? []) {
         try {
-          parts.push(dump(await call(request, options)));
+          if (method.methodKind === 'server_streaming') parts.push(await streamed(call(request, options) as unknown as AsyncIterable<unknown>));
+          else parts.push(dump(await call(request, options)));
         } catch (error) {
           const connectError = ConnectError.from(error);
           expect([Code.NotFound, Code.Unimplemented, Code.Unauthenticated, Code.PermissionDenied], `${method.name}: ${connectError.message}`).toContain(connectError.code);
@@ -123,6 +142,12 @@ describe.skipIf(!live)('the members-only canary', () => {
       body: { blocks: [paragraph(text('Join us: '), { type: 'link', href: `https://example.org/zoom?pwd=${TOKEN}`, children: [membersSpan('Zoom room')] })] },
     });
     ids['publicItem'] = publicItem.itemId;
+    // A members PDF on a public item, its original stored and its copies made.
+    const pdf = await linesPdf([`File ${TOKEN}`]);
+    const pdfItem = await publishItem(pool, { slug: 'canary-pdf', officeId: office, title: 'Flyer', body: { blocks: [] }, files: [{ objectKey: 'canary-flyer.pdf', audience: 'members', bytes: pdf }] });
+    ids['pdf'] = (await pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [pdfItem.versionId])).rows[0]!.id;
+    await storeOriginal(pool, { fileId: ids['pdf'], bytes: pdf, sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] });
+    await drain(pool);
     await publishItem(pool, { slug: 'canary-members', officeId: office, visibility: 'members', title: 'Members notice', body: { blocks: [paragraph(text(`Notice ${TOKEN}`))] } });
     await publishItem(pool, { slug: 'canary-officers', officeId: office, visibility: 'officers', title: `Officers ${TOKEN}`, body: { blocks: [paragraph(text(TOKEN))] } });
     ids['series'] = await insertId(pool,
@@ -175,11 +200,13 @@ describe.skipIf(!live)('the members-only canary', () => {
       ['the officers item, to an officer', () => content().getPublishedItem({ slug: 'canary-officers' }, OFFICER), () => `Officers ${TOKEN}`],
       ['the members series', () => api.client(EventService).listSeries({}, MEMBER), () => `Series ${TOKEN}`],
       ['the members one-off event', () => api.client(EventService).listOccurrences(RANGE, MEMBER), () => `Event ${TOKEN}`],
+      ['the members PDF\'s text', () => streamed(content().readFile({ fileId: ids['pdf'] as string }, MEMBER)), () => `File ${TOKEN}`],
       ['the members one-off event link', () => api.client(EventService).getOccurrence({ id: ids['oneOff'] as string }, MEMBER), () => `https://example.org/${TOKEN}`],
     ];
 
     it.each(places)('%s', async (_place, read, marker) => {
-      expect(dump(await read())).toContain(marker());
+      const got = await read();
+      expect(typeof got === 'string' ? got : dump(got)).toContain(marker());
     });
 
     it('keeps the officers item from a member', async () => {

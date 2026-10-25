@@ -206,3 +206,12 @@ export async function untaggedPropertiesFixture(): Promise<Uint8Array> {
   page.node.set(PDFName.of('Contents'), context.register(context.flateStream('<</ActualText (Quillon Brask)>> BDC BT /F1 12 Tf 72 700 Td (Hello there.) Tj ET EMC')));
   return doc.save({ useObjectStreams: false });
 }
+
+/** A one-page PDF with these lines in Helvetica: a plain file for the serving tests (REDACT R3c). */
+export async function linesPdf(lines: readonly string[]): Promise<Uint8Array> {
+  const doc = await PDFDocument.create({ updateMetadata: false });
+  const page = doc.addPage([612, 792]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  lines.forEach((line, n) => page.drawText(line, { x: 72, y: 720 - 20 * n, size: 12, font }));
+  return doc.save({ useObjectStreams: false });
+}

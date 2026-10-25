@@ -1,7 +1,7 @@
 import { type MessageInitShape, create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { describe, expect, it } from 'vitest';
-import { ContentItemSchema, ContentKind, type ContentItem, ItemVisibility } from '../gen/nwfl/mensa/v1/content_pb.js';
+import { ContentItemSchema, ContentKind, type ContentItem, FileAudience, FileRole, ItemVisibility } from '../gen/nwfl/mensa/v1/content_pb.js';
 import {
   Area,
   EventOccurrenceSchema,
@@ -70,6 +70,7 @@ function reads(over: Partial<ApiReads> = {}): ApiReads {
     listSeries: () => Promise.resolve([]),
     getRoster: () => Promise.resolve([]),
     listPublishedItems: () => Promise.resolve([]),
+    readFile: () => Promise.resolve({ kind: 'not_found' }),
     ...over,
   };
 }
@@ -242,8 +243,8 @@ describe('liveData items', () => {
     ).treasurerSummaries();
     expect(asked).toEqual([[ContentKind.TREASURER_SUMMARY, 12]]);
     expect(summaries).toEqual([
-      { slug: 'q3', title: 'Title of q3', summary: 'Summary of q3', bodyHtml: `<p>Body of q3 &amp; more</p><p class="members-note">${MEMBERS_PASSAGE}</p>`, publishedOn: '2026-09-19', source: 'submitted' },
-      { slug: 'q2', title: 'Title of q2', summary: 'Summary of q2', bodyHtml: `<p>Body of q2 &amp; more</p><p class="members-note">${MEMBERS_PASSAGE}</p>`, publishedOn: '2026-06-20', source: 'submitted' },
+      { slug: 'q3', title: 'Title of q3', summary: 'Summary of q3', bodyHtml: `<p>Body of q3 &amp; more</p><p class="members-note">${MEMBERS_PASSAGE}</p>`, publishedOn: '2026-09-19', source: 'submitted', files: [] },
+      { slug: 'q2', title: 'Title of q2', summary: 'Summary of q2', bodyHtml: `<p>Body of q2 &amp; more</p><p class="members-note">${MEMBERS_PASSAGE}</p>`, publishedOn: '2026-06-20', source: 'submitted', files: [] },
     ]);
   });
 
@@ -266,7 +267,7 @@ describe('liveData items', () => {
   it('leaves the date out when an item has none, and gives an empty body as nothing', async () => {
     const bare = create(ContentItemSchema, { slug: 'bare', live: { title: 'Bare', visibility: ItemVisibility.PUBLIC } });
     const [summary] = await liveData(reads({ listPublishedItems: () => Promise.resolve([bare, create(ContentItemSchema, { slug: 'no-version' })]) })).treasurerSummaries();
-    expect(summary).toEqual({ slug: 'bare', title: 'Bare', summary: '', bodyHtml: '', publishedOn: undefined, source: 'submitted' });
+    expect(summary).toEqual({ slug: 'bare', title: 'Bare', summary: '', bodyHtml: '', publishedOn: undefined, source: 'submitted', files: [] });
   });
 
   // REDACT R2b: an item with anything withheld from the public comes with its id in the slug field (R2a).
@@ -277,5 +278,45 @@ describe('liveData items', () => {
     const noSlug = create(ContentItemSchema, { id: 'b0e5a1d2-0000-4000-8000-000000000002', slug: '', live: { title: 'No slug', visibility: ItemVisibility.PUBLIC } });
     const summaries = await liveData(reads({ listPublishedItems: () => Promise.resolve([withheld, unmarked, noSlug]) })).treasurerSummaries();
     expect(summaries.map((s) => s.slug)).toEqual([ID, 'april-to-june', 'b0e5a1d2-0000-4000-8000-000000000002']);
+  });
+});
+
+// REDACT R3c: an item's PDFs, linked where the item renders, and served through the site.
+describe('liveData files', () => {
+  const FILE = '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7';
+
+  it("links an item's public PDFs, by id, and nothing else it carries", async () => {
+    const withFiles = create(ContentItemSchema, {
+      slug: 'q3',
+      live: {
+        title: 'Q3',
+        visibility: ItemVisibility.PUBLIC,
+        files: [
+          { id: FILE, filename: 'Q3 summary.pdf', mimeType: 'application/pdf', audience: FileAudience.PUBLIC, role: FileRole.PRIMARY },
+          { id: 'b0e5a1d2-0000-4000-8000-000000000001', filename: 'members.pdf', mimeType: 'application/pdf', audience: FileAudience.MEMBERS, role: FileRole.PRIMARY },
+          { id: 'b0e5a1d2-0000-4000-8000-000000000002', filename: 'photo.jpg', mimeType: 'image/jpeg', audience: FileAudience.PUBLIC, role: FileRole.PRIMARY },
+          { id: 'b0e5a1d2-0000-4000-8000-000000000003', filename: 'source.pdf', mimeType: 'application/pdf', audience: FileAudience.PUBLIC, role: FileRole.SOURCE },
+          { id: 'not-an-id', filename: 'odd.pdf', mimeType: 'application/pdf', audience: FileAudience.PUBLIC, role: FileRole.PRIMARY },
+        ],
+      },
+    });
+    const [summary] = await liveData(reads({ listPublishedItems: () => Promise.resolve([withFiles]) })).treasurerSummaries();
+    expect(summary?.files).toEqual([{ href: `/documents/${FILE}.pdf`, label: 'Q3 summary.pdf' }]);
+  });
+
+  it('reads a file by id, and never asks the API for something that is not an id', async () => {
+    const asked: string[] = [];
+    const live = liveData(
+      reads({
+        readFile: (id) => {
+          asked.push(id);
+          return Promise.resolve({ kind: 'not_ready' });
+        },
+      }),
+    );
+    expect(await live.file(FILE)).toEqual({ kind: 'not_ready' });
+    expect(await live.file('../etc/passwd')).toEqual({ kind: 'not_found' });
+    expect(await live.file(FILE.toUpperCase())).toEqual({ kind: 'not_found' });
+    expect(asked).toEqual([FILE]);
   });
 });

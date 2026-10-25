@@ -17,7 +17,7 @@ export interface PublishOptions {
   /** Overrides the derived public tree, to prove which column a read loads. */
   publicAst?: unknown;
   /** Files attached to the version before it is approved: an approved version's files are frozen (0011). */
-  files?: Array<{ objectKey: string; audience: 'public' | 'members' | 'officers'; mimeType?: string; role?: string }>;
+  files?: Array<{ objectKey: string; audience: 'public' | 'members' | 'officers'; mimeType?: string; role?: string; bytes?: Uint8Array }>;
   onBehalfOf?: string;
   editionId?: string;
 }
@@ -40,8 +40,16 @@ export async function publishItem(pool: pg.Pool, options: PublishOptions): Promi
   const versionId = (version.rows[0] as { id: string }).id;
   for (const file of options.files ?? []) {
     await pool.query(
-      `INSERT INTO stored_file (version_id, object_key, filename, mime_type, size_bytes, sha256, audience, role) VALUES ($1, $2, $2, $3, 10, $4, $5, $6)`,
-      [versionId, file.objectKey, file.mimeType ?? 'application/pdf', createHash('sha256').update(file.objectKey).digest(), file.audience, file.role ?? 'primary'],
+      `INSERT INTO stored_file (version_id, object_key, filename, mime_type, size_bytes, sha256, audience, role) VALUES ($1, $2, $2, $3, $7, $4, $5, $6)`,
+      [
+        versionId,
+        file.objectKey,
+        file.mimeType ?? 'application/pdf',
+        createHash('sha256').update(file.bytes ?? file.objectKey).digest(),
+        file.audience,
+        file.role ?? 'primary',
+        file.bytes?.length ?? 10,
+      ],
     );
   }
   const hash = createHash('sha256').update(JSON.stringify(options.body)).digest();
