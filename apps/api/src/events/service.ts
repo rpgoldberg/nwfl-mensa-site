@@ -40,7 +40,7 @@ import {
 import type { Date as ProtoDate } from '../gen/nwfl/mensa/v1/common_pb.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { type Rule, RecurrenceError, expand, parseRule } from './recurrence.js';
-import { calendarLens, entryFor, seriesFor, venueFor, visible } from './redact.js';
+import { bySlug, calendarLens, entryFor, inCalendarOrder, seriesFor, venueFor, visible } from './redact.js';
 import { eventWriteHandlers } from './writes.js';
 import { addDays, isoDate, localDateOf, protoDate, toDays, todayIn, zonedToUtc } from './zone.js';
 
@@ -385,7 +385,7 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
           .filter((entry) => request.includeCancelled || entry.status !== 'cancelled' || (audience === 'public' && entry.visibility === 'members'))
           .filter((entry) => areas.size === 0 || areas.has(areaOf(entry)));
         const lens = await calendarLens(db, audience, entries);
-        return { occurrences: visible(entries, (entry) => entryFor(entry, lens)).map((entry) => occurrenceMessage(entry, audience)) };
+        return { occurrences: inCalendarOrder(visible(entries, (entry) => entryFor(entry, lens)), audience).map((entry) => occurrenceMessage(entry, audience)) };
       },
 
       getOccurrence: async (request, ctx) => {
@@ -425,7 +425,7 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
         const audience = audienceOf(ctx);
         const rows = (await loadSeries(request.includeInactive)).filter((row) => audience !== 'public' || row.visibility === 'public');
         const lens = await calendarLens(db, audience, [], rows);
-        return { series: visible(rows, (row) => seriesFor(row, lens)).map(seriesMessage) };
+        return { series: bySlug(visible(rows, (row) => seriesFor(row, lens))).map(seriesMessage) };
       },
 
       listVenues: async (request, ctx) => {

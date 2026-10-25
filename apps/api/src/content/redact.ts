@@ -6,13 +6,27 @@
 // ============================================================================
 import { type Lens, WITHHELD, subjectKey } from '../redaction/render.js';
 
-/** Whether the lens drops this item for its audience: a mark that hides it, or a hidden on-behalf-of name. */
-export function itemHidden(item: { id: string; on_behalf_of: string | null }, lens: Lens): boolean {
-  return lens.hidden([subjectKey('content_item', item.id)]) || (item.on_behalf_of !== null && lens.action('member_name') === 'hide');
+/**
+ * Whether the lens drops this version of the item for its audience: a mark that hides it, a passage
+ * mark it no longer carries (fail closed), or a hidden on-behalf-of name.
+ */
+export function itemHidden(item: { id: string; on_behalf_of: string | null }, version: string, lens: Lens): boolean {
+  return lens.hidden([subjectKey('content_item', item.id)], version) || (item.on_behalf_of !== null && lens.action('member_name') === 'hide');
 }
 
 /** An on-behalf-of name (member_name) as the lens's audience may see it. Call after itemHidden. */
 export function bylineFor(value: string | null, subjects: readonly string[], lens: Lens): string {
   if (value === null) return '';
   return lens.action('member_name') === 'show' ? lens.text(value, subjects) : WITHHELD;
+}
+
+/**
+ * The slug an audience may see. A slug is written from the title, so where the lens withholds any
+ * of the title, or of the slug itself, the audience gets the item's id instead, and is never told
+ * the slug in any field.
+ */
+export function slugFor(item: { id: string; slug: string }, titles: readonly string[], lens: Lens): string {
+  const subjects = [subjectKey('content_item', item.id)];
+  const withheld = lens.text(item.slug, subjects) !== item.slug || titles.some((title) => lens.text(title, subjects) !== title);
+  return withheld ? item.id : item.slug;
 }

@@ -1,13 +1,23 @@
 // ============================================================================
 // Loads the lens (render.ts) for one audience: the group's policy cells for
 // that audience and the active marks on the items a read is about to return.
+//
+// Each passage mark is anchored here: the loader reads the stored text of
+// each content version the read may show (title, summary, on-behalf-of name,
+// markup, the whole body tree and file names) and of each event subject, and
+// records where the mark's text is found. Only that yes or no leaves this
+// file; the stored text itself is never handed to a message builder. A mark
+// found nowhere in what is shown makes the lens drop it (fail closed).
 // ============================================================================
+import { normalizeTree } from '../content/tree.js';
 import type { Db } from '../db/pool.js';
 import { TENANT, cellKey } from './policy.js';
-import { type Lens, type MarkRow, lensFor, subjectKey } from './render.js';
+import { type Lens, type MarkRow, lensFor, quoteMatches, subjectKey, treeText } from './render.js';
 
 export interface Subjects {
   items?: readonly string[];
+  /** The content versions the read may show, to anchor the items' marks in. */
+  versions?: readonly string[];
   series?: readonly string[];
   occurrences?: readonly string[];
 }
@@ -26,7 +36,56 @@ function keyOf(row: Row): string {
   return subjectKey('event_occurrence', row.occurrence_id as string);
 }
 
-export async function loadLens(db: Pick<Db, 'query'>, audience: string, subjects: Subjects): Promise<Lens> {
+type Query = Pick<Db, 'query'>;
+
+/** Each version's item and every text it carries. */
+async function versionTexts(db: Query, versions: readonly string[]): Promise<Array<{ id: string; item: string; texts: string[] }>> {
+  if (versions.length === 0) return [];
+  const [rows, files] = await Promise.all([
+    db.query<{ id: string; item_id: string; title: string; summary: string | null; on_behalf_of: string | null; body_src: string; body_ast: unknown }>(
+      `SELECT id, item_id, title, summary, on_behalf_of, body_src, body_ast FROM content_version WHERE id = ANY($1::uuid[])`,
+      [versions],
+    ),
+    db.query<{ version_id: string; filename: string }>(`SELECT version_id, filename FROM stored_file WHERE version_id = ANY($1::uuid[])`, [versions]),
+  ]);
+  return rows.rows.map((row) => ({
+    id: row.id,
+    item: row.item_id,
+    texts: [
+      row.title,
+      row.summary ?? '',
+      row.on_behalf_of ?? '',
+      row.body_src,
+      treeText(normalizeTree(row.body_ast)),
+      ...files.rows.filter((file) => file.version_id === row.id).map((file) => file.filename),
+    ],
+  }));
+}
+
+/** Each event subject's texts: a series' own, an occurrence's own and its series'. */
+async function eventTexts(db: Query, series: readonly string[], occurrences: readonly string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const [seriesRows, occurrenceRows] = await Promise.all([
+    series.length === 0
+      ? Promise.resolve({ rows: [] })
+      : db.query<{ id: string; title: string; description: string | null; cadence_label: string | null }>(
+          `SELECT id, title, description, cadence_label FROM event_series WHERE id = ANY($1::uuid[])`,
+          [series],
+        ),
+    occurrences.length === 0
+      ? Promise.resolve({ rows: [] })
+      : db.query<{ id: string; texts: Array<string | null> }>(
+          `SELECT o.id, ARRAY[o.title, o.detail, o.status_note, o.url, s.title, s.description, s.cadence_label] AS texts
+           FROM event_occurrence o LEFT JOIN event_series s ON s.id = o.series_id WHERE o.id = ANY($1::uuid[])`,
+          [occurrences],
+        ),
+  ]);
+  seriesRows.rows.forEach((row) => out.set(subjectKey('event_series', row.id), [row.title, row.description ?? '', row.cadence_label ?? '']));
+  occurrenceRows.rows.forEach((row) => out.set(subjectKey('event_occurrence', row.id), row.texts.map((text) => text ?? '')));
+  return out;
+}
+
+export async function loadLens(db: Query, audience: string, subjects: Subjects): Promise<Lens> {
   const items = [...(subjects.items ?? [])];
   const series = [...(subjects.series ?? [])];
   const occurrences = [...(subjects.occurrences ?? [])];
@@ -42,6 +101,29 @@ export async function loadLens(db: Pick<Db, 'query'>, audience: string, subjects
         ),
   ]);
   const policy = new Map(cells.rows.map((row) => [cellKey(audience, row.category), row.action]));
-  const rows: MarkRow[] = marks.rows.map((row) => ({ subject: keyOf(row), quote: row.quote, category: row.category }));
+  const passages = marks.rows.filter((row) => row.quote !== null);
+  const [versions, events] = await Promise.all([
+    passages.some((row) => row.content_item_id !== null) ? versionTexts(db, [...(subjects.versions ?? [])]) : Promise.resolve([]),
+    passages.some((row) => row.content_item_id === null)
+      ? eventTexts(
+          db,
+          [...new Set(passages.flatMap((row) => (row.series_id !== null ? [row.series_id] : [])))],
+          [...new Set(passages.flatMap((row) => (row.occurrence_id !== null ? [row.occurrence_id] : [])))],
+        )
+      : Promise.resolve(new Map<string, string[]>()),
+  ]);
+  const rows: MarkRow[] = marks.rows.map((row) => {
+    const subject = keyOf(row);
+    const mark: MarkRow = { subject, quote: row.quote, category: row.category };
+    if (row.quote === null) return mark;
+    const quote = row.quote;
+    const anchoredIn =
+      row.content_item_id !== null
+        ? versions.filter((version) => version.item === row.content_item_id && quoteMatches(quote, version.texts)).map((version) => version.id)
+        : quoteMatches(quote, events.get(subject) ?? [])
+          ? [subject]
+          : [];
+    return { ...mark, anchoredIn: new Set(anchoredIn) };
+  });
   return lensFor(audience, policy, rows);
 }

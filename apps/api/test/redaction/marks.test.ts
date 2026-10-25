@@ -274,7 +274,8 @@ describe.skipIf(!live)('redaction marks', () => {
       const listed = dump(await content.listPublishedItems({ pageSize: 50 }));
       expect(listed).not.toMatch(/robin-example/);
       expect(listed).toContain(lunch);
-      await expect(content.getPublishedItem({ slug })).rejects.toMatchObject({ code: Code.NotFound });
+      // Asked for by its slug, the item comes back under its id.
+      expect((await content.getPublishedItem({ slug })).item?.slug).toBe(lunch);
       const byId = await content.getPublishedItem({ slug: lunch });
       expect(byId.item).toMatchObject({ slug: lunch, live: { title: 'Lunch with [withheld]' } });
       expect((await content.getPublishedItem({ slug }, MEMBER)).item?.slug).toBe(slug);

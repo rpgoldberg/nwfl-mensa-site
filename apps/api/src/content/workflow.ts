@@ -44,7 +44,7 @@ import { FILE_AUDIENCES, FILE_ROLES, ITEM_VISIBILITIES, KINDS, KIND_NAMES, STATE
 import { contentHash } from './hash.js';
 import { parseMarkup } from './markup.js';
 import { deriveForApproval, normalizeTree, referencedFiles, toProtoDocument } from './tree.js';
-import { bylineFor, itemHidden } from './redact.js';
+import { bylineFor, itemHidden, slugFor } from './redact.js';
 import { loadLens } from '../redaction/lens.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
 
@@ -206,7 +206,9 @@ async function versionMessage(client: TxClient, row: VersionRow, lens: Lens) {
     summary: lens.text(row.summary ?? '', subjects),
     visibility: ITEM_VISIBILITIES[row.visibility],
     body: toProtoDocument(lens.tree(normalizeTree(row.body_ast), subjects)),
-    bodyMarkup: lens.text(row.body_src, subjects),
+    // The markup can split a marked name with its own syntax (Jo**hn**), so it is left out
+    // whenever anything is withheld from this audience.
+    bodyMarkup: withheld ? '' : row.body_src,
     ...(row.content_hash !== null && !withheld ? { contentHash: row.content_hash } : {}),
     targets: { website: row.target_website, newsletter: row.target_newsletter, email: row.target_email },
     editionId: row.edition_id ?? '',
@@ -231,7 +233,8 @@ async function versionMessage(client: TxClient, row: VersionRow, lens: Lens) {
 
 /**
  * An item as officers see it: the live version and the working one, members passages kept, through
- * the lens for the caller's audience. Undefined when the lens hides it.
+ * the lens for the caller's audience. A version the lens drops (a passage mark it no longer carries)
+ * is left out; undefined when the lens hides the item, or both versions.
  */
 async function officerItem(client: TxClient, itemId: string, audience: string): Promise<ContentItem | undefined> {
   const { rows } = await client.query<ItemRow>(
@@ -240,15 +243,21 @@ async function officerItem(client: TxClient, itemId: string, audience: string): 
     [itemId],
   );
   const item = rows[0] as ItemRow;
-  const lens = await loadLens(client, audience, { items: [item.id] });
-  const liveRow = item.live_version_id === null ? undefined : await loadVersion(client, item.live_version_id);
-  const workingRow = item.working_version_id === null ? undefined : await loadVersion(client, item.working_version_id);
-  if ([liveRow, workingRow].some((version) => version !== undefined && itemHidden({ id: item.id, on_behalf_of: version.on_behalf_of }, lens))) return undefined;
+  const ids = [item.live_version_id, item.working_version_id].filter((id) => id !== null);
+  const lens = await loadLens(client, audience, { items: [item.id], versions: ids });
+  const shown = async (id: string | null): Promise<VersionRow | undefined> => {
+    if (id === null) return undefined;
+    const version = await loadVersion(client, id);
+    return itemHidden({ id: item.id, on_behalf_of: version.on_behalf_of }, version.id, lens) ? undefined : version;
+  };
+  const liveRow = await shown(item.live_version_id);
+  const workingRow = await shown(item.working_version_id);
+  if (liveRow === undefined && workingRow === undefined && ids.length > 0) return undefined;
   const live = liveRow === undefined ? undefined : await versionMessage(client, liveRow, lens);
   const working = workingRow === undefined ? undefined : await versionMessage(client, workingRow, lens);
   return create(ContentItemSchema, {
     id: item.id,
-    slug: item.slug,
+    slug: slugFor(item, [liveRow, workingRow].flatMap((version) => (version === undefined ? [] : [version.title])), lens),
     kind: KINDS[item.kind],
     officeId: item.office_id,
     state: STATES[item.state],
@@ -597,7 +606,8 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
               actorSubject: row.actor_sub ?? '',
               actingOfficeId: row.acting_office_id ?? '',
               versionNumber: row.n ?? 0,
-              ...(row.content_hash !== null ? { contentHash: row.content_hash } : {}),
+              // A hash covers what was withheld: given only where nothing is.
+              ...(row.content_hash !== null && !lens.affected([subjectKey('content_item', item.id)]) ? { contentHash: row.content_hash } : {}),
               fromState: row.from_state ?? '',
               toState: row.to_state ?? '',
               note: lens.text(row.note ?? '', [subjectKey('content_item', item.id)]),

@@ -5,11 +5,13 @@
 // the stored text beside it.
 //
 //   A passage mark withholds its text wherever it appears in the item, matched
-//   without regard to case or spacing, when the policy REDACTS its category for
+//   as whole words after folding (see Matching), when the policy REDACTS its category for
 //   this audience. The text becomes "[withheld]": one fixed placeholder, so the
 //   length of what was there is not given away.
 //   An item is dropped when a passage mark's category is HIDDEN, or when a
-//   whole-item mark's category is anything but SHOWN. An unknown audience,
+//   whole-item mark's category is anything but SHOWN, or when a passage mark
+//   this audience redacts no longer matches the item's text anywhere (fail
+//   closed, until an officer re-marks it or two officers remove it). An unknown audience,
 //   category or action reads as HIDE (policy.ts).
 //
 // In a body tree the text is matched across emphasis runs and links within a
@@ -24,11 +26,16 @@ export const WITHHELD = '[withheld]';
 
 export type SubjectKind = 'content_item' | 'event_series' | 'event_occurrence';
 
-/** An active mark, as the lens needs it: whose it is, its text (null: the whole item) and its category. */
+/**
+ * An active mark, as the lens needs it: whose it is, its text (null: the whole item), its category,
+ * and where its text was found: the content versions, or the event subject, it matches in (lens.ts
+ * sets this for every mark it loads; a mark without it is not anchor-checked).
+ */
 export interface MarkRow {
   subject: string;
   quote: string | null;
   category: string;
+  anchoredIn?: ReadonlySet<string>;
 }
 
 export const subjectKey = (kind: SubjectKind, id: string): string => `${kind}:${id}`;
@@ -40,8 +47,12 @@ export interface Lens {
   readonly audience: string;
   /** The policy's action for a structured field's category, fail-closed. */
   action(category: string): Action;
-  /** Whether these subjects' item is dropped for this audience. */
-  hidden(subjects: readonly string[]): boolean;
+  /**
+   * Whether these subjects' item is dropped for this audience. `version` is the content version
+   * about to be shown: a passage mark this audience redacts must be found in it, or the item is
+   * dropped (fail closed: the text was changed so the mark no longer finds it).
+   */
+  hidden(subjects: readonly string[], version?: string): boolean;
   /** Whether any mark on these subjects changes what this audience sees. */
   affected(subjects: readonly string[]): boolean;
   text(value: string, subjects: readonly string[]): string;
@@ -50,20 +61,122 @@ export interface Lens {
 
 const PLACEHOLDER: Tree = { blocks: [{ type: 'redacted' }] };
 
-/** The quote as a pattern: its words literally, any run of spacing between them. */
-function patternOf(quote: string): RegExp {
-  const words = quote
-    .trim()
-    .split(/\s+/u)
-    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return new RegExp(words.join('\\s+'), 'giu');
+// ---------------------------------------------------------------------------
+// Matching. Text and quote are both folded before they are compared: percent-
+// encodings decoded (twice-encoded too), combining marks kept with their base
+// letter, NFKC (full-width and compatibility forms), a full case fold (ß and
+// SS alike), and Default_Ignorable_Code_Point characters (soft hyphens, zero-
+// width spaces and joiners) removed. Each folded character remembers the span
+// of the original it came from, so a match cuts the original text.
+//
+// A quote matches as whole words: its words in order, separated by any run of
+// characters that are not letters, digits or marks (spaces, dots, hyphens, a
+// "+" in a link), and never inside a longer word: "Ann" does not match
+// "Annual".
+// ---------------------------------------------------------------------------
+
+interface Unit {
+  text: string;
+  start: number;
+  end: number;
 }
 
-/** Every match of every pattern, merged where they touch or overlap, in order. */
+const WORD = '\\p{L}\\p{N}\\p{M}';
+const NOT_WORD = new RegExp(`[^${WORD}]+`, 'u');
+const HEX = /^[0-9a-f]$/i;
+const COMBINING = /^\p{M}/u;
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/gu;
+const utf8 = new TextDecoder('utf-8');
+
+/** Runs of %XX decoded as UTF-8; each decoded character spans the whole run. */
+function percentDecoded(units: Unit[]): Unit[] {
+  const out: Unit[] = [];
+  for (let i = 0; i < units.length; ) {
+    const bytes: number[] = [];
+    let j = i;
+    while (units[j]?.text === '%' && HEX.test(units[j + 1]?.text ?? '') && HEX.test(units[j + 2]?.text ?? '')) {
+      bytes.push(parseInt(`${(units[j + 1] as Unit).text}${(units[j + 2] as Unit).text}`, 16));
+      j += 3;
+    }
+    if (bytes.length === 0) {
+      out.push(units[i] as Unit);
+      i += 1;
+      continue;
+    }
+    const span = { start: (units[i] as Unit).start, end: (units[j - 1] as Unit).end };
+    for (const ch of utf8.decode(new Uint8Array(bytes))) out.push({ text: ch, ...span });
+    i = j;
+  }
+  return out;
+}
+
+/** The folded form of a run of text, one folded character per entry, each with the original span it came from. */
+function fold(value: string): Unit[] {
+  let units: Unit[] = [];
+  let at = 0;
+  for (const ch of value) {
+    units.push({ text: ch, start: at, end: at + ch.length });
+    at += ch.length;
+  }
+  for (let pass = 0; pass < 3; pass++) {
+    const decoded = percentDecoded(units);
+    if (decoded.length === units.length) break;
+    units = decoded;
+  }
+  // A combining mark stays with its base, so NFKC can compose them.
+  const clusters: Unit[] = [];
+  for (const unit of units) {
+    const last = clusters.at(-1);
+    if (last !== undefined && COMBINING.test(unit.text)) {
+      last.text += unit.text;
+      last.end = unit.end;
+    } else clusters.push({ ...unit });
+  }
+  const out: Unit[] = [];
+  for (const cluster of clusters) {
+    const folded = cluster.text.normalize('NFKC').toUpperCase().toLowerCase().normalize('NFKC').replace(IGNORABLE, '');
+    for (const ch of folded) out.push({ text: ch, start: cluster.start, end: cluster.end });
+  }
+  return out;
+}
+
+const foldedText = (value: string): string => fold(value).map((unit) => unit.text).join('');
+
+/** The quote as a pattern over folded text: whole words, any non-word run between them. */
+function patternOf(quote: string): RegExp {
+  const folded = foldedText(quote);
+  const escape = (word: string): string => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const words = folded.split(NOT_WORD).filter((word) => word !== '');
+  if (words.length === 0) return new RegExp(escape(folded.trim()), 'gu');
+  return new RegExp(`(?<![${WORD}])${words.map(escape).join(`[^${WORD}]*`)}(?![${WORD}])`, 'gu');
+}
+
+/** Every match of every pattern, as spans of the ORIGINAL text, merged where they touch or overlap, in order. */
 function ranges(value: string, patterns: readonly RegExp[]): Array<[number, number]> {
+  const units = fold(value);
+  const offsets: number[] = [];
+  let folded = '';
+  for (const unit of units) {
+    offsets.push(folded.length);
+    folded += unit.text;
+  }
+  // The unit each folded UTF-16 index belongs to.
+  const unitAt = (index: number): Unit => {
+    let low = 0;
+    let high = offsets.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if ((offsets[mid] as number) <= index) low = mid;
+      else high = mid - 1;
+    }
+    return units[low] as Unit;
+  };
   const found: Array<[number, number]> = [];
   for (const pattern of patterns) {
-    for (const match of value.matchAll(pattern)) found.push([match.index, match.index + match[0].length]);
+    for (const match of folded.matchAll(pattern)) {
+      if (match[0] === '') continue;
+      found.push([unitAt(match.index).start, unitAt(match.index + match[0].length - 1).end]);
+    }
   }
   found.sort((a, b) => a[0] - b[0]);
   const merged: Array<[number, number]> = [];
@@ -85,23 +198,20 @@ function withhold(value: string, patterns: readonly RegExp[]): string {
   return out + value.slice(at);
 }
 
-/** A link target, decoded where it can be, so an escaped quote is matched too. */
-function decoded(href: string): string {
-  try {
-    return decodeURIComponent(href);
-  } catch {
-    return href;
-  }
-}
-
 const matches = (value: string, patterns: readonly RegExp[]): boolean => ranges(value, patterns).length > 0;
+
+/** Whether a quote matches, folded and as whole words, in any of these texts. */
+export const quoteMatches = (quote: string, texts: readonly string[]): boolean => {
+  const pattern = [patternOf(quote)];
+  return texts.some((value) => matches(value, pattern));
+};
 
 /** A link whose target carries the text keeps its words but loses the target, at any depth. */
 function unwrapLinks(nodes: Inline[], patterns: readonly RegExp[]): Inline[] {
   return nodes.flatMap((node): Inline[] => {
     if (node.type === 'link') {
       const children = unwrapLinks(node.children, patterns);
-      return matches(node.href, patterns) || matches(decoded(node.href), patterns) ? children : [{ ...node, children }];
+      return matches(node.href, patterns) ? children : [{ ...node, children }];
     }
     if (node.type === 'members') return [{ ...node, children: unwrapLinks(node.children, patterns) }];
     return [node];
@@ -174,7 +284,7 @@ function strings(node: Block | Inline, out: string[]): void {
       out.push(' ', node.alt, ' ');
       return;
     case 'link':
-      out.push(' ', node.href, ' ', decoded(node.href), ' ');
+      out.push(' ', node.href, ' ');
       node.children.forEach((child) => strings(child, out));
       return;
     case 'list':
@@ -189,6 +299,16 @@ function strings(node: Block | Inline, out: string[]): void {
   }
 }
 
+/** Every string a tree carries, as one text: what a mark must be found in. */
+export function treeText(tree: Tree): string {
+  const out: string[] = [];
+  tree.blocks.forEach((node) => {
+    strings(node, out);
+    out.push('\n');
+  });
+  return out.join('');
+}
+
 export function lensFor(audience: string, policy: Policy, marks: readonly MarkRow[]): Lens {
   const actionOf = (category: string): Action => resolveAction(policy, audience, category);
   const of = (subjects: readonly string[]): MarkRow[] => marks.filter((mark) => subjects.includes(mark.subject));
@@ -198,10 +318,13 @@ export function lensFor(audience: string, policy: Policy, marks: readonly MarkRo
   return {
     audience,
     action: actionOf,
-    hidden: (subjects) =>
+    hidden: (subjects, version) =>
       of(subjects).some((mark) => {
         const action = actionOf(mark.category);
-        return action === 'hide' || (mark.quote === null && action !== 'show');
+        if (action === 'hide' || (mark.quote === null && action !== 'show')) return true;
+        if (action !== 'redact' || mark.anchoredIn === undefined) return false;
+        const scope = mark.subject.startsWith('content_item:') ? version : mark.subject;
+        return scope === undefined || !mark.anchoredIn.has(scope);
       }),
     affected: (subjects) => of(subjects).some((mark) => actionOf(mark.category) !== 'show'),
     text: (value, subjects) => {
@@ -212,12 +335,7 @@ export function lensFor(audience: string, policy: Policy, marks: readonly MarkRo
       const list = patterns(subjects);
       if (list.length === 0) return tree;
       const out: Tree = { blocks: tree.blocks.map((node) => redactBlock(node, list)) };
-      const left: string[] = [];
-      out.blocks.forEach((node) => {
-        strings(node, left);
-        left.push('\n');
-      });
-      return matches(left.join(''), list) ? PLACEHOLDER : out;
+      return matches(treeText(out), list) ? PLACEHOLDER : out;
     },
   };
 }

@@ -42,7 +42,7 @@ import { EDITION_SELECT, type EditionRow, editionHandlers, editionMessages } fro
 import { workflowHandlers } from './workflow.js';
 import { loadLens } from '../redaction/lens.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
-import { bylineFor, itemHidden } from './redact.js';
+import { bylineFor, itemHidden, slugFor } from './redact.js';
 
 export interface ContentDeps {
   db: Db;
@@ -130,7 +130,7 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[], lens: L
   if (row.state === 'withdrawn') {
     return create(ContentItemSchema, {
       id: row.id,
-      slug: row.slug,
+      slug: slugFor(row, [row.title], lens),
       kind: KINDS[row.kind],
       officeId: row.office_id,
       state: ItemState.WITHDRAWN,
@@ -142,7 +142,7 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[], lens: L
   const hashed = audience === 'officers' && row.content_hash !== null && !lens.affected(subjects) && (row.on_behalf_of === null || lens.action('member_name') === 'show');
   return create(ContentItemSchema, {
     id: row.id,
-    slug: row.slug,
+    slug: slugFor(row, [row.title], lens),
     kind: KINDS[row.kind],
     officeId: row.office_id,
     state: STATES[row.state],
@@ -252,14 +252,18 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
       getPublishedItem: async (request, ctx) => {
         const audience = audienceOf(ctx);
         const query = itemQuery(audience);
+        // By slug, or by id: an audience that may not see an item's slug is given its id instead.
+        const byId = UUID.test(request.slug);
         const { rows } = await db.query<ItemRow>(
-          `${query.select} WHERE i.slug = $1 AND i.state IN ('published', 'withdrawn') AND ${query.visible}`,
-          [request.slug],
+          `${query.select} WHERE (i.slug = $1 OR ($2 AND i.id::text = $1)) AND i.state IN ('published', 'withdrawn') AND ${query.visible}
+           ORDER BY (i.id::text = $1) DESC LIMIT 1`,
+          [request.slug, byId],
         );
         const row = rows[0];
-        const lens = await loadLens(db, audience, { items: rows.map((found) => found.id) });
-        // An item the lens hides is not there, for this audience.
-        if (row === undefined || itemHidden(row, lens)) throw new ConnectError('item not found', Code.NotFound);
+        const lens = await loadLens(db, audience, { items: rows.map((found) => found.id), versions: rows.map((found) => found.version_id) });
+        // An item the lens hides is not there, for this audience. One found by a slug it may not
+        // see is answered with its id in the slug field: the slug is never sent back.
+        if (row === undefined || itemHidden(row, row.version_id, lens)) throw new ConnectError('item not found', Code.NotFound);
         return { item: itemMessage(row, audience, await filesFor(rows, audience), lens) };
       },
 
@@ -286,9 +290,9 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
              LIMIT $5`,
             [KIND_NAMES.get(request.kind) ?? null, request.officeId === '' ? null : request.officeId, cursor?.[0] ?? null, cursor?.[1] ?? null, size + 1],
           );
-          const lens = await loadLens(db, audience, { items: rows.map((row) => row.id) });
+          const lens = await loadLens(db, audience, { items: rows.map((row) => row.id), versions: rows.map((row) => row.version_id) });
           for (const row of rows) {
-            if (itemHidden(row, lens)) continue;
+            if (itemHidden(row, row.version_id, lens)) continue;
             kept.push(row);
             lenses.set(row.id, lens);
           }

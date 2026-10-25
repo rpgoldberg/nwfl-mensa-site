@@ -44,8 +44,27 @@ export function seriesFor(row: SeriesRow, lens: Lens): SeriesRow | undefined {
   const subjects = [subjectKey('event_series', row.id)];
   if (lens.hidden(subjects)) return undefined;
   const text = (value: string | null): string | null => (value === null ? null : lens.text(value, subjects));
-  return { ...row, title: lens.text(row.title, subjects), description: text(row.description), cadence_label: text(row.cadence_label) };
+  const title = lens.text(row.title, subjects);
+  // A slug is written from the title: where any of either is withheld, the series' id stands in.
+  const slug = title !== row.title || lens.text(row.slug, subjects) !== row.slug ? row.id : row.slug;
+  return { ...row, slug, title, description: text(row.description), cadence_label: text(row.cadence_label) };
 }
+
+const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Calendar order on what the audience sees (S3): date, start, the shown title, then id. A members
+ * event the public reads withheld is ordered by its date alone, never by its title or time.
+ */
+export function inCalendarOrder(entries: readonly Entry[], audience?: string): Entry[] {
+  const withheld = (entry: Entry): boolean => audience === 'public' && entry.visibility === 'members';
+  const start = (entry: Entry): number => (withheld(entry) ? 0 : (entry.startsAt?.getTime() ?? 0));
+  const title = (entry: Entry): string => (withheld(entry) ? '' : entry.title);
+  return [...entries].sort((a, b) => compare(a.localDate, b.localDate) || start(a) - start(b) || compare(title(a), title(b)) || compare(a.id, b.id));
+}
+
+/** Series by the slug the audience sees, then id. */
+export const bySlug = (series: readonly SeriesRow[]): SeriesRow[] => [...series].sort((a, b) => compare(a.slug, b.slug) || compare(a.id, b.id));
 
 export function entryFor(entry: Entry, lens: Lens): Entry | undefined {
   const subjects = entrySubjects(entry);

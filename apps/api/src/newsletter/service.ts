@@ -25,7 +25,7 @@ import { filterForPublic, normalizeTree } from '../content/tree.js';
 import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { type Entry, calendarSource, occurrenceMessage, seriesMessage } from '../events/service.js';
-import { calendarLens, entryFor, seriesFor, visible } from '../events/redact.js';
+import { bySlug, calendarLens, entryFor, inCalendarOrder, seriesFor, visible } from '../events/redact.js';
 import { itemHidden } from '../content/redact.js';
 import { loadLens } from '../redaction/lens.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
@@ -65,9 +65,24 @@ interface PinnedRow {
 
 /** The lens for an edition's items, for one audience. */
 const lensOf = (db: Pick<Db, 'query'>, audience: string, rows: readonly PinnedRow[]): Promise<Lens> =>
-  loadLens(db, audience, { items: rows.map((row) => row.item_id) });
+  loadLens(db, audience, { items: rows.map((row) => row.item_id), versions: rows.map((row) => row.version_id) });
 
-const hiddenFrom = (lens: Lens, row: PinnedRow): boolean => itemHidden({ id: row.item_id, on_behalf_of: row.on_behalf_of }, lens);
+const hiddenFrom = (lens: Lens, row: PinnedRow): boolean => itemHidden({ id: row.item_id, on_behalf_of: row.on_behalf_of }, row.version_id, lens);
+
+const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Print order for an audience: by kind, then by the title THIS audience sees, then by id. Ordering
+ * by the stored title or the slug would place a withheld title by its hidden text (S3).
+ */
+function inPrintOrder(rows: readonly PinnedRow[], lens: Lens): PinnedRow[] {
+  const key = (row: PinnedRow): [number, string, string] => [KIND_ORDER.indexOf(row.kind), lens.text(row.title, [subjectKey('content_item', row.item_id)]), row.item_id];
+  return [...rows].sort((a, b) => {
+    const [ka, ta, ia] = key(a);
+    const [kb, tb, ib] = key(b);
+    return ka - kb || compare(ta, tb) || compare(ia, ib);
+  });
+}
 
 /**
  * The edition's items in print order: pinned versions once frozen, live ones
@@ -154,7 +169,7 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
         const edition = await loadEdition(request.editionId);
         const pinned = await editionItems(db, edition);
         const lens = await itemLens(callerOf(ctx.values).audience, pinned);
-        const rows = pinned.filter((row) => readable(row, 'members') && !hiddenFrom(lens, row));
+        const rows = inPrintOrder(pinned.filter((row) => readable(row, 'members') && !hiddenFrom(lens, row)), lens);
         return {
           items: rows.map((row) => {
             const subjects = [subjectKey('content_item', row.item_id)];
@@ -178,8 +193,8 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
         const [entries, series] = await Promise.all([entriesOf(edition), calendar.loadSeries(false)]);
         const lens = await calendarLens(db, callerOf(ctx.values).audience, entries, series);
         return {
-          series: visible(series, (row) => seriesFor(row, lens)).map(seriesMessage),
-          occurrences: visible(entries, (entry) => entryFor(entry, lens)).map((entry) => occurrenceMessage(entry, 'members')),
+          series: bySlug(visible(series, (row) => seriesFor(row, lens))).map(seriesMessage),
+          occurrences: inCalendarOrder(visible(entries, (entry) => entryFor(entry, lens))).map((entry) => occurrenceMessage(entry, 'members')),
         };
       },
 
@@ -206,7 +221,7 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
         const input: ExportInput = {
           audience,
           edition: { slug: edition.slug, title: edition.title, volume: edition.volume, issueNumber: edition.issue_number, calendarMonths: monthsBetween(grid.from, grid.to) },
-          items: items.filter((row) => readable(row, audience) && !hiddenFrom(lens, row)).map((row) => {
+          items: inPrintOrder(items.filter((row) => readable(row, audience) && !hiddenFrom(lens, row)), lens).map((row) => {
             const subjects = [subjectKey('content_item', row.item_id)];
             return {
               kind: row.kind,
@@ -224,7 +239,7 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
             holders: office.terms.filter((term) => term.holderDisplayName !== '').map((term) => term.holderDisplayName),
             roleAlias: office.roleAlias,
           })),
-          events: visible(entries, (entry) => entryFor(entry, events)).map((entry) => exportEvent(entry, aliasOf)),
+          events: inCalendarOrder(visible(entries, (entry) => entryFor(entry, events)), audience).map((entry) => exportEvent(entry, aliasOf)),
         };
         const content = buildContentJson(input);
         // Recorded before the content is returned: an export that cannot be audited is not given.

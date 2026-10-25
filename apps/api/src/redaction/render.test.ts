@@ -42,9 +42,9 @@ describe('the lens: text', () => {
     expect(lens.text('pat example said: PAT\nEXAMPLE.', [ITEM])).toBe(`${WITHHELD} said: ${WITHHELD}.`);
   });
 
-  it('treats the quote as text, not as a pattern', () => {
+  it('treats the quote as words, not as a pattern', () => {
     const lens = lensFor('public', POLICY, [span('a.b(c)*', 'member_name')]);
-    expect(lens.text('xa.b(c)*y aXb(c)y', [ITEM])).toBe(`x${WITHHELD}y aXb(c)y`);
+    expect(lens.text('x a.b(c)* y aXb(c)y xa.b(c)', [ITEM])).toBe(`x ${WITHHELD})* y aXb(c)y xa.b(c)`);
   });
 
   it('withholds overlapping marks as one passage, so no fragment is left between them', () => {
