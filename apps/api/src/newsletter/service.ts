@@ -25,6 +25,10 @@ import { filterForPublic, normalizeTree } from '../content/tree.js';
 import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { type Entry, calendarSource, occurrenceMessage, seriesMessage } from '../events/service.js';
+import { calendarLens, entryFor, seriesFor, visible } from '../events/redact.js';
+import { itemHidden } from '../content/redact.js';
+import { loadLens } from '../redaction/lens.js';
+import { type Lens, subjectKey } from '../redaction/render.js';
 import { Audience } from '../gen/nwfl/mensa/v1/common_pb.js';
 import { EditionItemSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { NewsletterService } from '../gen/nwfl/mensa/v1/newsletter_pb.js';
@@ -56,7 +60,14 @@ interface PinnedRow {
   content_hash: Buffer;
   body_ast: unknown;
   public_ast: unknown;
+  on_behalf_of: string | null;
 }
+
+/** The lens for an edition's items, for one audience. */
+const lensOf = (db: Pick<Db, 'query'>, audience: string, rows: readonly PinnedRow[]): Promise<Lens> =>
+  loadLens(db, audience, { items: rows.map((row) => row.item_id) });
+
+const hiddenFrom = (lens: Lens, row: PinnedRow): boolean => itemHidden({ id: row.item_id, on_behalf_of: row.on_behalf_of }, lens);
 
 /**
  * The edition's items in print order: pinned versions once frozen, live ones
@@ -67,7 +78,8 @@ interface PinnedRow {
  * longer be read (see readable).
  */
 async function editionItems(db: Pick<Db, 'query'>, edition: EditionRow): Promise<PinnedRow[]> {
-  const columns = `i.id AS item_id, v.id AS version_id, i.kind, i.office_id, v.title, v.summary, v.visibility, v.n, v.content_hash, v.body_ast, v.public_ast`;
+  const columns = `i.id AS item_id, v.id AS version_id, i.kind, i.office_id, v.title, v.summary, v.visibility, v.n, v.content_hash, v.body_ast, v.public_ast,
+    v.on_behalf_of`;
   const { rows } = FROZEN.has(edition.status)
     ? await db.query<PinnedRow>(
         `SELECT ${columns}, lv.visibility AS live_visibility
@@ -120,6 +132,8 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
   /** The day the printed roster is "as of": the first day of the first grid month. */
   const rosterDay = async (edition: EditionRow): Promise<string> => `${(await gridRange(db, edition)).from.slice(0, 7)}-01`;
 
+  const itemLens = (audience: string, rows: readonly PinnedRow[]): Promise<Lens> => lensOf(db, audience, rows);
+
   const entriesOf = async (edition: EditionRow): Promise<Entry[]> => {
     const { from, to } = await gridRange(db, edition);
     return calendar.calendar(from, to);
@@ -136,29 +150,37 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
         return { editions: await editionMessages(db, rows) };
       },
 
-      listEditionItems: async (request) => {
+      listEditionItems: async (request, ctx) => {
         const edition = await loadEdition(request.editionId);
-        const rows = (await editionItems(db, edition)).filter((row) => readable(row, 'members'));
+        const pinned = await editionItems(db, edition);
+        const lens = await itemLens(callerOf(ctx.values).audience, pinned);
+        const rows = pinned.filter((row) => readable(row, 'members') && !hiddenFrom(lens, row));
         return {
-          items: rows.map((row) =>
-            create(EditionItemSchema, {
+          items: rows.map((row) => {
+            const subjects = [subjectKey('content_item', row.item_id)];
+            return create(EditionItemSchema, {
               editionId: edition.id,
               itemId: row.item_id,
               versionId: row.version_id,
               kind: KINDS[row.kind],
               officeId: row.office_id,
-              title: row.title,
+              title: lens.text(row.title, subjects),
               versionNumber: row.n,
-              contentHash: row.content_hash,
-            }),
-          ),
+              // The hash covers what was withheld, so it goes only where nothing was.
+              ...(lens.affected(subjects) || (row.on_behalf_of !== null && lens.action('member_name') !== 'show') ? {} : { contentHash: row.content_hash }),
+            });
+          }),
         };
       },
 
-      getEditionCalendar: async (request) => {
+      getEditionCalendar: async (request, ctx) => {
         const edition = await loadEdition(request.editionId);
         const [entries, series] = await Promise.all([entriesOf(edition), calendar.loadSeries(false)]);
-        return { series: series.map(seriesMessage), occurrences: entries.map((entry) => occurrenceMessage(entry, 'members')) };
+        const lens = await calendarLens(db, callerOf(ctx.values).audience, entries, series);
+        return {
+          series: visible(series, (row) => seriesFor(row, lens)).map(seriesMessage),
+          occurrences: visible(entries, (entry) => entryFor(entry, lens)).map((entry) => occurrenceMessage(entry, 'members')),
+        };
       },
 
       getEditionRoster: async (request) => {
@@ -178,17 +200,23 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
           gridRange(db, edition),
         ]);
         const aliasOf = new Map(offices.map((office) => [office.id, office.roleAlias]));
+        // The export audience's lens: every item and event is built from its view, never the stored text.
+        const lens = await itemLens(audience, items);
+        const events = await calendarLens(db, audience, entries);
         const input: ExportInput = {
           audience,
           edition: { slug: edition.slug, title: edition.title, volume: edition.volume, issueNumber: edition.issue_number, calendarMonths: monthsBetween(grid.from, grid.to) },
-          items: items.filter((row) => readable(row, audience)).map((row) => ({
-            kind: row.kind,
-            title: row.title,
-            summary: row.summary,
-            visibility: row.visibility,
-            // The public export reads the public tree only, filtered again; the members export the full tree.
-            tree: audience === 'public' ? filterForPublic(normalizeTree(row.public_ast)) : normalizeTree(row.body_ast),
-          })),
+          items: items.filter((row) => readable(row, audience) && !hiddenFrom(lens, row)).map((row) => {
+            const subjects = [subjectKey('content_item', row.item_id)];
+            return {
+              kind: row.kind,
+              title: lens.text(row.title, subjects),
+              summary: row.summary === null ? null : lens.text(row.summary, subjects),
+              visibility: row.visibility,
+              // The public export reads the public tree only, filtered again; the members export the full tree.
+              tree: lens.tree(audience === 'public' ? filterForPublic(normalizeTree(row.public_ast)) : normalizeTree(row.body_ast), subjects),
+            };
+          }),
           offices: offices.map((office) => ({
             slug: office.slug,
             title: office.title,
@@ -196,7 +224,7 @@ export function newsletterRoutes(deps: NewsletterDeps): (router: ConnectRouter) 
             holders: office.terms.filter((term) => term.holderDisplayName !== '').map((term) => term.holderDisplayName),
             roleAlias: office.roleAlias,
           })),
-          events: entries.map((entry) => exportEvent(entry, aliasOf)),
+          events: visible(entries, (entry) => entryFor(entry, events)).map((entry) => exportEvent(entry, aliasOf)),
         };
         const content = buildContentJson(input);
         // Recorded before the content is returned: an export that cannot be audited is not given.

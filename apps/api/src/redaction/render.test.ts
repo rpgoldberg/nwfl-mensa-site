@@ -9,7 +9,6 @@ import { type MarkRow, WITHHELD, lensFor, subjectKey, venueCategory } from './re
 
 const ITEM = subjectKey('content_item', '00000000-0000-4000-8000-000000000001');
 const OTHER = subjectKey('content_item', '00000000-0000-4000-8000-000000000002');
-const SERIES = subjectKey('event_series', '00000000-0000-4000-8000-000000000003');
 
 // The launch defaults that matter here (0012).
 const POLICY = new Map([

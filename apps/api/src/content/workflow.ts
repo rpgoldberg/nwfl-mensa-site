@@ -44,6 +44,9 @@ import { FILE_AUDIENCES, FILE_ROLES, ITEM_VISIBILITIES, KINDS, KIND_NAMES, STATE
 import { contentHash } from './hash.js';
 import { parseMarkup } from './markup.js';
 import { deriveForApproval, normalizeTree, referencedFiles, toProtoDocument } from './tree.js';
+import { bylineFor, itemHidden } from './redact.js';
+import { loadLens } from '../redaction/lens.js';
+import { type Lens, subjectKey } from '../redaction/render.js';
 
 export interface WorkflowDeps {
   db: Db;
@@ -186,7 +189,10 @@ async function newVersion(client: TxClient, item: ItemRow, from: VersionRow, cal
   return version;
 }
 
-async function versionMessage(client: TxClient, row: VersionRow) {
+/** A version as the lens's audience may see it: its text through the lens, its hash only where nothing was withheld. */
+async function versionMessage(client: TxClient, row: VersionRow, lens: Lens) {
+  const subjects = [subjectKey('content_item', row.item_id)];
+  const withheld = lens.affected(subjects) || (row.on_behalf_of !== null && lens.action('member_name') !== 'show');
   const { rows: files } = await client.query<{ id: string; filename: string; mime_type: string; size_bytes: string; sha256: Buffer; audience: string; role: string; public_copy_of: string | null }>(
     `SELECT id, filename, mime_type, size_bytes::text AS size_bytes, sha256, audience, role, public_copy_of FROM stored_file WHERE version_id = $1 ORDER BY filename, id`,
     [row.id],
@@ -196,22 +202,22 @@ async function versionMessage(client: TxClient, row: VersionRow) {
     itemId: row.item_id,
     number: row.n,
     status: VERSION_STATUSES[row.status],
-    title: row.title,
-    summary: row.summary ?? '',
+    title: lens.text(row.title, subjects),
+    summary: lens.text(row.summary ?? '', subjects),
     visibility: ITEM_VISIBILITIES[row.visibility],
-    body: toProtoDocument(normalizeTree(row.body_ast)),
-    bodyMarkup: row.body_src,
-    ...(row.content_hash !== null ? { contentHash: row.content_hash } : {}),
+    body: toProtoDocument(lens.tree(normalizeTree(row.body_ast), subjects)),
+    bodyMarkup: lens.text(row.body_src, subjects),
+    ...(row.content_hash !== null && !withheld ? { contentHash: row.content_hash } : {}),
     targets: { website: row.target_website, newsletter: row.target_newsletter, email: row.target_email },
     editionId: row.edition_id ?? '',
     printAsIs: row.print_as_is,
-    onBehalfOf: row.on_behalf_of ?? '',
+    onBehalfOf: bylineFor(row.on_behalf_of, subjects, lens),
     ...(row.ready_at !== null ? { readyAt: timestampFromDate(row.ready_at) } : {}),
     ...(row.approved_at !== null ? { approvedAt: timestampFromDate(row.approved_at) } : {}),
     files: files.map((file) =>
       create(StoredFileSchema, {
         id: file.id,
-        filename: file.filename,
+        filename: lens.text(file.filename, subjects),
         mimeType: file.mime_type,
         sizeBytes: BigInt(file.size_bytes),
         sha256: file.sha256,
@@ -223,16 +229,23 @@ async function versionMessage(client: TxClient, row: VersionRow) {
   });
 }
 
-/** An item as officers see it: the live version and the working one, members passages kept. */
-async function officerItem(client: TxClient, itemId: string): Promise<ContentItem> {
+/**
+ * An item as officers see it: the live version and the working one, members passages kept, through
+ * the lens for the caller's audience. Undefined when the lens hides it.
+ */
+async function officerItem(client: TxClient, itemId: string, audience: string): Promise<ContentItem | undefined> {
   const { rows } = await client.query<ItemRow>(
     `SELECT i.id, i.slug, i.kind, i.office_id, '' AS office_slug, i.state, i.live_version_id, i.working_version_id, i.withdrawn_at
      FROM content_item i WHERE i.id = $1`,
     [itemId],
   );
   const item = rows[0] as ItemRow;
-  const live = item.live_version_id === null ? undefined : await versionMessage(client, await loadVersion(client, item.live_version_id));
-  const working = item.working_version_id === null ? undefined : await versionMessage(client, await loadVersion(client, item.working_version_id));
+  const lens = await loadLens(client, audience, { items: [item.id] });
+  const liveRow = item.live_version_id === null ? undefined : await loadVersion(client, item.live_version_id);
+  const workingRow = item.working_version_id === null ? undefined : await loadVersion(client, item.working_version_id);
+  if ([liveRow, workingRow].some((version) => version !== undefined && itemHidden({ id: item.id, on_behalf_of: version.on_behalf_of }, lens))) return undefined;
+  const live = liveRow === undefined ? undefined : await versionMessage(client, liveRow, lens);
+  const working = workingRow === undefined ? undefined : await versionMessage(client, workingRow, lens);
   return create(ContentItemSchema, {
     id: item.id,
     slug: item.slug,
@@ -288,7 +301,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           actingOfficeId: request.officeId,
           payload: onBehalfOf ? { for_office: true } : {},
         });
-        return { item: await officerItem(client, item.id) };
+        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },
 
@@ -331,7 +344,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'draft',
           actingOfficeId: item.office_id,
         });
-        return { item: await officerItem(client, item.id), problems };
+        return { item: await officerItem(client, item.id, callerIn(ctx).audience), problems };
       });
     },
 
@@ -368,7 +381,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'ready',
           actingOfficeId: item.office_id,
         });
-        return { item: await officerItem(client, item.id) };
+        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },
 
@@ -393,7 +406,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'draft',
           note,
         });
-        return { item: await officerItem(client, item.id) };
+        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },
 
@@ -482,7 +495,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'approved',
           note: reason,
         });
-        return { item: await officerItem(client, item.id) };
+        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },
 
@@ -497,7 +510,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         // A takedown beats the pin: the item stays out of every frozen edition it is pinned in, even once republished.
         await client.query(`UPDATE edition_item SET taken_down_at = now() WHERE item_id = $1 AND taken_down_at IS NULL`, [item.id]);
         await recordAudit(client, caller, { action: 'withdraw', subjectKind: 'content_item', subjectId: item.id, itemId: item.id, fromState: 'published', toState: 'withdrawn' });
-        return { item: await officerItem(client, item.id) };
+        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },
 
@@ -519,7 +532,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'draft',
           actingOfficeId: item.office_id,
         });
-        return { item: await officerItem(client, item.id) };
+        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },
 
@@ -536,7 +549,11 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           [statuses, request.officeId === '' ? null : request.officeId, request.editionId === '' ? null : request.editionId],
         );
         const items: ContentItem[] = [];
-        for (const row of rows) items.push(await officerItem(client, row.id));
+        const audience = callerIn(ctx).audience;
+        for (const row of rows) {
+          const item = await officerItem(client, row.id, audience);
+          if (item !== undefined) items.push(item);
+        }
         return { items };
       });
     },
@@ -545,7 +562,9 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
       requireOfficer(callerIn(ctx));
       return tx(async (client) => {
         const item = await loadItem(client, request.itemId);
-        return { item: await officerItem(client, item.id) };
+        const view = await officerItem(client, item.id, callerIn(ctx).audience);
+        if (view === undefined) throw notFound();
+        return { item: view };
       });
     },
 
@@ -553,6 +572,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
       requireOfficer(callerIn(ctx));
       return tx(async (client) => {
         const item = await loadItem(client, request.itemId);
+        const lens = await loadLens(client, callerIn(ctx).audience, { items: [item.id] });
         const { rows } = await client.query<{
           at: Date;
           action: string;
@@ -580,7 +600,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
               ...(row.content_hash !== null ? { contentHash: row.content_hash } : {}),
               fromState: row.from_state ?? '',
               toState: row.to_state ?? '',
-              note: row.note ?? '',
+              note: lens.text(row.note ?? '', [subjectKey('content_item', item.id)]),
             }),
           ),
         };

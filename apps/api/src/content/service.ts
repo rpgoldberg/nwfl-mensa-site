@@ -9,6 +9,9 @@
 //            title, summary and one placeholder; an officers item is NOT_FOUND.
 //   members  reads body_ast with members passages kept (marked, not hidden).
 //   officers as members, plus officers items and the content hash.
+// Then the lens (REDACT R2a, content/redact.ts): marked passages in the title,
+// summary, body, file names and on-behalf-of name are withheld per the policy,
+// and an item the lens hides is not found, nor listed.
 // The content hash covers members passages, so it is returned to officers
 // only: with the public text and the canonical form in a public repository, a
 // short members passage (a gate code) could be recovered from it by trial.
@@ -37,6 +40,9 @@ import {
 import { type Tree, filterForPublic, normalizeTree, toProtoDocument } from './tree.js';
 import { EDITION_SELECT, type EditionRow, editionHandlers, editionMessages } from './editions.js';
 import { workflowHandlers } from './workflow.js';
+import { loadLens } from '../redaction/lens.js';
+import { type Lens, subjectKey } from '../redaction/render.js';
+import { bylineFor, itemHidden } from './redact.js';
 
 export interface ContentDeps {
   db: Db;
@@ -119,7 +125,8 @@ export function bodyFor(audience: Audience, visibility: string, stored: unknown)
   return filterForPublic(normalizeTree(stored));
 }
 
-function itemMessage(row: ItemRow, audience: Audience, files: FileRow[]): ContentItem {
+/** Built from the lens's view only: no stored text leaves without passing it. Call after itemHidden. */
+function itemMessage(row: ItemRow, audience: Audience, files: FileRow[], lens: Lens): ContentItem {
   if (row.state === 'withdrawn') {
     return create(ContentItemSchema, {
       id: row.id,
@@ -130,6 +137,9 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[]): Conten
       ...(row.withdrawn_at !== null ? { withdrawnAt: timestampFromDate(row.withdrawn_at) } : {}),
     });
   }
+  const subjects = [subjectKey('content_item', row.id)];
+  // The hash covers what was withheld, so it goes only where nothing was.
+  const hashed = audience === 'officers' && row.content_hash !== null && !lens.affected(subjects) && (row.on_behalf_of === null || lens.action('member_name') === 'show');
   return create(ContentItemSchema, {
     id: row.id,
     slug: row.slug,
@@ -141,15 +151,15 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[]): Conten
       itemId: row.id,
       number: row.n,
       status: VERSION_STATUSES[row.status],
-      title: row.title,
-      summary: row.summary ?? '',
+      title: lens.text(row.title, subjects),
+      summary: lens.text(row.summary ?? '', subjects),
       visibility: ITEM_VISIBILITIES[row.visibility],
-      body: toProtoDocument(bodyFor(audience, row.visibility, row.body)),
-      ...(audience === 'officers' && row.content_hash !== null ? { contentHash: row.content_hash } : {}),
+      body: toProtoDocument(lens.tree(bodyFor(audience, row.visibility, row.body), subjects)),
+      ...(hashed ? { contentHash: row.content_hash as Buffer } : {}),
       targets: { website: row.target_website, newsletter: row.target_newsletter, email: row.target_email },
       editionId: row.edition_id ?? '',
       printAsIs: row.print_as_is,
-      onBehalfOf: row.on_behalf_of ?? '',
+      onBehalfOf: bylineFor(row.on_behalf_of, subjects, lens),
       ...(row.ready_at !== null ? { readyAt: timestampFromDate(row.ready_at) } : {}),
       approvedAt: timestampFromDate(row.approved_at),
       files: files
@@ -157,7 +167,7 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[]): Conten
         .map((file) =>
           create(StoredFileSchema, {
             id: file.id,
-            filename: file.filename,
+            filename: lens.text(file.filename, subjects),
             mimeType: file.mime_type,
             sizeBytes: BigInt(file.size_bytes),
             sha256: file.sha256,
@@ -247,8 +257,10 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
           [request.slug],
         );
         const row = rows[0];
-        if (row === undefined) throw new ConnectError('item not found', Code.NotFound);
-        return { item: itemMessage(row, audience, await filesFor(rows, audience)) };
+        const lens = await loadLens(db, audience, { items: rows.map((found) => found.id) });
+        // An item the lens hides is not there, for this audience.
+        if (row === undefined || itemHidden(row, lens)) throw new ConnectError('item not found', Code.NotFound);
+        return { item: itemMessage(row, audience, await filesFor(rows, audience), lens) };
       },
 
       listPublishedItems: async (request, ctx) => {
@@ -257,28 +269,39 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
         const after = pageKey('items', request.pageToken, [isMicroTimestamp, isUuid]);
         if (request.officeId !== '' && !UUID.test(request.officeId)) throw new ConnectError('office_id is not an id', Code.InvalidArgument);
         const query = itemQuery(audience);
-        const { rows } = await db.query<ItemRow>(
-          `${query.select}
-           WHERE i.state = 'published' AND ${query.visible}
-             AND ($1::text IS NULL OR i.kind = $1)
-             AND ($2::uuid IS NULL OR i.office_id = $2)
-             AND ($3::timestamptz IS NULL OR (v.approved_at, i.id) < ($3, $4::uuid))
-           ORDER BY v.approved_at DESC, i.id DESC
-           LIMIT $5`,
-          [
-            KIND_NAMES.get(request.kind) ?? null,
-            request.officeId === '' ? null : request.officeId,
-            after?.[0] ?? null,
-            after?.[1] ?? null,
-            size + 1,
-          ],
-        );
-        const page = rows.slice(0, size);
+        // Items the lens hides are skipped, and the next page starts after the last item SHOWN, so
+        // a page token never carries a hidden item's key. A page is filled from as many reads as it
+        // takes; each read moves past every row it saw.
+        const kept: ItemRow[] = [];
+        const lenses = new Map<string, Lens>();
+        let cursor: readonly [string, string] | undefined = after === undefined ? undefined : [after[0] as string, after[1] as string];
+        for (;;) {
+          const { rows } = await db.query<ItemRow>(
+            `${query.select}
+             WHERE i.state = 'published' AND ${query.visible}
+               AND ($1::text IS NULL OR i.kind = $1)
+               AND ($2::uuid IS NULL OR i.office_id = $2)
+               AND ($3::timestamptz IS NULL OR (v.approved_at, i.id) < ($3, $4::uuid))
+             ORDER BY v.approved_at DESC, i.id DESC
+             LIMIT $5`,
+            [KIND_NAMES.get(request.kind) ?? null, request.officeId === '' ? null : request.officeId, cursor?.[0] ?? null, cursor?.[1] ?? null, size + 1],
+          );
+          const lens = await loadLens(db, audience, { items: rows.map((row) => row.id) });
+          for (const row of rows) {
+            if (itemHidden(row, lens)) continue;
+            kept.push(row);
+            lenses.set(row.id, lens);
+          }
+          const last = rows.at(-1);
+          if (rows.length <= size || kept.length > size || last === undefined) break;
+          cursor = [last.approved_key, last.id];
+        }
+        const page = kept.slice(0, size);
         const last = page.at(-1);
         const files = await filesFor(page, audience);
         return {
-          items: page.map((row) => itemMessage(row, audience, files)),
-          nextPageToken: rows.length > size && last !== undefined ? encodeToken('items', [last.approved_key, last.id]) : '',
+          items: page.map((row) => itemMessage(row, audience, files, lenses.get(row.id) as Lens)),
+          nextPageToken: kept.length > size && last !== undefined ? encodeToken('items', [last.approved_key, last.id]) : '',
         };
       },
 

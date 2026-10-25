@@ -97,7 +97,7 @@ describe.skipIf(!live)('redaction marks', () => {
         expect(await sqlstate(owner, `UPDATE redaction_mark SET category = 'business_venue' WHERE id = $1`, [id])).toBe('55000');
         expect(await sqlstate(owner, `DELETE FROM redaction_mark WHERE id = $1`, [id])).toBe('55000');
         // A removal is born pending.
-        expect(await sqlstate(owner, `INSERT INTO redaction_mark_removal (mark_id, status, proposed_by_sub, approved_by_sub, approved_at, decided_at) VALUES ($1, 'applied', 'a', 'b', now(), now())`, [id])).toBe('55000');
+        expect(await sqlstate(owner, `INSERT INTO redaction_mark_removal (mark_id, status, proposed_by_sub, approved_by_sub, approved_at) VALUES ($1, 'applied', 'a', 'b', now())`, [id])).toBe('55000');
         // A mark is born active.
         expect(await sqlstate(owner, `INSERT INTO redaction_mark (content_item_id, field, quote, category, status, removed_at, created_by_sub) VALUES ($1, 'body', 'xyz', 'member_name', 'removed', now(), 'a')`, [item])).toBe('55000');
       });
@@ -109,7 +109,7 @@ describe.skipIf(!live)('redaction marks', () => {
       await marks.approveMarkRemoval({ removalId: removal.removal?.removalId as string }, SECOND);
       await asOwner(async (owner) => {
         expect(await sqlstate(owner, `UPDATE redaction_mark SET status = 'active', removed_at = NULL WHERE id = $1`, [id])).toBe('55000');
-        expect(await sqlstate(owner, `UPDATE redaction_mark_removal SET status = 'pending', approved_by_sub = NULL, approved_at = NULL, decided_at = NULL WHERE id = $1`, [removal.removal?.removalId])).toBe('55000');
+        expect(await sqlstate(owner, `UPDATE redaction_mark_removal SET status = 'pending', approved_by_sub = NULL, approved_at = NULL WHERE id = $1`, [removal.removal?.removalId])).toBe('55000');
       });
     });
 
@@ -132,6 +132,19 @@ describe.skipIf(!live)('redaction marks', () => {
       expect(await sqlstate(db as unknown as pg.Client, `SELECT redaction_mark_propose_removal($1, 'sub-c', ARRAY['nwfl-officers'], NULL)`, [id])).toBe('55000');
       const { rows } = await db.query(`SELECT status FROM redaction_mark WHERE id = $1`, [id]);
       expect(rows[0]).toEqual({ status: 'removed' });
+    });
+
+    it('lets exactly one of four racing approvals, and one of four racing proposals, through', async () => {
+      const id = (await add('Call 850-555', { category: Category.MEMBER_NAME })).mark?.markId as string;
+      const settle = (calls: Array<Promise<unknown>>) => Promise.allSettled(calls).then((all) => all.filter((r) => r.status === 'fulfilled').length);
+      const proposals = await settle(['p1', 'p2', 'p3', 'p4'].map((sub) => api.pool.query(`SELECT redaction_mark_propose_removal($1, $2, ARRAY['nwfl-officers'], NULL)`, [id, sub])));
+      expect(proposals).toBe(1);
+      const { rows } = await api.pool.query<{ id: string }>(`SELECT id FROM redaction_mark_removal WHERE mark_id = $1`, [id]);
+      expect(rows).toHaveLength(1);
+      const approvals = await settle(['a1', 'a2', 'a3', 'a4'].map((sub) => api.pool.query(`SELECT redaction_mark_approve_removal($1, $2, ARRAY['nwfl-officers'], NULL)`, [rows[0]?.id, sub])));
+      expect(approvals).toBe(1);
+      const audit = await api.pool.query(`SELECT 1 FROM audit_event WHERE action = 'redaction_mark_approve_removal' AND subject_id = $1`, [rows[0]?.id]);
+      expect(audit.rows).toHaveLength(1);
     });
 
     it('lets a non-officer add a mark only to an item they wrote, and never to an event', async () => {

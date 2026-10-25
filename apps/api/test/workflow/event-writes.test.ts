@@ -107,7 +107,7 @@ describe.skipIf(!live)('event writes', () => {
       await expect(events.saveSeries({ series: noStart }, PUB)).rejects.toMatchObject({ code: Code.InvalidArgument });
       await expect(events.saveSeries({ series: { ...lunch(), slug: 'member' } }, MEMBER)).rejects.toMatchObject({ code: Code.PermissionDenied });
       await expect(events.saveSeries({ series: { ...lunch(), slug: 'Bad Slug' } }, PUB)).rejects.toMatchObject({ code: Code.InvalidArgument });
-      const mine = (await events.listSeries({})).series.find((s) => s.slug === 'wednesday-lunch');
+      const mine = (await events.listSeries({}, PUB)).series.find((s) => s.slug === 'wednesday-lunch');
       await expect(events.saveSeries({ series: { ...must(mine), hostOfficeId: offices['treasurer'] as string } }, PUB)).rejects.toMatchObject({ code: Code.PermissionDenied });
       await expect(events.saveSeries({ series: { ...must(mine), title: 'Taken over' } }, TREASURER)).rejects.toMatchObject({ code: Code.PermissionDenied });
       // Nor by moving it to an office the caller does hold.
@@ -123,7 +123,7 @@ describe.skipIf(!live)('event writes', () => {
     });
 
     it('lets the Admin edit any series', async () => {
-      const mine = (await events.listSeries({})).series.find((s) => s.slug === 'wednesday-lunch');
+      const mine = (await events.listSeries({}, PUB)).series.find((s) => s.slug === 'wednesday-lunch');
       expect((await events.saveSeries({ series: { ...must(mine), cadenceLabel: 'Wednesdays' } }, ADMIN)).series?.cadenceLabel).toBe('Wednesdays');
     });
   });
