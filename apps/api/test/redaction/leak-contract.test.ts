@@ -60,7 +60,6 @@ describe.skipIf(!live)('the redaction leak contract', () => {
   const ids: Record<string, string> = {};
 
   const reads: Record<string, Requests> = {
-    'grpc.health.v1.Health': {},
     'nwfl.mensa.v1.EventService': {
       ListOccurrences: () => [RANGE, { ...RANGE, includeCancelled: true }],
       GetOccurrence: () => [{ id: ids['occurrence'] }, { id: `${ids['series'] as string}:2026-11-15` }],
@@ -101,8 +100,43 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     },
   };
 
-  const readMethods = (): DescMethod[] =>
-    SERVED_SERVICES.flatMap((service) => service.methods).filter((method) => method.idempotency === Idempotency.NO_SIDE_EFFECTS);
+  // Every method that is NOT swept, by name, with why. Every other method of every served service is
+  // swept, whatever its idempotency option says, and the two together must be the service
+  // definitions exactly (S1): a new RPC fails the first test until it is placed in one or the other.
+  const WRITES = new Set([
+    // Health carries no content; Watch streams.
+    'Health.Check',
+    'Health.List',
+    'Health.Watch',
+    'EventService.SaveSeries',
+    'EventService.SaveOccurrence',
+    'EventService.SaveVenue',
+    'ContentService.CreateItem',
+    'ContentService.SaveDraft',
+    'ContentService.MarkReady',
+    'ContentService.SendBack',
+    'ContentService.Approve',
+    'ContentService.Withdraw',
+    'ContentService.Restore',
+    'ContentService.SaveOfficeTerm',
+    'ContentService.SaveEdition',
+    'ContentService.FreezeEdition',
+    'MembershipService.SubmitSignup',
+    'MembershipService.ApproveSignup',
+    'MembershipService.RejectSignup',
+    'MembershipService.RemoveMember',
+    'MembershipService.ConfirmMember',
+    'MembershipService.GrantAffiliate',
+    'MembershipVerifierService.ReportVerification',
+    'RedactionPolicyService.ProposeRedactionChange',
+    'RedactionPolicyService.ApproveRedactionChange',
+    'RedactionPolicyService.AddRedactionMark',
+    'RedactionPolicyService.ProposeMarkRemoval',
+    'RedactionPolicyService.ApproveMarkRemoval',
+  ]);
+  const rpcName = (method: DescMethod): string => `${method.parent.name}.${method.name}`;
+  const allMethods = (): DescMethod[] => SERVED_SERVICES.flatMap((service) => service.methods);
+  const readMethods = (): DescMethod[] => allMethods().filter((method) => !WRITES.has(rpcName(method)));
 
   /** Every read (or those of one service), every request: the serialized responses and the errors, by RPC. */
   async function sweep(options: { headers?: Record<string, string> }, only?: string): Promise<Map<string, Buffer>> {
@@ -202,11 +236,16 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     await api?.close();
   });
 
-  it('has a request for every read RPC the port serves (Health aside: it carries no content)', () => {
-    const uncovered = readMethods().filter(
-      (method) => method.parent.typeName !== 'grpc.health.v1.Health' && (reads[method.parent.typeName]?.[method.name]?.() ?? []).length === 0,
-    );
-    expect(uncovered.map((method) => `${method.parent.name}.${method.name}`)).toEqual([]);
+  it('places every method of every served service in the sweep or the write allowlist, exactly once', () => {
+    const swept = Object.entries(reads).flatMap(([service, methods]) => Object.keys(methods).map((name) => `${service.split('.').at(-1) as string}.${name}`));
+    expect(swept.filter((name) => WRITES.has(name))).toEqual([]);
+    expect([...swept, ...WRITES].sort()).toEqual(allMethods().map(rpcName).sort());
+    const uncovered = readMethods().filter((method) => (reads[method.parent.typeName]?.[method.name]?.() ?? []).length === 0);
+    expect(uncovered.map(rpcName)).toEqual([]);
+  });
+
+  it('sweeps every side-effect-free method, so the allowlist holds no read', () => {
+    expect(allMethods().filter((method) => method.idempotency === Idempotency.NO_SIDE_EFFECTS && WRITES.has(rpcName(method))).map(rpcName)).toEqual([]);
   });
 
   it('gives the public no canary, in any read RPC or error', async () => {

@@ -241,6 +241,54 @@ describe.skipIf(!live)('redaction marks', () => {
       await expect(marks.listRedactionMarks({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: own })).rejects.toMatchObject({ code: Code.Unauthenticated });
     });
 
+    it('fails closed: a mark that matches nowhere withholds the whole item from an audience that redacts it, until it is removed by two officers', async () => {
+      const events = api.client(EventService);
+      const lunch = await insertId(
+        api.pool,
+        `INSERT INTO event_series (slug, title, category, recurrence, starts_on, area, description) VALUES ('tea', 'Tea', 'other', 'FREQ=MONTHLY;BYDAY=2SU', '2026-01-11', 'bay', 'Pour: Robin Example') RETURNING id`,
+      );
+      const added = await add('Robin Example', { kind: MarkSubjectKind.EVENT_SERIES, subject: lunch, field: MarkField.DESCRIPTION, category: Category.MEMBER_NAME });
+      expect(dump(await events.listSeries({}))).toContain('Pour: [withheld]');
+      // One editor rewrites the name so the mark no longer finds it.
+      await api.pool.query(`UPDATE event_series SET description = 'Pour: R0bin Exampl3' WHERE id = $1`, [lunch]);
+      expect(dump(await events.listSeries({}))).not.toContain(lunch);
+      expect(dump(await events.listSeries({}, MEMBER))).toContain('R0bin Exampl3');
+      // A mark whose text was never there hides a content item the same way.
+      const slug = 'never-there';
+      const item = (await publishItem(api.pool, { slug, officeId: office, title: 'Plain', body: { blocks: [paragraph(text('Nothing to see'))] } })).itemId;
+      await add('Nobody Here', { subject: item, category: Category.MEMBER_NAME });
+      await expect(api.client(ContentService).getPublishedItem({ slug })).rejects.toMatchObject({ code: Code.NotFound });
+      expect(dump(await api.client(ContentService).getPublishedItem({ slug }, MEMBER))).toContain('Nothing to see');
+      // Lifted only by a second officer.
+      const removal = await marks.proposeMarkRemoval({ markId: added.mark?.markId as string }, OFFICER);
+      expect(dump(await events.listSeries({}))).not.toContain(lunch);
+      await marks.approveMarkRemoval({ removalId: removal.removal?.removalId as string }, SECOND);
+      expect(dump(await events.listSeries({}))).toContain(lunch);
+    });
+
+    it('gives an audience that does not see a marked title the item id, never the slug, and finds the item by its id', async () => {
+      const slug = 'lunch-with-robin-example';
+      const lunch = (await publishItem(api.pool, { slug, officeId: office, title: 'Lunch with Robin Example', body: { blocks: [paragraph(text('Noon'))] } })).itemId;
+      await add('Robin Example', { subject: lunch, field: MarkField.TITLE, category: Category.MEMBER_NAME });
+      const content = api.client(ContentService);
+      const listed = dump(await content.listPublishedItems({ pageSize: 50 }));
+      expect(listed).not.toMatch(/robin-example/);
+      expect(listed).toContain(lunch);
+      await expect(content.getPublishedItem({ slug })).rejects.toMatchObject({ code: Code.NotFound });
+      const byId = await content.getPublishedItem({ slug: lunch });
+      expect(byId.item).toMatchObject({ slug: lunch, live: { title: 'Lunch with [withheld]' } });
+      expect((await content.getPublishedItem({ slug }, MEMBER)).item?.slug).toBe(slug);
+      // A series' slug the same way.
+      const series = await insertId(
+        api.pool,
+        `INSERT INTO event_series (slug, title, category, recurrence, starts_on, area) VALUES ('walk-with-robin-example', 'Walk with Robin Example', 'other', 'FREQ=MONTHLY;BYDAY=4SU', '2026-01-25', 'bay') RETURNING id`,
+      );
+      await add('Robin Example', { kind: MarkSubjectKind.EVENT_SERIES, subject: series, field: MarkField.TITLE, category: Category.MEMBER_NAME });
+      const anonymous = dump(await api.client(EventService).listSeries({}));
+      expect(anonymous).not.toMatch(/robin-example/);
+      expect(anonymous).toContain('Walk with [withheld]');
+    });
+
     it('refuses a malformed mark', async () => {
       const bad: Array<[string, Parameters<typeof add>]> = [
         ['a quote too short', ['ab']],

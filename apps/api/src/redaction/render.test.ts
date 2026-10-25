@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Block, Inline, Tree } from '../content/tree.js';
 import { cellKey } from './policy.js';
-import { type MarkRow, WITHHELD, lensFor, subjectKey, venueCategory } from './render.js';
+import { type MarkRow, WITHHELD, lensFor, quoteMatches, subjectKey, venueCategory } from './render.js';
 
 const ITEM = subjectKey('content_item', '00000000-0000-4000-8000-000000000001');
 const OTHER = subjectKey('content_item', '00000000-0000-4000-8000-000000000002');
@@ -147,5 +147,42 @@ describe('venueCategory', () => {
   it('reads only a business as a business venue; anything else is private (fail-closed)', () => {
     expect(venueCategory('business')).toBe('business_venue');
     for (const kind of ['member_home', 'virtual', '', 'BUSINESS', 'unknown']) expect(venueCategory(kind), kind).toBe('private_venue');
+  });
+});
+
+describe('the lens: anchoring (fail closed)', () => {
+  const SERIES = subjectKey('event_series', '00000000-0000-4000-8000-000000000003');
+  const anchored = (scopes: string[], subject = ITEM): MarkRow => ({ subject, quote: 'Pat Example', category: 'member_name', anchoredIn: new Set(scopes) });
+
+  it('drops an item from an audience that redacts the mark when its passage matches nowhere in the version shown', () => {
+    const lens = lensFor('public', POLICY, [anchored(['version-1'])]);
+    expect(lens.hidden([ITEM], 'version-1')).toBe(false);
+    expect(lens.hidden([ITEM], 'version-2')).toBe(true);
+    expect(lens.hidden([ITEM])).toBe(true);
+    expect(lensFor('members', POLICY, [anchored([])]).hidden([ITEM], 'version-2')).toBe(false);
+  });
+
+  it('anchors an event mark in its own subject', () => {
+    expect(lensFor('public', POLICY, [anchored([SERIES], SERIES)]).hidden([SERIES])).toBe(false);
+    expect(lensFor('public', POLICY, [anchored([], SERIES)]).hidden([SERIES])).toBe(true);
+  });
+
+  it('matches a quote in any of the texts, normalized', () => {
+    expect(quoteMatches('Pat Example', ['nothing', 'mail pat.example@example.org'])).toBe(true);
+    expect(quoteMatches('Pat Example', ['Patricia Examples'])).toBe(false);
+    expect(quoteMatches('...', ['a ... b'])).toBe(true);
+  });
+});
+
+describe('the lens: whole words, normalized', () => {
+  const lens = lensFor('public', POLICY, [span('850-555-0142'), span('Pat Example', 'member_name')]);
+
+  it('withholds a number written with other separators, or none', () => {
+    expect(lens.text('Ring 850.555.0142, (850) 555 0142 or 8505550142', [ITEM])).toBe(`Ring ${WITHHELD}, (${WITHHELD} or ${WITHHELD}`);
+  });
+
+  it('withholds a name inside an address or a link, but not inside a longer word', () => {
+    expect(lens.text('Mail pat.example@example.org', [ITEM])).toBe(`Mail ${WITHHELD}@example.org`);
+    expect(lens.text('Patricia Examples', [ITEM])).toBe('Patricia Examples');
   });
 });
