@@ -246,6 +246,6 @@ function asked(path: string, headers: Record<string, string>): Promise<string> {
 test('robots.txt answers for the Host asked for: a forwarded host cannot make the canary indexable', async () => {
   expect(await asked('/robots.txt', { Host: 'nwflorida.us' })).toContain('Sitemap: https://nwflorida.us/sitemap.xml');
   for (const spoof of [{ 'X-Forwarded-Host': 'nwflorida.us' }, { 'X-Forwarded-Host': 'nwflorida.us', 'X-Forwarded-Port': '443' }]) {
-    expect(await asked('/robots.txt', { Host: 'nwfl-canary.mindsignals1.com', ...spoof })).toBe('User-agent: *\nDisallow: /\n');
+    expect(await asked('/robots.txt', { Host: 'canary.nwflorida.us', ...spoof })).toBe('User-agent: *\nDisallow: /\n');
   }
 });

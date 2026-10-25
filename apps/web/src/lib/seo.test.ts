@@ -10,7 +10,7 @@ describe('robots.txt', () => {
   });
 
   it('keeps every other host, the canary included, out of search engines', () => {
-    for (const host of ['nwfl-canary.mindsignals1.com', 'localhost', 'www.nwflorida.us']) {
+    for (const host of ['canary.nwflorida.us', 'localhost', 'www.nwflorida.us']) {
       expect(robotsTxt(host), host).toBe('User-agent: *\nDisallow: /\n');
     }
   });

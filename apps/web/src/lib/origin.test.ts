@@ -6,7 +6,7 @@ const SITE = new URL('https://nwflorida.us');
 const asked = (host: string | undefined, url = 'http://localhost:8080/events'): Request => new Request(url, host === undefined ? {} : { headers: { host } });
 
 describe('publicOrigin', () => {
-  it.each(['canary.nwflorida.us', 'nwflorida.us', 'www.nwflorida.us', 'nwflmensa.us', 'www.nwflmensa.us', 'nwfl-canary.mindsignals1.com'])('trusts the Host %s', (host) => {
+  it.each(['canary.nwflorida.us', 'nwflorida.us', 'www.nwflorida.us', 'nwflmensa.us', 'www.nwflmensa.us'])('trusts the Host %s', (host) => {
     expect(publicOrigin(asked(host), SITE)).toBe(`https://${host}`);
   });
 

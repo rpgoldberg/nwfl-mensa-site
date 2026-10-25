@@ -31,8 +31,8 @@ describe('authConfig (MT-03): sign-in only at login.nwflorida.us', () => {
 
   it('in production, refuses any issuer that is not https://login.nwflorida.us', () => {
     for (const issuer of [
-      'https://auth.mindsignals1.com/application/o/nwfl-site/',
-      'https://nwfl-login.mindsignals1.com/',
+      'https://auth.example.com/application/o/nwfl-site/',
+      'https://nwfl-login.example.com/',
       'http://login.nwflorida.us/application/o/nwfl-site/',
       'https://login.nwflorida.us.evil.example/',
       'https://login.nwflorida.us:8443/',
@@ -47,7 +47,7 @@ describe('authConfig (MT-03): sign-in only at login.nwflorida.us', () => {
   it('in production, refuses a redirect to anywhere but the site’s own callback and signed-out page', () => {
     for (const [name, value] of [
       ['OIDC_REDIRECT_URI', 'https://localhost:8443/auth/callback'],
-      ['OIDC_REDIRECT_URI', 'https://nwfl-canary.mindsignals1.com/auth/callback'],
+      ['OIDC_REDIRECT_URI', 'https://canary.nwflorida.us/auth/callback'],
       ['OIDC_REDIRECT_URI', 'http://nwflorida.us/auth/callback'],
       ['OIDC_POST_LOGOUT_REDIRECT_URI', 'http://127.0.0.1/signed-out'],
       ['OIDC_POST_LOGOUT_REDIRECT_URI', 'https://nwflorida.us/'],
@@ -72,8 +72,8 @@ describe('authConfig (MT-03): sign-in only at login.nwflorida.us', () => {
 });
 
 describe('the sign-in code', () => {
-  it('names no mindsignals1.com host anywhere', () => {
+  it('names no host of the old identity domain anywhere', () => {
     const files = [...readdirSync('src/lib/auth').map((f) => `src/lib/auth/${f}`), 'server/session.mjs', 'server/account.mjs', 'server/auth-config.mjs'];
-    for (const file of files.filter((f) => !f.endsWith('.test.ts'))) expect(readFileSync(file, 'utf8'), file).not.toMatch(/mindsignals1/);
+    for (const file of files.filter((f) => !f.endsWith('.test.ts'))) expect(readFileSync(file, 'utf8'), file).not.toMatch(/mindsignals\d/);
   });
 });

@@ -111,7 +111,7 @@ describe('withSitePolicy', () => {
       res.setHeader('Set-Cookie', [
         '__Host-ok=1; Path=/; Secure; HttpOnly; SameSite=Lax',
         'plain=secret-value; Path=/',
-        '__Host-wide=2; Path=/; Secure; Domain=mindsignals1.com',
+        '__Host-wide=2; Path=/; Secure; Domain=example.com',
       ]);
       res.end('page');
     });

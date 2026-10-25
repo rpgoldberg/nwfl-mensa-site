@@ -15,8 +15,6 @@ export const PUBLIC_HOSTS = [
   // A likely future domain.
   { hostname: 'nwflmensa.us', protocol: 'https' },
   { hostname: 'www.nwflmensa.us', protocol: 'https' },
-  // The first canary's address, until its tunnel route is gone.
-  { hostname: 'nwfl-canary.mindsignals1.com', protocol: 'https' },
 ];
 
 /**
