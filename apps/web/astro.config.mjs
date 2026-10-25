@@ -2,9 +2,10 @@
 import node from '@astrojs/node';
 import { defineConfig, envField } from 'astro/config';
 import { buildInfoIntegration } from './server/build-info.mjs';
+import { LOCAL_HOSTS, PUBLIC_HOSTS, SITE } from './server/public-hosts.mjs';
 
 export default defineConfig({
-  site: 'https://nwflorida.us',
+  site: SITE,
   output: 'server',
   // Standalone, but started by server/serve.mjs, which wraps Astro's handler so
   // the response policy reaches prerendered pages and assets too.
@@ -39,13 +40,7 @@ export default defineConfig({
     // so the origin check sees the browser's https origin.
     // Only a listed Host sets the request's origin; any other falls back to
     // localhost, and the origin check then refuses the site's own form posts.
-    allowedDomains: [
-      { hostname: 'nwflorida.us', protocol: 'https' },
-      { hostname: 'nwfl-canary.mindsignals1.com', protocol: 'https' },
-      // Local runs: `npm start` in Chromium over http://localhost (which keeps
-      // Secure cookies on loopback), and the e2e suite through its TLS edge.
-      { hostname: 'localhost', protocol: 'http' },
-      { hostname: 'localhost', protocol: 'https' },
-    ],
+    // Pages print absolute URLs through publicOrigin (src/lib/origin.ts), not Astro.url.
+    allowedDomains: [...PUBLIC_HOSTS, ...LOCAL_HOSTS],
   },
 });

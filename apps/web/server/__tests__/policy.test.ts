@@ -144,7 +144,7 @@ describe('isHostOnlyCookie (MT-30)', () => {
       '__Host-a=1; Path=/',
       '__Host-a=1; Secure',
       '__Host-a=1; Path=/x; Secure',
-      '__Host-a=1; Path=/; Secure; Domain=mindsignals1.com',
+      '__Host-a=1; Path=/; Secure; Domain=example.com',
       '__Host-a=1; Path=/; Secure; domain=.nwflorida.us',
       '__Secure-a=1; Path=/; Secure',
     ]) {

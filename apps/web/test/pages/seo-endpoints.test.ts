@@ -10,7 +10,7 @@ describe('GET /robots.txt', () => {
     const canonical = (await robots({ url: new URL('https://nwflorida.us/robots.txt') } as unknown as Ctx)) as Response;
     expect(canonical.headers.get('content-type')).toBe('text/plain; charset=utf-8');
     expect(await canonical.text()).toContain('Sitemap: https://nwflorida.us/sitemap.xml');
-    const canary = (await robots({ url: new URL('https://nwfl-canary.mindsignals1.com/robots.txt') } as unknown as Ctx)) as Response;
+    const canary = (await robots({ url: new URL('https://canary.nwflorida.us/robots.txt') } as unknown as Ctx)) as Response;
     expect(await canary.text()).toBe('User-agent: *\nDisallow: /\n');
   });
 });

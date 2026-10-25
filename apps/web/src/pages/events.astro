@@ -13,12 +13,13 @@ import { liveData } from '../data';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
 import { calendarRange, googleCalendarUrl, monthGrid, monthLabel, shiftMonth, todayCentral } from '../lib/calendar';
+import { feedWebcal } from '../lib/origin';
 import { page } from '../lib/site';
 
 const p = page('/events');
 const live = liveData();
 const today = todayCentral(new Date());
-const feedUrl = `webcal://${Astro.url.host}/calendar.ics`;
+const feedUrl = feedWebcal(Astro.request, Astro.site);
 const range = calendarRange(Astro.url.searchParams.get('month'), today);
 if (range === undefined) return Astro.rewrite('/404');
 
