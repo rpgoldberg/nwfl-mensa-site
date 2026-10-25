@@ -1,6 +1,13 @@
 ---
 // A plain GET form, so it works with no JavaScript. Results arrive with the
 // archive search (R29); until then the page says so.
+//
+// SEARCH CONTRACT (REDACT R2b): when search is built it queries only the API,
+// as the public like every other read, and the API answers from its own
+// per-audience index of that audience's redacted copy. The site never builds an
+// index or a snippet of its own: not from its bundled content, not from pages it
+// rendered, not with a search library or an outside search service.
+// test/search-contract.test.ts holds this page to it.
 import Base from '../layouts/Base.astro';
 import { page } from '../lib/site';
 

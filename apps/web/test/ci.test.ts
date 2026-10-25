@@ -90,7 +90,7 @@ describe('web workflow', () => {
     for (const at of order) expect(at).toBeGreaterThan(-1);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     // The throwaway database goes, by the id it was started with, whatever happened.
-    expect(e2e).toMatch(/^ {8}if: always\(\) && env\.NWFL_TEST_PG_CONTAINER != ''\n {8}run: sh \.\.\/api\/scripts\/test-db\.sh stop "\$NWFL_TEST_PG_CONTAINER"$/m);
+    expect(e2e).toMatch(/^ {6}- if: always\(\) && env\.NWFL_TEST_PG_CONTAINER != ''\n {8}run: sh \.\.\/api\/scripts\/test-db\.sh stop "\$NWFL_TEST_PG_CONTAINER"$/m);
   });
 
   it('builds the image from apps/web and starts it with a read-only root, the canary image too', () => {

@@ -118,6 +118,7 @@ test('as the public, every route and every page it links to carries no canary in
     for (const next of links(page, ctx.months)) if (!fetched.has(next) && !queue.includes(next)) queue.push(next);
   }
   expect(queue, 'the crawl stopped at its cap').toEqual([]);
+  console.log(JSON.stringify({ crawled: fetched.size }));
 
   // Every route was reached, and a live route answered 200 at least once.
   const reached = new Map<string, number[]>();

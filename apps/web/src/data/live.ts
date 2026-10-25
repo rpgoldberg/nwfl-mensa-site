@@ -118,7 +118,9 @@ function toEvent(o: EventOccurrence): CalendarEvent {
 function itemView(item: ContentItem): ItemView {
   const live = item.live!;
   return {
-    slug: item.slug,
+    // Whatever the API put in the slug field: the item's id when anything in it is
+    // withheld from the public (REDACT R2a), so a page never shows the original.
+    slug: item.slug || item.id,
     title: live.title,
     summary: live.summary,
     bodyHtml: documentHtml(live.body),
