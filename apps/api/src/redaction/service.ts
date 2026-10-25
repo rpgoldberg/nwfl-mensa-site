@@ -10,14 +10,15 @@
 //                           supersedes a loosening waiting on the same cell
 //   ApproveRedactionChange  a different officer applies a waiting change
 //
-// Every proposal, change, supersession and approval writes an audit row in the
-// same transaction. Each write takes a transaction-scoped advisory lock on its
-// cell, so the cell's changes are serial even when its policy row is missing.
+// Every write goes through 0013's SECURITY DEFINER functions, the app role's
+// only way to change the policy: they lock the cell, hold four-eyes, and write
+// the change, the cell and the audit rows together. The checks here only give
+// a clear refusal first.
 // ============================================================================
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@connectrpc/connect';
-import { recordAudit } from '../audit/audit.js';
+import { traceId } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
 import { requireOfficer } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
@@ -116,8 +117,6 @@ function changeMessage(row: ChangeRow): RedactionChange {
   });
 }
 
-const policySubject = (audience: PolicyAudience, category: Category): string => `${TENANT}:${audience}:${category}`;
-
 export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) => void {
   const { db } = deps;
   const callerIn = (ctx: HandlerContext): Caller => callerOf(ctx.values);
@@ -130,31 +129,16 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
     }
   };
 
-  /** Serialises every write to one cell, and returns its action now, fail-closed. */
-  const lockCell = async (client: TxClient, audience: PolicyAudience, category: Category): Promise<Action> => {
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`redaction_policy:${policySubject(audience, category)}`]);
+  /** The caller as the redaction functions record them in audit rows. */
+  const actor = (caller: Caller): [string | null, string[], string | null] => [caller.subject, [...caller.groups], traceId()];
+
+  /** The cell's action now, fail-closed. Unlocked: for a clear refusal only; 0013's functions decide under lock. */
+  const currentAction = async (client: TxClient, audience: PolicyAudience, category: Category): Promise<Action> => {
     const { rows } = await client.query<{ action: string }>(
       `SELECT action FROM redaction_policy WHERE tenant_id = $1 AND audience = $2 AND category = $3`,
       [TENANT, audience, category],
     );
     return resolveAction(new Map(rows.map((row) => [cellKey(audience, category), row.action])), audience, category);
-  };
-
-  /** Writes the cell and its audit row. */
-  const setCell = async (client: TxClient, caller: Caller, change: ChangeRow): Promise<void> => {
-    await client.query(
-      `INSERT INTO redaction_policy (tenant_id, audience, category, action, updated_by_sub) VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (tenant_id, audience, category) DO UPDATE SET action = EXCLUDED.action, updated_by_sub = EXCLUDED.updated_by_sub, updated_at = now()`,
-      [TENANT, change.audience, change.category, change.to_action, caller.subject],
-    );
-    await recordAudit(client, caller, {
-      action: 'redaction_set',
-      subjectKind: 'redaction_policy',
-      subjectId: policySubject(change.audience, change.category),
-      fromState: change.from_action,
-      toState: change.to_action,
-      payload: { change_id: change.id },
-    });
   };
 
   return (router) => {
@@ -196,7 +180,7 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
           throw invalid(category === 'image' ? 'an image is shown, blurred or hidden' : 'text is shown, redacted or hidden');
         }
         return tx(async (client) => {
-          const from = await lockCell(client, audience, category);
+          const from = await currentAction(client, audience, category);
           if (from === action) throw precondition('the policy already says that');
           if (needsSecondOfficer(audience, category, from, action)) {
             const waiting = await client.query(
@@ -204,39 +188,12 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
               [TENANT, audience, category],
             );
             if (waiting.rows.length > 0) throw precondition('a change to this setting is already waiting for approval');
-            const { rows } = await client.query<ChangeRow>(
-              `INSERT INTO redaction_change (tenant_id, audience, category, from_action, to_action, status, proposed_by_sub)
-               VALUES ($1, $2, $3, $4, $5, 'pending', $6) RETURNING ${CHANGE_COLUMNS}`,
-              [TENANT, audience, category, from, action, caller.subject],
-            );
-            const change = rows[0] as ChangeRow;
-            await recordAudit(client, caller, {
-              action: 'redaction_propose',
-              subjectKind: 'redaction_change',
-              subjectId: change.id,
-              fromState: from,
-              toState: action,
-              payload: { tenant: TENANT, audience, category },
-            });
-            return { change: changeMessage(change) };
-          }
-          // Applies at once, and replaces a loosening still waiting on this cell.
-          const superseded = await client.query<{ id: string }>(
-            `UPDATE redaction_change SET status = 'superseded', decided_at = now()
-             WHERE tenant_id = $1 AND audience = $2 AND category = $3 AND status = 'pending' RETURNING id`,
-            [TENANT, audience, category],
-          );
-          for (const { id } of superseded.rows) {
-            await recordAudit(client, caller, { action: 'redaction_supersede', subjectKind: 'redaction_change', subjectId: id, fromState: 'pending', toState: 'superseded' });
           }
           const { rows } = await client.query<ChangeRow>(
-            `INSERT INTO redaction_change (tenant_id, audience, category, from_action, to_action, status, proposed_by_sub, decided_at)
-             VALUES ($1, $2, $3, $4, $5, 'applied', $6, now()) RETURNING ${CHANGE_COLUMNS}`,
-            [TENANT, audience, category, from, action, caller.subject],
+            `SELECT ${CHANGE_COLUMNS} FROM redaction_propose($1, $2, $3, $4, $5, $6, $7)`,
+            [TENANT, audience, category, action, ...actor(caller)],
           );
-          const change = rows[0] as ChangeRow;
-          await setCell(client, caller, change);
-          return { change: changeMessage(change) };
+          return { change: changeMessage(rows[0] as ChangeRow) };
         });
       },
 
@@ -247,26 +204,16 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
         if (!UUID.test(id)) throw invalid('a change id is a UUID');
         return tx(async (client) => {
           const found = (
-            await client.query<{ audience: PolicyAudience; category: Category }>(
-              `SELECT audience, category FROM redaction_change WHERE id = $1 AND tenant_id = $2`,
-              [id, TENANT],
-            )
+            await client.query<{ status: string; proposed_by_sub: string }>(`SELECT status, proposed_by_sub FROM redaction_change WHERE id = $1 AND tenant_id = $2`, [
+              id,
+              TENANT,
+            ])
           ).rows[0];
           if (found === undefined) throw new ConnectError('change not found', Code.NotFound);
-          // The cell first, as a proposal takes it, then the change.
-          await lockCell(client, found.audience, found.category);
-          const change = (await client.query<ChangeRow>(`SELECT ${CHANGE_COLUMNS} FROM redaction_change WHERE id = $1 FOR UPDATE`, [id])).rows[0] as ChangeRow;
-          if (change.status !== 'pending') throw precondition('this change is not waiting for approval');
-          if (change.proposed_by_sub === caller.subject) throw new ConnectError('a second officer approves this change', Code.PermissionDenied);
-          const { rows } = await client.query<ChangeRow>(
-            `UPDATE redaction_change SET status = 'applied', approved_by_sub = $2, approved_at = now(), decided_at = now()
-             WHERE id = $1 RETURNING ${CHANGE_COLUMNS}`,
-            [id, caller.subject],
-          );
-          const applied = rows[0] as ChangeRow;
-          await recordAudit(client, caller, { action: 'redaction_approve', subjectKind: 'redaction_change', subjectId: id, fromState: 'pending', toState: 'applied' });
-          await setCell(client, caller, applied);
-          return { change: changeMessage(applied) };
+          if (found.status !== 'pending') throw precondition('this change is not waiting for approval');
+          if (found.proposed_by_sub === caller.subject) throw new ConnectError('a second officer approves this change', Code.PermissionDenied);
+          const { rows } = await client.query<ChangeRow>(`SELECT ${CHANGE_COLUMNS} FROM redaction_approve($1, $2, $3, $4)`, [id, ...actor(caller)]);
+          return { change: changeMessage(rows[0] as ChangeRow) };
         });
       },
     });

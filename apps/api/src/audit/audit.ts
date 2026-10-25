@@ -25,7 +25,8 @@ export interface AuditRecord {
 
 const ACTOR_KIND = { user: 'user', agent: 'agent', verifier: 'verifier', anonymous: 'system' } as const;
 
-function traceId(): string | null {
+/** The active span's trace id for an audit row, or null. Also passed to the redaction functions (0013). */
+export function traceId(): string | null {
   const context = trace.getActiveSpan()?.spanContext();
   return context !== undefined && /^[0-9a-f]{32}$/.test(context.traceId) && !/^0+$/.test(context.traceId) ? context.traceId : null;
 }
