@@ -312,7 +312,7 @@ describe.skipIf(!live)('redaction marks', () => {
         return JSON.stringify({ status: response.status, headers, trailers: response.trailers, body: response.body.toString('hex') });
       };
       const withheld = await raw(slug);
-      expect(withheld).toContain('not found');
+      expect(withheld).toContain('"grpc-message":"item%20not%20found","grpc-status":"5"');
       expect(withheld).toBe(await raw('supper-that-never-was'));
     });
 

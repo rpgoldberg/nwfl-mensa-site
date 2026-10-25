@@ -260,10 +260,13 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
           [request.slug, byId],
         );
         const row = rows[0];
-        const lens = await loadLens(db, audience, { items: rows.map((found) => found.id), versions: rows.map((found) => found.version_id) });
-        // An item the lens hides is not there, for this audience. One found by a slug it may not
-        // see is answered with its id in the slug field: the slug is never sent back.
-        if (row === undefined || itemHidden(row, row.version_id, lens)) throw new ConnectError('item not found', Code.NotFound);
+        const lens = await loadLens(db, audience, { items: rows.map((found) => found.id), versions: rows.map((found) => found.version_id) }, { uniform: true });
+        // Not there, for this audience: an item the lens hides, and an item asked for by a slug the
+        // audience may not see (so a guessed slug confirms nothing). Each is answered exactly as a
+        // slug that never existed, after the same queries (uniform). By its id, the item is found.
+        if (row === undefined || itemHidden(row, row.version_id, lens) || (row.id !== request.slug && slugFor(row, [row.title], lens) !== row.slug)) {
+          throw new ConnectError('item not found', Code.NotFound);
+        }
         return { item: itemMessage(row, audience, await filesFor(rows, audience), lens) };
       },
 

@@ -39,8 +39,8 @@ function keyOf(row: Row): string {
 type Query = Pick<Db, 'query'>;
 
 /** Each version's item and every text it carries. */
-async function versionTexts(db: Query, versions: readonly string[]): Promise<Array<{ id: string; item: string; texts: string[] }>> {
-  if (versions.length === 0) return [];
+async function versionTexts(db: Query, versions: readonly string[], uniform: boolean): Promise<Array<{ id: string; item: string; texts: string[] }>> {
+  if (versions.length === 0 && !uniform) return [];
   const [rows, files] = await Promise.all([
     db.query<{ id: string; item_id: string; title: string; summary: string | null; on_behalf_of: string | null; body_src: string; body_ast: unknown }>(
       `SELECT id, item_id, title, summary, on_behalf_of, body_src, body_ast FROM content_version WHERE id = ANY($1::uuid[])`,
@@ -85,13 +85,18 @@ async function eventTexts(db: Query, series: readonly string[], occurrences: rea
   return out;
 }
 
-export async function loadLens(db: Query, audience: string, subjects: Subjects): Promise<Lens> {
+/**
+ * `uniform`: run the same queries whether or not there is anything to find, so a read that answers
+ * "not found" for an item it withholds takes the same steps as one for an item that does not exist.
+ */
+export async function loadLens(db: Query, audience: string, subjects: Subjects, options: { uniform?: boolean } = {}): Promise<Lens> {
+  const uniform = options.uniform === true;
   const items = [...(subjects.items ?? [])];
   const series = [...(subjects.series ?? [])];
   const occurrences = [...(subjects.occurrences ?? [])];
   const [cells, marks] = await Promise.all([
     db.query<{ category: string; action: string }>(`SELECT category, action FROM redaction_policy WHERE tenant_id = $1 AND audience = $2`, [TENANT, audience]),
-    items.length + series.length + occurrences.length === 0
+    items.length + series.length + occurrences.length === 0 && !uniform
       ? Promise.resolve({ rows: [] as Row[] })
       : db.query<Row>(
           `SELECT content_item_id, series_id, occurrence_id, quote, category FROM redaction_mark
@@ -103,7 +108,7 @@ export async function loadLens(db: Query, audience: string, subjects: Subjects):
   const policy = new Map(cells.rows.map((row) => [cellKey(audience, row.category), row.action]));
   const passages = marks.rows.filter((row) => row.quote !== null);
   const [versions, events] = await Promise.all([
-    passages.some((row) => row.content_item_id !== null) ? versionTexts(db, [...(subjects.versions ?? [])]) : Promise.resolve([]),
+    uniform || passages.some((row) => row.content_item_id !== null) ? versionTexts(db, [...(subjects.versions ?? [])], uniform) : Promise.resolve([]),
     passages.some((row) => row.content_item_id === null)
       ? eventTexts(
           db,

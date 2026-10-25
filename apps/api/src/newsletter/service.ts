@@ -26,7 +26,7 @@ import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { type Entry, calendarSource, occurrenceMessage, seriesMessage } from '../events/service.js';
 import { bySlug, calendarLens, entryFor, inCalendarOrder, seriesFor, visible } from '../events/redact.js';
-import { itemHidden } from '../content/redact.js';
+import { itemHidden, slugFor } from '../content/redact.js';
 import { loadLens } from '../redaction/lens.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
 import { Audience } from '../gen/nwfl/mensa/v1/common_pb.js';
@@ -61,6 +61,7 @@ interface PinnedRow {
   body_ast: unknown;
   public_ast: unknown;
   on_behalf_of: string | null;
+  slug: string;
 }
 
 /** The lens for an edition's items, for one audience. */
@@ -72,11 +73,16 @@ const hiddenFrom = (lens: Lens, row: PinnedRow): boolean => itemHidden({ id: row
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
- * Print order for an audience: by kind, then by the title THIS audience sees, then by id. Ordering
- * by the stored title or the slug would place a withheld title by its hidden text (S3).
+ * Print order for an audience: by kind, then by the title and slug THIS audience sees (the slug is
+ * the id where it is withheld). Ordering by the stored title or slug would place a withheld title by
+ * its hidden text (S3).
  */
 function inPrintOrder(rows: readonly PinnedRow[], lens: Lens): PinnedRow[] {
-  const key = (row: PinnedRow): [number, string, string] => [KIND_ORDER.indexOf(row.kind), lens.text(row.title, [subjectKey('content_item', row.item_id)]), row.item_id];
+  const key = (row: PinnedRow): [number, string, string] => [
+    KIND_ORDER.indexOf(row.kind),
+    lens.text(row.title, [subjectKey('content_item', row.item_id)]),
+    slugFor({ id: row.item_id, slug: row.slug }, [row.title], lens),
+  ];
   return [...rows].sort((a, b) => {
     const [ka, ta, ia] = key(a);
     const [kb, tb, ib] = key(b);
@@ -94,7 +100,7 @@ function inPrintOrder(rows: readonly PinnedRow[], lens: Lens): PinnedRow[] {
  */
 async function editionItems(db: Pick<Db, 'query'>, edition: EditionRow): Promise<PinnedRow[]> {
   const columns = `i.id AS item_id, v.id AS version_id, i.kind, i.office_id, v.title, v.summary, v.visibility, v.n, v.content_hash, v.body_ast, v.public_ast,
-    v.on_behalf_of`;
+    v.on_behalf_of, i.slug`;
   const { rows } = FROZEN.has(edition.status)
     ? await db.query<PinnedRow>(
         `SELECT ${columns}, lv.visibility AS live_visibility
