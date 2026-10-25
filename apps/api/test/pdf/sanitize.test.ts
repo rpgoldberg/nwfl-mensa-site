@@ -20,7 +20,7 @@ describe('sanitize', () => {
       context.obj({ Type: 'Font', Subtype: 'Type3', FontBBox: [0, 0, 500, 700], FontMatrix: [0.001, 0, 0, 0.001, 0, 0], CharProcs: { g1: glyph }, Encoding: { Type: 'Encoding', Differences: [65, 'g1'] }, FirstChar: 65, LastChar: 65, Widths: [500], Resources: {} }),
     );
     page.node.set(PDFName.of('Resources'), context.obj({ XObject: { X1: form }, Pattern: { P1: pattern }, Font: { F3: type3 } }));
-    page.node.set(PDFName.of('Contents'), context.register(context.flateStream('/X1 Do BT /F3 12 Tf (A) Tj ET')));
+    page.node.set(PDFName.of('Contents'), context.register(context.flateStream('/X1 Do /Pattern cs /P1 scn 0 0 9 9 re f BT /F3 12 Tf (A) Tj ET')));
     const before = await doc.save({ useObjectStreams: false });
     expect(rawText(before)).toContain('Quillon Brask');
 

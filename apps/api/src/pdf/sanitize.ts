@@ -9,7 +9,11 @@
 // every object left loses the keys that carry text or files beside the
 // drawing: Metadata, PieceInfo, associated files, optional-content names,
 // marked-content properties. Content streams lose their BDC properties
-// (content.ts). Objects nothing points at any more are deleted before saving.
+// (content.ts). Each page, form, tiling pattern and Type 3 font keeps only the
+// resources its own content names: a form that another page's shared
+// resources list, or that a page lists but never draws, is not copied on.
+// A JPEG keeps only what draws it (jpeg.ts). Objects nothing points at any
+// more are deleted before saving.
 // No date or id is written, so the same input gives the same bytes.
 // ============================================================================
 import {
@@ -24,10 +28,12 @@ import {
   decodePDFRawStream,
 } from '@cantoo/pdf-lib';
 import { stripMarkedContentProperties } from './content.js';
+import { stripJpeg } from './jpeg.js';
 
 const PAGE_KEYS = new Set(['/Type', '/Parent', '/Resources', '/Contents', '/MediaBox', '/CropBox', '/BleedBox', '/TrimBox', '/ArtBox', '/Rotate', '/UserUnit', '/Group']);
 const DROP = ['Metadata', 'PieceInfo', 'AF', 'OPI', 'StructParent', 'StructParents', 'Properties', 'OC', 'Thumb', 'LastModified', 'Annots', 'AA'].map((key) => PDFName.of(key));
 const STREAM_KEYS = new Set(['/Filter', '/DecodeParms', '/Length', '/DL']);
+const RESOURCE_KINDS = new Set(['/XObject', '/Font', '/Pattern', '/ExtGState', '/ColorSpace', '/Shading', '/Properties']);
 
 const name = (dict: PDFDict, key: string): string | undefined => dict.get(PDFName.of(key))?.toString();
 
@@ -68,6 +74,61 @@ function contentStreams(doc: PDFDocument): Set<PDFRef> {
   return out;
 }
 
+const decoded = (value: PDFObject | undefined): Uint8Array => (value instanceof PDFRawStream ? decodePDFRawStream(value).decode() : new Uint8Array());
+
+/** Every name a content stream writes (operands included, so this keeps more than it must, never less). */
+const namesIn = (content: Uint8Array): Set<PDFName> =>
+  new Set([...Buffer.from(content).toString('latin1').matchAll(/\/([^\s/<>[\]()%{}]*)/g)].map((m) => PDFName.of(m[1] as string)));
+
+/** Each page, and each form, tiling pattern and Type 3 font it reaches, given resources holding only what its content names. */
+function pruneResources(doc: PDFDocument): void {
+  const { context } = doc;
+  const done = new Set<PDFObject>();
+  const visit = (owner: PDFDict, content: Uint8Array): void => {
+    const resources = context.lookupMaybe(owner.get(PDFName.of('Resources')), PDFDict);
+    if (resources === undefined) return;
+    const used = namesIn(content);
+    const fresh = context.obj({});
+    for (const [kind, value] of resources.entries()) {
+      if (!RESOURCE_KINDS.has(kind.toString())) {
+        fresh.set(kind, value);
+        continue;
+      }
+      const kept = context.obj({});
+      for (const [key, ref] of context.lookupMaybe(value, PDFDict)?.entries() ?? []) {
+        if (!used.has(key)) continue;
+        kept.set(key, ref);
+        const target = context.lookup(ref);
+        if (target === undefined || done.has(target)) continue;
+        done.add(target);
+        if (target instanceof PDFRawStream && (name(target.dict, 'Subtype') === '/Form' || name(target.dict, 'PatternType') === '1')) visit(target.dict, decoded(target));
+        else if (target instanceof PDFDict && name(target, 'Subtype') === '/Type3') {
+          const procs = context.lookupMaybe(target.get(PDFName.of('CharProcs')), PDFDict);
+          visit(target, Buffer.concat([...(procs?.entries() ?? [])].map(([, proc]) => decoded(context.lookup(proc)))));
+        }
+      }
+      if (kept.keys().length > 0) fresh.set(kind, kept);
+    }
+    owner.set(PDFName.of('Resources'), fresh);
+  };
+  for (const page of doc.getPages()) {
+    const contents = context.lookup(page.node.get(PDFName.of('Contents')));
+    const streams = contents instanceof PDFArray ? contents.asArray().map((ref) => context.lookup(ref)) : [contents];
+    visit(page.node, Buffer.concat(streams.map((stream) => decoded(stream))));
+  }
+}
+
+/** Every JPEG with only what draws it. Throws when one cannot be read. */
+function stripJpegs(doc: PDFDocument): void {
+  const { context } = doc;
+  for (const [ref, object] of context.enumerateIndirectObjects()) {
+    if (!(object instanceof PDFRawStream)) continue;
+    const filter = object.dict.lookup(PDFName.of('Filter'));
+    const only = filter instanceof PDFArray && filter.size() === 1 ? filter.lookup(0) : filter;
+    if (only === PDFName.of('DCTDecode')) context.assign(ref, PDFRawStream.of(object.dict, stripJpeg(object.contents)));
+  }
+}
+
 function scrub(value: PDFObject): void {
   const dict = value instanceof PDFStream ? value.dict : value instanceof PDFDict ? value : undefined;
   if (dict !== undefined) {
@@ -92,7 +153,7 @@ function reachable(doc: PDFDocument): Set<string> {
   return seen;
 }
 
-/** The pages of `bytes`, alone in a new document, with nothing beside the drawing. Throws when a content stream cannot be read. */
+/** The pages of `bytes`, alone in a new document, with nothing beside the drawing. Throws when a content stream or a JPEG cannot be read. */
 export async function sanitize(bytes: Uint8Array): Promise<Uint8Array> {
   const source = await PDFDocument.load(bytes, { updateMetadata: false });
   for (const page of source.getPages()) {
@@ -102,6 +163,7 @@ export async function sanitize(bytes: Uint8Array): Promise<Uint8Array> {
   for (const page of await out.copyPages(source, source.getPageIndices())) out.addPage(page);
   const { context } = out;
   for (const [, object] of context.enumerateIndirectObjects()) scrub(object);
+  pruneResources(out);
   for (const ref of contentStreams(out)) {
     const stream = context.lookup(ref);
     if (!(stream instanceof PDFRawStream)) throw new Error('a page has content that is not a stream');
@@ -111,5 +173,6 @@ export async function sanitize(bytes: Uint8Array): Promise<Uint8Array> {
   }
   const keep = reachable(out);
   for (const [ref] of context.enumerateIndirectObjects()) if (!keep.has(ref.toString())) context.delete(ref);
+  stripJpegs(out);
   return out.save({ useObjectStreams: false });
 }

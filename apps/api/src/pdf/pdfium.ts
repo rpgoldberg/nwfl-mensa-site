@@ -118,15 +118,28 @@ export class Page {
     return this.m.FPDFPage_CountObjects(this.handle);
   }
 
+  get width(): number {
+    return this.m.FPDF_GetPageWidthF(this.handle);
+  }
+
+  get height(): number {
+    return this.m.FPDF_GetPageHeightF(this.handle);
+  }
+
   /** The bounds of every picture drawn directly on the page. */
   pictures(): Box[] {
+    return this.bounds(true);
+  }
+
+  /** The bounds of every object drawn directly on the page, or of its pictures only. */
+  bounds(picturesOnly = false): Box[] {
     const m = this.m;
     const out: Box[] = [];
     const at = rt(m).wasmExports.malloc(16);
     try {
       for (let i = 0; i < this.objectCount; i++) {
         const object = m.FPDFPage_GetObject(this.handle, i);
-        if (m.FPDFPageObj_GetType(object) !== FPDF_PAGEOBJ_IMAGE) continue;
+        if (picturesOnly && m.FPDFPageObj_GetType(object) !== FPDF_PAGEOBJ_IMAGE) continue;
         m.FPDFPageObj_GetBounds(object, at, at + 4, at + 8, at + 12);
         const [left = 0, bottom = 0, right = 0, top = 0] = new Float32Array(rt(m).HEAPU8.buffer, at, 4);
         out.push({ left, bottom, right, top });

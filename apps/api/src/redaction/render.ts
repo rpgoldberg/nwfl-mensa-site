@@ -252,6 +252,26 @@ export const quoteMatches = (quote: string, texts: readonly string[]): boolean =
 export const quoteSpans = (value: string, quotes: readonly string[], wholeWords = true): Array<[number, number]> =>
   ranges(value, quotes.map((quote) => patternOf(quote, wholeWords)));
 
+/**
+ * A loose, fast test for a quote (the PDF output gate, R3a): its folded letters in order, each with
+ * its look-alikes, anything but a letter or digit between any two. It matches wherever patternOf
+ * can in any reading of a text, once the text is probeFolded; null when the quote has no word.
+ */
+export function quoteProbe(quote: string): RegExp | null {
+  const words = foldedText(quote).match(TOKEN);
+  return words === null ? null : new RegExp(words.join('').split('').map(lookalikes).join('[^\\p{L}\\p{N}]*'), 'v');
+}
+
+/** Text folded as fold does, but whole and natively (fast on megabytes), with its spaces taken out: what quoteProbe tests. */
+export function probeFolded(value: string): string {
+  let text = value;
+  for (let pass = 0; pass < 3 && /%[0-9a-f]{2}/i.test(text); pass++) {
+    text = text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => utf8.decode(Buffer.from(run.replaceAll('%', ''), 'hex')));
+  }
+  // Whole-string case mapping differs from fold's per-character one only at a final sigma.
+  return text.normalize('NFKD').toUpperCase().toLowerCase().normalize('NFKD').replace(MARKS, '').replace(IGNORABLE, '').replaceAll('ς', 'σ').replace(/\s+/g, '');
+}
+
 /** A link whose target carries the text keeps its words but loses the target, at any depth. */
 function unwrapLinks(nodes: Inline[], patterns: readonly RegExp[]): Inline[] {
   return nodes.flatMap((node): Inline[] => {

@@ -9,14 +9,22 @@
 //              one word again ("Wren-" / "hallow" reads "Wrenhallow");
 //   kept       the line-end hyphen stays ("Smith-" / "Jones" reads "Smith-Jones");
 //   spaced     runs of single letters ("K e s t r e l") rejoined, and matched
-//              without word edges, since a spaced run gives none.
+//              without word edges, since a spaced run gives none;
+//   collapsed  the spaces between single letters taken out, the rest kept,
+//              so a word spaced beside a plain one ("J u n o Blackwood")
+//              reads "Juno Blackwood", matched as whole words.
 //
 // Every character a match covers in any reading is withheld. Then each line's
 // withheld characters become a region, widened to the next multiple of a
 // fixed step (WIDTH_STEP_EM of the type size) within the line, so the box drawn
-// over it does not give away how long the passage was.
+// over it does not give away how long the passage was. A box that would reach
+// the line's end runs on to the page's right margin (the left one mirrored),
+// or to the next text further right in the same band, so its right edge does
+// not show where the passage ended.
+//
+// textMatches reads a plain string the same ways: the output gate's matcher.
 // ============================================================================
-import { quoteSpans } from '../redaction/render.js';
+import { probeFolded, quoteProbe, quoteSpans } from '../redaction/render.js';
 
 export interface Box {
   left: number;
@@ -48,6 +56,8 @@ export const WIDTH_STEP_EM = 4;
 const isBreak = (c: PageChar): boolean => c.text === '\r' || c.text === '\n';
 const HYPHENS = new Set(['-', '\u0002', '­', '‐']);
 const SPACED_RUN = /(?<![\p{L}\p{N}\p{M}])[\p{L}\p{N}](?:\s+[\p{L}\p{N}](?![\p{L}\p{N}\p{M}]))+/gu;
+/** The space between two single letters. */
+const BETWEEN_SINGLES = /(?<=(?<![\p{L}\p{N}\p{M}])[\p{L}\p{N}])\s+(?=[\p{L}\p{N}](?![\p{L}\p{N}\p{M}]))/gu;
 
 /**
  * A hyphen that ends a line: PDFium flags one it recognises (often as U+0002, with no line break
@@ -104,6 +114,24 @@ function spaced(reading: Reading): Reading {
   return out;
 }
 
+/** The reading with the spaces between single letters taken out. */
+function collapsed(reading: Reading): Reading {
+  const out: Reading = { text: '', source: [] };
+  let at = 0;
+  const keep = (to: number): void => {
+    out.text += reading.text.slice(at, to);
+    out.source.push(...reading.source.slice(at, to));
+  };
+  for (const gap of reading.text.matchAll(BETWEEN_SINGLES)) {
+    keep(gap.index);
+    at = gap.index + gap[0].length;
+    // The spaces taken out stand with the letter before them, so a match covers them too.
+    out.source[out.source.length - 1] = [...(out.source.at(-1) as number[]), ...reading.source.slice(gap.index, at).flat()];
+  }
+  keep(reading.text.length);
+  return out;
+}
+
 /** The page characters any quote covers, in any reading. */
 export function matchedChars(chars: readonly PageChar[], quotes: readonly string[]): Set<number> {
   const out = new Set<number>();
@@ -113,6 +141,7 @@ export function matchedChars(chars: readonly PageChar[], quotes: readonly string
     [joined, true],
     [read(chars, true), true],
     [spaced(joined), false],
+    [collapsed(joined), true],
   ];
   for (const [reading, wholeWords] of readings) {
     for (const [start, end] of quoteSpans(reading.text, quotes, wholeWords)) {
@@ -122,21 +151,53 @@ export function matchedChars(chars: readonly PageChar[], quotes: readonly string
   return out;
 }
 
+/** A long text is read in pieces this long, each overlapping the last by enough to hold any quote. */
+const PIECE = 65_536;
+
+/**
+ * Whether any quote can be read in a plain string, in any of the readings of a page (line breaks
+ * are \\n or \\r). Each piece is first probed natively (quoteProbe), and only a piece a quote's
+ * probe hits is read character by character: megabytes of decoded streams stay fast.
+ */
+export function textMatches(text: string, quotes: readonly string[]): boolean {
+  if (quotes.length === 0) return false;
+  const probes = quotes.map((quote) => [quote, quoteProbe(quote)] as const);
+  const overlap = Math.max(1024, 4 * Math.max(...quotes.map((quote) => quote.length)));
+  for (let from = 0; from < text.length; from += PIECE - overlap) {
+    const piece = text.slice(from, from + PIECE);
+    const folded = probeFolded(piece);
+    const hot = probes.filter(([, probe]) => probe === null || probe.test(folded)).map(([quote]) => quote);
+    if (hot.length > 0) {
+      const chars = [...piece].map((ch): PageChar => ({ text: ch, generated: false, hyphen: false, box: null, fontSize: 0 }));
+      if (matchedChars(chars, hot).size > 0) return true;
+    }
+    if (from + PIECE >= text.length) break;
+  }
+  return false;
+}
+
 interface Span extends Box {
   line: number;
   fontSize: number;
 }
 
-/** Widened to a whole number of steps from its left edge, kept within the line (shifted left first). */
-function widen(span: Span, line: Box): Span {
+/**
+ * Widened to a whole number of steps from its left edge. One that would reach the line's end runs
+ * on to `reach` when that is further; otherwise it is kept within the line (shifted left first).
+ */
+function widen(span: Span, line: Box, reach: number): Span {
   const step = WIDTH_STEP_EM * span.fontSize;
   const width = Math.max(1, Math.ceil((span.right - span.left) / step - 1e-9)) * step;
+  if (span.left + width >= line.right - 1e-9 && reach > line.right) return { ...span, right: reach };
   const right = Math.min(span.left + width, line.right);
   return { ...span, left: Math.max(line.left, right - width), right };
 }
 
-/** The regions to remove and box for these withheld characters, or why there can be none. */
-export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<number>, page = 0): Regions {
+/**
+ * The regions to remove and box for these withheld characters, or why there can be none. Given the
+ * page's width, a box that reaches a line's end runs on to the right margin (see the header).
+ */
+export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<number>, page = 0, pageWidth?: number): Regions {
   const lineOf: number[] = [];
   const lines: Box[] = [];
   let line = 0;
@@ -181,10 +242,23 @@ export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<num
     last = i;
   }
 
+  // How far right a box at this line's end may run: the mirrored margin, short of other text in the band.
+  const margin = pageWidth === undefined ? -Infinity : pageWidth - Math.min(...lines.filter(Boolean).map((l) => l.left));
+  const reachOf = (lineNo: number, extent: Box): number => {
+    let reach = Math.max(extent.right, margin);
+    chars.forEach((c, i) => {
+      if (c.box === null || c.generated || lineOf[i] === lineNo) return;
+      const middle = (c.box.bottom + c.box.top) / 2;
+      if (c.box.left >= extent.right && middle > extent.bottom && middle < extent.top) reach = Math.min(reach, c.box.left);
+    });
+    return reach;
+  };
+
   const regions: Region[] = [];
   for (const lineNo of new Set(spans.map((s) => s.line))) {
     const extent = lines[lineNo] as Box;
-    const onLine = spans.filter((s) => s.line === lineNo).map((s) => widen(s, extent));
+    const reach = reachOf(lineNo, extent);
+    const onLine = spans.filter((s) => s.line === lineNo).map((s) => widen(s, extent, reach));
     onLine.sort((a, b) => a.left - b.left);
     const merged: Span[] = [];
     for (const span of onLine) {
@@ -202,6 +276,7 @@ export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<num
             fontSize: Math.max(prior.fontSize, current.fontSize),
           },
           extent,
+          reach,
         );
         prior = merged.at(-1);
       }

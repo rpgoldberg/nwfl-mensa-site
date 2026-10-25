@@ -205,7 +205,7 @@ describe('checkCopy: every string and name object', () => {
   });
 
   it('finds the name in PDFDocEncoding (a ligature byte)', async () => {
-    expect(await checkCopy(pdf(PAGE, ['<< /Comment <93726f6e61204d61727368> >>']), ['Fiona Marsh'])).toBe(IN_FILE);
+    expect(await checkCopy(pdf(PAGE, ['<< /Comment <936f6e61204d61727368> >>']), ['Fiona Marsh'])).toBe(IN_FILE);
   });
 
   it('finds the name in a name object', async () => {
