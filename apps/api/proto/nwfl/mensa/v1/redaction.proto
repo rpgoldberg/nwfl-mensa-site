@@ -1,0 +1,116 @@
+// The redaction policy (REDACT R1): for each audience and category of personal
+// data, whether it is shown, redacted or hidden (an image: shown, blurred or
+// hidden, always whole). One policy per group; the group comes from the
+// server, never from a request field. Officers only.
+//
+// A cell with no setting, or a setting the server does not know, reads as
+// HIDE: the policy fails closed.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Who a policy cell is for.
+enum RedactionAudience {
+  REDACTION_AUDIENCE_UNSPECIFIED = 0;
+  REDACTION_AUDIENCE_PUBLIC = 1;
+  REDACTION_AUDIENCE_MEMBERS = 2;
+  REDACTION_AUDIENCE_OFFICERS = 3;
+}
+
+// The kinds of personal data the policy covers.
+enum RedactionCategory {
+  REDACTION_CATEGORY_UNSPECIFIED = 0;
+  REDACTION_CATEGORY_MEMBER_NAME = 1;
+  REDACTION_CATEGORY_MEMBER_ADDRESS = 2;
+  REDACTION_CATEGORY_MEMBER_PHONE = 3;
+  REDACTION_CATEGORY_MEMBER_EMAIL = 4;
+  // A venue at a private home.
+  REDACTION_CATEGORY_PRIVATE_VENUE = 5;
+  REDACTION_CATEGORY_BUSINESS_VENUE = 6;
+  // An officer's own contact details; office titles are always shown.
+  REDACTION_CATEGORY_OFFICER_CONTACT = 7;
+  // A photo, as a whole: there is no partial image redaction.
+  REDACTION_CATEGORY_IMAGE = 8;
+}
+
+// SHOW, REDACT and HIDE apply to text categories; SHOW, BLUR and HIDE to
+// images. HIDE is the strictest for both.
+enum RedactionAction {
+  REDACTION_ACTION_UNSPECIFIED = 0;
+  REDACTION_ACTION_SHOW = 1;
+  REDACTION_ACTION_REDACT = 2;
+  REDACTION_ACTION_HIDE = 3;
+  REDACTION_ACTION_BLUR = 4;
+}
+
+enum RedactionChangeStatus {
+  REDACTION_CHANGE_STATUS_UNSPECIFIED = 0;
+  // A loosening of the public audience, waiting for a second officer.
+  REDACTION_CHANGE_STATUS_PENDING = 1;
+  REDACTION_CHANGE_STATUS_APPLIED = 2;
+  // Replaced by a later change to the same cell before it was approved.
+  REDACTION_CHANGE_STATUS_SUPERSEDED = 3;
+}
+
+// One cell of the policy, as it is in effect.
+message RedactionCell {
+  RedactionAudience audience = 1;
+  RedactionCategory category = 2;
+  RedactionAction action = 3;
+}
+
+// A change to one cell: applied at once, or waiting for a second officer.
+message RedactionChange {
+  string change_id = 1;
+  RedactionAudience audience = 2;
+  RedactionCategory category = 3;
+  RedactionAction from_action = 4;
+  RedactionAction to_action = 5;
+  RedactionChangeStatus status = 6;
+  // The Authentik subjects of the officers.
+  string proposed_by = 7;
+  google.protobuf.Timestamp proposed_at = 8;
+  // Empty unless a second officer approved it.
+  string approved_by = 9;
+  google.protobuf.Timestamp approved_at = 10;
+}
+
+// Officers only. A change that loosens the public audience waits for a second,
+// different officer; any other change applies at once. Every change and
+// approval is audit-logged.
+service RedactionPolicyService {
+  // Every cell, in audience then category order, and the changes waiting.
+  rpc GetRedactionPolicy(GetRedactionPolicyRequest) returns (GetRedactionPolicyResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc ProposeRedactionChange(ProposeRedactionChangeRequest) returns (ProposeRedactionChangeResponse);
+  // No officer approves their own proposal.
+  rpc ApproveRedactionChange(ApproveRedactionChangeRequest) returns (ApproveRedactionChangeResponse);
+}
+
+message GetRedactionPolicyRequest {}
+
+message GetRedactionPolicyResponse {
+  repeated RedactionCell cells = 1;
+  repeated RedactionChange pending = 2;
+}
+
+message ProposeRedactionChangeRequest {
+  RedactionAudience audience = 1;
+  RedactionCategory category = 2;
+  RedactionAction action = 3;
+}
+
+message ProposeRedactionChangeResponse {
+  RedactionChange change = 1;
+}
+
+message ApproveRedactionChangeRequest {
+  string change_id = 1;
+}
+
+message ApproveRedactionChangeResponse {
+  RedactionChange change = 1;
+}
