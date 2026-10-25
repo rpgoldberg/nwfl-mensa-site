@@ -22,8 +22,10 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.16.0",
+    "@cantoo/pdf-lib": "2.11.1",
     "@connectrpc/connect": "2.2.0",
     "@connectrpc/connect-node": "2.2.0",
+    "@embedpdf/pdfium": "2.15.1",
     "@figurecollecting/fc-shared": "file:vendor/figurecollecting-fc-shared-1.7.0.tgz",
     "@opentelemetry/api": "1.10.0",
     "@opentelemetry/context-async-hooks": "3.0.0",
@@ -31,6 +33,7 @@
     "@opentelemetry/sdk-trace": "3.0.0",
     "fastify": "5.12.7",
     "jose": "6.2.13",
+    "pdfjs-dist": "6.4.299",
     "pg": "8.23.1"
   },
   "devDependencies": {
