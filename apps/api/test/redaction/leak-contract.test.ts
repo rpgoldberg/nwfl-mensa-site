@@ -22,6 +22,7 @@ import { MethodOptions_IdempotencyLevel as Idempotency } from '@bufbuild/protobu
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Audience } from '../../src/gen/nwfl/mensa/v1/common_pb.js';
+import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
 import {
   MarkField,
@@ -48,6 +49,7 @@ const C = {
   venueName: canary('venuename'),
   venueUrl: canary('venueurl'),
 };
+const ALIAS = 'hospitality@nwflorida.us';
 const RANGE = { from: { year: 2026, month: 11, day: 1 }, to: { year: 2026, month: 11, day: 30 } };
 const AGENT = as('agent-token');
 
@@ -138,7 +140,12 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     const { pool } = api;
     const policy = api.client(RedactionPolicyService);
     const office = await insertId(pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
-    ids['host'] = await insertId(pool, `INSERT INTO office (slug, title, kind) VALUES ('hospitality', 'Hospitality', 'appointed') RETURNING id`);
+    // The group's public contact: an office and its verified role alias, never officer_contact.
+    ids['host'] = await insertId(
+      pool,
+      `INSERT INTO office (slug, title, kind, role_alias, role_alias_verified_on) VALUES ('hospitality', 'Hospitality', 'appointed', $1, '2026-10-01') RETURNING id`,
+      [ALIAS],
+    );
     ids['edition'] = await insertId(
       pool,
       `INSERT INTO edition (slug, title, kind, period_start, period_end, status) VALUES ('2026-11', 'November 2026', 'regular', '2026-11-01', '2026-11-30', 'collecting') RETURNING id`,
@@ -176,6 +183,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       `INSERT INTO event_occurrence (title, starts_at, visibility, venue_id, status_note, detail, owner_office_id) VALUES ('Games night', '2026-11-06T23:00:00Z', 'public', $1, $2, $2, $3) RETURNING id`,
       [ids['venue'], `Meet at ${C.address}`, ids['host']],
     );
+    const home = await insertId(pool, `INSERT INTO venue (kind, name, area, host_office_id) VALUES ('member_home', 'A home', 'okaloosa', $1) RETURNING id`, [ids['host']]);
+    await pool.query(`INSERT INTO event_occurrence (title, starts_at, visibility, venue_id) VALUES ('Potluck', '2026-11-21T23:00:00Z', 'public', $1)`, [home]);
 
     const mark = (kind: MarkSubjectKind, subjectId: string, field: MarkField, quote: string, category: RedactionCategory) =>
       policy.addRedactionMark({ subjectKind: kind, subjectId, field, quote, category }, OFFICER);
@@ -211,11 +220,6 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     expect(whole(await sweep({}))).not.toMatch(/█|\*{3,}|x{5,}/);
   });
 
-  it('gives the public no event contact office', async () => {
-    const events = await sweep({}, 'nwfl.mensa.v1.EventService');
-    expect(found(events, { host: ids['host'] as string })).toEqual({});
-  });
-
   it('gives a member what the members policy shows, and not a member’s address', async () => {
     const responses = await sweep(MEMBER);
     const { address, ...shown } = C;
@@ -240,7 +244,25 @@ describe.skipIf(!live)('the redaction leak contract', () => {
   it('keeps every canary out of the PUBLIC export', async () => {
     const exported = await api.client(NewsletterService).exportEdition({ editionId: ids['edition'] as string, audience: Audience.PUBLIC }, AGENT);
     const bytes = new Map([['ExportEdition', Buffer.from(toBinary(NewsletterService.method.exportEdition.output, exported))]]);
-    expect(found(bytes, { ...C, host: ids['host'] as string })).toEqual({});
+    expect(found(bytes, C)).toEqual({});
     expect(exported.contentJson).toContain('[withheld]');
+  });
+
+  // Last: it tightens the public officer_contact cell, which must change none of this.
+  it('shows the public each event’s host office and its verified role alias, whatever officer_contact says', async () => {
+    await api.client(RedactionPolicyService).proposeRedactionChange(
+      { audience: RedactionAudience.PUBLIC, category: RedactionCategory.OFFICER_CONTACT, action: RedactionAction.HIDE },
+      OFFICER,
+    );
+    const host = ids['host'] as string;
+    const events = await sweep({}, 'nwfl.mensa.v1.EventService');
+    expect(found(events, { host })).toEqual({
+      host: ['EventService.ListOccurrences', 'EventService.GetOccurrence', 'EventService.ListSeries', 'EventService.ListVenues'],
+    });
+    const roster = dump(await api.client(ContentService).getRoster({}));
+    expect(roster).toContain('Hospitality');
+    expect(roster).toContain(ALIAS);
+    const exported = await api.client(NewsletterService).exportEdition({ editionId: ids['edition'] as string, audience: Audience.PUBLIC }, AGENT);
+    expect(exported.contentJson).toContain(`(contact ${ALIAS})`);
   });
 });

@@ -15,7 +15,7 @@
 //     under a fixed label, whatever was typed into its name (R3).
 //   - REDACT R2a: every series, venue and entry passes through the caller's
 //     lens (events/redact.ts) before a message is built from it: marked
-//     passages withheld, private venues and contact offices per the policy,
+//     passages withheld, private venues per the policy (host offices stay),
 //     and anything the lens hides dropped (NOT_FOUND for a single read).
 // ============================================================================
 import { create } from '@bufbuild/protobuf';
