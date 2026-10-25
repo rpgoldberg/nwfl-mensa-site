@@ -26,6 +26,7 @@ import { type Redact, drain } from '../../src/pdf/regenerate.js';
 import { ENGINE_VERSION, storeOriginal } from '../../src/pdf/store.js';
 import { type Api, MEMBER, OFFICER, as, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
+import { linesPdf } from '../pdf/fixtures.js';
 import { APP, APP_PW, live, sqlstate, url, urlFor } from '../helpers/pg.js';
 
 const PUB = as('pub-token');
@@ -138,13 +139,21 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
     it('pins search_path on the four 0012-0014 functions that lacked it, and on every ledger function', async () => {
       const { rows: found } = await owner.query<{ proname: string; proconfig: string[] | null }>(
         `SELECT proname, proconfig FROM pg_proc WHERE proname IN ('redaction_action_allowed', 'redaction_rank', 'redaction_change_guard',
-           'redaction_mark_removal_guard') OR proname LIKE 'publication_ledger%' ORDER BY proname`,
+           'redaction_mark_removal_guard', 'pdf_original_guard', 'pdf_copy_guard', 'pdf_audience_rank') OR proname LIKE 'publication_ledger%' ORDER BY proname`,
       );
       expect(found.map((row) => row.proname)).toEqual([
+        'pdf_audience_rank',
+        'pdf_copy_guard',
+        'pdf_original_guard',
         'publication_ledger_canonical',
         'publication_ledger_guard',
         'publication_ledger_lock',
+        'publication_ledger_lock_trigger',
+        'publication_ledger_original',
         'publication_ledger_record',
+        'publication_ledger_stamp',
+        'publication_ledger_stamp_change',
+        'publication_ledger_stamp_mark',
         'redaction_action_allowed',
         'redaction_change_guard',
         'redaction_mark_removal_guard',
@@ -444,10 +453,123 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       expect(asOfReady.matches, asOfReady.detail).toBe(true);
       const asOfWaiting = await ledgerAsOf(api.pool, 'stored_file', file, 'public', new Date(waiting.current_from.getTime() + 1));
       expect(asOfWaiting.matches, asOfWaiting.detail).toBe(true);
-      // The first copy was dropped by the regeneration's finish: its inputs are checked, its bytes cannot be.
-      const asOfBefore = await ledgerAsOf(api.pool, 'stored_file', file, 'public', new Date(before.current_from.getTime() + 1));
-      expect(asOfBefore.matches).toBe(false);
-      expect(asOfBefore.detail).toMatch(/no longer kept/);
+      // The first copy was dropped by the regeneration's finish: it is made again from the original, by the same engine.
+      const at = new Date(before.current_from.getTime() + 1);
+      expect((await q(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [file, before.inputs['input_hash']])).rows).toEqual([]);
+      const asOfBefore = await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: stub, caller: OWNER });
+      expect(asOfBefore.matches, asOfBefore.detail).toBe(true);
+      expect(asOfBefore.rerender).toEqual(before.output_sha256);
+      // A different engine could not make the same bytes: the inputs are still checked.
+      const otherEngine = await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: stub, caller: OWNER, engine: 'pdfium-0+other' });
+      expect(otherEngine).toMatchObject({ matches: false, detail: 'engine changed, inputs verified only' });
+      // An engine that makes different bytes is a mismatch; one that refuses says so.
+      const wrong: Redact = () => Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(Buffer.from('other bytes')), boxes: [] });
+      expect(await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: wrong, caller: OWNER })).toMatchObject({ matches: false, detail: expect.stringMatching(/does not match/) as unknown });
+      const refuse: Redact = () => Promise.resolve({ kind: 'refused', reason: 'no' });
+      expect(await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: refuse, caller: OWNER })).toMatchObject({ matches: false, detail: expect.stringMatching(/refused/) as unknown });
+      // Only an officer re-makes a copy, only for a ledger row of a copy no longer kept, and each read is audited.
+      expect(await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: stub })).toMatchObject({ matches: false, detail: expect.stringMatching(/officer/) as unknown });
+      const app = new pg.Client({ connectionString: urlFor(APP, APP_PW, database) });
+      await app.connect();
+      try {
+        expect(await sqlstate(app, `SELECT publication_ledger_original($1, 'sub-member', '{nwfl-members}', NULL)`, [before.seq])).toBe('42501');
+        expect(await sqlstate(app, `SELECT publication_ledger_original($1, 'sub-officer', '{nwfl-officers}', NULL)`, [ready.seq])).toBe('55000');
+        expect(await sqlstate(app, `SELECT publication_ledger_original($1, 'sub-officer', '{nwfl-officers}', NULL)`, [waiting.seq])).toBe('22023');
+        expect(await sqlstate(app, `SELECT bytes FROM pdf_original`)).toBe('42501');
+      } finally {
+        await app.end();
+      }
+      const audited = await q(`SELECT 1 FROM audit_event WHERE action = 'ledger_original_read' AND subject_id = $1 AND actor_sub = 'sub-officer'`, [file]);
+      expect(audited.rows.length).toBeGreaterThan(0);
+    });
+
+    it('re-makes a deleted copy with the real engine through the RPC, and the hash matches', async () => {
+      const bytes = await linesPdf(['Minutes taken by Ottoline Varga.', 'The picnic is on Saturday.']);
+      const published = await publishItem(api.pool, {
+        slug: 'ledger-real-pdf',
+        officeId: office,
+        title: 'Real minutes',
+        body: { blocks: [paragraph(text('Minutes taken by Ottoline Varga.'))] },
+        files: [{ objectKey: 'real.pdf', audience: 'public', bytes }],
+      });
+      const realFile = (await q<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [published.versionId])).rows[0]!.id;
+      await storeOriginal(api.pool, { fileId: realFile, bytes, ...OWNER });
+      await drain(api.pool);
+      const first = (await current(realFile, 'public'))!;
+      expect(first.inputs['served']).toBe('copy');
+      await redaction.addRedactionMark(
+        { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: published.itemId, field: MarkField.BODY, quote: 'Ottoline Varga', category: RedactionCategory.MEMBER_NAME },
+        OFFICER,
+      );
+      await drain(api.pool);
+      expect((await q(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [realFile, first.inputs['input_hash']])).rows).toEqual([]);
+      const response = await redaction.ledgerAsOf(
+        { subjectKind: LedgerSubjectKind.STORED_FILE, subjectId: realFile, audience: RedactionAudience.PUBLIC, at: timestampFromDate(new Date(first.current_from.getTime() + 1)) },
+        OFFICER,
+      );
+      expect(response.matches, response.detail).toBe(true);
+      expect(Buffer.from(response.rerenderSha256)).toEqual(first.output_sha256);
+    });
+  });
+
+  describe('a change racing a render', () => {
+    it('makes a mark committed mid-render wait: the render\'s row and the mark\'s row both re-render to their hashes', async () => {
+      const raced = await publishItem(api.pool, { slug: 'ledger-race', officeId: office, title: 'Race', body: { blocks: [paragraph(text('Ring Pellingham Farrow tonight.'))] } });
+      const client = await api.pool.connect();
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => (release = resolve));
+      let paused = false;
+      let reached!: () => void;
+      const atBarrier = new Promise<void>((resolve) => (reached = resolve));
+      // The render pauses after it has read the item's marks, still holding the append lock.
+      const paused$ = {
+        query: async (sql: string, values?: unknown[]) => {
+          const result = await client.query(sql, values);
+          if (!paused && /FROM redaction_mark/.test(sql)) {
+            paused = true;
+            reached();
+            await barrier;
+          }
+          return result;
+        },
+      } as unknown as pg.Pool;
+      let markDone = false;
+      let rendering: Promise<number>;
+      try {
+        await client.query('BEGIN');
+        rendering = recordItems(paused$, [raced.itemId]);
+        await atBarrier;
+        const marking = redaction
+          .addRedactionMark(
+            { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: raced.itemId, field: MarkField.BODY, quote: 'Pellingham Farrow', category: RedactionCategory.MEMBER_NAME },
+            OFFICER,
+          )
+          .then(() => {
+            markDone = true;
+          });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        expect(markDone).toBe(false);
+        release();
+        await rendering;
+        await client.query('COMMIT');
+        await marking;
+      } finally {
+        client.release();
+      }
+      expect(markDone).toBe(true);
+      const publicRows = await rows(raced.versionId, 'public');
+      expect(publicRows).toHaveLength(2);
+      expect(publicRows[0]!.passages_withheld).toBe(0);
+      expect(publicRows[1]!.passages_withheld).toBe(1);
+      for (const row of publicRows) {
+        const at = row.current_to === null ? new Date() : new Date((row.current_from.getTime() + row.current_to.getTime()) / 2);
+        const asOf = await ledgerAsOf(api.pool, 'content_version', raced.versionId, 'public', at);
+        expect(asOf.row?.seq).toBe(row.seq);
+        expect(asOf.matches, `${row.seq}: ${asOf.detail}`).toBe(true);
+      }
+      // The mark's own time is the time its ledger row opened: one stamp per transaction.
+      const mark = (await q<{ created_at: Date }>(`SELECT created_at FROM redaction_mark WHERE content_item_id = $1`, [raced.itemId])).rows[0]!;
+      expect(mark.created_at).toEqual(publicRows[1]!.current_from);
     });
   });
 
