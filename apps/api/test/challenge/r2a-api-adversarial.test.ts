@@ -1,4 +1,5 @@
-// CHALLENGER (R2a): end-to-end adversarial reads. Each `it` asserts the SECURE outcome; red = finding.
+// CHALLENGER (R2a): end-to-end adversarial reads. Fix 3: A2, A3 and A7 fetch by id, as a withheld
+// slug is now not found; they test what the answer holds, not how the item is found. Each `it` asserts the SECURE outcome; red = finding.
 import { createHash } from 'node:crypto';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -58,11 +59,11 @@ describe.skipIf(!live)('R2a challenge: API', () => {
     expect(out).not.toMatch(/john-smith/);
   });
   it('A2 substring via the public API: no "[withheld]ual"', async () => {
-    const out = dump(await api.client(ContentService).getPublishedItem({ slug: 'picnic-with-john-smith' }));
+    const out = dump(await api.client(ContentService).getPublishedItem({ slug: ids['slug'] as string }));
     expect(out).not.toContain('[withheld]ual');
   });
   it('A3 NFD title, NFC mark: the public title is withheld', async () => {
-    const out = dump(await api.client(ContentService).getPublishedItem({ slug: 'nfd' }));
+    const out = dump(await api.client(ContentService).getPublishedItem({ slug: ids['nfd'] as string }));
     expect(out.normalize('NFC')).not.toContain('José Núñez');
   });
   it('A4 print order: the public export does not place a withheld title by its hidden text', async () => {
@@ -99,7 +100,7 @@ describe.skipIf(!live)('R2a challenge: API', () => {
       { headers: { 'x-audience': 'officers', 'x-forwarded-groups': 'nwfl-officers', 'x-nwfl-audience': 'members', 'l5d-client-id': 'officer.nwfl.serviceaccount.identity.linkerd.cluster.local' } },
     ];
     for (const c of callers) {
-      const out = dump(await api.client(ContentService).getPublishedItem({ slug: 'thanks' }, c));
+      const out = dump(await api.client(ContentService).getPublishedItem({ slug: ids['charlie'] as string }, c));
       expect(out, JSON.stringify(c)).not.toContain('Charlie Quinn');
       const err = await api.client(RedactionPolicyService).listRedactionMarks({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: ids['charlie'] as string }, c).then(() => undefined, (e: unknown) => ConnectError.from(e).code);
       expect([Code.PermissionDenied, Code.Unauthenticated], JSON.stringify(c)).toContain(err);

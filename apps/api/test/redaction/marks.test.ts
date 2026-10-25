@@ -7,7 +7,9 @@
 import { type Client, Code } from '@connectrpc/connect';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { create, toBinary } from '@bufbuild/protobuf';
+import { ContentService, GetPublishedItemRequestSchema } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { h2Request } from '../helpers/h2.js';
 import { EventService } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
 import {
   MarkField,
@@ -274,8 +276,8 @@ describe.skipIf(!live)('redaction marks', () => {
       const listed = dump(await content.listPublishedItems({ pageSize: 50 }));
       expect(listed).not.toMatch(/robin-example/);
       expect(listed).toContain(lunch);
-      // Asked for by its slug, the item comes back under its id.
-      expect((await content.getPublishedItem({ slug })).item?.slug).toBe(lunch);
+      // Asked for by its slug, it is not there for this audience: the slug is no oracle.
+      await expect(content.getPublishedItem({ slug })).rejects.toMatchObject({ code: Code.NotFound });
       const byId = await content.getPublishedItem({ slug: lunch });
       expect(byId.item).toMatchObject({ slug: lunch, live: { title: 'Lunch with [withheld]' } });
       expect((await content.getPublishedItem({ slug }, MEMBER)).item?.slug).toBe(slug);
@@ -288,6 +290,41 @@ describe.skipIf(!live)('redaction marks', () => {
       const anonymous = dump(await api.client(EventService).listSeries({}));
       expect(anonymous).not.toMatch(/robin-example/);
       expect(anonymous).toContain('Walk with [withheld]');
+    });
+
+    it('answers a withheld slug byte for byte as a slug that never existed, for the public', async () => {
+      const slug = 'supper-with-robin-example';
+      await add('Robin Example', {
+        subject: (await publishItem(api.pool, { slug, officeId: office, title: 'Supper with Robin Example', body: { blocks: [paragraph(text('Six'))] } })).itemId,
+        field: MarkField.TITLE,
+        category: Category.MEMBER_NAME,
+      });
+      const raw = async (asked: string) => {
+        const message = toBinary(GetPublishedItemRequestSchema, create(GetPublishedItemRequestSchema, { slug: asked }));
+        const frame = Buffer.concat([Buffer.from([0, 0, 0, 0, message.length]), Buffer.from(message)]);
+        const response = await h2Request(
+          api.baseUrl,
+          { ':method': 'POST', ':path': '/nwfl.mensa.v1.ContentService/GetPublishedItem', 'content-type': 'application/grpc', te: 'trailers' },
+          frame,
+        );
+        // The date header is the clock, not the answer.
+        const headers = Object.fromEntries(Object.entries(response.headers).filter(([name]) => name !== 'date'));
+        return JSON.stringify({ status: response.status, headers, trailers: response.trailers, body: response.body.toString('hex') });
+      };
+      const withheld = await raw(slug);
+      expect(withheld).toContain('not found');
+      expect(withheld).toBe(await raw('supper-that-never-was'));
+    });
+
+    it('holds a member to the members policy the same way: a slug whose title a member may not see is not found', async () => {
+      const slug = 'party-at-12-example-lane';
+      const party = (await publishItem(api.pool, { slug, officeId: office, title: 'Party at 12 Example Lane', body: { blocks: [paragraph(text('Bring a dish'))] } })).itemId;
+      await add('12 Example Lane', { subject: party, field: MarkField.TITLE, category: Category.MEMBER_ADDRESS });
+      const content = api.client(ContentService);
+      await expect(content.getPublishedItem({ slug }, MEMBER)).rejects.toMatchObject({ code: Code.NotFound, rawMessage: 'item not found' });
+      expect((await content.getPublishedItem({ slug: party }, MEMBER)).item).toMatchObject({ slug: party, live: { title: 'Party at [withheld]' } });
+      // Officers see addresses (the default), so the slug is theirs to use.
+      expect((await content.getPublishedItem({ slug }, OFFICER)).item?.slug).toBe(slug);
     });
 
     it('refuses a malformed mark', async () => {
