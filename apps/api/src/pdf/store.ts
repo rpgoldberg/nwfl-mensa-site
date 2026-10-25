@@ -11,7 +11,7 @@
 //   original   every one of the audience's cells is "show";
 //   copy       otherwise: the engine is given the marked passages this
 //              audience redacts. The copy is keyed by a hash of the
-//              original's sha256, those passages and the engine version, so
+//              original's sha256, those passages, the image action and the engine version, so
 //              audiences given the same inputs share one copy.
 //
 // A read serves only the copy whose key is the inputs' hash now. There is no
@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto';
 import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { CATEGORIES, TENANT, cellKey, resolveAction } from '../redaction/policy.js';
+import type { ImageAction } from './images.js';
 import type { RedactRequest } from './redact.js';
 
 type Query = Pick<Db, 'query'>;
@@ -47,7 +48,7 @@ const RANK: Readonly<Record<string, number>> = { public: 0, members: 1, officers
 const canonicalQuotes = (quotes: readonly string[]): string[] => [...new Set(quotes.map((quote) => quote.trim()).filter((quote) => quote !== ''))].sort();
 
 export function inputHash(sha256: Uint8Array, request: RedactRequest, engine = ENGINE_VERSION): Buffer {
-  const canonical = JSON.stringify({ v: 1, engine, original: Buffer.from(sha256).toString('hex'), redactsAny: request.redactsAny, quotes: canonicalQuotes(request.quotes) });
+  const canonical = JSON.stringify({ v: 1, engine, original: Buffer.from(sha256).toString('hex'), redactsAny: request.redactsAny, quotes: canonicalQuotes(request.quotes), image: request.image ?? 'show' });
   return createHash('sha256').update(canonical).digest();
 }
 
@@ -73,7 +74,7 @@ export async function inputsFor(db: Query, fileId: string, audience: string): Pr
   if (marks.rows.some((mark) => action(mark.category) === 'hide' || (mark.quote === null && action(mark.category) !== 'show'))) return { kind: 'hidden' };
   if (CATEGORIES.every((category) => action(category) === 'show')) return { kind: 'original' };
   const quotes = canonicalQuotes(marks.rows.flatMap((mark) => (mark.quote !== null && action(mark.category) === 'redact' ? [mark.quote] : [])));
-  const request: RedactRequest = { quotes, redactsAny: true };
+  const request: RedactRequest = { quotes, redactsAny: true, image: action('image') as ImageAction };
   return { kind: 'copy', hash: inputHash(row.sha256, request), request };
 }
 

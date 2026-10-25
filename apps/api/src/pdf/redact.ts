@@ -29,6 +29,7 @@
 //     readable after (PDFium), or the gate finds one or cannot check a stream.
 // ============================================================================
 import { checkCopy } from './gate.js';
+import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
 import { type Box, type Region, matchedChars, regionsFor } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
@@ -38,6 +39,12 @@ export interface RedactRequest {
   quotes: readonly string[];
   /** Whether this audience's policy redacts any category: then even an unmarked file is never given as it is. */
   redactsAny: boolean;
+  /** This audience's image policy (images.ts); "show" when absent. */
+  image?: ImageAction;
+}
+
+export interface RedactDeps {
+  sanitize?: (pdf: Uint8Array, image: ImageAction) => Promise<Uint8Array>;
 }
 
 export type RedactResult =
@@ -68,9 +75,11 @@ const overlaps = (a: Region, b: { left: number; right: number; bottom: number; t
   a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
 
 /** Why one page cannot be given, or null once its passages are removed and boxed (added to `boxes`). */
-function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[]): string | null {
+function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[], regenerate: boolean): string | null {
   doc.flatten(index);
   return doc.page(index, (page) => {
+    // Inline pictures become picture XObjects, which sanitize can replace.
+    if (regenerate) page.regenerate();
     const { chars, unmapped } = page.chars();
     if (chars.length === 0 && page.objectCount > 0) return `page ${index + 1} has no text layer`;
     if (isScan(page)) return `page ${index + 1} is a scan: pictures cover most of it`;
@@ -90,10 +99,10 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
 }
 
 /** The document with the passages removed from every page, or why there can be no copy. */
-function redactPages(doc: Document, quotes: readonly string[]): { pdf: Uint8Array; boxes: Region[] } | string {
+function redactPages(doc: Document, quotes: readonly string[], regenerate: boolean): { pdf: Uint8Array; boxes: Region[] } | string {
   const boxes: Region[] = [];
   for (let index = 0; index < doc.pageCount; index++) {
-    const refused = redactPage(doc, index, quotes, boxes);
+    const refused = redactPage(doc, index, quotes, boxes, regenerate);
     if (refused !== null) return refused;
   }
   return { pdf: doc.save(), boxes };
@@ -115,24 +124,26 @@ export async function verifyRedacted(pdf: Uint8Array, quotes: readonly string[])
 }
 
 /** This audience's file: the original, a redacted copy, or none, with the reason. */
-export async function redactPdf(original: Uint8Array, request: RedactRequest): Promise<RedactResult> {
+export async function redactPdf(original: Uint8Array, request: RedactRequest, deps: RedactDeps = {}): Promise<RedactResult> {
+  const image = request.image ?? 'show';
   const quotes = [...new Set(request.quotes.map((quote) => quote.trim()).filter((quote) => quote !== ''))];
-  if (quotes.length === 0 && !request.redactsAny) return { kind: 'original' };
+  if (quotes.length === 0 && !request.redactsAny && image === 'show') return { kind: 'original' };
   const doc = Document.open(await pdfium(), original);
   if (doc === null) return { kind: 'refused', reason: UNOPENABLE };
   let redacted: { pdf: Uint8Array; boxes: Region[] } | string;
   try {
-    redacted = redactPages(doc, quotes);
+    redacted = redactPages(doc, quotes, image !== 'show');
   } finally {
     doc.close();
   }
   if (typeof redacted === 'string') return { kind: 'refused', reason: redacted };
   let pdf: Uint8Array;
   try {
-    pdf = await sanitize(redacted.pdf);
+    pdf = await (deps.sanitize ?? sanitize)(redacted.pdf, image);
   } catch (error) {
     return { kind: 'refused', reason: error instanceof Error ? error.message : String(error) };
   }
+  if (image !== 'show' && keepsPicture(pdf, await pictureWindows(original))) return { kind: 'refused', reason: 'an original picture is still in the copy' };
   const left = (await verifyRedacted(pdf, quotes)) ?? (await checkCopy(pdf, quotes));
   return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes } : { kind: 'refused', reason: left };
 }

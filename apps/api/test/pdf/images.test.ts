@@ -25,7 +25,10 @@ function pixels(width: number, height: number, channels: number): Buffer {
 const jpegBytes = (): Buffer => {
   const rgba = Buffer.alloc(96 * 64 * 4);
   const rgb = pixels(96, 64, 3);
-  for (let p = 0; p < 96 * 64; p++) rgb.copy(rgba, p * 4, p * 3, p * 3 + 3), (rgba[p * 4 + 3] = 255);
+  for (let p = 0; p < 96 * 64; p++) {
+    rgb.copy(rgba, p * 4, p * 3, p * 3 + 3);
+    rgba[p * 4 + 3] = 255;
+  }
   return jpeg.encode({ width: 96, height: 64, data: rgba }, 90).data;
 };
 
@@ -40,7 +43,7 @@ interface Fixture {
  * undecodable JPEG 2000 picture, and an inline picture; `form` draws the inline picture inside a
  * form XObject instead (PDFium does not rewrite a form's content).
  */
-async function fixture(options: { form?: boolean } = {}): Promise<Fixture> {
+async function fixture(options: { form?: boolean; jpx?: boolean } = {}): Promise<Fixture> {
   const doc = await PDFDocument.create({ updateMetadata: false });
   const page = doc.addPage([612, 792]);
   const { context } = doc;
@@ -57,7 +60,8 @@ async function fixture(options: { form?: boolean } = {}): Promise<Fixture> {
     PDFName.of('Pic'),
     context.register(PDFRawStream.of(context.obj({ ...image, Width: 40, Height: 30, ColorSpace: 'DeviceRGB', Filter: 'FlateDecode', Metadata: xmp, SMask: smask }), flate)),
   );
-  page.node.setXObject(PDFName.of('Jpx'), context.register(PDFRawStream.of(context.obj({ ...image, Width: 10, Height: 10, ColorSpace: 'DeviceRGB', Filter: 'JPXDecode' }), jpx)));
+  const withJpx = options.jpx !== false;
+  if (withJpx) page.node.setXObject(PDFName.of('Jpx'), context.register(PDFRawStream.of(context.obj({ ...image, Width: 10, Height: 10, ColorSpace: 'DeviceRGB', Filter: 'JPXDecode' }), jpx)));
   const inline = `q 50 0 0 50 400 300 cm BI /W 4 /H 4 /CS /RGB /BPC 8 ID ${INLINE} EI Q`;
   if (options.form === true) {
     page.node.setXObject(PDFName.of('Fm'), context.register(context.stream(inline, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 612, 792] })));
@@ -67,11 +71,11 @@ async function fixture(options: { form?: boolean } = {}): Promise<Fixture> {
     'BT /F1 12 Tf 72 680 Td (This closing line stays readable.) Tj ET',
     'q 192 0 0 128 72 400 cm /Photo Do Q',
     'q 120 0 0 90 300 400 cm /Pic Do Q',
-    'q 30 0 0 30 72 200 cm /Jpx Do Q',
+    withJpx ? 'q 30 0 0 30 72 200 cm /Jpx Do Q' : '',
     options.form === true ? '/Fm Do' : inline,
   ].join('\n');
   page.node.set(PDFName.of('Contents'), context.register(context.stream(content)));
-  return { pdf: await doc.save({ useObjectStreams: false }), pictures: [photo, flate, mask, jpx] };
+  return { pdf: await doc.save({ useObjectStreams: false }), pictures: withJpx ? [photo, flate, mask, jpx] : [photo, flate, mask] };
 }
 
 function copyOf(result: RedactResult): Uint8Array {
@@ -94,7 +98,8 @@ async function picturesIn(bytes: Uint8Array): Promise<Picture[]> {
   for (const [, object] of doc.context.enumerateIndirectObjects()) {
     if (!(object instanceof PDFRawStream) || object.dict.lookup(PDFName.of('Subtype')) !== PDFName.of('Image')) continue;
     const size = (key: string): number => (object.dict.lookup(PDFName.of(key)) as PDFNumber).asNumber();
-    const filtered = object.dict.lookup(PDFName.of('Filter')) !== undefined;
+    const filter = object.dict.lookup(PDFName.of('Filter'));
+    const filtered = filter !== undefined && filter !== PDFName.of('DCTDecode');
     out.push({
       width: size('Width'),
       height: size('Height'),
@@ -174,7 +179,8 @@ describe('an image policy of "hide"', () => {
 
 describe('an image policy of "show"', () => {
   it('keeps the original picture bytes (the officers\' and members\' copies)', async () => {
-    const { pdf, pictures } = await fixture();
+    // No JPEG 2000 here: the gate cannot check one, so a copy that keeps it is refused.
+    const { pdf, pictures } = await fixture({ jpx: false });
     const copy = copyOf(await redactPdf(pdf, { quotes: [NAME], redactsAny: true, image: 'show' }));
     const found = await picturesIn(copy);
     const [photo, flate] = pictures as [Buffer, Buffer];
@@ -206,7 +212,7 @@ describe('pictureWindows and keepsPicture (the last check before a copy is given
   it('refuses a copy that still holds an original picture', async () => {
     const { pdf } = await fixture();
     const reason = 'an original picture is still in the copy';
-    const sanitizeKeeping = async (bytes: Uint8Array): Promise<Uint8Array> => bytes;
+    const sanitizeKeeping = (bytes: Uint8Array): Promise<Uint8Array> => Promise.resolve(bytes);
     expect(await redactPdf(pdf, { quotes: [], redactsAny: true, image: 'hide' }, { sanitize: sanitizeKeeping })).toEqual({ kind: 'refused', reason });
   }, 60_000);
 });
