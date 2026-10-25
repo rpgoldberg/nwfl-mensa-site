@@ -97,14 +97,15 @@ describe(`${PKG}: services`, () => {
     );
   });
 
-  it('keeps every RPC unary: no stream holds a drain open', () => {
+  // One exception: ReadFile streams a file of at most 10 MiB in 64 KiB chunks and stops at the drain deadline (content/files.ts).
+  it('keeps every RPC unary but ReadFile: no stream holds a drain open', () => {
     expect(methods().length).toBeGreaterThan(0);
-    for (const m of methods()) expect(m.methodKind, rpc(m)).toBe('unary');
+    for (const m of methods()) expect(m.methodKind, rpc(m)).toBe(rpc(m) === 'ContentService.ReadFile' ? 'server_streaming' : 'unary');
   });
 
-  it('marks every List/Get/Export RPC as a read (NO_SIDE_EFFECTS), and nothing else', () => {
+  it('marks every List/Get/Export/Read RPC as a read (NO_SIDE_EFFECTS), and nothing else', () => {
     for (const m of methods()) {
-      const isRead = /^(List|Get|Export)/.test(m.name);
+      const isRead = /^(List|Get|Export|Read)/.test(m.name);
       expect(m.idempotency === Idempotency.NO_SIDE_EFFECTS, rpc(m)).toBe(isRead);
     }
   });

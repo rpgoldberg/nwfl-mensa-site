@@ -203,3 +203,134 @@ describe('grpcReads, over the gRPC wire protocol', () => {
     await expect(grpcReads({ baseUrl: api.url, timeoutMs: 5000 }, () => {}).getRoster()).rejects.toBeInstanceOf(ApiUnavailable);
   });
 });
+
+// REDACT R3c: a PDF's bytes, streamed through the site as the API serves them to the public.
+describe('grpcReads.readFile', () => {
+  const FILE = '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7';
+  const head = (size: number, filename = 'picnic-with-withheld.pdf') => ({ part: { case: 'head' as const, value: { filename, mimeType: 'application/pdf', sizeBytes: BigInt(size) } } });
+  const chunk = (bytes: Uint8Array) => ({ part: { case: 'chunk' as const, value: bytes } });
+  const drainBody = async (body: ReadableStream<Uint8Array>) => Buffer.concat(await Array.fromAsync(body));
+
+  it('streams the head, then the bytes, as the public', async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        async *readFile(req) {
+          expect(req.fileId).toBe(FILE);
+          yield head(6);
+          yield chunk(Buffer.from('%PDF-'));
+          yield chunk(Buffer.from('1'));
+        },
+      }),
+    );
+    const file = await grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, () => {}).readFile(FILE);
+    expect(file.kind).toBe('pdf');
+    if (file.kind !== 'pdf') return;
+    expect({ filename: file.filename, size: file.size }).toEqual({ filename: 'picnic-with-withheld.pdf', size: 6 });
+    expect((await drainBody(file.body)).toString()).toBe('%PDF-1');
+    expect(api.seen.map((s) => s.path)).toEqual(['/nwfl.mensa.v1.ContentService/ReadFile']);
+    expect(api.seen[0]!.headers['authorization']).toBeUndefined();
+    expect(api.seen[0]!.headers['cookie']).toBeUndefined();
+  });
+
+  it('says not ready, and not found for NOT_FOUND', async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        async *readFile(req) {
+          if (req.fileId !== FILE) throw new ConnectError('file not found', Code.NotFound);
+          yield { part: { case: 'notReady' as const, value: {} } };
+        },
+      }),
+    );
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, () => {});
+    expect(await reads.readFile(FILE)).toEqual({ kind: 'not_ready' });
+    expect(await reads.readFile('00000000-0000-4000-8000-000000000000')).toEqual({ kind: 'not_found' });
+  });
+
+  it('turns a failure, an empty answer, one that does not start with its head, or a file over 10 MiB into ApiUnavailable', async () => {
+    for (const run of [
+      // eslint-disable-next-line require-yield
+      async function* () {
+        throw new ConnectError('pg: secret', Code.Internal);
+      },
+      async function* () {},
+      async function* () {
+        yield chunk(Buffer.from('%PDF-'));
+      },
+      async function* () {
+        yield head(10 * 1024 * 1024 + 1);
+        yield chunk(Buffer.from('%PDF-'));
+      },
+    ]) {
+      const api = await grpcServer((router) => router.service(ContentService, { readFile: run }));
+      const { lines, log } = logs();
+      await expect(grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, log).readFile(FILE)).rejects.toBeInstanceOf(ApiUnavailable);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ level: 'error', msg: 'api call failed', rpc: 'ReadFile' });
+      expect(JSON.stringify(lines)).not.toContain('secret');
+    }
+  });
+
+  it('fails the body, and logs it, when the stream breaks or runs past or short of its head', async () => {
+    for (const [name, run] of [
+      [
+        'broken',
+        async function* () {
+          yield head(10);
+          yield chunk(Buffer.from('%PDF-'));
+          throw new ConnectError('pg: secret', Code.Internal);
+        },
+      ],
+      [
+        'longer than its head',
+        async function* () {
+          yield head(3);
+          yield chunk(Buffer.from('%PDF-'));
+        },
+      ],
+      [
+        'shorter than its head',
+        async function* () {
+          yield head(30);
+          yield chunk(Buffer.from('%PDF-'));
+        },
+      ],
+      [
+        'a second head',
+        async function* () {
+          yield head(5);
+          yield head(5);
+        },
+      ],
+    ] as const) {
+      const api = await grpcServer((router) => router.service(ContentService, { readFile: run }));
+      const { lines, log } = logs();
+      const file = await grpcReads({ baseUrl: api.url, timeoutMs: 5000 }, log).readFile(FILE);
+      if (file.kind !== 'pdf') throw new Error(`${name}: ${file.kind}`);
+      await expect(drainBody(file.body), name).rejects.toThrow();
+      expect(lines, name).toEqual([expect.objectContaining({ level: 'error', msg: 'api stream failed', rpc: 'ReadFile' })]);
+      expect(JSON.stringify(lines)).not.toContain('secret');
+    }
+  });
+
+  it('stops reading when the reader goes away', async () => {
+    let sent = 0;
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        async *readFile() {
+          yield head(64 * 1024 * 100);
+          for (let n = 0; n < 100; n++) {
+            sent++;
+            yield chunk(new Uint8Array(64 * 1024));
+          }
+        },
+      }),
+    );
+    const file = await grpcReads({ baseUrl: api.url, timeoutMs: 5000 }, () => {}).readFile(FILE);
+    if (file.kind !== 'pdf') throw new Error(file.kind);
+    const reader = file.body.getReader();
+    await reader.read();
+    await reader.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sent).toBeLessThan(100);
+  });
+});

@@ -253,6 +253,14 @@ service ContentService {
   // Moves the edition to proof and pins the live version of each item with
   // the newsletter target in it.
   rpc FreezeEdition(FreezeEditionRequest) returns (FreezeEditionResponse);
+  // A PDF file's bytes as the caller's audience may have them (REDACT R3c):
+  // its current redacted copy, or the original only when the audience's
+  // policy shows everything. The first message is the head or "not ready";
+  // the chunks follow. A withheld file is answered exactly as a missing one:
+  // NOT_FOUND, "file not found".
+  rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
 message ListPublishedItemsRequest {
@@ -449,4 +457,28 @@ message FreezeEditionRequest {
 message FreezeEditionResponse {
   Edition edition = 1;
   int32 pinned_items = 2;
+}
+
+message ReadFileRequest {
+  string file_id = 1;
+}
+
+// What a file's bytes are served as.
+message FileHead {
+  // Built from the item's title as this audience sees it (ASCII letters,
+  // digits and hyphens), or the file's id; ends in .pdf.
+  string filename = 1;
+  string mime_type = 2;
+  int64 size_bytes = 3;
+}
+
+// The copy for this audience is still being made; ask again shortly.
+message FileNotReady {}
+
+message ReadFileResponse {
+  oneof part {
+    FileHead head = 1;
+    FileNotReady not_ready = 2;
+    bytes chunk = 3;
+  }
 }

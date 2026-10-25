@@ -44,11 +44,17 @@ describe('the route registry (e2e/routes.ts)', () => {
     expect(patternOf('/finances')).toBe('/finances');
     expect(patternOf('/events/0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20')).toBe('/events/[id]');
     expect(patternOf('/events/0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20_2026-11-04.ics')).toBe('/events/[id].ics');
+    expect(patternOf('/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf')).toBe('/documents/[id].pdf');
     expect(patternOf('/no/such/thing')).toBeUndefined();
   });
 
-  it('seeds the crawl with every route, an event by the id the API gave and a series date as <series>_<date>', () => {
-    const seeds = crawlSeeds({ eventIds: ['3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7', '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20:2026-11-04'], months: ['2026-11'] });
+  it('seeds the crawl with every route, an event and a file by the id the API gave and a series date as <series>_<date>', () => {
+    const seeds = crawlSeeds({
+      eventIds: ['3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7', '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20:2026-11-04'],
+      months: ['2026-11'],
+      fileIds: ['9c51279e-6426-43e6-a52c-3fa78711e10b'],
+    });
+    expect(seeds).toContain('/documents/9c51279e-6426-43e6-a52c-3fa78711e10b.pdf');
     expect(seeds).toContain('/events/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.ics');
     expect(seeds).toContain('/events/0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20_2026-11-04');
     expect(seeds).toContain('/events?month=2026-11');

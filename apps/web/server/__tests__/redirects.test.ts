@@ -53,6 +53,13 @@ describe('resolveOldUrl (R16)', () => {
     expect(resolveOldUrl('/excom-meeting-minutes-11-nov-2022.html', tables)).toEqual({ status: 301, location: '/minutes#2022-11-11' });
   });
 
+  // REDACT R3c: the old site's /files/ stays gone, so an item's PDF lives under /documents/.
+  it('leaves an item PDF at /documents/<id>.pdf to the site, while the old /files/ stays gone', () => {
+    const real = compileRedirects(JSON.parse(readFileSync(new URL('../old-site.json', import.meta.url), 'utf8')) as Parameters<typeof compileRedirects>[0]);
+    expect(resolveOldUrl('/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf', real)).toBeUndefined();
+    expect(resolveOldUrl('/files/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf', real)).toEqual({ status: 410 });
+  });
+
   it('never redirects a new page to itself', () => {
     expect(resolveOldUrl('/officers', tables)).toBeUndefined();
     expect(resolveOldUrl('/officers.html', tables)).toEqual({ status: 301, location: '/officers' });

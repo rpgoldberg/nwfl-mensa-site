@@ -1433,6 +1433,101 @@ export declare type FreezeEditionResponse = Message<"nwfl.mensa.v1.FreezeEdition
 export declare const FreezeEditionResponseSchema: GenMessage<FreezeEditionResponse>;
 
 /**
+ * @generated from message nwfl.mensa.v1.ReadFileRequest
+ */
+export declare type ReadFileRequest = Message<"nwfl.mensa.v1.ReadFileRequest"> & {
+  /**
+   * @generated from field: string file_id = 1;
+   */
+  fileId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ReadFileRequest.
+ * Use `create(ReadFileRequestSchema)` to create a new message.
+ */
+export declare const ReadFileRequestSchema: GenMessage<ReadFileRequest>;
+
+/**
+ * What a file's bytes are served as.
+ *
+ * @generated from message nwfl.mensa.v1.FileHead
+ */
+export declare type FileHead = Message<"nwfl.mensa.v1.FileHead"> & {
+  /**
+   * Built from the item's title as this audience sees it (ASCII letters,
+   * digits and hyphens), or the file's id; ends in .pdf.
+   *
+   * @generated from field: string filename = 1;
+   */
+  filename: string;
+
+  /**
+   * @generated from field: string mime_type = 2;
+   */
+  mimeType: string;
+
+  /**
+   * @generated from field: int64 size_bytes = 3;
+   */
+  sizeBytes: bigint;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.FileHead.
+ * Use `create(FileHeadSchema)` to create a new message.
+ */
+export declare const FileHeadSchema: GenMessage<FileHead>;
+
+/**
+ * The copy for this audience is still being made; ask again shortly.
+ *
+ * @generated from message nwfl.mensa.v1.FileNotReady
+ */
+export declare type FileNotReady = Message<"nwfl.mensa.v1.FileNotReady"> & {
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.FileNotReady.
+ * Use `create(FileNotReadySchema)` to create a new message.
+ */
+export declare const FileNotReadySchema: GenMessage<FileNotReady>;
+
+/**
+ * @generated from message nwfl.mensa.v1.ReadFileResponse
+ */
+export declare type ReadFileResponse = Message<"nwfl.mensa.v1.ReadFileResponse"> & {
+  /**
+   * @generated from oneof nwfl.mensa.v1.ReadFileResponse.part
+   */
+  part: {
+    /**
+     * @generated from field: nwfl.mensa.v1.FileHead head = 1;
+     */
+    value: FileHead;
+    case: "head";
+  } | {
+    /**
+     * @generated from field: nwfl.mensa.v1.FileNotReady not_ready = 2;
+     */
+    value: FileNotReady;
+    case: "notReady";
+  } | {
+    /**
+     * @generated from field: bytes chunk = 3;
+     */
+    value: Uint8Array;
+    case: "chunk";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ReadFileResponse.
+ * Use `create(ReadFileResponseSchema)` to create a new message.
+ */
+export declare const ReadFileResponseSchema: GenMessage<ReadFileResponse>;
+
+/**
  * @generated from enum nwfl.mensa.v1.ContentKind
  */
 export enum ContentKind {
@@ -1806,6 +1901,20 @@ export declare const ContentService: GenService<{
     methodKind: "unary";
     input: typeof FreezeEditionRequestSchema;
     output: typeof FreezeEditionResponseSchema;
+  },
+  /**
+   * A PDF file's bytes as the caller's audience may have them (REDACT R3c):
+   * its current redacted copy, or the original only when the audience's
+   * policy shows everything. The first message is the head or "not ready";
+   * the chunks follow. A withheld file is answered exactly as a missing one:
+   * NOT_FOUND, "file not found".
+   *
+   * @generated from rpc nwfl.mensa.v1.ContentService.ReadFile
+   */
+  readFile: {
+    methodKind: "server_streaming";
+    input: typeof ReadFileRequestSchema;
+    output: typeof ReadFileResponseSchema;
   },
 }>;
 

@@ -11,10 +11,14 @@
 // which test/routes.test.ts holds to the pages folder), every link those pages
 // lead to on this site, and every non-HTML output: the calendar files, each
 // event's file, sitemap.xml, robots.txt and the head of every page. No canary
-// may appear in any body or header, raw or however encoded. The redacted
+// may appear in any body or header, raw or however encoded. Every PDF it
+// fetches is read as pdf.js reads it, and searched raw with every Flate stream
+// inflated (REDACT R3c); the seeded PDF carries a marked canary. The redacted
 // copies must render (the positive control), so a fixture that never reached
 // a page cannot pass vacuously.
+import { inflateSync } from 'node:zlib';
 import { expect, test, type APIRequestContext } from '@playwright/test';
+import { PUBLIC_CACHE } from '../../server/policy.mjs';
 import { SESSION_COOKIE } from '../../server/policy.mjs';
 import { LIVE, STATIC, crawlSeeds, patternOf } from '../routes';
 import { REDACTION } from './servers';
@@ -23,6 +27,8 @@ interface Fixture {
   canaries: Record<string, string>;
   ids: Record<string, string>;
   plainSlug: string;
+  pdfPlain: string;
+  pdfOriginal: string;
   stored: Record<string, number>;
 }
 
@@ -32,6 +38,55 @@ interface Fetched {
   headers: Record<string, string>;
   contentType: string;
   body: string;
+  /** For a PDF: its text as pdf.js reads it, and how many Flate streams were inflated into the body. */
+  pdf?: { text: string; inflated: number };
+}
+
+type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+let pdfjs: Promise<PdfJs> | undefined;
+
+/** Every text pdf.js reads on every page, and in the document's metadata. */
+async function pdfText(bytes: Uint8Array): Promise<string> {
+  const { getDocument } = await (pdfjs ??= import('pdfjs-dist/legacy/build/pdf.mjs'));
+  const task = getDocument({ data: new Uint8Array(bytes), verbosity: 0, disableFontFace: true });
+  try {
+    const doc = await task.promise;
+    const parts: string[] = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      parts.push((await page.getTextContent()).items.map((item) => ('str' in item ? item.str : '')).join(' '));
+      parts.push(JSON.stringify(await page.getAnnotations()));
+    }
+    const meta = await doc.getMetadata();
+    parts.push(JSON.stringify(meta.info), String(meta.metadata?.getRaw() ?? ''));
+    return parts.join('\n');
+  } finally {
+    await task.destroy();
+  }
+}
+
+/** Every Flate stream in the file, inflated. */
+function inflatedStreams(bytes: Buffer): Buffer[] {
+  const out: Buffer[] = [];
+  const text = bytes.toString('latin1');
+  for (const m of text.matchAll(/stream\r?\n/g)) {
+    const start = m.index + m[0].length;
+    const end = text.indexOf('endstream', start);
+    if (end < 0) continue;
+    try {
+      out.push(inflateSync(bytes.subarray(start, end)));
+    } catch {
+      // Not a Flate stream.
+    }
+  }
+  return out;
+}
+
+/** A PDF as the crawl searches it: the raw bytes, every inflated stream, and the text pdf.js reads. */
+async function pdfBody(bytes: Buffer): Promise<{ body: string; pdf: { text: string; inflated: number } }> {
+  const streams = inflatedStreams(bytes);
+  const text = await pdfText(bytes);
+  return { body: [bytes.toString('latin1'), ...streams.map((s) => s.toString('latin1')), text].join('\n'), pdf: { text, inflated: streams.length } };
 }
 
 /** Case, accents, entities, percent-escapes, calendar folding and escapes, all undone. */
@@ -62,13 +117,14 @@ function context(f: Fixture) {
   const month = today.slice(0, 7);
   const [y, m] = month.split('-').map(Number) as [number, number];
   const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-  return { eventIds: [f.ids['games']!, f.ids['potluck']!, f.ids['online']!, `${f.ids['series']}:${today}`], months: [month, next] };
+  return { eventIds: [f.ids['games']!, f.ids['potluck']!, f.ids['online']!, `${f.ids['series']}:${today}`], months: [month, next], fileIds: [f.ids['pdf']!] };
 }
 
 async function get(request: APIRequestContext, url: string): Promise<Fetched> {
   const res = await request.get(url, { maxRedirects: 0 });
   const headers = res.headers();
   const contentType = headers['content-type'] ?? '';
+  if (contentType === 'application/pdf') return { url, status: res.status(), headers, contentType, ...(await pdfBody(await res.body())) };
   const body = TEXTUAL.test(contentType) || contentType === '' ? await res.text() : '';
   return { url, status: res.status(), headers, contentType, body };
 }
@@ -100,6 +156,18 @@ test.beforeAll(async ({ playwright }) => {
   const stack = await playwright.request.newContext();
   fixture = (await (await stack.get(`${REDACTION.stackUrl}/fixture`)).json()) as Fixture;
   await stack.dispose();
+});
+
+test('the PDF check finds the canaries in the original: it would see one in a copy', async () => {
+  const { body, pdf } = await pdfBody(Buffer.from(fixture.pdfOriginal, 'base64'));
+  expect(pdf.inflated).toBeGreaterThan(0);
+  expect(pdf.text).toContain(fixture.pdfPlain);
+  for (const name of ['phone', 'pdfName']) {
+    expect(fold(pdf.text), name).toContain(fold(fixture.canaries[name]!));
+    expect(fold(body), name).toContain(fold(fixture.canaries[name]!));
+  }
+  // The raw bytes alone do not show them: the page is compressed.
+  expect(Buffer.from(fixture.pdfOriginal, 'base64').toString('latin1')).not.toContain(fixture.canaries['pdfName']);
 });
 
 test('every canary is in the database the API reads: the seed reached its place', () => {
@@ -177,6 +245,21 @@ test('the event pages load by the id the API gave, and the calendar links them b
     expect(ics).toContain(`UID:${fixture.ids[key]}@nwflorida.us`);
     expect(fetched.get(`/events/${fixture.ids[key]}`)?.status, key).toBe(200);
   }
+});
+
+test('the PDF is linked where its item renders, and served as the redacted copy: a PDF, inline, publicly cached', () => {
+  const url = `/documents/${fixture.ids['pdf']}.pdf`;
+  expect(fetched.get('/finances')!.body).toContain(`href="${url}"`);
+  const pdf = fetched.get(url);
+  expect(pdf?.status).toBe(200);
+  expect(pdf!.contentType).toBe('application/pdf');
+  expect(pdf!.headers['content-disposition']).toMatch(/^inline; filename="[a-z0-9-]+\.pdf"$/);
+  expect(pdf!.headers['content-disposition']).toContain('withheld');
+  expect(pdf!.headers['cache-control']).toBe(PUBLIC_CACHE);
+  // The positive control: the copy was read, and it is not the original.
+  expect(pdf!.pdf?.text).toContain(fixture.pdfPlain);
+  expect(pdf!.pdf?.inflated).toBeGreaterThan(0);
+  expect(pdf!.body).not.toContain(Buffer.from(fixture.pdfOriginal, 'base64').toString('latin1'));
 });
 
 test('sitemap.xml and robots.txt list no API-made URL', () => {

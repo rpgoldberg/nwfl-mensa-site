@@ -6,13 +6,18 @@
 // production entrypoint (apps/api/dist/main.js; run `npm run build` in
 // apps/api first) with no token client at all, so every call is the public's.
 //
+// A PDF on a marked item carries a canary of its own and a marked phone
+// (REDACT R3c); the stack is ready only once the API's background job has
+// made its copies, so the crawl fetches a redacted copy, never "not ready".
+//
 // Ready when GET /fixture on STACK_PORT answers: the canaries, the ids the
 // test needs and how many times each canary is stored (the positive control:
 // a canary that never reached the database would pass vacuously). On SIGTERM
 // or SIGINT it stops the API and drops its database. Loopback only; the
 // superuser password is read from the environment and never printed.
 import { execFile, spawn } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { deflateSync } from 'node:zlib';
 import http from 'node:http';
 import path from 'node:path';
 
@@ -83,6 +88,8 @@ const C = {
   venueName: canary('venuename'),
   venueUrl: canary('venueurl'),
   homeName: canary('homename'),
+  // In the PDF and, so that its mark anchors (a mark found in no field hides the item), in the body.
+  pdfName: canary('pdfname'),
 };
 
 const ids = {
@@ -101,15 +108,53 @@ const ids = {
   games: randomUUID(),
   potluck: randomUUID(),
   online: randomUUID(),
+  pdf: randomUUID(),
 };
+/** What the PDF says besides its canaries: the crawl's sign that it read the copy. */
+const PDF_PLAIN = 'Bring a folding chair';
+
+/**
+ * A one-page PDF in Helvetica, its page drawn by a Flate-compressed content stream, with a correct
+ * cross-reference table. Built by hand: the web app carries no PDF writer.
+ * @param {string[]} lines
+ */
+function linesPdf(lines) {
+  const esc = (/** @type {string} */ t) => t.replace(/[\\()]/g, '\\$&');
+  const content = deflateSync(Buffer.from(lines.map((line, n) => `BT /F1 12 Tf 72 ${720 - 20 * n} Td (${esc(line)}) Tj ET`).join('\n'), 'latin1'));
+  /** @type {Buffer[]} */
+  const objects = [
+    Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
+    Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
+    Buffer.from('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>'),
+    Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'),
+    Buffer.concat([Buffer.from(`<< /Length ${content.length} /Filter /FlateDecode >>\nstream\n`), content, Buffer.from('\nendstream')]),
+  ];
+  const header = Buffer.from('%PDF-1.7\n');
+  const parts = [header];
+  /** @type {number[]} */
+  const offsets = [];
+  let at = header.length;
+  objects.forEach((body, i) => {
+    offsets.push(at);
+    const obj = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`), body, Buffer.from('\nendobj\n')]);
+    parts.push(obj);
+    at += obj.length;
+  });
+  const xref = [`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`, ...offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`)].join('');
+  parts.push(Buffer.from(`${xref}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${at}\n%%EOF\n`));
+  return Buffer.concat(parts);
+}
+
+const PDF = linesPdf([`Receipts: call ${C.phone} by Friday.`, `Signed by ${C.pdfName} for the board.`, `${PDF_PLAIN} to the picnic.`]);
 const PLAIN_SLUG = 'treasurer-plain-summary';
 
 const para = (/** @type {string[]} */ ...texts) => ({ type: 'paragraph', children: texts.map((text) => ({ type: 'text', text })) });
 
 /**
  * One published item, the way apps/api/test/helpers/content.ts publishes it: a version, ready with
- * its hash, approved with its public tree and search text, then live.
- * @param {{ id: string, slug: string, kind: string, office: string, title: string, summary?: string, body: unknown[], onBehalfOf?: string, daysAgo: number }} i
+ * its hash, approved with its public tree and search text, then live. A file is attached before
+ * the version is approved (an approved version's files are frozen, 0011).
+ * @param {{ id: string, slug: string, kind: string, office: string, title: string, summary?: string, body: unknown[], onBehalfOf?: string, daysAgo: number, file?: { id: string, bytes: Buffer } }} i
  */
 function item(i) {
   const v = randomUUID();
@@ -118,6 +163,12 @@ function item(i) {
 INSERT INTO content_item (id, slug, kind, office_id) VALUES (${q(i.id)}, ${q(i.slug)}, ${q(i.kind)}, ${q(i.office)});
 INSERT INTO content_version (id, item_id, n, title, summary, visibility, body_ast, created_by_sub, acting_office_id, target_newsletter, on_behalf_of)
   VALUES (${q(v)}, ${q(i.id)}, 1, ${q(i.title)}, ${i.summary ? q(i.summary) : 'NULL'}, 'public', ${j(body)}, 'sub-author', ${q(i.office)}, true, ${i.onBehalfOf ? q(i.onBehalfOf) : 'NULL'});
+${
+  i.file
+    ? `INSERT INTO stored_file (id, version_id, object_key, filename, mime_type, size_bytes, sha256, audience)
+  VALUES (${q(i.file.id)}, ${q(v)}, ${q(`files/${i.file.id}`)}, 'receipts.pdf', 'application/pdf', ${i.file.bytes.length}, decode(${q(createHash('sha256').update(i.file.bytes).digest('hex'))}, 'hex'), 'public');`
+    : ''
+}
 UPDATE content_version SET status = 'ready', content_hash = sha256(convert_to(${q(JSON.stringify(body))}, 'UTF8')), ready_at = now() WHERE id = ${q(v)};
 UPDATE content_version SET status = 'approved', approved_at = now() - interval '${i.daysAgo} days', approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
   public_ast = ${j(body)}, search_public = to_tsvector('english', ${q(i.title)}), search_members = to_tsvector('english', ${q(i.title)}) WHERE id = ${q(v)};
@@ -137,7 +188,7 @@ INSERT INTO office (id, slug, title, kind, sort_order, role_alias, role_alias_ve
 INSERT INTO office_term (office_id, holder_display_name, starts_on, status) VALUES
   (${q(ids.president)}, 'Alex Sample', '2026-01-01', 'active'),
   (${q(ids.treasurer)}, 'Riley Testcase', '2026-01-01', 'active');
-${item({ id: ids.accented, slug: `${C.slugName}-q3`, kind: 'treasurer_summary', office: ids.treasurer, title: `Report by ${C.accentedName}`, body: [para(`Receipts: call ${C.phone} by Friday.`)], daysAgo: 2 })}
+${item({ id: ids.accented, slug: `${C.slugName}-q3`, kind: 'treasurer_summary', office: ids.treasurer, title: `Report by ${C.accentedName}`, body: [para(`Receipts: call ${C.phone} by Friday.`), para(`Signed by ${C.pdfName}.`)], daysAgo: 2, file: { id: ids.pdf, bytes: PDF } })}
 ${item({ id: ids.plain, slug: PLAIN_SLUG, kind: 'treasurer_summary', office: ids.treasurer, title: 'April to June', body: [para('Closing balance: $2,543.10')], daysAgo: 90 })}
 ${item({ id: ids.report, slug: 'president-report', kind: 'president_report', office: ids.president, title: 'A busy autumn', onBehalfOf: `${C.byline}, guest writer`, body: [para(`Rides to the picnic: call ${C.reportPhone} any evening.`)], daysAgo: 1 })}
 ${item({ id: ids.whole, slug: 'remembering-a-friend', kind: 'announcement', office: ids.president, title: 'Remembering a friend', body: [para(`Words by ${C.whole}`)], daysAgo: 1 })}
@@ -156,6 +207,9 @@ INSERT INTO event_occurrence (id, title, starts_at, visibility, venue_id, status
   (${q(ids.online)}, 'Online chat', date_trunc('day', now()) + interval '4 days 23 hours', 'public', ${q(ids.room)}, 'scheduled', NULL, NULL, NULL, ${q(ids.president)});
 ${mark('content_item', ids.accented, 'title', C.accentedName, 'member_name')}
 ${mark('content_item', ids.accented, 'body', C.phone, 'member_phone')}
+${mark('content_item', ids.accented, 'body', C.pdfName, 'member_name')}
+-- The PDF's original, through the API's own writer (0015), which queues its copies.
+SELECT pdf_original_put(${q(ids.pdf)}, decode(${q(PDF.toString('hex'))}, 'hex'), 'sub-officer', ARRAY['nwfl-members', 'nwfl-officers'], NULL);
 ${mark('content_item', ids.report, 'body', C.reportPhone, 'member_phone')}
 ${mark('content_item', ids.report, 'on_behalf_of', C.byline, 'member_name')}
 ${mark('content_item', ids.whole, null, null, 'member_name')}
@@ -181,6 +235,9 @@ async function stored() {
     const counts = (await psql(db, `SELECT sum(count) FROM (${sql}) s;`)).trim();
     out[key] = Number(counts);
   }
+  // The PDF's text is compressed in the file: its canaries are counted in the stored original's bytes, as written.
+  const original = (await psql(db, `SELECT encode(bytes, 'hex') FROM pdf_original WHERE file_id = ${q(ids.pdf)};`)).trim();
+  if (Buffer.from(original, 'hex').equals(PDF)) for (const key of ['phone', 'pdfName']) out[key] = (out[key] ?? 0) + 1;
   return out;
 }
 
@@ -249,8 +306,16 @@ try {
     }
   });
   await waitReady();
+  // The API's background job makes the PDF's copies; the crawl starts once none is queued and the public's is made.
+  for (let tries = 0; ; tries++) {
+    const state = (await psql(db, `SELECT (SELECT count(*) FROM pdf_regen) || ' ' || (SELECT count(*) FROM pdf_copy WHERE file_id = ${q(ids.pdf)} AND status = 'ready');`)).trim();
+    if (state.startsWith('0 ') && Number(state.split(' ')[1]) > 0) break;
+    if (tries >= 120) throw new Error(`the PDF's copies were never made (${state})`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 
-  const fixture = JSON.stringify({ canaries: C, ids, plainSlug: PLAIN_SLUG, stored: counts });
+  // The original too, so the test can show its PDF check finds the canaries in it.
+  const fixture = JSON.stringify({ canaries: C, ids, plainSlug: PLAIN_SLUG, pdfPlain: PDF_PLAIN, pdfOriginal: PDF.toString('base64'), stored: counts });
   http
     .createServer((req, res) => {
       if (req.url !== '/fixture') {
