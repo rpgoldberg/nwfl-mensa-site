@@ -58,6 +58,8 @@ export interface Lens {
   hidden(subjects: readonly string[], version?: string): boolean;
   /** Whether any mark on these subjects changes what this audience sees. */
   affected(subjects: readonly string[]): boolean;
+  /** How many marks on these subjects change what this audience sees (the ledger's passages withheld). */
+  withheld(subjects: readonly string[]): number;
   text(value: string, subjects: readonly string[]): string;
   tree(tree: Tree, subjects: readonly string[]): Tree;
 }
@@ -393,6 +395,7 @@ export function lensFor(audience: string, policy: Policy, marks: readonly MarkRo
         return scope === undefined || !mark.anchoredIn.has(scope);
       }),
     affected: (subjects) => of(subjects).some((mark) => actionOf(mark.category) !== 'show'),
+    withheld: (subjects) => of(subjects).filter((mark) => actionOf(mark.category) !== 'show').length,
     text: (value, subjects) => {
       const list = patterns(subjects);
       return list.length === 0 ? value : withhold(value, list);

@@ -23,13 +23,14 @@
 import { randomBytes } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
 import { type DescMessage, type DescMethod, type MessageInitShape, fromBinary, toBinary } from '@bufbuild/protobuf';
-import { MethodOptions_IdempotencyLevel as Idempotency } from '@bufbuild/protobuf/wkt';
+import { MethodOptions_IdempotencyLevel as Idempotency, timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Audience } from '../../src/gen/nwfl/mensa/v1/common_pb.js';
 import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
 import {
+  LedgerSubjectKind,
   MarkField,
   MarkSubjectKind,
   RedactionAction,
@@ -107,6 +108,13 @@ describe.skipIf(!live)('the redaction leak contract', () => {
         { subjectKind: MarkSubjectKind.EVENT_OCCURRENCE, subjectId: ids['occurrence'] },
         { subjectKind: MarkSubjectKind.EVENT_SERIES, subjectId: ids['series'] },
       ],
+      // The publication ledger (R-LEDGER): read-only, officers only, and swept like a read.
+      LedgerAsOf: () =>
+        [RedactionAudience.PUBLIC, RedactionAudience.MEMBERS, RedactionAudience.OFFICERS].flatMap((audience) => [
+          { subjectKind: LedgerSubjectKind.STORED_FILE, subjectId: ids['publicFile'], audience, at: timestampFromDate(new Date()) },
+          { subjectKind: LedgerSubjectKind.STORED_FILE, subjectId: ids['wholeFile'], audience, at: timestampFromDate(new Date()) },
+        ]),
+      VerifyLedger: () => [{}],
     },
   };
 

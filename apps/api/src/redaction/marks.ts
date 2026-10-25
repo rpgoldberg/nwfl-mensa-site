@@ -22,6 +22,7 @@ import { requireOfficer, requireUser } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
+import { recordItems } from '../ledger/ledger.js';
 import {
   type MarkRemoval,
   MarkField,
@@ -200,6 +201,8 @@ export function markHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof Redac
           category,
           ...actor(caller),
         ]);
+        // The ledger covers content versions and PDFs; event renderings are a follow-up (R-LEDGER).
+        if (kind === 'content_item') await recordItems(client, [subject]);
         return { mark: markMessage(rows[0] as MarkRow) };
       });
     },
@@ -243,7 +246,10 @@ export function markHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof Redac
         if (found.status !== 'pending') throw precondition('this removal is not waiting for approval');
         if (found.proposed_by_sub === caller.subject) throw denied('a second officer approves this removal');
         const { rows } = await client.query<RemovalRow>(`SELECT ${REMOVAL_COLUMNS} FROM redaction_mark_approve_removal($1, $2, $3, $4)`, [id, ...actor(caller)]);
-        return { removal: removalMessage(rows[0] as RemovalRow) };
+        const removal = rows[0] as RemovalRow;
+        const item = (await client.query<{ content_item_id: string | null }>(`SELECT content_item_id FROM redaction_mark WHERE id = $1`, [removal.mark_id])).rows[0];
+        if (item?.content_item_id) await recordItems(client, [item.content_item_id]);
+        return { removal: removalMessage(removal) };
       });
     },
   };

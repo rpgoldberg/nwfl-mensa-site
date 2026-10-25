@@ -46,6 +46,7 @@ import { parseMarkup } from './markup.js';
 import { deriveForApproval, normalizeTree, referencedFiles, toProtoDocument } from './tree.js';
 import { bylineFor, itemHidden, slugFor } from './redact.js';
 import { loadLens } from '../redaction/lens.js';
+import { recordItems } from '../ledger/ledger.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
 
 export interface WorkflowDeps {
@@ -504,6 +505,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'approved',
           note: reason,
         });
+        await recordItems(client, [item.id]);
         return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },
@@ -519,6 +521,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         // A takedown beats the pin: the item stays out of every frozen edition it is pinned in, even once republished.
         await client.query(`UPDATE edition_item SET taken_down_at = now() WHERE item_id = $1 AND taken_down_at IS NULL`, [item.id]);
         await recordAudit(client, caller, { action: 'withdraw', subjectKind: 'content_item', subjectId: item.id, itemId: item.id, fromState: 'published', toState: 'withdrawn' });
+        await recordItems(client, [item.id]);
         return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },

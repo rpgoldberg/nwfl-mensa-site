@@ -21,6 +21,7 @@
 import { createHash } from 'node:crypto';
 import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
+import { markActive, policyCells } from '../redaction/lens.js';
 import { CATEGORIES, TENANT, cellKey, resolveAction } from '../redaction/policy.js';
 import type { ImageAction } from './images.js';
 import type { RedactRequest } from './redact.js';
@@ -52,8 +53,11 @@ export function inputHash(sha256: Uint8Array, request: RedactRequest, engine = E
   return createHash('sha256').update(canonical).digest();
 }
 
-/** What this audience is given for the file; null when the file has no stored original or is not for this audience. */
-export async function inputsFor(db: Query, fileId: string, audience: string): Promise<Inputs | null> {
+/**
+ * What this audience is given for the file; null when the file has no stored original or is not for
+ * this audience. `asOf`: from the policy and marks as they stood then (the ledger's re-render).
+ */
+export async function inputsFor(db: Query, fileId: string, audience: string, asOf?: Date): Promise<Inputs | null> {
   const asked = RANK[audience];
   if (asked === undefined) return null;
   const [file, cells, marks] = await Promise.all([
@@ -61,15 +65,15 @@ export async function inputsFor(db: Query, fileId: string, audience: string): Pr
       `SELECT f.audience, f.sha256 FROM stored_file f WHERE f.id = $1 AND EXISTS (SELECT 1 FROM pdf_original o WHERE o.file_id = f.id)`,
       [fileId],
     ),
-    db.query<{ category: string; action: string }>(`SELECT category, action FROM redaction_policy WHERE tenant_id = $1 AND audience = $2`, [TENANT, audience]),
+    policyCells(db, audience, asOf),
     db.query<{ quote: string | null; category: string }>(
-      `SELECT quote, category FROM redaction_mark WHERE tenant_id = $1 AND status = 'active' AND content_item_id IN (SELECT pdf_file_items($2))`,
-      [TENANT, fileId],
+      `SELECT quote, category FROM redaction_mark WHERE tenant_id = $1 AND ${markActive(asOf, 3)} AND content_item_id IN (SELECT pdf_file_items($2))`,
+      [TENANT, fileId, ...(asOf === undefined ? [] : [asOf])],
     ),
   ]);
   const row = file.rows[0];
   if (row === undefined || (RANK[row.audience] as number) > asked) return null;
-  const policy = new Map(cells.rows.map((cell) => [cellKey(audience, cell.category), cell.action]));
+  const policy = new Map(cells.map((cell) => [cellKey(audience, cell.category), cell.action]));
   const action = (category: string) => resolveAction(policy, audience, category);
   if (marks.rows.some((mark) => action(mark.category) === 'hide' || (mark.quote === null && action(mark.category) !== 'show'))) return { kind: 'hidden' };
   if (CATEGORIES.every((category) => action(category) === 'show')) return { kind: 'original' };

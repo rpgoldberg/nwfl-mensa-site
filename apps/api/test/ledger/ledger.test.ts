@@ -23,7 +23,7 @@ import {
 } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { canonicalText, ledgerAsOf, recordAll, recordItems, renderVersion, verifyLedger } from '../../src/ledger/ledger.js';
 import { type Redact, drain } from '../../src/pdf/regenerate.js';
-import { storeOriginal } from '../../src/pdf/store.js';
+import { ENGINE_VERSION, storeOriginal } from '../../src/pdf/store.js';
 import { type Api, MEMBER, OFFICER, as, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
 import { APP, APP_PW, live, sqlstate, url, urlFor } from '../helpers/pg.js';
@@ -209,7 +209,9 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       const head = (await q<{ seq: string; row_hash: Buffer }>(`SELECT seq, row_hash FROM publication_ledger_head`)).rows[0]!;
       expect(Number(head.seq)).toBe(chain.length);
       expect(head.row_hash).toEqual(chain.at(-1)!.row_hash);
-      expect(await verifyLedger(api.pool)).toMatchObject({ intact: true, rows: chain.length, firstBreak: null });
+      const verdict = await verifyLedger(api.pool);
+      expect(verdict.problem).toBe('');
+      expect(verdict).toMatchObject({ intact: true, rows: chain.length, firstBreak: null });
     });
   });
 
@@ -305,9 +307,20 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       await expect(
         redaction.ledgerAsOf({ subjectKind: LedgerSubjectKind.CONTENT_VERSION, subjectId: versionId, audience: RedactionAudience.PUBLIC, at: timestampFromDate(new Date()) }, MEMBER),
       ).rejects.toMatchObject({ code: Code.PermissionDenied });
-      await expect(
-        redaction.ledgerAsOf({ subjectKind: LedgerSubjectKind.UNSPECIFIED, subjectId: versionId, audience: RedactionAudience.PUBLIC, at: timestampFromDate(new Date()) }, OFFICER),
-      ).rejects.toMatchObject({ code: Code.InvalidArgument });
+      const now = await redaction.ledgerAsOf(
+        { subjectKind: LedgerSubjectKind.CONTENT_VERSION, subjectId: versionId.toUpperCase(), audience: RedactionAudience.MEMBERS, at: timestampFromDate(new Date()) },
+        OFFICER,
+      );
+      expect(now.matches).toBe(true);
+      expect(now.row?.currentTo).toBeUndefined();
+      expect(now.row?.currentFrom).toBeDefined();
+      const none = await redaction.ledgerAsOf({ subjectKind: LedgerSubjectKind.STORED_FILE, subjectId: versionId, audience: RedactionAudience.PUBLIC, at: timestampFromDate(new Date()) }, OFFICER);
+      expect(none).toMatchObject({ matches: false, detail: 'no row was current then' });
+      expect(none.row).toBeUndefined();
+      const good = { subjectKind: LedgerSubjectKind.CONTENT_VERSION, subjectId: versionId, audience: RedactionAudience.PUBLIC, at: timestampFromDate(new Date()) };
+      for (const bad of [{ subjectKind: LedgerSubjectKind.UNSPECIFIED }, { audience: RedactionAudience.UNSPECIFIED }, { subjectId: 'not-a-uuid' }, { at: undefined }]) {
+        await expect(redaction.ledgerAsOf({ ...good, ...bad }, OFFICER), JSON.stringify(bad)).rejects.toMatchObject({ code: Code.InvalidArgument });
+      }
     });
 
     it('reports a re-render that does not match the row when the history was tampered with', async () => {
@@ -353,13 +366,21 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       // A second version goes live (as approval does it, by SQL here, so nothing records it yet).
       const v2 = await insertId(
         api.pool,
-        `INSERT INTO content_version (item_id, n, title, visibility, body_ast, created_by_sub, acting_office_id) VALUES ($1, 2, 'Officers only', 'officers', $2, 'sub-author', $3) RETURNING id`,
+        `INSERT INTO content_version (item_id, n, title, visibility, body_ast, created_by_sub, acting_office_id, target_newsletter)
+         VALUES ($1, 2, 'Officers only', 'officers', $2, 'sub-author', $3, false) RETURNING id`,
         [secret.itemId, JSON.stringify({ blocks: [paragraph(text('y'))] }), office],
       );
       await q(`UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [v2, sha(Buffer.from('y'))]);
-      await q(`UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal', public_ast = '{"blocks":[]}' WHERE id = $1`, [v2]);
-      await q(`UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [secret.itemId, v2]);
-      await q(`UPDATE content_version SET status = 'superseded' WHERE id = $1`, [secret.versionId]);
+      const tx = await api.pool.connect();
+      try {
+        await tx.query('BEGIN');
+        await tx.query(`UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal', public_ast = '{"blocks":[]}' WHERE id = $1`, [v2]);
+        await tx.query(`UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [secret.itemId, v2]);
+        await tx.query(`UPDATE content_version SET status = 'superseded' WHERE id = $1`, [secret.versionId]);
+        await tx.query('COMMIT');
+      } finally {
+        tx.release();
+      }
       expect(await recordAll(api.pool)).toBe(2);
       const closed = (await current(secret.versionId, 'officers'))!;
       expect(closed.output_sha256).toBeNull();
@@ -372,7 +393,7 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
 
   describe('PDF copies', () => {
     const OWNER = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
-    const stub: Redact = async (_original, request) => ({ kind: 'redacted', pdf: new Uint8Array(Buffer.from(`copy:${[...request.quotes].sort().join('|')}`)), boxes: [] });
+    const stub: Redact = (_original, request) => Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(Buffer.from(`copy:${[...request.quotes].sort().join('|')}`)), boxes: [] });
     let file: string;
     let item: string;
     let original: Uint8Array;
@@ -396,11 +417,15 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       const officers = (await current(file, 'officers'))!;
       expect(officers.output_sha256).toEqual(sha(original));
       expect(officers.inputs).toMatchObject({ served: 'original', file_id: file, original_sha256: sha(original).toString('hex') });
+      const asOfOfficers = await ledgerAsOf(api.pool, 'stored_file', file, 'officers', new Date());
+      expect(asOfOfficers.matches, asOfOfficers.detail).toBe(true);
+      expect(asOfOfficers.rerender).toEqual(sha(original));
       const pub = (await current(file, 'public'))!;
       expect(pub.inputs['served']).toBe('copy');
       const copy = (await q<{ bytes: Buffer }>(`SELECT bytes FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [file, pub.inputs['input_hash']])).rows[0]!;
       expect(pub.output_sha256).toEqual(sha(copy.bytes));
-      expect(pub.inputs).toMatchObject({ engine: expect.stringContaining('pdfium'), image: 'blur' });
+      expect(pub.inputs['engine']).toBe(ENGINE_VERSION);
+      expect(pub.inputs['image']).toBe('blur');
     });
 
     it('records "not ready" in the mark transaction, then the new copy, and re-renders each as of its time', async () => {
@@ -435,6 +460,19 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       const target = (await q<{ seq: string }>(`SELECT seq FROM publication_ledger ORDER BY seq OFFSET 4 LIMIT 1`)).rows[0]!.seq;
       // As the superuser, with the guard trigger off for this session.
       await owner.query(`SET session_replication_role = replica`);
+      // current_to is outside the hash; the successor's current_from proves it.
+      const closed = (await q<{ seq: string }>(`SELECT seq FROM publication_ledger WHERE current_to IS NOT NULL ORDER BY seq LIMIT 1`)).rows[0]!.seq;
+      await owner.query(`UPDATE publication_ledger SET current_to = current_to + interval '1 second' WHERE seq = $1`, [closed]);
+      expect(await verifyLedger(api.pool)).toMatchObject({ intact: false, firstBreak: Number(closed), problem: expect.stringMatching(/window/) as unknown });
+      await owner.query(`UPDATE publication_ledger SET current_to = current_to - interval '1 second' WHERE seq = $1`, [closed]);
+      const open = (await q<{ seq: string }>(`SELECT seq FROM publication_ledger WHERE current_to IS NULL ORDER BY seq LIMIT 1`)).rows[0]!.seq;
+      await owner.query(`UPDATE publication_ledger SET current_to = current_from WHERE seq = $1`, [open]);
+      expect(await verifyLedger(api.pool)).toMatchObject({ intact: false, firstBreak: Number(open), problem: expect.stringMatching(/no later row/) as unknown });
+      await owner.query(`UPDATE publication_ledger SET current_to = NULL WHERE seq = $1`, [open]);
+      await owner.query(`UPDATE publication_ledger_head SET seq = seq - 1`);
+      expect(await verifyLedger(api.pool)).toMatchObject({ intact: false, problem: expect.stringMatching(/head/) as unknown });
+      await owner.query(`UPDATE publication_ledger_head SET seq = seq + 1`);
+      expect(await verifyLedger(api.pool)).toMatchObject({ intact: true });
       await owner.query(`UPDATE publication_ledger SET passages_withheld = passages_withheld + 7 WHERE seq = $1`, [target]);
       const broken = await verifyLedger(api.pool);
       expect(broken).toMatchObject({ intact: false, firstBreak: Number(target) });
