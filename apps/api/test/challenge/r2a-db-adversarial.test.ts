@@ -2,7 +2,7 @@
 // CHALLENGER (R2a): 0014 as the app role. Each assertion is the SECURE outcome; red = finding.
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { APP, APP_PW, asSuper, dropDatabase, freshDatabase, live, migrate, sqlstate, urlFor } from '../helpers/pg.js';
+import { APP, APP_PW, asSuper, dropDatabase, freshDatabase, live, migrate, sqlstate, urlFor, testPool } from '../helpers/pg.js';
 
 const OFF = ['nwfl-members', 'nwfl-officers'];
 describe.skipIf(!live)('R2a challenge: 0014 as nwfl', () => {
@@ -17,7 +17,7 @@ describe.skipIf(!live)('R2a challenge: 0014 as nwfl', () => {
     db = await freshDatabase('nwfl_chaldb');
     const run = await migrate(db);
     expect(run.code, run.stderr).toBe(0);
-    app = new pg.Pool({ connectionString: urlFor(APP, APP_PW, db), max: 8 });
+    app = testPool({ connectionString: urlFor(APP, APP_PW, db), max: 8 });
     const office = (await app.query<{ id: string }>(`INSERT INTO office (slug, title, kind) VALUES ('pubs', 'Pubs', 'appointed') RETURNING id`)).rows[0]!.id;
     item = (await app.query<{ id: string }>(`INSERT INTO content_item (slug, kind, office_id) VALUES ('x', 'article', $1) RETURNING id`, [office])).rows[0]!.id;
     const ledger = await asSuper(async (c) => { await c.query(`SELECT 1`); return 0; });

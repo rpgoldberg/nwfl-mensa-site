@@ -12,7 +12,7 @@ import { apiRoutes } from '../../src/grpc/routes.js';
 import { apiInterceptors } from '../../src/grpc/interceptors.js';
 import { createGrpcServer } from '../../src/grpc/server.js';
 import { createStructuredLogger } from '../../src/platform/logger.js';
-import { APP, APP_PW, WORKER, WORKER_PW, dropDatabase, freshDatabase, migrate, urlFor } from './pg.js';
+import { APP, APP_PW, WORKER, WORKER_PW, dropDatabase, freshDatabase, migrate, urlFor, testPool } from './pg.js';
 import { captureLogs, closeHard, listen } from './servers.js';
 
 export const MEMBER = { headers: { authorization: 'Bearer member-token' } };
@@ -85,8 +85,8 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const db = await freshDatabase(prefix);
   const run = await migrate(db);
   if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
-  const pool = new pg.Pool({ connectionString: urlFor(APP, APP_PW, db), max: 4 });
-  const worker = new pg.Pool({ connectionString: urlFor(WORKER, WORKER_PW, db), max: 2 });
+  const pool = testPool({ connectionString: urlFor(APP, APP_PW, db), max: 4 });
+  const worker = testPool({ connectionString: urlFor(WORKER, WORKER_PW, db), max: 2 });
   // The member reads at member level because member_account says so (AC6 b), not because of its token groups.
   await pool.query(
     `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES ('sub-member', 'member', 'signup', 'sub-approver', now(), '2026-10-01')`,

@@ -92,12 +92,23 @@ export function describeTarget(env: Env = process.env): string {
   return `${host}:${env['PGPORT'] ?? '5432'}/${env['PGDATABASE'] ?? 'nwfl'}`;
 }
 
-export function createPool(env: Env = process.env): pg.Pool {
-  const pool = new pg.Pool(poolConfigFromEnv(env));
-  // An IDLE client dropping emits 'error' on the pool; unhandled, that would
-  // crash the process. Checked-out clients surface errors per query.
-  pool.on('error', () => {});
+/** How a pool reports a dropped idle connection: a structured logger's warn. */
+export type Warn = (fields: Record<string, unknown>, message: string) => void;
+
+/**
+ * An IDLE client the server ends (a restart, a failover, idle_in_transaction_session_timeout)
+ * emits 'error' on its pool; with no listener that would crash the process. The pool drops the
+ * client and opens a new one for the next query, so this only logs: the error's code, never its
+ * message or client, which carry the connection's details and password. Checked-out clients
+ * surface their errors per query.
+ */
+export function onIdleError(pool: pg.Pool, warn: Warn = () => {}): pg.Pool {
+  pool.on('error', (error) => warn({ error_code: (error as { code?: string }).code ?? 'UNKNOWN' }, 'an idle database connection was dropped; the pool opens a new one'));
   return pool;
+}
+
+export function createPool(env: Env = process.env, warn?: Warn): pg.Pool {
+  return onIdleError(new pg.Pool(poolConfigFromEnv(env)), warn);
 }
 
 /** The slice of pg.Pool a probe needs, so readiness is testable without a database. */

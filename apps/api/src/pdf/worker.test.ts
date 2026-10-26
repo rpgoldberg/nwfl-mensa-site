@@ -35,6 +35,14 @@ describe('createWorkerPool', () => {
     await pool.end();
     expect(() => createWorkerPool({ PGUSER: 'nwfl' })).toThrow('not nwfl');
   });
+
+  it('logs a dropped idle client at warn with the code only', async () => {
+    const warned: unknown[] = [];
+    const pool = createWorkerPool({ PGHOST: '127.0.0.1', PGPORT: '1' }, (fields) => void warned.push(fields));
+    pool.emit('error', Object.assign(new Error('gone'), { code: '57P01' }));
+    await pool.end();
+    expect(warned).toEqual([{ error_code: '57P01' }]);
+  });
 });
 
 describe('runWorker', () => {

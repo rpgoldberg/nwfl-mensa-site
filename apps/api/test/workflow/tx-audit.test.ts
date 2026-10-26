@@ -7,7 +7,7 @@ import { recordAudit } from '../../src/audit/audit.js';
 import type { Caller } from '../../src/auth/caller.js';
 import { inTransaction } from '../../src/db/tx.js';
 import { startTelemetry, type Telemetry } from '../../src/platform/telemetry.js';
-import { APP, APP_PW, dropDatabase, freshDatabase, live, migrate, urlFor } from '../helpers/pg.js';
+import { APP, APP_PW, dropDatabase, freshDatabase, live, migrate, urlFor, testPool } from '../helpers/pg.js';
 
 const officer: Caller = { kind: 'user', subject: 'sub-officer', groups: ['nwfl-officers', 'nwfl-office-treasurer'], scopes: [], audience: 'officers' };
 
@@ -21,7 +21,7 @@ describe.skipIf(!live)('inTransaction and recordAudit', () => {
     db = await freshDatabase('nwfl_txaudit');
     const run = await migrate(db);
     if (run.code !== 0) throw new Error(run.stderr);
-    pool = new pg.Pool({ connectionString: urlFor(APP, APP_PW, db), max: 2 });
+    pool = testPool({ connectionString: urlFor(APP, APP_PW, db), max: 2 });
   });
 
   afterAll(async () => {

@@ -87,6 +87,18 @@ describe('createPool', () => {
     pool.emit('error', new Error('idle client dropped'));
     await pool.end();
   });
+
+  it('logs a dropped idle client at warn with the code only, never the connection', async () => {
+    const warned: Array<[Record<string, unknown>, string]> = [];
+    const pool = createPool({ DATABASE_URL: 'postgres://nwfl:s3cret@db:5432/nwfl' }, (fields, message) => void warned.push([fields, message]));
+    pool.emit('error', Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01', client: { password: 's3cret' } }));
+    pool.emit('error', new Error('no code'));
+    await pool.end();
+    expect(warned).toEqual([
+      [{ error_code: '57P01' }, 'an idle database connection was dropped; the pool opens a new one'],
+      [{ error_code: 'UNKNOWN' }, 'an idle database connection was dropped; the pool opens a new one'],
+    ]);
+  });
 });
 
 describe('probeDatabase', () => {
