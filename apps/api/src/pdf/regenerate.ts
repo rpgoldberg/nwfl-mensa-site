@@ -16,7 +16,7 @@ import type { Db } from '../db/pool.js';
 import { AUDIENCES } from '../redaction/policy.js';
 import { type RedactRequest, type RedactResult, redactPdf } from './redact.js';
 import { ENGINE_VERSION, inputsFor } from './store.js';
-import { recordFiles } from '../ledger/ledger.js';
+import { recordClaimedFile } from '../ledger/ledger.js';
 
 type Query = Pick<Db, 'query'>;
 
@@ -64,20 +64,22 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
         await db.query(`SELECT pdf_copy_put($1, $2, $3, $4, $5, $6)`, [fileId, claim, target.hash, ENGINE_VERSION, copy.pdf, copy.reason]);
       }
     }
+    // The ledger records what each audience is given now (R-LEDGER), under the claim, and the run
+    // finishes in the same transaction (0019: the worker appends only for the file it holds).
+    const done = await recordClaimedFile(db, fileId, claim, async (client) => {
+      const finished = await client.query<{ done: boolean }>(`SELECT pdf_regen_finish($1, $2, $3::bytea[]) AS done`, [
+        fileId,
+        claim,
+        [...targets.values()].map((target) => target.hash),
+      ]);
+      return finished.rows[0]?.done === true;
+    });
+    return { fileId, done };
   } catch (error) {
     // The lease ran out and another run holds the file now.
     if ((error as { code?: string }).code === '42501') return { fileId, done: false };
     throw error;
   }
-  const finished = await db.query<{ done: boolean }>(`SELECT pdf_regen_finish($1, $2, $3::bytea[]) AS done`, [
-    fileId,
-    claim,
-    [...targets.values()].map((target) => target.hash),
-  ]);
-  const done = finished.rows[0]?.done === true;
-  // Its copies are current: the ledger records what each audience is given now (R-LEDGER).
-  if (done) await recordFiles(db, [fileId]);
-  return { fileId, done };
 }
 
 /** Runs until nothing is queued (at most `max` runs); returns how many ran. */

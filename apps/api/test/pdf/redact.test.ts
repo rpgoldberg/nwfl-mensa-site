@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { type RedactResult, redactPdf, verifyRedacted } from '../../src/pdf/redact.js';
 import { extractAll, leaked, rawText } from './extract.js';
-import { CANARIES, type CanaryName, ON_PAGE, leakFixture, pictureUnderTextFixture, scannedFixture, twoMarksFixture, unmappedFixture, untaggedPropertiesFixture } from './fixtures.js';
+import { CANARIES, type CanaryName, ON_PAGE, leakFixture, linesPdf, pictureUnderTextFixture, scannedFixture, twoMarksFixture, unmappedFixture, untaggedPropertiesFixture } from './fixtures.js';
 
 const ALL = Object.keys(CANARIES) as CanaryName[];
 const quotes = (names: readonly CanaryName[]): string[] => names.map((name) => CANARIES[name].quote);
@@ -155,5 +155,16 @@ describe('redactPdf: fail closed', () => {
 
   it('reports a file the check cannot open', async () => {
     expect(await verifyRedacted(Buffer.from('nope'), ['x'])).toBe('the PDF could not be opened');
+  });
+});
+
+describe('redactPdf: a mark is a whole word, letter-spaced or not (HARDEN-1)', () => {
+  it('leaves "befo" inside "before" alone, plain or letter-spaced, and removes "B e f o" standing alone', async () => {
+    const original = await linesPdf(['Come before noon.', 'Come b e f o r e noon.', 'Ask B e f o today.']);
+    const seen = await readBack(copyOf(await redactPdf(original, { quotes: ['befo'], redactsAny: true })));
+    expect(seen.extracted).toContain('Come before noon.');
+    expect(seen.extracted).toContain('Come b e f o r e noon.');
+    expect(seen.extracted).not.toMatch(/B\s*e\s*f\s*o/);
+    expect(seen.extracted).toContain('Ask');
   });
 });

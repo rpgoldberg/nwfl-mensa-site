@@ -8,8 +8,12 @@
 //   joined     a line break is a space, and a word hyphenated at a line end is
 //              one word again ("Wren-" / "hallow" reads "Wrenhallow");
 //   kept       the line-end hyphen stays ("Smith-" / "Jones" reads "Smith-Jones");
-//   spaced     runs of single letters ("K e s t r e l") rejoined, and matched
-//              without word edges, since a spaced run gives none;
+//   spaced     runs of single letters ("K e s t r e l") rejoined, one run a
+//              line, and matched as whole words of the rejoined run: "B e f o"
+//              reads "Befo" and is withheld, but a mark "befo" leaves
+//              "b e f o r e" alone (HARDEN-1). A spaced word run straight on
+//              into the next ("K e s t r e l n o w", no wider gap) reads as
+//              one word and is not matched: the run gives no word edge;
 //   collapsed  the spaces between single letters taken out, the rest kept,
 //              so a word spaced beside a plain one ("J u n o Blackwood")
 //              reads "Juno Blackwood", matched as whole words.
@@ -137,14 +141,9 @@ export function matchedChars(chars: readonly PageChar[], quotes: readonly string
   const out = new Set<number>();
   if (quotes.length === 0) return out;
   const joined = read(chars, false);
-  const readings: Array<[Reading, boolean]> = [
-    [joined, true],
-    [read(chars, true), true],
-    [spaced(joined), false],
-    [collapsed(joined), true],
-  ];
-  for (const [reading, wholeWords] of readings) {
-    for (const [start, end] of quoteSpans(reading.text, quotes, wholeWords)) {
+  // Every reading as whole words: a mark never takes letters out of the middle of a word.
+  for (const reading of [joined, read(chars, true), spaced(joined), collapsed(joined)]) {
+    for (const [start, end] of quoteSpans(reading.text, quotes)) {
       for (let u = start; u < end; u++) for (const i of reading.source[u] as number[]) out.add(i);
     }
   }

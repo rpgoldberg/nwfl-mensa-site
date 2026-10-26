@@ -34,7 +34,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY vendor ./vendor
 # --omit=optional: pdf.js's optional canvas (@napi-rs/canvas, about 71 MB) is only for rendering;
-# the gate only reads text. @cantoo/pdf-lib: Node loads es/ (and dist/standard-fonts, dist/upng),
+# the gate only reads text. Without it pdf.js prints three "Warning: Cannot ..." lines on its first
+# load (src/pdf/gate.ts): expected. @cantoo/pdf-lib: Node loads es/ (and dist/standard-fonts, dist/upng),
 # never its CommonJS build, sources or UMD bundles.
 RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund && npm cache clean --force && cd node_modules/@cantoo/pdf-lib && rm -rf cjs src ts3.4 dist/*.js dist/*.map && cd /app && chmod -R u=rwX,go=rX node_modules
 

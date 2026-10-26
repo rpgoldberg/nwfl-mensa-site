@@ -156,6 +156,7 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
         'publication_ledger_lock_trigger',
         'publication_ledger_original',
         'publication_ledger_record',
+        'publication_ledger_record_file',
         'publication_ledger_stamp',
         'publication_ledger_stamp_change',
         'publication_ledger_stamp_mark',

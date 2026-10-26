@@ -23,6 +23,13 @@ const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 // server's own error first. keepAlive lets the kernel notice a dead peer.
 const DEFAULT_STATEMENT_TIMEOUT_MS = 10_000;
 const DEFAULT_QUERY_TIMEOUT_MS = 12_000;
+// HARDEN-1: one row (publication_ledger_head) serializes every ledger append and every change that
+// can alter a rendering. A writer waiting on it gives up after lock_timeout rather than queueing
+// behind a stuck holder, and a transaction left open and idle is ended by the server after
+// idle_in_transaction_session_timeout, so no connection can hold the lock indefinitely. Both are
+// startup parameters, so they are set on every connection the pool opens, the worker's too.
+const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_IDLE_TX_TIMEOUT_MS = 30_000;
 
 const positive = (value: string | undefined, fallback: number): number => {
   const parsed = Number(value);
@@ -63,6 +70,8 @@ export function poolConfigFromEnv(env: Env = process.env): pg.PoolConfig {
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     statement_timeout: positive(env['PG_STATEMENT_TIMEOUT_MS'], DEFAULT_STATEMENT_TIMEOUT_MS),
     query_timeout: positive(env['PG_QUERY_TIMEOUT_MS'], DEFAULT_QUERY_TIMEOUT_MS),
+    lock_timeout: positive(env['PG_LOCK_TIMEOUT_MS'], DEFAULT_LOCK_TIMEOUT_MS),
+    idle_in_transaction_session_timeout: positive(env['PG_IDLE_TX_TIMEOUT_MS'], DEFAULT_IDLE_TX_TIMEOUT_MS),
     keepAlive: true,
   };
 }

@@ -27,6 +27,14 @@ import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, type 
 import { probeFolded } from '../redaction/render.js';
 import { textMatches } from './match.js';
 
+// pdf.js is loaded on the first check, and on load it prints three lines in the image (HARDEN-1):
+//   Warning: Cannot load "@napi-rs/canvas" package: ...
+//   Warning: Cannot polyfill `DOMMatrix`, rendering may be broken.
+//   Warning: Cannot polyfill `Path2D`, rendering may be broken.
+// They are expected and harmless. The image leaves out the optional canvas (Dockerfile:
+// --omit=optional, about 71 MB) because the gate never renders a page: it only reads text
+// (getTextContent), which needs neither. pdf.js prints them while the module loads, before any
+// option (verbosity) can reach it, so no setting silences them; installing the canvas would.
 type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 let pdfjs: Promise<PdfJs> | undefined;
 
