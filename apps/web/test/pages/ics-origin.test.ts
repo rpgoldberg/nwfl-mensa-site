@@ -46,6 +46,12 @@ describe.each([
     expect(body).not.toContain('localhost');
   });
 
+  it('uses the canary host of the new domain', async () => {
+    const body = (await text(get(ctx('canary.nwflmensa.us')) as Promise<Response>)).replace(/\r\n /g, '');
+    expect(body).toContain(`https://canary.nwflmensa.us${e.path}`);
+    expect(body).not.toContain('localhost');
+  });
+
   it('falls back to the configured site for any other Host', async () => {
     const body = (await text(get(ctx('evil.example')) as Promise<Response>)).replace(/\r\n /g, '');
     expect(body).toContain(`https://nwflorida.us${e.path}`);

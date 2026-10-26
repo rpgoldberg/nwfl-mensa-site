@@ -6,7 +6,7 @@ const SITE = new URL('https://nwflorida.us');
 const asked = (host: string | undefined, url = 'http://localhost:8080/events'): Request => new Request(url, host === undefined ? {} : { headers: { host } });
 
 describe('publicOrigin', () => {
-  it.each(['canary.nwflorida.us', 'nwflorida.us', 'www.nwflorida.us', 'nwflmensa.us', 'www.nwflmensa.us'])('trusts the Host %s', (host) => {
+  it.each(['canary.nwflorida.us', 'canary.nwflmensa.us', 'nwflorida.us', 'www.nwflorida.us', 'nwflmensa.us', 'www.nwflmensa.us'])('trusts the Host %s', (host) => {
     expect(publicOrigin(asked(host), SITE)).toBe(`https://${host}`);
   });
 
@@ -39,7 +39,7 @@ describe('publicOrigin', () => {
   it('lists exactly the hosts the server trusts, each over https', () => {
     expect(PUBLIC_HOSTS.filter((h) => h.hostname !== 'localhost').every((h) => h.protocol === 'https')).toBe(true);
     expect(PUBLIC_HOSTS.map((h) => h.hostname)).toEqual(
-      expect.arrayContaining(['canary.nwflorida.us', 'nwflorida.us', 'www.nwflorida.us', 'nwflmensa.us', 'www.nwflmensa.us']),
+      expect.arrayContaining(['canary.nwflorida.us', 'canary.nwflmensa.us', 'nwflorida.us', 'www.nwflorida.us', 'nwflmensa.us', 'www.nwflmensa.us']),
     );
   });
 });
@@ -47,6 +47,10 @@ describe('publicOrigin', () => {
 describe('feedWebcal', () => {
   it('is the calendar feed on the trusted host', () => {
     expect(feedWebcal(asked('canary.nwflorida.us'), SITE)).toBe('webcal://canary.nwflorida.us/calendar.ics');
+  });
+
+  it('is the calendar feed on the new domain canary host', () => {
+    expect(feedWebcal(asked('canary.nwflmensa.us'), SITE)).toBe('webcal://canary.nwflmensa.us/calendar.ics');
   });
 
   it('is the feed on the configured site for any other Host', () => {
