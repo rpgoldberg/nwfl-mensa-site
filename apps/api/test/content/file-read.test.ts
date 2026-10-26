@@ -121,7 +121,7 @@ describe.skipIf(!live)('ContentService.ReadFile', () => {
   });
 
   it('serves the public the redacted copy once made: a PDF, named from the redacted title, without the marked passages', async () => {
-    await drain(api.pool);
+    await drain(api.worker);
     const { messages, bytes } = await pdfOf(files['flyer'] as string);
     const head = messages[0]?.part;
     expect(head?.case).toBe('head');
@@ -157,7 +157,7 @@ describe.skipIf(!live)('ContentService.ReadFile', () => {
     // A refused copy: the engine would not make one.
     const refused = await publish('refused', 'Scanned flyer', await linesPdf(['A scan of a phone number']));
     await mark(refused.itemId, MarkField.BODY, PHONE, RedactionCategory.MEMBER_PHONE);
-    await drain(api.pool, { redact: () => Promise.resolve({ kind: 'refused', reason: 'page 1 is a scan' }) });
+    await drain(api.worker, { redact: () => Promise.resolve({ kind: 'refused', reason: 'page 1 is a scan' }) });
     const stored = await api.pool.query<{ status: string }>(`SELECT status FROM pdf_copy WHERE file_id = $1`, [refused.file]);
     expect(stored.rows.map((row) => row.status)).toContain('refused');
 

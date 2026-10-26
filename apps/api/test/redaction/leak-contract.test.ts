@@ -300,7 +300,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     const storer = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
     await storeOriginal(pool, { fileId: ids['publicFile'], bytes: publicPdf, ...storer });
     await storeOriginal(pool, { fileId: ids['wholeFile'], bytes: wholePdf, ...storer });
-    await drain(pool);
+    await drain(api.worker);
   }, 60_000);
 
   afterAll(async () => {

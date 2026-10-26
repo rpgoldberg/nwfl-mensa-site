@@ -22,6 +22,8 @@ export default defineConfig({
         // The process entrypoint: env reads, listen and signal wiring only.
         // Everything it calls is covered through startServer().
         'src/main.ts',
+        // The PDF worker's entrypoint: env, telemetry and signal wiring only (pdf/worker.ts is tested).
+        'src/worker.ts',
         // The seed command's entrypoint: argv, env and stdout only (seed.ts is tested).
         'src/seed/cli.ts',
       ],

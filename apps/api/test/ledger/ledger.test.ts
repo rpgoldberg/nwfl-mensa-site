@@ -27,6 +27,11 @@ import { ENGINE_VERSION, storeOriginal } from '../../src/pdf/store.js';
 import { type Api, MEMBER, OFFICER, as, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
 import { linesPdf } from '../pdf/fixtures.js';
+
+// 0017 takes publication_ledger_original from the app role once the worker role exists, as it does in
+// every suite. Granting it back stands for a database where fc has not created the role yet.
+const LEGACY_GRANT = `GRANT EXECUTE ON FUNCTION publication_ledger_original(bigint, text, text[], text) TO nwfl`;
+const LEGACY_REVOKE = `REVOKE EXECUTE ON FUNCTION publication_ledger_original(bigint, text, text[], text) FROM nwfl`;
 import { APP, APP_PW, live, sqlstate, url, urlFor } from '../helpers/pg.js';
 
 const PUB = as('pub-token');
@@ -422,7 +427,7 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
     });
 
     it('writes each audience a row when its copy becomes current, hashing exactly the bytes ReadFile serves', async () => {
-      await drain(api.pool, { redact: stub });
+      await drain(api.worker, { redact: stub });
       const officers = (await current(file, 'officers'))!;
       expect(officers.output_sha256).toEqual(sha(original));
       expect(officers.inputs).toMatchObject({ served: 'original', file_id: file, original_sha256: sha(original).toString('hex') });
@@ -446,16 +451,31 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       const waiting = (await current(file, 'public'))!;
       expect(waiting.output_sha256).toBeNull();
       expect(waiting.inputs['served']).toBe('not_ready');
-      await drain(api.pool, { redact: stub });
+      await drain(api.worker, { redact: stub });
       const ready = (await current(file, 'public'))!;
       expect(ready.passages_withheld).toBe(1);
       const asOfReady = await ledgerAsOf(api.pool, 'stored_file', file, 'public', new Date());
       expect(asOfReady.matches, asOfReady.detail).toBe(true);
       const asOfWaiting = await ledgerAsOf(api.pool, 'stored_file', file, 'public', new Date(waiting.current_from.getTime() + 1));
       expect(asOfWaiting.matches, asOfWaiting.detail).toBe(true);
-      // The first copy was dropped by the regeneration's finish: it is made again from the original, by the same engine.
+      // Fix 1: the job keeps every copy that was ever current (stale), so a past row is checked against its own bytes,
+      // with no original read.
       const at = new Date(before.current_from.getTime() + 1);
-      expect((await q(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [file, before.inputs['input_hash']])).rows).toEqual([]);
+      const kept = await owner.query<{ stale: boolean; sha: Buffer }>(`SELECT stale, sha256(bytes) AS sha FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [file, before.inputs['input_hash']]);
+      expect(kept.rows).toEqual([{ stale: true, sha: before.output_sha256 }]);
+      const reads = async () => (await owner.query(`SELECT 1 FROM audit_event WHERE action = 'ledger_original_read' AND subject_id = $1`, [file])).rows.length;
+      const readsBefore = await reads();
+      const fromKept = await ledgerAsOf(api.pool, 'stored_file', file, 'public', at);
+      expect(fromKept).toMatchObject({ matches: true, detail: '', rerender: before.output_sha256 });
+      expect(await reads()).toBe(readsBefore);
+      // A copy deleted before Fix 1 (here by hand) is made again from the original, only where the app role may read it.
+      await owner.query(`DELETE FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [file, before.inputs['input_hash']]);
+      // 0017: with the worker role, the app role reads no original, so the officer's check stops at the inputs.
+      expect(await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: stub, caller: OWNER })).toEqual(
+        expect.objectContaining({ matches: false, rerender: null, detail: 'the copy is no longer kept and only the worker reads originals: inputs verified only' }),
+      );
+      // Before fc creates the role, the app role keeps the audited officer path (the rest of this test).
+      await owner.query(LEGACY_GRANT);
       const asOfBefore = await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: stub, caller: OWNER });
       expect(asOfBefore.matches, asOfBefore.detail).toBe(true);
       expect(asOfBefore.rerender).toEqual(before.output_sha256);
@@ -478,6 +498,7 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
         expect(await sqlstate(app, `SELECT bytes FROM pdf_original`)).toBe('42501');
       } finally {
         await app.end();
+        await owner.query(LEGACY_REVOKE);
       }
       const audited = await q(`SELECT 1 FROM audit_event WHERE action = 'ledger_original_read' AND subject_id = $1 AND actor_sub = 'sub-officer'`, [file]);
       expect(audited.rows.length).toBeGreaterThan(0);
@@ -494,21 +515,36 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       });
       const realFile = (await q<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [published.versionId])).rows[0]!.id;
       await storeOriginal(api.pool, { fileId: realFile, bytes, ...OWNER });
-      await drain(api.pool);
+      await drain(api.worker);
       const first = (await current(realFile, 'public'))!;
       expect(first.inputs['served']).toBe('copy');
       await redaction.addRedactionMark(
         { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: published.itemId, field: MarkField.BODY, quote: 'Ottoline Varga', category: RedactionCategory.MEMBER_NAME },
         OFFICER,
       );
-      await drain(api.pool);
-      expect((await q(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [realFile, first.inputs['input_hash']])).rows).toEqual([]);
-      const response = await redaction.ledgerAsOf(
-        { subjectKind: LedgerSubjectKind.STORED_FILE, subjectId: realFile, audience: RedactionAudience.PUBLIC, at: timestampFromDate(new Date(first.current_from.getTime() + 1)) },
-        OFFICER,
-      );
-      expect(response.matches, response.detail).toBe(true);
-      expect(Buffer.from(response.rerenderSha256)).toEqual(first.output_sha256);
+      await drain(api.worker);
+      // Fix 1: the superseded copy is kept, and the RPC checks the row against it with no original read.
+      expect((await q(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [realFile, first.inputs['input_hash']])).rows).toHaveLength(1);
+      const ask = () =>
+        redaction.ledgerAsOf(
+          { subjectKind: LedgerSubjectKind.STORED_FILE, subjectId: realFile, audience: RedactionAudience.PUBLIC, at: timestampFromDate(new Date(first.current_from.getTime() + 1)) },
+          OFFICER,
+        );
+      const fromKept = await ask();
+      expect(fromKept.matches, fromKept.detail).toBe(true);
+      expect(Buffer.from(fromKept.rerenderSha256)).toEqual(first.output_sha256);
+      // A copy deleted before Fix 1 (here by hand): the app role reads no original under 0017.
+      await owner.query(`DELETE FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [realFile, first.inputs['input_hash']]);
+      expect((await ask()).detail).toMatch(/only the worker reads originals/);
+      // Without the worker role (the legacy grant), the copy is made again and the hash matches.
+      await owner.query(LEGACY_GRANT);
+      try {
+        const response = await ask();
+        expect(response.matches, response.detail).toBe(true);
+        expect(Buffer.from(response.rerenderSha256)).toEqual(first.output_sha256);
+      } finally {
+        await owner.query(LEGACY_REVOKE);
+      }
     });
   });
 

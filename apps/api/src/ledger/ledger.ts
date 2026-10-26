@@ -309,6 +309,9 @@ async function remake(db: Query, row: LedgerRowData, audience: Audience, at: Dat
   if (row.inputs['engine'] !== (options.engine ?? ENGINE_VERSION)) return { detail: 'engine changed, inputs verified only', rerender: null };
   if (options.caller === undefined) return { detail: 'the copy is no longer kept: an officer makes it again', rerender: null };
   const inputs = (await inputsFor(db, row.subject_id, audience, at)) as Extract<Inputs, { kind: 'copy' }>;
+  // 0017: once the worker role exists, the app role reaches no original. Asked first, so a transaction is not aborted.
+  const allowed = await db.query<{ ok: boolean }>(`SELECT has_function_privilege('publication_ledger_original(bigint, text, text[], text)', 'EXECUTE') AS ok`);
+  if (allowed.rows[0]?.ok !== true) return { detail: 'the copy is no longer kept and only the worker reads originals: inputs verified only', rerender: null };
   const original = await db.query<{ bytes: Buffer }>(`SELECT publication_ledger_original($1, $2, $3, $4) AS bytes`, [
     row.seq,
     options.caller.sub,

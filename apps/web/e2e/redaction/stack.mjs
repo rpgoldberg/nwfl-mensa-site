@@ -7,13 +7,14 @@
 // apps/api first) with no token client at all, so every call is the public's.
 //
 // A PDF on a marked item carries a canary of its own and a marked phone
-// (REDACT R3c); the stack is ready only once the API's background job has
-// made its copies, so the crawl fetches a redacted copy, never "not ready".
+// (REDACT R3c); the stack is ready only once the PDF worker (dist/worker.js,
+// as its own role nwfl_worker, W-WORKER) has made its copies, so the crawl
+// fetches a redacted copy, never "not ready".
 //
 // Ready when GET /fixture on STACK_PORT answers: the canaries, the ids the
 // test needs and how many times each canary is stored (the positive control:
 // a canary that never reached the database would pass vacuously). On SIGTERM
-// or SIGINT it stops the API and drops its database. Loopback only; the
+// or SIGINT it stops the API and the worker it started and drops its database. Loopback only; the
 // superuser password is read from the environment and never printed.
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -32,10 +33,13 @@ const apiPort = Number(process.env['API_PORT'] ?? 9101);
 const healthPort = Number(process.env['API_HEALTH_PORT'] ?? 9102);
 const stackPort = Number(process.env['STACK_PORT'] ?? 9103);
 const API_MAIN = path.resolve(import.meta.dirname, '../../../api/dist/main.js');
+// The PDF worker (W-WORKER): its own process and database role make the redacted copies.
+const API_WORKER = path.resolve(import.meta.dirname, '../../../api/dist/worker.js');
 
 // The roles the API's own test helpers use (apps/api/test/helpers/pg.ts); 0000_grants.sql names nwfl.
 const MIGRATOR = { user: 'nwfl_migrator', password: 'migrator-pw' };
 const APP = { user: 'nwfl', password: 'app-pw' };
+const WORKER = { user: 'nwfl_worker', password: 'worker-pw' };
 const db = `nwfl_redact_e2e_${randomBytes(4).toString('hex')}`;
 
 /**
@@ -243,16 +247,22 @@ async function stored() {
 
 /** @type {import('node:child_process').ChildProcess | undefined} */
 let api;
+/** @type {import('node:child_process').ChildProcess | undefined} */
+let worker;
 let stopping = false;
+
+/** SIGTERM to a child this script spawned (by its handle, never by name), then wait up to 5 s. @param {import('node:child_process').ChildProcess | undefined} child */
+async function end(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  child.kill('SIGTERM');
+  await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
+}
 
 async function stop(code = 0) {
   if (stopping) return;
   stopping = true;
-  if (api && api.exitCode === null) {
-    const exited = new Promise((resolve) => api?.once('exit', resolve));
-    api.kill('SIGTERM');
-    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000))]);
-  }
+  await Promise.all([end(worker), end(api)]);
   await psql('postgres', `DROP DATABASE IF EXISTS ${db} WITH (FORCE);`).catch((error) => console.error(String(error)));
   process.exit(code);
 }
@@ -276,10 +286,16 @@ try {
     'postgres',
     `DO $$ BEGIN CREATE ROLE ${MIGRATOR.user} LOGIN PASSWORD ${q(MIGRATOR.password)}; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
      DO $$ BEGIN CREATE ROLE ${APP.user} LOGIN PASSWORD ${q(APP.password)}; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
+     DO $$ BEGIN CREATE ROLE ${WORKER.user} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 10 PASSWORD ${q(WORKER.password)};
+       EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
      CREATE DATABASE ${db} OWNER ${MIGRATOR.user};`,
   );
   await docker(['sh', '/repo/scripts/migrate.sh', '/repo/migrations'], {
     env: { PGHOST: '127.0.0.1', PGUSER: MIGRATOR.user, PGPASSWORD: MIGRATOR.password, PGDATABASE: db },
+  });
+  // 0017 granted the worker when the role already existed; the explicit call is what fc runs after creating it.
+  await docker(['psql', '-h', '127.0.0.1', '-U', MIGRATOR.user, '-d', db, '-v', 'ON_ERROR_STOP=1', '-q', '-At', '-c', 'SELECT nwfl_worker_grants()'], {
+    env: { PGPASSWORD: MIGRATOR.password },
   });
   await psql(db, SEED);
   const counts = await stored();
@@ -306,7 +322,20 @@ try {
     }
   });
   await waitReady();
-  // The API's background job makes the PDF's copies; the crawl starts once none is queued and the public's is made.
+  const workerDsn = new URL(dsn);
+  workerDsn.username = WORKER.user;
+  workerDsn.password = WORKER.password;
+  worker = spawn(process.execPath, [API_WORKER], {
+    env: { PATH: process.env['PATH'] ?? '', DATABASE_URL: workerDsn.toString(), LOG_LEVEL: 'warn' },
+    stdio: ['ignore', 'inherit', 'inherit'],
+  });
+  worker.once('exit', (code) => {
+    if (!stopping) {
+      console.error(`redaction stack: the PDF worker exited (${code})`);
+      void stop(1);
+    }
+  });
+  // The worker makes the PDF's copies; the crawl starts once none is queued and the public's is made.
   for (let tries = 0; ; tries++) {
     const state = (await psql(db, `SELECT (SELECT count(*) FROM pdf_regen) || ' ' || (SELECT count(*) FROM pdf_copy WHERE file_id = ${q(ids.pdf)} AND status = 'ready');`)).trim();
     if (state.startsWith('0 ') && Number(state.split(' ')[1]) > 0) break;
