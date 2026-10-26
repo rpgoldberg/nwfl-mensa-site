@@ -37,6 +37,29 @@ test('/calendar.ics is the public calendar as RFC 5545: CRLF lines folded at 75 
   expect(text).toContain('DESCRIPTION:Bring a friend\\, a book\\; and an appetite.');
 });
 
+test("every VEVENT's URL is the event page the site links to, and each one opens", async ({ request }) => {
+  const text = unfold(await (await request.get('/calendar.ics')).text());
+  const events = text.split('BEGIN:VEVENT').slice(1);
+  expect(events.length).toBeGreaterThan(10);
+  const seen = new Set<string>();
+  for (const e of events) {
+    const url = /\r\nURL:([^\r]+)/.exec(e)?.[1];
+    expect(url, e).toBeDefined();
+    const { pathname } = new URL(url!);
+    // The path the /events page links to: <id>_<YYYY-MM-DD> for a series date, a stored event's own id otherwise.
+    expect(pathname).toMatch(/^\/events\/[0-9a-f-]{36}(_\d{4}-\d{2}-\d{2})?$/);
+    const uid = /\r\nUID:([^@\r]+)@/.exec(e)![1]!;
+    expect(pathname).toBe(`/events/${uid.replace(':', '_')}`);
+    seen.add(pathname);
+  }
+  expect([...seen].some((p) => p.includes('_'))).toBe(true);
+  for (const path of seen) expect((await request.get(path)).status(), path).toBe(200);
+  const single = unfold(await (await request.get(`/events/${BOARD_GAMES}.ics`)).text());
+  const own = /\r\nURL:([^\r]+)/.exec(single)?.[1];
+  expect(new URL(own!).pathname).toBe(`/events/${BOARD_GAMES}`);
+  expect((await request.get(`/events/${BOARD_GAMES}`)).status()).toBe(200);
+});
+
 test('/events.ics is the same feed as /calendar.ics, which stays for the phones already subscribed', async ({ request }) => {
   const [old, renamed] = await Promise.all([request.get('/calendar.ics', { maxRedirects: 0 }), request.get('/events.ics', { maxRedirects: 0 })]);
   expect([old.status(), renamed.status()]).toEqual([200, 200]);

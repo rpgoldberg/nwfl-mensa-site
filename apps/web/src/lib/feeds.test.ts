@@ -123,3 +123,20 @@ describe('eventFeed (one event as .ics)', () => {
     expect(res.headers.get('cache-control')).toBe('no-store');
   });
 });
+
+describe('every VEVENT URL', () => {
+  const STORED = '7d1f0c34-8b2e-4f6a-9c10-5a3e2b1d4c68';
+  const events = [event(), event({ id: `${SERIES}:2026-11-11`, path: eventPath(`${SERIES}:2026-11-11`), date: '2026-11-11' }), event({ id: STORED, path: eventPath(STORED), title: 'Board games' })];
+  const urls = (text: string) => [...text.replace(/\r\n /g, '').matchAll(/\r\nURL:([^\r]+)/g)].map((m) => m[1]);
+
+  it('is the occurrence page the site links to, once the 75-octet folds are undone', async () => {
+    const text = await (await calendarFeed(live({ events: () => Promise.resolve(events) }), { now: NOW, origin })).text();
+    expect(urls(text)).toEqual([`${origin}/events/${SERIES}_2026-11-04`, `${origin}/events/${SERIES}_2026-11-11`, `${origin}/events/${STORED}`]);
+  });
+
+  it('is the same in a single event file', async () => {
+    const one = events[1]!;
+    const text = await (await eventFeed(live({ event: () => Promise.resolve({ event: one } as never) }), `${SERIES}_2026-11-11`, { now: NOW, origin })).text();
+    expect(urls(text)).toEqual([`${origin}/events/${SERIES}_2026-11-11`]);
+  });
+});
