@@ -6,8 +6,9 @@
 // inputs, and makes a copy for each distinct input that has none yet (one
 // shared copy per input). A refusal is stored with its reason, for officers;
 // so is an engine failure, and an engine that hands back the original for an
-// audience that redacts (fail closed). Finishing drops the copies no audience
-// uses. Runs are safe to race: a file is claimed by one run at a time, a copy
+// audience that redacts (fail closed). Finishing marks stale the copies no
+// audience uses, keeps those the ledger records as served (0018: a past row is
+// checked against its own bytes) and drops the rest. Runs are safe to race: a file is claimed by one run at a time, a copy
 // is written once per input, a run whose lease ran out can no longer write,
 // and a file queued again mid-run stays queued for the next run.
 // ============================================================================

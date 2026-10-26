@@ -227,7 +227,7 @@ describe.skipIf(!live)('0017 before fc creates the worker role', () => {
       // Re-running the migration Job applies them: nothing is pending, the grants follow the role.
       const again = await run('docker', ['exec', '-e', 'PGHOST=127.0.0.1', '-e', `PGUSER=${MIGRATOR}`, '-e', `PGPASSWORD=${MIGRATOR_PW}`, '-e', 'PGDATABASE=nwfl', id as string, 'sh', '/repo/scripts/migrate.sh', '/repo/migrations']);
       expect(again.code, again.stderr).toBe(0);
-      expect(again.stdout).toMatch(/applied=0 skipped=18/);
+      expect(again.stdout).toMatch(/applied=0 skipped=19/);
       expect(again.stdout).toContain('migrate: worker grants t');
       expect(await sqlstate(app, `SELECT * FROM pdf_regen_claim(60)`)).toBe('42501');
       const worker = new pg.Client({ connectionString: at(WORKER, WORKER_PW, 'nwfl') });

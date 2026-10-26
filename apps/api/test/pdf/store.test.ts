@@ -204,7 +204,8 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(calls).toEqual([]);
       expect(text(await readPdf(pool, file, 'public'))).toBe('copy:');
       expect(text(await readPdf(pool, file, 'members'))).toBe('copy:');
-      expect((await copies(file)).map((c) => [c.status, c.stale])).toEqual([['ready', false]]);
+      // One copy is current; the members' old one was served, so it is kept stale (Fix 1).
+      expect((await copies(file)).map((c) => [c.status, c.stale])).toEqual([['ready', false], ['ready', true]]);
       expect(await queued(file)).toBe(0);
       expect(await drain(worker, { redact: stub() })).toBe(0);
     });
@@ -212,7 +213,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     it('marks copies stale when a mark changes, serves no stale copy, and regenerates only what changed', async () => {
       const before = await copies(file);
       await mark(item, PHONE_NAME, 'member_phone');
-      expect((await copies(file)).map((c) => c.stale)).toEqual([true]);
+      expect((await copies(file)).map((c) => c.stale)).toEqual([true, true]);
       expect(await queued(file)).toBe(1);
       // The public redacts phones: its inputs changed, so its old copy is never served.
       expect(await readPdf(pool, file, 'public')).toEqual({ kind: 'not_ready' });
@@ -223,7 +224,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(calls).toEqual([{ quotes: [PHONE_NAME], redactsAny: true, image: 'blur' }]);
       expect(text(await readPdf(pool, file, 'public'))).toBe(`copy:${PHONE_NAME}`);
       const after = await copies(file);
-      expect(after.map((c) => [c.stale, c.status])).toEqual([[false, 'ready'], [false, 'ready']]);
+      expect(after.map((c) => [c.stale, c.status])).toEqual([[false, 'ready'], [true, 'ready'], [false, 'ready']]);
       expect(after[0]!.id).toBe(before[0]!.id);
     });
 
@@ -235,7 +236,8 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       calls.length = 0;
       expect(await drain(worker, { redact: stub() })).toBe(1);
       expect(calls).toEqual([]);
-      expect((await copies(file)).every((c) => !c.stale)).toBe(true);
+      // The two in use are fresh again; the kept one no audience uses stays stale (Fix 1).
+      expect((await copies(file)).map((c) => c.stale)).toEqual([false, true, false]);
     });
 
     it('lets one of two racing runs claim a file', async () => {
@@ -247,8 +249,8 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(calls).toHaveLength(2);
       expect(text(await readPdf(pool, file, 'members'))).toBe(`copy:${EMAIL_NAME}`);
       expect(text(await readPdf(pool, file, 'public'))).toBe(`copy:${EMAIL_NAME}|${PHONE_NAME}`);
-      // The copies no audience uses any more are gone.
-      expect((await copies(file)).length).toBe(2);
+      // Two copies are current; the ones no audience uses any more are kept stale (Fix 1).
+      expect((await copies(file)).filter((c) => !c.stale).length).toBe(2);
     });
 
     it('stays correct when a run outlives its lease and a second run takes over', async () => {
@@ -261,8 +263,43 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await slow).toEqual({ fileId: file, done: false });
       expect(text(await readPdf(pool, file, 'members'))).toBe(`copy:Lease Name|${EMAIL_NAME}|${PHONE_NAME}`);
       expect(text(await readPdf(pool, file, 'public'))).toBe(`copy:Lease Name|${EMAIL_NAME}|${PHONE_NAME}`);
-      expect((await copies(file)).length).toBe(1);
+      expect((await copies(file)).filter((c) => !c.stale).length).toBe(1); // the rest are kept stale (Fix 1)
       expect(await queued(file)).toBe(0);
+    });
+
+    it('keeps every copy that was ever current, stale, and prunes only copies never served (Fix 1)', async () => {
+      const { item: i, version: v } = await newItem('kept');
+      const bytes = pdfBytes('kept');
+      const id = await newFile({ version: v }, bytes);
+      await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
+      expect(await drain(worker, { redact: stub() })).toBe(1);
+      const first = await copies(id);
+      expect(first.every((c) => c.status === 'ready' && !c.stale)).toBe(true);
+      // Supersede every copy: a mark both the public and members redact.
+      await mark(i, 'Kept Name', 'member_address');
+      expect(await drain(worker, { redact: stub() })).toBe(1);
+      const after = await copies(id);
+      for (const copy of first) expect(after.find((c) => c.id === copy.id), 'an ever-current copy is kept').toBeDefined();
+      expect(after.length).toBe(first.length + 1);
+      const fresh = after.filter((c) => !first.some((f) => f.id === c.id));
+      expect(fresh.map((c) => c.stale)).toEqual([false]);
+      // A copy is stale exactly when no audience is given it now (members may still share the old one).
+      const used = new Set<string>();
+      for (const audience of ['public', 'members', 'officers']) {
+        const inputs = await inputsFor(pool, id, audience);
+        if (inputs?.kind === 'copy') used.add(inputs.hash.toString('hex'));
+      }
+      expect(after.map((c) => c.stale)).toEqual(after.map((c) => !used.has(c.input_hash.toString('hex'))));
+      expect(after.some((c) => c.stale)).toBe(true);
+      // A copy that was never current, and a refused one, are pruned at the next finish.
+      await owner.query(`INSERT INTO pdf_copy (file_id, input_hash, engine, status, bytes) VALUES ($1, $2, 'e', 'ready', '\\x01')`, [id, Buffer.alloc(32, 9)]);
+      await owner.query(`INSERT INTO pdf_copy (file_id, input_hash, engine, status, reason) VALUES ($1, $2, 'e', 'refused', 'no')`, [id, Buffer.alloc(32, 10)]);
+      await mark(i, 'Kept Name', 'member_email');
+      expect(await drain(worker, { redact: stub() })).toBe(1);
+      const ids = (await copies(id)).map((c) => c.input_hash.toString('hex'));
+      expect(ids).not.toContain(Buffer.alloc(32, 9).toString('hex'));
+      expect(ids).not.toContain(Buffer.alloc(32, 10).toString('hex'));
+      for (const copy of after) expect(ids).toContain(copy.input_hash.toString('hex'));
     });
 
     it('requeues a file whose inputs changed during a run', async () => {
@@ -294,7 +331,11 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await sqlstate(owner, `INSERT INTO pdf_copy (file_id, input_hash, engine, status) VALUES ($1, $2, 'e', 'ready')`, [file, Buffer.alloc(32, 8)])).toBe('23514');
       await worker.query(`SELECT pdf_regen_finish($1, '00000000-0000-0000-0000-0000000000aa', ARRAY[]::bytea[])`, [file]);
       expect(await queued(file)).toBe(0);
-      expect((await copies(file)).length).toBe(0);
+      // The copy put by hand was never served: pruned. The served ones are kept, all stale now (Fix 1).
+      const left = await copies(file);
+      expect(left.map((c) => c.input_hash.toString('hex'))).not.toContain(Buffer.alloc(32, 7).toString('hex'));
+      expect(left.length).toBeGreaterThan(0);
+      expect(left.every((c) => c.stale)).toBe(true);
       await propose('members', 'member_phone', 'show');
       await drain(worker, { redact: stub() });
     });
