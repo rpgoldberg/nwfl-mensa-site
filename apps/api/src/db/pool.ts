@@ -23,6 +23,13 @@ const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 // server's own error first. keepAlive lets the kernel notice a dead peer.
 const DEFAULT_STATEMENT_TIMEOUT_MS = 10_000;
 const DEFAULT_QUERY_TIMEOUT_MS = 12_000;
+// HARDEN-1: one row (publication_ledger_head) serializes every ledger append and every change that
+// can alter a rendering. A writer waiting on it gives up after lock_timeout rather than queueing
+// behind a stuck holder, and a transaction left open and idle is ended by the server after
+// idle_in_transaction_session_timeout, so no connection can hold the lock indefinitely. Both are
+// startup parameters, so they are set on every connection the pool opens, the worker's too.
+const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
+const DEFAULT_IDLE_TX_TIMEOUT_MS = 30_000;
 
 const positive = (value: string | undefined, fallback: number): number => {
   const parsed = Number(value);
@@ -63,6 +70,8 @@ export function poolConfigFromEnv(env: Env = process.env): pg.PoolConfig {
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     statement_timeout: positive(env['PG_STATEMENT_TIMEOUT_MS'], DEFAULT_STATEMENT_TIMEOUT_MS),
     query_timeout: positive(env['PG_QUERY_TIMEOUT_MS'], DEFAULT_QUERY_TIMEOUT_MS),
+    lock_timeout: positive(env['PG_LOCK_TIMEOUT_MS'], DEFAULT_LOCK_TIMEOUT_MS),
+    idle_in_transaction_session_timeout: positive(env['PG_IDLE_TX_TIMEOUT_MS'], DEFAULT_IDLE_TX_TIMEOUT_MS),
     keepAlive: true,
   };
 }
@@ -83,12 +92,23 @@ export function describeTarget(env: Env = process.env): string {
   return `${host}:${env['PGPORT'] ?? '5432'}/${env['PGDATABASE'] ?? 'nwfl'}`;
 }
 
-export function createPool(env: Env = process.env): pg.Pool {
-  const pool = new pg.Pool(poolConfigFromEnv(env));
-  // An IDLE client dropping emits 'error' on the pool; unhandled, that would
-  // crash the process. Checked-out clients surface errors per query.
-  pool.on('error', () => {});
+/** How a pool reports a dropped idle connection: a structured logger's warn. */
+export type Warn = (fields: Record<string, unknown>, message: string) => void;
+
+/**
+ * An IDLE client the server ends (a restart, a failover, idle_in_transaction_session_timeout)
+ * emits 'error' on its pool; with no listener that would crash the process. The pool drops the
+ * client and opens a new one for the next query, so this only logs: the error's code, never its
+ * message or client, which carry the connection's details and password. Checked-out clients
+ * surface their errors per query.
+ */
+export function onIdleError(pool: pg.Pool, warn: Warn = () => {}): pg.Pool {
+  pool.on('error', (error) => warn({ error_code: (error as { code?: string }).code ?? 'UNKNOWN' }, 'an idle database connection was dropped; the pool opens a new one'));
   return pool;
+}
+
+export function createPool(env: Env = process.env, warn?: Warn): pg.Pool {
+  return onIdleError(new pg.Pool(poolConfigFromEnv(env)), warn);
 }
 
 /** The slice of pg.Pool a probe needs, so readiness is testable without a database. */

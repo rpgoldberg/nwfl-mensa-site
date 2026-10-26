@@ -7,6 +7,10 @@ describe('workerPoolConfig: the PDF worker connects as its own role only', () =>
     expect(config).toMatchObject({ host: 'db', user: WORKER_ROLE, password: 'pw', database: 'nwfl', max: 2 });
   });
 
+  it('sets the same lock and idle-in-transaction timeouts as the server', () => {
+    expect(workerPoolConfig({})).toMatchObject({ lock_timeout: 5_000, idle_in_transaction_session_timeout: 30_000 });
+  });
+
   it('takes PG_POOL_MAX and an explicit PGUSER of nwfl_worker', () => {
     expect(workerPoolConfig({ PGUSER: 'nwfl_worker', PG_POOL_MAX: '3' })).toMatchObject({ user: 'nwfl_worker', max: 3 });
   });
@@ -30,6 +34,14 @@ describe('createWorkerPool', () => {
     expect(() => pool.emit('error', new Error('idle client dropped'))).not.toThrow();
     await pool.end();
     expect(() => createWorkerPool({ PGUSER: 'nwfl' })).toThrow('not nwfl');
+  });
+
+  it('logs a dropped idle client at warn with the code only', async () => {
+    const warned: unknown[] = [];
+    const pool = createWorkerPool({ PGHOST: '127.0.0.1', PGPORT: '1' }, (fields) => void warned.push(fields));
+    pool.emit('error', Object.assign(new Error('gone'), { code: '57P01' }));
+    await pool.end();
+    expect(warned).toEqual([{ error_code: '57P01' }]);
   });
 });
 

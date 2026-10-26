@@ -6,6 +6,7 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
+import { onIdleError } from '../../src/db/pool.js';
 
 export const url = process.env['NWFL_TEST_DATABASE_URL'];
 export const container = process.env['NWFL_TEST_PG_CONTAINER'];
@@ -117,3 +118,9 @@ export async function failure(client: pg.Client, text: string, values: unknown[]
     return (error as Error).message;
   }
 }
+
+/**
+ * A pool for a test's database. Dropping the database (WITH FORCE) ends any connection still idle in
+ * it, and without a listener that 'error' would surface as an unhandled error and fail the run.
+ */
+export const testPool = (config: pg.PoolConfig): pg.Pool => onIdleError(new pg.Pool(config));

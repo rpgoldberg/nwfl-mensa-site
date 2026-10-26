@@ -9,7 +9,10 @@
 //              one word again ("Wren-" / "hallow" reads "Wrenhallow");
 //   kept       the line-end hyphen stays ("Smith-" / "Jones" reads "Smith-Jones");
 //   spaced     runs of single letters ("K e s t r e l") rejoined, and matched
-//              without word edges, since a spaced run gives none;
+//              without word edges, since a spaced run gives none: so
+//              "K e s t r e l n o w" is caught, and a run "b e f o r e" loses
+//              "b e f o" to a mark "befo" (over-redaction, the safe side). Normal
+//              text is only ever matched on word edges ("before" keeps it);
 //   collapsed  the spaces between single letters taken out, the rest kept,
 //              so a word spaced beside a plain one ("J u n o Blackwood")
 //              reads "Juno Blackwood", matched as whole words.

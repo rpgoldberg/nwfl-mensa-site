@@ -17,7 +17,7 @@ const config = readConfig();
 const auth = readAuthConfig(process.env);
 const telemetry = startTelemetry();
 const logger = createStructuredLogger({ name: telemetry.state.serviceName, level: config.logLevel });
-const pool = createPool();
+const pool = createPool(process.env, (fields, message) => logger.warn(fields, message));
 
 // The database target is logged once here, for operators; no endpoint reports it.
 logger.info({ db_target: describeTarget(), service_version: process.env['SERVICE_VERSION'] ?? 'dev' }, 'starting');

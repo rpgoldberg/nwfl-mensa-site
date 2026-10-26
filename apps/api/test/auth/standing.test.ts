@@ -6,7 +6,7 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbStanding } from '../../src/auth/standing.js';
-import { APP, APP_PW, dropDatabase, freshDatabase, live, migrate, urlFor } from '../helpers/pg.js';
+import { APP, APP_PW, dropDatabase, freshDatabase, live, migrate, urlFor, testPool } from '../helpers/pg.js';
 
 describe.skipIf(!live)('dbStanding', () => {
   let db: string;
@@ -17,7 +17,7 @@ describe.skipIf(!live)('dbStanding', () => {
     db = await freshDatabase('nwfl_standing');
     const run = await migrate(db);
     if (run.code !== 0) throw new Error(run.stderr);
-    pool = new pg.Pool({ connectionString: urlFor(APP, APP_PW, db) });
+    pool = testPool({ connectionString: urlFor(APP, APP_PW, db) });
     const insert = (sub: string, status: string, verifiedOn: string | null): Promise<unknown> =>
       pool.query(
         `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on, affiliate_granted_by_sub, affiliate_granted_at, removed_at)

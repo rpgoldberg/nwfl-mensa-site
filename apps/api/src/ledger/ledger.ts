@@ -10,8 +10,9 @@
 //                    the current copy's; nothing while the copy is not ready,
 //                    refused or hidden.
 // Rows are written in the same transaction as the change (publish, withdraw,
-// a mark, an applied policy change), and by the regeneration job when a copy
-// becomes current. The append lock is taken BEFORE rendering, so a writer
+// a mark, an applied policy change), and by the regeneration job (as its own
+// role, for the file it holds, through publication_ledger_record_file: 0019)
+// in the transaction that finishes the file. The append lock is taken BEFORE rendering, so a writer
 // renders only once every earlier append has committed.
 //
 // ledgerAsOf re-renders a row from the kept history: the immutable version,
@@ -253,11 +254,26 @@ export function recordItems(db: Query, items: readonly string[]): Promise<number
   });
 }
 
-/** Records these PDF files (the regeneration job, once a file's copies are current). */
-export function recordFiles(db: Query, files: readonly string[]): Promise<number> {
+/**
+ * The regeneration job's append (0019): every audience of the one file it holds, through
+ * publication_ledger_record_file under its claim, then `finish` in the same transaction (which
+ * drops the claim, so it comes last). Throws 42501 when the claim is no longer live.
+ */
+export function recordClaimedFile<T>(db: Query, fileId: string, claim: string, finish: (client: Query) => Promise<T>): Promise<T> {
   return inTx(db, async (client) => {
     await client.query('SELECT publication_ledger_lock()');
-    return recordSubjects(client, both([], [...files].sort()));
+    for (const audience of AUDIENCES) {
+      const rendering = await renderFile(client, fileId, audience);
+      await client.query(`SELECT publication_ledger_record_file($1, $2, $3, $4, $5, $6)`, [
+        fileId,
+        claim,
+        audience,
+        rendering.output,
+        rendering.inputs,
+        rendering.withheld,
+      ]);
+    }
+    return finish(client);
   });
 }
 

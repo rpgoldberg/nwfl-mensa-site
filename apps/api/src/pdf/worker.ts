@@ -10,12 +10,11 @@
 // worker can never be started with the server's credentials. The pool is 2.
 // ============================================================================
 import pg from 'pg';
-import { type Env, poolConfigFromEnv } from '../db/pool.js';
+import { type Env, type Warn, onIdleError, poolConfigFromEnv } from '../db/pool.js';
+import { isolatedRedact } from './isolated.js';
 import { type RegenerateOptions, startRegenerator } from './regenerate.js';
 
 export const WORKER_ROLE = 'nwfl_worker';
-
-const ignore = (): void => {};
 
 /** The worker's pool settings; throws unless they connect as nwfl_worker. */
 export function workerPoolConfig(env: Env): pg.PoolConfig {
@@ -33,20 +32,23 @@ export function workerPoolConfig(env: Env): pg.PoolConfig {
   return config;
 }
 
-/** The worker's pool. An idle client dropping emits 'error' on it; unhandled, that would end the process. */
-export function createWorkerPool(env: Env): pg.Pool {
-  const pool = new pg.Pool(workerPoolConfig(env));
-  pool.on('error', ignore);
-  return pool;
+/** The worker's pool; a dropped idle connection is logged (db/pool.ts onIdleError), never fatal. */
+export function createWorkerPool(env: Env, warn?: Warn): pg.Pool {
+  return onIdleError(new pg.Pool(workerPoolConfig(env)), warn);
 }
 
-/** Starts the job on its own pool; stop() lets the current run finish, then closes the pool. */
-export function runWorker(options: RegenerateOptions & { env: Env; intervalMs?: number; onError?: (error: unknown) => void }): { stop(): Promise<void> } {
-  const pool = createWorkerPool(options.env);
-  const job = startRegenerator({ ...options, db: pool });
+/**
+ * Starts the job on its own pool; stop() lets the current run finish, then closes the pool. Each copy
+ * is made in a child process (isolated.ts; `engine` names another child module, for tests).
+ */
+export function runWorker(
+  options: RegenerateOptions & { env: Env; engine?: string; intervalMs?: number; onError?: (error: unknown) => void; warn?: Warn },
+): { stop(): Promise<void> } {
+  const pool = createWorkerPool(options.env, options.warn);
+  const job = startRegenerator({ redact: isolatedRedact(options.engine === undefined ? {} : { module: options.engine }), ...options, db: pool });
   // The job's timer is unref'd (it never held the server open) and the worker has no listener, so
   // without this the process would exit at once. Cleared on stop, so a stopped worker can exit.
-  const alive = setInterval(ignore, 60_000);
+  const alive = setInterval(Date.now, 60_000) // any cheap callback: the timer is what keeps the process up;
   return {
     stop: async () => {
       clearInterval(alive);

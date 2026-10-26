@@ -24,6 +24,8 @@ export default defineConfig({
         'src/main.ts',
         // The PDF worker's entrypoint: env, telemetry and signal wiring only (pdf/worker.ts is tested).
         'src/worker.ts',
+        // The engine's child process: message and exit wiring only (isolated.ts engineReply is tested).
+        'src/pdf/engine-child.ts',
         // The seed command's entrypoint: argv, env and stdout only (seed.ts is tested).
         'src/seed/cli.ts',
       ],

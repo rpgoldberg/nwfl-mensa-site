@@ -16,6 +16,7 @@ const logger = createStructuredLogger({ name: `${telemetry.state.serviceName}-wo
 
 const worker = runWorker({
   env: process.env,
+  warn: (fields, message) => logger.warn(fields, message),
   onError: (error) => logger.error({ error_name: error instanceof Error ? error.name : 'unknown', error_code: (error as { code?: string }).code }, 'pdf regeneration failed'),
 });
 logger.info({ service_version: process.env['SERVICE_VERSION'] ?? 'dev' }, 'pdf worker started');

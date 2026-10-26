@@ -10,7 +10,7 @@ import type { RedactRequest } from '../../src/pdf/redact.js';
 import { type Redact, drain, regenerateOne, startRegenerator } from '../../src/pdf/regenerate.js';
 import { MAX_ORIGINAL_BYTES, inputsFor, readPdf, storeOriginal } from '../../src/pdf/store.js';
 import { checkCopy } from '../../src/pdf/gate.js';
-import { APP, APP_PW, WORKER, WORKER_PW, dropDatabase, failure, freshDatabase, live, migrate, sqlstate, url, urlFor } from '../helpers/pg.js';
+import { APP, APP_PW, WORKER, WORKER_PW, dropDatabase, failure, freshDatabase, live, migrate, sqlstate, url, urlFor, testPool } from '../helpers/pg.js';
 import { leakFixture } from './fixtures.js';
 
 const OFFICER = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
@@ -75,8 +75,8 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     database = await freshDatabase('nwfl_pdfstore');
     const run = await migrate(database);
     if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
-    pool = new pg.Pool({ connectionString: urlFor(APP, APP_PW, database), max: 6 });
-    worker = new pg.Pool({ connectionString: urlFor(WORKER, WORKER_PW, database), max: 4 });
+    pool = testPool({ connectionString: urlFor(APP, APP_PW, database), max: 6 });
+    worker = testPool({ connectionString: urlFor(WORKER, WORKER_PW, database), max: 4 });
     const target = new URL(url as string);
     target.pathname = `/${database}`;
     owner = new pg.Client({ connectionString: target.toString() });
@@ -441,6 +441,9 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     });
 
     it('lets any other database failure through, and the file is taken again once the lease ends', async () => {
+      // Nothing else queued: a file an earlier test left (its 1 s lease ran out under load, so its
+      // run could not record and finish) would be claimed first.
+      await drain(worker, { redact: stub() });
       const { version: v } = await newItem('db-fails');
       const bytes = pdfBytes('db-fails');
       const id = await newFile({ version: v }, bytes);

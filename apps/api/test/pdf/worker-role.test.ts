@@ -35,7 +35,7 @@ const WORKER_FUNCTIONS = [
   'pdf_regen_finish',
   'pdf_regen_original',
   'publication_ledger_lock',
-  'publication_ledger_record',
+  'publication_ledger_record_file',
 ];
 
 describe.skipIf(!live)('0017: the PDF worker role', () => {
@@ -97,6 +97,8 @@ describe.skipIf(!live)('0017: the PDF worker role', () => {
     const errors: unknown[] = [];
     const job = runWorker({
       env: { PGHOST: target.hostname, PGPORT: target.port, PGDATABASE: database, PGUSER: WORKER, PGPASSWORD: WORKER_PW },
+      // A stand-in engine process (HARDEN-1 Fix 1): the copy proves the job ran the engine in a child.
+      engine: fileURLToPath(new URL('./children/refuse.ts', import.meta.url)),
       intervalMs: 20,
       onError: (error) => errors.push(error),
     });
@@ -107,6 +109,8 @@ describe.skipIf(!live)('0017: the PDF worker role', () => {
     await job.stop();
     expect(errors).toEqual([]);
     expect((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [file])).rowCount).toBe(0);
+    const reasons = await api.pool.query<{ reason: string }>(`SELECT reason FROM pdf_copy WHERE file_id = $1 AND status = 'refused'`, [file]);
+    expect(reasons.rows.map((row) => row.reason)).toContain('refused by the engine process');
   });
 
   it('gives the worker nothing outside its grants: no other table, column or write, no other function', async () => {
@@ -227,7 +231,7 @@ describe.skipIf(!live)('0017 before fc creates the worker role', () => {
       // Re-running the migration Job applies them: nothing is pending, the grants follow the role.
       const again = await run('docker', ['exec', '-e', 'PGHOST=127.0.0.1', '-e', `PGUSER=${MIGRATOR}`, '-e', `PGPASSWORD=${MIGRATOR_PW}`, '-e', 'PGDATABASE=nwfl', id as string, 'sh', '/repo/scripts/migrate.sh', '/repo/migrations']);
       expect(again.code, again.stderr).toBe(0);
-      expect(again.stdout).toMatch(/applied=0 skipped=19/);
+      expect(again.stdout).toMatch(/applied=0 skipped=20/);
       expect(again.stdout).toContain('migrate: worker grants t');
       expect(await sqlstate(app, `SELECT * FROM pdf_regen_claim(60)`)).toBe('42501');
       const worker = new pg.Client({ connectionString: at(WORKER, WORKER_PW, 'nwfl') });
