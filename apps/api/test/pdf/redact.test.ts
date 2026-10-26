@@ -158,13 +158,13 @@ describe('redactPdf: fail closed', () => {
   });
 });
 
-describe('redactPdf: a mark is a whole word, letter-spaced or not (HARDEN-1)', () => {
-  it('leaves "befo" inside "before" alone, plain or letter-spaced, and removes "B e f o" standing alone', async () => {
-    const original = await linesPdf(['Come before noon.', 'Come b e f o r e noon.', 'Ask B e f o today.']);
-    const seen = await readBack(copyOf(await redactPdf(original, { quotes: ['befo'], redactsAny: true })));
+describe('redactPdf: normal text on word edges, letter-spaced runs without (HARDEN-1)', () => {
+  it('leaves "befo" inside "before" alone, removes "B e f o" alone and "Kestrel" run on into "n o w"', async () => {
+    const original = await linesPdf(['Come before noon.', 'Ask B e f o today.', 'Phone K e s t r e l n o w please.']);
+    const seen = await readBack(copyOf(await redactPdf(original, { quotes: ['befo', 'Kestrel'], redactsAny: true })));
     expect(seen.extracted).toContain('Come before noon.');
-    expect(seen.extracted).toContain('Come b e f o r e noon.');
     expect(seen.extracted).not.toMatch(/B\s*e\s*f\s*o/);
+    expect(leaked('Kestrel', seen.extracted, seen.raw)).toBe(false);
     expect(seen.extracted).toContain('Ask');
   });
 });

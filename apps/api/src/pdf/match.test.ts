@@ -89,18 +89,19 @@ describe('matchedChars', () => {
     expect(textOf(chars, matchedChars(chars, ['Quialon']))).toBe('Quiаlon');
   });
 
-  it('finds letter-spaced text as a whole word', () => {
-    const chars = page(['Phone K e s t r e l, n o w please']);
-    expect(textOf(chars, matchedChars(chars, ['Kestrel']))).toBe('K e s t r e l');
+  it('finds letter-spaced text, even run on into the next spaced word', () => {
+    const chars = page(['Phone K e s t r e l n o w please']);
+    expect(textOf(chars, matchedChars(chars, ['Kestrel']))).toBe('Kestrel');
   });
 
-  it('does not take a mark out of the middle of a word, plain or letter-spaced, but takes it letter-spaced alone', () => {
+  it('matches normal text on word edges only, but a letter-spaced run without them (over-redaction is the safe side)', () => {
     const plain = page(['Come before noon']);
     expect(matchedChars(plain, ['befo']).size).toBe(0);
-    const word = page(['Come b e f o r e noon']);
-    expect(matchedChars(word, ['befo']).size).toBe(0);
     const alone = page(['Ask B e f o today']);
-    expect(textOf(alone, matchedChars(alone, ['befo']))).toBe('B e f o');
+    expect(textOf(alone, matchedChars(alone, ['befo'])).replaceAll(' ', '')).toBe('Befo');
+    // A spaced run gives no word edge: "b e f o r e" loses "b e f o". Accepted.
+    const run = page(['Come b e f o r e noon']);
+    expect(textOf(run, matchedChars(run, ['befo']))).toBe('befo');
   });
 
   it('finds letter-spaced text across PDFium generated spaces', () => {
@@ -130,16 +131,17 @@ describe('textMatches (a plain string, as the output gate reads it)', () => {
   });
 
   it('finds letter-spaced and mixed-spaced passages', () => {
-    expect(textMatches('see K e s t r e l, then', ['Kestrel'])).toBe(true);
-    // The price of word edges (HARDEN-1): single letters run straight on give no edge, so read as one word.
-    expect(textMatches('x K e s t r e l y', ['Kestrel'])).toBe(false);
+    expect(textMatches('x K e s t r e l y', ['Kestrel'])).toBe(true);
+    expect(textMatches('Phone K e s t r e l n o w please', ['Kestrel'])).toBe(true);
     expect(textMatches('Phone J u n o Blackwood now.', ['Juno Blackwood'])).toBe(true);
   });
 
   it('does not match inside a longer word, or without quotes', () => {
     expect(textMatches('Ann Leek', ['Ann Lee'])).toBe(false);
-    expect(textMatches('come b e f o r e noon', ['befo'])).toBe(false);
+    expect(textMatches('come before noon', ['befo'])).toBe(false);
     expect(textMatches('ask B e f o today', ['befo'])).toBe(true);
+    // The gate keeps the no-edge check on a rejoined run: over-redaction, never a leak.
+    expect(textMatches('come b e f o r e noon', ['befo'])).toBe(true);
     expect(textMatches('anything', [])).toBe(false);
   });
 

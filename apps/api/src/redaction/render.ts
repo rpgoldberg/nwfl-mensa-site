@@ -179,13 +179,16 @@ function lookalikes(char: string): string {
   return all.size === 1 ? char : `[${[...all].join('')}]`;
 }
 
-/** The quote as a pattern over folded text: whole words, any non-word run between them. */
-function patternOf(quote: string): RegExp {
+/**
+ * The quote as a pattern over folded text: whole words, any non-word run between them. Without
+ * `wholeWords` the words may run on into more letters (a PDF's letter-spaced run, rejoined).
+ */
+function patternOf(quote: string, wholeWords = true): RegExp {
   const folded = foldedText(quote);
   const words = folded.match(TOKEN);
   if (words === null) return new RegExp(folded.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gu');
   // A word of letters or of digits may not run on into more of the same; a CJK word may.
-  const edge = (word: string): string => (LETTER_FIRST.test(word) ? LETTER : DIGIT_FIRST.test(word) ? '\\p{N}' : '');
+  const edge = (word: string): string => (!wholeWords ? '' : LETTER_FIRST.test(word) ? LETTER : DIGIT_FIRST.test(word) ? '\\p{N}' : '');
   const before = edge(words[0]);
   const after = edge(words.at(-1) as string);
   const body = words.map((word) => [...word].map(lookalikes).join('')).join(SEPARATOR);
@@ -248,8 +251,8 @@ export const quoteMatches = (quote: string, texts: readonly string[]): boolean =
 };
 
 /** Every match of these quotes in the value, as merged spans of the value (PDF text, R3a). */
-export const quoteSpans = (value: string, quotes: readonly string[]): Array<[number, number]> =>
-  ranges(value, quotes.map((quote) => patternOf(quote)));
+export const quoteSpans = (value: string, quotes: readonly string[], wholeWords = true): Array<[number, number]> =>
+  ranges(value, quotes.map((quote) => patternOf(quote, wholeWords)));
 
 /**
  * A loose, fast test for a quote (the PDF output gate, R3a): its folded letters in order, each with

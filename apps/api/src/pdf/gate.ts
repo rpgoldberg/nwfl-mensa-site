@@ -34,7 +34,8 @@ import { textMatches } from './match.js';
 // They are expected and harmless. The image leaves out the optional canvas (Dockerfile:
 // --omit=optional, about 71 MB) because the gate never renders a page: it only reads text
 // (getTextContent), which needs neither. pdf.js prints them while the module loads, before any
-// option (verbosity) can reach it, so no setting silences them; installing the canvas would.
+// option (verbosity) can reach it, so no setting silences them; the engine's child process drops
+// exactly these three (isolated.ts withoutCanvasWarnings).
 type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 let pdfjs: Promise<PdfJs> | undefined;
 

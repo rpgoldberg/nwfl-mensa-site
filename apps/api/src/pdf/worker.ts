@@ -11,6 +11,7 @@
 // ============================================================================
 import pg from 'pg';
 import { type Env, poolConfigFromEnv } from '../db/pool.js';
+import { isolatedRedact } from './isolated.js';
 import { type RegenerateOptions, startRegenerator } from './regenerate.js';
 
 export const WORKER_ROLE = 'nwfl_worker';
@@ -40,10 +41,15 @@ export function createWorkerPool(env: Env): pg.Pool {
   return pool;
 }
 
-/** Starts the job on its own pool; stop() lets the current run finish, then closes the pool. */
-export function runWorker(options: RegenerateOptions & { env: Env; intervalMs?: number; onError?: (error: unknown) => void }): { stop(): Promise<void> } {
+/**
+ * Starts the job on its own pool; stop() lets the current run finish, then closes the pool. Each copy
+ * is made in a child process (isolated.ts; `engine` names another child module, for tests).
+ */
+export function runWorker(
+  options: RegenerateOptions & { env: Env; engine?: string; intervalMs?: number; onError?: (error: unknown) => void },
+): { stop(): Promise<void> } {
   const pool = createWorkerPool(options.env);
-  const job = startRegenerator({ ...options, db: pool });
+  const job = startRegenerator({ redact: isolatedRedact(options.engine === undefined ? {} : { module: options.engine }), ...options, db: pool });
   // The job's timer is unref'd (it never held the server open) and the worker has no listener, so
   // without this the process would exit at once. Cleared on stop, so a stopped worker can exit.
   const alive = setInterval(ignore, 60_000);

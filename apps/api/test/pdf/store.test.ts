@@ -441,6 +441,9 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     });
 
     it('lets any other database failure through, and the file is taken again once the lease ends', async () => {
+      // Nothing else queued: a file an earlier test left (its 1 s lease ran out under load, so its
+      // run could not record and finish) would be claimed first.
+      await drain(worker, { redact: stub() });
       const { version: v } = await newItem('db-fails');
       const bytes = pdfBytes('db-fails');
       const id = await newFile({ version: v }, bytes);
