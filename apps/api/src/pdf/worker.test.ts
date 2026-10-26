@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WORKER_ROLE, createWorkerPool, workerPoolConfig } from './worker.js';
+import { WORKER_ROLE, createWorkerPool, runWorker, workerPoolConfig } from './worker.js';
 
 describe('workerPoolConfig: the PDF worker connects as its own role only', () => {
   it('defaults the user to nwfl_worker and the pool to 2 connections', () => {
@@ -30,5 +30,16 @@ describe('createWorkerPool', () => {
     expect(() => pool.emit('error', new Error('idle client dropped'))).not.toThrow();
     await pool.end();
     expect(() => createWorkerPool({ PGUSER: 'nwfl' })).toThrow('not nwfl');
+  });
+});
+
+describe('runWorker', () => {
+  it('keeps the process alive until stopped: the job\'s own timer is unref\'d and the worker has no listener', async () => {
+    const timeouts = () => process.getActiveResourcesInfo().filter((kind) => kind === 'Timeout').length;
+    const before = timeouts();
+    const worker = runWorker({ env: { PGHOST: '127.0.0.1', PGPORT: '1' }, intervalMs: 3_600_000 });
+    expect(timeouts()).toBe(before + 1);
+    await worker.stop();
+    expect(timeouts()).toBe(before);
   });
 });

@@ -15,6 +15,8 @@ import { type RegenerateOptions, startRegenerator } from './regenerate.js';
 
 export const WORKER_ROLE = 'nwfl_worker';
 
+const ignore = (): void => {};
+
 /** The worker's pool settings; throws unless they connect as nwfl_worker. */
 export function workerPoolConfig(env: Env): pg.PoolConfig {
   const config = poolConfigFromEnv({ PG_POOL_MAX: '2', ...env, PGUSER: env['PGUSER'] ?? WORKER_ROLE });
@@ -34,7 +36,7 @@ export function workerPoolConfig(env: Env): pg.PoolConfig {
 /** The worker's pool. An idle client dropping emits 'error' on it; unhandled, that would end the process. */
 export function createWorkerPool(env: Env): pg.Pool {
   const pool = new pg.Pool(workerPoolConfig(env));
-  pool.on('error', () => {});
+  pool.on('error', ignore);
   return pool;
 }
 
@@ -42,8 +44,12 @@ export function createWorkerPool(env: Env): pg.Pool {
 export function runWorker(options: RegenerateOptions & { env: Env; intervalMs?: number; onError?: (error: unknown) => void }): { stop(): Promise<void> } {
   const pool = createWorkerPool(options.env);
   const job = startRegenerator({ ...options, db: pool });
+  // The job's timer is unref'd (it never held the server open) and the worker has no listener, so
+  // without this the process would exit at once. Cleared on stop, so a stopped worker can exit.
+  const alive = setInterval(ignore, 60_000);
   return {
     stop: async () => {
+      clearInterval(alive);
       await job.stop();
       await pool.end();
     },
