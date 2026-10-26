@@ -274,6 +274,13 @@ for f in "$@"; do
 done
 
 # --- release advisory lock (EOF the holder session) -------------------------
+# W-WORKER (0017): the PDF worker role's grants follow the role, which fc creates (the migrator has
+# no CREATEROLE), possibly after 0017 is applied. So every run re-applies them, under the lock; the
+# function is idempotent and only grants when the role exists. A tree without it skips this.
+if [ "$($PSQL -tAc "SELECT to_regprocedure('public.nwfl_worker_grants()') IS NOT NULL")" = t ]; then
+  printf 'migrate: worker grants %s\n' "$($PSQL -tAc "SELECT nwfl_worker_grants()")"
+fi
+
 exec 9>&-
 wait "$LOCK_PID" 2>/dev/null || true
 printf 'migrate: done — applied=%d skipped=%d (db=%s ledger=schema_migrations)\n' "$n_applied" "$n_skipped" "$cur_db"

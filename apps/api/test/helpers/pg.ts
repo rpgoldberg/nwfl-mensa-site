@@ -17,6 +17,13 @@ export const MIGRATOR_PW = 'migrator-pw';
 // deployed DSN connects as.
 export const APP = 'nwfl';
 export const APP_PW = 'app-pw';
+// The PDF regeneration worker's role (0017). fc creates it in production; the harness creates it in
+// every suite, so every suite sees the same grants (roles are cluster-wide, suites run in parallel).
+// Its attributes are those of ~/tmp/mensa-site/pdf-worker/role-spec.md, but a higher connection limit:
+// parallel suites share it.
+export const WORKER = 'nwfl_worker';
+export const WORKER_PW = 'worker-pw';
+export const WORKER_ATTRIBUTES = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 40';
 
 export interface ExecResult {
   code: number;
@@ -67,20 +74,21 @@ export const asSuper = <T>(fn: (client: pg.Client) => Promise<T>): Promise<T> =>
 
 const IGNORABLE = new Set(['42710', '23505']); // role exists; a parallel suite created it first
 
-async function ensureRole(client: pg.Client, name: string, password: string): Promise<void> {
+async function ensureRole(client: pg.Client, name: string, password: string, attributes = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE'): Promise<void> {
   try {
-    await client.query(`CREATE ROLE ${name} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${password}'`);
+    await client.query(`CREATE ROLE ${name} ${attributes} PASSWORD '${password}'`);
   } catch (error) {
     if (!IGNORABLE.has((error as { code?: string }).code ?? '')) throw error;
   }
 }
 
-/** A fresh database owned by the migrator, plus both roles. */
+/** A fresh database owned by the migrator, plus the three roles. */
 export async function freshDatabase(prefix: string): Promise<string> {
   const name = `${prefix}_${randomBytes(4).toString('hex')}`;
   await asSuper(async (client) => {
     await ensureRole(client, MIGRATOR, MIGRATOR_PW);
     await ensureRole(client, APP, APP_PW);
+    await ensureRole(client, WORKER, WORKER_PW, WORKER_ATTRIBUTES);
     await client.query(`CREATE DATABASE ${name} OWNER ${MIGRATOR}`);
   });
   return name;

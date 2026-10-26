@@ -10,7 +10,7 @@ import type { RedactRequest } from '../../src/pdf/redact.js';
 import { type Redact, drain, regenerateOne, startRegenerator } from '../../src/pdf/regenerate.js';
 import { MAX_ORIGINAL_BYTES, inputsFor, readPdf, storeOriginal } from '../../src/pdf/store.js';
 import { checkCopy } from '../../src/pdf/gate.js';
-import { APP, APP_PW, dropDatabase, failure, freshDatabase, live, migrate, sqlstate, url, urlFor } from '../helpers/pg.js';
+import { APP, APP_PW, WORKER, WORKER_PW, dropDatabase, failure, freshDatabase, live, migrate, sqlstate, url, urlFor } from '../helpers/pg.js';
 import { leakFixture } from './fixtures.js';
 
 const OFFICER = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
@@ -41,6 +41,8 @@ const text = (result: Awaited<ReturnType<typeof readPdf>>): string => {
 describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
   let database: string;
   let pool: pg.Pool;
+  // The job runs as its own role (0017).
+  let worker: pg.Pool;
   let owner: pg.Client;
   let office: string;
   let item: string;
@@ -74,6 +76,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     const run = await migrate(database);
     if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
     pool = new pg.Pool({ connectionString: urlFor(APP, APP_PW, database), max: 6 });
+    worker = new pg.Pool({ connectionString: urlFor(WORKER, WORKER_PW, database), max: 4 });
     const target = new URL(url as string);
     target.pathname = `/${database}`;
     owner = new pg.Client({ connectionString: target.toString() });
@@ -87,6 +90,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
   afterAll(async () => {
     await owner?.end();
     await pool?.end();
+    await worker?.end();
     if (database !== undefined) await dropDatabase(database);
   });
 
@@ -159,7 +163,11 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const fake = '00000000-0000-0000-0000-000000000001';
       expect(await sqlstate(c, `SELECT pdf_regen_original($1, $2)`, [file, fake])).toBe('42501');
       expect(await sqlstate(c, `SELECT pdf_copy_put($1, $2, $3, 'e', NULL, 'r')`, [file, fake, Buffer.alloc(32)])).toBe('42501');
-      expect(await sqlstate(c, `SELECT pdf_regen_finish($1, $2, ARRAY[]::bytea[])`, [file, fake])).toBe('ok');
+      expect(await sqlstate(c, `SELECT pdf_regen_finish($1, $2, ARRAY[]::bytea[])`, [file, fake])).toBe('42501'); // 0017: the worker's alone
+      const w = worker as unknown as pg.Client;
+      expect(await sqlstate(w, `SELECT pdf_regen_original($1, $2)`, [file, fake])).toBe('42501');
+      expect(await sqlstate(w, `SELECT pdf_copy_put($1, $2, $3, 'e', NULL, 'r')`, [file, fake, Buffer.alloc(32)])).toBe('42501');
+      expect(await sqlstate(w, `SELECT pdf_regen_finish($1, $2, ARRAY[]::bytea[])`, [file, fake])).toBe('ok');
       expect(await queued(file)).toBe(1);
     });
   });
@@ -183,7 +191,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
 
     it('keys a copy by the image action too: public photos blur, members\' show', async () => {
       calls.length = 0;
-      expect(await drain(pool, { redact: stub() })).toBe(1);
+      expect(await drain(worker, { redact: stub() })).toBe(1);
       expect(calls).toEqual(expect.arrayContaining([{ quotes: [], redactsAny: true, image: 'blur' }, { quotes: [], redactsAny: true, image: 'show' }]));
       expect(calls).toHaveLength(2);
       expect((await copies(file)).length).toBe(2);
@@ -192,13 +200,13 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     it('shares one copy between audiences whose settings for the file are the same', async () => {
       await propose('members', 'image', 'blur');
       calls.length = 0;
-      expect(await drain(pool, { redact: stub() })).toBe(1);
+      expect(await drain(worker, { redact: stub() })).toBe(1);
       expect(calls).toEqual([]);
       expect(text(await readPdf(pool, file, 'public'))).toBe('copy:');
       expect(text(await readPdf(pool, file, 'members'))).toBe('copy:');
       expect((await copies(file)).map((c) => [c.status, c.stale])).toEqual([['ready', false]]);
       expect(await queued(file)).toBe(0);
-      expect(await drain(pool, { redact: stub() })).toBe(0);
+      expect(await drain(worker, { redact: stub() })).toBe(0);
     });
 
     it('marks copies stale when a mark changes, serves no stale copy, and regenerates only what changed', async () => {
@@ -211,7 +219,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       // Members show phones: their inputs did not change, so their copy (same hash) still serves.
       expect(text(await readPdf(pool, file, 'members'))).toBe('copy:');
       calls.length = 0;
-      expect(await drain(pool, { redact: stub() })).toBe(1);
+      expect(await drain(worker, { redact: stub() })).toBe(1);
       expect(calls).toEqual([{ quotes: [PHONE_NAME], redactsAny: true, image: 'blur' }]);
       expect(text(await readPdf(pool, file, 'public'))).toBe(`copy:${PHONE_NAME}`);
       const after = await copies(file);
@@ -225,7 +233,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await queued(file)).toBe(1);
       // No mark of that category yet: the inputs are the same, so nothing is regenerated.
       calls.length = 0;
-      expect(await drain(pool, { redact: stub() })).toBe(1);
+      expect(await drain(worker, { redact: stub() })).toBe(1);
       expect(calls).toEqual([]);
       expect((await copies(file)).every((c) => !c.stale)).toBe(true);
     });
@@ -233,7 +241,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     it('lets one of two racing runs claim a file', async () => {
       await mark(item, EMAIL_NAME, 'member_email');
       calls.length = 0;
-      const runs = await Promise.all([regenerateOne(pool, { redact: stub(200) }), regenerateOne(pool, { redact: stub(200) })]);
+      const runs = await Promise.all([regenerateOne(worker, { redact: stub(200) }), regenerateOne(worker, { redact: stub(200) })]);
       expect(runs.filter((run) => run !== null)).toEqual([{ fileId: file, done: true }]);
       expect(calls.map((c) => c.quotes)).toEqual(expect.arrayContaining([[EMAIL_NAME], [EMAIL_NAME, PHONE_NAME]]));
       expect(calls).toHaveLength(2);
@@ -246,9 +254,9 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     it('stays correct when a run outlives its lease and a second run takes over', async () => {
       await propose('members', 'member_phone', 'redact');
       await mark(item, 'Lease Name', 'member_phone');
-      const slow = regenerateOne(pool, { redact: stub(1500), leaseSeconds: 1 });
+      const slow = regenerateOne(worker, { redact: stub(1500), leaseSeconds: 1 });
       await new Promise((resolve) => setTimeout(resolve, 1200));
-      const fast = await regenerateOne(pool, { redact: stub() });
+      const fast = await regenerateOne(worker, { redact: stub() });
       expect(fast).toEqual({ fileId: file, done: true });
       expect(await slow).toEqual({ fileId: file, done: false });
       expect(text(await readPdf(pool, file, 'members'))).toBe(`copy:Lease Name|${EMAIL_NAME}|${PHONE_NAME}`);
@@ -267,16 +275,16 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
         return stub()(o, request);
       };
       calls.length = 0;
-      expect(await regenerateOne(pool, { redact: changing })).toEqual({ fileId: id, done: false });
+      expect(await regenerateOne(worker, { redact: changing })).toEqual({ fileId: id, done: false });
       expect(await queued(id)).toBe(1);
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'not_ready' });
-      expect(await drain(pool, { redact: stub() })).toBe(1);
+      expect(await drain(worker, { redact: stub() })).toBe(1);
       expect(text(await readPdf(pool, id, 'public'))).toBe('copy:Mid Run Name');
     });
 
     it('writes a copy once per inputs, however often it is put', async () => {
       await owner.query(`INSERT INTO pdf_regen (file_id, generation, claim, claimed_generation, claimed_until) VALUES ($1, 0, '00000000-0000-0000-0000-0000000000aa', 0, now() + interval '1 minute')`, [file]);
-      const put = (bytes: string) => q(`SELECT pdf_copy_put($1, '00000000-0000-0000-0000-0000000000aa', $2, 'e', $3, NULL)`, [file, Buffer.alloc(32, 7), Buffer.from(bytes)]);
+      const put = (bytes: string) => worker.query(`SELECT pdf_copy_put($1, '00000000-0000-0000-0000-0000000000aa', $2, 'e', $3, NULL)`, [file, Buffer.alloc(32, 7), Buffer.from(bytes)]);
       await put('first');
       await put('second');
       const rows = await owner.query<{ bytes: Buffer }>(`SELECT bytes FROM pdf_copy WHERE input_hash = $1`, [Buffer.alloc(32, 7)]);
@@ -284,16 +292,16 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await failure(owner, `UPDATE pdf_copy SET bytes = '\\x00' WHERE input_hash = $1`, [Buffer.alloc(32, 7)])).toMatch(/a copy is kept as made/);
       expect(await sqlstate(owner, `UPDATE pdf_copy SET stale = true WHERE input_hash = $1`, [Buffer.alloc(32, 7)])).toBe('ok');
       expect(await sqlstate(owner, `INSERT INTO pdf_copy (file_id, input_hash, engine, status) VALUES ($1, $2, 'e', 'ready')`, [file, Buffer.alloc(32, 8)])).toBe('23514');
-      await q(`SELECT pdf_regen_finish($1, '00000000-0000-0000-0000-0000000000aa', ARRAY[]::bytea[])`, [file]);
+      await worker.query(`SELECT pdf_regen_finish($1, '00000000-0000-0000-0000-0000000000aa', ARRAY[]::bytea[])`, [file]);
       expect(await queued(file)).toBe(0);
       expect((await copies(file)).length).toBe(0);
       await propose('members', 'member_phone', 'show');
-      await drain(pool, { redact: stub() });
+      await drain(worker, { redact: stub() });
     });
 
     it('stores a refusal\'s reason for officers and serves it as refused', async () => {
       await mark(item, 'Refuse Me', 'member_phone');
-      await drain(pool, { redact: stub() });
+      await drain(worker, { redact: stub() });
       expect(await readPdf(pool, file, 'public')).toEqual({ kind: 'refused', reason: 'page 1 is a scan: pictures cover most of it' });
       expect(text(await readPdf(pool, file, 'members'))).toBe(`copy:${EMAIL_NAME}`);
     });
@@ -309,7 +317,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const f2 = await newFile({ version: v2 }, b2);
       await storeOriginal(pool, { fileId: f2, bytes: b2, ...OFFICER });
       await mark(i2, 'Give Original', 'member_phone');
-      await drain(pool, { redact: stub() });
+      await drain(worker, { redact: stub() });
       expect(await readPdf(pool, f1, 'public')).toEqual({ kind: 'refused', reason: 'the engine failed: wasm trap' });
       expect(await readPdf(pool, f2, 'public')).toEqual({ kind: 'refused', reason: 'the engine returned the original for an audience that redacts' });
     });
@@ -320,7 +328,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const id = await newFile({ version: v }, bytes);
       await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
       await mark(i, null, 'member_name');
-      await drain(pool, { redact: stub() });
+      await drain(worker, { redact: stub() });
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'hidden' });
       expect(await inputsFor(pool, id, 'public')).toEqual({ kind: 'hidden' });
       expect(text(await readPdf(pool, id, 'members'))).toBe('copy:');
@@ -336,7 +344,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'not_found' });
       expect(await readPdf(pool, id, 'members')).toEqual({ kind: 'not_found' });
       expect(await readPdf(pool, id, 'officers')).toMatchObject({ kind: 'pdf', original: true });
-      await drain(pool, { redact: stub() });
+      await drain(worker, { redact: stub() });
       expect(await copies(id)).toEqual([]);
     });
 
@@ -345,12 +353,12 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const bytes = pdfBytes('issue');
       const id = await newFile({ edition }, bytes);
       await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
-      await drain(pool, { redact: stub() });
+      await drain(worker, { redact: stub() });
       expect(text(await readPdf(pool, id, 'public'))).toBe('copy:');
       await q(`INSERT INTO edition_item (edition_id, item_id, version_id) VALUES ($1, $2, $3)`, [edition, item, version]);
       expect(await queued(id)).toBe(1);
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'not_ready' });
-      await drain(pool, { redact: stub() });
+      await drain(worker, { redact: stub() });
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'refused', reason: 'page 1 is a scan: pictures cover most of it' });
       expect(text(await readPdf(pool, id, 'members'))).toBe(`copy:${EMAIL_NAME}`);
     });
@@ -379,7 +387,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const bytes = pdfBytes('background');
       const id = await newFile({ version: v }, bytes);
       await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
-      const job = startRegenerator({ db: pool, intervalMs: 20, redact: stub() });
+      const job = startRegenerator({ db: worker, intervalMs: 20, redact: stub() });
       for (let i = 0; i < 100 && (await readPdf(pool, id, 'public')).kind !== 'pdf'; i++) await new Promise((resolve) => setTimeout(resolve, 20));
       await job.stop();
       expect(text(await readPdf(pool, id, 'public'))).toBe('copy:');
@@ -398,12 +406,12 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
       const failing = {
         query: (sql: string, values?: unknown[]) =>
-          sql.includes('pdf_copy_put') ? Promise.reject(Object.assign(new Error('disk full'), { code: '53100' })) : pool.query(sql, values),
+          sql.includes('pdf_copy_put') ? Promise.reject(Object.assign(new Error('disk full'), { code: '53100' })) : worker.query(sql, values),
       } as unknown as pg.Pool;
       await expect(regenerateOne(failing, { redact: stub(), leaseSeconds: 1 })).rejects.toThrow('disk full');
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'not_ready' });
       await new Promise((resolve) => setTimeout(resolve, 1100));
-      expect(await drain(pool, { redact: stub() })).toBe(1);
+      expect(await drain(worker, { redact: stub() })).toBe(1);
       expect(text(await readPdf(pool, id, 'public'))).toBe('copy:');
     });
 
@@ -413,7 +421,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const id = await newFile({ version: v }, bytes);
       await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
       await mark(i, PHONE_NAME, 'member_phone');
-      while ((await regenerateOne(pool)) !== null);
+      while ((await regenerateOne(worker)) !== null);
       const result = await readPdf(pool, id, 'public');
       expect(result.kind).toBe('pdf');
       const copy = (result as { pdf: Uint8Array }).pdf;
@@ -423,25 +431,21 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
     }, 120_000);
   });
 
-  // Documented, not closed (fix 2): the database takes the groups the app passes on trust, as it
-  // does for R1's approver. So the app role, or anyone who has taken it over, can say it is an
-  // officer, add a mark (which queues the file), claim the file and read its original. Closing this
-  // needs a separate worker role, which needs CREATEROLE (filed with fc).
-  describe('the trust the worker path rests on', () => {
-    it('lets the app role read an original by claiming officer groups, adding a mark and claiming the file', async () => {
+  // Fix 2 documented this hole; 0017 closes it. The database still takes the groups the app passes on
+  // trust, so the app role can say it is an officer and add a mark (which queues the file), but the
+  // claim and the original are the worker role's alone.
+  describe('the worker path, closed by 0017', () => {
+    it('no longer lets the app role read an original by claiming officer groups, adding a mark and claiming the file', async () => {
       const self = { sub: 'sub-anyone', groups: ['nwfl-officers'] };
-      for (const audience of ['public', 'members', 'officers']) {
-        if (audience !== 'officers') expect(await sqlstate(pool as unknown as pg.Client, `SELECT pdf_original_read($1, $2)`, [file, audience])).toBe('42501');
+      for (const audience of ['public', 'members']) {
+        expect(await sqlstate(pool as unknown as pg.Client, `SELECT pdf_original_read($1, $2)`, [file, audience])).toBe('42501');
       }
       await mark(item, 'zzz nowhere', 'member_phone', self);
-      let claim: { file_id: string; claim: string } | undefined;
-      for (let i = 0; i < 50; i++) {
-        claim = (await q<{ file_id: string; claim: string }>(`SELECT * FROM pdf_regen_claim(60)`)).rows[0];
-        if (claim === undefined || claim.file_id === file) break;
-      }
-      expect(claim?.file_id).toBe(file);
-      const got = (await q<{ b: Buffer }>(`SELECT pdf_regen_original($1, $2) AS b`, [file, claim!.claim])).rows[0]!.b;
-      expect(got.equals(Buffer.from(original))).toBe(true);
+      expect(await queued(file)).toBe(1);
+      expect(await sqlstate(pool as unknown as pg.Client, `SELECT * FROM pdf_regen_claim(60)`)).toBe('42501');
+      const claim = (await worker.query<{ file_id: string; claim: string }>(`SELECT * FROM pdf_regen_claim(60)`)).rows[0];
+      expect(claim).toBeDefined();
+      expect(await sqlstate(pool as unknown as pg.Client, `SELECT pdf_regen_original($1, $2)`, [claim!.file_id, claim!.claim])).toBe('42501');
     });
   });
 });

@@ -12,7 +12,7 @@ import { apiRoutes } from '../../src/grpc/routes.js';
 import { apiInterceptors } from '../../src/grpc/interceptors.js';
 import { createGrpcServer } from '../../src/grpc/server.js';
 import { createStructuredLogger } from '../../src/platform/logger.js';
-import { APP, APP_PW, dropDatabase, freshDatabase, migrate, urlFor } from './pg.js';
+import { APP, APP_PW, WORKER, WORKER_PW, dropDatabase, freshDatabase, migrate, urlFor } from './pg.js';
 import { captureLogs, closeHard, listen } from './servers.js';
 
 export const MEMBER = { headers: { authorization: 'Bearer member-token' } };
@@ -69,6 +69,8 @@ export const as = (token: keyof typeof PEOPLE  ): { headers: Record<string, stri
 
 export interface Api {
   pool: pg.Pool;
+  /** The PDF regeneration worker's connection (0017): only it may run the job. */
+  worker: pg.Pool;
   baseUrl: string;
   logs: Record<string, unknown>[];
   client<T extends DescService>(service: T): Client<T>;
@@ -84,6 +86,7 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const run = await migrate(db);
   if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
   const pool = new pg.Pool({ connectionString: urlFor(APP, APP_PW, db), max: 4 });
+  const worker = new pg.Pool({ connectionString: urlFor(WORKER, WORKER_PW, db), max: 2 });
   // The member reads at member level because member_account says so (AC6 b), not because of its token groups.
   await pool.query(
     `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES ('sub-member', 'member', 'signup', 'sub-approver', now(), '2026-10-01')`,
@@ -100,12 +103,14 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const transport = createGrpcTransport({ baseUrl });
   return {
     pool,
+    worker,
     baseUrl,
     logs: lines,
     client: (service) => createClient(service, transport),
     close: async () => {
       await closeHard(server);
       await pool.end();
+      await worker.end();
       await dropDatabase(db);
     },
   };

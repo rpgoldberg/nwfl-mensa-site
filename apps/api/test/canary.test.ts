@@ -147,7 +147,7 @@ describe.skipIf(!live)('the members-only canary', () => {
     const pdfItem = await publishItem(pool, { slug: 'canary-pdf', officeId: office, title: 'Flyer', body: { blocks: [] }, files: [{ objectKey: 'canary-flyer.pdf', audience: 'members', bytes: pdf }] });
     ids['pdf'] = (await pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [pdfItem.versionId])).rows[0]!.id;
     await storeOriginal(pool, { fileId: ids['pdf'], bytes: pdf, sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] });
-    await drain(pool);
+    await drain(api.worker);
     await publishItem(pool, { slug: 'canary-members', officeId: office, visibility: 'members', title: 'Members notice', body: { blocks: [paragraph(text(`Notice ${TOKEN}`))] } });
     await publishItem(pool, { slug: 'canary-officers', officeId: office, visibility: 'officers', title: `Officers ${TOKEN}`, body: { blocks: [paragraph(text(TOKEN))] } });
     ids['series'] = await insertId(pool,
