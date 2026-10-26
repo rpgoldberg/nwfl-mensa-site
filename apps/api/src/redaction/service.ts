@@ -21,6 +21,8 @@ import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@co
 import { traceId } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
 import { requireOfficer } from '../auth/roles.js';
+import { ledgerHandlers } from '../ledger/handlers.js';
+import { recordAll } from '../ledger/ledger.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -146,6 +148,7 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
     router.service(RedactionPolicyService, {
       // Marks (R2a): add, list, and the four-eyes removal.
       ...markHandlers({ db }),
+      ...ledgerHandlers({ db }),
       getRedactionPolicy: async (_request, ctx) => {
         requireOfficer(callerIn(ctx));
         const cells = await db.query<{ audience: string; category: string; action: string }>(
@@ -196,7 +199,10 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
             `SELECT ${CHANGE_COLUMNS} FROM redaction_propose($1, $2, $3, $4, $5, $6, $7)`,
             [TENANT, audience, category, action, ...actor(caller)],
           );
-          return { change: changeMessage(rows[0] as ChangeRow) };
+          const change = rows[0] as ChangeRow;
+          // What each audience is given changes only when the change applies (R-LEDGER).
+          if (change.status === 'applied') await recordAll(client);
+          return { change: changeMessage(change) };
         });
       },
 
@@ -216,6 +222,7 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
           if (found.status !== 'pending') throw precondition('this change is not waiting for approval');
           if (found.proposed_by_sub === caller.subject) throw new ConnectError('a second officer approves this change', Code.PermissionDenied);
           const { rows } = await client.query<ChangeRow>(`SELECT ${CHANGE_COLUMNS} FROM redaction_approve($1, $2, $3, $4)`, [id, ...actor(caller)]);
+          await recordAll(client);
           return { change: changeMessage(rows[0] as ChangeRow) };
         });
       },

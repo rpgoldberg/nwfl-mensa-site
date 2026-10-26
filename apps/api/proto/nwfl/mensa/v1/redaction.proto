@@ -100,6 +100,13 @@ service RedactionPolicyService {
   rpc ProposeMarkRemoval(ProposeMarkRemovalRequest) returns (ProposeMarkRemovalResponse);
   // No officer approves their own proposal.
   rpc ApproveMarkRemoval(ApproveMarkRemovalRequest) returns (ApproveMarkRemovalResponse);
+
+  // The publication ledger (R-LEDGER), officers only. LedgerAsOf returns the
+  // row current at a time for one subject and audience, and renders it again
+  // from the kept history to check its hash. VerifyLedger walks the hash chain
+  // and names the first row that breaks it. Neither returns any content.
+  rpc LedgerAsOf(LedgerAsOfRequest) returns (LedgerAsOfResponse);
+  rpc VerifyLedger(VerifyLedgerRequest) returns (VerifyLedgerResponse);
 }
 
 // What a mark is on.
@@ -226,4 +233,58 @@ message ApproveRedactionChangeRequest {
 
 message ApproveRedactionChangeResponse {
   RedactionChange change = 1;
+}
+
+// What a ledger row is about.
+enum LedgerSubjectKind {
+  LEDGER_SUBJECT_KIND_UNSPECIFIED = 0;
+  // A content version, as the published item reads give it.
+  LEDGER_SUBJECT_KIND_CONTENT_VERSION = 1;
+  // A PDF file, as ReadFile gives it.
+  LEDGER_SUBJECT_KIND_STORED_FILE = 2;
+}
+
+// One ledger row. output_sha256 is empty when the audience was given nothing.
+message LedgerRow {
+  int64 seq = 1;
+  LedgerSubjectKind subject_kind = 2;
+  string subject_id = 3;
+  RedactionAudience audience = 4;
+  bytes output_sha256 = 5;
+  // The inputs manifest, as JSON: ids, hashes, policy cells and engine only.
+  string inputs_json = 6;
+  int32 passages_withheld = 7;
+  google.protobuf.Timestamp current_from = 8;
+  // Unset while the row is current.
+  google.protobuf.Timestamp current_to = 9;
+  bytes prev_hash = 10;
+  bytes row_hash = 11;
+}
+
+message LedgerAsOfRequest {
+  LedgerSubjectKind subject_kind = 1;
+  string subject_id = 2;
+  RedactionAudience audience = 3;
+  google.protobuf.Timestamp at = 4;
+}
+
+message LedgerAsOfResponse {
+  // Unset when no row was current then.
+  LedgerRow row = 1;
+  // The hash of the output rendered again as of `at`; empty when nothing was given.
+  bytes rerender_sha256 = 2;
+  bool matches = 3;
+  // Why it does not match, or what could not be rendered again.
+  string detail = 4;
+}
+
+message VerifyLedgerRequest {}
+
+message VerifyLedgerResponse {
+  bool intact = 1;
+  int64 rows = 2;
+  // 0 when intact.
+  int64 first_break_seq = 3;
+  string problem = 4;
+  bytes head_hash = 5;
 }

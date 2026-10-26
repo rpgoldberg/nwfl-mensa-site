@@ -11,7 +11,7 @@
 // ============================================================================
 import { normalizeTree } from '../content/tree.js';
 import type { Db } from '../db/pool.js';
-import { TENANT, cellKey } from './policy.js';
+import { CATEGORIES, TENANT, cellKey } from './policy.js';
 import { type Lens, type MarkRow, lensFor, quoteMatches, subjectKey, treeText } from './render.js';
 
 export interface Subjects {
@@ -86,26 +86,56 @@ async function eventTexts(db: Query, series: readonly string[], occurrences: rea
 }
 
 /**
+ * The SQL test that a redaction_mark row was active: now, or at the time in parameter `$n` (from
+ * the kept history: a mark is made once and removed once, 0014).
+ */
+export const markActive = (asOf: Date | undefined, n: number): string =>
+  asOf === undefined ? `status = 'active'` : `created_at <= $${n} AND (removed_at IS NULL OR removed_at > $${n})`;
+
+/**
+ * One audience's policy cells: now, or as they stood at `asOf`, from the kept change history (0012,
+ * 0013): the last change applied by then, else the first applied after it (its from_action), else
+ * the cell as it is. A cell with neither is missing, which reads as hide.
+ */
+export async function policyCells(db: Query, audience: string, asOf?: Date): Promise<Array<{ category: string; action: string }>> {
+  if (asOf === undefined) {
+    return (await db.query<{ category: string; action: string }>(`SELECT category, action FROM redaction_policy WHERE tenant_id = $1 AND audience = $2`, [TENANT, audience])).rows;
+  }
+  const { rows } = await db.query<{ category: string; action: string | null }>(
+    `SELECT c.category, coalesce(
+       (SELECT h.to_action FROM redaction_change h WHERE h.tenant_id = $1 AND h.audience = $2 AND h.category = c.category
+          AND h.status = 'applied' AND h.decided_at <= $3 ORDER BY h.decided_at DESC, h.proposed_at DESC LIMIT 1),
+       (SELECT h.from_action FROM redaction_change h WHERE h.tenant_id = $1 AND h.audience = $2 AND h.category = c.category
+          AND h.status = 'applied' AND h.decided_at > $3 ORDER BY h.decided_at, h.proposed_at LIMIT 1),
+       p.action) AS action
+     FROM unnest($4::text[]) AS c (category)
+     LEFT JOIN redaction_policy p ON p.tenant_id = $1 AND p.audience = $2 AND p.category = c.category`,
+    [TENANT, audience, asOf, [...CATEGORIES]],
+  );
+  return rows.flatMap((row) => (row.action === null ? [] : [{ category: row.category, action: row.action }]));
+}
+
+/**
  * `uniform`: run the same queries whether or not there is anything to find, so a read that answers
  * "not found" for an item it withholds takes the same steps as one for an item that does not exist.
  */
-export async function loadLens(db: Query, audience: string, subjects: Subjects, options: { uniform?: boolean } = {}): Promise<Lens> {
+export async function loadLens(db: Query, audience: string, subjects: Subjects, options: { uniform?: boolean; asOf?: Date } = {}): Promise<Lens> {
   const uniform = options.uniform === true;
   const items = [...(subjects.items ?? [])];
   const series = [...(subjects.series ?? [])];
   const occurrences = [...(subjects.occurrences ?? [])];
   const [cells, marks] = await Promise.all([
-    db.query<{ category: string; action: string }>(`SELECT category, action FROM redaction_policy WHERE tenant_id = $1 AND audience = $2`, [TENANT, audience]),
+    policyCells(db, audience, options.asOf),
     items.length + series.length + occurrences.length === 0 && !uniform
       ? Promise.resolve({ rows: [] as Row[] })
       : db.query<Row>(
           `SELECT content_item_id, series_id, occurrence_id, quote, category FROM redaction_mark
-           WHERE tenant_id = $1 AND status = 'active'
+           WHERE tenant_id = $1 AND ${markActive(options.asOf, 5)}
              AND (content_item_id = ANY($2::uuid[]) OR series_id = ANY($3::uuid[]) OR occurrence_id = ANY($4::uuid[]))`,
-          [TENANT, items, series, occurrences],
+          [TENANT, items, series, occurrences, ...(options.asOf === undefined ? [] : [options.asOf])],
         ),
   ]);
-  const policy = new Map(cells.rows.map((row) => [cellKey(audience, row.category), row.action]));
+  const policy = new Map(cells.map((row) => [cellKey(audience, row.category), row.action]));
   const passages = marks.rows.filter((row) => row.quote !== null);
   const [versions, events] = await Promise.all([
     uniform || passages.some((row) => row.content_item_id !== null) ? versionTexts(db, [...(subjects.versions ?? [])], uniform) : Promise.resolve([]),

@@ -60,7 +60,7 @@ const FILE_AUDIENCES_FOR: Record<Audience, string[]> = {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-interface ItemRow {
+export interface ItemRow {
   id: string;
   slug: string;
   kind: string;
@@ -102,9 +102,10 @@ interface FileRow {
 /**
  * The SELECT for published items, by audience. The body column is chosen here
  * and nowhere else: the public never selects body_ast, and never loads a
- * members item's body at all.
+ * members item's body at all. `versions: 'any'` joins every version of the
+ * item, not only the live one (the publication ledger, ledger/ledger.ts).
  */
-function itemQuery(audience: Audience): { select: string; visible: string } {
+export function itemQuery(audience: Audience, versions: 'live' | 'any' = 'live'): { select: string; visible: string } {
   const body = audience === 'public' ? `CASE WHEN v.visibility = 'public' THEN v.public_ast END` : 'v.body_ast';
   return {
     select: `SELECT i.id, i.slug, i.kind, i.office_id, i.state, i.withdrawn_at,
@@ -112,7 +113,7 @@ function itemQuery(audience: Audience): { select: string; visible: string } {
        v.target_website, v.target_newsletter, v.target_email, v.edition_id, v.print_as_is, v.on_behalf_of,
        v.ready_at, v.approved_at,
        to_char(v.approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS approved_key
-     FROM content_item i JOIN content_version v ON v.id = i.live_version_id`,
+     FROM content_item i JOIN content_version v ON ${versions === 'live' ? 'v.id = i.live_version_id' : 'v.item_id = i.id'}`,
     visible: audience === 'officers' ? 'true' : `v.visibility <> 'officers'`,
   };
 }
@@ -181,6 +182,28 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[], lens: L
   });
 }
 
+type Query = Pick<Db, 'query'>;
+
+async function filesFor(db: Query, rows: ItemRow[], audience: Audience): Promise<FileRow[]> {
+  const versions = rows.filter((row) => row.state !== 'withdrawn').map((row) => row.version_id);
+  if (versions.length === 0) return [];
+  const { rows: files } = await db.query<FileRow>(
+    `SELECT id, version_id, filename, mime_type, size_bytes::text AS size_bytes, sha256, audience, role, public_copy_of
+     FROM stored_file WHERE version_id = ANY($1) AND audience = ANY($2) ORDER BY filename, id`,
+    [versions, FILE_AUDIENCES_FOR[audience]],
+  );
+  return files;
+}
+
+/**
+ * THE published item one audience is given for this row, or null when the lens hides it. The read
+ * path and the publication ledger both call this, so the ledger hashes exactly what a read returns.
+ */
+export async function publishedItem(db: Query, audience: Audience, row: ItemRow, lens: Lens): Promise<ContentItem | null> {
+  if (itemHidden(row, row.version_id, lens)) return null;
+  return itemMessage(row, audience, await filesFor(db, [row], audience), lens);
+}
+
 /** The active offices with the terms current on `date` (an ISO date). Role aliases only once verified (R2). */
 export async function rosterAsOf(db: Pick<Db, 'query'>, date: string): Promise<Office[]> {
   const [offices, terms] = await Promise.all([
@@ -232,17 +255,6 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
     }
   };
 
-  const filesFor = async (rows: ItemRow[], audience: Audience): Promise<FileRow[]> => {
-    const versions = rows.filter((row) => row.state !== 'withdrawn').map((row) => row.version_id);
-    if (versions.length === 0) return [];
-    const { rows: files } = await db.query<FileRow>(
-      `SELECT id, version_id, filename, mime_type, size_bytes::text AS size_bytes, sha256, audience, role, public_copy_of
-       FROM stored_file WHERE version_id = ANY($1) AND audience = ANY($2) ORDER BY filename, id`,
-      [versions, FILE_AUDIENCES_FOR[audience]],
-    );
-    return files;
-  };
-
   return (router) => {
     router.service(ContentService, {
       // The officers' workflow (A4b): writes, working reads and the history.
@@ -266,10 +278,9 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
         // Not there, for this audience: an item the lens hides, and an item asked for by a slug the
         // audience may not see (so a guessed slug confirms nothing). Each is answered exactly as a
         // slug that never existed, after the same queries (uniform). By its id, the item is found.
-        if (row === undefined || itemHidden(row, row.version_id, lens) || (row.id !== request.slug && slugFor(row, lens) !== row.slug)) {
-          throw new ConnectError('item not found', Code.NotFound);
-        }
-        return { item: itemMessage(row, audience, await filesFor(rows, audience), lens) };
+        const item = row === undefined || (row.id !== request.slug && slugFor(row, lens) !== row.slug) ? null : await publishedItem(db, audience, row, lens);
+        if (item === null) throw new ConnectError('item not found', Code.NotFound);
+        return { item };
       },
 
       listPublishedItems: async (request, ctx) => {
@@ -307,7 +318,7 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
         }
         const page = kept.slice(0, size);
         const last = page.at(-1);
-        const files = await filesFor(page, audience);
+        const files = await filesFor(db, page, audience);
         return {
           items: page.map((row) => itemMessage(row, audience, files, lenses.get(row.id) as Lens)),
           nextPageToken: kept.length > size && last !== undefined ? encodeToken('items', [last.approved_key, last.id]) : '',

@@ -15,6 +15,7 @@ import type { Db } from '../db/pool.js';
 import { AUDIENCES } from '../redaction/policy.js';
 import { type RedactRequest, type RedactResult, redactPdf } from './redact.js';
 import { ENGINE_VERSION, inputsFor } from './store.js';
+import { recordFiles } from '../ledger/ledger.js';
 
 type Query = Pick<Db, 'query'>;
 
@@ -72,7 +73,10 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
     claim,
     [...targets.values()].map((target) => target.hash),
   ]);
-  return { fileId, done: finished.rows[0]?.done === true };
+  const done = finished.rows[0]?.done === true;
+  // Its copies are current: the ledger records what each audience is given now (R-LEDGER).
+  if (done) await recordFiles(db, [fileId]);
+  return { fileId, done };
 }
 
 /** Runs until nothing is queued (at most `max` runs); returns how many ran. */
