@@ -12,6 +12,8 @@ describe('GET /robots.txt', () => {
     expect(await canonical.text()).toContain('Sitemap: https://nwflorida.us/sitemap.xml');
     const canary = (await robots({ url: new URL('https://canary.nwflorida.us/robots.txt') } as unknown as Ctx)) as Response;
     expect(await canary.text()).toBe('User-agent: *\nDisallow: /\n');
+    const newCanary = (await robots({ url: new URL('https://canary.nwflmensa.us/robots.txt') } as unknown as Ctx)) as Response;
+    expect(await newCanary.text()).toBe('User-agent: *\nDisallow: /\n');
   });
 });
 

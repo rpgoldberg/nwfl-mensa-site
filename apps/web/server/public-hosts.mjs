@@ -12,9 +12,10 @@ export const PUBLIC_HOSTS = [
   { hostname: 'nwflorida.us', protocol: 'https' },
   { hostname: 'www.nwflorida.us', protocol: 'https' },
   { hostname: 'canary.nwflorida.us', protocol: 'https' },
-  // A likely future domain.
+  // The group's new domain (DOMAIN2; ExComm vote pending).
   { hostname: 'nwflmensa.us', protocol: 'https' },
   { hostname: 'www.nwflmensa.us', protocol: 'https' },
+  { hostname: 'canary.nwflmensa.us', protocol: 'https' },
 ];
 
 /**

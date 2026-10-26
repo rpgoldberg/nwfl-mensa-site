@@ -25,7 +25,7 @@ const webcal = (host: string) => `webcal://${host}/calendar.ics`;
 const google = (host: string) => `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(webcal(host))}`;
 
 test.describe('Events calendar buttons', () => {
-  for (const host of ['canary.nwflorida.us', 'nwflorida.us', 'www.nwflorida.us', 'nwflmensa.us', 'www.nwflmensa.us']) {
+  for (const host of ['canary.nwflorida.us', 'canary.nwflmensa.us', 'nwflorida.us', 'www.nwflorida.us', 'nwflmensa.us', 'www.nwflmensa.us']) {
     test(`point at ${host} when that is the Host asked for`, async () => {
       expect(feeds(await asked('/events', { Host: host }))).toEqual(expect.arrayContaining([webcal(host), google(host)]));
     });
@@ -50,6 +50,12 @@ test.describe('the feed', () => {
   test('links each event back to the Host asked for, if ours', async () => {
     const body = (await asked('/calendar.ics', { Host: 'canary.nwflorida.us' })).replace(/\r\n /g, '');
     expect(body).toMatch(/https:\/\/canary\.nwflorida\.us\/events\//);
+    expect(body).not.toMatch(/localhost|127\.0\.0\.1/);
+  });
+
+  test('links each event back to canary.nwflmensa.us when that is the Host', async () => {
+    const body = (await asked('/calendar.ics', { Host: 'canary.nwflmensa.us' })).replace(/\r\n /g, '');
+    expect(body).toMatch(/https:\/\/canary\.nwflmensa\.us\/events\//);
     expect(body).not.toMatch(/localhost|127\.0\.0\.1/);
   });
 
