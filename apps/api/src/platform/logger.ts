@@ -9,7 +9,7 @@
 // Shaped as a pino-compatible logger so Fastify accepts it as
 // `loggerInstance`.
 // ============================================================================
-import { NWFL_REDACT_OPTIONS, getActiveTraceIds, redactValue, sanitizeLogValue } from './shared.js';
+import { NWFL_REDACT_OPTIONS, getActiveTraceIds, redactString, redactValue, sanitizeLogValue } from './shared.js';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 
@@ -96,6 +96,18 @@ function safeFields(fields: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+/**
+ * The message as one log-safe string. Secret shapes and email addresses are
+ * masked BEFORE the length cap, so the cap cannot cut an address in half and
+ * leave its local part behind; once more after, for a non-string message that
+ * only becomes text in sanitizeLogValue.
+ */
+function safeMessage(message: unknown): string {
+  const text = message instanceof Error ? message.message || 'Error (no message)' : message;
+  const masked = typeof text === 'string' ? redactString(text, NWFL_REDACT_OPTIONS) : text;
+  return redactString(sanitizeLogValue(masked), NWFL_REDACT_OPTIONS);
+}
+
 export function createStructuredLogger(options: LoggerOptions = {}): StructuredLogger {
   const level = options.level ?? 'info';
   const sink = options.sink ?? defaultSink;
@@ -111,7 +123,7 @@ export function createStructuredLogger(options: LoggerOptions = {}): StructuredL
       ...(options.name !== undefined ? { name: options.name } : {}),
       ...bindings,
       ...safeFields(fields),
-      msg: sanitizeLogValue(message),
+      msg: safeMessage(message),
     };
     const ids = getActiveTraceIds();
     if (ids !== undefined) {
