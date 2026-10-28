@@ -218,6 +218,56 @@ describe('withSitePolicy', () => {
     expectSecurityHeaders(res);
   });
 
+  it('logs a failed /auth/callback by pathname and error class only, never the code or state', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => {
+        throw new TypeError('bad code SECRETCODE state STATEVAL');
+      });
+      const res = await fetch(`${base}/auth/callback?code=SECRETCODE&state=STATEVAL`);
+      expect(res.status).toBe(500);
+      expect(error).toHaveBeenCalledTimes(1);
+      const line = String(error.mock.calls[0]?.[0]);
+      expect(line).not.toContain('SECRETCODE');
+      expect(line).not.toContain('STATEVAL');
+      expect(line).not.toContain('?');
+      expect(JSON.parse(line)).toEqual({ level: 'error', msg: 'request failed', path: '/auth/callback', err: 'TypeError' });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('logs a thrown non-Error as a fixed name, not its text', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(async () => {
+        throw 'leak SECRETCODE';
+      });
+      const res = await fetch(`${base}/x?code=SECRETCODE`);
+      expect(res.status).toBe(500);
+      const line = String(error.mock.calls[0]?.[0]);
+      expect(line).not.toContain('SECRETCODE');
+      expect(JSON.parse(line)).toMatchObject({ path: '/x', err: 'NonError' });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('logs an error whose name is free text as plain Error', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => {
+        throw Object.assign(new Error('x'), { name: 'code=SECRETCODE' });
+      });
+      await fetch(`${base}/x`);
+      const line = String(error.mock.calls[0]?.[0]);
+      expect(line).not.toContain('SECRETCODE');
+      expect(JSON.parse(line)).toMatchObject({ err: 'Error' });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('answers a handler that rejects with a 500', async () => {
     const base = await serve(async () => {
       throw new Error('boom');

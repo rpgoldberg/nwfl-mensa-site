@@ -183,6 +183,17 @@ export function normalisePath(raw) {
 }
 
 /**
+ * The class name of a failure, safe to log: a bounded identifier or a fixed word, never free text.
+ *
+ * @param {unknown} err
+ * @returns {string}
+ */
+function errorName(err) {
+  if (!(err instanceof Error)) return 'NonError';
+  return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name) ? err.name : 'Error';
+}
+
+/**
  * Wrap a request handler so every response carries the site policy, answer
  * old URLs (R16) and the site's own renamed pages, serve the prerendered pages, and answer the health probe
  * without touching Astro.
@@ -249,7 +260,9 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     }
     /** @param {unknown} err */
     const fail = (err) => {
-      console.error(JSON.stringify({ level: 'error', msg: 'request failed', path: req.url, err: String(err) }));
+      // The pathname only: the query of /auth/callback carries the OIDC code and state. The error's
+      // name only: its message can echo what the request sent.
+      console.error(JSON.stringify({ level: 'error', msg: 'request failed', path: raw, err: errorName(err) }));
       if (res.headersSent) {
         res.destroy();
         return;
