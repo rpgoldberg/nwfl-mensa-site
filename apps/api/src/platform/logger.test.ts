@@ -81,6 +81,30 @@ describe('createStructuredLogger', () => {
     expect(String(lines[0]?.['path'])).not.toContain('\n');
   });
 
+  it('masks an email address inside a message and inside a string field', () => {
+    const { lines, sink } = capture();
+    const log = createStructuredLogger({ sink });
+    log.info({ detail: 'sent to a.b@example.org' }, 'reset for jane@example.org failed');
+    log.error(new Error('bounce from x@example.net'));
+    log.warn(`${'x'.repeat(990)} tail@example.org`);
+    expect(lines[0]).toMatchObject({ detail: 'sent to [REDACTED]', msg: 'reset for [REDACTED] failed' });
+    expect(lines[1]?.['msg']).toBe('bounce from [REDACTED]');
+    expect(String(lines[2]?.['msg'])).not.toContain('tail@');
+    expect(JSON.stringify(lines)).not.toMatch(/@example\./);
+  });
+
+  it('masks an email inside a non-string message', () => {
+    const { lines, sink } = capture();
+    createStructuredLogger({ sink }).info({ who: 'm' }, { to: 'q@example.org' });
+    expect(String(lines[0]?.['msg'])).not.toContain('q@example');
+  });
+
+  it('keeps the fixed text for an Error with no message', () => {
+    const { lines, sink } = capture();
+    createStructuredLogger({ sink }).error(new Error(''));
+    expect(lines[0]?.['msg']).toBe('Error (no message)');
+  });
+
   it('child loggers accumulate redacted bindings', () => {
     const { lines, sink } = capture();
     const child = createStructuredLogger({ sink, bindings: { svc: 'x' } }).child({ component: 'grpc', email: 'a@b.c' });

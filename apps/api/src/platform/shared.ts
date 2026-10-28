@@ -12,12 +12,13 @@
 // is the registry artifact byte for byte, so its lockfile integrity matches.
 // ============================================================================
 import {
+  DEFAULT_SECRET_VALUE_PATTERNS as SHARED_SECRET_VALUE_PATTERNS,
   DEFAULT_SENSITIVE_KEY_PATTERN as SHARED_SENSITIVE_KEY_PATTERN,
   type RedactOptions,
 } from '@figurecollecting/fc-shared/utils/sanitize';
 
 export { getActiveTraceIds } from '@figurecollecting/fc-shared/utils/trace';
-export { redactAttributes, redactValue } from '@figurecollecting/fc-shared/utils/sanitize';
+export { redactAttributes, redactString, redactValue } from '@figurecollecting/fc-shared/utils/sanitize';
 export { sanitizeLogValue } from '@figurecollecting/fc-shared/utils/logger';
 export type { AttributeValue, RedactOptions } from '@figurecollecting/fc-shared/utils/sanitize';
 
@@ -50,6 +51,59 @@ const SITE_KEYS = [
   'last_name',
   'lastname',
   'break_glass_reason',
+  // Member names, however a caller spells them. A bare `name` is NOT here: the
+  // logger's own `name` field and many non-personal names would vanish.
+  'first_name',
+  'firstname',
+  'given_name',
+  'givenname',
+  'family_name',
+  'familyname',
+  'surname',
+  'full_name',
+  'fullname',
+  'member_name',
+  'membername',
+  'legal_name',
+  'legalname',
+  // A contributor's name and role, typed by an officer (content.proto).
+  'on_behalf_of',
+  // Contact. `address` also catches business_address and home_address; the
+  // camelCase `remoteAddress` has no separator before it and stays legible.
+  'phone',
+  'phone_number',
+  'phonenumber',
+  'telephone',
+  'mobile',
+  'address',
+  'homeaddress',
+  'streetaddress',
+  'mailingaddress',
+  // Identity numbers and dates.
+  'member_number',
+  'membernumber',
+  'member_no',
+  'member_id',
+  'memberid',
+  'mensa_number',
+  'mensanumber',
+  'mensa_no',
+  'birth_date',
+  'birthdate',
+  'date_of_birth',
+  'dateofbirth',
+  'dob',
+  'birthday',
+  // Report and marked text: what an officer wrote, and the passage a redaction
+  // mark quotes (redaction.proto).
+  'content',
+  'content_json',
+  'report',
+  'report_body',
+  'report_text',
+  'text',
+  'quote',
+  'notes',
 ];
 
 export const NWFL_SENSITIVE_KEY_PATTERN = new RegExp(
@@ -57,7 +111,16 @@ export const NWFL_SENSITIVE_KEY_PATTERN = new RegExp(
   'i',
 );
 
+/**
+ * An email address inside a free-text value. Bounded quantifiers (RFC 5321
+ * limits: 64-char local part, 63-char labels) keep the scan linear on a long
+ * string that has no `@`. Deliberately loose: an over-mask costs a log word, a
+ * miss costs a member's address.
+ */
+export const EMAIL_VALUE_PATTERN = /[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})+/g;
+
 /** Pass these wherever fc-shared redaction is invoked from this service. */
 export const NWFL_REDACT_OPTIONS: RedactOptions = {
   sensitiveKeyPattern: NWFL_SENSITIVE_KEY_PATTERN,
+  secretValuePatterns: [...SHARED_SECRET_VALUE_PATTERNS, EMAIL_VALUE_PATTERN],
 };
