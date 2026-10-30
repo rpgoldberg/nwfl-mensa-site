@@ -37,14 +37,17 @@
 //     (0015) and redaction_mark_add_file (0020) accept the version's writer,
 //     so no officer's claim is ever made or audited. The approval is
 //     self_breakglass, its reason naming the operator's approval reference,
-//     the marks hash and the public input hash; it goes through the
+//     the marks hash, the public input hash and the members PDF's sha256
+//     (all three approved, and checked); it goes through the
 //     workflow's own ready and approval writes (content/workflow.ts), so the
 //     two cannot drift (N-7).
 //   - One transaction: all of it lands, or none of it.
 //   - Idempotent: the item by its slug, the files by sha256 and audience,
-//     the marks as a set. File ids are random, never derived (N10). An issue
-//     already loaded differently, or a slug held by anything the loader did
-//     not write, is refused: the loader never revises an issue.
+//     the marks as a set, the approval by its reason. File ids are random,
+//     never derived (N10). An issue already loaded differently or under
+//     another approval, an issue edited (or withdrawn) after loading, and a
+//     slug held by anything the loader did not write are refused: the
+//     loader never revises an issue.
 //   - It prints ids and counts only, never a quote, and a driver error by
 //     its code only.
 //   - Anchoring reads the stored originals as officers do
@@ -264,13 +267,19 @@ interface Existing {
   state: string;
   working_version_id: string | null;
   live_version_id: string | null;
-  /** The live version's writer; null with no live version. */
+  /** The live version's writer and approval reason; null with no live version. */
   created_by_sub: string | null;
+  approval_reason: string | null;
+  /** Whether the loader wrote the item's first version. */
+  loaded: boolean;
 }
 
-/** A repeated run: the issue as loaded must be the bundle's, file for file (by sha256) and mark for mark, or it is refused. */
+/** A repeated run: the issue as loaded must be the bundle's, unedited, file for file (by sha256), mark for mark and approval for approval, or it is refused. */
 async function unchanged(client: TxClient, bundle: Bundle, slug: string, existing: Existing): Promise<LoadResult> {
-  if (existing.kind !== 'document' || existing.created_by_sub !== LOADER) throw new LoadError(`${slug} already exists and was not written by the loader: it is never touched`);
+  if (existing.kind !== 'document' || !existing.loaded) throw new LoadError(`${slug} already exists and was not written by the loader: it is never touched`);
+  if (existing.created_by_sub !== LOADER || existing.working_version_id !== null) {
+    throw new LoadError(`${slug} was edited after loading: the loader never revises an issue`);
+  }
   const files = (
     await client.query<{ id: string; audience: string; sha256: Buffer }>(
       `SELECT f.id, f.audience, f.sha256 FROM stored_file f WHERE f.version_id = $1 AND EXISTS (SELECT 1 FROM pdf_original o WHERE o.file_id = f.id)`,
@@ -283,7 +292,7 @@ async function unchanged(client: TxClient, bundle: Bundle, slug: string, existin
   const marks = (await client.query<Mark>(`SELECT quote, category FROM redaction_mark WHERE content_item_id = $1 AND status = 'active'`, [existing.id])).rows;
   if (
     existing.state !== 'published' ||
-    existing.working_version_id !== null ||
+    // Defence only: an approved version's files are frozen (0011), so a loaded issue cannot gain or lose one.
     files.length !== 2 ||
     publicFile === undefined ||
     membersFile === undefined ||
@@ -291,6 +300,7 @@ async function unchanged(client: TxClient, bundle: Bundle, slug: string, existin
   ) {
     throw new LoadError(`${slug} is already loaded, and its files, marks or state differ from the bundle's: the loader never revises an issue`);
   }
+  if (existing.approval_reason !== approvalReason(bundle.approval)) throw new LoadError(`${slug} is already loaded under another approval: the loader never revises an issue`);
   return { status: 'unchanged', itemId: existing.id, publicFileId: publicFile.id, membersFileId: membersFile.id, marks: marks.length };
 }
 
@@ -355,9 +365,10 @@ export function applyBundle(db: Db, bundle: Bundle): Promise<LoadResult> {
   return inTransaction(db, async (client) => {
     const existing = (
       await client.query<Existing>(
-        `SELECT i.id, i.kind, i.state, i.working_version_id, i.live_version_id, v.created_by_sub
+        `SELECT i.id, i.kind, i.state, i.working_version_id, i.live_version_id, v.created_by_sub, v.approval_reason,
+           EXISTS (SELECT 1 FROM content_version f WHERE f.item_id = i.id AND f.n = 1 AND f.created_by_sub = $2) AS loaded
          FROM content_item i LEFT JOIN content_version v ON v.id = i.live_version_id WHERE i.slug = $1 FOR UPDATE OF i`,
-        [contract.slug],
+        [contract.slug, LOADER],
       )
     ).rows[0];
     return existing === undefined ? loadIssue(client, bundle, contract) : unchanged(client, bundle, contract.slug, existing);

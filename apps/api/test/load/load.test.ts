@@ -9,14 +9,14 @@
 // nothing behind. Every person here is made up.
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ContentService, type ReadFileResponse } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentService, ItemVisibility, type ReadFileResponse } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { LOADER, LoadError, type LoadResult, applyBundle, marksSha256, parseBundle, runLoad } from '../../src/load/load.js';
 import { redactPdf } from '../../src/pdf/redact.js';
 import { readPdf } from '../../src/pdf/store.js';
 import { loadLens } from '../../src/redaction/lens.js';
 import { subjectKey } from '../../src/redaction/render.js';
 import { drain } from '../../src/pdf/regenerate.js';
-import { type Api, MEMBER, OFFICER, insertId, startApi } from '../helpers/api.js';
+import { type Api, MEMBER, OFFICER, as, insertId, startApi } from '../helpers/api.js';
 import { APP, APP_PW, live, urlFor } from '../helpers/pg.js';
 import { extractAll } from '../pdf/extract.js';
 import { ADDRESS, EMAIL, KEPT, MARKS, MEMBERS_ONLY, NAME, PHONE, bundleJson, membersPdf, publicInputHash, publicPdf, sha256, stdinOf } from './bundle.js';
@@ -350,6 +350,12 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       expect((await api.pool.query(`SELECT 1 FROM content_item WHERE slug = 'pensa-mensa-2026-04'`)).rowCount).toBe(0);
     });
 
+    it('refuses a repeat run under another approval: another reference, or another public input hash, with the same files and marks', async () => {
+      await loading;
+      await refused({ publicPdf: pub, membersPdf: members, reference: 'PUBCOPY-2' }, /^pensa-mensa-2026-10 is already loaded under another approval: the loader never revises an issue$/);
+      await refused({ publicPdf: pub, membersPdf: members, publicInputHash: 'd'.repeat(64) }, /already loaded under another approval/);
+    });
+
     it("refuses a slug that holds someone else's item", async () => {
       await api.pool.query(`INSERT INTO content_item (slug, kind, office_id) VALUES ('pensa-mensa-2025-08', 'document', $1)`, [office]);
       await refused({ period: '2025-08' }, /pensa-mensa-2025-08 already exists and was not written by the loader/);
@@ -376,6 +382,48 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       expect(await runLoad(['-'], env, stdinOf(json), (line) => lines.push(line))).toBe(1);
       expect(lines).toHaveLength(1);
       expect(lines[0]).toMatch(/^load refused, nothing applied: the public copy's inputs are not the approved ones/);
+    });
+  });
+
+  describe('a repeated run after the issue was changed by hand', () => {
+    const ADMIN = as('admin-token');
+    const WEBMASTER = as('webmaster-token');
+    const loadPeriod = async (period: string) => applyBundle(api.pool, parseBundle(await bundleJson({ period })));
+    const rerun = async (period: string): Promise<string> => {
+      const before = await counts();
+      const outcome = await loadPeriod(period).then(
+        (result) => result.status,
+        (error: Error) => `${error.name}: ${error.message}`,
+      );
+      expect(await counts()).toEqual(before);
+      return outcome;
+    };
+    const draft = (itemId: string, title: string) =>
+      api.client(ContentService).saveDraft({ itemId, title, summary: 'Volume 30, Number 5', visibility: ItemVisibility.PUBLIC, bodyMarkup: '' }, ADMIN);
+
+    it('refuses an issue with a draft edit waiting, saying it was edited after loading', async () => {
+      const first = await loadPeriod('2025-04');
+      await draft(first.itemId, 'Pensa Mensa, April-May 2025 (corrected)');
+      expect(await rerun('2025-04')).toBe('LoadError: pensa-mensa-2025-04 was edited after loading: the loader never revises an issue');
+    });
+
+    it('refuses an issue whose edit someone else approved, saying it was edited after loading', async () => {
+      const first = await loadPeriod('2025-05');
+      await draft(first.itemId, 'Pensa Mensa, May-June 2025 (corrected)');
+      const content = api.client(ContentService);
+      const hash = (await content.markReady({ itemId: first.itemId, targets: { website: true, newsletter: false, email: false } }, ADMIN)).item?.working?.contentHash as Uint8Array;
+      await content.approve({ itemId: first.itemId, contentHash: hash }, WEBMASTER);
+      const live = await api.pool.query<{ created_by_sub: string }>(`SELECT v.created_by_sub FROM content_item i JOIN content_version v ON v.id = i.live_version_id WHERE i.id = $1`, [first.itemId]);
+      expect(live.rows[0]?.created_by_sub).toBe('sub-admin');
+      expect(await rerun('2025-05')).toBe('LoadError: pensa-mensa-2025-05 was edited after loading: the loader never revises an issue');
+    });
+
+    it('refuses a withdrawn issue', async () => {
+      const first = await loadPeriod('2025-02');
+      await api.client(ContentService).withdraw({ itemId: first.itemId }, WEBMASTER);
+      expect(await rerun('2025-02')).toBe(
+        "LoadError: pensa-mensa-2025-02 is already loaded, and its files, marks or state differ from the bundle's: the loader never revises an issue",
+      );
     });
   });
 
