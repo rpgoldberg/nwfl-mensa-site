@@ -30,6 +30,8 @@ interface Fixture {
   pdfPlain: string;
   pdfOriginal: string;
   stored: Record<string, number>;
+  /** The newsletter issue: its title and summary, a line its PDFs carry, and the public original's sha256 in hex. */
+  issue: { title: string; summary: string; plain: string; publicSha256: string };
 }
 
 interface Fetched {
@@ -260,6 +262,30 @@ test('the PDF is linked where its item renders, and served as the redacted copy:
   expect(pdf!.pdf?.text).toContain(fixture.pdfPlain);
   expect(pdf!.pdf?.inflated).toBeGreaterThan(0);
   expect(pdf!.body).not.toContain(Buffer.from(fixture.pdfOriginal, 'base64').toString('latin1'));
+});
+
+test("/news lists the issue with its public PDF, served as a copy, and the members file reaches no response, nor the original's hash", () => {
+  const news = fetched.get('/news');
+  expect(news?.status).toBe(200);
+  expect(news!.body).toContain(fixture.issue.title);
+  expect(news!.body).toContain(fixture.issue.summary);
+  expect(news!.body).not.toContain('Sample entries');
+  const url = `/documents/${fixture.ids['issuePublicPdf']}.pdf`;
+  expect(news!.body).toContain(`href="${url}"`);
+  const pdf = fetched.get(url);
+  expect(pdf?.status).toBe(200);
+  expect(pdf!.contentType).toBe('application/pdf');
+  expect(pdf!.pdf?.text).toContain(fixture.issue.plain);
+  const members = fixture.ids['issueMembersPdf']!;
+  const sha = fixture.issue.publicSha256;
+  const shaBase64 = Buffer.from(sha, 'hex').toString('base64');
+  const seen: string[] = [];
+  for (const page of fetched.values()) {
+    const haystacks = [page.body, ...Object.entries(page.headers).map(([k, v]) => `${k}: ${v}`)];
+    if (haystacks.some((h) => h.includes(members))) seen.push(`members file in ${page.url}`);
+    if (haystacks.some((h) => h.toLowerCase().includes(sha) || h.includes(shaBase64))) seen.push(`public original's sha256 in ${page.url}`);
+  }
+  expect(seen).toEqual([]);
 });
 
 test('sitemap.xml and robots.txt list no API-made URL', () => {

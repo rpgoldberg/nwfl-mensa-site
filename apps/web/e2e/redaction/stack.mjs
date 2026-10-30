@@ -9,7 +9,9 @@
 // A PDF on a marked item carries a canary of its own and a marked phone
 // (REDACT R3c); the stack is ready only once the PDF worker (dist/worker.js,
 // as its own role nwfl_worker, W-WORKER) has made its copies, so the crawl
-// fetches a redacted copy, never "not ready".
+// fetches a redacted copy, never "not ready". An issue of the newsletter, in
+// the issue loader's shape, holds a public PDF and a members PDF: /news links
+// the first, and the members file's id must reach no public response.
 //
 // Ready when GET /fixture on STACK_PORT answers: the canaries, the ids the
 // test needs and how many times each canary is stored (the positive control:
@@ -113,6 +115,9 @@ const ids = {
   potluck: randomUUID(),
   online: randomUUID(),
   pdf: randomUUID(),
+  issue: randomUUID(),
+  issuePublicPdf: randomUUID(),
+  issueMembersPdf: randomUUID(),
 };
 /** What the PDF says besides its canaries: the crawl's sign that it read the copy. */
 const PDF_PLAIN = 'Bring a folding chair';
@@ -150,15 +155,19 @@ function linesPdf(lines) {
 }
 
 const PDF = linesPdf([`Receipts: call ${C.phone} by Friday.`, `Signed by ${C.pdfName} for the board.`, `${PDF_PLAIN} to the picnic.`]);
+// The newsletter issue's two PDFs, as the issue loader stores them (apps/api README, "Loading a newsletter issue").
+const ISSUE = { title: 'Pensa Mensa, October-November 2026', summary: 'Volume 30, Number 5', plain: 'Puzzle corner answers' };
+const ISSUE_PUBLIC_PDF = linesPdf(['Pensa Mensa', `${ISSUE.plain} on page 4.`]);
+const ISSUE_MEMBERS_PDF = linesPdf(['Pensa Mensa, the members edition', `${ISSUE.plain} on page 4.`]);
 const PLAIN_SLUG = 'treasurer-plain-summary';
 
 const para = (/** @type {string[]} */ ...texts) => ({ type: 'paragraph', children: texts.map((text) => ({ type: 'text', text })) });
 
 /**
  * One published item, the way apps/api/test/helpers/content.ts publishes it: a version, ready with
- * its hash, approved with its public tree and search text, then live. A file is attached before
+ * its hash, approved with its public tree and search text, then live. Its files are attached before
  * the version is approved (an approved version's files are frozen, 0011).
- * @param {{ id: string, slug: string, kind: string, office: string, title: string, summary?: string, body: unknown[], onBehalfOf?: string, daysAgo: number, file?: { id: string, bytes: Buffer } }} i
+ * @param {{ id: string, slug: string, kind: string, office: string, title: string, summary?: string, body: unknown[], onBehalfOf?: string, daysAgo: number, files?: { id: string, bytes: Buffer, name: string, audience: 'public' | 'members' }[] }} i
  */
 function item(i) {
   const v = randomUUID();
@@ -167,12 +176,12 @@ function item(i) {
 INSERT INTO content_item (id, slug, kind, office_id) VALUES (${q(i.id)}, ${q(i.slug)}, ${q(i.kind)}, ${q(i.office)});
 INSERT INTO content_version (id, item_id, n, title, summary, visibility, body_ast, created_by_sub, acting_office_id, target_newsletter, on_behalf_of)
   VALUES (${q(v)}, ${q(i.id)}, 1, ${q(i.title)}, ${i.summary ? q(i.summary) : 'NULL'}, 'public', ${j(body)}, 'sub-author', ${q(i.office)}, true, ${i.onBehalfOf ? q(i.onBehalfOf) : 'NULL'});
-${
-  i.file
-    ? `INSERT INTO stored_file (id, version_id, object_key, filename, mime_type, size_bytes, sha256, audience)
-  VALUES (${q(i.file.id)}, ${q(v)}, ${q(`files/${i.file.id}`)}, 'receipts.pdf', 'application/pdf', ${i.file.bytes.length}, decode(${q(createHash('sha256').update(i.file.bytes).digest('hex'))}, 'hex'), 'public');`
-    : ''
-}
+${(i.files ?? [])
+  .map(
+    (f) => `INSERT INTO stored_file (id, version_id, object_key, filename, mime_type, size_bytes, sha256, audience)
+  VALUES (${q(f.id)}, ${q(v)}, ${q(`files/${f.id}`)}, ${q(f.name)}, 'application/pdf', ${f.bytes.length}, decode(${q(createHash('sha256').update(f.bytes).digest('hex'))}, 'hex'), ${q(f.audience)});`,
+  )
+  .join('\n')}
 UPDATE content_version SET status = 'ready', content_hash = sha256(convert_to(${q(JSON.stringify(body))}, 'UTF8')), ready_at = now() WHERE id = ${q(v)};
 UPDATE content_version SET status = 'approved', approved_at = now() - interval '${i.daysAgo} days', approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
   public_ast = ${j(body)}, search_public = to_tsvector('english', ${q(i.title)}), search_members = to_tsvector('english', ${q(i.title)}) WHERE id = ${q(v)};
@@ -192,12 +201,26 @@ INSERT INTO office (id, slug, title, kind, sort_order, role_alias, role_alias_ve
 INSERT INTO office_term (office_id, holder_display_name, starts_on, status) VALUES
   (${q(ids.president)}, 'Alex Sample', '2026-01-01', 'active'),
   (${q(ids.treasurer)}, 'Riley Testcase', '2026-01-01', 'active');
-${item({ id: ids.accented, slug: `${C.slugName}-q3`, kind: 'treasurer_summary', office: ids.treasurer, title: `Report by ${C.accentedName}`, body: [para(`Receipts: call ${C.phone} by Friday.`), para(`Signed by ${C.pdfName}.`)], daysAgo: 2, file: { id: ids.pdf, bytes: PDF } })}
+${item({ id: ids.accented, slug: `${C.slugName}-q3`, kind: 'treasurer_summary', office: ids.treasurer, title: `Report by ${C.accentedName}`, body: [para(`Receipts: call ${C.phone} by Friday.`), para(`Signed by ${C.pdfName}.`)], daysAgo: 2, files: [{ id: ids.pdf, bytes: PDF, name: 'receipts.pdf', audience: 'public' }] })}
 ${item({ id: ids.plain, slug: PLAIN_SLUG, kind: 'treasurer_summary', office: ids.treasurer, title: 'April to June', body: [para('Closing balance: $2,543.10')], daysAgo: 90 })}
 ${item({ id: ids.report, slug: 'president-report', kind: 'president_report', office: ids.president, title: 'A busy autumn', onBehalfOf: `${C.byline}, guest writer`, body: [para(`Rides to the picnic: call ${C.reportPhone} any evening.`)], daysAgo: 1 })}
 ${item({ id: ids.whole, slug: 'remembering-a-friend', kind: 'announcement', office: ids.president, title: 'Remembering a friend', body: [para(`Words by ${C.whole}`)], daysAgo: 1 })}
 ${item({ id: ids.hidden, slug: 'mailing-list', kind: 'announcement', office: ids.president, title: 'Mailing list', body: [para(`Write to ${C.email} to join.`)], daysAgo: 2 })}
 ${item({ id: ids.helpers, slug: 'helpers-wanted', kind: 'announcement', office: ids.president, title: 'Helpers wanted', body: [para('The picnic needs two more helpers.')], daysAgo: 3 })}
+${item({
+  id: ids.issue,
+  slug: 'pensa-mensa-2026-10',
+  kind: 'document',
+  office: ids.president,
+  title: ISSUE.title,
+  summary: ISSUE.summary,
+  body: [],
+  daysAgo: 1,
+  files: [
+    { id: ids.issuePublicPdf, bytes: ISSUE_PUBLIC_PDF, name: 'pensa-mensa-2026-10.pdf', audience: 'public' },
+    { id: ids.issueMembersPdf, bytes: ISSUE_MEMBERS_PDF, name: 'pensa-mensa-2026-10-members.pdf', audience: 'members' },
+  ],
+})}
 INSERT INTO venue (id, kind, name, business_address, city, area) VALUES (${q(ids.bistro)}, 'business', 'Sample Bistro', '100 Example Way', 'Destin', 'okaloosa');
 INSERT INTO venue (id, kind, name, area, url, host_office_id) VALUES (${q(ids.room)}, 'virtual', ${q(`Room ${C.venueName}`)}, 'virtual', ${q(`https://example.org/${C.venueUrl}`)}, ${q(ids.president)});
 INSERT INTO venue (id, kind, name, area, host_office_id) VALUES (${q(ids.home)}, 'member_home', ${q(`The ${C.homeName} home`)}, 'okaloosa', ${q(ids.president)});
@@ -214,6 +237,8 @@ ${mark('content_item', ids.accented, 'body', C.phone, 'member_phone')}
 ${mark('content_item', ids.accented, 'body', C.pdfName, 'member_name')}
 -- The PDF's original, through the API's own writer (0015), which queues its copies.
 SELECT pdf_original_put(${q(ids.pdf)}, decode(${q(PDF.toString('hex'))}, 'hex'), 'sub-officer', ARRAY['nwfl-members', 'nwfl-officers'], NULL);
+SELECT pdf_original_put(${q(ids.issuePublicPdf)}, decode(${q(ISSUE_PUBLIC_PDF.toString('hex'))}, 'hex'), 'sub-officer', ARRAY['nwfl-members', 'nwfl-officers'], NULL);
+SELECT pdf_original_put(${q(ids.issueMembersPdf)}, decode(${q(ISSUE_MEMBERS_PDF.toString('hex'))}, 'hex'), 'sub-officer', ARRAY['nwfl-members', 'nwfl-officers'], NULL);
 ${mark('content_item', ids.report, 'body', C.reportPhone, 'member_phone')}
 ${mark('content_item', ids.report, 'on_behalf_of', C.byline, 'member_name')}
 ${mark('content_item', ids.whole, null, null, 'member_name')}
@@ -335,16 +360,26 @@ try {
       void stop(1);
     }
   });
-  // The worker makes the PDF's copies; the crawl starts once none is queued and the public's is made.
+  // The worker makes the PDFs' copies; the crawl starts once none is queued and the public's of each public file is made.
   for (let tries = 0; ; tries++) {
-    const state = (await psql(db, `SELECT (SELECT count(*) FROM pdf_regen) || ' ' || (SELECT count(*) FROM pdf_copy WHERE file_id = ${q(ids.pdf)} AND status = 'ready');`)).trim();
-    if (state.startsWith('0 ') && Number(state.split(' ')[1]) > 0) break;
+    const ready = (/** @type {string} */ id) => `(SELECT count(*) FROM pdf_copy WHERE file_id = ${q(id)} AND status = 'ready')`;
+    const state = (await psql(db, `SELECT (SELECT count(*) FROM pdf_regen) || ' ' || ${ready(ids.pdf)} || ' ' || ${ready(ids.issuePublicPdf)};`)).trim();
+    const [queued, ...made] = state.split(' ').map(Number);
+    if (queued === 0 && made.every((n) => n > 0)) break;
     if (tries >= 120) throw new Error(`the PDF's copies were never made (${state})`);
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
   // The original too, so the test can show its PDF check finds the canaries in it.
-  const fixture = JSON.stringify({ canaries: C, ids, plainSlug: PLAIN_SLUG, pdfPlain: PDF_PLAIN, pdfOriginal: PDF.toString('base64'), stored: counts });
+  const fixture = JSON.stringify({
+    canaries: C,
+    ids,
+    plainSlug: PLAIN_SLUG,
+    pdfPlain: PDF_PLAIN,
+    pdfOriginal: PDF.toString('base64'),
+    stored: counts,
+    issue: { title: ISSUE.title, summary: ISSUE.summary, plain: ISSUE.plain, publicSha256: createHash('sha256').update(ISSUE_PUBLIC_PDF).digest('hex') },
+  });
   http
     .createServer((req, res) => {
       if (req.url !== '/fixture') {
