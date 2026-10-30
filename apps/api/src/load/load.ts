@@ -41,7 +41,9 @@
 //     (all three approved, and checked); it goes through the
 //     workflow's own ready and approval writes (content/workflow.ts), so the
 //     two cannot drift (N-7).
-//   - One transaction: all of it lands, or none of it.
+//   - One transaction: all of it lands, or none of it. It lifts the server's
+//     idle-in-transaction timeout for itself (SET LOCAL), since anchoring
+//     the marks reads both PDFs while it is open.
 //   - Idempotent: the item by its slug, the files by sha256 and audience,
 //     the marks as a set, the approval by its reason. File ids are random,
 //     never derived (N10). An issue already loaded differently or under
@@ -363,6 +365,9 @@ async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<
 export function applyBundle(db: Db, bundle: Bundle): Promise<LoadResult> {
   const contract = issueContract(bundle.issue);
   return inTransaction(db, async (client) => {
+    // Reading both PDFs to anchor the marks keeps this transaction idle for seconds on a large
+    // issue; the server's idle-in-transaction timeout (30 s on pg-nwfl) must not end it midway.
+    await client.query('SET LOCAL idle_in_transaction_session_timeout = 0');
     const existing = (
       await client.query<Existing>(
         `SELECT i.id, i.kind, i.state, i.working_version_id, i.live_version_id, v.created_by_sub, v.approval_reason,

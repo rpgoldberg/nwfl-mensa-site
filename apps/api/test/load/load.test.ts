@@ -7,17 +7,18 @@
 // issue is listed for everyone.
 // A repeated run changes nothing, and each database-side refusal leaves
 // nothing behind. Every person here is made up.
+import { PDFDocument, StandardFonts } from '@cantoo/pdf-lib';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentService, ItemVisibility, type ReadFileResponse } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
-import { LOADER, LoadError, type LoadResult, applyBundle, marksSha256, parseBundle, runLoad } from '../../src/load/load.js';
+import { LOADER, LoadError, type LoadResult, type Mark, applyBundle, marksSha256, parseBundle, runLoad } from '../../src/load/load.js';
 import { redactPdf } from '../../src/pdf/redact.js';
 import { readPdf } from '../../src/pdf/store.js';
 import { loadLens } from '../../src/redaction/lens.js';
 import { subjectKey } from '../../src/redaction/render.js';
 import { drain } from '../../src/pdf/regenerate.js';
 import { type Api, MEMBER, OFFICER, as, insertId, startApi } from '../helpers/api.js';
-import { APP, APP_PW, live, urlFor } from '../helpers/pg.js';
+import { APP, APP_PW, live, testPool, urlFor } from '../helpers/pg.js';
 import { extractAll } from '../pdf/extract.js';
 import { ADDRESS, EMAIL, KEPT, MARKS, MEMBERS_ONLY, NAME, PHONE, bundleJson, membersPdf, publicInputHash, publicPdf, sha256, stdinOf } from './bundle.js';
 
@@ -383,6 +384,44 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       expect(lines).toHaveLength(1);
       expect(lines[0]).toMatch(/^load refused, nothing applied: the public copy's inputs are not the approved ones/);
     });
+  });
+
+  describe("a large issue, under the cluster's idle-in-transaction timeout scaled down", () => {
+    // pg-nwfl ends a transaction idle for 30 s; reading both PDFs to anchor the marks keeps the
+    // load's transaction idle that long for a large issue. Here the timeout is 250 ms, and the
+    // anchoring of 60 marks over 8 pages in each of two PDFs takes longer than that.
+    const marks = Array.from({ length: 60 }, (_v, n): Mark =>
+      n % 2 === 0 ? { quote: `850-555-${2000 + n}`, category: 'member_phone' } : { quote: `Person${n} Madeup`, category: 'member_name' },
+    );
+    const issuePdf = async (label: string): Promise<Uint8Array> => {
+      const doc = await PDFDocument.create({ updateMetadata: false });
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      for (let p = 0; p < 8; p++) {
+        const page = doc.addPage([612, 792]);
+        const lines = [
+          label,
+          ...marks.slice(p * 8, p * 8 + 8).map((mark) => `Contact ${mark.quote} for details.`),
+          ...Array.from({ length: 30 }, () => 'The group meets for games, lectures and dinners across the region every month.'),
+        ];
+        lines.forEach((line, n) => page.drawText(line, { x: 54, y: 750 - 18 * n, size: 10, font }));
+      }
+      return doc.save({ useObjectStreams: false });
+    };
+
+    it('loads: the load lifts the timeout for its own transaction only', async () => {
+      const pool = testPool({ connectionString: urlFor(APP, APP_PW, database), max: 1, options: '-c idle_in_transaction_session_timeout=250' });
+      try {
+        const bundle = parseBundle(await bundleJson({ period: '2024-08', publicPdf: await issuePdf('Pensa Mensa 2024-08'), membersPdf: await issuePdf('Pensa Mensa 2024-08, members'), marks }));
+        const started = Date.now();
+        const result = await applyBundle(pool, bundle);
+        expect(result).toMatchObject({ status: 'loaded', marks: 60 });
+        // The test holds only while the load outlasts the timeout.
+        expect(Date.now() - started).toBeGreaterThan(250);
+        expect((await pool.query<{ t: string }>(`SELECT current_setting('idle_in_transaction_session_timeout') AS t`)).rows[0]?.t).toBe('250ms');
+      } finally {
+        await pool.end();
+      }
+    }, 120_000);
   });
 
   describe('a repeated run after the issue was changed by hand', () => {
