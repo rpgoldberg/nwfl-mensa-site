@@ -11,6 +11,10 @@ import { type ClientConfig, createJwtVerifier } from './jwt.js';
 const SITE_ISS = 'https://login.example.org/application/o/nwfl-site/';
 const AGENT_ISS = 'https://login.example.org/application/o/nwfl-agent/';
 const VERIFIER_ISS = 'https://login.example.org/application/o/nwfl-verifier/';
+// A site token names its user as Authentik's user_uuid sub mode does, str(user.uuid):
+// lowercase and hyphenated (NA1). Made-up values.
+const MEMBER_SUB = '6f1c2a9e-3b4d-4e5f-8a7b-0c1d2e3f4a5b';
+const OTHER_SUB = '0b9e8d7c-6a5f-4e3d-9c2b-1a0f9e8d7c6b';
 
 type Keys = Awaited<ReturnType<typeof generateKeyPair>>;
 let rsa: Keys;
@@ -38,7 +42,7 @@ function clients(keySet: JWTVerifyGetKey = createLocalJWKSet(jwks)): ClientConfi
 const site = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   iss: SITE_ISS,
   aud: 'nwfl-site',
-  sub: 'user-123',
+  sub: MEMBER_SUB,
   groups: ['nwfl-members', 'nwfl-office-treasurer'],
   ...extra,
 });
@@ -59,7 +63,7 @@ describe('createJwtVerifier', () => {
   it('verifies a site token and reports its client, subject, groups and scopes', async () => {
     const verifier = createJwtVerifier(clients());
     const token = await sign(site({ scope: 'openid profile' }));
-    expect(await verifier.verify(token)).toEqual({ client: 'site', subject: 'user-123', groups: ['nwfl-members', 'nwfl-office-treasurer'], scopes: ['openid', 'profile'] });
+    expect(await verifier.verify(token)).toEqual({ client: 'site', subject: MEMBER_SUB, groups: ['nwfl-members', 'nwfl-office-treasurer'], scopes: ['openid', 'profile'] });
   });
 
   it('reads the name and email a site token carries, for the sign-up; a machine token gives none', async () => {
@@ -104,6 +108,53 @@ describe('createJwtVerifier', () => {
     ['a token that is not a JWT', () => Promise.resolve('not.a.jwt')],
   ])('refuses %s', async (_label, make) => {
     await expect(createJwtVerifier(clients()).verify(await make())).rejects.toThrow();
+  });
+
+  describe('the site subject pin (NA1, MT-02): a site token names its user by a lowercase UUID', () => {
+    it('accepts a UUID subject and reports it unchanged', async () => {
+      const verifier = createJwtVerifier(clients());
+      expect((await verifier.verify(await sign(site({ sub: OTHER_SUB })))).subject).toBe(OTHER_SUB);
+      expect((await verifier.verify(await sign(site(), { keys: ec, alg: 'ES256' }))).subject).toBe(MEMBER_SUB);
+    });
+
+    it.each([
+      ['a subject that is not a UUID', 'user-123'],
+      ['the uppercase form of a UUID, which Authentik never emits', MEMBER_SUB.toUpperCase()],
+      ['a mixed-case UUID', `${MEMBER_SUB.slice(0, 9).toUpperCase()}${MEMBER_SUB.slice(9)}`],
+      ['an empty subject', ''],
+      ['a UUID with surrounding spaces', ` ${MEMBER_SUB} `],
+      ['a UUID with a trailing newline', `${MEMBER_SUB}\n`],
+      ['a UUID without its hyphens', MEMBER_SUB.replaceAll('-', '')],
+      ['a braced UUID', `{${MEMBER_SUB}}`],
+      ['a URN UUID', `urn:uuid:${MEMBER_SUB}`],
+      ['a UUID with one character too many', `${MEMBER_SUB}0`],
+      ['a UUID with a non-hex character', `${MEMBER_SUB.slice(0, -1)}g`],
+      ["the newsletter agent's service account", 'svc-nwfl-newsletter'],
+      ['a list holding one UUID', [MEMBER_SUB]],
+      ['a number', 42],
+      ['null', null],
+      ['an object', { id: MEMBER_SUB }],
+    ])('refuses a site token whose subject is %s', async (_label, sub) => {
+      await expect(createJwtVerifier(clients()).verify(await sign(site({ sub })))).rejects.toThrow(/subject is not a UUID/);
+    });
+
+    it('refuses a site token with no subject at all', async () => {
+      await expect(createJwtVerifier(clients()).verify(await sign(site({ sub: undefined })))).rejects.toThrow(/"sub"/);
+    });
+
+    it('leaves the agent and the verifier as they were: service-account subjects, each held to its own', async () => {
+      const verifier = createJwtVerifier(clients());
+      const agent = await sign({ iss: AGENT_ISS, aud: 'nwfl-agent', sub: 'svc-nwfl-newsletter', scope: 'newsletter.read' });
+      expect((await verifier.verify(agent)).subject).toBe('svc-nwfl-newsletter');
+      const checker = await sign({ iss: VERIFIER_ISS, aud: 'nwfl-verifier', sub: 'svc-nwfl-verifier', scope: 'membership.verify' });
+      expect((await verifier.verify(checker)).subject).toBe('svc-nwfl-verifier');
+      // A UUID is no pass for a machine token: its own subject pin still decides.
+      await expect(verifier.verify(await sign({ iss: AGENT_ISS, aud: 'nwfl-agent', sub: MEMBER_SUB, scope: 'newsletter.read' }))).rejects.toThrow(/unexpected subject/);
+      await expect(verifier.verify(await sign({ iss: VERIFIER_ISS, aud: 'nwfl-verifier', sub: MEMBER_SUB, scope: 'membership.verify' }))).rejects.toThrow(/unexpected subject/);
+      // The UUID rule is the site's alone, not a rule for every client without a subject pin.
+      const unpinned = createJwtVerifier([{ kind: 'agent', issuer: AGENT_ISS, audience: 'nwfl-agent', jwks: createLocalJWKSet(jwks) }]);
+      expect((await unpinned.verify(await sign({ iss: AGENT_ISS, aud: 'nwfl-agent', sub: 'svc-any' }))).subject).toBe('svc-any');
+    });
   });
 
   describe('token lifetime (STACK-FIX): an issue time is required, and exp - iat is at most 1 h for a site token, 24 h for a machine token', () => {
@@ -174,8 +225,8 @@ describe('createJwtVerifier', () => {
     it('fetches the key set once and verifies against it', async () => {
       const url = new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}/jwks/`);
       const verifier = createJwtVerifier(clients(createRemoteJWKSet(url)));
-      expect((await verifier.verify(await sign(site()))).subject).toBe('user-123');
-      expect((await verifier.verify(await sign(site({ sub: 'user-456' })))).subject).toBe('user-456');
+      expect((await verifier.verify(await sign(site()))).subject).toBe(MEMBER_SUB);
+      expect((await verifier.verify(await sign(site({ sub: OTHER_SUB })))).subject).toBe(OTHER_SUB);
       expect(fetches).toBe(1);
     });
   });
