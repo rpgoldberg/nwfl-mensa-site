@@ -2,9 +2,10 @@
 // is anchored in its item's stored PDFs, not in the item's own text: the API
 // finds the quote in the text layer of the item's PDFs when the mark is added
 // and records the files it is in (redaction_mark_anchor). The lens never hides
-// an item for an anchored file mark and ignores file marks in text; a file mark
-// with no anchor in the version shown hides the item, as any unanchored mark
-// does (fail closed). Every person here is made up.
+// an item for an anchored file mark, and withholds its quote from the item's
+// own text like any redact mark's; a file mark with no anchor in the version
+// shown hides the item, as any unanchored mark does (fail closed). Every
+// person here is made up.
 import { Code, ConnectError } from '@connectrpc/connect';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -16,6 +17,7 @@ import { drain } from '../../src/pdf/regenerate.js';
 import { FileMarkError, addFileMarks } from '../../src/redaction/file-marks.js';
 import { type Api, OFFICER, insertId, startApi } from '../helpers/api.js';
 import { publishItem } from '../helpers/content.js';
+import { WITHHELD } from '../../src/redaction/render.js';
 import { live, url } from '../helpers/pg.js';
 import { extractAll } from '../pdf/extract.js';
 import { linesPdf } from '../pdf/fixtures.js';
@@ -222,12 +224,14 @@ describe.skipIf(!live)('file marks (0020)', () => {
       await drain(api.worker, { redact: redactPdf });
     }, 120_000);
 
-    it('shows the public an item whose file marks are anchored: listed, found by its slug, its own text untouched by them', async () => {
+    it('shows the public an item whose file marks are anchored: listed, found by its slug, a file-marked quote withheld from its own text', async () => {
       const flyer = items['flyer']!;
       const item = await published('flyer');
       expect(typeof item === 'object' && item?.id).toBe(flyer.item);
       expect(typeof item === 'object' && item?.slug).toBe('flyer');
-      expect(typeof item === 'object' && item?.live?.title).toBe(`Picnic with ${NAME}`);
+      expect(typeof item === 'object' && item?.live?.title).toBe(`Picnic with ${WITHHELD}`);
+      const officer = await published(flyer.item, OFFICER);
+      expect(typeof officer === 'object' && officer?.live?.title).toBe(`Picnic with ${NAME}`);
       expect(await listed()).toContain(flyer.item);
     });
 

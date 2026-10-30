@@ -35,8 +35,9 @@ export type SubjectKind = 'content_item' | 'event_series' | 'event_occurrence';
  * sets this for every mark it loads; a text mark without it is not anchor-checked).
  *
  * A file mark (0020) is a content item's passage in its stored PDFs: anchoredIn holds the versions
- * whose files its quote was found in when it was added. The text lens ignores it; it hides the item
- * when it is not anchored in the version shown, or has no anchoredIn at all (fail closed).
+ * whose files its quote was found in when it was added. Its quote is withheld wherever it appears in
+ * the item's own text, as a text mark's is; it hides the item when it is not anchored in the version
+ * shown, or has no anchoredIn at all (fail closed). It does not count in affected or withheld.
  */
 export interface MarkRow {
   subject: string;
@@ -387,8 +388,9 @@ export function lensFor(audience: string, policy: Policy, marks: readonly MarkRo
   const of = (subjects: readonly string[]): MarkRow[] => marks.filter((mark) => subjects.includes(mark.subject));
   /** The marks on the subjects' own text: file marks are in their PDFs. */
   const inText = (subjects: readonly string[]): MarkRow[] => of(subjects).filter((mark) => mark.file !== true);
+  // Every passage mark, file marks included: a file-marked quote is withheld from the text too.
   const patterns = (subjects: readonly string[]): RegExp[] =>
-    inText(subjects).flatMap((mark) => (mark.quote !== null && actionOf(mark.category) === 'redact' ? [patternOf(mark.quote)] : []));
+    of(subjects).flatMap((mark) => (mark.quote !== null && actionOf(mark.category) === 'redact' ? [patternOf(mark.quote)] : []));
 
   return {
     audience,

@@ -16,9 +16,10 @@
 --     file mark, with 0014's rule for who may add one (an officer, or a writer of the item) and
 --     its audit row (field 'file' and the number of files, never the quote);
 --   * the lens never hides an item for a file mark anchored in a file of the version shown, and
---     hides it (fail closed) for one that is not; the text lens ignores file marks. The PDF
---     output gate is unchanged: every active mark's quote, file marks' included, is withheld
---     from the PDFs given to an audience that redacts its category, and every copy is re-read.
+--     hides it (fail closed) for one that is not. A file mark's quote is withheld from the item's
+--     own text, as any redact mark's is. The PDF output gate is unchanged: every active mark's
+--     quote, file marks' included, is withheld from the PDFs given to an audience that redacts its
+--     category, and every copy is re-read.
 --
 -- The app role only reads redaction_mark_anchor. A trigger refuses UPDATE, DELETE and TRUNCATE,
 -- and an anchor that is not a stored PDF of its file mark's own item, for every role's writes,
