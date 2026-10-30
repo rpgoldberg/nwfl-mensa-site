@@ -8,6 +8,10 @@
 // records where the mark's text is found. Only that yes or no leaves this
 // file; the stored text itself is never handed to a message builder. A mark
 // found nowhere in what is shown makes the lens drop it (fail closed).
+//
+// A file mark (0020) is anchored in the item's stored PDFs when it is added
+// (redaction_mark_anchor): it is anchored in the versions that own those
+// files, and in no other (fail closed as well).
 // ============================================================================
 import { normalizeTree } from '../content/tree.js';
 import type { Db } from '../db/pool.js';
@@ -23,9 +27,11 @@ export interface Subjects {
 }
 
 interface Row {
+  id: string;
   content_item_id: string | null;
   series_id: string | null;
   occurrence_id: string | null;
+  field: string | null;
   quote: string | null;
   category: string;
 }
@@ -129,15 +135,16 @@ export async function loadLens(db: Query, audience: string, subjects: Subjects, 
     items.length + series.length + occurrences.length === 0 && !uniform
       ? Promise.resolve({ rows: [] as Row[] })
       : db.query<Row>(
-          `SELECT content_item_id, series_id, occurrence_id, quote, category FROM redaction_mark
+          `SELECT id, content_item_id, series_id, occurrence_id, field, quote, category FROM redaction_mark
            WHERE tenant_id = $1 AND ${markActive(options.asOf, 5)}
              AND (content_item_id = ANY($2::uuid[]) OR series_id = ANY($3::uuid[]) OR occurrence_id = ANY($4::uuid[]))`,
           [TENANT, items, series, occurrences, ...(options.asOf === undefined ? [] : [options.asOf])],
         ),
   ]);
   const policy = new Map(cells.map((row) => [cellKey(audience, row.category), row.action]));
-  const passages = marks.rows.filter((row) => row.quote !== null);
-  const [versions, events] = await Promise.all([
+  const passages = marks.rows.filter((row) => row.quote !== null && row.field !== 'file');
+  const files = marks.rows.filter((row) => row.field === 'file').map((row) => row.id);
+  const [versions, events, anchors] = await Promise.all([
     uniform || passages.some((row) => row.content_item_id !== null) ? versionTexts(db, [...(subjects.versions ?? [])], uniform) : Promise.resolve([]),
     passages.some((row) => row.content_item_id === null)
       ? eventTexts(
@@ -146,10 +153,20 @@ export async function loadLens(db: Query, audience: string, subjects: Subjects, 
           [...new Set(passages.flatMap((row) => (row.occurrence_id !== null ? [row.occurrence_id] : [])))],
         )
       : Promise.resolve(new Map<string, string[]>()),
+    uniform || files.length > 0
+      ? db.query<{ mark_id: string; version_id: string }>(
+          `SELECT a.mark_id, f.version_id FROM redaction_mark_anchor a JOIN stored_file f ON f.id = a.file_id
+           WHERE a.tenant_id = $1 AND a.mark_id = ANY($2::uuid[]) AND f.version_id IS NOT NULL`,
+          [TENANT, files],
+        )
+      : Promise.resolve({ rows: [] as Array<{ mark_id: string; version_id: string }> }),
   ]);
   const rows: MarkRow[] = marks.rows.map((row) => {
     const subject = keyOf(row);
     const mark: MarkRow = { subject, quote: row.quote, category: row.category };
+    if (row.field === 'file') {
+      return { ...mark, file: true, anchoredIn: new Set(anchors.rows.filter((anchor) => anchor.mark_id === row.id).map((anchor) => anchor.version_id)) };
+    }
     if (row.quote === null) return mark;
     const quote = row.quote;
     const anchoredIn =

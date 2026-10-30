@@ -120,7 +120,8 @@ enum MarkSubjectKind {
 
 // The text field a passage was marked in. A content item has title, summary,
 // body and on_behalf_of; a series title, description and cadence_label; an
-// occurrence title, detail, status_note and url.
+// occurrence title, detail, status_note and url. A content item's passage in
+// its stored PDFs is a file mark (FILE).
 enum MarkField {
   MARK_FIELD_UNSPECIFIED = 0;
   MARK_FIELD_TITLE = 1;
@@ -132,6 +133,10 @@ enum MarkField {
   MARK_FIELD_DETAIL = 7;
   MARK_FIELD_STATUS_NOTE = 8;
   MARK_FIELD_URL = 9;
+  // A content item's passage in its stored PDFs, anchored in the files its
+  // quote was found in (0020). Listed here; added only with its files, by the
+  // issue loader, never through AddRedactionMark.
+  MARK_FIELD_FILE = 10;
 }
 
 enum MarkStatus {
