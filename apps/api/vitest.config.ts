@@ -28,6 +28,8 @@ export default defineConfig({
         'src/pdf/engine-child.ts',
         // The seed command's entrypoint: argv, env and stdout only (seed.ts is tested).
         'src/seed/cli.ts',
+        // The issue loader's entrypoint: argv, env, stdin's fstat and stdout only (load.ts is tested).
+        'src/load/cli.ts',
       ],
       thresholds: {
         perFile: true,

@@ -44,7 +44,7 @@ const KIND_OUT: Record<SubjectKind, MarkSubjectKind> = {
 };
 const COLUMN: Record<SubjectKind, string> = { content_item: 'content_item_id', event_series: 'series_id', event_occurrence: 'occurrence_id' };
 
-type Field = 'title' | 'summary' | 'body' | 'on_behalf_of' | 'description' | 'cadence_label' | 'detail' | 'status_note' | 'url';
+type Field = 'title' | 'summary' | 'body' | 'on_behalf_of' | 'description' | 'cadence_label' | 'detail' | 'status_note' | 'url' | 'file';
 const FIELD_OUT: Record<Field, MarkField> = {
   title: MarkField.TITLE,
   summary: MarkField.SUMMARY,
@@ -55,8 +55,9 @@ const FIELD_OUT: Record<Field, MarkField> = {
   detail: MarkField.DETAIL,
   status_note: MarkField.STATUS_NOTE,
   url: MarkField.URL,
+  file: MarkField.FILE,
 };
-/** The fields each kind of subject has: 0014's redaction_mark_field_of_subject. */
+/** The text fields each kind of subject has: 0014's redaction_mark_field_of_subject (a content item's file marks, 0020, are added by the issue loader only). */
 const FIELDS: Record<SubjectKind, readonly Field[]> = {
   content_item: ['title', 'summary', 'body', 'on_behalf_of'],
   event_series: ['title', 'description', 'cadence_label'],
@@ -182,6 +183,7 @@ export function markHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof Redac
       if (category === undefined) throw invalid('choose a text category: an image is shown, blurred or hidden whole');
       const quote = request.quote.trim();
       const field = nameOf(FIELD_OUT, request.field);
+      if (field === 'file') throw invalid('a file mark is added with the files its quote is found in, by the issue loader');
       if (quote === '' && field !== undefined) throw invalid('a whole-item mark has no field; a passage needs its text');
       if (quote !== '' && field === undefined) throw invalid('a marked passage needs the field it is in');
       if (quote !== '' && (quote.length < 3 || quote.length > 500)) throw invalid('a marked passage is 3 to 500 characters');

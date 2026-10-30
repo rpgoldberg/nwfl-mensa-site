@@ -157,6 +157,45 @@ people). A path inside the repository is refused, as are a member's home and
 any unknown field. It runs in one transaction, is idempotent, records each
 row in `audit_event`, and prints counts only.
 
+## Loading a newsletter issue
+
+    node dist/load/cli.js -        # the bundle on stdin, never a path
+
+One issue becomes one public DOCUMENT item, `Pensa Mensa, October-November
+2026` with `Volume 30, Number 5` as its summary (slug `pensa-mensa-2026-10`),
+holding a public PDF and a members PDF. The public is told "not found" for
+the members file. The writer and approver is `system:issue-loader`, with a
+self_breakglass reason that names the approval tag and both hashes.
+
+The bundle is JSON: `format` (`nwfl-issue/1`), `issue` (`period` YYYY-MM,
+`volume`, `number`), `office` (a slug), `approval` (`reference` such as
+`PUBCOPY`, `marksSha256`, `publicInputHash`, `membersSha256`), `pdfs`
+(`public`, `members`, base64, 10 MiB each at most) and `marks` (`quote`,
+`category`). It is refused, with nothing applied, when:
+
+- it has no marks, or a mark's category is not a personal-data category;
+- the marks' hash is not `approval.marksSha256` (`marksSha256` in
+  `src/load/load.ts`), or the members PDF's sha256 is not
+  `approval.membersSha256`;
+- a mark's quote is in the text layer of neither PDF (named by its place in
+  the list, never its text);
+- the public copy's input hash, computed in the database, is not
+  `approval.publicInputHash`. The refusal prints the computed hash.
+
+With `NODE_ENV=production` (the image), stdin must be a pipe or a socket. A
+second run of the same bundle reports `unchanged`. A different bundle, or the
+same one under another approval, is refused for an issue already loaded, and
+so is any run once the issue was edited or withdrawn after loading. The
+command prints ids and counts only.
+
+The marks are file marks (`0020_file_marks.sql`): each is anchored in the
+PDFs whose text layer holds its quote, so the issue is listed for everyone
+while the PDF engine withholds the marked passages. The public gets the
+redacted public copy, members a members copy without home addresses, and
+officers the originals. Anchoring reads the originals as officers do, so the
+load fails, with nothing applied, while the officers' policy hides or
+redacts any category.
+
 ## Schema
 
 Raw SQL in `migrations/NNNN_*.sql`, applied by `scripts/migrate.sh` (ported

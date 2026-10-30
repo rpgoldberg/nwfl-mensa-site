@@ -32,13 +32,19 @@ export type SubjectKind = 'content_item' | 'event_series' | 'event_occurrence';
 /**
  * An active mark, as the lens needs it: whose it is, its text (null: the whole item), its category,
  * and where its text was found: the content versions, or the event subject, it matches in (lens.ts
- * sets this for every mark it loads; a mark without it is not anchor-checked).
+ * sets this for every mark it loads; a text mark without it is not anchor-checked).
+ *
+ * A file mark (0020) is a content item's passage in its stored PDFs: anchoredIn holds the versions
+ * whose files its quote was found in when it was added. Its quote is withheld wherever it appears in
+ * the item's own text, as a text mark's is; it hides the item when it is not anchored in the version
+ * shown, or has no anchoredIn at all (fail closed). It does not count in affected or withheld.
  */
 export interface MarkRow {
   subject: string;
   quote: string | null;
   category: string;
   anchoredIn?: ReadonlySet<string>;
+  file?: boolean;
 }
 
 export const subjectKey = (kind: SubjectKind, id: string): string => `${kind}:${id}`;
@@ -380,6 +386,9 @@ export function treeText(tree: Tree): string {
 export function lensFor(audience: string, policy: Policy, marks: readonly MarkRow[]): Lens {
   const actionOf = (category: string): Action => resolveAction(policy, audience, category);
   const of = (subjects: readonly string[]): MarkRow[] => marks.filter((mark) => subjects.includes(mark.subject));
+  /** The marks on the subjects' own text: file marks are in their PDFs. */
+  const inText = (subjects: readonly string[]): MarkRow[] => of(subjects).filter((mark) => mark.file !== true);
+  // Every passage mark, file marks included: a file-marked quote is withheld from the text too.
   const patterns = (subjects: readonly string[]): RegExp[] =>
     of(subjects).flatMap((mark) => (mark.quote !== null && actionOf(mark.category) === 'redact' ? [patternOf(mark.quote)] : []));
 
@@ -390,12 +399,12 @@ export function lensFor(audience: string, policy: Policy, marks: readonly MarkRo
       of(subjects).some((mark) => {
         const action = actionOf(mark.category);
         if (action === 'hide' || (mark.quote === null && action !== 'show')) return true;
-        if (action !== 'redact' || mark.anchoredIn === undefined) return false;
+        if (action !== 'redact' || (mark.anchoredIn === undefined && mark.file !== true)) return false;
         const scope = mark.subject.startsWith('content_item:') ? version : mark.subject;
-        return scope === undefined || !mark.anchoredIn.has(scope);
+        return scope === undefined || mark.anchoredIn?.has(scope) !== true;
       }),
-    affected: (subjects) => of(subjects).some((mark) => actionOf(mark.category) !== 'show'),
-    withheld: (subjects) => of(subjects).filter((mark) => actionOf(mark.category) !== 'show').length,
+    affected: (subjects) => inText(subjects).some((mark) => actionOf(mark.category) !== 'show'),
+    withheld: (subjects) => inText(subjects).filter((mark) => actionOf(mark.category) !== 'show').length,
     text: (value, subjects) => {
       const list = patterns(subjects);
       return list.length === 0 ? value : withhold(value, list);

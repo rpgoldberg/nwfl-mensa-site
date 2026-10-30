@@ -175,6 +175,60 @@ describe('the lens: anchoring (fail closed)', () => {
   });
 });
 
+// MLOGIN S3, option (a): a FILE mark (0020) is anchored in the item's stored PDFs, recorded when it
+// is added (anchoredIn: the versions that own a file its quote was found in). Its quote is withheld
+// from the item's own text like any redact mark's; hiding still fails closed when it is not anchored
+// in the version shown. The slug and hash rule (affected) and the withheld count stay with text marks.
+describe('the lens: file marks (0020)', () => {
+  const fileMark = (scopes: string[] | undefined, category = 'member_name'): MarkRow => ({
+    subject: ITEM,
+    quote: 'Pat Example',
+    category,
+    file: true,
+    ...(scopes === undefined ? {} : { anchoredIn: new Set(scopes) }),
+  });
+
+  it("withholds its quote from the item's own text and body tree like a text mark, for an audience that redacts it", () => {
+    const lens = lensFor('public', POLICY, [fileMark(['version-1'])]);
+    expect(lens.text('Pat Example spoke', [ITEM])).toBe(`${WITHHELD} spoke`);
+    const tree: Tree = { blocks: [{ type: 'paragraph', children: [{ type: 'text', text: 'Pat Example spoke', bold: false, italic: false }] }] };
+    const asText = lensFor('public', POLICY, [{ subject: ITEM, quote: 'Pat Example', category: 'member_name' }]);
+    expect(lens.tree(tree, [ITEM])).toEqual(asText.tree(tree, [ITEM]));
+    expect(lens.tree(tree, [ITEM])).not.toEqual(tree);
+    expect(lensFor('members', POLICY, [fileMark(['version-1'])]).text('Pat Example spoke', [ITEM])).toBe('Pat Example spoke');
+    expect(lens.affected([ITEM])).toBe(false);
+    expect(lens.withheld([ITEM])).toBe(0);
+  });
+
+  it('never hides the item for a file mark anchored in the version shown', () => {
+    expect(lensFor('public', POLICY, [fileMark(['version-1'])]).hidden([ITEM], 'version-1')).toBe(false);
+    expect(lensFor('members', POLICY, [fileMark(['version-1'], 'member_address')]).hidden([ITEM], 'version-1')).toBe(false);
+  });
+
+  it('hides the item, fail closed, for a file mark not anchored in the version shown, anchored nowhere, or with no record at all', () => {
+    expect(lensFor('public', POLICY, [fileMark(['version-1'])]).hidden([ITEM], 'version-2')).toBe(true);
+    expect(lensFor('public', POLICY, [fileMark(['version-1'])]).hidden([ITEM])).toBe(true);
+    expect(lensFor('public', POLICY, [fileMark([])]).hidden([ITEM], 'version-1')).toBe(true);
+    expect(lensFor('public', POLICY, [fileMark(undefined)]).hidden([ITEM], 'version-1')).toBe(true);
+  });
+
+  it('still hides for a policy that hides the category, anchored or not, and never for an audience that shows it', () => {
+    expect(lensFor('public', POLICY, [fileMark(['version-1'], 'member_email')]).hidden([ITEM], 'version-1')).toBe(true);
+    expect(lensFor('members', POLICY, [fileMark([], 'member_name')]).hidden([ITEM], 'version-2')).toBe(false);
+  });
+
+  it('leaves a text mark beside it as it was: still withheld in the text, still hiding when it matches nowhere', () => {
+    const text: MarkRow = { subject: ITEM, quote: '850-555-0142', category: 'member_phone', anchoredIn: new Set(['version-1']) };
+    const lens = lensFor('public', POLICY, [fileMark(['version-1']), text]);
+    expect(lens.text('Pat Example: 850-555-0142', [ITEM])).toBe(`${WITHHELD}: ${WITHHELD}`);
+    expect(lens.affected([ITEM])).toBe(true);
+    expect(lens.withheld([ITEM])).toBe(1);
+    expect(lens.hidden([ITEM], 'version-1')).toBe(false);
+    expect(lensFor('public', POLICY, [fileMark(['version-2']), { ...text, anchoredIn: new Set(['version-2']) }]).hidden([ITEM], 'version-1')).toBe(true);
+    expect(lensFor('public', POLICY, [fileMark(['version-1']), { ...text, anchoredIn: new Set<string>() }]).hidden([ITEM], 'version-1')).toBe(true);
+  });
+});
+
 describe('the lens: whole words, normalized', () => {
   const lens = lensFor('public', POLICY, [span('850-555-0142'), span('Pat Example', 'member_name')]);
 

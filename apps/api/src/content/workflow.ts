@@ -70,7 +70,7 @@ interface ItemRow {
   withdrawn_at: Date | null;
 }
 
-interface VersionRow {
+export interface VersionRow {
   id: string;
   item_id: string;
   n: number;
@@ -171,8 +171,80 @@ async function hashOf(client: TxClient, version: VersionRow, targets: Targets, e
   });
 }
 
-async function addEditor(client: TxClient, versionId: string, subject: string): Promise<void> {
+export async function addEditor(client: TxClient, versionId: string, subject: string): Promise<void> {
   await client.query(`INSERT INTO content_version_editor (version_id, subject) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [versionId, subject]);
+}
+
+/**
+ * Mark ready's writes, once its checks have passed: the hash over what the approver will judge, the
+ * targets and edition recorded, and the item to ready. Shared by MarkReady and the issue loader
+ * (load/load.ts), so the two cannot drift.
+ */
+export async function readyVersion(
+  client: TxClient,
+  item: Pick<ItemRow, 'id' | 'state'>,
+  version: VersionRow,
+  options: { targets: Targets; editionId: string | null; printAsIs: boolean },
+): Promise<VersionRow> {
+  const { targets, editionId, printAsIs } = options;
+  const hash = await hashOf(client, { ...version, print_as_is: printAsIs }, targets, editionId);
+  const ready = (
+    await client.query<VersionRow>(
+      `UPDATE content_version SET print_as_is = $2, target_website = $3, target_newsletter = $4, target_email = $5, edition_id = $6,
+         status = 'ready', content_hash = $7, ready_at = now() WHERE id = $1 RETURNING *`,
+      [version.id, printAsIs, targets.website, targets.newsletter, targets.email, editionId, hash],
+    )
+  ).rows[0] as VersionRow;
+  if (item.state === 'draft') await client.query(`UPDATE content_item SET state = 'ready', updated_at = now() WHERE id = $1`, [item.id]);
+  return ready;
+}
+
+/**
+ * Approval's writes, once the approver's checks have passed: derive public_ast and both search
+ * indexes, make a file referenced only inside members passages a members file, approve, repoint the
+ * live version BEFORE superseding the old one, audit, and record the ledger. Shared by Approve and the
+ * issue loader (load/load.ts), so the two cannot drift (MLOGIN N-7).
+ */
+export async function applyApproval(
+  client: TxClient,
+  caller: Caller,
+  item: Pick<ItemRow, 'id' | 'live_version_id'>,
+  version: VersionRow,
+  approval: { kind: 'normal' | 'self_breakglass'; reason: string | null },
+): Promise<void> {
+  const derived = deriveForApproval({ title: version.title, summary: version.summary, visibility: version.visibility, body: version.body_ast });
+  // A file referenced only inside members passages becomes a members file (section 4 rule 4).
+  const { membersOnly } = referencedFiles(normalizeTree(version.body_ast));
+  if (membersOnly.length > 0) {
+    await client.query(
+      `UPDATE stored_file SET audience = 'members' WHERE version_id = $1 AND id = ANY($2) AND audience = 'public' AND role <> 'public_copy'`,
+      [version.id, membersOnly],
+    );
+  }
+  await client.query(
+    `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = $2, approval_kind = $3, approval_reason = $4,
+       public_ast = $5, search_public = to_tsvector('english', $6), search_members = to_tsvector('english', $7)
+     WHERE id = $1`,
+    [version.id, caller.subject, approval.kind, approval.reason, JSON.stringify(derived.publicAst), derived.publicText, derived.membersText],
+  );
+  // Repoint live first: the old live version cannot be superseded while it is live.
+  await client.query(
+    `UPDATE content_item SET live_version_id = $2, working_version_id = NULL, state = 'published', withdrawn_at = NULL, updated_at = now() WHERE id = $1`,
+    [item.id, version.id],
+  );
+  if (item.live_version_id !== null) await client.query(`UPDATE content_version SET status = 'superseded' WHERE id = $1`, [item.live_version_id]);
+  await recordAudit(client, caller, {
+    action: approval.kind === 'normal' ? 'approve' : 'approve_self',
+    subjectKind: 'content_version',
+    subjectId: version.id,
+    itemId: item.id,
+    versionId: version.id,
+    contentHash: version.content_hash,
+    fromState: 'ready',
+    toState: 'approved',
+    note: approval.reason,
+  });
+  await recordItems(client, [item.id]);
 }
 
 /** A new draft version copying the authored content of `from`. */
@@ -372,21 +444,14 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         checkTargets(version.visibility, targets);
         const editionId = request.editionId === '' ? null : request.editionId;
         if (editionId !== null) await openEdition(client, editionId);
-        const withFlag = { ...version, print_as_is: request.printAsIs };
-        const hash = await hashOf(client, withFlag, targets, editionId);
-        await client.query(
-          `UPDATE content_version SET print_as_is = $2, target_website = $3, target_newsletter = $4, target_email = $5, edition_id = $6,
-             status = 'ready', content_hash = $7, ready_at = now() WHERE id = $1`,
-          [version.id, request.printAsIs, targets.website, targets.newsletter, targets.email, editionId, hash],
-        );
-        if (item.state === 'draft') await client.query(`UPDATE content_item SET state = 'ready', updated_at = now() WHERE id = $1`, [item.id]);
+        const ready = await readyVersion(client, item, version, { targets, editionId, printAsIs: request.printAsIs });
         await recordAudit(client, caller, {
           action: 'ready',
           subjectKind: 'content_version',
           subjectId: version.id,
           itemId: item.id,
           versionId: version.id,
-          contentHash: hash,
+          contentHash: ready.content_hash,
           fromState: 'draft',
           toState: 'ready',
           actingOfficeId: item.office_id,
@@ -473,39 +538,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           if (editionChanged) await recordAudit(client, caller, { ...common, action: 'edition_changed', payload: { from: beforeEdition, to: editionId } });
         }
 
-        const derived = deriveForApproval({ title: version.title, summary: version.summary, visibility: version.visibility, body: version.body_ast });
-        // A file referenced only inside members passages becomes a members file (section 4 rule 4).
-        const { membersOnly } = referencedFiles(normalizeTree(version.body_ast));
-        if (membersOnly.length > 0) {
-          await client.query(
-            `UPDATE stored_file SET audience = 'members' WHERE version_id = $1 AND id = ANY($2) AND audience = 'public' AND role <> 'public_copy'`,
-            [version.id, membersOnly],
-          );
-        }
-        await client.query(
-          `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = $2, approval_kind = $3, approval_reason = $4,
-             public_ast = $5, search_public = to_tsvector('english', $6), search_members = to_tsvector('english', $7)
-           WHERE id = $1`,
-          [version.id, caller.subject, kind, reason, JSON.stringify(derived.publicAst), derived.publicText, derived.membersText],
-        );
-        // Repoint live first: the old live version cannot be superseded while it is live.
-        await client.query(
-          `UPDATE content_item SET live_version_id = $2, working_version_id = NULL, state = 'published', withdrawn_at = NULL, updated_at = now() WHERE id = $1`,
-          [item.id, version.id],
-        );
-        if (item.live_version_id !== null) await client.query(`UPDATE content_version SET status = 'superseded' WHERE id = $1`, [item.live_version_id]);
-        await recordAudit(client, caller, {
-          action: kind === 'normal' ? 'approve' : 'approve_self',
-          subjectKind: 'content_version',
-          subjectId: version.id,
-          itemId: item.id,
-          versionId: version.id,
-          contentHash: version.content_hash,
-          fromState: 'ready',
-          toState: 'approved',
-          note: reason,
-        });
-        await recordItems(client, [item.id]);
+        await applyApproval(client, caller, item, version, { kind, reason });
         return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },
