@@ -320,3 +320,152 @@ describe('liveData files', () => {
     expect(asked).toEqual([FILE]);
   });
 });
+
+// The newsletter on /news: the issue loader's items (apps/api README, "Loading a newsletter issue"):
+// one public DOCUMENT per issue, titled "Pensa Mensa, <Month>-<Month> <Year>", volume and number in
+// the summary, holding a public PDF and a members PDF. Made-up ids and hashes only.
+describe('liveData.issues (the newsletter)', () => {
+  const ID = { oct: 'd0c00000-0000-4000-8000-000000000010', aug: 'd0c00000-0000-4000-8000-000000000008', jun: 'd0c00000-0000-4000-8000-000000000006' };
+  const PUBLIC_PDF = { oct: 'f0000000-0000-4000-8000-000000000010', aug: 'f0000000-0000-4000-8000-000000000008', jun: 'f0000000-0000-4000-8000-000000000006' };
+  const MEMBERS_PDF = { oct: 'f1000000-0000-4000-8000-000000000010', aug: 'f1000000-0000-4000-8000-000000000008', jun: 'f1000000-0000-4000-8000-000000000006' };
+  const SHA = new Uint8Array(32).fill(0xab);
+  const SIZE = 987_654n;
+
+  const issue = (
+    title: string,
+    over: { id?: string; slug?: string; summary?: string; kind?: ContentKind; visibility?: ItemVisibility; files?: { id: string; audience: FileAudience; mimeType?: string; role?: FileRole }[]; approvedAt?: Date } = {},
+  ): ContentItem =>
+    create(ContentItemSchema, {
+      id: over.id ?? ID.oct,
+      slug: over.slug ?? 'pensa-mensa-2026-10',
+      kind: over.kind ?? ContentKind.DOCUMENT,
+      live: {
+        title,
+        summary: over.summary ?? 'Volume 30, Number 5',
+        visibility: over.visibility ?? ItemVisibility.PUBLIC,
+        approvedAt: timestampFromDate(over.approvedAt ?? new Date('2026-10-02T15:00:00Z')),
+        files: (over.files ?? [{ id: PUBLIC_PDF.oct, audience: FileAudience.PUBLIC }, { id: MEMBERS_PDF.oct, audience: FileAudience.MEMBERS }]).map((f) => ({
+          id: f.id,
+          filename: `${f.id}.pdf`,
+          mimeType: f.mimeType ?? 'application/pdf',
+          sizeBytes: SIZE,
+          sha256: SHA,
+          audience: f.audience,
+          role: f.role ?? FileRole.PRIMARY,
+        })),
+      },
+    });
+
+  const files = (key: keyof typeof ID) => [
+    { id: MEMBERS_PDF[key], audience: FileAudience.MEMBERS },
+    { id: PUBLIC_PDF[key], audience: FileAudience.PUBLIC },
+  ];
+
+  it('asks for every published document, and lists the issues newest first by the months their titles name, each with its public PDF', async () => {
+    const asked: [ContentKind, number][] = [];
+    const issues = await liveData(
+      reads({
+        listPublishedItems: (kind, size) => {
+          asked.push([kind, size]);
+          // In the order the API gives: the last approved first, which is not the newest issue.
+          return Promise.resolve([
+            issue('Pensa Mensa, June-July 2026', { id: ID.jun, slug: 'pensa-mensa-2026-06', summary: 'Volume 30, Number 3', files: files('jun'), approvedAt: new Date('2026-10-20T15:00:00Z') }),
+            issue('Pensa Mensa, October-November 2026', { files: files('oct') }),
+            issue('Pensa Mensa, August-September 2026', { id: ID.aug, slug: 'pensa-mensa-2026-08', summary: 'Volume 30, Number 4', files: files('aug'), approvedAt: new Date('2026-08-02T15:00:00Z') }),
+          ]);
+        },
+      }),
+    ).issues();
+    expect(asked).toEqual([[ContentKind.DOCUMENT, 50]]);
+    expect(issues).toEqual([
+      { period: '2026-10', label: 'Pensa Mensa, October-November 2026', summary: 'Volume 30, Number 5', pdf: `/documents/${PUBLIC_PDF.oct}.pdf`, source: 'pipeline' },
+      { period: '2026-08', label: 'Pensa Mensa, August-September 2026', summary: 'Volume 30, Number 4', pdf: `/documents/${PUBLIC_PDF.aug}.pdf`, source: 'pipeline' },
+      { period: '2026-06', label: 'Pensa Mensa, June-July 2026', summary: 'Volume 30, Number 3', pdf: `/documents/${PUBLIC_PDF.jun}.pdf`, source: 'pipeline' },
+    ]);
+  });
+
+  it('never lists or links a members or officers file, nor the hash or size of any file', async () => {
+    const issues = await liveData(
+      reads({
+        listPublishedItems: () =>
+          Promise.resolve([
+            issue('Pensa Mensa, October-November 2026', {
+              files: [
+                { id: MEMBERS_PDF.oct, audience: FileAudience.MEMBERS },
+                { id: MEMBERS_PDF.aug, audience: FileAudience.OFFICERS },
+                { id: PUBLIC_PDF.oct, audience: FileAudience.PUBLIC },
+              ],
+            }),
+            // An issue the API sent with its members file and no public one, as a buggy API might: not listed at all.
+            issue('Pensa Mensa, August-September 2026', { id: ID.aug, files: [{ id: MEMBERS_PDF.jun, audience: FileAudience.MEMBERS }] }),
+          ]),
+      }),
+    ).issues();
+    expect(issues.map((i) => i.pdf)).toEqual([`/documents/${PUBLIC_PDF.oct}.pdf`]);
+    const text = JSON.stringify(issues);
+    for (const id of Object.values(MEMBERS_PDF)) expect(text).not.toContain(id);
+    expect(text).not.toMatch(/abab|987654|987,654/i);
+    expect(Object.keys(issues[0]!).sort()).toEqual(['label', 'pdf', 'period', 'source', 'summary']);
+  });
+
+  it("links only a public PDF that is the issue's own: never a source file, another type, or a file whose id is not one", async () => {
+    const only = (f: { id: string; audience: FileAudience; mimeType?: string; role?: FileRole }) => issue('Pensa Mensa, October-November 2026', { files: [f] });
+    const issues = await liveData(
+      reads({
+        listPublishedItems: () =>
+          Promise.resolve([
+            only({ id: PUBLIC_PDF.oct, audience: FileAudience.PUBLIC, role: FileRole.SOURCE }),
+            only({ id: PUBLIC_PDF.aug, audience: FileAudience.PUBLIC, mimeType: 'image/jpeg' }),
+            only({ id: 'not-an-id', audience: FileAudience.PUBLIC }),
+            only({ id: PUBLIC_PDF.jun, audience: FileAudience.UNSPECIFIED }),
+          ]),
+      }),
+    ).issues();
+    expect(issues).toEqual([]);
+  });
+
+  it('lists the newsletter only: not another document, a members or officers item, another kind, or a title outside the contract', async () => {
+    const issues = await liveData(
+      reads({
+        listPublishedItems: () =>
+          Promise.resolve([
+            issue('Our bylaws'),
+            issue('Pensa Mensa, October-November 2026', { visibility: ItemVisibility.MEMBERS }),
+            issue('Pensa Mensa, October-November 2026', { visibility: ItemVisibility.OFFICERS }),
+            issue('Pensa Mensa, October-November 2026', { kind: ContentKind.ANNOUNCEMENT }),
+            issue('Pensa Mensa, October-December 2026'),
+            issue('Pensa Mensa, November-October 2026'),
+            issue('Pensa Mensa, December-January 2026'),
+            issue('Pensa Mensa, October-November 26'),
+            issue('Pensa Mensa, October-November 2026, extra'),
+            issue('pensa mensa, october-november 2026'),
+            issue('Pensa Mensa, [withheld]-November 2026'),
+            create(ContentItemSchema, { id: ID.jun, slug: 'pensa-mensa-2026-06', kind: ContentKind.DOCUMENT }),
+          ]),
+      }),
+    ).issues();
+    expect(issues).toEqual([]);
+  });
+
+  it('keeps the title and summary as the API gave them, withheld text included', async () => {
+    const [one] = await liveData(reads({ listPublishedItems: () => Promise.resolve([issue('Pensa Mensa, January-February 2027', { summary: 'Volume 31, Number [withheld]' })]) })).issues();
+    expect(one).toMatchObject({ period: '2027-01', label: 'Pensa Mensa, January-February 2027', summary: 'Volume 31, Number [withheld]' });
+  });
+
+  // The API puts the item's id in the slug field when anything in the item is withheld (REDACT R2a);
+  // a file-marked quote in a title does not (it is not counted), so the slug carries no meaning here.
+  it("shows an issue the same whether the API gave its slug or its id in the slug field", async () => {
+    const read = (slug: string) => liveData(reads({ listPublishedItems: () => Promise.resolve([issue('Pensa Mensa, October-November 2026', { slug })]) })).issues();
+    const bySlug = await read('pensa-mensa-2026-10');
+    const byId = await read(ID.oct);
+    expect(byId).toEqual(bySlug);
+    expect(byId).toHaveLength(1);
+    expect(JSON.stringify(byId)).not.toContain(ID.oct);
+    // A slug that says something else is not believed either: the title decides.
+    expect(await read('pensa-mensa-1999-01')).toEqual(bySlug);
+  });
+
+  it('passes an unavailable API on to the page', async () => {
+    await expect(liveData(reads({ listPublishedItems: () => Promise.reject(new ApiUnavailable('ListPublishedItems')) })).issues()).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+});

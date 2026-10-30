@@ -9,19 +9,21 @@
 // refused, so a page that sent one would fail.
 //
 // SILENT_API_PORT is a second listener that accepts connections and never
-// answers: the API that hangs, for the timeout test.
+// answers: the API that hangs, for the timeout test. NO_ISSUES_API_PORT is a
+// third, the same API with no issue of the newsletter published yet.
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 import http2 from 'node:http2';
 import net from 'node:net';
-import { ContentItemSchema, ContentKind, ContentService, ItemState, ItemVisibility } from '../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { Area, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
 
 const port = Number(process.env['API_PORT'] ?? 9091);
 const silentPort = Number(process.env['SILENT_API_PORT'] ?? 9092);
+const noIssuesPort = Number(process.env['NO_ISSUES_API_PORT'] ?? 9093);
 
 // As in e2e/stand-in.ts.
 const CANARY = { membersInFull: 'MEMBERS-ONLY CANARY PICNIC', noStatus: 'UNPUBLISHED CANARY' };
@@ -193,6 +195,50 @@ const ITEMS = {
   ],
 };
 
+// The newsletter, as the issue loader publishes it, as in e2e/stand-in.ts (NEWSLETTER): each issue a
+// public DOCUMENT with a public PDF and a members PDF. The members file is listed too, as a buggy API
+// might list it, and every file carries a hash and a size: the site must show none of them.
+const SHA256 = new Uint8Array(32).fill(0xab);
+const SIZE = 987_654n;
+const NEWSLETTER = [
+  { title: 'Pensa Mensa, October-November 2026', summary: 'Volume 30, Number 5', id: 'd0c00000-0000-4000-8000-000000000010', publicPdf: 'f0000000-0000-4000-8000-000000000010', membersPdf: 'f1000000-0000-4000-8000-000000000010', daysAgo: 2 },
+  // Approved last, so the API lists it first; the API gave its id in the slug field (something in it is withheld).
+  { title: 'Pensa Mensa, August-September 2026', summary: 'Volume 30, Number 4', id: 'd0c00000-0000-4000-8000-000000000008', publicPdf: 'f0000000-0000-4000-8000-000000000008', membersPdf: 'f1000000-0000-4000-8000-000000000008', daysAgo: 1, withheldSlug: true },
+  { title: 'Pensa Mensa, June-July 2026', summary: 'Volume 30, Number 3', id: 'd0c00000-0000-4000-8000-000000000006', publicPdf: 'f0000000-0000-4000-8000-000000000006', membersPdf: 'f1000000-0000-4000-8000-000000000006', daysAgo: 60 },
+  { title: 'Pensa Mensa, February-March 2025', summary: 'Volume 29, Number 2', id: 'd0c00000-0000-4000-8000-000000000002', publicPdf: 'f0000000-0000-4000-8000-000000000002', membersPdf: 'f1000000-0000-4000-8000-000000000002', daysAgo: 300 },
+  // A members item in an issue's shape, sent in full: never listed for the public.
+  { title: 'Pensa Mensa, April-May 2026', summary: 'Volume 30, Number 2', id: 'd0c00000-0000-4000-8000-000000000004', publicPdf: 'f0000000-0000-4000-8000-000000000004', membersPdf: 'f1000000-0000-4000-8000-000000000004', daysAgo: 3, visibility: ItemVisibility.MEMBERS },
+  // A public document that is not an issue.
+  { title: 'Our bylaws', summary: 'As amended in 2024.', id: 'd0c00000-0000-4000-8000-0000000000b1', publicPdf: 'f0000000-0000-4000-8000-0000000000b1', daysAgo: 4 },
+];
+
+/** @param {string} id @param {FileAudience} audience */
+const storedFile = (id, audience) => ({ id, filename: `${id}.pdf`, mimeType: 'application/pdf', sizeBytes: SIZE, sha256: SHA256, audience, role: FileRole.PRIMARY });
+
+const DOCUMENTS = NEWSLETTER.map((d) =>
+  create(ContentItemSchema, {
+    id: d.id,
+    slug: d.withheldSlug ? d.id : d.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    kind: ContentKind.DOCUMENT,
+    officeId: OFFICE.president,
+    state: ItemState.PUBLISHED,
+    live: {
+      title: d.title,
+      summary: d.summary,
+      visibility: d.visibility ?? ItemVisibility.PUBLIC,
+      approvedAt: timestampFromDate(new Date(Date.now() - d.daysAgo * 86_400_000)),
+      files: [...(d.membersPdf ? [storedFile(d.membersPdf, FileAudience.MEMBERS)] : []), storedFile(d.publicPdf, FileAudience.PUBLIC)],
+    },
+  }),
+).sort((a, b) => Number(b.live?.approvedAt?.seconds) - Number(a.live?.approvedAt?.seconds));
+
+/** A one-page PDF with no text: what ReadFile streams for a public file. */
+const PDF = Buffer.from(
+  '%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n',
+  'latin1',
+);
+const PUBLIC_PDFS = new Set(NEWSLETTER.filter((d) => (d.visibility ?? ItemVisibility.PUBLIC) === ItemVisibility.PUBLIC).map((d) => d.publicPdf));
+
 /** @param {string} title @param {string} slug @param {number} order @param {{ name: string, status: TermStatus }[]} holders @param {string} alias */
 const office = (slug, title, order, holders, alias) => ({
   id: slug === 'president' ? OFFICE.president : slug === 'social' ? OFFICE.social : `office-${slug}`,
@@ -222,51 +268,59 @@ function anonymousOnly(ctx) {
   if (ctx.requestHeader.has('authorization') || ctx.requestHeader.has('cookie')) throw new ConnectError('the site must call as the public', Code.PermissionDenied);
 }
 
-const adapter = connectNodeAdapter({
-  grpc: true,
-  grpcWeb: false,
-  connect: false,
-  routes: (router) => {
-    router.service(EventService, {
-      listOccurrences: (req, ctx) => {
-        anonymousOnly(ctx);
-        const today = central(new Date()).date;
-        const from = req.from ? iso(req.from) : today;
-        return { occurrences: calendar(from, req.to ? iso(req.to) : addDays(from, 62)) };
-      },
-      getOccurrence: (req, ctx) => {
-        anonymousOnly(ctx);
-        const today = central(new Date()).date;
-        const found = calendar(addDays(today, -60), addDays(today, 400)).find((o) => o.id === req.id);
-        if (!found) throw new ConnectError('occurrence not found', Code.NotFound);
-        return { occurrence: found };
-      },
-      listSeries: (_req, ctx) => {
-        anonymousOnly(ctx);
-        return {
-          series: [
-            { id: SERIES.lunch, slug: 'wednesday-lunchers', title: 'Wednesday Lunchers', cadenceLabel: 'Every Wednesday', description: 'Lunch and conversation, every week. Everyone is welcome.', hostOfficeId: OFFICE.president, visibility: EventVisibility.PUBLIC, active: true },
-            { id: SERIES.happyHour, slug: 'happy-hour', title: 'Happy Hour', cadenceLabel: 'Second Friday of each month', description: 'A different place each time.', hostOfficeId: OFFICE.social, visibility: EventVisibility.PUBLIC, active: true },
-          ],
-        };
-      },
-      listVenues: (_req, ctx) => {
-        anonymousOnly(ctx);
-        return { venues: [VENUES.bistro, VENUES.taproom, VENUES.diner, VENUES.home, VENUES.video] };
-      },
-    });
-    router.service(ContentService, {
-      getRoster: (_req, ctx) => {
-        anonymousOnly(ctx);
-        return { offices: ROSTER };
-      },
-      listPublishedItems: (req, ctx) => {
-        anonymousOnly(ctx);
-        return { items: (ITEMS[/** @type {keyof typeof ITEMS} */ (req.kind)] ?? []).slice(0, req.pageSize || 20) };
-      },
-    });
-  },
-});
+/** The API's routes; with `issues: false`, nothing of the newsletter is published yet. @param {{ issues: boolean }} options */
+const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').ConnectRouter} */ router) => {
+  router.service(EventService, {
+    listOccurrences: (req, ctx) => {
+      anonymousOnly(ctx);
+      const today = central(new Date()).date;
+      const from = req.from ? iso(req.from) : today;
+      return { occurrences: calendar(from, req.to ? iso(req.to) : addDays(from, 62)) };
+    },
+    getOccurrence: (req, ctx) => {
+      anonymousOnly(ctx);
+      const today = central(new Date()).date;
+      const found = calendar(addDays(today, -60), addDays(today, 400)).find((o) => o.id === req.id);
+      if (!found) throw new ConnectError('occurrence not found', Code.NotFound);
+      return { occurrence: found };
+    },
+    listSeries: (_req, ctx) => {
+      anonymousOnly(ctx);
+      return {
+        series: [
+          { id: SERIES.lunch, slug: 'wednesday-lunchers', title: 'Wednesday Lunchers', cadenceLabel: 'Every Wednesday', description: 'Lunch and conversation, every week. Everyone is welcome.', hostOfficeId: OFFICE.president, visibility: EventVisibility.PUBLIC, active: true },
+          { id: SERIES.happyHour, slug: 'happy-hour', title: 'Happy Hour', cadenceLabel: 'Second Friday of each month', description: 'A different place each time.', hostOfficeId: OFFICE.social, visibility: EventVisibility.PUBLIC, active: true },
+        ],
+      };
+    },
+    listVenues: (_req, ctx) => {
+      anonymousOnly(ctx);
+      return { venues: [VENUES.bistro, VENUES.taproom, VENUES.diner, VENUES.home, VENUES.video] };
+    },
+  });
+  router.service(ContentService, {
+    getRoster: (_req, ctx) => {
+      anonymousOnly(ctx);
+      return { offices: ROSTER };
+    },
+    listPublishedItems: (req, ctx) => {
+      anonymousOnly(ctx);
+      const items = req.kind === ContentKind.DOCUMENT ? (issues ? DOCUMENTS : []) : (ITEMS[/** @type {keyof typeof ITEMS} */ (req.kind)] ?? []);
+      return { items: items.slice(0, req.pageSize || 20) };
+    },
+    // A public file's bytes; anything else is not found, as the API answers the public for a members file.
+    readFile: async function* (req, ctx) {
+      anonymousOnly(ctx);
+      if (!issues || !PUBLIC_PDFS.has(req.fileId)) throw new ConnectError('file not found', Code.NotFound);
+      yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(PDF.length) } } };
+      yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(PDF) } };
+    },
+  });
+};
 
-http2.createServer(adapter).listen(port, '127.0.0.1', () => console.log(JSON.stringify({ msg: 'stand-in API listening', port })));
+/** @param {{ issues: boolean }} options */
+const adapter = (options) => connectNodeAdapter({ grpc: true, grpcWeb: false, connect: false, routes: routes(options) });
+
+http2.createServer(adapter({ issues: true })).listen(port, '127.0.0.1', () => console.log(JSON.stringify({ msg: 'stand-in API listening', port })));
+http2.createServer(adapter({ issues: false })).listen(noIssuesPort, '127.0.0.1', () => console.log(JSON.stringify({ msg: 'stand-in API with no issue listening', port: noIssuesPort })));
 net.createServer(() => {}).listen(silentPort, '127.0.0.1', () => console.log(JSON.stringify({ msg: 'silent API listening', port: silentPort })));

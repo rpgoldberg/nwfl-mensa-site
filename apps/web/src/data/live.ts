@@ -5,13 +5,13 @@
 // members event or item never reaches a page or a feed, even if the API sent
 // more than it should.
 import { timestampDate } from '@bufbuild/protobuf/wkt';
-import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility } from '../gen/nwfl/mensa/v1/content_pb.js';
+import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility, type StoredFile } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { Area, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { ApiNotFound, type ApiReads, type FileRead } from '../lib/api/client';
 import { type CalendarEvent, type CalendarVenue, type EventStatus, centralParts, eventPath } from '../lib/calendar';
 import { documentHtml } from '../lib/document';
-import type { Office } from './site-data';
+import { type Issue, type Office, newestFirst } from './site-data';
 
 /** A published item as a page shows it. */
 export interface ItemView {
@@ -52,6 +52,8 @@ export interface LiveData {
   treasurerSummaries(): Promise<ItemView[]>;
   presidentReport(): Promise<ItemView | undefined>;
   announcements(): Promise<ItemView[]>;
+  /** The newsletter's published issues, newest first, each with its public PDF. */
+  issues(): Promise<Issue[]>;
   /** A PDF as the public may have it; not found for anything that is not a file id. */
   file(id: string): Promise<FileRead>;
 }
@@ -137,13 +139,40 @@ function itemView(item: ContentItem): ItemView {
     bodyHtml: documentHtml(live.body),
     publishedOn: live.approvedAt === undefined ? undefined : centralParts(timestampDate(live.approvedAt)).date,
     source: 'submitted',
-    files: live.files
-      .filter((f) => f.mimeType === 'application/pdf' && f.audience === FileAudience.PUBLIC && f.role !== FileRole.SOURCE && UUID.test(f.id))
-      .map((f) => ({ href: `/documents/${f.id}.pdf`, label: f.filename })),
+    files: publicPdfs(live.files),
   };
 }
 
+/** An item's public PDFs, never a members or officers file, a source file, or a file whose id is not one. */
+function publicPdfs(files: readonly StoredFile[]): FileLink[] {
+  return files
+    .filter((f) => f.mimeType === 'application/pdf' && f.audience === FileAudience.PUBLIC && f.role !== FileRole.SOURCE && UUID.test(f.id))
+    .map((f) => ({ href: `/documents/${f.id}.pdf`, label: f.filename }));
+}
+
 const publicItems = (items: readonly ContentItem[]) => items.filter((i) => i.live?.visibility === ItemVisibility.PUBLIC).map(itemView);
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** The issue loader's title (apps/api README, "Loading a newsletter issue"): two months of one year. */
+const ISSUE_TITLE = new RegExp(`^Pensa Mensa, (${MONTHS.join('|')})-(${MONTHS.join('|')}) ([0-9]{4})$`);
+/** The API's largest page: some eight years of issues. */
+const ISSUES_PAGE = 50;
+
+/**
+ * An issue of Pensa Mensa as the issue loader publishes it: a public DOCUMENT whose title names
+ * its months, with its public PDF. The title and summary are shown as the API gave them; the
+ * slug is never read, since the API may put the item's id there. Anything else is not an issue.
+ */
+function issueView(item: ContentItem): Issue | undefined {
+  const live = item.live;
+  if (item.kind !== ContentKind.DOCUMENT || live?.visibility !== ItemVisibility.PUBLIC) return undefined;
+  const [, first, second, year] = ISSUE_TITLE.exec(live.title) ?? [];
+  const month = MONTHS.indexOf(first ?? '');
+  if (month < 0 || MONTHS[month + 1] !== second) return undefined;
+  const pdf = publicPdfs(live.files)[0];
+  if (pdf === undefined) return undefined;
+  return { period: `${year}-${pad(month + 1)}`, label: live.title, summary: live.summary, pdf: pdf.href, source: 'pipeline' };
+}
 
 export function liveData(reads: ApiReads): LiveData {
   return {
@@ -182,6 +211,11 @@ export function liveData(reads: ApiReads): LiveData {
     treasurerSummaries: async () => publicItems(await reads.listPublishedItems(ContentKind.TREASURER_SUMMARY, 12)),
     presidentReport: async () => publicItems(await reads.listPublishedItems(ContentKind.PRESIDENT_REPORT, 5))[0],
     announcements: async () => publicItems(await reads.listPublishedItems(ContentKind.ANNOUNCEMENT, 3)),
+    issues: async () =>
+      (await reads.listPublishedItems(ContentKind.DOCUMENT, ISSUES_PAGE))
+        .map(issueView)
+        .filter((issue) => issue !== undefined)
+        .sort(newestFirst),
     file: (id) => (UUID.test(id) ? reads.readFile(id) : Promise.resolve({ kind: 'not_found' })),
   };
 }

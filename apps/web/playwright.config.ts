@@ -1,6 +1,23 @@
 import { randomBytes } from 'node:crypto';
 import { defineConfig, devices } from '@playwright/test';
-import { API_PORT, API_URL, BACKEND_PORT, BACKEND_URL, DOWN_PORT, DOWN_URL, IDP_ORIGIN, IDP_PORT, SILENT_API_PORT, SITE_URL, TLS_PORT } from './e2e/servers';
+import {
+  API_PORT,
+  API_URL,
+  BACKEND_PORT,
+  BACKEND_URL,
+  DOWN_PORT,
+  DOWN_URL,
+  IDP_ORIGIN,
+  IDP_PORT,
+  NO_ISSUES_API_PORT,
+  NO_ISSUES_BACKEND_URL,
+  NO_ISSUES_PORT,
+  NO_ISSUES_SITE_URL,
+  NO_ISSUES_TLS_PORT,
+  SILENT_API_PORT,
+  SITE_URL,
+  TLS_PORT,
+} from './e2e/servers';
 
 // Made fresh for each run: the test provider's client secret and the session key.
 const client = { id: 'nwfl-site-e2e', secret: randomBytes(24).toString('base64url') };
@@ -30,7 +47,7 @@ export default defineConfig({
     {
       command: 'node e2e/api.mjs',
       port: API_PORT,
-      env: { API_PORT: String(API_PORT), SILENT_API_PORT: String(SILENT_API_PORT) },
+      env: { API_PORT: String(API_PORT), SILENT_API_PORT: String(SILENT_API_PORT), NO_ISSUES_API_PORT: String(NO_ISSUES_API_PORT) },
       reuseExistingServer: false,
     },
     {
@@ -61,6 +78,20 @@ export default defineConfig({
       url: `${SITE_URL}/healthz`,
       ignoreHTTPSErrors: true,
       env: { TLS_PORT: String(TLS_PORT), UPSTREAM: BACKEND_URL },
+      reuseExistingServer: false,
+    },
+    // The same site with an API that has published no issue of the newsletter, behind its own TLS edge.
+    {
+      command: 'node server/serve.mjs',
+      url: `${NO_ISSUES_BACKEND_URL}/healthz`,
+      env: { PORT: String(NO_ISSUES_PORT), HOST: '127.0.0.1', API_URL: `http://127.0.0.1:${NO_ISSUES_API_PORT}` },
+      reuseExistingServer: false,
+    },
+    {
+      command: 'node e2e/tls-proxy.mjs',
+      url: `${NO_ISSUES_SITE_URL}/healthz`,
+      ignoreHTTPSErrors: true,
+      env: { TLS_PORT: String(NO_ISSUES_TLS_PORT), UPSTREAM: NO_ISSUES_BACKEND_URL },
       reuseExistingServer: false,
     },
   ],

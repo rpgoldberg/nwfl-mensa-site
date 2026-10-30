@@ -27,6 +27,8 @@ export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
   '/events.ics': () => ['/events.ics'],
   '/documents/[id].pdf': (c) => (c.fileIds ?? []).map((id) => `/documents/${id}.pdf`),
   '/finances': () => ['/finances'],
+  // The newsletter's issues, once the issue loader has published one; the bundled sample until then.
+  '/news': () => ['/news'],
   '/officers': () => ['/officers'],
 };
 
@@ -41,8 +43,6 @@ export const STATIC: Readonly<Record<string, readonly string[]>> = {
   '/join': ['/join'],
   '/minutes': ['/minutes'],
   '/more': ['/more'],
-  // The newsletter list is the bundled fixtures until the archive arrives (MB3, C1).
-  '/news': ['/news'],
   '/officer-area': ['/officer-area'],
   '/prefs': ['/prefs'],
   '/robots.txt': ['/robots.txt'],

@@ -1,9 +1,9 @@
-// The data the on-request pages read. The newsletter and the minutes are still
-// made-up fixtures. The live sections (the calendar, the roster, the
-// treasurer's summaries, the President's report and the announcements) come
-// from nwfl-mensa-api over gRPC when API_URL is set (W3); without it they are
-// undefined, and the pages keep their bundled content, as the public-only
-// canary does.
+// The data the on-request pages read. The minutes are still made-up fixtures,
+// and so is the newsletter until the API has an issue. The live sections (the
+// calendar, the roster, the treasurer's summaries, the President's report, the
+// announcements and the newsletter's issues) come from nwfl-mensa-api over gRPC
+// when API_URL is set (W3); without it they are undefined, and the pages keep
+// their bundled content, as the public-only canary does.
 import { PUBLIC_ONLY } from 'astro:env/server';
 import { apiSetup, grpcReads, unavailableReads } from '../lib/api/client';
 import { fixtureData } from './fixtures';

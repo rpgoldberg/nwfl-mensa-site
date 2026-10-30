@@ -1,42 +1,53 @@
 ---
 // News: Pensa Mensa, the newsletter. The current issue, then every other issue
-// by year (R5), on request. Missing issues are listed honestly. Reading views
-// and PDFs arrive with the archive (MB3, C1).
+// by year (R5), on request. From the API when it is set (W3): the issues the
+// issue loader published, each with its public PDF. Until the API has one, and
+// without the API, the bundled sample, which says it is one; its missing issues
+// are listed honestly. Large-type reading views arrive with the archive (MB3).
 import { PUBLIC_ONLY } from 'astro:env/server';
 import IssueCard from '../components/IssueCard.astro';
 import SampleNotice from '../components/SampleNotice.astro';
-import { siteData } from '../data';
-import { currentIssue, issuesByYear } from '../data/site-data';
+import Unavailable from '../components/Unavailable.astro';
+import { liveData, siteData } from '../data';
+import { currentIssue, issueSummary, issuesByYear, newsIssues } from '../data/site-data';
 import Base from '../layouts/Base.astro';
+import { attempt, markUnavailable } from '../lib/api/page';
 import { visibleContent } from '../lib/content';
 import { page } from '../lib/site';
 
 const p = page('/news');
-const issues = visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY });
-const current = currentIssue(issues);
-const past = issuesByYear(issues);
+const live = liveData();
+const loaded = live ? await attempt(() => live.issues()) : { ok: true as const, value: [] };
+if (!loaded.ok) markUnavailable(Astro.response);
+const shown = newsIssues(loaded.ok ? loaded.value : [], visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY }));
+const current = currentIssue(shown.issues);
+const past = issuesByYear(shown.issues);
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
   <p class="lead">Pensa Mensa, our newsletter: {p.description.charAt(0).toLowerCase()}{p.description.slice(1)}</p>
-  {siteData.isSample && <SampleNotice />}
-  {current && <IssueCard issue={current} />}
-  <section aria-labelledby="past-title">
-    <h2 id="past-title">Past issues</h2>
-    {past.map(([year, list]) => (
-      <div class="yr">
-        <h3>{year}</h3>
-        <ul class="issues">
-          {list.map((i) => (
-            <li data-source={i.source} class={i.missing ? 'missing' : undefined}>
-              <span>{i.label}</span>
-              {i.missing ? <span class="muted">No copy known. If you have a paper copy, please tell the Editor.</span>
-                : i.volume !== undefined && <span class="muted">Volume {i.volume}, Number {i.number}</span>}
-            </li>
-          ))}
-        </ul>
-      </div>
-    ))}
-  </section>
+  {!loaded.ok ? <Unavailable what="The list of issues" /> : (
+    <>
+      {shown.sample && siteData.isSample && <SampleNotice />}
+      {current && <IssueCard issue={current} />}
+      <section aria-labelledby="past-title">
+        <h2 id="past-title">Past issues</h2>
+        {past.map(([year, list]) => (
+          <div class="yr">
+            <h3>{year}</h3>
+            <ul class="issues">
+              {list.map((i) => (
+                <li data-source={i.source} class={i.missing ? 'missing' : undefined}>
+                  {i.pdf ? <a href={i.pdf}>{i.label} (PDF)</a> : <span>{i.label}</span>}
+                  {i.missing ? <span class="muted">No copy known. If you have a paper copy, please tell the Editor.</span>
+                    : issueSummary(i) && <span class="muted">{issueSummary(i)}</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </section>
+    </>
+  )}
   <p><a href="/search">Search the newsletter archive</a></p>
 </Base>

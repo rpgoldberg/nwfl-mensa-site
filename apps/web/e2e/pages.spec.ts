@@ -1,5 +1,5 @@
 // The public pages (W2): About, Join and Governance from content/site/, and
-// the newsletter and minutes from the fixture adapter's made-up data.
+// the minutes from the fixture adapter's made-up data.
 import { expect, test } from '@playwright/test';
 
 test.describe('About', () => {
@@ -51,23 +51,12 @@ test('About, Officers, Governance, Minutes and Finances share the About subnav',
   await expect(page.getByRole('navigation', { name: 'About the group' })).toHaveCount(0);
 });
 
-// Officers, Finances, Home and the calendar read the API now: live.spec.ts.
+// Officers, Finances, Home and the calendar read the API now: live.spec.ts. News reads the
+// newsletter's issues, and keeps its sample until the API has one: news.spec.ts.
 test.describe('pages still filled from the bundled sample data', () => {
-  for (const path of ['/news', '/minutes']) {
-    test(`${path} says its entries are samples`, async ({ page }) => {
-      await page.goto(path);
-      await expect(page.getByRole('note').filter({ hasText: 'Sample entries' })).toBeVisible();
-    });
-  }
-
-  test('News, the newsletter, shows the current issue, then past issues by year, missing ones honestly', async ({ page }) => {
-    await page.goto('/news');
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('News');
-    await expect(page.getByRole('heading', { level: 2, name: 'October and November 2026' })).toBeVisible();
-    await expect(page.getByRole('heading', { level: 2, name: 'Past issues' })).toBeVisible();
-    await expect(page.getByRole('heading', { level: 3, name: '2026' })).toBeVisible();
-    await expect(page.getByRole('listitem').filter({ hasText: 'June and July 2025' })).toContainText('No copy known');
-    await expect(page.locator('[data-source="pipeline"]').first()).toBeVisible();
+  test('/minutes says its entries are samples', async ({ page }) => {
+    await page.goto('/minutes');
+    await expect(page.getByRole('note').filter({ hasText: 'Sample entries' })).toBeVisible();
   });
 
   test('Minutes lists meetings newest first, each at its date anchor, with attendance by office', async ({ page }) => {

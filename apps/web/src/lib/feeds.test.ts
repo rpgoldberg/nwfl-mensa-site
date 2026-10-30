@@ -34,6 +34,7 @@ const live = (over: Partial<LiveData> = {}): LiveData => ({
   treasurerSummaries: () => Promise.resolve([]),
   presidentReport: () => Promise.resolve(undefined),
   announcements: () => Promise.resolve([]),
+  issues: () => Promise.resolve([]),
   file: () => Promise.resolve({ kind: 'not_found' }),
   ...over,
 });

@@ -754,6 +754,8 @@ main > .cols { max-width: none; }
   border: var(--border) solid var(--line-soft); border-radius: var(--radius); background: var(--surface);
 }
 .issues li.missing { border-style: dashed; background: transparent; }
+/* An issue's PDF: a full-size target, like every other link a reader taps. */
+.issues a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
 
 /* Minutes and finances. */
 .meeting { scroll-margin-top: var(--space-4); }
