@@ -14,7 +14,7 @@ import {
   stdinKind,
 } from '../../src/load/load.js';
 import { MAX_ORIGINAL_BYTES } from '../../src/pdf/store.js';
-import { MARKS, NAME, PHONE, bundleJson, stdinOf } from './bundle.js';
+import { MARKS, NAME, PHONE, bundleJson, membersPdf, sha256, stdinOf } from './bundle.js';
 
 const NO_DB = { DATABASE_URL: 'postgres://nobody:nothing@127.0.0.1:1/none' };
 const PRODUCTION = { ...NO_DB, NODE_ENV: 'production' };
@@ -113,6 +113,7 @@ describe('parseBundle', () => {
     expect(bundle.issue).toEqual({ period: '2026-10', volume: 30, number: 5 });
     expect(bundle.office).toBe('editor');
     expect(bundle.approval.reference).toBe('PUBCOPY');
+    expect(bundle.approval.membersSha256).toBe(sha256(bundle.pdfs.members).toString('hex'));
     expect(Buffer.from(bundle.pdfs.public).subarray(0, 5).toString('latin1')).toBe('%PDF-');
     expect(Buffer.from(bundle.pdfs.members).subarray(0, 5).toString('latin1')).toBe('%PDF-');
     expect(bundle.marks).toEqual(MARKS);
@@ -133,6 +134,8 @@ describe('parseBundle', () => {
     ['an approval reference with free text', (j: Record<string, unknown>) => withPath(j, ['approval', 'reference'], 'ok from Pat'), /approval\.reference/],
     ['a marks hash that is not hex', (j: Record<string, unknown>) => withPath(j, ['approval', 'marksSha256'], 'zz'), /approval\.marksSha256/],
     ['an input hash that is not hex', (j: Record<string, unknown>) => withPath(j, ['approval', 'publicInputHash'], 'A'.repeat(64)), /approval\.publicInputHash/],
+    ['a members hash that is not hex', (j: Record<string, unknown>) => withPath(j, ['approval', 'membersSha256'], 'f'.repeat(63)), /approval\.membersSha256/],
+    ['no members hash', (j: Record<string, unknown>) => withPath(j, ['approval', 'membersSha256'], undefined), /approval\.membersSha256/],
     ['an unknown approval field', (j: Record<string, unknown>) => withPath(j, ['approval', 'by'], 'x'), /approval: unknown field by/],
     ['a PDF that is not base64', (j: Record<string, unknown>) => withPath(j, ['pdfs', 'public'], '%PDF-1.7 raw'), /pdfs\.public/],
     ['a PDF that is not a PDF', (j: Record<string, unknown>) => withPath(j, ['pdfs', 'members'], Buffer.from('<html>').toString('base64')), /pdfs\.members.*not a PDF/],
@@ -149,6 +152,13 @@ describe('parseBundle', () => {
     const json = edit(await bundleJson());
     expect(() => parseBundle(json)).toThrow(LoadError);
     expect(() => parseBundle(json)).toThrow(message);
+  });
+
+  it('refuses a members PDF other than the approved one, naming the sha256 it has', async () => {
+    const other = await membersPdf('another render');
+    const json = await bundleJson({ membersSha256: sha256(await membersPdf('2026-10')).toString('hex'), membersPdf: other });
+    expect(() => parseBundle(json)).toThrow(LoadError);
+    expect(() => parseBundle(json)).toThrow(`the members PDF is not the approved one: its sha256 is ${sha256(other).toString('hex')}`);
   });
 
   it('refuses more than 1000 marks', async () => {

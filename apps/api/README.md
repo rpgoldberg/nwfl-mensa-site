@@ -169,13 +169,14 @@ self_breakglass reason that names the approval tag and both hashes.
 
 The bundle is JSON: `format` (`nwfl-issue/1`), `issue` (`period` YYYY-MM,
 `volume`, `number`), `office` (a slug), `approval` (`reference` such as
-`PUBCOPY`, `marksSha256`, `publicInputHash`), `pdfs` (`public`, `members`,
-base64, 10 MiB each at most) and `marks` (`quote`, `category`). It is
-refused, with nothing applied, when:
+`PUBCOPY`, `marksSha256`, `publicInputHash`, `membersSha256`), `pdfs`
+(`public`, `members`, base64, 10 MiB each at most) and `marks` (`quote`,
+`category`). It is refused, with nothing applied, when:
 
 - it has no marks, or a mark's category is not a personal-data category;
 - the marks' hash is not `approval.marksSha256` (`marksSha256` in
-  `src/load/load.ts`);
+  `src/load/load.ts`), or the members PDF's sha256 is not
+  `approval.membersSha256`;
 - a mark's quote is in the text layer of neither PDF (named by its place in
   the list, never its text);
 - the public copy's input hash, computed in the database, is not

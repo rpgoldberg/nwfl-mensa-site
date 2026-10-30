@@ -116,7 +116,7 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       ]);
     });
 
-    it('is approved by the loader as self_breakglass, the reason naming the approval, the marks hash and the public input hash', async () => {
+    it('is approved by the loader as self_breakglass, the reason naming the approval, the marks hash, the public input hash and the members sha256', async () => {
       const loaded = await loading;
       const row = (
         await api.pool.query<{ approved_by_sub: string; approval_kind: string; approval_reason: string; public_ast: unknown; content_hash: Buffer | null }>(
@@ -128,7 +128,9 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       expect(row.approval_kind).toBe('self_breakglass');
       expect(row.approval_reason).toContain('PUBCOPY');
       expect(row.approval_reason).toContain(marksSha256(MARKS));
-      expect(row.approval_reason).toContain(publicInputHash(pub, MARKS));
+      expect(row.approval_reason).toBe(
+        `Issue loader, approved as PUBCOPY: marks sha256 ${marksSha256(MARKS)}, public inputHash ${publicInputHash(pub, MARKS)}, members sha256 ${sha256(members).toString('hex')}`,
+      );
       expect(row.public_ast).toEqual({ blocks: [] });
       expect(row.content_hash?.length).toBe(32);
     });

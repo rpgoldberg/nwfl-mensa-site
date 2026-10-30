@@ -91,7 +91,7 @@ export interface Bundle {
   issue: Issue;
   /** The slug of the office the issue is posted as. */
   office: string;
-  approval: { reference: string; marksSha256: string; publicInputHash: string };
+  approval: { reference: string; marksSha256: string; publicInputHash: string; membersSha256: string };
   pdfs: { public: Uint8Array; members: Uint8Array };
   marks: Mark[];
 }
@@ -207,17 +207,21 @@ export function parseBundle(input: unknown): Bundle {
   const office = matching(own(json, 'office'), /^[a-z0-9][a-z0-9-]{0,62}$/, 'office', "an office's slug");
 
   const approvalJson = object(own(json, 'approval'), 'approval');
-  known(approvalJson, 'approval', ['reference', 'marksSha256', 'publicInputHash']);
+  known(approvalJson, 'approval', ['reference', 'marksSha256', 'publicInputHash', 'membersSha256']);
   const approval = {
     // A reply tag (PUBCOPY, ML-H7): no free text, so no name.
     reference: matching(own(approvalJson, 'reference'), /^[A-Z][A-Z0-9-]{1,39}$/, 'approval.reference', 'a reply tag: capital letters, digits and hyphens'),
     marksSha256: matching(own(approvalJson, 'marksSha256'), HEX64, 'approval.marksSha256', '64 lower-case hex digits'),
     publicInputHash: matching(own(approvalJson, 'publicInputHash'), HEX64, 'approval.publicInputHash', '64 lower-case hex digits'),
+    // The members PDF has no copy hash to approve: its own sha256 binds it.
+    membersSha256: matching(own(approvalJson, 'membersSha256'), HEX64, 'approval.membersSha256', '64 lower-case hex digits'),
   };
 
   const pdfsJson = object(own(json, 'pdfs'), 'pdfs');
   known(pdfsJson, 'pdfs', ['public', 'members']);
   const pdfs = { public: pdf(own(pdfsJson, 'public'), 'pdfs.public'), members: pdf(own(pdfsJson, 'members'), 'pdfs.members') };
+  const members = sha256(pdfs.members).toString('hex');
+  if (members !== approval.membersSha256) throw new LoadError(`the members PDF is not the approved one: its sha256 is ${members}`);
 
   const marks = marksOf(own(json, 'marks'));
   const computed = marksSha256(marks);
@@ -249,6 +253,10 @@ async function readCapped(chunks: Stdin['chunks']): Promise<Buffer> {
 const LOADER_CALLER: Caller = Object.freeze({ kind: 'anonymous', subject: LOADER, groups: Object.freeze([]), scopes: Object.freeze([]), audience: 'public' });
 const FILE_AUDIENCES = ['public', 'members'] as const;
 const sha256 = (bytes: Uint8Array): Buffer => createHash('sha256').update(bytes).digest();
+
+/** The self_breakglass reason: the operator's approval reference and the three hashes approved with it. */
+const approvalReason = (approval: Bundle['approval']): string =>
+  `Issue loader, approved as ${approval.reference}: marks sha256 ${approval.marksSha256}, public inputHash ${approval.publicInputHash}, members sha256 ${approval.membersSha256}`;
 
 interface Existing {
   id: string;
@@ -336,7 +344,7 @@ async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<
     toState: 'ready',
     actingOfficeId: office.id,
   });
-  const reason = `Issue loader, approved as ${bundle.approval.reference}: marks sha256 ${bundle.approval.marksSha256}, public inputHash ${computed}`;
+  const reason = approvalReason(bundle.approval);
   await applyApproval(client, LOADER_CALLER, { id: itemId, live_version_id: null }, version, { kind: 'self_breakglass', reason });
   return { status: 'loaded', itemId, publicFileId: ids.public, membersFileId: ids.members, marks: bundle.marks.length };
 }

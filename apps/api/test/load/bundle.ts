@@ -44,6 +44,7 @@ export interface BundleOptions {
   /** Overrides the approved hashes (by default they are the bundle's own). */
   marksSha256?: string;
   publicInputHash?: string;
+  membersSha256?: string;
 }
 
 /** A bundle as the loader reads it from stdin (JSON, PDFs in base64), approved for its own marks and public copy. */
@@ -60,6 +61,7 @@ export async function bundleJson(options: BundleOptions = {}): Promise<Record<st
       reference: options.reference ?? 'PUBCOPY',
       marksSha256: options.marksSha256 ?? marksSha256(marks),
       publicInputHash: options.publicInputHash ?? publicInputHash(pub, marks),
+      membersSha256: options.membersSha256 ?? sha256(members).toString('hex'),
     },
     pdfs: { public: Buffer.from(pub).toString('base64'), members: Buffer.from(members).toString('base64') },
     marks: marks.map((mark) => ({ ...mark })),
