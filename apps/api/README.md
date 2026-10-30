@@ -157,6 +157,37 @@ people). A path inside the repository is refused, as are a member's home and
 any unknown field. It runs in one transaction, is idempotent, records each
 row in `audit_event`, and prints counts only.
 
+## Loading a newsletter issue
+
+    node dist/load/cli.js -        # the bundle on stdin, never a path
+
+One issue becomes one public DOCUMENT item, `Pensa Mensa, October-November
+2026` with `Volume 30, Number 5` as its summary (slug `pensa-mensa-2026-10`),
+holding a public PDF and a members PDF. The public is told "not found" for
+the members file. The writer and approver is `system:issue-loader`, with a
+self_breakglass reason that names the approval tag and both hashes.
+
+The bundle is JSON: `format` (`nwfl-issue/1`), `issue` (`period` YYYY-MM,
+`volume`, `number`), `office` (a slug), `approval` (`reference` such as
+`PUBCOPY`, `marksSha256`, `publicInputHash`), `pdfs` (`public`, `members`,
+base64, 10 MiB each at most) and `marks` (`quote`, `category`). It is
+refused, with nothing applied, when:
+
+- it has no marks, or a mark's category is not a personal-data category;
+- the marks' hash is not `approval.marksSha256` (`marksSha256` in
+  `src/load/load.ts`);
+- the public copy's input hash, computed in the database, is not
+  `approval.publicInputHash`. The refusal prints the computed hash.
+
+With `NODE_ENV=production` (the image), stdin must be a pipe or a socket. A
+second run of the same bundle reports `unchanged`. A different bundle for an
+issue already loaded is refused. The command prints ids and counts only.
+
+Known gap: the marks quote the PDFs, not the item's own text, so the lens
+(`src/redaction/render.ts`) withholds the item from the public and members.
+Both get "not found" until the API decides how a document's marks anchor in
+its files. `test/load/load.test.ts` pins this.
+
 ## Schema
 
 Raw SQL in `migrations/NNNN_*.sql`, applied by `scripts/migrate.sh` (ported
