@@ -29,9 +29,13 @@
 //     public copy whose inputs (store.ts inputHash: the original's sha256,
 //     the passages the public policy redacts, the image action, the engine
 //     version) are not the approved ones.
+//   - The marks are file marks (0020): each is anchored in the PDFs whose
+//     text layer holds its quote (redaction/file-marks.ts), so the lens shows
+//     the issue while the PDF engine withholds the passages. A quote in
+//     neither PDF is refused (fail closed), named by its place, not its text.
 //   - The writer is system:issue-loader, with no groups: pdf_original_put
-//     (0015) and redaction_mark_add (0014) accept the version's writer, so
-//     no officer's claim is ever made or audited. The approval is
+//     (0015) and redaction_mark_add_file (0020) accept the version's writer,
+//     so no officer's claim is ever made or audited. The approval is
 //     self_breakglass, its reason naming the operator's approval reference,
 //     the marks hash and the public input hash; it goes through the
 //     workflow's own ready and approval writes (content/workflow.ts), so the
@@ -43,13 +47,9 @@
 //     not write, is refused: the loader never revises an issue.
 //   - It prints ids and counts only, never a quote, and a driver error by
 //     its code only.
-//
-// KNOWN CONFLICT (reported, not bypassed): the lens (redaction/render.ts,
-// hidden) drops an item for every audience that redacts one of its passage
-// marks when the mark's quote is not in the version's own text. These marks
-// quote the PDFs and the body is empty, so until the API decides how a
-// document's marks anchor in its files, the public and members are given
-// NOT_FOUND for both files (fail closed). test/load/load.test.ts pins it.
+//   - Anchoring reads the stored originals as officers do
+//     (pdf_original_read): while the officers' policy does not show every
+//     category, the load fails and nothing is applied.
 // ============================================================================
 import { createHash, randomUUID } from 'node:crypto';
 import { recordAudit } from '../audit/audit.js';
@@ -59,6 +59,7 @@ import { type VersionRow, addEditor, applyApproval, readyVersion } from '../cont
 import { type Db, type Env, createPool } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import { MAX_ORIGINAL_BYTES, inputsFor, storeOriginal } from '../pdf/store.js';
+import { FileMarkError, addFileMarks } from '../redaction/file-marks.js';
 
 export class LoadError extends Error {
   override name = 'LoadError';
@@ -313,11 +314,11 @@ async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<
     );
     await recordAudit(client, LOADER_CALLER, { ...common, action: 'file_added', subjectKind: 'stored_file', subjectId: ids[audience], payload: { audience } });
   }
-  // As the version's writer, with no groups (0015 pdf_original_put, 0014 redaction_mark_add).
+  // As the version's writer, with no groups (0015 pdf_original_put, 0020 redaction_mark_add_file).
   for (const audience of FILE_AUDIENCES) await storeOriginal(client, { fileId: ids[audience], bytes: bundle.pdfs[audience], sub: LOADER, groups: [] });
-  for (const mark of bundle.marks) {
-    await client.query(`SELECT 1 FROM redaction_mark_add('content_item', $1, 'body', $2, $3, $4, '{}', NULL)`, [itemId, mark.quote, mark.category, LOADER]);
-  }
+  await addFileMarks(client, { itemId, marks: bundle.marks, sub: LOADER, groups: [] }).catch((error: unknown) => {
+    throw error instanceof FileMarkError ? new LoadError(error.message) : error;
+  });
 
   // What the public will be given, from the policy and the marks as they now stand in this transaction.
   const inputs = await inputsFor(client, ids.public, 'public');

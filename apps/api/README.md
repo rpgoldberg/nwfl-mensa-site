@@ -176,6 +176,8 @@ refused, with nothing applied, when:
 - it has no marks, or a mark's category is not a personal-data category;
 - the marks' hash is not `approval.marksSha256` (`marksSha256` in
   `src/load/load.ts`);
+- a mark's quote is in the text layer of neither PDF (named by its place in
+  the list, never its text);
 - the public copy's input hash, computed in the database, is not
   `approval.publicInputHash`. The refusal prints the computed hash.
 
@@ -183,10 +185,13 @@ With `NODE_ENV=production` (the image), stdin must be a pipe or a socket. A
 second run of the same bundle reports `unchanged`. A different bundle for an
 issue already loaded is refused. The command prints ids and counts only.
 
-Known gap: the marks quote the PDFs, not the item's own text, so the lens
-(`src/redaction/render.ts`) withholds the item from the public and members.
-Both get "not found" until the API decides how a document's marks anchor in
-its files. `test/load/load.test.ts` pins this.
+The marks are file marks (`0020_file_marks.sql`): each is anchored in the
+PDFs whose text layer holds its quote, so the issue is listed for everyone
+while the PDF engine withholds the marked passages. The public gets the
+redacted public copy, members a members copy without home addresses, and
+officers the originals. Anchoring reads the originals as officers do, so the
+load fails, with nothing applied, while the officers' policy hides or
+redacts any category.
 
 ## Schema
 

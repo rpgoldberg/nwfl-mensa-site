@@ -1,9 +1,10 @@
 // MLOGIN S3, the issue loader against a migrated database and the real API:
 // one public-visibility DOCUMENT item, written and approved by
 // system:issue-loader, with a public file and a members file. The public gets
-// NOT_FOUND for the members file, and the store holds only a redacted copy of
-// the public one for it; for a member, a copy without home addresses; an
-// officer gets the originals. (The lens conflict is pinned below.)
+// NOT_FOUND for the members file and, through ReadFile, a redacted copy of the
+// public one; a member a copy without home addresses; an officer the
+// originals. Its marks are file marks (0020), anchored in both PDFs, so the
+// issue is listed for everyone.
 // A repeated run changes nothing, and each database-side refusal leaves
 // nothing behind. Every person here is made up.
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -48,7 +49,7 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
   };
   /** Row counts of every table a load writes. */
   const counts = async (): Promise<Record<string, number>> => {
-    const tables = ['content_item', 'content_version', 'content_version_editor', 'stored_file', 'pdf_original', 'redaction_mark', 'audit_event', 'publication_ledger', 'pdf_regen'];
+    const tables = ['content_item', 'content_version', 'content_version_editor', 'stored_file', 'pdf_original', 'redaction_mark', 'redaction_mark_anchor', 'audit_event', 'publication_ledger', 'pdf_regen'];
     const out: Record<string, number> = {};
     for (const table of tables) out[table] = Number((await api.pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${table}`)).rows[0]!.n);
     return out;
@@ -163,8 +164,19 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
         await api.pool.query(`SELECT field, quote, category, status, created_by_sub FROM redaction_mark WHERE content_item_id = $1 ORDER BY quote`, [loaded.itemId])
       ).rows;
       expect(marks).toEqual(
-        [...MARKS].sort((a, b) => (a.quote < b.quote ? -1 : 1)).map((mark) => ({ field: 'body', quote: mark.quote, category: mark.category, status: 'active', created_by_sub: LOADER })),
+        [...MARKS].sort((a, b) => (a.quote < b.quote ? -1 : 1)).map((mark) => ({ field: 'file', quote: mark.quote, category: mark.category, status: 'active', created_by_sub: LOADER })),
       );
+    });
+
+    it('anchors each mark in the PDFs whose text layer holds its quote: both files for every synthetic mark', async () => {
+      const loaded = await loading;
+      const { rows } = await api.pool.query<{ quote: string; files: string[] }>(
+        `SELECT m.quote, array_agg(a.file_id::text ORDER BY a.file_id) AS files FROM redaction_mark m
+           LEFT JOIN redaction_mark_anchor a ON a.mark_id = m.id WHERE m.content_item_id = $1 GROUP BY m.quote ORDER BY m.quote`,
+        [loaded.itemId],
+      );
+      const both = [loaded.publicFileId, loaded.membersFileId].sort();
+      expect(rows).toEqual([...MARKS].map((mark) => mark.quote).sort().map((quote) => ({ quote, files: both })));
     });
 
     it('audits every step as the system, with no groups, and never writes a marked quote to the audit log', async () => {
@@ -252,36 +264,32 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       for (const shown of [NAME, PHONE, EMAIL, MEMBERS_ONLY, KEPT]) expect(text).toContain(shown);
     }, 60_000);
 
-    // KNOWN CONFLICT, reported to the orchestrator (MLOGIN S3): the lens (redaction/render.ts, hidden)
-    // drops an item for every audience that redacts one of its passage marks when that mark's quote is
-    // not found in the version's own text. A loaded issue's marks quote its PDFs, and its body is
-    // empty, so the public and members are given NOT_FOUND for both files, and the issue is missing
-    // from their published lists. Fail closed: nobody is given anything they should not have. When the
-    // API decides how a document's marks anchor in its files, this test fails and the two below pass.
-    it('KNOWN CONFLICT: ReadFile and the published list withhold the issue from the public and members, because its marks are not in its text', async () => {
+    it('lists the issue for the public and members, and shows its item: its file marks are anchored in its PDFs (0020)', async () => {
       const loaded = await loading;
       const version = (await api.pool.query<{ v: string }>(`SELECT live_version_id AS v FROM content_item WHERE id = $1`, [loaded.itemId])).rows[0]!.v;
-      for (const [audience, hidden] of [['public', true], ['members', true], ['officers', false]] as const) {
-        const lens = await loadLens(api.pool, audience, { items: [loaded.itemId], versions: [version] });
-        expect(lens.hidden([subjectKey('content_item', loaded.itemId)], version), audience).toBe(hidden);
+      for (const audience of ['public', 'members', 'officers']) {
+        const lens = await loadLens(api.pool, audience, { items: [loaded.itemId], versions: [version] }, { uniform: true });
+        expect(lens.hidden([subjectKey('content_item', loaded.itemId)], version), audience).toBe(false);
       }
-      const missing = await read('00000000-0000-4000-8000-000000000000');
-      expect(await read(loaded.publicFileId)).toEqual(missing);
-      expect(await read(loaded.publicFileId, MEMBER)).toEqual(missing);
-      expect(await read(loaded.membersFileId, MEMBER)).toEqual(missing);
-      const listed = await api.client(ContentService).listPublishedItems({});
-      expect(listed.items.map((item) => item.id)).not.toContain(loaded.itemId);
+      for (const who of [{}, MEMBER]) {
+        const listed = await api.client(ContentService).listPublishedItems({}, who);
+        expect(listed.items.map((item) => item.id)).toContain(loaded.itemId);
+      }
     });
 
-    it.fails('(blocked by the conflict above) ReadFile gives the public the redacted copy of the public file', async () => {
+    it('gives the public, through ReadFile, the redacted copy of the public file', async () => {
       const loaded = await loading;
       expect((await pdfOf(loaded.publicFileId)).equals(await storedPdf(loaded.publicFileId, 'public'))).toBe(true);
-    });
+    }, 60_000);
 
-    it.fails('(blocked by the conflict above) ReadFile gives a member the copy of the members file without home addresses', async () => {
+    it('gives a member, through ReadFile, the copy of the members file without home addresses, and the public copy of the public file', async () => {
       const loaded = await loading;
       expect((await pdfOf(loaded.membersFileId, MEMBER)).equals(await storedPdf(loaded.membersFileId, 'members'))).toBe(true);
-    });
+      const text = await extractAll(await pdfOf(loaded.membersFileId, MEMBER));
+      expect(text).not.toContain(ADDRESS);
+      expect(text).toContain(MEMBERS_ONLY);
+      expect((await pdfOf(loaded.publicFileId, MEMBER)).equals(await storedPdf(loaded.publicFileId, 'members'))).toBe(true);
+    }, 60_000);
   });
 
   describe('a repeated run', () => {
@@ -331,6 +339,15 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       await refused({ publicPdf: pub, membersPdf: members, marks: MARKS.slice(1) }, /already loaded.*differ/);
     });
 
+    it('refuses a mark whose quote is in the text layer of neither PDF (fail closed), without repeating the quote', async () => {
+      const marks = [...MARKS, { quote: 'Ysolde Pemberton', category: 'member_name' as const }];
+      await refused({ period: '2026-04', marks }, /marks\[4\]: the quote is not in the text layer of any of the item's PDFs/);
+      const error = await applyBundle(api.pool, parseBundle(await bundleJson({ period: '2026-04', marks }))).catch((caught: Error) => caught);
+      expect(error).toBeInstanceOf(LoadError);
+      expect((error as Error).message).not.toContain('Ysolde');
+      expect((await api.pool.query(`SELECT 1 FROM content_item WHERE slug = 'pensa-mensa-2026-04'`)).rowCount).toBe(0);
+    });
+
     it("refuses a slug that holds someone else's item", async () => {
       await api.pool.query(`INSERT INTO content_item (slug, kind, office_id) VALUES ('pensa-mensa-2025-08', 'document', $1)`, [office]);
       await refused({ period: '2025-08' }, /pensa-mensa-2025-08 already exists and was not written by the loader/);
@@ -366,6 +383,16 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       await api.pool.query(`SELECT redaction_propose('nwflorida', 'public', 'member_email', 'hide', 'sub-officer', ARRAY['nwfl-officers'], NULL)`);
       const before = await counts();
       await expect(load({ period: '2026-04' })).rejects.toThrow(/public copy's inputs are not the approved ones: computed none/);
+      expect(await counts()).toEqual(before);
+    });
+
+    it('fails, nothing applied, when the officers policy no longer shows everything: the originals cannot be read to anchor the marks', async () => {
+      await api.pool.query(`SELECT redaction_propose('nwflorida', 'officers', 'member_phone', 'redact', 'sub-officer', ARRAY['nwfl-officers'], NULL)`);
+      const before = await counts();
+      const lines: string[] = [];
+      const json = JSON.stringify(await bundleJson({ period: '2026-03' }));
+      expect(await runLoad(['-'], { DATABASE_URL: urlFor(APP, APP_PW, database) }, stdinOf(json), (line) => lines.push(line))).toBe(1);
+      expect(lines).toEqual(['load failed, nothing applied: 42501']);
       expect(await counts()).toEqual(before);
     });
   });
