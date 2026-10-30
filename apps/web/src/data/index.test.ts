@@ -17,7 +17,7 @@ describe('the data the pages read', () => {
   it('reads the API when API_URL is set', () => {
     const live = liveFromEnv({ API_URL: 'http://127.0.0.1:1' }, { publicOnly: false, log: () => {} });
     expect(live).toBeDefined();
-    expect(Object.keys(live!).sort()).toEqual(['announcements', 'event', 'events', 'file', 'offices', 'presidentReport', 'treasurerSummaries']);
+    expect(Object.keys(live!).sort()).toEqual(['announcements', 'event', 'events', 'file', 'issues', 'offices', 'presidentReport', 'treasurerSummaries']);
   });
 
   it('answers every read as unavailable when API_URL is set wrongly, and says why once, at start', async () => {

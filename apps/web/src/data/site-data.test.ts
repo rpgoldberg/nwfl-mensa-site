@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fixtureData } from './fixtures';
-import { balanced, currentIssue, issuesByYear, rosterView } from './site-data';
+import { type Issue, balanced, currentIssue, issueSummary, issuesByYear, newsIssues, rosterView } from './site-data';
 
 describe('the fixture adapter (made-up data until the API lands)', () => {
   it('says it is sample data, so the pages can say so too', () => {
@@ -72,6 +72,26 @@ describe('issues', () => {
       ['2026', ['2026-08']],
       ['2025', ['2025-12', '2025-06']],
     ]);
+  });
+
+  it('gives an issue its summary as the API wrote it, or the bundled volume and number, or nothing', () => {
+    expect(issueSummary({ period: '2026-10', label: 'Pensa Mensa, October-November 2026', summary: 'Volume 30, Number [withheld]', source: 'pipeline' })).toBe('Volume 30, Number [withheld]');
+    expect(issueSummary({ period: '2026-10', label: 'x', summary: '', volume: 30, number: 5, source: 'pipeline' })).toBe('');
+    expect(issueSummary(issues[1]!)).toBe('Volume 30, Number 5');
+    expect(issueSummary(issues[3]!)).toBe('');
+  });
+});
+
+describe('newsIssues (/news)', () => {
+  const live: Issue[] = [{ period: '2026-10', label: 'Pensa Mensa, October-November 2026', summary: 'Volume 30, Number 5', pdf: '/documents/f0000000-0000-4000-8000-000000000010.pdf', source: 'pipeline' }];
+  const bundled: Issue[] = [{ period: '2026-08', label: 'August and September 2026', volume: 30, number: 4, source: 'pipeline' }];
+
+  it('lists the live issues once there is one, and nothing bundled beside them', () => {
+    expect(newsIssues(live, bundled)).toEqual({ issues: live, sample: false });
+  });
+
+  it('keeps the bundled sample while the API has no issue', () => {
+    expect(newsIssues([], bundled)).toEqual({ issues: bundled, sample: true });
   });
 });
 

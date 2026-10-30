@@ -43,3 +43,26 @@ export const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', '
 export function monthLabel(month: string): string {
   return `${MONTHS[Number(month.slice(5)) - 1]} ${month.slice(0, 4)}`;
 }
+
+/**
+ * The newsletter, as the issue loader publishes it: each issue one public DOCUMENT holding a public
+ * PDF and a members PDF. api.mjs sends each members file in the list too, as a buggy API might, and
+ * every file's hash and size: the site must show none of them. Newest issue first, as /news lists
+ * them; the API's own order is by approval, and the August issue was approved last.
+ */
+export const NEWSLETTER = {
+  issues: [
+    { title: 'Pensa Mensa, October-November 2026', summary: 'Volume 30, Number 5', id: 'd0c00000-0000-4000-8000-000000000010', publicPdf: 'f0000000-0000-4000-8000-000000000010', membersPdf: 'f1000000-0000-4000-8000-000000000010' },
+    // The API gives this one's id in its slug field, as it does when anything in an item is withheld.
+    { title: 'Pensa Mensa, August-September 2026', summary: 'Volume 30, Number 4', id: 'd0c00000-0000-4000-8000-000000000008', publicPdf: 'f0000000-0000-4000-8000-000000000008', membersPdf: 'f1000000-0000-4000-8000-000000000008' },
+    { title: 'Pensa Mensa, June-July 2026', summary: 'Volume 30, Number 3', id: 'd0c00000-0000-4000-8000-000000000006', publicPdf: 'f0000000-0000-4000-8000-000000000006', membersPdf: 'f1000000-0000-4000-8000-000000000006' },
+    { title: 'Pensa Mensa, February-March 2025', summary: 'Volume 29, Number 2', id: 'd0c00000-0000-4000-8000-000000000002', publicPdf: 'f0000000-0000-4000-8000-000000000002', membersPdf: 'f1000000-0000-4000-8000-000000000002' },
+  ],
+  /** A members item in an issue's shape, sent in full: never listed for the public. */
+  membersOnly: { title: 'Pensa Mensa, April-May 2026', id: 'd0c00000-0000-4000-8000-000000000004', publicPdf: 'f0000000-0000-4000-8000-000000000004', membersPdf: 'f1000000-0000-4000-8000-000000000004' },
+  /** A public document that is not an issue, with its PDF: not on /news. */
+  other: { title: 'Our bylaws', id: 'd0c00000-0000-4000-8000-0000000000b1', publicPdf: 'f0000000-0000-4000-8000-0000000000b1' },
+  /** The hash every file carries, in hex, and its size in bytes. */
+  sha256Hex: 'ab'.repeat(32),
+  sizeBytes: 987_654,
+};

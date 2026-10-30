@@ -21,6 +21,10 @@ export interface Issue {
   label: string;
   volume?: number;
   number?: number;
+  /** A live issue's summary, as the API gave it ("Volume 30, Number 5"). */
+  summary?: string;
+  /** A live issue's public PDF, /documents/<id>.pdf; never the members file. */
+  pdf?: string;
   /** No copy is known to exist anywhere. */
   missing?: boolean;
   source: ContentSource;
@@ -79,7 +83,18 @@ export function rosterView(offices: readonly Office[]): RosterEntry[] {
   }));
 }
 
-const newestFirst = (a: Issue, b: Issue) => b.period.localeCompare(a.period);
+export const newestFirst = (a: Issue, b: Issue) => b.period.localeCompare(a.period);
+
+/** The line under an issue's name: a live issue's summary as the API wrote it, else the bundled volume and number. */
+export function issueSummary(issue: Issue): string {
+  if (issue.summary !== undefined) return issue.summary;
+  return issue.volume === undefined ? '' : `Volume ${issue.volume}, Number ${issue.number}`;
+}
+
+/** What /news lists: the live issues once there is one; until then the bundled sample, which the page says is one. */
+export function newsIssues(live: readonly Issue[], bundled: readonly Issue[]): { issues: readonly Issue[]; sample: boolean } {
+  return live.length > 0 ? { issues: live, sample: false } : { issues: bundled, sample: true };
+}
 
 /** The newest issue we have a copy of. */
 export function currentIssue(issues: readonly Issue[]): Issue | undefined {

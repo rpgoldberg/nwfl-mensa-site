@@ -133,7 +133,7 @@ function getDown(path: string): Promise<{ status: number; headers: http.Incoming
 }
 
 test('when the API does not answer, each live page says so in plain words, with 503 and no-store, and no error detail', async () => {
-  for (const path of ['/', '/events', '/officers', '/finances', `/events/${BOARD_GAMES}`]) {
+  for (const path of ['/', '/events', '/officers', '/finances', '/news', `/events/${BOARD_GAMES}`]) {
     const res = await getDown(path);
     expect(res.status, path).toBe(503);
     expect(res.headers['cache-control'], path).toBe('no-store');
@@ -146,5 +146,5 @@ test('when the API does not answer, each live page says so in plain words, with 
   expect(feed.headers['cache-control']).toBe('no-store');
   expect(feed.body).toBe('The calendar is temporarily unavailable. Please try again in a few minutes.\n');
   // The pages that never read the API are untouched.
-  for (const path of ['/about', '/join', '/news']) expect((await getDown(path)).status, path).toBe(200);
+  for (const path of ['/about', '/join', '/minutes']) expect((await getDown(path)).status, path).toBe(200);
 });
