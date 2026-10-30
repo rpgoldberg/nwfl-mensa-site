@@ -183,8 +183,10 @@ The bundle is JSON: `format` (`nwfl-issue/1`), `issue` (`period` YYYY-MM,
   `approval.publicInputHash`. The refusal prints the computed hash.
 
 With `NODE_ENV=production` (the image), stdin must be a pipe or a socket. A
-second run of the same bundle reports `unchanged`. A different bundle for an
-issue already loaded is refused. The command prints ids and counts only.
+second run of the same bundle reports `unchanged`. A different bundle, or the
+same one under another approval, is refused for an issue already loaded, and
+so is any run once the issue was edited or withdrawn after loading. The
+command prints ids and counts only.
 
 The marks are file marks (`0020_file_marks.sql`): each is anchored in the
 PDFs whose text layer holds its quote, so the issue is listed for everyone
