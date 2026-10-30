@@ -19,6 +19,8 @@
 // for its kind: 1 h for a site token, 24 h for a machine token, so a leaked
 // token cannot be minted to last for years. A token naming two of our
 // audiences is refused, so one token never works for two clients.
+// A site token's subject is a lowercase UUID, as Authentik's user_uuid sub mode
+// emits it (NA1); any other subject is refused, never normalised.
 // The reason a token fails is never returned to the caller (auth/caller.ts).
 // ============================================================================
 import { type JWTPayload, type JWTVerifyGetKey, decodeJwt, jwtVerify } from 'jose';
@@ -40,6 +42,7 @@ export interface ClientConfig {
 export const ALGORITHMS = ['RS256', 'ES256'];
 const CLOCK_TOLERANCE_SECONDS = 30;
 export const MAX_LIFETIME_SECONDS: Record<ClientKind, number> = { site: 3600, agent: 86_400, verifier: 86_400 };
+const SITE_SUBJECT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 class TokenRefused extends Error {
   override name = 'TokenRefused';
@@ -67,6 +70,8 @@ export function createJwtVerifier(clients: ClientConfig[]): TokenVerifier {
         maxTokenAge: MAX_LIFETIME_SECONDS[client.kind],
       });
       if ((payload.exp as number) - (payload.iat as number) > MAX_LIFETIME_SECONDS[client.kind]) throw new TokenRefused('token lifetime is too long');
+      // jose checks only that sub is present: a list holding one UUID would pass the pattern as text.
+      if (client.kind === 'site' && (typeof payload.sub !== 'string' || !SITE_SUBJECT.test(payload.sub))) throw new TokenRefused('site subject is not a UUID');
       const subject = payload.sub as string;
       if (client.subject !== undefined && subject !== client.subject) throw new TokenRefused('unexpected subject');
       const scopes = typeof payload['scope'] === 'string' ? payload['scope'].split(' ').filter((scope) => scope !== '') : [];
