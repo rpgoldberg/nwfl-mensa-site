@@ -104,6 +104,7 @@ describe.skipIf(!live)('file marks (0020)', () => {
     await documentItem('lost', 'Lost anchor', { public: [`Call ${NAME}.`] });
     await documentItem('old', 'Body-marked flyer', { public: [`Call ${NAME}.`] });
     await documentItem('unstored', 'Not stored', {}, true);
+    await documentItem('mixed', 'Mixed flyer', { public: [`Call ${NAME}.`] }, true);
   }, 60_000);
 
   afterAll(async () => {
@@ -127,6 +128,22 @@ describe.skipIf(!live)('file marks (0020)', () => {
       const flyer = items['flyer']!;
       expect(await addFile(flyer.item, NAME, 'member_name', [])).toMatch(/^22023: .*the files its quote is found in/);
       expect(await addFile(flyer.item, NAME, 'member_name', [items['other']!.files['public']!])).toMatch(/^22023: .*own item/);
+    });
+
+    it('anchors only in a stored PDF and only a file mark, for every role: a PDF row of the item with no original, or a text mark, is refused', async () => {
+      const mixed = items['mixed']!;
+      const unstored = (await api.pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1 AND object_key = 'k-mixed-unstored'`, [mixed.version])).rows[0]!.id;
+      expect(await addFile(mixed.item, NAME, 'member_name', [unstored])).toMatch(/^22023: .*own item/);
+      expect(await addFile(mixed.item, NAME, 'member_name', [mixed.files['public']!, unstored])).toMatch(/^22023: .*own item/);
+      expect(await marksOn(mixed.item)).toBe(0);
+      const title = await api.pool.query<{ id: string }>(`SELECT (redaction_mark_add('content_item', $1, 'title', 'Mixed flyer', 'member_name', $2, $3, NULL)).id`, [
+        mixed.item,
+        STORER.sub,
+        STORER.groups,
+      ]);
+      await asOwner(async (owner) => {
+        expect(await outcome(`INSERT INTO redaction_mark_anchor (mark_id, file_id) VALUES ($1, $2)`, [title.rows[0]!.id, mixed.files['public']], owner)).toMatch(/^22023: .*own item/);
+      });
     });
 
     it("refuses anyone but an officer or the item's writer", async () => {
