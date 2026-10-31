@@ -84,6 +84,13 @@ describe('newSession (R10)', () => {
     expect(newSession({ sub: 's' }, NOW).name).toBe('Member');
   });
 
+  it('refuses a groups claim that is not a list of strings, as the API refuses the token (CF-ISO-0 N3)', () => {
+    for (const groups of ['nwfl-officers', { 0: 'nwfl-officers' }, ['nwfl-members', 42], ['nwfl-officers', null]]) {
+      expect(() => newSession({ sub: 'u', groups }, NOW), JSON.stringify(groups)).toThrow('malformed groups claim');
+    }
+    expect(newSession({ sub: 'u' }, NOW).groups).toEqual([]);
+  });
+
   it('keeps at most 20 groups, so the cookie stays small', () => {
     const many = Array.from({ length: 50 }, (_, i) => `nwfl-office-x${i}`);
     expect(newSession(claims(many), NOW).groups).toHaveLength(20);

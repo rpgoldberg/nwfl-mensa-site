@@ -113,6 +113,13 @@ describe('completeSignIn: the callback', () => {
     expect(await signIn('mensa-nwfl-', ['nwfl-members', 'nwfl-officers'])).toMatchObject({ officer: false, member: false, groups: [] });
   });
 
+  it('refuses a sign-in whose groups claim holds a non-string, as the API would refuse the token (CF-ISO-0 N3)', async () => {
+    const d = deps();
+    vi.mocked(d.oidc.finishSignIn).mockResolvedValueOnce({ claims: { sub: 'user-3', groups: ['nwfl-officers', 7] }, tokens: { access_token: 'a', id_token: 'i' } });
+    const { cookieHeader, state } = await started(d);
+    expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ kind: 'refused', reason: 'failed' });
+  });
+
   it('refuses a callback with no transaction, or one older than ten minutes, as timed out', async () => {
     const d = deps();
     expect(await completeSignIn(d, { url: url({ code: 'c', state: 's' }), cookieHeader: undefined })).toMatchObject({ kind: 'refused', reason: 'expired' });

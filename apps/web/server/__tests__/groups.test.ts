@@ -10,7 +10,7 @@ describe('parseGroupPrefix', () => {
     expect(parseGroupPrefix(undefined)).toBe('nwfl-');
   });
 
-  it.each(['nwfl-', 'mensa-nwfl-', 'mensa-nwflorida-', 'm2-', 'mensa-x9-'])('accepts %s', (prefix) => {
+  it.each(['nwfl-', 'mensa-nwfl-', 'mensa-nwflorida-', 'm2-x-', 'mensa-x9-'])('accepts %s', (prefix) => {
     expect(parseGroupPrefix(prefix)).toBe(prefix);
   });
 
@@ -26,9 +26,15 @@ describe('parseGroupPrefix', () => {
   );
 });
 
+describe('parseGroupPrefix: a family and a chapter (CF-ISO-0 N5)', () => {
+  it.each(['mensa-', 'fc-', 'm2-', 'chapter-'])('refuses the one-word prefix %s, which would read a whole family\'s groups', (prefix) => {
+    expect(() => parseGroupPrefix(prefix)).toThrow('SITE_GROUP_PREFIX must name a family and a chapter (e.g. mensa-nwfl-); only the default nwfl- is one word');
+  });
+});
+
 describe('internalGroups', () => {
   it('with the default prefix, keeps today\'s nwfl- groups and drops every other', () => {
-    expect(internalGroups(['nwfl-members', 'nwfl-officers', 'fc-admins', 'NWFL-OFFICERS', 'mensa-nwfl-officers', 42], 'nwfl-')).toEqual(['nwfl-members', 'nwfl-officers']);
+    expect(internalGroups(['nwfl-members', 'nwfl-officers', 'fc-admins', 'NWFL-OFFICERS', 'mensa-nwfl-officers'], 'nwfl-')).toEqual(['nwfl-members', 'nwfl-officers']);
   });
 
   it('with mensa-nwfl-, renames its groups and drops a bare nwfl- group and another chapter\'s', () => {

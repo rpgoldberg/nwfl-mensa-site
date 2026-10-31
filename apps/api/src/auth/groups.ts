@@ -15,7 +15,8 @@
 //
 // A prefix is checked at startup, strictly: lowercase segments of letters and
 // digits, each starting with a letter, joined by single hyphens and closed by
-// one, at most 32 characters. No segment may be a role word (office, role,
+// one, at most 32 characters, and at least two words (a family and a chapter;
+// only the default nwfl- is one word). No segment may be a role word (office, role,
 // officers, admin...): with nwfl-office- as the prefix, the default prefix's
 // seat group nwfl-office-officers would read as <prefix>officers.
 // ============================================================================
@@ -37,6 +38,10 @@ export function parseGroupPrefix(value: string | undefined): string {
   }
   const word = value.slice(0, -1).split('-').find((segment) => ROLE_WORDS.has(segment));
   if (word !== undefined) throw new Error(`SITE_GROUP_PREFIX must not contain the role word ${word}: <prefix>officers could then be another prefix's group`);
+  // One word (mensa-) would read a whole family's groups (mensa-officers); only today's default is one word.
+  if (value !== DEFAULT_SITE_GROUP_PREFIX && value.split('-').length < 3) {
+    throw new Error('SITE_GROUP_PREFIX must name a family and a chapter (e.g. mensa-nwfl-); only the default nwfl- is one word');
+  }
   return value;
 }
 

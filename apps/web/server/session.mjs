@@ -7,7 +7,7 @@
 // (state, nonce, PKCE verifier) for ten minutes.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readCookie } from './cookies.mjs';
-import { DEFAULT_SITE_GROUP_PREFIX, internalGroups } from './groups.mjs';
+import { DEFAULT_SITE_GROUP_PREFIX, groupsClaim, internalGroups } from './groups.mjs';
 import { SESSION_COOKIE } from './policy.mjs';
 
 export { SESSION_COOKIE };
@@ -93,7 +93,9 @@ function displayName(value) {
  * @returns {Session}
  */
 export function newSession(claims, now, groupPrefix = DEFAULT_SITE_GROUP_PREFIX) {
-  const groups = internalGroups(Array.isArray(claims['groups']) ? claims['groups'] : [], groupPrefix).slice(0, MAX_GROUPS);
+  // A claim that is not a list of strings throws, so the sign-in is refused (flow.ts), as the API refuses
+  // the token. At most 20 are kept, after the rename; the API keeps all, so the web is the stricter side.
+  const groups = internalGroups(groupsClaim(claims['groups']), groupPrefix).slice(0, MAX_GROUPS);
   const officer = groups.includes('nwfl-officers');
   const lifetime = officer ? OFFICER_SECONDS : MEMBER_SECONDS;
   return {
