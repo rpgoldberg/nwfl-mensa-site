@@ -52,7 +52,7 @@ CI for this app is the root's `.github/workflows/web.yml`; it runs when `apps/we
 
 ## Sign-in and sessions
 
-Sign-in needs `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `OIDC_POST_LOGOUT_REDIRECT_URI` and `SESSION_KEY` (`openssl rand -base64 32`); without them the site runs with everyone signed out. In production the issuer must be on `https://login.nwflorida.us`. The provider must use `client_secret_post` and put the `nwfl-` groups in the ID token.
+Sign-in needs `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `OIDC_POST_LOGOUT_REDIRECT_URI` and `SESSION_KEY` (`openssl rand -base64 32`); without them the site runs with everyone signed out. In production the issuer must be on `https://login.nwflorida.us`. The provider must use `client_secret_post` and put the chapter's groups in the ID token. `SITE_GROUP_PREFIX` (default `nwfl-`, e.g. `mensa-nwfl-`) names them; the session keeps only those, by their internal `nwfl-` names (`server/groups.mjs`), and the API must be given the same value. A malformed prefix turns sign-in off.
 
 Sessions and their tokens are held in the server's memory, so **the site runs as one replica until W5a**, which moves them to a shared store behind the API; the server logs `session_store: memory (single replica)` at start. A session is valid only while its record is there: sign-out deletes it, so a copy of the cookie is dead at once, and a restart signs everyone out.
 
