@@ -103,7 +103,7 @@ A bearer token is verified with jose against the JWKS of the client it names
 
 | Client | Env (issuer turns it on) | Caller | Reaches |
 |---|---|---|---|
-| `nwfl-site` | `SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`, `SITE_OIDC_JWKS_URL` | a user: officers by the `nwfl-officers` group, members by `member_account` | every service but the two below |
+| `nwfl-site` | `SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`, `SITE_OIDC_JWKS_URL`, `SITE_GROUP_PREFIX` | a user: officers by the `<prefix>officers` group, members by `member_account` | every service but the two below |
 | `nwfl-agent` | `AGENT_OIDC_*`, `AGENT_SCOPE`, `AGENT_SUBJECT` | the newsletter agent | `NewsletterService` only |
 | `nwfl-verifier` | `VERIFIER_OIDC_*`, `VERIFIER_SCOPE`, `VERIFIER_SUBJECT` | the membership verifier | `MembershipVerifierService` only |
 
@@ -114,6 +114,15 @@ token's groups; an account unverified for 13 months reads as public.
 write handlers. A call that arrived through the edge (its `l5d-client-id` is
 in `EDGE_CLIENT_IDS`) reaches only the agent and verifier services; the
 header never grants anything. With no issuer set, every token is refused.
+
+One deployment serves one chapter (CF-ISO-0). A site token is this chapter's
+only by its issuer and audience (`SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`),
+with no other audience beside ours. Its groups count only under
+`SITE_GROUP_PREFIX` (default `nwfl-`; e.g. `mensa-nwfl-`), renamed to the
+internal `nwfl-<role>` names the code and SQL use (`src/auth/groups.ts`); the
+web takes the same variable. `TENANT` (default `nwflorida`) names the chapter,
+and the API and the worker refuse to start unless the database serves exactly
+that tenant (`src/tenant.ts`).
 
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
