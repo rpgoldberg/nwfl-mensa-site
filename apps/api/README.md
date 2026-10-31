@@ -120,9 +120,13 @@ only by its issuer and audience (`SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`),
 with no other audience beside ours. Its groups count only under
 `SITE_GROUP_PREFIX` (default `nwfl-`; e.g. `mensa-nwfl-`), renamed to the
 internal `nwfl-<role>` names the code and SQL use (`src/auth/groups.ts`); the
-web takes the same variable. `TENANT` (default `nwflorida`) names the chapter,
-and the API and the worker refuse to start unless the database serves exactly
-that tenant (`src/tenant.ts`).
+web takes the same variable. `TENANT` (default `nwflorida`) names the chapter
+(`src/tenant.ts`). Both processes check it in the background. While the
+database is down the API runs but reports not ready (`/readyz` shows
+`tenant: unverified`) and the worker claims no job. Each failed attempt logs a
+plain line and retries, waiting 1 s at first and doubling up to 15 s. Only a
+positive mismatch (another tenant's row, no row, or several rows) logs the
+reason and exits 1.
 
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
@@ -204,6 +208,22 @@ redacted public copy, members a members copy without home addresses, and
 officers the originals. Anchoring reads the originals as officers do, so the
 load fails, with nothing applied, while the officers' policy hides or
 redacts any category.
+
+### Untrusted PDFs (UNTRUSTED-PDF-GATE)
+
+The loader is the only way a PDF reaches the engine, and Ross runs it by
+hand. An officer upload, the archive import or any new RPC that stores an
+original waits for two things: the engine as a sidecar with its own uid and
+no secrets, and the output gate re-run outside the engine on every copy.
+`test/gates/untrusted-pdf.test.ts` runs in the normal suite and enforces this.
+It fails when anything but `src/load/load.ts` calls `storeOriginal`, when
+anything but `src/pdf/store.ts` calls `pdf_original_put`, or when a
+migration grants EXECUTE on `pdf_original_put` to a role other than `nwfl`.
+It also fails when an RPC's request message carries a `bytes` field, even in
+a nested message (`ApproveRequest.content_hash`, a hash, is the one frozen
+exemption). `UNTRUSTED_PDF_READY` in `src/pdf/untrusted.ts` lifts the gate,
+and only once the sidecar test and the gate re-run test that its comment
+names exist; setting it to true without them fails too.
 
 ## Schema
 
