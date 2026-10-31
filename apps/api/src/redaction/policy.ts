@@ -9,8 +9,14 @@
 // (redaction/service.ts); the database holds the same rule (0012).
 // ============================================================================
 
-/** The one group this deployment serves (0012's tenant row). Never taken from a caller. */
-export const TENANT = 'nwflorida';
+import { parseTenant } from '../tenant.js';
+
+/**
+ * The one group this deployment serves: TENANT from config, default nwflorida (tenant.ts), checked
+ * against the tenant row at startup (main.ts, worker.ts). Never taken from a caller. Validated to
+ * 0012's pattern, so it is safe where ledger.ts writes it into SQL text.
+ */
+export const TENANT = parseTenant(process.env['TENANT']);
 
 export const AUDIENCES = ['public', 'members', 'officers'] as const;
 export type PolicyAudience = (typeof AUDIENCES)[number];

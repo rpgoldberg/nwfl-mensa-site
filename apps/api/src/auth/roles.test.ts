@@ -3,6 +3,7 @@
 import { Code } from '@connectrpc/connect';
 import { describe, expect, it } from 'vitest';
 import { ANONYMOUS, type Caller } from './caller.js';
+import { internalGroups } from './groups.js';
 import {
   requireContentApprover,
   requireGrantor,
@@ -23,6 +24,22 @@ const treasurer = user('nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer')
 const approver = user('nwfl-members', 'nwfl-membership-approvers');
 const rvc = user('nwfl-affiliates', 'nwfl-role-rvc');
 const member = user('nwfl-members');
+
+describe('rolesOf a chapter caller (CF-ISO-0: SITE_GROUP_PREFIX=mensa-nwfl-)', () => {
+  it('reads every role from the internal names the gate carries for mensa-nwfl- groups', () => {
+    const groups = internalGroups(
+      ['mensa-nwfl-admin', 'mensa-nwfl-webmaster', 'mensa-nwfl-officers', 'mensa-nwfl-membership-approvers', 'mensa-nwfl-affiliates', 'mensa-nwfl-office-editor', 'mensa-nwfl-role-rvc'],
+      'mensa-nwfl-',
+    );
+    expect(rolesOf(user(...groups))).toEqual({ admin: true, webmaster: true, officer: true, membershipApprover: true, affiliate: true, offices: ['editor'], roles: ['rvc'] });
+  });
+
+  it('gives a bare nwfl- token and another chapter\'s nothing', () => {
+    const none = { admin: false, webmaster: false, officer: false, membershipApprover: false, affiliate: false, offices: [], roles: [] };
+    expect(rolesOf(user(...internalGroups(['nwfl-admin', 'nwfl-officers', 'nwfl-office-editor'], 'mensa-nwfl-')))).toEqual(none);
+    expect(rolesOf(user(...internalGroups(['mensa-other-admin', 'mensa-other-officers', 'mensa-other-office-editor'], 'mensa-nwfl-')))).toEqual(none);
+  });
+});
 
 describe('rolesOf', () => {
   it('reads every role from the groups', () => {

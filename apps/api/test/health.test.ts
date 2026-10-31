@@ -35,6 +35,17 @@ describe('health port', () => {
     await app.close();
   });
 
+  it('answers /readyz 503 until the tenant is verified, and names that (CF-ISO-0)', async () => {
+    const gate = { verified: false };
+    const app = buildHealthApp({ readiness: createReadiness(up, { tenant: gate }) });
+    const before = await app.inject({ method: 'GET', url: '/readyz' });
+    expect([before.statusCode, before.json()]).toEqual([503, { status: 'not_ready', db: 'ok', tenant: 'unverified' }]);
+    gate.verified = true;
+    const after = await app.inject({ method: 'GET', url: '/readyz' });
+    expect([after.statusCode, after.json()]).toEqual([200, { status: 'ready', db: 'ok', tenant: 'verified' }]);
+    await app.close();
+  });
+
   it('answers /readyz 503 draining once shutdown has begun', async () => {
     const readiness = createReadiness(up);
     readiness.startDraining();

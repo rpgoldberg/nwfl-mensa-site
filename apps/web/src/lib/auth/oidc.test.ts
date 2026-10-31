@@ -67,6 +67,7 @@ const config = (): AuthConfig => ({
   postLogoutRedirectUri: 'https://localhost:8443/signed-out',
   scope: 'openid profile',
   allowInsecure: true,
+  groupPrefix: 'nwfl-',
 });
 
 beforeEach(() => {

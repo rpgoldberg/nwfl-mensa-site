@@ -12,6 +12,7 @@ import { createPool, describeTarget } from './db/pool.js';
 import { createStructuredLogger } from './platform/logger.js';
 import { startTelemetry } from './platform/telemetry.js';
 import { startServer } from './server.js';
+import { refuseToStart, startTenantGate, tenantRows } from './tenant.js';
 
 const config = readConfig();
 const auth = readAuthConfig(process.env);
@@ -22,7 +23,16 @@ const pool = createPool(process.env, (fields, message) => logger.warn(fields, me
 // The database target is logged once here, for operators; no endpoint reports it.
 logger.info({ db_target: describeTarget(), service_version: process.env['SERVICE_VERSION'] ?? 'dev' }, 'starting');
 // Which token clients are on, by kind only (a key named token_* is redacted). With none, every token is refused.
-logger.info({ enabled_clients: auth.clients.map((client) => client.kind) }, 'auth');
+logger.info({ enabled_clients: auth.clients.map((client) => client.kind), group_prefix: auth.groupPrefix }, 'auth');
+
+// The chapter this process serves must be the database's one tenant row (CF-ISO-0, tenant.ts). Checked in
+// the background: with the database down the server starts and reports not ready, as before; only a
+// positive mismatch (another row, no row, several) logs the reason and exits 1.
+const tenantGate = startTenantGate(tenantRows(pool), config.tenant, {
+  onRetry: (fields) => logger.warn({ tenant: config.tenant, ...fields }, 'tenant check: the database did not answer; not ready, retrying'),
+  onVerified: () => logger.info({ tenant: config.tenant }, 'tenant verified'),
+  onMismatch: refuseToStart((message) => logger.error({ tenant: config.tenant }, message)),
+});
 
 const server = await startServer({
   host: config.host,
@@ -33,6 +43,8 @@ const server = await startServer({
   drainTimeoutMs: config.drainTimeoutMs,
   verifier: verifierFrom(auth),
   edgeClientIds: auth.edgeClientIds,
+  groupPrefix: auth.groupPrefix,
+  tenantGate,
 });
 
 // The redacted PDF copies are made by the worker process (src/worker.ts), as its own database role.
@@ -45,6 +57,7 @@ const stop = (signal: string): void => {
   // Backstop: if the drain itself wedges, leave anyway, before the kubelet's
   // SIGKILL. unref'd, so it never holds a clean exit open.
   setTimeout(() => process.exit(1), config.drainTimeoutMs + 5_000).unref();
+  tenantGate.stop();
   void server
     .close()
     .then(() => pool.end())

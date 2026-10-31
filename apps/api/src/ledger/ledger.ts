@@ -180,7 +180,7 @@ export async function renderFile(db: Query, fileId: string, audience: Audience, 
   };
   if (inputs === null || stored === undefined) return { output: null, withheld: 0, inputs: { ...base, served: 'not_found' } };
   if (inputs.kind === 'hidden') return { output: null, withheld: 0, inputs: { ...base, served: 'hidden' } };
-  // pdf_original_put stores only bytes whose sha256 is the file's, and an original is never rewritten.
+  // The store (0015) keeps only bytes whose sha256 is the file's, and an original is never rewritten.
   if (inputs.kind === 'original') return { output: stored.sha256, withheld: 0, inputs: { ...base, served: 'original' } };
   const copy = await db.query<{ status: string; sha: Buffer | null }>(`SELECT status, sha256(bytes) AS sha FROM pdf_copy WHERE file_id = $1 AND input_hash = $2`, [
     fileId,

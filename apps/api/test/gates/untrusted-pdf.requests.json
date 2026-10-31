@@ -1,0 +1,1620 @@
+{
+  "ContentService.Approve": {
+    "input": "nwfl.mensa.v1.ApproveRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "content_hash",
+        "number": 2,
+        "type": "bytes",
+        "label": "optional"
+      },
+      {
+        "name": "targets",
+        "number": 3,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.Targets",
+        "fields": [
+          {
+            "name": "website",
+            "number": 1,
+            "type": "bool",
+            "label": "optional"
+          },
+          {
+            "name": "newsletter",
+            "number": 2,
+            "type": "bool",
+            "label": "optional"
+          },
+          {
+            "name": "email",
+            "number": 3,
+            "type": "bool",
+            "label": "optional"
+          }
+        ]
+      },
+      {
+        "name": "edition_id",
+        "number": 4,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "break_glass",
+        "number": 5,
+        "type": "bool",
+        "label": "optional"
+      },
+      {
+        "name": "break_glass_reason",
+        "number": 6,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.CreateItem": {
+    "input": "nwfl.mensa.v1.CreateItemRequest",
+    "fields": [
+      {
+        "name": "kind",
+        "number": 1,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.ContentKind"
+      },
+      {
+        "name": "office_id",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "slug",
+        "number": 3,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "title",
+        "number": 4,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "on_behalf_of",
+        "number": 5,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.FreezeEdition": {
+    "input": "nwfl.mensa.v1.FreezeEditionRequest",
+    "fields": [
+      {
+        "name": "edition_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.GetPublishedItem": {
+    "input": "nwfl.mensa.v1.GetPublishedItemRequest",
+    "fields": [
+      {
+        "name": "slug",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.GetRoster": {
+    "input": "nwfl.mensa.v1.GetRosterRequest",
+    "fields": []
+  },
+  "ContentService.GetWorkingItem": {
+    "input": "nwfl.mensa.v1.GetWorkingItemRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.ListItemHistory": {
+    "input": "nwfl.mensa.v1.ListItemHistoryRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.ListPublishedEditions": {
+    "input": "nwfl.mensa.v1.ListPublishedEditionsRequest",
+    "fields": [
+      {
+        "name": "page_size",
+        "number": 1,
+        "type": "int32",
+        "label": "optional"
+      },
+      {
+        "name": "page_token",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.ListPublishedItems": {
+    "input": "nwfl.mensa.v1.ListPublishedItemsRequest",
+    "fields": [
+      {
+        "name": "kind",
+        "number": 1,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.ContentKind"
+      },
+      {
+        "name": "office_id",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "page_size",
+        "number": 3,
+        "type": "int32",
+        "label": "optional"
+      },
+      {
+        "name": "page_token",
+        "number": 4,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.ListWorkingItems": {
+    "input": "nwfl.mensa.v1.ListWorkingItemsRequest",
+    "fields": [
+      {
+        "name": "states",
+        "number": 1,
+        "type": "enum",
+        "label": "repeated",
+        "message": "nwfl.mensa.v1.ItemState"
+      },
+      {
+        "name": "office_id",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "edition_id",
+        "number": 3,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.MarkReady": {
+    "input": "nwfl.mensa.v1.MarkReadyRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "targets",
+        "number": 2,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.Targets",
+        "fields": [
+          {
+            "name": "website",
+            "number": 1,
+            "type": "bool",
+            "label": "optional"
+          },
+          {
+            "name": "newsletter",
+            "number": 2,
+            "type": "bool",
+            "label": "optional"
+          },
+          {
+            "name": "email",
+            "number": 3,
+            "type": "bool",
+            "label": "optional"
+          }
+        ]
+      },
+      {
+        "name": "edition_id",
+        "number": 3,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "print_as_is",
+        "number": 4,
+        "type": "bool",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.ReadFile": {
+    "input": "nwfl.mensa.v1.ReadFileRequest",
+    "fields": [
+      {
+        "name": "file_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.Restore": {
+    "input": "nwfl.mensa.v1.RestoreRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.SaveDraft": {
+    "input": "nwfl.mensa.v1.SaveDraftRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "title",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "summary",
+        "number": 3,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "visibility",
+        "number": 4,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.ItemVisibility"
+      },
+      {
+        "name": "body_markup",
+        "number": 5,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.SaveEdition": {
+    "input": "nwfl.mensa.v1.SaveEditionRequest",
+    "fields": [
+      {
+        "name": "edition",
+        "number": 1,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.Edition",
+        "fields": [
+          {
+            "name": "id",
+            "number": 1,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "slug",
+            "number": 2,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "volume",
+            "number": 3,
+            "type": "int32",
+            "label": "optional"
+          },
+          {
+            "name": "issue_number",
+            "number": 4,
+            "type": "int32",
+            "label": "optional"
+          },
+          {
+            "name": "title",
+            "number": 5,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "kind",
+            "number": 6,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.EditionKind"
+          },
+          {
+            "name": "period_start",
+            "number": 7,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Date",
+            "fields": [
+              {
+                "name": "year",
+                "number": 1,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "month",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "day",
+                "number": 3,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "period_end",
+            "number": 8,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Date",
+            "fields": [
+              {
+                "name": "year",
+                "number": 1,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "month",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "day",
+                "number": 3,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "calendar_ranges",
+            "number": 9,
+            "type": "message",
+            "label": "repeated",
+            "message": "nwfl.mensa.v1.DateRange",
+            "fields": [
+              {
+                "name": "start",
+                "number": 1,
+                "type": "message",
+                "label": "optional",
+                "message": "nwfl.mensa.v1.Date",
+                "fields": [
+                  {
+                    "name": "year",
+                    "number": 1,
+                    "type": "int32",
+                    "label": "optional"
+                  },
+                  {
+                    "name": "month",
+                    "number": 2,
+                    "type": "int32",
+                    "label": "optional"
+                  },
+                  {
+                    "name": "day",
+                    "number": 3,
+                    "type": "int32",
+                    "label": "optional"
+                  }
+                ]
+              },
+              {
+                "name": "end",
+                "number": 2,
+                "type": "message",
+                "label": "optional",
+                "message": "nwfl.mensa.v1.Date",
+                "fields": [
+                  {
+                    "name": "year",
+                    "number": 1,
+                    "type": "int32",
+                    "label": "optional"
+                  },
+                  {
+                    "name": "month",
+                    "number": 2,
+                    "type": "int32",
+                    "label": "optional"
+                  },
+                  {
+                    "name": "day",
+                    "number": 3,
+                    "type": "int32",
+                    "label": "optional"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "submission_deadline",
+            "number": 10,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Date",
+            "fields": [
+              {
+                "name": "year",
+                "number": 1,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "month",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "day",
+                "number": 3,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "status",
+            "number": 11,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.EditionStatus"
+          },
+          {
+            "name": "frozen_at",
+            "number": 12,
+            "type": "message",
+            "label": "optional",
+            "message": "google.protobuf.Timestamp",
+            "fields": [
+              {
+                "name": "seconds",
+                "number": 1,
+                "type": "int64",
+                "label": "optional"
+              },
+              {
+                "name": "nanos",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "public_pdf_file_id",
+            "number": 13,
+            "type": "string",
+            "label": "optional"
+          }
+        ]
+      }
+    ]
+  },
+  "ContentService.SaveOfficeTerm": {
+    "input": "nwfl.mensa.v1.SaveOfficeTermRequest",
+    "fields": [
+      {
+        "name": "term",
+        "number": 1,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.OfficeTerm",
+        "fields": [
+          {
+            "name": "id",
+            "number": 1,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "office_id",
+            "number": 2,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "holder_display_name",
+            "number": 3,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "starts_on",
+            "number": 4,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Date",
+            "fields": [
+              {
+                "name": "year",
+                "number": 1,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "month",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "day",
+                "number": 3,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "ends_on",
+            "number": 5,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Date",
+            "fields": [
+              {
+                "name": "year",
+                "number": 1,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "month",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "day",
+                "number": 3,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "status",
+            "number": 6,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.TermStatus"
+          }
+        ]
+      }
+    ]
+  },
+  "ContentService.SendBack": {
+    "input": "nwfl.mensa.v1.SendBackRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "note",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.Withdraw": {
+    "input": "nwfl.mensa.v1.WithdrawRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "EventService.GetOccurrence": {
+    "input": "nwfl.mensa.v1.GetOccurrenceRequest",
+    "fields": [
+      {
+        "name": "id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "EventService.ListOccurrences": {
+    "input": "nwfl.mensa.v1.ListOccurrencesRequest",
+    "fields": [
+      {
+        "name": "from",
+        "number": 1,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.Date",
+        "fields": [
+          {
+            "name": "year",
+            "number": 1,
+            "type": "int32",
+            "label": "optional"
+          },
+          {
+            "name": "month",
+            "number": 2,
+            "type": "int32",
+            "label": "optional"
+          },
+          {
+            "name": "day",
+            "number": 3,
+            "type": "int32",
+            "label": "optional"
+          }
+        ]
+      },
+      {
+        "name": "to",
+        "number": 2,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.Date",
+        "fields": [
+          {
+            "name": "year",
+            "number": 1,
+            "type": "int32",
+            "label": "optional"
+          },
+          {
+            "name": "month",
+            "number": 2,
+            "type": "int32",
+            "label": "optional"
+          },
+          {
+            "name": "day",
+            "number": 3,
+            "type": "int32",
+            "label": "optional"
+          }
+        ]
+      },
+      {
+        "name": "areas",
+        "number": 3,
+        "type": "enum",
+        "label": "repeated",
+        "message": "nwfl.mensa.v1.Area"
+      },
+      {
+        "name": "include_cancelled",
+        "number": 4,
+        "type": "bool",
+        "label": "optional"
+      }
+    ]
+  },
+  "EventService.ListSeries": {
+    "input": "nwfl.mensa.v1.ListSeriesRequest",
+    "fields": [
+      {
+        "name": "include_inactive",
+        "number": 1,
+        "type": "bool",
+        "label": "optional"
+      }
+    ]
+  },
+  "EventService.ListVenues": {
+    "input": "nwfl.mensa.v1.ListVenuesRequest",
+    "fields": [
+      {
+        "name": "include_inactive",
+        "number": 1,
+        "type": "bool",
+        "label": "optional"
+      }
+    ]
+  },
+  "EventService.SaveOccurrence": {
+    "input": "nwfl.mensa.v1.SaveOccurrenceRequest",
+    "fields": [
+      {
+        "name": "occurrence",
+        "number": 1,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.EventOccurrence",
+        "fields": [
+          {
+            "name": "id",
+            "number": 1,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "series_id",
+            "number": 2,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "title",
+            "number": 3,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "starts_at",
+            "number": 4,
+            "type": "message",
+            "label": "optional",
+            "message": "google.protobuf.Timestamp",
+            "fields": [
+              {
+                "name": "seconds",
+                "number": 1,
+                "type": "int64",
+                "label": "optional"
+              },
+              {
+                "name": "nanos",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "ends_at",
+            "number": 5,
+            "type": "message",
+            "label": "optional",
+            "message": "google.protobuf.Timestamp",
+            "fields": [
+              {
+                "name": "seconds",
+                "number": 1,
+                "type": "int64",
+                "label": "optional"
+              },
+              {
+                "name": "nanos",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "venue_id",
+            "number": 6,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "venue",
+            "number": 7,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Venue",
+            "fields": [
+              {
+                "name": "id",
+                "number": 1,
+                "type": "string",
+                "label": "optional"
+              },
+              {
+                "name": "kind",
+                "number": 2,
+                "type": "enum",
+                "label": "optional",
+                "message": "nwfl.mensa.v1.VenueKind"
+              },
+              {
+                "name": "name",
+                "number": 3,
+                "type": "string",
+                "label": "optional"
+              },
+              {
+                "name": "business_address",
+                "number": 4,
+                "type": "string",
+                "label": "optional"
+              },
+              {
+                "name": "city",
+                "number": 5,
+                "type": "string",
+                "label": "optional"
+              },
+              {
+                "name": "area",
+                "number": 6,
+                "type": "enum",
+                "label": "optional",
+                "message": "nwfl.mensa.v1.Area"
+              },
+              {
+                "name": "host_office_id",
+                "number": 7,
+                "type": "string",
+                "label": "optional"
+              },
+              {
+                "name": "url",
+                "number": 8,
+                "type": "string",
+                "label": "optional"
+              },
+              {
+                "name": "accessibility_note",
+                "number": 9,
+                "type": "string",
+                "label": "optional"
+              },
+              {
+                "name": "active",
+                "number": 10,
+                "type": "bool",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "status",
+            "number": 8,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.OccurrenceStatus"
+          },
+          {
+            "name": "status_note",
+            "number": 9,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "detail",
+            "number": 10,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "url",
+            "number": 11,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "visibility",
+            "number": 12,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.EventVisibility"
+          },
+          {
+            "name": "details_withheld",
+            "number": 13,
+            "type": "bool",
+            "label": "optional"
+          },
+          {
+            "name": "local_date",
+            "number": 14,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Date",
+            "fields": [
+              {
+                "name": "year",
+                "number": 1,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "month",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "day",
+                "number": 3,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "area",
+            "number": 15,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Area"
+          },
+          {
+            "name": "owner_office_id",
+            "number": 16,
+            "type": "string",
+            "label": "optional"
+          }
+        ]
+      }
+    ]
+  },
+  "EventService.SaveSeries": {
+    "input": "nwfl.mensa.v1.SaveSeriesRequest",
+    "fields": [
+      {
+        "name": "series",
+        "number": 1,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.EventSeries",
+        "fields": [
+          {
+            "name": "id",
+            "number": 1,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "slug",
+            "number": 2,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "title",
+            "number": 3,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "category",
+            "number": 4,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.EventCategory"
+          },
+          {
+            "name": "recurrence",
+            "number": 5,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "cadence_label",
+            "number": 6,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "default_start",
+            "number": 7,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.TimeOfDay",
+            "fields": [
+              {
+                "name": "hours",
+                "number": 1,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "minutes",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          },
+          {
+            "name": "default_duration_minutes",
+            "number": 8,
+            "type": "int32",
+            "label": "optional"
+          },
+          {
+            "name": "default_venue_id",
+            "number": 9,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "area",
+            "number": 10,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Area"
+          },
+          {
+            "name": "host_office_id",
+            "number": 11,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "description",
+            "number": 12,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "visibility",
+            "number": 13,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.EventVisibility"
+          },
+          {
+            "name": "active",
+            "number": 14,
+            "type": "bool",
+            "label": "optional"
+          },
+          {
+            "name": "starts_on",
+            "number": 15,
+            "type": "message",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Date",
+            "fields": [
+              {
+                "name": "year",
+                "number": 1,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "month",
+                "number": 2,
+                "type": "int32",
+                "label": "optional"
+              },
+              {
+                "name": "day",
+                "number": 3,
+                "type": "int32",
+                "label": "optional"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "active",
+        "number": 2,
+        "type": "bool",
+        "label": "proto3_optional"
+      }
+    ]
+  },
+  "EventService.SaveVenue": {
+    "input": "nwfl.mensa.v1.SaveVenueRequest",
+    "fields": [
+      {
+        "name": "venue",
+        "number": 1,
+        "type": "message",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.Venue",
+        "fields": [
+          {
+            "name": "id",
+            "number": 1,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "kind",
+            "number": 2,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.VenueKind"
+          },
+          {
+            "name": "name",
+            "number": 3,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "business_address",
+            "number": 4,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "city",
+            "number": 5,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "area",
+            "number": 6,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.Area"
+          },
+          {
+            "name": "host_office_id",
+            "number": 7,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "url",
+            "number": 8,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "accessibility_note",
+            "number": 9,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "active",
+            "number": 10,
+            "type": "bool",
+            "label": "optional"
+          }
+        ]
+      },
+      {
+        "name": "active",
+        "number": 2,
+        "type": "bool",
+        "label": "proto3_optional"
+      }
+    ]
+  },
+  "Health.Check": {
+    "input": "grpc.health.v1.HealthCheckRequest",
+    "fields": [
+      {
+        "name": "service",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "Health.List": {
+    "input": "grpc.health.v1.HealthListRequest",
+    "fields": []
+  },
+  "Health.Watch": {
+    "input": "grpc.health.v1.HealthCheckRequest",
+    "fields": [
+      {
+        "name": "service",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.ApproveSignup": {
+    "input": "nwfl.mensa.v1.ApproveSignupRequest",
+    "fields": [
+      {
+        "name": "request_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.ConfirmMember": {
+    "input": "nwfl.mensa.v1.ConfirmMemberRequest",
+    "fields": [
+      {
+        "name": "subject",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.GetMyAccount": {
+    "input": "nwfl.mensa.v1.GetMyAccountRequest",
+    "fields": []
+  },
+  "MembershipService.GrantAffiliate": {
+    "input": "nwfl.mensa.v1.GrantAffiliateRequest",
+    "fields": [
+      {
+        "name": "subject",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.ListMembers": {
+    "input": "nwfl.mensa.v1.ListMembersRequest",
+    "fields": [
+      {
+        "name": "recheck_due_only",
+        "number": 1,
+        "type": "bool",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.ListSignupRequests": {
+    "input": "nwfl.mensa.v1.ListSignupRequestsRequest",
+    "fields": []
+  },
+  "MembershipService.RejectSignup": {
+    "input": "nwfl.mensa.v1.RejectSignupRequest",
+    "fields": [
+      {
+        "name": "request_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.RemoveMember": {
+    "input": "nwfl.mensa.v1.RemoveMemberRequest",
+    "fields": [
+      {
+        "name": "subject",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.SubmitSignup": {
+    "input": "nwfl.mensa.v1.SubmitSignupRequest",
+    "fields": [
+      {
+        "name": "last_name",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "membership_number",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipVerifierService.ListPendingVerifications": {
+    "input": "nwfl.mensa.v1.ListPendingVerificationsRequest",
+    "fields": [
+      {
+        "name": "page_size",
+        "number": 1,
+        "type": "int32",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipVerifierService.ReportVerification": {
+    "input": "nwfl.mensa.v1.ReportVerificationRequest",
+    "fields": [
+      {
+        "name": "request_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "outcome",
+        "number": 2,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.VerificationOutcome"
+      }
+    ]
+  },
+  "NewsletterService.ExportEdition": {
+    "input": "nwfl.mensa.v1.ExportEditionRequest",
+    "fields": [
+      {
+        "name": "edition_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "audience",
+        "number": 2,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.Audience"
+      }
+    ]
+  },
+  "NewsletterService.GetEditionCalendar": {
+    "input": "nwfl.mensa.v1.GetEditionCalendarRequest",
+    "fields": [
+      {
+        "name": "edition_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "NewsletterService.GetEditionRoster": {
+    "input": "nwfl.mensa.v1.GetEditionRosterRequest",
+    "fields": [
+      {
+        "name": "edition_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "NewsletterService.ListEditionItems": {
+    "input": "nwfl.mensa.v1.ListEditionItemsRequest",
+    "fields": [
+      {
+        "name": "edition_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "NewsletterService.ListEditions": {
+    "input": "nwfl.mensa.v1.ListEditionsRequest",
+    "fields": [
+      {
+        "name": "statuses",
+        "number": 1,
+        "type": "enum",
+        "label": "repeated",
+        "message": "nwfl.mensa.v1.EditionStatus"
+      }
+    ]
+  },
+  "RedactionPolicyService.AddRedactionMark": {
+    "input": "nwfl.mensa.v1.AddRedactionMarkRequest",
+    "fields": [
+      {
+        "name": "subject_kind",
+        "number": 1,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.MarkSubjectKind"
+      },
+      {
+        "name": "subject_id",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "field",
+        "number": 3,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.MarkField"
+      },
+      {
+        "name": "quote",
+        "number": 4,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "category",
+        "number": 5,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.RedactionCategory"
+      }
+    ]
+  },
+  "RedactionPolicyService.ApproveMarkRemoval": {
+    "input": "nwfl.mensa.v1.ApproveMarkRemovalRequest",
+    "fields": [
+      {
+        "name": "removal_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "RedactionPolicyService.ApproveRedactionChange": {
+    "input": "nwfl.mensa.v1.ApproveRedactionChangeRequest",
+    "fields": [
+      {
+        "name": "change_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "RedactionPolicyService.GetRedactionPolicy": {
+    "input": "nwfl.mensa.v1.GetRedactionPolicyRequest",
+    "fields": []
+  },
+  "RedactionPolicyService.LedgerAsOf": {
+    "input": "nwfl.mensa.v1.LedgerAsOfRequest",
+    "fields": [
+      {
+        "name": "subject_kind",
+        "number": 1,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.LedgerSubjectKind"
+      },
+      {
+        "name": "subject_id",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "audience",
+        "number": 3,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.RedactionAudience"
+      },
+      {
+        "name": "at",
+        "number": 4,
+        "type": "message",
+        "label": "optional",
+        "message": "google.protobuf.Timestamp",
+        "fields": [
+          {
+            "name": "seconds",
+            "number": 1,
+            "type": "int64",
+            "label": "optional"
+          },
+          {
+            "name": "nanos",
+            "number": 2,
+            "type": "int32",
+            "label": "optional"
+          }
+        ]
+      }
+    ]
+  },
+  "RedactionPolicyService.ListRedactionMarks": {
+    "input": "nwfl.mensa.v1.ListRedactionMarksRequest",
+    "fields": [
+      {
+        "name": "subject_kind",
+        "number": 1,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.MarkSubjectKind"
+      },
+      {
+        "name": "subject_id",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "RedactionPolicyService.ProposeMarkRemoval": {
+    "input": "nwfl.mensa.v1.ProposeMarkRemovalRequest",
+    "fields": [
+      {
+        "name": "mark_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "RedactionPolicyService.ProposeRedactionChange": {
+    "input": "nwfl.mensa.v1.ProposeRedactionChangeRequest",
+    "fields": [
+      {
+        "name": "audience",
+        "number": 1,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.RedactionAudience"
+      },
+      {
+        "name": "category",
+        "number": 2,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.RedactionCategory"
+      },
+      {
+        "name": "action",
+        "number": 3,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.RedactionAction"
+      }
+    ]
+  },
+  "RedactionPolicyService.VerifyLedger": {
+    "input": "nwfl.mensa.v1.VerifyLedgerRequest",
+    "fields": []
+  }
+}

@@ -106,7 +106,7 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
   }
   try {
     const signedIn = await d.oidc.finishSignIn(d.setup.config, url, tx);
-    const session = newSession(signedIn.claims, now);
+    const session = newSession(signedIn.claims, now, d.setup.config.groupPrefix);
     d.tokens.put(session.sid, signedIn.tokens, session.exp);
     log(d, 'info', 'signed in', { officer: session.officer, member: session.member });
     return { kind: 'redirect', location: tx.back, cookies: [...cookies, sessionSetCookie(session, d.key, now)] };

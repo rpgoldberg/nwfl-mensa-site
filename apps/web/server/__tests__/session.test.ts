@@ -84,9 +84,28 @@ describe('newSession (R10)', () => {
     expect(newSession({ sub: 's' }, NOW).name).toBe('Member');
   });
 
+  it('refuses a groups claim that is not a list of strings, as the API refuses the token (CF-ISO-0 N3)', () => {
+    for (const groups of ['nwfl-officers', { 0: 'nwfl-officers' }, ['nwfl-members', 42], ['nwfl-officers', null]]) {
+      expect(() => newSession({ sub: 'u', groups }, NOW), JSON.stringify(groups)).toThrow('malformed groups claim');
+    }
+    expect(newSession({ sub: 'u' }, NOW).groups).toEqual([]);
+  });
+
   it('keeps at most 20 groups, so the cookie stays small', () => {
     const many = Array.from({ length: 50 }, (_, i) => `nwfl-office-x${i}`);
     expect(newSession(claims(many), NOW).groups).toHaveLength(20);
+  });
+});
+
+describe('newSession with a chapter group prefix (CF-ISO-0)', () => {
+  it('with mensa-nwfl-, a mensa-nwfl-officers sign-in is an officer, held under the internal names', () => {
+    const s = newSession(claims(['mensa-nwfl-members', 'mensa-nwfl-officers', 'mensa-nwfl-office-president']), NOW, 'mensa-nwfl-');
+    expect(s).toMatchObject({ member: true, officer: true, exp: NOW + 12 * 3600, groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-president'] });
+  });
+
+  it('with mensa-nwfl-, a bare nwfl-officers sign-in and another chapter\'s are neither member nor officer', () => {
+    expect(newSession(claims(['nwfl-members', 'nwfl-officers']), NOW, 'mensa-nwfl-')).toMatchObject({ member: false, officer: false, groups: [] });
+    expect(newSession(claims(['mensa-other-members', 'mensa-other-officers']), NOW, 'mensa-nwfl-')).toMatchObject({ member: false, officer: false, groups: [] });
   });
 });
 

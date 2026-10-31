@@ -22,6 +22,18 @@
 // A site token's subject is a lowercase UUID, as Authentik's user_uuid sub mode
 // emits it (NA1); any other subject is refused, never normalised.
 // The reason a token fails is never returned to the caller (auth/caller.ts).
+//
+// THE CHAPTER CLAIM CONTRACT (CF-ISO-0). One deployment serves one chapter
+// (TENANT, config.ts, checked at startup against the tenant row), and a site
+// token belongs to that chapter only by its (issuer, audience), both from
+// config: SITE_OIDC_ISSUER and SITE_OIDC_AUDIENCE (auth/config.ts). Each
+// chapter has its own Authentik provider, so its own issuer and client id,
+// even where providers share a signing key. A token from any other issuer, for
+// any other audience, or naming any audience besides ours (aud must be ours
+// alone, as a string or a list of one) is refused, whatever groups it carries.
+// Only then do its groups count, and only those under the chapter's
+// SITE_GROUP_PREFIX, renamed to the internal names (auth/groups.ts). No claim
+// in the token chooses the chapter.
 // ============================================================================
 import { type JWTPayload, type JWTVerifyGetKey, decodeJwt, jwtVerify } from 'jose';
 import type { ClientKind, TokenVerifier, VerifiedToken } from './caller.js';
@@ -70,6 +82,8 @@ export function createJwtVerifier(clients: ClientConfig[]): TokenVerifier {
         maxTokenAge: MAX_LIFETIME_SECONDS[client.kind],
       });
       if ((payload.exp as number) - (payload.iat as number) > MAX_LIFETIME_SECONDS[client.kind]) throw new TokenRefused('token lifetime is too long');
+      // The chapter contract: jose accepts a list holding our audience among others; a site token names ours alone.
+      if (client.kind === 'site' && audiences(payload).some((aud) => aud !== client.audience)) throw new TokenRefused('site token names another audience');
       // jose checks only that sub is present: a list holding one UUID would pass the pattern as text.
       if (client.kind === 'site' && (typeof payload.sub !== 'string' || !SITE_SUBJECT.test(payload.sub))) throw new TokenRefused('site subject is not a UUID');
       const subject = payload.sub as string;

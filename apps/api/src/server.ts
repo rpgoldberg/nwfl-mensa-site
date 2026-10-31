@@ -36,6 +36,10 @@ export interface ServerOptions {
   standing?: MemberStanding;
   /** The edge's mesh identities (auth/caller.ts). */
   edgeClientIds?: readonly string[];
+  /** The chapter's group prefix (SITE_GROUP_PREFIX, auth/groups.ts). Default nwfl-. */
+  groupPrefix?: string;
+  /** Not ready until it is verified (CF-ISO-0, tenant.ts startTenantGate). */
+  tenantGate?: { readonly verified: boolean };
 }
 
 export interface RunningServer {
@@ -50,7 +54,7 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 20_000;
 export async function startServer(options: ServerOptions): Promise<RunningServer> {
   const { logger } = options;
   const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
-  const readiness = createReadiness(options.db);
+  const readiness = createReadiness(options.db, { tenant: options.tenantGate });
   const shutdown = new AbortController();
 
   const grpc = createGrpcServer({
@@ -60,6 +64,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       verifier: options.verifier ?? rejectAllTokens,
       standing: options.standing ?? dbStanding(options.db),
       ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
+      groupPrefix: options.groupPrefix,
     }),
     shutdownSignal: shutdown.signal,
     ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),

@@ -22,6 +22,18 @@ describe('authConfig (MT-03): sign-in only at login.nwflorida.us', () => {
     expect(PRODUCTION_REDIRECTS).toEqual({ redirect: 'https://nwflorida.us/auth/callback', postLogout: 'https://nwflorida.us/signed-out' });
   });
 
+  it('reads the chapter\'s group prefix, nwfl- by default, and turns sign-in off on a bad one (CF-ISO-0)', () => {
+    const setup = authConfig(production);
+    expect(setup.enabled && setup.config.groupPrefix).toBe('nwfl-');
+    const chapter = authConfig({ ...production, SITE_GROUP_PREFIX: 'mensa-nwfl-' });
+    expect(chapter.enabled && chapter.config.groupPrefix).toBe('mensa-nwfl-');
+    for (const bad of ['', 'nwfl', 'nwfl-office-']) {
+      const off = authConfig({ ...production, SITE_GROUP_PREFIX: bad });
+      expect(off.enabled, bad).toBe(false);
+      expect(!off.enabled && off.reason).toMatch(/^SITE_GROUP_PREFIX/);
+    }
+  });
+
   it('has no default: with any setting missing, sign-in is off and says which', () => {
     for (const name of Object.keys(production).filter((k) => k !== 'NODE_ENV')) {
       const setup = authConfig({ ...production, [name]: undefined });

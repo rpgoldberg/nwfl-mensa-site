@@ -23,4 +23,12 @@ describe('createReadiness', () => {
     const readiness = createReadiness({ query: () => new Promise(() => {}) }, { probeTimeoutMs: 20 });
     expect(await readiness.check()).toEqual({ ready: false, db: 'down', draining: false });
   });
+
+  it('is not ready until the tenant is verified (CF-ISO-0), and says so', async () => {
+    const gate = { verified: false };
+    const readiness = createReadiness({ query: () => Promise.resolve({}) }, { tenant: gate });
+    expect(await readiness.check()).toEqual({ ready: false, db: 'ok', draining: false, tenant: 'unverified' });
+    gate.verified = true;
+    expect(await readiness.check()).toEqual({ ready: true, db: 'ok', draining: false, tenant: 'verified' });
+  });
 });

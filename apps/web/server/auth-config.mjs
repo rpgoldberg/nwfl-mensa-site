@@ -5,6 +5,10 @@
 // back only to the site's own callback and signed-out page. Anything else
 // turns sign-in off, with the reason logged. Shared by the pages and the
 // server wrapper, which lets forms lead to the issuer's origin (form-action).
+// SITE_GROUP_PREFIX (CF-ISO-0, groups.mjs) names the chapter's groups, nwfl-
+// by default; the API must be given the same value. A bad one turns sign-in off.
+
+import { parseGroupPrefix } from './groups.mjs';
 
 export const PRODUCTION_ISSUER_ORIGIN = 'https://login.nwflorida.us';
 export const PRODUCTION_REDIRECTS = Object.freeze({
@@ -15,7 +19,7 @@ export const PRODUCTION_REDIRECTS = Object.freeze({
 /**
  * @typedef {{
  *   issuer: URL, clientId: string, clientSecret: string, redirectUri: string,
- *   postLogoutRedirectUri: string, scope: string, allowInsecure: boolean,
+ *   postLogoutRedirectUri: string, scope: string, allowInsecure: boolean, groupPrefix: string,
  * }} AuthConfig allowInsecure: a plain-http issuer, the local test provider, never in production
  * @typedef {{ enabled: true, config: AuthConfig } | { enabled: false, reason: string }} AuthSetup
  */
@@ -59,9 +63,15 @@ export function authConfig(env) {
   }
   const scope = env['OIDC_SCOPE'] || 'openid profile';
   if (!scope.split(' ').includes('openid')) return { enabled: false, reason: 'OIDC_SCOPE must include openid' };
+  let groupPrefix;
+  try {
+    groupPrefix = parseGroupPrefix(env['SITE_GROUP_PREFIX']);
+  } catch (error) {
+    return { enabled: false, reason: /** @type {Error} */ (error).message };
+  }
 
   return {
     enabled: true,
-    config: { issuer, clientId: value('OIDC_CLIENT_ID'), clientSecret: value('OIDC_CLIENT_SECRET'), redirectUri, postLogoutRedirectUri, scope, allowInsecure },
+    config: { issuer, clientId: value('OIDC_CLIENT_ID'), clientSecret: value('OIDC_CLIENT_SECRET'), redirectUri, postLogoutRedirectUri, scope, allowInsecure, groupPrefix },
   };
 }

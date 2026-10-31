@@ -103,7 +103,7 @@ A bearer token is verified with jose against the JWKS of the client it names
 
 | Client | Env (issuer turns it on) | Caller | Reaches |
 |---|---|---|---|
-| `nwfl-site` | `SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`, `SITE_OIDC_JWKS_URL` | a user: officers by the `nwfl-officers` group, members by `member_account` | every service but the two below |
+| `nwfl-site` | `SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`, `SITE_OIDC_JWKS_URL`, `SITE_GROUP_PREFIX` | a user: officers by the `<prefix>officers` group, members by `member_account` | every service but the two below |
 | `nwfl-agent` | `AGENT_OIDC_*`, `AGENT_SCOPE`, `AGENT_SUBJECT` | the newsletter agent | `NewsletterService` only |
 | `nwfl-verifier` | `VERIFIER_OIDC_*`, `VERIFIER_SCOPE`, `VERIFIER_SUBJECT` | the membership verifier | `MembershipVerifierService` only |
 
@@ -114,6 +114,19 @@ token's groups; an account unverified for 13 months reads as public.
 write handlers. A call that arrived through the edge (its `l5d-client-id` is
 in `EDGE_CLIENT_IDS`) reaches only the agent and verifier services; the
 header never grants anything. With no issuer set, every token is refused.
+
+One deployment serves one chapter (CF-ISO-0). A site token is this chapter's
+only by its issuer and audience (`SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`),
+with no other audience beside ours. Its groups count only under
+`SITE_GROUP_PREFIX` (default `nwfl-`; e.g. `mensa-nwfl-`), renamed to the
+internal `nwfl-<role>` names the code and SQL use (`src/auth/groups.ts`); the
+web takes the same variable. `TENANT` (default `nwflorida`) names the chapter
+(`src/tenant.ts`). Both processes check it in the background. While the
+database is down the API runs but reports not ready (`/readyz` shows
+`tenant: unverified`) and the worker claims no job. Each failed attempt logs a
+plain line and retries, waiting 1 s at first and doubling up to 15 s. Only a
+positive mismatch (another tenant's row, no row, or several rows) logs the
+reason and exits 1.
 
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
@@ -195,6 +208,52 @@ redacted public copy, members a members copy without home addresses, and
 officers the originals. Anchoring reads the originals as officers do, so the
 load fails, with nothing applied, while the officers' policy hides or
 redacts any category.
+
+### Untrusted PDFs (UNTRUSTED-PDF-GATE)
+
+The loader is the only way a PDF reaches the engine, and Ross runs it by
+hand. An officer upload, the archive importer, or any new RPC that stores an
+original, waits for two things: the engine as a sidecar with its own uid and
+no secrets, and the output gate re-run outside the engine on every copy. Two
+tests in the normal suite enforce this, and both aim at accidental and lazy
+paths.
+
+`test/gates/untrusted-pdf.test.ts` reads text, with nothing blanked. It fails
+when:
+
+- `storeOriginal`, or any word holding `original_put`, appears outside
+  `src/pdf/store.ts` and `src/load/load.ts`;
+- another word holding `pdf_original` appears outside `src/pdf/` beyond a
+  frozen count;
+- a module outside a frozen list imports `pdf/store`, or any module imports
+  it whole;
+- an `import()` or `require()` takes anything but a plain string;
+- a migration grants EXECUTE on `pdf_original_put` or a write on
+  `pdf_original` to a role other than `nwfl`, adds a member to `nwfl`, or
+  changes an owner;
+- an RPC's request message carries a `bytes` field, even nested
+  (`ApproveRequest.content_hash`, a hash, is the one frozen exemption);
+- an RPC's request tree differs from `test/gates/untrusted-pdf.requests.json`.
+  Review the change against the gate, then refresh the file in the same PR
+  with `UPDATE_REQUEST_SNAPSHOT=1`.
+
+`test/gates/untrusted-pdf-catalog.test.ts` is the backstop. It migrates a
+fresh database and freezes five things: who can write `pdf_original`; every
+function that names it, with its owner, SECURITY DEFINER and executors; every
+SECURITY DEFINER function; the members of `nwfl`; and the owner of
+`pdf_original_put`. The database's grants are what make a call work, so this
+check catches what text cannot: a name built at run time for a new role or a
+new function, a grant built with `format()`, a role that joins `nwfl`. What it
+does not catch is code running as `nwfl`, which already holds EXECUTE on
+`pdf_original_put`, calling it under a name spelled at run time. The text
+check flags the usual spellings; a deliberate split is out of scope, as the
+gate is for accidents.
+
+`UNTRUSTED_PDF_READY` in `src/pdf/untrusted.ts` lifts the text rules. It does
+so only when both test files pinned in the gate test
+(`test/pdf/engine-sidecar.test.ts` and `test/pdf/gate-rerun.test.ts`) exist,
+each holding a real, unskipped test under its pinned title. Setting it to true
+without them fails. The request snapshot and the catalog are never lifted.
 
 ## Schema
 

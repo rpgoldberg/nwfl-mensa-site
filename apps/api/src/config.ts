@@ -7,8 +7,11 @@
 //   LOG_LEVEL      info
 //   DRAIN_TIMEOUT_MS 20000  how long in-flight calls may finish after SIGTERM;
 //                           keep it under the pod's terminationGracePeriod.
+//   TENANT    nwflorida  the chapter this deployment serves (tenant.ts),
+//                        checked against the tenant row at startup.
 // ============================================================================
 import { LOG_LEVELS, type LogLevel } from './platform/logger.js';
+import { parseTenant } from './tenant.js';
 
 export interface ServiceConfig {
   host: string;
@@ -16,6 +19,8 @@ export interface ServiceConfig {
   healthPort: number;
   logLevel: LogLevel;
   drainTimeoutMs: number;
+  /** TENANT (tenant.ts). */
+  tenant: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -43,5 +48,5 @@ export function readConfig(env: Env = process.env): ServiceConfig {
     throw new Error('DRAIN_TIMEOUT_MS must be a whole number of milliseconds');
   }
 
-  return { host: env['HOST'] ?? '0.0.0.0', grpcPort, healthPort, logLevel, drainTimeoutMs };
+  return { host: env['HOST'] ?? '0.0.0.0', grpcPort, healthPort, logLevel, drainTimeoutMs, tenant: parseTenant(env['TENANT']) };
 }

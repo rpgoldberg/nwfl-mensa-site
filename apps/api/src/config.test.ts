@@ -9,13 +9,19 @@ describe('readConfig', () => {
       healthPort: 8081,
       logLevel: 'info',
       drainTimeoutMs: 20_000,
+      tenant: 'nwflorida',
     });
+  });
+
+  it('reads the chapter it serves from TENANT (CF-ISO-0), and refuses a malformed one', () => {
+    expect(readConfig({ TENANT: 'mensa-other' }).tenant).toBe('mensa-other');
+    expect(() => readConfig({ TENANT: 'Bad Tenant' })).toThrow(/TENANT/);
   });
 
   it('reads overrides', () => {
     expect(
       readConfig({ HOST: '127.0.0.1', GRPC_PORT: '6000', HEALTH_PORT: '6001', LOG_LEVEL: 'debug', DRAIN_TIMEOUT_MS: '500' }),
-    ).toEqual({ host: '127.0.0.1', grpcPort: 6000, healthPort: 6001, logLevel: 'debug', drainTimeoutMs: 500 });
+    ).toEqual({ host: '127.0.0.1', grpcPort: 6000, healthPort: 6001, logLevel: 'debug', drainTimeoutMs: 500, tenant: 'nwflorida' });
   });
 
   it.each([

@@ -4,7 +4,8 @@
 //
 //   no authorization header      -> anonymous, audience public
 //   a bearer token that verifies -> its client decides the kind of caller:
-//     site      a user. Officers by the nwfl-officers group in the token;
+//     site      a user. Officers by the officers group in the token (its
+//               <SITE_GROUP_PREFIX>officers, carried as nwfl-officers: groups.ts);
 //               members by member_account (AC6 b: the database, not the
 //               token, which a 30-day session can leave stale).
 //     agent     the newsletter agent (audience members: it builds the issue
@@ -31,6 +32,7 @@
 // on their own, and the mesh policy is the first line.
 // ============================================================================
 import { Code, ConnectError, type ContextValues, type Interceptor, createContextKey } from '@connectrpc/connect';
+import { DEFAULT_SITE_GROUP_PREFIX, internalGroups } from './groups.js';
 
 export type Audience = 'public' | 'members' | 'officers';
 export type ClientKind = 'site' | 'agent' | 'verifier';
@@ -59,7 +61,7 @@ export interface MemberStanding {
 export interface Caller {
   kind: CallerKind;
   subject: string | null;
-  /** The token's nwfl- groups; empty for machine callers. */
+  /** The token's groups under the chapter's prefix, by their internal nwfl- names (groups.ts); empty for machine callers. */
   groups: readonly string[];
   scopes: readonly string[];
   audience: Audience;
@@ -107,9 +109,11 @@ export interface AuthOptions {
   standing?: MemberStanding;
   /** Mesh identities of the edge (cloudflared). */
   edgeClientIds?: readonly string[];
+  /** The chapter's group prefix (SITE_GROUP_PREFIX, groups.ts); default nwfl-. */
+  groupPrefix?: string;
 }
 
-async function establish(header: string | null, verifier: TokenVerifier, standing: MemberStanding): Promise<Caller> {
+async function establish(header: string | null, verifier: TokenVerifier, standing: MemberStanding, groupPrefix: string): Promise<Caller> {
   if (header === null) return ANONYMOUS;
   const token = BEARER.exec(header)?.[1];
   if (token === undefined) throw new ConnectError('malformed authorization header', Code.Unauthenticated);
@@ -123,7 +127,7 @@ async function establish(header: string | null, verifier: TokenVerifier, standin
   const scopes = [...verified.scopes];
   if (verified.client === 'agent') return { kind: 'agent', subject: verified.subject, groups: [], scopes, audience: 'members' };
   if (verified.client === 'verifier') return { kind: 'verifier', subject: verified.subject, groups: [], scopes, audience: 'public' };
-  const groups = verified.groups.filter((group) => group.startsWith('nwfl-'));
+  const groups = internalGroups(verified.groups, groupPrefix);
   const member = await standing.isMember(verified.subject);
   return {
     kind: 'user',
@@ -149,6 +153,7 @@ function admit(service: string, caller: Caller): void {
 export function authInterceptor(options: AuthOptions): Interceptor {
   const standing = options.standing ?? noStanding;
   const edge = new Set(options.edgeClientIds ?? DEFAULT_EDGE_CLIENT_IDS);
+  const groupPrefix = options.groupPrefix ?? DEFAULT_SITE_GROUP_PREFIX;
   return (next) => async (req) => {
     const service = req.service.typeName;
     const peer = req.header.get('l5d-client-id');
@@ -156,7 +161,7 @@ export function authInterceptor(options: AuthOptions): Interceptor {
     if (peer !== null && (peer.includes(',') || (isEdgePeer(peer, edge) && !EDGE_SERVICES.has(service)))) {
       throw new ConnectError('not served on this path', Code.PermissionDenied);
     }
-    const caller = await establish(req.header.get('authorization'), options.verifier, standing);
+    const caller = await establish(req.header.get('authorization'), options.verifier, standing, groupPrefix);
     admit(service, caller);
     req.contextValues.set(CALLER, caller);
     return next(req);

@@ -1,6 +1,10 @@
 // ============================================================================
-// Roles from the verified token's nwfl- groups (R10, R25, R33), for the write
+// Roles from the verified token's groups (R10, R25, R33), for the write
 // handlers (A4b, A5) to check before they act. A person can hold several.
+// The names below are the INTERNAL ones: the caller gate keeps only the
+// token's groups under the chapter's SITE_GROUP_PREFIX and renames
+// <prefix><role> to nwfl-<role> (groups.ts), so with mensa-nwfl- a
+// mensa-nwfl-officers group arrives here as nwfl-officers.
 //
 //   nwfl-admin                  Admin: approves content; acts for any office,
 //                               recorded as on behalf of it; approves members

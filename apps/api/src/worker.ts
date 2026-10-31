@@ -9,13 +9,22 @@ import { createStructuredLogger } from './platform/logger.js';
 import { startTelemetry } from './platform/telemetry.js';
 import { readConfig } from './config.js';
 import { runWorker } from './pdf/worker.js';
+import { refuseToStart } from './tenant.js';
 
 const config = readConfig();
 const telemetry = startTelemetry();
 const logger = createStructuredLogger({ name: `${telemetry.state.serviceName}-worker`, level: config.logLevel });
 
+// No job runs until the database is verified to serve TENANT (CF-ISO-0); a database that is down is
+// retried with backoff, and only a positive mismatch logs the reason and exits 1.
 const worker = runWorker({
   env: process.env,
+  tenant: {
+    id: config.tenant,
+    onRetry: (fields) => logger.warn({ tenant: config.tenant, ...fields }, 'tenant check: the database did not answer; no job runs yet, retrying'),
+    onVerified: () => logger.info({ tenant: config.tenant }, 'tenant verified'),
+    onMismatch: refuseToStart((message) => logger.error({ tenant: config.tenant }, message)),
+  },
   warn: (fields, message) => logger.warn(fields, message),
   onError: (error) => logger.error({ error_name: error instanceof Error ? error.name : 'unknown', error_code: (error as { code?: string }).code }, 'pdf regeneration failed'),
 });
