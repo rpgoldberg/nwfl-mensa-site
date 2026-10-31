@@ -201,6 +201,27 @@ describe('createJwtVerifier', () => {
     });
   });
 
+  // CF-ISO-0, the chapter claim contract: a site token belongs to this deployment's chapter only by
+  // (issuer, audience). Another chapter's provider on the same Authentik, signing with the same key and
+  // even naming groups under our prefix, is never this chapter.
+  describe('one chapter per site token, by issuer and audience', () => {
+    const OTHER_ISS = 'https://login.example.org/application/o/mensa-other-site/';
+    const ours = ['mensa-nwfl-members', 'mensa-nwfl-officers'];
+    it.each([
+      ['another chapter\'s issuer and audience', { iss: OTHER_ISS, aud: 'mensa-other-site' }],
+      ['another chapter\'s issuer with our audience', { iss: OTHER_ISS, aud: 'nwfl-site' }],
+      ['our issuer with another chapter\'s audience', { iss: SITE_ISS, aud: 'mensa-other-site' }],
+      ['our issuer and audience alongside another chapter\'s audience', { iss: SITE_ISS, aud: ['nwfl-site', 'mensa-other-site'] }],
+    ])('refuses %s, signed by the same key', async (_label, claims) => {
+      await expect(createJwtVerifier(clients()).verify(await sign(site({ ...claims, groups: ours })))).rejects.toThrow();
+    });
+
+    it('accepts our issuer with our audience alone, as a string or a list of one', async () => {
+      await expect(createJwtVerifier(clients()).verify(await sign(site({ groups: ours })))).resolves.toMatchObject({ client: 'site', groups: ours });
+      await expect(createJwtVerifier(clients()).verify(await sign(site({ aud: ['nwfl-site'] })))).resolves.toMatchObject({ client: 'site' });
+    });
+  });
+
   it('refuses every token when no client is configured', async () => {
     await expect(createJwtVerifier([]).verify(await sign(site()))).rejects.toThrow();
   });
