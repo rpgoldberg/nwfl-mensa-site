@@ -16,6 +16,7 @@ const cfg: AuthConfig = {
   postLogoutRedirectUri: 'https://nwflorida.us/signed-out',
   scope: 'openid profile',
   allowInsecure: false,
+  groupPrefix: 'nwfl-',
 };
 
 function deps(over: Partial<Deps> = {}): Deps & { lines: string[] } {
@@ -98,6 +99,18 @@ describe('completeSignIn: the callback', () => {
     expect(out.cookies.join()).not.toMatch(/access-1|id-1/);
     expect(d.tokens.get(session!.sid, NOW)).toMatchObject({ access_token: 'access-1', id_token: 'id-1' });
     expect(d.oidc.finishSignIn).toHaveBeenCalledWith(cfg, expect.any(URL), expect.objectContaining({ state, nonce: 'nonce-1', verifier: 'verifier-1' }));
+  });
+
+  it('reads the groups under the configured chapter prefix (CF-ISO-0): mensa-nwfl-officers is an officer, a bare nwfl-officers is not', async () => {
+    const signIn = async (prefix: string, groups: string[]) => {
+      const d = deps({ setup: { enabled: true, config: { ...cfg, groupPrefix: prefix } } });
+      vi.mocked(d.oidc.finishSignIn).mockResolvedValueOnce({ claims: { sub: 'user-2', groups }, tokens: { access_token: 'a', id_token: 'i' } });
+      const { cookieHeader, state } = await started(d);
+      const out = await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader });
+      return out.kind === 'redirect' ? readSession(jar(out.cookies), key, NOW, d.tokens) : undefined;
+    };
+    expect(await signIn('mensa-nwfl-', ['mensa-nwfl-members', 'mensa-nwfl-officers'])).toMatchObject({ officer: true, member: true, groups: ['nwfl-members', 'nwfl-officers'] });
+    expect(await signIn('mensa-nwfl-', ['nwfl-members', 'nwfl-officers'])).toMatchObject({ officer: false, member: false, groups: [] });
   });
 
   it('refuses a callback with no transaction, or one older than ten minutes, as timed out', async () => {

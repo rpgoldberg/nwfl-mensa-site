@@ -90,6 +90,18 @@ describe('newSession (R10)', () => {
   });
 });
 
+describe('newSession with a chapter group prefix (CF-ISO-0)', () => {
+  it('with mensa-nwfl-, a mensa-nwfl-officers sign-in is an officer, held under the internal names', () => {
+    const s = newSession(claims(['mensa-nwfl-members', 'mensa-nwfl-officers', 'mensa-nwfl-office-president']), NOW, 'mensa-nwfl-');
+    expect(s).toMatchObject({ member: true, officer: true, exp: NOW + 12 * 3600, groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-president'] });
+  });
+
+  it('with mensa-nwfl-, a bare nwfl-officers sign-in and another chapter\'s are neither member nor officer', () => {
+    expect(newSession(claims(['nwfl-members', 'nwfl-officers']), NOW, 'mensa-nwfl-')).toMatchObject({ member: false, officer: false, groups: [] });
+    expect(newSession(claims(['mensa-other-members', 'mensa-other-officers']), NOW, 'mensa-nwfl-')).toMatchObject({ member: false, officer: false, groups: [] });
+  });
+});
+
 describe('the session cookie', () => {
   it('is host-only, httpOnly and Lax, for as long as the session lasts', () => {
     const s = newSession(claims(['nwfl-members']), NOW);

@@ -1,12 +1,13 @@
 // @ts-check
 // The signed-in session (W4, R10), sealed into a host-only cookie with
 // AES-256-GCM under a key from config (SESSION_KEY, never in the repo). The
-// cookie holds who the person is and their nwfl- roles only; their tokens stay
+// cookie holds who the person is and their (internal nwfl-) roles only; their tokens stay
 // on the server (server/token-store.mjs), and the session is valid only while
 // that record is there. A sealed value also carries the sign-in transaction
 // (state, nonce, PKCE verifier) for ten minutes.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readCookie } from './cookies.mjs';
+import { DEFAULT_SITE_GROUP_PREFIX, internalGroups } from './groups.mjs';
 import { SESSION_COOKIE } from './policy.mjs';
 
 export { SESSION_COOKIE };
@@ -83,16 +84,16 @@ function displayName(value) {
 
 /**
  * A session from the ID token's claims: officers 12 hours, members 30 days
- * renewed on use. Only nwfl- groups are kept, at most 20.
+ * renewed on use. Only the groups under the chapter's prefix are kept, by
+ * their internal nwfl- names (groups.mjs), at most 20.
  *
  * @param {Record<string, unknown>} claims
  * @param {number} now seconds
+ * @param {string} [groupPrefix] SITE_GROUP_PREFIX (auth-config.mjs); default nwfl-
  * @returns {Session}
  */
-export function newSession(claims, now) {
-  const groups = (Array.isArray(claims['groups']) ? claims['groups'] : [])
-    .filter((g) => typeof g === 'string' && g.startsWith('nwfl-'))
-    .slice(0, MAX_GROUPS);
+export function newSession(claims, now, groupPrefix = DEFAULT_SITE_GROUP_PREFIX) {
+  const groups = internalGroups(Array.isArray(claims['groups']) ? claims['groups'] : [], groupPrefix).slice(0, MAX_GROUPS);
   const officer = groups.includes('nwfl-officers');
   const lifetime = officer ? OFFICER_SECONDS : MEMBER_SECONDS;
   return {
