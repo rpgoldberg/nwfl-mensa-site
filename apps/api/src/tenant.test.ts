@@ -123,6 +123,16 @@ describe('startTenantGate: verify in the background, never exit on a database th
 });
 
 describe('refuseToStart', () => {
+  it('exits the process by default', () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      refuseToStart(() => {})('x');
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      exit.mockRestore();
+    }
+  });
+
   it('logs the reason, then exits 1', () => {
     const calls: unknown[] = [];
     refuseToStart((message) => void calls.push(['log', message]), (code) => void calls.push(['exit', code]))('TENANT is x but the database serves y: refusing to start');

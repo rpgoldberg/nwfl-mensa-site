@@ -36,6 +36,15 @@ describe.skipIf(!live)('the TENANT gate, against a migrated database', () => {
     expect(await policyTenants(api.worker)()).toEqual(['nwflorida']);
   });
 
+  it('starts the job once the worker\'s TENANT is verified', async () => {
+    const onVerified = vi.fn();
+    const onMismatch = vi.fn();
+    const worker = runWorker({ env: workerEnv, intervalMs: 3_600_000, tenant: { id: 'nwflorida', onMismatch, onVerified } });
+    await vi.waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
+    expect(onMismatch).not.toHaveBeenCalled();
+    await worker.stop();
+  });
+
   it('runs no job in a worker whose TENANT is another chapter\'s, and reports the mismatch', async () => {
     const onMismatch = vi.fn();
     const errors: unknown[] = [];
