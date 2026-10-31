@@ -212,18 +212,48 @@ redacts any category.
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 
 The loader is the only way a PDF reaches the engine, and Ross runs it by
-hand. An officer upload, the archive import or any new RPC that stores an
-original waits for two things: the engine as a sidecar with its own uid and
-no secrets, and the output gate re-run outside the engine on every copy.
-`test/gates/untrusted-pdf.test.ts` runs in the normal suite and enforces this.
-It fails when anything but `src/load/load.ts` calls `storeOriginal`, when
-anything but `src/pdf/store.ts` calls `pdf_original_put`, or when a
-migration grants EXECUTE on `pdf_original_put` to a role other than `nwfl`.
-It also fails when an RPC's request message carries a `bytes` field, even in
-a nested message (`ApproveRequest.content_hash`, a hash, is the one frozen
-exemption). `UNTRUSTED_PDF_READY` in `src/pdf/untrusted.ts` lifts the gate,
-and only once the sidecar test and the gate re-run test that its comment
-names exist; setting it to true without them fails too.
+hand. An officer upload, the archive importer, or any new RPC that stores an
+original, waits for two things: the engine as a sidecar with its own uid and
+no secrets, and the output gate re-run outside the engine on every copy. Two
+tests in the normal suite enforce this, and both aim at accidental and lazy
+paths.
+
+`test/gates/untrusted-pdf.test.ts` reads text, with nothing blanked. It fails
+when:
+
+- `storeOriginal`, or any word holding `original_put`, appears outside
+  `src/pdf/store.ts` and `src/load/load.ts`;
+- another word holding `pdf_original` appears outside `src/pdf/` beyond a
+  frozen count;
+- a module outside a frozen list imports `pdf/store`, or any module imports
+  it whole;
+- an `import()` or `require()` takes anything but a plain string;
+- a migration grants EXECUTE on `pdf_original_put` or a write on
+  `pdf_original` to a role other than `nwfl`, adds a member to `nwfl`, or
+  changes an owner;
+- an RPC's request message carries a `bytes` field, even nested
+  (`ApproveRequest.content_hash`, a hash, is the one frozen exemption);
+- an RPC's request tree differs from `test/gates/untrusted-pdf.requests.json`.
+  Review the change against the gate, then refresh the file in the same PR
+  with `UPDATE_REQUEST_SNAPSHOT=1`.
+
+`test/gates/untrusted-pdf-catalog.test.ts` is the backstop. It migrates a
+fresh database and freezes five things: who can write `pdf_original`; every
+function that names it, with its owner, SECURITY DEFINER and executors; every
+SECURITY DEFINER function; the members of `nwfl`; and the owner of
+`pdf_original_put`. The database's grants are what make a call work, so this
+check catches what text cannot: a name built at run time for a new role or a
+new function, a grant built with `format()`, a role that joins `nwfl`. What it
+does not catch is code running as `nwfl`, which already holds EXECUTE on
+`pdf_original_put`, calling it under a name spelled at run time. The text
+check flags the usual spellings; a deliberate split is out of scope, as the
+gate is for accidents.
+
+`UNTRUSTED_PDF_READY` in `src/pdf/untrusted.ts` lifts the text rules. It does
+so only when both test files pinned in the gate test
+(`test/pdf/engine-sidecar.test.ts` and `test/pdf/gate-rerun.test.ts`) exist,
+each holding a real, unskipped test under its pinned title. Setting it to true
+without them fails. The request snapshot and the catalog are never lifted.
 
 ## Schema
 
