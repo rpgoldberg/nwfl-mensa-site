@@ -80,7 +80,7 @@ export interface Api {
 /** Thursday 2026-10-22, 10:00 Central. */
 export const NOW = new Date('2026-10-22T15:00:00Z');
 
-export async function startApi(prefix: string, options: { verifier?: TokenVerifier; now?: () => Date } = {}): Promise<Api> {
+export async function startApi(prefix: string, options: { verifier?: TokenVerifier; now?: () => Date; groupPrefix?: string } = {}): Promise<Api> {
   const now = options.now ?? ((): Date => NOW);
   const db = await freshDatabase(prefix);
   const run = await migrate(db);
@@ -95,7 +95,7 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const logger = createStructuredLogger({ sink });
   const server: http2.Http2Server = createGrpcServer({
     routes: apiRoutes({ db: pool, logger, now, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
-    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now) }),
+    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now), groupPrefix: options.groupPrefix }),
     // As in production: the gate's verifier also admits edge streams.
     verifier: options.verifier ?? fakeVerifier,
   });

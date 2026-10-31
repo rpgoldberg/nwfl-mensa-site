@@ -8,7 +8,13 @@ const ISS = 'https://login.nwflorida.us/application/o/nwfl-site/';
 
 describe('readAuthConfig', () => {
   it('accepts no client at all when nothing is set: every token is then refused', () => {
-    expect(readAuthConfig({})).toEqual({ clients: [], edgeClientIds: DEFAULT_EDGE_CLIENT_IDS });
+    expect(readAuthConfig({})).toEqual({ clients: [], edgeClientIds: DEFAULT_EDGE_CLIENT_IDS, groupPrefix: 'nwfl-' });
+  });
+
+  it('reads the chapter\'s group prefix from SITE_GROUP_PREFIX (CF-ISO-0), and refuses to start on a bad one', () => {
+    expect(readAuthConfig({ SITE_GROUP_PREFIX: 'mensa-nwfl-' }).groupPrefix).toBe('mensa-nwfl-');
+    expect(() => readAuthConfig({ SITE_GROUP_PREFIX: '' })).toThrow(/SITE_GROUP_PREFIX/);
+    expect(() => readAuthConfig({ SITE_GROUP_PREFIX: 'nwfl-office-' })).toThrow(/SITE_GROUP_PREFIX/);
   });
 
   it('turns a client on by its issuer, with defaults for audience, JWKS, scope and subject', () => {

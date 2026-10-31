@@ -16,12 +16,17 @@
 //                          a full identity in the nwfl-edge namespace and
 //                          not the web's or the API's; set but empty, or
 //                          any entry that is not, refuses to start
+//   SITE_GROUP_PREFIX      the chapter's Authentik group prefix (default
+//                          nwfl-; e.g. mensa-nwfl-): <prefix>officers is read
+//                          as the internal nwfl-officers (groups.ts). A bad
+//                          one refuses to start
 //
 // The scope and subject defaults follow the plan's names; the real values come
 // from the Authentik blueprint (I4) and are set here when they differ.
 // ============================================================================
 import { type JWTVerifyGetKey, createRemoteJWKSet } from 'jose';
 import { type ClientKind, DEFAULT_EDGE_CLIENT_IDS, type TokenVerifier, rejectAllTokens } from './caller.js';
+import { parseGroupPrefix } from './groups.js';
 import { type ClientConfig, createJwtVerifier } from './jwt.js';
 
 type Env = Record<string, string | undefined>;
@@ -38,6 +43,8 @@ export interface ClientSpec {
 export interface AuthConfig {
   clients: ClientSpec[];
   edgeClientIds: readonly string[];
+  /** SITE_GROUP_PREFIX (groups.ts). */
+  groupPrefix: string;
 }
 
 const DEFAULTS: Record<ClientKind, { prefix: string; audience: string; scope?: string; subject?: string }> = {
@@ -94,7 +101,7 @@ export function readAuthConfig(env: Env): AuthConfig {
       throw new Error(`EDGE_CLIENT_IDS: ${id} is not an edge identity (<service account>.nwfl-edge.serviceaccount.identity.linkerd.<trust domain>)`);
     }
   }
-  return { clients, edgeClientIds };
+  return { clients, edgeClientIds, groupPrefix: parseGroupPrefix(env['SITE_GROUP_PREFIX']) };
 }
 
 /** A remote, cached key set per client (jose's defaults: 5 s timeout, 10 min cache, 30 s cooldown). */

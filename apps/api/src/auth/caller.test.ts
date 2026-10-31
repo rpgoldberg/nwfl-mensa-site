@@ -55,7 +55,7 @@ const fakeVerifier: TokenVerifier = {
 };
 const standing: MemberStanding = { isMember: (subject) => Promise.resolve(subject === 'sub-member') };
 
-function harness(verifier: TokenVerifier = fakeVerifier, memberStanding: MemberStanding = standing) {
+function harness(verifier: TokenVerifier = fakeVerifier, memberStanding: MemberStanding = standing, groupPrefix?: string) {
   let seen: Caller | undefined;
   const record = (values: Parameters<typeof callerOf>[0]): void => {
     seen = callerOf(values);
@@ -87,7 +87,7 @@ function harness(verifier: TokenVerifier = fakeVerifier, memberStanding: MemberS
         },
       });
     },
-    { router: { interceptors: [authInterceptor({ verifier, standing: memberStanding })] } },
+    { router: { interceptors: [authInterceptor({ verifier, standing: memberStanding, ...(groupPrefix === undefined ? {} : { groupPrefix }) })] } },
   );
   const as = (headers: Record<string, string>) => ({ headers });
   const capture = async (call: () => Promise<unknown>): Promise<Caller> => {
@@ -154,6 +154,28 @@ describe('authInterceptor: who is calling', () => {
     await expect(unconfigured.events(bearer('member-token'))).rejects.toMatchObject({ code: Code.Unauthenticated });
     expect(await unconfigured.events()).toEqual(ANONYMOUS);
     expect(await harness(fakeVerifier, noStanding).events(bearer('member-token'))).toMatchObject({ audience: 'public' });
+  });
+});
+
+describe('authInterceptor: the chapter\'s group prefix (CF-ISO-0)', () => {
+  const holding = (...groups: string[]): TokenVerifier => ({ verify: () => Promise.resolve({ client: 'site', subject: 'sub-chapter', groups, scopes: [] }) });
+
+  it('with mensa-nwfl-, a mensa-nwfl-officers token is an officer, carried under the internal name', async () => {
+    const caller = await harness(holding('mensa-nwfl-members', 'mensa-nwfl-officers'), noStanding, 'mensa-nwfl-').events(bearer('t'));
+    expect(caller).toMatchObject({ kind: 'user', audience: 'officers', groups: ['nwfl-members', 'nwfl-officers'] });
+  });
+
+  it('with mensa-nwfl-, a bare nwfl-officers token is not an officer and carries no group', async () => {
+    expect(await harness(holding('nwfl-officers', 'nwfl-admin'), noStanding, 'mensa-nwfl-').events(bearer('t'))).toMatchObject({ audience: 'public', groups: [] });
+  });
+
+  it('with mensa-nwfl-, another chapter\'s groups grant nothing', async () => {
+    expect(await harness(holding('mensa-other-officers', 'mensa-other-admin'), noStanding, 'mensa-nwfl-').events(bearer('t'))).toMatchObject({ audience: 'public', groups: [] });
+  });
+
+  it('by default (nwfl-), today\'s nwfl-officers token is an officer and a mensa-nwfl-officers one is not', async () => {
+    expect(await harness(holding('nwfl-officers'), noStanding).events(bearer('t'))).toMatchObject({ audience: 'officers', groups: ['nwfl-officers'] });
+    expect(await harness(holding('mensa-nwfl-officers'), noStanding).events(bearer('t'))).toMatchObject({ audience: 'public', groups: [] });
   });
 });
 

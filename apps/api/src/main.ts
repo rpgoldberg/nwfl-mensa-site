@@ -22,7 +22,7 @@ const pool = createPool(process.env, (fields, message) => logger.warn(fields, me
 // The database target is logged once here, for operators; no endpoint reports it.
 logger.info({ db_target: describeTarget(), service_version: process.env['SERVICE_VERSION'] ?? 'dev' }, 'starting');
 // Which token clients are on, by kind only (a key named token_* is redacted). With none, every token is refused.
-logger.info({ enabled_clients: auth.clients.map((client) => client.kind) }, 'auth');
+logger.info({ enabled_clients: auth.clients.map((client) => client.kind), group_prefix: auth.groupPrefix }, 'auth');
 
 const server = await startServer({
   host: config.host,
@@ -33,6 +33,7 @@ const server = await startServer({
   drainTimeoutMs: config.drainTimeoutMs,
   verifier: verifierFrom(auth),
   edgeClientIds: auth.edgeClientIds,
+  groupPrefix: auth.groupPrefix,
 });
 
 // The redacted PDF copies are made by the worker process (src/worker.ts), as its own database role.

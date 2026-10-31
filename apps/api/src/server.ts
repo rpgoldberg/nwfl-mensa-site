@@ -36,6 +36,8 @@ export interface ServerOptions {
   standing?: MemberStanding;
   /** The edge's mesh identities (auth/caller.ts). */
   edgeClientIds?: readonly string[];
+  /** The chapter's group prefix (SITE_GROUP_PREFIX, auth/groups.ts). Default nwfl-. */
+  groupPrefix?: string;
 }
 
 export interface RunningServer {
@@ -60,6 +62,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
       verifier: options.verifier ?? rejectAllTokens,
       standing: options.standing ?? dbStanding(options.db),
       ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
+      groupPrefix: options.groupPrefix,
     }),
     shutdownSignal: shutdown.signal,
     ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
