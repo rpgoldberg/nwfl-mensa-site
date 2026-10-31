@@ -13,6 +13,7 @@ import pg from 'pg';
 import { type Env, type Warn, onIdleError, poolConfigFromEnv } from '../db/pool.js';
 import { isolatedRedact } from './isolated.js';
 import { type RegenerateOptions, startRegenerator } from './regenerate.js';
+import { type CheckOptions, checkTenant, policyTenants } from '../tenant.js';
 
 export const WORKER_ROLE = 'nwfl_worker';
 
@@ -35,6 +36,19 @@ export function workerPoolConfig(env: Env): pg.PoolConfig {
 /** The worker's pool; a dropped idle connection is logged (db/pool.ts onIdleError), never fatal. */
 export function createWorkerPool(env: Env, warn?: Warn): pg.Pool {
   return onIdleError(new pg.Pool(workerPoolConfig(env)), warn);
+}
+
+/**
+ * The worker's TENANT check (CF-ISO-0, tenant.ts), on a pool of its own that it closes. nwfl_worker may
+ * not read the tenant table, so it checks the tenant its redaction policy rows reference.
+ */
+export async function checkWorkerTenant(env: Env, tenant: string, options: CheckOptions = {}): Promise<void> {
+  const pool = createWorkerPool(env);
+  try {
+    await checkTenant(policyTenants(pool), tenant, { what: 'redaction policy tenant', ...options });
+  } finally {
+    await pool.end();
+  }
 }
 
 /**

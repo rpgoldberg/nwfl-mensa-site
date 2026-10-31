@@ -1,6 +1,6 @@
 // REDACT R1: the pure policy resolution. A missing cell, an unknown audience or
 // category, or an action the category does not allow resolves to HIDE.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AUDIENCES, CATEGORIES, actionsFor, cellKey, loosens, needsSecondOfficer, resolveAction, type Policy } from './policy.js';
 
 const policy = (cells: Array<[string, string, string]>): Policy => new Map(cells.map(([audience, category, action]) => [cellKey(audience, category), action]));
@@ -79,5 +79,27 @@ describe('needsSecondOfficer', () => {
     expect(needsSecondOfficer('public', 'member_phone', 'show', 'hide')).toBe(false);
     expect(needsSecondOfficer('members', 'member_phone', 'hide', 'show')).toBe(false);
     expect(needsSecondOfficer('officers', 'image', 'hide', 'show')).toBe(false);
+  });
+});
+
+describe('TENANT (CF-ISO-0)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('is nwflorida when TENANT is unset, and the configured chapter when it is set', async () => {
+    vi.stubEnv('TENANT', undefined);
+    vi.resetModules();
+    expect((await import('./policy.js')).TENANT).toBe('nwflorida');
+    vi.stubEnv('TENANT', 'mensa-other');
+    vi.resetModules();
+    expect((await import('./policy.js')).TENANT).toBe('mensa-other');
+  });
+
+  it('refuses to load with a malformed TENANT: it is written into SQL text (ledger.ts), so only 0012\'s pattern passes', async () => {
+    vi.stubEnv('TENANT', "nwflorida' OR '1'='1");
+    vi.resetModules();
+    await expect(import('./policy.js')).rejects.toThrow(/^TENANT must/);
   });
 });

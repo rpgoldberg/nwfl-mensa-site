@@ -8,11 +8,19 @@
 import { createStructuredLogger } from './platform/logger.js';
 import { startTelemetry } from './platform/telemetry.js';
 import { readConfig } from './config.js';
-import { runWorker } from './pdf/worker.js';
+import { checkWorkerTenant, runWorker } from './pdf/worker.js';
 
 const config = readConfig();
 const telemetry = startTelemetry();
 const logger = createStructuredLogger({ name: `${telemetry.state.serviceName}-worker`, level: config.logLevel });
+
+// The chapter this process serves must be the one its database's policy references (CF-ISO-0); otherwise it refuses to start.
+try {
+  await checkWorkerTenant(process.env, config.tenant);
+} catch (error) {
+  logger.error({ tenant: config.tenant }, (error as Error).message);
+  process.exit(1);
+}
 
 const worker = runWorker({
   env: process.env,

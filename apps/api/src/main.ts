@@ -12,6 +12,7 @@ import { createPool, describeTarget } from './db/pool.js';
 import { createStructuredLogger } from './platform/logger.js';
 import { startTelemetry } from './platform/telemetry.js';
 import { startServer } from './server.js';
+import { checkTenant, tenantRows } from './tenant.js';
 
 const config = readConfig();
 const auth = readAuthConfig(process.env);
@@ -23,6 +24,16 @@ const pool = createPool(process.env, (fields, message) => logger.warn(fields, me
 logger.info({ db_target: describeTarget(), service_version: process.env['SERVICE_VERSION'] ?? 'dev' }, 'starting');
 // Which token clients are on, by kind only (a key named token_* is redacted). With none, every token is refused.
 logger.info({ enabled_clients: auth.clients.map((client) => client.kind), group_prefix: auth.groupPrefix }, 'auth');
+
+// The chapter this process serves must be the database's one tenant row (CF-ISO-0); otherwise it refuses to start.
+try {
+  await checkTenant(tenantRows(pool), config.tenant);
+} catch (error) {
+  logger.error({ tenant: config.tenant }, (error as Error).message);
+  await pool.end();
+  process.exit(1);
+}
+logger.info({ tenant: config.tenant }, 'tenant');
 
 const server = await startServer({
   host: config.host,
