@@ -1,7 +1,7 @@
 import { createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
 import http2 from 'node:http2';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Health, HealthCheckResponse_ServingStatus as Status } from '../src/gen/grpc/health/v1/health_pb.js';
 import type { Db } from '../src/db/pool.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
@@ -12,6 +12,7 @@ import { HEALTH, NEWSLETTER, edgeHeaders, edgeVerifier } from './helpers/edge.js
 import { createStructuredLogger } from '../src/platform/logger.js';
 import { startTelemetry } from '../src/platform/telemetry.js';
 import { startServer } from '../src/server.js';
+import { startTenantGate } from '../src/tenant.js';
 import { h2Request } from './helpers/h2.js';
 import { captureLogs } from './helpers/servers.js';
 
@@ -54,6 +55,25 @@ describe('startServer', () => {
       // The health port is plain HTTP/1.1 and serves no RPC.
       expect((await fetch(`http://127.0.0.1:${server.healthPort}/grpc.health.v1.Health/Check`, { method: 'POST' })).status).toBe(404);
     } finally {
+      await server.close();
+    }
+  });
+
+  it('starts with the database down, stays not ready, and becomes ready once the tenant check passes, with no exit (CF-ISO-0)', async () => {
+    const { sink } = captureLogs();
+    let dbUp = false;
+    const db = fakeDb(() => (dbUp ? Promise.resolve({ rows: [{ id: 'nwflorida' }] }) : Promise.reject(Object.assign(new Error('down'), { code: 'ECONNREFUSED' }))));
+    const onMismatch = vi.fn();
+    const gate = startTenantGate(() => db.query<{ id: string }>('SELECT id FROM tenant').then((r) => r.rows.map((row) => row.id)), 'nwflorida', { onMismatch, firstDelayMs: 10, maxDelayMs: 20 });
+    const server = await startServer({ ...base, db, logger: createStructuredLogger({ sink }), tenantGate: gate });
+    try {
+      expect(await get(server.healthPort, '/readyz')).toEqual({ status: 503, body: { status: 'not_ready', db: 'down', tenant: 'unverified' } });
+      dbUp = true;
+      expect(await gate.settled).toBe('verified');
+      expect(await get(server.healthPort, '/readyz')).toEqual({ status: 200, body: { status: 'ready', db: 'ok', tenant: 'verified' } });
+      expect(onMismatch).not.toHaveBeenCalled();
+    } finally {
+      gate.stop();
       await server.close();
     }
   });

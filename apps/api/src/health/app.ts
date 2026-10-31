@@ -4,7 +4,8 @@
 //
 //   GET /healthz  liveness. The process is up and serving. It does NOT touch
 //                 Postgres: a database outage must not restart every pod.
-//   GET /readyz   readiness. Postgres answers and shutdown has not begun.
+//   GET /readyz   readiness. Postgres answers, shutdown has not begun and the
+//                 tenant is verified (tenant: verified | unverified, when gated).
 //
 // The bodies say which subsystem is unhappy and nothing else: no host, no
 // error text, no versions.
@@ -29,8 +30,9 @@ export function buildHealthApp(options: HealthAppOptions): FastifyInstance {
 
   app.get('/readyz', async (_request, reply) => {
     const report = await options.readiness.check();
-    if (report.ready) return reply.code(200).send({ status: 'ready', db: report.db });
-    return reply.code(503).send({ status: report.draining ? 'draining' : 'not_ready', db: report.db });
+    const tenant = report.tenant === undefined ? {} : { tenant: report.tenant };
+    if (report.ready) return reply.code(200).send({ status: 'ready', db: report.db, ...tenant });
+    return reply.code(503).send({ status: report.draining ? 'draining' : 'not_ready', db: report.db, ...tenant });
   });
 
   return app;

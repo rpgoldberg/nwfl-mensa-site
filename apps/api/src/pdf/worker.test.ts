@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { WORKER_ROLE, createWorkerPool, runWorker, workerPoolConfig } from './worker.js';
 
 describe('workerPoolConfig: the PDF worker connects as its own role only', () => {
@@ -53,5 +53,22 @@ describe('runWorker', () => {
     expect(timeouts()).toBe(before + 1);
     await worker.stop();
     expect(timeouts()).toBe(before);
+  });
+
+  it('claims nothing until the tenant is verified: a database that is down is retried, never a job run (CF-ISO-0)', async () => {
+    const errors: unknown[] = [];
+    const retries: unknown[] = [];
+    const onMismatch = vi.fn();
+    const worker = runWorker({
+      env: { PGHOST: '127.0.0.1', PGPORT: '1' },
+      intervalMs: 10,
+      onError: (error) => void errors.push(error),
+      tenant: { id: 'nwflorida', onMismatch, onRetry: (fields) => void retries.push(fields), firstDelayMs: 10, maxDelayMs: 10 },
+    });
+    await vi.waitFor(() => expect(retries.length).toBeGreaterThanOrEqual(3));
+    // Without the gate the job would have run (and failed) every 10 ms.
+    expect(errors).toEqual([]);
+    expect(onMismatch).not.toHaveBeenCalled();
+    await worker.stop();
   });
 });

@@ -38,6 +38,8 @@ export interface ServerOptions {
   edgeClientIds?: readonly string[];
   /** The chapter's group prefix (SITE_GROUP_PREFIX, auth/groups.ts). Default nwfl-. */
   groupPrefix?: string;
+  /** Not ready until it is verified (CF-ISO-0, tenant.ts startTenantGate). */
+  tenantGate?: { readonly verified: boolean };
 }
 
 export interface RunningServer {
@@ -52,7 +54,7 @@ const DEFAULT_DRAIN_TIMEOUT_MS = 20_000;
 export async function startServer(options: ServerOptions): Promise<RunningServer> {
   const { logger } = options;
   const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
-  const readiness = createReadiness(options.db);
+  const readiness = createReadiness(options.db, { tenant: options.tenantGate });
   const shutdown = new AbortController();
 
   const grpc = createGrpcServer({
