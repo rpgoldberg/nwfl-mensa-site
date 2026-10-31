@@ -35,6 +35,17 @@ export type EngineReply = { ok: true; result: RedactResult } | { ok: false; mess
 /** The built child next to this module (dist/pdf/engine-child.js). */
 export const ENGINE_CHILD = fileURLToPath(new URL('./engine-child.js', import.meta.url));
 
+/**
+ * The child's whole environment (CF-ISO-0): nothing. The child parses untrusted PDFs, so it must not
+ * inherit the worker's (PGPASSWORD, PGUSER, PGHOST and the rest). It is forked by absolute path with
+ * process.execPath, so it needs no PATH; it reads no variable it needs (a probe of every process.env
+ * read during real copies found only Node's own and the absent optional canvas's), and its copies
+ * are byte-identical with and without the worker's environment. Add a name here only with that proof.
+ * Residual: the child runs as the same uid, so it could still read /proc/<ppid>/environ; closing that
+ * needs a separate uid or no-new-privs in the worker's securityContext.
+ */
+export const ENGINE_ENV: Readonly<NodeJS.ProcessEnv> = Object.freeze({});
+
 /** Ten minutes is the job's lease; a copy that takes half of it is given up. */
 const DEFAULT_TIMEOUT_MS = 300_000;
 
@@ -62,7 +73,7 @@ export function isolatedRedact(options: { module?: string; timeoutMs?: number } 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return (original, request) =>
     new Promise<RedactResult>((resolve, reject) => {
-      const child = fork(options.module ?? ENGINE_CHILD, [], { serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
       let reply: EngineReply | undefined;
       let late = false;
       const timer = setTimeout(() => {

@@ -33,6 +33,25 @@ describe('isolatedRedact', () => {
     await expect(isolatedRedact({ module: child('hang'), timeoutMs: 300 })(Uint8Array.from([1]), REQUEST)).rejects.toThrow('the engine process took longer than 300 ms');
   });
 
+  it('gives the child no environment: the worker\'s database login and every other variable stay behind', async () => {
+    // CF-ISO-0: the child parses untrusted PDFs. Through the real fork, with the worker's PG* set.
+    const planted = { PGHOST: 'pg.example.invalid', PGUSER: 'nwfl_worker', PGPASSWORD: 'canary-pg-password', DATABASE_URL: 'postgres://u:canary@h/d', SOME_TOKEN: 'canary-token' };
+    const before = { ...process.env };
+    Object.assign(process.env, planted);
+    try {
+      const result = await isolatedRedact({ module: child('env') })(Uint8Array.from([1]), REQUEST);
+      expect(result.kind).toBe('refused');
+      const seen = JSON.parse((result as { reason: string }).reason) as string[];
+      expect(seen.filter((name) => name.startsWith('PG'))).toEqual([]);
+      expect(seen).toEqual([]);
+    } finally {
+      for (const name of Object.keys(planted)) {
+        if (before[name] === undefined) delete process.env[name];
+        else process.env[name] = before[name];
+      }
+    }
+  });
+
   it('runs the built engine-child.js next to it by default', () => {
     expect(ENGINE_CHILD).toMatch(/[/\\]pdf[/\\]engine-child\.js$/);
   });
