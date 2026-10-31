@@ -1,9 +1,13 @@
 // The engine in a process of its own (HARDEN-1 Fix 1): each copy is made in a child that exits after
 // it, so PDFium's and pdf.js's heaps go back to the OS. The children here are stand-ins (test/pdf/children).
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { linesPdf } from '../../test/pdf/fixtures.js';
-import { ENGINE_CHILD, engineReply, isolatedRedact, withoutCanvasWarnings } from './isolated.js';
+import { ENGINE_CHILD, engineExecArgv, engineReply, isolatedRedact, withoutCanvasWarnings } from './isolated.js';
 import { redactPdf } from './redact.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
@@ -50,6 +54,27 @@ describe('isolatedRedact', () => {
         else process.env[name] = before[name];
       }
     }
+  });
+
+  it('gives the child none of an --env-file the worker was started with (CF-ISO-0 N1)', () => {
+    // fork() passes the parent's Node flags on, so without a filter the child would load the file itself.
+    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-envfile-'));
+    try {
+      const file = path.join(dir, 'worker.env');
+      writeFileSync(file, 'PGPASSWORD=canary-from-env-file\nPGUSER=nwfl_worker\n', { mode: 0o600 });
+      const parent = fileURLToPath(new URL('../../test/pdf/children/env-file-parent.mjs', import.meta.url));
+      const out = execFileSync(process.execPath, [`--env-file=${file}`, parent], { env: {}, encoding: 'utf8' });
+      expect(JSON.parse((JSON.parse(out) as { reason: string }).reason)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('drops only the flags that load an environment file from the child\'s Node flags', () => {
+    expect(
+      engineExecArgv(['--max-old-space-size=512', '--env-file=/a', '--env-file', '/b', '--env-file-if-exists=/c', '--env-file-if-exists', '/d', '--import', 'x', '--enable-source-maps']),
+    ).toEqual(['--max-old-space-size=512', '--import', 'x', '--enable-source-maps']);
+    expect(engineExecArgv(['--env-file'])).toEqual([]);
   });
 
   it('runs the built engine-child.js next to it by default', () => {

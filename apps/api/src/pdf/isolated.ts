@@ -46,6 +46,24 @@ export const ENGINE_CHILD = fileURLToPath(new URL('./engine-child.js', import.me
  */
 export const ENGINE_ENV: Readonly<NodeJS.ProcessEnv> = Object.freeze({});
 
+const ENV_FILE_FLAGS = new Set(['--env-file', '--env-file-if-exists']);
+
+/**
+ * The child's Node flags: the worker's own (fork() passes process.execArgv on), minus any that load an
+ * environment file (CF-ISO-0 N1). Without this, a worker started with --env-file would hand the child
+ * the very variables ENGINE_ENV keeps out. Both spellings: --env-file=<path> and --env-file <path>.
+ */
+export function engineExecArgv(argv: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const flag = argv[i] as string;
+    const name = flag.split('=', 1)[0] as string;
+    if (!ENV_FILE_FLAGS.has(name)) kept.push(flag);
+    else if (!flag.includes('=')) i += 1;
+  }
+  return kept;
+}
+
 /** Ten minutes is the job's lease; a copy that takes half of it is given up. */
 const DEFAULT_TIMEOUT_MS = 300_000;
 
@@ -73,7 +91,7 @@ export function isolatedRedact(options: { module?: string; timeoutMs?: number } 
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   return (original, request) =>
     new Promise<RedactResult>((resolve, reject) => {
-      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, execArgv: engineExecArgv(process.execArgv), serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
       let reply: EngineReply | undefined;
       let late = false;
       const timer = setTimeout(() => {
