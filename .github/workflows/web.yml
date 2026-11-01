@@ -124,9 +124,13 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: apps/web
+          build-args: REVISION=${{ github.sha }}
           push: false
           load: true
           tags: nwfl-mensa-web:ci
+      - name: The image names its commit and this repository
+        # apps/api/scripts/image-labels.ts: the revision and source labels, read back from the image.
+        run: node ../api/scripts/image-labels.ts local nwfl-mensa-web:ci "$GITHUB_SHA"
       - name: Start with a read-only root and only /tmp writable
         run: |
           docker run -d --name web --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -p 127.0.0.1:8080:8080 nwfl-mensa-web:ci
@@ -140,7 +144,7 @@ jobs:
           test "$(docker inspect web --format '{{.State.ExitCode}}')" = "0"
       - name: The public-only canary image answers its sign-in routes with 404
         run: |
-          docker build --build-arg PUBLIC_ONLY=true -t nwfl-mensa-web:canary .
+          docker build --build-arg PUBLIC_ONLY=true --build-arg REVISION="$GITHUB_SHA" -t nwfl-mensa-web:canary .
           docker run -d --name canary --read-only --tmpfs /tmp -p 127.0.0.1:8081:8080 nwfl-mensa-web:canary
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8081/healthz; then break; fi
@@ -176,8 +180,14 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: apps/web
+          build-args: REVISION=${{ github.sha }}
           push: true
           tags: ghcr.io/rpgoldberg/nwfl-mensa-site/web:${{ steps.sha.outputs.short }}
       # Deploy by this digest, never by the tag.
       - name: The pushed digest
         run: echo "ghcr.io/rpgoldberg/nwfl-mensa-site/web@${{ steps.image.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
+      # Read back from the registry by that digest: the line fc-infra's pins cite.
+      - name: The pushed image names its commit and this repository
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: node ../api/scripts/image-labels.ts registry "ghcr.io/rpgoldberg/nwfl-mensa-site/web@$DIGEST" "$GITHUB_SHA"
