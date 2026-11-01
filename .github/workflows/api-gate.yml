@@ -3,8 +3,8 @@ name: api-gate
 # The UNTRUSTED-PDF-GATE tests (apps/api/test/gates) on EVERY push and pull
 # request, whatever it touches, as the check run `api-gate`, which the branch
 # ruleset requires. No paths filter, unlike api.yml: a required check that
-# never reports hangs on pending. Always running costs about a minute and a
-# half, mostly npm ci, so there is no changed-files step to get wrong.
+# never reports hangs on pending. Always running costs about a minute, mostly
+# npm ci, so there is no changed-files step to get wrong.
 # test/gates/api-gate-workflow.test.ts fails if this gains a filter, is
 # renamed or stops running and checking the gate tests.
 on:
