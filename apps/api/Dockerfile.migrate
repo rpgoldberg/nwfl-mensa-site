@@ -28,6 +28,14 @@ COPY --chown=root:root scripts/migrate.sh /app/scripts/migrate.sh
 COPY --chown=root:root migrations /app/migrations
 RUN find /app -type d -exec chmod 0555 {} + && find /app -type f -exec chmod 0444 {} +
 
+# The commit this image is built from, and where it lives: fc-infra's pins read
+# org.opencontainers.image.revision to bind a digest to its commit. CI passes
+# the full commit sha as --build-arg REVISION, and a build without it fails.
+# After every RUN, so a new commit rebuilds no layer.
+ARG REVISION
+LABEL org.opencontainers.image.revision="${REVISION:?pass the full commit sha as --build-arg REVISION}"
+LABEL org.opencontainers.image.source="https://github.com/rpgoldberg/nwfl-mensa-site"
+
 ENV HOME=/tmp \
     TMPDIR=/tmp
 

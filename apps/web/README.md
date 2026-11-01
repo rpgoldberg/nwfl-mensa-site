@@ -60,7 +60,7 @@ The public-only build (`npm run build:public-only`, or the image's `PUBLIC_ONLY=
 
 ## Image
 
-`docker build -t nwfl-mensa-web .` builds a Node 24 image that runs as uid 10001 with a read-only root; mount `/tmp` writable and nothing else. It listens on 8080 and answers `/healthz`.
+`docker build --build-arg REVISION="$(git rev-parse HEAD)" -t nwfl-mensa-web .` builds a Node 24 image that runs as uid 10001 with a read-only root; mount `/tmp` writable and nothing else. It listens on 8080 and answers `/healthz`. The build fails without `REVISION`, the full commit sha, which the image carries as its `org.opencontainers.image.revision` label; CI reads it back with `apps/api/scripts/image-labels.ts` after every build.
 
 ## Fonts
 

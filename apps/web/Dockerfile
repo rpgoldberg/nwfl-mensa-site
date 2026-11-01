@@ -69,6 +69,14 @@ COPY --from=build --chown=root:root /app/dist ./dist
 COPY --from=build --chown=root:root /app/server ./server
 COPY --chown=root:root --chmod=0644 package.json ./
 
+# The commit this image is built from, and where it lives: fc-infra's pins read
+# org.opencontainers.image.revision to bind a digest to its commit. CI passes
+# the full commit sha as --build-arg REVISION, and a build without it fails.
+# After every RUN, so a new commit rebuilds no layer.
+ARG REVISION
+LABEL org.opencontainers.image.revision="${REVISION:?pass the full commit sha as --build-arg REVISION}"
+LABEL org.opencontainers.image.source="https://github.com/rpgoldberg/nwfl-mensa-site"
+
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \

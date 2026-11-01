@@ -118,6 +118,22 @@ describe('web workflow', () => {
     expect(publish).toMatch(/echo .*ghcr\.io\/rpgoldberg\/nwfl-mensa-site\/web@\$\{\{ steps\.image\.outputs\.digest \}\}/);
   });
 
+  // fc-infra's pins cite the read-back line. apps/api/test/tooling/image-labels-workflow.test.ts checks
+  // this in full, but only api.yml runs it; this catches a change that runs only this workflow.
+  it('builds the image with the commit sha as REVISION, then reads its labels back, in the pull-request build and the publish', () => {
+    const reads = {
+      docker: 'run: node ../api/scripts/image-labels.ts local nwfl-mensa-web:ci "$GITHUB_SHA"',
+      publish: 'run: node ../api/scripts/image-labels.ts registry "ghcr.io/rpgoldberg/nwfl-mensa-site/web@$DIGEST" "$GITHUB_SHA"',
+    };
+    for (const [name, read] of Object.entries(reads)) {
+      const body = job(name);
+      const build = body.search(/^ {10}build-args: REVISION=\$\{\{ github\.sha \}\}$/m);
+      expect(build, name).toBeGreaterThan(-1);
+      expect(body.indexOf(read), name).toBeGreaterThan(build);
+    }
+    expect(job('publish')).toMatch(/^ {10}DIGEST: \$\{\{ steps\.image\.outputs\.digest \}\}$/m);
+  });
+
   it('installs with npm ci and never runs dependency install scripts', () => {
     for (const line of ci.match(/run: npm (ci|install).*$/gm) ?? []) expect(line).toMatch(/^run: npm ci --ignore-scripts/);
   });

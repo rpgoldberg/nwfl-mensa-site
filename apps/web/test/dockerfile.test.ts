@@ -49,6 +49,15 @@ describe('Dockerfile', () => {
     expect(stages[0]).toMatch(/^RUN PUBLIC_ONLY=\$\{PUBLIC_ONLY\} npx astro build$/m);
   });
 
+  // fc-infra's pins bind a digest to its commit by this label (apps/api/test/tooling/image-labels-workflow.test.ts).
+  it('requires the commit sha as REVISION and labels the image with it and this repository, after every RUN', () => {
+    const at = runtime.search(/^ARG REVISION$/m);
+    expect(at).toBeGreaterThan(-1);
+    expect(runtime.slice(at)).toMatch(/^LABEL org\.opencontainers\.image\.revision="\$\{REVISION:\?[^}"]+\}"$/m);
+    expect(runtime.slice(at)).not.toMatch(/^RUN /m);
+    expect(runtime).toMatch(/^LABEL org\.opencontainers\.image\.source="https:\/\/github\.com\/rpgoldberg\/nwfl-mensa-site"$/m);
+  });
+
   it('keeps the build context small and secret-free', () => {
     const ignore = readFileSync('.dockerignore', 'utf8').split('\n').map((l) => l.trim());
     for (const entry of ['node_modules', 'dist', '.git', '.env', 'coverage', 'test-results', '.astro']) {

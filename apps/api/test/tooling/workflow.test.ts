@@ -71,7 +71,7 @@ describe('api workflow', () => {
 
   it('builds the migration image from apps/api and smoke-runs it against a throwaway Postgres', () => {
     const migrate = job('migrate-image');
-    expect(migrate).toMatch(/docker build -f Dockerfile\.migrate -t nwfl-mensa-api-migrate:ci \.$/m);
+    expect(migrate).toMatch(/docker build -f Dockerfile\.migrate .*-t nwfl-mensa-api-migrate:ci \.$/m);
     expect(migrate).toContain('run: sh scripts/smoke-migrate-image.sh nwfl-mensa-api-migrate:ci');
   });
 

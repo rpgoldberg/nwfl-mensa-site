@@ -111,7 +111,11 @@ jobs:
         run: chmod -R go-rwx .
 
       - name: Build the production image
-        run: docker build --build-arg SERVICE_VERSION="$(node -pe "require('./package.json').version")" -t nwfl-mensa-api:ci .
+        run: docker build --build-arg SERVICE_VERSION="$(node -pe "require('./package.json').version")" --build-arg REVISION="$GITHUB_SHA" -t nwfl-mensa-api:ci .
+
+      - name: The image names its commit and this repository
+        # scripts/image-labels.ts: the revision and source labels, read back from the image.
+        run: node scripts/image-labels.ts local nwfl-mensa-api:ci "$GITHUB_SHA"
 
       - name: The image runs as a numeric non-root user
         run: |
@@ -152,7 +156,10 @@ jobs:
         run: chmod -R go-rwx .
 
       - name: Build the migration image
-        run: docker build -f Dockerfile.migrate -t nwfl-mensa-api-migrate:ci .
+        run: docker build -f Dockerfile.migrate --build-arg REVISION="$GITHUB_SHA" -t nwfl-mensa-api-migrate:ci .
+
+      - name: The image names its commit and this repository
+        run: node scripts/image-labels.ts local nwfl-mensa-api-migrate:ci "$GITHUB_SHA"
 
       - name: The image runs as a numeric non-root user
         run: |
@@ -201,7 +208,9 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: apps/api
-          build-args: SERVICE_VERSION=${{ steps.sha.outputs.version }}
+          build-args: |
+            SERVICE_VERSION=${{ steps.sha.outputs.version }}
+            REVISION=${{ github.sha }}
           push: true
           tags: ghcr.io/rpgoldberg/nwfl-mensa-site/api:${{ steps.sha.outputs.short }}
 
@@ -209,14 +218,26 @@ jobs:
       - name: The pushed digest
         run: echo "ghcr.io/rpgoldberg/nwfl-mensa-site/api@${{ steps.image.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Read back from the registry by that digest: the line fc-infra's pins cite.
+      - name: The pushed image names its commit and this repository
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: node scripts/image-labels.ts registry "ghcr.io/rpgoldberg/nwfl-mensa-site/api@$DIGEST" "$GITHUB_SHA"
+
       - name: Build and push the migration image
         id: migrate-image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: apps/api
           file: apps/api/Dockerfile.migrate
+          build-args: REVISION=${{ github.sha }}
           push: true
           tags: ghcr.io/rpgoldberg/nwfl-mensa-site/api-migrate:${{ steps.sha.outputs.short }}
 
       - name: The pushed migration digest
         run: echo "ghcr.io/rpgoldberg/nwfl-mensa-site/api-migrate@${{ steps.migrate-image.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: The pushed migration image names its commit and this repository
+        env:
+          DIGEST: ${{ steps.migrate-image.outputs.digest }}
+        run: node scripts/image-labels.ts registry "ghcr.io/rpgoldberg/nwfl-mensa-site/api-migrate@$DIGEST" "$GITHUB_SHA"
