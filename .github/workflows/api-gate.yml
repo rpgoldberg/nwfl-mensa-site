@@ -1,0 +1,59 @@
+name: api-gate
+
+# The UNTRUSTED-PDF-GATE tests (apps/api/test/gates) on EVERY push and pull
+# request, whatever it touches, as the check run `api-gate`, which the branch
+# ruleset requires. No paths filter, unlike api.yml: a required check that
+# never reports hangs on pending. Always running costs about a minute, mostly
+# npm ci, so there is no changed-files step to get wrong.
+# test/gates/api-gate-workflow.test.ts fails if this gains a filter, is
+# renamed or stops running and checking the gate tests.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: api-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: apps/api
+
+jobs:
+  api-gate:
+    name: api-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version-file: apps/api/.nvmrc
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+
+      - name: Install dependencies
+        # fc-shared is vendored (vendor/README.md), so no registry token.
+        run: npm ci --ignore-scripts
+
+      - name: Start a throwaway Postgres
+        # The catalog test migrates a fresh database on it.
+        run: sh scripts/test-db.sh start >> "$GITHUB_ENV"
+
+      - name: Run the gate tests
+        run: node_modules/.bin/vitest run test/gates/ --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/api-gate.json"
+
+      - name: Every gate test ran and passed, none skipped
+        # vitest passes a skipped test; without its database the catalog test skips.
+        run: node scripts/gate-results.ts "$RUNNER_TEMP/api-gate.json" test/gates
+
+      - name: Remove the throwaway Postgres
+        if: always() && env.NWFL_TEST_PG_CONTAINER != ''
+        run: sh scripts/test-db.sh stop "$NWFL_TEST_PG_CONTAINER"

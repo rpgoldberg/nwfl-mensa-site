@@ -255,6 +255,17 @@ so only when both test files pinned in the gate test
 each holding a real, unskipped test under its pinned title. Setting it to true
 without them fails. The request snapshot and the catalog are never lifted.
 
+### The api-gate check
+
+`.github/workflows/api-gate.yml` runs every test in `test/gates` on every push
+and pull request, whatever it touches, as the check run `api-gate`, which the
+branch ruleset requires. It has no paths filter, so it always reports. It runs
+the tests on a throwaway Postgres, then `scripts/gate-results.ts` fails the job
+unless every gate test file ran and every test passed: vitest alone passes a
+skipped test, and the catalog test skips without its database.
+`test/gates/api-gate-workflow.test.ts` fails if the workflow gains a filter, is
+renamed, or stops running or checking the gate tests.
+
 ## Schema
 
 Raw SQL in `migrations/NNNN_*.sql`, applied by `scripts/migrate.sh` (ported
@@ -301,4 +312,6 @@ Accepted residual risks, with no code against them:
 - fc-shared 1.7.0 is vendored; see `vendor/README.md`.
 - buf comes from the `@bufbuild/buf` npm package, so CI and a laptop run the
   same version.
+- yaml 2.9.1, a dev dependency, parses the workflows in the api-gate
+  self-check.
 - jose 6.2.13 verifies tokens (RS256 and ES256 only).
