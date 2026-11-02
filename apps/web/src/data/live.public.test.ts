@@ -49,7 +49,7 @@ const item = (n: number, kind: ContentKind, visibility: ItemVisibility, title = 
 
 const KINDS = [ContentKind.TREASURER_SUMMARY, ContentKind.PRESIDENT_REPORT, ContentKind.ANNOUNCEMENT, ContentKind.ARTICLE];
 const LISTS = new Map<ContentKind, ContentItem[]>([
-  ...KINDS.map((kind) => [kind, [item(1, kind, ItemVisibility.PUBLIC), item(2, kind, ItemVisibility.MEMBERS), item(3, kind, ItemVisibility.OFFICERS), item(4, kind, ItemVisibility.PUBLIC)]] as const),
+  ...KINDS.map((kind): [ContentKind, ContentItem[]] => [kind, [item(1, kind, ItemVisibility.PUBLIC), item(2, kind, ItemVisibility.MEMBERS), item(3, kind, ItemVisibility.OFFICERS), item(4, kind, ItemVisibility.PUBLIC)]]),
   [
     ContentKind.DOCUMENT,
     [

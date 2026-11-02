@@ -4,8 +4,12 @@
 // kept only when it is plain ASCII; otherwise the file's id. The cache rule is
 // the site's (server/policy.mjs): public briefly when anonymous, private and
 // never stored with a session cookie, never stored for a 404 or a 503.
+// A14: with a signed-in reader, the file is read with their token (a member
+// gets the members copy), and the PDF itself says private, no-store, which
+// the site policy keeps. A file the reader may not have is the same 404 as a
+// missing one, byte for byte, and not ready is the public's answer too.
 import type { LiveData } from '../data/live';
-import { ApiUnavailable } from './api/client';
+import { ApiUnavailable, type Reader } from './api/client';
 
 export const NOT_READY_TEXT = 'This file is being prepared; try again in a minute.';
 const SAFE_NAME = /^[a-z0-9][a-z0-9-]{0,79}\.pdf$/;
@@ -23,11 +27,11 @@ function page(status: number, title: string, text: string, extra: Record<string,
 
 const notFound = () => page(404, 'No such file', 'There is no file at this address. It may have been moved or taken down.');
 
-export async function serveFile(live: Pick<LiveData, 'file'> | undefined, id: string | undefined): Promise<Response> {
+export async function serveFile(live: Pick<LiveData, 'file'> | undefined, id: string | undefined, as?: Reader): Promise<Response> {
   if (live === undefined || id === undefined) return notFound();
   let file;
   try {
-    file = await live.file(id);
+    file = await live.file(id, as);
   } catch (error) {
     if (error instanceof ApiUnavailable) return page(503, 'File temporarily unavailable', 'This file is temporarily unavailable. Please try again later.');
     throw error;
@@ -42,6 +46,7 @@ export async function serveFile(live: Pick<LiveData, 'file'> | undefined, id: st
       'Content-Disposition': `inline; filename="${filename}"`,
       'Content-Length': String(file.size),
       'X-Content-Type-Options': 'nosniff',
+      ...(as === undefined ? {} : { 'Cache-Control': 'private, no-store' }),
     },
   });
 }
