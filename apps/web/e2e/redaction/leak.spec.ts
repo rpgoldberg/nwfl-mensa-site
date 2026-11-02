@@ -16,8 +16,15 @@
 // inflated (REDACT R3c); the seeded PDF carries a marked canary. The redacted
 // copies must render (the positive control), so a fixture that never reached
 // a page cannot pass vacuously.
+//
+// A14: /news as a signed-in reader, through the same real API, with the test
+// identity provider's JWT access tokens (playwright.redaction.config.ts). A
+// member sees the members passage, the members article and the members copy
+// (the positive control); a pending account none of it, nor a members file id;
+// an officer never the officers article; with sign-in off, a session cookie
+// changes nothing.
 import { inflateSync } from 'node:zlib';
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequest, type APIRequestContext } from '@playwright/test';
 import { PUBLIC_CACHE } from '../../server/policy.mjs';
 import { SESSION_COOKIE } from '../../server/policy.mjs';
 import { LIVE, STATIC, crawlSeeds, patternOf } from '../routes';
@@ -32,6 +39,8 @@ interface Fixture {
   stored: Record<string, number>;
   /** The newsletter issue: its title and summary, a line its PDFs carry, and the public original's sha256 in hex. */
   issue: { title: string; summary: string; plain: string; publicSha256: string };
+  /** What the article with the members passage says to everyone (A14). */
+  articlePlain: string;
 }
 
 interface Fetched {
@@ -301,4 +310,110 @@ test('cache by audience: no response is stored publicly for a signed-in reader, 
     if (!/(^|, )(private|no-store)(,|$)/.test(cache) || /\bpublic\b|s-maxage/.test(cache)) wrong.push(`${url}: ${cache}`);
   }
   expect(wrong).toEqual([]);
+});
+
+// A14: /news as a signed-in reader, through the real API.
+const MEMBERS_CANARIES = ['membersPassage', 'membersTitle', 'membersBody'] as const;
+const OFFICERS_CANARIES = ['officersTitle', 'officersBody'] as const;
+
+/** Signed in on the site with sign-in on, at the test provider, as one of its people: a context that carries the session. */
+async function signedIn(request: APIRequest, login: 'member' | 'pending' | 'officer'): Promise<APIRequestContext> {
+  const ctx = await request.newContext({ baseURL: REDACTION.memberSiteUrl, ignoreHTTPSErrors: true });
+  const form = await ctx.get('/sign-in?return=%2Fnews');
+  expect(form.status(), 'the provider asks who it is').toBe(200);
+  const action = /<form method="post" action="([^"]+)"/.exec(await form.text())?.[1];
+  expect(action, 'the sign-in form').toBeDefined();
+  const done = await ctx.post(new URL(action!, form.url()).href, { form: { login, password: 'any' } });
+  expect(done.status(), `${login} signed in`).toBe(200);
+  expect(new URL(done.url()).pathname).toBe('/news');
+  return ctx;
+}
+
+const seen = (html: string, names: readonly string[]) => names.filter((name) => fold(html).includes(fold(fixture.canaries[name]!)));
+const stamp = (text: string) => text.replace(/^DTSTAMP:.*$/gm, '');
+
+test('a member sees the members passage and the members article (the positive control), and gets the members copy, never stored', async ({ playwright }) => {
+  const member = await signedIn(playwright.request, 'member');
+  const news = await get(member, '/news');
+  expect(news.status).toBe(200);
+  expect(seen(news.body, MEMBERS_CANARIES)).toEqual([...MEMBERS_CANARIES]);
+  expect(seen(news.body, OFFICERS_CANARIES)).toEqual([]);
+  expect(news.body).toContain(fixture.articlePlain);
+  expect(news.body).toContain(`href="/documents/${fixture.ids['issueMembersPdf']}.pdf"`);
+  expect(news.headers['cache-control']).toBe('private, no-store');
+  expect(news.headers['cdn-cache-control']).toBe('no-store');
+  expect(news.headers['vary']).toBe('Cookie');
+  const pdf = await get(member, `/documents/${fixture.ids['issueMembersPdf']}.pdf`);
+  expect(pdf.status).toBe(200);
+  expect(pdf.contentType).toBe('application/pdf');
+  expect(pdf.pdf?.text).toContain('the members edition');
+  expect(pdf.headers['cache-control']).toBe('private, no-store');
+  expect(pdf.headers['cdn-cache-control']).toBe('no-store');
+  await member.dispose();
+});
+
+test('an officer gets the members view, and /news never shows the officers article the API sends them', async ({ playwright }) => {
+  const officer = await signedIn(playwright.request, 'officer');
+  const news = await get(officer, '/news');
+  expect(seen(news.body, MEMBERS_CANARIES)).toEqual([...MEMBERS_CANARIES]);
+  expect(seen(news.body, OFFICERS_CANARIES)).toEqual([]);
+  await officer.dispose();
+});
+
+test('a pending account (no member standing) sees no members canary and no members file id; its members copy is a missing file\'s 404', async ({ playwright }) => {
+  const pending = await signedIn(playwright.request, 'pending');
+  const news = await get(pending, '/news');
+  expect(news.status).toBe(200);
+  expect(seen(news.body, [...MEMBERS_CANARIES, ...OFFICERS_CANARIES])).toEqual([]);
+  expect(news.body).not.toContain(fixture.ids['issueMembersPdf']);
+  expect(news.body).toContain('Your account does not have member access yet.');
+  expect(news.body).toContain(fixture.articlePlain);
+  const withheld = await pending.get(`/documents/${fixture.ids['issueMembersPdf']}.pdf`);
+  const random = await pending.get('/documents/00000000-0000-4000-8000-0000000000aa.pdf');
+  expect(withheld.status()).toBe(404);
+  expect(await withheld.text()).toBe(await random.text());
+  await pending.dispose();
+});
+
+test("one reader's answer never reaches another: after a member, and beside one, the public's /news on the same site has none of it", async ({ playwright }) => {
+  const member = await signedIn(playwright.request, 'member');
+  const anonymous = await playwright.request.newContext({ baseURL: REDACTION.memberSiteUrl, ignoreHTTPSErrors: true });
+  await get(member, '/news');
+  const after = await get(anonymous, '/news');
+  expect(seen(after.body, [...MEMBERS_CANARIES, ...OFFICERS_CANARIES])).toEqual([]);
+  expect(after.body).not.toContain(fixture.ids['issueMembersPdf']);
+  // Sign-in is on here: the public box offers it.
+  expect(after.body).toContain('href="/sign-in?return=%2Fnews&amp;again=1"');
+  const together = await Promise.all([get(member, '/news'), get(anonymous, '/news'), get(member, '/news'), get(anonymous, '/news')]);
+  for (const n of [1, 3]) {
+    expect(seen(together[n]!.body, MEMBERS_CANARIES), String(n)).toEqual([]);
+    expect(together[n]!.body, String(n)).not.toContain(fixture.ids['issueMembersPdf']);
+  }
+  for (const n of [0, 2]) expect(seen(together[n]!.body, MEMBERS_CANARIES), String(n)).toEqual([...MEMBERS_CANARIES]);
+  const members = await anonymous.get(`/documents/${fixture.ids['issueMembersPdf']}.pdf`);
+  expect(members.status()).toBe(404);
+  await Promise.all([member.dispose(), anonymous.dispose()]);
+});
+
+test("with a member's session, the calendar files are byte for byte the public's: no feed forwards a token", async ({ playwright }) => {
+  const member = await signedIn(playwright.request, 'member');
+  const anonymous = await playwright.request.newContext({ baseURL: REDACTION.memberSiteUrl, ignoreHTTPSErrors: true });
+  for (const url of ['/calendar.ics', '/events.ics', `/events/${fixture.ids['games']}.ics`]) {
+    const signed = await member.get(url);
+    const plain = await anonymous.get(url);
+    expect(signed.status(), url).toBe(200);
+    expect(stamp(await signed.text()), url).toBe(stamp(await plain.text()));
+  }
+  await Promise.all([member.dispose(), anonymous.dispose()]);
+});
+
+test('with sign-in off, a session cookie changes nothing: /news and the PDFs are the public bytes, and the members copy a 404', async ({ request }) => {
+  const cookie = { cookie: `${SESSION_COOKIE}=v1.forged` };
+  for (const url of ['/news', `/documents/${fixture.ids['issuePublicPdf']}.pdf`, `/documents/${fixture.ids['issueMembersPdf']}.pdf`]) {
+    const plain = await request.get(url);
+    const withCookie = await request.get(url, { headers: cookie });
+    expect(withCookie.status(), url).toBe(plain.status());
+    expect((await withCookie.body()).equals(await plain.body()), url).toBe(true);
+  }
+  expect((await request.get(`/documents/${fixture.ids['issueMembersPdf']}.pdf`, { headers: cookie })).status()).toBe(404);
 });

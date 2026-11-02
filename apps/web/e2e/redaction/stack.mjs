@@ -4,7 +4,16 @@
 // migrated by the API's own migrate.sh, seeded with random canary strings that
 // the redaction policy or a mark withholds from the public, then the API's
 // production entrypoint (apps/api/dist/main.js; run `npm run build` in
-// apps/api first) with no token client at all, so every call is the public's.
+// apps/api first). Its one token client is the test identity provider
+// (SITE_OIDC_ISSUER, over https; IDP_CA_FILE is its certificate): a call
+// without a token is the public's, as every call of the crawl is.
+//
+// A14: the members view. MEMBER_SUB has member standing (a member_account
+// row, verified today); the provider's pending account has none. A public
+// article carries a members passage, a members article and an officers
+// article carry canaries of their own: the public, and the pending account,
+// must see none of them, a member the first two, and /news shows nobody the
+// officers article.
 //
 // A PDF on a marked item carries a canary of its own and a marked phone
 // (REDACT R3c); the stack is ready only once the PDF worker (dist/worker.js,
@@ -34,6 +43,9 @@ const pg = new URL(url);
 const apiPort = Number(process.env['API_PORT'] ?? 9101);
 const healthPort = Number(process.env['API_HEALTH_PORT'] ?? 9102);
 const stackPort = Number(process.env['STACK_PORT'] ?? 9103);
+// A14: the API's token client, and the account with member standing.
+const oidc = { issuer: process.env['SITE_OIDC_ISSUER'], jwks: process.env['SITE_OIDC_JWKS_URL'], ca: process.env['IDP_CA_FILE'] };
+const memberSub = process.env['MEMBER_SUB'];
 const API_MAIN = path.resolve(import.meta.dirname, '../../../api/dist/main.js');
 // The PDF worker (W-WORKER): its own process and database role make the redacted copies.
 const API_WORKER = path.resolve(import.meta.dirname, '../../../api/dist/worker.js');
@@ -96,6 +108,12 @@ const C = {
   homeName: canary('homename'),
   // In the PDF and, so that its mark anchors (a mark found in no field hides the item), in the body.
   pdfName: canary('pdfname'),
+  // A14: a members passage in a public article; a members article's title and body; an officers article's.
+  membersPassage: canary('memberspassage'),
+  membersTitle: canary('memberstitle'),
+  membersBody: canary('membersbody'),
+  officersTitle: canary('officerstitle'),
+  officersBody: canary('officersbody'),
 };
 
 const ids = {
@@ -118,7 +136,12 @@ const ids = {
   issue: randomUUID(),
   issuePublicPdf: randomUUID(),
   issueMembersPdf: randomUUID(),
+  openArticle: randomUUID(),
+  membersArticle: randomUUID(),
+  officersArticle: randomUUID(),
 };
+/** A14: what the open article says to everyone, beside its members passage. */
+const ARTICLE_PLAIN = 'The lunch moves across town in March';
 /** What the PDF says besides its canaries: the crawl's sign that it read the copy. */
 const PDF_PLAIN = 'Bring a folding chair';
 
@@ -167,15 +190,19 @@ const para = (/** @type {string[]} */ ...texts) => ({ type: 'paragraph', childre
  * One published item, the way apps/api/test/helpers/content.ts publishes it: a version, ready with
  * its hash, approved with its public tree and search text, then live. Its files are attached before
  * the version is approved (an approved version's files are frozen, 0011).
- * @param {{ id: string, slug: string, kind: string, office: string, title: string, summary?: string, body: unknown[], onBehalfOf?: string, daysAgo: number, files?: { id: string, bytes: Buffer, name: string, audience: 'public' | 'members' }[] }} i
+ * The public tree is the body unless given: the API's approval makes it with each members passage a
+ * placeholder, and a members or officers item's a single placeholder (apps/api/src/content/tree.ts).
+ * An officers item never targets the newsletter (0003: officers items are not distributed).
+ * @param {{ id: string, slug: string, kind: string, office: string, title: string, summary?: string, body: unknown[], publicBody?: unknown[], visibility?: 'public' | 'members' | 'officers', onBehalfOf?: string, daysAgo: number, files?: { id: string, bytes: Buffer, name: string, audience: 'public' | 'members' }[] }} i
  */
 function item(i) {
   const v = randomUUID();
   const body = { blocks: i.body };
+  const publicBody = { blocks: i.publicBody ?? i.body };
   return `
 INSERT INTO content_item (id, slug, kind, office_id) VALUES (${q(i.id)}, ${q(i.slug)}, ${q(i.kind)}, ${q(i.office)});
 INSERT INTO content_version (id, item_id, n, title, summary, visibility, body_ast, created_by_sub, acting_office_id, target_newsletter, on_behalf_of)
-  VALUES (${q(v)}, ${q(i.id)}, 1, ${q(i.title)}, ${i.summary ? q(i.summary) : 'NULL'}, 'public', ${j(body)}, 'sub-author', ${q(i.office)}, true, ${i.onBehalfOf ? q(i.onBehalfOf) : 'NULL'});
+  VALUES (${q(v)}, ${q(i.id)}, 1, ${q(i.title)}, ${i.summary ? q(i.summary) : 'NULL'}, ${q(i.visibility ?? 'public')}, ${j(body)}, 'sub-author', ${q(i.office)}, ${i.visibility === 'officers' ? 'false' : 'true'}, ${i.onBehalfOf ? q(i.onBehalfOf) : 'NULL'});
 ${(i.files ?? [])
   .map(
     (f) => `INSERT INTO stored_file (id, version_id, object_key, filename, mime_type, size_bytes, sha256, audience)
@@ -184,7 +211,7 @@ ${(i.files ?? [])
   .join('\n')}
 UPDATE content_version SET status = 'ready', content_hash = sha256(convert_to(${q(JSON.stringify(body))}, 'UTF8')), ready_at = now() WHERE id = ${q(v)};
 UPDATE content_version SET status = 'approved', approved_at = now() - interval '${i.daysAgo} days', approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
-  public_ast = ${j(body)}, search_public = to_tsvector('english', ${q(i.title)}), search_members = to_tsvector('english', ${q(i.title)}) WHERE id = ${q(v)};
+  public_ast = ${j(publicBody)}, search_public = to_tsvector('english', ${q(i.title)}), search_members = to_tsvector('english', ${q(i.title)}) WHERE id = ${q(v)};
 UPDATE content_item SET state = 'ready' WHERE id = ${q(i.id)};
 UPDATE content_item SET state = 'published', live_version_id = ${q(v)} WHERE id = ${q(i.id)};`;
 }
@@ -221,6 +248,19 @@ ${item({
     { id: ids.issueMembersPdf, bytes: ISSUE_MEMBERS_PDF, name: 'pensa-mensa-2026-10-members.pdf', audience: 'members' },
   ],
 })}
+${item({
+  id: ids.openArticle,
+  slug: 'a-new-home-for-lunch',
+  kind: 'article',
+  office: ids.president,
+  title: 'A new home for the Wednesday lunch',
+  body: [para(`${ARTICLE_PLAIN}.`), { type: 'members', children: [para(`The side gate code is ${C.membersPassage}.`)] }],
+  publicBody: [para(`${ARTICLE_PLAIN}.`), { type: 'redacted' }],
+  daysAgo: 2,
+})}
+${item({ id: ids.membersArticle, slug: 'members-picnic', kind: 'article', office: ids.president, title: `Picnic with ${C.membersTitle}`, visibility: 'members', body: [para(`Meet at ${C.membersBody}.`)], publicBody: [{ type: 'redacted' }], daysAgo: 3 })}
+${item({ id: ids.officersArticle, slug: 'board-notes', kind: 'article', office: ids.president, title: `Board notes ${C.officersTitle}`, visibility: 'officers', body: [para(`Notes: ${C.officersBody}.`)], publicBody: [{ type: 'redacted' }], daysAgo: 4 })}
+${memberSub ? `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES (${q(memberSub)}, 'member', 'invite', 'sub-officer', now(), current_date);` : ''}
 INSERT INTO venue (id, kind, name, business_address, city, area) VALUES (${q(ids.bistro)}, 'business', 'Sample Bistro', '100 Example Way', 'Destin', 'okaloosa');
 INSERT INTO venue (id, kind, name, area, url, host_office_id) VALUES (${q(ids.room)}, 'virtual', ${q(`Room ${C.venueName}`)}, 'virtual', ${q(`https://example.org/${C.venueUrl}`)}, ${q(ids.president)});
 INSERT INTO venue (id, kind, name, area, host_office_id) VALUES (${q(ids.home)}, 'member_home', ${q(`The ${C.homeName} home`)}, 'okaloosa', ${q(ids.president)});
@@ -337,6 +377,9 @@ try {
       GRPC_PORT: String(apiPort),
       HEALTH_PORT: String(healthPort),
       LOG_LEVEL: 'warn',
+      ...(oidc.issuer ? { SITE_OIDC_ISSUER: oidc.issuer } : {}),
+      ...(oidc.jwks ? { SITE_OIDC_JWKS_URL: oidc.jwks } : {}),
+      ...(oidc.ca ? { NODE_EXTRA_CA_CERTS: oidc.ca } : {}),
     },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -379,6 +422,7 @@ try {
     pdfOriginal: PDF.toString('base64'),
     stored: counts,
     issue: { title: ISSUE.title, summary: ISSUE.summary, plain: ISSUE.plain, publicSha256: createHash('sha256').update(ISSUE_PUBLIC_PDF).digest('hex') },
+    articlePlain: ARTICLE_PLAIN,
   });
   http
     .createServer((req, res) => {
