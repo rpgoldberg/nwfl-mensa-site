@@ -35,7 +35,7 @@ export function readerFor(session: Session | undefined, { tokens, now }: ReaderD
 
 /**
  * Where "sign in" leads from a page (the public box, "Sign in again"): back to `back`, asking for a
- * fresh sign-in even when signed in (flow.ts), so a lapsed or refused token is replaced. None while
+ * fresh sign-in even when signed in (flow.ts), so a lapsed token is replaced. None while
  * sign-in is not set up (it would answer 503) or in a build that offers none.
  */
 export function signInLink({ setup, key }: { setup: AuthSetup; key: Buffer | undefined }, publicOnly: boolean, back: string): string | undefined {

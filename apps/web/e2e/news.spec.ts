@@ -65,7 +65,7 @@ test.describe('/news with issues published', () => {
       expect(html).not.toContain(NEWSLETTER.membersOnly.publicPdf);
       expect(html).not.toContain(NEWSLETTER.other.publicPdf);
       // A14: the article's members PDF, its members passage, the members and officers articles.
-      for (const secret of [ARTICLES.open.membersPdf, ARTICLES.open.passage, ARTICLES.members.title, ARTICLES.members.body, ARTICLES.officers.title, ARTICLES.officers.pdf, ...SOURCE_PDFS]) expect(html).not.toContain(secret);
+      for (const secret of [ARTICLES.open.membersPdf, ARTICLES.open.passage, ARTICLES.members.title, ARTICLES.members.body, ARTICLES.officers.title, ARTICLES.officers.pdf, ARTICLES.withheld.title, ...SOURCE_PDFS]) expect(html).not.toContain(secret);
       expect(html.toLowerCase()).not.toContain(NEWSLETTER.sha256Hex.slice(0, 16));
       expect(html).not.toContain(Buffer.from(NEWSLETTER.sha256Hex, 'hex').toString('base64').slice(0, 16));
       expect(html).not.toMatch(/987[,.\s]?654/);

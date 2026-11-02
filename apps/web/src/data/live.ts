@@ -10,15 +10,17 @@
 // the API's answer, never the session: a members copy, a members item, a
 // members passage or a members file only where the API sent it to that reader,
 // and never an officers item or file, or a source file, even to an officer.
-// A refused token is asked again once as the public. Nothing is kept between
-// calls: one reader's answer never reaches another's page.
+// Whether the API read the reader as a member is decided from its whole
+// answer, never item by item. A refused token is asked again once as the
+// public. Nothing is kept between calls: one reader's answer never reaches
+// another's page.
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility, type StoredFile } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { Area, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type FileRead, type Reader, sendable } from '../lib/api/client';
 import { type CalendarEvent, type CalendarVenue, type EventStatus, centralParts, eventPath } from '../lib/calendar';
-import { type View, documentHtml, hasRedacted, withheldHtml } from '../lib/document';
+import { type View, documentHtml, hasMembers, hasRedacted, withheldHtml } from '../lib/document';
 import { type Issue, type Office, newestFirst } from './site-data';
 
 /** A published item as a page shows it. */
@@ -56,9 +58,12 @@ export interface News {
   items: NewsItemView[];
   /** A reader's token went, and the API answered with it. */
   signedIn: boolean;
-  /** The API refused the reader's token: this is the public's view, and the page says to sign in again. */
+  /** The API refused the reader's token: this is the public's view, and the page says to ask for help (signing in again would be refused too). */
   tokenRefused: boolean;
-  /** The API could not give the articles (items is empty): the page says so, and still lists the issues. */
+  /**
+   * The API could not give a reader the articles (items is empty): the page says so, and still lists the issues.
+   * Never for the public, whose /news is then what it was before it showed any article.
+   */
   itemsUnavailable: boolean;
 }
 
@@ -231,21 +236,41 @@ const issueList = (items: readonly ContentItem[], members: boolean) =>
     .sort(newestFirst);
 
 /**
- * The articles as one reader may have them. A public item always; a members item only when the API sent
- * that reader its tree (no redacted node in it), or as a teaser when D1's switch is on; an officers item
- * never, whoever reads. Each body is rendered for what the API answered: the members view for a member's
- * tree, the signed-in box for a tree the API filtered for the public, and the public box otherwise. A
- * teaser is its title and summary with the box alone: whatever body or files the API sent are not read.
+ * Whether the answer as a whole shows that the API read the reader as a member (or an officer): a members
+ * node in any body, or a members file on any item, in either list. The API never sends the public either:
+ * its tree is filtered before it leaves, and it is listed public files only (apps/api content/service.ts).
+ * Then a redacted node anywhere in the answer is something withheld from members too, not a sign of the
+ * public's view.
  */
-function newsItemViews(items: readonly ContentItem[], signedIn: boolean, signIn: string | undefined, teasers: boolean): NewsItemView[] {
+function answeredAsMember(lists: readonly (readonly ContentItem[])[]): boolean {
+  return lists.some((items) => items.some(({ live }) => live !== undefined && (hasMembers(live.body) || live.files.some((f) => f.audience === FileAudience.MEMBERS))));
+}
+
+/** How the API answered /news: `reader` a token went; `signedIn` the API answered it; `member` and read it as a member's. */
+interface Answer {
+  reader: boolean;
+  signedIn: boolean;
+  member: boolean;
+}
+
+/**
+ * The articles as one reader may have them. A public item always; a members item when the API answered as
+ * for a member, or, when nothing in the answer shows that, when it sent that reader the item's tree (no
+ * redacted node in it); as a teaser when D1's switch is on; an officers item never, whoever reads. Each body
+ * is rendered for what the API answered: the members view for a member's answer or tree, the signed-in box
+ * for a reader the API answered as the public's (a refused token included, so no box sends them to sign in
+ * again), and the public box with no reader. A teaser is its title and summary with the box alone: whatever
+ * body or files the API sent are not read.
+ */
+function newsItemViews(items: readonly ContentItem[], answer: Answer, signIn: string | undefined, teasers: boolean): NewsItemView[] {
   return items.flatMap((item) => {
     const live = item.live;
     if (live === undefined) return [];
-    const answeredAsPublic = !signedIn || hasRedacted(live.body);
+    const answeredAsPublic = !answer.member && (!answer.signedIn || hasRedacted(live.body));
     const membersOnly = live.visibility === ItemVisibility.MEMBERS;
     const shown = live.visibility === ItemVisibility.PUBLIC || (membersOnly && (!answeredAsPublic || teasers));
     if (!shown) return [];
-    const view: View = !signedIn ? 'public' : answeredAsPublic ? 'signed-in-public' : 'members';
+    const view: View = !answeredAsPublic ? 'members' : answer.reader ? 'signed-in-public' : 'public';
     const withheld = membersOnly && answeredAsPublic;
     return [{ ...itemView(item, { view, signIn: view === 'public' ? signIn : undefined, withheld }), membersOnly }];
   });
@@ -313,7 +338,15 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
       }
       const signedIn = as !== undefined && !tokenRefused;
       const [documents, listed] = lists;
-      return { issues: issueList(documents, signedIn), items: newsItemViews(listed ?? [], signedIn, signIn, membersTeasers), signedIn, tokenRefused, itemsUnavailable: listed === undefined };
+      const answer = { reader: as !== undefined, signedIn, member: signedIn && answeredAsMember([documents, listed ?? []]) };
+      return {
+        issues: issueList(documents, signedIn),
+        items: newsItemViews(listed ?? [], answer, signIn, membersTeasers),
+        signedIn,
+        tokenRefused,
+        // With no reader, articles that cannot be read are left out, as before /news showed any (NOTE-1).
+        itemsUnavailable: listed === undefined && as !== undefined,
+      };
     },
 
     file: async (id, given) => {

@@ -1,7 +1,7 @@
 import { type MessageInitShape, create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { describe, expect, it } from 'vitest';
-import { ContentItemSchema, ContentKind, type ContentItem, FileAudience, FileRole, ItemVisibility } from '../gen/nwfl/mensa/v1/content_pb.js';
+import { BlockSchema, ContentItemSchema, ContentKind, type ContentItem, FileAudience, FileRole, ItemVisibility } from '../gen/nwfl/mensa/v1/content_pb.js';
 import {
   Area,
   EventOccurrenceSchema,
@@ -13,7 +13,7 @@ import {
 } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeSchema, TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type Reader } from '../lib/api/client';
-import { MEMBERS_PASSAGE, NO_MEMBER_ACCESS } from '../lib/document';
+import { MEMBERS_PASSAGE, NOT_SHOWN, NO_MEMBER_ACCESS } from '../lib/document';
 import { isPublicEvent, liveData } from './live';
 
 const SERIES = '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20';
@@ -654,21 +654,24 @@ describe('liveData.news', () => {
     expect(text).not.toMatch(/1234|members-picnic/);
   });
 
-  it('asks again as the public, once, when the API refuses the token, and says so: never a 503', async () => {
+  it('asks again as the public, once, when the API refuses the token, and says so: never a 503, and no box that sends the reader to sign in again (NOTE-2)', async () => {
     const { reads: r, asked } = api((as) => (as ? new ApiTokenRefused('ListPublishedItems') : publicAnswer()));
-    const news = await liveData(r).news(member);
-    expect(news).toEqual({ ...ANONYMOUS, tokenRefused: true });
+    const news = await liveData(r).news(member, { signIn: '/sign-in?return=%2Fnews&again=1' });
+    const box = `<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`;
+    expect(news).toEqual({ ...ANONYMOUS, items: [{ ...ANONYMOUS.items[0]!, bodyHtml: `<p>Hello &amp; welcome</p>${box}` }], tokenRefused: true });
     expect(asked.filter(([, , bearer]) => bearer === undefined).map(([kind]) => kind).sort()).toEqual([ContentKind.DOCUMENT, ContentKind.ARTICLE].sort());
     expect(asked.filter(([, , bearer]) => bearer !== undefined).length).toBeLessThanOrEqual(2);
   });
 
-  it('still gives the issues when only the articles cannot be read, and says so: the issues never wait on the articles (N4)', async () => {
+  it('still gives the issues when only the articles cannot be read, and says so to a reader: the issues never wait on the articles (N4)', async () => {
     /** The fake API with its articles read down, whoever asks. */
     const articlesDown = (inner: ApiReads): ApiReads => ({
       ...inner,
       listPublishedItems: (kind, size, as) => (kind === ContentKind.ARTICLE ? Promise.reject(new ApiUnavailable('ListPublishedItems')) : inner.listPublishedItems(kind, size, as)),
     });
-    expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news()).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: true });
+    // With no reader, /news is exactly what it was before A14 read any article: the issues, no line, no 503 (NOTE-1).
+    expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news()).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
+    expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news({ bearer: 'not a b64token' })).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
     const asMember = await liveData(articlesDown(api((as) => (as ? memberAnswer() : publicAnswer())).reads)).news(member);
     expect(asMember).toMatchObject({ items: [], itemsUnavailable: true, signedIn: true, tokenRefused: false });
     expect(asMember.issues[0]!.membersPdf).toBe(`/documents/${UUIDS.issueMembers}.pdf`);
@@ -681,6 +684,73 @@ describe('liveData.news', () => {
     // Anything but an unavailable API is not swallowed.
     const bug = reads({ listPublishedItems: (kind) => (kind === ContentKind.ARTICLE ? Promise.reject(new TypeError('bug')) : Promise.resolve(publicAnswer()[ContentKind.DOCUMENT])) });
     await expect(liveData(bug).news()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  // A14 round 2 (SHOULD-1): the API may send a member a redacted node too (a privacy mark the members lens
+  // withholds whole, apps/api/src/redaction/render.ts). Whether it read the caller as a member is decided
+  // from the whole answer: a members node, or a members file in either list, which the public is never sent.
+  describe('answered as a member, from the whole answer', () => {
+    const withheldWhole = () => article('trip-notes', ItemVisibility.MEMBERS, [redacted]);
+    const openWithRedacted = (files: FileInit[] = []) => article('open-letter', ItemVisibility.PUBLIC, [para('Hello & welcome'), redacted], files);
+    const NOTE = `<p class="members-note">${NOT_SHOWN}</p>`;
+
+    it("shows a member everything the API sent beside a redacted node: the passage, the members item, and a note that says nothing of their access", async () => {
+      const answer = memberAnswer();
+      const [open, picnic, board] = answer[ContentKind.ARTICLE];
+      open!.live!.body!.blocks.push(create(BlockSchema, redacted as never));
+      picnic!.live!.body!.blocks.push(create(BlockSchema, redacted as never));
+      const { reads: r } = api(() => ({ ...answer, [ContentKind.ARTICLE]: [open!, picnic!, board!, withheldWhole()] }));
+      const news = await liveData(r).news(member, { signIn: '/sign-in?return=%2Fnews&again=1' });
+      expect(news.signedIn).toBe(true);
+      expect(news.items.map((i) => [i.slug, i.membersOnly])).toEqual([['open-letter', false], ['members-picnic', true], ['trip-notes', true]]);
+      expect(news.items[0]!.bodyHtml).toContain('The gate code is &lt;1234&gt;');
+      expect(news.items[0]!.bodyHtml.endsWith(NOTE)).toBe(true);
+      expect(news.items[1]!.bodyHtml).toBe(`<p>Bring a chair</p>${NOTE}`);
+      expect(news.items[2]).toMatchObject({ bodyHtml: NOTE, files: [] });
+      const text = JSON.stringify(news);
+      expect(text).not.toContain('member access');
+      expect(text).not.toContain('sign-in');
+      expect(text).not.toContain(MEMBERS_PASSAGE);
+    });
+
+    const proofs: [string, () => Partial<Record<ContentKind, ContentItem[]>>][] = [
+      ['a members passage in another article', () => ({ [ContentKind.ARTICLE]: [openWithRedacted(), withheldWhole(), article('other', ItemVisibility.PUBLIC, [passage('PASSAGE')])] })],
+      ['a members inline in another article', () => ({ [ContentKind.ARTICLE]: [openWithRedacted(), withheldWhole(), article('other', ItemVisibility.PUBLIC, [{ kind: { case: 'paragraph', value: { inlines: [{ kind: { case: 'members', value: { inlines: [{ kind: { case: 'text', value: { text: 'INLINE' } } }] } } }] } } }])] })],
+      ['a members file on an issue alone', () => ({ [ContentKind.DOCUMENT]: [issueItem([{ id: UUIDS.issuePublic, audience: FileAudience.PUBLIC }, { id: UUIDS.issueMembers, audience: FileAudience.MEMBERS }])], [ContentKind.ARTICLE]: [openWithRedacted(), withheldWhole()] })],
+      ['a members file on an article alone', () => ({ [ContentKind.ARTICLE]: [openWithRedacted([{ id: UUIDS.articlePublic, audience: FileAudience.PUBLIC }, { id: UUIDS.articleMembers, audience: FileAudience.MEMBERS }]), withheldWhole()] })],
+      ['a members passage in an issue', () => ({ [ContentKind.DOCUMENT]: [create(ContentItemSchema, { id: 'doc', kind: ContentKind.DOCUMENT, live: { title: 'Not an issue', visibility: ItemVisibility.PUBLIC, body: { blocks: [passage('IN A DOCUMENT')] as never } } })], [ContentKind.ARTICLE]: [openWithRedacted(), withheldWhole()] })],
+    ];
+    for (const [name, answer] of proofs) {
+      it(`reads ${name} as the API's word that this is a member: every redacted node gets the neutral note, and the members item is shown`, async () => {
+        const news = await liveData(api(answer).reads).news(member);
+        const [open, trip] = news.items;
+        expect(open).toMatchObject({ slug: 'open-letter', bodyHtml: `<p>Hello &amp; welcome</p>${NOTE}` });
+        expect(trip).toMatchObject({ slug: 'trip-notes', membersOnly: true, bodyHtml: NOTE });
+        expect(JSON.stringify(news)).not.toContain('member access');
+      });
+    }
+
+    it("falls back to the redacted rule when nothing in the answer proves member standing: a public or an officers file proves nothing", async () => {
+      const files: FileInit[] = [{ id: UUIDS.articlePublic, audience: FileAudience.PUBLIC }, { id: UUIDS.articleOfficers, audience: FileAudience.OFFICERS }];
+      const { reads: r } = api(() => ({ [ContentKind.DOCUMENT]: [issueItem([{ id: UUIDS.issuePublic, audience: FileAudience.PUBLIC }, { id: UUIDS.issueOfficers, audience: FileAudience.OFFICERS }])], [ContentKind.ARTICLE]: [openWithRedacted(files), withheldWhole(), article('plain', ItemVisibility.PUBLIC, [para('No passage')])] }));
+      const news = await liveData(r).news(member);
+      expect(news.items.map((i) => i.slug)).toEqual(['open-letter', 'plain']);
+      expect(news.items[0]!.bodyHtml).toBe(`<p>Hello &amp; welcome</p><p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`);
+      expect(news.items[1]!.bodyHtml).toBe('<p>No passage</p>');
+    });
+
+    it("never takes proof from the public's answer: no reader, or a refused token asked again as the public, stays the public's view", async () => {
+      const buggy = () => ({ ...memberAnswer(), [ContentKind.ARTICLE]: [...memberAnswer()[ContentKind.ARTICLE], withheldWhole()] });
+      const anonymous = await liveData(api(buggy).reads).news();
+      const refused = await liveData(api((as) => (as ? new ApiTokenRefused('ListPublishedItems') : buggy())).reads).news(member);
+      for (const news of [anonymous, refused]) {
+        const text = JSON.stringify(news);
+        expect(news.items.map((i) => i.slug)).toEqual(['open-letter']);
+        expect(news.issues[0]).not.toHaveProperty('membersPdf');
+        expect(text).not.toMatch(/1234|gate code|trip-notes|members-picnic/);
+        expect(text).not.toContain(NOT_SHOWN);
+      }
+    });
   });
 
   it('passes an unavailable API on, with or without a reader, and a refusal of the public read too', async () => {

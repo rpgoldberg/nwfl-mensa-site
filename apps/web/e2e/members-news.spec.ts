@@ -3,9 +3,13 @@
 // (e2e/api.mjs) answers it as the API would: a member gets each issue's
 // members copy, the members passage, the members article and the members PDF;
 // an officer the same and never an officers article; a pending account the
-// public view with a box saying so; a refused or lapsed token the public view
-// and a line to sign in again, never a 503. The stand-in refuses a token on
-// every other RPC, so a route that started forwarding one would fail here.
+// public view with a box saying so; a lapsed token the public view and a line
+// to sign in again; a refused one the public view and a line to ask for help,
+// with no sign-in link that would only be refused again; never a 503. The
+// stand-in refuses a token on every other RPC, so a route that started
+// forwarding one would fail here. A member's answer carries redacted nodes as
+// well (a privacy mark the API withholds from members): the page still reads
+// the whole answer as a member's, and says only that a part is not shown.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
@@ -18,12 +22,15 @@ import { ARTICLES, BOARD_GAMES, MEMBERS_PDF_MARK, NEWSLETTER, SOURCE_PDFS, centr
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
 const RULE = "Members only, please don't forward";
 const EXPIRED = 'Your sign-in has expired for members-only reading.';
+const REFUSED = 'Members-only reading is not available for this sign-in.';
+const NOT_SHOWN = 'Part of this text is not shown.';
+const NO_ACCESS = 'Your account does not have member access yet.';
 
 const [current, ...past] = NEWSLETTER.issues;
 const pdf = (id: string) => `/documents/${id}.pdf`;
 const MEMBERS_IDS = [...NEWSLETTER.issues.map((i) => i.membersPdf), ARTICLES.open.membersPdf];
 /** What only a member may see on /news, and what nobody may. */
-const MEMBERS_TEXT = [ARTICLES.open.passage, ARTICLES.members.body, ARTICLES.members.title];
+const MEMBERS_TEXT = [ARTICLES.open.passage, ARTICLES.members.body, ARTICLES.members.title, ARTICLES.withheld.title, NOT_SHOWN];
 const NEVER = [ARTICLES.officers.title, ARTICLES.officers.body, ARTICLES.officers.pdf, NEWSLETTER.membersOnly.title, ...SOURCE_PDFS];
 
 async function axe(page: Page): Promise<string[]> {
@@ -74,6 +81,19 @@ test.describe('/news signed in as a member', () => {
     const html = await page.content();
     expect(noneOf(html, NEVER)).toEqual([]);
     expect(html).not.toContain(EXPIRED);
+  });
+
+  test("reads the whole answer as a member's: a redacted node beside the passage, in the members article, or as a whole article says only that a part is not shown", async ({ page }) => {
+    const articles = page.getByRole('region', { name: 'From the newsletter' });
+    const open = articles.getByRole('article').filter({ hasText: ARTICLES.open.title });
+    await expect(open).toContainText(ARTICLES.open.passage);
+    await expect(open.getByText(NOT_SHOWN)).toBeVisible();
+    await expect(articles.getByRole('article').filter({ hasText: ARTICLES.members.title }).getByText(NOT_SHOWN)).toBeVisible();
+    const whole = articles.getByRole('article').filter({ hasText: ARTICLES.withheld.title });
+    await expect(whole).toContainText(RULE);
+    await expect(whole.getByText(NOT_SHOWN)).toBeVisible();
+    const html = await page.content();
+    expect(noneOf(html, [NO_ACCESS, 'Members-only passage', EXPIRED, REFUSED])).toEqual([]);
   });
 
   test('/news is private, never stored by any cache, a CDN included', async ({ page }) => {
@@ -168,20 +188,36 @@ test('a pending account gets the public view, a box saying it has no member acce
   expect(await withheld.text()).toBe(await random.text());
 });
 
-for (const login of ['refused', 'lapsed'] as const) {
-  test(`a ${login} token gives the public view and a line to sign in again: never a 503`, async ({ page }) => {
-    await page.goto('/news');
-    await signIn(page, login);
-    const res = await page.goto('/news');
-    expect(res?.status()).toBe(200);
-    await expect(page.getByRole('note').filter({ hasText: EXPIRED })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/sign-in?return=%2Fnews&again=1');
-    const html = await page.content();
-    expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER])).toEqual([]);
-    const withheld = await page.request.get(pdf(current!.membersPdf));
-    expect(withheld.status()).toBe(404);
-  });
-}
+test('a lapsed token gives the public view and a line to sign in again: never a 503', async ({ page }) => {
+  await page.goto('/news');
+  await signIn(page, 'lapsed');
+  const res = await page.goto('/news');
+  expect(res?.status()).toBe(200);
+  await expect(page.getByRole('note').filter({ hasText: EXPIRED })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/sign-in?return=%2Fnews&again=1');
+  const html = await page.content();
+  expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, REFUSED])).toEqual([]);
+  const withheld = await page.request.get(pdf(current!.membersPdf));
+  expect(withheld.status()).toBe(404);
+});
+
+test('a refused token gives the public view and a line to ask for help, never one to sign in again, which would only be refused again: never a 503', async ({ page }) => {
+  await page.goto('/news');
+  await signIn(page, 'refused');
+  const res = await page.goto('/news');
+  expect(res?.status()).toBe(200);
+  const note = page.getByRole('note').filter({ hasText: REFUSED });
+  await expect(note).toBeVisible();
+  await expect(note.getByRole('link', { name: 'Ask for help' })).toHaveAttribute('href', '/help');
+  await expect(page.getByRole('link', { name: 'Sign in again' })).toHaveCount(0);
+  await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
+  const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
+  await expect(open).toContainText(`Members-only passage. ${NO_ACCESS}`);
+  const html = await page.content();
+  expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, EXPIRED])).toEqual([]);
+  const withheld = await page.request.get(pdf(current!.membersPdf));
+  expect(withheld.status()).toBe(404);
+});
 
 test('articles the API cannot give leave the issues listed, members copies too, with a line in their place: a 503, never stored', async ({ page }) => {
   await page.goto('/news');

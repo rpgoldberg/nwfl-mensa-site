@@ -8,13 +8,18 @@
 //   signed-in-public  the same, for a reader the API answered as the public's:
 //                     the box says their account has no member access yet.
 //   members           the passage, escaped, in a box that says not to forward
-//                     it. A redacted node is still a placeholder.
+//                     it. A redacted node here is something the API withheld
+//                     from a member too (a privacy mark): a plain note that a
+//                     part is not shown, and nothing about the reader's access.
 import type { Block, Document, Inline } from '../gen/nwfl/mensa/v1/content_pb.js';
 
 export const MEMBERS_PASSAGE = 'Members-only passage, sign in to read.';
 export const NO_MEMBER_ACCESS = 'Members-only passage. Your account does not have member access yet.';
 export const MEMBERS_RULE = "Members only, please don't forward";
+/** Where the API withheld a part from a member too. */
+export const NOT_SHOWN = 'Part of this text is not shown.';
 const MEMBERS_INLINE = '<span class="members-note">(members only)</span>';
+const NOT_SHOWN_INLINE = '<span class="members-note">(not shown)</span>';
 /** The editor makes nothing near this deep; past it, nothing is rendered. */
 const MAX_DEPTH = 16;
 
@@ -69,7 +74,7 @@ function inlines(list: readonly Inline[], depth: number, o: Options): string {
         case 'members':
           return o.view === 'members' ? `${inlines(kind.value.inlines, depth + 1, o)} ${MEMBERS_INLINE}` : MEMBERS_INLINE;
         case 'redacted':
-          return MEMBERS_INLINE;
+          return o.view === 'members' ? NOT_SHOWN_INLINE : MEMBERS_INLINE;
         default:
           return '';
       }
@@ -102,7 +107,7 @@ function blocks(list: readonly Block[], level: number, depth: number, o: Options
             ? `<aside class="members-passage" aria-label="Members only"><p class="members-rule">${escapeHtml(MEMBERS_RULE)}</p>${blocks(kind.value.blocks, level, depth + 1, o)}</aside>`
             : placeholder(o);
         case 'redacted':
-          return placeholder(o.view === 'members' ? { view: 'public', signIn: undefined } : o);
+          return o.view === 'members' ? `<p class="members-note">${NOT_SHOWN}</p>` : placeholder(o);
         default:
           return '';
       }
@@ -123,15 +128,16 @@ export function withheldHtml({ view = 'public', signIn }: { view?: View; signIn?
   return placeholder({ view, signIn });
 }
 
-/** Whether the API sent any redacted node: then it read the caller as the public (A14). */
-export function hasRedacted(document: Document | undefined): boolean {
-  // Past the depth cap, anything at all counts: a tree too deep to read is read as the public's (fail closed).
+/**
+ * Whether the tree holds a node of the kind; past the depth cap, `beyondCap` for any node at all
+ * (what a tree too deep to read counts as).
+ */
+function holds(document: Document | undefined, wanted: 'redacted' | 'members', beyondCap: boolean): boolean {
   const inBlocks = (list: readonly Block[], depth: number): boolean =>
-    depth > MAX_DEPTH ? list.length > 0 : list.some((block) => {
+    depth > MAX_DEPTH ? beyondCap && list.length > 0 : list.some((block) => {
       const kind = block.kind;
+      if (kind.case === wanted) return true;
       switch (kind.case) {
-        case 'redacted':
-          return true;
         case 'paragraph':
         case 'heading':
           return inInlines(kind.value.inlines, depth + 1);
@@ -145,11 +151,10 @@ export function hasRedacted(document: Document | undefined): boolean {
       }
     });
   const inInlines = (list: readonly Inline[], depth: number): boolean =>
-    depth > MAX_DEPTH ? list.length > 0 : list.some((inline) => {
+    depth > MAX_DEPTH ? beyondCap && list.length > 0 : list.some((inline) => {
       const kind = inline.kind;
+      if (kind.case === wanted) return true;
       switch (kind.case) {
-        case 'redacted':
-          return true;
         case 'link':
         case 'members':
           return inInlines(kind.value.inlines, depth + 1);
@@ -158,4 +163,18 @@ export function hasRedacted(document: Document | undefined): boolean {
       }
     });
   return document !== undefined && inBlocks(document.blocks, 0);
+}
+
+/** Whether the API sent any redacted node. Past the depth cap, anything at all counts: a tree too deep to read is read as the public's (fail closed). */
+export function hasRedacted(document: Document | undefined): boolean {
+  return holds(document, 'redacted', true);
+}
+
+/**
+ * Whether the API sent any members node: the API sends one only to a caller it reads as a member or an
+ * officer, since the public's tree is filtered (filterForPublic in the API) before it leaves (A14). Past
+ * the depth cap, nothing counts: a tree too deep to read proves nothing (fail closed).
+ */
+export function hasMembers(document: Document | undefined): boolean {
+  return holds(document, 'members', false);
 }

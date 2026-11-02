@@ -271,6 +271,7 @@ const ARTICLES = {
   open: { id: 'e0a00000-0000-4000-8000-000000000001', title: 'A new home for the Wednesday lunch', summary: 'The lunch moves across town in March.', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001', sourcePdf: 'e3f00000-0000-4000-8000-000000000001' },
   members: { id: 'e0a00000-0000-4000-8000-000000000002', title: 'Members picnic sign-up', summary: 'Bring a dish to share.', body: 'MEMBERS ARTICLE CANARY: the picnic is at the north shelter.' },
   officers: { id: 'e0a00000-0000-4000-8000-000000000003', title: 'OFFICERS ARTICLE CANARY', summary: 'Board notes.', body: 'OFFICERS BODY CANARY', pdf: 'e2f00000-0000-4000-8000-000000000003' },
+  withheld: { id: 'e0a00000-0000-4000-8000-000000000004', title: 'Members trip notes, withheld whole', summary: 'Notes from the trip.' },
 };
 /** What a member may read beyond the public: each public issue's members copy and the article's members PDF. */
 const MEMBERS_PDFS = new Set([...NEWSLETTER.filter((d) => d.membersPdf && (d.visibility ?? ItemVisibility.PUBLIC) === ItemVisibility.PUBLIC).map((d) => d.membersPdf), ARTICLES.open.membersPdf]);
@@ -296,10 +297,12 @@ const article = (a, visibility, blocks, files, daysAgo) =>
 /** The articles by audience: what the API sends each. @param {'anonymous' | 'public' | 'members' | 'officers'} audience */
 function articles(audience) {
   const memberTree = audience === 'members' || audience === 'officers' || audience === 'anonymous';
+  // What the API sends a member besides: a redacted node where its members lens withholds a privacy mark.
+  const lens = audience === 'members' || audience === 'officers' ? [REDACTED] : [];
   const open = article(
     ARTICLES.open,
     ItemVisibility.PUBLIC,
-    [para(ARTICLES.open.plain), memberTree ? passage(ARTICLES.open.passage) : REDACTED],
+    [para(ARTICLES.open.plain), memberTree ? passage(ARTICLES.open.passage) : REDACTED, ...lens],
     // Named as the issue loader names a file: its slug, and -members for the members copy.
     // A members source file first, as a buggy API might list it: never linked, whoever reads.
     [
@@ -309,10 +312,12 @@ function articles(audience) {
     ],
     6,
   );
-  const members = article(ARTICLES.members, ItemVisibility.MEMBERS, memberTree ? [para(ARTICLES.members.body)] : [REDACTED], [], 7);
+  const members = article(ARTICLES.members, ItemVisibility.MEMBERS, memberTree ? [para(ARTICLES.members.body), ...lens] : [REDACTED], [], 7);
   const officers = article(ARTICLES.officers, ItemVisibility.OFFICERS, [para(ARTICLES.officers.body)], [{ id: ARTICLES.officers.pdf, audience: FileAudience.OFFICERS, name: 'board-notes.pdf' }], 8);
+  // A members article the members lens withholds whole, and the public gets as a placeholder: one redacted node, whoever reads.
+  const withheld = article(ARTICLES.withheld, ItemVisibility.MEMBERS, [REDACTED], [], 9);
   // The real API never sends an officers item to anyone else; the anonymous answer is a buggy API's.
-  return audience === 'officers' || audience === 'anonymous' ? [open, members, officers] : [open, members];
+  return audience === 'officers' || audience === 'anonymous' ? [open, members, officers, withheld] : [open, members, withheld];
 }
 
 /** The issues for a token the API reads as the public's: the public files only, as the real API lists them. */
