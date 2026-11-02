@@ -7,7 +7,7 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REQUEST_MAGIC, encodeRequest } from './engine-protocol.js';
 import { RetryableEngineError } from './regenerate.js';
 import { DEFAULT_SOCKET, READ_TIMEOUT_MS, SOCKET_MODE, type Sidecar, refusedEnv, sidecarMain, startSidecar } from './sidecar.js';
@@ -136,6 +136,16 @@ describe('startSidecar', () => {
     expect(logged.join('\n')).not.toMatch(/passwd|canary/);
     expect(READ_TIMEOUT_MS).toBe(30_000);
     expect(await socketRedact({ path: socket })(ONE, REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
+  });
+
+  it('makes no copy for a worker that hung up while its request waited its turn', async () => {
+    const { socket, logged } = await started({ module: child('slow') });
+    const redact = socketRedact({ path: socket });
+    const first = redact(ONE, REQUEST);
+    const waiting = socketRedact({ path: socket, timeoutMs: 300 })(ONE, REQUEST);
+    await expect(waiting).rejects.toBeInstanceOf(RetryableEngineError);
+    expect(await first).toEqual({ kind: 'refused', reason: 'slow but done' });
+    await vi.waitFor(() => expect(logged).toContain('dropped a request: the worker hung up before its turn'));
   });
 
   it('drops a request that sends more after its frame while the copy is made', async () => {

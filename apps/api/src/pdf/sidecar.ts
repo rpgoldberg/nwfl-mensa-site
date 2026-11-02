@@ -100,13 +100,16 @@ export async function startSidecar(options: SidecarOptions): Promise<Sidecar> {
     return run;
   }
 
-  /** The copy, or why there is none; never rejects. */
+  /** The copy, or why there is none; never rejects (isolatedRedact rejects with an Error only). */
   async function make(message: EngineMessage, signal: AbortSignal): Promise<SidecarReply> {
-    if (signal.aborted) return { kind: 'failed', message: 'the worker hung up' };
+    if (signal.aborted) {
+      log('dropped a request: the worker hung up before its turn');
+      return { kind: 'failed', message: 'the worker hung up' };
+    }
     try {
       return await isolatedRedact({ ...engine, signal })(message.original, message.request);
     } catch (error) {
-      return { kind: 'failed', message: error instanceof Error ? error.message : String(error) };
+      return { kind: 'failed', message: (error as Error).message };
     }
   }
 

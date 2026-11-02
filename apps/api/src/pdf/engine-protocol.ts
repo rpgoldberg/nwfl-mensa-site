@@ -73,11 +73,10 @@ export function readFrame(
     let received = 0;
     let expected: number | undefined;
     let headerLength = 0;
-    let settled = false;
     const timer = limits.timeoutMs === undefined ? undefined : setTimeout(() => fail(`the frame took longer than ${limits.timeoutMs} ms`), limits.timeoutMs);
 
+    // Every path out detaches every listener and the timer first, so the promise settles once.
     function detach(): void {
-      settled = true;
       clearTimeout(timer);
       stream.off('data', onData);
       stream.off('end', onEnd);
@@ -85,7 +84,6 @@ export function readFrame(
       stream.off('close', onClose);
     }
     function fail(reason: string): void {
-      if (settled) return;
       detach();
       reject(new FrameError(reason));
     }
