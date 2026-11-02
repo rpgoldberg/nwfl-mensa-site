@@ -6,15 +6,21 @@
 // Every call goes out as the public: no Authorization header, no cookie,
 // nothing about the reader. The API works the audience out from what it gets
 // (no token: anonymous, public; apps/api/src/auth/caller.ts), so the site
-// never claims an audience of its own.
+// never claims an audience of its own. Two reads only, ListPublishedItems and
+// ReadFile, may carry a signed-in reader's access token (A14, /news and its
+// PDFs), as "Authorization: Bearer", and only when given a Reader; no other
+// read takes one, so the calendar, the roster and every feed stay the
+// public's. A token the API refuses (UNAUTHENTICATED) is ApiTokenRefused, for
+// the caller to ask again as the public, never a 503. Never a cookie.
 //
 // Read RPCs only. ReadFile streams a PDF (REDACT R3c): the head comes first,
 // then the bytes, handed on as they arrive; a stream that breaks after the
 // head fails the body, which the reader sees as a cut-off download.
 //
 // Read RPCs only. A failure of any kind is logged by call and code (never the
-// API's message) and becomes ApiUnavailable, which the pages answer with a
-// plain "temporarily unavailable" and 503.
+// API's message, never a token) and becomes ApiUnavailable, which the pages
+// answer with a plain "temporarily unavailable" and 503; a refused token is
+// ApiTokenRefused instead (above).
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
 import { type ContentItem, ContentKind, ContentService, type ReadFileResponse } from '../../gen/nwfl/mensa/v1/content_pb.js';
@@ -38,6 +44,27 @@ export class ApiUnavailable extends Error {
     super(`the API did not answer ${rpc}`);
     this.name = 'ApiUnavailable';
   }
+}
+
+/** The API refused the reader's token (expired, revoked, or not for this site): ask again as the public. */
+export class ApiTokenRefused extends Error {
+  constructor(readonly rpc: string) {
+    super(`the API refused the reader's token (${rpc})`);
+    this.name = 'ApiTokenRefused';
+  }
+}
+
+/** A signed-in reader, by their access token (src/lib/auth/bearer.ts). Only the news reads take one. */
+export interface Reader {
+  bearer: string;
+}
+
+// RFC 6750 b64token, the one form the API reads (apps/api/src/auth/caller.ts): anything else is not sent at all.
+const B64TOKEN = /^[A-Za-z0-9\-._~+/]+=*$/;
+
+/** The call's Authorization header for a reader, or none for no reader or a bearer that is not one b64token. */
+function authorization(as: Reader | undefined): { authorization: string } | undefined {
+  return as !== undefined && B64TOKEN.test(as.bearer) ? { authorization: `Bearer ${as.bearer}` } : undefined;
 }
 
 /** The most ReadFile may stream (R11), and how long it may take. */
@@ -81,8 +108,10 @@ export interface ApiReads {
   getOccurrence(id: string): Promise<EventOccurrence | undefined>;
   listSeries(): Promise<EventSeries[]>;
   getRoster(): Promise<Office[]>;
-  listPublishedItems(kind: ContentKind, pageSize: number): Promise<ContentItem[]>;
-  readFile(id: string): Promise<FileRead>;
+  /** With a reader, as them (A14); a refused token rejects with ApiTokenRefused. */
+  listPublishedItems(kind: ContentKind, pageSize: number, as?: Reader): Promise<ContentItem[]>;
+  /** With a reader, as them (A14); a refused token rejects with ApiTokenRefused. */
+  readFile(id: string, as?: Reader): Promise<FileRead>;
 }
 
 const codeName = (code: Code) => Code[code].replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
@@ -95,12 +124,17 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
   const events = createClient(EventService, transport);
   const content = createClient(ContentService, transport);
 
-  const call = async <T>(rpc: string, run: () => Promise<T>, notFound = false): Promise<T> => {
+  const call = async <T>(rpc: string, run: () => Promise<T>, notFound = false, bearer = false): Promise<T> => {
     try {
       return await run();
     } catch (error) {
       const code = ConnectError.from(error).code;
       if (notFound && code === Code.NotFound) throw new ApiNotFound(rpc);
+      // The call and the code only: never the token, never the API's message.
+      if (bearer && code === Code.Unauthenticated) {
+        log(JSON.stringify({ level: 'warn', msg: 'api refused the token', rpc, code: codeName(code) }));
+        throw new ApiTokenRefused(rpc);
+      }
       log(JSON.stringify({ level: 'error', msg: 'api call failed', rpc, code: codeName(code) }));
       throw new ApiUnavailable(rpc);
     }
@@ -140,13 +174,14 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
     });
   };
 
-  const readFile = async (id: string): Promise<FileRead> => {
+  const readFile = async (id: string, as?: Reader): Promise<FileRead> => {
     const abort = new AbortController();
+    const headers = authorization(as);
     try {
       return await call(
         'ReadFile',
         async (): Promise<FileRead> => {
-          const messages = content.readFile({ fileId: id }, { signal: abort.signal, timeoutMs: FILE_TIMEOUT_MS })[Symbol.asyncIterator]();
+          const messages = content.readFile({ fileId: id }, { signal: abort.signal, timeoutMs: FILE_TIMEOUT_MS, ...(headers ? { headers } : {}) })[Symbol.asyncIterator]();
           const first = await messages.next();
           const part = first.done ? undefined : first.value.part;
           if (part?.case === 'notReady') return { kind: 'not_ready' };
@@ -156,6 +191,7 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
           return { kind: 'pdf', filename: part.value.filename, size: Number(part.value.sizeBytes), body: fileBody(messages, Number(part.value.sizeBytes), abort) };
         },
         true,
+        headers !== undefined,
       );
     } catch (error) {
       abort.abort();
@@ -171,7 +207,10 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
     getOccurrence: (id) => call('GetOccurrence', async () => (await events.getOccurrence({ id })).occurrence, true),
     listSeries: () => call('ListSeries', async () => (await events.listSeries({ includeInactive: false })).series),
     getRoster: () => call('GetRoster', async () => (await content.getRoster({})).offices),
-    listPublishedItems: (kind, pageSize) => call('ListPublishedItems', async () => (await content.listPublishedItems({ kind, pageSize })).items),
+    listPublishedItems: (kind, pageSize, as) => {
+      const headers = authorization(as);
+      return call('ListPublishedItems', async () => (await content.listPublishedItems({ kind, pageSize }, headers ? { headers } : {})).items, false, headers !== undefined);
+    },
   };
 }
 
