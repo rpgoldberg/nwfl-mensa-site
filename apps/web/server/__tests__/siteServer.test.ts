@@ -94,6 +94,29 @@ describe('withSitePolicy', () => {
     expect(res.headers.get('cache-control')).toBe('private, no-store');
   });
 
+  // A14 (D6): Cloudflare ignores Vary: Cookie, and a zone rule may override Cache-Control; CDN-Cache-Control says no too.
+  it('tells a CDN not to store a private response, and says nothing extra on an anonymous one', async () => {
+    const base = await serve((_req, res) => res.end('page'));
+    const signedIn = await fetch(`${base}/news`, { headers: { cookie: `${SESSION_COOKIE}=abc` } });
+    expect(signedIn.headers.get('cdn-cache-control')).toBe('no-store');
+    expect(signedIn.headers.get('vary')).toBe('Cookie');
+    const anonymous = await fetch(`${base}/news`);
+    expect(anonymous.headers.get('cdn-cache-control')).toBeNull();
+    const missing = await fetch(`${base}/news`, { headers: { cookie: 'other=1' } });
+    expect(missing.headers.get('cdn-cache-control')).toBeNull();
+  });
+
+  it("keeps a handler's private response private, with no cookie at all (a members copy)", async () => {
+    const base = await serve((_req, res) => {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.end('%PDF-1');
+    });
+    const res = await fetch(`${base}/documents/f1000000-0000-4000-8000-000000000010.pdf`);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(res.headers.get('cdn-cache-control')).toBe('no-store');
+    expect(res.headers.get('vary')).toBe('Cookie');
+  });
+
   it('makes a response that sets a cookie private and unstored, and keeps every cookie', async () => {
     const base = await serve((_req, res) => {
       res.writeHead(303, { Location: '/', 'Set-Cookie': ['__Host-a=1; Path=/; Secure', '__Host-b=2; Path=/; Secure'] });

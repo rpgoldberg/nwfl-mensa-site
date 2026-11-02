@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, hasCookie, isHostOnlyCookie, parseCsp, securityHeaders } from '../policy.mjs';
+import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, cdnCacheControl, hasCookie, isHostOnlyCookie, parseCsp, securityHeaders } from '../policy.mjs';
 
 describe('security headers', () => {
   it('sends CSP, HSTS, nosniff, Referrer-Policy, Permissions-Policy and COOP, and nothing else', () => {
@@ -128,6 +128,32 @@ describe('cacheControl (R26)', () => {
 
   it("never stores an error, the reader's or the server's: a page that is back a moment later must not stay missing", () => {
     for (const status of [400, 403, 404, 410, 413, 500, 502, 503]) expect(cacheControl({ ...anon, status }), String(status)).toBe('no-store');
+  });
+});
+
+// A14: a members response stays private even if a handler is the only one that knows it is one, and a CDN
+// rule that overrides the origin's Cache-Control still sees CDN-Cache-Control (D6).
+describe('a handler that marks its response private (A14)', () => {
+  const anon = { path: '/documents/f1000000-0000-4000-8000-000000000010.pdf', cookieHeader: undefined, status: 200, setsCookie: false };
+
+  it('keeps it private and unstored, cookie or not', () => {
+    expect(cacheControl({ ...anon, handler: 'private, no-store' })).toBe('private, no-store');
+    expect(cacheControl({ ...anon, handler: 'Private' })).toBe('private, no-store');
+    expect(cacheControl({ ...anon, handler: ['no-cache', 'private'] })).toBe('private, no-store');
+  });
+
+  it('never lets a handler loosen the rule: anything else it set is overridden as before', () => {
+    expect(cacheControl({ ...anon, handler: 'public, max-age=99999' })).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(cacheControl({ ...anon, handler: 'public, max-age=99999', cookieHeader: `${SESSION_COOKIE}=abc` })).toBe('private, no-store');
+    expect(cacheControl({ ...anon, handler: 'no-store', status: 404 })).toBe('no-store');
+    expect(cacheControl({ ...anon, handler: undefined })).toBe('public, max-age=60, stale-while-revalidate=60');
+  });
+});
+
+describe('cdnCacheControl (D6)', () => {
+  it('is no-store whenever the rule is private, and absent otherwise, so an anonymous response keeps its headers', () => {
+    expect(cdnCacheControl('private, no-store')).toBe('no-store');
+    for (const rule of ['public, max-age=60, stale-while-revalidate=60', 'no-store', 'public, max-age=31536000, immutable']) expect(cdnCacheControl(rule), rule).toBeUndefined();
   });
 });
 
