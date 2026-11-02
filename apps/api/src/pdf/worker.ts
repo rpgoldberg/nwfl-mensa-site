@@ -8,11 +8,18 @@
 // PGSSLROOTCERT, PG_POOL_MAX), set in the worker's own Deployment from its own
 // Secret. PGUSER defaults to nwfl_worker, and any other user is refused, so the
 // worker can never be started with the server's credentials. The pool is 2.
+//
+// UNTRUSTED-PDF-GATE: the engine is the in-pod child (isolated.ts) unless
+// PDF_ENGINE_SOCKET names the engine sidecar's socket (socket-engine.ts); then
+// only the sidecar, never a fallback. Either way the output gate is re-run
+// here on every copy before it is stored (rerun.ts).
 // ============================================================================
 import pg from 'pg';
 import { type Env, type Warn, onIdleError, poolConfigFromEnv } from '../db/pool.js';
 import { isolatedRedact } from './isolated.js';
-import { type RegenerateOptions, startRegenerator } from './regenerate.js';
+import { type Redact, type RegenerateOptions, startRegenerator } from './regenerate.js';
+import { withGateRerun } from './rerun.js';
+import { engineSocketPath, socketRedact } from './socket-engine.js';
 import { type TenantGate, type TenantGateOptions, policyTenants, startTenantGate } from '../tenant.js';
 
 export const WORKER_ROLE = 'nwfl_worker';
@@ -38,27 +45,54 @@ export function createWorkerPool(env: Env, warn?: Warn): pg.Pool {
   return onIdleError(new pg.Pool(workerPoolConfig(env)), warn);
 }
 
+export interface EngineOptions {
+  /** The in-pod child's module (default the built engine-child.js); another, for tests. */
+  engine?: string;
+  /** Where PDF_ENGINE_SOCKET may point (default /run/pdf-engine); another, for tests. */
+  socketDirs?: readonly string[];
+  /** How long the worker waits for the sidecar's reply (default SOCKET_TIMEOUT_MS). */
+  engineTimeoutMs?: number;
+  /** An engine of the caller's; the gate is still re-run on it. */
+  redact?: Redact;
+}
+
+/**
+ * The engine the worker makes copies with: the sidecar when PDF_ENGINE_SOCKET is set, else the
+ * in-pod child, with the output gate re-run on every copy. Throws for a PDF_ENGINE_SOCKET outside
+ * the allowed directory.
+ */
+export function workerRedact(env: Env, options: EngineOptions): Redact {
+  const socket = engineSocketPath(env, options.socketDirs);
+  const engine =
+    options.redact ??
+    (socket === undefined
+      ? isolatedRedact(options.engine === undefined ? {} : { module: options.engine })
+      : socketRedact({ path: socket, ...(options.engineTimeoutMs === undefined ? {} : { timeoutMs: options.engineTimeoutMs }) }));
+  return withGateRerun(engine);
+}
+
 /**
  * Starts the job on its own pool; stop() lets the current run finish, then closes the pool. Each copy
- * is made in a child process (isolated.ts; `engine` names another child module, for tests).
+ * is made by workerRedact's engine: in a child process (isolated.ts; `engine` names another child
+ * module, for tests) or in the sidecar.
  *
  * With `tenant` (CF-ISO-0, tenant.ts), the job starts only once the database is verified to serve that
  * tenant; until then a database that does not answer is retried with backoff and no file is claimed.
  * nwfl_worker may not read the tenant table, so the gate reads the tenant its redaction policy references.
  */
 export function runWorker(
-  options: RegenerateOptions & {
+  options: RegenerateOptions &
+    EngineOptions & {
     env: Env;
-    engine?: string;
     intervalMs?: number;
     onError?: (error: unknown) => void;
     warn?: Warn;
     tenant?: { id: string } & Omit<TenantGateOptions, 'what'>;
   },
 ): { stop(): Promise<void> } {
+  const redact = workerRedact(options.env, options);
   const pool = createWorkerPool(options.env, options.warn);
-  const start = (): { stop(): Promise<void> } =>
-    startRegenerator({ redact: isolatedRedact(options.engine === undefined ? {} : { module: options.engine }), ...options, db: pool });
+  const start = (): { stop(): Promise<void> } => startRegenerator({ ...options, redact, db: pool });
   let job: { stop(): Promise<void> } | undefined;
   let gate: TenantGate | undefined;
   let stopping = false;

@@ -11,6 +11,12 @@
 // checked against its own bytes) and drops the rest. Runs are safe to race: a file is claimed by one run at a time, a copy
 // is written once per input, a run whose lease ran out can no longer write,
 // and a file queued again mid-run stays queued for the next run.
+//
+// UNTRUSTED-PDF-GATE: an engine that cannot be reached at all (the sidecar's
+// socket missing, the sidecar dead or answering garbage, socket-engine.ts) is
+// not an answer about the file. It throws a RetryableEngineError, which the
+// run does not store: no copy is put, the file stays queued, and the next run
+// after the lease takes it again (startRegenerator's onError logs the code).
 // ============================================================================
 import type { Db } from '../db/pool.js';
 import { AUDIENCES } from '../redaction/policy.js';
@@ -21,6 +27,12 @@ import { recordClaimedFile } from '../ledger/ledger.js';
 type Query = Pick<Db, 'query'>;
 
 export type Redact = (original: Uint8Array, request: RedactRequest) => Promise<RedactResult>;
+
+/** The engine could not be asked (UNTRUSTED-PDF-GATE): the run stores nothing for the file and fails, and the file is retried. */
+export class RetryableEngineError extends Error {
+  override readonly name = 'RetryableEngineError';
+  readonly code = 'PDF_ENGINE_UNAVAILABLE';
+}
 
 export interface RegenerateOptions {
   redact?: Redact;
@@ -36,6 +48,7 @@ async function make(redact: Redact, original: Uint8Array, request: RedactRequest
     if (result.kind === 'refused') return { pdf: null, reason: result.reason };
     return { pdf: null, reason: 'the engine returned the original for an audience that redacts' };
   } catch (error) {
+    if (error instanceof RetryableEngineError) throw error;
     return { pdf: null, reason: `the engine failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }

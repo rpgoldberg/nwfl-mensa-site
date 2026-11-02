@@ -1,5 +1,13 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { WORKER_ROLE, createWorkerPool, runWorker, workerPoolConfig } from './worker.js';
+import { RetryableEngineError } from './regenerate.js';
+import { RERUN_REFUSAL } from './rerun.js';
+import { WORKER_ROLE, createWorkerPool, runWorker, workerPoolConfig, workerRedact } from './worker.js';
+
+const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
 
 describe('workerPoolConfig: the PDF worker connects as its own role only', () => {
   it('defaults the user to nwfl_worker and the pool to 2 connections', () => {
@@ -70,5 +78,37 @@ describe('runWorker', () => {
     expect(errors).toEqual([]);
     expect(onMismatch).not.toHaveBeenCalled();
     await worker.stop();
+  });
+});
+
+describe('workerRedact: the engine the worker uses, chosen by PDF_ENGINE_SOCKET (UNTRUSTED-PDF-GATE)', () => {
+  const ONE = Uint8Array.from([1, 2, 3]);
+
+  it('without it, forks the in-pod child, as before', async () => {
+    expect(await workerRedact({}, { engine: child('refuse') })(ONE, { quotes: ['Kestrel'], redactsAny: true })).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
+    expect(await workerRedact({}, { engine: child('echo') })(ONE, { quotes: [], redactsAny: true })).toEqual({ kind: 'redacted', pdf: Uint8Array.from([3, 2, 1]) });
+  });
+
+  it('re-runs the output gate on every copy, whatever the engine: one it cannot read is refused', async () => {
+    expect(await workerRedact({}, { engine: child('echo') })(ONE, { quotes: ['Kestrel'], redactsAny: true })).toEqual({ kind: 'refused', reason: RERUN_REFUSAL });
+    const given = () => Promise.resolve({ kind: 'redacted' as const, pdf: Uint8Array.from([9]), boxes: [] });
+    expect(await workerRedact({}, { redact: given })(ONE, { quotes: ['Kestrel'], redactsAny: true })).toEqual({ kind: 'refused', reason: RERUN_REFUSAL });
+  });
+
+  it('with it, talks only to the sidecar: a missing socket fails the job closed, never the in-pod child', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-wr-'));
+    try {
+      const redact = workerRedact({ PDF_ENGINE_SOCKET: path.join(dir, 'engine.sock') }, { socketDirs: [dir], engine: child('refuse'), engineTimeoutMs: 1_000 });
+      const job = redact(ONE, { quotes: ['Kestrel'], redactsAny: true });
+      await expect(job).rejects.toBeInstanceOf(RetryableEngineError);
+      await expect(job).rejects.toThrow('the engine socket is missing');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a socket outside /run/pdf-engine, and so does runWorker, before it opens a pool', () => {
+    expect(() => workerRedact({ PDF_ENGINE_SOCKET: 'engine.sock' }, {})).toThrow('PDF_ENGINE_SOCKET must be an absolute path directly in /run/pdf-engine');
+    expect(() => runWorker({ env: { PGHOST: '127.0.0.1', PGPORT: '1', PDF_ENGINE_SOCKET: '/tmp/engine.sock' }, intervalMs: 3_600_000 })).toThrow('PDF_ENGINE_SOCKET');
   });
 });

@@ -77,6 +77,14 @@ describe('isolatedRedact', () => {
     expect(engineExecArgv(['--env-file'])).toEqual([]);
   });
 
+  it('kills the child when its signal aborts (the sidecar: a worker that hung up, or a stop), and forks none for a signal already aborted', async () => {
+    const controller = new AbortController();
+    const job = isolatedRedact({ module: child('hang'), signal: controller.signal })(Uint8Array.from([1]), REQUEST);
+    setTimeout(() => controller.abort(), 200);
+    await expect(job).rejects.toThrow('the engine process was stopped');
+    await expect(isolatedRedact({ module: child('missing'), signal: AbortSignal.abort() })(Uint8Array.from([1]), REQUEST)).rejects.toThrow('the engine process was stopped');
+  });
+
   it('runs the built engine-child.js next to it by default', () => {
     expect(ENGINE_CHILD).toMatch(/[/\\]pdf[/\\]engine-child\.js$/);
   });

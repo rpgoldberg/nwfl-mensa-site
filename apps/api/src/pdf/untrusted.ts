@@ -18,4 +18,6 @@
 // ============================================================================
 
 /** True only once the sidecar and the out-of-child gate re-run, and their tests above, exist. */
+// PDF-ISO built both and their tests pass, but this stays false on purpose: the lift waits until
+// fc's manifest runs the sidecar as its own uid and validate-nwfl checks it (README, "The engine sidecar").
 export const UNTRUSTED_PDF_READY: boolean = false;

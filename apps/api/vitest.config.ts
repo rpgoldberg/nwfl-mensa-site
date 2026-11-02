@@ -26,6 +26,9 @@ export default defineConfig({
         'src/worker.ts',
         // The engine's child process: message and exit wiring only (isolated.ts engineReply is tested).
         'src/pdf/engine-child.ts',
+        // The engine sidecar's entrypoint: signal wiring only (sidecar.ts sidecarMain is tested here, and
+        // test/pdf/engine-sidecar.test.ts runs this very file as a process, where coverage cannot see it).
+        'src/pdf/engine-sidecar.ts',
         // The seed command's entrypoint: argv, env and stdout only (seed.ts is tested).
         'src/seed/cli.ts',
         // The issue loader's entrypoint: argv, env, stdin's fstat and stdout only (load.ts is tested).

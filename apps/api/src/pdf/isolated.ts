@@ -65,7 +65,7 @@ export function engineExecArgv(argv: readonly string[]): string[] {
 }
 
 /** Ten minutes is the job's lease; a copy that takes half of it is given up. */
-const DEFAULT_TIMEOUT_MS = 300_000;
+export const ENGINE_TIMEOUT_MS = 300_000;
 
 /** The child's side: runs the engine on one message; never throws. */
 export async function engineReply(message: EngineMessage, redact: Redact): Promise<EngineReply> {
@@ -86,25 +86,41 @@ export function withoutCanvasWarnings(warn: (...args: unknown[]) => void): (...a
   };
 }
 
-/** An engine that runs each call in a new child process. */
-export function isolatedRedact(options: { module?: string; timeoutMs?: number } = {}): Redact {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+/**
+ * An engine that runs each call in a new child process. `signal` (the sidecar's: the worker hung up,
+ * or the sidecar is stopping) kills the child and fails the call.
+ */
+export function isolatedRedact(options: { module?: string; timeoutMs?: number; signal?: AbortSignal } = {}): Redact {
+  const timeoutMs = options.timeoutMs ?? ENGINE_TIMEOUT_MS;
+  const { signal } = options;
   return (original, request) =>
     new Promise<RedactResult>((resolve, reject) => {
+      if (signal?.aborted === true) {
+        reject(new Error('the engine process was stopped'));
+        return;
+      }
       const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, execArgv: engineExecArgv(process.execArgv), serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
       let reply: EngineReply | undefined;
       let late = false;
+      let stopped = false;
       const timer = setTimeout(() => {
         late = true;
         child.kill('SIGKILL');
       }, timeoutMs);
+      const stop = (): void => {
+        stopped = true;
+        child.kill('SIGKILL');
+      };
+      signal?.addEventListener('abort', stop, { once: true });
       child.once('message', (message) => {
         reply = message as EngineReply;
       });
-      child.once('exit', (code, signal) => {
+      child.once('exit', (code, killedBy) => {
         clearTimeout(timer);
-        if (late) reject(new Error(`the engine process took longer than ${timeoutMs} ms`));
-        else if (reply === undefined) reject(new Error(`the engine process ended without a copy (${signal ?? `exit ${code}`})`));
+        signal?.removeEventListener('abort', stop);
+        if (stopped) reject(new Error('the engine process was stopped'));
+        else if (late) reject(new Error(`the engine process took longer than ${timeoutMs} ms`));
+        else if (reply === undefined) reject(new Error(`the engine process ended without a copy (${killedBy ?? `exit ${code}`})`));
         else if (reply.ok) resolve(reply.result);
         else reject(new Error(reply.message));
       });
