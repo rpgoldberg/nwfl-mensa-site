@@ -8,7 +8,7 @@ export const AT_PROVIDER = new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/`);
 
 export const banner = (page: Page) => page.getByRole('banner');
 
-export async function signIn(page: Page, login: 'member' | 'officer' | 'pending' | 'long-name') {
+export async function signIn(page: Page, login: 'member' | 'officer' | 'pending' | 'long-name' | 'refused' | 'lapsed') {
   await banner(page).getByRole('link', { name: 'Sign in', exact: true }).click();
   await expect(page).toHaveURL(AT_PROVIDER);
   await page.locator('input[name="login"]').fill(login);

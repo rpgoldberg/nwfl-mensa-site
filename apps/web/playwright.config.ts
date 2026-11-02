@@ -47,7 +47,8 @@ export default defineConfig({
     {
       command: 'node e2e/api.mjs',
       port: API_PORT,
-      env: { API_PORT: String(API_PORT), SILENT_API_PORT: String(SILENT_API_PORT), NO_ISSUES_API_PORT: String(NO_ISSUES_API_PORT) },
+      // A14: it verifies a reader's token against the test provider, as the API verifies Authentik's.
+      env: { API_PORT: String(API_PORT), SILENT_API_PORT: String(SILENT_API_PORT), NO_ISSUES_API_PORT: String(NO_ISSUES_API_PORT), IDP_ISSUER: IDP_ORIGIN, IDP_JWKS_URL: `${IDP_ORIGIN}/jwks` },
       reuseExistingServer: false,
     },
     {

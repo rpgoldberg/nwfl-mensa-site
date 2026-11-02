@@ -66,3 +66,27 @@ export const NEWSLETTER = {
   sha256Hex: 'ab'.repeat(32),
   sizeBytes: 987_654,
 };
+
+/** A14: the test identity provider's people (e2e/idp.mjs), by login, with their subjects. */
+export const ACCOUNTS = {
+  officer: '00000000-0000-4000-8000-0000000000a1',
+  member: '00000000-0000-4000-8000-0000000000b2',
+  pending: '00000000-0000-4000-8000-0000000000c3',
+  refused: '00000000-0000-4000-8000-0000000000e5',
+  lapsed: '00000000-0000-4000-8000-0000000000f6',
+};
+
+/**
+ * A14: the newsletter's articles (api.mjs ARTICLES). The public article carries a members passage and a
+ * members PDF; the members and officers articles are listed for the public too, in full, as a buggy API
+ * might. A member sees the passage, the members article and the members PDF; nobody sees the officers
+ * article on /news; the public sees none of it.
+ */
+export const ARTICLES = {
+  open: { title: 'A new home for the Wednesday lunch', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001' },
+  members: { title: 'Members picnic sign-up', body: 'MEMBERS ARTICLE CANARY: the picnic is at the north shelter.' },
+  officers: { title: 'OFFICERS ARTICLE CANARY', body: 'OFFICERS BODY CANARY', pdf: 'e2f00000-0000-4000-8000-000000000003' },
+};
+
+/** The marker line in a members copy's bytes (api.mjs MEMBERS_PDF). */
+export const MEMBERS_PDF_MARK = '% members copy';

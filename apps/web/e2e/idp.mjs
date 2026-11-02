@@ -1,27 +1,48 @@
 // @ts-check
 // A local OpenID provider for the e2e suite only (oidc-provider), standing in
-// for the club's Authentik: never a shared host. It knows four made-up
+// for the club's Authentik: never a shared host. It knows six made-up
 // people, requires PKCE, takes the client secret in the body
 // (client_secret_post), puts name and groups in the ID token as Authentik does,
 // and offers RP-initiated logout. Consent is skipped for the one client, as a
 // first-party provider would. Its own pages are plain forms that load nothing
 // from elsewhere (the library's samples import a web font, and WebKit then
 // lost a sign-in now and then). Settings come from the environment.
+//
+// A14: as A16 provisions Authentik, the access token is a JWT for the API
+// alone (aud nwfl-site, RS256), with the groups claim, a UUID subject, and an
+// hour's life at most (the API refuses a longer one). Two people exist for the
+// edge cases: "lapsed", whose token lives 20 s (under the site's 30 s margin,
+// so it is never forwarded), and "refused", whose token the stand-in API
+// refuses (e2e/api.mjs). With IDP_TLS_KEY and IDP_TLS_CERT (PEM) it serves
+// https, as the real API requires of an issuer (the redaction lane).
 import http from 'node:http';
-import Provider from 'oidc-provider';
+import https from 'node:https';
+import Provider, { errors } from 'oidc-provider';
 
 const env = process.env;
 const port = Number(env['IDP_PORT'] ?? 9090);
-const issuer = `http://127.0.0.1:${port}`;
+const tls = env['IDP_TLS_KEY'] && env['IDP_TLS_CERT'] ? { key: env['IDP_TLS_KEY'], cert: env['IDP_TLS_CERT'] } : undefined;
+const issuer = `${tls ? 'https' : 'http'}://127.0.0.1:${port}`;
 
-/** @type {Record<string, { name: string, groups: string[] }>} */
-const ACCOUNTS = {
-  officer: { name: 'Alex Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-president'] },
-  member: { name: 'Jordan Example', groups: ['nwfl-members'] },
-  pending: { name: 'Casey Placeholder', groups: ['nwfl-pending'] },
+/** The API as a resource: the access token's audience is its client id, as Authentik sets it. */
+const RESOURCE = 'urn:nwfl:api';
+const AUDIENCE = 'nwfl-site';
+
+/**
+ * By the login typed at the sign-in form. Each id is the subject, a UUID as Authentik's user_uuid mode
+ * makes it (the API refuses any other). Kept in step with e2e/stand-in.ts (ACCOUNTS).
+ * @type {Record<string, { id: string, name: string, groups: string[], tokenSeconds?: number }>}
+ */
+const LOGINS = {
+  officer: { id: '00000000-0000-4000-8000-0000000000a1', name: 'Alex Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-president'] },
+  member: { id: '00000000-0000-4000-8000-0000000000b2', name: 'Jordan Example', groups: ['nwfl-members'] },
+  pending: { id: '00000000-0000-4000-8000-0000000000c3', name: 'Casey Placeholder', groups: ['nwfl-pending'] },
   // A long name, for the header's layout on a narrow phone at large text.
-  'long-name': { name: 'Maximiliana Bartholomew-Fitzgerald Examplesworth', groups: ['nwfl-members', 'nwfl-officers'] },
+  'long-name': { id: '00000000-0000-4000-8000-0000000000d4', name: 'Maximiliana Bartholomew-Fitzgerald Examplesworth', groups: ['nwfl-members', 'nwfl-officers'] },
+  refused: { id: '00000000-0000-4000-8000-0000000000e5', name: 'Riley Testcase', groups: ['nwfl-members'] },
+  lapsed: { id: '00000000-0000-4000-8000-0000000000f6', name: 'Quinn Example', groups: ['nwfl-members'], tokenSeconds: 20 },
 };
+const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 
 /** @param {string} title @param {string} body */
 const page = (title, body) =>
@@ -45,6 +66,19 @@ const provider = new Provider(issuer, {
   cookies: { keys: ['e2e-only-not-a-secret'] },
   features: {
     devInteractions: { enabled: false },
+    resourceIndicators: {
+      enabled: true,
+      defaultResource: () => RESOURCE,
+      // The client asks for no resource at the token endpoint: the granted one is used, so the access token is the API's JWT.
+      useGrantedResource: () => true,
+      /** @param {import('oidc-provider').KoaContextWithOIDC} ctx @param {string} indicator */
+      getResourceServerInfo(ctx, indicator) {
+        if (indicator !== RESOURCE) throw new errors.InvalidTarget();
+        const accountId = ctx.oidc.entities.AuthorizationCode?.accountId;
+        const seconds = (accountId && BY_ID.get(accountId)?.tokenSeconds) || 3600;
+        return { scope: 'site', audience: AUDIENCE, accessTokenTTL: seconds, accessTokenFormat: 'jwt', jwt: { sign: { alg: 'RS256' } } };
+      },
+    },
     rpInitiatedLogout: {
       enabled: true,
       /** @param {import('oidc-provider').KoaContextWithOIDC} ctx @param {string} form */
@@ -56,10 +90,15 @@ const provider = new Provider(issuer, {
       },
     },
   },
+  /** The groups claim in the API's access token, as Authentik's scope mapping puts it there. @param {unknown} _ctx @param {any} token */
+  async extraTokenClaims(_ctx, token) {
+    return token.kind === 'AccessToken' ? { groups: BY_ID.get(String(token.accountId))?.groups ?? [] } : undefined;
+  },
   /** @param {unknown} _ctx @param {string} id */
   async findAccount(_ctx, id) {
-    const account = ACCOUNTS[id] ?? { name: id, groups: [] };
-    return { accountId: id, claims: async () => ({ sub: id, ...account }) };
+    const account = BY_ID.get(id);
+    const claims = account ? { name: account.name, groups: account.groups } : { name: id, groups: [] };
+    return { accountId: id, claims: async () => ({ sub: id, ...claims }) };
   },
   /** @param {import('oidc-provider').KoaContextWithOIDC} ctx */
   async loadExistingGrant(ctx) {
@@ -69,6 +108,7 @@ const provider = new Provider(issuer, {
     const grant = new oidc.provider.Grant({ clientId: String(oidc.client?.clientId), accountId: String(oidc.session?.accountId) });
     grant.addOIDCScope('openid profile');
     grant.addOIDCClaims(['name', 'groups']);
+    grant.addResourceScope(RESOURCE, 'site');
     await grant.save();
     return grant;
   },
@@ -85,29 +125,30 @@ const app = provider.callback();
 
 // The sign-in step (the library's own interaction pages are off): a login
 // form, any password, and a Cancel link that answers access_denied.
-http
-  .createServer(async (req, res) => {
-    const match = /^\/interaction\/([\w-]+)(\/abort)?$/.exec(new URL(req.url ?? '/', issuer).pathname);
-    if (!match) return app(req, res);
-    try {
-      const details = await provider.interactionDetails(req, res);
-      if (match[2]) {
-        return await provider.interactionFinished(req, res, { error: 'access_denied', error_description: 'End-User aborted interaction' }, { mergeWithLastSubmission: false });
-      }
-      if (req.method === 'POST') {
-        const login = (await form(req)).get('login') ?? '';
-        return await provider.interactionFinished(req, res, { login: { accountId: login } }, { mergeWithLastSubmission: false });
-      }
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(
-        page(
-          'Sign-in',
-          `<form method="post" action="/interaction/${details.uid}"><label>Login <input required type="text" name="login"></label> <label>Password <input required type="password" name="password"></label> <button type="submit">Sign-in</button></form><p><a href="/interaction/${details.uid}/abort">[ Cancel ]</a></p>`,
-        ),
-      );
-    } catch (error) {
-      res.writeHead(400, { 'Content-Type': 'text/plain' });
-      res.end(String(error));
+/** @param {http.IncomingMessage} req @param {http.ServerResponse} res */
+async function listener(req, res) {
+  const match = /^\/interaction\/([\w-]+)(\/abort)?$/.exec(new URL(req.url ?? '/', issuer).pathname);
+  if (!match) return app(req, res);
+  try {
+    const details = await provider.interactionDetails(req, res);
+    if (match[2]) {
+      return await provider.interactionFinished(req, res, { error: 'access_denied', error_description: 'End-User aborted interaction' }, { mergeWithLastSubmission: false });
     }
-  })
-  .listen(port, '127.0.0.1', () => console.log(JSON.stringify({ msg: 'test identity provider listening', issuer })));
+    if (req.method === 'POST') {
+      const login = (await form(req)).get('login') ?? '';
+      return await provider.interactionFinished(req, res, { login: { accountId: LOGINS[login]?.id ?? login } }, { mergeWithLastSubmission: false });
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(
+      page(
+        'Sign-in',
+        `<form method="post" action="/interaction/${details.uid}"><label>Login <input required type="text" name="login"></label> <label>Password <input required type="password" name="password"></label> <button type="submit">Sign-in</button></form><p><a href="/interaction/${details.uid}/abort">[ Cancel ]</a></p>`,
+      ),
+    );
+  } catch (error) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end(String(error));
+  }
+}
+
+(tls ? https.createServer(tls, listener) : http.createServer(listener)).listen(port, '127.0.0.1', () => console.log(JSON.stringify({ msg: 'test identity provider listening', issuer })));
