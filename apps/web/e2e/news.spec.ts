@@ -6,7 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
 import { setPrefs } from './prefs';
 import { NO_ISSUES_SITE_URL } from './servers';
-import { NEWSLETTER } from './stand-in';
+import { ARTICLES, NEWSLETTER, SOURCE_PDFS } from './stand-in';
 
 // As in a11y.spec.ts: WCAG 2.2 A and AA, plus AAA and best practice.
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
@@ -64,6 +64,8 @@ test.describe('/news with issues published', () => {
       for (const issue of [...NEWSLETTER.issues, NEWSLETTER.membersOnly]) expect(html, issue.title).not.toContain(issue.membersPdf);
       expect(html).not.toContain(NEWSLETTER.membersOnly.publicPdf);
       expect(html).not.toContain(NEWSLETTER.other.publicPdf);
+      // A14: the article's members PDF, its members passage, the members and officers articles.
+      for (const secret of [ARTICLES.open.membersPdf, ARTICLES.open.passage, ARTICLES.members.title, ARTICLES.members.body, ARTICLES.officers.title, ARTICLES.officers.pdf, ARTICLES.withheld.title, ...SOURCE_PDFS]) expect(html).not.toContain(secret);
       expect(html.toLowerCase()).not.toContain(NEWSLETTER.sha256Hex.slice(0, 16));
       expect(html).not.toContain(Buffer.from(NEWSLETTER.sha256Hex, 'hex').toString('base64').slice(0, 16));
       expect(html).not.toMatch(/987[,.\s]?654/);
@@ -98,7 +100,8 @@ test.describe('/news with issues published', () => {
       await expect(page.locator('html')).toHaveAttribute('data-size', String(SIZES.at(-1)));
       expect(await sideways(page)).toBeLessThanOrEqual(0);
       const links = page.locator('main a[href^="/documents/"]');
-      await expect(links).toHaveCount(NEWSLETTER.issues.length);
+      // Each issue's public PDF, and the published article's (A14).
+      await expect(links).toHaveCount(NEWSLETTER.issues.length + 1);
       for (const link of await links.all()) {
         const box = (await link.boundingBox())!;
         expect(box.height, await link.innerText()).toBeGreaterThanOrEqual(48);

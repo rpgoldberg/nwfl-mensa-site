@@ -1,0 +1,119 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the public output of the live reads, as before A14 > is unchanged for every section 1`] = `
+"{
+ "treasurerSummaries": [
+  {
+   "slug": "item-1",
+   "title": "Item 1",
+   "summary": "Summary 1",
+   "bodyHtml": "<p>Open &lt;b&gt;&amp;&lt;/b&gt; &quot;quoted&quot;<span class=\\"members-note\\">(members only)</span><span class=\\"members-note\\">(members only)</span></p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><h3>Heading</h3>",
+   "publishedOn": "2026-10-01",
+   "source": "submitted",
+   "files": [
+    {
+     "href": "/documents/a0000000-0000-4000-8000-000000000001.pdf",
+     "label": "a0000000.pdf"
+    }
+   ]
+  },
+  {
+   "slug": "item-4",
+   "title": "Item 4",
+   "summary": "Summary 4",
+   "bodyHtml": "<p>Open &lt;b&gt;&amp;&lt;/b&gt; &quot;quoted&quot;<span class=\\"members-note\\">(members only)</span><span class=\\"members-note\\">(members only)</span></p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><h3>Heading</h3>",
+   "publishedOn": "2026-10-04",
+   "source": "submitted",
+   "files": [
+    {
+     "href": "/documents/a0000000-0000-4000-8000-000000000001.pdf",
+     "label": "a0000000.pdf"
+    }
+   ]
+  }
+ ],
+ "presidentReport": {
+  "slug": "item-1",
+  "title": "Item 1",
+  "summary": "Summary 1",
+  "bodyHtml": "<p>Open &lt;b&gt;&amp;&lt;/b&gt; &quot;quoted&quot;<span class=\\"members-note\\">(members only)</span><span class=\\"members-note\\">(members only)</span></p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><h3>Heading</h3>",
+  "publishedOn": "2026-10-01",
+  "source": "submitted",
+  "files": [
+   {
+    "href": "/documents/a0000000-0000-4000-8000-000000000001.pdf",
+    "label": "a0000000.pdf"
+   }
+  ]
+ },
+ "announcements": [
+  {
+   "slug": "item-1",
+   "title": "Item 1",
+   "summary": "Summary 1",
+   "bodyHtml": "<p>Open &lt;b&gt;&amp;&lt;/b&gt; &quot;quoted&quot;<span class=\\"members-note\\">(members only)</span><span class=\\"members-note\\">(members only)</span></p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><h3>Heading</h3>",
+   "publishedOn": "2026-10-01",
+   "source": "submitted",
+   "files": [
+    {
+     "href": "/documents/a0000000-0000-4000-8000-000000000001.pdf",
+     "label": "a0000000.pdf"
+    }
+   ]
+  },
+  {
+   "slug": "item-4",
+   "title": "Item 4",
+   "summary": "Summary 4",
+   "bodyHtml": "<p>Open &lt;b&gt;&amp;&lt;/b&gt; &quot;quoted&quot;<span class=\\"members-note\\">(members only)</span><span class=\\"members-note\\">(members only)</span></p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><p class=\\"members-note\\">Members-only passage, sign in to read.</p><h3>Heading</h3>",
+   "publishedOn": "2026-10-04",
+   "source": "submitted",
+   "files": [
+    {
+     "href": "/documents/a0000000-0000-4000-8000-000000000001.pdf",
+     "label": "a0000000.pdf"
+    }
+   ]
+  }
+ ],
+ "issues": [
+  {
+   "period": "2026-10",
+   "label": "Pensa Mensa, October-November 2026",
+   "summary": "Summary 5",
+   "pdf": "/documents/a0000000-0000-4000-8000-000000000001.pdf",
+   "source": "pipeline"
+  },
+  {
+   "period": "2026-04",
+   "label": "Pensa Mensa, April-May 2026",
+   "summary": "Summary 8",
+   "pdf": "/documents/a0000000-0000-4000-8000-000000000001.pdf",
+   "source": "pipeline"
+  }
+ ],
+ "files": [
+  {
+   "kind": "not_ready"
+  },
+  {
+   "kind": "not_found"
+  },
+  {
+   "kind": "not_found"
+  },
+  {
+   "kind": "not_found"
+  },
+  {
+   "kind": "not_found"
+  },
+  {
+   "kind": "not_found"
+  },
+  {
+   "kind": "not_found"
+  }
+ ]
+}"
+`;

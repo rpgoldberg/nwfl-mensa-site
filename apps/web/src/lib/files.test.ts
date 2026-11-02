@@ -1,12 +1,12 @@
 // REDACT R3c: /documents/[id].pdf, a PDF streamed from the API as the public may have it.
 import { describe, expect, it } from 'vitest';
-import type { FileRead } from './api/client';
+import type { FileRead, Reader } from './api/client';
 import { ApiUnavailable } from './api/client';
 import { NOT_READY_TEXT, serveFile } from './files';
 
 const FILE = '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7';
 const body = (text: string) => new Blob([text]).stream() as ReadableStream<Uint8Array>;
-const live = (read: (id: string) => Promise<FileRead>) => ({ file: read });
+const live = (read: (id: string, as?: Reader) => Promise<FileRead>) => ({ file: read });
 
 describe('serveFile', () => {
   it('streams a PDF inline, under a safe name, with its length', async () => {
@@ -55,5 +55,48 @@ describe('serveFile', () => {
     expect(res.status).toBe(503);
     expect(await res.text()).toContain('temporarily unavailable');
     await expect(serveFile(live(() => Promise.reject(new TypeError('bug'))), FILE)).rejects.toThrow('bug');
+  });
+});
+
+// A14 (S5a): a members copy, read with a signed-in reader's token.
+describe('serveFile as a signed-in reader', () => {
+  const member: Reader = { bearer: 'member.token' };
+  const snapshot = async (res: Response) => ({ status: res.status, headers: [...res.headers], body: await res.text() });
+
+  it("reads with the reader's token, and never lets a shared cache keep what it got", async () => {
+    const asked: (string | undefined)[] = [];
+    const res = await serveFile(
+      live((_id, as) => {
+        asked.push(as?.bearer);
+        return Promise.resolve({ kind: 'pdf', filename: 'pensa-mensa-2026-10.pdf', size: 6, body: body('%PDF-1') });
+      }),
+      FILE,
+      member,
+    );
+    expect(asked).toEqual(['member.token']);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(await res.text()).toBe('%PDF-1');
+  });
+
+  it('leaves the public read as it was: no cache rule of its own, the site policy decides', async () => {
+    const res = await serveFile(live(() => Promise.resolve({ kind: 'pdf', filename: 'x.pdf', size: 1, body: body('x') })), FILE);
+    expect(res.headers.get('cache-control')).toBeNull();
+  });
+
+  it("answers a file the reader may not have exactly as a missing one: the same 404, byte for byte, as a random id's to the public", async () => {
+    const random = await snapshot(await serveFile(live(() => Promise.resolve({ kind: 'not_found' })), '00000000-0000-4000-8000-0000000000aa'));
+    for (const reader of [member, undefined]) {
+      const withheld = await snapshot(await serveFile(live(() => Promise.resolve({ kind: 'not_found' })), FILE, reader));
+      expect(withheld).toEqual(random);
+    }
+    expect(random.status).toBe(404);
+  });
+
+  it("keeps not ready and unavailable the same as the public's", async () => {
+    for (const read of [() => Promise.resolve({ kind: 'not_ready' } as FileRead), () => Promise.reject(new ApiUnavailable('ReadFile'))]) {
+      const anonymous = await snapshot(await serveFile(live(read), FILE));
+      expect(await snapshot(await serveFile(live(read), FILE, member))).toEqual(anonymous);
+    }
   });
 });

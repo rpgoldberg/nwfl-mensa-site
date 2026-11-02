@@ -6,15 +6,26 @@
 // dated from today, members events withheld. Two canaries the site must never
 // show sit among them: a members event sent in full (as a buggy API might)
 // and an event with no status. A call that carries a token, or a cookie, is
-// refused, so a page that sent one would fail.
+// refused, so a page that sent one would fail; the one exception (A14) is a
+// signed-in reader's token on ReadFile and on /news's two ListPublishedItems
+// reads (documents, page 50; articles, page 10), which /news and its PDFs
+// forward. That token is verified against the test identity provider
+// (e2e/idp.mjs, IDP_ISSUER and IDP_JWKS_URL) and answered as the API answers
+// it: the officers' view for the officers group, the members' view for an
+// account with member standing (MEMBER_SUBJECTS, as member_account would say),
+// the public's for any other (pending), and UNAUTHENTICATED for a bad token or
+// the "refused" account; the "articles-down" member's articles read fails as an
+// API that could not answer it. Without a token the public's answer is a buggy API's:
+// it lists members files, a members article in full, an officers article.
 //
 // SILENT_API_PORT is a second listener that accepts connections and never
 // answers: the API that hangs, for the timeout test. NO_ISSUES_API_PORT is a
 // third, the same API with no issue of the newsletter published yet.
-import { create } from '@bufbuild/protobuf';
+import { clone, create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import http2 from 'node:http2';
 import net from 'node:net';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility } from '../src/gen/nwfl/mensa/v1/content_pb.js';
@@ -27,6 +38,13 @@ const noIssuesPort = Number(process.env['NO_ISSUES_API_PORT'] ?? 9093);
 
 // As in e2e/stand-in.ts.
 const CANARY = { membersInFull: 'MEMBERS-ONLY CANARY PICNIC', noStatus: 'UNPUBLISHED CANARY' };
+
+// A14: the test identity provider's subjects (e2e/idp.mjs), as in e2e/stand-in.ts (ACCOUNTS).
+const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6', articlesDown: '00000000-0000-4000-8000-0000000000a7' };
+/** Who has member standing (member_account, in the real API): not the pending account, and the officers by their group. */
+const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.refused, SUBJECT.lapsed, SUBJECT.articlesDown]);
+const idpIssuer = process.env['IDP_ISSUER'];
+const jwks = process.env['IDP_JWKS_URL'] ? createRemoteJWKSet(new URL(process.env['IDP_JWKS_URL'])) : undefined;
 
 const OFFICE = {
   president: '11111111-1111-4111-8111-111111111111',
@@ -212,8 +230,14 @@ const NEWSLETTER = [
   { title: 'Our bylaws', summary: 'As amended in 2024.', id: 'd0c00000-0000-4000-8000-0000000000b1', publicPdf: 'f0000000-0000-4000-8000-0000000000b1', daysAgo: 4 },
 ];
 
-/** @param {string} id @param {FileAudience} audience */
-const storedFile = (id, audience) => ({ id, filename: `${id}.pdf`, mimeType: 'application/pdf', sizeBytes: SIZE, sha256: SHA256, audience, role: FileRole.PRIMARY });
+/** @param {string} id @param {FileAudience} audience @param {string} [filename] @param {FileRole} [role] */
+const storedFile = (id, audience, filename = `${id}.pdf`, role = FileRole.PRIMARY) => ({ id, filename, mimeType: 'application/pdf', sizeBytes: SIZE, sha256: SHA256, audience, role });
+/**
+ * A14: a members SOURCE file, listed before each members copy as a buggy API might (a source file is
+ * officers-only, and a .docx): a PDF, so only its role tells it apart. As in e2e/stand-in.ts (SOURCE_PDFS).
+ * @param {string} membersPdf
+ */
+const sourceOf = (membersPdf) => `f3${membersPdf.slice(2)}`;
 
 const DOCUMENTS = NEWSLETTER.map((d) =>
   create(ContentItemSchema, {
@@ -227,7 +251,7 @@ const DOCUMENTS = NEWSLETTER.map((d) =>
       summary: d.summary,
       visibility: d.visibility ?? ItemVisibility.PUBLIC,
       approvedAt: timestampFromDate(new Date(Date.now() - d.daysAgo * 86_400_000)),
-      files: [...(d.membersPdf ? [storedFile(d.membersPdf, FileAudience.MEMBERS)] : []), storedFile(d.publicPdf, FileAudience.PUBLIC)],
+      files: [...(d.membersPdf ? [storedFile(sourceOf(d.membersPdf), FileAudience.MEMBERS, 'pensa-mensa-source.pdf', FileRole.SOURCE), storedFile(d.membersPdf, FileAudience.MEMBERS)] : []), storedFile(d.publicPdf, FileAudience.PUBLIC)],
     },
   }),
 ).sort((a, b) => Number(b.live?.approvedAt?.seconds) - Number(a.live?.approvedAt?.seconds));
@@ -238,6 +262,70 @@ const PDF = Buffer.from(
   'latin1',
 );
 const PUBLIC_PDFS = new Set(NEWSLETTER.filter((d) => (d.visibility ?? ItemVisibility.PUBLIC) === ItemVisibility.PUBLIC).map((d) => d.publicPdf));
+/** The members copy, told apart from the public one by a comment line: what a member's ReadFile streams. */
+const MEMBERS_PDF = Buffer.concat([Buffer.from('%PDF-1.4\n% members copy\n', 'latin1'), PDF.subarray(9)]);
+
+// A14: the newsletter's articles, as in e2e/stand-in.ts (ARTICLES). A public article with a members
+// passage and a members PDF, a members article and an officers article.
+const ARTICLES = {
+  open: { id: 'e0a00000-0000-4000-8000-000000000001', title: 'A new home for the Wednesday lunch', summary: 'The lunch moves across town in March.', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001', sourcePdf: 'e3f00000-0000-4000-8000-000000000001' },
+  members: { id: 'e0a00000-0000-4000-8000-000000000002', title: 'Members picnic sign-up', summary: 'Bring a dish to share.', body: 'MEMBERS ARTICLE CANARY: the picnic is at the north shelter.' },
+  officers: { id: 'e0a00000-0000-4000-8000-000000000003', title: 'OFFICERS ARTICLE CANARY', summary: 'Board notes.', body: 'OFFICERS BODY CANARY', pdf: 'e2f00000-0000-4000-8000-000000000003' },
+  withheld: { id: 'e0a00000-0000-4000-8000-000000000004', title: 'Members trip notes, withheld whole', summary: 'Notes from the trip.' },
+};
+/** What a member may read beyond the public: each public issue's members copy and the article's members PDF. */
+const MEMBERS_PDFS = new Set([...NEWSLETTER.filter((d) => d.membersPdf && (d.visibility ?? ItemVisibility.PUBLIC) === ItemVisibility.PUBLIC).map((d) => d.membersPdf), ARTICLES.open.membersPdf]);
+
+/** @param {string} text */
+const passage = (text) => ({ kind: { case: /** @type {const} */ ('members'), value: { blocks: [para(text)] } } });
+const REDACTED = { kind: { case: /** @type {const} */ ('redacted'), value: {} } };
+
+/**
+ * @param {{ id: string, title: string, summary: string }} a @param {ItemVisibility} visibility @param {unknown[]} blocks
+ * @param {{ id: string, audience: FileAudience, name: string, role?: FileRole }[]} files @param {number} daysAgo
+ */
+const article = (a, visibility, blocks, files, daysAgo) =>
+  create(ContentItemSchema, {
+    id: a.id,
+    slug: a.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    kind: ContentKind.ARTICLE,
+    officeId: OFFICE.president,
+    state: ItemState.PUBLISHED,
+    live: { title: a.title, summary: a.summary, visibility, body: { blocks: /** @type {any} */ (blocks) }, approvedAt: timestampFromDate(new Date(Date.now() - daysAgo * 86_400_000)), files: files.map((f) => storedFile(f.id, f.audience, f.name, f.role)) },
+  });
+
+/** The articles by audience: what the API sends each. @param {'anonymous' | 'public' | 'members' | 'officers'} audience */
+function articles(audience) {
+  const memberTree = audience === 'members' || audience === 'officers' || audience === 'anonymous';
+  // What the API sends a member besides: a redacted node where its members lens withholds a privacy mark.
+  const lens = audience === 'members' || audience === 'officers' ? [REDACTED] : [];
+  const open = article(
+    ARTICLES.open,
+    ItemVisibility.PUBLIC,
+    [para(ARTICLES.open.plain), memberTree ? passage(ARTICLES.open.passage) : REDACTED, ...lens],
+    // Named as the issue loader names a file: its slug, and -members for the members copy.
+    // A members source file first, as a buggy API might list it: never linked, whoever reads.
+    [
+      ...(audience === 'public' ? [] : [{ id: ARTICLES.open.sourcePdf, audience: FileAudience.MEMBERS, name: 'new-home-for-lunch-source.pdf', role: FileRole.SOURCE }]),
+      { id: ARTICLES.open.publicPdf, audience: FileAudience.PUBLIC, name: 'new-home-for-lunch.pdf' },
+      ...(audience === 'public' ? [] : [{ id: ARTICLES.open.membersPdf, audience: FileAudience.MEMBERS, name: 'new-home-for-lunch-members.pdf' }]),
+    ],
+    6,
+  );
+  const members = article(ARTICLES.members, ItemVisibility.MEMBERS, memberTree ? [para(ARTICLES.members.body), ...lens] : [REDACTED], [], 7);
+  const officers = article(ARTICLES.officers, ItemVisibility.OFFICERS, [para(ARTICLES.officers.body)], [{ id: ARTICLES.officers.pdf, audience: FileAudience.OFFICERS, name: 'board-notes.pdf' }], 8);
+  // A members article the members lens withholds whole, and the public gets as a placeholder: one redacted node, whoever reads.
+  const withheld = article(ARTICLES.withheld, ItemVisibility.MEMBERS, [REDACTED], [], 9);
+  // The real API never sends an officers item to anyone else; the anonymous answer is a buggy API's.
+  return audience === 'officers' || audience === 'anonymous' ? [open, members, officers, withheld] : [open, members, withheld];
+}
+
+/** The issues for a token the API reads as the public's: the public files only, as the real API lists them. */
+const PUBLIC_DOCUMENTS = DOCUMENTS.map((d) => {
+  const copy = clone(ContentItemSchema, d);
+  if (copy.live) copy.live.files = copy.live.files.filter((f) => f.audience === FileAudience.PUBLIC);
+  return copy;
+});
 
 /** @param {string} title @param {string} slug @param {number} order @param {{ name: string, status: TermStatus }[]} holders @param {string} alias */
 const office = (slug, title, order, holders, alias) => ({
@@ -266,6 +354,32 @@ const ROSTER = [
 /** @param {import('@connectrpc/connect').HandlerContext} ctx */
 function anonymousOnly(ctx) {
   if (ctx.requestHeader.has('authorization') || ctx.requestHeader.has('cookie')) throw new ConnectError('the site must call as the public', Code.PermissionDenied);
+}
+
+/**
+ * The caller's audience, for the two reads that may carry a reader's token (A14). Never a cookie.
+ * `articles`: the articles read, which fails for the "articles-down" account.
+ * @param {import('@connectrpc/connect').HandlerContext} ctx @param {{ articles?: boolean }} [options]
+ * @returns {Promise<'anonymous' | 'public' | 'members' | 'officers'>}
+ */
+async function audienceOf(ctx, { articles = false } = {}) {
+  if (ctx.requestHeader.has('cookie')) throw new ConnectError('the site must never send a cookie', Code.PermissionDenied);
+  const header = ctx.requestHeader.get('authorization');
+  if (header === null) return 'anonymous';
+  const token = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i.exec(header)?.[1];
+  if (token === undefined || jwks === undefined) throw new ConnectError('invalid token', Code.Unauthenticated);
+  /** @type {import('jose').JWTPayload} */
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(token, jwks, { ...(idpIssuer ? { issuer: idpIssuer } : {}), audience: 'nwfl-site', algorithms: ['RS256'], requiredClaims: ['exp', 'sub', 'iat'], maxTokenAge: 3600 }));
+  } catch {
+    throw new ConnectError('invalid token', Code.Unauthenticated);
+  }
+  if (payload.sub === SUBJECT.refused) throw new ConnectError('invalid token', Code.Unauthenticated);
+  if (articles && payload.sub === SUBJECT.articlesDown) throw new ConnectError('the articles are down', Code.Unavailable);
+  const groups = Array.isArray(payload['groups']) ? payload['groups'] : [];
+  if (groups.includes('nwfl-officers')) return 'officers';
+  return MEMBER_SUBJECTS.has(String(payload.sub)) ? 'members' : 'public';
 }
 
 /** The API's routes; with `issues: false`, nothing of the newsletter is published yet. @param {{ issues: boolean }} options */
@@ -303,17 +417,28 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       anonymousOnly(ctx);
       return { offices: ROSTER };
     },
-    listPublishedItems: (req, ctx) => {
-      anonymousOnly(ctx);
-      const items = req.kind === ContentKind.DOCUMENT ? (issues ? DOCUMENTS : []) : (ITEMS[/** @type {keyof typeof ITEMS} */ (req.kind)] ?? []);
+    listPublishedItems: async (req, ctx) => {
+      // Only /news's two reads (live.ts: DOCUMENT, page 50; ARTICLE, page 10) may carry a reader's token:
+      // Home, /finances or the President's report sending one is refused, as every other RPC refuses it.
+      const news = (req.kind === ContentKind.DOCUMENT && req.pageSize === 50) || (req.kind === ContentKind.ARTICLE && req.pageSize === 10);
+      if (!news) anonymousOnly(ctx);
+      const audience = await audienceOf(ctx, { articles: req.kind === ContentKind.ARTICLE });
+      const documents = audience === 'public' ? PUBLIC_DOCUMENTS : DOCUMENTS;
+      const items =
+        req.kind === ContentKind.DOCUMENT ? (issues ? documents : [])
+        : req.kind === ContentKind.ARTICLE ? (issues ? articles(audience) : [])
+        : (ITEMS[/** @type {keyof typeof ITEMS} */ (req.kind)] ?? []);
       return { items: items.slice(0, req.pageSize || 20) };
     },
-    // A public file's bytes; anything else is not found, as the API answers the public for a members file.
+    // A public file's bytes, and a members copy for a member; anything else is not found, as the API answers a withheld file.
     readFile: async function* (req, ctx) {
-      anonymousOnly(ctx);
-      if (!issues || !PUBLIC_PDFS.has(req.fileId)) throw new ConnectError('file not found', Code.NotFound);
-      yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(PDF.length) } } };
-      yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(PDF) } };
+      const audience = await audienceOf(ctx);
+      const members = (audience === 'members' || audience === 'officers') && MEMBERS_PDFS.has(req.fileId);
+      if (!issues || (!PUBLIC_PDFS.has(req.fileId) && req.fileId !== ARTICLES.open.publicPdf && !members)) throw new ConnectError('file not found', Code.NotFound);
+      const bytes = members ? MEMBERS_PDF : PDF;
+      // The same title-based name for both copies, as the API builds it.
+      yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(bytes.length) } } };
+      yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(bytes) } };
     },
   });
 };

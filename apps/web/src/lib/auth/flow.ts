@@ -68,14 +68,18 @@ const log = (d: Deps, level: string, msg: string, extra: Record<string, unknown>
 
 const sameText = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
-export async function beginSignIn(d: Deps, { cookieHeader, back }: { cookieHeader: string | null | undefined; back: string | null | undefined }): Promise<Outcome> {
+/** `again`: a fresh sign-in even for someone signed in, for a new token ("Sign in again" on /news, A14). */
+export async function beginSignIn(
+  d: Deps,
+  { cookieHeader, back, again = false }: { cookieHeader: string | null | undefined; back: string | null | undefined; again?: boolean },
+): Promise<Outcome> {
   const now = d.now();
   if (!d.setup.enabled || !d.key) {
     log(d, 'error', 'sign-in is not set up', { reason: d.setup.enabled ? 'SESSION_KEY is not set' : d.setup.reason });
     return { kind: 'unavailable' };
   }
   const to = safeBack(back);
-  if (readSession(cookieHeader, d.key, now, d.tokens)) return { kind: 'redirect', location: to, cookies: [] };
+  if (!again && readSession(cookieHeader, d.key, now, d.tokens)) return { kind: 'redirect', location: to, cookies: [] };
   try {
     const start = await d.oidc.startSignIn(d.setup.config);
     const tx = { state: start.state, nonce: start.nonce, verifier: start.verifier, back: to };
@@ -84,6 +88,15 @@ export async function beginSignIn(d: Deps, { cookieHeader, back }: { cookieHeade
     log(d, 'error', 'the sign-in provider could not be reached', { err: String(error).slice(0, 200) });
     return { kind: 'unavailable' };
   }
+}
+
+/**
+ * The tokens with the time their access token expires (A14: the site forwards it only while it has time to live).
+ * No expires_in, or a nonsense one, gives no expires_at: it is then never forwarded.
+ */
+function withExpiry(tokens: Tokens, now: number): Tokens {
+  const life = tokens.expires_in;
+  return typeof life === 'number' && Number.isFinite(life) && life > 0 ? { ...tokens, expires_at: now + life } : tokens;
 }
 
 export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL; cookieHeader: string | null | undefined }): Promise<Outcome> {
@@ -107,7 +120,10 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
   try {
     const signedIn = await d.oidc.finishSignIn(d.setup.config, url, tx);
     const session = newSession(signedIn.claims, now, d.setup.config.groupPrefix);
-    d.tokens.put(session.sid, signedIn.tokens, session.exp);
+    // A session this sign-in replaces (signing in again) ends here, its record with it.
+    const replaced = readSession(cookieHeader, d.key, now, d.tokens);
+    if (replaced) d.tokens.take(replaced.sid, now);
+    d.tokens.put(session.sid, withExpiry(signedIn.tokens, now), session.exp);
     log(d, 'info', 'signed in', { officer: session.officer, member: session.member });
     return { kind: 'redirect', location: tx.back, cookies: [...cookies, sessionSetCookie(session, d.key, now)] };
   } catch (err) {

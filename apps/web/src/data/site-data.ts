@@ -25,6 +25,8 @@ export interface Issue {
   summary?: string;
   /** A live issue's public PDF, /documents/<id>.pdf; never the members file. */
   pdf?: string;
+  /** The members copy, /documents/<id>.pdf: only in a member's view of /news, when the API listed it for them (A14). */
+  membersPdf?: string;
   /** No copy is known to exist anywhere. */
   missing?: boolean;
   source: ContentSource;

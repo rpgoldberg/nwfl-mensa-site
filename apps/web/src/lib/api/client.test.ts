@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ContentKind, ContentService } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import { EventOccurrenceSchema, EventService, EventVisibility } from '../../gen/nwfl/mensa/v1/event_pb.js';
-import { ApiNotFound, ApiUnavailable, apiSetup, grpcReads } from './client';
+import { ApiNotFound, ApiTokenRefused, ApiUnavailable, type ApiReads, type Reader, apiSetup, grpcReads, unavailableReads } from './client';
 
 const SERIES = '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20';
 
@@ -334,3 +334,126 @@ describe('grpcReads.readFile', () => {
     expect(sent).toBeLessThan(100);
   });
 });
+
+// A14 (S5a): a signed-in reader's token, forwarded on the two news reads only.
+describe('grpcReads as a signed-in reader', () => {
+  const FILE = '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7';
+  // Shaped like a JWT (three parts, every b64token character), but plainly a test value.
+  const TOKEN = 'test.member-token.sig~nature+/=';
+  const member: Reader = { bearer: TOKEN };
+
+  /** Every read the API has, answering as the public would. */
+  const everything = (router: ConnectRouter) => {
+    router.service(EventService, {
+      listOccurrences: () => ({ occurrences: [] }),
+      getOccurrence: (req) => ({ occurrence: create(EventOccurrenceSchema, { id: req.id }) }),
+      listSeries: () => ({ series: [] }),
+    });
+    router.service(ContentService, {
+      getRoster: () => ({ offices: [] }),
+      listPublishedItems: () => ({ items: [{ slug: 'x' }] }),
+      async *readFile() {
+        yield { part: { case: 'notReady' as const, value: {} } };
+      },
+    });
+  };
+
+  it('sends the bearer on ListPublishedItems and ReadFile when given one, and on nothing else', async () => {
+    const api = await grpcServer(everything);
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, () => {});
+    await reads.listPublishedItems(ContentKind.ARTICLE, 10, member);
+    await reads.readFile(FILE, member);
+    await reads.listOccurrences('2026-11-01', '2026-11-30');
+    await reads.getOccurrence(SERIES);
+    await reads.listSeries();
+    await reads.getRoster();
+    await reads.listPublishedItems(ContentKind.ANNOUNCEMENT, 3);
+    await reads.readFile(FILE);
+    const auth = api.seen.map((s) => [s.path.split('/').at(-1), s.headers['authorization']]);
+    expect(auth).toEqual([
+      ['ListPublishedItems', `Bearer ${TOKEN}`],
+      ['ReadFile', `Bearer ${TOKEN}`],
+      ['ListOccurrences', undefined],
+      ['GetOccurrence', undefined],
+      ['ListSeries', undefined],
+      ['GetRoster', undefined],
+      ['ListPublishedItems', undefined],
+      ['ReadFile', undefined],
+    ]);
+    for (const call of api.seen) expect(call.headers['cookie']).toBeUndefined();
+  });
+
+  it('sends no Authorization header at all for a bearer that is not one RFC 6750 b64token: no header injection', async () => {
+    const api = await grpcServer(everything);
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, () => {});
+    const bad = ['', ' ', 'two words', `${TOKEN}\r\nCookie: a=b`, `${TOKEN}\n`, 'Bearer x', 'a=b', 'é', 'tab\there', '=abc'];
+    for (const bearer of bad) {
+      await reads.listPublishedItems(ContentKind.ARTICLE, 10, { bearer });
+      await reads.readFile(FILE, { bearer });
+    }
+    expect(api.seen).toHaveLength(bad.length * 2);
+    for (const call of api.seen) expect(call.headers['authorization']).toBeUndefined();
+  });
+
+  it('turns UNAUTHENTICATED into ApiTokenRefused when a bearer went, and logs the call and the code, never the token', async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        listPublishedItems: () => {
+          throw new ConnectError(`invalid token ${TOKEN}`, Code.Unauthenticated);
+        },
+        // eslint-disable-next-line require-yield
+        async *readFile() {
+          throw new ConnectError(`invalid token ${TOKEN}`, Code.Unauthenticated);
+        },
+      }),
+    );
+    const { lines, log } = logs();
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, log);
+    const listed = await reads.listPublishedItems(ContentKind.ARTICLE, 10, member).catch((e: unknown) => e);
+    const read = await reads.readFile(FILE, member).catch((e: unknown) => e);
+    expect(listed).toBeInstanceOf(ApiTokenRefused);
+    expect(read).toBeInstanceOf(ApiTokenRefused);
+    expect(listed).not.toBeInstanceOf(ApiUnavailable);
+    expect((listed as ApiTokenRefused).rpc).toBe('ListPublishedItems');
+    expect(lines).toEqual([
+      { level: 'warn', msg: 'api refused the token', rpc: 'ListPublishedItems', code: 'unauthenticated' },
+      { level: 'warn', msg: 'api refused the token', rpc: 'ReadFile', code: 'unauthenticated' },
+    ]);
+    expect(JSON.stringify(lines) + String(listed) + String(read)).not.toContain(TOKEN);
+  });
+
+  it('keeps UNAUTHENTICATED without a bearer as ApiUnavailable, as before, and any other failure with one too', async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        listPublishedItems: (req) => {
+          throw new ConnectError('no', req.pageSize === 1 ? Code.Unauthenticated : Code.PermissionDenied);
+        },
+      }),
+    );
+    const { lines, log } = logs();
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, log);
+    expect(await reads.listPublishedItems(ContentKind.ARTICLE, 1).catch((e: unknown) => e)).toBeInstanceOf(ApiUnavailable);
+    expect(await reads.listPublishedItems(ContentKind.ARTICLE, 2, member).catch((e: unknown) => e)).toBeInstanceOf(ApiUnavailable);
+    expect(await reads.listPublishedItems(ContentKind.ARTICLE, 1, { bearer: 'not a token' }).catch((e: unknown) => e)).toBeInstanceOf(ApiUnavailable);
+    expect(lines.map((l) => l['code'])).toEqual(['unauthenticated', 'permission_denied', 'unauthenticated']);
+    expect(JSON.stringify(lines)).not.toContain(TOKEN);
+  });
+
+  it('a read the site cannot make fails the same with or without a reader', async () => {
+    const reads = unavailableReads();
+    await expect(reads.listPublishedItems(ContentKind.ARTICLE, 10, member)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(reads.readFile(FILE, member)).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+});
+
+/** Compile-time only (never run): the calendar, the roster and the series take no reader, so no page can forward a token on them. */
+export function onlyTheNewsReadsTakeAReader(reads: ApiReads, as: Reader): void {
+  // @ts-expect-error listOccurrences takes no reader
+  void reads.listOccurrences('2026-11-01', '2026-11-30', as);
+  // @ts-expect-error getOccurrence takes no reader
+  void reads.getOccurrence(SERIES, as);
+  // @ts-expect-error listSeries takes no reader
+  void reads.listSeries(as);
+  // @ts-expect-error getRoster takes no reader
+  void reads.getRoster(as);
+}

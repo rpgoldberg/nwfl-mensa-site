@@ -35,6 +35,7 @@ const live = (over: Partial<LiveData> = {}): LiveData => ({
   presidentReport: () => Promise.resolve(undefined),
   announcements: () => Promise.resolve([]),
   issues: () => Promise.resolve([]),
+  news: () => Promise.reject(new Error('a feed never reads the news')),
   file: () => Promise.resolve({ kind: 'not_found' }),
   ...over,
 });

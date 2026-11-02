@@ -1,7 +1,7 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 import { type Block, type Document, DocumentSchema, type Inline } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { MEMBERS_PASSAGE, documentHtml, escapeHtml } from './document';
+import { MEMBERS_PASSAGE, MEMBERS_RULE, NOT_SHOWN, NO_MEMBER_ACCESS, documentHtml, escapeHtml, hasMembers, hasRedacted, withheldHtml } from './document';
 
 const text = (value: string, style: { bold?: boolean; italic?: boolean } = {}): Inline => ({ $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'text', value: { $typeName: 'nwfl.mensa.v1.Text', text: value, bold: false, italic: false, ...style } } });
 const para = (...inlines: Inline[]): Block => ({ $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'paragraph', value: { $typeName: 'nwfl.mensa.v1.Paragraph', inlines } } });
@@ -79,5 +79,168 @@ describe('documentHtml', () => {
 describe('escapeHtml', () => {
   it('escapes the five characters', () => {
     expect(escapeHtml(`&<>"'`)).toBe('&amp;&lt;&gt;&quot;&#39;');
+  });
+});
+
+// A14 (S5b): a members-only passage as a member reads it, and the box for everyone else.
+describe('documentHtml views', () => {
+  const membersInline = (...inlines: Inline[]): Inline => ({ $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'members', value: { $typeName: 'nwfl.mensa.v1.MembersInline', inlines } } });
+  const redactedInline: Inline = { $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'redacted', value: { $typeName: 'nwfl.mensa.v1.Redacted' } } };
+  const membersBlock = (...blocks: Block[]): Block => ({ $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'members', value: { $typeName: 'nwfl.mensa.v1.MembersBlock', blocks } } });
+  const redactedBlock: Block = { $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'redacted', value: { $typeName: 'nwfl.mensa.v1.Redacted' } } };
+  const tree = doc(
+    para(text('Open & '), membersInline(text('gate <code> 1234')), text(' then '), redactedInline),
+    membersBlock(para(text('Ring "Pat" at <5>')), { $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'heading', value: { $typeName: 'nwfl.mensa.v1.Heading', level: 2, inlines: [text('Inside')] } } }),
+    redactedBlock,
+  );
+  const PUBLIC_HTML = `<p>Open &amp; <span class="members-note">(members only)</span> then <span class="members-note">(members only)</span></p><p class="members-note">${MEMBERS_PASSAGE}</p><p class="members-note">${MEMBERS_PASSAGE}</p>`;
+
+  it("is today's public output, byte for byte, by default and as 'public'", () => {
+    expect(documentHtml(tree)).toBe(PUBLIC_HTML);
+    expect(documentHtml(tree, { view: 'public' })).toBe(PUBLIC_HTML);
+    expect(documentHtml(tree, { headingLevel: 3, view: 'public', signIn: undefined })).toBe(PUBLIC_HTML);
+  });
+
+  it('shows a member the passage, escaped, in a labelled box that says not to forward it; a redacted node says only that something is not shown', () => {
+    expect(MEMBERS_RULE).toBe("Members only, please don't forward");
+    expect(NOT_SHOWN).toBe('Part of this text is not shown.');
+    const html = documentHtml(tree, { view: 'members' });
+    expect(html).toBe(
+      '<p>Open &amp; gate &lt;code&gt; 1234 <span class="members-note">(members only)</span> then <span class="members-note">(not shown)</span></p>' +
+        `<aside class="members-passage" aria-label="Members only"><p class="members-rule">Members only, please don&#39;t forward</p><p>Ring &quot;Pat&quot; at &lt;5&gt;</p><h4>Inside</h4></aside>` +
+        `<p class="members-note">${NOT_SHOWN}</p>`,
+    );
+    // Nothing about the reader's access, and no sign-in: the API read them as a member (A14 round 2).
+    expect(documentHtml(tree, { view: 'members', signIn: '/sign-in' })).toBe(html);
+    expect(html).not.toMatch(/sign in|member access|Members-only passage/i);
+  });
+
+  it('keeps the depth cap in the members view: a passage nested past it renders nothing', () => {
+    let deep: Block = membersBlock(para(text('bottom')));
+    for (let i = 0; i < 40; i++) deep = membersBlock(deep);
+    const html = documentHtml(doc(deep), { view: 'members' });
+    expect(html).not.toContain('bottom');
+    let deepInline: Inline = membersInline(text('bottom'));
+    for (let i = 0; i < 40; i++) deepInline = membersInline(deepInline);
+    expect(documentHtml(doc(para(deepInline)), { view: 'members' })).not.toContain('bottom');
+  });
+
+  it('tells a signed-in reader without member access why, with a way to ask, and never shows the passage, even if the API sent it', () => {
+    expect(NO_MEMBER_ACCESS).toBe('Members-only passage. Your account does not have member access yet.');
+    const html = documentHtml(tree, { view: 'signed-in-public' });
+    const box = `<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`;
+    expect(html).toBe(`<p>Open &amp; <span class="members-note">(members only)</span> then <span class="members-note">(members only)</span></p>${box}${box}`);
+    expect(html).not.toMatch(/1234|Ring|Inside/);
+  });
+
+  it('links "sign in" in the public box only when given where sign-in is; the passage stays hidden', () => {
+    const html = documentHtml(tree, { view: 'public', signIn: '/sign-in?return=%2Fnews' });
+    const box = '<p class="members-note">Members-only passage, <a href="/sign-in?return=%2Fnews">sign in</a> to read.</p>';
+    expect(html).toBe(`<p>Open &amp; <span class="members-note">(members only)</span> then <span class="members-note">(members only)</span></p>${box}${box}`);
+    expect(documentHtml(doc(redactedBlock), { signIn: '/x?a="b"&c' })).toBe('<p class="members-note">Members-only passage, <a href="/x?a=&quot;b&quot;&amp;c">sign in</a> to read.</p>');
+    expect(html).not.toMatch(/1234|Ring|Inside/);
+  });
+});
+
+// A14: the API sends a redacted node only to a caller it reads as the public: that decides the view.
+describe('withheldHtml (a teaser, D1)', () => {
+  it("is the box a redacted node gets, for each reader, and nothing else", () => {
+    const redacted = create(DocumentSchema, { blocks: [{ kind: { case: 'redacted', value: {} } }] });
+    expect(withheldHtml()).toBe(`<p class="members-note">${MEMBERS_PASSAGE}</p>`);
+    expect(withheldHtml()).toBe(documentHtml(redacted));
+    expect(withheldHtml({ signIn: '/sign-in?a=1&b=2' })).toBe(documentHtml(redacted, { signIn: '/sign-in?a=1&b=2' }));
+    expect(withheldHtml({ view: 'signed-in-public' })).toBe(`<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`);
+  });
+});
+
+describe('hasRedacted', () => {
+  const R: Inline = { $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'redacted', value: { $typeName: 'nwfl.mensa.v1.Redacted' } } };
+  const RB: Block = { $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'redacted', value: { $typeName: 'nwfl.mensa.v1.Redacted' } } };
+  const wrap = (kind: Block['kind']): Block => ({ $typeName: 'nwfl.mensa.v1.Block', kind });
+  const inline = (kind: Inline['kind']): Inline => ({ $typeName: 'nwfl.mensa.v1.Inline', kind });
+
+  it('finds one anywhere: a block, an inline, in a heading, a list, a quote, a members passage, a link or a members inline', () => {
+    const cases: Block[] = [
+      RB,
+      para(text('a'), R),
+      wrap({ case: 'heading', value: { $typeName: 'nwfl.mensa.v1.Heading', level: 1, inlines: [R] } }),
+      wrap({ case: 'list', value: { $typeName: 'nwfl.mensa.v1.ListBlock', ordered: false, items: [{ $typeName: 'nwfl.mensa.v1.ListItem', blocks: [para(text('x'))] }, { $typeName: 'nwfl.mensa.v1.ListItem', blocks: [RB] }] } }),
+      wrap({ case: 'quote', value: { $typeName: 'nwfl.mensa.v1.Quote', blocks: [RB] } }),
+      wrap({ case: 'members', value: { $typeName: 'nwfl.mensa.v1.MembersBlock', blocks: [RB] } }),
+      para(inline({ case: 'link', value: { $typeName: 'nwfl.mensa.v1.Link', href: 'https://example.org/', inlines: [R] } })),
+      para(inline({ case: 'members', value: { $typeName: 'nwfl.mensa.v1.MembersInline', inlines: [R] } })),
+    ];
+    for (const [n, block] of cases.entries()) expect(hasRedacted(doc(para(text('first')), block)), String(n)).toBe(true);
+  });
+
+  it('finds none in a tree without one, nor in no body', () => {
+    const clean = doc(
+      para(text('a'), link('https://example.org/', text('b')), inline({ case: 'members', value: { $typeName: 'nwfl.mensa.v1.MembersInline', inlines: [text('m')] } }), inline({ case: undefined })),
+      wrap({ case: 'members', value: { $typeName: 'nwfl.mensa.v1.MembersBlock', blocks: [para(text('m'))] } }),
+      wrap({ case: 'image', value: { $typeName: 'nwfl.mensa.v1.Image', fileId: 'f', alt: 'x' } }),
+      wrap({ case: 'list', value: { $typeName: 'nwfl.mensa.v1.ListBlock', ordered: true, items: [{ $typeName: 'nwfl.mensa.v1.ListItem', blocks: [para(text('i'))] }] } }),
+      wrap({ case: undefined }),
+    );
+    expect(hasRedacted(clean)).toBe(false);
+    expect(hasRedacted(undefined)).toBe(false);
+    expect(hasRedacted(doc())).toBe(false);
+  });
+
+  it('reads a tree nested past the depth cap as the public\'s: it fails closed', () => {
+    let deep: Block = para(text('bottom'));
+    for (let i = 0; i < 40; i++) deep = wrap({ case: 'quote', value: { $typeName: 'nwfl.mensa.v1.Quote', blocks: [deep] } });
+    expect(hasRedacted(doc(deep))).toBe(true);
+    let deepInline: Inline = text('bottom');
+    for (let i = 0; i < 40; i++) deepInline = inline({ case: 'link', value: { $typeName: 'nwfl.mensa.v1.Link', href: 'https://example.org/', inlines: [deepInline] } });
+    expect(hasRedacted(doc(para(deepInline)))).toBe(true);
+    let emptyDeep: Block = wrap({ case: 'quote', value: { $typeName: 'nwfl.mensa.v1.Quote', blocks: [] } });
+    for (let i = 0; i < 40; i++) emptyDeep = wrap({ case: 'quote', value: { $typeName: 'nwfl.mensa.v1.Quote', blocks: [emptyDeep] } });
+    expect(hasRedacted(doc(emptyDeep))).toBe(true);
+  });
+});
+
+// A14 round 2: a members node in any body proves the API read the caller as a member (filterForPublic never emits one).
+describe('hasMembers', () => {
+  const R: Inline = { $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'redacted', value: { $typeName: 'nwfl.mensa.v1.Redacted' } } };
+  const RB: Block = { $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'redacted', value: { $typeName: 'nwfl.mensa.v1.Redacted' } } };
+  const wrap = (kind: Block['kind']): Block => ({ $typeName: 'nwfl.mensa.v1.Block', kind });
+  const inline = (kind: Inline['kind']): Inline => ({ $typeName: 'nwfl.mensa.v1.Inline', kind });
+  const MB = wrap({ case: 'members', value: { $typeName: 'nwfl.mensa.v1.MembersBlock', blocks: [para(text('m'))] } });
+  const MI = inline({ case: 'members', value: { $typeName: 'nwfl.mensa.v1.MembersInline', inlines: [text('m')] } });
+
+  it('finds one anywhere: a block, an inline, in a heading, a list, a quote, a link, or beside a redacted node', () => {
+    const cases: Block[] = [
+      MB,
+      para(text('a'), MI),
+      wrap({ case: 'heading', value: { $typeName: 'nwfl.mensa.v1.Heading', level: 1, inlines: [MI] } }),
+      wrap({ case: 'list', value: { $typeName: 'nwfl.mensa.v1.ListBlock', ordered: false, items: [{ $typeName: 'nwfl.mensa.v1.ListItem', blocks: [para(text('x'))] }, { $typeName: 'nwfl.mensa.v1.ListItem', blocks: [MB] }] } }),
+      wrap({ case: 'quote', value: { $typeName: 'nwfl.mensa.v1.Quote', blocks: [MB] } }),
+      para(inline({ case: 'link', value: { $typeName: 'nwfl.mensa.v1.Link', href: 'https://example.org/', inlines: [MI] } })),
+    ];
+    for (const [n, block] of cases.entries()) expect(hasMembers(doc(RB, para(text('first'), R), block)), String(n)).toBe(true);
+  });
+
+  it('finds none in a public tree, a redacted one, nor in no body', () => {
+    const publicTree = doc(
+      para(text('a'), link('https://example.org/', text('b')), R, inline({ case: undefined })),
+      RB,
+      wrap({ case: 'image', value: { $typeName: 'nwfl.mensa.v1.Image', fileId: 'f', alt: 'x' } }),
+      wrap({ case: 'list', value: { $typeName: 'nwfl.mensa.v1.ListBlock', ordered: true, items: [{ $typeName: 'nwfl.mensa.v1.ListItem', blocks: [para(text('i'))] }] } }),
+      wrap({ case: 'quote', value: { $typeName: 'nwfl.mensa.v1.Quote', blocks: [RB] } }),
+      wrap({ case: 'heading', value: { $typeName: 'nwfl.mensa.v1.Heading', level: 2, inlines: [text('h')] } }),
+      wrap({ case: undefined }),
+    );
+    expect(hasMembers(publicTree)).toBe(false);
+    expect(hasMembers(undefined)).toBe(false);
+    expect(hasMembers(doc())).toBe(false);
+  });
+
+  it('counts nothing nested past the depth cap: a tree too deep to read proves nothing (fails closed)', () => {
+    let deep: Block = MB;
+    for (let i = 0; i < 40; i++) deep = wrap({ case: 'quote', value: { $typeName: 'nwfl.mensa.v1.Quote', blocks: [deep] } });
+    expect(hasMembers(doc(deep))).toBe(false);
+    let deepInline: Inline = MI;
+    for (let i = 0; i < 40; i++) deepInline = inline({ case: 'link', value: { $typeName: 'nwfl.mensa.v1.Link', href: 'https://example.org/', inlines: [deepInline] } });
+    expect(hasMembers(doc(para(deepInline)))).toBe(false);
   });
 });

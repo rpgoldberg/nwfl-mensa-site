@@ -26,7 +26,8 @@ const plain = (body: string, status: number) => new Response(body, { status, hea
 const ics = (body: string, filename: string) =>
   new Response(body, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `inline; filename="${filename}"` } });
 
-export async function calendarFeed(live: LiveData | undefined, { now, origin }: FeedContext): Promise<Response> {
+/** The calendar reads only: a feed can never reach a read that takes a signed-in reader (A14). */
+export async function calendarFeed(live: Pick<LiveData, 'events'> | undefined, { now, origin }: FeedContext): Promise<Response> {
   const today = todayCentral(now);
   const loaded = live === undefined ? ({ ok: true, value: [] } as const) : await attempt(() => live.events(addDays(today, -FEED_PAST_DAYS), addDays(today, FEED_FUTURE_DAYS)));
   if (!loaded.ok) return plain(UNAVAILABLE, 503);
@@ -34,7 +35,7 @@ export async function calendarFeed(live: LiveData | undefined, { now, origin }: 
 }
 
 /** `param` is the event page's own last path segment. */
-export async function eventFeed(live: LiveData | undefined, param: string | undefined, { now, origin }: FeedContext): Promise<Response> {
+export async function eventFeed(live: Pick<LiveData, 'event'> | undefined, param: string | undefined, { now, origin }: FeedContext): Promise<Response> {
   const id = eventIdFromParam(param);
   if (id === undefined || live === undefined) return plain(NOT_FOUND, 404);
   const loaded = await attempt(() => live.event(id));

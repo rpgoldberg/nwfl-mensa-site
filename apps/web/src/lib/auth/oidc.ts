@@ -63,6 +63,8 @@ export interface Tokens {
   id_token?: string | undefined;
   refresh_token?: string | undefined;
   expires_in?: number | undefined;
+  /** When the access token expires, in seconds: set at sign-in from expires_in (flow.ts); none means never forward it (A14). */
+  expires_at?: number | undefined;
 }
 
 export interface SignedIn {

@@ -6,7 +6,7 @@
 // theme stamped on <html>, as the layout does for on-request pages.
 import http from 'node:http';
 import { stampAccount } from './account.mjs';
-import { cacheControl, isHostOnlyCookie, securityHeaders } from './policy.mjs';
+import { cacheControl, cdnCacheControl, isHostOnlyCookie, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 import { renamedPath, resolveOldUrl } from './redirects.mjs';
 import { readSession } from './session.mjs';
@@ -103,8 +103,11 @@ function applyPolicy(req, res, path, headers) {
     cookieHeader: req.headers.cookie,
     status: res.statusCode,
     setsCookie,
+    handler: res.getHeader('cache-control'),
   });
   res.setHeader('Cache-Control', cache);
+  const cdn = cdnCacheControl(cache);
+  if (cdn) res.setHeader('CDN-Cache-Control', cdn);
   // A page differs by cookie (session, reader settings), so a cache keyed on
   // the URL alone must not hand one reader's copy to another.
   if (!cache.endsWith('immutable')) res.setHeader('Vary', 'Cookie');

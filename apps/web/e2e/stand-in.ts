@@ -66,3 +66,34 @@ export const NEWSLETTER = {
   sha256Hex: 'ab'.repeat(32),
   sizeBytes: 987_654,
 };
+
+/** A14: the test identity provider's people (e2e/idp.mjs), by login, with their subjects. */
+export const ACCOUNTS = {
+  officer: '00000000-0000-4000-8000-0000000000a1',
+  member: '00000000-0000-4000-8000-0000000000b2',
+  pending: '00000000-0000-4000-8000-0000000000c3',
+  refused: '00000000-0000-4000-8000-0000000000e5',
+  lapsed: '00000000-0000-4000-8000-0000000000f6',
+  'articles-down': '00000000-0000-4000-8000-0000000000a7',
+};
+
+/**
+ * A14: the newsletter's articles (api.mjs ARTICLES). The public article carries a members passage and a
+ * members PDF; the members and officers articles are listed for the public too, in full, as a buggy API
+ * might. A member sees the passage, the members article and the members PDF; nobody sees the officers
+ * article on /news; the public sees none of it. A member's answer also carries redacted nodes, as the API
+ * sends a member a privacy mark its members lens withholds: one beside the passage, one in the members
+ * article, and a members article withheld whole (a lone redacted node), which a member sees by its title.
+ */
+export const ARTICLES = {
+  open: { title: 'A new home for the Wednesday lunch', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001', sourcePdf: 'e3f00000-0000-4000-8000-000000000001' },
+  members: { title: 'Members picnic sign-up', body: 'MEMBERS ARTICLE CANARY: the picnic is at the north shelter.' },
+  officers: { title: 'OFFICERS ARTICLE CANARY', body: 'OFFICERS BODY CANARY', pdf: 'e2f00000-0000-4000-8000-000000000003' },
+  withheld: { title: 'Members trip notes, withheld whole' },
+};
+
+/** A14: the members source files api.mjs lists before each members copy, to anyone but the public (api.mjs sourceOf): never linked. */
+export const SOURCE_PDFS = [...NEWSLETTER.issues.map((i) => `f3${i.membersPdf.slice(2)}`), ARTICLES.open.sourcePdf];
+
+/** The marker line in a members copy's bytes (api.mjs MEMBERS_PDF). */
+export const MEMBERS_PDF_MARK = '% members copy';

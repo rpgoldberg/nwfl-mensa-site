@@ -103,12 +103,28 @@ export const PUBLIC_CACHE = 'public, max-age=60, stale-while-revalidate=60';
  * request with the session cookie, or a response that sets any cookie, is never
  * stored (R26); an error, the reader's or the server's, and the health probe
  * are never stored, so a page that is back a moment later is not kept missing.
+ * A handler may make its response private (A14: a members copy read with a
+ * reader's token), never looser: any other Cache-Control it set is overridden.
  *
- * @param {{ path: string, cookieHeader: string | undefined, status: number, setsCookie: boolean }} r
+ * @param {{ path: string, cookieHeader: string | undefined, status: number, setsCookie: boolean, handler?: string | number | string[] | undefined }} r
+ *   handler: the Cache-Control the handler set, if any
  */
 export function cacheControl(r) {
-  if (r.setsCookie || hasCookie(r.cookieHeader, SESSION_COOKIE)) return 'private, no-store';
+  const handlerPrivate = r.handler !== undefined && /(^|,)\s*private\s*(,|$)/i.test(String(r.handler));
+  if (r.setsCookie || handlerPrivate || hasCookie(r.cookieHeader, SESSION_COOKIE)) return 'private, no-store';
   if (r.status >= 400 || r.path === '/healthz') return 'no-store';
   if (HASHED_ASSET.test(r.path) && r.status === 200) return 'public, max-age=31536000, immutable';
   return PUBLIC_CACHE;
+}
+
+/**
+ * D6: a private response tells a CDN too. Cloudflare ignores Vary: Cookie, and a
+ * zone rule can override the origin's Cache-Control, but not CDN-Cache-Control.
+ * Nothing on any other response, so an anonymous one keeps its headers.
+ *
+ * @param {string} cache the response's Cache-Control (cacheControl)
+ * @returns {string | undefined}
+ */
+export function cdnCacheControl(cache) {
+  return cache.startsWith('private') ? 'no-store' : undefined;
 }
