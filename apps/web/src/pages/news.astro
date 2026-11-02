@@ -4,28 +4,45 @@
 // issue loader published, each with its public PDF. Until the API has one, and
 // without the API, the bundled sample, which says it is one; its missing issues
 // are listed honestly. Large-type reading views arrive with the archive (MB3).
+// A14: read with a signed-in reader's token (src/lib/auth/bearer.ts), the page
+// shows what the API sent that reader: a member gets each issue's members copy
+// and the newsletter's members articles and passages. A lapsed or refused token
+// gives the public view and a line to sign in again. The articles section
+// appears only once one is published, so the public page is unchanged till then.
 import { PUBLIC_ONLY } from 'astro:env/server';
 import IssueCard from '../components/IssueCard.astro';
+import ItemFiles from '../components/ItemFiles.astro';
 import SampleNotice from '../components/SampleNotice.astro';
 import Unavailable from '../components/Unavailable.astro';
 import { liveData, siteData } from '../data';
+import { formatDate } from '../data/format';
 import { currentIssue, issueSummary, issuesByYear, newsIssues } from '../data/site-data';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
+import { readerFor, signInLink } from '../lib/auth/bearer';
+import { runtimeDeps } from '../lib/auth/flow';
 import { visibleContent } from '../lib/content';
+import { MEMBERS_RULE } from '../lib/document';
 import { page } from '../lib/site';
 
 const p = page('/news');
 const live = liveData();
-const loaded = live ? await attempt(() => live.issues()) : { ok: true as const, value: [] };
+const auth = runtimeDeps();
+const { reader, lapsed } = readerFor(Astro.locals.session, auth);
+const signIn = signInLink(auth, PUBLIC_ONLY, '/news');
+const loaded = live ? await attempt(() => live.news(reader, { signIn })) : { ok: true as const, value: undefined };
 if (!loaded.ok) markUnavailable(Astro.response);
-const shown = newsIssues(loaded.ok ? loaded.value : [], visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY }));
+const news = loaded.ok ? loaded.value : undefined;
+const shown = newsIssues(news?.issues ?? [], visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY }));
 const current = currentIssue(shown.issues);
 const past = issuesByYear(shown.issues);
+const expired = lapsed || news?.tokenRefused === true;
+const items = news?.items ?? [];
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
   <p class="lead">Pensa Mensa, our newsletter: {p.description.charAt(0).toLowerCase()}{p.description.slice(1)}</p>
+  {expired && <p class="notice" role="note">Your sign-in has expired for members-only reading. {signIn ? <a href={signIn}>Sign in again</a> : 'Sign in again'}.</p>}
   {!loaded.ok ? <Unavailable what="The list of issues" /> : (
     <>
       {shown.sample && siteData.isSample && <SampleNotice />}
@@ -39,6 +56,7 @@ const past = issuesByYear(shown.issues);
               {list.map((i) => (
                 <li data-source={i.source} class={i.missing ? 'missing' : undefined}>
                   {i.pdf ? <a href={i.pdf}>{i.label} (PDF)</a> : <span>{i.label}</span>}
+                  {i.membersPdf && <a href={i.membersPdf}>{i.label}, members copy (PDF)</a>}
                   {i.missing ? <span class="muted">No copy known. If you have a paper copy, please tell the Editor.</span>
                     : issueSummary(i) && <span class="muted">{issueSummary(i)}</span>}
                 </li>
@@ -47,6 +65,21 @@ const past = issuesByYear(shown.issues);
           </div>
         ))}
       </section>
+      {items.length > 0 && (
+        <section class="articles" aria-labelledby="articles-title">
+          <h2 id="articles-title">From the newsletter</h2>
+          {items.map((a) => (
+            <article class="item" data-source={a.source}>
+              <h3>{a.title}</h3>
+              {a.membersOnly && <p class="members-rule">{MEMBERS_RULE}</p>}
+              {a.publishedOn && <p class="muted">{formatDate(a.publishedOn)}</p>}
+              {a.summary && <p>{a.summary}</p>}
+              <div class="prose" set:html={a.bodyHtml} />
+              <ItemFiles files={a.files} />
+            </article>
+          ))}
+        </section>
+      )}
     </>
   )}
   <p><a href="/search">Search the newsletter archive</a></p>
