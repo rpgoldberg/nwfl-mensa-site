@@ -71,6 +71,17 @@ describe('beginSignIn', () => {
     expect(d.oidc.startSignIn).not.toHaveBeenCalled();
   });
 
+  // A14: "Sign in again" on /news, when the token has lapsed or the API refused it, must get a fresh token.
+  it('starts a fresh sign-in for someone already signed in who asks again', async () => {
+    const d = deps();
+    const session = newSession({ sub: 'u' }, NOW);
+    d.tokens.put(session.sid, { access_token: 'a' }, session.exp);
+    const header = sessionSetCookie(session, key, NOW).split(';')[0];
+    const out = await beginSignIn(d, { cookieHeader: header, back: '/news', again: true });
+    expect(out).toMatchObject({ kind: 'redirect', location: 'https://login.nwflorida.us/auth?n=1' });
+    expect(d.oidc.startSignIn).toHaveBeenCalledTimes(1);
+  });
+
   it('is unavailable, and says why in the log, when sign-in is not set up or the provider cannot be reached', async () => {
     const off = deps({ setup: { enabled: false, reason: 'OIDC_ISSUER is not set' } as AuthSetup });
     expect(await beginSignIn(off, { cookieHeader: undefined, back: '/' })).toEqual({ kind: 'unavailable' });
@@ -99,6 +110,38 @@ describe('completeSignIn: the callback', () => {
     expect(out.cookies.join()).not.toMatch(/access-1|id-1/);
     expect(d.tokens.get(session!.sid, NOW)).toMatchObject({ access_token: 'access-1', id_token: 'id-1' });
     expect(d.oidc.finishSignIn).toHaveBeenCalledWith(cfg, expect.any(URL), expect.objectContaining({ state, nonce: 'nonce-1', verifier: 'verifier-1' }));
+  });
+
+  // A14 (S5a): the site forwards a token only while it has time to live, so it keeps when the token expires.
+  it('keeps when the access token expires, from expires_in, and no expiry at all when the provider gave none or a nonsense one', async () => {
+    const signIn = async (expires_in: unknown) => {
+      const d = deps();
+      vi.mocked(d.oidc.finishSignIn).mockResolvedValueOnce({ claims: { sub: 'user-4' }, tokens: { access_token: 'a', id_token: 'i', expires_in: expires_in as number } });
+      const { cookieHeader, state } = await started(d);
+      const out = await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader });
+      if (out.kind !== 'redirect') throw new Error(out.kind);
+      return d.tokens.get(readSession(jar(out.cookies), key, NOW, d.tokens)!.sid, NOW);
+    };
+    expect(await signIn(300)).toEqual({ access_token: 'a', id_token: 'i', expires_in: 300, expires_at: NOW + 300 });
+    for (const odd of [undefined, 0, -5, Number.NaN, Number.POSITIVE_INFINITY, '300']) {
+      const kept = await signIn(odd);
+      expect(kept, String(odd)).toMatchObject({ access_token: 'a' });
+      expect(kept, String(odd)).not.toHaveProperty('expires_at');
+    }
+  });
+
+  it('ends the session it replaces: signing in again leaves the old session cookie reading as nobody', async () => {
+    const d = deps();
+    const old = newSession({ sub: 'user-1' }, NOW);
+    d.tokens.put(old.sid, { access_token: 'old' }, old.exp);
+    const oldCookie = sessionSetCookie(old, key, NOW).split(';')[0]!;
+    const begun = await beginSignIn(d, { cookieHeader: oldCookie, back: '/news', again: true });
+    if (begun.kind !== 'redirect') throw new Error(begun.kind);
+    const cookieHeader = `${oldCookie}; ${jar(begun.cookies)}`;
+    const out = await completeSignIn(d, { url: url({ code: 'c', state: 'state-1' }), cookieHeader });
+    expect(out.kind).toBe('redirect');
+    expect(readSession(oldCookie, key, NOW, d.tokens)).toBeUndefined();
+    if (out.kind === 'redirect') expect(readSession(jar(out.cookies), key, NOW, d.tokens)).toBeDefined();
   });
 
   it('reads the groups under the configured chapter prefix (CF-ISO-0): mensa-nwfl-officers is an officer, a bare nwfl-officers is not', async () => {
