@@ -655,6 +655,13 @@ describe('liveData.news', () => {
     expect(together[0]!.issues[0]!.membersPdf).toBeDefined();
   });
 
+  it('skips an article the API sent with no live version, whoever reads', async () => {
+    const bare = create(ContentItemSchema, { id: 'bare', slug: 'bare', kind: ContentKind.ARTICLE });
+    const { reads: r } = api(() => ({ [ContentKind.ARTICLE]: [bare, ...publicAnswer()[ContentKind.ARTICLE]] }));
+    expect((await liveData(r).news()).items.map((i) => i.slug)).toEqual(['open-letter']);
+    expect((await liveData(r).news(member)).items.map((i) => i.slug)).toEqual(['open-letter']);
+  });
+
   it('puts the sign-in link in the public box only when asked, and never for a signed-in reader', async () => {
     const live = liveData(api((as) => (as ? publicAnswer() : publicAnswer())).reads);
     const signIn = '/sign-in?return=%2Fnews';
@@ -690,5 +697,12 @@ describe('liveData.file as a signed-in reader', () => {
     expect(await live.file('../x', { bearer: 'member.token' })).toEqual({ kind: 'not_found' });
     expect(asked).toEqual(['member.token', 'refused', undefined]);
     await expect(liveData(reads({ readFile: () => Promise.reject(new ApiTokenRefused('ReadFile')) })).file(FILE)).rejects.toBeInstanceOf(ApiTokenRefused);
+  });
+
+  it('passes an unavailable API on with a reader too, without asking again', async () => {
+    let asked = 0;
+    const live = liveData(reads({ readFile: () => (asked++, Promise.reject(new ApiUnavailable('ReadFile'))) }));
+    await expect(live.file(FILE, { bearer: 'member.token' })).rejects.toBeInstanceOf(ApiUnavailable);
+    expect(asked).toBe(1);
   });
 });
