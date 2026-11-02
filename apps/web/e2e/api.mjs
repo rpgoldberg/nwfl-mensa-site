@@ -7,13 +7,15 @@
 // show sit among them: a members event sent in full (as a buggy API might)
 // and an event with no status. A call that carries a token, or a cookie, is
 // refused, so a page that sent one would fail; the one exception (A14) is a
-// signed-in reader's token on ListPublishedItems and ReadFile, which /news and
-// its PDFs forward. That token is verified against the test identity provider
+// signed-in reader's token on ReadFile and on /news's two ListPublishedItems
+// reads (documents, page 50; articles, page 10), which /news and its PDFs
+// forward. That token is verified against the test identity provider
 // (e2e/idp.mjs, IDP_ISSUER and IDP_JWKS_URL) and answered as the API answers
 // it: the officers' view for the officers group, the members' view for an
 // account with member standing (MEMBER_SUBJECTS, as member_account would say),
 // the public's for any other (pending), and UNAUTHENTICATED for a bad token or
-// the "refused" account. Without a token the public's answer is a buggy API's:
+// the "refused" account; the "articles-down" member's articles read fails as an
+// API that could not answer it. Without a token the public's answer is a buggy API's:
 // it lists members files, a members article in full, an officers article.
 //
 // SILENT_API_PORT is a second listener that accepts connections and never
@@ -38,9 +40,9 @@ const noIssuesPort = Number(process.env['NO_ISSUES_API_PORT'] ?? 9093);
 const CANARY = { membersInFull: 'MEMBERS-ONLY CANARY PICNIC', noStatus: 'UNPUBLISHED CANARY' };
 
 // A14: the test identity provider's subjects (e2e/idp.mjs), as in e2e/stand-in.ts (ACCOUNTS).
-const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6' };
+const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6', articlesDown: '00000000-0000-4000-8000-0000000000a7' };
 /** Who has member standing (member_account, in the real API): not the pending account, and the officers by their group. */
-const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.refused, SUBJECT.lapsed]);
+const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.refused, SUBJECT.lapsed, SUBJECT.articlesDown]);
 const idpIssuer = process.env['IDP_ISSUER'];
 const jwks = process.env['IDP_JWKS_URL'] ? createRemoteJWKSet(new URL(process.env['IDP_JWKS_URL'])) : undefined;
 
@@ -228,8 +230,14 @@ const NEWSLETTER = [
   { title: 'Our bylaws', summary: 'As amended in 2024.', id: 'd0c00000-0000-4000-8000-0000000000b1', publicPdf: 'f0000000-0000-4000-8000-0000000000b1', daysAgo: 4 },
 ];
 
-/** @param {string} id @param {FileAudience} audience @param {string} [filename] */
-const storedFile = (id, audience, filename = `${id}.pdf`) => ({ id, filename, mimeType: 'application/pdf', sizeBytes: SIZE, sha256: SHA256, audience, role: FileRole.PRIMARY });
+/** @param {string} id @param {FileAudience} audience @param {string} [filename] @param {FileRole} [role] */
+const storedFile = (id, audience, filename = `${id}.pdf`, role = FileRole.PRIMARY) => ({ id, filename, mimeType: 'application/pdf', sizeBytes: SIZE, sha256: SHA256, audience, role });
+/**
+ * A14: a members SOURCE file, listed before each members copy as a buggy API might (a source file is
+ * officers-only, and a .docx): a PDF, so only its role tells it apart. As in e2e/stand-in.ts (SOURCE_PDFS).
+ * @param {string} membersPdf
+ */
+const sourceOf = (membersPdf) => `f3${membersPdf.slice(2)}`;
 
 const DOCUMENTS = NEWSLETTER.map((d) =>
   create(ContentItemSchema, {
@@ -243,7 +251,7 @@ const DOCUMENTS = NEWSLETTER.map((d) =>
       summary: d.summary,
       visibility: d.visibility ?? ItemVisibility.PUBLIC,
       approvedAt: timestampFromDate(new Date(Date.now() - d.daysAgo * 86_400_000)),
-      files: [...(d.membersPdf ? [storedFile(d.membersPdf, FileAudience.MEMBERS)] : []), storedFile(d.publicPdf, FileAudience.PUBLIC)],
+      files: [...(d.membersPdf ? [storedFile(sourceOf(d.membersPdf), FileAudience.MEMBERS, 'pensa-mensa-source.pdf', FileRole.SOURCE), storedFile(d.membersPdf, FileAudience.MEMBERS)] : []), storedFile(d.publicPdf, FileAudience.PUBLIC)],
     },
   }),
 ).sort((a, b) => Number(b.live?.approvedAt?.seconds) - Number(a.live?.approvedAt?.seconds));
@@ -260,7 +268,7 @@ const MEMBERS_PDF = Buffer.concat([Buffer.from('%PDF-1.4\n% members copy\n', 'la
 // A14: the newsletter's articles, as in e2e/stand-in.ts (ARTICLES). A public article with a members
 // passage and a members PDF, a members article and an officers article.
 const ARTICLES = {
-  open: { id: 'e0a00000-0000-4000-8000-000000000001', title: 'A new home for the Wednesday lunch', summary: 'The lunch moves across town in March.', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001' },
+  open: { id: 'e0a00000-0000-4000-8000-000000000001', title: 'A new home for the Wednesday lunch', summary: 'The lunch moves across town in March.', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001', sourcePdf: 'e3f00000-0000-4000-8000-000000000001' },
   members: { id: 'e0a00000-0000-4000-8000-000000000002', title: 'Members picnic sign-up', summary: 'Bring a dish to share.', body: 'MEMBERS ARTICLE CANARY: the picnic is at the north shelter.' },
   officers: { id: 'e0a00000-0000-4000-8000-000000000003', title: 'OFFICERS ARTICLE CANARY', summary: 'Board notes.', body: 'OFFICERS BODY CANARY', pdf: 'e2f00000-0000-4000-8000-000000000003' },
 };
@@ -273,7 +281,7 @@ const REDACTED = { kind: { case: /** @type {const} */ ('redacted'), value: {} } 
 
 /**
  * @param {{ id: string, title: string, summary: string }} a @param {ItemVisibility} visibility @param {unknown[]} blocks
- * @param {{ id: string, audience: FileAudience, name: string }[]} files @param {number} daysAgo
+ * @param {{ id: string, audience: FileAudience, name: string, role?: FileRole }[]} files @param {number} daysAgo
  */
 const article = (a, visibility, blocks, files, daysAgo) =>
   create(ContentItemSchema, {
@@ -282,7 +290,7 @@ const article = (a, visibility, blocks, files, daysAgo) =>
     kind: ContentKind.ARTICLE,
     officeId: OFFICE.president,
     state: ItemState.PUBLISHED,
-    live: { title: a.title, summary: a.summary, visibility, body: { blocks: /** @type {any} */ (blocks) }, approvedAt: timestampFromDate(new Date(Date.now() - daysAgo * 86_400_000)), files: files.map((f) => storedFile(f.id, f.audience, f.name)) },
+    live: { title: a.title, summary: a.summary, visibility, body: { blocks: /** @type {any} */ (blocks) }, approvedAt: timestampFromDate(new Date(Date.now() - daysAgo * 86_400_000)), files: files.map((f) => storedFile(f.id, f.audience, f.name, f.role)) },
   });
 
 /** The articles by audience: what the API sends each. @param {'anonymous' | 'public' | 'members' | 'officers'} audience */
@@ -293,7 +301,12 @@ function articles(audience) {
     ItemVisibility.PUBLIC,
     [para(ARTICLES.open.plain), memberTree ? passage(ARTICLES.open.passage) : REDACTED],
     // Named as the issue loader names a file: its slug, and -members for the members copy.
-    [{ id: ARTICLES.open.publicPdf, audience: FileAudience.PUBLIC, name: 'new-home-for-lunch.pdf' }, ...(audience === 'public' ? [] : [{ id: ARTICLES.open.membersPdf, audience: FileAudience.MEMBERS, name: 'new-home-for-lunch-members.pdf' }])],
+    // A members source file first, as a buggy API might list it: never linked, whoever reads.
+    [
+      ...(audience === 'public' ? [] : [{ id: ARTICLES.open.sourcePdf, audience: FileAudience.MEMBERS, name: 'new-home-for-lunch-source.pdf', role: FileRole.SOURCE }]),
+      { id: ARTICLES.open.publicPdf, audience: FileAudience.PUBLIC, name: 'new-home-for-lunch.pdf' },
+      ...(audience === 'public' ? [] : [{ id: ARTICLES.open.membersPdf, audience: FileAudience.MEMBERS, name: 'new-home-for-lunch-members.pdf' }]),
+    ],
     6,
   );
   const members = article(ARTICLES.members, ItemVisibility.MEMBERS, memberTree ? [para(ARTICLES.members.body)] : [REDACTED], [], 7);
@@ -340,10 +353,11 @@ function anonymousOnly(ctx) {
 
 /**
  * The caller's audience, for the two reads that may carry a reader's token (A14). Never a cookie.
- * @param {import('@connectrpc/connect').HandlerContext} ctx
+ * `articles`: the articles read, which fails for the "articles-down" account.
+ * @param {import('@connectrpc/connect').HandlerContext} ctx @param {{ articles?: boolean }} [options]
  * @returns {Promise<'anonymous' | 'public' | 'members' | 'officers'>}
  */
-async function audienceOf(ctx) {
+async function audienceOf(ctx, { articles = false } = {}) {
   if (ctx.requestHeader.has('cookie')) throw new ConnectError('the site must never send a cookie', Code.PermissionDenied);
   const header = ctx.requestHeader.get('authorization');
   if (header === null) return 'anonymous';
@@ -357,6 +371,7 @@ async function audienceOf(ctx) {
     throw new ConnectError('invalid token', Code.Unauthenticated);
   }
   if (payload.sub === SUBJECT.refused) throw new ConnectError('invalid token', Code.Unauthenticated);
+  if (articles && payload.sub === SUBJECT.articlesDown) throw new ConnectError('the articles are down', Code.Unavailable);
   const groups = Array.isArray(payload['groups']) ? payload['groups'] : [];
   if (groups.includes('nwfl-officers')) return 'officers';
   return MEMBER_SUBJECTS.has(String(payload.sub)) ? 'members' : 'public';
@@ -398,7 +413,11 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       return { offices: ROSTER };
     },
     listPublishedItems: async (req, ctx) => {
-      const audience = await audienceOf(ctx);
+      // Only /news's two reads (live.ts: DOCUMENT, page 50; ARTICLE, page 10) may carry a reader's token:
+      // Home, /finances or the President's report sending one is refused, as every other RPC refuses it.
+      const news = (req.kind === ContentKind.DOCUMENT && req.pageSize === 50) || (req.kind === ContentKind.ARTICLE && req.pageSize === 10);
+      if (!news) anonymousOnly(ctx);
+      const audience = await audienceOf(ctx, { articles: req.kind === ContentKind.ARTICLE });
       const documents = audience === 'public' ? PUBLIC_DOCUMENTS : DOCUMENTS;
       const items =
         req.kind === ContentKind.DOCUMENT ? (issues ? documents : [])

@@ -62,9 +62,15 @@ export interface Reader {
 // RFC 6750 b64token, the one form the API reads (apps/api/src/auth/caller.ts): anything else is not sent at all.
 const B64TOKEN = /^[A-Za-z0-9\-._~+/]+=*$/;
 
+/** The reader as the API may be sent it: none for a bearer that is not one b64token, which is no token at all (S5a-1). */
+export function sendable(as: Reader | undefined): Reader | undefined {
+  return as !== undefined && B64TOKEN.test(as.bearer) ? as : undefined;
+}
+
 /** The call's Authorization header for a reader, or none for no reader or a bearer that is not one b64token. */
 function authorization(as: Reader | undefined): { authorization: string } | undefined {
-  return as !== undefined && B64TOKEN.test(as.bearer) ? { authorization: `Bearer ${as.bearer}` } : undefined;
+  const reader = sendable(as);
+  return reader === undefined ? undefined : { authorization: `Bearer ${reader.bearer}` };
 }
 
 /** The most ReadFile may stream (R11), and how long it may take. */

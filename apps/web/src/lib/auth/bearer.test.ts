@@ -49,6 +49,13 @@ describe('readerFor', () => {
       expect(readerFor(session, deps), JSON.stringify(tokens)).toEqual({ reader: undefined, lapsed: false });
     }
   });
+
+  it('gives nothing for a token that is not one RFC 6750 b64token: it is treated as no token, not as a reader (S5a-1)', () => {
+    for (const access_token of ['two words', 'tok.en\r\nCookie: a=b', 'é', '=abc', 'Bearer x']) {
+      const { session, deps } = signedIn({ access_token, expires_at: NOW + 3600 });
+      expect(readerFor(session, deps), JSON.stringify(access_token)).toEqual({ reader: undefined, lapsed: false });
+    }
+  });
 });
 
 describe('signInLink', () => {

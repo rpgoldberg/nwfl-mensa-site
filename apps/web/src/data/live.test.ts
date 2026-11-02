@@ -486,6 +486,9 @@ describe('liveData.news', () => {
     articlePublic: 'e0000000-0000-4000-8000-000000000001',
     articleMembers: 'e1000000-0000-4000-8000-000000000001',
     articleOfficers: 'e2000000-0000-4000-8000-000000000001',
+    articleSource: 'e4000000-0000-4000-8000-000000000001',
+    articleMembersCopy: 'e5000000-0000-4000-8000-000000000001',
+    articleMembersJpeg: 'e6000000-0000-4000-8000-000000000001',
   };
   type FileInit = { id: string; audience: FileAudience; role?: FileRole; mimeType?: string };
   const stored = (f: FileInit) => ({ id: f.id, filename: `${f.id.slice(0, 2)}.pdf`, mimeType: f.mimeType ?? 'application/pdf', audience: f.audience, role: f.role ?? FileRole.PRIMARY, sizeBytes: 5n });
@@ -501,21 +504,29 @@ describe('liveData.news', () => {
       live: { title: `Title of ${slug}`, summary: `Summary of ${slug}`, visibility, approvedAt: timestampFromDate(new Date('2026-10-20T15:00:00Z')), body: { blocks: blocks as never }, files: files.map(stored) },
     });
 
-  /** What the API sends a member: their tree, members files, members items. */
+  /**
+   * What the API sends a member: their tree, members files, members items. Each members file that is not
+   * the members copy (a source file, a public copy, another type, an id that is not one) comes before the
+   * copy, so the first members file is never the copy by luck; the article lists them all.
+   */
   const memberAnswer = () => ({
     [ContentKind.DOCUMENT]: [
       issueItem([
-        { id: UUIDS.issueMembers, audience: FileAudience.MEMBERS },
-        { id: UUIDS.issuePublic, audience: FileAudience.PUBLIC },
-        { id: UUIDS.issueOfficers, audience: FileAudience.OFFICERS },
         { id: UUIDS.issueSource, audience: FileAudience.MEMBERS, role: FileRole.SOURCE },
         { id: UUIDS.issueMembersCopy, audience: FileAudience.MEMBERS, role: FileRole.PUBLIC_COPY },
         { id: UUIDS.issueMembersJpeg, audience: FileAudience.MEMBERS, mimeType: 'image/jpeg' },
         { id: 'not-an-id', audience: FileAudience.MEMBERS },
+        { id: UUIDS.issueOfficers, audience: FileAudience.OFFICERS },
+        { id: UUIDS.issueMembers, audience: FileAudience.MEMBERS },
+        { id: UUIDS.issuePublic, audience: FileAudience.PUBLIC },
       ]),
     ],
     [ContentKind.ARTICLE]: [
       article('open-letter', ItemVisibility.PUBLIC, [para('Hello & welcome'), passage('The gate code is <1234>')], [
+        { id: UUIDS.articleSource, audience: FileAudience.MEMBERS, role: FileRole.SOURCE },
+        { id: UUIDS.articleMembersCopy, audience: FileAudience.MEMBERS, role: FileRole.PUBLIC_COPY },
+        { id: UUIDS.articleMembersJpeg, audience: FileAudience.MEMBERS, mimeType: 'image/jpeg' },
+        { id: 'not-an-id-either', audience: FileAudience.MEMBERS },
         { id: UUIDS.articlePublic, audience: FileAudience.PUBLIC },
         { id: UUIDS.articleMembers, audience: FileAudience.MEMBERS },
         { id: UUIDS.articleOfficers, audience: FileAudience.OFFICERS },
@@ -564,6 +575,7 @@ describe('liveData.news', () => {
     ],
     signedIn: false,
     tokenRefused: false,
+    itemsUnavailable: false,
   };
 
   it('as the public: the issues exactly as issues() gives them, public articles only (page size 10), and no reader sent', async () => {
@@ -582,7 +594,7 @@ describe('liveData.news', () => {
     expect(news.signedIn).toBe(false);
     expect(news.items.map((i) => i.slug)).toEqual(['open-letter']);
     expect(news.issues[0]).not.toHaveProperty('membersPdf');
-    for (const id of [UUIDS.issueMembers, UUIDS.issueOfficers, UUIDS.issueSource, UUIDS.articleMembers, UUIDS.articleOfficers]) expect(text).not.toContain(id);
+    for (const id of [UUIDS.issueMembers, UUIDS.issueOfficers, UUIDS.issueSource, UUIDS.articleMembers, UUIDS.articleOfficers, UUIDS.articleSource, UUIDS.articleMembersCopy, UUIDS.articleMembersJpeg]) expect(text).not.toContain(id);
     expect(text).not.toMatch(/1234|gate code|OFFICERS ONLY|members-picnic|board-notes/);
   });
 
@@ -607,8 +619,8 @@ describe('liveData.news', () => {
     ]);
     expect(picnic).toMatchObject({ slug: 'members-picnic', membersOnly: true, bodyHtml: '<p>Bring a chair</p>', files: [] });
     const text = JSON.stringify(news);
-    for (const id of [UUIDS.issueOfficers, UUIDS.issueSource, UUIDS.issueMembersCopy, UUIDS.issueMembersJpeg, UUIDS.articleOfficers]) expect(text).not.toContain(id);
-    expect(text).not.toMatch(/OFFICERS ONLY|board-notes/);
+    for (const id of [UUIDS.issueOfficers, UUIDS.issueSource, UUIDS.issueMembersCopy, UUIDS.issueMembersJpeg, UUIDS.articleOfficers, UUIDS.articleSource, UUIDS.articleMembersCopy, UUIDS.articleMembersJpeg]) expect(text).not.toContain(id);
+    expect(text).not.toMatch(/OFFICERS ONLY|board-notes|not-an-id/);
   });
 
   it("as an officer: the same as a member's view, never an officers item, an officers file or a source file (D5)", async () => {
@@ -616,7 +628,9 @@ describe('liveData.news', () => {
     const { reads: r } = api(() => officerAnswer);
     const news = await liveData(r).news({ bearer: 'officer.token' });
     expect(news.items.map((i) => i.slug)).toEqual(['open-letter', 'members-picnic']);
-    expect(JSON.stringify(news)).not.toMatch(new RegExp(`${UUIDS.issueOfficers}|${UUIDS.issueSource}|${UUIDS.articleOfficers}|OFFICERS ONLY`));
+    expect(news.issues[0]!.membersPdf).toBe(`/documents/${UUIDS.issueMembers}.pdf`);
+    expect(news.items[0]!.files.map((f) => f.href)).toEqual([`/documents/${UUIDS.articlePublic}.pdf`, `/documents/${UUIDS.articleMembers}.pdf`]);
+    expect(JSON.stringify(news)).not.toMatch(new RegExp(`${UUIDS.issueOfficers}|${UUIDS.issueSource}|${UUIDS.articleOfficers}|${UUIDS.articleSource}|OFFICERS ONLY`));
   });
 
   it("keys on the API's answer, not the session: a token the API answers as the public's reads as signed in without member access", async () => {
@@ -629,12 +643,44 @@ describe('liveData.news', () => {
     expect(news.items[0]!.files).toEqual(ANONYMOUS.items[0]!.files);
   });
 
+  it('reads a bearer that is not one b64token as no reader at all: the public view, even when the API sends more than it should (S5a-1)', async () => {
+    const { reads: r, asked } = api(() => memberAnswer());
+    const news = await liveData(r).news({ bearer: 'not a b64token' });
+    expect(news).toEqual(await liveData(api(() => memberAnswer()).reads).news());
+    expect(news.signedIn).toBe(false);
+    expect(asked.map(([, , bearer]) => bearer)).toEqual([undefined, undefined]);
+    const text = JSON.stringify(news);
+    for (const id of [UUIDS.issueMembers, UUIDS.articleMembers]) expect(text).not.toContain(id);
+    expect(text).not.toMatch(/1234|members-picnic/);
+  });
+
   it('asks again as the public, once, when the API refuses the token, and says so: never a 503', async () => {
     const { reads: r, asked } = api((as) => (as ? new ApiTokenRefused('ListPublishedItems') : publicAnswer()));
     const news = await liveData(r).news(member);
     expect(news).toEqual({ ...ANONYMOUS, tokenRefused: true });
     expect(asked.filter(([, , bearer]) => bearer === undefined).map(([kind]) => kind).sort()).toEqual([ContentKind.DOCUMENT, ContentKind.ARTICLE].sort());
     expect(asked.filter(([, , bearer]) => bearer !== undefined).length).toBeLessThanOrEqual(2);
+  });
+
+  it('still gives the issues when only the articles cannot be read, and says so: the issues never wait on the articles (N4)', async () => {
+    /** The fake API with its articles read down, whoever asks. */
+    const articlesDown = (inner: ApiReads): ApiReads => ({
+      ...inner,
+      listPublishedItems: (kind, size, as) => (kind === ContentKind.ARTICLE ? Promise.reject(new ApiUnavailable('ListPublishedItems')) : inner.listPublishedItems(kind, size, as)),
+    });
+    expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news()).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: true });
+    const asMember = await liveData(articlesDown(api((as) => (as ? memberAnswer() : publicAnswer())).reads)).news(member);
+    expect(asMember).toMatchObject({ items: [], itemsUnavailable: true, signedIn: true, tokenRefused: false });
+    expect(asMember.issues[0]!.membersPdf).toBe(`/documents/${UUIDS.issueMembers}.pdf`);
+    // A refused token is still asked again as the public, with the articles still down.
+    const refused = await liveData(articlesDown(api((as) => (as ? new ApiTokenRefused('ListPublishedItems') : publicAnswer())).reads)).news(member);
+    expect(refused).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: true, tokenRefused: true });
+    // The issues down is the page's own failure, as before A14.
+    const docsDown = reads({ listPublishedItems: (kind) => (kind === ContentKind.DOCUMENT ? Promise.reject(new ApiUnavailable('ListPublishedItems')) : Promise.resolve(publicAnswer()[ContentKind.ARTICLE])) });
+    await expect(liveData(docsDown).news()).rejects.toBeInstanceOf(ApiUnavailable);
+    // Anything but an unavailable API is not swallowed.
+    const bug = reads({ listPublishedItems: (kind) => (kind === ContentKind.ARTICLE ? Promise.reject(new TypeError('bug')) : Promise.resolve(publicAnswer()[ContentKind.DOCUMENT])) });
+    await expect(liveData(bug).news()).rejects.toBeInstanceOf(TypeError);
   });
 
   it('passes an unavailable API on, with or without a reader, and a refusal of the public read too', async () => {
@@ -655,6 +701,32 @@ describe('liveData.news', () => {
     expect(together[0]!.issues[0]!.membersPdf).toBeDefined();
   });
 
+  it("leaves every other section the public's, before and after a member's /news and PDF: no token ever reaches them", async () => {
+    const asked: [ContentKind, string | undefined][] = [];
+    const files: (string | undefined)[] = [];
+    const live = liveData(
+      reads({
+        listPublishedItems: (kind, _size, as) => (asked.push([kind, as?.bearer]), Promise.resolve([])),
+        readFile: (_id, as) => (files.push(as?.bearer), Promise.resolve({ kind: 'not_found' as const })),
+      }),
+    );
+    const others = async () => {
+      await live.announcements();
+      await live.treasurerSummaries();
+      await live.presidentReport();
+      await live.issues();
+    };
+    const PUBLIC_READS = [ContentKind.ANNOUNCEMENT, ContentKind.TREASURER_SUMMARY, ContentKind.PRESIDENT_REPORT, ContentKind.DOCUMENT].map((kind) => [kind, undefined]);
+    await others();
+    await live.news(member);
+    await live.file(UUIDS.issueMembers, member);
+    await others();
+    await live.news();
+    await live.file(UUIDS.issueMembers);
+    expect(asked).toEqual([...PUBLIC_READS, [ContentKind.DOCUMENT, 'member.token'], [ContentKind.ARTICLE, 'member.token'], ...PUBLIC_READS, [ContentKind.DOCUMENT, undefined], [ContentKind.ARTICLE, undefined]]);
+    expect(files).toEqual(['member.token', undefined]);
+  });
+
   it('skips an article the API sent with no live version, whoever reads', async () => {
     const bare = create(ContentItemSchema, { id: 'bare', slug: 'bare', kind: ContentKind.ARTICLE });
     const { reads: r } = api(() => ({ [ContentKind.ARTICLE]: [bare, ...publicAnswer()[ContentKind.ARTICLE]] }));
@@ -669,14 +741,35 @@ describe('liveData.news', () => {
     expect((await live.news({ bearer: 'pending.token' }, { signIn })).items[0]!.bodyHtml).not.toContain('sign-in');
   });
 
-  it('shows members items to the public by title and summary only when the teaser switch is on (D1); hidden by default', async () => {
-    const { reads: r } = api(() => publicAnswer());
+  it('shows members items to the public by title and summary only when the teaser switch is on (D1), never a body or a file the API sent; hidden by default', async () => {
+    const teaserPublicPdf = 'e3000000-0000-4000-8000-000000000001';
+    // A buggy API sends the public the members item in full, a members passage, a members file and a public one.
+    const full = article('members-picnic', ItemVisibility.MEMBERS, [para('MEMBERS BODY CANARY'), passage('The gate code is <1234>')], [
+      { id: UUIDS.articleMembers, audience: FileAudience.MEMBERS },
+      { id: teaserPublicPdf, audience: FileAudience.PUBLIC },
+    ]);
+    const [open] = publicAnswer()[ContentKind.ARTICLE];
+    const { reads: r } = api((as) => (as ? publicAnswer() : { [ContentKind.ARTICLE]: [open!, full] }));
     expect((await liveData(r).news()).items.map((i) => i.slug)).toEqual(['open-letter']);
     const teased = await liveData(r, { membersTeasers: true }).news();
     expect(teased.items.map((i) => [i.slug, i.membersOnly])).toEqual([['open-letter', false], ['members-picnic', true]]);
-    expect(teased.items[1]!.bodyHtml).toBe(`<p class="members-note">${MEMBERS_PASSAGE}</p>`);
-    // A signed-in reader the API answered as the public's gets the same switch.
+    expect(teased.items[1]).toEqual({
+      slug: 'members-picnic',
+      title: 'Title of members-picnic',
+      summary: 'Summary of members-picnic',
+      bodyHtml: `<p class="members-note">${MEMBERS_PASSAGE}</p>`,
+      publishedOn: '2026-10-20',
+      source: 'submitted',
+      files: [],
+      membersOnly: true,
+    });
+    expect(JSON.stringify(teased)).not.toMatch(new RegExp(`MEMBERS BODY|1234|gate code|${UUIDS.articleMembers}|${teaserPublicPdf}`));
+    const signIn = '/sign-in?return=%2Fnews';
+    expect((await liveData(r, { membersTeasers: true }).news(undefined, { signIn })).items[1]!.bodyHtml).toBe(`<p class="members-note">Members-only passage, <a href="${signIn}">sign in</a> to read.</p>`);
+    // A signed-in reader the API answered as the public's gets the same switch, with the box that says so.
     expect((await liveData(r).news({ bearer: 'pending.token' })).items.map((i) => i.slug)).toEqual(['open-letter']);
+    const pending = await liveData(r, { membersTeasers: true }).news({ bearer: 'pending.token' }, { signIn });
+    expect(pending.items[1]).toMatchObject({ slug: 'members-picnic', membersOnly: true, files: [], bodyHtml: `<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>` });
   });
 });
 
@@ -697,6 +790,13 @@ describe('liveData.file as a signed-in reader', () => {
     expect(await live.file('../x', { bearer: 'member.token' })).toEqual({ kind: 'not_found' });
     expect(asked).toEqual(['member.token', 'refused', undefined]);
     await expect(liveData(reads({ readFile: () => Promise.reject(new ApiTokenRefused('ReadFile')) })).file(FILE)).rejects.toBeInstanceOf(ApiTokenRefused);
+  });
+
+  it('reads the file as the public for a bearer that is not one b64token (S5a-1)', async () => {
+    const asked: (string | undefined)[] = [];
+    const live = liveData(reads({ readFile: (_id, as) => (asked.push(as?.bearer), Promise.resolve({ kind: 'not_found' as const })) }));
+    expect(await live.file(FILE, { bearer: 'two words' })).toEqual({ kind: 'not_found' });
+    expect(asked).toEqual([undefined]);
   });
 
   it('passes an unavailable API on with a reader too, without asking again', async () => {

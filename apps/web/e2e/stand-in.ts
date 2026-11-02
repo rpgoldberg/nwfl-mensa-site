@@ -74,6 +74,7 @@ export const ACCOUNTS = {
   pending: '00000000-0000-4000-8000-0000000000c3',
   refused: '00000000-0000-4000-8000-0000000000e5',
   lapsed: '00000000-0000-4000-8000-0000000000f6',
+  'articles-down': '00000000-0000-4000-8000-0000000000a7',
 };
 
 /**
@@ -83,10 +84,13 @@ export const ACCOUNTS = {
  * article on /news; the public sees none of it.
  */
 export const ARTICLES = {
-  open: { title: 'A new home for the Wednesday lunch', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001' },
+  open: { title: 'A new home for the Wednesday lunch', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001', sourcePdf: 'e3f00000-0000-4000-8000-000000000001' },
   members: { title: 'Members picnic sign-up', body: 'MEMBERS ARTICLE CANARY: the picnic is at the north shelter.' },
   officers: { title: 'OFFICERS ARTICLE CANARY', body: 'OFFICERS BODY CANARY', pdf: 'e2f00000-0000-4000-8000-000000000003' },
 };
+
+/** A14: the members source files api.mjs lists before each members copy, to anyone but the public (api.mjs sourceOf): never linked. */
+export const SOURCE_PDFS = [...NEWSLETTER.issues.map((i) => `f3${i.membersPdf.slice(2)}`), ARTICLES.open.sourcePdf];
 
 /** The marker line in a members copy's bytes (api.mjs MEMBERS_PDF). */
 export const MEMBERS_PDF_MARK = '% members copy';

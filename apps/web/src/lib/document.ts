@@ -118,6 +118,11 @@ export function documentHtml(
   return document === undefined ? '' : blocks(document.blocks, headingLevel, 0, { view, signIn });
 }
 
+/** The box alone, in place of a whole members item the reader may not read (a teaser, D1): nothing of its body is read. */
+export function withheldHtml({ view = 'public', signIn }: { view?: View; signIn?: string | undefined } = {}): string {
+  return placeholder({ view, signIn });
+}
+
 /** Whether the API sent any redacted node: then it read the caller as the public (A14). */
 export function hasRedacted(document: Document | undefined): boolean {
   // Past the depth cap, anything at all counts: a tree too deep to read is read as the public's (fail closed).

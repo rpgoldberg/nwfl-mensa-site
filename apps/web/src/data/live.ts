@@ -16,9 +16,9 @@ import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility, type StoredFile } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { Area, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
-import { ApiNotFound, type ApiReads, ApiTokenRefused, type FileRead, type Reader } from '../lib/api/client';
+import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type FileRead, type Reader, sendable } from '../lib/api/client';
 import { type CalendarEvent, type CalendarVenue, type EventStatus, centralParts, eventPath } from '../lib/calendar';
-import { type View, documentHtml, hasRedacted } from '../lib/document';
+import { type View, documentHtml, hasRedacted, withheldHtml } from '../lib/document';
 import { type Issue, type Office, newestFirst } from './site-data';
 
 /** A published item as a page shows it. */
@@ -58,6 +58,8 @@ export interface News {
   signedIn: boolean;
   /** The API refused the reader's token: this is the public's view, and the page says to sign in again. */
   tokenRefused: boolean;
+  /** The API could not give the articles (items is empty): the page says so, and still lists the issues. */
+  itemsUnavailable: boolean;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -163,7 +165,8 @@ function toEvent(o: EventOccurrence): CalendarEvent {
   };
 }
 
-function itemView(item: ContentItem, render: { view?: View; signIn?: string | undefined } = {}): ItemView {
+/** `withheld`: a members item the reader may not read, shown by title and summary only (a teaser, D1): the box, never its body or files. */
+function itemView(item: ContentItem, render: { view?: View; signIn?: string | undefined; withheld?: boolean } = {}): ItemView {
   const live = item.live!;
   return {
     // Whatever the API put in the slug field: the item's id when anything in it is
@@ -171,10 +174,10 @@ function itemView(item: ContentItem, render: { view?: View; signIn?: string | un
     slug: item.slug || item.id,
     title: live.title,
     summary: live.summary,
-    bodyHtml: documentHtml(live.body, render),
+    bodyHtml: render.withheld ? withheldHtml(render) : documentHtml(live.body, render),
     publishedOn: live.approvedAt === undefined ? undefined : centralParts(timestampDate(live.approvedAt)).date,
     source: 'submitted',
-    files: render.view === 'members' ? [...publicPdfs(live.files), ...membersPdfs(live.files)] : publicPdfs(live.files),
+    files: render.withheld ? [] : render.view === 'members' ? [...publicPdfs(live.files), ...membersPdfs(live.files)] : publicPdfs(live.files),
   };
 }
 
@@ -231,7 +234,8 @@ const issueList = (items: readonly ContentItem[], members: boolean) =>
  * The articles as one reader may have them. A public item always; a members item only when the API sent
  * that reader its tree (no redacted node in it), or as a teaser when D1's switch is on; an officers item
  * never, whoever reads. Each body is rendered for what the API answered: the members view for a member's
- * tree, the signed-in box for a tree the API filtered for the public, and the public box otherwise.
+ * tree, the signed-in box for a tree the API filtered for the public, and the public box otherwise. A
+ * teaser is its title and summary with the box alone: whatever body or files the API sent are not read.
  */
 function newsItemViews(items: readonly ContentItem[], signedIn: boolean, signIn: string | undefined, teasers: boolean): NewsItemView[] {
   return items.flatMap((item) => {
@@ -242,13 +246,20 @@ function newsItemViews(items: readonly ContentItem[], signedIn: boolean, signIn:
     const shown = live.visibility === ItemVisibility.PUBLIC || (membersOnly && (!answeredAsPublic || teasers));
     if (!shown) return [];
     const view: View = !signedIn ? 'public' : answeredAsPublic ? 'signed-in-public' : 'members';
-    return [{ ...itemView(item, { view, signIn: view === 'public' ? signIn : undefined }), membersOnly }];
+    const withheld = membersOnly && answeredAsPublic;
+    return [{ ...itemView(item, { view, signIn: view === 'public' ? signIn : undefined, withheld }), membersOnly }];
   });
 }
 
 export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOptions = {}): LiveData {
+  /** The articles, or undefined when the API could not give them: the issues, there before A14, never wait on them. */
+  const articles = (as: Reader | undefined) =>
+    reads.listPublishedItems(ContentKind.ARTICLE, ARTICLES_PAGE, as).catch((error: unknown) => {
+      if (error instanceof ApiUnavailable) return undefined;
+      throw error;
+    });
   /** Both news lists, as the reader, or as the public. */
-  const newsLists = (as: Reader | undefined) => Promise.all([reads.listPublishedItems(ContentKind.DOCUMENT, ISSUES_PAGE, as), reads.listPublishedItems(ContentKind.ARTICLE, ARTICLES_PAGE, as)]);
+  const newsLists = (as: Reader | undefined) => Promise.all([reads.listPublishedItems(ContentKind.DOCUMENT, ISSUES_PAGE, as), articles(as)]);
 
   return {
     events: async (from, to) => (await reads.listOccurrences(from, to)).filter(isPublicEvent).map(toEvent),
@@ -288,8 +299,10 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
     announcements: async () => publicItems(await reads.listPublishedItems(ContentKind.ANNOUNCEMENT, 3)),
     issues: async () => issueList(await reads.listPublishedItems(ContentKind.DOCUMENT, ISSUES_PAGE), false),
 
-    news: async (as, { signIn } = {}) => {
-      let lists: [ContentItem[], ContentItem[]];
+    news: async (given, { signIn } = {}) => {
+      // A bearer the client would not send is no reader: the call goes as the public's, and is shaped so (S5a-1).
+      const as = sendable(given);
+      let lists: [ContentItem[], ContentItem[] | undefined];
       let tokenRefused = false;
       try {
         lists = await newsLists(as);
@@ -299,12 +312,13 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
         lists = await newsLists(undefined);
       }
       const signedIn = as !== undefined && !tokenRefused;
-      const [documents, articles] = lists;
-      return { issues: issueList(documents, signedIn), items: newsItemViews(articles, signedIn, signIn, membersTeasers), signedIn, tokenRefused };
+      const [documents, listed] = lists;
+      return { issues: issueList(documents, signedIn), items: newsItemViews(listed ?? [], signedIn, signIn, membersTeasers), signedIn, tokenRefused, itemsUnavailable: listed === undefined };
     },
 
-    file: async (id, as) => {
+    file: async (id, given) => {
       if (!UUID.test(id)) return { kind: 'not_found' };
+      const as = sendable(given);
       if (as === undefined) return reads.readFile(id);
       try {
         return await reads.readFile(id, as);

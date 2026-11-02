@@ -1,7 +1,7 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 import { type Block, type Document, DocumentSchema, type Inline } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { MEMBERS_PASSAGE, MEMBERS_RULE, NO_MEMBER_ACCESS, documentHtml, escapeHtml, hasRedacted } from './document';
+import { MEMBERS_PASSAGE, MEMBERS_RULE, NO_MEMBER_ACCESS, documentHtml, escapeHtml, hasRedacted, withheldHtml } from './document';
 
 const text = (value: string, style: { bold?: boolean; italic?: boolean } = {}): Inline => ({ $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'text', value: { $typeName: 'nwfl.mensa.v1.Text', text: value, bold: false, italic: false, ...style } } });
 const para = (...inlines: Inline[]): Block => ({ $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'paragraph', value: { $typeName: 'nwfl.mensa.v1.Paragraph', inlines } } });
@@ -139,6 +139,16 @@ describe('documentHtml views', () => {
 });
 
 // A14: the API sends a redacted node only to a caller it reads as the public: that decides the view.
+describe('withheldHtml (a teaser, D1)', () => {
+  it("is the box a redacted node gets, for each reader, and nothing else", () => {
+    const redacted = create(DocumentSchema, { blocks: [{ kind: { case: 'redacted', value: {} } }] });
+    expect(withheldHtml()).toBe(`<p class="members-note">${MEMBERS_PASSAGE}</p>`);
+    expect(withheldHtml()).toBe(documentHtml(redacted));
+    expect(withheldHtml({ signIn: '/sign-in?a=1&b=2' })).toBe(documentHtml(redacted, { signIn: '/sign-in?a=1&b=2' }));
+    expect(withheldHtml({ view: 'signed-in-public' })).toBe(`<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`);
+  });
+});
+
 describe('hasRedacted', () => {
   const R: Inline = { $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'redacted', value: { $typeName: 'nwfl.mensa.v1.Redacted' } } };
   const RB: Block = { $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'redacted', value: { $typeName: 'nwfl.mensa.v1.Redacted' } } };

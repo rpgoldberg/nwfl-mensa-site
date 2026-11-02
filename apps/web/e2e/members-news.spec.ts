@@ -12,7 +12,7 @@ import { SIZES } from '../server/prefs.mjs';
 import { setPrefs } from './prefs';
 import { crawlSeeds } from './routes';
 import { banner, signIn } from './signin';
-import { ARTICLES, BOARD_GAMES, MEMBERS_PDF_MARK, NEWSLETTER, centralToday } from './stand-in';
+import { ARTICLES, BOARD_GAMES, MEMBERS_PDF_MARK, NEWSLETTER, SOURCE_PDFS, centralToday } from './stand-in';
 
 // As in a11y.spec.ts: WCAG 2.2 A and AA, plus AAA and best practice.
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
@@ -24,7 +24,7 @@ const pdf = (id: string) => `/documents/${id}.pdf`;
 const MEMBERS_IDS = [...NEWSLETTER.issues.map((i) => i.membersPdf), ARTICLES.open.membersPdf];
 /** What only a member may see on /news, and what nobody may. */
 const MEMBERS_TEXT = [ARTICLES.open.passage, ARTICLES.members.body, ARTICLES.members.title];
-const NEVER = [ARTICLES.officers.title, ARTICLES.officers.body, ARTICLES.officers.pdf, NEWSLETTER.membersOnly.title];
+const NEVER = [ARTICLES.officers.title, ARTICLES.officers.body, ARTICLES.officers.pdf, NEWSLETTER.membersOnly.title, ...SOURCE_PDFS];
 
 async function axe(page: Page): Promise<string[]> {
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -182,6 +182,20 @@ for (const login of ['refused', 'lapsed'] as const) {
     expect(withheld.status()).toBe(404);
   });
 }
+
+test('articles the API cannot give leave the issues listed, members copies too, with a line in their place: a 503, never stored', async ({ page }) => {
+  await page.goto('/news');
+  await signIn(page, 'articles-down');
+  const res = await page.goto('/news');
+  expect(res?.status()).toBe(503);
+  expect(res?.headers()['cache-control']).toContain('no-store');
+  const card = page.getByRole('region', { name: current!.title });
+  await expect(card.getByRole('link', { name: 'Read this issue (PDF)' })).toHaveAttribute('href', pdf(current!.publicPdf));
+  await expect(card.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toHaveAttribute('href', pdf(current!.membersPdf));
+  await expect(page.getByRole('note').filter({ hasText: 'The list of articles is temporarily unavailable.' })).toBeVisible();
+  await expect(page.getByText('The list of issues is temporarily unavailable.')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'From the newsletter' })).toHaveCount(0);
+});
 
 test('anonymous: the public article with its passage hidden behind a sign-in link, and none of the members content', async ({ page }) => {
   const res = await page.goto('/news');

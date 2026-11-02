@@ -2,14 +2,14 @@
 // the API, on the news reads only (src/lib/api/client.ts). The API decides
 // what the token may see (apps/api/src/auth/caller.ts); the site decides only
 // whether to send it: for a valid session with its record on the server, and
-// a token with more than 30 seconds to live. There is no refresh (the
-// provider grants no offline_access, and the API takes a site token for an
-// hour at most): past that, the reader gets the public view, and the page
-// says to sign in again.
+// a token that is one RFC 6750 b64token with more than 30 seconds to live.
+// There is no refresh (the provider grants no offline_access, and the API
+// takes a site token for an hour at most): past that, the reader gets the
+// public view, and the page says to sign in again.
 import type { AuthSetup } from '../../../server/auth-config.mjs';
 import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
-import type { Reader } from '../api/client';
+import { type Reader, sendable } from '../api/client';
 import type { Tokens } from './oidc';
 
 /** A token this close to its expiry is not sent: it could lapse on the way. */
@@ -29,7 +29,8 @@ export function readerFor(session: Session | undefined, { tokens, now }: ReaderD
   const expiresAt = record?.expires_at;
   if (record === undefined || record.access_token === '' || typeof expiresAt !== 'number' || Number.isNaN(expiresAt)) return { reader: undefined, lapsed: false };
   if (expiresAt - EXPIRY_MARGIN_SECONDS <= at) return { reader: undefined, lapsed: true };
-  return { reader: { bearer: record.access_token }, lapsed: false };
+  // A token that is not one b64token is never sent (client.ts): it is no token, not a reader (S5a-1).
+  return { reader: sendable({ bearer: record.access_token }), lapsed: false };
 }
 
 /**

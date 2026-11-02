@@ -6,7 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
 import { setPrefs } from './prefs';
 import { NO_ISSUES_SITE_URL } from './servers';
-import { ARTICLES, NEWSLETTER } from './stand-in';
+import { ARTICLES, NEWSLETTER, SOURCE_PDFS } from './stand-in';
 
 // As in a11y.spec.ts: WCAG 2.2 A and AA, plus AAA and best practice.
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
@@ -65,7 +65,7 @@ test.describe('/news with issues published', () => {
       expect(html).not.toContain(NEWSLETTER.membersOnly.publicPdf);
       expect(html).not.toContain(NEWSLETTER.other.publicPdf);
       // A14: the article's members PDF, its members passage, the members and officers articles.
-      for (const secret of [ARTICLES.open.membersPdf, ARTICLES.open.passage, ARTICLES.members.title, ARTICLES.members.body, ARTICLES.officers.title, ARTICLES.officers.pdf]) expect(html).not.toContain(secret);
+      for (const secret of [ARTICLES.open.membersPdf, ARTICLES.open.passage, ARTICLES.members.title, ARTICLES.members.body, ARTICLES.officers.title, ARTICLES.officers.pdf, ...SOURCE_PDFS]) expect(html).not.toContain(secret);
       expect(html.toLowerCase()).not.toContain(NEWSLETTER.sha256Hex.slice(0, 16));
       expect(html).not.toContain(Buffer.from(NEWSLETTER.sha256Hex, 'hex').toString('base64').slice(0, 16));
       expect(html).not.toMatch(/987[,.\s]?654/);

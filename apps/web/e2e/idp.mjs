@@ -1,6 +1,6 @@
 // @ts-check
 // A local OpenID provider for the e2e suite only (oidc-provider), standing in
-// for the club's Authentik: never a shared host. It knows six made-up
+// for the club's Authentik: never a shared host. It knows seven made-up
 // people, requires PKCE, takes the client secret in the body
 // (client_secret_post), puts name and groups in the ID token as Authentik does,
 // and offers RP-initiated logout. Consent is skipped for the one client, as a
@@ -10,10 +10,11 @@
 //
 // A14: as A16 provisions Authentik, the access token is a JWT for the API
 // alone (aud nwfl-site, RS256), with the groups claim, a UUID subject, and an
-// hour's life at most (the API refuses a longer one). Two people exist for the
+// hour's life at most (the API refuses a longer one). Three people exist for the
 // edge cases: "lapsed", whose token lives 20 s (under the site's 30 s margin,
-// so it is never forwarded), and "refused", whose token the stand-in API
-// refuses (e2e/api.mjs). With IDP_TLS_KEY and IDP_TLS_CERT (PEM) it serves
+// so it is never forwarded), "refused", whose token the stand-in API
+// refuses (e2e/api.mjs), and "articles-down", a member whose articles read the
+// stand-in API cannot answer. With IDP_TLS_KEY and IDP_TLS_CERT (PEM) it serves
 // https, as the real API requires of an issuer (the redaction lane).
 import http from 'node:http';
 import https from 'node:https';
@@ -41,6 +42,7 @@ const LOGINS = {
   'long-name': { id: '00000000-0000-4000-8000-0000000000d4', name: 'Maximiliana Bartholomew-Fitzgerald Examplesworth', groups: ['nwfl-members', 'nwfl-officers'] },
   refused: { id: '00000000-0000-4000-8000-0000000000e5', name: 'Riley Testcase', groups: ['nwfl-members'] },
   lapsed: { id: '00000000-0000-4000-8000-0000000000f6', name: 'Quinn Example', groups: ['nwfl-members'], tokenSeconds: 20 },
+  'articles-down': { id: '00000000-0000-4000-8000-0000000000a7', name: 'Morgan Example', groups: ['nwfl-members'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 
