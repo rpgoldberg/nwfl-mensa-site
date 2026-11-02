@@ -142,6 +142,12 @@ jobs:
           docker logs "$id" | tail -5
           [ "$code" = "0" ] || { echo "::error::exit code ${code} after SIGTERM"; exit 1; }
 
+      - name: The PDF engine sidecar runs from it, read-only and with no network
+        # scripts/smoke-sidecar-image.sh (UNTRUSTED-PDF-GATE): it refuses a credential in its env,
+        # listens on a 0660 socket in a shared volume, makes a copy for the worker's uid, refuses
+        # a uid outside the socket's group, and exits 0 on SIGTERM.
+        run: sh scripts/smoke-sidecar-image.sh nwfl-mensa-api:ci
+
   migrate-image:
     name: Build and run the migration image
     runs-on: ubuntu-latest

@@ -255,6 +255,70 @@ so only when both test files pinned in the gate test
 each holding a real, unskipped test under its pinned title. Setting it to true
 without them fails. The request snapshot and the catalog are never lifted.
 
+Both pieces now exist (below) and both tests pass, but `UNTRUSTED_PDF_READY`
+stays false until fc's manifest runs the sidecar as its own uid and
+validate-nwfl checks it.
+
+### The engine sidecar
+
+The PDF engine can run as a sidecar process in a container of its own beside
+the worker, from the same image: `node dist/pdf/engine-sidecar.js`
+(`src/pdf/sidecar.ts`). It listens on one unix socket, by default
+`/run/pdf-engine/engine.sock`, mode 0660, and still forks one child per copy
+with an empty environment. It opens no other socket and makes no connection.
+
+It will not start (exit 2) if its environment holds `DATABASE_URL`, `PG*`,
+`SESSION*`, or any name containing `TOKEN`, `SECRET` or `KEY`. It names the
+variables, never their values. It replaces a socket left behind by a dead
+sidecar, but exits 1 if anything else is at the path. SIGTERM kills the copy
+in flight and removes the socket. Arguments: `--socket <absolute path>`,
+`--timeout-ms <ms>` (per copy, default 300000), and `--engine <module>`, which
+is for tests only.
+
+The worker picks the engine with `PDF_ENGINE_SOCKET`:
+
+- unset: the in-pod child, as before;
+- an absolute path directly in `/run/pdf-engine`: the sidecar only, never
+  the child;
+- anything else: the worker refuses to start.
+
+Each copy uses one connection carrying one length-prefixed frame each way
+(`src/pdf/engine-protocol.ts`). The request carries the original (at most
+10 MiB) and the typed request (header at most 1 MiB). The reply carries the
+copy (at most 20 MiB) and a small typed result. Neither side sends an
+environment, a path or a credential. Each side stops reading at a declared
+size over its cap. The sidecar gives a request 30 s to arrive and drops a
+malformed one without a reply.
+
+A missing socket, a dead sidecar, a malformed reply, or no reply within
+330 s fails the job closed with `RetryableEngineError`. No copy is stored,
+the file stays queued, and the next run takes it once the lease (600 s)
+ends. If the engine itself fails on the file inside the sidecar (its child
+crashed or ran past 300 s), the copy is refused, as it is in the pod.
+
+The worker re-runs the output gate (`src/pdf/gate.ts`) on every copy over
+either transport before `pdf_copy_put` (`src/pdf/rerun.ts`). A hit stores a
+refused copy with a fixed reason that quotes nothing. This loads pdf.js and
+pdf-lib in the worker too.
+
+What fc's manifest gives the sidecar container:
+
+- its own `runAsUser` and `runAsGroup`, different from the worker's;
+- `runAsNonRoot: true`, `readOnlyRootFilesystem: true`,
+  `allowPrivilegeEscalation: false`, capabilities `drop: [ALL]`;
+- no env from Secrets (no `envFrom` secret, no `secretKeyRef`), no secret
+  volume, and no service account token (`automountServiceAccountToken:
+  false` on the pod);
+- `shareProcessNamespace: false` and `enableServiceLinks: false` on the pod;
+- an emptyDir mounted at `/run/pdf-engine` in the worker and the sidecar
+  only, with the pod's `fsGroup` as the socket's shared group;
+- no ports, and no egress: the pod's NetworkPolicy allows only what the
+  worker needs, and the sidecar's uid gets no network;
+- CPU and memory requests and limits;
+- `args: ["node", "dist/pdf/engine-sidecar.js"]`, not `command`, so
+  dumb-init stays PID 1;
+- in the worker, `PDF_ENGINE_SOCKET=/run/pdf-engine/engine.sock`.
+
 ### The api-gate check
 
 `.github/workflows/api-gate.yml` runs every test in `test/gates` on every push
