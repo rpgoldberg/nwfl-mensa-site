@@ -30,7 +30,7 @@
 import { fork } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
+import { CHILD_PERMISSION, type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
 import type { RedactRequest, RedactResult } from './redact.js';
 import type { Redact } from './regenerate.js';
 
@@ -57,20 +57,24 @@ export const ENGINE_CHILD = fileURLToPath(new URL('./engine-child.js', import.me
  */
 export const ENGINE_ENV: Readonly<NodeJS.ProcessEnv> = Object.freeze({});
 
-const ENV_FILE_FLAGS = new Set(['--env-file', '--env-file-if-exists']);
+const DROPPED_WITH_VALUE = new Set(['--env-file', '--env-file-if-exists', '--allow-fs-read', '--allow-fs-write']);
+const DROPPED_FLAGS = new Set(['--permission', '--experimental-permission', '--allow-child-process', '--allow-worker', '--allow-addons', '--allow-wasi']);
 
 /**
  * The child's Node flags: the worker's own (fork() passes process.execArgv on), minus any that load an
  * environment file (CF-ISO-0 N1). Without this, a worker started with --env-file would hand the child
- * the very variables ENGINE_ENV keeps out. Both spellings: --env-file=<path> and --env-file <path>.
+ * the very variables ENGINE_ENV keeps out. Both spellings: --env-file=<path> and --env-file <path>. Minus
+ * any flag of the permission model too (fix round 4, S2): the child gets CHILD_PERMISSION, and no grant
+ * its parent was started with.
  */
 export function engineExecArgv(argv: readonly string[]): string[] {
   const kept: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i] as string;
     const name = flag.split('=', 1)[0] as string;
-    if (!ENV_FILE_FLAGS.has(name)) kept.push(flag);
-    else if (!flag.includes('=')) i += 1;
+    if (DROPPED_WITH_VALUE.has(name)) {
+      if (!flag.includes('=')) i += 1;
+    } else if (!DROPPED_FLAGS.has(name)) kept.push(flag);
   }
   return kept;
 }
@@ -117,6 +121,8 @@ export interface IsolatedOptions {
   limit?: LimitForks;
   /** Where the child's stderr goes, capped (default this process's stderr); a spy, for tests. */
   log?: (chunk: Buffer) => void;
+  /** Whether the child runs under the permission model (default true: CHILD_PERMISSION); false only for tests of the layers behind it. */
+  permission?: boolean;
 }
 
 /** How much of one child's stderr reaches the log (S2). */
@@ -179,7 +185,7 @@ export function isolatedRedact(options: IsolatedOptions = {}): Redact {
         reject(new Error('the engine process was stopped'));
         return;
       }
-      const execArgv = [...engineExecArgv(process.execArgv), guardFlag(options.guard)];
+      const execArgv = [...(options.permission === false ? [] : CHILD_PERMISSION), ...engineExecArgv(process.execArgv), guardFlag(options.guard)];
       const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, ...viaChoom(execArgv), serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'], detached: true });
       relayChildLog(child.stderr, options.log);
       let reply: EngineReply | undefined;

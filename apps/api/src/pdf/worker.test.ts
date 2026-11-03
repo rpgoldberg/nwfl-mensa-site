@@ -133,8 +133,8 @@ describe('workerRedact: the engine and the gate the worker uses, chosen by PDF_E
     }
   });
 
-  it('caps the in-pod gate child at IN_POD_GATE_MAX_RSS_BYTES (384 MiB), well under the worker\'s 768Mi, so its watchdog fires before the kernel (S5)', async () => {
-    expect(IN_POD_GATE_MAX_RSS_BYTES).toBe(384 * 1024 * 1024);
+  it('caps the in-pod gate child at IN_POD_GATE_MAX_RSS_BYTES (640 MiB: 384 refused ordinary 4 MiB copies, fix round 4, S3)', async () => {
+    expect(IN_POD_GATE_MAX_RSS_BYTES).toBe(640 * 1024 * 1024);
     // A spy stands in for /proc: the child (hang) uses no memory. Over the cap, the watchdog kills it at
     // once; under a larger cap it would run to its 5 s deadline.
     const over = () => IN_POD_GATE_MAX_RSS_BYTES + 1;
@@ -153,9 +153,9 @@ describe('workerRedact: the engine and the gate the worker uses, chosen by PDF_E
     expect(() => workerRedact({}, { ready: true })).toThrow('UNTRUSTED_PDF_READY is true: the worker parses PDFs only in the sidecars; set PDF_ENGINE_SOCKET and PDF_GATE_SOCKET');
     expect(() => workerRedact({ PDF_GATE_SOCKET: sockets.PDF_GATE_SOCKET }, { ready: true })).toThrow('UNTRUSTED_PDF_READY is true');
     expect(() => workerRedact(sockets, { ready: true })).not.toThrow();
-    // Today the flag is false, and the in-pod mode still starts.
-    expect(UNTRUSTED_PDF_READY).toBe(false);
-    expect(() => workerRedact({}, {})).not.toThrow();
+    // The default is the flag itself (fix round 4, integrity N2): with no sockets the in-pod mode starts exactly while it is false.
+    if (UNTRUSTED_PDF_READY) expect(() => workerRedact({}, {})).toThrow('UNTRUSTED_PDF_READY is true');
+    else expect(() => workerRedact({}, {})).not.toThrow();
     expect(() => runWorker({ env: { PGHOST: '127.0.0.1', PGPORT: '1' }, ready: true, intervalMs: 3_600_000 })).toThrow('UNTRUSTED_PDF_READY is true');
   });
 

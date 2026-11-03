@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { BLOCKED, CHILD_GUARD, CHILD_OOM_SCORE_ADJ, CHOOM, PRLIMIT, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
+import { BLOCKED, CHILD_GUARD, CHILD_OOM_SCORE_ADJ, CHILD_PERMISSION, CHOOM, PRLIMIT, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
 import { NODE_FLAGS } from '../../test/helpers/sidecar.js';
 
 /** A made-up child: messages in, what the parent sent out. */
@@ -20,11 +20,13 @@ function fakeChild(pid: number | null = 4242): { child: ChildProcess; sent: unkn
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 describe('the guard\'s constants', () => {
-  it('preloads child-guard.ts here (child-guard.js once built), runs util-linux prlimit by absolute path, and wants EAGAIN', () => {
+  it('preloads child-guard.ts here (child-guard.js once built), runs util-linux prlimit by absolute path, and wants EAGAIN or the permission model\'s refusal', () => {
     expect(path.basename(CHILD_GUARD)).toBe('child-guard.ts');
     expect(guardFlag('/x/guard.js')).toBe('--import=file:///x/guard.js');
     expect(PRLIMIT).toBe('/usr/bin/prlimit');
-    expect(BLOCKED).toBe('EAGAIN');
+    expect([...BLOCKED]).toEqual(['EAGAIN', 'ERR_ACCESS_DENIED']);
+    // Fix round 4 (S2): every child runs under Node's permission model, read access only.
+    expect(CHILD_PERMISSION).toEqual(['--permission', '--allow-fs-read=*']);
     expect(isGuardMessage({ guard: 'ready' })).toBe(true);
     expect(isGuardMessage({ ok: true })).toBe(false);
     expect(isGuardMessage(null)).toBe(false);
@@ -48,6 +50,11 @@ describe('watchGuard: the job goes to the child only once its limit holds', () =
     expect(sent).toEqual([{ guard: 'limited' }]);
     say({ guard: 'listening', probe: 'EAGAIN' });
     expect(calls).toEqual(['ready']);
+    // Under the permission model a spawn is refused before the kernel sees it (fix round 4, S2).
+    const denied = fakeChild();
+    watchGuard(denied.child, limit, () => void calls.push('ready too'), (why) => void calls.push(why));
+    denied.say({ guard: 'listening', probe: 'ERR_ACCESS_DENIED' });
+    expect(calls).toEqual(['ready', 'ready too']);
   });
 
   it('refuses when the limit cannot be set, or the child could still start a process', async () => {
@@ -96,20 +103,25 @@ describe('viaChoom and the guard\'s oom_score_adj check (fix round 3, S5)', () =
     expect(viaChoom(['--max-old-space-size=512', '--import=file:///g.js'])).toEqual({ execPath: CHOOM, execArgv: ['-n', '1000', '--', process.execPath, '--max-old-space-size=512', '--import=file:///g.js'] });
   });
 
-  it('ends a child started without it before it says ready, and lets one started through choom say ready', async () => {
-    const started = (options: { execPath?: string; execArgv: string[] }): Promise<{ code: number | null; ready: boolean }> =>
-      new Promise((resolve) => {
-        const child = fork(fileURLToPath(new URL('../../test/pdf/children/hang.ts', import.meta.url)), [], { env: {}, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], ...options });
-        let ready = false;
-        child.on('message', (message) => {
-          if ((message as { guard?: string }).guard !== 'ready') return;
-          ready = true;
-          child.kill('SIGKILL');
-        });
-        child.once('exit', (code) => resolve({ code, ready }));
+  const started = (options: { execPath?: string; execArgv: string[] }): Promise<{ code: number | null; ready: boolean }> =>
+    new Promise((resolve) => {
+      const child = fork(fileURLToPath(new URL('../../test/pdf/children/hang.ts', import.meta.url)), [], { env: {}, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], ...options });
+      let ready = false;
+      child.on('message', (message) => {
+        if ((message as { guard?: string }).guard !== 'ready') return;
+        ready = true;
+        child.kill('SIGKILL');
       });
-    // Unless this process's own score is already 1000, which a child would inherit.
-    if (readFileSync('/proc/self/oom_score_adj', 'utf8').trim() !== '1000') expect(await started({ execArgv: [...NODE_FLAGS, guardFlag()] })).toEqual({ code: 1, ready: false });
+      child.once('exit', (code) => resolve({ code, ready }));
+    });
+  // A child inherits its parent's score: on a runner already at 1000 a child started without choom has it too (fix round 4, N6).
+  const INHERITS_1000 = readFileSync('/proc/self/oom_score_adj', 'utf8').trim() === '1000';
+
+  it.skipIf(INHERITS_1000)('ends a child started without choom before it says ready (skipped, and so reported, on a runner whose own oom_score_adj is already 1000)', async () => {
+    expect(await started({ execArgv: [...NODE_FLAGS, guardFlag()] })).toEqual({ code: 1, ready: false });
+  });
+
+  it('lets a child started through choom say ready', async () => {
     expect((await started(viaChoom([...NODE_FLAGS, guardFlag()]))).ready).toBe(true);
   });
 });

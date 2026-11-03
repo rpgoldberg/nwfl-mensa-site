@@ -33,6 +33,8 @@ export interface GateSidecarOptions extends ServeOptions {
   maxRssBytes?: number;
   /** Node flags for each child beside the sidecar's own. */
   nodeFlags?: readonly string[];
+  /** False only for tests (--no-child-permission): the children run without the permission model. */
+  childPermission?: boolean;
 }
 
 /** The gate sidecar: a verdict per connection, each from a capped child of its own. */
@@ -51,6 +53,7 @@ export function startGateSidecar(options: GateSidecarOptions): Promise<Sidecar> 
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         ...(options.maxRssBytes === undefined ? {} : { maxRssBytes: options.maxRssBytes }),
         ...(options.nodeFlags === undefined ? {} : { nodeFlags: options.nodeFlags }),
+        permission: options.childPermission !== false,
       })({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image });
       if (outcome.cause !== undefined) options.log(`a check was unfinished (${outcome.cause})`);
       if (outcome.sha256 !== null && outcome.sha256 !== sha256) return encodeGateReply({ verdict: { pass: false, code: 'mismatch' }, sha256 });
@@ -65,7 +68,7 @@ const GATE_SPEC: SidecarSpec = {
   dir: GATE_SOCKET_DIR,
   file: 'gate.sock',
   options: { gate: { type: 'string' }, 'max-rss-mb': { type: 'string' } },
-  usage: 'gate-sidecar [--socket <path in /run/pdf-gate>] [--timeout-ms <ms>] [--max-rss-mb <MiB>] [--gate <module>] [--socket-dir <dir>] [--shared-pid-namespace]',
+  usage: 'gate-sidecar [--socket <path in /run/pdf-gate>] [--timeout-ms <ms>] [--max-rss-mb <MiB>] [--gate <module>] [--socket-dir <dir>] [--shared-pid-namespace] [--no-child-permission]',
 };
 
 /**
@@ -88,6 +91,7 @@ export async function gateSidecarMain(argv: readonly string[], env: NodeJS.Proce
       path: prepared.socket,
       log,
       onFatal: prepared.onFatal,
+      childPermission: prepared.childPermission,
       ...(prepared.sweep === undefined ? {} : { sweep: prepared.sweep }),
       ...(module === undefined ? {} : { module }),
       ...(prepared.timeoutMs === undefined ? {} : { timeoutMs: prepared.timeoutMs }),

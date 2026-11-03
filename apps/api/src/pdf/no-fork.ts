@@ -15,6 +15,14 @@
 // Measured in a container: after the limit, spawn and fork fail with EAGAIN,
 // and the child's threaded work (zlib, crypto, fs, wasm, GC) still runs on
 // the threads it already has.
+//
+// Fix round 4 (S2, N2): every child also runs under Node's permission model
+// with read access only (CHILD_PERMISSION): it cannot write, create, rename,
+// remove or chmod a file (so it cannot squat or chmod its sidecar's socket),
+// load native code (so it cannot make itself dumpable or lower its
+// oom_score_adj), or start a process, a worker or a WASI instance. Its spawn
+// is then refused before the kernel sees it, with ERR_ACCESS_DENIED, which
+// the parent accepts as it accepts EAGAIN: the limit stays underneath.
 // ============================================================================
 import { type ChildProcess, execFile } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -25,7 +33,11 @@ export const CHILD_GUARD = fileURLToPath(new URL(import.meta.url.endsWith('.ts')
 export const PRLIMIT = '/usr/bin/prlimit';
 /** util-linux choom, by absolute path (in the base image, as prlimit is): it sets a child's oom_score_adj, then runs node. */
 export const CHOOM = '/usr/bin/choom';
-/** Every engine and gate child's oom_score_adj (fix round 3, S5): when a pod's memory runs out, the kernel takes the child first. */
+/**
+ * Every engine and gate child's oom_score_adj (fix round 3, S5): the kernel's first pick when a container's memory
+ * runs out. On k3s with cgroup v2 it kills the whole container then (memory.oom.group, fix round 4): if the kernel
+ * acts, the container restarts and the job is retried under the attempt cap.
+ */
 export const CHILD_OOM_SCORE_ADJ = 1000;
 
 /**
@@ -37,8 +49,10 @@ export const CHILD_OOM_SCORE_ADJ = 1000;
 export function viaChoom(execArgv: readonly string[]): { execPath: string; execArgv: string[] } {
   return { execPath: CHOOM, execArgv: ['-n', String(CHILD_OOM_SCORE_ADJ), '--', process.execPath, ...execArgv] };
 }
-/** What the guard must see from its own spawn once the limit holds. */
-export const BLOCKED = 'EAGAIN';
+/** What the guard may see from its own spawn once the limit holds: the kernel's EAGAIN, or the permission model's refusal. */
+export const BLOCKED: ReadonlySet<string> = new Set(['EAGAIN', 'ERR_ACCESS_DENIED']);
+/** Node's permission model, read access only, for every engine and gate child (fix round 4, S2). */
+export const CHILD_PERMISSION: readonly string[] = ['--permission', '--allow-fs-read=*'];
 
 /** The Node flag that preloads `guard` in a child (it must come after any flag that loads the TS hook). */
 export const guardFlag = (guard: string = CHILD_GUARD): string => `--import=${pathToFileURL(guard).href}`;
@@ -61,7 +75,7 @@ export const isGuardMessage = (message: unknown): message is GuardMessage => typ
 
 /**
  * The parent's side of the guard's handshake on `child`: on "ready" it limits the child; on
- * "listening" it calls `ready` if the child's spawn was refused with EAGAIN, else `refuse`. A limit
+ * "listening" it calls `ready` if the child's spawn was refused (BLOCKED), else `refuse`. A limit
  * that fails calls `refuse` with why. Every other message is the caller's.
  */
 export function watchGuard(child: ChildProcess, limit: LimitForks, ready: () => void, refuse: (why: string) => void): void {
@@ -74,7 +88,7 @@ export function watchGuard(child: ChildProcess, limit: LimitForks, ready: () => 
         (error: Error) => refuse(`its limit on starting processes could not be set (${(error as NodeJS.ErrnoException).code ?? error.message})`),
       );
     } else if (message.guard === 'listening') {
-      if (message.probe === BLOCKED) ready();
+      if (BLOCKED.has(message.probe)) ready();
       else refuse(`it could still start a process (${message.probe})`);
     }
   });

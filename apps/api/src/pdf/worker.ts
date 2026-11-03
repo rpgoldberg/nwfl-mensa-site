@@ -31,12 +31,13 @@ import { UNTRUSTED_PDF_READY } from './untrusted.js';
 export const WORKER_ROLE = 'nwfl_worker';
 
 /**
- * The in-pod gate child's memory cap (fix round 3, S5): well under the worker container's 768Mi limit
- * (fc's manifest), so the watchdog stops a check for memory before the kernel's OOM killer acts in the
- * worker's cgroup (and the guard's oom_score_adj 1000 makes the kernel take the child if it does). The
- * gate sidecar keeps GATE_MAX_RSS_BYTES in its own 1Gi container.
+ * The in-pod gate child's memory cap: 384 MiB in fix round 3 refused ordinary copies of about 4 MiB with
+ * photos, so 640 MiB from fix round 4 (S3). With the worker's ~150 MiB, a check fits the worker container
+ * only at 1Gi (fc decides: fc-manifest-needs.md, the in-pod rows). If the kernel's OOM killer acts anyway,
+ * it kills the whole container (k3s on cgroup v2), which restarts, and the job retries under the attempt
+ * cap. The gate sidecar keeps GATE_MAX_RSS_BYTES in its own 1Gi container.
  */
-export const IN_POD_GATE_MAX_RSS_BYTES = 384 * 1024 * 1024;
+export const IN_POD_GATE_MAX_RSS_BYTES = 640 * 1024 * 1024;
 
 /** The worker's pool settings; throws unless they connect as nwfl_worker. */
 export function workerPoolConfig(env: Env): pg.PoolConfig {

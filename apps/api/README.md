@@ -307,14 +307,22 @@ and took its socket over), most load-bearing first:
    `src/pdf/no-fork.ts`) that starts the threads it needs and says it is
    ready; the sidecar then sets the child's RLIMIT_NPROC to 1 with util-linux
    `prlimit` (in the base image), and the guard tries a spawn on purpose. The
-   copy is sent only when that spawn failed with EAGAIN; a limit that cannot be
-   set, or a spawn that works, refuses the copy. In a capped container spawn,
-   exec and fork then all fail with EAGAIN, and zlib, crypto and the real
+   copy is sent only when that spawn failed; a limit that cannot be set, or a
+   spawn that works, refuses the copy. Every child also runs under Node's
+   permission model with read access only (`--permission --allow-fs-read=*`,
+   fix round 4): it cannot write, create, rename, remove or chmod a file (so
+   it cannot squat on or lock its sidecar's socket), load native code, or
+   start a process, a worker or a WASI instance. Node then refuses the
+   guard's spawn itself (`ERR_ACCESS_DENIED`), which the parent accepts as it
+   accepts the limit's `EAGAIN`; the limit stays beneath it. In a capped
+   container spawn, exec and fork then all fail, and zlib, crypto and the real
    engine and gate still run. pdf.js's optional canvas would need threads
    later, which is one more reason it is not in the image. Each child is also
    started through util-linux `choom` with `oom_score_adj` 1000 (fix round 3),
-   so when a container's memory runs out the kernel ends the child, never the
-   sidecar; the guard ends a child whose score is not 1000. Node cannot set it
+   the kernel's first pick when a container's memory runs out; the guard ends a
+   child whose score is not 1000. On k3s with cgroup v2 the kernel kills the
+   whole container then (fix round 4): if the kernel acts, the container
+   restarts and the job is retried under the attempt cap. Node cannot set it
    itself: the image makes `node` execute-only (0711), which leaves every node
    process non-dumpable, so a child cannot read the worker's environment or
    memory through `/proc` (and its own `/proc/self` files belong to root). Its
@@ -331,15 +339,18 @@ and took its socket over), most load-bearing first:
    place and lock the worker out). A socket replaced, removed or changed
    stops it with exit 1 and no reply, and the job fails closed.
 
-It replaces a socket left behind by a dead sidecar, but exits 1 if anything
-else is at the path. SIGTERM and SIGINT kill the copy in flight, close the
+At start it empties its socket directory (its own emptyDir) and logs each
+entry it removed (fix round 4): a socket a dead sidecar left, and whatever
+else is there, so a directory left at the socket's path cannot keep it from
+starting. SIGTERM and SIGINT kill the copy in flight, close the
 listener, remove the socket and exit 0. Arguments: `--socket <path>`,
 `--timeout-ms <ms>` (per copy, default 300000) and `--engine <module>`
-(another engine child; tests use it, and production accepts it). Two more are
+(another engine child; tests use it, and production accepts it). Three more are
 for tests and refused when `NODE_ENV=production`: `--socket-dir <dir>` (bind
 outside `/run/pdf-engine`) and `--shared-pid-namespace` (run on a test host,
 not as PID 1, clearing nothing, since `kill(-1)` there would reach the host's
-processes). Every hostile, process-starting or memory-heavy test runs the
+processes). The third, `--no-child-permission`, runs the children without the
+permission model, so the hostile tests can reach the layers behind it. Every hostile, process-starting or memory-heavy test runs the
 sidecar as PID 1 of a capped container instead (`test/helpers/contained.ts`).
 
 The worker picks the engine with `PDF_ENGINE_SOCKET`:
@@ -402,7 +413,8 @@ login. A subverted engine's copy is attacker-made bytes, such as a Flate
 stream that inflates to gigabytes, millions of strings or 100,000 pages, so
 every check runs in a child forked for it alone (`src/pdf/gate-isolated.ts`).
 The child has an empty environment, a 512 MiB heap, a watchdog that kills it
-past 768 MiB resident (384 MiB in the worker's own pod, which has less room),
+past 768 MiB resident (640 MiB in the worker's own pod, fix round 4: 384
+refused ordinary photo copies),
 and a 120 s deadline, and its process group is killed after it. A crash, a
 kill or a timeout means the copy is refused, never passed; a child that ends
 because V8 ran out of heap is logged as memory. A child that passes and then
@@ -428,8 +440,8 @@ incremental update), and checks those bytes, read afresh. It replies with a
 verdict naming the copy's sha256 and, on a pass, those bytes with their own
 sha256 (fix round 3, M1). **What is stored is the gate's bytes, never the
 engine's copy:** the worker stores them only on a pass naming the copy's hash,
-once their sha256 is the one named. A pdf-lib reading and a viewer's reading
-of the same bytes cannot then differ, whatever tricks the copy held. Anything
+once their sha256 is the one named: the bytes stored are the bytes the gate
+checked. Anything
 else stores a refused copy with a fixed reason per outcome (withheld text, a
 broken rule, unfinished, other bytes). A missing or dead gate sidecar fails
 the job closed and retryably, under the same cap of 5.

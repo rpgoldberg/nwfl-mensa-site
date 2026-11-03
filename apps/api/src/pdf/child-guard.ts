@@ -3,9 +3,11 @@
 // child (`--import`, no-fork.ts), so it runs before the child's own module
 // and before the child is given anything to parse.
 //
-//   0. Checks its own oom_score_adj is 1000 (fix round 3, S5), so when a
-//      pod's memory runs out the kernel takes this child, never the sidecar
-//      or the worker. Its parent starts it through choom, which sets it
+//   0. Checks its own oom_score_adj is 1000 (fix round 3, S5), so the kernel
+//      picks this child first when a container's memory runs out. On k3s with
+//      cgroup v2 the kernel then kills the whole container (memory.oom.group,
+//      fix round 4): if the kernel acts, the container restarts and the job is
+//      retried under the attempt cap. Its parent starts it through choom, which sets it
 //      (no-fork.ts viaChoom): node cannot, being non-dumpable in the image.
 //      A child without it is ended (exit 1), and its copy is refused.
 //   1. Starts the libuv thread pool (one fs call) and loads node:tls (Node
@@ -18,8 +20,11 @@
 //   2. Says "ready" and waits for "limited" (the parent has set RLIMIT_NPROC
 //      to 1). A parent that goes away ends it.
 //   3. Tries to spawn /bin/true on purpose. With the limit it fails with
-//      EAGAIN; the result goes to the parent once the child's own module
-//      listens for its job, and the parent sends the job only on EAGAIN.
+//      EAGAIN; under the permission model every child runs in (fix round 4,
+//      S2: read access only, CHILD_PERMISSION) Node refuses it first with
+//      ERR_ACCESS_DENIED. The result goes to the parent once the child's own
+//      module listens for its job, and the parent sends the job only on one
+//      of the two (no-fork.ts BLOCKED).
 // Not covered in-process (it runs only in children); the tests drive it
 // through real children (isolated.test.ts, gate-isolated.test.ts, the lift
 // tests).
@@ -42,8 +47,16 @@ await new Promise<void>((resolve) => {
   process.on('message', limited);
   process.send?.({ guard: 'ready' });
 });
-const probe = spawnSync('/bin/true', [], { env: {}, stdio: 'ignore' });
-const code = probe.error === undefined ? `a process started (exit ${probe.status})` : ((probe.error as NodeJS.ErrnoException).code ?? 'unknown');
+const tried = (): string => {
+  try {
+    const probe = spawnSync('/bin/true', [], { env: {}, stdio: 'ignore' });
+    return probe.error === undefined ? `a process started (exit ${probe.status})` : ((probe.error as NodeJS.ErrnoException).code ?? 'unknown');
+  } catch (error) {
+    // Under the permission model (fix round 4, S2) the spawn is refused before the kernel sees it.
+    return (error as NodeJS.ErrnoException).code ?? 'unknown';
+  }
+};
+const code = tried();
 // From here the child's own disconnect handler is the one that ends it.
 process.off('disconnect', gone);
 const tell = (event: string | symbol): void => {

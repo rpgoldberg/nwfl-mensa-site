@@ -3,7 +3,7 @@
 // own; here they are covered. The engines are stand-ins (test/pdf/children).
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -220,23 +220,41 @@ describe('startSidecar', () => {
     expect(await reply).toEqual(Buffer.alloc(0));
   });
 
-  it('takes over a stale socket, and refuses a path that holds anything else', async () => {
+  it('takes over a stale socket, and fails to start where its directory cannot be read', async () => {
     const { socket: stale } = place();
     // A socket file no one serves: a process that listens on it and is killed, so it never unlinks it.
     const listener = spawn(process.execPath, ['-e', "require('net').createServer().listen(process.argv[1], () => process.kill(process.pid, 'SIGKILL'))", stale], { env: {}, stdio: 'ignore' });
     await new Promise((resolve) => listener.once('exit', resolve));
     expect(lstatSync(stale).isSocket()).toBe(true);
-    const again = await startSidecar({ path: stale, module: child('refuse'), log: () => {} });
+    const lines: string[] = [];
+    const again = await startSidecar({ path: stale, module: child('refuse'), log: (line) => void lines.push(line) });
     cleanup.push(() => again.close());
     expect(await socketRedact({ path: stale })(ONE, REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
+    expect(lines).toContain('removed from its socket directory before listening: engine.sock (a socket)');
     const { socket: file } = place();
     writeFileSync(file, 'kept');
-    await expect(startSidecar({ path: file, log: () => {} })).rejects.toThrow('is not a socket');
     await expect(startSidecar({ path: path.join(file, 'below'), log: () => {} })).rejects.toThrow('ENOTDIR');
-    const { socket: link } = place();
-    symlinkSync('/dev/null', link);
-    await expect(startSidecar({ path: link, log: () => {} })).rejects.toThrow('is not a socket');
-    await expect(startSidecar({ path: path.join(place().dir, 'no', 'such', 'engine.sock'), log: () => {} })).rejects.toThrow(/^listen E/);
+    await expect(startSidecar({ path: path.join(place().dir, 'no', 'such', 'engine.sock'), log: () => {} })).rejects.toThrow('ENOENT');
+  });
+
+  it('empties its socket directory at start, whatever a child left there: a directory squatting at its path, a renamed socket, files, links (fix round 4, S2 and N5)', async () => {
+    const { dir, socket } = place();
+    // What a child of the sidecar's uid could leave before the permission model: the socket renamed aside and a directory in its place.
+    const old = spawn(process.execPath, ['-e', "require('net').createServer().listen(process.argv[1], () => process.kill(process.pid, 'SIGKILL'))", path.join(dir, 'old.sock')], { env: {}, stdio: 'ignore' });
+    await new Promise((resolve) => old.once('exit', resolve));
+    mkdirSync(socket);
+    mkdirSync(path.join(socket, 'deeper'));
+    writeFileSync(path.join(socket, 'deeper', 'inside'), 'x');
+    writeFileSync(path.join(dir, '.fill'), Buffer.alloc(4096));
+    symlinkSync('/dev/null', path.join(dir, 'link'));
+    const lines: string[] = [];
+    const sidecar = await startSidecar({ path: socket, module: child('refuse'), log: (line) => void lines.push(line) });
+    cleanup.push(() => sidecar.close());
+    expect(readdirSync(dir)).toEqual(['engine.sock']);
+    expect(lstatSync(socket).isSocket()).toBe(true);
+    expect(existsSync('/dev/null')).toBe(true);
+    expect(lines).toContain('removed from its socket directory before listening: .fill (a file), engine.sock (a directory), link (a link), old.sock (a socket)');
+    expect(await socketRedact({ path: socket })(ONE, REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
   });
 
   it('on close, kills the copies in flight, fails their jobs closed, and removes its socket; twice is harmless', async () => {
@@ -336,17 +354,21 @@ describe('startSidecar: the socket it bound is the one it serves (M1)', () => {
     const fatal: string[] = [];
     const { dir, socket } = place();
     const moved = path.join(dir, 'moved.sock');
-    const ran = path.join(dir, 'child-ran');
+    // The mark stand-in signals this process as soon as it is sent a job.
+    let ran = 0;
+    const heard = (): void => void (ran += 1);
+    process.on('SIGURG', heard);
+    cleanup.push(() => void process.off('SIGURG', heard));
     const sidecar = await startSidecar({ path: socket, module: child('mark'), log: () => {}, onFatal: (reason) => void fatal.push(reason), watchMs: 60_000 });
     cleanup.push(() => sidecar.close());
     // The bound socket moved aside and a decoy in its place: a connection still reaching the bound one is refused.
     renameSync(socket, moved);
     writeFileSync(socket, 'decoy');
-    expect(await exchange(moved, encodeRequest(ONE, { quotes: [ran], redactsAny: true }))).toEqual(Buffer.alloc(0));
+    expect(await exchange(moved, encodeRequest(ONE, { quotes: [String(process.pid)], redactsAny: true }))).toEqual(Buffer.alloc(0));
     expect(fatal).toEqual([`the socket at ${socket} was replaced or removed`]);
-    // The stand-in writes its marker as soon as it runs: no child was forked for the refused connection.
+    // No child was forked for the refused connection.
     await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(existsSync(ran)).toBe(false);
+    expect(ran).toBe(0);
   });
 
   it('closes a connection past MAX_CONNECTIONS at once, and serves again once one is free (S2)', async () => {
@@ -449,13 +471,27 @@ describe('sidecarMain (the entry\'s logic)', () => {
     }
   });
 
-  it('takes --socket-dir and --shared-pid-namespace, for tests, only outside production', async () => {
+  it('takes --socket-dir, --shared-pid-namespace and --no-child-permission, for tests, only outside production', async () => {
     const { dir } = place();
-    for (const argv of [['--socket-dir', dir], SHARED]) {
+    for (const argv of [['--socket-dir', dir], SHARED, ['--no-child-permission']]) {
       const lines: string[] = [];
       expect(await sidecarMain(argv, { NODE_ENV: 'production' }, (line) => void lines.push(line), { system: system() }), argv.join(' ')).toEqual({ code: 2 });
       expect(lines.join('\n'), argv.join(' ')).toContain('is for tests and refused in production');
     }
+  });
+
+  it('runs its children under the permission model, and without it only with --no-child-permission, so a test can reach the layers behind it (fix round 4, S2)', async () => {
+    const tried = async (extra: string[]): Promise<Record<string, string>> => {
+      const { dir, socket } = place();
+      const target = place().dir;
+      const result = await sidecarMain(['--socket-dir', dir, ...SHARED, '--engine', child('try-write'), ...extra], {}, () => {});
+      const { sidecar } = result as { sidecar: Sidecar };
+      cleanup.push(() => sidecar.close());
+      const reply = await socketRedact({ path: socket })(ONE, { quotes: [target], redactsAny: true });
+      return JSON.parse((reply as { reason: string }).reason) as Record<string, string>;
+    };
+    expect((await tried([]))['write']).toBe('ERR_ACCESS_DENIED');
+    expect((await tried(['--no-child-permission']))['write']).toBe('done');
   });
 
   it('serves only as PID 1 of its container, never as root, and in production only with --disable-sigusr1, exit 2 (fix round 2)', async () => {
@@ -528,11 +564,9 @@ describe('sidecarMain (the entry\'s logic)', () => {
 
   it('exits 1 when it cannot listen, and reports a replaced socket to its caller', async () => {
     const { dir, socket } = place();
-    writeFileSync(socket, 'kept');
     const lines: string[] = [];
-    expect(await sidecarMain(['--socket-dir', dir, ...SHARED], {}, (line) => void lines.push(line))).toEqual({ code: 1 });
-    expect(lines.join('\n')).toContain('is not a socket');
-    rmSync(socket);
+    expect(await sidecarMain(['--socket-dir', path.join(dir, 'none'), ...SHARED], {}, (line) => void lines.push(line))).toEqual({ code: 1 });
+    expect(lines.join('\n')).toContain('the engine sidecar cannot listen');
     const fatal: string[] = [];
     const result = await sidecarMain(['--socket-dir', dir, ...SHARED], {}, () => {}, { onFatal: (reason) => void fatal.push(reason) });
     const { sidecar } = result as { sidecar: Sidecar };

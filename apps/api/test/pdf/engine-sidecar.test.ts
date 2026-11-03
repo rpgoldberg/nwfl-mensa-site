@@ -6,8 +6,9 @@
 // (its own uid, no secrets, no shared process namespace) is fc's manifest; README, "The engine
 // sidecar". Every name is made up.
 // ============================================================================
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
+import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   MAX_INPUT_BYTES,
@@ -301,7 +302,7 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
     expect([first.env, second.env]).toEqual([[], []]);
   });
 
-  it('UNTRUSTED-PDF-GATE sidecar: takes over a stale socket, but will not start over a file or a link at its path', async () => {
+  it('UNTRUSTED-PDF-GATE sidecar: takes over a stale socket, and whatever else is at its path (a file, a link, a directory a child left), saying so (fix round 4, S2)', async () => {
     const stale = await sidecar(['--engine', standIn('refuse')]);
     process.kill(stale.spawned.pid, 'SIGKILL');
     await stale.spawned.exited;
@@ -310,15 +311,21 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
     started.push(again);
     await listening(again, stale.socket);
     expect(await socketRedact({ path: stale.socket })(Uint8Array.from([1]), REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
-    for (const make of [(at: string) => writeFileSync(at, 'kept'), (at: string) => symlinkSync('/dev/null', at)]) {
+    const kinds: Array<[string, (at: string) => void]> = [
+      ['a file', (at) => writeFileSync(at, 'kept')],
+      ['a link', (at) => symlinkSync('/dev/null', at)],
+      ['a directory', (at) => mkdirSync(path.join(at, 'deeper'), { recursive: true })],
+    ];
+    for (const [kind, make] of kinds) {
       const place = socketDir();
       dirs.push(place);
       make(place.socket);
-      const refused = spawnSidecar(['--socket', place.socket]);
-      started.push(refused);
-      expect(await refused.exited).toEqual({ code: 1, signal: null });
-      expect(refused.stderr()).toContain('is not a socket');
-      expect(lstatSync(place.socket).isSocket()).toBe(false);
+      const taken = spawnSidecar(['--socket', place.socket, '--engine', standIn('refuse')]);
+      started.push(taken);
+      await listening(taken, place.socket);
+      expect(taken.stderr(), kind).toContain(`removed from its socket directory before listening: engine.sock (${kind})`);
+      expect(lstatSync(place.socket).isSocket(), kind).toBe(true);
+      expect(await socketRedact({ path: place.socket })(Uint8Array.from([1]), REQUEST), kind).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
     }
   });
 });
@@ -341,25 +348,48 @@ describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1, fix round 2
   };
   const own = (text: string): Uint8Array => Uint8Array.from(Buffer.from(text));
 
-  it('UNTRUSTED-PDF-GATE sidecar: a copy\'s child cannot start a process: spawn, exec and fork fail with EAGAIN once its limit is set, and its threaded work still runs', async () => {
-    const { result } = await runContained<{ pid: number; result: { reason: string } }>(probe('no-fork'));
+  it('UNTRUSTED-PDF-GATE sidecar: a copy\'s child cannot start a process: the permission model refuses spawn, exec and fork, and behind it they fail with EAGAIN once its limit is set; its threaded work still runs', async () => {
+    const { result } = await runContained<{ pid: number; result: { reason: string }; denied: { reason: string } }>(probe('no-fork'));
     expect(result.pid).toBe(1);
+    const denied = JSON.parse(result.denied.reason) as Record<string, unknown>;
+    expect(denied).toMatchObject({ spawnSync: 'ERR_ACCESS_DENIED', execFileSync: 'ERR_ACCESS_DENIED', spawn: 'ERR_ACCESS_DENIED', fork: 'ERR_ACCESS_DENIED', zlib: 1024 * 1024, pbkdf2: 32 });
+    // The kernel's limit alone, without the permission model (fix round 4: the layer behind it).
     const seen = JSON.parse(result.result.reason) as Record<string, unknown>;
     expect(seen).toMatchObject({ spawnSync: 'EAGAIN', execFileSync: 'EAGAIN', spawn: 'EAGAIN', fork: 'EAGAIN', zlib: 1024 * 1024, pbkdf2: 32 });
     // No thread was started after the limit either: the pool the guard warmed is all it has.
     expect(seen['threadsAfter']).toBe(seen['threads']);
+    expect(denied['threadsAfter']).toBe(denied['threads']);
   }, 120_000);
 
-  it('UNTRUSTED-PDF-GATE sidecar: a fork-and-exit hop chain starts nothing; the sidecar is still the only process, still serves on the socket it bound, and the next job holds only its own data', async () => {
+  for (const [layer, args, code] of [
+    ['the permission model', [], 'ERR_ACCESS_DENIED'],
+    ['its process limit, the layer behind the permission model', ['--no-child-permission'], 'EAGAIN'],
+  ] as const) {
+    it(`UNTRUSTED-PDF-GATE sidecar: a fork-and-exit hop chain starts nothing (${layer}); the sidecar is still the only process, still serves on the socket it bound, and the next job holds only its own data`, async () => {
+      const sidecar = await engineIn(['--engine', hostile, '--timeout-ms', '5000', ...args]);
+      const inode = lstatSync(sidecar.socket).ino;
+      expect(await socketRedact({ path: sidecar.socket })(own('job 0'), { quotes: ['hop', ENGINE_SOCK], redactsAny: true })).toEqual({ kind: 'refused', reason: `hop: started 0 of 8 (${code})` });
+      // Past the 2 s a chain would take to run out and turn thief.
+      await sleep(2_500);
+      expect(sidecar.processes()).toBe(1);
+      expect(lstatSync(sidecar.socket).ino).toBe(inode);
+      const job = own('job B: these bytes only');
+      expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [] });
+      expect(sidecar.stderr()).not.toContain('stops');
+    }, 120_000);
+  }
+
+  it('UNTRUSTED-PDF-GATE sidecar: a child under the permission model cannot take its socket over at all: the removal is refused, the sidecar stays up on the socket it bound, and the next job holds only its own data (fix round 4, S2)', async () => {
     const sidecar = await engineIn();
     const inode = lstatSync(sidecar.socket).ino;
-    expect(await socketRedact({ path: sidecar.socket })(own('job 0'), { quotes: ['hop', ENGINE_SOCK], redactsAny: true })).toEqual({ kind: 'refused', reason: 'hop: started 0 of 8 (EAGAIN)' });
-    // Past the 2 s a chain would take to run out and turn thief.
-    await sleep(2_500);
-    expect(sidecar.processes()).toBe(1);
+    for (const mode of ['stop-steal', 'steal']) {
+      expect(await socketRedact({ path: sidecar.socket })(own('job 0'), { quotes: [mode, ENGINE_SOCK], redactsAny: true }), mode).toEqual({ kind: 'refused', reason: `${mode}: ERR_ACCESS_DENIED` });
+    }
     expect(lstatSync(sidecar.socket).ino).toBe(inode);
+    expect(existsSync(`${sidecar.socket}.stolen`)).toBe(false);
     const job = own('job B: these bytes only');
     expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [] });
+    expect(sidecar.processes()).toBe(1);
     expect(sidecar.stderr()).not.toContain('stops');
   }, 120_000);
 
@@ -373,8 +403,8 @@ describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1, fix round 2
   }, 120_000);
 
   for (const mode of ['stop-steal', 'steal'] as const) {
-    it(`UNTRUSTED-PDF-GATE sidecar: a child that ${mode === 'stop-steal' ? 'freezes it (SIGSTOP) and ' : ''}takes its socket over gets no reply out: the sidecar exits 1 before any, and later jobs fail closed with no other job's data`, async () => {
-      const sidecar = await engineIn();
+    it(`UNTRUSTED-PDF-GATE sidecar: behind the permission model, a child that ${mode === 'stop-steal' ? 'freezes it (SIGSTOP) and ' : ''}takes its socket over gets no reply out: the sidecar exits 1 before any, and later jobs fail closed with no other job's data`, async () => {
+      const sidecar = await engineIn(['--engine', hostile, '--timeout-ms', '5000', '--no-child-permission']);
       const job0 = socketRedact({ path: sidecar.socket, timeoutMs: 30_000 })(own('job 0'), { quotes: [mode, ENGINE_SOCK], redactsAny: true });
       await expect(job0).rejects.toBeInstanceOf(RetryableEngineError);
       expect((await sidecar.exited).code).toBe(1);
@@ -490,17 +520,19 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: a job whose sidecar is gone, on a re
     dirs.push(place);
     const gatePlace = socketDir('gate.sock');
     dirs.push(gatePlace);
-    // No sidecar at all: every run fails closed until the cap.
+    // No sidecar at all: every run fails closed until the cap, for each file still queued (this one, and any
+    // an earlier test left: under a -t filter the describe's first file is still queued, fix round 4, N4).
+    const queued = Number((await api.pool.query<{ n: string }>(`SELECT count(*) AS n FROM pdf_regen`)).rows[0]!.n);
     const redact = workerRedact({ PDF_ENGINE_SOCKET: place.socket, PDF_GATE_SOCKET: gatePlace.socket }, { socketDirs: [place.dir], gateSocketDirs: [gatePlace.dir] });
     const errors: unknown[] = [];
     const job = startRegenerator({ db: api.worker, redact, leaseSeconds: 1, intervalMs: 50, onError: (error) => void errors.push(error) });
     try {
       const deadline = Date.now() + 30_000;
-      while ((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [stuck])).rowCount !== 0 && Date.now() < deadline) await sleep(100);
+      while ((await api.pool.query(`SELECT 1 FROM pdf_regen`)).rowCount !== 0 && Date.now() < deadline) await sleep(100);
     } finally {
       await job.stop();
     }
-    expect(errors.filter((error) => error instanceof RetryableEngineError)).toHaveLength(MAX_ENGINE_ATTEMPTS - 1);
+    expect(errors.filter((error) => error instanceof RetryableEngineError)).toHaveLength((MAX_ENGINE_ATTEMPTS - 1) * queued);
     const rows = await api.pool.query<{ status: string; reason: string | null; bytes: Buffer | null }>(`SELECT status, reason, bytes FROM pdf_copy WHERE file_id = $1`, [stuck]);
     expect(rows.rows.length).toBeGreaterThan(0);
     for (const row of rows.rows) expect(row).toEqual({ status: 'refused', reason: `the engine could not be reached in ${MAX_ENGINE_ATTEMPTS} attempts`, bytes: null });

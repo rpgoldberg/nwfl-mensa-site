@@ -3,11 +3,11 @@
 // The children here are stand-ins (test/pdf/children), all benign: the ones that start processes run
 // only in a capped container (test/pdf/engine-sidecar.test.ts).
 import { execFileSync, fork } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { GATE_CHILD_SOURCE, NODE_FLAGS } from '../../test/helpers/sidecar.js';
 import { linesPdf } from '../../test/pdf/fixtures.js';
 import { PassThrough } from 'node:stream';
@@ -48,7 +48,30 @@ describe('isolatedRedact', () => {
     expect(text).not.toContain('o'.repeat(64));
   });
 
-  it('sets the child\'s oom_score_adj to 1000 in its guard, so the kernel takes the child first (S5)', async () => {
+  it('drops all of each child\'s stdout: a parent running the engine and the gate children writes none (fix round 4, integrity S1)', async () => {
+    const parent = fork(fileURLToPath(new URL('../../test/pdf/children/stdout-parent.ts', import.meta.url)), [], { env: {}, execArgv: NODE_FLAGS, stdio: ['ignore', 'pipe', 'ignore', 'ipc'] });
+    const out: Buffer[] = [];
+    parent.stdout?.on('data', (chunk: Buffer) => void out.push(chunk));
+    const said = new Promise<unknown>((resolve) => parent.once('message', resolve));
+    await new Promise((resolve) => parent.once('exit', resolve));
+    expect(await said).toEqual({ engine: { kind: 'refused', reason: 'refused by the noisy engine' }, gate: { pass: true } });
+    expect(Buffer.concat(out).length).toBe(0);
+  });
+
+  it('runs its child under Node\'s permission model with read access only: it cannot write, make, rename, remove or chmod a file, load native code or start a process (fix round 4, S2)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-iso-'));
+    try {
+      writeFileSync(path.join(dir, 'kept'), 'x');
+      const result = await isolatedRedact({ module: child('try-write') })(Uint8Array.from([1]), { quotes: [dir], redactsAny: true });
+      const denied = 'ERR_ACCESS_DENIED';
+      expect(JSON.parse((result as { reason: string }).reason)).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied });
+      expect(readdirSync(dir)).toEqual(['kept']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('sets the child\'s oom_score_adj to 1000 in its guard, the kernel\'s first pick if it acts (S5)', async () => {
     expect(await isolatedRedact({ module: child('oom-score') })(Uint8Array.from([1]), REQUEST)).toEqual({ kind: 'refused', reason: '1000' });
   });
 
@@ -94,6 +117,8 @@ describe('isolatedRedact', () => {
       engineExecArgv(['--max-old-space-size=512', '--env-file=/a', '--env-file', '/b', '--env-file-if-exists=/c', '--env-file-if-exists', '/d', '--import', 'x', '--enable-source-maps']),
     ).toEqual(['--max-old-space-size=512', '--import', 'x', '--enable-source-maps']);
     expect(engineExecArgv(['--env-file'])).toEqual([]);
+    // Nor any flag of the permission model a parent may have been started with: the child gets CHILD_PERMISSION alone (fix round 4, S2).
+    expect(engineExecArgv(['--permission', '--allow-fs-write=*', '--allow-fs-write', '/x', '--allow-fs-read', '/', '--allow-child-process', '--allow-worker', '--allow-addons', '--allow-wasi', '--max-old-space-size=1'])).toEqual(['--max-old-space-size=1']);
   });
 
   it('gives the child RLIMIT_NPROC 1 before it is sent the original (no-fork, fix round 2)', async () => {
@@ -103,19 +128,24 @@ describe('isolatedRedact', () => {
   });
 
   it('refuses the copy, before the child is sent the original, when its limit cannot be set or its spawn still works', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-iso-'));
+    // The mark stand-in signals this process as soon as it is sent a job.
+    let ran = 0;
+    const heard = (): void => void (ran += 1);
+    process.on('SIGURG', heard);
     try {
-      const ran = path.join(dir, 'ran');
+      const me = { quotes: [String(process.pid)], redactsAny: true };
       const failing = (): Promise<void> => Promise.reject(Object.assign(new Error('prlimit: not found'), { code: 'ENOENT' }));
-      await expect(isolatedRedact({ module: child('mark'), limit: failing })(Uint8Array.from([1]), { quotes: [ran], redactsAny: true })).rejects.toThrow(
+      await expect(isolatedRedact({ module: child('mark'), limit: failing })(Uint8Array.from([1]), me)).rejects.toThrow(
         'the engine process was refused: its limit on starting processes could not be set (ENOENT)',
       );
-      await expect(isolatedRedact({ module: child('mark'), guard: guard('lies') })(Uint8Array.from([1]), { quotes: [ran], redactsAny: true })).rejects.toThrow(
+      await expect(isolatedRedact({ module: child('mark'), guard: guard('lies') })(Uint8Array.from([1]), me)).rejects.toThrow(
         'the engine process was refused: it could still start a process (a process started (exit 0))',
       );
-      expect(existsSync(ran)).toBe(false);
+      // The control: sent a job, it signals.
+      expect(await isolatedRedact({ module: child('mark') })(Uint8Array.from([1]), me)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
+      await vi.waitFor(() => expect(ran).toBe(1));
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      process.off('SIGURG', heard);
     }
   });
 

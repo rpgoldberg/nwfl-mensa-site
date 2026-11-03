@@ -82,8 +82,9 @@ async function steal(socket: string, stop: boolean): Promise<string> {
   const parent = stateOf(process.ppid);
   try {
     unlinkSync(socket);
-  } catch {
-    // gone already
+  } catch (error) {
+    // Gone already; anything else (the permission model's ERR_ACCESS_DENIED) ends the attack.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   let previous = Buffer.from('LEAK: nothing yet');
   const gate = socket.endsWith('gate.sock');
@@ -117,10 +118,14 @@ async function hitParent(): Promise<string> {
   return `parent ${parent} after SIGSTOP: ${stopped}; after SIGKILL: ${stateOf(parent)}`;
 }
 
-/** Runs one attack; `holds` is whether the child must stay alive (it serves a stolen socket). */
+/** Runs one attack; `holds` is whether the child must stay alive (it serves a stolen socket). One that throws says its code. */
 export async function attack(mode: string, socket: string): Promise<{ said: string; holds: boolean }> {
-  if (mode === 'hop') return { said: await hop(socket), holds: false };
-  if (mode === 'steal' || mode === 'stop-steal') return { said: await steal(socket, mode === 'stop-steal'), holds: true };
-  if (mode === 'hit-parent') return { said: await hitParent(), holds: false };
-  return { said: `no attack named ${mode}`, holds: false };
+  try {
+    if (mode === 'hop') return { said: await hop(socket), holds: false };
+    if (mode === 'steal' || mode === 'stop-steal') return { said: await steal(socket, mode === 'stop-steal'), holds: true };
+    if (mode === 'hit-parent') return { said: await hitParent(), holds: false };
+    return { said: `no attack named ${mode}`, holds: false };
+  } catch (error) {
+    return { said: `${mode}: ${(error as NodeJS.ErrnoException).code ?? (error as Error).message}`, holds: false };
+  }
 }

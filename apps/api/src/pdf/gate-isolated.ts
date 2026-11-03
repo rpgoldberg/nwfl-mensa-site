@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url';
 import { type CheckedCopy, GATE_CODES, type GateCode, type GateVerdict, MAX_OUTPUT_BYTES } from './engine-protocol.js';
 import type { ImageAction } from './images.js';
 import { engineExecArgv, killGroup, relayChildLog } from './isolated.js';
-import { type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
+import { CHILD_PERMISSION, type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
 
 /** The built child next to this module (dist/pdf/gate-child.js). */
 export const GATE_CHILD = fileURLToPath(new URL('./gate-child.js', import.meta.url));
@@ -86,6 +86,8 @@ export interface IsolatedGateOptions {
   rss?: (pid: number) => number;
   /** Where the child's stderr goes, capped (default this process's stderr); a spy, for tests. */
   log?: (chunk: Buffer) => void;
+  /** Whether the child runs under the permission model (default true: CHILD_PERMISSION); false only for tests of the layers behind it. */
+  permission?: boolean;
 }
 
 /** How long a child that ended on its own is given to finish its stderr, where V8 says its heap ran out (N1). */
@@ -94,8 +96,8 @@ const LOG_GRACE_MS = 1_000;
 const unfinished = (cause: UnfinishedCause): GateOutcome => ({ verdict: { pass: false, code: 'unfinished' }, sha256: null, cause });
 
 /** The child's Node flags: the parent's without any --env-file (both spellings), the test's, the heap cap, then the guard. */
-export function gateExecArgv(parent: readonly string[], nodeFlags: readonly string[] = [], guard?: string): string[] {
-  return [...engineExecArgv(parent), ...nodeFlags, `--max-old-space-size=${GATE_HEAP_MB}`, guardFlag(guard)];
+export function gateExecArgv(parent: readonly string[], nodeFlags: readonly string[] = [], guard?: string, permission = true): string[] {
+  return [...(permission ? CHILD_PERMISSION : []), ...engineExecArgv(parent), ...nodeFlags, `--max-old-space-size=${GATE_HEAP_MB}`, guardFlag(guard)];
 }
 
 /** A process's resident memory in bytes, from /proc; 0 once it is gone. */
@@ -143,7 +145,7 @@ export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) 
         resolve(unfinished('signal'));
         return;
       }
-      const execArgv = gateExecArgv(process.execArgv, options.nodeFlags, options.guard);
+      const execArgv = gateExecArgv(process.execArgv, options.nodeFlags, options.guard, options.permission !== false);
       const child = fork(options.module ?? GATE_CHILD, [], { env: {}, ...viaChoom(execArgv), serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'], detached: true });
       const log = relayChildLog(child.stderr, options.log);
       let answer: GateOutcome | undefined;

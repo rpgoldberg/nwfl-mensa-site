@@ -2,7 +2,7 @@
 // its own, with no environment, a capped heap, a memory watchdog, a deadline and no way to start a
 // process. Its children here are stand-ins (test/pdf/gate-children), all benign: the ones that use
 // memory or start processes run only in a capped container (test/pdf/gate-rerun.test.ts).
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +60,16 @@ describe('isolatedGate', () => {
     expect(text).not.toContain('o'.repeat(64));
   });
 
+  it('runs its child under Node\'s permission model with read access only: it cannot write, make, rename, remove or chmod a file, load native code or start a process (fix round 4, S2)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-gi-'));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(path.join(dir, 'kept'), 'x');
+    const outcome = await isolatedGate({ module: child('try-write') })({ ...JOB, quotes: [dir] });
+    const denied = 'ERR_ACCESS_DENIED';
+    expect(JSON.parse(new TextDecoder().decode(outcome.checked?.pdf))).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied });
+    expect(readdirSync(dir)).toEqual(['kept']);
+  });
+
   it('gives no pass for a child that passes and then exits 3, or passes and then is killed (S4)', async () => {
     expect(await isolatedGate({ module: child('passexit') })(JOB)).toEqual(unfinished('crash'));
     expect(await isolatedGate({ module: child('passkill') })(JOB)).toEqual(unfinished('crash'));
@@ -92,24 +102,20 @@ describe('isolatedGate', () => {
   });
 
   it('refuses the check when the child\'s process limit cannot be set or its spawn still works (no-fork), before it is sent the copy', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-gi-'));
-    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
-    const out = path.join(dir, 'report.json');
+    // Sent the copy, the report child would pass: an unfinished outcome means it never was.
     const failing = (): Promise<void> => Promise.reject(Object.assign(new Error('prlimit: not found'), { code: 'ENOENT' }));
-    expect(await isolatedGate({ module: child('report'), limit: failing })({ ...JOB, quotes: [out] })).toEqual(unfinished('no-fork'));
+    expect(await isolatedGate({ module: child('report'), limit: failing })(JOB)).toEqual(unfinished('no-fork'));
     // A guard stand-in that says a process started (it starts none): the parent refuses it too.
-    expect(await isolatedGate({ module: child('report'), guard: guard('lies') })({ ...JOB, quotes: [out] })).toEqual(unfinished('no-fork'));
-    expect(() => readFileSync(out)).toThrow();
+    expect(await isolatedGate({ module: child('report'), guard: guard('lies') })(JOB)).toEqual(unfinished('no-fork'));
   });
 
-  it('gives the child no environment, no --env-file, and a heap capped at 512 MiB', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-gi-'));
-    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
-    const out = path.join(dir, 'report.json');
-    expect((await isolatedGate({ module: child('report') })({ ...JOB, quotes: [out] })).verdict).toEqual({ pass: true });
-    const report = JSON.parse(readFileSync(out, 'utf8')) as { env: string[]; execArgv: string[]; heapLimitMb: number; pid: number; limits: string; oomScoreAdj: string };
+  it('gives the child no environment, no --env-file, read access only, and a heap capped at 512 MiB', async () => {
+    const outcome = await isolatedGate({ module: child('report') })(JOB);
+    expect(outcome.verdict).toEqual({ pass: true });
+    const report = JSON.parse(new TextDecoder().decode(outcome.checked?.pdf)) as { env: string[]; execArgv: string[]; heapLimitMb: number; pid: number; limits: string; oomScoreAdj: string };
+    expect(report.execArgv.slice(0, 2)).toEqual(['--permission', '--allow-fs-read=*']);
     expect(report.env).toEqual([]);
-    // The kernel's OOM killer takes the child first, never the sidecar or the worker (S5).
+    // The kernel's first pick (S5). If it acts, the whole container restarts and the job retries under the attempt cap (fix round 4).
     expect(report.oomScoreAdj).toBe('1000');
     expect(report.execArgv).toContain('--max-old-space-size=512');
     expect(report.execArgv.at(-1)).toBe(guardFlag());
@@ -123,8 +129,9 @@ describe('isolatedGate', () => {
 
   it('drops every --env-file flag of its parent, both spellings, keeps the rest, caps the heap, and preloads the guard last (S4)', () => {
     const parent = ['--env-file=/srv/worker.env', '--conditions', 'node', '--env-file', '/srv/other.env', '--env-file-if-exists=/srv/maybe.env', '--env-file-if-exists', '/srv/maybe2.env', '--max-semi-space-size=16'];
-    expect(gateExecArgv(parent, ['--import', '/hook.mjs'], '/guard.js')).toEqual(['--conditions', 'node', '--max-semi-space-size=16', '--import', '/hook.mjs', '--max-old-space-size=512', '--import=file:///guard.js']);
-    expect(gateExecArgv([])).toEqual(['--max-old-space-size=512', guardFlag()]);
+    expect(gateExecArgv(parent, ['--import', '/hook.mjs'], '/guard.js')).toEqual(['--permission', '--allow-fs-read=*', '--conditions', 'node', '--max-semi-space-size=16', '--import', '/hook.mjs', '--max-old-space-size=512', '--import=file:///guard.js']);
+    expect(gateExecArgv([])).toEqual(['--permission', '--allow-fs-read=*', '--max-old-space-size=512', guardFlag()]);
+    expect(gateExecArgv([], [], undefined, false)).toEqual(['--max-old-space-size=512', guardFlag()]);
   });
 
   it('kills the child when its signal aborts, and forks none for one already aborted', async () => {

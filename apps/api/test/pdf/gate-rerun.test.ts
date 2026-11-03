@@ -314,8 +314,13 @@ describe('UNTRUSTED-PDF-GATE: hostile copies and hostile checks, with the gate s
   const COPY = Uint8Array.from(Buffer.from('a copy'));
   const check = (gate: ContainedSidecar, quotes: string[], copy: Uint8Array = COPY, timeoutMs = 30_000) =>
     socketGate({ path: gate.socket, timeoutMs })({ copy, original: Uint8Array.from([9]), quotes, image: 'blur', sha256: sha256Hex(copy) });
-  // The hostile stand-in passes with the copy as the bytes it checked (M1).
+  // The hostile stand-in passes with the copy as the bytes it checked (M1); after an attack, with what the attack managed.
   const PASS = { verdict: { pass: true }, sha256: sha256Hex(COPY), checked: { pdf: new Uint8Array(COPY), sha256: sha256Hex(COPY) } };
+  const said = (outcome: { verdict: unknown; sha256: string | null; checked?: { pdf: Uint8Array } }): string => {
+    expect(outcome.verdict).toEqual({ pass: true });
+    expect(outcome.sha256).toBe(sha256Hex(COPY));
+    return new TextDecoder().decode(outcome.checked?.pdf);
+  };
   type InPod = { result: unknown; ms: number; cause: string | null; causeMs: number };
 
   it('UNTRUSTED-PDF-GATE gate re-run: refuses a Flate bomb (a 1 MiB copy inflating to 1 GiB) at the gate\'s memory cap, for memory, on both transports, and the worker goes on', async () => {
@@ -375,27 +380,41 @@ describe('UNTRUSTED-PDF-GATE: hostile copies and hostile checks, with the gate s
     await vi.waitFor(() => expect(gate.stderr()).toContain('a check was unfinished (memory)'), { timeout: 10_000 });
   }, 120_000);
 
-  it('UNTRUSTED-PDF-GATE gate re-run: a check\'s fork-and-exit hop chain starts nothing; the gate sidecar is still the only process and serves the next check', async () => {
-    const gate = await gateIn(['--gate', hostile, '--timeout-ms', '5000']);
-    const inode = lstatSync(gate.socket).ino;
-    expect(await check(gate, ['hop', GATE_SOCK])).toEqual(PASS);
-    expect(readFileSync(`${gate.socket}.said`, 'utf8')).toBe('hop: started 0 of 8 (EAGAIN)');
-    await sleep(2_500);
-    expect(gate.processes()).toBe(1);
-    expect(lstatSync(gate.socket).ino).toBe(inode);
-    expect(await check(gate, ['echo'])).toEqual(PASS);
-  }, 120_000);
+  for (const [layer, args, code] of [
+    ['the permission model', [], 'ERR_ACCESS_DENIED'],
+    ['its process limit, the layer behind the permission model', ['--no-child-permission'], 'EAGAIN'],
+  ] as const) {
+    it(`UNTRUSTED-PDF-GATE gate re-run: a check's fork-and-exit hop chain starts nothing (${layer}); the gate sidecar is still the only process and serves the next check`, async () => {
+      const gate = await gateIn(['--gate', hostile, '--timeout-ms', '5000', ...args]);
+      const inode = lstatSync(gate.socket).ino;
+      expect(said(await check(gate, ['hop', GATE_SOCK]))).toBe(`hop: started 0 of 8 (${code})`);
+      await sleep(2_500);
+      expect(gate.processes()).toBe(1);
+      expect(lstatSync(gate.socket).ino).toBe(inode);
+      expect(await check(gate, ['echo'])).toEqual(PASS);
+    }, 120_000);
+  }
 
   it('UNTRUSTED-PDF-GATE gate re-run: a check that sends its parent SIGSTOP, then SIGKILL, changes nothing: PID 1 neither stops nor dies, and serves the next check', async () => {
     const gate = await gateIn(['--gate', hostile, '--timeout-ms', '5000']);
-    expect(await check(gate, ['hit-parent', GATE_SOCK])).toEqual(PASS);
-    expect(readFileSync(`${gate.socket}.said`, 'utf8')).toMatch(/^parent 1 after SIGSTOP: [RS]; after SIGKILL: [RS]$/);
+    expect(said(await check(gate, ['hit-parent', GATE_SOCK]))).toMatch(/^parent 1 after SIGSTOP: [RS]; after SIGKILL: [RS]$/);
     expect(await check(gate, ['echo'])).toEqual(PASS);
   }, 120_000);
 
+  it('UNTRUSTED-PDF-GATE gate re-run: a check under the permission model cannot take its socket over at all: the removal is refused, the sidecar stays up on the socket it bound, and serves the next check (fix round 4, S2)', async () => {
+    const gate = await gateIn(['--gate', hostile, '--timeout-ms', '5000']);
+    const inode = lstatSync(gate.socket).ino;
+    for (const mode of ['stop-steal', 'steal']) expect(said(await check(gate, [mode, GATE_SOCK])), mode).toBe(`${mode}: ERR_ACCESS_DENIED`);
+    expect(lstatSync(gate.socket).ino).toBe(inode);
+    expect(existsSync(`${gate.socket}.stolen`)).toBe(false);
+    expect(await check(gate, ['echo'])).toEqual(PASS);
+    expect(gate.processes()).toBe(1);
+    expect(gate.stderr()).not.toContain('stops');
+  }, 120_000);
+
   for (const mode of ['stop-steal', 'steal'] as const) {
-    it(`UNTRUSTED-PDF-GATE gate re-run: a check that ${mode === 'stop-steal' ? 'freezes the gate sidecar (SIGSTOP) and ' : ''}takes its socket over gets no verdict out: the sidecar exits 1 before any, and later checks fail closed (S1)`, async () => {
-      const gate = await gateIn(['--gate', hostile, '--timeout-ms', '5000']);
+    it(`UNTRUSTED-PDF-GATE gate re-run: behind the permission model, a check that ${mode === 'stop-steal' ? 'freezes the gate sidecar (SIGSTOP) and ' : ''}takes its socket over gets no verdict out: the sidecar exits 1 before any, and later checks fail closed (S1)`, async () => {
+      const gate = await gateIn(['--gate', hostile, '--timeout-ms', '5000', '--no-child-permission']);
       await expect(check(gate, [mode, GATE_SOCK])).rejects.toBeInstanceOf(RetryableEngineError);
       expect((await gate.exited).code).toBe(1);
       expect(gate.stderr()).toContain(`the socket at ${GATE_SOCK} was replaced or removed`);

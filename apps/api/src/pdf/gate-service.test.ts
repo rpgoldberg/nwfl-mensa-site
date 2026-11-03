@@ -1,7 +1,7 @@
 // The gate sidecar's own code, in this process (UNTRUSTED-PDF-GATE M2): the output gate as a second
 // sidecar, its own container and uid, one capped child per check. The lift test
 // (test/pdf/gate-rerun.test.ts) runs the real entry as a process. Children here are stand-ins.
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -61,14 +61,12 @@ describe('startGateSidecar', () => {
   });
 
   it('refuses a copy whose bytes do not match the sha256 the worker sent, before any child reads it', async () => {
-    const dir = place().dir;
-    const report = path.join(dir, 'report.json');
+    // A child sent either would pass (the report stand-in): mismatch means none was.
     const { socket } = await started({ module: child('report') });
-    const frame = encodeGateRequest({ ...JOB, quotes: [report], sha256: sha256Hex(Buffer.from('another copy')), originalSha256: sha256Hex(ORIGINAL) });
+    const frame = encodeGateRequest({ ...JOB, sha256: sha256Hex(Buffer.from('another copy')), originalSha256: sha256Hex(ORIGINAL) });
     expect(await ask(socket, frame)).toEqual({ verdict: { pass: false, code: 'mismatch' }, sha256: SHA });
-    const original = encodeGateRequest({ ...JOB, quotes: [report], originalSha256: sha256Hex(Buffer.from('another original')) });
+    const original = encodeGateRequest({ ...JOB, originalSha256: sha256Hex(Buffer.from('another original')) });
     expect(await ask(socket, original)).toEqual({ verdict: { pass: false, code: 'mismatch' }, sha256: SHA });
-    expect(existsSync(report)).toBe(false);
   });
 
   it('refuses a check whose child names other bytes than it was sent', async () => {
@@ -176,6 +174,23 @@ describe('gateSidecarMain (the gate entry\'s logic)', () => {
     writeFileSync(path.join(doubted.procRoot, '9', 'status'), 'Name:\tsh\nState:\tZ (zombie)\nUid:\t10004\t10004\t10004\t10004\n');
     await expect(socketGate({ path: stuck.socket })(JOB)).rejects.toBeInstanceOf(RetryableEngineError);
     expect(fatal.join('\n')).toContain('its PID namespace is not clear before a reply: an orphaned process');
+  });
+
+  it('runs its children under the permission model, and without it only with --no-child-permission, for tests (fix round 4, S2)', async () => {
+    const tried = async (extra: string[]): Promise<Record<string, string>> => {
+      const { dir, socket } = place();
+      const target = place().dir;
+      const result = await gateSidecarMain(['--socket-dir', dir, ...SHARED, '--gate', child('try-write'), ...extra], {}, () => {});
+      const { sidecar } = result as { sidecar: Sidecar };
+      cleanup.push(() => sidecar.close());
+      const outcome = await socketGate({ path: socket })({ ...JOB, quotes: [target] });
+      return JSON.parse(new TextDecoder().decode(outcome.checked?.pdf)) as Record<string, string>;
+    };
+    expect((await tried([]))['write']).toBe('ERR_ACCESS_DENIED');
+    expect((await tried(['--no-child-permission']))['write']).toBe('done');
+    const lines: string[] = [];
+    expect(await gateSidecarMain(['--no-child-permission'], { NODE_ENV: 'production' }, (line) => void lines.push(line))).toEqual({ code: 2 });
+    expect(lines.join('\n')).toContain('--no-child-permission is for tests and refused in production');
   });
 
   it('exits 1 when it cannot listen', async () => {

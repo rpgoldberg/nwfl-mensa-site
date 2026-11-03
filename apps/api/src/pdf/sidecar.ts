@@ -37,7 +37,7 @@
 //   - One job at a time: the worker asks one by one, and a second PDFium heap
 //     would only double the peak.
 // ============================================================================
-import { type Stats, chmodSync, lstatSync, unlinkSync } from 'node:fs';
+import { type Stats, chmodSync, lstatSync, readdirSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -125,17 +125,24 @@ export interface Protocol<M> {
   run(message: M, signal: AbortSignal): Promise<Buffer>;
 }
 
-/** Removes a socket left by a sidecar that died; refuses anything else at the path. */
-function clearStale(at: string): void {
-  let stat;
-  try {
-    stat = lstatSync(at);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw error;
+const kindOf = (stat: Stats): string => (stat.isSocket() ? 'a socket' : stat.isDirectory() ? 'a directory' : stat.isSymbolicLink() ? 'a link' : 'a file');
+
+/**
+ * Empties the socket's directory before it binds (fix round 4, S2 and N5), and says what it removed: a
+ * socket a dead sidecar left, and whatever a child left (a directory squatting at the socket's path made
+ * every restart exit 1, for the pod's life). The directory is the sidecar's own emptyDir. Throws when it
+ * cannot be read or emptied, and the sidecar does not start.
+ */
+function clearDirectory(at: string, log: (line: string) => void): void {
+  const dir = path.dirname(at);
+  const removed: string[] = [];
+  for (const name of readdirSync(dir).sort()) {
+    const entry = path.join(dir, name);
+    const kind = kindOf(lstatSync(entry));
+    rmSync(entry, { recursive: true, force: true });
+    removed.push(`${name} (${kind})`);
   }
-  if (!stat.isSocket()) throw new Error(`${at} is not a socket; the sidecar will not replace it`);
-  unlinkSync(at);
+  if (removed.length > 0) log(`removed from its socket directory before listening: ${removed.join(', ')}`);
 }
 
 /** Binds with a umask that leaves the socket 0600 until it is opened to the group (bind is synchronous in listen). */
@@ -154,7 +161,6 @@ function listen(server: net.Server, at: string): Promise<void> {
   });
 }
 
-/** Serves one request frame per connection on a unix socket at `options.path`, one job at a time. */
 /** The socket as bound: its device and inode, and its mode, owner and group. */
 export interface BoundSocket {
   dev: number;
@@ -175,6 +181,7 @@ export function socketDrift(bound: BoundSocket, now: Pick<Stats, 'dev' | 'ino' |
   return null;
 }
 
+/** Serves one request frame per connection on a unix socket at `options.path`, one job at a time. */
 export async function serveFrames<M>(options: ServeOptions, protocol: Protocol<M>): Promise<Sidecar> {
   const { log } = options;
   const connections = new Set<net.Socket>();
@@ -283,7 +290,7 @@ export async function serveFrames<M>(options: ServeOptions, protocol: Protocol<M
     }
   }
 
-  clearStale(options.path);
+  clearDirectory(options.path, log);
   // After this, a socket error has no listener: the sidecar crashes, the kubelet restarts it, and the
   // worker's jobs fail closed meanwhile.
   await listen(server, options.path);
@@ -311,11 +318,13 @@ export interface SidecarOptions extends ServeOptions {
   module?: string;
   /** Per copy. */
   timeoutMs?: number;
+  /** False only for tests (--no-child-permission): the children run without the permission model. */
+  childPermission?: boolean;
 }
 
 /** The engine sidecar: a copy per connection, each made in a child of its own (isolated.ts). */
 export function startSidecar(options: SidecarOptions): Promise<Sidecar> {
-  const engine = { module: options.module ?? ENGINE_CHILD, timeoutMs: options.timeoutMs ?? ENGINE_TIMEOUT_MS };
+  const engine = { module: options.module ?? ENGINE_CHILD, timeoutMs: options.timeoutMs ?? ENGINE_TIMEOUT_MS, permission: options.childPermission !== false };
   /** The copy, or why there is none; never rejects (isolatedRedact rejects with an Error only). */
   async function make(message: EngineMessage, signal: AbortSignal): Promise<SidecarReply> {
     try {
@@ -384,6 +393,8 @@ export interface Prepared {
   socket: string;
   values: Record<string, string | boolean | undefined>;
   timeoutMs: number | undefined;
+  /** False with --no-child-permission (tests only, refused in production). */
+  childPermission: boolean;
   sweep: (() => Promise<string | null>) | undefined;
   listening: string;
   onFatal: (reason: string) => void;
@@ -417,7 +428,7 @@ export function prepareSidecar(spec: SidecarSpec, argv: readonly string[], env: 
   try {
     ({ values } = parseArgs({
       args: [...argv],
-      options: { socket: { type: 'string' }, 'timeout-ms': { type: 'string' }, 'socket-dir': { type: 'string' }, 'shared-pid-namespace': { type: 'boolean' }, ...spec.options },
+      options: { socket: { type: 'string' }, 'timeout-ms': { type: 'string' }, 'socket-dir': { type: 'string' }, 'shared-pid-namespace': { type: 'boolean' }, 'no-child-permission': { type: 'boolean' }, ...spec.options },
       strict: true,
       allowPositionals: false,
     }));
@@ -425,7 +436,7 @@ export function prepareSidecar(spec: SidecarSpec, argv: readonly string[], env: 
     log(`usage: ${spec.usage}: ${(error as Error).message}`);
     return { code: 2 };
   }
-  for (const flag of ['socket-dir', 'shared-pid-namespace']) {
+  for (const flag of ['socket-dir', 'shared-pid-namespace', 'no-child-permission']) {
     if (values[flag] !== undefined && env['NODE_ENV'] === 'production') {
       log(`--${flag} is for tests and refused in production`);
       return { code: 2 };
@@ -461,6 +472,7 @@ export function prepareSidecar(spec: SidecarSpec, argv: readonly string[], env: 
     socket,
     values,
     timeoutMs,
+    childPermission: values['no-child-permission'] !== true,
     sweep,
     listening: `${spec.what} sidecar listening (${sweep === undefined ? 'not PID 1: shared PID namespace, for tests; nothing is cleared' : 'PID 1: clearing its PID namespace before every reply'})`,
     onFatal: options.onFatal ?? ((reason) => log(`${name} stops: ${reason}`)),
@@ -486,7 +498,7 @@ const ENGINE_SPEC: SidecarSpec = {
   dir: ENGINE_SOCKET_DIR,
   file: 'engine.sock',
   options: { engine: { type: 'string' } },
-  usage: 'engine-sidecar [--socket <path in /run/pdf-engine>] [--timeout-ms <ms>] [--engine <module>] [--socket-dir <dir>] [--shared-pid-namespace]',
+  usage: 'engine-sidecar [--socket <path in /run/pdf-engine>] [--timeout-ms <ms>] [--engine <module>] [--socket-dir <dir>] [--shared-pid-namespace] [--no-child-permission]',
 };
 
 /**
@@ -503,6 +515,7 @@ export async function sidecarMain(argv: readonly string[], env: NodeJS.ProcessEn
       path: prepared.socket,
       log,
       onFatal: prepared.onFatal,
+      childPermission: prepared.childPermission,
       ...(prepared.sweep === undefined ? {} : { sweep: prepared.sweep }),
       ...(module === undefined ? {} : { module }),
       ...(prepared.timeoutMs === undefined ? {} : { timeoutMs: prepared.timeoutMs }),
