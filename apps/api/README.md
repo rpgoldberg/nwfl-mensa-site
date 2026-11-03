@@ -256,8 +256,8 @@ each holding a real, unskipped test under its pinned title. Setting it to true
 without them fails. The request snapshot and the catalog are never lifted.
 
 Both pieces now exist (below) and both tests pass, but `UNTRUSTED_PDF_READY`
-stays false until fc's manifest runs the sidecar as its own uid and
-validate-nwfl checks it.
+stays false until fc's manifest runs both sidecars as their own uids and
+validate-nwfl checks them.
 
 ### The engine sidecar
 
@@ -267,57 +267,134 @@ the worker, from the same image: `node dist/pdf/engine-sidecar.js`
 `/run/pdf-engine/engine.sock`, mode 0660, and still forks one child per copy
 with an empty environment. It opens no other socket and makes no connection.
 
-It will not start (exit 2) if its environment holds `DATABASE_URL`, `PG*`,
-`SESSION*`, or any name containing `TOKEN`, `SECRET` or `KEY`. It names the
-variables, never their values. It replaces a socket left behind by a dead
-sidecar, but exits 1 if anything else is at the path. SIGTERM kills the copy
-in flight and removes the socket. Arguments: `--socket <absolute path>`,
-`--timeout-ms <ms>` (per copy, default 300000), and `--engine <module>`, which
-is for tests only.
+It will not start (exit 2) when:
+
+- its environment holds any name off its allow-list (`ALLOWED_ENV`: what the
+  image and the runtime set, the locale, the two socket paths, and the
+  `KUBERNETES_*` address the kubelet always injects). It names the variables,
+  never their values;
+- `--socket` is not directly in `/run/pdf-engine`, or holds anything but
+  letters, digits and `. _ - /`;
+- it is PID 1, or its PID namespace is not its own (its parent is not PID 1,
+  or a process of another uid is in it).
+
+After every copy it SIGKILLs every process in its PID namespace except PID 1
+(dumb-init) and itself, so nothing a copy started can outlive it, even a
+grandchild that left its session (`src/pdf/pidns.ts`). Node cannot reap
+orphans, so the sidecar refuses to be PID 1 rather than keep a subreaper of
+its own: the container must use `args`, not `command`. The sidecar also checks
+its socket's inode at each connection, after each copy and every second. If
+the socket was replaced or removed, it stops with exit 1 and answers nothing
+more, and the job fails closed.
+
+It replaces a socket left behind by a dead sidecar, but exits 1 if anything
+else is at the path. SIGTERM kills the copy in flight and removes the socket.
+Arguments: `--socket <path>`, `--timeout-ms <ms>` (per copy, default 300000),
+and, for tests only, `--engine <module>`, `--socket-dir <dir>` and
+`--shared-pid-namespace`; the last two are refused when `NODE_ENV=production`,
+which the image sets.
 
 The worker picks the engine with `PDF_ENGINE_SOCKET`:
 
 - unset: the in-pod child, as before;
 - an absolute path directly in `/run/pdf-engine`: the sidecar only, never
-  the child;
-- anything else: the worker refuses to start.
+  the child, and `PDF_GATE_SOCKET` must be set too;
+- anything else, including a trailing newline: the worker refuses to start.
 
 Each copy uses one connection carrying one length-prefixed frame each way
 (`src/pdf/engine-protocol.ts`). The request carries the original (at most
 10 MiB) and the typed request (header at most 1 MiB). The reply carries the
 copy (at most 20 MiB) and a small typed result. Neither side sends an
 environment, a path or a credential. Each side stops reading at a declared
-size over its cap. The sidecar gives a request 30 s to arrive and drops a
-malformed one without a reply.
+size over its cap. The sidecar drops a connection whose first bytes take more
+than 5 s, or whose request takes more than 30 s, without a reply.
 
 A missing socket, a dead sidecar, a malformed reply, or no reply within
 330 s fails the job closed with `RetryableEngineError`. No copy is stored,
 the file stays queued, and the next run takes it once the lease (600 s)
-ends. If the engine itself fails on the file inside the sidecar (its child
-crashed or ran past 300 s), the copy is refused, as it is in the pod.
-
-The worker re-runs the output gate (`src/pdf/gate.ts`) on every copy over
-either transport before `pdf_copy_put` (`src/pdf/rerun.ts`). A hit stores a
-refused copy with a fixed reason that quotes nothing. This loads pdf.js and
-pdf-lib in the worker too.
+ends. After 5 such failures for one file (`MAX_ENGINE_ATTEMPTS`) the copies
+are stored refused, with the fixed reason "the engine could not be reached
+in 5 attempts". The count is kept in
+the worker's memory, since no migration was allowed, so a restart starts it
+again. If the engine itself fails on the file inside the sidecar (its child
+crashed or ran past 300 s), or the request cannot be sent at all (over a
+cap), the copy is refused, as it is in the pod.
 
 What fc's manifest gives the sidecar container:
 
-- its own `runAsUser` and `runAsGroup`, different from the worker's;
+- its own `runAsUser` and `runAsGroup` (10002), different from the worker's;
 - `runAsNonRoot: true`, `readOnlyRootFilesystem: true`,
   `allowPrivilegeEscalation: false`, capabilities `drop: [ALL]`;
 - no env from Secrets (no `envFrom` secret, no `secretKeyRef`), no secret
   volume, and no service account token (`automountServiceAccountToken:
   false` on the pod);
 - `shareProcessNamespace: false` and `enableServiceLinks: false` on the pod;
-- an emptyDir mounted at `/run/pdf-engine` in the worker and the sidecar
-  only, with the pod's `fsGroup` as the socket's shared group;
+- an emptyDir mounted at `/run/pdf-engine` in the worker and this sidecar
+  only, with the pod's `fsGroup` (10003) as the socket's shared group;
 - no ports, and no egress: the pod's NetworkPolicy allows only what the
   worker needs, and the sidecar's uid gets no network;
 - CPU and memory requests and limits;
 - `args: ["node", "dist/pdf/engine-sidecar.js"]`, not `command`, so
   dumb-init stays PID 1;
 - in the worker, `PDF_ENGINE_SOCKET=/run/pdf-engine/engine.sock`.
+
+### The gate sidecar
+
+The output gate is re-run on every copy before `pdf_copy_put`
+(`src/pdf/rerun.ts`), and never in the worker, which holds the database
+login. A subverted engine's copy is attacker-made bytes, such as a Flate
+stream that inflates to gigabytes, millions of strings or 100,000 pages, so
+every check runs in a child forked for it alone (`src/pdf/gate-isolated.ts`).
+The child has an empty environment, a 512 MiB heap, a watchdog that kills it
+past 768 MiB resident, and a 120 s deadline, and its process group is killed
+after it. A crash, a kill or a timeout means the copy is refused, never
+passed.
+
+With `PDF_GATE_SOCKET`, that child runs in a sidecar of its own:
+`node dist/pdf/gate-sidecar.js` (`src/pdf/gate-service.ts`), uid 10004, its
+socket `/run/pdf-gate/gate.sock` in an emptyDir only it and the worker mount,
+mode 0660, group 10003. It shares the engine sidecar's code: the env
+allow-list, the directory rule (it will not bind in `/run/pdf-engine`), the
+framing, caps and deadlines, the socket watch, and the sweep after every
+check. Extra arguments: `--max-rss-mb <MiB>` (each child's memory cap) and,
+for tests, `--gate <module>`.
+
+The worker sends the copy and its original with their sha256s, the quotes and
+the picture policy. The gate refuses bytes that do not match their hash
+before any child reads them, and replies with a verdict and the sha256 of the
+copy it checked. The worker stores the copy only on a pass naming that very
+hash; anything else stores a refused copy with a fixed reason per outcome
+(withheld text, a broken rule, unfinished, other bytes). A missing or dead
+gate sidecar fails the job closed and retryably, under the same cap of 5.
+
+Without either socket (the in-pod mode) the worker forks the same capped
+child itself. This is the pre-sidecar mode only: the child is still the
+worker's uid, beside its login. With `PDF_ENGINE_SOCKET` set,
+`PDF_GATE_SOCKET` is required, in another directory, or the worker refuses to
+start.
+
+Besides withheld text (`src/pdf/gate.ts`), the gate re-checks the
+sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
+
+- no JavaScript, OpenAction, additional actions, Launch, URI or any other
+  action, no embedded or attached file, no XFA, no AcroForm, no annotation
+  (an empty annotation list is let through), no encryption;
+- under "blur" or "hide", each picture is exactly what the policy draws
+  (the 1 x 1 grey fill, or under "blur" a Flate grey or RGB picture at most
+  24 pixels a side), with no inline picture in any content stream;
+- no run of an original picture's samples is kept, and no picture has the
+  very samples of an original that blurring would change.
+
+Its limits, as for any text gate: text written so it does not read as text
+(reversed, encoded, drawn as curves or as a picture); a picture rebuilt from
+many small tiles or from vector shapes; a tiny inline picture of the
+original (under 64 bytes) kept as a picture object; and a picture of a single
+grey, which is its own blur and so may come through unchanged.
+
+What fc's manifest gives the gate container: what the engine's gets, with
+uid and gid 10004, its own emptyDir at `/run/pdf-gate` (never mounted in the
+engine), limits of 1 CPU and 1Gi, `args: ["node", "dist/pdf/gate-sidecar.js"]`,
+and in the worker `PDF_GATE_SOCKET=/run/pdf-gate/gate.sock`.
 
 ### The api-gate check
 

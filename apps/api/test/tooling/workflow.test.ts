@@ -56,6 +56,23 @@ describe('api workflow', () => {
     }
   });
 
+  it('lets the tests make user and PID namespaces before it tests, so the sidecars\' sweep runs for real (UNTRUSTED-PDF-GATE M1)', () => {
+    const test = job('test');
+    const allow = test.indexOf('kernel.apparmor_restrict_unprivileged_userns=0');
+    expect(allow).toBeGreaterThan(-1);
+    expect(test).toContain('unshare --user --map-current-user --pid --fork --mount-proc --kill-child true');
+    expect(allow).toBeLessThan(test.indexOf('run: npm run test:coverage'));
+  });
+
+  it('runs both PDF sidecars, the engine and the gate, from the image (UNTRUSTED-PDF-GATE)', () => {
+    const image = job('image');
+    expect(image).toContain('run: sh scripts/smoke-sidecar-image.sh nwfl-mensa-api:ci');
+    const smoke = readFileSync(path.join(REPO, 'scripts', 'smoke-sidecar-image.sh'), 'utf8');
+    for (const needed of ['dist/pdf/engine-sidecar.js', 'dist/pdf/gate-sidecar.js', '--user 10002:10002', '--user 10004:10004', 'PDF_GATE_SOCKET', '--entrypoint node', 'DB_PASSWORD', '--read-only']) {
+      expect(smoke, needed).toContain(needed);
+    }
+  });
+
   it('checks the protos against the base commit, with the whole history at hand', () => {
     const proto = job('proto');
     expect(proto).toMatch(/fetch-depth: 0/);

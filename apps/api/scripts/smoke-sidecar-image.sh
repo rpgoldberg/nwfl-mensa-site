@@ -1,110 +1,163 @@
 #!/bin/sh
 # ============================================================================
-# smoke-sidecar-image.sh - run the PDF engine sidecar from the production image
-# the way the worker pod does (UNTRUSTED-PDF-GATE; README, "The engine sidecar").
+# smoke-sidecar-image.sh - run both PDF sidecars, the engine and the output
+# gate, from the production image the way the worker pod does
+# (UNTRUSTED-PDF-GATE; README, "The engine sidecar" and "The gate sidecar").
 #
 #   sh scripts/smoke-sidecar-image.sh <image>
 #
-# A throwaway volume stands in for the pod's emptyDir: root-owned, group 10003
-# (the pod's fsGroup) with the setgid bit, as the kubelet leaves it. Then, every
-# container with a read-only root, no capabilities, no privilege escalation and
-# no network at all:
-#   1. the sidecar refuses to start (exit 2) with PGPASSWORD in its env;
-#   2. the sidecar, uid 10002 and group 10002 plus 10003, listens, and its
-#      socket is mode 660, group 10003;
-#   3. a worker, uid 10001 plus group 10003, gets a redacted copy of a real PDF
-#      through the socket with PDF_ENGINE_SOCKET (the gate re-run included),
-#      and the output gate finds no marked text in it;
-#   4. a stranger, uid 10005 without the group, is refused at the socket;
-#   5. SIGTERM stops the sidecar with exit 0.
+# Two throwaway volumes stand in for the pod's two emptyDirs, /run/pdf-engine
+# and /run/pdf-gate: root-owned, group 10003 (the pod's fsGroup) with the
+# setgid bit, as the kubelet leaves them. Then, every container with a
+# read-only root, no capabilities, no privilege escalation and no network:
+#   1. each sidecar refuses to start (exit 2) with a name off its allow-list
+#      in its env: PGPASSWORD for the engine, DB_PASSWORD for the gate;
+#   2. each refuses to start (exit 2) as PID 1 (--entrypoint node, no
+#      dumb-init), and the gate refuses to bind in /run/pdf-engine;
+#   3. the engine, uid 10002, and the gate, uid 10004, each plus group 10003,
+#      listen; each socket is mode 660, group 10003;
+#   4. a worker, uid 10001 plus 10003, mounting both, gets a redacted copy of
+#      a real PDF with PDF_ENGINE_SOCKET and PDF_GATE_SOCKET (the gate re-run
+#      in the gate sidecar), and the gate sidecar refuses a marked copy;
+#   5. a stranger, uid 10005 without the group, is refused at both sockets;
+#   6. SIGTERM stops each sidecar with exit 0.
 # Everything it started is removed by recorded id or name, pass or fail.
 # ============================================================================
 set -eu
 
 IMAGE_UNDER_TEST=${1:?usage: smoke-sidecar-image.sh <image>}
 suffix=$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
-vol=nwfl-smoke-engine-$suffix
-sidecar=
-SOCK=/run/pdf-engine/engine.sock
+engine_vol=nwfl-smoke-engine-$suffix
+gate_vol=nwfl-smoke-gate-$suffix
+engine=
+gate=
+ENGINE_SOCK=/run/pdf-engine/engine.sock
+GATE_SOCK=/run/pdf-gate/gate.sock
 LOCKED='--read-only --cap-drop ALL --security-opt no-new-privileges --network none'
+AS_ENGINE="--user 10002:10002 --group-add 10003 -v $engine_vol:/run/pdf-engine"
+AS_GATE="--user 10004:10004 --group-add 10003 -v $gate_vol:/run/pdf-gate"
 
 cleanup() {
-  if [ -n "$sidecar" ]; then
-    docker logs "$sidecar" 2>&1 | tail -20 || true
-    docker rm -f "$sidecar" >/dev/null 2>&1 || true
-  fi
-  docker volume rm "$vol" >/dev/null 2>&1 || true
+  for id in $engine $gate; do
+    docker logs "$id" 2>&1 | tail -20 || true
+    docker rm -f "$id" >/dev/null 2>&1 || true
+  done
+  docker volume rm "$engine_vol" "$gate_vol" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-docker volume create "$vol" >/dev/null
-docker run --rm --user 0:0 --network none -v "$vol:/run/pdf-engine" --entrypoint sh "$IMAGE_UNDER_TEST" \
-  -c 'chown 0:10003 /run/pdf-engine && chmod 2770 /run/pdf-engine'
-
-# 1. A credential in its env: it will not start.
-# shellcheck disable=SC2086
-if docker run --rm $LOCKED --user 10002:10002 --group-add 10003 -v "$vol:/run/pdf-engine" \
-  -e PGPASSWORD=smoke-not-a-secret "$IMAGE_UNDER_TEST" node dist/pdf/engine-sidecar.js; then
-  echo "smoke-sidecar: started with PGPASSWORD in its env" >&2; exit 1
-else
-  code=$?
-  [ "$code" = 2 ] || { echo "smoke-sidecar: expected exit 2 for PGPASSWORD, got $code" >&2; exit 1; }
-fi
-echo "smoke-sidecar: refused PGPASSWORD (exit 2)"
-
-# 2. It listens, 660, group 10003.
-# shellcheck disable=SC2086
-sidecar=$(docker run -d $LOCKED --user 10002:10002 --group-add 10003 -v "$vol:/run/pdf-engine" \
-  "$IMAGE_UNDER_TEST" node dist/pdf/engine-sidecar.js)
-tries=0
-until docker logs "$sidecar" 2>&1 | grep -q 'engine sidecar listening'; do
-  tries=$((tries + 1))
-  [ "$tries" -lt 60 ] || { echo "smoke-sidecar: the sidecar did not listen" >&2; exit 1; }
-  sleep 0.5
+for pair in "$engine_vol:/run/pdf-engine" "$gate_vol:/run/pdf-gate"; do
+  docker volume create "${pair%%:*}" >/dev/null
+  docker run --rm --user 0:0 --network none -v "$pair" --entrypoint sh "$IMAGE_UNDER_TEST" \
+    -c "chown 0:10003 ${pair#*:} && chmod 2770 ${pair#*:}"
 done
-# shellcheck disable=SC2086
-mode=$(docker run --rm $LOCKED --user 10001:10001 --group-add 10003 -v "$vol:/run/pdf-engine" --entrypoint stat \
-  "$IMAGE_UNDER_TEST" -c '%a %g %F' "$SOCK")
-echo "smoke-sidecar: socket ${mode}"
-[ "$mode" = "660 10003 socket" ] || { echo "smoke-sidecar: expected 660 10003 socket" >&2; exit 1; }
 
-# 3. The worker gets a redacted copy, which the output gate passes.
+# refuses <what> <expected log text> <docker run arguments...>: the container exits 2, saying so.
+refuses() {
+  what=$1
+  says=$2
+  shift 2
+  if out=$(docker run --rm "$@" 2>&1); then
+    echo "smoke-sidecar: started ($what)" >&2; exit 1
+  else
+    code=$?
+    [ "$code" = 2 ] || { printf '%s\n' "$out" >&2; echo "smoke-sidecar: expected exit 2 ($what), got $code" >&2; exit 1; }
+  fi
+  printf '%s\n' "$out" | grep -q -- "$says" || { printf '%s\n' "$out" >&2; echo "smoke-sidecar: no \"$says\" ($what)" >&2; exit 1; }
+  echo "smoke-sidecar: refused ($what, exit 2)"
+}
+
+# 1. A name off the allow-list in its env.
+# shellcheck disable=SC2086
+refuses 'engine, PGPASSWORD' 'its environment holds PGPASSWORD' $LOCKED $AS_ENGINE -e PGPASSWORD=smoke-not-a-secret \
+  "$IMAGE_UNDER_TEST" node dist/pdf/engine-sidecar.js
+# shellcheck disable=SC2086
+refuses 'gate, DB_PASSWORD' 'its environment holds DB_PASSWORD' $LOCKED $AS_GATE -e DB_PASSWORD=smoke-not-a-secret \
+  "$IMAGE_UNDER_TEST" node dist/pdf/gate-sidecar.js
+
+# 2. PID 1 (no dumb-init), and the gate's socket in the engine's directory.
+# shellcheck disable=SC2086
+refuses 'engine as PID 1' 'is PID 1' $LOCKED $AS_ENGINE --entrypoint node "$IMAGE_UNDER_TEST" dist/pdf/engine-sidecar.js
+# shellcheck disable=SC2086
+refuses 'gate as PID 1' 'is PID 1' $LOCKED $AS_GATE --entrypoint node "$IMAGE_UNDER_TEST" dist/pdf/gate-sidecar.js
+# shellcheck disable=SC2086
+refuses 'gate in /run/pdf-engine' 'directly in /run/pdf-gate' $LOCKED $AS_GATE -v "$engine_vol:/run/pdf-engine" \
+  "$IMAGE_UNDER_TEST" node dist/pdf/gate-sidecar.js --socket /run/pdf-engine/gate.sock
+
+# 3. Both listen, 660, group 10003.
+# shellcheck disable=SC2086
+engine=$(docker run -d $LOCKED $AS_ENGINE "$IMAGE_UNDER_TEST" node dist/pdf/engine-sidecar.js)
+# shellcheck disable=SC2086
+gate=$(docker run -d $LOCKED $AS_GATE "$IMAGE_UNDER_TEST" node dist/pdf/gate-sidecar.js)
+for pair in "$engine:engine sidecar listening (sweeping" "$gate:gate sidecar listening (sweeping"; do
+  tries=0
+  until docker logs "${pair%%:*}" 2>&1 | grep -q -F "${pair#*:}"; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 60 ] || { echo "smoke-sidecar: no \"${pair#*:}\"" >&2; exit 1; }
+    sleep 0.5
+  done
+done
+for pair in "$engine_vol:/run/pdf-engine:$ENGINE_SOCK" "$gate_vol:/run/pdf-gate:$GATE_SOCK"; do
+  vol=${pair%%:*}
+  rest=${pair#*:}
+  # shellcheck disable=SC2086
+  mode=$(docker run --rm $LOCKED --user 10001:10001 --group-add 10003 -v "$vol:${rest%%:*}" --entrypoint stat \
+    "$IMAGE_UNDER_TEST" -c '%a %g %F' "${rest#*:}")
+  echo "smoke-sidecar: ${rest#*:} ${mode}"
+  [ "$mode" = "660 10003 socket" ] || { echo "smoke-sidecar: expected 660 10003 socket" >&2; exit 1; }
+done
+
+# 4. The worker gets a redacted copy, which the gate sidecar passes; a marked copy it refuses.
 CLIENT=$(cat <<'EOF'
 import { PDFDocument, StandardFonts } from '@cantoo/pdf-lib';
-import { withoutCanvasWarnings } from './dist/pdf/isolated.js';
-import { workerRedact } from './dist/pdf/worker.js';
+import { sha256Hex } from './dist/pdf/engine-protocol.js';
 import { checkCopy } from './dist/pdf/gate.js';
+import { withoutCanvasWarnings } from './dist/pdf/isolated.js';
+import { socketGate } from './dist/pdf/socket-gate.js';
+import { workerRedact } from './dist/pdf/worker.js';
 console.warn = withoutCanvasWarnings(console.warn.bind(console));
+const [engineSocket, gateSocket] = process.argv.slice(1);
 const doc = await PDFDocument.create({ updateMetadata: false });
 const page = doc.addPage([612, 792]);
 const font = await doc.embedFont(StandardFonts.Helvetica);
 page.drawText('Picnic flyer', { x: 72, y: 720, size: 12, font });
 page.drawText('Rides: call Kestrel Ambry.', { x: 72, y: 700, size: 12, font });
 const original = await doc.save({ useObjectStreams: false });
-// The worker's own engine: PDF_ENGINE_SOCKET picks the sidecar, and the output gate is re-run here.
-const result = await workerRedact({ PDF_ENGINE_SOCKET: process.argv[1] }, {})(original, { quotes: ['Kestrel Ambry'], redactsAny: true });
-if (result.kind !== 'redacted') throw new Error(`expected a copy, got ${result.kind}`);
+// The worker's own engine: the two sockets pick the engine sidecar, and the gate re-run in the gate sidecar.
+const env = { PDF_ENGINE_SOCKET: engineSocket, PDF_GATE_SOCKET: gateSocket };
+const result = await workerRedact(env, {})(original, { quotes: ['Kestrel Ambry'], redactsAny: true });
+if (result.kind !== 'redacted') throw new Error(`expected a copy, got ${result.kind}: ${result.reason}`);
 const left = await checkCopy(result.pdf, ['Kestrel Ambry']);
 if (left !== null) throw new Error(`the copy still holds the mark: ${left}`);
-console.log(`smoke-sidecar: redacted copy, ${result.pdf.byteLength} bytes, gate passed`);
+console.log(`smoke-sidecar: redacted copy, ${result.pdf.byteLength} bytes, gate sidecar passed it`);
+const marked = await socketGate({ path: gateSocket })({ copy: original, original, quotes: ['Kestrel Ambry'], image: 'show', sha256: sha256Hex(original) });
+if (marked.verdict.pass || marked.verdict.code !== 'withheld' || marked.sha256 !== sha256Hex(original)) throw new Error(`the gate sidecar passed a marked copy: ${JSON.stringify(marked)}`);
+console.log('smoke-sidecar: gate sidecar refused a marked copy (withheld)');
 EOF
 )
 # A failure exits here (set -e on the assignment).
 # shellcheck disable=SC2086
-out=$(docker run --rm $LOCKED --user 10001:10001 --group-add 10003 -v "$vol:/run/pdf-engine" \
-  "$IMAGE_UNDER_TEST" node --input-type=module -e "$CLIENT" "$SOCK" 2>&1)
+out=$(docker run --rm $LOCKED --user 10001:10001 --group-add 10003 -v "$engine_vol:/run/pdf-engine" -v "$gate_vol:/run/pdf-gate" \
+  "$IMAGE_UNDER_TEST" node --input-type=module -e "$CLIENT" "$ENGINE_SOCK" "$GATE_SOCK" 2>&1)
 printf '%s\n' "$out"
-printf '%s\n' "$out" | grep -q 'gate passed' || { echo "smoke-sidecar: no redacted copy" >&2; exit 1; }
+printf '%s\n' "$out" | grep -q 'gate sidecar passed it' || { echo "smoke-sidecar: no redacted copy" >&2; exit 1; }
+printf '%s\n' "$out" | grep -q 'refused a marked copy' || { echo "smoke-sidecar: the marked copy was not refused" >&2; exit 1; }
 
-# 4. A uid without the group cannot connect.
-# shellcheck disable=SC2086
-stranger=$(docker run --rm $LOCKED --user 10005:10005 -v "$vol:/run/pdf-engine" "$IMAGE_UNDER_TEST" \
-  node -e "require('net').createConnection(process.argv[1]).on('connect', () => { console.log('connected'); process.exit(0); }).on('error', (e) => { console.log(e.code); process.exit(0); })" "$SOCK")
-echo "smoke-sidecar: a stranger gets ${stranger}"
-[ "$stranger" = EACCES ] || { echo "smoke-sidecar: expected EACCES for a stranger" >&2; exit 1; }
+# 5. A uid without the group cannot connect to either.
+for pair in "$engine_vol:/run/pdf-engine:$ENGINE_SOCK" "$gate_vol:/run/pdf-gate:$GATE_SOCK"; do
+  vol=${pair%%:*}
+  rest=${pair#*:}
+  # shellcheck disable=SC2086
+  stranger=$(docker run --rm $LOCKED --user 10005:10005 -v "$vol:${rest%%:*}" "$IMAGE_UNDER_TEST" \
+    node -e "require('net').createConnection(process.argv[1]).on('connect', () => { console.log('connected'); process.exit(0); }).on('error', (e) => { console.log(e.code); process.exit(0); })" "${rest#*:}")
+  echo "smoke-sidecar: a stranger at ${rest#*:} gets ${stranger}"
+  [ "$stranger" = EACCES ] || { echo "smoke-sidecar: expected EACCES for a stranger" >&2; exit 1; }
+done
 
-# 5. SIGTERM: exit 0.
-docker stop --time 10 "$sidecar" >/dev/null
-code=$(docker inspect "$sidecar" --format '{{.State.ExitCode}}')
-[ "$code" = 0 ] || { echo "smoke-sidecar: exit ${code} after SIGTERM" >&2; exit 1; }
-echo "smoke-sidecar: stopped on SIGTERM (exit 0)"
+# 6. SIGTERM: exit 0, each.
+for id in "$engine" "$gate"; do
+  docker stop --time 10 "$id" >/dev/null
+  code=$(docker inspect "$id" --format '{{.State.ExitCode}}')
+  [ "$code" = 0 ] || { echo "smoke-sidecar: exit ${code} after SIGTERM" >&2; exit 1; }
+done
+echo "smoke-sidecar: both stopped on SIGTERM (exit 0)"
