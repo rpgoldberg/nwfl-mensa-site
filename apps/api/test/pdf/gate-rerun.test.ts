@@ -31,7 +31,7 @@ import { type ContainedSidecar, containedSidecar, ensureImage, probe, removeLeft
 import { GATE_CHILD_SOURCE, GATE_SIDECAR_ENTRY, NODE_FLAGS, type Spawned, gateStandIn, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
 import { CANARIES, leakFixture, linesPdf, smallPictureFixture } from './fixtures.js';
 import { flateBomb, manyPages, manyShows } from './hostile.js';
-import { M1_CASES, M1_ORIGINAL, M1_QUOTES, plainCopy } from './shadows.js';
+import { M1_CASES, M1_DRAWN_CASES, M1_ORIGINAL, M1_QUOTES, plainCopy } from './shadows.js';
 
 const QUOTE = 'Kestrel Ambry';
 const REQUEST = { quotes: [QUOTE], redactsAny: true };
@@ -154,6 +154,23 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the
       expect(Buffer.from(stored).equals(Buffer.from(plain)), name).toBe(false);
       expect(await structureBreak(stored), name).toBeNull();
       expect(await checkCopy(stored, [QUOTE]), name).toBeNull();
+    }
+  }, 60_000);
+
+  it('UNTRUSTED-PDF-GATE gate re-run: refuses copies whose pages draw the photo where pdf-lib saw none (n2: "qBI"; n3b: a page under a node with no /Type), on both transports, under "hide" (fix round 4, M1)', async () => {
+    const given = await sidecar('engine', ['--engine', standIn('given')]);
+    const gate = await sidecar('gate');
+    const both: Array<[string, Redact]> = [
+      ['in-pod children', inPod({ engine: standIn('given') })],
+      ['sidecars', workerRedact({ PDF_ENGINE_SOCKET: given.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [given.dir], gateSocketDirs: [gate.dir] })],
+    ];
+    for (const id of ['n2', 'n3b']) {
+      const drawn = M1_DRAWN_CASES.find((c) => c.id === id) as (typeof M1_DRAWN_CASES)[number];
+      const file = path.join(gate.dir, `${id}.pdf`);
+      writeFileSync(file, drawn.attack);
+      for (const [name, redact] of both) {
+        expect(await redact(M1_ORIGINAL, { quotes: [file, ...M1_QUOTES], redactsAny: true, image: 'hide' }), `${id} over the ${name}`).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
+      }
     }
   }, 60_000);
 

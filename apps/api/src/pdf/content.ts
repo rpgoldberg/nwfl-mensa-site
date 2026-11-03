@@ -135,3 +135,47 @@ export function stripMarkedContentProperties(stream: Uint8Array): Uint8Array {
   }
   return Buffer.from(out + s.slice(at), 'latin1');
 }
+
+/**
+ * Where each inline picture may begin in decoded content, as pdf.js's lexer reads it (UNTRUSTED-PDF-GATE M1,
+ * fix round 4): the start of every regular word (not a string, hex string, name or comment) that holds "BI".
+ * pdf.js ends a command at the longest operator it knows, so "qBI" is q then BI, "200BI" is 200 then BI and
+ * "BIG" is BI then G; a word holding BI anywhere is counted, which takes in a few words pdf.js would not read
+ * as BI and never leaves one out. Past each, the picture's data is skipped, to the EI after its ID. Null
+ * when the content cannot be read to its end (an unterminated string or hex string): a caller counts that
+ * as a picture.
+ */
+export function inlinePictureStarts(stream: Uint8Array): number[] | null {
+  const s = Buffer.from(stream).toString('latin1');
+  const starts: number[] = [];
+  let i = 0;
+  try {
+    while (i < s.length) {
+      const code = s.charCodeAt(i);
+      const c = s[i] as string;
+      if (c === '%') {
+        const eol = s.slice(i).search(/[\r\n]/);
+        i = eol < 0 ? s.length : i + eol;
+      } else if (c === '(') i = stringEnd(s, i);
+      else if (c === '<' && s[i + 1] !== '<') i = hexEnd(s, i);
+      else if (c === '/') i = regularEnd(s, i + 1);
+      else if (WHITESPACE.has(code) || DELIMITERS.has(code)) i += 1;
+      else {
+        const end = regularEnd(s, i);
+        if (!s.slice(i, end).includes('BI')) i = end;
+        else {
+          starts.push(i);
+          try {
+            i = inlineImageEnd(s, end);
+          } catch {
+            // No ID or no EI after it: nothing past it is read, and it is counted already.
+            i = s.length;
+          }
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return starts;
+}

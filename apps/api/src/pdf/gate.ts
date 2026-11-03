@@ -36,8 +36,10 @@ import { textMatches } from './match.js';
 // (getTextContent), which needs neither. pdf.js prints them while the module loads, before any
 // option (verbosity) can reach it, so no setting silences them; the engine's child process drops
 // exactly these three (isolated.ts withoutCanvasWarnings).
-type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+export type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 let pdfjs: Promise<PdfJs> | undefined;
+/** pdf.js, loaded once, on first use (the gate's text reader here, and drawn.ts). */
+export const loadPdfJs = (): Promise<PdfJs> => (pdfjs ??= import('pdfjs-dist/legacy/build/pdf.mjs'));
 
 const UNREADABLE = 'the copy could not be read';
 
@@ -81,7 +83,7 @@ function byPosition(items: readonly Item[]): string {
 
 /** Why pdf.js can read a quote on a page, or null. Throws when pdf.js cannot open the copy. */
 async function readerFinds(pdf: Uint8Array, quotes: readonly string[]): Promise<string | null> {
-  const { getDocument } = await (pdfjs ??= import('pdfjs-dist/legacy/build/pdf.mjs'));
+  const { getDocument } = await loadPdfJs();
   const task = getDocument({ data: new Uint8Array(pdf), verbosity: 0, disableFontFace: true });
   try {
     const doc = await task.promise;

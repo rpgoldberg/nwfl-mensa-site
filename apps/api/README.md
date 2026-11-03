@@ -461,7 +461,21 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   (an empty annotation list is let through), no encryption;
 - under "blur" or "hide", each picture is exactly what the policy draws
   (the 1 x 1 grey fill, or under "blur" a Flate grey or RGB picture at most
-  24 pixels a side), with no inline picture in any content stream;
+  24 pixels a side), with no inline picture in any content stream (BI read
+  as pdf.js's lexer reads it, so `qBI` and `BI%` count, and a page's
+  `/Contents` array read joined, as pdf.js joins it) and no `/DecodeParms`
+  on a stream that is not a picture (fix round 4);
+- under "blur" or "hide", what pdf.js draws (`src/pdf/drawn.ts`, fix round
+  4): the gate reads the operator list of every page of its own writing of
+  the copy, tiling patterns and Type 3 glyphs included, and refuses any
+  inline picture, any picture or stencil larger than the policy draws, any
+  shading drawn as a lattice or mesh of colours (function-based, types 4 to
+  7), and a page count other than pdf-lib's. The glyphs drawn are matched
+  against the withheld quotes too, so a `/ToUnicode` that lies to the text
+  layer does not hide them (under "show" this pass does not run);
+- the page tree is one pdf.js and pdf-lib read alike: every node `/Type
+  /Pages` with its `/Kids` and their `/Count`, every leaf `/Type /Page`,
+  each once (fix round 4);
 - no run of an original picture's samples is kept, and no picture has the
   very samples of an original that blurring would change;
 - one reading (`src/pdf/pdf-structure.ts`, fix round 3): pdf-lib keeps the

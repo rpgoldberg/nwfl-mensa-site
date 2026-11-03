@@ -237,3 +237,89 @@ add('h2', 'the withheld quote in a shadowed annotation\'s appearance, Flate', 's
 /** The challenge's cases a to h2, each with its control. */
 export const M1_CASES: readonly M1Case[] = cases;
 export const M1_QUOTES = ['Kestrel Ambry', '850-555-0142'];
+
+// Round 4 (fix round 4, M1, from test/chal-r4/gate/cases.mjs): copies whose structure is one reading, and
+// whose pages draw the kept photo all the same, where pdf-lib (the rules' reader) and pdf.js (the viewer)
+// disagree on what is DRAWN. Every control is the same inline photo written plainly on the page.
+const drawn: M1Case[] = [];
+const addDrawn = (id: string, name: string, attack: Uint8Array, control: Uint8Array = PLAIN_INLINE): void => void drawn.push({ id, name, image: 'hide', attack, control });
+const PLAIN = '200 0 0 200 72 400';
+const PLAIN_INLINE = rawPdf([[1, CATALOG], PAGES, page(), contents(inline(PLAIN).toString('latin1')), FONT]);
+// n1. pdf-lib's decoder has no predictor; pdf.js undoes /Predictor 12 (PNG rows of one byte, filter None).
+{
+  const content = Buffer.concat([latin1(TEXT), inline(PLAIN)]);
+  const rows = Buffer.alloc(content.length * 2);
+  for (let i = 0; i < content.length; i++) rows[2 * i + 1] = content[i] as number;
+  addDrawn('n1', 'the inline photo behind a PNG predictor on the page\'s content', rawPdf([[1, CATALOG], PAGES, page(), [4, rawStream('/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 1 >>', deflateSync(rows))], FONT]));
+}
+// n2, n2b, n2c. pdf.js's lexer: "qBI" is q then BI; "BI%" is BI then a comment; "{BI" is { then BI.
+const lexed = (before: string, begin: string): Uint8Array =>
+  rawPdf([[1, CATALOG], PAGES, page(), contents(`${before}${begin} /W ${SIDE} /H ${SIDE} /CS /RGB /BPC 8 /F /AHx ID ${KEPT.toString('hex')}>\nEI Q\n`), FONT]);
+addDrawn('n2', 'the inline photo as "qBI"', lexed(`${PLAIN} cm q`, 'BI'));
+addDrawn('n2b', 'the inline photo as "BI%c"', lexed(`q ${PLAIN} cm `, 'BI%c\n'));
+addDrawn('n2c', 'the inline photo as "{BI"', lexed(`q ${PLAIN} cm {`, 'BI'));
+// n3, n3b. pdf-lib counts only typed pages under typed nodes; pdf.js takes any kid without /Kids as a page.
+{
+  const two: RawObject = [2, '<< /Type /Pages /Kids [3 0 R 13 0 R] /Count 2 >>'];
+  const second = (type: string): Uint8Array =>
+    rawPdf([[1, CATALOG], two, page(), contents(), FONT, [13, `<< ${type}/Parent 2 0 R /MediaBox [0 0 612 792] /Contents 14 0 R /Resources << >> >>`], [14, rawStream('', inline(PLAIN))]]);
+  addDrawn('n3', 'the inline photo on a second page with no /Type', second(''), second('/Type /Page '));
+  const under = (type: string): Uint8Array =>
+    rawPdf([
+      [1, CATALOG],
+      two,
+      page(),
+      contents(),
+      FONT,
+      [13, `<< ${type}/Parent 2 0 R /Kids [15 0 R] /Count 1 >>`],
+      [14, rawStream('', inline(PLAIN))],
+      [15, '<< /Type /Page /Parent 13 0 R /MediaBox [0 0 612 792] /Contents 14 0 R /Resources << >> >>'],
+    ]);
+  addDrawn('n3b', 'the inline photo on a page under a node with no /Type', under(''), under('/Type /Pages '));
+}
+// n4. pdf.js joins a /Contents array's streams byte to byte: "B" ending one and "I" starting the next is BI.
+{
+  // "q <scale> cm B" | "I /W 64 ...".
+  const split = `q ${PLAIN} cm B`.length;
+  const [head, tail] = [inline(PLAIN).subarray(0, split), inline(PLAIN).subarray(split)];
+  const joined: RawObject = [3, (page()[1] as string).replace('/Contents 4 0 R', '/Contents [4 0 R 14 0 R]')];
+  addDrawn('n4', 'the inline photo with its BI split across two streams of /Contents', rawPdf([[1, CATALOG], PAGES, joined, [4, rawStream('', Buffer.concat([latin1(TEXT), head]))], FONT, [14, rawStream('', tail)]]));
+}
+// n5. The photo as a function-based shading over a 64 x 64 sampled function: no picture at all to pdf-lib.
+{
+  const flipped = Buffer.alloc(KEPT.length);
+  for (let row = 0; row < SIDE; row++) KEPT.copy(flipped, row * SIDE * 3, (SIDE - 1 - row) * SIDE * 3, (SIDE - row) * SIDE * 3);
+  addDrawn(
+    'n5',
+    'the photo as a function-based shading (ShadingType 1)',
+    rawPdf([
+      [1, CATALOG],
+      PAGES,
+      page('/Shading << /Sh1 16 0 R >>'),
+      contents('q 3.125 0 0 3.125 72 400 cm /Sh1 sh Q\n'),
+      FONT,
+      [16, `<< /ShadingType 1 /ColorSpace /DeviceRGB /Domain [0 ${SIDE} 0 ${SIDE}] /Function 17 0 R >>`],
+      [17, rawStream(`/FunctionType 0 /Domain [0 ${SIDE} 0 ${SIDE}] /Range [0 1 0 1 0 1] /Size [${SIDE} ${SIDE}] /BitsPerSample 8 /Filter /FlateDecode`, deflateSync(flipped))],
+    ]),
+    kept('/Image'),
+  );
+}
+/** Round 4's n1 to n5 (all under "hide"), each with its control. */
+export const M1_DRAWN_CASES: readonly M1Case[] = drawn;
+
+/**
+ * Round 4's q1 (r4 N1): the quote only in a comment between objects. The copy as handed over holds it (the
+ * gate's search of the file as written finds it); the gate's own writing does not (pdf-lib writes no
+ * comments). The verdict is on that writing, so q1 passes, and its stored bytes hold no quote.
+ */
+export const Q1 = ((): Uint8Array => {
+  const good = Buffer.from(plainCopy()).toString('latin1');
+  const comment = '%Rides: call Kestrel Ambry, 850-555-0142\n';
+  const at = good.indexOf('2 0 obj');
+  const moved = (offset: number): number => (offset >= at ? offset + comment.length : offset);
+  return latin1(
+    (good.slice(0, at) + comment + good.slice(at))
+      .replace(/^(\d{10}) 00000 n $/gm, (_line, offset: string) => `${String(moved(Number(offset))).padStart(10, '0')} 00000 n `)
+      .replace(/startxref\n(\d+)/, (_line, offset: string) => `startxref\n${moved(Number(offset))}`),
+  );
+})();

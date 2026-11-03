@@ -19,7 +19,15 @@
 //        exactly its samples. A re-encoded original (a JPEG, a larger Flate
 //        picture, one with a mask) has another shape;
 //      - no inline picture in any content (a page's, a form's, a tiling
-//        pattern's, a Type 3 glyph's);
+//        pattern's, a Type 3 glyph's), BI read as pdf.js's lexer reads it
+//        ("qBI" is q then BI), and a page's /Contents array read joined, as
+//        pdf.js joins it, as well as stream by stream (fix round 4, M1);
+//      - no /DecodeParms on a stream that is not a picture: pdf-lib decodes
+//        no predictor, so it would read such content wrong (fix round 4);
+//      - what pdf.js draws from the copy, read from its operator lists
+//        (drawn.ts, fix round 4): no inline picture, no picture larger than
+//        the policy draws, no shading drawn as a lattice or a mesh, and as
+//        many pages as pdf-lib counts;
 //      - no run of an original picture's samples is in the copy (the
 //        engine's own check, keepsPicture, on the original the worker sends),
 //        and no picture of the copy has exactly the samples of an original
@@ -36,10 +44,14 @@
 //        it, and a structural name or number (/S, /Subtype, /Type,
 //        /PatternType, /Filter) given by reference is refused: the sanitizer
 //        writes them direct;
+//      - the page tree is one a viewer reads as pdf-lib does (fix round 4,
+//        M1): every node /Type /Pages with its /Kids and their /Count, every
+//        leaf /Type /Page, each once, by reference (pdf.js takes any kid
+//        without /Kids for a page; pdf-lib skips one with no /Type);
 //      - gateReply checks, and hands back, its own writing of the copy: what
 //        pdf-lib read, written again (no object streams, no incremental
-//        update). Only those bytes are stored (rerun.ts), so what a reader is
-//        given is what the gate read, whatever the copy's tricks.
+//        update). Only those bytes are stored (rerun.ts): the bytes stored
+//        are the bytes the gate checked.
 //
 // Out of scope, as for any text gate: withheld text written so a reader does
 // not see it as text (reversed, encoded, drawn as curves or as a picture), a
@@ -48,6 +60,7 @@
 // ============================================================================
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, type PDFObject, PDFRawStream, PDFRef, decodePDFRawStream } from '@cantoo/pdf-lib';
 import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha256Hex } from './engine-protocol.js';
+import { drawnBreak } from './drawn.js';
 import { checkCopy } from './gate.js';
 import type { GateJob } from './gate-isolated.js';
 import { BLUR_MAX, FILL_GRAY, type ImageAction, type Pixels, blurred, decodePicture, hasInlinePicture, keepsPicture, pictureWindows } from './images.js';
@@ -146,52 +159,93 @@ function drawnByPolicy(picture: PDFRawStream, image: 'blur' | 'hide'): boolean {
   }
 }
 
-/** Every content stream of the copy: its pages', its forms', its tiling patterns' and these Type 3 glyphs'. */
-function contentStreams(doc: PDFDocument, glyphs: readonly PDFObject[]): PDFObject[] {
+/** Every content stream of the copy, in groups read as one: each page's /Contents (an array is joined, as pdf.js joins it), each form, tiling pattern and Type 3 glyph alone. */
+function contentGroups(doc: PDFDocument, glyphs: readonly PDFObject[]): PDFObject[][] {
   const { context } = doc;
-  const out: PDFObject[] = [];
+  const out: PDFObject[][] = [];
   for (const page of doc.getPages()) {
-    const contents = page.node.get(PDFName.of('Contents'));
-    const listed = context.lookup(contents);
-    if (listed instanceof PDFArray) out.push(...listed.asArray().map((ref) => context.lookup(ref) as PDFObject));
-    else if (listed !== undefined) out.push(listed);
+    const listed = context.lookup(page.node.get(PDFName.of('Contents')));
+    if (listed instanceof PDFArray) out.push(listed.asArray().map((ref) => context.lookup(ref) as PDFObject));
+    else if (listed !== undefined) out.push([listed]);
   }
   for (const [, object] of context.enumerateIndirectObjects()) {
-    if (object instanceof PDFRawStream && (nameIn(object.dict, 'Subtype') === 'Form' || numberIn(object.dict, 'PatternType') === 1)) out.push(object);
+    if (object instanceof PDFRawStream && (nameIn(object.dict, 'Subtype') === 'Form' || numberIn(object.dict, 'PatternType') === 1)) out.push([object]);
   }
-  out.push(...glyphs.map((glyph) => (glyph instanceof PDFRef ? (context.lookup(glyph) as PDFObject) : glyph)));
+  out.push(...glyphs.map((glyph) => [glyph instanceof PDFRef ? (context.lookup(glyph) as PDFObject) : glyph]));
   return out;
 }
 
-/** Why the copy breaks the sanitizer's rules or the picture policy's shape, or null. Reads the copy alone. */
-export async function copyRulesBreak(copy: Uint8Array, image: ImageAction): Promise<string | null> {
+class TreeBreak extends Error {}
+/** Page trees deeper than this are refused: the sanitizer writes one level. */
+const MAX_TREE_DEPTH = 32;
+
+/**
+ * Why the page tree is not one pdf.js and pdf-lib read alike (fix round 4, M1), or null: every node /Type /Pages
+ * with /Kids and their /Count, every leaf /Type /Page with no /Kids, each once, each kid by reference.
+ */
+function pageTreeBreak(doc: PDFDocument): string | null {
+  const { context } = doc;
+  const seen = new Set<PDFObject>();
+  const count = (ref: PDFObject | undefined, depth: number): number => {
+    const node = ref instanceof PDFRef ? context.lookup(ref) : undefined;
+    if (!(node instanceof PDFDict) || seen.has(node) || depth > MAX_TREE_DEPTH) throw new TreeBreak();
+    seen.add(node);
+    const kids = node.lookup(PDFName.of('Kids'));
+    if (depth > 0 && nameIn(node, 'Type') === 'Page' && kids === undefined) return 1;
+    if (nameIn(node, 'Type') !== 'Pages' || !(kids instanceof PDFArray)) throw new TreeBreak();
+    const pages = kids.asArray().reduce((sum: number, kid) => sum + count(kid, depth + 1), 0);
+    if (numberIn(node, 'Count') !== pages) throw new TreeBreak();
+    return pages;
+  };
+  try {
+    count(doc.catalog.get(PDFName.of('Pages')), 0);
+    return null;
+  } catch {
+    return 'the page tree: every node must be /Type /Pages with its /Kids and their /Count, every leaf /Type /Page, each once';
+  }
+}
+
+/** Why the copy breaks the sanitizer's rules or the picture policy's shape (or null), and how many pages pdf-lib reads in it. */
+async function readRules(copy: Uint8Array, image: ImageAction): Promise<{ broken: string | null; pages: number }> {
   // One reading first (M1): no encryption, no second trailer, no shadowed object.
   const structure = await structureBreak(copy);
-  if (structure !== null) return `the structure: ${structure}`;
+  if (structure !== null) return { broken: `the structure: ${structure}`, pages: 0 };
   const doc = await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
+  // pdf-lib counts pages only through a tree that passed pageTreeBreak (it throws on some others).
+  const broken = (reason: string | null): { broken: string | null; pages: number } => ({ broken: reason, pages: reason === null ? doc.getPageCount() : 0 });
   const { context } = doc;
+  const tree = pageTreeBreak(doc);
+  if (tree !== null) return broken(tree);
   const glyphs: PDFObject[] = [];
   for (const [ref, object] of context.enumerateIndirectObjects()) {
     const found = activeIn(object, glyphs);
-    if (found !== null) return `object ${ref.objectNumber}: ${found}`;
+    if (found !== null) return broken(`object ${ref.objectNumber}: ${found}`);
   }
-  if (image === 'show') return null;
+  if (image === 'show') return broken(null);
   for (const [ref, object] of context.enumerateIndirectObjects()) {
-    if (object instanceof PDFRawStream && nameIn(object.dict, 'Subtype') === 'Image' && !drawnByPolicy(object, image)) {
-      return `object ${ref.objectNumber}: a picture is not what the "${image}" policy draws`;
-    }
+    if (!(object instanceof PDFRawStream)) continue;
+    const picture = nameIn(object.dict, 'Subtype') === 'Image';
+    if (picture && !drawnByPolicy(object, image)) return broken(`object ${ref.objectNumber}: a picture is not what the "${image}" policy draws`);
+    if (!picture && object.dict.has(PDFName.of('DecodeParms'))) return broken(`object ${ref.objectNumber}: a stream that is not a picture has /DecodeParms`);
   }
-  for (const stream of contentStreams(doc, glyphs)) {
-    if (!(stream instanceof PDFRawStream)) return 'a page has content that is not a stream';
-    let bytes: Uint8Array;
-    try {
-      bytes = decodePDFRawStream(stream).decode();
-    } catch {
-      return 'a content stream cannot be read';
+  for (const group of contentGroups(doc, glyphs)) {
+    const decoded: Uint8Array[] = [];
+    for (const stream of group) {
+      if (!(stream instanceof PDFRawStream)) return broken('a page has content that is not a stream');
+      try {
+        decoded.push(decodePDFRawStream(stream).decode());
+      } catch {
+        return broken('a content stream cannot be read');
+      }
     }
-    if (hasInlinePicture(bytes)) return `an inline picture is in a content stream under the "${image}" policy`;
+    if ([...decoded, Buffer.concat(decoded)].some(hasInlinePicture)) return broken(`an inline picture is in a content stream under the "${image}" policy`);
   }
-  return null;
+  return broken(null);
+}
+
+/** Why the copy breaks the sanitizer's rules or the picture policy's shape, or null. Reads the copy alone, through pdf-lib. */
+export async function copyRulesBreak(copy: Uint8Array, image: ImageAction): Promise<string | null> {
+  return (await readRules(copy, image)).broken;
 }
 
 const samplesKey = (pixels: Pixels): string => `${pixels.width}x${pixels.height}x${pixels.channels}:${sha256Hex(pixels.data.subarray(0, pixels.width * pixels.height * pixels.channels))}`;
@@ -227,11 +281,17 @@ async function keepsSamples(copy: Uint8Array, originals: Set<string>): Promise<b
   return false;
 }
 
-/** The gate's verdict on one copy: withheld text first (gate.ts), then the rules above, then the original's pictures. Never throws. */
+/**
+ * The gate's verdict on one copy: withheld text first (gate.ts), then the rules above, then under "blur" and
+ * "hide" what pdf.js draws (drawn.ts), then the original's pictures. Never throws.
+ */
 export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
   try {
     if ((await checkCopy(job.copy, job.quotes)) !== null) return { pass: false, code: 'withheld' };
-    if ((await copyRulesBreak(job.copy, job.image)) !== null) return { pass: false, code: 'rules' };
+    const { broken, pages } = await readRules(job.copy, job.image);
+    if (broken !== null) return { pass: false, code: 'rules' };
+    const drawn = job.image === 'show' ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
+    if (drawn !== null) return { pass: false, code: drawn.code };
     if (job.image !== 'show' && (await keepsPicture(job.copy, await pictureWindows(job.original)))) return { pass: false, code: 'rules' };
     if (job.image !== 'show' && (await keepsSamples(job.copy, await changedByBlur(job.original)))) return { pass: false, code: 'rules' };
     return { pass: true };
@@ -241,7 +301,7 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
 }
 
 /** The copy as pdf-lib read it, written again by pdf-lib's writer as the sanitizer writes (sanitize.ts): no object streams, no incremental update. */
-async function rewrite(copy: Uint8Array): Promise<Uint8Array> {
+export async function rewrite(copy: Uint8Array): Promise<Uint8Array> {
   const doc = await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
   return doc.save({ rewrite: true, useObjectStreams: false, addDefaultPage: false, updateFieldAppearances: false });
 }
@@ -250,16 +310,17 @@ async function rewrite(copy: Uint8Array): Promise<Uint8Array> {
  * The gate child's answer (M1): the copy's sha256 and the verdict on the gate's own writing of the copy, read
  * afresh; on a pass, those bytes, the only ones that may be stored, with their sha256. A copy whose structure
  * could read two ways is refused as it comes (withheld when there are quotes it cannot read it for, else rules);
- * one whose writing is over `maxBytes` is unfinished. Never throws.
+ * one whose writing is over `maxBytes` is unfinished. `write` is the writing (rewrite; another, for tests).
+ * Never throws.
  */
-export async function gateReply(job: GateJob, maxBytes = MAX_OUTPUT_BYTES): Promise<GateReply> {
+export async function gateReply(job: GateJob, maxBytes = MAX_OUTPUT_BYTES, write: (copy: Uint8Array) => Promise<Uint8Array> = rewrite): Promise<GateReply> {
   const sha256 = sha256Hex(job.copy);
   const refused = (code: GateCode): GateReply => ({ verdict: { pass: false, code }, sha256 });
   let pdf: Uint8Array;
   try {
     // Refused as it comes, by the verdict on it as handed over (its structure breaks copyRulesBreak).
     if ((await structureBreak(job.copy)) !== null) return { verdict: await gateVerdict(job), sha256 };
-    pdf = await rewrite(job.copy);
+    pdf = await write(job.copy);
   } catch {
     return refused('unfinished');
   }

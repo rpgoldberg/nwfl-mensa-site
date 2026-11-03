@@ -6,7 +6,8 @@ import { deflateSync } from 'node:zlib';
 import { type PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFString, StandardFonts } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { leakFixture, linesPdf, pictureUnderTextFixture, twoMarksFixture } from '../../test/pdf/fixtures.js';
-import { M1_CASES, M1_ORIGINAL, M1_QUOTES, plainCopy } from '../../test/pdf/shadows.js';
+import { M1_CASES, M1_DRAWN_CASES, M1_ORIGINAL, M1_QUOTES, Q1, type RawObject, plainCopy, rawPdf, rawStream } from '../../test/pdf/shadows.js';
+import { drawnBreak } from './drawn.js';
 import { sha256Hex } from './engine-protocol.js';
 import { copyRulesBreak, gateReply, gateVerdict } from './gate-rules.js';
 import { BLUR_MAX, FILL_GRAY } from './images.js';
@@ -291,5 +292,73 @@ describe('M1: a viewer reads the copy the gate read (fix round 3, the parser dif
     const kept = await withPicture(dict, deflateSync(varied));
     expect(await copyRulesBreak(kept, 'blur')).toBeNull();
     expect(await gateVerdict({ copy: kept, original, quotes: [], image: 'blur' })).toEqual({ pass: false, code: 'rules' });
+  });
+});
+
+describe('M1, fix round 4: pictures judged by what pdf.js draws from the gate\'s own writing, and the pdf-lib rules read as pdf.js reads', () => {
+  const pagesOf = async (pdf: Uint8Array): Promise<number> => (await PDFDocument.load(pdf, { updateMetadata: false })).getPageCount();
+
+  it('refuses each of round 4\'s copies n1 to n5 under "hide", as it refuses each written plainly, by what pdf.js draws from them alone, and passes none of their bytes on', async () => {
+    expect(M1_DRAWN_CASES.map((c) => c.id)).toEqual(['n1', 'n2', 'n2b', 'n2c', 'n3', 'n3b', 'n4', 'n5']);
+    for (const c of M1_DRAWN_CASES) {
+      const job = { original: M1_ORIGINAL, quotes: M1_QUOTES, image: c.image };
+      expect((await gateVerdict({ ...job, copy: c.control })).pass, `${c.id}: written plainly`).toBe(false);
+      expect(await drawnBreak(c.attack, 'hide', [], await pagesOf(c.attack)), c.id).toMatchObject({ code: 'rules' });
+      expect(await gateVerdict({ ...job, copy: c.attack }), c.id).toEqual({ pass: false, code: 'rules' });
+      expect(await gateReply({ ...job, copy: c.attack }), c.id).toEqual({ verdict: { pass: false, code: 'rules' }, sha256: sha256Hex(c.attack) });
+    }
+  });
+
+  it('refuses n1 to n4 by the pdf-lib rules too (defence in depth): /DecodeParms on content, BI as pdf.js lexes it, a page-tree node with no /Type, a /Contents array read joined; n5 only pdf.js sees', async () => {
+    const reasons: Record<string, string | null> = {};
+    for (const c of M1_DRAWN_CASES) reasons[c.id] = await copyRulesBreak(c.attack, 'hide');
+    expect(reasons['n1']).toMatch(/^object 4: a stream that is not a picture has \/DecodeParms$/);
+    for (const id of ['n2', 'n2b', 'n2c', 'n4']) expect(reasons[id], id).toBe('an inline picture is in a content stream under the "hide" policy');
+    for (const id of ['n3', 'n3b']) expect(reasons[id], id).toBe('the page tree: every node must be /Type /Pages with its /Kids and their /Count, every leaf /Type /Page, each once');
+    expect(reasons['n5']).toBeNull();
+    // Outside "blur" and "hide" pictures may be shown: only the page tree is a rule there.
+    expect(await copyRulesBreak((M1_DRAWN_CASES[0] as { attack: Uint8Array }).attack, 'show')).toBeNull();
+    expect(await copyRulesBreak((M1_DRAWN_CASES[4] as { attack: Uint8Array }).attack, 'show')).toMatch(/^the page tree: /);
+  });
+
+  it('refuses a page tree a viewer could read otherwise: a /Count that is not its pages, a node twice, a page with /Kids, a kid not by reference', async () => {
+    const PAGE = '/Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R';
+    const tree = (pages: string, extra: RawObject[] = []): Uint8Array => rawPdf([[1, '<< /Type /Catalog /Pages 2 0 R >>'], [2, pages], [3, `<< ${PAGE} >>`], [4, rawStream('', 'BT ET')], ...extra]);
+    expect(await copyRulesBreak(tree('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'), 'show')).toBeNull();
+    for (const [name, bad] of [
+      ['a /Count of 2 for one page', tree('<< /Type /Pages /Kids [3 0 R] /Count 2 >>')],
+      ['the same page twice', tree('<< /Type /Pages /Kids [3 0 R 3 0 R] /Count 2 >>')],
+      ['a page with /Kids', tree('<< /Type /Pages /Kids [5 0 R] /Count 1 >>', [[5, `<< ${PAGE} /Kids [3 0 R] >>`]])],
+      ['a kid written directly', tree(`<< /Type /Pages /Kids [<< ${PAGE} >>] /Count 1 >>`)],
+      ['a root that is a page', rawPdf([[1, '<< /Type /Catalog /Pages 3 0 R >>'], [3, '<< /Type /Page /MediaBox [0 0 612 792] /Contents 4 0 R >>'], [4, rawStream('', 'BT ET')]])],
+    ] as const) {
+      expect(await copyRulesBreak(bad, 'show'), name).toMatch(/^the page tree: /);
+    }
+  });
+
+  it('refuses /DecodeParms on any stream that is not a picture under "blur" or "hide" (a font program too), not under "show"', async () => {
+    const withParms = await copy((doc) => {
+      const font = doc.context.register(doc.context.stream('font program', { Filter: 'FlateDecode', DecodeParms: { Predictor: 2 } }));
+      doc.getPage(0).node.set(PDFName.of('Junk'), doc.context.obj({ FontFile2: font }));
+    });
+    for (const image of ['blur', 'hide'] as const) expect(await copyRulesBreak(withParms, image), image).toMatch(/^object \d+: a stream that is not a picture has \/DecodeParms$/);
+    expect(await copyRulesBreak(withParms, 'show')).toBeNull();
+  });
+
+  it('judges the gate\'s own writing, not the copy as handed over: a quote only in a comment between objects is gone from it, and it passes (q1, r4 N1)', async () => {
+    const job = { copy: Q1, original: plainCopy(), quotes: M1_QUOTES, image: 'show' as const };
+    // As handed over the quote is in the file's bytes, and the copy is refused.
+    expect(await gateVerdict(job)).toEqual({ pass: false, code: 'withheld' });
+    const reply = await gateReply(job);
+    expect(reply.verdict).toEqual({ pass: true });
+    expect(Buffer.from(reply.checked?.pdf ?? []).toString('latin1')).not.toContain('Kestrel');
+  });
+
+  it('judges the bytes its writing gives, whatever they are: a writing that breaks a rule is refused, though the copy as handed over passes (integrity N1)', async () => {
+    const clean = plainCopy();
+    const job = { copy: clean, original: plainCopy(), quotes: [], image: 'blur' as const };
+    expect((await gateReply(job)).verdict).toEqual({ pass: true });
+    const active = rawPdf([[1, '<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /JavaScript /JS (app.alert\\(1\\)) >> >>'], [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'], [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>']]);
+    expect(await gateReply(job, undefined, () => Promise.resolve(active))).toEqual({ verdict: { pass: false, code: 'rules' }, sha256: sha256Hex(clean) });
   });
 });
