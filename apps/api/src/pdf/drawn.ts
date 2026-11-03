@@ -47,16 +47,17 @@ interface Glyph {
 /** How long a picture, pattern or font pdf.js names may take to arrive before the copy is refused. */
 const SETTLE_MS = 5_000;
 
-/** One page's walk: the objects pdf.js sent for it, the fonts read already, and the text of the glyphs drawn. */
-class PageWalk {
+/** One page's walk: the objects pdf.js sent for it, the fonts read already, and the text of the glyphs drawn. Exported for tests. */
+export class PageWalk {
   readonly unicode: string[] = [];
   readonly chars: string[] = [];
   private readonly fonts = new Set<string>();
 
   constructor(
     private readonly pdfjs: PdfJs,
-    private readonly page: PDFPageProxy,
+    private readonly page: Pick<PDFPageProxy, 'objs' | 'commonObjs'>,
     private readonly side: number,
+    private readonly settleMs = SETTLE_MS,
   ) {}
 
   /** An object pdf.js sent for the page (a shading's IR, a font), as its renderer looks it up; undefined if it never comes. */
@@ -64,7 +65,7 @@ class PageWalk {
     const pool = id.startsWith('g_') ? this.page.commonObjs : this.page.objs;
     if (pool.has(id)) return Promise.resolve(pool.get(id));
     return new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(undefined), SETTLE_MS);
+      const timer = setTimeout(() => resolve(undefined), this.settleMs);
       pool.get(id, (data: unknown) => {
         clearTimeout(timer);
         resolve(data);

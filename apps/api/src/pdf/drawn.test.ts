@@ -3,7 +3,8 @@
 // drawn from. Small PDFs written byte by byte; nothing in them runs. Every name is made up.
 import { describe, expect, it } from 'vitest';
 import { type RawObject, plainCopy, rawPdf, rawStream } from '../../test/pdf/shadows.js';
-import { drawnBreak } from './drawn.js';
+import { PageWalk, drawnBreak } from './drawn.js';
+import { loadPdfJs } from './gate.js';
 
 const CATALOG: RawObject = [1, '<< /Type /Catalog /Pages 2 0 R >>'];
 const PAGES: RawObject = [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'];
@@ -85,5 +86,27 @@ describe('drawnBreak: the pictures pdf.js draws, under "blur" and "hide"', () =>
     ]);
     expect(await drawnBreak(lying, 'blur', [quote], 1)).toEqual({ code: 'withheld', reason: 'page 1: withheld text is in the glyphs pdf.js draws' });
     expect(await drawnBreak(lying, 'blur', [], 1)).toBeNull();
+  });
+});
+
+describe('PageWalk: an object pdf.js names before it has sent it', () => {
+  /** A page whose objects arrive only through the callback, after `ms`, or never. */
+  const later = (data: unknown, ms: number | null) => {
+    const pool = {
+      has: () => false,
+      get: (_id: string, callback: (value: unknown) => void) => void (ms === null ? undefined : setTimeout(() => callback(data), ms)),
+    };
+    return { objs: pool, commonObjs: pool } as unknown as ConstructorParameters<typeof PageWalk>[1];
+  };
+
+  it('waits for it, and refuses the page when it never comes', async () => {
+    const pdfjs = await loadPdfJs();
+    const list = { fnArray: [pdfjs.OPS.shadingFill], argsArray: [['pattern_p1']] };
+    expect(await new PageWalk(pdfjs, later(['Mesh', 6], 10), 1, 1_000).read(list)).toBe('pdf.js draws a shading of type 6');
+    expect(await new PageWalk(pdfjs, later(['RadialAxial', 'axial'], 10), 1, 1_000).read(list)).toBeNull();
+    expect(await new PageWalk(pdfjs, later(null, null), 1, 20).read(list)).toBe('pdf.js draws a shading it could not read');
+    // A global id (a Type 3 glyph's) is looked up among the document's objects.
+    const glyphList = { fnArray: [pdfjs.OPS.shadingFill], argsArray: [['g_d0_type3_pattern_p2']] };
+    expect(await new PageWalk(pdfjs, later(['Mesh', 1], 10), 1, 1_000).read(glyphList)).toBe('pdf.js draws a shading of type 1');
   });
 });
