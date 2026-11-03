@@ -18,11 +18,14 @@
 // throws a RetryableEngineError, which the run does not store: no copy is
 // put, the file stays queued, and the next run after the lease takes it again
 // (startRegenerator's onError logs the code). Retries end (fix round 1, S1):
-// a regenerator counts each file's retryable failures, and at the
-// MAX_ENGINE_ATTEMPTS-th it stores the copies refused with a fixed reason and
-// finishes the file. The count lives in the regenerator, where the job's run
-// state already does (no migration): a worker restart starts it again, and
-// nothing in a copy can crash the worker any more (the gate runs outside it).
+// a retryable failure on a file's MAX_ENGINE_ATTEMPTS-th attempt stores the
+// copies refused with a fixed reason (GAVE_UP) and finishes the file. The
+// count is in the database (0021, fix round 3, S2): pdf_regen_claim counts
+// every claim, before any engine reads the file, so neither a worker restart
+// nor a run that never finishes (a check child of the worker's uid can kill
+// the worker in the in-pod mode) starts it again. A file claimed more than
+// MAX_ENGINE_ATTEMPTS times without finishing is given up on as soon as it
+// is claimed, without asking the engine again. Finishing sets it back.
 // ============================================================================
 import type { Db } from '../db/pool.js';
 import { AUDIENCES } from '../redaction/policy.js';
@@ -48,8 +51,6 @@ export interface RegenerateOptions {
   redact?: Redact;
   /** How long a run holds its file before another run may take it over. */
   leaseSeconds?: number;
-  /** Retryable failures so far, by file (startRegenerator keeps one); without it a run never gives up. */
-  attempts?: Map<string, number>;
 }
 
 /** A copy's bytes, or why there is none. */
@@ -68,10 +69,11 @@ async function make(redact: Redact, original: Uint8Array, request: RedactRequest
 /** One run: null when nothing is queued; `done` is false when the run lost its claim or the file was queued again meanwhile. */
 export async function regenerateOne(db: Query, options: RegenerateOptions = {}): Promise<{ fileId: string; done: boolean } | null> {
   const redact = options.redact ?? redactPdf;
-  const claimed = await db.query<{ file_id: string; claim: string }>(`SELECT file_id, claim FROM pdf_regen_claim($1)`, [options.leaseSeconds ?? 600]);
+  const claimed = await db.query<{ file_id: string; claim: string; attempts: number }>(`SELECT file_id, claim, attempts FROM pdf_regen_claim($1)`, [options.leaseSeconds ?? 600]);
   const row = claimed.rows[0];
   if (row === undefined) return null;
-  const { file_id: fileId, claim } = row;
+  // attempts counts this claim too (0021).
+  const { file_id: fileId, claim, attempts } = row;
   const targets = new Map<string, { hash: Buffer; request: RedactRequest }>();
   for (const audience of AUDIENCES) {
     const inputs = await inputsFor(db, fileId, audience);
@@ -85,16 +87,14 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
       const original = await db.query<{ bytes: Buffer }>(`SELECT pdf_regen_original($1, $2) AS bytes`, [fileId, claim]);
       const bytes = new Uint8Array((original.rows[0] as { bytes: Buffer }).bytes);
       for (const target of missing) {
-        let copy: { pdf: Buffer | null; reason: string | null };
-        try {
-          copy = await make(redact, bytes, target.request);
-        } catch (error) {
-          const failures = (options.attempts?.get(fileId) ?? 0) + 1;
-          if (options.attempts === undefined || failures < MAX_ENGINE_ATTEMPTS) {
-            options.attempts?.set(fileId, failures);
-            throw error;
+        let copy: { pdf: Buffer | null; reason: string | null } = { pdf: null, reason: GAVE_UP };
+        // Past the cap, earlier runs died before they finished: the engine is not asked again.
+        if (attempts <= MAX_ENGINE_ATTEMPTS) {
+          try {
+            copy = await make(redact, bytes, target.request);
+          } catch (error) {
+            if (attempts < MAX_ENGINE_ATTEMPTS) throw error;
           }
-          copy = { pdf: null, reason: GAVE_UP };
         }
         await db.query(`SELECT pdf_copy_put($1, $2, $3, $4, $5, $6)`, [fileId, claim, target.hash, ENGINE_VERSION, copy.pdf, copy.reason]);
       }
@@ -109,7 +109,6 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
       ]);
       return finished.rows[0]?.done === true;
     });
-    options.attempts?.delete(fileId);
     return { fileId, done };
   } catch (error) {
     // The lease ran out and another run holds the file now.
@@ -130,7 +129,6 @@ export function startRegenerator(
   options: RegenerateOptions & { db: Query; intervalMs?: number; onError?: (error: unknown) => void },
 ): { stop(): Promise<void> } {
   const interval = options.intervalMs ?? 5_000;
-  const runs = { ...options, attempts: options.attempts ?? new Map<string, number>() };
   let stopped = false;
   let current: Promise<void> = Promise.resolve();
   let timer: NodeJS.Timeout | undefined;
@@ -139,7 +137,7 @@ export function startRegenerator(
     timer.unref();
   };
   function tick(): void {
-    current = drain(options.db, runs).then(
+    current = drain(options.db, options).then(
       () => undefined,
       (error: unknown) => options.onError?.(error),
     );

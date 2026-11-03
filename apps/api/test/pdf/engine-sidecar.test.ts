@@ -8,7 +8,7 @@
 // ============================================================================
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   MAX_INPUT_BYTES,
   MAX_OUTPUT_BYTES,
@@ -21,7 +21,7 @@ import {
   encodeRequest,
 } from '../../src/pdf/engine-protocol.js';
 import { checkCopy } from '../../src/pdf/gate.js';
-import { MAX_ENGINE_ATTEMPTS, RetryableEngineError, regenerateOne, startRegenerator } from '../../src/pdf/regenerate.js';
+import { GAVE_UP, MAX_ENGINE_ATTEMPTS, type Redact, RetryableEngineError, regenerateOne, startRegenerator } from '../../src/pdf/regenerate.js';
 import { socketRedact } from '../../src/pdf/socket-engine.js';
 import { MAX_ORIGINAL_BYTES, readPdf, storeOriginal } from '../../src/pdf/store.js';
 import { workerRedact } from '../../src/pdf/worker.js';
@@ -505,5 +505,66 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: a job whose sidecar is gone, on a re
     expect(rows.rows.length).toBeGreaterThan(0);
     for (const row of rows.rows) expect(row).toEqual({ status: 'refused', reason: `the engine could not be reached in ${MAX_ENGINE_ATTEMPTS} attempts`, bytes: null });
     expect((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [stuck])).rowCount).toBe(0);
+  }, 60_000);
+
+  /** A new queued file with a withheld phone: its original stored, so the next run claims it. */
+  async function queuedFile(slug: string): Promise<string> {
+    const bytes = await linesPdf(['Picnic flyer', `Rides: call ${PHONE}.`]);
+    const office = (await api.pool.query<{ id: string }>(`SELECT id FROM office WHERE slug = 'publications'`)).rows[0]!.id;
+    const { itemId, versionId } = await publishItem(api.pool, { slug, officeId: office, title: slug, body: { blocks: [] }, files: [{ objectKey: `k-${slug}`, audience: 'public', bytes }] });
+    const id = (await api.pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [versionId])).rows[0]!.id;
+    await storeOriginal(api.pool, { fileId: id, bytes, ...STORER });
+    await api.pool.query(`SELECT redaction_mark_add('content_item', $1, 'body', $2, 'member_phone', $3, $4, NULL)`, [itemId, PHONE, STORER.sub, STORER.groups]);
+    return id;
+  }
+  const attempts = async (id: string): Promise<number | undefined> => (await api.pool.query<{ attempts: number }>(`SELECT attempts FROM pdf_regen WHERE file_id = $1`, [id])).rows[0]?.attempts;
+  const gaveUp = async (id: string): Promise<void> => {
+    const rows = await api.pool.query<{ status: string; reason: string | null; bytes: Buffer | null }>(`SELECT status, reason, bytes FROM pdf_copy WHERE file_id = $1`, [id]);
+    expect(rows.rows.length).toBeGreaterThan(0);
+    for (const row of rows.rows) expect(row).toEqual({ status: 'refused', reason: GAVE_UP, bytes: null });
+    expect(await attempts(id)).toBeUndefined();
+  };
+
+  it('UNTRUSTED-PDF-GATE sidecar: the attempt count lives in pdf_regen (fix round 3, S2): runs by a worker restarted before each still end at MAX_ENGINE_ATTEMPTS', async () => {
+    const place = socketDir();
+    dirs.push(place);
+    const gatePlace = socketDir('gate.sock');
+    dirs.push(gatePlace);
+    const redact = workerRedact({ PDF_ENGINE_SOCKET: place.socket, PDF_GATE_SOCKET: gatePlace.socket }, { socketDirs: [place.dir], gateSocketDirs: [gatePlace.dir] });
+    const id = await queuedFile('flyer-s2-restart');
+    // Each run is a new regenerateOne with nothing kept between runs, as a restarted worker's would be.
+    for (let run = 1; run < MAX_ENGINE_ATTEMPTS; run++) {
+      await expect(regenerateOne(api.worker, { redact, leaseSeconds: 1 }), `run ${run}`).rejects.toBeInstanceOf(RetryableEngineError);
+      expect(await attempts(id), `run ${run}`).toBe(run);
+      await sleep(1_100);
+    }
+    expect(await regenerateOne(api.worker, { redact, leaseSeconds: 1 })).toEqual({ fileId: id, done: true });
+    await gaveUp(id);
+  }, 60_000);
+
+  it('UNTRUSTED-PDF-GATE sidecar: a file whose runs never finish (a check child that kills the worker mid-job) is given up on after MAX_ENGINE_ATTEMPTS claims, without asking the engine again (S2)', async () => {
+    const id = await queuedFile('flyer-s2-killed');
+    // A killed worker records no failure: only its claim, which lapses with its lease.
+    for (let run = 1; run <= MAX_ENGINE_ATTEMPTS; run++) {
+      expect((await api.worker.query<{ file_id: string }>(`SELECT file_id FROM pdf_regen_claim(1)`)).rows, `claim ${run}`).toEqual([{ file_id: id }]);
+      await sleep(1_100);
+    }
+    const asked = vi.fn<Redact>(() => Promise.reject(new Error('the engine was asked')));
+    expect(await regenerateOne(api.worker, { redact: asked, leaseSeconds: 60 })).toEqual({ fileId: id, done: true });
+    expect(asked).not.toHaveBeenCalled();
+    await gaveUp(id);
+  }, 60_000);
+
+  it('UNTRUSTED-PDF-GATE sidecar: a run that finishes sets the count back (S2)', async () => {
+    const id = await queuedFile('flyer-s2-reset');
+    expect((await api.worker.query(`SELECT file_id FROM pdf_regen_claim(1)`)).rows).toEqual([{ file_id: id }]);
+    await sleep(1_100);
+    // The file is queued again while the run works (an officer's change): finish clears the claim and the count.
+    const engine: Redact = async () => {
+      await api.pool.query(`SELECT redaction_mark_add('content_item', (SELECT item_id FROM content_version WHERE id = (SELECT version_id FROM stored_file WHERE id = $1)), 'body', 'Picnic', 'member_phone', $2, $3, NULL)`, [id, STORER.sub, STORER.groups]);
+      return { kind: 'refused', reason: 'refused by the stand-in' };
+    };
+    expect(await regenerateOne(api.worker, { redact: engine, leaseSeconds: 60 })).toEqual({ fileId: id, done: false });
+    expect(await attempts(id)).toBe(0);
   }, 60_000);
 });
