@@ -126,7 +126,8 @@ describe('pictureWindows and keepsPicture', () => {
     // The same bytes inside a string are text, not a picture.
     const quoted = Buffer.concat([Buffer.from('BT (BI /W 32 ID ', 'latin1'), Buffer.from(varied.toString('hex'), 'latin1'), Buffer.from(' EI) Tj ET', 'latin1')]);
     expect((await pictureWindows(await original(quoted))).size).toBe(0);
-    // A BI with no ID after it has no data to read.
+    // A BI with no ID after it has no data to read, nor has content that cannot be read to its end.
     expect((await pictureWindows(await original(Buffer.from('q BI /W 32 /H 20 Q', 'latin1'))))).toHaveProperty('size', 0);
+    expect((await pictureWindows(await original(Buffer.from('BT (no end', 'latin1'))))).toHaveProperty('size', 0);
   });
 });
