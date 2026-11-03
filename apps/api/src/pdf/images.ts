@@ -35,7 +35,7 @@ const DCT = PDFName.of('DCTDecode');
 const DECODABLE = new Set(['/FlateDecode', '/LZWDecode', '/ASCIIHexDecode', '/ASCII85Decode', '/RunLengthDecode']);
 const WINDOW = 64;
 
-interface Pixels {
+export interface Pixels {
   width: number;
   height: number;
   channels: 1 | 3;
@@ -56,8 +56,8 @@ function channelsOf(context: PDFContext, space: unknown): 1 | 3 | null {
   return null;
 }
 
-/** A picture's pixels, or null when it cannot be decoded. */
-function decodePicture(picture: PDFRawStream): Pixels | null {
+/** A picture's pixels, or null when it cannot be decoded. Exported for the gate's check (gate-rules.ts). */
+export function decodePicture(picture: PDFRawStream): Pixels | null {
   const { dict } = picture;
   const number = (key: string): number | undefined => {
     const value = dict.lookup(PDFName.of(key));

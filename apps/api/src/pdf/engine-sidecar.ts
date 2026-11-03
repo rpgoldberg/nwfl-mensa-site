@@ -1,8 +1,10 @@
 // ============================================================================
 // The PDF engine sidecar's entrypoint (UNTRUSTED-PDF-GATE):
 // `node dist/pdf/engine-sidecar.js`, same image as the API and the worker, in
-// a container of its own beside the worker (sidecar.ts). Argument, env and
-// signal wiring only: sidecarMain is tested.
+// a container of its own beside the worker (sidecar.ts), started with args so
+// dumb-init stays PID 1. Argument, env and signal wiring only: sidecarMain is
+// tested. A replaced socket or a failed sweep exits 1, so the kubelet
+// restarts the container.
 // ============================================================================
 import { type Sidecar, sidecarMain } from './sidecar.js';
 
@@ -23,7 +25,12 @@ const stop = (signal: NodeJS.Signals): void => {
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
 
-const started = await sidecarMain(process.argv.slice(2), process.env, log);
+const started = await sidecarMain(process.argv.slice(2), process.env, log, {
+  onFatal: (reason) => {
+    log(`the engine sidecar stops: ${reason}`);
+    process.exit(1);
+  },
+});
 if ('code' in started) process.exit(started.code);
 running.sidecar = started.sidecar;
 if (stopping) close(started.sidecar);

@@ -11,15 +11,20 @@
 //
 // UNTRUSTED-PDF-GATE: the engine is the in-pod child (isolated.ts) unless
 // PDF_ENGINE_SOCKET names the engine sidecar's socket (socket-engine.ts); then
-// only the sidecar, never a fallback. Either way the output gate is re-run
-// here on every copy before it is stored (rerun.ts).
+// only the sidecar, never a fallback, and PDF_GATE_SOCKET must name the gate
+// sidecar's (socket-gate.ts), or the worker refuses to start. Either way the
+// output gate is re-run on every copy before it is stored (rerun.ts), and
+// never in this process: in the gate sidecar, or (in the in-pod mode, the
+// pre-sidecar mode only) in a capped child of the worker (gate-isolated.ts).
 // ============================================================================
 import pg from 'pg';
 import { type Env, type Warn, onIdleError, poolConfigFromEnv } from '../db/pool.js';
+import { isolatedGate } from './gate-isolated.js';
 import { isolatedRedact } from './isolated.js';
 import { type Redact, type RegenerateOptions, startRegenerator } from './regenerate.js';
-import { withGateRerun } from './rerun.js';
-import { engineSocketPath, socketRedact } from './socket-engine.js';
+import { type Gate, withGateRerun } from './rerun.js';
+import { socketRedact, workerSockets } from './socket-engine.js';
+import { socketGate } from './socket-gate.js';
 import { type TenantGate, type TenantGateOptions, policyTenants, startTenantGate } from '../tenant.js';
 
 export const WORKER_ROLE = 'nwfl_worker';
@@ -50,25 +55,43 @@ export interface EngineOptions {
   engine?: string;
   /** Where PDF_ENGINE_SOCKET may point (default /run/pdf-engine); another, for tests. */
   socketDirs?: readonly string[];
-  /** How long the worker waits for the sidecar's reply (default SOCKET_TIMEOUT_MS). */
+  /** Where PDF_GATE_SOCKET may point (default /run/pdf-gate); another, for tests. */
+  gateSocketDirs?: readonly string[];
+  /** How long the worker waits for the engine sidecar's reply (default SOCKET_TIMEOUT_MS). */
   engineTimeoutMs?: number;
+  /** How long the worker waits for the gate sidecar's reply (default GATE_SOCKET_TIMEOUT_MS). */
+  gateTimeoutMs?: number;
   /** An engine of the caller's; the gate is still re-run on it. */
   redact?: Redact;
+  /** The in-pod gate child's module (default the built gate-child.js), its Node flags, deadline and memory cap; for tests. */
+  gateChild?: string;
+  gateNodeFlags?: readonly string[];
+  gateChildTimeoutMs?: number;
+  gateMaxRssBytes?: number;
 }
 
 /**
- * The engine the worker makes copies with: the sidecar when PDF_ENGINE_SOCKET is set, else the
- * in-pod child, with the output gate re-run on every copy. Throws for a PDF_ENGINE_SOCKET outside
- * the allowed directory.
+ * The engine the worker makes copies with, and the gate that checks each copy: the sidecars when
+ * PDF_ENGINE_SOCKET (and so PDF_GATE_SOCKET) is set, else the in-pod children. Throws for a socket
+ * outside its directory, PDF_ENGINE_SOCKET without PDF_GATE_SOCKET, or both in one directory.
  */
 export function workerRedact(env: Env, options: EngineOptions): Redact {
-  const socket = engineSocketPath(env, options.socketDirs);
+  const sockets = workerSockets(env, { engineDirs: options.socketDirs, gateDirs: options.gateSocketDirs });
   const engine =
     options.redact ??
-    (socket === undefined
+    (sockets.engine === undefined
       ? isolatedRedact(options.engine === undefined ? {} : { module: options.engine })
-      : socketRedact({ path: socket, ...(options.engineTimeoutMs === undefined ? {} : { timeoutMs: options.engineTimeoutMs }) }));
-  return withGateRerun(engine);
+      : socketRedact({ path: sockets.engine, ...(options.engineTimeoutMs === undefined ? {} : { timeoutMs: options.engineTimeoutMs }) }));
+  const gate: Gate =
+    sockets.gate === undefined
+      ? isolatedGate({
+          ...(options.gateChild === undefined ? {} : { module: options.gateChild }),
+          ...(options.gateNodeFlags === undefined ? {} : { nodeFlags: options.gateNodeFlags }),
+          ...(options.gateChildTimeoutMs === undefined ? {} : { timeoutMs: options.gateChildTimeoutMs }),
+          ...(options.gateMaxRssBytes === undefined ? {} : { maxRssBytes: options.gateMaxRssBytes }),
+        })
+      : socketGate({ path: sockets.gate, ...(options.gateTimeoutMs === undefined ? {} : { timeoutMs: options.gateTimeoutMs }) });
+  return withGateRerun(engine, gate);
 }
 
 /**

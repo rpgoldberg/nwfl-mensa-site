@@ -2,9 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GATE_CHILD_SOURCE, NODE_FLAGS } from '../../test/helpers/sidecar.js';
 import { RetryableEngineError } from './regenerate.js';
-import { RERUN_REFUSAL } from './rerun.js';
+import { RERUN_REASONS, RERUN_REFUSAL } from './rerun.js';
+import { startSidecar } from './sidecar.js';
 import { WORKER_ROLE, createWorkerPool, runWorker, workerPoolConfig, workerRedact } from './worker.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
@@ -81,34 +83,62 @@ describe('runWorker', () => {
   });
 });
 
-describe('workerRedact: the engine the worker uses, chosen by PDF_ENGINE_SOCKET (UNTRUSTED-PDF-GATE)', () => {
+describe('workerRedact: the engine and the gate the worker uses, chosen by PDF_ENGINE_SOCKET and PDF_GATE_SOCKET (UNTRUSTED-PDF-GATE)', () => {
   const ONE = Uint8Array.from([1, 2, 3]);
+  const gateChild = (name: string): string => fileURLToPath(new URL(`../../test/pdf/gate-children/${name}.ts`, import.meta.url));
+  const dirs: string[] = [];
+  const fresh = (): string => {
+    const made = mkdtempSync(path.join(tmpdir(), 'nwfl-wr-'));
+    dirs.push(made);
+    return made;
+  };
+  afterEach(() => {
+    for (const made of dirs.splice(0)) rmSync(made, { recursive: true, force: true });
+  });
 
-  it('without it, forks the in-pod child, as before', async () => {
+  it('without the sockets, forks the in-pod engine child, and checks every copy in the in-pod gate child, never in the worker', async () => {
     expect(await workerRedact({}, { engine: child('refuse') })(ONE, { quotes: ['Kestrel'], redactsAny: true })).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
-    expect(await workerRedact({}, { engine: child('echo') })(ONE, { quotes: [], redactsAny: true })).toEqual({ kind: 'redacted', pdf: Uint8Array.from([3, 2, 1]) });
+    expect(await workerRedact({}, { engine: child('echo'), gateChild: gateChild('pass') })(ONE, { quotes: [], redactsAny: true })).toEqual({ kind: 'redacted', pdf: Uint8Array.from([3, 2, 1]) });
+    expect(await workerRedact({}, { engine: child('echo'), gateChild: gateChild('crash') })(ONE, { quotes: [], redactsAny: true })).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
+    expect(await workerRedact({}, { engine: child('echo'), gateChild: gateChild('hang'), gateChildTimeoutMs: 300 })(ONE, { quotes: [], redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: RERUN_REASONS.unfinished,
+    });
   });
 
-  it('re-runs the output gate on every copy, whatever the engine: one it cannot read is refused', async () => {
-    expect(await workerRedact({}, { engine: child('echo') })(ONE, { quotes: ['Kestrel'], redactsAny: true })).toEqual({ kind: 'refused', reason: RERUN_REFUSAL });
+  it('re-runs the real gate on every copy, whatever the engine: one it cannot read is refused', async () => {
+    const real = { gateChild: GATE_CHILD_SOURCE, gateNodeFlags: NODE_FLAGS };
+    expect(await workerRedact({}, { engine: child('echo'), ...real })(ONE, { quotes: ['Kestrel'], redactsAny: true })).toEqual({ kind: 'refused', reason: RERUN_REFUSAL });
     const given = () => Promise.resolve({ kind: 'redacted' as const, pdf: Uint8Array.from([9]), boxes: [] });
-    expect(await workerRedact({}, { redact: given })(ONE, { quotes: ['Kestrel'], redactsAny: true })).toEqual({ kind: 'refused', reason: RERUN_REFUSAL });
+    expect(await workerRedact({}, { redact: given, ...real })(ONE, { quotes: [], redactsAny: true })).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
   });
 
-  it('with it, talks only to the sidecar: a missing socket fails the job closed, never the in-pod child', async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-wr-'));
+  it('with both sockets, talks only to the sidecars: a missing engine or gate socket fails the job closed, never an in-pod child', async () => {
+    const engineDir = fresh();
+    const gateDir = fresh();
+    const env = { PDF_ENGINE_SOCKET: path.join(engineDir, 'engine.sock'), PDF_GATE_SOCKET: path.join(gateDir, 'gate.sock') };
+    // The in-pod children named here would answer if the worker ever fell back to them.
+    const fallbacks = { engine: child('echo'), gateChild: gateChild('pass'), socketDirs: [engineDir], gateSocketDirs: [gateDir], engineTimeoutMs: 1_000, gateTimeoutMs: 1_000 };
+    const noEngine = workerRedact(env, fallbacks)(ONE, { quotes: ['Kestrel'], redactsAny: true });
+    await expect(noEngine).rejects.toBeInstanceOf(RetryableEngineError);
+    await expect(noEngine).rejects.toThrow('the engine socket is missing');
+    const engine = await startSidecar({ path: env.PDF_ENGINE_SOCKET, module: child('echo'), log: () => {} });
     try {
-      const redact = workerRedact({ PDF_ENGINE_SOCKET: path.join(dir, 'engine.sock') }, { socketDirs: [dir], engine: child('refuse'), engineTimeoutMs: 1_000 });
-      const job = redact(ONE, { quotes: ['Kestrel'], redactsAny: true });
-      await expect(job).rejects.toBeInstanceOf(RetryableEngineError);
-      await expect(job).rejects.toThrow('the engine socket is missing');
+      const noGate = workerRedact(env, fallbacks)(ONE, { quotes: ['Kestrel'], redactsAny: true });
+      await expect(noGate).rejects.toBeInstanceOf(RetryableEngineError);
+      await expect(noGate).rejects.toThrow('the gate socket is missing');
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      await engine.close();
     }
   });
 
-  it('refuses a socket outside /run/pdf-engine, and so does runWorker, before it opens a pool', () => {
+  it('refuses PDF_ENGINE_SOCKET without PDF_GATE_SOCKET, or either outside its directory, and so does runWorker, before it opens a pool', () => {
     expect(() => workerRedact({ PDF_ENGINE_SOCKET: 'engine.sock' }, {})).toThrow('PDF_ENGINE_SOCKET must be an absolute path directly in /run/pdf-engine');
+    expect(() => workerRedact({ PDF_ENGINE_SOCKET: '/run/pdf-engine/engine.sock' }, {})).toThrow('PDF_GATE_SOCKET must be set whenever PDF_ENGINE_SOCKET is');
+    expect(() => workerRedact({ PDF_ENGINE_SOCKET: '/run/pdf-engine/engine.sock', PDF_GATE_SOCKET: '/run/pdf-engine/gate.sock' }, {})).toThrow(
+      'PDF_GATE_SOCKET must be an absolute path directly in /run/pdf-gate',
+    );
     expect(() => runWorker({ env: { PGHOST: '127.0.0.1', PGPORT: '1', PDF_ENGINE_SOCKET: '/tmp/engine.sock' }, intervalMs: 3_600_000 })).toThrow('PDF_ENGINE_SOCKET');
+    expect(() => runWorker({ env: { PGHOST: '127.0.0.1', PGPORT: '1', PDF_ENGINE_SOCKET: '/run/pdf-engine/engine.sock' }, intervalMs: 3_600_000 })).toThrow('PDF_GATE_SOCKET');
   });
 });

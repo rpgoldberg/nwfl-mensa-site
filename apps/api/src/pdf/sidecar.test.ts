@@ -2,7 +2,7 @@
 // (test/pdf/engine-sidecar.test.ts) runs the same paths through the real entry as a process of its
 // own; here they are covered. The engines are stand-ins (test/pdf/children).
 import { spawn } from 'node:child_process';
-import { lstatSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REQUEST_MAGIC, encodeRequest } from './engine-protocol.js';
 import { RetryableEngineError } from './regenerate.js';
-import { DEFAULT_SOCKET, READ_TIMEOUT_MS, SOCKET_MODE, type Sidecar, refusedEnv, sidecarMain, startSidecar } from './sidecar.js';
+import { ALLOWED_ENV, DEFAULT_SOCKET, ENGINE_SOCKET_DIR, READ_TIMEOUT_MS, SOCKET_MODE, type Sidecar, type System, WATCH_MS, refusedEnv, sidecarMain, startSidecar } from './sidecar.js';
 import { socketRedact } from './socket-engine.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
@@ -49,27 +49,83 @@ function exchange(socket: string, bytes: Uint8Array, end = false): Promise<Buffe
   });
 }
 
-describe('refusedEnv', () => {
-  it('names every variable that could hold a database login, a token, a secret, a key or a session', () => {
+describe('refusedEnv: an allow-list (S2)', () => {
+  it('names every variable that is not on the allow-list, a credential or not, in any case', () => {
     const env = {
       DATABASE_URL: 'x',
       PGPASSWORD: 'x',
-      PGHOST: 'x',
-      pguser: 'x',
-      GH_TOKEN: 'x',
-      tokenFile: 'x',
-      APP_SECRET: 'x',
-      API_KEY: 'x',
-      SESSION_COOKIE: 'x',
+      POSTGRES_PASSWORD: 'x',
+      DB_PASSWORD: 'x',
+      PASSWORD: 'x',
+      MYSQL_PWD: 'x',
+      REDIS_URL: 'x',
+      MONGODB_URI: 'x',
+      SENTRY_DSN: 'x',
+      GOOGLE_APPLICATION_CREDENTIALS: 'x',
+      AWS_SHARED_CREDENTIALS_FILE: 'x',
+      SMTP_PASS: 'x',
+      NPM_CONFIG__AUTH: 'x',
+      CREDENTIALS_DIRECTORY: 'x',
+      NODE_OPTIONS: '--require /tmp/x.js',
+      path: '/usr/bin',
+      KUBERNETES_SERVICE_HOST_EXTRA: 'x',
+      PDF_SECRET: 'x',
       NODE_ENV: 'production',
       HOME: '/',
       PATH: '/usr/bin',
-      SERVICE_VERSION: '1',
-      KUBERNETES_SERVICE_HOST: '10.0.0.1',
-      DATABASE: 'not a url',
     };
-    expect(refusedEnv(env)).toEqual(['API_KEY', 'APP_SECRET', 'DATABASE_URL', 'GH_TOKEN', 'PGHOST', 'PGPASSWORD', 'SESSION_COOKIE', 'pguser', 'tokenFile']);
-    expect(refusedEnv({ NODE_ENV: 'production' })).toEqual([]);
+    expect(refusedEnv(env)).toEqual([
+      'AWS_SHARED_CREDENTIALS_FILE',
+      'CREDENTIALS_DIRECTORY',
+      'DATABASE_URL',
+      'DB_PASSWORD',
+      'GOOGLE_APPLICATION_CREDENTIALS',
+      'KUBERNETES_SERVICE_HOST_EXTRA',
+      'MONGODB_URI',
+      'MYSQL_PWD',
+      'NODE_OPTIONS',
+      'NPM_CONFIG__AUTH',
+      'PASSWORD',
+      'PDF_SECRET',
+      'PGPASSWORD',
+      'POSTGRES_PASSWORD',
+      'REDIS_URL',
+      'SENTRY_DSN',
+      'SMTP_PASS',
+      'path',
+    ]);
+  });
+
+  it('passes what the image, the container runtime and the kubelet set, and nothing else', () => {
+    expect([...ALLOWED_ENV].sort()).toEqual(
+      [
+        'GRPC_PORT',
+        'HEALTH_PORT',
+        'HOME',
+        'HOSTNAME',
+        'KUBERNETES_PORT',
+        'KUBERNETES_PORT_443_TCP',
+        'KUBERNETES_PORT_443_TCP_ADDR',
+        'KUBERNETES_PORT_443_TCP_PORT',
+        'KUBERNETES_PORT_443_TCP_PROTO',
+        'KUBERNETES_SERVICE_HOST',
+        'KUBERNETES_SERVICE_PORT',
+        'KUBERNETES_SERVICE_PORT_HTTPS',
+        'LANG',
+        'LC_ALL',
+        'NODE_ENV',
+        'NODE_VERSION',
+        'PATH',
+        'PDF_ENGINE_SOCKET',
+        'PDF_GATE_SOCKET',
+        'SERVICE_VERSION',
+        'TERM',
+        'TZ',
+        'YARN_VERSION',
+      ].sort(),
+    );
+    expect(refusedEnv(Object.fromEntries([...ALLOWED_ENV].map((name) => [name, 'x'])))).toEqual([]);
+    expect(refusedEnv({})).toEqual([]);
   });
 });
 
@@ -193,39 +249,191 @@ describe('startSidecar', () => {
   });
 });
 
+describe('startSidecar: the socket it bound is the one it serves (M1)', () => {
+  it('exits on its watch when the socket is replaced or removed, and serves nothing after', async () => {
+    expect(WATCH_MS).toBe(1_000);
+    for (const change of ['replace', 'remove'] as const) {
+      const fatal: string[] = [];
+      const { socket } = await started({ onFatal: (reason) => void fatal.push(reason), watchMs: 50 });
+      if (change === 'remove') unlinkSync(socket);
+      else {
+        unlinkSync(socket);
+        writeFileSync(socket, 'not the socket it bound');
+      }
+      await vi.waitFor(() => expect(fatal, change).toEqual([`the socket at ${socket} was replaced or removed`]));
+      // Once: the watch and the server are stopped.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(fatal, change).toHaveLength(1);
+    }
+  });
+
+  it('checks the socket after every job and before any reply: a job whose child replaced it gets none', async () => {
+    const fatal: string[] = [];
+    const at: { socket?: string } = {};
+    const { socket } = await started({
+      module: child('slow'),
+      onFatal: (reason) => void fatal.push(reason),
+      watchMs: 60_000,
+      // The sweep runs after the job, before its reply: here it plays a process that took the socket.
+      sweep: () => {
+        unlinkSync(at.socket as string);
+        writeFileSync(at.socket as string, 'taken');
+      },
+    });
+    at.socket = socket;
+    const job = socketRedact({ path: socket, timeoutMs: 10_000 })(ONE, REQUEST);
+    await expect(job).rejects.toBeInstanceOf(RetryableEngineError);
+    expect(fatal).toEqual([`the socket at ${socket} was replaced or removed`]);
+  });
+
+  it('checks the socket at each connection', async () => {
+    const fatal: string[] = [];
+    const { dir, socket } = place();
+    const moved = path.join(dir, 'moved.sock');
+    const sidecar = await startSidecar({ path: socket, module: child('refuse'), log: () => {}, onFatal: (reason) => void fatal.push(reason), watchMs: 60_000 });
+    cleanup.push(() => sidecar.close());
+    // The bound socket moved aside and a decoy in its place: a connection still reaching the bound one is refused.
+    renameSync(socket, moved);
+    writeFileSync(socket, 'decoy');
+    expect(await exchange(moved, encodeRequest(ONE, REQUEST))).toEqual(Buffer.alloc(0));
+    expect(fatal).toEqual([`the socket at ${socket} was replaced or removed`]);
+  });
+});
+
+describe('startSidecar: the sweep after each job (M1)', () => {
+  it('sweeps after every job, before its reply, and one job at a time', async () => {
+    const order: string[] = [];
+    const { socket } = await started({ sweep: () => void order.push('sweep') });
+    const redact = socketRedact({ path: socket });
+    await redact(ONE, REQUEST);
+    order.push('reply');
+    await redact(ONE, REQUEST);
+    order.push('reply');
+    expect(order).toEqual(['sweep', 'reply', 'sweep', 'reply']);
+  });
+
+  it('stops serving when a sweep fails: a process it could not kill may still be running', async () => {
+    const fatal: string[] = [];
+    const { socket } = await started({
+      onFatal: (reason) => void fatal.push(reason),
+      sweep: () => {
+        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      },
+    });
+    await expect(socketRedact({ path: socket })(ONE, REQUEST)).rejects.toBeInstanceOf(RetryableEngineError);
+    expect(fatal).toEqual(['the sweep after a job failed (EPERM)']);
+  });
+
+  it('drops an idle connection within the first-bytes deadline (NOTE: idle connections are bounded)', async () => {
+    const { socket, logged } = await started({ firstBytesTimeoutMs: 100, readTimeoutMs: 10_000 });
+    const t0 = Date.now();
+    expect(await exchange(socket, new Uint8Array(0))).toEqual(Buffer.alloc(0));
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(logged).toContain('refused a request: no frame began within 100 ms');
+  });
+});
+
 describe('sidecarMain (the entry\'s logic)', () => {
-  it('refuses to start, exit 2, naming the variables and not their values', async () => {
+  /** A made-up process view: the sidecar (pid 7) under dumb-init (pid 1), each listed process at its uid. */
+  function system(processes: Record<number, number> = { 1: 10002, 7: 10002 }, self: Partial<System> = {}): System & { sent: number[] } {
+    const root = mkdtempSync(path.join(tmpdir(), 'nwfl-proc-'));
+    cleanup.push(() => rmSync(root, { recursive: true, force: true }));
+    for (const [pid, uid] of Object.entries(processes)) {
+      mkdirSync(path.join(root, pid));
+      writeFileSync(path.join(root, pid, 'status'), `Name:\tnode\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`);
+    }
+    const sent: number[] = [];
+    return { pid: 7, ppid: 1, uid: 10002, procRoot: root, kill: (pid) => void sent.push(pid), sent, ...self };
+  }
+  const SHARED = ['--shared-pid-namespace'];
+
+  it('refuses to start, exit 2, naming the variables that are not allowed and not their values', async () => {
     const lines: string[] = [];
-    expect(await sidecarMain([], { NODE_ENV: 'production', PGPASSWORD: 'canary-value', GH_TOKEN: 'canary-token' }, (line) => void lines.push(line))).toEqual({ code: 2 });
-    expect(lines.join('\n')).toContain('GH_TOKEN, PGPASSWORD');
+    expect(await sidecarMain([], { NODE_ENV: 'production', DB_PASSWORD: 'canary-value', REDIS_URL: 'canary-url' }, (line) => void lines.push(line))).toEqual({ code: 2 });
+    expect(lines.join('\n')).toContain('DB_PASSWORD, REDIS_URL');
     expect(lines.join('\n')).not.toContain('canary');
   });
 
   it('refuses arguments it does not know, a relative socket and a bad timeout, exit 2', async () => {
-    for (const argv of [['--port', '80'], ['--socket', 'engine.sock'], ['--timeout-ms', '0'], ['--timeout-ms', 'soon'], ['--timeout-ms', '3600001'], ['extra']]) {
+    const { dir } = place();
+    for (const argv of [['--port', '80'], ['--socket', 'engine.sock'], ['--timeout-ms', '0'], ['--timeout-ms', 'soon'], ['--timeout-ms', '3600001'], ['extra'], ['--socket-dir', 'relative']]) {
       const lines: string[] = [];
-      expect(await sidecarMain(argv, {}, (line) => void lines.push(line)), argv.join(' ')).toEqual({ code: 2 });
+      expect(await sidecarMain([...argv, ...(argv[0] === '--socket-dir' ? [] : ['--socket-dir', dir]), ...SHARED], {}, (line) => void lines.push(line)), argv.join(' ')).toEqual({ code: 2 });
       expect(lines.length, argv.join(' ')).toBeGreaterThan(0);
     }
   });
 
-  it('exits 1 when it cannot listen, and starts on /run/pdf-engine/engine.sock by default', async () => {
-    const { socket } = place();
+  it('binds only directly in its own directory, /run/pdf-engine, and never in another', async () => {
+    expect(ENGINE_SOCKET_DIR).toBe('/run/pdf-engine');
+    expect(DEFAULT_SOCKET).toBe('/run/pdf-engine/engine.sock');
+    const { dir } = place();
+    for (const socket of ['/run/pdf-gate/engine.sock', '/tmp/engine.sock', '/run/pdf-engine/sub/engine.sock', '/run/pdf-engine/../pdf-gate/gate.sock', '/run/pdf-engine/engine.sock\n', `${dir}/engine.sock`]) {
+      const lines: string[] = [];
+      expect(await sidecarMain(['--socket', socket, ...SHARED], {}, (line) => void lines.push(line)), socket).toEqual({ code: 2 });
+      expect(lines.join('\n'), socket).toContain('--socket must be an absolute path directly in /run/pdf-engine');
+    }
+  });
+
+  it('takes --socket-dir and --shared-pid-namespace, for tests, only outside production', async () => {
+    const { dir } = place();
+    for (const argv of [['--socket-dir', dir], SHARED]) {
+      const lines: string[] = [];
+      expect(await sidecarMain(argv, { NODE_ENV: 'production' }, (line) => void lines.push(line), { system: system() }), argv.join(' ')).toEqual({ code: 2 });
+      expect(lines.join('\n'), argv.join(' ')).toContain('is for tests and refused in production');
+    }
+  });
+
+  it('refuses to run as PID 1 or outside a PID namespace of its own, exit 2 (it sweeps that namespace after every job)', async () => {
+    const { dir } = place();
+    const cases: Array<[string, System, RegExp]> = [
+      ['PID 1', system({ 1: 10002 }, { pid: 1, ppid: 0 }), /is PID 1/],
+      ['a shared namespace', system({ 1: 65535, 7: 10002, 9: 10001 }), /another user/],
+      ['a parent other than PID 1', system({ 1: 10002, 5: 10002, 7: 10002 }, { ppid: 5 }), /parent is not PID 1/],
+    ];
+    for (const [name, given, why] of cases) {
+      const lines: string[] = [];
+      expect(await sidecarMain(['--socket-dir', dir], {}, (line) => void lines.push(line), { system: given }), name).toEqual({ code: 2 });
+      expect(lines.join('\n'), name).toMatch(why);
+      expect(lines.join('\n'), name).toContain('needs a PID namespace of its own');
+    }
+  });
+
+  it('in a namespace of its own, sweeps it at start and after every job', async () => {
+    const { dir, socket } = place();
+    const view = system({ 1: 10002, 7: 10002, 30: 10002 });
+    const lines: string[] = [];
+    const result = await sidecarMain(['--socket-dir', dir, '--engine', child('refuse')], {}, (line) => void lines.push(line), { system: view });
+    const { sidecar } = result as { sidecar: Sidecar };
+    cleanup.push(() => sidecar.close());
+    expect(view.sent).toEqual([30]);
+    expect(await socketRedact({ path: socket })(ONE, REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
+    expect(view.sent).toEqual([30, 30]);
+    expect(lines).toContain('engine sidecar listening (sweeping its PID namespace after every job)');
+  });
+
+  it('exits 1 when it cannot listen, and reports a replaced socket to its caller', async () => {
+    const { dir, socket } = place();
     writeFileSync(socket, 'kept');
     const lines: string[] = [];
-    expect(await sidecarMain(['--socket', socket], {}, (line) => void lines.push(line))).toEqual({ code: 1 });
+    expect(await sidecarMain(['--socket-dir', dir, ...SHARED], {}, (line) => void lines.push(line))).toEqual({ code: 1 });
     expect(lines.join('\n')).toContain('is not a socket');
-    expect(DEFAULT_SOCKET).toBe('/run/pdf-engine/engine.sock');
+    rmSync(socket);
+    const fatal: string[] = [];
+    const result = await sidecarMain(['--socket-dir', dir, ...SHARED], {}, () => {}, { onFatal: (reason) => void fatal.push(reason) });
+    const { sidecar } = result as { sidecar: Sidecar };
+    cleanup.push(() => sidecar.close());
+    unlinkSync(socket);
+    await vi.waitFor(() => expect(fatal).toEqual([`the socket at ${socket} was replaced or removed`]), { timeout: 3_000 });
   });
 
   it('starts with an engine and a timeout from its arguments, and says it is listening', async () => {
-    const { socket } = place();
+    const { dir, socket } = place();
     const lines: string[] = [];
-    const result = await sidecarMain(['--socket', socket, '--engine', child('selective'), '--timeout-ms', '200'], { NODE_ENV: 'production' }, (line) => void lines.push(line));
+    const result = await sidecarMain(['--socket-dir', dir, ...SHARED, '--engine', child('selective'), '--timeout-ms', '200'], { NODE_ENV: 'test' }, (line) => void lines.push(line));
     expect('sidecar' in result).toBe(true);
     const { sidecar } = result as { sidecar: Sidecar };
     cleanup.push(() => sidecar.close());
-    expect(lines).toContain('engine sidecar listening');
+    expect(lines).toContain('engine sidecar listening (not sweeping: shared PID namespace, for tests)');
     await expect(socketRedact({ path: socket })(ONE, { quotes: ['hang'], redactsAny: true })).rejects.toThrow('took longer than 200 ms');
   });
 });

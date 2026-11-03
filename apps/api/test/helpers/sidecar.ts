@@ -1,8 +1,8 @@
-// The real engine sidecar (src/pdf/engine-sidecar.ts) as its own process, on a temp unix socket, for
-// the UNTRUSTED-PDF-GATE lift tests. Spawned with an empty environment unless a test gives one, and
-// stopped by the PID recorded here, never by name.
+// The real sidecars (src/pdf/engine-sidecar.ts, src/pdf/gate-sidecar.ts) as processes of their own, on
+// temp unix sockets, for the UNTRUSTED-PDF-GATE lift tests. Spawned with an empty environment unless a
+// test gives one, and stopped by the PID recorded here, never by name.
 import { type ChildProcess, spawn } from 'node:child_process';
-import { lstatSync, mkdtempSync, rmSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,15 +10,34 @@ import { fileURLToPath } from 'node:url';
 
 export const TS_HOOK = fileURLToPath(new URL('./ts-resolve.mjs', import.meta.url));
 export const SIDECAR_ENTRY = fileURLToPath(new URL('../../src/pdf/engine-sidecar.ts', import.meta.url));
+export const GATE_SIDECAR_ENTRY = fileURLToPath(new URL('../../src/pdf/gate-sidecar.ts', import.meta.url));
 export const ENGINE_CHILD_SOURCE = fileURLToPath(new URL('../../src/pdf/engine-child.ts', import.meta.url));
+export const GATE_CHILD_SOURCE = fileURLToPath(new URL('../../src/pdf/gate-child.ts', import.meta.url));
 
 /** A stand-in engine child (test/pdf/children). */
 export const standIn = (name: string): string => fileURLToPath(new URL(`../pdf/children/${name}.ts`, import.meta.url));
+/** A stand-in gate child (test/pdf/gate-children). */
+export const gateStandIn = (name: string): string => fileURLToPath(new URL(`../pdf/gate-children/${name}.ts`, import.meta.url));
 
 /** A fresh directory for one socket; remove() takes it and everything in it away. */
-export function socketDir(): { dir: string; socket: string; remove(): void } {
+export function socketDir(name = 'engine.sock'): { dir: string; socket: string; remove(): void } {
   const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-sc-'));
-  return { dir, socket: path.join(dir, 'engine.sock'), remove: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, socket: path.join(dir, name), remove: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** The pids of live processes (zombies are dead) whose arguments hold `marker`, read from /proc. */
+export function aliveWith(marker: string): number[] {
+  return readdirSync('/proc')
+    .filter((entry) => /^\d+$/.test(entry))
+    .filter((pid) => {
+      try {
+        if (!readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(marker)) return false;
+        return !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+      } catch {
+        return false;
+      }
+    })
+    .map(Number);
 }
 
 export interface Spawned {
@@ -38,9 +57,34 @@ export interface Spawned {
  */
 export const NODE_FLAGS = ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', '--import', TS_HOOK];
 
-/** Spawns the real sidecar entry with these arguments; listening() waits for it to listen. */
-export function spawnSidecar(args: readonly string[], options: { env?: NodeJS.ProcessEnv } = {}): Spawned {
-  const child = spawn(process.execPath, [...NODE_FLAGS, SIDECAR_ENTRY, ...args], { env: options.env ?? {}, stdio: ['ignore', 'ignore', 'pipe'] });
+/** Where the tests find unshare, sh and env: absolute, since the sidecar's environment has no PATH. */
+const UNSHARE = '/usr/bin/unshare';
+const SH = '/bin/sh';
+const ENV = '/usr/bin/env';
+
+/**
+ * Spawns a real sidecar entry (the engine's unless `entry` says otherwise) with these arguments;
+ * listening() waits for it to listen. A temp socket is outside the sidecar's own directory, so given
+ * `--socket <path>` this adds `--socket-dir <its directory>` (refused in production; tests only).
+ *
+ * By default the sidecar runs in the test's own PID namespace with `--shared-pid-namespace` (no
+ * sweep: it would kill this machine's processes). With `namespace`, it runs as a container does, in a
+ * PID namespace of its own (unshare: a user namespace mapping this uid, a new PID namespace and its
+ * own /proc), under /bin/sh as PID 1 (dumb-init's part: it reaps), with an empty environment, and
+ * sweeps that namespace after every job. Stopping it kills unshare, whose child (PID 1) is killed
+ * with it, and so is everything in the namespace.
+ */
+export function spawnSidecar(args: readonly string[], options: { env?: NodeJS.ProcessEnv; entry?: string; namespace?: boolean } = {}): Spawned {
+  const socketAt = args.indexOf('--socket');
+  const extra = [
+    ...(socketAt >= 0 && !args.includes('--socket-dir') ? ['--socket-dir', path.dirname(args[socketAt + 1] as string)] : []),
+    ...(options.namespace === true ? [] : ['--shared-pid-namespace']),
+  ];
+  const node = [process.execPath, ...NODE_FLAGS, options.entry ?? SIDECAR_ENTRY, ...args, ...extra];
+  const child =
+    options.namespace === true
+      ? spawn(UNSHARE, ['--user', '--map-current-user', '--pid', '--fork', '--mount-proc', '--kill-child', SH, '-c', `${ENV} -i "$@"; exit $?`, 'sh', ...node], { env: {}, stdio: ['ignore', 'ignore', 'pipe'] })
+      : spawn(node[0] as string, node.slice(1), { env: options.env ?? {}, stdio: ['ignore', 'ignore', 'pipe'] });
   let err = '';
   child.stderr?.setEncoding('utf8').on('data', (chunk: string) => (err += chunk));
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));

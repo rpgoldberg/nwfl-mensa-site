@@ -6,6 +6,7 @@
 // (its own uid, no secrets, no shared process namespace) is fc's manifest; README, "The engine
 // sidecar". Every name is made up.
 // ============================================================================
+import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -21,14 +22,14 @@ import {
   encodeRequest,
 } from '../../src/pdf/engine-protocol.js';
 import { checkCopy } from '../../src/pdf/gate.js';
-import { RetryableEngineError, regenerateOne } from '../../src/pdf/regenerate.js';
+import { MAX_ENGINE_ATTEMPTS, RetryableEngineError, regenerateOne, startRegenerator } from '../../src/pdf/regenerate.js';
 import { socketRedact } from '../../src/pdf/socket-engine.js';
 import { MAX_ORIGINAL_BYTES, readPdf, storeOriginal } from '../../src/pdf/store.js';
 import { workerRedact } from '../../src/pdf/worker.js';
 import { type Api, insertId, startApi } from '../helpers/api.js';
 import { publishItem } from '../helpers/content.js';
 import { live } from '../helpers/pg.js';
-import { type Spawned, exchange, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
+import { GATE_SIDECAR_ENTRY, type Spawned, aliveWith, exchange, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
 import { extractAll } from './extract.js';
 import { linesPdf } from './fixtures.js';
 
@@ -63,7 +64,7 @@ afterEach(async () => {
 });
 
 describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
-  it('UNTRUSTED-PDF-GATE sidecar: refuses to start when its environment holds a database login, a token, a secret, a key or a session variable, naming no value', async () => {
+  it('UNTRUSTED-PDF-GATE sidecar: refuses to start when its environment holds any variable off its allow-list (a database login, a token, a password, a URL), naming no value', async () => {
     const planted: Record<string, string> = {
       DATABASE_URL: 'postgres://u:canary-db@h/d',
       PGPASSWORD: 'canary-pg-password',
@@ -73,12 +74,16 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
       SIGNING_KEY: 'canary-key',
       SESSION_COOKIE: 'canary-session',
       pgpassword: 'canary-lower-case',
+      POSTGRES_PASSWORD: 'canary-postgres',
+      DB_PASSWORD: 'canary-db-password',
+      REDIS_URL: 'redis://:canary-redis@h',
+      GOOGLE_APPLICATION_CREDENTIALS: '/canary/creds.json',
     };
     await Promise.all(
       Object.entries(planted).map(async ([name, value]) => {
         const place = socketDir();
         dirs.push(place);
-        const spawned = spawnSidecar(['--socket', place.socket], { env: { NODE_ENV: 'production', [name]: value } });
+        const spawned = spawnSidecar(['--socket', place.socket], { env: { NODE_ENV: 'test', [name]: value } });
         started.push(spawned);
         expect(await spawned.exited, name).toEqual({ code: 2, signal: null });
         expect(spawned.stderr(), name).toContain(name);
@@ -87,7 +92,7 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
       }),
     );
     // What the image and Kubernetes set is harmless, and it starts.
-    const { spawned } = await sidecar([], { NODE_ENV: 'production', SERVICE_VERSION: '0.1.0', HOME: '/', KUBERNETES_SERVICE_HOST: '10.0.0.1', GRPC_PORT: '50051' });
+    const { spawned } = await sidecar([], { NODE_ENV: 'test', SERVICE_VERSION: '0.1.0', HOME: '/', KUBERNETES_SERVICE_HOST: '10.0.0.1', GRPC_PORT: '50051', PATH: '/usr/bin' });
     await spawned.stop();
     expect(await spawned.exited).toEqual({ code: 0, signal: null });
   });
@@ -135,16 +140,15 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
     expect(held).toContain((listener as string).trim().split(/\s+/)[6]);
   });
 
-  it('UNTRUSTED-PDF-GATE sidecar: caps the input; a frame declaring more than 10 MiB, or a header over its cap, gets no reply, and the worker never sends one', async () => {
+  it('UNTRUSTED-PDF-GATE sidecar: caps the input; a frame declaring more than 10 MiB, or a header over its cap, gets no reply, and the worker never sends one but refuses the copy', async () => {
     expect(MAX_INPUT_BYTES).toBe(MAX_ORIGINAL_BYTES);
     const { socket } = await sidecar(['--engine', standIn('refuse')]);
     // The sidecar reads the 12-byte prefix, sees the declared size and hangs up without reading on.
     expect(await exchange(socket, prefix(64, MAX_INPUT_BYTES + 1))).toEqual({ reply: Buffer.alloc(0) });
     expect(await exchange(socket, prefix(MAX_REQUEST_HEADER_BYTES + 1, 1))).toEqual({ reply: Buffer.alloc(0) });
-    const over = socketRedact({ path: socket })(new Uint8Array(MAX_INPUT_BYTES + 1), REQUEST);
-    await expect(over).rejects.toBeInstanceOf(RetryableEngineError);
-    await expect(over).rejects.toThrow('the original is outside the engine input cap');
-    await expect(socketRedact({ path: socket })(new Uint8Array(0), REQUEST)).rejects.toBeInstanceOf(RetryableEngineError);
+    // A request that cannot be sent is refused, never retried (S1): the same file would fail the same way.
+    expect(await socketRedact({ path: socket })(new Uint8Array(MAX_INPUT_BYTES + 1), REQUEST)).toEqual({ kind: 'refused', reason: 'the engine request could not be sent: the original is outside the engine input cap' });
+    expect(await socketRedact({ path: socket })(new Uint8Array(0), REQUEST)).toEqual({ kind: 'refused', reason: 'the engine request could not be sent: the original is outside the engine input cap' });
     // And it still serves.
     expect(await socketRedact({ path: socket })(Uint8Array.from([1]), REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
   });
@@ -260,7 +264,9 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
   it('UNTRUSTED-PDF-GATE sidecar: a killed sidecar fails the job closed, as do a socket with no sidecar and no socket at all; nothing falls back to the in-pod child', async () => {
     const { spawned, socket, dir } = await sidecar(['--engine', standIn('slow')]);
     // The in-pod child named here would answer "refused by the engine process" if the worker ever fell back to it.
-    const redact = workerRedact({ PDF_ENGINE_SOCKET: socket }, { socketDirs: [dir], engine: standIn('refuse') });
+    const gatePlace = socketDir('gate.sock');
+    dirs.push(gatePlace);
+    const redact = workerRedact({ PDF_ENGINE_SOCKET: socket, PDF_GATE_SOCKET: gatePlace.socket }, { socketDirs: [dir], gateSocketDirs: [gatePlace.dir], engine: standIn('refuse') });
     const original = await linesPdf(['Picnic flyer']);
     const job = redact(original, REQUEST);
     await sleep(400);
@@ -279,7 +285,7 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
   });
 
   it('UNTRUSTED-PDF-GATE sidecar: forks a fresh child for every copy, with an empty environment; two jobs share no process and no state', async () => {
-    const { spawned, socket } = await sidecar(['--engine', standIn('state')], { NODE_ENV: 'production', SERVICE_VERSION: '0.1.0' });
+    const { spawned, socket } = await sidecar(['--engine', standIn('state')], { NODE_ENV: 'test', SERVICE_VERSION: '0.1.0' });
     const report = async (): Promise<{ pid: number; ppid: number; copies: number; sawMarker: boolean; env: string[] }> => {
       const result = await socketRedact({ path: socket })(Uint8Array.from([1]), REQUEST);
       expect(result.kind).toBe('refused');
@@ -317,6 +323,81 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
   });
 });
 
+describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1), in a PID namespace of its own as in its container', () => {
+  it('UNTRUSTED-PDF-GATE sidecar: kills a double-forked, detached grandchild before the next job, and the next job\'s copy holds only its own data', async () => {
+    const place = socketDir();
+    dirs.push(place);
+    const spawned = spawnSidecar(['--socket', place.socket, '--engine', standIn('persist')], { namespace: true });
+    started.push(spawned);
+    await listening(spawned, place.socket);
+    expect(spawned.stderr()).toContain('engine sidecar listening (sweeping its PID namespace after every job)');
+    const inode = lstatSync(place.socket).ino;
+    const marker = `nwfl-persist-${randomUUID()}`;
+    // The hostile copy: its child leaves a grandchild in a session of its own, which is up before the child answers.
+    expect(await socketRedact({ path: place.socket })(Uint8Array.from([1]), { quotes: ['persist', marker], redactsAny: true })).toEqual({ kind: 'refused', reason: 'left a grandchild' });
+    expect(existsSync(`${place.socket}.${marker}.up`)).toBe(true);
+    expect(aliveWith(marker)).toEqual([]);
+    // Past the 300 ms after which the grandchild would have taken the socket: the sidecar still holds it.
+    await sleep(800);
+    expect(lstatSync(place.socket).ino).toBe(inode);
+    expect(spawned.child.exitCode).toBeNull();
+    // The next job, another file: its copy is its own bytes, and nothing else.
+    const own = Uint8Array.from(Buffer.from('job B: these bytes only'));
+    expect(await socketRedact({ path: place.socket })(own, { quotes: ['other'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: own, boxes: [] });
+  }, 30_000);
+
+  it('UNTRUSTED-PDF-GATE sidecar: the same grandchild outlives its copy where the sidecar cannot sweep (control: the test sees a survivor)', async () => {
+    const place = socketDir();
+    dirs.push(place);
+    const spawned = spawnSidecar(['--socket', place.socket, '--engine', standIn('persist')]);
+    started.push(spawned);
+    await listening(spawned, place.socket);
+    const marker = `nwfl-persist-${randomUUID()}`;
+    await socketRedact({ path: place.socket })(Uint8Array.from([1]), { quotes: ['persist', marker], redactsAny: true });
+    const survivors = aliveWith(marker);
+    try {
+      // The grandchild wrote its pid to its flag file; the middle process may still be ending too.
+      const thief = Number(readFileSync(`${place.socket}.${marker}.up`, 'utf8'));
+      expect(survivors).toContain(thief);
+      // It takes the socket over; the sidecar's watch sees its socket replaced and exits 1.
+      expect(await spawned.exited).toEqual({ code: 1, signal: null });
+      expect(spawned.stderr()).toContain(`the socket at ${place.socket} was replaced or removed`);
+    } finally {
+      for (const pid of survivors) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, 30_000);
+
+  it('UNTRUSTED-PDF-GATE sidecar: exits 1 without a reply when a copy\'s process replaced its socket; the job fails closed', async () => {
+    const place = socketDir();
+    dirs.push(place);
+    const spawned = spawnSidecar(['--socket', place.socket, '--engine', standIn('persist')], { namespace: true });
+    started.push(spawned);
+    await listening(spawned, place.socket);
+    const marker = `nwfl-steal-${randomUUID()}`;
+    const job = socketRedact({ path: place.socket, timeoutMs: 20_000 })(Uint8Array.from([1]), { quotes: ['steal', marker], redactsAny: true });
+    await expect(job).rejects.toBeInstanceOf(RetryableEngineError);
+    expect(await spawned.exited).toEqual({ code: 1, signal: null });
+    expect(spawned.stderr()).toContain(`the socket at ${place.socket} was replaced or removed`);
+    expect(aliveWith(marker)).toEqual([]);
+  }, 30_000);
+
+  it('UNTRUSTED-PDF-GATE sidecar: will not bind outside its own directory, /run/pdf-engine', async () => {
+    const place = socketDir();
+    dirs.push(place);
+    const spawned = spawnSidecar(['--socket', place.socket, '--socket-dir', '/run/pdf-engine']);
+    started.push(spawned);
+    expect(await spawned.exited).toEqual({ code: 2, signal: null });
+    expect(spawned.stderr()).toContain('--socket must be an absolute path directly in /run/pdf-engine');
+    expect(existsSync(place.socket)).toBe(false);
+  });
+});
+
 describe.skipIf(!live)('UNTRUSTED-PDF-GATE: a job whose sidecar is gone, on a real database', () => {
   const STORER = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
   const PHONE = '850-555-0199';
@@ -337,10 +418,21 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: a job whose sidecar is gone, on a re
     await api?.close();
   });
 
+  /** The real gate sidecar, with the real gate child, on a fresh socket. */
+  async function gateSidecar(): Promise<{ socket: string; dir: string }> {
+    const place = socketDir('gate.sock');
+    dirs.push(place);
+    const spawned = spawnSidecar(['--socket', place.socket], { entry: GATE_SIDECAR_ENTRY });
+    started.push(spawned);
+    await listening(spawned, place.socket);
+    return place;
+  }
+
   it('UNTRUSTED-PDF-GATE sidecar: stores no copy and leaves the file queued, never the in-pod child; with the sidecar back, the next run makes the copies', async () => {
     const place = socketDir();
     dirs.push(place);
-    const redact = workerRedact({ PDF_ENGINE_SOCKET: place.socket }, { socketDirs: [place.dir], engine: standIn('refuse') });
+    const gate = await gateSidecar();
+    const redact = workerRedact({ PDF_ENGINE_SOCKET: place.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [place.dir], gateSocketDirs: [gate.dir], engine: standIn('refuse') });
     await expect(regenerateOne(api.worker, { redact, leaseSeconds: 1 })).rejects.toBeInstanceOf(RetryableEngineError);
     expect((await api.pool.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1`, [file])).rowCount).toBe(0);
     expect((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [file])).rowCount).toBe(1);
@@ -359,4 +451,33 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: a job whose sidecar is gone, on a re
     expect(await checkCopy((pub as { pdf: Uint8Array }).pdf, [PHONE])).toBeNull();
     expect((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [file])).rowCount).toBe(0);
   }, 90_000);
+
+  it('UNTRUSTED-PDF-GATE sidecar: retries end (S1); after MAX_ENGINE_ATTEMPTS runs that could not reach the engine, the copies are stored refused with a fixed reason', async () => {
+    expect(MAX_ENGINE_ATTEMPTS).toBe(5);
+    const bytes = await linesPdf(['Picnic flyer', `Rides: call ${PHONE}.`]);
+    const office = (await api.pool.query<{ id: string }>(`SELECT id FROM office WHERE slug = 'publications'`)).rows[0]!.id;
+    const { itemId, versionId } = await publishItem(api.pool, { slug: 'flyer-s1', officeId: office, title: 'Flyer S1', body: { blocks: [] }, files: [{ objectKey: 'k-flyer-s1', audience: 'public', bytes }] });
+    const stuck = (await api.pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [versionId])).rows[0]!.id;
+    await storeOriginal(api.pool, { fileId: stuck, bytes, ...STORER });
+    await api.pool.query(`SELECT redaction_mark_add('content_item', $1, 'body', $2, 'member_phone', $3, $4, NULL)`, [itemId, PHONE, STORER.sub, STORER.groups]);
+    const place = socketDir();
+    dirs.push(place);
+    const gatePlace = socketDir('gate.sock');
+    dirs.push(gatePlace);
+    // No sidecar at all: every run fails closed until the cap.
+    const redact = workerRedact({ PDF_ENGINE_SOCKET: place.socket, PDF_GATE_SOCKET: gatePlace.socket }, { socketDirs: [place.dir], gateSocketDirs: [gatePlace.dir] });
+    const errors: unknown[] = [];
+    const job = startRegenerator({ db: api.worker, redact, leaseSeconds: 1, intervalMs: 50, onError: (error) => void errors.push(error) });
+    try {
+      const deadline = Date.now() + 30_000;
+      while ((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [stuck])).rowCount !== 0 && Date.now() < deadline) await sleep(100);
+    } finally {
+      await job.stop();
+    }
+    expect(errors.filter((error) => error instanceof RetryableEngineError)).toHaveLength(MAX_ENGINE_ATTEMPTS - 1);
+    const rows = await api.pool.query<{ status: string; reason: string | null; bytes: Buffer | null }>(`SELECT status, reason, bytes FROM pdf_copy WHERE file_id = $1`, [stuck]);
+    expect(rows.rows.length).toBeGreaterThan(0);
+    for (const row of rows.rows) expect(row).toEqual({ status: 'refused', reason: `the engine could not be reached in ${MAX_ENGINE_ATTEMPTS} attempts`, bytes: null });
+    expect((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [stuck])).rowCount).toBe(0);
+  }, 60_000);
 });

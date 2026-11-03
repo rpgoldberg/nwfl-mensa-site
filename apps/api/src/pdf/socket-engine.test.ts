@@ -1,13 +1,13 @@
 // The worker's side of the engine sidecar (UNTRUSTED-PDF-GATE): which socket it may use, and how a
 // job fails closed. The sidecar's side is sidecar.test.ts; the lift test runs both as processes.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { REPLY_MAGIC, encodeFrame } from './engine-protocol.js';
 import { RetryableEngineError } from './regenerate.js';
-import { ENGINE_SOCKET_DIRS, SOCKET_TIMEOUT_MS, engineSocketPath, socketRedact } from './socket-engine.js';
+import { ENGINE_SOCKET_DIRS, GATE_SOCKET_DIRS, SOCKET_TIMEOUT_MS, engineSocketPath, gateSocketPath, socketRedact, workerSockets } from './socket-engine.js';
 
 const REQUEST = { quotes: ['Kestrel Ambry'], redactsAny: true, image: 'blur' as const };
 const ONE = Uint8Array.from([1]);
@@ -49,9 +49,42 @@ describe('engineSocketPath (PDF_ENGINE_SOCKET)', () => {
       '/run/pdf-engine/..',
       `/run/pdf-engine/${'s'.repeat(100)}.sock`,
       '/run/pdf-engine-other/engine.sock',
+      // Whitespace and control characters (a YAML block scalar leaves a trailing newline), and anything outside plain path letters.
+      '/run/pdf-engine/engine.sock\n',
+      ' /run/pdf-engine/engine.sock',
+      '/run/pdf-engine/engine sock',
+      '/run/pdf-engine/engine.sock\t',
+      '/run/pdf-engine/engine\u0000.sock',
+      '/run/pdf-engine/engine.sock\r',
+      '/run/pdf-engine/\u00e9ngine.sock',
     ]) {
       expect(() => engineSocketPath({ PDF_ENGINE_SOCKET: value }), value).toThrow('PDF_ENGINE_SOCKET must be an absolute path directly in /run/pdf-engine');
     }
+  });
+});
+
+describe('gateSocketPath and workerSockets (PDF_GATE_SOCKET, M2)', () => {
+  it('takes the gate socket directly in /run/pdf-gate, never in the engine\'s directory', () => {
+    expect(GATE_SOCKET_DIRS).toEqual(['/run/pdf-gate']);
+    expect(gateSocketPath({})).toBeUndefined();
+    expect(gateSocketPath({ PDF_GATE_SOCKET: '/run/pdf-gate/gate.sock' })).toBe('/run/pdf-gate/gate.sock');
+    for (const value of ['/run/pdf-engine/gate.sock', '/run/pdf-gate/gate.sock\n', 'gate.sock', '/run/pdf-gate/']) {
+      expect(() => gateSocketPath({ PDF_GATE_SOCKET: value }), value).toThrow('PDF_GATE_SOCKET must be an absolute path directly in /run/pdf-gate');
+    }
+  });
+
+  it('needs PDF_GATE_SOCKET whenever PDF_ENGINE_SOCKET is set, in another directory', () => {
+    expect(workerSockets({})).toEqual({});
+    expect(workerSockets({ PDF_GATE_SOCKET: '/run/pdf-gate/gate.sock' })).toEqual({ gate: '/run/pdf-gate/gate.sock' });
+    expect(workerSockets({ PDF_ENGINE_SOCKET: '/run/pdf-engine/engine.sock', PDF_GATE_SOCKET: '/run/pdf-gate/gate.sock' })).toEqual({
+      engine: '/run/pdf-engine/engine.sock',
+      gate: '/run/pdf-gate/gate.sock',
+    });
+    expect(() => workerSockets({ PDF_ENGINE_SOCKET: '/run/pdf-engine/engine.sock' })).toThrow('PDF_GATE_SOCKET must be set whenever PDF_ENGINE_SOCKET is');
+    // Tests may move the directories, but never to one shared by both.
+    expect(() => workerSockets({ PDF_ENGINE_SOCKET: '/tmp/s/engine.sock', PDF_GATE_SOCKET: '/tmp/s/gate.sock' }, { engineDirs: ['/tmp/s'], gateDirs: ['/tmp/s'] })).toThrow(
+      'PDF_ENGINE_SOCKET and PDF_GATE_SOCKET must be in different directories',
+    );
   });
 });
 
@@ -71,10 +104,34 @@ describe('socketRedact', () => {
     await expect(unchecked).rejects.toThrow('the engine socket cannot be checked (ENOTDIR)');
   });
 
-  it('fails the job closed when the request cannot be sent, before connecting', async () => {
-    const tooMany = socketRedact({ path: '/run/pdf-engine/engine.sock' })(ONE, { quotes: Array.from({ length: 5000 }, () => 'abc'), redactsAny: true });
-    await expect(tooMany).rejects.toBeInstanceOf(RetryableEngineError);
-    await expect(tooMany).rejects.toThrow('too many quotes');
+  it('refuses, never retries, a request it cannot send: the same request would fail the same way (S1)', async () => {
+    expect(await socketRedact({ path: '/run/pdf-engine/engine.sock' })(ONE, { quotes: Array.from({ length: 5000 }, () => 'abc'), redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: 'the engine request could not be sent: too many quotes',
+    });
+    // 2200 marks of 500 characters each are valid marks (0014), and over the request header's cap.
+    expect(await socketRedact({ path: '/run/pdf-engine/engine.sock' })(ONE, { quotes: Array.from({ length: 2200 }, (_, n) => `${n}`.padEnd(500, 'q')), redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: 'the engine request could not be sent: the request header is over its cap',
+    });
+  });
+
+  it('fails the job closed for a symlink at the socket path, even one to a live socket (S4: lstat, not stat)', async () => {
+    const at = dir();
+    const real = path.join(at, 'real.sock');
+    let connections = 0;
+    const live = net.createServer((conn) => {
+      connections += 1;
+      conn.destroy();
+    });
+    await new Promise<void>((resolve) => live.listen(real, resolve));
+    cleanup.push(() => new Promise<void>((resolve) => live.close(() => resolve())));
+    const link = path.join(at, 'engine.sock');
+    symlinkSync(real, link);
+    const job = socketRedact({ path: link })(ONE, REQUEST);
+    await expect(job).rejects.toBeInstanceOf(RetryableEngineError);
+    await expect(job).rejects.toThrow('the engine socket path holds something other than a socket');
+    expect(connections).toBe(0);
   });
 
   it('sends the typed request with the image action, and reads the reply', async () => {

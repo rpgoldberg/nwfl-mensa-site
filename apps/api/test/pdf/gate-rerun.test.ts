@@ -1,47 +1,88 @@
 // ============================================================================
 // UNTRUSTED-PDF-GATE (2), a lift test pinned in test/gates/untrusted-pdf.test.ts: the redaction
-// output gate (src/pdf/gate.ts) re-run in the worker, outside the engine, on every copy the engine
-// returns, over either transport, before pdf_copy_put. The engine here is a stand-in that skipped
-// its own gate (test/pdf/children/identity.ts: the original handed back as the "copy"), so what
-// refuses is the worker's re-run alone. Every name is made up.
+// output gate (src/pdf/gate.ts, src/pdf/gate-rules.ts) re-run outside the engine and outside the
+// worker, on every copy the engine returns, before pdf_copy_put. Two transports:
+//   - in-pod: the worker forks the engine child, then a capped gate child (gate-isolated.ts);
+//   - sidecars: the engine sidecar and the gate sidecar (gate-service.ts), each its own process,
+//     here the REAL entries spawned on temp sockets.
+// The engine is a stand-in that skipped its own gate (test/pdf/children/identity.ts: the original
+// handed back as the "copy"), so what refuses is the re-run alone. The worker parses no PDF on
+// either transport: a copy that would crash or stall a parser is refused, and the worker goes on.
+// Every name is made up.
 // ============================================================================
+import { randomUUID } from 'node:crypto';
+import { readFileSync, readdirSync, readlinkSync } from 'node:fs';
+import net from 'node:net';
+import { PDFDocument, PDFName, PDFString, StandardFonts } from '@cantoo/pdf-lib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { GATE_REPLY_MAGIC, encodeFrame, sha256Hex } from '../../src/pdf/engine-protocol.js';
 import { checkCopy } from '../../src/pdf/gate.js';
 import { isolatedRedact } from '../../src/pdf/isolated.js';
 import type { Redact } from '../../src/pdf/regenerate.js';
-import { RERUN_REFUSAL } from '../../src/pdf/rerun.js';
+import { RERUN_REASONS, RERUN_REFUSAL } from '../../src/pdf/rerun.js';
 import { readPdf, storeOriginal } from '../../src/pdf/store.js';
-import { runWorker, workerRedact } from '../../src/pdf/worker.js';
+import { type EngineOptions, runWorker, workerRedact } from '../../src/pdf/worker.js';
 import { type Api, insertId, startApi } from '../helpers/api.js';
 import { publishItem } from '../helpers/content.js';
 import { WORKER, WORKER_PW, live, url } from '../helpers/pg.js';
-import { type Spawned, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
-import { CANARIES, leakFixture, linesPdf } from './fixtures.js';
+import { GATE_CHILD_SOURCE, GATE_SIDECAR_ENTRY, NODE_FLAGS, type Spawned, aliveWith, gateStandIn, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
+import { CANARIES, leakFixture, linesPdf, smallPictureFixture } from './fixtures.js';
+import { flateBomb, manyPages, manyShows } from './hostile.js';
 
 const QUOTE = 'Kestrel Ambry';
 const REQUEST = { quotes: [QUOTE], redactsAny: true };
+const MiB = 1024 * 1024;
 
-let place: ReturnType<typeof socketDir>;
-let sidecar: Spawned;
-/** The worker's engine, as runWorker builds it, over each transport; both run the identity stand-in. */
+const spawned: Spawned[] = [];
+const places: Array<{ remove(): void }> = [];
+let engine: { socket: string; dir: string };
+
+/** A real sidecar (the engine's or the gate's) on a fresh socket, listening. */
+async function sidecar(entry: 'engine' | 'gate', args: readonly string[] = [], options: { namespace?: boolean } = {}): Promise<{ socket: string; dir: string; process: Spawned }> {
+  const place = socketDir(entry === 'gate' ? 'gate.sock' : 'engine.sock');
+  places.push(place);
+  const process = spawnSidecar(['--socket', place.socket, ...args], { ...(entry === 'gate' ? { entry: GATE_SIDECAR_ENTRY } : {}), ...options });
+  spawned.push(process);
+  await listening(process, place.socket);
+  return { socket: place.socket, dir: place.dir, process };
+}
+
+/** The worker's engine over the sidecars, as runWorker builds it from PDF_ENGINE_SOCKET and PDF_GATE_SOCKET. */
+const overSidecars = (gate: { socket: string; dir: string }, options: EngineOptions = {}): Redact =>
+  workerRedact({ PDF_ENGINE_SOCKET: engine.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [engine.dir], gateSocketDirs: [gate.dir], ...options });
+/** The worker's engine in the pod: the identity child, then the real gate child, capped as `options` says. */
+const inPod = (options: EngineOptions = {}): Redact => workerRedact({}, { engine: standIn('identity'), gateChild: GATE_CHILD_SOURCE, gateNodeFlags: NODE_FLAGS, ...options });
+
+/** Both transports, each with the gate at these limits. */
 let transports: Array<[string, Redact]>;
+let capped: Array<[string, Redact]>;
+let short: Array<[string, Redact]>;
 
 beforeAll(async () => {
-  place = socketDir();
-  sidecar = spawnSidecar(['--socket', place.socket, '--engine', standIn('identity')]);
-  await listening(sidecar, place.socket);
+  engine = await sidecar('engine', ['--engine', standIn('identity')]);
+  const gate = await sidecar('gate');
+  const cappedGate = await sidecar('gate', ['--max-rss-mb', '384', '--timeout-ms', '60000']);
+  const shortGate = await sidecar('gate', ['--timeout-ms', '3000']);
   transports = [
-    ['in-pod child', workerRedact({}, { engine: standIn('identity') })],
-    ['sidecar', workerRedact({ PDF_ENGINE_SOCKET: place.socket }, { socketDirs: [place.dir] })],
+    ['in-pod children', inPod()],
+    ['sidecars', overSidecars(gate)],
   ];
-});
+  capped = [
+    ['in-pod children', inPod({ gateMaxRssBytes: 384 * MiB, gateChildTimeoutMs: 60_000 })],
+    ['sidecars', overSidecars(cappedGate)],
+  ];
+  short = [
+    ['in-pod children', inPod({ gateChildTimeoutMs: 3_000 })],
+    ['sidecars', overSidecars(shortGate)],
+  ];
+}, 60_000);
 
 afterAll(async () => {
-  await sidecar?.stop();
-  place?.remove();
+  await Promise.all(spawned.map((process) => process.stop()));
+  for (const place of places) place.remove();
 });
 
-describe('UNTRUSTED-PDF-GATE: the output gate, re-run in the worker on what the engine returns', () => {
+describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the worker, on what the engine returns', () => {
   it('UNTRUSTED-PDF-GATE gate re-run: the stand-in engine lets marked text through on its own', async () => {
     const original = await linesPdf([`Rides: call ${QUOTE}.`]);
     const result = await isolatedRedact({ module: standIn('identity') })(original, REQUEST);
@@ -74,6 +115,129 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run in the worker on what the 
       expect(Buffer.from((result as { pdf: Uint8Array }).pdf).equals(Buffer.from(clean)), name).toBe(true);
     }
   });
+
+  it('UNTRUSTED-PDF-GATE gate re-run: refuses active content, and an original picture kept where the policy blurs or hides it, on both transports (S3)', async () => {
+    const doc = await PDFDocument.create({ updateMetadata: false });
+    doc.addPage([612, 792]).drawText('Picnic flyer', { x: 72, y: 720, size: 12, font: await doc.embedFont(StandardFonts.Helvetica) });
+    doc.catalog.set(PDFName.of('OpenAction'), doc.context.obj({ S: 'JavaScript', JS: PDFString.of("app.launchURL('https://example.invalid/x', true);") }));
+    const active = await doc.save({ useObjectStreams: false });
+    // 4 x 4: under BLUR_MAX and under keepsPicture's window, so only the gate's sample check sees it kept.
+    const picture = await smallPictureFixture(4);
+    for (const [name, redact] of transports) {
+      expect(await redact(active, { quotes: [QUOTE], redactsAny: true, image: 'blur' }), name).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
+      for (const image of ['blur', 'hide'] as const) {
+        expect(await redact(picture, { quotes: [], redactsAny: true, image }), `${name}, ${image}`).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
+      }
+      expect((await redact(picture, { quotes: [], redactsAny: true, image: 'show' })).kind, name).toBe('redacted');
+    }
+  });
+
+  it('UNTRUSTED-PDF-GATE gate re-run: refuses a Flate bomb (a 1 MiB copy inflating to 1 GiB) at the gate\'s memory cap, on both transports, and the worker goes on', async () => {
+    const bomb = await flateBomb(1024);
+    expect(bomb.byteLength).toBeLessThan(2 * MiB);
+    const before = process.memoryUsage().rss;
+    for (const [name, redact] of capped) {
+      const t0 = Date.now();
+      expect(await redact(bomb, REQUEST), name).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
+      expect(Date.now() - t0, name).toBeLessThan(60_000);
+    }
+    // The bytes were inflated in the gate's child, never here.
+    expect(process.memoryUsage().rss - before).toBeLessThan(256 * MiB);
+    expect((await capped[1]![1](await linesPdf(['Picnic flyer']), REQUEST)).kind).toBe('redacted');
+  }, 150_000);
+
+  it('UNTRUSTED-PDF-GATE gate re-run: refuses a 24 KB copy drawing 2,000,000 strings, on both transports, and the worker goes on', async () => {
+    const shows = manyShows(2_000_000);
+    expect(shows.byteLength).toBeLessThan(64 * 1024);
+    const before = process.memoryUsage().rss;
+    for (const [name, redact] of capped) {
+      expect(await redact(shows, REQUEST), name).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
+    }
+    expect(process.memoryUsage().rss - before).toBeLessThan(256 * MiB);
+  }, 150_000);
+
+  it('UNTRUSTED-PDF-GATE gate re-run: refuses a copy of 20,000 pages within the gate\'s deadline, on both transports, and the worker goes on', async () => {
+    const pages = manyPages(20_000);
+    for (const [name, redact] of short) {
+      const t0 = Date.now();
+      expect(await redact(pages, REQUEST), name).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
+      // The deadline is 3 s; forking the child and loading pdf.js come on top.
+      expect(Date.now() - t0, name).toBeLessThan(15_000);
+    }
+  }, 60_000);
+
+  it('UNTRUSTED-PDF-GATE gate re-run: refuses a copy when the gate names other bytes than the copy, on both transports', async () => {
+    const clean = await linesPdf(['Picnic flyer']);
+    // The gate's own child names other bytes: the gate sidecar, and the worker in the pod, refuse.
+    const wrongGate = await sidecar('gate', ['--gate', gateStandIn('wrongsha')]);
+    expect(await overSidecars(wrongGate)(clean, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.mismatch });
+    expect(await workerRedact({}, { engine: standIn('identity'), gateChild: gateStandIn('wrongsha') })(clean, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.mismatch });
+    // A gate that says "pass" for other bytes than it was sent: the worker compares, and refuses.
+    const fake = socketDir('gate.sock');
+    places.push(fake);
+    const liar = net.createServer((conn) => {
+      conn.on('error', () => {});
+      conn.once('data', () => conn.end(encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: sha256Hex(Buffer.from('another copy')) })));
+    });
+    await new Promise<void>((resolve) => liar.listen(fake.socket, resolve));
+    try {
+      expect(await overSidecars({ socket: fake.socket, dir: fake.dir })(clean, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.mismatch });
+    } finally {
+      await new Promise((resolve) => liar.close(resolve));
+    }
+  }, 60_000);
+
+  it('UNTRUSTED-PDF-GATE gate re-run: in a PID namespace of its own, the gate sidecar kills what a check left behind, a grandchild in a session of its own included', async () => {
+    const gate = await sidecar('gate', ['--gate', gateStandIn('leave')], { namespace: true });
+    expect(gate.process.stderr()).toContain('gate sidecar listening (sweeping its PID namespace after every job)');
+    const marker = `nwfl-gate-session-${randomUUID()}`;
+    const clean = await linesPdf(['Picnic flyer']);
+    // The stand-in passes, so the copy is stored; what it left must be gone before the next check.
+    const result = await workerRedact({ PDF_ENGINE_SOCKET: engine.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [engine.dir], gateSocketDirs: [gate.dir] })(clean, { quotes: ['session', marker], redactsAny: true });
+    expect(result.kind).toBe('redacted');
+    expect(aliveWith(marker)).toEqual([]);
+  }, 30_000);
+
+  it('UNTRUSTED-PDF-GATE gate re-run: the gate sidecar starts with no variable off its allow-list, and binds only in /run/pdf-gate', async () => {
+    const place = socketDir('gate.sock');
+    places.push(place);
+    const withSecret = spawnSidecar(['--socket', place.socket], { entry: GATE_SIDECAR_ENTRY, env: { DB_PASSWORD: 'canary-db' } });
+    spawned.push(withSecret);
+    expect(await withSecret.exited).toEqual({ code: 2, signal: null });
+    expect(withSecret.stderr()).toContain('DB_PASSWORD');
+    expect(withSecret.stderr()).not.toContain('canary');
+    const elsewhere = spawnSidecar(['--socket', place.socket, '--socket-dir', '/run/pdf-gate'], { entry: GATE_SIDECAR_ENTRY });
+    spawned.push(elsewhere);
+    expect(await elsewhere.exited).toEqual({ code: 2, signal: null });
+    expect(elsewhere.stderr()).toContain('--socket must be an absolute path directly in /run/pdf-gate');
+  });
+
+  it('UNTRUSTED-PDF-GATE gate re-run: the gate sidecar holds no network socket, through a check; its unix socket is all it listens on', async () => {
+    const gate = await sidecar('gate');
+    const clean = await linesPdf(['Picnic flyer']);
+    expect((await overSidecars(gate)(clean, REQUEST)).kind).toBe('redacted');
+    const pid = gate.process.pid;
+    const held = readdirSync(`/proc/${pid}/fd`).flatMap((fd) => {
+      try {
+        const match = /^socket:\[(\d+)\]$/.exec(readlinkSync(`/proc/${pid}/fd/${fd}`));
+        return match === null ? [] : [match[1] as string];
+      } catch {
+        return [];
+      }
+    });
+    const inet = ['tcp', 'tcp6', 'udp', 'udp6', 'raw', 'raw6', 'udplite', 'udplite6'].flatMap((table) => {
+      try {
+        return readFileSync(`/proc/${pid}/net/${table}`, 'utf8').trim().split('\n').slice(1).map((line) => line.trim().split(/\s+/)[9] as string);
+      } catch {
+        return [];
+      }
+    });
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.filter((inode) => inet.includes(inode))).toEqual([]);
+    const listener = readFileSync(`/proc/${pid}/net/unix`, 'utf8').split('\n').find((line) => line.endsWith(` ${gate.socket}`));
+    expect(listener).toBeDefined();
+    expect(held).toContain((listener as string).trim().split(/\s+/)[6]);
+  });
 });
 
 describe.skipIf(!live)('UNTRUSTED-PDF-GATE: the re-run decides what reaches pdf_copy_put, in the worker process', () => {
@@ -82,6 +246,7 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: the re-run decides what reaches pdf_
   let api: Api;
   let database: string;
   let office: string;
+  let gate: { socket: string; dir: string };
 
   /** A published file with its original stored and the phone number marked on its item; queued. */
   async function markedFile(slug: string, lines: readonly string[]): Promise<string> {
@@ -100,7 +265,10 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: the re-run decides what reaches pdf_
     const job = runWorker({
       env: { PGHOST: target.hostname, PGPORT: target.port, PGDATABASE: database, PGUSER: WORKER, PGPASSWORD: WORKER_PW, ...env },
       engine: standIn('identity'),
-      socketDirs: [place.dir],
+      gateChild: GATE_CHILD_SOURCE,
+      gateNodeFlags: NODE_FLAGS,
+      socketDirs: [engine.dir],
+      gateSocketDirs: [gate.dir],
       intervalMs: 20,
       onError: (error) => errors.push(error),
     });
@@ -118,6 +286,7 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: the re-run decides what reaches pdf_
     api = await startApi('nwfl_rerun');
     database = new URL((api.pool as unknown as { options: { connectionString: string } }).options.connectionString).pathname.slice(1);
     office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
+    gate = await sidecar('gate');
   }, 60_000);
 
   afterAll(async () => {
@@ -125,8 +294,8 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: the re-run decides what reaches pdf_
   });
 
   for (const [transport, env] of [
-    ['in-pod child', (): Record<string, string> => ({})],
-    ['sidecar', (): Record<string, string> => ({ PDF_ENGINE_SOCKET: place.socket })],
+    ['in-pod children', (): Record<string, string> => ({})],
+    ['sidecars', (): Record<string, string> => ({ PDF_ENGINE_SOCKET: engine.socket, PDF_GATE_SOCKET: gate.socket })],
   ] as const) {
     it(`UNTRUSTED-PDF-GATE gate re-run: over the ${transport}, a copy with the marked text is stored refused with no bytes, and a clean one ready`, async () => {
       const leaky = await markedFile(`leaky-${transport.replace(/\W/g, '')}`, ['Picnic flyer', `Rides: call ${PHONE}.`]);
@@ -143,4 +312,3 @@ describe.skipIf(!live)('UNTRUSTED-PDF-GATE: the re-run decides what reaches pdf_
     }, 60_000);
   }
 });
-

@@ -12,11 +12,17 @@
 // is written once per input, a run whose lease ran out can no longer write,
 // and a file queued again mid-run stays queued for the next run.
 //
-// UNTRUSTED-PDF-GATE: an engine that cannot be reached at all (the sidecar's
-// socket missing, the sidecar dead or answering garbage, socket-engine.ts) is
-// not an answer about the file. It throws a RetryableEngineError, which the
-// run does not store: no copy is put, the file stays queued, and the next run
-// after the lease takes it again (startRegenerator's onError logs the code).
+// UNTRUSTED-PDF-GATE: an engine or gate that cannot be reached at all (a
+// sidecar's socket missing, the sidecar dead or answering garbage,
+// socket-engine.ts, socket-gate.ts) is not an answer about the file. It
+// throws a RetryableEngineError, which the run does not store: no copy is
+// put, the file stays queued, and the next run after the lease takes it again
+// (startRegenerator's onError logs the code). Retries end (fix round 1, S1):
+// a regenerator counts each file's retryable failures, and at the
+// MAX_ENGINE_ATTEMPTS-th it stores the copies refused with a fixed reason and
+// finishes the file. The count lives in the regenerator, where the job's run
+// state already does (no migration): a worker restart starts it again, and
+// nothing in a copy can crash the worker any more (the gate runs outside it).
 // ============================================================================
 import type { Db } from '../db/pool.js';
 import { AUDIENCES } from '../redaction/policy.js';
@@ -34,10 +40,16 @@ export class RetryableEngineError extends Error {
   readonly code = 'PDF_ENGINE_UNAVAILABLE';
 }
 
+/** A file whose engine could not be reached this many times running is given refused copies. */
+export const MAX_ENGINE_ATTEMPTS = 5;
+export const GAVE_UP = `the engine could not be reached in ${MAX_ENGINE_ATTEMPTS} attempts`;
+
 export interface RegenerateOptions {
   redact?: Redact;
   /** How long a run holds its file before another run may take it over. */
   leaseSeconds?: number;
+  /** Retryable failures so far, by file (startRegenerator keeps one); without it a run never gives up. */
+  attempts?: Map<string, number>;
 }
 
 /** A copy's bytes, or why there is none. */
@@ -73,7 +85,17 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
       const original = await db.query<{ bytes: Buffer }>(`SELECT pdf_regen_original($1, $2) AS bytes`, [fileId, claim]);
       const bytes = new Uint8Array((original.rows[0] as { bytes: Buffer }).bytes);
       for (const target of missing) {
-        const copy = await make(redact, bytes, target.request);
+        let copy: { pdf: Buffer | null; reason: string | null };
+        try {
+          copy = await make(redact, bytes, target.request);
+        } catch (error) {
+          const failures = (options.attempts?.get(fileId) ?? 0) + 1;
+          if (options.attempts === undefined || failures < MAX_ENGINE_ATTEMPTS) {
+            options.attempts?.set(fileId, failures);
+            throw error;
+          }
+          copy = { pdf: null, reason: GAVE_UP };
+        }
         await db.query(`SELECT pdf_copy_put($1, $2, $3, $4, $5, $6)`, [fileId, claim, target.hash, ENGINE_VERSION, copy.pdf, copy.reason]);
       }
     }
@@ -87,6 +109,7 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
       ]);
       return finished.rows[0]?.done === true;
     });
+    options.attempts?.delete(fileId);
     return { fileId, done };
   } catch (error) {
     // The lease ran out and another run holds the file now.
@@ -107,6 +130,7 @@ export function startRegenerator(
   options: RegenerateOptions & { db: Query; intervalMs?: number; onError?: (error: unknown) => void },
 ): { stop(): Promise<void> } {
   const interval = options.intervalMs ?? 5_000;
+  const runs = { ...options, attempts: options.attempts ?? new Map<string, number>() };
   let stopped = false;
   let current: Promise<void> = Promise.resolve();
   let timer: NodeJS.Timeout | undefined;
@@ -115,7 +139,7 @@ export function startRegenerator(
     timer.unref();
   };
   function tick(): void {
-    current = drain(options.db, options).then(
+    current = drain(options.db, runs).then(
       () => undefined,
       (error: unknown) => options.onError?.(error),
     );

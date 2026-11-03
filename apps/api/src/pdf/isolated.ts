@@ -8,6 +8,11 @@
 // answers with the result and exits, and its memory goes back to the OS. The
 // worker itself only claims, reads and writes the database.
 //
+// The child is forked detached, so it leads a process group, and that group is
+// killed once it exits: whatever it started without leaving the group goes
+// with it. A sidecar also sweeps its whole PID namespace after each copy
+// (pidns.ts), which a grandchild in a session of its own cannot leave.
+//
 // A child that dies without an answer (a crash, or killed by the kernel when
 // it runs out of memory) or takes longer than the timeout is a failed engine:
 // the job stores a refused copy with the reason (regenerate.ts make()), never
@@ -64,6 +69,19 @@ export function engineExecArgv(argv: readonly string[]): string[] {
   return kept;
 }
 
+/**
+ * SIGKILLs the process group `pid` leads (a child forked detached); nothing when it is gone. Here, with
+ * no import, so a plain `node` (type stripping, no resolve hook) can load this module, as the
+ * --env-file test does.
+ */
+export function killGroup(pid: number, kill: (pid: number, signal: NodeJS.Signals) => void = (target, signal) => void process.kill(target, signal)): void {
+  try {
+    kill(-pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
 /** Ten minutes is the job's lease; a copy that takes half of it is given up. */
 export const ENGINE_TIMEOUT_MS = 300_000;
 
@@ -99,7 +117,7 @@ export function isolatedRedact(options: { module?: string; timeoutMs?: number; s
         reject(new Error('the engine process was stopped'));
         return;
       }
-      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, execArgv: engineExecArgv(process.execArgv), serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, execArgv: engineExecArgv(process.execArgv), serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'], detached: true });
       let reply: EngineReply | undefined;
       let late = false;
       let stopped = false;
@@ -118,6 +136,7 @@ export function isolatedRedact(options: { module?: string; timeoutMs?: number; s
       child.once('exit', (code, killedBy) => {
         clearTimeout(timer);
         signal?.removeEventListener('abort', stop);
+        if (child.pid !== undefined) killGroup(child.pid);
         if (stopped) reject(new Error('the engine process was stopped'));
         else if (late) reject(new Error(`the engine process took longer than ${timeoutMs} ms`));
         else if (reply === undefined) reject(new Error(`the engine process ended without a copy (${killedBy ?? `exit ${code}`})`));

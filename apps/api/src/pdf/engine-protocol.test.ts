@@ -3,7 +3,12 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import {
+  FIRST_BYTES_TIMEOUT_MS,
   FrameError,
+  GATE_REPLY_MAGIC,
+  GATE_REQUEST_MAGIC,
+  MAX_GATE_BODY_BYTES,
+  MAX_GATE_REPLY_HEADER_BYTES,
   MAX_INPUT_BYTES,
   MAX_OUTPUT_BYTES,
   MAX_QUOTES,
@@ -13,12 +18,17 @@ import {
   PREFIX_BYTES,
   REPLY_MAGIC,
   REQUEST_MAGIC,
+  decodeGateReply,
+  decodeGateRequest,
   decodeReply,
   decodeRequest,
   encodeFrame,
+  encodeGateReply,
+  encodeGateRequest,
   encodeReply,
   encodeRequest,
   readFrame,
+  sha256Hex,
 } from './engine-protocol.js';
 
 const REQUEST = { quotes: ['Kestrel Ambry'], redactsAny: true };
@@ -30,9 +40,14 @@ const u32 = (n: number): Buffer => {
 const LIMITS = { magic: REQUEST_MAGIC, maxHeader: MAX_REQUEST_HEADER_BYTES, maxBody: MAX_INPUT_BYTES };
 
 /** Reads one frame from a stream fed these chunks, one per tick, then (unless `end` is false) its end. */
-function fed(chunks: readonly Buffer[], options: { end?: boolean; untilEnd?: boolean; timeoutMs?: number; limits?: typeof LIMITS } = {}): ReturnType<typeof readFrame> {
+function fed(chunks: readonly Buffer[], options: { end?: boolean; untilEnd?: boolean; timeoutMs?: number; firstBytesTimeoutMs?: number; limits?: typeof LIMITS } = {}): ReturnType<typeof readFrame> {
   const stream = new PassThrough();
-  const read = readFrame(stream, { ...(options.limits ?? LIMITS), untilEnd: options.untilEnd ?? true, ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) });
+  const read = readFrame(stream, {
+    ...(options.limits ?? LIMITS),
+    untilEnd: options.untilEnd ?? true,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.firstBytesTimeoutMs === undefined ? {} : { firstBytesTimeoutMs: options.firstBytesTimeoutMs }),
+  });
   void (async () => {
     for (const chunk of chunks) {
       await new Promise((resolve) => setImmediate(resolve));
@@ -140,6 +155,106 @@ describe('readFrame', () => {
     const odd = readFrame(plain, LIMITS);
     plain.destroy(new Error('no code'));
     await expect(odd).rejects.toThrow('the connection failed (no code)');
+  });
+
+  it('bounds an idle connection: the prefix must arrive within its own few seconds, then the frame has the rest', async () => {
+    expect(FIRST_BYTES_TIMEOUT_MS).toBe(5_000);
+    await expect(fed([], { end: false, firstBytesTimeoutMs: 50, timeoutMs: 10_000 })).rejects.toThrow('no frame began within 50 ms');
+    // Eleven bytes are not a prefix yet.
+    await expect(fed([encodeRequest(Uint8Array.from([1]), REQUEST).subarray(0, 11)], { end: false, firstBytesTimeoutMs: 50, timeoutMs: 10_000 })).rejects.toThrow('no frame began within 50 ms');
+    // Once the prefix is in, the first-bytes deadline is off and only the frame's own applies.
+    const frame = encodeRequest(Uint8Array.from([1]), REQUEST);
+    const slow = new PassThrough();
+    const read = readFrame(slow, { ...LIMITS, firstBytesTimeoutMs: 50, timeoutMs: 2_000 });
+    slow.write(frame.subarray(0, PREFIX_BYTES));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    slow.end(frame.subarray(PREFIX_BYTES));
+    expect(decodeRequest(await read).original).toEqual(Uint8Array.from([1]));
+  });
+});
+
+describe('gate requests and replies (the worker and the gate sidecar)', () => {
+  const COPY = Uint8Array.from([4, 5, 6]);
+  const SHA = sha256Hex(COPY);
+  const ORIGINAL = Uint8Array.from([9, 9]);
+  const ORIGINAL_SHA = sha256Hex(ORIGINAL);
+  const GATE = { copy: COPY, original: ORIGINAL, quotes: ['Kestrel Ambry'], image: 'blur' as const, sha256: SHA, originalSha256: ORIGINAL_SHA };
+  const GATE_LIMITS = { magic: GATE_REQUEST_MAGIC, maxHeader: MAX_REQUEST_HEADER_BYTES, maxBody: MAX_GATE_BODY_BYTES };
+  const REPLY_LIMITS = { magic: GATE_REPLY_MAGIC, maxHeader: MAX_GATE_REPLY_HEADER_BYTES, maxBody: 0 };
+
+  it('hashes with sha256, in lower-case hex', () => {
+    expect(SHA).toBe('787c798e39a5bc1910355bae6d0cd87a36b2e10fd0202a83e3bb6b005da83472');
+    expect(MAX_GATE_BODY_BYTES).toBe(MAX_OUTPUT_BYTES + MAX_INPUT_BYTES);
+  });
+
+  it('round-trip: the copy and the original with their sha256s, the quotes and the image action, nothing else', async () => {
+    const frame = encodeGateRequest(GATE);
+    expect(frame.subarray(0, 4).equals(GATE_REQUEST_MAGIC)).toBe(true);
+    expect(JSON.parse(frame.subarray(12, 12 + frame.readUInt32BE(4)).toString('utf8'))).toEqual({ v: 1, quotes: ['Kestrel Ambry'], image: 'blur', sha256: SHA, originalSha256: ORIGINAL_SHA, copyBytes: 3 });
+    expect(frame.subarray(12 + frame.readUInt32BE(4))).toEqual(Buffer.from([4, 5, 6, 9, 9]));
+    expect(decodeGateRequest(await fed([frame], { limits: GATE_LIMITS }))).toEqual(GATE);
+  });
+
+  it('is never built over the caps, or with a hash that is not one', () => {
+    expect(() => encodeGateRequest({ ...GATE, copy: new Uint8Array(0) })).toThrow('the copy is outside the gate input cap');
+    expect(() => encodeGateRequest({ ...GATE, copy: new Uint8Array(MAX_OUTPUT_BYTES + 1) })).toThrow('the copy is outside the gate input cap');
+    expect(() => encodeGateRequest({ ...GATE, original: new Uint8Array(0) })).toThrow('the original is outside the gate input cap');
+    expect(() => encodeGateRequest({ ...GATE, original: new Uint8Array(MAX_INPUT_BYTES + 1) })).toThrow('the original is outside the gate input cap');
+    expect(() => encodeGateRequest({ ...GATE, quotes: Array.from({ length: MAX_QUOTES + 1 }, () => 'a') })).toThrow('too many quotes');
+    expect(() => encodeGateRequest({ ...GATE, quotes: ['x'.repeat(MAX_QUOTE_CHARS + 1)] })).toThrow('a quote is over its cap');
+    expect(() => encodeGateRequest({ ...GATE, quotes: Array.from({ length: 2200 }, () => 'q'.repeat(500)) })).toThrow('the request header is over its cap');
+    expect(() => encodeGateRequest({ ...GATE, sha256: 'abc' })).toThrow('a hash is not a sha256');
+    expect(() => encodeGateRequest({ ...GATE, originalSha256: 'abc' })).toThrow('a hash is not a sha256');
+  });
+
+  it('refuses a request header that is not exactly the typed gate request', () => {
+    const body = Buffer.from([4, 5, 6, 9, 9]);
+    const good = { v: 1, quotes: [], image: 'show', sha256: SHA, originalSha256: ORIGINAL_SHA, copyBytes: 3 };
+    expect(decodeGateRequest({ header: good, body })).toEqual({ ...GATE, quotes: [], image: 'show' });
+    const bad: Array<[unknown, Buffer]> = [
+      [null, body],
+      [[], body],
+      [{ ...good, v: 2 }, body],
+      [{ ...good, sha256: undefined }, body],
+      [{ ...good, env: {} }, body],
+      [{ ...good, quotes: [7] }, body],
+      [{ ...good, image: 'melt' }, body],
+      [{ ...good, image: undefined }, body],
+      [{ ...good, sha256: SHA.toUpperCase() }, body],
+      [{ ...good, originalSha256: 7 }, body],
+      [{ ...good, copyBytes: 0 }, body],
+      [{ ...good, copyBytes: 5 }, body],
+      [{ ...good, copyBytes: 2.5 }, body],
+      [{ ...good, copyBytes: '3' }, body],
+      [{ ...good, copyBytes: MAX_OUTPUT_BYTES + 1 }, Buffer.alloc(MAX_OUTPUT_BYTES + 2)],
+      [good, Buffer.concat([Buffer.from([4, 5, 6]), Buffer.alloc(MAX_INPUT_BYTES + 1)])],
+    ];
+    for (const [header, raw] of bad) expect(() => decodeGateRequest({ header, body: raw }), JSON.stringify(header)?.slice(0, 120)).toThrow(FrameError);
+  });
+
+  it('round-trip: a pass or a refusal by code, with the sha256 of the bytes the gate checked, and no body', async () => {
+    const reply = async (value: Parameters<typeof encodeGateReply>[0]): Promise<ReturnType<typeof decodeGateReply>> => decodeGateReply(await fed([encodeGateReply(value)], { limits: REPLY_LIMITS }));
+    expect(await reply({ verdict: { pass: true }, sha256: SHA })).toEqual({ verdict: { pass: true }, sha256: SHA });
+    for (const code of ['withheld', 'rules', 'unfinished', 'mismatch'] as const) {
+      expect(await reply({ verdict: { pass: false, code }, sha256: SHA }), code).toEqual({ verdict: { pass: false, code }, sha256: SHA });
+    }
+  });
+
+  it('refuses a reply that is not exactly a typed verdict', () => {
+    const none = Buffer.alloc(0);
+    const bad: Array<[unknown, Buffer]> = [
+      [null, none],
+      [{ v: 2, verdict: 'pass', sha256: SHA }, none],
+      [{ v: 1, verdict: 'pass' }, none],
+      [{ v: 1, verdict: 'pass', sha256: 'x' }, none],
+      [{ v: 1, verdict: 'pass', sha256: SHA, code: 'withheld' }, none],
+      [{ v: 1, verdict: 'pass', sha256: SHA }, Buffer.from([1])],
+      [{ v: 1, verdict: 'refused', sha256: SHA }, none],
+      [{ v: 1, verdict: 'refused', code: 'leaked', sha256: SHA }, none],
+      [{ v: 1, verdict: 'refused', code: 'withheld', sha256: SHA, reason: 'Kestrel' }, none],
+      [{ v: 1, verdict: 'maybe', sha256: SHA }, none],
+    ];
+    for (const [header, body] of bad) expect(() => decodeGateReply({ header, body }), JSON.stringify(header)).toThrow(FrameError);
   });
 });
 
