@@ -1,11 +1,13 @@
 // The engine in a process of its own (HARDEN-1 Fix 1): each copy is made in a child that exits after
 // it, so PDFium's and pdf.js's heaps go back to the OS. The children here are stand-ins (test/pdf/children).
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { aliveWith } from '../../test/helpers/sidecar.js';
 import { linesPdf } from '../../test/pdf/fixtures.js';
 import { ENGINE_CHILD, engineExecArgv, engineReply, isolatedRedact, withoutCanvasWarnings } from './isolated.js';
 import { redactPdf } from './redact.js';
@@ -75,6 +77,18 @@ describe('isolatedRedact', () => {
       engineExecArgv(['--max-old-space-size=512', '--env-file=/a', '--env-file', '/b', '--env-file-if-exists=/c', '--env-file-if-exists', '/d', '--import', 'x', '--enable-source-maps']),
     ).toEqual(['--max-old-space-size=512', '--import', 'x', '--enable-source-maps']);
     expect(engineExecArgv(['--env-file'])).toEqual([]);
+  });
+
+  it('kills what the child left in its process group once it is done (M1: in the pod, nothing else would)', async () => {
+    const marker = `nwfl-engine-left-${randomUUID()}`;
+    expect(await isolatedRedact({ module: child('leave') })(Uint8Array.from([1]), { quotes: ['group', marker], redactsAny: true })).toEqual({ kind: 'refused', reason: 'left a process in its group' });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const left = aliveWith(marker);
+    try {
+      expect(left).toEqual([]);
+    } finally {
+      for (const pid of left) process.kill(pid, 'SIGKILL');
+    }
   });
 
   it('kills the child when its signal aborts (the sidecar: a worker that hung up, or a stop), and forks none for a signal already aborted', async () => {
