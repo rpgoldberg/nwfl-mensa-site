@@ -262,7 +262,8 @@ validate-nwfl checks them.
 ### The engine sidecar
 
 The PDF engine can run as a sidecar process in a container of its own beside
-the worker, from the same image: `node dist/pdf/engine-sidecar.js`
+the worker, from the same image, with node as PID 1 and no init:
+`command: ["node", "--disable-sigusr1", "dist/pdf/engine-sidecar.js"]`
 (`src/pdf/sidecar.ts`). It listens on one unix socket, by default
 `/run/pdf-engine/engine.sock`, mode 0660, and still forks one child per copy
 with an empty environment. It opens no other socket and makes no connection.
@@ -275,24 +276,51 @@ It will not start (exit 2) when:
   never their values;
 - `--socket` is not directly in `/run/pdf-engine`, or holds anything but
   letters, digits and `. _ - /`;
-- it is PID 1, or its PID namespace is not its own (its parent is not PID 1,
-  or a process of another uid is in it).
+- it runs as root;
+- it is not PID 1 of its container (dumb-init or any other init in front of
+  it, which is what `args` instead of `command` gives);
+- `NODE_ENV=production` (the image sets it) and Node was started without
+  `--disable-sigusr1`.
 
-After every copy it SIGKILLs every process in its PID namespace except PID 1
-(dumb-init) and itself, so nothing a copy started can outlive it, even a
-grandchild that left its session (`src/pdf/pidns.ts`). Node cannot reap
-orphans, so the sidecar refuses to be PID 1 rather than keep a subreaper of
-its own: the container must use `args`, not `command`. The sidecar also checks
-its socket's inode at each connection, after each copy and every second. If
-the socket was replaced or removed, it stops with exit 1 and answers nothing
-more, and the job fails closed.
+What keeps a subverted copy's processes from outliving it (fix round 2, after
+the round-2 challenge froze a sidecar with SIGSTOP from a fork-and-exit chain
+and took its socket over), most load-bearing first:
+
+1. PID 1. The kernel does not deliver SIGKILL or SIGSTOP to a namespace's PID
+   1 from inside the namespace, nor any signal it has no handler for, so no
+   child can stop or kill the sidecar. As PID 1 it still gets SIGUSR1, which
+   would start Node's inspector on 127.0.0.1:9229, reachable from a child
+   even with no network (measured); `--disable-sigusr1` and a listener of its
+   own take it (`ignoreInspectorSignal`).
+2. No fork. Every per-copy child preloads a guard (`src/pdf/child-guard.ts`,
+   `src/pdf/no-fork.ts`) that starts the threads it needs and says it is
+   ready; the sidecar then sets the child's RLIMIT_NPROC to 1 with util-linux
+   `prlimit` (in the base image), and the guard tries a spawn on purpose. The
+   copy is sent only when that spawn failed with EAGAIN; a limit that cannot be
+   set, or a spawn that works, refuses the copy. In a capped container spawn,
+   exec and fork then all fail with EAGAIN, and zlib, crypto and the real
+   engine and gate still run. pdf.js's optional canvas would need threads
+   later, which is one more reason it is not in the image.
+3. Before every reply, `kill(-1, SIGKILL)` (everything but PID 1), then `/proc`
+   re-read until the sidecar is alone, in bounded passes. Anything left, or
+   any zombie (its own children are reaped by then, so a zombie is an
+   orphan), is doubt: it exits 1 without the reply, and the kernel kills the
+   whole namespace with it. The `/proc` reading is best-effort on its own;
+   1 and 2 are what make it hold.
+4. Then the socket's device and inode are checked, before the reply, at each
+   connection, and every second. A socket replaced or removed stops it with
+   exit 1 and no reply, and the job fails closed.
 
 It replaces a socket left behind by a dead sidecar, but exits 1 if anything
-else is at the path. SIGTERM kills the copy in flight and removes the socket.
-Arguments: `--socket <path>`, `--timeout-ms <ms>` (per copy, default 300000),
-and, for tests only, `--engine <module>`, `--socket-dir <dir>` and
-`--shared-pid-namespace`; the last two are refused when `NODE_ENV=production`,
-which the image sets.
+else is at the path. SIGTERM and SIGINT kill the copy in flight, close the
+listener, remove the socket and exit 0. Arguments: `--socket <path>`,
+`--timeout-ms <ms>` (per copy, default 300000) and `--engine <module>`
+(another engine child; tests use it, and production accepts it). Two more are
+for tests and refused when `NODE_ENV=production`: `--socket-dir <dir>` (bind
+outside `/run/pdf-engine`) and `--shared-pid-namespace` (run on a test host,
+not as PID 1, clearing nothing, since `kill(-1)` there would reach the host's
+processes). Every hostile, process-starting or memory-heavy test runs the
+sidecar as PID 1 of a capped container instead (`test/helpers/contained.ts`).
 
 The worker picks the engine with `PDF_ENGINE_SOCKET`:
 
@@ -328,14 +356,19 @@ What fc's manifest gives the sidecar container:
 - no env from Secrets (no `envFrom` secret, no `secretKeyRef`), no secret
   volume, and no service account token (`automountServiceAccountToken:
   false` on the pod);
-- `shareProcessNamespace: false` and `enableServiceLinks: false` on the pod;
+- `shareProcessNamespace: false` and `enableServiceLinks: false` on the pod
+  (with a shared namespace the sidecar would not be PID 1);
 - an emptyDir mounted at `/run/pdf-engine` in the worker and this sidecar
   only, with the pod's `fsGroup` (10003) as the socket's shared group;
 - no ports, and no egress: the pod's NetworkPolicy allows only what the
   worker needs, and the sidecar's uid gets no network;
 - CPU and memory requests and limits;
-- `args: ["node", "dist/pdf/engine-sidecar.js"]`, not `command`, so
-  dumb-init stays PID 1;
+- `command: ["node", "--disable-sigusr1", "dist/pdf/engine-sidecar.js"]` and
+  no `args`, so node is PID 1 and dumb-init does not run (this reverses round
+  1's `args`, for point 1 above);
+- a uid (10002) no other workload on the node uses: RLIMIT_NPROC is counted per
+  uid across the node, and with a limit of 1 the child can start nothing
+  whatever the count, so this is hygiene, not what the limit rests on;
 - in the worker, `PDF_ENGINE_SOCKET=/run/pdf-engine/engine.sock`.
 
 ### The gate sidecar
@@ -351,13 +384,16 @@ after it. A crash, a kill or a timeout means the copy is refused, never
 passed.
 
 With `PDF_GATE_SOCKET`, that child runs in a sidecar of its own:
-`node dist/pdf/gate-sidecar.js` (`src/pdf/gate-service.ts`), uid 10004, its
-socket `/run/pdf-gate/gate.sock` in an emptyDir only it and the worker mount,
-mode 0660, group 10003. It shares the engine sidecar's code: the env
-allow-list, the directory rule (it will not bind in `/run/pdf-engine`), the
-framing, caps and deadlines, the socket watch, and the sweep after every
-check. Extra arguments: `--max-rss-mb <MiB>` (each child's memory cap) and,
-for tests, `--gate <module>`.
+`command: ["node", "--disable-sigusr1", "dist/pdf/gate-sidecar.js"]`
+(`src/pdf/gate-service.ts`), uid 10004, its socket `/run/pdf-gate/gate.sock`
+in an emptyDir only it and the worker mount, mode 0660, group 10003. It shares
+the engine sidecar's code: the env allow-list, the directory rule (it will not
+bind in `/run/pdf-engine`), the framing, caps and deadlines, PID 1, the no-fork
+children, the namespace cleared and the socket checked before every reply, and
+the socket watch. It logs why a check was unfinished (memory, deadline,
+signal, crash or no-fork). Extra arguments: `--max-rss-mb <MiB>` (each child's
+memory cap) and `--gate <module>` (another gate child; tests use it, and
+production accepts it).
 
 The worker sends the copy and its original with their sha256s, the quotes and
 the picture policy. The gate refuses bytes that do not match their hash
