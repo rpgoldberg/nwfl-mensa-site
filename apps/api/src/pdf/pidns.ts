@@ -7,8 +7,10 @@
 //   1. The sidecar is PID 1 of its container (fc's manifest: `command`, so no
 //      dumb-init). The kernel does not deliver SIGKILL or SIGSTOP to PID 1
 //      from inside its PID namespace, nor any signal it has no handler for,
-//      so a child cannot stop or kill it. Node's inspector signal (SIGUSR1)
-//      is taken by a JS listener and `--disable-sigusr1` (sidecar.ts).
+//      so a child cannot freeze it. Node's inspector signal (SIGUSR1) is
+//      taken by a JS listener and `--disable-sigusr1`, and so is every other
+//      signal Node lets it hold (sidecar.ts holdSignals). A child can still
+//      make it exit (fix round 3, N2): it fails closed, with no reply.
 //   2. A child cannot start a process (no-fork.ts: RLIMIT_NPROC 1, checked
 //      by the child's own failed spawn before it gets any input).
 //   3. Before every reply the sidecar sends SIGKILL to every other process

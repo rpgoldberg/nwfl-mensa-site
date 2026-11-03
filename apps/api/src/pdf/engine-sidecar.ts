@@ -8,10 +8,11 @@
 // replaced socket or a namespace not clear before a reply exits 1, so the
 // kubelet restarts the container.
 // ============================================================================
-import { type Sidecar, ignoreInspectorSignal, sidecarMain } from './sidecar.js';
+import { type Sidecar, holdSignals, sidecarMain } from './sidecar.js';
 
-// First: as PID 1 it still gets SIGUSR1, and Node's own handler would open the inspector to a child.
-ignoreInspectorSignal();
+// First: as PID 1 it still gets SIGUSR1, and Node's own handler would open the inspector to a child;
+// and a signal that ends a process by default could end it (N2).
+holdSignals();
 const log = (line: string): void => void process.stderr.write(`${line}\n`);
 /** Set once it listens. */
 const running: { sidecar?: Sidecar } = {};

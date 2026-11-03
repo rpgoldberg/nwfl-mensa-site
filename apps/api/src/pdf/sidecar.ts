@@ -16,12 +16,15 @@
 //   - It must be PID 1 of its container and not root (exit 2), and in
 //     production it needs --disable-sigusr1 (exit 2). As PID 1 the kernel
 //     keeps SIGKILL, SIGSTOP and every signal it has no handler for away from
-//     it, so a child cannot stop or kill it; Node's inspector signal is
-//     taken by a listener (ignoreInspectorSignal) and the flag.
+//     it, so a child cannot freeze it; Node's inspector signal is taken by a
+//     listener and the flag, and so is every other signal Node lets it hold
+//     (holdSignals). A child can still make it exit (fix round 3, N2): it
+//     fails closed, with no reply.
 //   - Each job's child cannot start a process (no-fork.ts). Before every
 //     reply the sidecar kills everything else in its namespace and waits
 //     until it is alone (pidns.ts clearNamespace), then checks that its
-//     socket path still holds the socket it bound (device and inode). Either
+//     socket path still holds the socket it bound (device and inode) with
+//     mode 0660 and its owner and group as bound (fix round 3, S1). Either
 //     failing stops it without a reply (the entry exits 1, and the kernel
 //     kills the whole namespace with it); the worker's job fails closed. It
 //     also checks the socket at each connection and every WATCH_MS.
@@ -34,7 +37,7 @@
 //   - One job at a time: the worker asks one by one, and a second PDFium heap
 //     would only double the peak.
 // ============================================================================
-import { chmodSync, lstatSync, unlinkSync } from 'node:fs';
+import { type Stats, chmodSync, lstatSync, unlinkSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -152,13 +155,33 @@ function listen(server: net.Server, at: string): Promise<void> {
 }
 
 /** Serves one request frame per connection on a unix socket at `options.path`, one job at a time. */
+/** The socket as bound: its device and inode, and its mode, owner and group. */
+export interface BoundSocket {
+  dev: number;
+  ino: number;
+  mode: number;
+  uid: number;
+  gid: number;
+}
+
+/**
+ * How the entry at the socket's path differs from the socket as bound: "gone" (removed, or another file or
+ * socket in its place), "changed" (the same socket with another mode than SOCKET_MODE, or another owner or
+ * group: a child of the sidecar's uid can chmod it in place and lock the worker out, fix round 3, S1), or null.
+ */
+export function socketDrift(bound: BoundSocket, now: Pick<Stats, 'dev' | 'ino' | 'mode' | 'uid' | 'gid' | 'isSocket'> | undefined): 'gone' | 'changed' | null {
+  if (now === undefined || !now.isSocket() || now.dev !== bound.dev || now.ino !== bound.ino) return 'gone';
+  if ((now.mode & 0o7777) !== SOCKET_MODE || now.uid !== bound.uid || now.gid !== bound.gid) return 'changed';
+  return null;
+}
+
 export async function serveFrames<M>(options: ServeOptions, protocol: Protocol<M>): Promise<Sidecar> {
   const { log } = options;
   const connections = new Set<net.Socket>();
   const jobs = new Set<AbortController>();
   let queue: Promise<unknown> = Promise.resolve();
-  /** The socket as bound (its device and inode), and the timer that watches it; set once it listens. */
-  const bound: { dev?: number; ino?: number; watch?: NodeJS.Timeout } = {};
+  /** The socket as bound, and the timer that watches it; set once it listens. */
+  const bound: { socket?: BoundSocket; watch?: NodeJS.Timeout } = {};
   let stopped = false;
   const server = net.createServer((socket) => void serve(socket));
   server.maxConnections = MAX_CONNECTIONS;
@@ -174,16 +197,18 @@ export async function serveFrames<M>(options: ServeOptions, protocol: Protocol<M
     (options.onFatal ?? log)(reason);
   }
 
-  /** Whether the path still holds the very socket this sidecar bound; stops it when not. */
+  /** Whether the path still holds the very socket this sidecar bound, with its mode, owner and group; stops it when not. */
   function intact(): boolean {
     if (stopped) return false;
+    let now: Stats | undefined;
     try {
-      const now = lstatSync(options.path);
-      if (now.isSocket() && now.dev === bound.dev && now.ino === bound.ino) return true;
+      now = lstatSync(options.path);
     } catch {
-      // gone
+      now = undefined;
     }
-    fail(`the socket at ${options.path} was replaced or removed`);
+    const drift = socketDrift(bound.socket as BoundSocket, now);
+    if (drift === null) return true;
+    fail(drift === 'gone' ? `the socket at ${options.path} was replaced or removed` : `the socket at ${options.path} changed its mode or owner`);
     return false;
   }
 
@@ -263,9 +288,8 @@ export async function serveFrames<M>(options: ServeOptions, protocol: Protocol<M
   // worker's jobs fail closed meanwhile.
   await listen(server, options.path);
   chmodSync(options.path, SOCKET_MODE);
-  const stat = lstatSync(options.path);
-  bound.dev = stat.dev;
-  bound.ino = stat.ino;
+  const { dev, ino, mode, uid, gid } = lstatSync(options.path);
+  bound.socket = { dev, ino, mode, uid, gid };
   bound.watch = setInterval(intact, options.watchMs ?? WATCH_MS);
   bound.watch.unref();
   let closing: Promise<void> | undefined;
@@ -327,12 +351,23 @@ export interface MainOptions {
 const thisProcess = (): System => ({ pid: process.pid, uid: process.getuid?.() ?? -1, procRoot: '/proc', kill: (pid, signal) => void process.kill(pid, signal), execArgv: process.execArgv });
 
 /**
- * Takes SIGUSR1 with a listener that does nothing. Node's own SIGUSR1 handler starts the inspector on
- * 127.0.0.1:9229, which a child could then drive over loopback; as PID 1 the sidecar still gets any
- * signal it has a handler for. The entries call this first; --disable-sigusr1 is required too.
+ * The signals that end a process by default and that Node lets a listener take, beside SIGTERM and SIGINT
+ * (the entries' clean stop) and the faults (SIGSEGV, SIGBUS, SIGFPE, SIGILL), which must still end it.
  */
-export function ignoreInspectorSignal(target: Pick<NodeJS.Process, 'on'> = process): void {
+export const HELD_SIGNALS: readonly NodeJS.Signals[] = ['SIGHUP', 'SIGQUIT', 'SIGTRAP', 'SIGABRT', 'SIGUSR2', 'SIGALRM', 'SIGVTALRM', 'SIGPROF', 'SIGIO', 'SIGPWR', 'SIGSTKFLT', 'SIGSYS', 'SIGXCPU', 'SIGXFSZ'];
+
+/**
+ * Takes SIGUSR1, and each of HELD_SIGNALS, with a listener that does nothing. Node's own SIGUSR1 handler
+ * starts the inspector on 127.0.0.1:9229, which a child could then drive over loopback; as PID 1 the
+ * sidecar still gets any signal it has a handler for. The others (fix round 3, N2): the kernel drops a
+ * signal with no handler that a child sends PID 1, but a burst of one Node handles (SIGCHLD) followed by
+ * one of these ended PID 1 in the round-3 challenge. Real-time signals cannot be listened for in Node,
+ * so a child can still make the sidecar exit; it fails closed (no reply, the job retried). It cannot
+ * freeze it. The entries call this first; --disable-sigusr1 is required too.
+ */
+export function holdSignals(target: Pick<NodeJS.Process, 'on'> = process): void {
   target.on('SIGUSR1', () => {});
+  for (const signal of HELD_SIGNALS) target.on(signal, () => {});
 }
 
 /** What one sidecar entry takes: its directory and socket name, and its own arguments beside the common ones. */

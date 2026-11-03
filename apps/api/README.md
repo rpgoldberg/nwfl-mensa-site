@@ -288,10 +288,15 @@ and took its socket over), most load-bearing first:
 
 1. PID 1. The kernel does not deliver SIGKILL or SIGSTOP to a namespace's PID
    1 from inside the namespace, nor any signal it has no handler for, so no
-   child can stop or kill the sidecar. As PID 1 it still gets SIGUSR1, which
-   would start Node's inspector on 127.0.0.1:9229, reachable from a child
-   even with no network (measured); `--disable-sigusr1` and a listener of its
-   own take it (`ignoreInspectorSignal`).
+   child can freeze the sidecar. As PID 1 it still gets SIGUSR1, which would
+   start Node's inspector on 127.0.0.1:9229, reachable from a child even with
+   no network (measured); `--disable-sigusr1` and a listener of its own take
+   it (`holdSignals`). The same listener-that-does-nothing takes every other
+   signal that would end it by default and that Node lets it hold (SIGHUP,
+   SIGUSR2, SIGALRM and the rest, `HELD_SIGNALS`): the round-3 challenge
+   ended PID 1 with a burst of SIGCHLD, which Node handles, followed by one
+   of those. A child can still make the sidecar exit (a real-time signal,
+   SIGTERM): it fails closed, with no reply, and the job is retried.
 2. No fork. Every per-copy child preloads a guard (`src/pdf/child-guard.ts`,
    `src/pdf/no-fork.ts`) that starts the threads it needs and says it is
    ready; the sidecar then sets the child's RLIMIT_NPROC to 1 with util-linux
@@ -308,8 +313,10 @@ and took its socket over), most load-bearing first:
    whole namespace with it. The `/proc` reading is best-effort on its own;
    1 and 2 are what make it hold.
 4. Then the socket's device and inode are checked, before the reply, at each
-   connection, and every second. A socket replaced or removed stops it with
-   exit 1 and no reply, and the job fails closed.
+   connection, and every second, and so are its mode (0660), owner and group
+   as bound (fix round 3: a child of the sidecar's uid could `chmod 0` it in
+   place and lock the worker out). A socket replaced, removed or changed
+   stops it with exit 1 and no reply, and the job fails closed.
 
 It replaces a socket left behind by a dead sidecar, but exits 1 if anything
 else is at the path. SIGTERM and SIGINT kill the copy in flight, close the

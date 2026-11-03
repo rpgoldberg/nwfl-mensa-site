@@ -3,7 +3,7 @@
 // own; here they are covered. The engines are stand-ins (test/pdf/children).
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,8 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REQUEST_MAGIC, encodeRequest } from './engine-protocol.js';
 import { RetryableEngineError } from './regenerate.js';
-import { ALLOWED_ENV, DEFAULT_SOCKET, ENGINE_SOCKET_DIR, MAX_CONNECTIONS, READ_TIMEOUT_MS, SOCKET_MODE, type Sidecar, type System, WATCH_MS, ignoreInspectorSignal, refusedEnv, sidecarMain, startSidecar } from './sidecar.js';
+import { ALLOWED_ENV, DEFAULT_SOCKET, ENGINE_SOCKET_DIR, MAX_CONNECTIONS, READ_TIMEOUT_MS, SOCKET_MODE, type Sidecar, type System, WATCH_MS, HELD_SIGNALS, holdSignals, refusedEnv, sidecarMain, socketDrift, startSidecar } from './sidecar.js';
 import { socketRedact } from './socket-engine.js';
+import { NODE_FLAGS } from '../../test/helpers/sidecar.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
 const REQUEST = { quotes: ['Kestrel Ambry'], redactsAny: true };
@@ -268,6 +269,49 @@ describe('startSidecar: the socket it bound is the one it serves (M1)', () => {
     }
   });
 
+  it('exits on its watch when the socket\'s mode changes in place, as a child of its uid can chmod it (S1)', async () => {
+    for (const mode of [0o000, 0o666]) {
+      const fatal: string[] = [];
+      const { socket } = await started({ onFatal: (reason) => void fatal.push(reason), watchMs: 50 });
+      chmodSync(socket, mode);
+      await vi.waitFor(() => expect(fatal, mode.toString(8)).toEqual([`the socket at ${socket} changed its mode or owner`]));
+    }
+  });
+
+  it('tells the socket as bound from one gone, replaced, or changed in mode, owner or group (S1)', () => {
+    const bound = { dev: 7, ino: 11, mode: SOCKET_MODE, uid: 10004, gid: 10003 };
+    const stat = (change: Partial<typeof bound> & { socket?: boolean } = {}) => {
+      const { socket = true, ...rest } = change;
+      return { ...bound, mode: 0o140000 | bound.mode, ...rest, isSocket: () => socket };
+    };
+    expect(socketDrift(bound, stat())).toBeNull();
+    expect(socketDrift(bound, undefined)).toBe('gone');
+    expect(socketDrift(bound, stat({ socket: false }))).toBe('gone');
+    expect(socketDrift(bound, stat({ ino: 12 }))).toBe('gone');
+    expect(socketDrift(bound, stat({ dev: 8 }))).toBe('gone');
+    expect(socketDrift(bound, stat({ mode: 0o140000 }))).toBe('changed');
+    expect(socketDrift(bound, stat({ mode: 0o140666 }))).toBe('changed');
+    expect(socketDrift(bound, stat({ uid: 10005 }))).toBe('changed');
+    expect(socketDrift(bound, stat({ gid: 0 }))).toBe('changed');
+  });
+
+  it('checks the socket\'s mode after every job and before any reply: a job whose child chmods it gets none (S1)', async () => {
+    const fatal: string[] = [];
+    const at: { socket?: string } = {};
+    const { socket } = await started({
+      module: child('slow'),
+      onFatal: (reason) => void fatal.push(reason),
+      watchMs: 60_000,
+      sweep: () => {
+        chmodSync(at.socket as string, 0o000);
+        return Promise.resolve(null);
+      },
+    });
+    at.socket = socket;
+    await expect(socketRedact({ path: socket, timeoutMs: 10_000 })(ONE, REQUEST)).rejects.toBeInstanceOf(RetryableEngineError);
+    expect(fatal).toEqual([`the socket at ${socket} changed its mode or owner`]);
+  });
+
   it('checks the socket after every job and before any reply: a job whose child replaced it gets none', async () => {
     const fatal: string[] = [];
     const at: { socket?: string } = {};
@@ -454,11 +498,32 @@ describe('sidecarMain (the entry\'s logic)', () => {
     expect(lines.join('\n')).toContain('its PID namespace is not clear: an orphaned process');
   });
 
-  it('takes SIGUSR1 with a listener, so Node does not open its inspector to a child', () => {
+  it('takes SIGUSR1 with a listener, so Node does not open its inspector to a child, and every other signal that would end it by default (N2)', () => {
     const target = new EventEmitter();
-    ignoreInspectorSignal(target as unknown as NodeJS.Process);
+    holdSignals(target as unknown as NodeJS.Process);
     expect(target.listenerCount('SIGUSR1')).toBe(1);
     expect(() => target.emit('SIGUSR1')).not.toThrow();
+    expect(HELD_SIGNALS).toEqual(['SIGHUP', 'SIGQUIT', 'SIGTRAP', 'SIGABRT', 'SIGUSR2', 'SIGALRM', 'SIGVTALRM', 'SIGPROF', 'SIGIO', 'SIGPWR', 'SIGSTKFLT', 'SIGSYS', 'SIGXCPU', 'SIGXFSZ']);
+    for (const signal of HELD_SIGNALS) {
+      expect(target.listenerCount(signal), signal).toBe(1);
+      expect(() => target.emit(signal)).not.toThrow();
+    }
+    // SIGTERM and SIGINT are the entries' own (a clean stop); SIGKILL and SIGSTOP cannot be held; a fault is not to be.
+    for (const signal of ['SIGTERM', 'SIGINT', 'SIGKILL', 'SIGSTOP', 'SIGSEGV', 'SIGBUS', 'SIGFPE', 'SIGILL']) expect(target.listenerCount(signal), signal).toBe(0);
+  });
+
+  it('keeps a real process running through each held signal (N2)', async () => {
+    const sidecarModule = fileURLToPath(new URL('./sidecar.ts', import.meta.url));
+    const script = `const { holdSignals } = await import(${JSON.stringify(sidecarModule)}); holdSignals(); process.send('held'); setTimeout(() => process.exit(0), 1500);`;
+    const held = spawn(process.execPath, [...NODE_FLAGS, '--input-type=module', '-e', script], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'], env: {} });
+    const exited = new Promise<number | null>((resolve) => held.once('exit', (code) => resolve(code)));
+    const ready = new Promise<boolean>((resolve) => {
+      held.once('message', () => resolve(true));
+      held.once('exit', () => resolve(false));
+    });
+    expect(await ready).toBe(true);
+    for (const signal of HELD_SIGNALS) held.kill(signal);
+    expect(await exited).toBe(0);
   });
 
   it('exits 1 when it cannot listen, and reports a replaced socket to its caller', async () => {
