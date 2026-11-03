@@ -2,9 +2,10 @@
 // UNTRUSTED-PDF-GATE (1): the PDF engine as a sidecar process, meant for a
 // container of its own in the worker's pod: its own uid and gid, no Secret in
 // its env or volumes, no shared process namespace, no network (README, "The
-// engine sidecar", lists what fc's manifest gives it). Started with args from
-// the same image, so dumb-init stays PID 1: `node dist/pdf/engine-sidecar.js`.
-// The gate sidecar (gate-service.ts) is served by the same code here.
+// engine sidecar", lists what fc's manifest gives it). From the same image,
+// started with `command: ["node", "--disable-sigusr1", "dist/pdf/
+// engine-sidecar.js"]`, so node is PID 1 and no init runs (fix round 2). The
+// gate sidecar (gate-service.ts) is served by the same code here.
 //
 //   - At start it refuses (exit 2) an environment holding any variable not on
 //     ALLOWED_ENV: an allow-list, so a credential under a name nobody thought
@@ -12,13 +13,18 @@
 //   - It binds only directly in its own directory (/run/pdf-engine; the gate
 //     /run/pdf-gate), each an emptyDir only it and the worker mount, on one
 //     unix socket of mode 0660: the socket's group is the pod's fsGroup.
-//   - It needs a PID namespace of its own and refuses to be PID 1 (exit 2);
-//     after every job it SIGKILLs every process in that namespace but PID 1
-//     and itself (pidns.ts), so nothing a job started outlives it (M1).
-//   - It watches its socket: at each connection, after each job and every
-//     WATCH_MS it compares the path's device and inode with the socket it
-//     bound. Replaced or gone, it stops (the entry exits 1, the kubelet
-//     restarts it) and the worker's job fails closed (M1).
+//   - It must be PID 1 of its container and not root (exit 2), and in
+//     production it needs --disable-sigusr1 (exit 2). As PID 1 the kernel
+//     keeps SIGKILL, SIGSTOP and every signal it has no handler for away from
+//     it, so a child cannot stop or kill it; Node's inspector signal is
+//     taken by a listener (ignoreInspectorSignal) and the flag.
+//   - Each job's child cannot start a process (no-fork.ts). Before every
+//     reply the sidecar kills everything else in its namespace and waits
+//     until it is alone (pidns.ts clearNamespace), then checks that its
+//     socket path still holds the socket it bound (device and inode). Either
+//     failing stops it without a reply (the entry exits 1, and the kernel
+//     kills the whole namespace with it); the worker's job fails closed. It
+//     also checks the socket at each connection and every WATCH_MS.
 //   - Per connection: the first bytes within FIRST_BYTES_TIMEOUT_MS, one
 //     request frame (engine-protocol.ts) within READ_TIMEOUT_MS and the
 //     caps, validated to the field; anything else is dropped without an
@@ -34,7 +40,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { FIRST_BYTES_TIMEOUT_MS, type Frame, MAX_INPUT_BYTES, MAX_REQUEST_HEADER_BYTES, REQUEST_MAGIC, type SidecarReply, decodeRequest, encodeReply, readFrame } from './engine-protocol.js';
 import { ENGINE_CHILD, ENGINE_TIMEOUT_MS, type EngineMessage, isolatedRedact } from './isolated.js';
-import { ownNamespaceProblem, sweepNamespace } from './pidns.js';
+import { type Kill, clearNamespace, pid1Problem } from './pidns.js';
 import { inSocketDir } from './socket-engine.js';
 
 export const ENGINE_SOCKET_DIR = '/run/pdf-engine';
@@ -44,7 +50,8 @@ export const SOCKET_MODE = 0o660;
 export const READ_TIMEOUT_MS = 30_000;
 /** How often a sidecar checks that its socket is still the one it bound. */
 export const WATCH_MS = 1_000;
-const MAX_CONNECTIONS = 8;
+/** Connections past this are closed at once (net.Server maxConnections). */
+export const MAX_CONNECTIONS = 8;
 export const MAX_TIMEOUT_MS = 3_600_000;
 
 /**
@@ -97,9 +104,9 @@ export interface ServeOptions {
   log: (line: string) => void;
   readTimeoutMs?: number;
   firstBytesTimeoutMs?: number;
-  /** After every job, before its reply (pidns.ts sweepNamespace); a throw stops the sidecar. */
-  sweep?: () => void;
-  /** The socket is not the one bound any more, or a sweep failed: the sidecar has stopped. Default: logged. */
+  /** After every job, before its reply (pidns.ts clearNamespace): null when the namespace is clear; a reason, or a throw, stops the sidecar. */
+  sweep?: () => Promise<string | null>;
+  /** The socket is not the one bound any more, or the namespace is not clear: the sidecar has stopped. Default: logged. */
   onFatal?: (reason: string) => void;
   watchMs?: number;
 }
@@ -180,13 +187,15 @@ export async function serveFrames<M>(options: ServeOptions, protocol: Protocol<M
     return false;
   }
 
-  /** After a job's child is gone: the sweep, then the socket check, before any reply. */
-  function afterJob(): void {
+  /** After a job's child is gone: the namespace cleared, then the socket checked, before any reply. */
+  async function afterJob(): Promise<void> {
+    let problem: string | null;
     try {
-      options.sweep?.();
+      problem = (await options.sweep?.()) ?? null;
     } catch (error) {
-      fail(`the sweep after a job failed (${(error as NodeJS.ErrnoException).code ?? (error as Error).message})`);
+      problem = `its check failed (${(error as NodeJS.ErrnoException).code ?? (error as Error).message})`;
     }
+    if (problem !== null) fail(`its PID namespace is not clear before a reply: ${problem}`);
     intact();
   }
 
@@ -239,7 +248,7 @@ export async function serveFrames<M>(options: ServeOptions, protocol: Protocol<M
         try {
           return await protocol.run(message, job.signal);
         } finally {
-          afterJob();
+          await afterJob();
         }
       });
       if (reply === null || job.signal.aborted || stopped) socket.destroy();
@@ -300,22 +309,31 @@ export function startSidecar(options: SidecarOptions): Promise<Sidecar> {
   });
 }
 
-/** What a sidecar's entry sees of its process; tests give a made-up one. */
+/** What a sidecar's entry sees of its process; tests give a made-up one (never the real kill with pid 1). */
 export interface System {
   pid: number;
-  ppid: number;
   uid: number;
   procRoot: string;
-  kill: (pid: number, signal: NodeJS.Signals) => void;
+  kill: Kill;
+  execArgv: readonly string[];
 }
 
 export interface MainOptions {
   system?: System;
-  /** The sidecar stopped (its socket replaced or gone, or a sweep failed): the entry exits 1. */
+  /** The sidecar stopped (its socket replaced or gone, or its namespace not clear before a reply): the entry exits 1. */
   onFatal?: (reason: string) => void;
 }
 
-const thisProcess = (): System => ({ pid: process.pid, ppid: process.ppid, uid: process.getuid?.() ?? -1, procRoot: '/proc', kill: (pid, signal) => void process.kill(pid, signal) });
+const thisProcess = (): System => ({ pid: process.pid, uid: process.getuid?.() ?? -1, procRoot: '/proc', kill: (pid, signal) => void process.kill(pid, signal), execArgv: process.execArgv });
+
+/**
+ * Takes SIGUSR1 with a listener that does nothing. Node's own SIGUSR1 handler starts the inspector on
+ * 127.0.0.1:9229, which a child could then drive over loopback; as PID 1 the sidecar still gets any
+ * signal it has a handler for. The entries call this first; --disable-sigusr1 is required too.
+ */
+export function ignoreInspectorSignal(target: Pick<NodeJS.Process, 'on'> = process): void {
+  target.on('SIGUSR1', () => {});
+}
 
 /** What one sidecar entry takes: its directory and socket name, and its own arguments beside the common ones. */
 export interface SidecarSpec {
@@ -331,7 +349,7 @@ export interface Prepared {
   socket: string;
   values: Record<string, string | boolean | undefined>;
   timeoutMs: number | undefined;
-  sweep: (() => void) | undefined;
+  sweep: (() => Promise<string | null>) | undefined;
   listening: string;
   onFatal: (reason: string) => void;
 }
@@ -345,12 +363,12 @@ export function wholeArgument(value: string | boolean | undefined, max: number):
 
 /**
  * The common start of both entries: refuse an environment off the allow-list, unknown arguments, a
- * socket outside the sidecar's own directory, the test-only flags in production, PID 1, and a PID
- * namespace that is not its own (exit 2). Common arguments:
+ * socket outside the sidecar's own directory, the test-only flags in production, root, any pid but 1,
+ * and, in production, a missing --disable-sigusr1 (exit 2). Common arguments:
  *   --socket <path>          directly in the sidecar's directory; default <dir>/<file>
  *   --timeout-ms <ms>        per job
  *   --socket-dir <dir>       another directory, for tests (refused when NODE_ENV=production)
- *   --shared-pid-namespace   no sweep, for tests (refused when NODE_ENV=production)
+ *   --shared-pid-namespace   not PID 1 and nothing cleared, for tests (refused when NODE_ENV=production)
  */
 export function prepareSidecar(spec: SidecarSpec, argv: readonly string[], env: NodeJS.ProcessEnv, log: (line: string) => void, options: MainOptions = {}): { code: number } | Prepared {
   const name = `the ${spec.what} sidecar`;
@@ -393,26 +411,32 @@ export function prepareSidecar(spec: SidecarSpec, argv: readonly string[], env: 
     log(`--timeout-ms must be a whole number from 1 to ${MAX_TIMEOUT_MS}`);
     return { code: 2 };
   }
-  const problem = system.pid === 1 || values['shared-pid-namespace'] !== true ? ownNamespaceProblem(system, system.procRoot) : null;
+  const shared = values['shared-pid-namespace'] === true;
+  const problem = shared ? (system.uid === 0 ? 'it runs as root' : null) : pid1Problem(system);
   if (problem !== null) {
-    log(`${name} needs a PID namespace of its own and will not start: ${problem}`);
+    log(`${name} must be PID 1 of its container and will not start: ${problem}`);
     return { code: 2 };
   }
-  const sweep = values['shared-pid-namespace'] === true ? undefined : (): void => void sweepNamespace(system.pid, { procRoot: system.procRoot, kill: system.kill });
+  if (env['NODE_ENV'] === 'production' && !system.execArgv.includes('--disable-sigusr1')) {
+    log(`${name} will not start without --disable-sigusr1: as PID 1 it still gets SIGUSR1, which would open Node's inspector to a child`);
+    return { code: 2 };
+  }
+  const sweep = shared ? undefined : (): Promise<string | null> => clearNamespace({ self: system.pid, procRoot: system.procRoot, kill: system.kill });
   return {
     socket,
     values,
     timeoutMs,
     sweep,
-    listening: `${spec.what} sidecar listening (${sweep === undefined ? 'not sweeping: shared PID namespace, for tests' : 'sweeping its PID namespace after every job'})`,
+    listening: `${spec.what} sidecar listening (${sweep === undefined ? 'not PID 1: shared PID namespace, for tests; nothing is cleared' : 'PID 1: clearing its PID namespace before every reply'})`,
     onFatal: options.onFatal ?? ((reason) => log(`${name} stops: ${reason}`)),
   };
 }
 
-/** Sweeps once (a fresh namespace holds nothing to kill), then starts; exit 1 when it cannot. */
+/** Clears its namespace once (a fresh one holds nothing else), then starts; exit 1 when it cannot. */
 export async function startPrepared(what: string, prepared: Prepared, log: (line: string) => void, start: () => Promise<Sidecar>): Promise<{ code: number } | { sidecar: Sidecar }> {
   try {
-    prepared.sweep?.();
+    const problem = (await prepared.sweep?.()) ?? null;
+    if (problem !== null) throw new Error(`its PID namespace is not clear: ${problem}`);
     const sidecar = await start();
     log(prepared.listening);
     return { sidecar };

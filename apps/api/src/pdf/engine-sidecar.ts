@@ -1,13 +1,17 @@
 // ============================================================================
 // The PDF engine sidecar's entrypoint (UNTRUSTED-PDF-GATE):
-// `node dist/pdf/engine-sidecar.js`, same image as the API and the worker, in
-// a container of its own beside the worker (sidecar.ts), started with args so
-// dumb-init stays PID 1. Argument, env and signal wiring only: sidecarMain is
-// tested. A replaced socket or a failed sweep exits 1, so the kubelet
-// restarts the container.
+// `command: ["node", "--disable-sigusr1", "dist/pdf/engine-sidecar.js"]`,
+// same image as the API and the worker, in a container of its own beside the
+// worker (sidecar.ts), with node as PID 1 and no init (fix round 2: it must
+// be PID 1, exit 2 otherwise). Argument, env and signal wiring only:
+// sidecarMain is tested. SIGTERM and SIGINT close the listener and exit 0; a
+// replaced socket or a namespace not clear before a reply exits 1, so the
+// kubelet restarts the container.
 // ============================================================================
-import { type Sidecar, sidecarMain } from './sidecar.js';
+import { type Sidecar, ignoreInspectorSignal, sidecarMain } from './sidecar.js';
 
+// First: as PID 1 it still gets SIGUSR1, and Node's own handler would open the inspector to a child.
+ignoreInspectorSignal();
 const log = (line: string): void => void process.stderr.write(`${line}\n`);
 /** Set once it listens. */
 const running: { sidecar?: Sidecar } = {};

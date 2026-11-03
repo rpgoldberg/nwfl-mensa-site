@@ -2,7 +2,8 @@
 // (test/pdf/engine-sidecar.test.ts) runs the same paths through the real entry as a process of its
 // own; here they are covered. The engines are stand-ins (test/pdf/children).
 import { spawn } from 'node:child_process';
-import { lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REQUEST_MAGIC, encodeRequest } from './engine-protocol.js';
 import { RetryableEngineError } from './regenerate.js';
-import { ALLOWED_ENV, DEFAULT_SOCKET, ENGINE_SOCKET_DIR, READ_TIMEOUT_MS, SOCKET_MODE, type Sidecar, type System, WATCH_MS, refusedEnv, sidecarMain, startSidecar } from './sidecar.js';
+import { ALLOWED_ENV, DEFAULT_SOCKET, ENGINE_SOCKET_DIR, MAX_CONNECTIONS, READ_TIMEOUT_MS, SOCKET_MODE, type Sidecar, type System, WATCH_MS, ignoreInspectorSignal, refusedEnv, sidecarMain, startSidecar } from './sidecar.js';
 import { socketRedact } from './socket-engine.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
@@ -278,6 +279,7 @@ describe('startSidecar: the socket it bound is the one it serves (M1)', () => {
       sweep: () => {
         unlinkSync(at.socket as string);
         writeFileSync(at.socket as string, 'taken');
+        return Promise.resolve(null);
       },
     });
     at.socket = socket;
@@ -286,24 +288,52 @@ describe('startSidecar: the socket it bound is the one it serves (M1)', () => {
     expect(fatal).toEqual([`the socket at ${socket} was replaced or removed`]);
   });
 
-  it('checks the socket at each connection', async () => {
+  it('checks the socket at each connection, before it reads a request or forks a child (N2)', async () => {
     const fatal: string[] = [];
     const { dir, socket } = place();
     const moved = path.join(dir, 'moved.sock');
-    const sidecar = await startSidecar({ path: socket, module: child('refuse'), log: () => {}, onFatal: (reason) => void fatal.push(reason), watchMs: 60_000 });
+    const ran = path.join(dir, 'child-ran');
+    const sidecar = await startSidecar({ path: socket, module: child('mark'), log: () => {}, onFatal: (reason) => void fatal.push(reason), watchMs: 60_000 });
     cleanup.push(() => sidecar.close());
     // The bound socket moved aside and a decoy in its place: a connection still reaching the bound one is refused.
     renameSync(socket, moved);
     writeFileSync(socket, 'decoy');
-    expect(await exchange(moved, encodeRequest(ONE, REQUEST))).toEqual(Buffer.alloc(0));
+    expect(await exchange(moved, encodeRequest(ONE, { quotes: [ran], redactsAny: true }))).toEqual(Buffer.alloc(0));
     expect(fatal).toEqual([`the socket at ${socket} was replaced or removed`]);
+    // The stand-in writes its marker as soon as it runs: no child was forked for the refused connection.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(existsSync(ran)).toBe(false);
+  });
+
+  it('closes a connection past MAX_CONNECTIONS at once, and serves again once one is free (S2)', async () => {
+    expect(MAX_CONNECTIONS).toBe(8);
+    const { socket } = await started({ firstBytesTimeoutMs: 10_000, readTimeoutMs: 20_000 });
+    const idle = await Promise.all(
+      Array.from({ length: MAX_CONNECTIONS }, () => new Promise<net.Socket>((resolve) => {
+        const conn = net.createConnection({ path: socket }, () => resolve(conn));
+        conn.on('error', () => {});
+      })),
+    );
+    cleanup.push(() => idle.forEach((conn) => conn.destroy()));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const t0 = Date.now();
+    expect(await exchange(socket, encodeRequest(ONE, REQUEST))).toEqual(Buffer.alloc(0));
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    (idle[0] as net.Socket).destroy();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await socketRedact({ path: socket })(ONE, REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
   });
 });
 
-describe('startSidecar: the sweep after each job (M1)', () => {
-  it('sweeps after every job, before its reply, and one job at a time', async () => {
+describe('startSidecar: the namespace cleared after each job, before its reply (M1)', () => {
+  it('clears its namespace after every job, before its reply, and one job at a time', async () => {
     const order: string[] = [];
-    const { socket } = await started({ sweep: () => void order.push('sweep') });
+    const { socket } = await started({
+      sweep: () => {
+        order.push('sweep');
+        return Promise.resolve(null);
+      },
+    });
     const redact = socketRedact({ path: socket });
     await redact(ONE, REQUEST);
     order.push('reply');
@@ -312,16 +342,19 @@ describe('startSidecar: the sweep after each job (M1)', () => {
     expect(order).toEqual(['sweep', 'reply', 'sweep', 'reply']);
   });
 
-  it('stops serving when a sweep fails: a process it could not kill may still be running', async () => {
-    const fatal: string[] = [];
-    const { socket } = await started({
-      onFatal: (reason) => void fatal.push(reason),
-      sweep: () => {
-        throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
-      },
-    });
-    await expect(socketRedact({ path: socket })(ONE, REQUEST)).rejects.toBeInstanceOf(RetryableEngineError);
-    expect(fatal).toEqual(['the sweep after a job failed (EPERM)']);
+  it('stops without a reply when its namespace is not clear, or the check fails: a process may still be running', async () => {
+    for (const [sweep, why] of [
+      [() => Promise.resolve('processes are still in its PID namespace after 50 passes'), 'its PID namespace is not clear before a reply: processes are still in its PID namespace after 50 passes'],
+      [
+        () => Promise.reject(Object.assign(new Error('kill EPERM'), { code: 'EPERM' })),
+        'its PID namespace is not clear before a reply: its check failed (EPERM)',
+      ],
+    ] as Array<[() => Promise<string | null>, string]>) {
+      const fatal: string[] = [];
+      const { socket } = await started({ onFatal: (reason) => void fatal.push(reason), sweep });
+      await expect(socketRedact({ path: socket })(ONE, REQUEST)).rejects.toBeInstanceOf(RetryableEngineError);
+      expect(fatal).toEqual([why]);
+    }
   });
 
   it('drops an idle connection within the first-bytes deadline (NOTE: idle connections are bounded)', async () => {
@@ -334,16 +367,14 @@ describe('startSidecar: the sweep after each job (M1)', () => {
 });
 
 describe('sidecarMain (the entry\'s logic)', () => {
-  /** A made-up process view: the sidecar (pid 7) under dumb-init (pid 1), each listed process at its uid. */
-  function system(processes: Record<number, number> = { 1: 10002, 7: 10002 }, self: Partial<System> = {}): System & { sent: number[] } {
+  /** A made-up process view: the sidecar as PID 1, alone, with a kill that only records (never the real one). */
+  function system(self: Partial<System> = {}): System & { sent: number[] } {
     const root = mkdtempSync(path.join(tmpdir(), 'nwfl-proc-'));
     cleanup.push(() => rmSync(root, { recursive: true, force: true }));
-    for (const [pid, uid] of Object.entries(processes)) {
-      mkdirSync(path.join(root, pid));
-      writeFileSync(path.join(root, pid, 'status'), `Name:\tnode\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`);
-    }
+    mkdirSync(path.join(root, '1'));
+    writeFileSync(path.join(root, '1', 'status'), 'Name:\tnode\nState:\tS (sleeping)\nUid:\t10002\t10002\t10002\t10002\n');
     const sent: number[] = [];
-    return { pid: 7, ppid: 1, uid: 10002, procRoot: root, kill: (pid) => void sent.push(pid), sent, ...self };
+    return { pid: 1, uid: 10002, procRoot: root, kill: (pid) => void sent.push(pid), execArgv: ['--disable-sigusr1'], sent, ...self };
   }
   const SHARED = ['--shared-pid-namespace'];
 
@@ -383,32 +414,51 @@ describe('sidecarMain (the entry\'s logic)', () => {
     }
   });
 
-  it('refuses to run as PID 1 or outside a PID namespace of its own, exit 2 (it sweeps that namespace after every job)', async () => {
+  it('serves only as PID 1 of its container, never as root, and in production only with --disable-sigusr1, exit 2 (fix round 2)', async () => {
     const { dir } = place();
-    const cases: Array<[string, System, RegExp]> = [
-      ['PID 1', system({ 1: 10002 }, { pid: 1, ppid: 0 }), /is PID 1/],
-      ['a shared namespace', system({ 1: 65535, 7: 10002, 9: 10001 }), /another user/],
-      ['a parent other than PID 1', system({ 1: 10002, 5: 10002, 7: 10002 }, { ppid: 5 }), /parent is not PID 1/],
+    const cases: Array<[string, string[], NodeJS.ProcessEnv, System & { sent: number[] }, RegExp]> = [
+      ['not PID 1 (dumb-init or another init in front of it)', ['--socket-dir', dir], {}, system({ pid: 7 }), /must be PID 1 of its container and will not start: it is PID 7, not PID 1 of its container: set command, not args/],
+      ['root', ['--socket-dir', dir], {}, system({ uid: 0 }), /will not start: it runs as root/],
+      ['root, even for tests', ['--socket-dir', dir, ...SHARED], {}, system({ pid: 7, uid: 0 }), /will not start: it runs as root/],
+      ['production without the flag', [], { NODE_ENV: 'production' }, system({ execArgv: [] }), /will not start without --disable-sigusr1/],
     ];
-    for (const [name, given, why] of cases) {
+    for (const [name, argv, env, given, why] of cases) {
       const lines: string[] = [];
-      expect(await sidecarMain(['--socket-dir', dir], {}, (line) => void lines.push(line), { system: given }), name).toEqual({ code: 2 });
+      expect(await sidecarMain(argv, env, (line) => void lines.push(line), { system: given }), name).toEqual({ code: 2 });
       expect(lines.join('\n'), name).toMatch(why);
-      expect(lines.join('\n'), name).toContain('needs a PID namespace of its own');
+      expect(given.sent, name).toEqual([]);
     }
   });
 
-  it('in a namespace of its own, sweeps it at start and after every job', async () => {
+  it('as PID 1, clears its namespace (kill(-1)) at start and before every reply', async () => {
     const { dir, socket } = place();
-    const view = system({ 1: 10002, 7: 10002, 30: 10002 });
+    const view = system();
     const lines: string[] = [];
     const result = await sidecarMain(['--socket-dir', dir, '--engine', child('refuse')], {}, (line) => void lines.push(line), { system: view });
     const { sidecar } = result as { sidecar: Sidecar };
     cleanup.push(() => sidecar.close());
-    expect(view.sent).toEqual([30]);
+    expect(view.sent).toEqual([-1]);
     expect(await socketRedact({ path: socket })(ONE, REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
-    expect(view.sent).toEqual([30, 30]);
-    expect(lines).toContain('engine sidecar listening (sweeping its PID namespace after every job)');
+    expect(view.sent).toEqual([-1, -1]);
+    expect(lines).toContain('engine sidecar listening (PID 1: clearing its PID namespace before every reply)');
+  });
+
+  it('exits 1 at start when its namespace is not clear', async () => {
+    const { dir } = place();
+    const view = system();
+    writeFileSync(path.join(view.procRoot, 'stray'), '');
+    mkdirSync(path.join(view.procRoot, '9'));
+    writeFileSync(path.join(view.procRoot, '9', 'status'), 'Name:\tsh\nState:\tZ (zombie)\nUid:\t10002\t10002\t10002\t10002\n');
+    const lines: string[] = [];
+    expect(await sidecarMain(['--socket-dir', dir], {}, (line) => void lines.push(line), { system: view })).toEqual({ code: 1 });
+    expect(lines.join('\n')).toContain('its PID namespace is not clear: an orphaned process');
+  });
+
+  it('takes SIGUSR1 with a listener, so Node does not open its inspector to a child', () => {
+    const target = new EventEmitter();
+    ignoreInspectorSignal(target as unknown as NodeJS.Process);
+    expect(target.listenerCount('SIGUSR1')).toBe(1);
+    expect(() => target.emit('SIGUSR1')).not.toThrow();
   });
 
   it('exits 1 when it cannot listen, and reports a replaced socket to its caller', async () => {
@@ -433,7 +483,7 @@ describe('sidecarMain (the entry\'s logic)', () => {
     expect('sidecar' in result).toBe(true);
     const { sidecar } = result as { sidecar: Sidecar };
     cleanup.push(() => sidecar.close());
-    expect(lines).toContain('engine sidecar listening (not sweeping: shared PID namespace, for tests)');
+    expect(lines).toContain('engine sidecar listening (not PID 1: shared PID namespace, for tests; nothing is cleared)');
     await expect(socketRedact({ path: socket })(ONE, { quotes: ['hang'], redactsAny: true })).rejects.toThrow('took longer than 200 ms');
   });
 });

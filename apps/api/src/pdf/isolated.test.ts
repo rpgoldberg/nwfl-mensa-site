@@ -1,18 +1,21 @@
 // The engine in a process of its own (HARDEN-1 Fix 1): each copy is made in a child that exits after
-// it, so PDFium's and pdf.js's heaps go back to the OS. The children here are stand-ins (test/pdf/children).
-import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+// it, so PDFium's and pdf.js's heaps go back to the OS, and (fix round 2) that cannot start a process.
+// The children here are stand-ins (test/pdf/children), all benign: the ones that start processes run
+// only in a capped container (test/pdf/engine-sidecar.test.ts).
+import { execFileSync, fork } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { aliveWith } from '../../test/helpers/sidecar.js';
+import { GATE_CHILD_SOURCE, NODE_FLAGS } from '../../test/helpers/sidecar.js';
 import { linesPdf } from '../../test/pdf/fixtures.js';
 import { ENGINE_CHILD, engineExecArgv, engineReply, isolatedRedact, withoutCanvasWarnings } from './isolated.js';
+import { guardFlag, limitForks } from './no-fork.js';
 import { redactPdf } from './redact.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
+const guard = (name: string): string => fileURLToPath(new URL(`../../test/pdf/guards/${name}.ts`, import.meta.url));
 const REQUEST = { quotes: ['Kestrel'], redactsAny: true };
 
 describe('isolatedRedact', () => {
@@ -79,17 +82,44 @@ describe('isolatedRedact', () => {
     expect(engineExecArgv(['--env-file'])).toEqual([]);
   });
 
-  it('kills what the child left in its process group once it is done (M1: in the pod, nothing else would)', async () => {
-    const marker = `nwfl-engine-left-${randomUUID()}`;
-    expect(await isolatedRedact({ module: child('leave') })(Uint8Array.from([1]), { quotes: ['group', marker], redactsAny: true })).toEqual({ kind: 'refused', reason: 'left a process in its group' });
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const left = aliveWith(marker);
+  it('gives the child RLIMIT_NPROC 1 before it is sent the original (no-fork, fix round 2)', async () => {
+    const result = await isolatedRedact({ module: child('limits') })(Uint8Array.from([1]), REQUEST);
+    expect(result).toMatchObject({ kind: 'refused' });
+    expect((result as { reason: string }).reason).toMatch(/^Max processes\s+1\s+1\s+processes/);
+  });
+
+  it('refuses the copy, before the child is sent the original, when its limit cannot be set or its spawn still works', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-iso-'));
     try {
-      expect(left).toEqual([]);
+      const ran = path.join(dir, 'ran');
+      const failing = (): Promise<void> => Promise.reject(Object.assign(new Error('prlimit: not found'), { code: 'ENOENT' }));
+      await expect(isolatedRedact({ module: child('mark'), limit: failing })(Uint8Array.from([1]), { quotes: [ran], redactsAny: true })).rejects.toThrow(
+        'the engine process was refused: its limit on starting processes could not be set (ENOENT)',
+      );
+      await expect(isolatedRedact({ module: child('mark'), guard: guard('lies') })(Uint8Array.from([1]), { quotes: [ran], redactsAny: true })).rejects.toThrow(
+        'the engine process was refused: it could still start a process (a process started (exit 0))',
+      );
+      expect(existsSync(ran)).toBe(false);
     } finally {
-      for (const pid of left) process.kill(pid, 'SIGKILL');
+      rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('runs the real engine and gate children to their exit when their parent goes away (N3: no orphan)', async () => {
+    for (const module of [fileURLToPath(new URL('./engine-child.ts', import.meta.url)), GATE_CHILD_SOURCE]) {
+      const real = fork(module, [], { env: {}, execArgv: [...NODE_FLAGS, guardFlag()], stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+      const exited = new Promise<number | null>((resolve) => real.once('exit', (code) => resolve(code)));
+      real.on('message', (message) => {
+        const { guard: step } = message as { guard?: string };
+        if (step === 'ready') void limitForks(real.pid as number).then(() => real.send({ guard: 'limited' }));
+        // Its own module listens for a job now: the parent goes away instead of sending one.
+        else if (step === 'listening') real.disconnect();
+      });
+      const t0 = Date.now();
+      expect(await exited, module).toBe(1);
+      expect(Date.now() - t0, module).toBeLessThan(20_000);
+    }
+  }, 40_000);
 
   it('kills the child when its signal aborts (the sidecar: a worker that hung up, or a stop), and forks none for a signal already aborted', async () => {
     const controller = new AbortController();

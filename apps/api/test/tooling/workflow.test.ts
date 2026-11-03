@@ -56,12 +56,13 @@ describe('api workflow', () => {
     }
   });
 
-  it('lets the tests make user and PID namespaces before it tests, so the sidecars\' sweep runs for real (UNTRUSTED-PDF-GATE M1)', () => {
+  it('pulls the Dockerfile\'s pinned base image before it tests, for the contained sidecar tests, and no longer lifts the runner\'s namespace limits (UNTRUSTED-PDF-GATE M1, fix round 2)', () => {
     const test = job('test');
-    const allow = test.indexOf('kernel.apparmor_restrict_unprivileged_userns=0');
-    expect(allow).toBeGreaterThan(-1);
-    expect(test).toContain('unshare --user --map-current-user --pid --fork --mount-proc --kill-child true');
-    expect(allow).toBeLessThan(test.indexOf('run: npm run test:coverage'));
+    const pull = test.indexOf(`run: docker pull --quiet "$(sed -n 's/^ARG NODE_IMAGE=//p' Dockerfile)"`);
+    expect(pull).toBeGreaterThan(-1);
+    expect(pull).toBeLessThan(test.indexOf('run: npm run test:coverage'));
+    expect(test).not.toContain('apparmor_restrict_unprivileged_userns');
+    expect(test).not.toContain('unshare');
   });
 
   it('runs both PDF sidecars, the engine and the gate, from the image (UNTRUSTED-PDF-GATE)', () => {
@@ -71,6 +72,11 @@ describe('api workflow', () => {
     for (const needed of ['dist/pdf/engine-sidecar.js', 'dist/pdf/gate-sidecar.js', '--user 10002:10002', '--user 10004:10004', 'PDF_GATE_SOCKET', '--entrypoint node', 'DB_PASSWORD', '--read-only']) {
       expect(smoke, needed).toContain(needed);
     }
+    // Fix round 2: each sidecar is served as PID 1 with --disable-sigusr1, and refused behind dumb-init or without the flag.
+    for (const needed of ['$AS_PID1 "$IMAGE_UNDER_TEST" --disable-sigusr1 dist/pdf/engine-sidecar.js)', '$AS_PID1 "$IMAGE_UNDER_TEST" --disable-sigusr1 dist/pdf/gate-sidecar.js)', 'must be PID 1 of its container', 'will not start without --disable-sigusr1', 'listening (PID 1: clearing']) {
+      expect(smoke, needed).toContain(needed);
+    }
+    expect(smoke).not.toContain("'is PID 1'");
   });
 
   it('checks the protos against the base commit, with the whole history at hand', () => {

@@ -9,16 +9,20 @@
 # Two throwaway volumes stand in for the pod's two emptyDirs, /run/pdf-engine
 # and /run/pdf-gate: root-owned, group 10003 (the pod's fsGroup) with the
 # setgid bit, as the kubelet leaves them. Then, every container with a
-# read-only root, no capabilities, no privilege escalation and no network:
+# read-only root, no capabilities, no privilege escalation and no network,
+# each sidecar run as fc's manifest runs it (fix round 2): `command`, so
+# --entrypoint node here, with --disable-sigusr1, and node is PID 1:
 #   1. each sidecar refuses to start (exit 2) with a name off its allow-list
 #      in its env: PGPASSWORD for the engine, DB_PASSWORD for the gate;
-#   2. each refuses to start (exit 2) as PID 1 (--entrypoint node, no
-#      dumb-init), and the gate refuses to bind in /run/pdf-engine;
+#   2. each refuses to start (exit 2) behind the image's dumb-init (args
+#      only: not PID 1) and without --disable-sigusr1 (NODE_ENV=production),
+#      and the gate refuses to bind in /run/pdf-engine;
 #   3. the engine, uid 10002, and the gate, uid 10004, each plus group 10003,
-#      listen; each socket is mode 660, group 10003;
+#      listen as PID 1; each socket is mode 660, group 10003;
 #   4. a worker, uid 10001 plus 10003, mounting both, gets a redacted copy of
 #      a real PDF with PDF_ENGINE_SOCKET and PDF_GATE_SOCKET (the gate re-run
-#      in the gate sidecar), and the gate sidecar refuses a marked copy;
+#      in the gate sidecar), and the gate sidecar refuses a marked copy: the
+#      real children, each unable to start a process (prlimit, no-fork.ts);
 #   5. a stranger, uid 10005 without the group, is refused at both sockets;
 #   6. SIGTERM stops each sidecar with exit 0.
 # Everything it started is removed by recorded id or name, pass or fail.
@@ -36,6 +40,8 @@ GATE_SOCK=/run/pdf-gate/gate.sock
 LOCKED='--read-only --cap-drop ALL --security-opt no-new-privileges --network none'
 AS_ENGINE="--user 10002:10002 --group-add 10003 -v $engine_vol:/run/pdf-engine"
 AS_GATE="--user 10004:10004 --group-add 10003 -v $gate_vol:/run/pdf-gate"
+# As fc's manifest's `command` runs each sidecar: node is the entrypoint, so it is PID 1.
+AS_PID1='--entrypoint node'
 
 cleanup() {
   for id in $engine $gate; do
@@ -70,26 +76,30 @@ refuses() {
 # 1. A name off the allow-list in its env.
 # shellcheck disable=SC2086
 refuses 'engine, PGPASSWORD' 'its environment holds PGPASSWORD' $LOCKED $AS_ENGINE -e PGPASSWORD=smoke-not-a-secret \
-  "$IMAGE_UNDER_TEST" node dist/pdf/engine-sidecar.js
+  $AS_PID1 "$IMAGE_UNDER_TEST" --disable-sigusr1 dist/pdf/engine-sidecar.js
 # shellcheck disable=SC2086
 refuses 'gate, DB_PASSWORD' 'its environment holds DB_PASSWORD' $LOCKED $AS_GATE -e DB_PASSWORD=smoke-not-a-secret \
-  "$IMAGE_UNDER_TEST" node dist/pdf/gate-sidecar.js
+  $AS_PID1 "$IMAGE_UNDER_TEST" --disable-sigusr1 dist/pdf/gate-sidecar.js
 
-# 2. PID 1 (no dumb-init), and the gate's socket in the engine's directory.
+# 2. Behind dumb-init (args only), without --disable-sigusr1, and the gate's socket in the engine's directory.
 # shellcheck disable=SC2086
-refuses 'engine as PID 1' 'is PID 1' $LOCKED $AS_ENGINE --entrypoint node "$IMAGE_UNDER_TEST" dist/pdf/engine-sidecar.js
+refuses 'engine behind dumb-init' 'must be PID 1 of its container' $LOCKED $AS_ENGINE "$IMAGE_UNDER_TEST" node --disable-sigusr1 dist/pdf/engine-sidecar.js
 # shellcheck disable=SC2086
-refuses 'gate as PID 1' 'is PID 1' $LOCKED $AS_GATE --entrypoint node "$IMAGE_UNDER_TEST" dist/pdf/gate-sidecar.js
+refuses 'gate behind dumb-init' 'must be PID 1 of its container' $LOCKED $AS_GATE "$IMAGE_UNDER_TEST" node --disable-sigusr1 dist/pdf/gate-sidecar.js
+# shellcheck disable=SC2086
+refuses 'engine without --disable-sigusr1' 'will not start without --disable-sigusr1' $LOCKED $AS_ENGINE $AS_PID1 "$IMAGE_UNDER_TEST" dist/pdf/engine-sidecar.js
+# shellcheck disable=SC2086
+refuses 'gate without --disable-sigusr1' 'will not start without --disable-sigusr1' $LOCKED $AS_GATE $AS_PID1 "$IMAGE_UNDER_TEST" dist/pdf/gate-sidecar.js
 # shellcheck disable=SC2086
 refuses 'gate in /run/pdf-engine' 'directly in /run/pdf-gate' $LOCKED $AS_GATE -v "$engine_vol:/run/pdf-engine" \
-  "$IMAGE_UNDER_TEST" node dist/pdf/gate-sidecar.js --socket /run/pdf-engine/gate.sock
+  $AS_PID1 "$IMAGE_UNDER_TEST" --disable-sigusr1 dist/pdf/gate-sidecar.js --socket /run/pdf-engine/gate.sock
 
-# 3. Both listen, 660, group 10003.
+# 3. Both listen as PID 1, 660, group 10003.
 # shellcheck disable=SC2086
-engine=$(docker run -d $LOCKED $AS_ENGINE "$IMAGE_UNDER_TEST" node dist/pdf/engine-sidecar.js)
+engine=$(docker run -d $LOCKED $AS_ENGINE $AS_PID1 "$IMAGE_UNDER_TEST" --disable-sigusr1 dist/pdf/engine-sidecar.js)
 # shellcheck disable=SC2086
-gate=$(docker run -d $LOCKED $AS_GATE "$IMAGE_UNDER_TEST" node dist/pdf/gate-sidecar.js)
-for pair in "$engine:engine sidecar listening (sweeping" "$gate:gate sidecar listening (sweeping"; do
+gate=$(docker run -d $LOCKED $AS_GATE $AS_PID1 "$IMAGE_UNDER_TEST" --disable-sigusr1 dist/pdf/gate-sidecar.js)
+for pair in "$engine:engine sidecar listening (PID 1: clearing" "$gate:gate sidecar listening (PID 1: clearing"; do
   tries=0
   until docker logs "${pair%%:*}" 2>&1 | grep -q -F "${pair#*:}"; do
     tries=$((tries + 1))

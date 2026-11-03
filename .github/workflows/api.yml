@@ -44,15 +44,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Let the tests make user and PID namespaces
-        # The sidecars sweep their PID namespace after every job (UNTRUSTED-PDF-GATE M1); the tests
-        # run them in one of their own with unshare, as a container would. Ubuntu 24.04 restricts
-        # unprivileged user namespaces through AppArmor; this lifts that on the runner only.
-        run: |
-          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-          unshare --user --map-current-user --pid --fork --mount-proc --kill-child true
+      - name: Pull the sidecars' base image for the contained tests
+        # The hostile, process-starting and memory-heavy sidecar tests run the sidecars as PID 1 of a
+        # capped container with no network (UNTRUSTED-PDF-GATE M1, test/helpers/contained.ts), on the
+        # Dockerfile's own pinned node image; pulled here, since those containers cannot.
+        run: docker pull --quiet "$(sed -n 's/^ARG NODE_IMAGE=//p' Dockerfile)"
 
       - name: Start a throwaway Postgres
         # Writes NWFL_TEST_PG_CONTAINER and NWFL_TEST_DATABASE_URL for the

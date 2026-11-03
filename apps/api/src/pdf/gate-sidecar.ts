@@ -1,14 +1,17 @@
 // ============================================================================
 // The output gate sidecar's entrypoint (UNTRUSTED-PDF-GATE M2):
-// `node dist/pdf/gate-sidecar.js`, same image as the API and the worker, in
-// a third container beside the worker (gate-service.ts), started with args so
-// dumb-init stays PID 1. Argument, env and signal wiring only: gateSidecarMain is
-// tested. A replaced socket or a failed sweep exits 1, so the kubelet
-// restarts the container.
+// `command: ["node", "--disable-sigusr1", "dist/pdf/gate-sidecar.js"]`, same
+// image as the API and the worker, in a third container beside the worker
+// (gate-service.ts), with node as PID 1 and no init (fix round 2). Argument,
+// env and signal wiring only: gateSidecarMain is tested. SIGTERM and SIGINT
+// close the listener and exit 0; a replaced socket or a namespace not clear
+// before a reply exits 1, so the kubelet restarts the container.
 // ============================================================================
 import { gateSidecarMain } from './gate-service.js';
-import type { Sidecar } from './sidecar.js';
+import { type Sidecar, ignoreInspectorSignal } from './sidecar.js';
 
+// First: as PID 1 it still gets SIGUSR1, and Node's own handler would open the inspector to a child.
+ignoreInspectorSignal();
 const log = (line: string): void => void process.stderr.write(`${line}\n`);
 /** Set once it listens. */
 const running: { sidecar?: Sidecar } = {};

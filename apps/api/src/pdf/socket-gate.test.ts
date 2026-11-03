@@ -5,7 +5,7 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { GATE_REPLY_MAGIC, MAX_OUTPUT_BYTES, encodeFrame, sha256Hex } from './engine-protocol.js';
+import { GATE_REPLY_MAGIC, MAX_GATE_REPLY_HEADER_BYTES, MAX_OUTPUT_BYTES, encodeFrame, sha256Hex } from './engine-protocol.js';
 import { RetryableEngineError } from './regenerate.js';
 import { GATE_SOCKET_TIMEOUT_MS, socketGate } from './socket-gate.js';
 
@@ -106,6 +106,24 @@ describe('socketGate', () => {
     await new Promise<void>((resolve) => listener.close(() => resolve()));
     // close() removes the socket file; a socket file with no listener is what a killed sidecar leaves.
     expect(await socketGate({ path: nobody })(JOB).catch((error: Error) => error.message)).toMatch(/the gate socket is missing|could not be reached/);
+  });
+
+  it('reads a verdict header of exactly MAX_GATE_REPLY_HEADER_BYTES, and refuses one byte more (S2)', async () => {
+    expect(MAX_GATE_REPLY_HEADER_BYTES).toBe(1024);
+    for (const [size, outcome] of [
+      [MAX_GATE_REPLY_HEADER_BYTES, 'read'],
+      [MAX_GATE_REPLY_HEADER_BYTES + 1, 'over'],
+    ] as const) {
+      const json = `{"v":1,"verdict":"pass","sha256":"${SHA}"}`;
+      const head = Buffer.from(json + ' '.repeat(size - json.length), 'utf8');
+      const prefix = Buffer.alloc(12);
+      GATE_REPLY_MAGIC.copy(prefix, 0);
+      prefix.writeUInt32BE(head.length, 4);
+      const { socket } = await fakeGate(() => Buffer.concat([prefix, head]));
+      const check = socketGate({ path: socket })(JOB);
+      if (outcome === 'read') expect(await check).toEqual({ verdict: { pass: true }, sha256: SHA });
+      else await expect(check).rejects.toThrow('the gate sidecar gave no usable reply: the header is over its cap');
+    }
   });
 
   it('gives no pass for a check it cannot send, and does not connect for it', async () => {

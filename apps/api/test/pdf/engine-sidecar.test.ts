@@ -6,7 +6,6 @@
 // (its own uid, no secrets, no shared process namespace) is fc's manifest; README, "The engine
 // sidecar". Every name is made up.
 // ============================================================================
-import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -29,7 +28,8 @@ import { workerRedact } from '../../src/pdf/worker.js';
 import { type Api, insertId, startApi } from '../helpers/api.js';
 import { publishItem } from '../helpers/content.js';
 import { live } from '../helpers/pg.js';
-import { GATE_SIDECAR_ENTRY, type Spawned, aliveWith, exchange, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
+import { type ContainedSidecar, containedSidecar, ensureImage, probe, removeLeftovers, runContained } from '../helpers/contained.js';
+import { GATE_SIDECAR_ENTRY, type Spawned, exchange, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
 import { extractAll } from './extract.js';
 import { linesPdf } from './fixtures.js';
 
@@ -323,70 +323,96 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
   });
 });
 
-describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1), in a PID namespace of its own as in its container', () => {
-  it('UNTRUSTED-PDF-GATE sidecar: kills a double-forked, detached grandchild before the next job, and the next job\'s copy holds only its own data', async () => {
-    const place = socketDir();
-    dirs.push(place);
-    const spawned = spawnSidecar(['--socket', place.socket, '--engine', standIn('persist')], { namespace: true });
-    started.push(spawned);
-    await listening(spawned, place.socket);
-    expect(spawned.stderr()).toContain('engine sidecar listening (sweeping its PID namespace after every job)');
-    const inode = lstatSync(place.socket).ino;
-    const marker = `nwfl-persist-${randomUUID()}`;
-    // The hostile copy: its child leaves a grandchild in a session of its own, which is up before the child answers.
-    expect(await socketRedact({ path: place.socket })(Uint8Array.from([1]), { quotes: ['persist', marker], redactsAny: true })).toEqual({ kind: 'refused', reason: 'left a grandchild' });
-    expect(existsSync(`${place.socket}.${marker}.up`)).toBe(true);
-    expect(aliveWith(marker)).toEqual([]);
-    // Past the 300 ms after which the grandchild would have taken the socket: the sidecar still holds it.
-    await sleep(800);
-    expect(lstatSync(place.socket).ino).toBe(inode);
-    expect(spawned.child.exitCode).toBeNull();
-    // The next job, another file: its copy is its own bytes, and nothing else.
-    const own = Uint8Array.from(Buffer.from('job B: these bytes only'));
-    expect(await socketRedact({ path: place.socket })(own, { quotes: ['other'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: own, boxes: [] });
-  }, 30_000);
+describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1, fix round 2), as PID 1 of a capped container', () => {
+  // Each case runs the real entry as PID 1 of a container under the safety caps (test/helpers/contained.ts);
+  // the test is the worker, on the host, over the socket's bind-mounted directory.
+  const ENGINE_SOCK = '/run/pdf-engine/engine.sock';
+  const hostile = standIn('hostile');
+  const contained: ContainedSidecar[] = [];
+  beforeAll(() => ensureImage(), 300_000);
+  afterEach(async () => {
+    await Promise.all(contained.splice(0).map((sidecar) => sidecar.remove()));
+  });
+  afterAll(() => removeLeftovers());
+  const engineIn = async (args: readonly string[] = ['--engine', hostile, '--timeout-ms', '5000']): Promise<ContainedSidecar> => {
+    const sidecar = await containedSidecar('engine', args);
+    contained.push(sidecar);
+    return sidecar;
+  };
+  const own = (text: string): Uint8Array => Uint8Array.from(Buffer.from(text));
 
-  it('UNTRUSTED-PDF-GATE sidecar: the same grandchild outlives its copy where the sidecar cannot sweep (control: the test sees a survivor)', async () => {
-    const place = socketDir();
-    dirs.push(place);
-    const spawned = spawnSidecar(['--socket', place.socket, '--engine', standIn('persist')]);
-    started.push(spawned);
-    await listening(spawned, place.socket);
-    const marker = `nwfl-persist-${randomUUID()}`;
-    await socketRedact({ path: place.socket })(Uint8Array.from([1]), { quotes: ['persist', marker], redactsAny: true });
-    const survivors = aliveWith(marker);
-    try {
-      // The grandchild wrote its pid to its flag file; the middle process may still be ending too.
-      const thief = Number(readFileSync(`${place.socket}.${marker}.up`, 'utf8'));
-      expect(survivors).toContain(thief);
-      // It takes the socket over; the sidecar's watch sees its socket replaced and exits 1.
-      expect(await spawned.exited).toEqual({ code: 1, signal: null });
-      expect(spawned.stderr()).toContain(`the socket at ${place.socket} was replaced or removed`);
-    } finally {
-      for (const pid of survivors) {
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch {
-          // already gone
-        }
+  it('UNTRUSTED-PDF-GATE sidecar: a copy\'s child cannot start a process: spawn, exec and fork fail with EAGAIN once its limit is set, and its threaded work still runs', async () => {
+    const { result } = await runContained<{ pid: number; result: { reason: string } }>(probe('no-fork'));
+    expect(result.pid).toBe(1);
+    const seen = JSON.parse(result.result.reason) as Record<string, unknown>;
+    expect(seen).toMatchObject({ spawnSync: 'EAGAIN', execFileSync: 'EAGAIN', spawn: 'EAGAIN', fork: 'EAGAIN', zlib: 1024 * 1024, pbkdf2: 32 });
+    // No thread was started after the limit either: the pool the guard warmed is all it has.
+    expect(seen['threadsAfter']).toBe(seen['threads']);
+  }, 120_000);
+
+  it('UNTRUSTED-PDF-GATE sidecar: a fork-and-exit hop chain starts nothing; the sidecar is still the only process, still serves on the socket it bound, and the next job holds only its own data', async () => {
+    const sidecar = await engineIn();
+    const inode = lstatSync(sidecar.socket).ino;
+    expect(await socketRedact({ path: sidecar.socket })(own('job 0'), { quotes: ['hop', ENGINE_SOCK], redactsAny: true })).toEqual({ kind: 'refused', reason: 'hop: started 0 of 8 (EAGAIN)' });
+    // Past the 2 s a chain would take to run out and turn thief.
+    await sleep(2_500);
+    expect(sidecar.processes()).toBe(1);
+    expect(lstatSync(sidecar.socket).ino).toBe(inode);
+    const job = own('job B: these bytes only');
+    expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [] });
+    expect(sidecar.stderr()).not.toContain('stops');
+  }, 120_000);
+
+  it('UNTRUSTED-PDF-GATE sidecar: a child that sends its parent SIGSTOP, then SIGKILL, during its own job changes nothing: PID 1 neither stops nor dies, and serves the next job', async () => {
+    const sidecar = await engineIn();
+    const hit = await socketRedact({ path: sidecar.socket })(own('job 0'), { quotes: ['hit-parent', ENGINE_SOCK], redactsAny: true });
+    expect(hit).toMatchObject({ kind: 'refused' });
+    expect((hit as { reason: string }).reason).toMatch(/^parent 1 after SIGSTOP: [RS]; after SIGKILL: [RS]$/);
+    const job = own('job B: these bytes only');
+    expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [] });
+  }, 120_000);
+
+  for (const mode of ['stop-steal', 'steal'] as const) {
+    it(`UNTRUSTED-PDF-GATE sidecar: a child that ${mode === 'stop-steal' ? 'freezes it (SIGSTOP) and ' : ''}takes its socket over gets no reply out: the sidecar exits 1 before any, and later jobs fail closed with no other job's data`, async () => {
+      const sidecar = await engineIn();
+      const job0 = socketRedact({ path: sidecar.socket, timeoutMs: 30_000 })(own('job 0'), { quotes: [mode, ENGINE_SOCK], redactsAny: true });
+      await expect(job0).rejects.toBeInstanceOf(RetryableEngineError);
+      expect((await sidecar.exited).code).toBe(1);
+      expect(sidecar.stderr()).toContain(`the socket at ${ENGINE_SOCK} was replaced or removed`);
+      // The theft happened, and the SIGSTOP did nothing: PID 1 was not stopped.
+      const stolen = JSON.parse(readFileSync(`${sidecar.socket}.stolen`, 'utf8')) as { parent: string };
+      expect(stolen.parent).toMatch(/^[RS]$/);
+      // The members-only file, then a public one: neither reaches the thief, and neither gets the other's bytes.
+      for (const text of ['MEMBERS ONLY roster note: Kestrel Ambry', 'public flyer']) {
+        await expect(socketRedact({ path: sidecar.socket, timeoutMs: 10_000 })(own(text), { quotes: ['echo'], redactsAny: true }), text).rejects.toBeInstanceOf(RetryableEngineError);
       }
+    }, 120_000);
+  }
+
+  it('UNTRUSTED-PDF-GATE sidecar: as PID 1, SIGTERM and SIGINT close the listener and exit 0 promptly; SIGUSR1 opens no inspector', async () => {
+    for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+      const sidecar = await engineIn(['--engine', standIn('refuse')]);
+      const t0 = Date.now();
+      sidecar.signal(signal);
+      expect((await sidecar.exited).code, signal).toBe(0);
+      expect(Date.now() - t0, signal).toBeLessThan(5_000);
+      expect(sidecar.stderr(), signal).toContain(`engine sidecar stopping (${signal})`);
+      expect(existsSync(sidecar.socket), signal).toBe(false);
     }
-  }, 30_000);
+    const sidecar = await engineIn(['--engine', standIn('refuse')]);
+    sidecar.signal('SIGUSR1');
+    await sleep(500);
+    expect(await socketRedact({ path: sidecar.socket })(own('x'), REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
+    expect(sidecar.stderr()).not.toContain('Debugger listening');
+  }, 120_000);
 
-  it('UNTRUSTED-PDF-GATE sidecar: exits 1 without a reply when a copy\'s process replaced its socket; the job fails closed', async () => {
-    const place = socketDir();
-    dirs.push(place);
-    const spawned = spawnSidecar(['--socket', place.socket, '--engine', standIn('persist')], { namespace: true });
-    started.push(spawned);
-    await listening(spawned, place.socket);
-    const marker = `nwfl-steal-${randomUUID()}`;
-    const job = socketRedact({ path: place.socket, timeoutMs: 20_000 })(Uint8Array.from([1]), { quotes: ['steal', marker], redactsAny: true });
-    await expect(job).rejects.toBeInstanceOf(RetryableEngineError);
-    expect(await spawned.exited).toEqual({ code: 1, signal: null });
-    expect(spawned.stderr()).toContain(`the socket at ${place.socket} was replaced or removed`);
-    expect(aliveWith(marker)).toEqual([]);
-  }, 30_000);
+  it('UNTRUSTED-PDF-GATE sidecar: will not serve behind an init (not PID 1), nor in production without --disable-sigusr1', async () => {
+    await expect(containedSidecar('engine', [], { init: true })).rejects.toThrow(/exit 2\).*must be PID 1 of its container and will not start: it is PID \d+, not PID 1/s);
+    await expect(containedSidecar('engine', [], { production: true, withoutFlag: true })).rejects.toThrow(/exit 2\).*will not start without --disable-sigusr1/s);
+  }, 120_000);
+});
 
+describe('UNTRUSTED-PDF-GATE: the engine sidecar\'s socket and arguments', () => {
   it('UNTRUSTED-PDF-GATE sidecar: will not bind outside its own directory, /run/pdf-engine', async () => {
     const place = socketDir();
     dirs.push(place);

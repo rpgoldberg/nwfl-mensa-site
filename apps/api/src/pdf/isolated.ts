@@ -8,10 +8,12 @@
 // answers with the result and exits, and its memory goes back to the OS. The
 // worker itself only claims, reads and writes the database.
 //
-// The child is forked detached, so it leads a process group, and that group is
-// killed once it exits: whatever it started without leaving the group goes
-// with it. A sidecar also sweeps its whole PID namespace after each copy
-// (pidns.ts), which a grandchild in a session of its own cannot leave.
+// The child cannot start a process (fix round 2, no-fork.ts): it is forked
+// with child-guard.ts preloaded, its RLIMIT_NPROC is set to 1, and it is sent
+// the original only once its own attempt to spawn failed with EAGAIN. It is
+// also forked detached, so it leads a process group, which is killed once it
+// exits. A sidecar, PID 1 of its container, also kills everything else in its
+// namespace before each reply (pidns.ts).
 //
 // A child that dies without an answer (a crash, or killed by the kernel when
 // it runs out of memory) or takes longer than the timeout is a failed engine:
@@ -25,6 +27,7 @@
 // ============================================================================
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { type LimitForks, guardFlag, isGuardMessage, limitForks, watchGuard } from './no-fork.js';
 import type { RedactRequest, RedactResult } from './redact.js';
 import type { Redact } from './regenerate.js';
 
@@ -69,11 +72,7 @@ export function engineExecArgv(argv: readonly string[]): string[] {
   return kept;
 }
 
-/**
- * SIGKILLs the process group `pid` leads (a child forked detached); nothing when it is gone. Here, with
- * no import, so a plain `node` (type stripping, no resolve hook) can load this module, as the
- * --env-file test does.
- */
+/** SIGKILLs the process group `pid` leads (a child forked detached); nothing when it is gone. */
 export function killGroup(pid: number, kill: (pid: number, signal: NodeJS.Signals) => void = (target, signal) => void process.kill(target, signal)): void {
   try {
     kill(-pid, 'SIGKILL');
@@ -104,11 +103,23 @@ export function withoutCanvasWarnings(warn: (...args: unknown[]) => void): (...a
   };
 }
 
+export interface IsolatedOptions {
+  /** The child (default the built engine-child.js); another module, for tests. */
+  module?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /** The guard preloaded in the child (default no-fork.ts CHILD_GUARD); another, for tests. */
+  guard?: string;
+  /** How the child's process limit is set (default prlimit); another, for tests. */
+  limit?: LimitForks;
+}
+
 /**
- * An engine that runs each call in a new child process. `signal` (the sidecar's: the worker hung up,
- * or the sidecar is stopping) kills the child and fails the call.
+ * An engine that runs each call in a new child process, which cannot start a process of its own
+ * (no-fork.ts): it is sent the original only once its limit holds. `signal` (the sidecar's: the
+ * worker hung up, or the sidecar is stopping) kills the child and fails the call.
  */
-export function isolatedRedact(options: { module?: string; timeoutMs?: number; signal?: AbortSignal } = {}): Redact {
+export function isolatedRedact(options: IsolatedOptions = {}): Redact {
   const timeoutMs = options.timeoutMs ?? ENGINE_TIMEOUT_MS;
   const { signal } = options;
   return (original, request) =>
@@ -117,10 +128,12 @@ export function isolatedRedact(options: { module?: string; timeoutMs?: number; s
         reject(new Error('the engine process was stopped'));
         return;
       }
-      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, execArgv: engineExecArgv(process.execArgv), serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'], detached: true });
+      const execArgv = [...engineExecArgv(process.execArgv), guardFlag(options.guard)];
+      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, execArgv, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'], detached: true });
       let reply: EngineReply | undefined;
       let late = false;
       let stopped = false;
+      let unguarded: string | undefined;
       const timer = setTimeout(() => {
         late = true;
         child.kill('SIGKILL');
@@ -130,20 +143,28 @@ export function isolatedRedact(options: { module?: string; timeoutMs?: number; s
         child.kill('SIGKILL');
       };
       signal?.addEventListener('abort', stop, { once: true });
-      child.once('message', (message) => {
-        reply = message as EngineReply;
+      child.on('message', (message) => {
+        if (!isGuardMessage(message) && reply === undefined) reply = message as EngineReply;
       });
+      watchGuard(
+        child,
+        options.limit ?? limitForks,
+        () => child.send({ original, request } satisfies EngineMessage, () => {}),
+        (why) => {
+          unguarded = why;
+          child.kill('SIGKILL');
+        },
+      );
       child.once('exit', (code, killedBy) => {
         clearTimeout(timer);
         signal?.removeEventListener('abort', stop);
         if (child.pid !== undefined) killGroup(child.pid);
-        if (stopped) reject(new Error('the engine process was stopped'));
+        if (unguarded !== undefined) reject(new Error(`the engine process was refused: ${unguarded}`));
+        else if (stopped) reject(new Error('the engine process was stopped'));
         else if (late) reject(new Error(`the engine process took longer than ${timeoutMs} ms`));
         else if (reply === undefined) reject(new Error(`the engine process ended without a copy (${killedBy ?? `exit ${code}`})`));
         else if (reply.ok) resolve(reply.result);
         else reject(new Error(reply.message));
       });
-      const message: EngineMessage = { original, request };
-      child.send(message);
     });
 }

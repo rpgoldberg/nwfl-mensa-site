@@ -6,7 +6,7 @@
 // only it and the worker mount (README, "The gate sidecar";
 // fc-manifest-needs.md). It is served by the engine sidecar's code
 // (sidecar.ts): the same allow-listed environment, directory rule, framing,
-// caps, socket watch and PID-namespace sweep after every check.
+// caps, socket watch, PID-1 rule and namespace clearing before every reply.
 //
 // Per connection: one gate request (engine-protocol.ts), the copy and its
 // original with their sha256s. A body whose hash is not the one named is
@@ -50,6 +50,7 @@ export function startGateSidecar(options: GateSidecarOptions): Promise<Sidecar> 
         ...(options.maxRssBytes === undefined ? {} : { maxRssBytes: options.maxRssBytes }),
         ...(options.nodeFlags === undefined ? {} : { nodeFlags: options.nodeFlags }),
       })({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image });
+      if (outcome.cause !== undefined) options.log(`a check was unfinished (${outcome.cause})`);
       if (outcome.sha256 !== null && outcome.sha256 !== sha256) return encodeGateReply({ verdict: { pass: false, code: 'mismatch' }, sha256 });
       return encodeGateReply({ verdict: outcome.verdict, sha256 });
     },

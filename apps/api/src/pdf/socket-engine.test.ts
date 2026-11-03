@@ -5,7 +5,7 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { REPLY_MAGIC, encodeFrame } from './engine-protocol.js';
+import { MAX_REPLY_HEADER_BYTES, REPLY_MAGIC, encodeFrame } from './engine-protocol.js';
 import { RetryableEngineError } from './regenerate.js';
 import { ENGINE_SOCKET_DIRS, GATE_SOCKET_DIRS, SOCKET_TIMEOUT_MS, engineSocketPath, gateSocketPath, socketRedact, workerSockets } from './socket-engine.js';
 
@@ -151,6 +151,31 @@ describe('socketRedact', () => {
     const header = JSON.parse(all.subarray(12, 12 + all.readUInt32BE(4)).toString('utf8')) as unknown;
     expect(header).toEqual({ v: 1, quotes: ['Kestrel Ambry'], redactsAny: true, image: 'blur' });
     expect(all.subarray(12 + all.readUInt32BE(4))).toEqual(Buffer.from([5, 6]));
+  });
+
+  it('reads a reply header of exactly MAX_REPLY_HEADER_BYTES, and refuses one byte more (S2: a subverted engine cannot flood the worker)', async () => {
+    expect(MAX_REPLY_HEADER_BYTES).toBe(16 * 1024);
+    for (const [size, outcome] of [
+      [MAX_REPLY_HEADER_BYTES, 'read'],
+      [MAX_REPLY_HEADER_BYTES + 1, 'over'],
+    ] as const) {
+      const json = '{"v":1,"kind":"refused","reason":"refused by the engine process"}';
+      // JSON allows trailing whitespace: a valid reply, padded to the size under test.
+      const head = Buffer.from(json + ' '.repeat(size - json.length), 'utf8');
+      const prefix = Buffer.alloc(12);
+      REPLY_MAGIC.copy(prefix, 0);
+      prefix.writeUInt32BE(head.length, 4);
+      const socket = path.join(dir(), 'engine.sock');
+      const fake = net.createServer((conn) => {
+        conn.on('error', () => {});
+        conn.once('data', () => conn.end(Buffer.concat([prefix, head])));
+      });
+      await new Promise<void>((resolve) => fake.listen(socket, resolve));
+      cleanup.push(() => new Promise<void>((resolve) => fake.close(() => resolve())));
+      const job = socketRedact({ path: socket })(ONE, REQUEST);
+      if (outcome === 'read') expect(await job).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
+      else await expect(job).rejects.toThrow('the engine sidecar gave no usable reply: the header is over its cap');
+    }
   });
 
   it('fails the job closed when the sidecar hangs up without a reply', async () => {

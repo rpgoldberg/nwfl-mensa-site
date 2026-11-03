@@ -33,6 +33,9 @@ export default defineConfig({
         // gate-rules.ts gateReply are tested here; test/pdf/gate-rerun.test.ts runs both as processes).
         'src/pdf/gate-sidecar.ts',
         'src/pdf/gate-child.ts',
+        // The no-fork guard both children preload: it runs only in them (no-fork.ts's parent side is
+        // tested here; isolated.test.ts, gate-isolated.test.ts and the contained lift tests drive it).
+        'src/pdf/child-guard.ts',
         // The seed command's entrypoint: argv, env and stdout only (seed.ts is tested).
         'src/seed/cli.ts',
         // The issue loader's entrypoint: argv, env, stdin's fstat and stdout only (load.ts is tested).

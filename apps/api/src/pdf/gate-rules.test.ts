@@ -69,6 +69,15 @@ describe('copyRulesBreak: the sanitizer\'s invariants, re-checked on the copy', 
     }
   });
 
+  it('refuses an embedded file attached as a PDF 2.0 associated file: /EF in a file specification with no /Type, under the catalog\'s /AF (S3)', async () => {
+    const attached = await copy((doc) => {
+      const file = doc.context.register(doc.context.flateStream(Buffer.from('payload: members roster')));
+      const spec = doc.context.register(doc.context.obj({ F: 'roster.txt', UF: 'roster.txt', EF: { F: file } }));
+      doc.catalog.set(PDFName.of('AF'), doc.context.obj([spec]));
+    });
+    for (const image of ['show', 'blur', 'hide'] as const) expect(await copyRulesBreak(attached, image), image).toMatch(/^object \d+: it holds \/EF$/);
+  });
+
   it('refuses an encrypted copy, and one it cannot read', async () => {
     const encrypted = await copy((doc) => {
       doc.context.trailerInfo.Encrypt = doc.context.register(doc.context.obj({ Filter: 'Standard', V: 1, R: 2 }));
@@ -177,6 +186,22 @@ describe('gateVerdict and gateReply (the gate child\'s answer)', () => {
       expect(made.kind).toBe('redacted');
       expect(await gateVerdict({ copy: (made as { pdf: Uint8Array }).pdf, original, quotes: [], image: 'blur' }), `${side}: the engine's copy`).toEqual({ pass: true });
     }
+  });
+
+  it('refuses a copy that keeps a crop of an original picture, rows of its samples, though no picture is a whole original (S3: keepsPicture)', async () => {
+    const W = 64;
+    const samples = Uint8Array.from({ length: W * W * 3 }, (_, i) => (Math.imul(i + 1, 2654435761) >>> 24) % 251);
+    const rgb = (side: number, bytes: Uint8Array) => withPicture({ Width: side, Height: side, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'FlateDecode' }, deflateSync(bytes));
+    const original = await rgb(W, samples);
+    // A 24 x 24 crop from (10, 10): each 72-byte row is a run of the original's samples.
+    const crop = new Uint8Array(24 * 24 * 3);
+    for (let y = 0; y < 24; y += 1) crop.set(samples.subarray((10 + y) * W * 3 + 30, (10 + y) * W * 3 + 30 + 72), y * 72);
+    const kept = await rgb(24, crop);
+    expect(await copyRulesBreak(kept, 'blur')).toBeNull();
+    expect(await gateVerdict({ copy: kept, original, quotes: ['Kestrel Ambry'], image: 'blur' })).toEqual({ pass: false, code: 'rules' });
+    // The engine's own blur of the original passes.
+    const made = await redactPdf(original, { quotes: [], redactsAny: true, image: 'blur' });
+    expect(await gateVerdict({ copy: (made as { pdf: Uint8Array }).pdf, original, quotes: [], image: 'blur' })).toEqual({ pass: true });
   });
 
   it('lets a picture through unchanged only where blurring would not change it (one of a single grey), and reads no windows from an unreadable original', async () => {

@@ -119,24 +119,27 @@ describe('gateSidecarMain (the gate entry\'s logic)', () => {
     }
   });
 
-  it('refuses to run as PID 1, exit 2', async () => {
+  it('serves only as PID 1 of its container, exit 2 otherwise (fix round 2)', async () => {
     const { dir } = place();
     const lines: string[] = [];
-    const system = { pid: 1, ppid: 0, uid: 10004, procRoot: dir, kill: () => {} };
+    const sent: number[] = [];
+    const system = { pid: 7, uid: 10004, procRoot: dir, kill: (pid: number) => void sent.push(pid), execArgv: ['--disable-sigusr1'] };
     expect(await gateSidecarMain(['--socket-dir', dir], {}, (line) => void lines.push(line), { system })).toEqual({ code: 2 });
-    expect(lines.join('\n')).toMatch(/is PID 1/);
+    expect(lines.join('\n')).toMatch(/the gate sidecar must be PID 1 of its container and will not start: it is PID 7/);
+    expect(sent).toEqual([]);
   });
 
-  it('starts with a gate child, a deadline and a memory cap from its arguments, and says it is listening', async () => {
+  it('starts with a gate child, a deadline and a memory cap from its arguments, says it is listening, and logs why a check was unfinished', async () => {
     const { dir, socket } = place();
     const lines: string[] = [];
-    const result = await gateSidecarMain(['--socket-dir', dir, ...SHARED, '--gate', child('hog'), '--timeout-ms', '30000', '--max-rss-mb', '200'], { NODE_ENV: 'test' }, (line) => void lines.push(line));
+    const result = await gateSidecarMain(['--socket-dir', dir, ...SHARED, '--gate', child('hang'), '--timeout-ms', '400', '--max-rss-mb', '200'], { NODE_ENV: 'test' }, (line) => void lines.push(line));
     const { sidecar } = result as { sidecar: Sidecar };
     cleanup.push(() => sidecar.close());
-    expect(lines).toContain('gate sidecar listening (not sweeping: shared PID namespace, for tests)');
+    expect(lines).toContain('gate sidecar listening (not PID 1: shared PID namespace, for tests; nothing is cleared)');
     const t0 = Date.now();
     expect(await socketGate({ path: socket })(JOB)).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: SHA });
-    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(lines).toContain('a check was unfinished (deadline)');
   });
 
   it('exits 1 when it cannot listen', async () => {

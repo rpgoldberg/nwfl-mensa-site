@@ -15,7 +15,13 @@
 //     GATE_MAX_RSS_BYTES, read from /proc every RSS_POLL_MS: a decoded stream
 //     lives outside the V8 heap, so the heap flag alone does not stop a bomb;
 //   - a deadline, GATE_TIMEOUT_MS;
-//   - forked detached, so it leads a process group, which is killed after it.
+//   - forked detached, so it leads a process group, which is killed after it;
+//   - no way to start a process (fix round 2, no-fork.ts): RLIMIT_NPROC 1,
+//     checked by the child's own failed spawn before it is sent the copy.
+//
+// Fix round 2 (M2): an unfinished outcome says why the child was stopped
+// (cause: memory, deadline, signal, crash or no-fork), so a test can tell a
+// watchdog kill from a deadline kill.
 //
 // Anything but a well-formed verdict (a crash, a kill, a timeout, a reply
 // that is not a verdict) is "unfinished": no pass, so a refused copy, never a
@@ -28,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { GATE_CODES, type GateCode, type GateVerdict } from './engine-protocol.js';
 import type { ImageAction } from './images.js';
 import { engineExecArgv, killGroup } from './isolated.js';
+import { type LimitForks, guardFlag, isGuardMessage, limitForks, watchGuard } from './no-fork.js';
 
 /** The built child next to this module (dist/pdf/gate-child.js). */
 export const GATE_CHILD = fileURLToPath(new URL('./gate-child.js', import.meta.url));
@@ -46,10 +53,15 @@ export interface GateJob {
   image: ImageAction;
 }
 
+/** Why a child gave no verdict: killed past its memory cap or deadline, stopped by the signal, ended on its own, or refused before it was sent the copy. */
+export type UnfinishedCause = 'memory' | 'deadline' | 'signal' | 'crash' | 'no-fork';
+
 /** What a check comes to: the verdict, and the sha256 of the bytes the child checked (null when it gave none). */
 export interface GateOutcome {
   verdict: GateVerdict;
   sha256: string | null;
+  /** Set when the child gave no verdict. */
+  cause?: UnfinishedCause;
 }
 
 export interface IsolatedGateOptions {
@@ -61,9 +73,20 @@ export interface IsolatedGateOptions {
   nodeFlags?: readonly string[];
   /** Kills the child (the sidecar: the worker hung up, or the sidecar is stopping). */
   signal?: AbortSignal;
+  /** The guard preloaded in the child (default no-fork.ts CHILD_GUARD); another, for tests. */
+  guard?: string;
+  /** How the child's process limit is set (default prlimit); another, for tests. */
+  limit?: LimitForks;
+  /** How the child's resident memory is read (default rssOf); a spy, for tests. */
+  rss?: (pid: number) => number;
 }
 
-const UNFINISHED: GateOutcome = { verdict: { pass: false, code: 'unfinished' }, sha256: null };
+const unfinished = (cause: UnfinishedCause): GateOutcome => ({ verdict: { pass: false, code: 'unfinished' }, sha256: null, cause });
+
+/** The child's Node flags: the parent's without any --env-file (both spellings), the test's, the heap cap, then the guard. */
+export function gateExecArgv(parent: readonly string[], nodeFlags: readonly string[] = [], guard?: string): string[] {
+  return [...engineExecArgv(parent), ...nodeFlags, `--max-old-space-size=${GATE_HEAP_MB}`, guardFlag(guard)];
+}
 
 /** A process's resident memory in bytes, from /proc; 0 once it is gone. */
 export function rssOf(pid: number): number {
@@ -94,36 +117,52 @@ export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) 
   return (job) =>
     new Promise<GateOutcome>((resolve) => {
       if (signal?.aborted === true) {
-        resolve(UNFINISHED);
+        resolve(unfinished('signal'));
         return;
       }
-      const execArgv = [...engineExecArgv(process.execArgv), ...(options.nodeFlags ?? []), `--max-old-space-size=${GATE_HEAP_MB}`];
+      const execArgv = gateExecArgv(process.execArgv, options.nodeFlags, options.guard);
       const child = fork(options.module ?? GATE_CHILD, [], { env: {}, execArgv, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'], detached: true });
       let answer: GateOutcome | undefined;
       let settled = false;
-      const kill = (): void => void child.kill('SIGKILL');
-      const deadline = setTimeout(kill, timeoutMs);
+      let cause: UnfinishedCause | undefined;
+      const rss = options.rss ?? rssOf;
+      /** The first reason to stop the child is the one reported. */
+      const stopFor = (why: UnfinishedCause): void => {
+        cause ??= why;
+        child.kill('SIGKILL');
+      };
+      const onAbort = (): void => stopFor('signal');
+      const deadline = setTimeout(() => stopFor('deadline'), timeoutMs);
       const watchdog = setInterval(() => {
-        if (child.pid !== undefined && rssOf(child.pid) > maxRss) kill();
+        if (child.pid !== undefined && rss(child.pid) > maxRss) stopFor('memory');
       }, RSS_POLL_MS);
-      signal?.addEventListener('abort', kill, { once: true });
+      signal?.addEventListener('abort', onAbort, { once: true });
       const settle = (outcome: GateOutcome): void => {
         if (settled) return;
         settled = true;
         clearTimeout(deadline);
         clearInterval(watchdog);
-        signal?.removeEventListener('abort', kill);
+        signal?.removeEventListener('abort', onAbort);
         if (child.pid !== undefined) killGroup(child.pid);
         resolve(outcome);
       };
-      child.once('message', (message) => {
-        answer = asOutcome(message);
+      child.on('message', (message) => {
+        if (!isGuardMessage(message) && answer === undefined) answer = asOutcome(message) ?? { ...unfinished('crash') };
       });
+      watchGuard(
+        child,
+        options.limit ?? limitForks,
+        () =>
+          child.send(job, (error) => {
+            if (error !== null) stopFor('crash');
+          }),
+        () => stopFor('no-fork'),
+      );
       // A child killed for its deadline, its memory or the signal may have answered first: no answer then.
-      child.once('exit', (code, killedBy) => settle(code === 0 && killedBy === null && answer !== undefined ? answer : UNFINISHED));
-      child.once('error', () => settle(UNFINISHED));
-      child.send(job, (error) => {
-        if (error !== null) kill();
+      child.once('exit', (code, killedBy) => {
+        const done = cause === undefined && code === 0 && killedBy === null && answer !== undefined && answer.cause === undefined;
+        settle(done ? (answer as GateOutcome) : unfinished(cause ?? 'crash'));
       });
+      child.once('error', () => settle(unfinished('crash')));
     });
 }

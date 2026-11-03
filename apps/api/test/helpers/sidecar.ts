@@ -2,7 +2,7 @@
 // temp unix sockets, for the UNTRUSTED-PDF-GATE lift tests. Spawned with an empty environment unless a
 // test gives one, and stopped by the PID recorded here, never by name.
 import { type ChildProcess, spawn } from 'node:child_process';
-import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { lstatSync, mkdtempSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -25,21 +25,6 @@ export function socketDir(name = 'engine.sock'): { dir: string; socket: string; 
   return { dir, socket: path.join(dir, name), remove: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** The pids of live processes (zombies are dead) whose arguments hold `marker`, read from /proc. */
-export function aliveWith(marker: string): number[] {
-  return readdirSync('/proc')
-    .filter((entry) => /^\d+$/.test(entry))
-    .filter((pid) => {
-      try {
-        if (!readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(marker)) return false;
-        return !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8'));
-      } catch {
-        return false;
-      }
-    })
-    .map(Number);
-}
-
 export interface Spawned {
   child: ChildProcess;
   pid: number;
@@ -57,34 +42,18 @@ export interface Spawned {
  */
 export const NODE_FLAGS = ['--experimental-transform-types', '--disable-warning=ExperimentalWarning', '--import', TS_HOOK];
 
-/** Where the tests find unshare, sh and env: absolute, since the sidecar's environment has no PATH. */
-const UNSHARE = '/usr/bin/unshare';
-const SH = '/bin/sh';
-const ENV = '/usr/bin/env';
-
 /**
- * Spawns a real sidecar entry (the engine's unless `entry` says otherwise) with these arguments;
- * listening() waits for it to listen. A temp socket is outside the sidecar's own directory, so given
- * `--socket <path>` this adds `--socket-dir <its directory>` (refused in production; tests only).
- *
- * By default the sidecar runs in the test's own PID namespace with `--shared-pid-namespace` (no
- * sweep: it would kill this machine's processes). With `namespace`, it runs as a container does, in a
- * PID namespace of its own (unshare: a user namespace mapping this uid, a new PID namespace and its
- * own /proc), under /bin/sh as PID 1 (dumb-init's part: it reaps), with an empty environment, and
- * sweeps that namespace after every job. Stopping it kills unshare, whose child (PID 1) is killed
- * with it, and so is everything in the namespace.
+ * Spawns a real sidecar entry (the engine's unless `entry` says otherwise) with these arguments, on the
+ * host, with --shared-pid-namespace (test-only: not PID 1, and nothing cleared, since kill(-1) here would
+ * reach this machine's processes); listening() waits for it to listen. A temp socket is outside the
+ * sidecar's own directory, so given `--socket <path>` this adds `--socket-dir <its directory>` (refused
+ * in production; tests only). Only benign stand-ins run this way: anything hostile, process-starting or
+ * memory-heavy runs as PID 1 of a capped container (contained.ts).
  */
-export function spawnSidecar(args: readonly string[], options: { env?: NodeJS.ProcessEnv; entry?: string; namespace?: boolean } = {}): Spawned {
+export function spawnSidecar(args: readonly string[], options: { env?: NodeJS.ProcessEnv; entry?: string } = {}): Spawned {
   const socketAt = args.indexOf('--socket');
-  const extra = [
-    ...(socketAt >= 0 && !args.includes('--socket-dir') ? ['--socket-dir', path.dirname(args[socketAt + 1] as string)] : []),
-    ...(options.namespace === true ? [] : ['--shared-pid-namespace']),
-  ];
-  const node = [process.execPath, ...NODE_FLAGS, options.entry ?? SIDECAR_ENTRY, ...args, ...extra];
-  const child =
-    options.namespace === true
-      ? spawn(UNSHARE, ['--user', '--map-current-user', '--pid', '--fork', '--mount-proc', '--kill-child', SH, '-c', `${ENV} -i "$@"; exit $?`, 'sh', ...node], { env: {}, stdio: ['ignore', 'ignore', 'pipe'] })
-      : spawn(node[0] as string, node.slice(1), { env: options.env ?? {}, stdio: ['ignore', 'ignore', 'pipe'] });
+  const extra = [...(socketAt >= 0 && !args.includes('--socket-dir') ? ['--socket-dir', path.dirname(args[socketAt + 1] as string)] : []), '--shared-pid-namespace'];
+  const child = spawn(process.execPath, [...NODE_FLAGS, options.entry ?? SIDECAR_ENTRY, ...args, ...extra], { env: options.env ?? {}, stdio: ['ignore', 'ignore', 'pipe'] });
   let err = '';
   child.stderr?.setEncoding('utf8').on('data', (chunk: string) => (err += chunk));
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
