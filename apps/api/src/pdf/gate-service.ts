@@ -14,7 +14,9 @@
 // checks it (gate-isolated.ts, gate-child.ts); a child that names other bytes
 // than it was sent is a "mismatch" too; one that crashes, runs out of memory
 // or time is "unfinished". The reply is the verdict and the sha256 of the
-// copy checked; the worker stores the copy only on a pass naming its hash.
+// copy checked; a pass also carries the bytes the child checked, its own
+// writing of the copy (fix round 3, M1), and the worker stores only those,
+// on a pass naming the copy's hash.
 // ============================================================================
 import { GATE_REQUEST_MAGIC, MAX_GATE_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, decodeGateRequest, encodeGateReply, sha256Hex } from './engine-protocol.js';
 import { GATE_CHILD, isolatedGate } from './gate-isolated.js';
@@ -52,7 +54,8 @@ export function startGateSidecar(options: GateSidecarOptions): Promise<Sidecar> 
       })({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image });
       if (outcome.cause !== undefined) options.log(`a check was unfinished (${outcome.cause})`);
       if (outcome.sha256 !== null && outcome.sha256 !== sha256) return encodeGateReply({ verdict: { pass: false, code: 'mismatch' }, sha256 });
-      return encodeGateReply({ verdict: outcome.verdict, sha256 });
+      // A pass carries the bytes the child checked, its own writing of the copy (M1): the worker stores only those.
+      return encodeGateReply({ verdict: outcome.verdict, sha256, ...(outcome.checked === undefined ? {} : { checked: outcome.checked }) });
     },
   });
 }

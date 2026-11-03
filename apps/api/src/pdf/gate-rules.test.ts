@@ -3,12 +3,14 @@
 // read from the copy alone. The engine's copies must pass them; a subverted engine's must not.
 // Every name is made up.
 import { deflateSync } from 'node:zlib';
-import { type PDFDict, PDFDocument, PDFName, PDFRawStream, PDFString, StandardFonts } from '@cantoo/pdf-lib';
+import { type PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFString, StandardFonts } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { leakFixture, linesPdf, pictureUnderTextFixture, twoMarksFixture } from '../../test/pdf/fixtures.js';
+import { M1_CASES, M1_ORIGINAL, M1_QUOTES, plainCopy } from '../../test/pdf/shadows.js';
 import { sha256Hex } from './engine-protocol.js';
 import { copyRulesBreak, gateReply, gateVerdict } from './gate-rules.js';
 import { BLUR_MAX, FILL_GRAY } from './images.js';
+import { structureBreak } from './pdf-structure.js';
 import { redactPdf } from './redact.js';
 
 type Doc = Awaited<ReturnType<typeof PDFDocument.create>>;
@@ -78,12 +80,32 @@ describe('copyRulesBreak: the sanitizer\'s invariants, re-checked on the copy', 
     for (const image of ['show', 'blur', 'hide'] as const) expect(await copyRulesBreak(attached, image), image).toMatch(/^object \d+: it holds \/EF$/);
   });
 
-  it('refuses an encrypted copy, and one it cannot read', async () => {
+  it('refuses an encrypted copy, and one it cannot read, by its structure first (M1)', async () => {
     const encrypted = await copy((doc) => {
       doc.context.trailerInfo.Encrypt = doc.context.register(doc.context.obj({ Filter: 'Standard', V: 1, R: 2 }));
     });
-    expect(await copyRulesBreak(encrypted, 'show')).toMatch(/encrypted/);
-    expect(await copyRulesBreak(Uint8Array.from([1, 2, 3]), 'show')).toBe('the copy could not be read');
+    expect(await copyRulesBreak(encrypted, 'show')).toBe('the structure: its trailer has more than /Size and /Root');
+    expect(await copyRulesBreak(Uint8Array.from([1, 2, 3]), 'show')).toBe('the structure: it has no xref table where startxref points');
+  });
+
+  it('refuses a structural name or number given by reference (/S, /Subtype, /Type, /PatternType, /Filter), which a viewer resolves (M1)', async () => {
+    const indirect = (key: string, value: string | number, extra: Record<string, unknown> = {}) =>
+      copy((doc) => {
+        const target = doc.context.register(typeof value === 'number' ? PDFNumber.of(value) : PDFName.of(value));
+        doc.getPage(0).node.set(PDFName.of('Junk'), doc.context.obj({ ...extra, [key]: target } as Parameters<typeof doc.context.obj>[0]));
+      });
+    const cases: Array<[string, Promise<Uint8Array>]> = [
+      ['S', indirect('S', 'Launch', { F: PDFString.of('cmd.exe') })],
+      ['Subtype', indirect('Subtype', 'Image')],
+      ['Type', indirect('Type', 'Action')],
+      ['PatternType', indirect('PatternType', 1)],
+      ['Filter', indirect('Filter', 'FlateDecode')],
+    ];
+    for (const [key, made] of cases) {
+      for (const image of ['show', 'blur', 'hide'] as const) expect(await copyRulesBreak(await made, image), `${key}, ${image}`).toBe(`object 3: its /${key} is not direct`);
+    }
+    const listed = await copy((doc) => doc.getPage(0).node.set(PDFName.of('Junk'), doc.context.obj({ Filter: [doc.context.register(PDFName.of('FlateDecode'))] })));
+    expect(await copyRulesBreak(listed, 'show')).toMatch(/^object \d+: its \/Filter is not direct$/);
   });
 
   it('under "hide", allows only the 1 x 1 grey fill the policy draws', async () => {
@@ -215,10 +237,59 @@ describe('gateVerdict and gateReply (the gate child\'s answer)', () => {
     expect(await gateVerdict({ copy: await linesPdf(['Picnic flyer']), original: Uint8Array.from([1]), quotes: [], image: 'blur' })).toEqual({ pass: true });
   });
 
-  it('answers with the sha256 of the very bytes it checked', async () => {
-    const clean = await linesPdf(['Picnic flyer']);
-    expect(await gateReply({ copy: clean, original: clean, quotes: [], image: 'hide' })).toEqual({ verdict: { pass: true }, sha256: sha256Hex(clean) });
-    const odd = { copy: clean, original: clean, quotes: null as unknown as string[], image: 'show' as const };
-    expect(await gateReply(odd)).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: sha256Hex(clean) });
+  it('answers with the sha256 of the copy it was sent, and on a pass the bytes it checked: its own writing of the copy (M1)', async () => {
+    // The engine writes with pdf-lib's writer, so its copy written again is the same bytes.
+    const made = await redactPdf(await linesPdf(['Picnic flyer', 'Rides: call Kestrel Ambry.']), { quotes: ['Kestrel Ambry'], redactsAny: true, image: 'blur' });
+    const engineCopy = (made as { pdf: Uint8Array }).pdf;
+    const job = { copy: engineCopy, original: engineCopy, quotes: ['Kestrel Ambry'], image: 'hide' as const };
+    expect(await gateReply(job)).toEqual({ verdict: { pass: true }, sha256: sha256Hex(engineCopy), checked: { pdf: engineCopy, sha256: sha256Hex(engineCopy) } });
+    // A copy written another way is stored as the gate wrote it, and those bytes are what it checked.
+    const plain = plainCopy();
+    const reply = await gateReply({ copy: plain, original: plain, quotes: ['Kestrel Ambry'], image: 'blur' });
+    expect(reply.verdict).toEqual({ pass: true });
+    expect(reply.sha256).toBe(sha256Hex(plain));
+    const written = reply.checked?.pdf as Uint8Array;
+    expect(Buffer.from(written).equals(Buffer.from(plain))).toBe(false);
+    expect(reply.checked?.sha256).toBe(sha256Hex(written));
+    expect(await structureBreak(written)).toBeNull();
+    expect(await gateVerdict({ copy: written, original: plain, quotes: ['Kestrel Ambry'], image: 'blur' })).toEqual({ pass: true });
+    const odd = { copy: engineCopy, original: engineCopy, quotes: null as unknown as string[], image: 'show' as const };
+    expect(await gateReply(odd)).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: sha256Hex(engineCopy) });
+  });
+
+  it('gives no pass, and no bytes, for a copy whose own writing would pass the output cap, or one it cannot read', async () => {
+    const plain = plainCopy();
+    expect(await gateReply({ copy: plain, original: plain, quotes: [], image: 'show' }, 64)).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: sha256Hex(plain) });
+    const junk = Uint8Array.from([1, 2, 3]);
+    expect(await gateReply({ copy: junk, original: plain, quotes: [], image: 'show' })).toEqual({ verdict: { pass: false, code: 'rules' }, sha256: sha256Hex(junk) });
+  });
+});
+
+describe('M1: a viewer reads the copy the gate read (fix round 3, the parser differential)', () => {
+  it('refuses each of the challenge\'s copies a to h2, as it refuses each written plainly, and passes none of their bytes on', async () => {
+    expect(M1_CASES.map((c) => c.id)).toEqual(['a', 'a2', 'b', 'b2', 'c', 'c2', 'd', 'e', 'f', 'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'h', 'h2']);
+    for (const c of M1_CASES) {
+      const job = { original: M1_ORIGINAL, quotes: M1_QUOTES, image: c.image };
+      expect((await gateVerdict({ ...job, copy: c.control })).pass, `${c.id}: written plainly`).toBe(false);
+      // h's quote is in its bytes as written, so the text check finds it before the structure check refuses it.
+      const refused = { pass: false, code: c.id === 'h' ? 'withheld' : 'rules' };
+      expect(await gateVerdict({ ...job, copy: c.attack }), c.id).toEqual(refused);
+      expect(await gateReply({ ...job, copy: c.attack }), c.id).toEqual({ verdict: refused, sha256: sha256Hex(c.attack) });
+    }
+  });
+
+  it('reads the original\'s pictures through references too: a kept small original whose /Subtype is indirect in the original is caught', async () => {
+    const side = 4;
+    const varied = Uint8Array.from({ length: side * side }, (_, i) => (i * 37 + (i >> 2) * 11) % 251);
+    const dict = { Width: side, Height: side, ColorSpace: 'DeviceGray', BitsPerComponent: 8, Filter: 'FlateDecode' };
+    const original = await copy((doc) => {
+      const head = doc.context.obj({ Type: 'XObject', ...dict } as Parameters<typeof doc.context.obj>[0]) as unknown as PDFDict;
+      head.set(PDFName.of('Subtype'), doc.context.register(PDFName.of('Image')));
+      doc.getPage(0).node.setXObject(PDFName.of('Im1'), doc.context.register(PDFRawStream.of(head, deflateSync(varied))));
+      doc.getPage(0).node.addContentStream(doc.context.register(doc.context.stream('q 100 0 0 100 72 400 cm /Im1 Do Q')));
+    });
+    const kept = await withPicture(dict, deflateSync(varied));
+    expect(await copyRulesBreak(kept, 'blur')).toBeNull();
+    expect(await gateVerdict({ copy: kept, original, quotes: [], image: 'blur' })).toEqual({ pass: false, code: 'rules' });
   });
 });

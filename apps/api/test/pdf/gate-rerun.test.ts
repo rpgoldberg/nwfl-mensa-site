@@ -10,12 +10,14 @@
 // either transport: a copy that would crash or stall a parser is refused, and the worker goes on.
 // Every name is made up.
 // ============================================================================
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import net from 'node:net';
 import { PDFDocument, PDFName, PDFString, StandardFonts } from '@cantoo/pdf-lib';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { GATE_REPLY_MAGIC, encodeFrame, sha256Hex } from '../../src/pdf/engine-protocol.js';
 import { checkCopy } from '../../src/pdf/gate.js';
+import { structureBreak } from '../../src/pdf/pdf-structure.js';
 import { isolatedRedact } from '../../src/pdf/isolated.js';
 import { type Redact, RetryableEngineError } from '../../src/pdf/regenerate.js';
 import { socketGate } from '../../src/pdf/socket-gate.js';
@@ -29,6 +31,7 @@ import { type ContainedSidecar, containedSidecar, ensureImage, probe, removeLeft
 import { GATE_CHILD_SOURCE, GATE_SIDECAR_ENTRY, NODE_FLAGS, type Spawned, gateStandIn, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
 import { CANARIES, leakFixture, linesPdf, smallPictureFixture } from './fixtures.js';
 import { flateBomb, manyPages, manyShows } from './hostile.js';
+import { M1_CASES, M1_ORIGINAL, M1_QUOTES, plainCopy } from './shadows.js';
 
 const QUOTE = 'Kestrel Ambry';
 const REQUEST = { quotes: [QUOTE], redactsAny: true };
@@ -122,6 +125,38 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the
     }
   });
 
+  it('UNTRUSTED-PDF-GATE gate re-run: refuses copies that read one way to pdf-lib and another to a viewer (c2: an indirect /Subtype; h2: a shadowed appearance), and stores only the gate\'s own writing of a copy, on both transports (M1)', async () => {
+    // A subverted engine (children/given.ts) hands back the file named by the first quote, whatever the original.
+    const given = await sidecar('engine', ['--engine', standIn('given')]);
+    const gate = await sidecar('gate');
+    const both: Array<[string, Redact]> = [
+      ['in-pod children', inPod({ engine: standIn('given') })],
+      ['sidecars', workerRedact({ PDF_ENGINE_SOCKET: given.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [given.dir], gateSocketDirs: [gate.dir] })],
+    ];
+    const handed = (name: string, bytes: Uint8Array): string => {
+      const file = path.join(gate.dir, `${name}.pdf`);
+      writeFileSync(file, bytes);
+      return file;
+    };
+    for (const id of ['c2', 'h2']) {
+      const shadow = M1_CASES.find((c) => c.id === id) as (typeof M1_CASES)[number];
+      const file = handed(id, shadow.attack);
+      for (const [name, redact] of both) {
+        expect(await redact(M1_ORIGINAL, { quotes: [file, ...M1_QUOTES], redactsAny: true, image: shadow.image }), `${id} over the ${name}`).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
+      }
+    }
+    const plain = plainCopy();
+    const file = handed('plain', plain);
+    for (const [name, redact] of both) {
+      const result = await redact(M1_ORIGINAL, { quotes: [file, QUOTE], redactsAny: true, image: 'blur' });
+      expect(result.kind, name).toBe('redacted');
+      const stored = (result as { pdf: Uint8Array }).pdf;
+      expect(Buffer.from(stored).equals(Buffer.from(plain)), name).toBe(false);
+      expect(await structureBreak(stored), name).toBeNull();
+      expect(await checkCopy(stored, [QUOTE]), name).toBeNull();
+    }
+  }, 60_000);
+
   it('UNTRUSTED-PDF-GATE gate re-run: refuses a copy when the gate names other bytes than the copy, on both transports', async () => {
     const clean = await linesPdf(['Picnic flyer']);
     // The gate's own child names other bytes: the gate sidecar, and the worker in the pod, refuse.
@@ -133,7 +168,8 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the
     places.push(fake);
     const liar = net.createServer((conn) => {
       conn.on('error', () => {});
-      conn.once('data', () => conn.end(encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: sha256Hex(Buffer.from('another copy')) })));
+      const written = Buffer.from('another copy');
+      conn.once('data', () => conn.end(encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: sha256Hex(written), checkedSha256: sha256Hex(written) }, written)));
     });
     await new Promise<void>((resolve) => liar.listen(fake.socket, resolve));
     try {
@@ -278,7 +314,8 @@ describe('UNTRUSTED-PDF-GATE: hostile copies and hostile checks, with the gate s
   const COPY = Uint8Array.from(Buffer.from('a copy'));
   const check = (gate: ContainedSidecar, quotes: string[], copy: Uint8Array = COPY, timeoutMs = 30_000) =>
     socketGate({ path: gate.socket, timeoutMs })({ copy, original: Uint8Array.from([9]), quotes, image: 'blur', sha256: sha256Hex(copy) });
-  const PASS = { verdict: { pass: true }, sha256: sha256Hex(COPY) };
+  // The hostile stand-in passes with the copy as the bytes it checked (M1).
+  const PASS = { verdict: { pass: true }, sha256: sha256Hex(COPY), checked: { pdf: new Uint8Array(COPY), sha256: sha256Hex(COPY) } };
   type InPod = { result: unknown; ms: number; cause: string | null; causeMs: number };
 
   it('UNTRUSTED-PDF-GATE gate re-run: refuses a Flate bomb (a 1 MiB copy inflating to 1 GiB) at the gate\'s memory cap, for memory, on both transports, and the worker goes on', async () => {
@@ -293,7 +330,8 @@ describe('UNTRUSTED-PDF-GATE: hostile copies and hostile checks, with the gate s
     const t0 = Date.now();
     expect(await overSidecars(gate)(bomb, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
     expect(Date.now() - t0).toBeLessThan(30_000);
-    expect(gate.stderr()).toContain('a check was unfinished (memory)');
+    // The container's log relay can trail the socket's reply (N4).
+    await vi.waitFor(() => expect(gate.stderr()).toContain('a check was unfinished (memory)'), { timeout: 10_000 });
     // The bytes were inflated in the gate's child, never here.
     expect(process.memoryUsage().rss - before).toBeLessThan(256 * MiB);
     expect((await overSidecars(gate)(await linesPdf(['Picnic flyer']), REQUEST)).kind).toBe('redacted');
@@ -306,7 +344,8 @@ describe('UNTRUSTED-PDF-GATE: hostile copies and hostile checks, with the gate s
     expect(inPodRun.result).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
     const gate = await gateIn(['--max-rss-mb', '384', '--timeout-ms', '60000']);
     expect(await overSidecars(gate)(shows, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
-    expect(gate.stderr()).toMatch(/a check was unfinished \((memory|crash)\)/);
+    // The container's log relay can trail the socket's reply (N4).
+    await vi.waitFor(() => expect(gate.stderr()).toMatch(/a check was unfinished \((memory|crash)\)/), { timeout: 10_000 });
     expect((await overSidecars(gate)(await linesPdf(['Picnic flyer']), REQUEST)).kind).toBe('redacted');
   }, 240_000);
 
@@ -320,7 +359,8 @@ describe('UNTRUSTED-PDF-GATE: hostile copies and hostile checks, with the gate s
     expect(await overSidecars(gate)(pages, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
     // The deadline is 3 s; forking the child and loading pdf.js come on top.
     expect(Date.now() - t0).toBeLessThan(15_000);
-    expect(gate.stderr()).toContain('a check was unfinished (deadline)');
+    // The container's log relay can trail the socket's reply (N4).
+    await vi.waitFor(() => expect(gate.stderr()).toContain('a check was unfinished (deadline)'), { timeout: 10_000 });
   }, 240_000);
 
   it('UNTRUSTED-PDF-GATE gate re-run: kills a check whose memory passes its cap at the watchdog, for memory, long before its deadline (M2)', async () => {
@@ -330,7 +370,8 @@ describe('UNTRUSTED-PDF-GATE: hostile copies and hostile checks, with the gate s
     const t0 = Date.now();
     expect(await check(gate, ['x'])).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: sha256Hex(COPY) });
     expect(Date.now() - t0).toBeLessThan(5_000);
-    expect(gate.stderr()).toContain('a check was unfinished (memory)');
+    // The container's log relay can trail the socket's reply (N4).
+    await vi.waitFor(() => expect(gate.stderr()).toContain('a check was unfinished (memory)'), { timeout: 10_000 });
   }, 120_000);
 
   it('UNTRUSTED-PDF-GATE gate re-run: a check\'s fork-and-exit hop chain starts nothing; the gate sidecar is still the only process and serves the next check', async () => {

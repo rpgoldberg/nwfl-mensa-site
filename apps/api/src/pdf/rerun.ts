@@ -14,8 +14,11 @@
 //     the worker (gate-isolated.ts), no environment, a heap cap, a memory
 //     watchdog and a deadline.
 // The worker sends the copy, its sha256, the original (for its pictures), the
-// image policy and the quotes as the engine takes them. Only a pass that names
-// the copy's own sha256 goes on to be stored. Anything else stores a refused
+// image policy and the quotes as the engine takes them. A pass names the
+// copy's own sha256 and carries the bytes the gate checked: its own writing
+// of the copy (gate-rules.ts gateReply, fix round 3, M1). Only those bytes
+// are stored, once their sha256 is the one the gate names; the engine's copy
+// never is, so a reader gets what the gate read. Anything else stores a refused
 // copy with a fixed reason per code (RERUN_REASONS), which echoes nothing from
 // the copy, the engine or the gate. A gate that cannot be asked fails the job
 // retryably (RetryableEngineError), under the attempt cap.
@@ -52,8 +55,9 @@ export function withGateRerun(engine: Redact, gate: Gate = isolatedGate()): Reda
       return { kind: 'refused', reason: RERUN_REASONS.unfinished };
     }
     if (!outcome.verdict.pass) return { kind: 'refused', reason: RERUN_REASONS[outcome.verdict.code] };
-    // The bytes the gate passed must be the very bytes about to be stored.
-    if (outcome.sha256 !== sha256) return { kind: 'refused', reason: RERUN_REASONS.mismatch };
-    return result;
+    // The pass is about this copy, and the bytes stored are the very bytes the gate checked.
+    const { checked } = outcome;
+    if (outcome.sha256 !== sha256 || checked === undefined || sha256Hex(checked.pdf) !== checked.sha256) return { kind: 'refused', reason: RERUN_REASONS.mismatch };
+    return { ...result, pdf: checked.pdf };
   };
 }

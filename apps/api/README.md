@@ -397,11 +397,17 @@ production accepts it).
 
 The worker sends the copy and its original with their sha256s, the quotes and
 the picture policy. The gate refuses bytes that do not match their hash
-before any child reads them, and replies with a verdict and the sha256 of the
-copy it checked. The worker stores the copy only on a pass naming that very
-hash; anything else stores a refused copy with a fixed reason per outcome
-(withheld text, a broken rule, unfinished, other bytes). A missing or dead
-gate sidecar fails the job closed and retryably, under the same cap of 5.
+before any child reads them. Its child reads the copy with pdf-lib, writes
+it again with pdf-lib's writer (as the sanitizer does: no object streams, no
+incremental update), and checks those bytes, read afresh. It replies with a
+verdict naming the copy's sha256 and, on a pass, those bytes with their own
+sha256 (fix round 3, M1). **What is stored is the gate's bytes, never the
+engine's copy:** the worker stores them only on a pass naming the copy's hash,
+once their sha256 is the one named. A pdf-lib reading and a viewer's reading
+of the same bytes cannot then differ, whatever tricks the copy held. Anything
+else stores a refused copy with a fixed reason per outcome (withheld text, a
+broken rule, unfinished, other bytes). A missing or dead gate sidecar fails
+the job closed and retryably, under the same cap of 5.
 
 Without either socket (the in-pod mode) the worker forks the same capped
 child itself. This is the pre-sidecar mode only: the child is still the
@@ -419,7 +425,16 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   (the 1 x 1 grey fill, or under "blur" a Flate grey or RGB picture at most
   24 pixels a side), with no inline picture in any content stream;
 - no run of an original picture's samples is kept, and no picture has the
-  very samples of an original that blurring would change.
+  very samples of an original that blurring would change;
+- one reading (`src/pdf/pdf-structure.ts`, fix round 3): pdf-lib keeps the
+  last definition of an object and ignores the xref, while a viewer follows
+  the xref. So, as defence in depth beside storing the gate's own bytes, a
+  copy is refused when it has more than one xref section or startxref, a
+  trailer with anything beside `/Size` and `/Root`, an object defined twice,
+  an xref entry that does not land on its object, or an object or xref
+  stream. Every value a rule reads is resolved as a viewer resolves it, and
+  `/S`, `/Subtype`, `/Type`, `/PatternType` or `/Filter` given by reference
+  is refused.
 
 Its limits, as for any text gate: text written so it does not read as text
 (reversed, encoded, drawn as curves or as a picture); a picture rebuilt from

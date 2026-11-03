@@ -27,16 +27,31 @@
 //        blur's shape, kept, is caught by one or the other. A picture of one
 //        grey is its own blur, so it may come through unchanged.
 //
+//   3. One reading (fix round 3, M1): pdf-lib keeps the last definition of
+//      an object and ignores the xref; a viewer follows the xref. So:
+//      - a copy whose structure is not the sanitizer's (pdf-structure.ts: one
+//        xref table, one definition per object where the xref says) is
+//        refused before any rule is read;
+//      - every value a rule reads is resolved (lookup), as a viewer resolves
+//        it, and a structural name or number (/S, /Subtype, /Type,
+//        /PatternType, /Filter) given by reference is refused: the sanitizer
+//        writes them direct;
+//      - gateReply checks, and hands back, its own writing of the copy: what
+//        pdf-lib read, written again (no object streams, no incremental
+//        update). Only those bytes are stored (rerun.ts), so what a reader is
+//        given is what the gate read, whatever the copy's tricks.
+//
 // Out of scope, as for any text gate: withheld text written so a reader does
 // not see it as text (reversed, encoded, drawn as curves or as a picture), a
 // picture rebuilt from many small tiles or from vector shapes. README, "The
 // gate sidecar", lists these limits.
 // ============================================================================
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, type PDFObject, PDFRawStream, PDFRef, decodePDFRawStream } from '@cantoo/pdf-lib';
-import { type GateVerdict, sha256Hex } from './engine-protocol.js';
+import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha256Hex } from './engine-protocol.js';
 import { checkCopy } from './gate.js';
 import type { GateJob } from './gate-isolated.js';
 import { BLUR_MAX, FILL_GRAY, type ImageAction, type Pixels, blurred, decodePicture, hasInlinePicture, keepsPicture, pictureWindows } from './images.js';
+import { structureBreak } from './pdf-structure.js';
 
 const FORBIDDEN_KEYS = new Set(['JS', 'JavaScript', 'OpenAction', 'AA', 'URI', 'EmbeddedFile', 'EmbeddedFiles', 'EF', 'XFA', 'AcroForm', 'Annots']);
 const ACTION_TYPES = new Set([
@@ -64,14 +79,18 @@ const ACTION_TYPES = new Set([
 const FORBIDDEN_TYPES = new Set(['Action', 'Filespec', 'EmbeddedFile', 'Annot']);
 const FILL_KEYS = new Set(['Type', 'Subtype', 'Width', 'Height', 'ColorSpace', 'BitsPerComponent', 'Length']);
 const BLUR_KEYS = new Set([...FILL_KEYS, 'Filter']);
-const UNREADABLE = 'the copy could not be read';
 
+/** Keys whose value says what a dictionary is or how its bytes read: the sanitizer writes them direct (M1). */
+const STRUCTURAL = new Set(['S', 'Subtype', 'Type', 'PatternType', 'Filter']);
+const indirect = (value: PDFObject): boolean => value instanceof PDFRef || (value instanceof PDFArray && value.asArray().some((item) => item instanceof PDFRef));
+
+// Values are read resolved, as a viewer reads them (M1).
 const nameIn = (dict: PDFDict, key: string): string | undefined => {
-  const value = dict.get(PDFName.of(key));
+  const value = dict.lookup(PDFName.of(key));
   return value instanceof PDFName ? value.decodeText() : undefined;
 };
 const numberIn = (dict: PDFDict, key: string): number | undefined => {
-  const value = dict.get(PDFName.of(key));
+  const value = dict.lookup(PDFName.of(key));
   return value instanceof PDFNumber ? value.asNumber() : undefined;
 };
 
@@ -92,6 +111,7 @@ function activeIn(object: PDFObject | undefined, glyphs: PDFObject[]): string | 
     // An empty annotation list (pdf-lib writes one on a new page) annotates nothing.
     if (key.decodeText() === 'Annots' && isEmptyList(object.lookup(key))) continue;
     if (FORBIDDEN_KEYS.has(key.decodeText())) return `it holds /${key.decodeText()}`;
+    if (STRUCTURAL.has(key.decodeText()) && indirect(value)) return `its /${key.decodeText()} is not direct`;
     const found = activeIn(value, glyphs);
     if (found !== null) return found;
   }
@@ -145,14 +165,11 @@ function contentStreams(doc: PDFDocument, glyphs: readonly PDFObject[]): PDFObje
 
 /** Why the copy breaks the sanitizer's rules or the picture policy's shape, or null. Reads the copy alone. */
 export async function copyRulesBreak(copy: Uint8Array, image: ImageAction): Promise<string | null> {
-  let doc: PDFDocument;
-  try {
-    doc = await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
-  } catch {
-    return UNREADABLE;
-  }
+  // One reading first (M1): no encryption, no second trailer, no shadowed object.
+  const structure = await structureBreak(copy);
+  if (structure !== null) return `the structure: ${structure}`;
+  const doc = await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
   const { context } = doc;
-  if (context.trailerInfo.Encrypt !== undefined) return 'the trailer: the copy is encrypted';
   const glyphs: PDFObject[] = [];
   for (const [ref, object] of context.enumerateIndirectObjects()) {
     const found = activeIn(object, glyphs);
@@ -223,7 +240,30 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
   }
 }
 
-/** The gate child's answer: the verdict and the sha256 of the very bytes it read. */
-export async function gateReply(job: GateJob): Promise<{ verdict: GateVerdict; sha256: string }> {
-  return { verdict: await gateVerdict(job), sha256: sha256Hex(job.copy) };
+/** The copy as pdf-lib read it, written again by pdf-lib's writer as the sanitizer writes (sanitize.ts): no object streams, no incremental update. */
+async function rewrite(copy: Uint8Array): Promise<Uint8Array> {
+  const doc = await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
+  return doc.save({ rewrite: true, useObjectStreams: false, addDefaultPage: false, updateFieldAppearances: false });
+}
+
+/**
+ * The gate child's answer (M1): the copy's sha256 and the verdict on the gate's own writing of the copy, read
+ * afresh; on a pass, those bytes, the only ones that may be stored, with their sha256. A copy whose structure
+ * could read two ways is refused as it comes (withheld when there are quotes it cannot read it for, else rules);
+ * one whose writing is over `maxBytes` is unfinished. Never throws.
+ */
+export async function gateReply(job: GateJob, maxBytes = MAX_OUTPUT_BYTES): Promise<GateReply> {
+  const sha256 = sha256Hex(job.copy);
+  const refused = (code: GateCode): GateReply => ({ verdict: { pass: false, code }, sha256 });
+  let pdf: Uint8Array;
+  try {
+    // Refused as it comes, by the verdict on it as handed over (its structure breaks copyRulesBreak).
+    if ((await structureBreak(job.copy)) !== null) return { verdict: await gateVerdict(job), sha256 };
+    pdf = await rewrite(job.copy);
+  } catch {
+    return refused('unfinished');
+  }
+  if (pdf.byteLength > maxBytes) return refused('unfinished');
+  const verdict = await gateVerdict({ ...job, copy: pdf });
+  return verdict.pass ? { verdict, sha256, checked: { pdf, sha256: sha256Hex(pdf) } } : { verdict, sha256 };
 }

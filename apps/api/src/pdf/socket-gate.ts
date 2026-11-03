@@ -4,9 +4,10 @@
 // With PDF_GATE_SOCKET set (worker.ts), every copy is checked by the gate
 // sidecar over that unix socket, one connection per check: the worker sends
 // the copy and its original with their sha256s, the quotes and the image
-// policy, and gets back a verdict with the sha256 of the bytes the gate
-// checked (rerun.ts compares it with the copy it will store). The worker
-// itself parses nothing.
+// policy, and gets back a verdict naming the copy's sha256 and, on a pass,
+// the bytes the gate checked, its own writing of the copy, with their sha256
+// (fix round 3, M1): rerun.ts stores only those. The worker itself parses
+// nothing.
 //
 // A gate that cannot be asked (its socket missing or not a socket, the
 // sidecar dead, hanging up, answering garbage or late) fails the job closed,
@@ -14,7 +15,7 @@
 // under the attempt cap; never a fallback, never a pass. A check that cannot
 // be sent (over a cap) gives no pass: the copy is refused.
 // ============================================================================
-import { GATE_REPLY_MAGIC, MAX_GATE_REPLY_HEADER_BYTES, decodeGateReply, encodeGateRequest, sha256Hex } from './engine-protocol.js';
+import { GATE_REPLY_MAGIC, MAX_GATE_REPLY_HEADER_BYTES, MAX_OUTPUT_BYTES, decodeGateReply, encodeGateRequest, sha256Hex } from './engine-protocol.js';
 import type { GateJob, GateOutcome } from './gate-isolated.js';
 import { RetryableEngineError } from './regenerate.js';
 import { askSidecar } from './socket-engine.js';
@@ -32,7 +33,7 @@ export function socketGate(options: { path: string; timeoutMs?: number }): (job:
     } catch {
       return { verdict: { pass: false, code: 'unfinished' }, sha256: null };
     }
-    const reply = await askSidecar(options.path, frame, { what: 'gate', magic: GATE_REPLY_MAGIC, maxHeader: MAX_GATE_REPLY_HEADER_BYTES, maxBody: 0, timeoutMs });
+    const reply = await askSidecar(options.path, frame, { what: 'gate', magic: GATE_REPLY_MAGIC, maxHeader: MAX_GATE_REPLY_HEADER_BYTES, maxBody: MAX_OUTPUT_BYTES, timeoutMs });
     try {
       return decodeGateReply(reply);
     } catch (error) {

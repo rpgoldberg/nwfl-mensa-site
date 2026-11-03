@@ -108,20 +108,31 @@ describe('socketGate', () => {
     expect(await socketGate({ path: nobody })(JOB).catch((error: Error) => error.message)).toMatch(/the gate socket is missing|could not be reached/);
   });
 
+  it('hands back a pass with the bytes the gate checked, up to MAX_OUTPUT_BYTES of them, and their sha256 as named (M1)', async () => {
+    const written = Buffer.from('the gate\'s own writing of the copy');
+    const { socket } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: SHA, checkedSha256: sha256Hex(written) }, written));
+    const outcome = await socketGate({ path: socket })(JOB);
+    expect(outcome).toEqual({ verdict: { pass: true }, sha256: SHA, checked: { pdf: expect.any(Uint8Array) as unknown, sha256: sha256Hex(written) } });
+    expect(Buffer.from(outcome.checked?.pdf ?? []).equals(written)).toBe(true);
+    const full = Buffer.alloc(MAX_OUTPUT_BYTES, 1);
+    const big = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: SHA, checkedSha256: sha256Hex(full) }, full));
+    expect((await socketGate({ path: big.socket })(JOB)).checked?.pdf.byteLength).toBe(MAX_OUTPUT_BYTES);
+  });
+
   it('reads a verdict header of exactly MAX_GATE_REPLY_HEADER_BYTES, and refuses one byte more (S2)', async () => {
     expect(MAX_GATE_REPLY_HEADER_BYTES).toBe(1024);
     for (const [size, outcome] of [
       [MAX_GATE_REPLY_HEADER_BYTES, 'read'],
       [MAX_GATE_REPLY_HEADER_BYTES + 1, 'over'],
     ] as const) {
-      const json = `{"v":1,"verdict":"pass","sha256":"${SHA}"}`;
+      const json = `{"v":1,"verdict":"refused","code":"rules","sha256":"${SHA}"}`;
       const head = Buffer.from(json + ' '.repeat(size - json.length), 'utf8');
       const prefix = Buffer.alloc(12);
       GATE_REPLY_MAGIC.copy(prefix, 0);
       prefix.writeUInt32BE(head.length, 4);
       const { socket } = await fakeGate(() => Buffer.concat([prefix, head]));
       const check = socketGate({ path: socket })(JOB);
-      if (outcome === 'read') expect(await check).toEqual({ verdict: { pass: true }, sha256: SHA });
+      if (outcome === 'read') expect(await check).toEqual({ verdict: { pass: false, code: 'rules' }, sha256: SHA });
       else await expect(check).rejects.toThrow('the gate sidecar gave no usable reply: the header is over its cap');
     }
   });

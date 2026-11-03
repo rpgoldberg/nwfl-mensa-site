@@ -8,8 +8,10 @@
 //   engine reply   = "NWA1", header {v: 1, kind, reason? | message?}, body the copy or nothing
 //   gate request   = "NGQ1", header {v: 1, quotes, image, sha256, originalSha256, copyBytes},
 //                    body the copy then the original (for its pictures, gate-rules.ts)
-//   gate reply     = "NGA1", header {v: 1, verdict: "pass" | "refused", code?, sha256}, no body;
-//                    sha256 names the bytes the gate checked
+//   gate reply     = "NGA1", header {v: 1, verdict: "refused", code, sha256}, no body; or
+//                    header {v: 1, verdict: "pass", sha256, checkedSha256}, body the bytes the
+//                    gate checked: its own writing of the copy, the only bytes that may be stored
+//                    (fix round 3, M1). sha256 names the copy the gate was sent.
 //
 // Each side reads the 12-byte prefix first and stops there if a declared size is
 // over its cap, so a peer's framing is never trusted beyond the caps. A header
@@ -73,10 +75,17 @@ export interface GateRequest {
   originalSha256: string;
 }
 
-/** What the gate answers: its verdict, and the sha256 of the copy it checked. */
+/** The bytes a gate passed: its own writing of the copy (gate-rules.ts gateReply), the only bytes that may be stored, and their sha256. */
+export interface CheckedCopy {
+  pdf: Uint8Array;
+  sha256: string;
+}
+
+/** What the gate answers: its verdict, the sha256 of the copy it was sent, and on a pass the bytes it checked (fix round 3, M1). */
 export interface GateReply {
   verdict: GateVerdict;
   sha256: string;
+  checked?: CheckedCopy;
 }
 
 /** A frame that is malformed, over a cap, cut short or late. Its message says which, never what it held. */
@@ -294,18 +303,25 @@ export function decodeGateRequest(frame: Frame): GateRequest {
   };
 }
 
-/** The gate's answer, as a frame: the verdict by code only, and the hash of what it checked. */
+/**
+ * The gate's answer, as a frame: the verdict by code only and the copy's hash; a pass also carries the bytes the gate
+ * checked, as the body, with their hash. Throws a FrameError for a pass without them, or with them outside the output cap.
+ */
 export function encodeGateReply(reply: GateReply): Buffer {
-  const verdict = reply.verdict.pass ? { verdict: 'pass' } : { verdict: 'refused', code: reply.verdict.code };
-  return encodeFrame(GATE_REPLY_MAGIC, { v: VERSION, ...verdict, sha256: reply.sha256 });
+  if (!reply.verdict.pass) return encodeFrame(GATE_REPLY_MAGIC, { v: VERSION, verdict: 'refused', code: reply.verdict.code, sha256: reply.sha256 });
+  const { checked } = reply;
+  if (checked === undefined || checked.pdf.byteLength === 0 || checked.pdf.byteLength > MAX_OUTPUT_BYTES) throw new FrameError('a pass carries the checked copy, within the output cap');
+  return encodeFrame(GATE_REPLY_MAGIC, { v: VERSION, verdict: 'pass', sha256: reply.sha256, checkedSha256: checked.sha256 }, checked.pdf);
 }
 
-/** The worker's reading of a gate reply frame: exactly one typed verdict, or a FrameError. */
+/** The worker's reading of a gate reply frame: exactly one typed verdict (a pass with its checked bytes), or a FrameError. */
 export function decodeGateReply(frame: Frame): GateReply {
   const { header, body } = frame;
-  if (isRecord(header) && header['v'] === VERSION && body.length === 0 && isHash(header['sha256'])) {
-    if (header['verdict'] === 'pass' && hasKeys(header, ['v', 'verdict', 'sha256'])) return { verdict: { pass: true }, sha256: header['sha256'] };
-    if (header['verdict'] === 'refused' && hasKeys(header, ['v', 'verdict', 'code', 'sha256']) && GATE_CODES.includes(header['code'] as GateCode)) {
+  if (isRecord(header) && header['v'] === VERSION && isHash(header['sha256'])) {
+    if (header['verdict'] === 'pass' && hasKeys(header, ['v', 'verdict', 'sha256', 'checkedSha256']) && isHash(header['checkedSha256']) && body.length > 0 && body.length <= MAX_OUTPUT_BYTES) {
+      return { verdict: { pass: true }, sha256: header['sha256'], checked: { pdf: new Uint8Array(body), sha256: header['checkedSha256'] } };
+    }
+    if (header['verdict'] === 'refused' && body.length === 0 && hasKeys(header, ['v', 'verdict', 'code', 'sha256']) && GATE_CODES.includes(header['code'] as GateCode)) {
       return { verdict: { pass: false, code: header['code'] as GateCode }, sha256: header['sha256'] };
     }
   }

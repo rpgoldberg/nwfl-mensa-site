@@ -19,16 +19,26 @@ const answering =
   () =>
     Promise.resolve(outcome);
 const REQUEST = { quotes: ['Kestrel Ambry'], redactsAny: true };
+// The gate's own writing of the copy (gate-rules.ts gateReply): the only bytes that may be stored (M1).
+const WRITTEN = Uint8Array.from([4, 5, 6, 7]);
+const CHECKED = { pdf: WRITTEN, sha256: sha256Hex(WRITTEN) };
+const PASS = { verdict: { pass: true as const }, sha256: SHA, checked: CHECKED };
 
 describe('withGateRerun', () => {
-  it('passes a copy only on a pass naming the copy\'s own sha256, as the engine returned it', async () => {
-    expect(await withGateRerun(engine(made), answering({ verdict: { pass: true }, sha256: SHA }))(COPY, REQUEST)).toBe(made);
+  it('on a pass naming the copy\'s own sha256, hands on the bytes the gate checked in place of the engine\'s (M1)', async () => {
+    expect(await withGateRerun(engine(made), answering(PASS))(COPY, REQUEST)).toEqual({ kind: 'redacted', pdf: WRITTEN, boxes: [] });
   });
 
   it('refuses a pass naming other bytes, or none (the gate checked something else)', async () => {
     for (const sha256 of [sha256Hex(Buffer.from('another copy')), null]) {
-      expect(await withGateRerun(engine(made), answering({ verdict: { pass: true }, sha256 }))(COPY, REQUEST), String(sha256)).toEqual({ kind: 'refused', reason: RERUN_REASONS.mismatch });
+      expect(await withGateRerun(engine(made), answering({ ...PASS, sha256 }))(COPY, REQUEST), String(sha256)).toEqual({ kind: 'refused', reason: RERUN_REASONS.mismatch });
     }
+  });
+
+  it('refuses a pass with no checked bytes, or bytes that are not the ones its sha256 names (M1)', async () => {
+    expect(await withGateRerun(engine(made), answering({ verdict: { pass: true }, sha256: SHA }))(COPY, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.mismatch });
+    const swapped = { ...PASS, checked: { pdf: Uint8Array.from([9]), sha256: CHECKED.sha256 } };
+    expect(await withGateRerun(engine(made), answering(swapped))(COPY, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.mismatch });
   });
 
   it('refuses each refusal with its own fixed reason, which quotes nothing from the copy or the gate', async () => {
@@ -46,7 +56,7 @@ describe('withGateRerun', () => {
   });
 
   it('asks the gate with the copy, its sha256, the original (for its pictures), the image action and the quotes as the engine reads them', async () => {
-    const gate = vi.fn<Gate>(() => Promise.resolve({ verdict: { pass: true }, sha256: SHA }));
+    const gate = vi.fn<Gate>(() => Promise.resolve(PASS));
     const original = Uint8Array.from([8, 8]);
     await withGateRerun(engine(made), gate)(original, { quotes: ['  Kestrel ', '', '  ', 'Kestrel'], redactsAny: true, image: 'blur' });
     expect(gate).toHaveBeenCalledWith({ copy: COPY, original, quotes: ['Kestrel'], image: 'blur', sha256: SHA });

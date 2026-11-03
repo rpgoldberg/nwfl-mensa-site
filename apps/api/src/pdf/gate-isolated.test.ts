@@ -30,10 +30,22 @@ describe('isolatedGate', () => {
     expect(GATE_CHILD.endsWith(`${path.sep}gate-child.js`)).toBe(true);
   });
 
-  it('hands back the child\'s verdict and the sha256 of the bytes it checked', async () => {
-    expect(await isolatedGate({ module: child('pass') })(JOB)).toEqual({ verdict: { pass: true }, sha256: sha256Hex(COPY) });
+  it('hands back the child\'s verdict, the sha256 of the copy, and on a pass the bytes it checked with their sha256 (M1)', async () => {
+    expect(await isolatedGate({ module: child('pass') })(JOB)).toEqual({ verdict: { pass: true }, sha256: sha256Hex(COPY), checked: { pdf: COPY, sha256: sha256Hex(COPY) } });
     // A wrong hash is passed on as it came: the caller compares it.
-    expect(await isolatedGate({ module: child('wrongsha') })(JOB)).toEqual({ verdict: { pass: true }, sha256: sha256Hex(Buffer.from('other bytes')) });
+    const other = new TextEncoder().encode('other bytes');
+    expect(await isolatedGate({ module: child('wrongsha') })(JOB)).toEqual({ verdict: { pass: true }, sha256: sha256Hex(other), checked: { pdf: other, sha256: sha256Hex(other) } });
+  });
+
+  it('gives no pass for a pass without checked bytes, with checked bytes over the output cap, or with checked bytes that are not bytes (M1)', async () => {
+    expect(await isolatedGate({ module: child('bare') })(JOB)).toEqual(unfinished('crash'));
+    expect(await isolatedGate({ module: child('oversize') })(JOB)).toEqual(unfinished('crash'));
+    expect(await isolatedGate({ module: child('oversize') })({ ...JOB, quotes: ['text'] })).toEqual(unfinished('crash'));
+  });
+
+  it('gives no pass for a child that passes and then exits 3, or passes and then is killed (S4)', async () => {
+    expect(await isolatedGate({ module: child('passexit') })(JOB)).toEqual(unfinished('crash'));
+    expect(await isolatedGate({ module: child('passkill') })(JOB)).toEqual(unfinished('crash'));
   });
 
   it('gives no pass for a child that crashed, answered something else, or could not be started, and says it crashed', async () => {

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { GATE_REPLY_MAGIC, GATE_REQUEST_MAGIC, MAX_GATE_REPLY_HEADER_BYTES, decodeGateReply, encodeFrame, encodeGateRequest, readFrame, sha256Hex } from './engine-protocol.js';
+import { GATE_REPLY_MAGIC, GATE_REQUEST_MAGIC, MAX_GATE_REPLY_HEADER_BYTES, MAX_OUTPUT_BYTES, decodeGateReply, encodeFrame, encodeGateRequest, readFrame, sha256Hex } from './engine-protocol.js';
 import { DEFAULT_GATE_SOCKET, GATE_SOCKET_DIR, gateSidecarMain, startGateSidecar } from './gate-service.js';
 import type { Sidecar } from './sidecar.js';
 import { socketGate } from './socket-gate.js';
@@ -41,7 +41,7 @@ async function started(options: Partial<Parameters<typeof startGateSidecar>[0]> 
 async function ask(socket: string, frame: Buffer): Promise<ReturnType<typeof decodeGateReply>> {
   const conn = net.createConnection({ path: socket });
   conn.on('error', () => {});
-  const read = readFrame(conn, { magic: GATE_REPLY_MAGIC, maxHeader: MAX_GATE_REPLY_HEADER_BYTES, maxBody: 0, untilEnd: true });
+  const read = readFrame(conn, { magic: GATE_REPLY_MAGIC, maxHeader: MAX_GATE_REPLY_HEADER_BYTES, maxBody: MAX_OUTPUT_BYTES, untilEnd: true });
   conn.write(frame);
   try {
     return decodeGateReply(await read);
@@ -51,10 +51,12 @@ async function ask(socket: string, frame: Buffer): Promise<ReturnType<typeof dec
 }
 
 describe('startGateSidecar', () => {
-  it('checks each copy in a child of its own and answers with the sha256 of the bytes it checked, on a 0660 socket', async () => {
+  it('checks each copy in a child of its own and answers with the copy\'s sha256 and the bytes the child checked, on a 0660 socket', async () => {
     const { socket } = await started();
     expect(lstatSync(socket).mode & 0o777).toBe(0o660);
-    expect(await socketGate({ path: socket })(JOB)).toEqual({ verdict: { pass: true }, sha256: SHA });
+    const outcome = await socketGate({ path: socket })(JOB);
+    expect(outcome).toEqual({ verdict: { pass: true }, sha256: SHA, checked: { pdf: expect.any(Uint8Array) as unknown, sha256: SHA } });
+    expect([...(outcome.checked?.pdf ?? [])]).toEqual([...COPY]);
   });
 
   it('refuses a copy whose bytes do not match the sha256 the worker sent, before any child reads it', async () => {
@@ -91,7 +93,7 @@ describe('startGateSidecar', () => {
     await expect(ask(socket, bad)).rejects.toThrow();
     expect(logged.join('\n')).toContain('refused a request: ');
     expect(logged.join('\n')).not.toContain('canary');
-    expect(await socketGate({ path: socket })(JOB)).toEqual({ verdict: { pass: true }, sha256: SHA });
+    expect((await socketGate({ path: socket })(JOB)).verdict).toEqual({ pass: true });
   });
 });
 

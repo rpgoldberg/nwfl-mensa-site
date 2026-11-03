@@ -31,7 +31,7 @@
 import { fork } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { GATE_CODES, type GateCode, type GateVerdict } from './engine-protocol.js';
+import { type CheckedCopy, GATE_CODES, type GateCode, type GateVerdict, MAX_OUTPUT_BYTES } from './engine-protocol.js';
 import type { ImageAction } from './images.js';
 import { engineExecArgv, killGroup } from './isolated.js';
 import { type LimitForks, guardFlag, isGuardMessage, limitForks, watchGuard } from './no-fork.js';
@@ -56,10 +56,11 @@ export interface GateJob {
 /** Why a child gave no verdict: killed past its memory cap or deadline, stopped by the signal, ended on its own, or refused before it was sent the copy. */
 export type UnfinishedCause = 'memory' | 'deadline' | 'signal' | 'crash' | 'no-fork';
 
-/** What a check comes to: the verdict, and the sha256 of the bytes the child checked (null when it gave none). */
+/** What a check comes to: the verdict, the sha256 of the copy the child was sent (null when it gave none), and on a pass the bytes it checked (M1). */
 export interface GateOutcome {
   verdict: GateVerdict;
   sha256: string | null;
+  checked?: CheckedCopy;
   /** Set when the child gave no verdict. */
   cause?: UnfinishedCause;
 }
@@ -98,13 +99,26 @@ export function rssOf(pid: number): number {
   }
 }
 
-/** The child's answer, if it is exactly a verdict and a hash; else undefined. */
+const isHash = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+
+/** The bytes a pass carries, if they are bytes within the output cap with a hash; else undefined. */
+function asChecked(value: unknown): CheckedCopy | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { pdf, sha256 } = value as { pdf?: unknown; sha256?: unknown };
+  if (!(pdf instanceof Uint8Array) || pdf.byteLength === 0 || pdf.byteLength > MAX_OUTPUT_BYTES || !isHash(sha256)) return undefined;
+  return { pdf, sha256 };
+}
+
+/** The child's answer, if it is exactly a verdict and a hash (and, for a pass, the bytes it checked); else undefined. */
 function asOutcome(message: unknown): GateOutcome | undefined {
   if (typeof message !== 'object' || message === null) return undefined;
-  const { verdict, sha256 } = message as { verdict?: unknown; sha256?: unknown };
-  if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256) || typeof verdict !== 'object' || verdict === null) return undefined;
+  const { verdict, sha256, checked } = message as { verdict?: unknown; sha256?: unknown; checked?: unknown };
+  if (!isHash(sha256) || typeof verdict !== 'object' || verdict === null) return undefined;
   const { pass, code } = verdict as { pass?: unknown; code?: unknown };
-  if (pass === true) return { verdict: { pass: true }, sha256 };
+  if (pass === true) {
+    const bytes = asChecked(checked);
+    return bytes === undefined ? undefined : { verdict: { pass: true }, sha256, checked: bytes };
+  }
   if (pass === false && GATE_CODES.includes(code as GateCode)) return { verdict: { pass: false, code: code as GateCode }, sha256 };
   return undefined;
 }

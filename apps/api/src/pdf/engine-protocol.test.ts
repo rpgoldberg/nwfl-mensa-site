@@ -180,7 +180,7 @@ describe('gate requests and replies (the worker and the gate sidecar)', () => {
   const ORIGINAL_SHA = sha256Hex(ORIGINAL);
   const GATE = { copy: COPY, original: ORIGINAL, quotes: ['Kestrel Ambry'], image: 'blur' as const, sha256: SHA, originalSha256: ORIGINAL_SHA };
   const GATE_LIMITS = { magic: GATE_REQUEST_MAGIC, maxHeader: MAX_REQUEST_HEADER_BYTES, maxBody: MAX_GATE_BODY_BYTES };
-  const REPLY_LIMITS = { magic: GATE_REPLY_MAGIC, maxHeader: MAX_GATE_REPLY_HEADER_BYTES, maxBody: 0 };
+  const REPLY_LIMITS = { magic: GATE_REPLY_MAGIC, maxHeader: MAX_GATE_REPLY_HEADER_BYTES, maxBody: MAX_OUTPUT_BYTES };
 
   it('hashes with sha256, in lower-case hex', () => {
     expect(SHA).toBe('787c798e39a5bc1910355bae6d0cd87a36b2e10fd0202a83e3bb6b005da83472');
@@ -232,23 +232,37 @@ describe('gate requests and replies (the worker and the gate sidecar)', () => {
     for (const [header, raw] of bad) expect(() => decodeGateRequest({ header, body: raw }), JSON.stringify(header)?.slice(0, 120)).toThrow(FrameError);
   });
 
-  it('round-trip: a pass or a refusal by code, with the sha256 of the bytes the gate checked, and no body', async () => {
+  it('round-trip: a pass with the bytes the gate checked (its writing of the copy) and their sha256, or a refusal by code with no body; each names the copy\'s sha256 (M1)', async () => {
     const reply = async (value: Parameters<typeof encodeGateReply>[0]): Promise<ReturnType<typeof decodeGateReply>> => decodeGateReply(await fed([encodeGateReply(value)], { limits: REPLY_LIMITS }));
-    expect(await reply({ verdict: { pass: true }, sha256: SHA })).toEqual({ verdict: { pass: true }, sha256: SHA });
+    const written = Uint8Array.from([7, 8, 9, 10]);
+    const checked = { pdf: written, sha256: sha256Hex(written) };
+    const passed = await reply({ verdict: { pass: true }, sha256: SHA, checked });
+    expect(passed).toEqual({ verdict: { pass: true }, sha256: SHA, checked: { pdf: expect.any(Uint8Array) as unknown, sha256: checked.sha256 } });
+    expect([...(passed.checked?.pdf ?? [])]).toEqual([7, 8, 9, 10]);
     for (const code of ['withheld', 'rules', 'unfinished', 'mismatch'] as const) {
-      expect(await reply({ verdict: { pass: false, code }, sha256: SHA }), code).toEqual({ verdict: { pass: false, code }, sha256: SHA });
+      expect(await reply({ verdict: { pass: false, code }, sha256: SHA, checked }), code).toEqual({ verdict: { pass: false, code }, sha256: SHA });
     }
+  });
+
+  it('will not write a pass without the checked bytes, or with bytes outside the output cap', () => {
+    expect(() => encodeGateReply({ verdict: { pass: true }, sha256: SHA })).toThrow(FrameError);
+    expect(() => encodeGateReply({ verdict: { pass: true }, sha256: SHA, checked: { pdf: new Uint8Array(0), sha256: SHA } })).toThrow(FrameError);
+    expect(() => encodeGateReply({ verdict: { pass: true }, sha256: SHA, checked: { pdf: new Uint8Array(MAX_OUTPUT_BYTES + 1), sha256: SHA } })).toThrow(FrameError);
   });
 
   it('refuses a reply that is not exactly a typed verdict', () => {
     const none = Buffer.alloc(0);
     const bad: Array<[unknown, Buffer]> = [
       [null, none],
-      [{ v: 2, verdict: 'pass', sha256: SHA }, none],
-      [{ v: 1, verdict: 'pass' }, none],
-      [{ v: 1, verdict: 'pass', sha256: 'x' }, none],
-      [{ v: 1, verdict: 'pass', sha256: SHA, code: 'withheld' }, none],
+      [{ v: 2, verdict: 'pass', sha256: SHA, checkedSha256: SHA }, Buffer.from([1])],
+      [{ v: 1, verdict: 'pass' }, Buffer.from([1])],
+      [{ v: 1, verdict: 'pass', sha256: 'x', checkedSha256: SHA }, Buffer.from([1])],
+      [{ v: 1, verdict: 'pass', sha256: SHA, checkedSha256: 'x' }, Buffer.from([1])],
+      [{ v: 1, verdict: 'pass', sha256: SHA, checkedSha256: SHA, code: 'withheld' }, Buffer.from([1])],
       [{ v: 1, verdict: 'pass', sha256: SHA }, Buffer.from([1])],
+      [{ v: 1, verdict: 'pass', sha256: SHA, checkedSha256: SHA }, none],
+      [{ v: 1, verdict: 'pass', sha256: SHA, checkedSha256: SHA }, Buffer.alloc(MAX_OUTPUT_BYTES + 1)],
+      [{ v: 1, verdict: 'refused', code: 'rules', sha256: SHA }, Buffer.from([1])],
       [{ v: 1, verdict: 'refused', sha256: SHA }, none],
       [{ v: 1, verdict: 'refused', code: 'leaked', sha256: SHA }, none],
       [{ v: 1, verdict: 'refused', code: 'withheld', sha256: SHA, reason: 'Kestrel' }, none],
