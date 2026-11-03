@@ -23,6 +23,20 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const CHILD_GUARD = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './child-guard.ts' : './child-guard.js', import.meta.url));
 /** The absolute path, so no PATH is looked up; util-linux's, in the image and on any Linux host. */
 export const PRLIMIT = '/usr/bin/prlimit';
+/** util-linux choom, by absolute path (in the base image, as prlimit is): it sets a child's oom_score_adj, then runs node. */
+export const CHOOM = '/usr/bin/choom';
+/** Every engine and gate child's oom_score_adj (fix round 3, S5): when a pod's memory runs out, the kernel takes the child first. */
+export const CHILD_OOM_SCORE_ADJ = 1000;
+
+/**
+ * fork() options that start a child's node through choom, with these Node flags, so its oom_score_adj is
+ * CHILD_OOM_SCORE_ADJ from its first instruction. node cannot raise its own: the image makes it
+ * non-dumpable (0711, fix round 3, S6), and a non-dumpable process's /proc/self files are root's. The
+ * guard checks the value (child-guard.ts) and ends a child without it. Same pid: choom execs node.
+ */
+export function viaChoom(execArgv: readonly string[]): { execPath: string; execArgv: string[] } {
+  return { execPath: CHOOM, execArgv: ['-n', String(CHILD_OOM_SCORE_ADJ), '--', process.execPath, ...execArgv] };
+}
 /** What the guard must see from its own spawn once the limit holds. */
 export const BLOCKED = 'EAGAIN';
 

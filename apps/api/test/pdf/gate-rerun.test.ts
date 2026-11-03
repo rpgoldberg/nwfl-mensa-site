@@ -345,7 +345,8 @@ describe('UNTRUSTED-PDF-GATE: hostile copies and hostile checks, with the gate s
     const gate = await gateIn(['--max-rss-mb', '384', '--timeout-ms', '60000']);
     expect(await overSidecars(gate)(shows, REQUEST)).toEqual({ kind: 'refused', reason: RERUN_REASONS.unfinished });
     // The container's log relay can trail the socket's reply (N4).
-    await vi.waitFor(() => expect(gate.stderr()).toMatch(/a check was unfinished \((memory|crash)\)/), { timeout: 10_000 });
+    // A V8 heap OOM is memory too (N1).
+    await vi.waitFor(() => expect(gate.stderr()).toContain('a check was unfinished (memory)'), { timeout: 10_000 });
     expect((await overSidecars(gate)(await linesPdf(['Picnic flyer']), REQUEST)).kind).toBe('redacted');
   }, 240_000);
 

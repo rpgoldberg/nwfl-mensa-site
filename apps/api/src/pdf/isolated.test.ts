@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { GATE_CHILD_SOURCE, NODE_FLAGS } from '../../test/helpers/sidecar.js';
 import { linesPdf } from '../../test/pdf/fixtures.js';
-import { ENGINE_CHILD, engineExecArgv, engineReply, isolatedRedact, withoutCanvasWarnings } from './isolated.js';
+import { PassThrough } from 'node:stream';
+import { CHILD_LOG_BYTES, ENGINE_CHILD, engineExecArgv, engineReply, isolatedRedact, relayChildLog, withoutCanvasWarnings } from './isolated.js';
 import { guardFlag, limitForks } from './no-fork.js';
 import { redactPdf } from './redact.js';
 
@@ -36,6 +37,19 @@ describe('isolatedRedact', () => {
     await expect(isolatedRedact({ module: child('crash') })(Uint8Array.from([1]), REQUEST)).rejects.toThrow('the engine process ended without a copy (exit 3)');
     await expect(isolatedRedact({ module: child('oom') })(Uint8Array.from([1]), REQUEST)).rejects.toThrow('the engine process ended without a copy (SIGKILL)');
     await expect(isolatedRedact({ module: child('missing') })(Uint8Array.from([1]), REQUEST)).rejects.toThrow('the engine process ended without a copy (exit 1)');
+  });
+
+  it('logs at most CHILD_LOG_BYTES of the child\'s stderr and none of its stdout (S2: a subverted child could fill the container log)', async () => {
+    const logged: Buffer[] = [];
+    expect(await isolatedRedact({ module: child('noisy'), log: (chunk) => void logged.push(chunk) })(Uint8Array.from([1]), REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the noisy engine' });
+    const text = Buffer.concat(logged).toString('latin1');
+    expect(text.startsWith('noisy-start ')).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(CHILD_LOG_BYTES + 100);
+    expect(text).not.toContain('o'.repeat(64));
+  });
+
+  it('sets the child\'s oom_score_adj to 1000 in its guard, so the kernel takes the child first (S5)', async () => {
+    expect(await isolatedRedact({ module: child('oom-score') })(Uint8Array.from([1]), REQUEST)).toEqual({ kind: 'refused', reason: '1000' });
   });
 
   it('kills a child that takes too long', async () => {
@@ -158,5 +172,28 @@ describe('withoutCanvasWarnings (the child\'s console.warn)', () => {
     warn('Warning: something else');
     warn(42);
     expect(seen).toEqual([['Warning: something else'], [42]]);
+  });
+});
+
+describe('relayChildLog (a child\'s stderr, capped)', () => {
+  it('passes on the first bytes up to the cap, says once that the rest is dropped, reads to the end, and spots a V8 heap OOM across chunks (S2, N1)', async () => {
+    const stream = new PassThrough();
+    const logged: Buffer[] = [];
+    const log = relayChildLog(stream, (chunk) => void logged.push(chunk), 10);
+    stream.write('0123456');
+    stream.write('789abc');
+    stream.write('...JavaScript heap ');
+    stream.end('out of memory\n');
+    await log.ended;
+    expect(Buffer.concat(logged).toString()).toBe("0123456789\n[the rest of this child's log is dropped]\n");
+    expect(log.heapOutOfMemory()).toBe(true);
+    const quiet = new PassThrough();
+    const other = relayChildLog(quiet, () => {}, 10);
+    quiet.end('a crash');
+    await other.ended;
+    expect(other.heapOutOfMemory()).toBe(false);
+    const none = relayChildLog(null);
+    await none.ended;
+    expect(none.heapOutOfMemory()).toBe(false);
   });
 });

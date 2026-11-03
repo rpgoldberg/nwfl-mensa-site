@@ -1,7 +1,7 @@
 // The gate sidecar's own code, in this process (UNTRUSTED-PDF-GATE M2): the output gate as a second
 // sidecar, its own container and uid, one capped child per check. The lift test
 // (test/pdf/gate-rerun.test.ts) runs the real entry as a process. Children here are stand-ins.
-import { existsSync, lstatSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { GATE_REPLY_MAGIC, GATE_REQUEST_MAGIC, MAX_GATE_REPLY_HEADER_BYTES, MAX_OUTPUT_BYTES, decodeGateReply, encodeFrame, encodeGateRequest, readFrame, sha256Hex } from './engine-protocol.js';
 import { DEFAULT_GATE_SOCKET, GATE_SOCKET_DIR, gateSidecarMain, startGateSidecar } from './gate-service.js';
 import type { Sidecar } from './sidecar.js';
+import { RetryableEngineError } from './regenerate.js';
 import { socketGate } from './socket-gate.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/gate-children/${name}.ts`, import.meta.url));
@@ -142,6 +143,39 @@ describe('gateSidecarMain (the gate entry\'s logic)', () => {
     expect(await socketGate({ path: socket })(JOB)).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: SHA });
     expect(Date.now() - t0).toBeLessThan(5_000);
     expect(lines).toContain('a check was unfinished (deadline)');
+  });
+
+  it('as PID 1, clears its namespace (kill(-1)) at start and before every reply, and replies to none when it cannot (fix round 3, S3)', async () => {
+    // A made-up /proc: the sidecar is PID 1, alone; kill() records, it kills nothing here.
+    const view = (): { pid: number; uid: number; procRoot: string; kill: (pid: number) => void; execArgv: string[]; sent: number[] } => {
+      const root = place().dir;
+      mkdirSync(path.join(root, '1'));
+      writeFileSync(path.join(root, '1', 'status'), 'Name:\tnode\nState:\tS (sleeping)\nUid:\t10004\t10004\t10004\t10004\n');
+      const sent: number[] = [];
+      return { pid: 1, uid: 10004, procRoot: root, kill: (pid) => void sent.push(pid), execArgv: ['--disable-sigusr1'], sent };
+    };
+    const { dir, socket } = place();
+    const system = view();
+    const lines: string[] = [];
+    const result = await gateSidecarMain(['--socket-dir', dir, '--gate', child('pass')], {}, (line) => void lines.push(line), { system });
+    const { sidecar } = result as { sidecar: Sidecar };
+    cleanup.push(() => sidecar.close());
+    expect(system.sent).toEqual([-1]);
+    expect((await socketGate({ path: socket })(JOB)).verdict).toEqual({ pass: true });
+    expect(system.sent).toEqual([-1, -1]);
+    expect((await socketGate({ path: socket })(JOB)).verdict).toEqual({ pass: true });
+    expect(system.sent).toEqual([-1, -1, -1]);
+    expect(lines).toContain('gate sidecar listening (PID 1: clearing its PID namespace before every reply)');
+    // A process the clear cannot remove (a zombie, here) is doubt: no reply, and the sidecar stops for good.
+    const stuck = place();
+    const doubted = view();
+    const fatal: string[] = [];
+    const second = await gateSidecarMain(['--socket-dir', stuck.dir, '--gate', child('pass')], {}, () => {}, { system: doubted, onFatal: (reason) => void fatal.push(reason) });
+    cleanup.push(() => (second as { sidecar: Sidecar }).sidecar.close());
+    mkdirSync(path.join(doubted.procRoot, '9'));
+    writeFileSync(path.join(doubted.procRoot, '9', 'status'), 'Name:\tsh\nState:\tZ (zombie)\nUid:\t10004\t10004\t10004\t10004\n');
+    await expect(socketGate({ path: stuck.socket })(JOB)).rejects.toBeInstanceOf(RetryableEngineError);
+    expect(fatal.join('\n')).toContain('its PID namespace is not clear before a reply: an orphaned process');
   });
 
   it('exits 1 when it cannot listen', async () => {

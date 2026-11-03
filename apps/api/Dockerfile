@@ -54,7 +54,10 @@ LABEL org.opencontainers.image.version="${SERVICE_VERSION}"
 
 # Security patches, dumb-init, the runtime user. npm, npx, corepack and yarn
 # are build tools; removing them drops their bundled dependencies (and their
-# CVEs) from the runtime.
+# CVEs) from the runtime. node is made execute-only (0711): a process whose
+# executable it cannot read is non-dumpable, so its /proc environ and mem are
+# EACCES even to a process of the same uid, such as a PDF check child reading
+# the worker's database login (fix round 3, S6; /proc status stays readable).
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends dumb-init && \
@@ -62,6 +65,7 @@ RUN apt-get update && \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
            /opt/yarn* /usr/local/bin/yarn /usr/local/bin/yarnpkg && \
+    chmod 0711 /usr/local/bin/node && \
     groupadd -g 10001 nwfl && \
     useradd -u 10001 -g nwfl -M -s /usr/sbin/nologin nwfl
 

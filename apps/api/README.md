@@ -53,6 +53,12 @@ skip locally; with `CI=true` they fail instead. The migration suites run
 `scripts/migrate.sh` inside that container (`docker exec`), against the repo
 mounted read-only at `/repo`, each in a database of its own.
 
+Run the tests with Node 24 (`.nvmrc`, as CI does). The PDF children start
+`.ts` stand-ins with `--experimental-transform-types`, which a newer Node a
+host may default to does not accept, so with another Node they fail to start.
+The per-copy children also need util-linux `prlimit` and `choom` at
+`/usr/bin` (Debian and Ubuntu ship both).
+
 ## Secrets and fixtures
 
 This repository's whole history is meant to be publishable.
@@ -305,7 +311,14 @@ and took its socket over), most load-bearing first:
    set, or a spawn that works, refuses the copy. In a capped container spawn,
    exec and fork then all fail with EAGAIN, and zlib, crypto and the real
    engine and gate still run. pdf.js's optional canvas would need threads
-   later, which is one more reason it is not in the image.
+   later, which is one more reason it is not in the image. Each child is also
+   started through util-linux `choom` with `oom_score_adj` 1000 (fix round 3),
+   so when a container's memory runs out the kernel ends the child, never the
+   sidecar; the guard ends a child whose score is not 1000. Node cannot set it
+   itself: the image makes `node` execute-only (0711), which leaves every node
+   process non-dumpable, so a child cannot read the worker's environment or
+   memory through `/proc` (and its own `/proc/self` files belong to root). Its
+   stdout is dropped and its stderr reaches the log only up to 64 KiB.
 3. Before every reply, `kill(-1, SIGKILL)` (everything but PID 1), then `/proc`
    re-read until the sidecar is alone, in bounded passes. Anything left, or
    any zombie (its own children are reaped by then, so a zombie is an
@@ -349,9 +362,12 @@ A missing socket, a dead sidecar, a malformed reply, or no reply within
 the file stays queued, and the next run takes it once the lease (600 s)
 ends. After 5 such failures for one file (`MAX_ENGINE_ATTEMPTS`) the copies
 are stored refused, with the fixed reason "the engine could not be reached
-in 5 attempts". The count is kept in
-the worker's memory, since no migration was allowed, so a restart starts it
-again. If the engine itself fails on the file inside the sidecar (its child
+in 5 attempts". The count is kept in the database (`pdf_regen.attempts`,
+migration 0021, fix round 3): each claim counts before any engine reads the
+file, so a restart does not start it again, and a run that never finishes (a
+child of the worker's uid could kill the worker mid-job) still counts. Past 5
+claims the copies are refused without asking the engine. A file queued again
+while a run works starts again at 0. If the engine itself fails on the file inside the sidecar (its child
 crashed or ran past 300 s), or the request cannot be sent at all (over a
 cap), the copy is refused, as it is in the pod.
 
@@ -386,9 +402,11 @@ login. A subverted engine's copy is attacker-made bytes, such as a Flate
 stream that inflates to gigabytes, millions of strings or 100,000 pages, so
 every check runs in a child forked for it alone (`src/pdf/gate-isolated.ts`).
 The child has an empty environment, a 512 MiB heap, a watchdog that kills it
-past 768 MiB resident, and a 120 s deadline, and its process group is killed
-after it. A crash, a kill or a timeout means the copy is refused, never
-passed.
+past 768 MiB resident (384 MiB in the worker's own pod, which has less room),
+and a 120 s deadline, and its process group is killed after it. A crash, a
+kill or a timeout means the copy is refused, never passed; a child that ends
+because V8 ran out of heap is logged as memory. A child that passes and then
+exits non-zero or is killed is unfinished too.
 
 With `PDF_GATE_SOCKET`, that child runs in a sidecar of its own:
 `command: ["node", "--disable-sigusr1", "dist/pdf/gate-sidecar.js"]`
@@ -420,7 +438,8 @@ Without either socket (the in-pod mode) the worker forks the same capped
 child itself. This is the pre-sidecar mode only: the child is still the
 worker's uid, beside its login. With `PDF_ENGINE_SOCKET` set,
 `PDF_GATE_SOCKET` is required, in another directory, or the worker refuses to
-start.
+start. Once `UNTRUSTED_PDF_READY` is true, the worker refuses to start
+without both sockets, so the in-pod mode cannot read an uploaded PDF.
 
 Besides withheld text (`src/pdf/gate.ts`), the gate re-checks the
 sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
@@ -451,8 +470,13 @@ grey, which is its own blur and so may come through unchanged.
 
 What fc's manifest gives the gate container: what the engine's gets, with
 uid and gid 10004, its own emptyDir at `/run/pdf-gate` (never mounted in the
-engine), limits of 1 CPU and 1Gi, `args: ["node", "dist/pdf/gate-sidecar.js"]`,
-and in the worker `PDF_GATE_SOCKET=/run/pdf-gate/gate.sock`.
+engine), limits of 1 CPU and 1Gi,
+`command: ["node", "--disable-sigusr1", "dist/pdf/gate-sidecar.js"]` and no
+`args` (so node is PID 1), and in the worker
+`PDF_GATE_SOCKET=/run/pdf-gate/gate.sock`. Both emptyDirs are
+`medium: Memory` with a 16Mi `sizeLimit`; their pages count against the
+memory of the container that writes them. No HEALTHCHECK or exec probe runs
+in either sidecar: any process exec'd into its namespace makes it exit 1.
 
 ### The api-gate check
 

@@ -9,6 +9,18 @@ import { M1_CASES, plainCopy, rawPdf, rawStream } from '../../test/pdf/shadows.j
 import { structureBreak } from './pdf-structure.js';
 import { redactPdf } from './redact.js';
 
+/** The bytes with `needle` replaced, every xref offset and startxref at or after it moved: the one xref table still lands on each object. */
+function spliced(bytes: Uint8Array, needle: string, replacement: string): Uint8Array {
+  const text = Buffer.from(bytes).toString('latin1');
+  const at = text.indexOf(needle);
+  const by = replacement.length - needle.length;
+  const moved = (offset: string): string => (Number(offset) >= at ? String(Number(offset) + by).padStart(offset.length, '0') : offset);
+  const out = (text.slice(0, at) + replacement + text.slice(at + needle.length))
+    .replace(/^(\d{10}) 00000 n $/gm, (_, offset: string) => `${moved(offset)} 00000 n `)
+    .replace(/startxref\n(\d+)/, (_, offset: string) => `startxref\n${moved(offset)}`);
+  return new Uint8Array(Buffer.from(out, 'latin1'));
+}
+
 const ONE_PAGE: Parameters<typeof rawPdf>[0] = [
   [1, '<< /Type /Catalog /Pages 2 0 R >>'],
   [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'],
@@ -40,6 +52,30 @@ describe('structureBreak', () => {
     expect(await structureBreak(rawPdf(ONE_PAGE, { prev: true }))).toBe('its trailer has more than /Size and /Root');
     expect(await structureBreak(rawPdf(ONE_PAGE, { shift: { object: 4, by: 3 } }))).toBe('the xref entry for object 4 does not land on it');
     expect(await structureBreak(rawPdf(ONE_PAGE, { omit: 5 }))).toBe('object 5 is not in the xref');
+  });
+
+  it('refuses a trailer between the objects, whose /Info, /Encrypt or /ID pdf-lib keeps and a viewer never reads', async () => {
+    const between = (trailer: string): Uint8Array => spliced(rawPdf(ONE_PAGE), '4 0 obj', `${trailer}4 0 obj`);
+    expect(await structureBreak(between('\n'))).toBeNull();
+    for (const key of ['/Info 5 0 R', '/Encrypt 5 0 R', '/ID [<00> <00>]']) {
+      expect(await structureBreak(between(`trailer\n<< ${key} >>\n`)), key).toBe('pdf-lib takes another trailer');
+    }
+  });
+
+  it('refuses an object only pdf-lib reads (its header split by a comment), even when the count matches one only a viewer reads (in stream data, which the xref names)', async () => {
+    const hidden = '7 0 obj\n<< /S /JavaScript /JS (app.alert(1)) >>\nendobj\n';
+    const made = rawPdf([...ONE_PAGE, [6, '<< /S /JavaScript /JS (app.alert(2)) >>'], [8, rawStream('', `pad\n${hidden}`)]], { omit: 6 });
+    const text = Buffer.from(made).toString('latin1');
+    const listed = text.replace(/(xref\n0 9\n(?:.{19}\n){7})0000000000 65535 f \n/, (_, head: string) => `${head}${String(text.indexOf(hidden)).padStart(10, '0')} 00000 n \n`);
+    const both = spliced(new Uint8Array(Buffer.from(listed, 'latin1')), '6 0 obj', '6 %\n0 obj');
+    expect(await structureBreak(both)).toBe('object 6 is not defined at the top level');
+    // Each alone: only pdf-lib's object 6, or only the viewer's object 7 (and 6 plainly, which the xref omits).
+    expect(await structureBreak(spliced(rawPdf([...ONE_PAGE, [6, '<< /S /JavaScript /JS (app.alert(2)) >>']], { omit: 6 }), '6 0 obj', '6 %\n0 obj'))).toBe('object 6 is not defined at the top level');
+    const viewers = rawPdf([...ONE_PAGE, [8, rawStream('', `pad\n${hidden}`)]]);
+    const shown = Buffer.from(viewers).toString('latin1');
+    const named = shown.replace(/(xref\n0 9\n(?:.{19}\n){7})0000000000 65535 f \n/, (_, head: string) => `${head}${String(shown.indexOf(hidden)).padStart(10, '0')} 00000 n \n`);
+    expect(await structureBreak(new Uint8Array(Buffer.from(named, 'latin1')))).toBe('pdf-lib does not read every definition');
+    expect(await structureBreak(new Uint8Array(Buffer.from(listed, 'latin1')))).toBe('object 6 is not in the xref');
   });
 
   it('refuses object streams and xref streams, which the sanitizer never writes, and bytes it cannot read', async () => {

@@ -7,7 +7,8 @@ import { GATE_CHILD_SOURCE, NODE_FLAGS } from '../../test/helpers/sidecar.js';
 import { RetryableEngineError } from './regenerate.js';
 import { RERUN_REASONS, RERUN_REFUSAL } from './rerun.js';
 import { startSidecar } from './sidecar.js';
-import { WORKER_ROLE, createWorkerPool, runWorker, workerPoolConfig, workerRedact } from './worker.js';
+import { UNTRUSTED_PDF_READY } from './untrusted.js';
+import { IN_POD_GATE_MAX_RSS_BYTES, WORKER_ROLE, createWorkerPool, runWorker, workerPoolConfig, workerRedact } from './worker.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
 
@@ -130,6 +131,32 @@ describe('workerRedact: the engine and the gate the worker uses, chosen by PDF_E
     } finally {
       await engine.close();
     }
+  });
+
+  it('caps the in-pod gate child at IN_POD_GATE_MAX_RSS_BYTES (384 MiB), well under the worker\'s 768Mi, so its watchdog fires before the kernel (S5)', async () => {
+    expect(IN_POD_GATE_MAX_RSS_BYTES).toBe(384 * 1024 * 1024);
+    // A spy stands in for /proc: the child (hang) uses no memory. Over the cap, the watchdog kills it at
+    // once; under a larger cap it would run to its 5 s deadline.
+    const over = () => IN_POD_GATE_MAX_RSS_BYTES + 1;
+    const t0 = Date.now();
+    expect(await workerRedact({}, { engine: child('echo'), gateChild: gateChild('hang'), gateChildTimeoutMs: 5_000, gateRss: over })(ONE, { quotes: [], redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: RERUN_REASONS.unfinished,
+    });
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    const under = () => IN_POD_GATE_MAX_RSS_BYTES;
+    expect((await workerRedact({}, { engine: child('echo'), gateChild: gateChild('pass'), gateRss: under })(ONE, { quotes: [], redactsAny: true })).kind).toBe('redacted');
+  });
+
+  it('once UNTRUSTED_PDF_READY is true, refuses to start without both sockets: untrusted PDFs are parsed only in the sidecars (S6)', () => {
+    const sockets = { PDF_ENGINE_SOCKET: '/run/pdf-engine/engine.sock', PDF_GATE_SOCKET: '/run/pdf-gate/gate.sock' };
+    expect(() => workerRedact({}, { ready: true })).toThrow('UNTRUSTED_PDF_READY is true: the worker parses PDFs only in the sidecars; set PDF_ENGINE_SOCKET and PDF_GATE_SOCKET');
+    expect(() => workerRedact({ PDF_GATE_SOCKET: sockets.PDF_GATE_SOCKET }, { ready: true })).toThrow('UNTRUSTED_PDF_READY is true');
+    expect(() => workerRedact(sockets, { ready: true })).not.toThrow();
+    // Today the flag is false, and the in-pod mode still starts.
+    expect(UNTRUSTED_PDF_READY).toBe(false);
+    expect(() => workerRedact({}, {})).not.toThrow();
+    expect(() => runWorker({ env: { PGHOST: '127.0.0.1', PGPORT: '1' }, ready: true, intervalMs: 3_600_000 })).toThrow('UNTRUSTED_PDF_READY is true');
   });
 
   it('refuses PDF_ENGINE_SOCKET without PDF_GATE_SOCKET, or either outside its directory, and so does runWorker, before it opens a pool', () => {

@@ -24,7 +24,11 @@
 #      in the gate sidecar), and the gate sidecar refuses a marked copy: the
 #      real children, each unable to start a process (prlimit, no-fork.ts);
 #   5. a stranger, uid 10005 without the group, is refused at both sockets;
-#   6. SIGTERM stops each sidecar with exit 0.
+#   6. SIGTERM stops each sidecar with exit 0;
+#   7. node is non-dumpable (0711, fix round 3, S6): a process of the same uid
+#      opens another node process's /proc status, never its environ or mem.
+# The sidecars run with --no-healthcheck (N3): Kubernetes runs no HEALTHCHECK,
+# and any process exec'd into a sidecar's namespace makes it exit 1 (pidns.ts).
 # Everything it started is removed by recorded id or name, pass or fail.
 # ============================================================================
 set -eu
@@ -40,8 +44,9 @@ GATE_SOCK=/run/pdf-gate/gate.sock
 LOCKED='--read-only --cap-drop ALL --security-opt no-new-privileges --network none'
 AS_ENGINE="--user 10002:10002 --group-add 10003 -v $engine_vol:/run/pdf-engine"
 AS_GATE="--user 10004:10004 --group-add 10003 -v $gate_vol:/run/pdf-gate"
-# As fc's manifest's `command` runs each sidecar: node is the entrypoint, so it is PID 1.
-AS_PID1='--entrypoint node'
+# As fc's manifest's `command` runs each sidecar: node is the entrypoint, so it is PID 1; and no
+# HEALTHCHECK, which docker would exec inside it (N3).
+AS_PID1='--no-healthcheck --entrypoint node'
 
 cleanup() {
   for id in $engine $gate; do
@@ -171,3 +176,27 @@ for id in "$engine" "$gate"; do
   [ "$code" = 0 ] || { echo "smoke-sidecar: exit ${code} after SIGTERM" >&2; exit 1; }
 done
 echo "smoke-sidecar: both stopped on SIGTERM (exit 0)"
+
+# 7. node is non-dumpable: a node process of the same uid (10001) cannot open another's environ or mem.
+PEEK=$(cat <<'EOF'
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const target = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { stdio: 'ignore', env: { SMOKE_CANARY: 'smoke-not-a-secret' } });
+const open = (file) => {
+  try {
+    fs.closeSync(fs.openSync(`/proc/${target.pid}/${file}`, 'r'));
+    return 'open';
+  } catch (error) {
+    return error.code;
+  }
+};
+target.once('spawn', () => setTimeout(() => {
+  console.log(`status=${open('status')} environ=${open('environ')} mem=${open('mem')}`);
+  target.kill('SIGKILL');
+}, 500));
+EOF
+)
+# shellcheck disable=SC2086
+dump=$(docker run --rm $LOCKED --user 10001:10001 --entrypoint node "$IMAGE_UNDER_TEST" -e "$PEEK")
+echo "smoke-sidecar: a node process of the same uid: $dump"
+[ "$dump" = "status=open environ=EACCES mem=EACCES" ] || { echo "smoke-sidecar: node is not non-dumpable" >&2; exit 1; }

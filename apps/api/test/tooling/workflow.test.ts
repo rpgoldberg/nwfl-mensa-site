@@ -77,6 +77,9 @@ describe('api workflow', () => {
       expect(smoke, needed).toContain(needed);
     }
     expect(smoke).not.toContain("'is PID 1'");
+    // Fix round 3: no HEALTHCHECK runs in a sidecar (an exec'd process makes it exit 1, N3), and node is non-dumpable (S6).
+    expect(smoke).toContain("AS_PID1='--no-healthcheck --entrypoint node'");
+    expect(smoke).toContain('[ "$dump" = "status=open environ=EACCES mem=EACCES" ]');
   });
 
   it('checks the protos against the base commit, with the whole history at hand', () => {

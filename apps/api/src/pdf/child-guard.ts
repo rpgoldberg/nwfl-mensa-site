@@ -3,6 +3,11 @@
 // child (`--import`, no-fork.ts), so it runs before the child's own module
 // and before the child is given anything to parse.
 //
+//   0. Checks its own oom_score_adj is 1000 (fix round 3, S5), so when a
+//      pod's memory runs out the kernel takes this child, never the sidecar
+//      or the worker. Its parent starts it through choom, which sets it
+//      (no-fork.ts viaChoom): node cannot, being non-dumpable in the image.
+//      A child without it is ended (exit 1), and its copy is refused.
 //   1. Starts the libuv thread pool (one fs call) and loads node:tls (Node
 //      reads its CA certificates on a thread of its own when tls first
 //      loads; the real children load it, measured), so every thread the
@@ -20,11 +25,12 @@
 // tests).
 // ============================================================================
 import { spawnSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
 import process from 'node:process';
 
 const gone = (): never => process.exit(1);
 process.once('disconnect', gone);
+if (readFileSync('/proc/self/oom_score_adj', 'utf8').trim() !== '1000') gone();
 await import('node:tls');
 await fs.stat('/');
 await new Promise<void>((resolve) => {

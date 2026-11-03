@@ -21,7 +21,11 @@
 //
 // Fix round 2 (M2): an unfinished outcome says why the child was stopped
 // (cause: memory, deadline, signal, crash or no-fork), so a test can tell a
-// watchdog kill from a deadline kill.
+// watchdog kill from a deadline kill. Fix round 3: a child that ends after
+// V8 says its heap ran out is "memory" too (N1); its stderr reaches the log
+// only up to CHILD_LOG_BYTES, and its stdout not at all (S2, isolated.ts
+// relayChildLog). The in-pod worker passes a smaller cap (worker.ts,
+// IN_POD_GATE_MAX_RSS_BYTES, S5).
 //
 // Anything but a well-formed verdict (a crash, a kill, a timeout, a reply
 // that is not a verdict) is "unfinished": no pass, so a refused copy, never a
@@ -33,8 +37,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { type CheckedCopy, GATE_CODES, type GateCode, type GateVerdict, MAX_OUTPUT_BYTES } from './engine-protocol.js';
 import type { ImageAction } from './images.js';
-import { engineExecArgv, killGroup } from './isolated.js';
-import { type LimitForks, guardFlag, isGuardMessage, limitForks, watchGuard } from './no-fork.js';
+import { engineExecArgv, killGroup, relayChildLog } from './isolated.js';
+import { type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
 
 /** The built child next to this module (dist/pdf/gate-child.js). */
 export const GATE_CHILD = fileURLToPath(new URL('./gate-child.js', import.meta.url));
@@ -80,7 +84,12 @@ export interface IsolatedGateOptions {
   limit?: LimitForks;
   /** How the child's resident memory is read (default rssOf); a spy, for tests. */
   rss?: (pid: number) => number;
+  /** Where the child's stderr goes, capped (default this process's stderr); a spy, for tests. */
+  log?: (chunk: Buffer) => void;
 }
+
+/** How long a child that ended on its own is given to finish its stderr, where V8 says its heap ran out (N1). */
+const LOG_GRACE_MS = 1_000;
 
 const unfinished = (cause: UnfinishedCause): GateOutcome => ({ verdict: { pass: false, code: 'unfinished' }, sha256: null, cause });
 
@@ -135,7 +144,8 @@ export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) 
         return;
       }
       const execArgv = gateExecArgv(process.execArgv, options.nodeFlags, options.guard);
-      const child = fork(options.module ?? GATE_CHILD, [], { env: {}, execArgv, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'], detached: true });
+      const child = fork(options.module ?? GATE_CHILD, [], { env: {}, ...viaChoom(execArgv), serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'], detached: true });
+      const log = relayChildLog(child.stderr, options.log);
       let answer: GateOutcome | undefined;
       let settled = false;
       let cause: UnfinishedCause | undefined;
@@ -175,7 +185,19 @@ export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) 
       // A child killed for its deadline, its memory or the signal may have answered first: no answer then.
       child.once('exit', (code, killedBy) => {
         const done = cause === undefined && code === 0 && killedBy === null && answer !== undefined && answer.cause === undefined;
-        settle(done ? (answer as GateOutcome) : unfinished(cause ?? 'crash'));
+        if (done || cause !== undefined) {
+          settle(done ? (answer as GateOutcome) : unfinished(cause as UnfinishedCause));
+          return;
+        }
+        // It ended on its own: V8's heap-out-of-memory line, if any, may still be in its stderr (N1).
+        let grace: NodeJS.Timeout | undefined;
+        const waited = new Promise<void>((resolve) => {
+          grace = setTimeout(resolve, LOG_GRACE_MS);
+        });
+        void Promise.race([log.ended, waited]).then(() => {
+          clearTimeout(grace);
+          settle(unfinished(log.heapOutOfMemory() ? 'memory' : 'crash'));
+        });
       });
       child.once('error', () => settle(unfinished('crash')));
     });

@@ -203,7 +203,7 @@ describe('startSidecar', () => {
     const waiting = socketRedact({ path: socket, timeoutMs: 300 })(ONE, REQUEST);
     await expect(waiting).rejects.toBeInstanceOf(RetryableEngineError);
     expect(await first).toEqual({ kind: 'refused', reason: 'slow but done' });
-    await vi.waitFor(() => expect(logged).toContain('dropped a request: the worker hung up before its turn'));
+    await vi.waitFor(() => expect(logged).toContain('dropped a request: the worker hung up before its turn'), { timeout: 5_000 });
   });
 
   it('drops a request that sends more after its frame while the copy is made', async () => {

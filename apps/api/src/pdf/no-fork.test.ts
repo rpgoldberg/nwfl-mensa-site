@@ -1,12 +1,14 @@
 // The no-fork guard's parent side (UNTRUSTED-PDF-GATE M1, fix round 2). The handshake runs on a
 // made-up child here; isolated.test.ts and gate-isolated.test.ts run it through real children, and the
 // lift tests show, in a capped container, that a child's spawn and fork fail with EAGAIN.
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, fork, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { BLOCKED, CHILD_GUARD, PRLIMIT, guardFlag, isGuardMessage, limitForks, watchGuard } from './no-fork.js';
+import { BLOCKED, CHILD_GUARD, CHILD_OOM_SCORE_ADJ, CHOOM, PRLIMIT, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
+import { NODE_FLAGS } from '../../test/helpers/sidecar.js';
 
 /** A made-up child: messages in, what the parent sent out. */
 function fakeChild(pid: number | null = 4242): { child: ChildProcess; sent: unknown[]; say: (message: unknown) => void } {
@@ -84,6 +86,31 @@ describe('watchGuard: the job goes to the child only once its limit holds', () =
     gone.say({ guard: 'ready' });
     await tick();
     expect(gone.sent).toEqual([]);
+  });
+});
+
+describe('viaChoom and the guard\'s oom_score_adj check (fix round 3, S5)', () => {
+  it('starts node through util-linux choom by absolute path with oom_score_adj 1000, then the flags', () => {
+    expect(CHOOM).toBe('/usr/bin/choom');
+    expect(CHILD_OOM_SCORE_ADJ).toBe(1000);
+    expect(viaChoom(['--max-old-space-size=512', '--import=file:///g.js'])).toEqual({ execPath: CHOOM, execArgv: ['-n', '1000', '--', process.execPath, '--max-old-space-size=512', '--import=file:///g.js'] });
+  });
+
+  it('ends a child started without it before it says ready, and lets one started through choom say ready', async () => {
+    const started = (options: { execPath?: string; execArgv: string[] }): Promise<{ code: number | null; ready: boolean }> =>
+      new Promise((resolve) => {
+        const child = fork(fileURLToPath(new URL('../../test/pdf/children/hang.ts', import.meta.url)), [], { env: {}, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], ...options });
+        let ready = false;
+        child.on('message', (message) => {
+          if ((message as { guard?: string }).guard !== 'ready') return;
+          ready = true;
+          child.kill('SIGKILL');
+        });
+        child.once('exit', (code) => resolve({ code, ready }));
+      });
+    // Unless this process's own score is already 1000, which a child would inherit.
+    if (readFileSync('/proc/self/oom_score_adj', 'utf8').trim() !== '1000') expect(await started({ execArgv: [...NODE_FLAGS, guardFlag()] })).toEqual({ code: 1, ready: false });
+    expect((await started(viaChoom([...NODE_FLAGS, guardFlag()]))).ready).toBe(true);
   });
 });
 

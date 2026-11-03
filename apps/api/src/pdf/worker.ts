@@ -26,8 +26,17 @@ import { type Gate, withGateRerun } from './rerun.js';
 import { socketRedact, workerSockets } from './socket-engine.js';
 import { socketGate } from './socket-gate.js';
 import { type TenantGate, type TenantGateOptions, policyTenants, startTenantGate } from '../tenant.js';
+import { UNTRUSTED_PDF_READY } from './untrusted.js';
 
 export const WORKER_ROLE = 'nwfl_worker';
+
+/**
+ * The in-pod gate child's memory cap (fix round 3, S5): well under the worker container's 768Mi limit
+ * (fc's manifest), so the watchdog stops a check for memory before the kernel's OOM killer acts in the
+ * worker's cgroup (and the guard's oom_score_adj 1000 makes the kernel take the child if it does). The
+ * gate sidecar keeps GATE_MAX_RSS_BYTES in its own 1Gi container.
+ */
+export const IN_POD_GATE_MAX_RSS_BYTES = 384 * 1024 * 1024;
 
 /** The worker's pool settings; throws unless they connect as nwfl_worker. */
 export function workerPoolConfig(env: Env): pg.PoolConfig {
@@ -68,15 +77,24 @@ export interface EngineOptions {
   gateNodeFlags?: readonly string[];
   gateChildTimeoutMs?: number;
   gateMaxRssBytes?: number;
+  /** How the in-pod gate child's memory is read; a spy, for tests. */
+  gateRss?: (pid: number) => number;
+  /** UNTRUSTED_PDF_READY (default the flag itself); injected, for tests only. */
+  ready?: boolean;
 }
 
 /**
  * The engine the worker makes copies with, and the gate that checks each copy: the sidecars when
  * PDF_ENGINE_SOCKET (and so PDF_GATE_SOCKET) is set, else the in-pod children. Throws for a socket
- * outside its directory, PDF_ENGINE_SOCKET without PDF_GATE_SOCKET, or both in one directory.
+ * outside its directory, PDF_ENGINE_SOCKET without PDF_GATE_SOCKET, or both in one directory; and,
+ * once UNTRUSTED_PDF_READY is true, without both sockets (fix round 3, S6): the in-pod children run
+ * as the worker's uid, beside its database login, so they are the pre-sidecar mode only.
  */
 export function workerRedact(env: Env, options: EngineOptions): Redact {
   const sockets = workerSockets(env, { engineDirs: options.socketDirs, gateDirs: options.gateSocketDirs });
+  if ((options.ready ?? UNTRUSTED_PDF_READY) && (sockets.engine === undefined || sockets.gate === undefined)) {
+    throw new Error('UNTRUSTED_PDF_READY is true: the worker parses PDFs only in the sidecars; set PDF_ENGINE_SOCKET and PDF_GATE_SOCKET');
+  }
   const engine =
     options.redact ??
     (sockets.engine === undefined
@@ -88,7 +106,8 @@ export function workerRedact(env: Env, options: EngineOptions): Redact {
           ...(options.gateChild === undefined ? {} : { module: options.gateChild }),
           ...(options.gateNodeFlags === undefined ? {} : { nodeFlags: options.gateNodeFlags }),
           ...(options.gateChildTimeoutMs === undefined ? {} : { timeoutMs: options.gateChildTimeoutMs }),
-          ...(options.gateMaxRssBytes === undefined ? {} : { maxRssBytes: options.gateMaxRssBytes }),
+          maxRssBytes: options.gateMaxRssBytes ?? IN_POD_GATE_MAX_RSS_BYTES,
+          ...(options.gateRss === undefined ? {} : { rss: options.gateRss }),
         })
       : socketGate({ path: sockets.gate, ...(options.gateTimeoutMs === undefined ? {} : { timeoutMs: options.gateTimeoutMs }) });
   return withGateRerun(engine, gate);

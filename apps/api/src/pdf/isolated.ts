@@ -22,12 +22,15 @@
 //
 // pdf.js warns three times as it loads that the optional canvas is absent
 // (gate.ts); a child loads it once per copy, so the child drops exactly those
-// three lines (withoutCanvasWarnings). Everything else it writes, a crash
-// included, reaches the worker's log.
+// three lines (withoutCanvasWarnings). What it writes to stderr reaches the
+// worker's log up to CHILD_LOG_BYTES, a crash included; the rest, and all of
+// its stdout, is dropped (fix round 3, S2: a subverted child could fill the
+// container log, and the kubelet evicts the pod for it).
 // ============================================================================
 import { fork } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { type LimitForks, guardFlag, isGuardMessage, limitForks, watchGuard } from './no-fork.js';
+import { type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
 import type { RedactRequest, RedactResult } from './redact.js';
 import type { Redact } from './regenerate.js';
 
@@ -112,6 +115,54 @@ export interface IsolatedOptions {
   guard?: string;
   /** How the child's process limit is set (default prlimit); another, for tests. */
   limit?: LimitForks;
+  /** Where the child's stderr goes, capped (default this process's stderr); a spy, for tests. */
+  log?: (chunk: Buffer) => void;
+}
+
+/** How much of one child's stderr reaches the log (S2). */
+export const CHILD_LOG_BYTES = 64 * 1024;
+/** What V8 writes when a heap runs out, before it aborts (N1). */
+const HEAP_OOM = 'JavaScript heap out of memory';
+const DROPPED = "\n[the rest of this child's log is dropped]\n";
+
+/** A child's stderr, read to its end: whether V8 said its heap ran out, and when the stream is done. */
+export interface ChildLog {
+  ended: Promise<void>;
+  heapOutOfMemory(): boolean;
+}
+
+/**
+ * Reads a child's stderr to its end: the first `cap` bytes go to `write`, then one line saying the rest is
+ * dropped, and the rest is read and dropped, so the child never blocks on a full pipe and never fills the
+ * log. Notes V8's heap-out-of-memory line wherever it falls (N1).
+ */
+export function relayChildLog(stream: Readable | null, write: (chunk: Buffer) => void = (chunk) => void process.stderr.write(chunk), cap = CHILD_LOG_BYTES): ChildLog {
+  let left = cap;
+  let noted = false;
+  let tail = '';
+  let oom = false;
+  const ended = new Promise<void>((resolve) => {
+    if (stream === null) {
+      resolve();
+      return;
+    }
+    stream.on('data', (chunk: Buffer) => {
+      const part = chunk.subarray(0, left);
+      left -= part.length;
+      if (part.length > 0) write(part);
+      if (part.length < chunk.length && !noted) {
+        noted = true;
+        write(Buffer.from(DROPPED));
+      }
+      const text = tail + chunk.toString('latin1');
+      if (text.includes(HEAP_OOM)) oom = true;
+      tail = text.slice(-HEAP_OOM.length);
+    });
+    stream.once('end', resolve);
+    stream.once('close', resolve);
+    stream.once('error', resolve);
+  });
+  return { ended, heapOutOfMemory: () => oom };
 }
 
 /**
@@ -129,7 +180,8 @@ export function isolatedRedact(options: IsolatedOptions = {}): Redact {
         return;
       }
       const execArgv = [...engineExecArgv(process.execArgv), guardFlag(options.guard)];
-      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, execArgv, serialization: 'advanced', stdio: ['ignore', 'inherit', 'inherit', 'ipc'], detached: true });
+      const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, ...viaChoom(execArgv), serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'], detached: true });
+      relayChildLog(child.stderr, options.log);
       let reply: EngineReply | undefined;
       let late = false;
       let stopped = false;

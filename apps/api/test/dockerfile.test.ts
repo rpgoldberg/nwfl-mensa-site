@@ -83,6 +83,11 @@ describe('Dockerfile', () => {
     expect(dockerfile).not.toMatch(/licen[cs]e/i);
   });
 
+  it('makes node execute-only (0711) in the runtime stage, so every node process is non-dumpable: a child of the same uid cannot read its environment or memory (fix round 3, S6)', () => {
+    const runs = finalStage().join('\n');
+    expect(runs).toMatch(/&& \\\n\s+chmod 0711 \/usr\/local\/bin\/node && \\\n/);
+  });
+
   it('declares no VOLUME, so a read-only root filesystem needs no writable mount', () => {
     expect(lines.some((line) => /^VOLUME\s/.test(line))).toBe(false);
   });

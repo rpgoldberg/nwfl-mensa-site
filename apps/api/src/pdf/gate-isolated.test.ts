@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sha256Hex } from './engine-protocol.js';
 import { GATE_CHILD, GATE_HEAP_MB, GATE_MAX_RSS_BYTES, GATE_TIMEOUT_MS, gateExecArgv, isolatedGate, rssOf } from './gate-isolated.js';
+import { CHILD_LOG_BYTES } from './isolated.js';
 import { guardFlag } from './no-fork.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/gate-children/${name}.ts`, import.meta.url));
@@ -41,6 +42,22 @@ describe('isolatedGate', () => {
     expect(await isolatedGate({ module: child('bare') })(JOB)).toEqual(unfinished('crash'));
     expect(await isolatedGate({ module: child('oversize') })(JOB)).toEqual(unfinished('crash'));
     expect(await isolatedGate({ module: child('oversize') })({ ...JOB, quotes: ['text'] })).toEqual(unfinished('crash'));
+  });
+
+  it('says a child that ran out of V8 heap (a fatal line, then an abnormal exit) ran out of memory (N1)', async () => {
+    expect(await isolatedGate({ module: child('heapoom') })(JOB)).toEqual(unfinished('memory'));
+  });
+
+  it('logs at most CHILD_LOG_BYTES of a child\'s stderr and none of its stdout, and still takes its answer (S2)', async () => {
+    expect(CHILD_LOG_BYTES).toBe(64 * 1024);
+    const logged: Buffer[] = [];
+    const outcome = await isolatedGate({ module: child('noisy'), log: (chunk) => void logged.push(chunk) })(JOB);
+    expect(outcome.verdict).toEqual({ pass: true });
+    const text = Buffer.concat(logged).toString('latin1');
+    expect(text.startsWith('noisy-start ')).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(CHILD_LOG_BYTES + 100);
+    expect(text).toContain('the rest of this child\'s log is dropped');
+    expect(text).not.toContain('o'.repeat(64));
   });
 
   it('gives no pass for a child that passes and then exits 3, or passes and then is killed (S4)', async () => {
@@ -90,8 +107,10 @@ describe('isolatedGate', () => {
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     const out = path.join(dir, 'report.json');
     expect((await isolatedGate({ module: child('report') })({ ...JOB, quotes: [out] })).verdict).toEqual({ pass: true });
-    const report = JSON.parse(readFileSync(out, 'utf8')) as { env: string[]; execArgv: string[]; heapLimitMb: number; pid: number; limits: string };
+    const report = JSON.parse(readFileSync(out, 'utf8')) as { env: string[]; execArgv: string[]; heapLimitMb: number; pid: number; limits: string; oomScoreAdj: string };
     expect(report.env).toEqual([]);
+    // The kernel's OOM killer takes the child first, never the sidecar or the worker (S5).
+    expect(report.oomScoreAdj).toBe('1000');
     expect(report.execArgv).toContain('--max-old-space-size=512');
     expect(report.execArgv.at(-1)).toBe(guardFlag());
     expect(report.execArgv.join(' ')).not.toContain('--env-file');
