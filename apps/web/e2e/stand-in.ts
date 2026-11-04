@@ -75,21 +75,26 @@ export const ACCOUNTS = {
   refused: '00000000-0000-4000-8000-0000000000e5',
   lapsed: '00000000-0000-4000-8000-0000000000f6',
   'articles-down': '00000000-0000-4000-8000-0000000000a7',
+  stale: '00000000-0000-4000-8000-0000000000b8',
+  'officer-only': '00000000-0000-4000-8000-0000000000a9',
+  enrolee: '00000000-0000-4000-8000-0000000000c1',
+  'enrolee-pending': '00000000-0000-4000-8000-0000000000c2',
+  'lapsed-outsider': '00000000-0000-4000-8000-0000000000c4',
 };
 
 /**
  * A14: the newsletter's articles (api.mjs ARTICLES). The public article carries a members passage and a
  * members PDF; the members and officers articles are listed for the public too, in full, as a buggy API
  * might. A member sees the passage, the members article and the members PDF; nobody sees the officers
- * article on /news; the public sees none of it. A member's answer also carries redacted nodes, as the API
+ * article on /news; the public sees the members articles by title and summary only (D1 teasers), and none of the rest. A member's answer also carries redacted nodes, as the API
  * sends a member a privacy mark its members lens withholds: one beside the passage, one in the members
  * article, and a members article withheld whole (a lone redacted node), which a member sees by its title.
  */
 export const ARTICLES = {
   open: { title: 'A new home for the Wednesday lunch', plain: 'The new place has a quiet back room.', passage: 'MEMBERS PASSAGE CANARY: the side gate code is 4321.', publicPdf: 'e0f00000-0000-4000-8000-000000000001', membersPdf: 'e1f00000-0000-4000-8000-000000000001', sourcePdf: 'e3f00000-0000-4000-8000-000000000001' },
-  members: { title: 'Members picnic sign-up', body: 'MEMBERS ARTICLE CANARY: the picnic is at the north shelter.' },
+  members: { title: 'Members picnic sign-up', summary: 'Bring a dish to share.', body: 'MEMBERS ARTICLE CANARY: the picnic is at the north shelter.' },
   officers: { title: 'OFFICERS ARTICLE CANARY', body: 'OFFICERS BODY CANARY', pdf: 'e2f00000-0000-4000-8000-000000000003' },
-  withheld: { title: 'Members trip notes, withheld whole' },
+  withheld: { title: 'Members trip notes, withheld whole', summary: 'Notes from the trip.' },
 };
 
 /** A14: the members source files api.mjs lists before each members copy, to anyone but the public (api.mjs sourceOf): never linked. */

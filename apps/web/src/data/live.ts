@@ -7,9 +7,17 @@
 //
 // /news alone (A14: news() and file()) may be read as a signed-in reader, with
 // their token. The API decides what the token may see; the view here follows
-// the API's answer, never the session: a members copy, a members item, a
-// members passage or a members file only where the API sent it to that reader,
-// and never an officers item or file, or a source file, even to an officer.
+// the API's answer, gated by the session's nwfl enrolee claim (D4): a members
+// copy, a members item, a members passage or a members file only where the
+// API sent it to that reader, and never an officers item or file, or a source
+// file, even to an officer. D4 (11-03) with AC6 (b): the token goes only for
+// a session whose groups claim holds an nwfl enrolee group (Reader.enrolee,
+// src/lib/auth/bearer.ts: nwfl-users, or nwfl-members set by hand), and member
+// standing is the API's word, from its records; so the members view needs
+// both that claim and the API's answer as a member's. Any other session is
+// the public's view, with the box that says the account has no member access
+// (signing in again would not change it). An officers group alone is no
+// enrolee group.
 // Whether the API read the reader as a member is decided from its whole
 // answer, never item by item. A refused token is asked again once as the
 // public. Nothing is kept between calls: one reader's answer never reaches
@@ -46,8 +54,10 @@ export interface FileLink {
 
 /** A newsletter article on /news (A14). */
 export interface NewsItemView extends ItemView {
-  /** A members item: the page marks it so ("Members only, please don't forward"). */
+  /** A members item: the page marks it so ("Members only, please don't forward"), unless it is a teaser. */
   membersOnly: boolean;
+  /** A members item the reader may not read, by title and summary with the box alone (D1): nothing to forward. */
+  teaser?: true;
 }
 
 /** /news as one reader may have it (A14). */
@@ -96,7 +106,7 @@ export interface LiveData {
 }
 
 export interface LiveOptions {
-  /** D1: list members items to the public by title and summary, with the placeholder. Off: they are not listed at all. */
+  /** D1: list members items to the public by title and summary, with the box. Off: they are not listed at all. On in production (index.ts). */
   membersTeasers?: boolean;
 }
 
@@ -272,9 +282,13 @@ function newsItemViews(items: readonly ContentItem[], answer: Answer, signIn: st
     if (!shown) return [];
     const view: View = !answeredAsPublic ? 'members' : answer.reader ? 'signed-in-public' : 'public';
     const withheld = membersOnly && answeredAsPublic;
-    return [{ ...itemView(item, { view, signIn: view === 'public' ? signIn : undefined, withheld }), membersOnly }];
+    const shape = { ...itemView(item, { view, signIn: view === 'public' ? signIn : undefined, withheld }), membersOnly };
+    return [withheld ? { ...shape, teaser: true as const } : shape];
   });
 }
+
+/** D4: the reader whose token may go, only with the nwfl enrolee claim; anything but true is no. */
+const withEnroleeClaim = (reader: Reader | undefined): Reader | undefined => (reader?.enrolee === true ? reader : undefined);
 
 export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOptions = {}): LiveData {
   /** The articles, or undefined when the API could not give them: the issues, there before A14, never wait on them. */
@@ -326,7 +340,9 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
 
     news: async (given, { signIn } = {}) => {
       // A bearer the client would not send is no reader: the call goes as the public's, and is shaped so (S5a-1).
-      const as = sendable(given);
+      const reader = sendable(given);
+      // D4: and the token goes only with the nwfl enrolee claim; without it the reader is shown the public's view.
+      const as = withEnroleeClaim(reader);
       let lists: [ContentItem[], ContentItem[] | undefined];
       let tokenRefused = false;
       try {
@@ -338,7 +354,7 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
       }
       const signedIn = as !== undefined && !tokenRefused;
       const [documents, listed] = lists;
-      const answer = { reader: as !== undefined, signedIn, member: signedIn && answeredAsMember([documents, listed ?? []]) };
+      const answer = { reader: reader !== undefined, signedIn, member: signedIn && answeredAsMember([documents, listed ?? []]) };
       return {
         issues: issueList(documents, signedIn),
         items: newsItemViews(listed ?? [], answer, signIn, membersTeasers),
@@ -351,7 +367,7 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
 
     file: async (id, given) => {
       if (!UUID.test(id)) return { kind: 'not_found' };
-      const as = sendable(given);
+      const as = withEnroleeClaim(sendable(given));
       if (as === undefined) return reads.readFile(id);
       try {
         return await reads.readFile(id, as);

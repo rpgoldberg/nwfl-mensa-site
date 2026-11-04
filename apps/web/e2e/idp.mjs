@@ -1,6 +1,6 @@
 // @ts-check
 // A local OpenID provider for the e2e suite only (oidc-provider), standing in
-// for the club's Authentik: never a shared host. It knows seven made-up
+// for the club's Authentik: never a shared host. It knows twelve made-up
 // people, requires PKCE, takes the client secret in the body
 // (client_secret_post), puts name and groups in the ID token as Authentik does,
 // and offers RP-initiated logout. Consent is skipped for the one client, as a
@@ -43,6 +43,15 @@ const LOGINS = {
   refused: { id: '00000000-0000-4000-8000-0000000000e5', name: 'Riley Testcase', groups: ['nwfl-members'] },
   lapsed: { id: '00000000-0000-4000-8000-0000000000f6', name: 'Quinn Example', groups: ['nwfl-members'], tokenSeconds: 20 },
   'articles-down': { id: '00000000-0000-4000-8000-0000000000a7', name: 'Morgan Example', groups: ['nwfl-members'] },
+  // D4: member standing in the API's records, but no members group in the claim (a stale or missing group).
+  stale: { id: '00000000-0000-4000-8000-0000000000b8', name: 'Avery Sample', groups: [] },
+  // D4: the officers group alone, without the members group: the site does not read it as a member's.
+  'officer-only': { id: '00000000-0000-4000-8000-0000000000a9', name: 'Drew Example', groups: ['nwfl-officers'] },
+  // AC6 (b): every enrolee is in nwfl-users alone; standing lives only in the API's records (member here, pending next).
+  enrolee: { id: '00000000-0000-4000-8000-0000000000c1', name: 'Sam Sample', groups: ['nwfl-users'] },
+  'enrolee-pending': { id: '00000000-0000-4000-8000-0000000000c2', name: 'Robin Example', groups: ['nwfl-users'] },
+  // No enrolee group and a token that lapses at once: never told to sign in again for members reading.
+  'lapsed-outsider': { id: '00000000-0000-4000-8000-0000000000c4', name: 'Jamie Placeholder', groups: ['nwfl-officers'], tokenSeconds: 20 },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

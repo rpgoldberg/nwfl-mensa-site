@@ -43,7 +43,9 @@ export default defineConfig({
         SITE_OIDC_ISSUER: REDACTION.idpUrl,
         SITE_OIDC_JWKS_URL: `${REDACTION.idpUrl}/jwks`,
         IDP_CA_FILE: tls.caFile,
-        MEMBER_SUB: ACCOUNTS.member,
+        // AC6 (b): standing in the API's records; the enrolees' claims hold nwfl-users alone (e2e/idp.mjs).
+        MEMBER_SUBS: [ACCOUNTS.member, ACCOUNTS.enrolee].join(','),
+        PENDING_SUBS: ACCOUNTS['enrolee-pending'],
       },
       timeout: 180_000,
       // Lets it stop the API and drop its database.

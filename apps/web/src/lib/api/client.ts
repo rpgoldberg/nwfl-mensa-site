@@ -57,6 +57,12 @@ export class ApiTokenRefused extends Error {
 /** A signed-in reader, by their access token (src/lib/auth/bearer.ts). Only the news reads take one. */
 export interface Reader {
   bearer: string;
+  /**
+   * D4 with AC6 (b): the session's groups claim holds an nwfl enrolee group (nwfl-users or nwfl-members,
+   * under the configured prefix: server/session.mjs). The site sends the token only when it does
+   * (src/data/live.ts); absent is no. This client never reads it.
+   */
+  enrolee?: boolean;
 }
 
 // RFC 6750 b64token, the one form the API reads (apps/api/src/auth/caller.ts): anything else is not sent at all.

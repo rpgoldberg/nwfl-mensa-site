@@ -109,6 +109,30 @@ describe('newSession with a chapter group prefix (CF-ISO-0)', () => {
   });
 });
 
+describe('newSession: the nwfl enrolee claim (AC6 b, D4)', () => {
+  it('is an enrolee with nwfl-users (every enrolee) or nwfl-members (an account set by hand), under the configured prefix', () => {
+    const cases: [string[], string | undefined, boolean][] = [
+      [['nwfl-users'], undefined, true],
+      [['nwfl-members'], undefined, true],
+      [['nwfl-users', 'nwfl-officers'], undefined, true],
+      [['mensa-nwfl-users'], 'mensa-nwfl-', true],
+      [['mensa-nwfl-members'], 'mensa-nwfl-', true],
+      [['nwfl-officers'], undefined, false],
+      [['nwfl-officers', 'nwfl-office-president'], undefined, false],
+      [['nwfl-pending'], undefined, false],
+      [[], undefined, false],
+      [['nwfl-users', 'nwfl-members'], 'mensa-nwfl-', false],
+      [['mensa-other-users'], 'mensa-nwfl-', false],
+    ];
+    for (const [groups, prefix, enrolee] of cases) expect(newSession(claims(groups), NOW, prefix).enrolee, `${JSON.stringify(groups)} ${prefix}`).toBe(enrolee);
+  });
+
+  it('leaves member as the members group alone: nwfl-users is an enrolee, not a member by its claim', () => {
+    expect(newSession(claims(['nwfl-users']), NOW)).toMatchObject({ enrolee: true, member: false, officer: false, sliding: true });
+    expect(newSession(claims(['nwfl-officers']), NOW)).toMatchObject({ enrolee: false, member: false, officer: true });
+  });
+});
+
 describe('the session cookie', () => {
   it('is host-only, httpOnly and Lax, for as long as the session lasts', () => {
     const s = newSession(claims(['nwfl-members']), NOW);

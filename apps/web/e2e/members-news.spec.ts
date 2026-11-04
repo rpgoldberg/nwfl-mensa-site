@@ -10,6 +10,15 @@
 // forwarding one would fail here. A member's answer carries redacted nodes as
 // well (a privacy mark the API withholds from members): the page still reads
 // the whole answer as a member's, and says only that a part is not shown.
+// D1 (11-03): the public, and any reader without member access, sees each
+// members article by title and summary with a "Members only, sign in to read"
+// box, never its body or files. D4 with AC6 (b): the members view needs an
+// nwfl enrolee group in the session's claim (nwfl-users, or nwfl-members set
+// by hand) AND member standing in the API's records ("enrolee" has both). A
+// session with no enrolee group is the public's view, whatever the records
+// say: its token is never sent ("stale", "officer-only"), and a lapsed token
+// there is not called expired ("lapsed-outsider"). Pending standing with the
+// group is the public's view too ("enrolee-pending").
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
@@ -29,8 +38,11 @@ const NO_ACCESS = 'Your account does not have member access yet.';
 const [current, ...past] = NEWSLETTER.issues;
 const pdf = (id: string) => `/documents/${id}.pdf`;
 const MEMBERS_IDS = [...NEWSLETTER.issues.map((i) => i.membersPdf), ARTICLES.open.membersPdf];
-/** What only a member may see on /news, and what nobody may. */
-const MEMBERS_TEXT = [ARTICLES.open.passage, ARTICLES.members.body, ARTICLES.members.title, ARTICLES.withheld.title, NOT_SHOWN];
+/** What only a member may see on /news, and what nobody may. The members articles' titles and summaries are public teasers (D1). */
+const MEMBERS_TEXT = [ARTICLES.open.passage, ARTICLES.members.body, NOT_SHOWN];
+const TEASERS = [ARTICLES.members, ARTICLES.withheld];
+const TEASER_BOX = 'Members only, sign in to read.';
+const TEASER_NO_ACCESS = 'Members only. Your account does not have member access yet.';
 const NEVER = [ARTICLES.officers.title, ARTICLES.officers.body, ARTICLES.officers.pdf, NEWSLETTER.membersOnly.title, ...SOURCE_PDFS];
 
 async function axe(page: Page): Promise<string[]> {
@@ -231,6 +243,111 @@ test('articles the API cannot give leave the issues listed, members copies too, 
   await expect(page.getByRole('note').filter({ hasText: 'The list of articles is temporarily unavailable.' })).toBeVisible();
   await expect(page.getByText('The list of issues is temporarily unavailable.')).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'From the newsletter' })).toHaveCount(0);
+});
+
+/** D1: each members article is a teaser, by title and summary with the box, never the rule not to forward it, nor a file. */
+async function teasers(page: Page, box: string, link: { name: string; href: string }) {
+  for (const t of TEASERS) {
+    const item = page.getByRole('article').filter({ hasText: t.title });
+    await expect(item.getByRole('heading', { level: 3 })).toHaveText(t.title);
+    await expect(item).toContainText(t.summary);
+    const note = item.locator('.members-note');
+    await expect(note).toHaveText(link.name === 'sign in' ? box : `${box} ${link.name}`);
+    await expect(note.getByRole('link', { name: link.name, exact: true })).toHaveAttribute('href', link.href);
+    await expect(item.getByText(RULE)).toHaveCount(0);
+    await expect(item.getByRole('link', { name: /PDF/ })).toHaveCount(0);
+  }
+}
+
+test('anonymous: each members article by title and summary, with a box and a real sign-in link (D1); the page is the same for every anonymous reader, and public', async ({ page, playwright, baseURL }) => {
+  const res = await page.goto('/news');
+  await teasers(page, TEASER_BOX, { name: 'sign in', href: '/sign-in?return=%2Fnews&again=1' });
+  const html = await res!.text();
+  expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, RULE.replace("'", '&#39;'), RULE])).toEqual([]);
+  expect(res?.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
+  expect(res?.headers()['cdn-cache-control']).toBeUndefined();
+  const others = await Promise.all([0, 1].map(async () => {
+    const ctx = await playwright.request.newContext({ baseURL: baseURL!, ignoreHTTPSErrors: true });
+    const got = await newsHtml(ctx);
+    await ctx.dispose();
+    return got;
+  }));
+  for (const other of others) {
+    expect(other.html).toBe(html);
+    expect(other.headers['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
+  }
+  // The sign-in link looks like a link (underlined, bold), in text large enough to read.
+  const link = page.getByRole('article').filter({ hasText: ARTICLES.members.title }).getByRole('link', { name: 'sign in', exact: true });
+  const style = await link.evaluate((a) => ({ line: getComputedStyle(a).textDecorationLine, weight: getComputedStyle(a).fontWeight, size: getComputedStyle(a).fontSize }));
+  expect(style.line).toContain('underline');
+  expect(Number(style.weight)).toBeGreaterThanOrEqual(700);
+  expect(Number.parseFloat(style.size)).toBeGreaterThanOrEqual(16);
+});
+
+for (const scheme of ['light', 'dark'] as const) {
+  test(`anonymous /news with the teasers passes axe, ${scheme} system setting`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto('/news');
+    await expect(page.getByText(TEASER_BOX).first()).toBeVisible();
+    expect(await axe(page)).toEqual([]);
+  });
+}
+
+const D4_PUBLIC = {
+  stale: 'member standing in the records but no enrolee group in the claim',
+  'officer-only': 'the officers group without an enrolee group',
+  'enrolee-pending': 'nwfl-users in the claim but pending standing in the records',
+} as const;
+for (const login of Object.keys(D4_PUBLIC) as (keyof typeof D4_PUBLIC)[]) {
+  test(`D4: ${D4_PUBLIC[login]} gives the public's view, with the box that says so, and no members id`, async ({ page }) => {
+    await page.goto('/news');
+    await signIn(page, login);
+    const res = await page.goto('/news');
+    expect(res?.status()).toBe(200);
+    await teasers(page, TEASER_NO_ACCESS, { name: 'Ask for help', href: '/help' });
+    const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
+    await expect(open).toContainText(`Members-only passage. ${NO_ACCESS}`);
+    await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
+    const html = await page.content();
+    expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, RULE.replace("'", '&#39;'), RULE, EXPIRED, REFUSED])).toEqual([]);
+    expect(res?.headers()['cache-control']).toBe('private, no-store');
+    expect(res?.headers()['cdn-cache-control']).toBe('no-store');
+    const random = await page.request.get(pdf('00000000-0000-4000-8000-0000000000aa'));
+    const withheld = await page.request.get(pdf(current!.membersPdf));
+    expect(withheld.status()).toBe(404);
+    expect(await withheld.text()).toBe(await random.text());
+  });
+}
+
+test('AC6 b: nwfl-users alone in the claim, with member standing in the records, gets the members view', async ({ page }) => {
+  await page.goto('/news');
+  await signIn(page, 'enrolee');
+  const res = await page.goto('/news');
+  expect(res?.status()).toBe(200);
+  await expect(page.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toHaveAttribute('href', pdf(current!.membersPdf));
+  const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
+  await expect(open.getByRole('complementary', { name: 'Members only' })).toContainText(ARTICLES.open.passage);
+  await expect(page.getByRole('article').filter({ hasText: ARTICLES.members.title })).toContainText(ARTICLES.members.body);
+  const html = await page.content();
+  expect(noneOf(html, [...NEVER, NO_ACCESS, TEASER_NO_ACCESS, EXPIRED, REFUSED])).toEqual([]);
+  expect(res?.headers()['cache-control']).toBe('private, no-store');
+  const members = await page.request.get(pdf(current!.membersPdf));
+  expect(members.status()).toBe(200);
+  expect((await members.body()).toString('latin1')).toContain(MEMBERS_PDF_MARK);
+});
+
+test('a lapsed token on a session with no enrolee group is never told its sign-in expired: the boxes say the account has no member access', async ({ page }) => {
+  await page.goto('/news');
+  await signIn(page, 'lapsed-outsider');
+  const res = await page.goto('/news');
+  expect(res?.status()).toBe(200);
+  await teasers(page, TEASER_NO_ACCESS, { name: 'Ask for help', href: '/help' });
+  const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
+  await expect(open).toContainText(`Members-only passage. ${NO_ACCESS}`);
+  await expect(page.getByRole('link', { name: 'Sign in again' })).toHaveCount(0);
+  await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
+  const html = await page.content();
+  expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, EXPIRED, REFUSED])).toEqual([]);
 });
 
 test('anonymous: the public article with its passage hidden behind a sign-in link, and none of the members content', async ({ page }) => {

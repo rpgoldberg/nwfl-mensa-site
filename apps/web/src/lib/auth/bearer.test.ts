@@ -7,9 +7,9 @@ import type { Tokens } from './oidc';
 
 const NOW = 1_800_000_000;
 
-function signedIn(tokens: Tokens | undefined) {
+function signedIn(tokens: Tokens | undefined, groups: string[] = ['nwfl-users']) {
   const store = new TokenStore<Tokens>();
-  const session = newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups: ['nwfl-members'] }, NOW - 60);
+  const session = newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups }, NOW - 60);
   if (tokens) store.put(session.sid, tokens, session.exp);
   return { session, deps: { tokens: store, now: () => NOW } };
 }
@@ -18,7 +18,68 @@ describe('readerFor', () => {
   it('gives the access token of a valid session whose token has more than 30 s to live', () => {
     const { session, deps } = signedIn({ access_token: 'tok.en-1', expires_at: NOW + EXPIRY_MARGIN_SECONDS + 1 });
     expect(EXPIRY_MARGIN_SECONDS).toBe(30);
-    expect(readerFor(session, deps)).toEqual({ reader: { bearer: 'tok.en-1' }, lapsed: false });
+    expect(readerFor(session, deps)).toEqual({ reader: { bearer: 'tok.en-1', enrolee: true }, lapsed: false });
+  });
+
+  it("carries whether the session's groups claim holds an nwfl enrolee group (D4, AC6 b): nwfl-users or nwfl-members; an officers or pending claim alone is not one", () => {
+    const cases: [string[], boolean][] = [
+      [['nwfl-users'], true],
+      [['nwfl-members'], true],
+      [['nwfl-users', 'nwfl-officers'], true],
+      [['nwfl-members', 'nwfl-officers'], true],
+      [['nwfl-officers'], false],
+      [['nwfl-officers', 'nwfl-office-president'], false],
+      [['nwfl-pending'], false],
+      [[], false],
+    ];
+    for (const [groups, enrolee] of cases) {
+      const { session, deps } = signedIn({ access_token: 'tok.en-1', expires_at: NOW + 3600 }, groups);
+      expect(readerFor(session, deps), JSON.stringify(groups)).toEqual({ reader: { bearer: 'tok.en-1', enrolee }, lapsed: false });
+    }
+  });
+
+  it("reads the claim under the configured prefix only: another prefix's enrolee group is none", () => {
+    const store = new TokenStore<Tokens>();
+    const readerOf = (groups: string[]) => {
+      const session = newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups }, NOW - 60, 'mensa-nwfl-');
+      store.put(session.sid, { access_token: 'tok', expires_at: NOW + 3600 }, session.exp);
+      return readerFor(session, { tokens: store, now: () => NOW }).reader;
+    };
+    for (const bare of [['nwfl-members'], ['nwfl-users']]) expect(readerOf(bare), String(bare)).toEqual({ bearer: 'tok', enrolee: false });
+    for (const ours of [['mensa-nwfl-members'], ['mensa-nwfl-users']]) expect(readerOf(ours), String(ours)).toEqual({ bearer: 'tok', enrolee: true });
+  });
+
+  it('reads no near miss of either enrolee group as one: case, spaces, invisible or look-alike letters, another prefix, a group past the 20th', () => {
+    const readerOf = (groups: unknown, prefix?: string) => {
+      const store = new TokenStore<Tokens>();
+      const session = newSession({ sub: 'x', groups } as never, NOW - 60, prefix);
+      store.put(session.sid, { access_token: 'tok', expires_at: NOW + 3600 }, session.exp);
+      return readerFor(session, { tokens: store, now: () => NOW }).reader;
+    };
+    for (const role of ['members', 'users']) {
+      const near: [string, unknown, string?][] = [
+        ['upper', [`NWFL-${role.toUpperCase()}`]],
+        ['mixed', [`nwfl-${role[0]!.toUpperCase()}${role.slice(1)}`]],
+        ['trailing space', [`nwfl-${role} `]],
+        ['leading space', [` nwfl-${role}`]],
+        ['zero-width', [`nwfl-${role}\u200b`]],
+        ['other prefix', [`mensa-nwfl-${role}`]],
+        ['bare under a configured prefix', [`nwfl-${role}`], 'mensa-nwfl-'],
+        ['singular', [`nwfl-${role.slice(0, -1)}`]],
+        ['past the 20th', [...Array.from({ length: 20 }, (_, i) => `nwfl-g${i}`), `nwfl-${role}`]],
+        ['NUL', [`nwfl-${role}\u0000`]],
+        ['homoglyph', [`nwfl-${role.replace('e', '\u0435')}`]],
+        ['another chapter', [`mensa-other-${role}`], 'mensa-nwfl-'],
+      ];
+      for (const [name, groups, prefix] of near) expect(readerOf(groups, prefix)?.enrolee, `${role}: ${name}`).toBe(false);
+      expect(readerOf([`nwfl-${role}`, `nwfl-${role}`])?.enrolee, `${role}: duplicated`).toBe(true);
+    }
+    for (const groups of [[], undefined, ['nwfl-officers', 'nwfl-officers']]) expect(readerOf(groups)?.enrolee, JSON.stringify(groups)).toBe(false);
+  });
+
+  it('fails closed on a session whose enrolee flag is anything but true', () => {
+    const { session, deps } = signedIn({ access_token: 'tok', expires_at: NOW + 3600 });
+    for (const enrolee of [undefined, 'true', 1, null]) expect(readerFor({ ...session, enrolee } as never, deps).reader, String(enrolee)).toEqual({ bearer: 'tok', enrolee: false });
   });
 
   it('gives nothing to no session', () => {
@@ -37,9 +98,20 @@ describe('readerFor', () => {
   });
 
   it('says lapsed, and gives nothing, once the token has 30 s or less to live, or has expired', () => {
-    for (const left of [EXPIRY_MARGIN_SECONDS, 1, 0, -3600]) {
-      const { session, deps } = signedIn({ access_token: 'a', expires_at: NOW + left });
-      expect(readerFor(session, deps), String(left)).toEqual({ reader: undefined, lapsed: true });
+    for (const groups of [['nwfl-users'], ['nwfl-members']]) {
+      for (const left of [EXPIRY_MARGIN_SECONDS, 1, 0, -3600]) {
+        const { session, deps } = signedIn({ access_token: 'a', expires_at: NOW + left }, groups);
+        expect(readerFor(session, deps), `${String(groups)} ${left}`).toEqual({ reader: undefined, lapsed: true });
+      }
+    }
+  });
+
+  it('never says lapsed to a session with no nwfl enrolee group: its token is never sent, so the page says the account has no member access', () => {
+    for (const groups of [['nwfl-officers'], ['nwfl-pending'], []]) {
+      for (const left of [EXPIRY_MARGIN_SECONDS, 0, -3600]) {
+        const { session, deps } = signedIn({ access_token: 'a', expires_at: NOW + left }, groups);
+        expect(readerFor(session, deps), `${String(groups)} ${left}`).toEqual({ reader: { bearer: 'a', enrolee: false }, lapsed: false });
+      }
     }
   });
 

@@ -22,7 +22,11 @@
 // member sees the members passage, the members article and the members copy
 // (the positive control); a pending account none of it, nor a members file id;
 // an officer never the officers article; with sign-in off, a session cookie
-// changes nothing.
+// changes nothing. D4 with AC6 (b): the members view needs an nwfl enrolee
+// group in the session's claim AND member standing in the API's records. An
+// account in nwfl-users alone with member standing gets it (the AC6 b path),
+// one with pending standing does not, and an officers-only account, which the
+// API itself would answer as an officer's, never has its token sent.
 import { inflateSync } from 'node:zlib';
 import { expect, test, type APIRequest, type APIRequestContext } from '@playwright/test';
 import { PUBLIC_CACHE } from '../../server/policy.mjs';
@@ -41,6 +45,8 @@ interface Fixture {
   issue: { title: string; summary: string; plain: string; publicSha256: string };
   /** What the article with the members passage says to everyone (A14). */
   articlePlain: string;
+  /** D1: the members article's title and summary, which the public is shown as a teaser. */
+  membersTeaser: { title: string; summary: string };
 }
 
 interface Fetched {
@@ -313,11 +319,11 @@ test('cache by audience: no response is stored publicly for a signed-in reader, 
 });
 
 // A14: /news as a signed-in reader, through the real API.
-const MEMBERS_CANARIES = ['membersPassage', 'membersTitle', 'membersBody'] as const;
+const MEMBERS_CANARIES = ['membersPassage', 'membersBody'] as const;
 const OFFICERS_CANARIES = ['officersTitle', 'officersBody'] as const;
 
 /** Signed in on the site with sign-in on, at the test provider, as one of its people: a context that carries the session. */
-async function signedIn(request: APIRequest, login: 'member' | 'pending' | 'officer'): Promise<APIRequestContext> {
+async function signedIn(request: APIRequest, login: 'member' | 'pending' | 'officer' | 'officer-only' | 'enrolee' | 'enrolee-pending'): Promise<APIRequestContext> {
   const ctx = await request.newContext({ baseURL: REDACTION.memberSiteUrl, ignoreHTTPSErrors: true });
   const form = await ctx.get('/sign-in?return=%2Fnews');
   expect(form.status(), 'the provider asks who it is').toBe(200);
@@ -331,6 +337,19 @@ async function signedIn(request: APIRequest, login: 'member' | 'pending' | 'offi
 
 const seen = (html: string, names: readonly string[]) => names.filter((name) => fold(html).includes(fold(fixture.canaries[name]!)));
 const stamp = (text: string) => text.replace(/^DTSTAMP:.*$/gm, '');
+
+test("D1: the public's /news, through the real API, lists the members article by title and summary with the members box, and none of its body", async ({ playwright }) => {
+  const anonymous = await playwright.request.newContext({ baseURL: REDACTION.memberSiteUrl, ignoreHTTPSErrors: true });
+  const news = await get(anonymous, '/news');
+  expect(news.status).toBe(200);
+  expect(news.body).toContain(`<h3>${fixture.membersTeaser.title}</h3>`);
+  expect(news.body).toContain(fixture.membersTeaser.summary);
+  expect(news.body).toContain('Members only, <a href="/sign-in?return=%2Fnews&amp;again=1">sign in</a> to read.');
+  expect(seen(news.body, [...MEMBERS_CANARIES, ...OFFICERS_CANARIES])).toEqual([]);
+  expect(news.body).not.toContain(fixture.ids['issueMembersPdf']);
+  expect(news.headers['cache-control']).toBe(PUBLIC_CACHE);
+  await anonymous.dispose();
+});
 
 test('a member sees the members passage and the members article (the positive control), and gets the members copy, never stored', async ({ playwright }) => {
   const member = await signedIn(playwright.request, 'member');
@@ -373,6 +392,62 @@ test('a pending account (no member standing) sees no members canary and no membe
   expect(withheld.status()).toBe(404);
   expect(await withheld.text()).toBe(await random.text());
   await pending.dispose();
+});
+
+/** The public's view for a signed-in reader without member access: no members or officers canary, no members file id, the box, never stored. */
+async function noMemberAccess(reader: APIRequestContext) {
+  const news = await get(reader, '/news');
+  expect(news.status).toBe(200);
+  expect(seen(news.body, [...MEMBERS_CANARIES, ...OFFICERS_CANARIES])).toEqual([]);
+  expect(news.body).not.toContain(fixture.ids['issueMembersPdf']);
+  expect(news.body).toContain('Members only. Your account does not have member access yet.');
+  expect(news.body).toContain(fixture.articlePlain);
+  expect(news.body).toContain(`<h3>${fixture.membersTeaser.title}</h3>`);
+  expect(news.body).not.toContain('Your sign-in has expired');
+  expect(news.headers['cache-control']).toBe('private, no-store');
+  expect(news.headers['cdn-cache-control']).toBe('no-store');
+  const withheld = await reader.get(`/documents/${fixture.ids['issueMembersPdf']}.pdf`);
+  const random = await reader.get('/documents/00000000-0000-4000-8000-0000000000aa.pdf');
+  expect(withheld.status()).toBe(404);
+  expect(await withheld.text()).toBe(await random.text());
+}
+
+test("D4: an officers-only account (no enrolee group), which the API would answer as an officer's, gets the public's view: its token never goes", async ({ playwright }) => {
+  const officer = await signedIn(playwright.request, 'officer-only');
+  await noMemberAccess(officer);
+  await officer.dispose();
+});
+
+test('AC6 b: an account in nwfl-users alone, with member standing in the records, gets the members view and the members copy', async ({ playwright }) => {
+  const enrolee = await signedIn(playwright.request, 'enrolee');
+  const news = await get(enrolee, '/news');
+  expect(news.status).toBe(200);
+  expect(seen(news.body, MEMBERS_CANARIES)).toEqual([...MEMBERS_CANARIES]);
+  expect(seen(news.body, OFFICERS_CANARIES)).toEqual([]);
+  expect(news.body).toContain(`href="/documents/${fixture.ids['issueMembersPdf']}.pdf"`);
+  expect(news.body).not.toContain('does not have member access');
+  expect(news.headers['cache-control']).toBe('private, no-store');
+  const pdf = await get(enrolee, `/documents/${fixture.ids['issueMembersPdf']}.pdf`);
+  expect(pdf.status).toBe(200);
+  expect(pdf.pdf?.text).toContain('the members edition');
+  expect(pdf.headers['cache-control']).toBe('private, no-store');
+  await enrolee.dispose();
+});
+
+test("AC6 b: an account in nwfl-users alone, with pending standing in the records, gets the public's view and the box", async ({ playwright }) => {
+  const pending = await signedIn(playwright.request, 'enrolee-pending');
+  await noMemberAccess(pending);
+  await pending.dispose();
+});
+
+test("N4: with sign-in off, the public's teaser box says \"Members only.\" and nothing about signing in", () => {
+  const news = fetched.get('/news')!;
+  const start = news.body.indexOf(`<h3>${fixture.membersTeaser.title}</h3>`);
+  expect(start).toBeGreaterThan(0);
+  const teaser = news.body.slice(start, news.body.indexOf('</article>', start));
+  expect(teaser).toContain('<p class="members-note">Members only.</p>');
+  expect(teaser.toLowerCase()).not.toContain('sign in');
+  expect(news.body).not.toContain('Members only, sign in to read.');
 });
 
 test("one reader's answer never reaches another: after a member, and beside one, the public's /news on the same site has none of it", async ({ playwright }) => {

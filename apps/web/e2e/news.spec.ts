@@ -48,7 +48,7 @@ test.describe('/news with issues published', () => {
     for (const sample of ['October and November 2026', 'June and July 2025', 'No copy known', 'arrive with the archive']) await expect(page.getByText(sample), sample).toHaveCount(0);
   });
 
-  test('lists no members item, and no document that is not an issue', async ({ page }) => {
+  test('lists no members issue, and no document that is not an issue', async ({ page }) => {
     await page.goto('/news');
     await expect(page.getByRole('heading', { level: 2, name: current!.title })).toBeVisible();
     await expect(page.getByText(NEWSLETTER.membersOnly.title)).toHaveCount(0);
@@ -64,8 +64,9 @@ test.describe('/news with issues published', () => {
       for (const issue of [...NEWSLETTER.issues, NEWSLETTER.membersOnly]) expect(html, issue.title).not.toContain(issue.membersPdf);
       expect(html).not.toContain(NEWSLETTER.membersOnly.publicPdf);
       expect(html).not.toContain(NEWSLETTER.other.publicPdf);
-      // A14: the article's members PDF, its members passage, the members and officers articles.
-      for (const secret of [ARTICLES.open.membersPdf, ARTICLES.open.passage, ARTICLES.members.title, ARTICLES.members.body, ARTICLES.officers.title, ARTICLES.officers.pdf, ARTICLES.withheld.title, ...SOURCE_PDFS]) expect(html).not.toContain(secret);
+      // A14: the article's members PDF, its members passage, the members article's body, the officers article.
+      // D1: the members articles' titles are public now (teasers), their bodies never.
+      for (const secret of [ARTICLES.open.membersPdf, ARTICLES.open.passage, ARTICLES.members.body, ARTICLES.officers.title, ARTICLES.officers.pdf, ...SOURCE_PDFS]) expect(html).not.toContain(secret);
       expect(html.toLowerCase()).not.toContain(NEWSLETTER.sha256Hex.slice(0, 16));
       expect(html).not.toContain(Buffer.from(NEWSLETTER.sha256Hex, 'hex').toString('base64').slice(0, 16));
       expect(html).not.toMatch(/987[,.\s]?654/);
