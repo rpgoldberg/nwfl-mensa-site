@@ -122,14 +122,15 @@ describe(`${PKG}: the approval rule (SOLO-APPROVE)`, () => {
 
   it('sets a scope to a rule with a reason, and says whether anything changed', () => {
     const set = service('ApprovalRuleService')?.methods.find((m) => m.name === 'SetApprovalRule');
-    expect(fieldNames(set?.input)).toEqual(['scope', 'rule', 'reason']);
+    // expected_revision: the revision the Admin read, so a stale form cannot undo a later switch.
+    expect(fieldNames(set?.input)).toEqual(['scope', 'rule', 'reason', 'expected_revision']);
     expect(fieldNames(set?.output)).toEqual(['setting', 'changed']);
   });
 
-  it('never names who set the rule in the setting itself', () => {
+  it('never names who set the rule in the setting itself: the revision is the switch\'s id, not a person', () => {
     const get = service('ApprovalRuleService')?.methods.find((m) => m.name === 'GetApprovalRules');
     const setting = get?.output.fields.map(fieldMessage).find((m) => m !== undefined);
-    expect(fieldNames(setting)).toEqual(['scope', 'rule', 'set_at']);
+    expect(fieldNames(setting)).toEqual(['scope', 'rule', 'set_at', 'revision']);
   });
 });
 

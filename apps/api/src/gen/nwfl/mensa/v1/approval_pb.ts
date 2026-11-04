@@ -19,7 +19,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file nwfl/mensa/v1/approval.proto.
  */
 export const file_nwfl_mensa_v1_approval: GenFile = /*@__PURE__*/
-  fileDesc("Chxud2ZsL21lbnNhL3YxL2FwcHJvdmFsLnByb3RvEg1ud2ZsLm1lbnNhLnYxIpUBCg9BcHByb3ZhbFNldHRpbmcSKwoFc2NvcGUYASABKA4yHC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmFsU2NvcGUSKQoEcnVsZRgCIAEoDjIbLm53ZmwubWVuc2EudjEuQXBwcm92YWxSdWxlEioKBnNldF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXAihgIKEkFwcHJvdmFsUnVsZUNoYW5nZRIRCgljaGFuZ2VfaWQYASABKAkSKwoFc2NvcGUYAiABKA4yHC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmFsU2NvcGUSLgoJZnJvbV9ydWxlGAMgASgOMhsubndmbC5tZW5zYS52MS5BcHByb3ZhbFJ1bGUSLAoHdG9fcnVsZRgEIAEoDjIbLm53ZmwubWVuc2EudjEuQXBwcm92YWxSdWxlEg4KBnJlYXNvbhgFIAEoCRISCgpjaGFuZ2VkX2J5GAYgASgJEi4KCmNoYW5nZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIhkKF0dldEFwcHJvdmFsUnVsZXNSZXF1ZXN0IkwKGEdldEFwcHJvdmFsUnVsZXNSZXNwb25zZRIwCghzZXR0aW5ncxgBIAMoCzIeLm53ZmwubWVuc2EudjEuQXBwcm92YWxTZXR0aW5nIoABChZTZXRBcHByb3ZhbFJ1bGVSZXF1ZXN0EisKBXNjb3BlGAEgASgOMhwubndmbC5tZW5zYS52MS5BcHByb3ZhbFNjb3BlEikKBHJ1bGUYAiABKA4yGy5ud2ZsLm1lbnNhLnYxLkFwcHJvdmFsUnVsZRIOCgZyZWFzb24YAyABKAkiWwoXU2V0QXBwcm92YWxSdWxlUmVzcG9uc2USLwoHc2V0dGluZxgBIAEoCzIeLm53ZmwubWVuc2EudjEuQXBwcm92YWxTZXR0aW5nEg8KB2NoYW5nZWQYAiABKAgiYAoeTGlzdEFwcHJvdmFsUnVsZUNoYW5nZXNSZXF1ZXN0EisKBXNjb3BlGAEgASgOMhwubndmbC5tZW5zYS52MS5BcHByb3ZhbFNjb3BlEhEKCXBhZ2Vfc2l6ZRgCIAEoBSJVCh9MaXN0QXBwcm92YWxSdWxlQ2hhbmdlc1Jlc3BvbnNlEjIKB2NoYW5nZXMYASADKAsyIS5ud2ZsLm1lbnNhLnYxLkFwcHJvdmFsUnVsZUNoYW5nZSpwCg1BcHByb3ZhbFNjb3BlEh4KGkFQUFJPVkFMX1NDT1BFX1VOU1BFQ0lGSUVEEAASGgoWQVBQUk9WQUxfU0NPUEVfQ09OVEVOVBABEiMKH0FQUFJPVkFMX1NDT1BFX1JFREFDVElPTl9QT0xJQ1kQAiprCgxBcHByb3ZhbFJ1bGUSHQoZQVBQUk9WQUxfUlVMRV9VTlNQRUNJRklFRBAAEhwKGEFQUFJPVkFMX1JVTEVfVFdPX1BFUlNPThABEh4KGkFQUFJPVkFMX1JVTEVfT05FX0FQUFJPVkVSEAIy4AIKE0FwcHJvdmFsUnVsZVNlcnZpY2USaAoQR2V0QXBwcm92YWxSdWxlcxImLm53ZmwubWVuc2EudjEuR2V0QXBwcm92YWxSdWxlc1JlcXVlc3QaJy5ud2ZsLm1lbnNhLnYxLkdldEFwcHJvdmFsUnVsZXNSZXNwb25zZSIDkAIBEmAKD1NldEFwcHJvdmFsUnVsZRIlLm53ZmwubWVuc2EudjEuU2V0QXBwcm92YWxSdWxlUmVxdWVzdBomLm53ZmwubWVuc2EudjEuU2V0QXBwcm92YWxSdWxlUmVzcG9uc2USfQoXTGlzdEFwcHJvdmFsUnVsZUNoYW5nZXMSLS5ud2ZsLm1lbnNhLnYxLkxpc3RBcHByb3ZhbFJ1bGVDaGFuZ2VzUmVxdWVzdBouLm53ZmwubWVuc2EudjEuTGlzdEFwcHJvdmFsUnVsZUNoYW5nZXNSZXNwb25zZSIDkAIBYgZwcm90bzM", [file_google_protobuf_timestamp]);
+  fileDesc("Chxud2ZsL21lbnNhL3YxL2FwcHJvdmFsLnByb3RvEg1ud2ZsLm1lbnNhLnYxIqcBCg9BcHByb3ZhbFNldHRpbmcSKwoFc2NvcGUYASABKA4yHC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmFsU2NvcGUSKQoEcnVsZRgCIAEoDjIbLm53ZmwubWVuc2EudjEuQXBwcm92YWxSdWxlEioKBnNldF9hdBgDIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASEAoIcmV2aXNpb24YBCABKAkihgIKEkFwcHJvdmFsUnVsZUNoYW5nZRIRCgljaGFuZ2VfaWQYASABKAkSKwoFc2NvcGUYAiABKA4yHC5ud2ZsLm1lbnNhLnYxLkFwcHJvdmFsU2NvcGUSLgoJZnJvbV9ydWxlGAMgASgOMhsubndmbC5tZW5zYS52MS5BcHByb3ZhbFJ1bGUSLAoHdG9fcnVsZRgEIAEoDjIbLm53ZmwubWVuc2EudjEuQXBwcm92YWxSdWxlEg4KBnJlYXNvbhgFIAEoCRISCgpjaGFuZ2VkX2J5GAYgASgJEi4KCmNoYW5nZWRfYXQYByABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wIhkKF0dldEFwcHJvdmFsUnVsZXNSZXF1ZXN0IkwKGEdldEFwcHJvdmFsUnVsZXNSZXNwb25zZRIwCghzZXR0aW5ncxgBIAMoCzIeLm53ZmwubWVuc2EudjEuQXBwcm92YWxTZXR0aW5nIrYBChZTZXRBcHByb3ZhbFJ1bGVSZXF1ZXN0EisKBXNjb3BlGAEgASgOMhwubndmbC5tZW5zYS52MS5BcHByb3ZhbFNjb3BlEikKBHJ1bGUYAiABKA4yGy5ud2ZsLm1lbnNhLnYxLkFwcHJvdmFsUnVsZRIOCgZyZWFzb24YAyABKAkSHgoRZXhwZWN0ZWRfcmV2aXNpb24YBCABKAlIAIgBAUIUChJfZXhwZWN0ZWRfcmV2aXNpb24iWwoXU2V0QXBwcm92YWxSdWxlUmVzcG9uc2USLwoHc2V0dGluZxgBIAEoCzIeLm53ZmwubWVuc2EudjEuQXBwcm92YWxTZXR0aW5nEg8KB2NoYW5nZWQYAiABKAgiYAoeTGlzdEFwcHJvdmFsUnVsZUNoYW5nZXNSZXF1ZXN0EisKBXNjb3BlGAEgASgOMhwubndmbC5tZW5zYS52MS5BcHByb3ZhbFNjb3BlEhEKCXBhZ2Vfc2l6ZRgCIAEoBSJVCh9MaXN0QXBwcm92YWxSdWxlQ2hhbmdlc1Jlc3BvbnNlEjIKB2NoYW5nZXMYASADKAsyIS5ud2ZsLm1lbnNhLnYxLkFwcHJvdmFsUnVsZUNoYW5nZSpwCg1BcHByb3ZhbFNjb3BlEh4KGkFQUFJPVkFMX1NDT1BFX1VOU1BFQ0lGSUVEEAASGgoWQVBQUk9WQUxfU0NPUEVfQ09OVEVOVBABEiMKH0FQUFJPVkFMX1NDT1BFX1JFREFDVElPTl9QT0xJQ1kQAiprCgxBcHByb3ZhbFJ1bGUSHQoZQVBQUk9WQUxfUlVMRV9VTlNQRUNJRklFRBAAEhwKGEFQUFJPVkFMX1JVTEVfVFdPX1BFUlNPThABEh4KGkFQUFJPVkFMX1JVTEVfT05FX0FQUFJPVkVSEAIy4AIKE0FwcHJvdmFsUnVsZVNlcnZpY2USaAoQR2V0QXBwcm92YWxSdWxlcxImLm53ZmwubWVuc2EudjEuR2V0QXBwcm92YWxSdWxlc1JlcXVlc3QaJy5ud2ZsLm1lbnNhLnYxLkdldEFwcHJvdmFsUnVsZXNSZXNwb25zZSIDkAIBEmAKD1NldEFwcHJvdmFsUnVsZRIlLm53ZmwubWVuc2EudjEuU2V0QXBwcm92YWxSdWxlUmVxdWVzdBomLm53ZmwubWVuc2EudjEuU2V0QXBwcm92YWxSdWxlUmVzcG9uc2USfQoXTGlzdEFwcHJvdmFsUnVsZUNoYW5nZXMSLS5ud2ZsLm1lbnNhLnYxLkxpc3RBcHByb3ZhbFJ1bGVDaGFuZ2VzUmVxdWVzdBouLm53ZmwubWVuc2EudjEuTGlzdEFwcHJvdmFsUnVsZUNoYW5nZXNSZXNwb25zZSIDkAIBYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message nwfl.mensa.v1.ApprovalSetting
@@ -41,6 +41,14 @@ export type ApprovalSetting = Message<"nwfl.mensa.v1.ApprovalSetting"> & {
    * @generated from field: google.protobuf.Timestamp set_at = 3;
    */
   setAt?: Timestamp | undefined;
+
+  /**
+   * Which switch set it (its change_id); empty while it is still the default.
+   * Send it back as SetApprovalRuleRequest.expected_revision.
+   *
+   * @generated from field: string revision = 4;
+   */
+  revision: string;
 };
 
 /**
@@ -147,6 +155,16 @@ export type SetApprovalRuleRequest = Message<"nwfl.mensa.v1.SetApprovalRuleReque
    * @generated from field: string reason = 3;
    */
   reason: string;
+
+  /**
+   * The revision the Admin read (ApprovalSetting.revision). When set, a switch
+   * from a setting that has moved on since is refused with FAILED_PRECONDITION,
+   * so a stale form sent again cannot undo a later switch. Asking for the rule
+   * already set still changes nothing, whatever this says.
+   *
+   * @generated from field: optional string expected_revision = 4;
+   */
+  expectedRevision?: string | undefined;
 };
 
 /**
@@ -292,7 +310,7 @@ export const ApprovalRuleSchema: GenEnum<ApprovalRule> = /*@__PURE__*/
  */
 export const ApprovalRuleService: GenService<{
   /**
-   * Officers only: both scopes, content first. Never says who set a rule.
+   * Officers and the Admin: both scopes, content first. Never says who set a rule.
    *
    * @generated from rpc nwfl.mensa.v1.ApprovalRuleService.GetApprovalRules
    */
@@ -302,7 +320,8 @@ export const ApprovalRuleService: GenService<{
     output: typeof GetApprovalRulesResponseSchema;
   },
   /**
-   * The Admin only, with a reason of 1 to 2000 characters.
+   * The Admin only, with a reason of 1 to 2000 characters that has a letter
+   * or a digit in it.
    *
    * @generated from rpc nwfl.mensa.v1.ApprovalRuleService.SetApprovalRule
    */
@@ -312,7 +331,7 @@ export const ApprovalRuleService: GenService<{
     output: typeof SetApprovalRuleResponseSchema;
   },
   /**
-   * Officers only: the switches, newest first.
+   * Officers and the Admin: the switches, newest first.
    *
    * @generated from rpc nwfl.mensa.v1.ApprovalRuleService.ListApprovalRuleChanges
    */

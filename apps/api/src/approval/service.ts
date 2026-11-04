@@ -4,12 +4,16 @@
 // follows under it; this service reads it for officers and lets the Admin
 // switch it.
 //
-//   GetApprovalRules         officers: both scopes and when each was set,
+//   GetApprovalRules         officers and the Admin: both scopes, when each
+//                            was set and by which switch (the revision),
 //                            never who set it
 //   SetApprovalRule          the Admin alone (checked first, authoritative):
 //                            a known scope and rule and a reason of 1 to 2000
-//                            characters; the same rule again changes nothing
-//   ListApprovalRuleChanges  officers: every switch, newest first
+//                            characters with a letter or digit in it, all
+//                            checked before the database is asked; the same
+//                            rule again changes nothing; a switch from a
+//                            revision that has moved on is refused
+//   ListApprovalRuleChanges  officers and the Admin: every switch, newest first
 //
 // readRule is how the content workflow and the issue loader read the content
 // rule: under FOR SHARE (0023 approval_rule_read), after the item's row lock
@@ -20,7 +24,7 @@ import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@connectrpc/connect';
 import { traceId } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
-import { requireAdmin, requireOfficer } from '../auth/roles.js';
+import { requireAdmin, requireOfficerOrAdmin } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import type { TxClient } from '../db/tx.js';
@@ -45,6 +49,10 @@ export interface ApprovalDeps {
 const SCOPE_OUT: Record<Scope, ApprovalScope> = { content: ApprovalScope.CONTENT, redaction_policy: ApprovalScope.REDACTION_POLICY };
 const RULE_OUT: Record<Rule, ApprovalRule> = { two_person: ApprovalRule.TWO_PERSON, one_approver: ApprovalRule.ONE_APPROVER };
 const MAX_REASON = 2_000;
+/** A uuid is 36; anything much longer is not a revision this API gave out. */
+const MAX_REVISION = 64;
+/** A reason says something: a letter in any alphabet, or a digit (0023's [[:alnum:]] under pg_c_utf8). */
+const SAYS_SOMETHING = /[\p{Alphabetic}0-9]/u;
 
 /** The stored name for a wire value, or undefined for UNSPECIFIED and unknown numbers. */
 function nameOf<K extends string, V>(table: Record<K, V>, value: V): K | undefined {
@@ -63,6 +71,7 @@ interface SettingRow {
   scope: Scope;
   rule: Rule;
   set_at: Date | null;
+  change_id: string | null;
 }
 
 const settingMessage = (row: SettingRow): ApprovalSetting =>
@@ -70,6 +79,7 @@ const settingMessage = (row: SettingRow): ApprovalSetting =>
     scope: SCOPE_OUT[row.scope],
     rule: RULE_OUT[row.rule],
     ...(row.set_at !== null ? { setAt: timestampFromDate(row.set_at) } : {}),
+    revision: row.change_id ?? '',
   });
 
 interface ChangeRow {
@@ -100,8 +110,8 @@ export function approvalRoutes(deps: ApprovalDeps): (router: ConnectRouter) => v
   return (router) => {
     router.service(ApprovalRuleService, {
       getApprovalRules: async (_request, ctx) => {
-        requireOfficer(callerIn(ctx));
-        const { rows } = await db.query<SettingRow>(`SELECT scope, rule, set_at FROM approval_rule ORDER BY scope`);
+        requireOfficerOrAdmin(callerIn(ctx));
+        const { rows } = await db.query<SettingRow>(`SELECT scope, rule, set_at, change_id FROM approval_rule ORDER BY scope`);
         return { settings: rows.map(settingMessage) };
       },
 
@@ -113,21 +123,23 @@ export function approvalRoutes(deps: ApprovalDeps): (router: ConnectRouter) => v
         const reason = request.reason.trim();
         if (scope === undefined) throw invalid('choose what the rule is for');
         if (rule === undefined) throw invalid('choose two officers or one');
-        if (reason === '' || reason.length > MAX_REASON) throw invalid('say why, in 1 to 2000 characters');
+        if (reason.length > MAX_REASON || !SAYS_SOMETHING.test(reason)) throw invalid('say why, in 1 to 2000 characters, in words');
+        const expected = request.expectedRevision;
+        if (expected !== undefined && expected.length > MAX_REVISION) throw invalid('no such revision');
         try {
-          const { rows } = await db.query<{ rule: Rule; set_at: Date | null; changed: boolean }>(
-            `SELECT rule, set_at, changed FROM approval_rule_set($1, $2, $3, $4, $5, $6)`,
-            [scope, rule, reason, caller.subject, [...caller.groups], traceId()],
+          const { rows } = await db.query<{ rule: Rule; set_at: Date | null; change_id: string | null; changed: boolean }>(
+            `SELECT rule, set_at, change_id, changed FROM approval_rule_set($1, $2, $3, $4, $5, $6, $7)`,
+            [scope, rule, reason, caller.subject, [...caller.groups], traceId(), expected ?? null],
           );
-          const row = rows[0] as { rule: Rule; set_at: Date | null; changed: boolean };
-          return { setting: settingMessage({ scope, rule: row.rule, set_at: row.set_at }), changed: row.changed };
+          const row = rows[0] as { rule: Rule; set_at: Date | null; change_id: string | null; changed: boolean };
+          return { setting: settingMessage({ scope, rule: row.rule, set_at: row.set_at, change_id: row.change_id }), changed: row.changed };
         } catch (error) {
           throw dbError(error);
         }
       },
 
       listApprovalRuleChanges: async (request, ctx) => {
-        requireOfficer(callerIn(ctx));
+        requireOfficerOrAdmin(callerIn(ctx));
         const size = pageSize(request.pageSize);
         const scope = request.scope === ApprovalScope.UNSPECIFIED ? null : nameOf(SCOPE_OUT, request.scope);
         if (scope === undefined) throw invalid('no such scope');

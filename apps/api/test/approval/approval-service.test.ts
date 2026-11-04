@@ -3,7 +3,7 @@
 // required reason; a repeat changes nothing; officers read the setting and the ledger, nobody else
 // does. Every person here is made up.
 import { type Client, Code } from '@connectrpc/connect';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { type Api, as, startApi } from '../helpers/api.js';
 import { live } from '../helpers/pg.js';
@@ -24,6 +24,18 @@ describe.skipIf(!live)('ApprovalRuleService', () => {
   };
   const setting = async (scope: ApprovalScope): Promise<ApprovalRule | undefined> =>
     (await rules.getApprovalRules({}, OFFICER)).settings.find((s) => s.scope === scope)?.rule;
+  const revision = async (scope: ApprovalScope): Promise<string | undefined> =>
+    (await rules.getApprovalRules({}, OFFICER)).settings.find((s) => s.scope === scope)?.revision;
+  /** How many times `run` made the API call approval_rule_set: the handler's own checks come first. */
+  const writes = async (run: () => Promise<unknown>): Promise<number> => {
+    const spy = vi.spyOn(api.pool, 'query');
+    try {
+      await run();
+      return spy.mock.calls.filter(([text]) => String(typeof text === 'string' ? text : (text as { text?: string }).text).includes('approval_rule_set')).length;
+    } finally {
+      spy.mockRestore();
+    }
+  };
 
   beforeAll(async () => {
     api = await startApi('nwfl_solo_api');
@@ -38,11 +50,15 @@ describe.skipIf(!live)('ApprovalRuleService', () => {
     it('refuses everyone but the Admin, in the API, writing nothing', async () => {
       const before = await ledger();
       await expect(rules.setApprovalRule({ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: 'away' })).rejects.toMatchObject({ code: Code.Unauthenticated });
-      for (const token of REFUSED) {
-        await expect(rules.setApprovalRule({ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: 'away' }, as(token)), token).rejects.toMatchObject({
-          code: Code.PermissionDenied,
-        });
-      }
+      // Refused by the handler, before the database's own check (0023's 42501) is ever asked.
+      const calls = await writes(async () => {
+        for (const token of REFUSED) {
+          await expect(rules.setApprovalRule({ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: 'away' }, as(token)), token).rejects.toMatchObject({
+            code: Code.PermissionDenied,
+          });
+        }
+      });
+      expect(calls).toBe(0);
       expect(await ledger()).toEqual(before);
       expect(await setting(ApprovalScope.CONTENT)).toBe(ApprovalRule.TWO_PERSON);
     });
@@ -51,20 +67,37 @@ describe.skipIf(!live)('ApprovalRuleService', () => {
       await expect(rules.setApprovalRule({}, OFFICER)).rejects.toMatchObject({ code: Code.PermissionDenied });
     });
 
-    it('refuses an unset or unknown scope or rule, and a blank or over-long reason', async () => {
+    it('refuses an unset or unknown scope or rule, a reason that is blank, says nothing or is over-long, and an over-long revision', async () => {
       const before = await ledger();
-      for (const request of [
-        { scope: ApprovalScope.UNSPECIFIED, rule: ApprovalRule.ONE_APPROVER, reason: 'away' },
-        { scope: ApprovalScope.CONTENT, rule: ApprovalRule.UNSPECIFIED, reason: 'away' },
-        { scope: 99 as ApprovalScope, rule: ApprovalRule.ONE_APPROVER, reason: 'away' },
-        { scope: ApprovalScope.CONTENT, rule: 99 as ApprovalRule, reason: 'away' },
-        { scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: '   ' },
-        { scope: ApprovalScope.CONTENT, rule: ApprovalRule.TWO_PERSON, reason: '' },
-        { scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: 'x'.repeat(2001) },
-      ]) {
-        await expect(rules.setApprovalRule(request, ADMIN), JSON.stringify({ ...request, reason: request.reason.slice(0, 8) })).rejects.toMatchObject({ code: Code.InvalidArgument });
-      }
+      const reason = 'say why, in 1 to 2000 characters, in words';
+      const calls = await writes(async () => {
+        for (const [request, message] of [
+          [{ scope: ApprovalScope.UNSPECIFIED, rule: ApprovalRule.ONE_APPROVER, reason: 'away' }, 'choose what the rule is for'],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.UNSPECIFIED, reason: 'away' }, 'choose two officers or one'],
+          [{ scope: 99 as ApprovalScope, rule: ApprovalRule.ONE_APPROVER, reason: 'away' }, 'choose what the rule is for'],
+          [{ scope: ApprovalScope.CONTENT, rule: 99 as ApprovalRule, reason: 'away' }, 'choose two officers or one'],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: '   ' }, reason],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.TWO_PERSON, reason: '' }, reason],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: 'x'.repeat(2001) }, reason],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: '\t\n' }, reason],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: '\u200b' }, reason],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: '\u00a0\ufeff' }, reason],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: '...' }, reason],
+          [{ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: 'away', expectedRevision: 'r'.repeat(65) }, 'no such revision'],
+        ] as const) {
+          await expect(rules.setApprovalRule(request, ADMIN), JSON.stringify({ ...request, reason: request.reason.slice(0, 8) })).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: message });
+        }
+      });
+      expect(calls).toBe(0);
       expect(await ledger()).toEqual(before);
+    });
+
+    it('takes a reason in any alphabet, or a number, and stores it trimmed of every kind of space', async () => {
+      const done = await rules.setApprovalRule({ scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: '\u00a0\u0395\u03bb\u03bb\u03ac\u03b4\u03b1\u2003' }, ADMIN);
+      expect(done.changed).toBe(true);
+      const { rows } = await api.pool.query(`SELECT reason FROM approval_rule_change ORDER BY changed_at DESC LIMIT 1`);
+      expect(rows[0]).toEqual({ reason: '\u0395\u03bb\u03bb\u03ac\u03b4\u03b1' });
+      expect((await rules.setApprovalRule({ scope: ApprovalScope.CONTENT, rule: ApprovalRule.TWO_PERSON, reason: '2' }, ADMIN)).changed).toBe(true);
     });
   });
 
@@ -94,6 +127,34 @@ describe.skipIf(!live)('ApprovalRuleService', () => {
         reason: 'Webmaster away until Monday',
       });
       await rules.setApprovalRule({ scope: ApprovalScope.CONTENT, rule: ApprovalRule.TWO_PERSON, reason: 'Webmaster back' }, ADMIN);
+    });
+
+    it('names the revision it read, and refuses a stale form sent again after a later switch', async () => {
+      const read = await revision(ApprovalScope.CONTENT);
+      const away = { scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, reason: 'Webmaster away this week', expectedRevision: read };
+      const first = await rules.setApprovalRule(away, ADMIN);
+      expect(first.changed).toBe(true);
+      expect(first.setting?.revision).toMatch(/^[0-9a-f-]{36}$/);
+      expect(first.setting?.revision).not.toBe(read);
+      expect(await revision(ApprovalScope.CONTENT)).toBe(first.setting?.revision);
+      // Pressed twice: nothing changes, nothing is refused.
+      expect((await rules.setApprovalRule(away, ADMIN)).changed).toBe(false);
+      await rules.setApprovalRule({ scope: ApprovalScope.CONTENT, rule: ApprovalRule.TWO_PERSON, reason: 'Webmaster back', expectedRevision: first.setting!.revision }, ADMIN);
+      const before = await ledger();
+      await expect(rules.setApprovalRule(away, ADMIN)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+      expect(await ledger()).toEqual(before);
+      expect(await setting(ApprovalScope.CONTENT)).toBe(ApprovalRule.TWO_PERSON);
+      // With the revision in force it goes through; with none named, nothing is checked.
+      expect((await rules.setApprovalRule({ ...away, expectedRevision: (await revision(ApprovalScope.CONTENT))! }, ADMIN)).changed).toBe(true);
+      expect((await rules.setApprovalRule({ scope: away.scope, rule: ApprovalRule.TWO_PERSON, reason: away.reason }, ADMIN)).changed).toBe(true);
+    });
+
+    it('serves the Admin without the officers group as it serves officers: reads the setting and the record, and flips it', async () => {
+      const lone = as('lone-admin-token');
+      expect((await rules.getApprovalRules({}, lone)).settings).toHaveLength(2);
+      expect((await rules.setApprovalRule({ scope: ApprovalScope.REDACTION_POLICY, rule: ApprovalRule.ONE_APPROVER, reason: 'lone admin' }, lone)).changed).toBe(true);
+      expect((await rules.listApprovalRuleChanges({ pageSize: 1 }, lone)).changes[0]).toMatchObject({ reason: 'lone admin', changedBy: 'sub-lone-admin' });
+      await rules.setApprovalRule({ scope: ApprovalScope.REDACTION_POLICY, rule: ApprovalRule.TWO_PERSON, reason: 'lone admin, back' }, lone);
     });
 
     it('keeps the two scopes apart, both ways and together', async () => {
@@ -128,13 +189,14 @@ describe.skipIf(!live)('ApprovalRuleService', () => {
 
     it('lists the flips to officers, newest first, by scope and a page at a time', async () => {
       const all = (await rules.listApprovalRuleChanges({}, OFFICER)).changes;
-      expect(all.length).toBe(6);
+      expect(all.length).toBe(14);
       expect(all[0]).toMatchObject({ scope: ApprovalScope.CONTENT, fromRule: ApprovalRule.ONE_APPROVER, toRule: ApprovalRule.TWO_PERSON, reason: 'neither', changedBy: 'sub-admin' });
       expect(all[0]?.changeId).toMatch(/^[0-9a-f-]{36}$/);
       expect(all[0]?.changedAt).toBeDefined();
-      expect(all.at(-1)).toMatchObject({ fromRule: ApprovalRule.TWO_PERSON, toRule: ApprovalRule.ONE_APPROVER, reason: 'Webmaster away until Monday' });
+      expect(all.at(-1)).toMatchObject({ fromRule: ApprovalRule.TWO_PERSON, toRule: ApprovalRule.ONE_APPROVER, reason: '\u0395\u03bb\u03bb\u03ac\u03b4\u03b1' });
+      expect(all.map((c) => c.reason)).toContain('Webmaster away until Monday');
       const policy = (await rules.listApprovalRuleChanges({ scope: ApprovalScope.REDACTION_POLICY }, OFFICER)).changes;
-      expect(policy.map((c) => c.reason)).toEqual(['content only', 'policy only']);
+      expect(policy.map((c) => c.reason)).toEqual(['content only', 'policy only', 'lone admin, back', 'lone admin']);
       expect((await rules.listApprovalRuleChanges({ pageSize: 2 }, OFFICER)).changes).toHaveLength(2);
       await expect(rules.listApprovalRuleChanges({ pageSize: -1 }, OFFICER)).rejects.toMatchObject({ code: Code.InvalidArgument });
       await expect(rules.listApprovalRuleChanges({ scope: 99 as ApprovalScope }, OFFICER)).rejects.toMatchObject({ code: Code.InvalidArgument });

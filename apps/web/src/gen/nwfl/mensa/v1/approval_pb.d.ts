@@ -38,6 +38,14 @@ export declare type ApprovalSetting = Message<"nwfl.mensa.v1.ApprovalSetting"> &
    * @generated from field: google.protobuf.Timestamp set_at = 3;
    */
   setAt?: Timestamp | undefined;
+
+  /**
+   * Which switch set it (its change_id); empty while it is still the default.
+   * Send it back as SetApprovalRuleRequest.expected_revision.
+   *
+   * @generated from field: string revision = 4;
+   */
+  revision: string;
 };
 
 /**
@@ -140,6 +148,16 @@ export declare type SetApprovalRuleRequest = Message<"nwfl.mensa.v1.SetApprovalR
    * @generated from field: string reason = 3;
    */
   reason: string;
+
+  /**
+   * The revision the Admin read (ApprovalSetting.revision). When set, a switch
+   * from a setting that has moved on since is refused with FAILED_PRECONDITION,
+   * so a stale form sent again cannot undo a later switch. Asking for the rule
+   * already set still changes nothing, whatever this says.
+   *
+   * @generated from field: optional string expected_revision = 4;
+   */
+  expectedRevision?: string | undefined;
 };
 
 /**
@@ -279,7 +297,7 @@ export declare const ApprovalRuleSchema: GenEnum<ApprovalRule>;
  */
 export declare const ApprovalRuleService: GenService<{
   /**
-   * Officers only: both scopes, content first. Never says who set a rule.
+   * Officers and the Admin: both scopes, content first. Never says who set a rule.
    *
    * @generated from rpc nwfl.mensa.v1.ApprovalRuleService.GetApprovalRules
    */
@@ -289,7 +307,8 @@ export declare const ApprovalRuleService: GenService<{
     output: typeof GetApprovalRulesResponseSchema;
   },
   /**
-   * The Admin only, with a reason of 1 to 2000 characters.
+   * The Admin only, with a reason of 1 to 2000 characters that has a letter
+   * or a digit in it.
    *
    * @generated from rpc nwfl.mensa.v1.ApprovalRuleService.SetApprovalRule
    */
@@ -299,7 +318,7 @@ export declare const ApprovalRuleService: GenService<{
     output: typeof SetApprovalRuleResponseSchema;
   },
   /**
-   * Officers only: the switches, newest first.
+   * Officers and the Admin: the switches, newest first.
    *
    * @generated from rpc nwfl.mensa.v1.ApprovalRuleService.ListApprovalRuleChanges
    */

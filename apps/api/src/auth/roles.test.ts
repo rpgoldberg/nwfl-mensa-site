@@ -11,6 +11,7 @@ import {
   requireMembershipApprover,
   requireOffice,
   requireOfficer,
+  requireOfficerOrAdmin,
   requireScope,
   requireUser,
   rolesOf,
@@ -125,5 +126,15 @@ describe('requireAdmin (SOLO-APPROVE: the approval switch)', () => {
 
   it('refuses an admin group under another prefix, which the gate drops', () => {
     expect(() => requireAdmin(user(...internalGroups(['nwfl-admin', 'other-nwfl-admin'], 'mensa-nwfl-')))).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+  });
+});
+
+describe('requireOfficerOrAdmin (SOLO-APPROVE: reading the approval setting)', () => {
+  it('lets officers and the Admin through, the Admin without the officers group too, and no one else', () => {
+    for (const caller of [ross, webmaster, treasurer, user('nwfl-admin')]) expect(() => requireOfficerOrAdmin(caller)).not.toThrow();
+    for (const caller of [member, agent, user('nwfl-members', 'mensa-nwfl-admin')]) {
+      expect(() => requireOfficerOrAdmin(caller)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    }
+    expect(() => requireOfficerOrAdmin(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
   });
 });

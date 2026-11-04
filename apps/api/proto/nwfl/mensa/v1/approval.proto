@@ -30,13 +30,14 @@ enum ApprovalRule {
 }
 
 service ApprovalRuleService {
-  // Officers only: both scopes, content first. Never says who set a rule.
+  // Officers and the Admin: both scopes, content first. Never says who set a rule.
   rpc GetApprovalRules(GetApprovalRulesRequest) returns (GetApprovalRulesResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
-  // The Admin only, with a reason of 1 to 2000 characters.
+  // The Admin only, with a reason of 1 to 2000 characters that has a letter
+  // or a digit in it.
   rpc SetApprovalRule(SetApprovalRuleRequest) returns (SetApprovalRuleResponse);
-  // Officers only: the switches, newest first.
+  // Officers and the Admin: the switches, newest first.
   rpc ListApprovalRuleChanges(ListApprovalRuleChangesRequest) returns (ListApprovalRuleChangesResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
@@ -47,6 +48,9 @@ message ApprovalSetting {
   ApprovalRule rule = 2;
   // When the rule was last switched; unset while it is still the default.
   google.protobuf.Timestamp set_at = 3;
+  // Which switch set it (its change_id); empty while it is still the default.
+  // Send it back as SetApprovalRuleRequest.expected_revision.
+  string revision = 4;
 }
 
 message ApprovalRuleChange {
@@ -70,6 +74,11 @@ message SetApprovalRuleRequest {
   ApprovalScope scope = 1;
   ApprovalRule rule = 2;
   string reason = 3;
+  // The revision the Admin read (ApprovalSetting.revision). When set, a switch
+  // from a setting that has moved on since is refused with FAILED_PRECONDITION,
+  // so a stale form sent again cannot undo a later switch. Asking for the rule
+  // already set still changes nothing, whatever this says.
+  optional string expected_revision = 4;
 }
 
 message SetApprovalRuleResponse {

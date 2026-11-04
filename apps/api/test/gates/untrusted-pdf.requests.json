@@ -43,6 +43,12 @@
         "number": 3,
         "type": "string",
         "label": "optional"
+      },
+      {
+        "name": "expected_revision",
+        "number": 4,
+        "type": "string",
+        "label": "proto3_optional"
       }
     ]
   },
