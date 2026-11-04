@@ -4,6 +4,8 @@
 // issue loader published, each with its public PDF. Until the API has one, and
 // without the API, the bundled sample, which says it is one; its missing issues
 // are listed honestly. Large-type reading views arrive with the archive (MB3).
+// Under each issue with a PDF, a reader who is not signed in is told to sign in for the
+// members copy, where sign-in works (membersSignInLink); a signed-in reader never is.
 // A14: read with a signed-in reader's token (src/lib/auth/bearer.ts), the page
 // shows what the API sent that reader: a member gets each issue's members copy
 // and the newsletter's members articles and passages. A lapsed token gives the
@@ -17,6 +19,7 @@
 import { PUBLIC_ONLY } from 'astro:env/server';
 import IssueCard from '../components/IssueCard.astro';
 import ItemFiles from '../components/ItemFiles.astro';
+import MembersSignIn from '../components/MembersSignIn.astro';
 import SampleNotice from '../components/SampleNotice.astro';
 import Unavailable from '../components/Unavailable.astro';
 import { liveData, siteData } from '../data';
@@ -24,7 +27,7 @@ import { formatDate } from '../data/format';
 import { currentIssue, issueSummary, issuesByYear, newsIssues } from '../data/site-data';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
-import { readerFor, signInLink } from '../lib/auth/bearer';
+import { membersSignInLink, readerFor, signInLink } from '../lib/auth/bearer';
 import { runtimeDeps } from '../lib/auth/flow';
 import { visibleContent } from '../lib/content';
 import { MEMBERS_RULE } from '../lib/document';
@@ -35,6 +38,8 @@ const live = liveData();
 const auth = runtimeDeps();
 const { reader, lapsed } = readerFor(Astro.locals.session, auth);
 const signIn = signInLink(auth, PUBLIC_ONLY, '/news');
+// A signed-out reader's line about the members copy: the same for all of them, so the public page still caches.
+const membersSignIn = membersSignInLink(Astro.locals.session, auth, PUBLIC_ONLY, '/news');
 const loaded = live ? await attempt(() => live.news(reader, { signIn })) : { ok: true as const, value: undefined };
 const news = loaded.ok ? loaded.value : undefined;
 if (!loaded.ok || news?.itemsUnavailable) markUnavailable(Astro.response);
@@ -51,7 +56,7 @@ const items = news?.items ?? [];
   {!loaded.ok ? <Unavailable what="The list of issues" /> : (
     <>
       {shown.sample && siteData.isSample && <SampleNotice />}
-      {current && <IssueCard issue={current} />}
+      {current && <IssueCard issue={current} membersSignIn={membersSignIn} />}
       <section aria-labelledby="past-title">
         <h2 id="past-title">Past issues</h2>
         {past.map(([year, list]) => (
@@ -62,6 +67,7 @@ const items = news?.items ?? [];
                 <li data-source={i.source} class={i.missing ? 'missing' : undefined}>
                   {i.pdf ? <a href={i.pdf}>{i.label} (PDF)</a> : <span>{i.label}</span>}
                   {i.membersPdf && <a href={i.membersPdf}>{i.label}, members copy (PDF)</a>}
+                  {i.pdf && membersSignIn && <MembersSignIn href={membersSignIn} />}
                   {i.missing ? <span class="muted">No copy known. If you have a paper copy, please tell the Editor.</span>
                     : issueSummary(i) && <span class="muted">{issueSummary(i)}</span>}
                 </li>

@@ -757,6 +757,12 @@ main > .cols { max-width: none; }
 /* An issue's PDF: a full-size target, like every other link a reader taps. */
 .issues a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
 
+/* The line under an issue for a reader not signed in: body text, the link an ordinary underlined one. */
+.members-signin { margin: 0; flex-basis: 100%; }
+.issue .members-signin { grid-column: 1 / -1; }
+.members-signin a { font-weight: 700; text-decoration: underline; }
+.issues .members-signin a { display: inline; min-height: 0; }
+
 /* Minutes and finances. */
 .meeting { scroll-margin-top: var(--space-4); }
 .meeting h2 { font-size: var(--fs-h3); }

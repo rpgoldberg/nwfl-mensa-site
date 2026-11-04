@@ -5,7 +5,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
 import { setPrefs } from './prefs';
-import { NO_ISSUES_SITE_URL } from './servers';
+import { NO_ISSUES_SITE_URL, SIGN_IN_OFF_URL } from './servers';
 import { ARTICLES, NEWSLETTER, SOURCE_PDFS } from './stand-in';
 
 // As in a11y.spec.ts: WCAG 2.2 A and AA, plus AAA and best practice.
@@ -32,10 +32,11 @@ test.describe('/news with issues published', () => {
     await expect(card.getByRole('link', { name: 'Read this issue (PDF)' })).toHaveAttribute('href', pdf(current!.publicPdf));
     const others = page.getByRole('region', { name: 'Past issues' });
     await expect(others.getByRole('heading', { level: 3 })).toHaveText(['2026', '2025']);
-    await expect(others.getByRole('link')).toHaveText(past.map((i) => `${i.title} (PDF)`));
+    // Each row also holds the signed-out line's "sign in" link (below): count the PDFs only.
+    await expect(others.getByRole('link', { name: /\(PDF\)$/ })).toHaveText(past.map((i) => `${i.title} (PDF)`));
     for (const issue of past) {
       const row = others.getByRole('listitem').filter({ hasText: issue.title });
-      await expect(row.getByRole('link')).toHaveAttribute('href', pdf(issue.publicPdf));
+      await expect(row.getByRole('link', { name: /\(PDF\)$/ })).toHaveAttribute('href', pdf(issue.publicPdf));
       await expect(row).toContainText(issue.summary);
     }
     await expect(page.locator('main [data-source="pipeline"]')).toHaveCount(NEWSLETTER.issues.length);
@@ -153,4 +154,69 @@ test.describe('/news with no issue published yet', () => {
       expect(await sideways(page)).toBeLessThanOrEqual(0);
     });
   });
+});
+
+// Ross, 11-04: under each issue with a PDF, a reader who is not signed in is told once that signing in
+// gives the members copy. Only where sign-in works (the main site), never on Home, never signed in.
+const SIGN_IN_LINE = 'Members: sign in to read the members copy, with phone numbers and e-mails.';
+
+test.describe('/news, the line to sign in for the members copy', () => {
+  test('shows once under each issue that has a PDF, with "sign in" a link back to /news', async ({ page }) => {
+    await page.goto('/news');
+    const main = page.getByRole('main');
+    const lines = main.getByText(SIGN_IN_LINE);
+    await expect(lines).toHaveCount(NEWSLETTER.issues.length);
+    const card = page.getByRole('region', { name: current!.title });
+    await expect(card.getByText(SIGN_IN_LINE)).toHaveCount(1);
+    const others = page.getByRole('region', { name: 'Past issues' });
+    for (const issue of past) await expect(others.getByRole('listitem').filter({ hasText: issue.title }).getByText(SIGN_IN_LINE)).toHaveCount(1);
+    const links = lines.getByRole('link', { name: 'sign in', exact: true });
+    await expect(links).toHaveCount(NEWSLETTER.issues.length);
+    for (const link of await links.all()) {
+      await expect(link).toHaveAttribute('href', '/sign-in?return=%2Fnews');
+      expect(await link.evaluate((el) => getComputedStyle(el).textDecorationLine)).toContain('underline');
+    }
+  });
+
+  test('is the same for every signed-out reader, and the page stays publicly cached', async ({ request }) => {
+    const first = await request.get('/news');
+    const second = await request.get('/news');
+    expect(first.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
+    const lines = (html: string) => html.split(' to read the members copy, with phone numbers and e-mails.').length - 1;
+    expect(lines(await first.text())).toBe(NEWSLETTER.issues.length);
+    expect(lines(await second.text())).toBe(NEWSLETTER.issues.length);
+  });
+
+  test('is in plain text of a readable size and holds at the narrowest phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto('/news');
+    const line = page.getByRole('main').getByText(SIGN_IN_LINE).first();
+    await expect(line).toBeVisible();
+    expect(await line.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
+    expect(await sideways(page)).toBeLessThanOrEqual(0);
+  });
+
+  test('is not on Home, whose newsletter card only leads to /news', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('link', { name: 'See every issue' })).toBeVisible();
+    await expect(page.getByText(SIGN_IN_LINE)).toHaveCount(0);
+    await expect(page.getByText('to read the members copy')).toHaveCount(0);
+  });
+
+  test('is not on /news where sign-in is not set up, since /sign-in would answer 503', async ({ page, request }) => {
+    expect((await request.get(`${SIGN_IN_OFF_URL}/sign-in`)).status()).toBe(503);
+    await page.goto(`${SIGN_IN_OFF_URL}/news`);
+    await expect(page.getByRole('region', { name: 'Past issues' }).getByRole('link', { name: `${past[0]!.title} (PDF)` })).toBeVisible();
+    await expect(page.getByText('to read the members copy')).toHaveCount(0);
+    await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
+  });
+
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`axe with the line, ${scheme} system setting`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto('/news');
+      await expect(page.getByRole('main').getByText(SIGN_IN_LINE)).toHaveCount(NEWSLETTER.issues.length);
+      expect(await axe(page)).toEqual([]);
+    });
+  }
 });
