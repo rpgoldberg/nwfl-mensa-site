@@ -28,8 +28,11 @@ import type { RedactRequest } from './redact.js';
 
 type Query = Pick<Db, 'query'>;
 
-/** The engine libraries and the gate's revision: a new one changes every key, so every copy is made again. */
-export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b';
+/**
+ * The engine libraries and the gate's and the boxes' revisions: a new one changes every key, so every
+ * copy is made again (box-exact: REDACT-LOOK's exact-fit boxes; older ledger rows verify as inputs only).
+ */
+export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact';
 /** R11: a PDF original is at most 10 MiB. */
 export const MAX_ORIGINAL_BYTES = 10 * 1024 * 1024;
 

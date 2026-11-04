@@ -42,7 +42,22 @@ const FPDF_PAGEOBJ_IMAGE = 3;
 const FPDF_FILLMODE_ALTERNATE = 1;
 /** Helvetica's advance for "withheld", in ems (its AFM widths: w i t h h e l d). */
 const LABEL = 'withheld';
-const LABEL_EMS = (722 + 222 + 278 + 556 + 556 + 556 + 222 + 556) / 1000;
+export const LABEL_EMS = (722 + 222 + 278 + 556 + 556 + 556 + 222 + 556) / 1000;
+/** The smallest label drawn, in points: below it a box has no label (REDACT-LOOK: legible to older readers at 100 %). */
+export const MIN_LABEL_PT = 7;
+/** The space kept clear between the label and each side of its box, in points. */
+const LABEL_PAD = 1;
+
+/**
+ * The size of the "withheld" label for a box, or null when it has none: 0.8 of the passage's type
+ * size, smaller to fit the box's height and width (a point clear each side), but never below
+ * MIN_LABEL_PT or 0.6 of the type size. A box too narrow for a readable label is left without one,
+ * as an opaque box alone; the label is never shrunk to fit.
+ */
+export function labelSize(region: Region): number | null {
+  const size = Math.min(0.8 * region.fontSize, 0.8 * (region.top - region.bottom), (region.right - region.left - 2 * LABEL_PAD) / LABEL_EMS);
+  return size < Math.max(MIN_LABEL_PT, 0.6 * region.fontSize) ? null : size;
+}
 
 /** An open document: the bytes stay in wasm memory until it is closed. */
 export class Document {
@@ -150,11 +165,16 @@ export class Page {
     return out;
   }
 
-  /** The page's characters, as PDFium extracts them; `unmapped` counts characters with no Unicode value. */
+  /**
+   * The page's characters, as PDFium extracts them; `unmapped` counts characters with no Unicode
+   * value. A character's type size is the font's size scaled by its matrix's vertical axis, so text
+   * set at 1 pt and scaled to 12 pt reads as 12 pt.
+   */
   chars(): { chars: PageChar[]; unmapped: number } {
     const m = this.m;
     const text = m.FPDFText_LoadPage(this.handle);
-    const at = rt(m).wasmExports.malloc(16);
+    // FS_RECTF (16 bytes), four doubles (32) and FS_MATRIX (24).
+    const at = rt(m).wasmExports.malloc(72);
     const chars: PageChar[] = [];
     let unmapped = 0;
     try {
@@ -171,7 +191,8 @@ export class Page {
           generated: m.FPDFText_IsGenerated(text, i) === 1,
           hyphen: m.FPDFText_IsHyphen(text, i) === 1,
           box,
-          fontSize: m.FPDFText_GetFontSize(text, i),
+          ink: this.ink(text, i, at + 16),
+          fontSize: m.FPDFText_GetFontSize(text, i) * this.scale(text, i, at + 48),
         });
       }
     } finally {
@@ -179,6 +200,21 @@ export class Page {
       m.FPDFText_ClosePage(text);
     }
     return { chars, unmapped };
+  }
+
+  /** A character's tight box (FPDFText_GetCharBox, the box PDFium's removal tests), or null. */
+  private ink(text: number, i: number, at: number): Box | null {
+    const placed = this.m.FPDFText_GetCharBox(text, i, at, at + 8, at + 16, at + 24);
+    const [left = NaN, right = NaN, bottom = NaN, top = NaN] = new Float64Array(rt(this.m).HEAPU8.buffer, at, 4);
+    return placed && [left, right, bottom, top].every(Number.isFinite) && right >= left && top >= bottom ? { left, right, bottom, top } : null;
+  }
+
+  /** How much a character's matrix scales its type vertically (1 when it cannot be read). */
+  private scale(text: number, i: number, at: number): number {
+    if (!this.m.FPDFText_GetMatrix(text, i, at)) return 1;
+    const [, , c = 0, d = 1] = new Float32Array(rt(this.m).HEAPU8.buffer, at, 4);
+    const scale = Math.hypot(c, d);
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
   }
 
   /** Removes every glyph the regions touch from the page's content, form XObjects included. */
@@ -210,18 +246,19 @@ export class Page {
     return m.FPDFPage_GenerateContent(this.handle);
   }
 
-  /** An opaque box over each region, labelled "withheld" in white where the label fits. */
+  /** An opaque box over each region, labelled "withheld" in white, centred, where the label fits (labelSize). */
   drawBoxes(regions: readonly Region[]): void {
     const m = this.m;
-    for (const { left, right, bottom, top, fontSize } of regions) {
+    for (const region of regions) {
+      const { left, right, bottom, top } = region;
       const width = right - left;
       const height = top - bottom;
       const box = m.FPDFPageObj_CreateNewRect(left, bottom, width, height);
       m.FPDFPageObj_SetFillColor(box, 0, 0, 0, 255);
       m.FPDFPath_SetDrawMode(box, FPDF_FILLMODE_ALTERNATE, false);
       m.FPDFPage_InsertObject(this.handle, box);
-      const size = Math.min(fontSize * 0.8, (width - 2) / LABEL_EMS, height * 0.8);
-      if (size < 4) continue;
+      const size = labelSize(region);
+      if (size === null) continue;
       const label = m.FPDFPageObj_NewTextObj(this.doc.handle, 'Helvetica', size);
       const bytes = (LABEL.length + 1) * 2;
       const text = rt(m).wasmExports.malloc(bytes);

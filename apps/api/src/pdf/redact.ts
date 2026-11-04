@@ -9,9 +9,11 @@
 //
 // The copy: annotations and form fields are drawn into their pages (so what
 // they show is matched like the page), the marked passages are found in each
-// page's text (match.ts), every glyph in their widened regions is removed
-// from the content (PDFium, form XObjects included) and an opaque box
-// labelled "withheld" is drawn over each. Then the pages are rebuilt alone
+// page's text (match.ts), every glyph in their regions (exactly the passages'
+// extent, and any neighbour removed with them) is removed from the content
+// (PDFium, form XObjects included) and an opaque box is drawn over exactly
+// what was removed, labelled "withheld" where the label fits at a readable
+// size (pdfium.ts labelSize). Then the pages are rebuilt alone
 // (sanitize.ts): no metadata, outline, attachments, JavaScript, annotations or
 // marked-content text. Last, PDFium reads the copy again, then the output
 // gate (gate.ts) reads it with pdf.js and decodes every object in it: if
@@ -23,14 +25,16 @@
 //     SCAN_SHARE of what it draws: a scan, whose words cannot be found, so
 //     cannot be checked, whenever the audience redacts anything;
 //   - a page has characters with no Unicode value: its text cannot be checked;
-//   - a passage has no position, or lies over a picture (removing the text
-//     would leave the picture's pixels under the box);
+//   - a passage has no position, or it or its glyphs' ink lies over a picture
+//     (removing the text would leave the picture's pixels under the box);
+//   - a withheld glyph is still on the page after removal, even one no whole
+//     quote can be read in;
 //   - a content stream or a JPEG cannot be read, or a passage is still
 //     readable after (PDFium), or the gate finds one or cannot check a stream.
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
-import { type Box, type Region, matchedChars, regionsFor } from './match.js';
+import { type Box, type PageChar, type Region, boxesFor, matchedChars, regionsFor, stillThere } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -71,8 +75,7 @@ function isScan(page: Page): boolean {
   return extent > 0 && pictures >= SCAN_SHARE * extent;
 }
 
-const overlaps = (a: Region, b: { left: number; right: number; bottom: number; top: number }): boolean =>
-  a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
+const overlaps = (a: Box, b: Box): boolean => a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
 
 /** Why one page cannot be given, or null once its passages are removed and boxed (added to `boxes`). */
 function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[], regenerate: boolean): string | null {
@@ -84,16 +87,25 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     if (chars.length === 0 && page.objectCount > 0) return `page ${index + 1} has no text layer`;
     if (isScan(page)) return `page ${index + 1} is a scan: pictures cover most of it`;
     if (unmapped > 0) return `page ${index + 1} has text that cannot be read`;
-    const found = regionsFor(chars, matchedChars(chars, quotes), index, page.width);
+    const withheld = matchedChars(chars, quotes);
+    const found = regionsFor(chars, withheld, index);
     if (!found.ok) return found.reason;
     if (found.regions.length === 0) return null;
+    // A box is as narrow as the passage, so the marked glyphs' own ink is checked too.
+    const covered: Box[] = [...found.regions, ...[...withheld].flatMap((i) => chars[i]?.ink ?? [])];
     const pictures = page.pictures();
-    if (found.regions.some((region) => pictures.some((picture) => overlaps(region, picture)))) {
+    if (covered.some((area) => pictures.some((picture) => overlaps(area, picture)))) {
       return `page ${index + 1}: a withheld passage lies over a picture`;
     }
     page.removeText(found.regions);
-    page.drawBoxes(found.regions);
-    boxes.push(...found.regions);
+    const there = stillThere(chars, page.chars().chars);
+    if ([...withheld].some((i) => there.has(i) && !/^\s*$/u.test((chars[i] as PageChar).text))) {
+      return `page ${index + 1}: a withheld glyph survived removal`;
+    }
+    // The boxes cover exactly what was removed: the passages, and any neighbour that went with them.
+    const drawn = boxesFor(chars, withheld, new Set([...chars.keys()].filter((i) => !there.has(i))), index);
+    page.drawBoxes(drawn);
+    boxes.push(...drawn);
     return null;
   });
 }

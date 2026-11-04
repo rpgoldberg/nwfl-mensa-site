@@ -61,15 +61,17 @@ describe('the post-rebuild check', () => {
   });
 });
 
-describe('the length hint at a line end', () => {
-  it('gives "Ann Lee" and "Ann Leek" the same box when each ends its line', async () => {
+describe('a box at a line end (REDACT-LOOK: exact fit, no run-on)', () => {
+  it('gives "Ann Lee" and "Ann Leek" boxes that end where each name ends', async () => {
     const lee = await redactPdf(fixture('size-lineend-Lee'), { quotes: ['Ann Lee'], redactsAny: false });
     const leek = await redactPdf(fixture('size-lineend-Leek'), { quotes: ['Ann Leek'], redactsAny: false });
     if (lee.kind !== 'redacted' || leek.kind !== 'redacted') throw new Error(JSON.stringify([lee, leek]));
     expect(lee.boxes).toHaveLength(1);
-    expect(lee.boxes).toEqual(leek.boxes);
-    // The box runs past where either name ends (Leek ends at 300.13).
-    expect(lee.boxes[0]?.right).toBeGreaterThan(400);
+    expect(leek.boxes).toHaveLength(1);
+    expect(lee.boxes[0]?.left).toBeCloseTo(leek.boxes[0]?.left as number, 3);
+    expect(lee.boxes[0]?.right).toBeLessThan(leek.boxes[0]?.right as number);
+    // Leek ends at 300.13: the box stops there, short of the margin.
+    expect(leek.boxes[0]?.right).toBeCloseTo(300.13, 1);
   });
 });
 

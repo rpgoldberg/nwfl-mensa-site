@@ -3,7 +3,8 @@
 // characters as PDFium reports them (text, generated or not, a line-end
 // hyphen or not, a box). Every name here is made up.
 import { describe, expect, it } from 'vitest';
-import { type PageChar, WIDTH_STEP_EM, matchedChars, regionsFor, textMatches } from './match.js';
+import { type Box, type PageChar, type Region, boxesFor, matchedChars, regionsFor, stillThere, textMatches } from './match.js';
+import { LABEL_EMS, MIN_LABEL_PT, labelSize } from './pdfium.js';
 
 const SIZE = 12;
 const ADVANCE = 6;
@@ -13,8 +14,8 @@ function page(lines: readonly string[], options: { x?: number; generatedSpaces?:
   const out: PageChar[] = [];
   lines.forEach((line, row) => {
     if (row > 0) {
-      out.push({ text: '\r', generated: true, hyphen: false, box: null, fontSize: 0 });
-      out.push({ text: '\n', generated: true, hyphen: false, box: null, fontSize: 0 });
+      out.push({ text: '\r', generated: true, hyphen: false, box: null, ink: null, fontSize: 0 });
+      out.push({ text: '\n', generated: true, hyphen: false, box: null, ink: null, fontSize: 0 });
     }
     const bottom = 700 - row * 20;
     [...line].forEach((ch, col) => {
@@ -25,6 +26,8 @@ function page(lines: readonly string[], options: { x?: number; generatedSpaces?:
         generated: false,
         hyphen,
         box: { left, right: left + ADVANCE, bottom, top: bottom + SIZE },
+        // The glyph's own ink sits inside its advance, as most do: half a point in from each side.
+        ink: { left: left + 0.5, right: left + ADVANCE - 0.5, bottom: bottom + 1, top: bottom + SIZE - 2 },
         fontSize: SIZE,
       });
     });
@@ -105,7 +108,7 @@ describe('matchedChars', () => {
   });
 
   it('finds letter-spaced text across PDFium generated spaces', () => {
-    const chars = page(['Phone K e s t r e l.']).map((c) => (c.text === ' ' ? { ...c, generated: true, box: null } : c));
+    const chars = page(['Phone K e s t r e l.']).map((c) => (c.text === ' ' ? { ...c, generated: true, box: null, ink: null } : c));
     expect(textOf(chars, matchedChars(chars, ['Kestrel'])).replaceAll(' ', '')).toBe('Kestrel');
   });
 
@@ -153,68 +156,93 @@ describe('textMatches (a plain string, as the output gate reads it)', () => {
   });
 });
 
-describe('regionsFor', () => {
-  const step = WIDTH_STEP_EM * SIZE;
+/** The regions' edges, rounded to a thousandth of a point. */
+const edges = (result: ReturnType<typeof regionsFor> | Region[]): number[][] => {
+  if (!Array.isArray(result) && !result.ok) throw new Error(result.reason);
+  return (Array.isArray(result) ? result : result.regions).map((r) => [r.left, r.right, r.bottom, r.top].map((v) => Number(v.toFixed(3))));
+};
 
-  it('widens a short passage to one step from its left edge', () => {
+/** The page with one character's loose box or ink changed. */
+const withChar = (chars: PageChar[], index: number, change: { box?: Partial<Box> | null; ink?: Partial<Box> | null }): PageChar[] =>
+  chars.map((c, i) => {
+    if (i !== index) return c;
+    const box = change.box === null ? null : change.box === undefined ? c.box : { ...(c.box as Box), ...change.box };
+    const ink = change.ink === null ? null : change.ink === undefined ? c.ink : { ...(c.ink as Box), ...change.ink };
+    return { ...c, box, ink };
+  });
+
+describe('regionsFor: exact fit (REDACT-LOOK, Ross 11-02)', () => {
+  it('boxes a passage at exactly its marked glyphs\' extent, one line tall', () => {
     const chars = page(['Call Bo today, and the rest of a long line of text']);
-    const result = regionsFor(chars, matchedChars(chars, ['Bo']));
-    expect(result).toEqual({
+    expect(regionsFor(chars, matchedChars(chars, ['Bo']))).toEqual({
       ok: true,
-      regions: [{ page: 0, left: 72 + 5 * ADVANCE, right: 72 + 5 * ADVANCE + step, bottom: 700, top: 712, fontSize: SIZE }],
+      regions: [{ page: 0, left: 72 + 5 * ADVANCE, right: 72 + 7 * ADVANCE, bottom: 700, top: 712, fontSize: SIZE }],
     });
   });
 
-  it('gives two passages of different lengths in the same step boxes of the same width', () => {
+  it('gives two passages of different lengths boxes of their own widths', () => {
     const chars = page(['x Bo y and some filler words here', 'x Quillon y and some filler words here']);
     const result = regionsFor(chars, matchedChars(chars, ['Bo', 'Quillon']));
-    if (!result.ok) throw new Error(result.reason);
-    const widths = result.regions.map((r) => r.right - r.left);
-    expect(widths).toEqual([step, step]);
+    expect(edges(result).map(([left, right]) => (right as number) - (left as number))).toEqual([2 * ADVANCE, 7 * ADVANCE]);
   });
 
-  it('widens a long passage to the next multiple of the step', () => {
+  it('does not widen a long passage', () => {
     const chars = page(['x Bartholomew y then a much longer tail of filler text']);
-    const result = regionsFor(chars, matchedChars(chars, ['Bartholomew']));
-    if (!result.ok) throw new Error(result.reason);
-    expect(result.regions.map((r) => r.right - r.left)).toEqual([2 * step]);
+    expect(edges(regionsFor(chars, matchedChars(chars, ['Bartholomew'])))).toEqual([[84, 84 + 11 * ADVANCE, 700, 712]]);
   });
 
-  it('caps a region at the line, shifting it left first', () => {
+  it('never runs a box that ends its line on into the margin', () => {
     const chars = page(['a long line that ends with Bo']);
-    const result = regionsFor(chars, matchedChars(chars, ['Bo']));
-    if (!result.ok) throw new Error(result.reason);
-    const lineRight = 72 + 29 * ADVANCE;
-    expect(result.regions).toEqual([{ page: 0, left: lineRight - step, right: lineRight, bottom: 700, top: 712, fontSize: SIZE }]);
+    expect(edges(regionsFor(chars, matchedChars(chars, ['Bo'])))).toEqual([[72 + 27 * ADVANCE, 72 + 29 * ADVANCE, 700, 712]]);
   });
 
-  it('caps a region at a line shorter than one step', () => {
-    const chars = page(['Bo ok']);
-    const result = regionsFor(chars, matchedChars(chars, ['Bo']));
-    if (!result.ok) throw new Error(result.reason);
-    expect(result.regions).toEqual([{ page: 0, left: 72, right: 72 + 5 * ADVANCE, bottom: 700, top: 712, fontSize: SIZE }]);
+  it('gives "Ann Lee" and "Ann Leek" at a line end their own widths', () => {
+    const lee = page(['Please phone our club treasurer, Ann Lee']);
+    const leek = page(['Please phone our club treasurer, Ann Leek']);
+    expect(edges(regionsFor(lee, matchedChars(lee, ['Ann Lee'])))).toEqual([[270, 312, 700, 712]]);
+    expect(edges(regionsFor(leek, matchedChars(leek, ['Ann Leek'])))).toEqual([[270, 318, 700, 712]]);
   });
 
-  it('gives each line of a split passage its own region', () => {
+  it('leaves a second column in the same band untouched', () => {
+    const left = page(['some words then Ann Lee']);
+    const right = page(['other column']).map((c) => ({
+      ...c,
+      box: c.box && { ...c.box, left: c.box.left + 300, right: c.box.right + 300 },
+      ink: c.ink && { ...c.ink, left: c.ink.left + 300, right: c.ink.right + 300 },
+    }));
+    const chars = [...left, { text: '\n', generated: true, hyphen: false, box: null, ink: null, fontSize: 0 }, ...right];
+    expect(edges(regionsFor(chars, matchedChars(chars, ['Ann Lee'])))).toEqual([[168, 210, 700, 712]]);
+  });
+
+  it('gives each line of a split passage its own exact box', () => {
     const chars = page(['then you can ask Marvel', 'Ostrander at the door and more filler text']);
-    const result = regionsFor(chars, matchedChars(chars, ['Marvel Ostrander']));
-    if (!result.ok) throw new Error(result.reason);
-    expect(result.regions.map((r) => r.bottom)).toEqual([700, 680]);
+    expect(edges(regionsFor(chars, matchedChars(chars, ['Marvel Ostrander'])))).toEqual([
+      [174, 210, 700, 712],
+      [72, 126, 680, 692],
+    ]);
   });
 
   it('starts a new line after PDFium\'s line-end hyphen, even with no line break reported', () => {
     const chars = page(['then Tobias Wren\u0002', 'hallow hosted it and more filler text']).filter((c) => !c.generated);
-    const result = regionsFor(chars, matchedChars(chars, ['Wrenhallow']));
-    if (!result.ok) throw new Error(result.reason);
-    // The hyphen is the first line's last glyph: its region reaches it.
-    expect(result.regions.map((r) => [r.left, r.right, r.bottom, r.top])).toEqual([[126, 174, 700, 712], [72, 120, 680, 692]]);
+    // The hyphen is the first line's last glyph: its box reaches it.
+    expect(edges(regionsFor(chars, matchedChars(chars, ['Wrenhallow'])))).toEqual([
+      [144, 174, 700, 712],
+      [72, 108, 680, 692],
+    ]);
   });
 
-  it('merges regions that overlap once widened, then widens the merge to a whole step', () => {
-    const chars = page(['x Bo Al y and some filler words here to widen']);
-    const result = regionsFor(chars, matchedChars(chars, ['Bo', 'Al']));
-    if (!result.ok) throw new Error(result.reason);
-    expect(result.regions.map((r) => r.right - r.left)).toEqual([2 * step]);
+  it('merges passages whose boxes overlap on a line, without widening the merge', () => {
+    // "Bo" and "Al" kerned together over a zero-width space: their boxes overlap by 2 pt.
+    let chars = page(['Bo Al']);
+    chars = withChar(chars, 2, { box: { left: 84, right: 84 }, ink: null });
+    chars = withChar(chars, 3, { box: { left: 82, right: 88 }, ink: { left: 82.5, right: 87.5 } });
+    chars = withChar(chars, 4, { box: { left: 88, right: 94 }, ink: { left: 88.5, right: 93.5 } });
+    expect(edges(regionsFor(chars, new Set([0, 1, 3, 4])))).toEqual([[72, 94, 700, 712]]);
+  });
+
+  it('makes the box taller for a risen glyph, never wider', () => {
+    const chars = withChar(page(['x Bo y']), 3, { box: { bottom: 703, top: 715 }, ink: { bottom: 704, top: 713 } });
+    expect(edges(regionsFor(chars, matchedChars(chars, ['Bo'])))).toEqual([[84, 96, 700, 715]]);
   });
 
   it('refuses a matched character that has no box', () => {
@@ -226,41 +254,134 @@ describe('regionsFor', () => {
     expect(regionsFor(page(['nothing']), new Set())).toEqual({ ok: true, regions: [] });
   });
 
-  it('runs a box that reaches the line end on to the page\'s right margin, so its edge does not show where the passage ends', () => {
-    // 612 pt page, text from 72: the right margin mirrors the left, at 540.
-    const lee = page(['Please phone our club treasurer, Ann Lee']);
-    const leek = page(['Please phone our club treasurer, Ann Leek']);
-    const boxOf = (chars: PageChar[], quote: string): number[] => {
-      const result = regionsFor(chars, matchedChars(chars, [quote]), 0, 612);
-      if (!result.ok) throw new Error(result.reason);
-      return result.regions.map((r) => [r.left, r.right]).flat();
-    };
-    const annAt = 72 + 33 * ADVANCE;
-    expect(boxOf(lee, 'Ann Lee')).toEqual([annAt, 540]);
-    expect(boxOf(leek, 'Ann Leek')).toEqual([annAt, 540]);
-  });
-
-  it('stops a line-end box short of text further right in the same band (a second column)', () => {
-    const left = page(['some words then Ann Lee']);
-    const right = page(['other column']).map((c) => ({ ...c, box: c.box && { ...c.box, left: c.box.left + 300, right: c.box.right + 300 } }));
-    const chars = [...left, { text: '\n', generated: true, hyphen: false, box: null, fontSize: 0 }, ...right];
-    const result = regionsFor(chars, matchedChars(chars, ['Ann Lee']), 0, 612);
-    if (!result.ok) throw new Error(result.reason);
-    expect(result.regions.map((r) => [r.left, r.right])).toEqual([[72 + 16 * ADVANCE, 372]]);
-  });
-
-  it('keeps a line-end box at the line when the line already passes the right margin', () => {
-    const chars = page(['a long line that ends with Bo']);
-    const result = regionsFor(chars, matchedChars(chars, ['Bo']), 0, 72 + 29 * ADVANCE + 10);
-    if (!result.ok) throw new Error(result.reason);
-    const lineRight = 72 + 29 * ADVANCE;
-    expect(result.regions.map((r) => [r.left, r.right])).toEqual([[lineRight - step, lineRight]]);
-  });
-
   it('numbers the page it is given', () => {
-    const chars = page(['Bo and more filler words to widen into']);
+    const chars = page(['Bo and more filler words']);
     const result = regionsFor(chars, matchedChars(chars, ['Bo']), 3);
     if (!result.ok) throw new Error(result.reason);
     expect(result.regions[0]?.page).toBe(3);
+  });
+});
+
+describe('regionsFor: neighbours PDFium removes with the passage (the collateral fixpoint)', () => {
+  // "xAVo y": x [72,78], A [78,84], V [84,90], o [90,96]; "Vo" is marked.
+  const kerned = (): PageChar[] => page(['xAVo y']);
+
+  it('extends the box over an unmarked neighbour whose ink reaches into it (a kerned A, an italic f)', () => {
+    const chars = withChar(kerned(), 1, { ink: { right: 86 } });
+    expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[78, 96, 700, 712]]);
+  });
+
+  it('does not extend over a neighbour whose ink only touches the box', () => {
+    const chars = withChar(kerned(), 1, { ink: { right: 84 } });
+    expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[84, 96, 700, 712]]);
+  });
+
+  it('follows a chain: a neighbour pulled in can pull in the next', () => {
+    const chars = withChar(withChar(kerned(), 1, { ink: { right: 86 } }), 0, { ink: { right: 80 } });
+    expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[72, 96, 700, 712]]);
+  });
+
+  it('gives a neighbour on another line its own region (a descender reaching into the line below)', () => {
+    // Line 0 "xg": g [78,84] at 700; line 1 "Bo y": B [72,78], o [78,84] at 680..692.
+    const chars = withChar(page(['xg', 'Bo y']), 1, { ink: { bottom: 690 } });
+    // In reading order: the line above first.
+    expect(edges(regionsFor(chars, new Set([4, 5])))).toEqual([
+      [78, 84, 700, 712],
+      [72, 84, 680, 692],
+    ]);
+  });
+
+  it('boxes a pulled-in neighbour that has no loose box at its ink', () => {
+    const chars = withChar(kerned(), 1, { box: null, ink: { left: 82, right: 86 } });
+    expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[82, 96, 700, 712]]);
+  });
+
+  it('ignores generated characters and ones with no ink', () => {
+    const chars = withChar(page(['xA', 'Vo']), 1, { ink: null });
+    expect(edges(regionsFor(chars, new Set([4, 5])))).toEqual([[72, 84, 680, 692]]);
+  });
+});
+
+describe('boxesFor: the boxes drawn over what PDFium removed', () => {
+  it('boxes exactly the marked and the removed characters, with no fixpoint', () => {
+    // A's ink reaches into "Vo", but PDFium removed only V and o: A keeps its place, unboxed.
+    const chars = withChar(page(['xAVo y']), 1, { ink: { right: 86 } });
+    expect(edges(boxesFor(chars, new Set([2, 3]), new Set([2, 3])))).toEqual([[84, 96, 700, 712]]);
+    expect(edges(boxesFor(chars, new Set([2, 3]), new Set([1, 2, 3])))).toEqual([[78, 96, 700, 712]]);
+  });
+
+  it('skips generated characters and ones with no position, and boxes a removed one on another line', () => {
+    const chars = withChar(page(['xg', 'Bo y']), 0, { box: null, ink: null });
+    expect(edges(boxesFor(chars, new Set([4, 5]), new Set([0, 1, 2, 3, 4, 5]), 2))).toEqual([
+      [78, 84, 700, 712],
+      [72, 84, 680, 692],
+    ]);
+    expect(boxesFor(chars, new Set([4, 5]), new Set([4, 5]), 2)[0]?.page).toBe(2);
+  });
+});
+
+describe('stillThere: which characters survived a removal', () => {
+  it('finds every character of an unchanged page, and no generated one', () => {
+    const chars = page(['Bo', 'Al']);
+    expect([...stillThere(chars, chars)].sort((a, b) => a - b)).toEqual([0, 1, 4, 5]);
+  });
+
+  it('misses the removed ones, whatever order the rest come back in', () => {
+    const before = page(['xAVo y']);
+    const after = [before[5], before[0], before[4], before[1]] as PageChar[];
+    expect([...stillThere(before, after)].sort((a, b) => a - b)).toEqual([0, 1, 4, 5]);
+  });
+
+  it('matches a character within a hundredth of a point, and not further', () => {
+    const before = page(['Bo']);
+    const near = withChar(before, 0, { box: { left: 72.005, right: 78.005 } });
+    const far = withChar(before, 0, { box: { left: 72.05, right: 78.05 } });
+    expect([...stillThere(before, near)].sort()).toEqual([0, 1]);
+    expect([...stillThere(before, far)]).toEqual([1]);
+    expect([...stillThere(before, withChar(before, 0, { box: null }))]).toEqual([1]);
+  });
+
+  it('counts a character drawn twice in the same place once per copy left', () => {
+    const one = page(['B']);
+    const twice = [...one, ...one];
+    expect([...stillThere(twice, one)]).toEqual([0]);
+    expect([...stillThere(twice, twice)]).toEqual([0, 1]);
+  });
+
+  it('never matches a character of other text at the same place', () => {
+    const before = page(['B']);
+    expect([...stillThere(before, [{ ...(before[0] as PageChar), text: 'b' }])]).toEqual([]);
+  });
+});
+
+describe('labelSize: "withheld" only where it fits at a readable size', () => {
+  const region = (width: number, height = 14.028, fontSize = 12) => ({ page: 0, left: 100, right: 100 + width, bottom: 700, top: 700 + height, fontSize });
+
+  it('is 7 pt at the smallest', () => {
+    expect(MIN_LABEL_PT).toBe(7);
+  });
+
+  it('labels "Quillon" at 12 pt at 0.8 of the type size, inside the box with a point to spare each side', () => {
+    const size = labelSize(region(37.344));
+    expect(size).toBeCloseTo(9.6, 6);
+    expect(LABEL_EMS * (size as number) + 2).toBeLessThanOrEqual(37.344);
+  });
+
+  it('gives "Bo" at 12 pt no label: it would be below the floor', () => {
+    expect(labelSize(region(14.676))).toBeNull();
+  });
+
+  it('shrinks to fit the width down to the floor (0.6 of the type size here), and no further', () => {
+    expect(labelSize(region(32))).toBeCloseTo(30 / LABEL_EMS, 6);
+    expect(labelSize(region(2 + 7.21 * LABEL_EMS))).toBeCloseTo(7.21, 6);
+    expect(labelSize(region(2 + 7.19 * LABEL_EMS))).toBeNull();
+  });
+
+  it('never labels small type, whose label would be under 7 pt', () => {
+    expect(labelSize(region(200, 9.4, 8))).toBeNull();
+  });
+
+  it('is never more than 0.8 of the box\'s height', () => {
+    expect(labelSize(region(200, 10))).toBeCloseTo(8, 6);
   });
 });
