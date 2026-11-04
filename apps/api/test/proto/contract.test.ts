@@ -4,7 +4,7 @@
 // proto file is checked without touching this test.
 //
 // The rules:
-//   - six services, each with a separate caller (the BFF, the newsletter
+//   - seven services, each with a separate caller (the BFF, the newsletter
 //     agent, the membership verifier);
 //   - no RPC takes an audience from the caller, except ExportEdition, and no
 //     read RPC takes a visibility filter either (P17: the audience comes from
@@ -91,9 +91,9 @@ beforeAll(async () => {
 });
 
 describe(`${PKG}: services`, () => {
-  it('declares the six services and nothing else', () => {
+  it('declares the seven services and nothing else', () => {
     expect(services().map((s) => s.name).sort()).toEqual(
-      ['ContentService', 'EventService', 'MembershipService', 'MembershipVerifierService', 'NewsletterService', 'RedactionPolicyService'].sort(),
+      ['ApprovalRuleService', 'ContentService', 'EventService', 'MembershipService', 'MembershipVerifierService', 'NewsletterService', 'RedactionPolicyService'].sort(),
     );
   });
 
@@ -108,6 +108,28 @@ describe(`${PKG}: services`, () => {
       const isRead = /^(List|Get|Export|Read)/.test(m.name);
       expect(m.idempotency === Idempotency.NO_SIDE_EFFECTS, rpc(m)).toBe(isRead);
     }
+  });
+});
+
+describe(`${PKG}: the approval rule (SOLO-APPROVE)`, () => {
+  it('is its own service: two reads for officers and the Admin\'s one write', () => {
+    expect(service('ApprovalRuleService')?.methods.map((m) => [m.name, m.idempotency === Idempotency.NO_SIDE_EFFECTS])).toEqual([
+      ['GetApprovalRules', true],
+      ['SetApprovalRule', false],
+      ['ListApprovalRuleChanges', true],
+    ]);
+  });
+
+  it('sets a scope to a rule with a reason, and says whether anything changed', () => {
+    const set = service('ApprovalRuleService')?.methods.find((m) => m.name === 'SetApprovalRule');
+    expect(fieldNames(set?.input)).toEqual(['scope', 'rule', 'reason']);
+    expect(fieldNames(set?.output)).toEqual(['setting', 'changed']);
+  });
+
+  it('never names who set the rule in the setting itself', () => {
+    const get = service('ApprovalRuleService')?.methods.find((m) => m.name === 'GetApprovalRules');
+    const setting = get?.output.fields.map(fieldMessage).find((m) => m !== undefined);
+    expect(fieldNames(setting)).toEqual(['scope', 'rule', 'set_at']);
   });
 });
 
