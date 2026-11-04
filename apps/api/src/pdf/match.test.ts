@@ -799,6 +799,8 @@ describe('drawnAgain: a withheld word drawn again where no box reaches (challeng
     expect(again('Lunch at noon.', undefined, FIRST, 'The winner: Brask won.')).toBe('');
     // A passage of one word is looked for as a word, not whole anywhere.
     expect(again('Lunch at noon.', ['Brask'], FIRST, 'Brask won the raffle.')).toBe('');
+    // A passage with no word in it (an ampersand marked on its own) is no run, and the name's repeat beside it is found.
+    expect(again('The winner: Brask won.', ['Quillon Brask', '&'], 'Ask Quillon Brask & co.')).toBe('Brask');
     // A repeat with no position is near nothing; one with no loose box is placed by its ink.
     const placeless = page([FIRST, 'The winner: Brask won.']).map((c, i) => (i >= 36 && i <= 40 ? { ...c, box: null, ink: null } : c));
     expect(found(placeless, ['Quillon Brask'], removedOf(placeless, ['Quillon Brask'], FIRST))).toBe('');
