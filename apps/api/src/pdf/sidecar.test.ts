@@ -490,8 +490,13 @@ describe('sidecarMain (the entry\'s logic)', () => {
       const reply = await socketRedact({ path: socket })(ONE, { quotes: [target], redactsAny: true });
       return JSON.parse((reply as { reason: string }).reason) as Record<string, string>;
     };
-    expect((await tried([]))['write']).toBe('ERR_ACCESS_DENIED');
-    expect((await tried(['--no-child-permission']))['write']).toBe('done');
+    const modeled = await tried([]);
+    expect(modeled['write']).toBe('ERR_ACCESS_DENIED');
+    // The guard refuses a listen with the permission model (fix round 5b, S2); behind it, as the socket takeover tests need, it does not.
+    expect(modeled['listen']).toBe('ERR_ACCESS_DENIED');
+    const bare = await tried(['--no-child-permission']);
+    expect(bare['write']).toBe('done');
+    expect(bare['listen']).toBe('done');
   });
 
   it('serves only as PID 1 of its container, never as root, and in production only with --disable-sigusr1, exit 2 (fix round 2)', async () => {
@@ -520,7 +525,8 @@ describe('sidecarMain (the entry\'s logic)', () => {
     expect(view.sent).toEqual([-1]);
     expect(await socketRedact({ path: socket })(ONE, REQUEST)).toEqual({ kind: 'refused', reason: 'refused by the engine process' });
     expect(view.sent).toEqual([-1, -1]);
-    expect(lines).toContain('engine sidecar listening (PID 1: clearing its PID namespace before every reply)');
+    // fc's apply step 17e greps this line: exactly once per start.
+    expect(lines.filter((line) => line === 'engine sidecar listening (PID 1: clearing its PID namespace before every reply)')).toHaveLength(1);
   });
 
   it('exits 1 at start when its namespace is not clear', async () => {

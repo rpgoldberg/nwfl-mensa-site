@@ -25,13 +25,29 @@
 //      ERR_ACCESS_DENIED. The result goes to the parent once the child's own
 //      module listens for its job, and the parent sends the job only on one
 //      of the two (no-fork.ts BLOCKED).
+// Before all of that, under the permission model, it refuses every listen
+// (fix round 5, S2): a listen on a unix socket leaves a socket file, a write
+// the model does not check, so the guard closes it with the model. Every
+// server listens through net.Server's listen and _listen2 (http, https, tls
+// and http2 servers are net servers); both are replaced, so they cannot be
+// put back, before the child's own module runs. Without the model (only
+// --no-child-permission, refused in production) a test can still reach the
+// layers behind it, the sidecar's socket check among them.
 // Not covered in-process (it runs only in children); the tests drive it
 // through real children (isolated.test.ts, gate-isolated.test.ts, the lift
 // tests).
 // ============================================================================
 import { spawnSync } from 'node:child_process';
 import { promises as fs, readFileSync } from 'node:fs';
+import net from 'node:net';
 import process from 'node:process';
+
+const refuseListen = (): never => {
+  throw Object.assign(new Error('a PDF child may not listen'), { code: 'ERR_ACCESS_DENIED' });
+};
+if (process.permission !== undefined) {
+  for (const name of ['listen', '_listen2']) Object.defineProperty(net.Server.prototype, name, { value: refuseListen, writable: false, configurable: false });
+}
 
 const gone = (): never => process.exit(1);
 process.once('disconnect', gone);

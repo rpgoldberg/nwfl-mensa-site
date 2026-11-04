@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { sha256Hex } from './engine-protocol.js';
 import { GATE_CHILD, GATE_HEAP_MB, GATE_MAX_RSS_BYTES, GATE_TIMEOUT_MS, gateExecArgv, isolatedGate, rssOf } from './gate-isolated.js';
 import { CHILD_LOG_BYTES } from './isolated.js';
-import { guardFlag } from './no-fork.js';
+import { CHILD_PERMISSION, guardFlag } from './no-fork.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/gate-children/${name}.ts`, import.meta.url));
 const COPY = Uint8Array.from([1, 2, 3]);
@@ -60,13 +60,13 @@ describe('isolatedGate', () => {
     expect(text).not.toContain('o'.repeat(64));
   });
 
-  it('runs its child under Node\'s permission model with read access only: it cannot write, make, rename, remove or chmod a file, load native code or start a process (fix round 4, S2)', async () => {
+  it('runs its child under Node\'s permission model with read access only: it cannot write, make, rename, remove or chmod a file, load native code or start a process (fix round 4, S2), nor listen on a socket (fix round 5b, S2)', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-gi-'));
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     writeFileSync(path.join(dir, 'kept'), 'x');
     const outcome = await isolatedGate({ module: child('try-write') })({ ...JOB, quotes: [dir] });
     const denied = 'ERR_ACCESS_DENIED';
-    expect(JSON.parse(new TextDecoder().decode(outcome.checked?.pdf))).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied });
+    expect(JSON.parse(new TextDecoder().decode(outcome.checked?.pdf))).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied, listen: denied });
     expect(readdirSync(dir)).toEqual(['kept']);
   });
 
@@ -113,7 +113,8 @@ describe('isolatedGate', () => {
     const outcome = await isolatedGate({ module: child('report') })(JOB);
     expect(outcome.verdict).toEqual({ pass: true });
     const report = JSON.parse(new TextDecoder().decode(outcome.checked?.pdf)) as { env: string[]; execArgv: string[]; heapLimitMb: number; pid: number; limits: string; oomScoreAdj: string };
-    expect(report.execArgv.slice(0, 2)).toEqual(['--permission', '--allow-fs-read=*']);
+    // The permission model's flags come after every flag the child inherits, so none it inherits can undo them (fix round 5, S2).
+    expect(report.execArgv.slice(-2 - CHILD_PERMISSION.length, -2)).toEqual([...CHILD_PERMISSION]);
     expect(report.env).toEqual([]);
     // The kernel's first pick (S5). If it acts, the whole container restarts and the job retries under the attempt cap (fix round 4).
     expect(report.oomScoreAdj).toBe('1000');
@@ -127,10 +128,10 @@ describe('isolatedGate', () => {
     expect(report.pid).not.toBe(process.pid);
   });
 
-  it('drops every --env-file flag of its parent, both spellings, keeps the rest, caps the heap, and preloads the guard last (S4)', () => {
-    const parent = ['--env-file=/srv/worker.env', '--conditions', 'node', '--env-file', '/srv/other.env', '--env-file-if-exists=/srv/maybe.env', '--env-file-if-exists', '/srv/maybe2.env', '--max-semi-space-size=16'];
-    expect(gateExecArgv(parent, ['--import', '/hook.mjs'], '/guard.js')).toEqual(['--permission', '--allow-fs-read=*', '--conditions', 'node', '--max-semi-space-size=16', '--import', '/hook.mjs', '--max-old-space-size=512', '--import=file:///guard.js']);
-    expect(gateExecArgv([])).toEqual(['--permission', '--allow-fs-read=*', '--max-old-space-size=512', guardFlag()]);
+  it('drops every --env-file flag of its parent, both spellings, keeps the rest, puts the permission model\'s flags after them, caps the heap, and preloads the guard last (S4; fix round 5, S2)', () => {
+    const parent = ['--env-file=/srv/worker.env', '--conditions', 'node', '--env-file', '/srv/other.env', '--env-file-if-exists=/srv/maybe.env', '--env-file-if-exists', '/srv/maybe2.env', '--max-semi-space-size=16', '--experimental-sqlite'];
+    expect(gateExecArgv(parent, ['--import', '/hook.mjs'], '/guard.js')).toEqual(['--conditions', 'node', '--max-semi-space-size=16', '--experimental-sqlite', '--import', '/hook.mjs', ...CHILD_PERMISSION, '--max-old-space-size=512', '--import=file:///guard.js']);
+    expect(gateExecArgv([])).toEqual([...CHILD_PERMISSION, '--max-old-space-size=512', guardFlag()]);
     expect(gateExecArgv([], [], undefined, false)).toEqual(['--max-old-space-size=512', guardFlag()]);
   });
 

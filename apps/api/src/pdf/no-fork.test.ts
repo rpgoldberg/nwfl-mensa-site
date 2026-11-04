@@ -25,8 +25,9 @@ describe('the guard\'s constants', () => {
     expect(guardFlag('/x/guard.js')).toBe('--import=file:///x/guard.js');
     expect(PRLIMIT).toBe('/usr/bin/prlimit');
     expect([...BLOCKED]).toEqual(['EAGAIN', 'ERR_ACCESS_DENIED']);
-    // Fix round 4 (S2): every child runs under Node's permission model, read access only.
-    expect(CHILD_PERMISSION).toEqual(['--permission', '--allow-fs-read=*']);
+    // Fix round 4 (S2): every child runs under Node's permission model, read access only; fix round 5 (S2):
+    // with node:sqlite and run-time V8 flags off, the two writers the model does not check, and Web Storage.
+    expect(CHILD_PERMISSION).toEqual(['--permission', '--allow-fs-read=*', '--no-experimental-sqlite', '--freeze-flags-after-init', '--no-experimental-webstorage']);
     expect(isGuardMessage({ guard: 'ready' })).toBe(true);
     expect(isGuardMessage({ ok: true })).toBe(false);
     expect(isGuardMessage(null)).toBe(false);

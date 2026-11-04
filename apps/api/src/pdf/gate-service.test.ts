@@ -163,7 +163,8 @@ describe('gateSidecarMain (the gate entry\'s logic)', () => {
     expect(system.sent).toEqual([-1, -1]);
     expect((await socketGate({ path: socket })(JOB)).verdict).toEqual({ pass: true });
     expect(system.sent).toEqual([-1, -1, -1]);
-    expect(lines).toContain('gate sidecar listening (PID 1: clearing its PID namespace before every reply)');
+    // fc's apply step 17e greps this line: exactly once per start.
+    expect(lines.filter((line) => line === 'gate sidecar listening (PID 1: clearing its PID namespace before every reply)')).toHaveLength(1);
     // A process the clear cannot remove (a zombie, here) is doubt: no reply, and the sidecar stops for good.
     const stuck = place();
     const doubted = view();
@@ -186,8 +187,13 @@ describe('gateSidecarMain (the gate entry\'s logic)', () => {
       const outcome = await socketGate({ path: socket })({ ...JOB, quotes: [target] });
       return JSON.parse(new TextDecoder().decode(outcome.checked?.pdf)) as Record<string, string>;
     };
-    expect((await tried([]))['write']).toBe('ERR_ACCESS_DENIED');
-    expect((await tried(['--no-child-permission']))['write']).toBe('done');
+    const modeled = await tried([]);
+    expect(modeled['write']).toBe('ERR_ACCESS_DENIED');
+    // The guard refuses a listen with the permission model (fix round 5b, S2); behind it, as the socket takeover tests need, it does not.
+    expect(modeled['listen']).toBe('ERR_ACCESS_DENIED');
+    const bare = await tried(['--no-child-permission']);
+    expect(bare['write']).toBe('done');
+    expect(bare['listen']).toBe('done');
     const lines: string[] = [];
     expect(await gateSidecarMain(['--no-child-permission'], { NODE_ENV: 'production' }, (line) => void lines.push(line))).toEqual({ code: 2 });
     expect(lines.join('\n')).toContain('--no-child-permission is for tests and refused in production');

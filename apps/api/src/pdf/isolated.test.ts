@@ -12,7 +12,7 @@ import { GATE_CHILD_SOURCE, NODE_FLAGS } from '../../test/helpers/sidecar.js';
 import { linesPdf } from '../../test/pdf/fixtures.js';
 import { PassThrough } from 'node:stream';
 import { CHILD_LOG_BYTES, ENGINE_CHILD, engineExecArgv, engineReply, isolatedRedact, relayChildLog, withoutCanvasWarnings } from './isolated.js';
-import { guardFlag, limitForks } from './no-fork.js';
+import { CHILD_PERMISSION, guardFlag, limitForks } from './no-fork.js';
 import { redactPdf } from './redact.js';
 
 const child = (name: string): string => fileURLToPath(new URL(`../../test/pdf/children/${name}.ts`, import.meta.url));
@@ -58,13 +58,13 @@ describe('isolatedRedact', () => {
     expect(Buffer.concat(out).length).toBe(0);
   });
 
-  it('runs its child under Node\'s permission model with read access only: it cannot write, make, rename, remove or chmod a file, load native code or start a process (fix round 4, S2)', async () => {
+  it('runs its child under Node\'s permission model with read access only: it cannot write, make, rename, remove or chmod a file, load native code or start a process (fix round 4, S2), nor listen on a socket (fix round 5b, S2)', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-iso-'));
     try {
       writeFileSync(path.join(dir, 'kept'), 'x');
       const result = await isolatedRedact({ module: child('try-write') })(Uint8Array.from([1]), { quotes: [dir], redactsAny: true });
       const denied = 'ERR_ACCESS_DENIED';
-      expect(JSON.parse((result as { reason: string }).reason)).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied });
+      expect(JSON.parse((result as { reason: string }).reason)).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied, listen: denied });
       expect(readdirSync(dir)).toEqual(['kept']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -119,6 +119,16 @@ describe('isolatedRedact', () => {
     expect(engineExecArgv(['--env-file'])).toEqual([]);
     // Nor any flag of the permission model a parent may have been started with: the child gets CHILD_PERMISSION alone (fix round 4, S2).
     expect(engineExecArgv(['--permission', '--allow-fs-write=*', '--allow-fs-write', '/x', '--allow-fs-read', '/', '--allow-child-process', '--allow-worker', '--allow-addons', '--allow-wasi', '--max-old-space-size=1'])).toEqual(['--max-old-space-size=1']);
+    // Every grant, those Node 24 added since and any later one (fix round 5b, S2): --allow-inspector, --allow-openssl-store, --allow-net.
+    expect(engineExecArgv(['--allow-inspector', '--allow-openssl-store', '--allow-net', '--allow-net=x', '--experimental-sqlite'])).toEqual(['--experimental-sqlite']);
+  });
+
+  it('puts the permission model\'s flags after every flag the child inherits, then the guard, so none it inherits can undo them (fix round 5, S2)', async () => {
+    const flags = async (permission?: boolean): Promise<string[]> => JSON.parse(((await isolatedRedact({ module: child('argv'), permission })(Uint8Array.from([1]), REQUEST)) as { reason: string }).reason) as string[];
+    const given = await flags();
+    expect(given.slice(-1 - CHILD_PERMISSION.length)).toEqual([...CHILD_PERMISSION, guardFlag()]);
+    expect(given.slice(0, -1 - CHILD_PERMISSION.length)).toEqual(engineExecArgv(process.execArgv));
+    expect(await flags(false)).toEqual([...engineExecArgv(process.execArgv), guardFlag()]);
   });
 
   it('gives the child RLIMIT_NPROC 1 before it is sent the original (no-fork, fix round 2)', async () => {

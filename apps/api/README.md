@@ -310,11 +310,19 @@ and took its socket over), most load-bearing first:
    copy is sent only when that spawn failed; a limit that cannot be set, or a
    spawn that works, refuses the copy. Every child also runs under Node's
    permission model with read access only (`--permission --allow-fs-read=*`,
-   fix round 4): it cannot write, create, rename, remove or chmod a file (so
-   it cannot squat on or lock its sidecar's socket), load native code, or
-   start a process, a worker or a WASI instance. Node then refuses the
-   guard's spawn itself (`ERR_ACCESS_DENIED`), which the parent accepts as it
-   accepts the limit's `EAGAIN`; the limit stays beneath it. In a capped
+   fix round 4): through `node:fs` it cannot write, create, rename, remove or
+   chmod a file (so it cannot squat on or lock its sidecar's socket), and it
+   cannot load native code, or start a process, a worker or a WASI instance.
+   The model does not check every writer (fix round 5, measured on node
+   24.22.1): `node:sqlite`, V8 flags set at run time, Web Storage and a listen
+   on a unix socket each wrote a file. So the child also gets
+   `--no-experimental-sqlite --freeze-flags-after-init
+   --no-experimental-webstorage`, after every flag it inherits and with no
+   `--allow-*` grant of its parent's, and its guard refuses any listen while
+   the model is on. Network is outside the model; the pod's NetworkPolicy
+   bounds it. Node then refuses the guard's spawn itself
+   (`ERR_ACCESS_DENIED`), which the parent accepts as it accepts the limit's
+   `EAGAIN`; the limit stays beneath it. In a capped
    container spawn, exec and fork then all fail, and zlib, crypto and the real
    engine and gate still run. pdf.js's optional canvas would need threads
    later, which is one more reason it is not in the image. Each child is also
@@ -459,20 +467,36 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
 - no JavaScript, OpenAction, additional actions, Launch, URI or any other
   action, no embedded or attached file, no XFA, no AcroForm, no annotation
   (an empty annotation list is let through), no encryption;
+- no `/Linearized` key (fix round 5): pdf.js takes page 1 of a linearized
+  file from its `/O`, which need not be in the page tree, where other
+  viewers show the tree's page. The sanitizer writes none, a copy holding
+  one is refused as it comes, and the gate's own writing drops the key;
+- forms, tiling patterns, Type 3 fonts and soft masks drawn more than 32
+  deep, or in a loop, are refused under every policy (fix round 5: forms
+  nested 1,500 deep ran pdf.js's stack out);
 - under "blur" or "hide", each picture is exactly what the policy draws
   (the 1 x 1 grey fill, or under "blur" a Flate grey or RGB picture at most
   24 pixels a side), with no inline picture in any content stream (BI read
   as pdf.js's lexer reads it, so `qBI` and `BI%` count, and a page's
   `/Contents` array read joined, as pdf.js joins it) and no `/DecodeParms`
-  on a stream that is not a picture (fix round 4);
+  on a stream that is not a picture (fix round 4); a soft mask's group is
+  read as content too (fix round 5);
+- under "blur" or "hide", no axial or radial gradient drawn from a sampled
+  function, or from a list or stitching of functions with one in it (fix
+  round 5: 64 of them, one per row of pixels, drew a photo). A copy with an
+  honest gradient drawn so is refused under these policies too;
 - under "blur" or "hide", what pdf.js draws (`src/pdf/drawn.ts`, fix round
   4): the gate reads the operator list of every page of its own writing of
   the copy, tiling patterns and Type 3 glyphs included, and refuses any
   inline picture, any picture or stencil larger than the policy draws, any
   shading drawn as a lattice or mesh of colours (function-based, types 4 to
-  7), and a page count other than pdf-lib's. The glyphs drawn are matched
-  against the withheld quotes too, so a `/ToUnicode` that lies to the text
-  layer does not hide them (under "show" this pass does not run);
+  7), and pages other than pdf-lib's tree gives (fix round 5: the count, and
+  each page's object). pdf.js reads with `stopAtErrors`, and a page it does
+  not read to the end, a font it could not load or a Type 3 glyph it could
+  not read refuses the copy (fix round 5), where a viewer that recovers
+  would draw them. The glyphs drawn are matched against the withheld quotes
+  too, so a `/ToUnicode` that lies to the text layer does not hide them
+  (under "show" this pass does not run);
 - the page tree is one pdf.js and pdf-lib read alike: every node `/Type
   /Pages` with its `/Kids` and their `/Count`, every leaf `/Type /Page`,
   each once (fix round 4);
@@ -490,7 +514,9 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
 
 Its limits, as for any text gate: text written so it does not read as text
 (reversed, encoded, drawn as curves or as a picture); a picture rebuilt from
-many small tiles or from vector shapes; a tiny inline picture of the
+many small tiles or from vector shapes, gradients among them (fix round 5
+refuses only gradients drawn from sampled functions: a photo drawn row by
+row from 4,095 linear pieces passes); a tiny inline picture of the
 original (under 64 bytes) kept as a picture object; and a picture of a single
 grey, which is its own blur and so may come through unchanged.
 

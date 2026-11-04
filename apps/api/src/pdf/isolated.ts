@@ -58,14 +58,16 @@ export const ENGINE_CHILD = fileURLToPath(new URL('./engine-child.js', import.me
 export const ENGINE_ENV: Readonly<NodeJS.ProcessEnv> = Object.freeze({});
 
 const DROPPED_WITH_VALUE = new Set(['--env-file', '--env-file-if-exists', '--allow-fs-read', '--allow-fs-write']);
-const DROPPED_FLAGS = new Set(['--permission', '--experimental-permission', '--allow-child-process', '--allow-worker', '--allow-addons', '--allow-wasi']);
+const DROPPED_FLAGS = new Set(['--permission', '--experimental-permission']);
+/** Every grant of the permission model starts so: those Node 24 has (--allow-inspector, --allow-openssl-store among them) and any later one. */
+const GRANT = '--allow-';
 
 /**
  * The child's Node flags: the worker's own (fork() passes process.execArgv on), minus any that load an
  * environment file (CF-ISO-0 N1). Without this, a worker started with --env-file would hand the child
  * the very variables ENGINE_ENV keeps out. Both spellings: --env-file=<path> and --env-file <path>. Minus
  * any flag of the permission model too (fix round 4, S2): the child gets CHILD_PERMISSION, and no grant
- * its parent was started with.
+ * its parent was started with (fix round 5: no --allow-* flag at all).
  */
 export function engineExecArgv(argv: readonly string[]): string[] {
   const kept: string[] = [];
@@ -74,7 +76,7 @@ export function engineExecArgv(argv: readonly string[]): string[] {
     const name = flag.split('=', 1)[0] as string;
     if (DROPPED_WITH_VALUE.has(name)) {
       if (!flag.includes('=')) i += 1;
-    } else if (!DROPPED_FLAGS.has(name)) kept.push(flag);
+    } else if (!DROPPED_FLAGS.has(name) && !name.startsWith(GRANT)) kept.push(flag);
   }
   return kept;
 }
@@ -185,7 +187,8 @@ export function isolatedRedact(options: IsolatedOptions = {}): Redact {
         reject(new Error('the engine process was stopped'));
         return;
       }
-      const execArgv = [...(options.permission === false ? [] : CHILD_PERMISSION), ...engineExecArgv(process.execArgv), guardFlag(options.guard)];
+      // The permission model's flags after the inherited ones, so none of those undoes them (fix round 5, S2).
+      const execArgv = [...engineExecArgv(process.execArgv), ...(options.permission === false ? [] : CHILD_PERMISSION), guardFlag(options.guard)];
       const child = fork(options.module ?? ENGINE_CHILD, [], { env: { ...ENGINE_ENV }, ...viaChoom(execArgv), serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'], detached: true });
       relayChildLog(child.stderr, options.log);
       let reply: EngineReply | undefined;

@@ -361,6 +361,21 @@ describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1, fix round 2
     expect(denied['threadsAfter']).toBe(denied['threads']);
   }, 120_000);
 
+  it('UNTRUSTED-PDF-GATE sidecar: an engine or gate child cannot write through node:sqlite or V8 flags set at run time, the writers the permission model does not check, though its parent\'s flags turn both on (fix round 5, S2)', async () => {
+    type Seen = { said: string; files: string[] };
+    const { result } = await runContained<Record<'engine' | 'gate', Record<'sqlite' | 'v8', { with: Seen; without: Seen }>>>(probe('writers'));
+    for (const kind of ['engine', 'gate'] as const) {
+      // With the child's flags: node:sqlite is not there, and setting a V8 flag ends the child before it writes.
+      expect(result[kind].sqlite.with, kind).toEqual({ said: 'ERR_UNKNOWN_BUILTIN_MODULE', files: [] });
+      expect(result[kind].v8.with.said, kind).toMatch(kind === 'engine' ? /^no answer: / : /^no pass: crash$/);
+      expect(result[kind].v8.with.files, kind).toEqual([]);
+      // Without them, each writes where node:fs could not.
+      expect(result[kind].sqlite.without, kind).toEqual({ said: 'done', files: ['written.db'] });
+      expect(result[kind].v8.without.said, kind).toBe('done');
+      expect(result[kind].v8.without.files.length, kind).toBeGreaterThan(0);
+    }
+  }, 120_000);
+
   for (const [layer, args, code] of [
     ['the permission model', [], 'ERR_ACCESS_DENIED'],
     ['its process limit, the layer behind the permission model', ['--no-child-permission'], 'EAGAIN'],

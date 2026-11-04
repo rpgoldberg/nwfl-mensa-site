@@ -31,7 +31,7 @@ import { type ContainedSidecar, containedSidecar, ensureImage, probe, removeLeft
 import { GATE_CHILD_SOURCE, GATE_SIDECAR_ENTRY, NODE_FLAGS, type Spawned, gateStandIn, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
 import { CANARIES, leakFixture, linesPdf, smallPictureFixture } from './fixtures.js';
 import { flateBomb, manyPages, manyShows } from './hostile.js';
-import { M1_CASES, M1_DRAWN_CASES, M1_ORIGINAL, M1_QUOTES, plainCopy } from './shadows.js';
+import { M1_CASES, M1_DRAWN_CASES, M1_LINEARIZED_CASES, M1_ORIGINAL, M1_QUOTES, linearizedCopy, plainCopy, roundFiveWriting } from './shadows.js';
 
 const QUOTE = 'Kestrel Ambry';
 const REQUEST = { quotes: [QUOTE], redactsAny: true };
@@ -157,17 +157,19 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the
     }
   }, 60_000);
 
-  it('UNTRUSTED-PDF-GATE gate re-run: refuses copies whose pages draw the photo where pdf-lib saw none (n2: "qBI"; n3b: a page under a node with no /Type), on both transports, under "hide" (fix round 4, M1)', async () => {
+  it('UNTRUSTED-PDF-GATE gate re-run: refuses copies whose pages draw the photo where pdf-lib saw none (n2: "qBI"; n3b: a page under a node with no /Type), or where pdf.js reads another page (l1, l3, l4: linearized), on both transports, under "hide" (fix rounds 4 and 5, M1)', async () => {
     const given = await sidecar('engine', ['--engine', standIn('given')]);
     const gate = await sidecar('gate');
     const both: Array<[string, Redact]> = [
       ['in-pod children', inPod({ engine: standIn('given') })],
       ['sidecars', workerRedact({ PDF_ENGINE_SOCKET: given.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [given.dir], gateSocketDirs: [gate.dir] })],
     ];
-    for (const id of ['n2', 'n3b']) {
-      const drawn = M1_DRAWN_CASES.find((c) => c.id === id) as (typeof M1_DRAWN_CASES)[number];
+    const attacks: Array<[string, Uint8Array]> = [...['n2', 'n3b'].map((id): [string, Uint8Array] => [id, (M1_DRAWN_CASES.find((c) => c.id === id) as (typeof M1_DRAWN_CASES)[number]).attack])];
+    // Fix round 5 (M1): l1, l3 and l4, linearized at the length of the gate's writing as it was, so pdf.js read page 1 from /O.
+    for (const c of M1_LINEARIZED_CASES) attacks.push([c.id, await linearizedCopy(c.build, roundFiveWriting)]);
+    for (const [id, attack] of attacks) {
       const file = path.join(gate.dir, `${id}.pdf`);
-      writeFileSync(file, drawn.attack);
+      writeFileSync(file, attack);
       for (const [name, redact] of both) {
         expect(await redact(M1_ORIGINAL, { quotes: [file, ...M1_QUOTES], redactsAny: true, image: 'hide' }), `${id} over the ${name}`).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
       }

@@ -95,9 +95,12 @@ const LOG_GRACE_MS = 1_000;
 
 const unfinished = (cause: UnfinishedCause): GateOutcome => ({ verdict: { pass: false, code: 'unfinished' }, sha256: null, cause });
 
-/** The child's Node flags: the parent's without any --env-file (both spellings), the test's, the heap cap, then the guard. */
+/**
+ * The child's Node flags: the parent's without any --env-file (both spellings) or grant, the test's, the permission
+ * model's (after those, so none undoes them: fix round 5, S2), the heap cap, then the guard.
+ */
 export function gateExecArgv(parent: readonly string[], nodeFlags: readonly string[] = [], guard?: string, permission = true): string[] {
-  return [...(permission ? CHILD_PERMISSION : []), ...engineExecArgv(parent), ...nodeFlags, `--max-old-space-size=${GATE_HEAP_MB}`, guardFlag(guard)];
+  return [...engineExecArgv(parent), ...nodeFlags, ...(permission ? CHILD_PERMISSION : []), `--max-old-space-size=${GATE_HEAP_MB}`, guardFlag(guard)];
 }
 
 /** A process's resident memory in bytes, from /proc; 0 once it is gone. */

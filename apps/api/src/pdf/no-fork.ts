@@ -17,12 +17,23 @@
 // the threads it already has.
 //
 // Fix round 4 (S2, N2): every child also runs under Node's permission model
-// with read access only (CHILD_PERMISSION): it cannot write, create, rename,
-// remove or chmod a file (so it cannot squat or chmod its sidecar's socket),
-// load native code (so it cannot make itself dumpable or lower its
-// oom_score_adj), or start a process, a worker or a WASI instance. Its spawn
-// is then refused before the kernel sees it, with ERR_ACCESS_DENIED, which
-// the parent accepts as it accepts EAGAIN: the limit stays underneath.
+// with read access only (CHILD_PERMISSION): through node:fs it cannot write,
+// create, rename, remove or chmod a file (so it cannot squat or chmod its
+// sidecar's socket), and it cannot load native code (so it cannot make itself
+// dumpable or lower its oom_score_adj), or start a process, a worker or a WASI
+// instance. Its spawn is then refused before the kernel sees it, with
+// ERR_ACCESS_DENIED, which the parent accepts as it accepts EAGAIN: the limit
+// stays underneath.
+//
+// Fix round 5 (S2): the model does not check every writer. Measured on node
+// 24.22.1: node:sqlite opens database files itself, V8 flags set at run time
+// (v8.setFlagsFromString) write trace files, Web Storage writes its file once
+// a parent's flags turn it on, and a listen on a unix socket leaves its
+// socket file. So CHILD_PERMISSION also turns node:sqlite and Web Storage
+// off and freezes V8's flags (a child that sets one aborts), and comes after
+// every flag the child inherits, so none of them turns a writer back on; the
+// guard (child-guard.ts) refuses a listen. The model does not cover network
+// either: a pod's NetworkPolicy bounds that.
 // ============================================================================
 import { type ChildProcess, execFile } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -51,8 +62,11 @@ export function viaChoom(execArgv: readonly string[]): { execPath: string; execA
 }
 /** What the guard may see from its own spawn once the limit holds: the kernel's EAGAIN, or the permission model's refusal. */
 export const BLOCKED: ReadonlySet<string> = new Set(['EAGAIN', 'ERR_ACCESS_DENIED']);
-/** Node's permission model, read access only, for every engine and gate child (fix round 4, S2). */
-export const CHILD_PERMISSION: readonly string[] = ['--permission', '--allow-fs-read=*'];
+/**
+ * Node's permission model, read access only, for every engine and gate child (fix round 4, S2), with the writers it
+ * does not check turned off (fix round 5, S2). It comes after every flag the child inherits.
+ */
+export const CHILD_PERMISSION: readonly string[] = ['--permission', '--allow-fs-read=*', '--no-experimental-sqlite', '--freeze-flags-after-init', '--no-experimental-webstorage'];
 
 /** The Node flag that preloads `guard` in a child (it must come after any flag that loads the TS hook). */
 export const guardFlag = (guard: string = CHILD_GUARD): string => `--import=${pathToFileURL(guard).href}`;

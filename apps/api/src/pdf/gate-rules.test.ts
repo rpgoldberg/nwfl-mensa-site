@@ -6,13 +6,14 @@ import { deflateSync } from 'node:zlib';
 import { type PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFString, StandardFonts } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { leakFixture, linesPdf, pictureUnderTextFixture, twoMarksFixture } from '../../test/pdf/fixtures.js';
-import { M1_CASES, M1_DRAWN_CASES, M1_ORIGINAL, M1_QUOTES, Q1, type RawObject, plainCopy, rawPdf, rawStream } from '../../test/pdf/shadows.js';
+import { M1_CASES, M1_DRAWN_CASES, M1_LINEARIZED_CASES, M1_ORIGINAL, M1_QUOTES, Q1, type RawObject, S1_ROWS, S1_STITCHED_ROWS, linearizedCopy, nestedForms, plainCopy, rawPdf, rawStream, roundFiveWriting } from '../../test/pdf/shadows.js';
 import { drawnBreak } from './drawn.js';
 import { sha256Hex } from './engine-protocol.js';
-import { copyRulesBreak, gateReply, gateVerdict } from './gate-rules.js';
+import { copyRulesBreak, gateReply, gateVerdict, rewrite } from './gate-rules.js';
 import { BLUR_MAX, FILL_GRAY } from './images.js';
 import { structureBreak } from './pdf-structure.js';
 import { redactPdf } from './redact.js';
+import { sanitize } from './sanitize.js';
 
 type Doc = Awaited<ReturnType<typeof PDFDocument.create>>;
 
@@ -296,7 +297,8 @@ describe('M1: a viewer reads the copy the gate read (fix round 3, the parser dif
 });
 
 describe('M1, fix round 4: pictures judged by what pdf.js draws from the gate\'s own writing, and the pdf-lib rules read as pdf.js reads', () => {
-  const pagesOf = async (pdf: Uint8Array): Promise<number> => (await PDFDocument.load(pdf, { updateMetadata: false })).getPageCount();
+  const pagesOf = async (pdf: Uint8Array): Promise<Array<{ num: number; gen: number }>> =>
+    (await PDFDocument.load(pdf, { updateMetadata: false })).getPages().map((page) => ({ num: page.ref.objectNumber, gen: page.ref.generationNumber }));
 
   it('refuses each of round 4\'s copies n1 to n5 under "hide", as it refuses each written plainly, by what pdf.js draws from them alone, and passes none of their bytes on', async () => {
     expect(M1_DRAWN_CASES.map((c) => c.id)).toEqual(['n1', 'n2', 'n2b', 'n2c', 'n3', 'n3b', 'n4', 'n5']);
@@ -360,5 +362,162 @@ describe('M1, fix round 4: pictures judged by what pdf.js draws from the gate\'s
     expect((await gateReply(job)).verdict).toEqual({ pass: true });
     const active = rawPdf([[1, '<< /Type /Catalog /Pages 2 0 R /OpenAction << /S /JavaScript /JS (app.alert\\(1\\)) >> >>'], [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'], [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>']]);
     expect(await gateReply(job, undefined, () => Promise.resolve(active))).toEqual({ verdict: { pass: false, code: 'rules' }, sha256: sha256Hex(clean) });
+  });
+});
+
+describe('M1, S1, S3, fix round 5: one page for every reader, no gradient drawn from samples, and nesting pdf.js reads to the end', () => {
+  const job = (pdf: Uint8Array, image: 'show' | 'blur' | 'hide') => ({ copy: pdf, original: M1_ORIGINAL, quotes: M1_QUOTES, image });
+  const CATALOG: RawObject = [1, '<< /Type /Catalog /Pages 2 0 R >>'];
+  const PAGES: RawObject = [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'];
+  /** One page drawing `content` with these resources, and these objects. */
+  const onPage = (content: string | Buffer, resources = '', extra: RawObject[] = []): Uint8Array =>
+    rawPdf([CATALOG, PAGES, [3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << ${resources} >> >>`], [4, rawStream('', content)], ...extra]);
+
+  it('refuses a copy holding a /Linearized dictionary under every policy, so pdf.js cannot take a page from it: l1, l3 and l4, and through gateReply (M1)', async () => {
+    for (const c of M1_LINEARIZED_CASES) {
+      const linearized = await linearizedCopy(c.build, roundFiveWriting);
+      // The attack as round 5 built it: pdf.js read the gate's writing of it as linearized, and judged object 9.
+      expect(await drawnBreak(await roundFiveWriting(linearized), c.image, M1_QUOTES, [{ num: 4, gen: 0 }]), c.id).toEqual({ code: 'rules', reason: 'page 1: pdf.js reads object 9 where pdf-lib reads object 4' });
+      for (const image of ['show', 'blur', 'hide'] as const) expect(await copyRulesBreak(linearized, image), `${c.id}, ${image}`).toBe('object 1: it holds /Linearized');
+      expect(await gateReply(job(linearized, c.image)), c.id).toEqual({ verdict: { pass: false, code: 'rules' }, sha256: sha256Hex(linearized) });
+    }
+  });
+
+  it('passes the sanitizer\'s copy of a linearized original: it writes no /Linearized, nor does the gate\'s writing of it (M1)', async () => {
+    const build = (L: number): Uint8Array =>
+      rawPdf(
+        [
+          [1, `<< /Linearized 1 /L ${L} /H [1000 100] /O 4 /E 1000 /N 1 /T 1000 >>`],
+          [2, '<< /Type /Catalog /Pages 3 0 R >>'],
+          [3, '<< /Type /Pages /Kids [4 0 R] /Count 1 >>'],
+          [4, '<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 6 0 R >> >> >>'],
+          [5, rawStream('', 'BT /F1 12 Tf 72 720 Td (Picnic flyer) Tj ET')],
+          [6, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'],
+        ],
+        { root: 2 },
+      );
+    let L = 10_000;
+    while (build(L).byteLength !== L) L = build(L).byteLength;
+    const original = build(L);
+    for (const image of ['show', 'hide'] as const) {
+      const copied = await sanitize(original, image);
+      expect(Buffer.from(copied).toString('latin1'), image).not.toContain('/Linearized');
+      const reply = await gateReply({ copy: copied, original, quotes: [], image });
+      expect(reply.verdict, image).toEqual({ pass: true });
+      expect(Buffer.from(reply.checked?.pdf ?? []).toString('latin1'), image).not.toContain('/Linearized');
+      // The original itself, handed over as the copy, is refused (fix round 5b): its page is clean, its /Linearized is not.
+      expect(await gateReply({ copy: original, original, quotes: [], image }), image).toEqual({ verdict: { pass: false, code: 'rules' }, sha256: sha256Hex(original) });
+    }
+  });
+
+  it('writes no /Linearized itself, wherever a copy holds one, so pdf.js reads its writing by the page tree: l1, l3 and l4, and one in the catalog (M1, fix round 5b)', async () => {
+    const own = (c: (typeof M1_LINEARIZED_CASES)[number]): Promise<Uint8Array> => linearizedCopy(c.build, (copy) => Promise.resolve(copy));
+    const found: Record<string, unknown> = {};
+    for (const c of M1_LINEARIZED_CASES) {
+      const written = await rewrite(await own(c));
+      expect(Buffer.from(written).toString('latin1'), c.id).not.toContain('/Linearized');
+      found[c.id] = await drawnBreak(written, c.image, M1_QUOTES, [{ num: 4, gen: 0 }]);
+    }
+    expect(found).toEqual({
+      l1: { code: 'rules', reason: 'page 1: pdf.js draws a shading of type 1' },
+      l3: { code: 'withheld', reason: 'page 1: withheld text is in the glyphs pdf.js draws' },
+      l4: { code: 'rules', reason: 'page 1: pdf.js draws an inline picture' },
+    });
+    const inCatalog = rawPdf([[1, '<< /Type /Catalog /Pages 2 0 R /Linearized 1 /O 9 /Extra << /Linearized 1 >> >>'], [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'], [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>']]);
+    expect(await copyRulesBreak(inCatalog, 'show')).toBe('object 1: it holds /Linearized');
+    const written = Buffer.from(await rewrite(inCatalog)).toString('latin1');
+    expect(written).not.toContain('/Linearized');
+    expect(written).toContain('/Extra');
+  });
+
+  it('refuses an axial or radial shading drawn from a sampled function, or from a list or stitching of functions with one in it, under "blur" and "hide", not "show"; a gradient of linear pieces passes (S1)', async () => {
+    for (const image of ['blur', 'hide'] as const) {
+      expect(await copyRulesBreak(S1_ROWS, image), image).toBe('object 3: a gradient is drawn from a sampled function');
+      expect((await gateReply(job(S1_ROWS, image))).verdict, image).toEqual({ pass: false, code: 'rules' });
+    }
+    expect(await copyRulesBreak(S1_ROWS, 'show')).toBeNull();
+    const sampled: RawObject = [7, rawStream('/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1] /Size [2] /BitsPerSample 8', Buffer.from([255, 0, 0, 0, 0, 255]))];
+    const linear = '<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >>';
+    const shading = (type: string, fn: string, extra: RawObject[] = []): Uint8Array =>
+      onPage('q /Sh1 sh Q', '/Shading << /Sh1 6 0 R >>', [[6, `<< /ShadingType ${type} /ColorSpace /DeviceRGB /Coords ${type === '3' ? '[50 50 0 50 50 50]' : '[0 0 100 0]'} /Function ${fn} >>`], sampled, ...extra]);
+    const refused: Array<[string, Uint8Array]> = [
+      ['a radial one over a sampled function', shading('3', '7 0 R')],
+      ['a list with a sampled function in it', shading('2', `[${linear} 7 0 R ${linear}]`)],
+      ['a stitching with a sampled piece', shading('2', `<< /FunctionType 3 /Domain [0 1] /Functions [${linear} 7 0 R] /Bounds [0.5] /Encode [0 1 0 1] >>`)],
+      ['a stitching within a stitching', shading('2', `<< /FunctionType 3 /Domain [0 1] /Functions [<< /FunctionType 3 /Domain [0 1] /Functions [7 0 R] /Bounds [] /Encode [0 1] >>] /Bounds [] /Encode [0 1] >>`)],
+      ['its /ShadingType by reference', shading('10 0 R', '7 0 R', [[10, '2']])],
+      ['the function\'s /FunctionType by reference', shading('2', '8 0 R', [[8, rawStream('/FunctionType 11 0 R /Domain [0 1] /Range [0 1 0 1 0 1] /Size [2] /BitsPerSample 8', Buffer.from([255, 0, 0, 0, 0, 255]))], [11, '0']])],
+      ['in a shading pattern', onPage('/Pattern cs /P1 scn 0 0 100 100 re f', '/Pattern << /P1 << /PatternType 2 /Shading << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function 7 0 R >> >> >>', [sampled])],
+    ];
+    for (const [name, pdf] of refused) {
+      for (const image of ['blur', 'hide'] as const) expect(await copyRulesBreak(pdf, image), `${name}, ${image}`).toMatch(/^object \d+: a gradient is drawn from a sampled function$/);
+      expect(await copyRulesBreak(pdf, 'show'), name).toBeNull();
+    }
+    expect(await copyRulesBreak(shading('2', linear), 'hide')).toBeNull();
+    expect(await copyRulesBreak(shading('3', `<< /FunctionType 3 /Domain [0 1] /Functions [${linear} ${linear}] /Bounds [0.5] /Encode [0 1 0 1] >>`), 'hide')).toBeNull();
+    // The README's limit (a picture rebuilt from vector shapes): the same rows drawn from 4,095 linear pieces, no sample in them, pass.
+    expect((await gateReply(job(S1_STITCHED_ROWS, 'hide'))).verdict).toEqual({ pass: true });
+  });
+
+  it('refuses forms, tiling patterns, Type 3 glyphs and soft masks nested more than 32 deep, or in a loop, under every policy, before pdf.js reads them (S3)', async () => {
+    const deep = 'forms, patterns, Type 3 glyphs or soft masks nest more than 32 deep, or in a loop';
+    const patterns = (depth: number): Uint8Array => {
+      const cells: RawObject[] = [];
+      for (let k = 0; k < depth; k++) {
+        const next = k + 1 < depth;
+        cells.push([k + 10, rawStream(`/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << ${next ? `/Pattern << /P ${k + 11} 0 R >>` : ''} >>`, next ? '/Pattern cs /P scn 0 0 10 10 re f' : '0 0 10 10 re f')]);
+      }
+      return onPage('/Pattern cs /P scn 0 0 100 100 re f', '/Pattern << /P 10 0 R >>', cells);
+    };
+    for (const image of ['show', 'blur', 'hide'] as const) {
+      expect(await copyRulesBreak(nestedForms(32), image), image).toBeNull();
+      expect(await copyRulesBreak(nestedForms(33), image), image).toBe(deep);
+      expect(await copyRulesBreak(nestedForms(2_000), image), image).toBe(deep);
+      expect(await copyRulesBreak(patterns(32), image), image).toBeNull();
+      expect(await copyRulesBreak(patterns(33), image), image).toBe(deep);
+    }
+    const loops: Array<[string, Uint8Array]> = [
+      ['a form that draws itself', onPage('q /X Do Q', '/XObject << /X 10 0 R >>', [[10, rawStream('/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /X 10 0 R >> >>', 'q /X Do Q')]])],
+      ['a Type 3 glyph drawn with its own font', onPage('BT /T3 12 Tf (A) Tj ET', '/Font << /T3 10 0 R >>', [[10, '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /g 11 0 R >> /Encoding << /Differences [65 /g] >> /FirstChar 65 /LastChar 65 /Widths [1000] /Resources << /Font << /T3 10 0 R >> >> >>'], [11, rawStream('', '1000 0 0 0 1000 1000 d1 BT /T3 12 Tf (A) Tj ET')]])],
+      ['a soft mask whose group sets it again', onPage('/GS1 gs 0 0 10 10 re f', '/ExtGState << /GS1 10 0 R >>', [[10, '<< /SMask << /S /Luminosity /G 11 0 R >> >>'], [11, rawStream('/BBox [0 0 10 10] /Group << /S /Transparency >> /Resources << /ExtGState << /GS1 10 0 R >> >>', '/GS1 gs 0 0 10 10 re f')]])],
+    ];
+    for (const [name, pdf] of loops) expect(await copyRulesBreak(pdf, 'show'), name).toBe(deep);
+    expect((await gateReply(job(nestedForms(2_000), 'hide'))).verdict).toEqual({ pass: false, code: 'rules' });
+  });
+
+  it('counts the depth of a form or pattern reached more than once by its deepest way in, reads each once (patterns 20 deep, each drawn twice), and follows a Type 3 font set through an ExtGState (S3)', async () => {
+    const deep = 'forms, patterns, Type 3 glyphs or soft masks nest more than 32 deep, or in a loop';
+    // Patterns 20 and 33 deep, each cell drawing the next under two names (2^20 ways in, read once each).
+    const twice = (depth: number): Uint8Array => {
+      const cells: RawObject[] = [];
+      for (let k = 0; k < depth; k++) {
+        const next = k + 1 < depth;
+        cells.push([k + 10, rawStream(`/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << ${next ? `/Pattern << /A ${k + 11} 0 R /B ${k + 11} 0 R >>` : ''} >>`, next ? '/Pattern cs /A scn 0 0 5 5 re f /B scn 5 5 5 5 re f' : '0 0 10 10 re f')]);
+      }
+      return onPage('/Pattern cs /P scn 0 0 100 100 re f', '/Pattern << /P 10 0 R >>', cells);
+    };
+    expect(await copyRulesBreak(twice(20), 'hide')).toBeNull();
+    expect(await copyRulesBreak(twice(33), 'hide')).toBe(deep);
+    // Form 10 heads a chain of 30, drawn first from the page, then again at the end of a chain of 5: 35 deep there.
+    const chain: RawObject[] = [];
+    for (let k = 0; k < 30; k++) chain.push([k + 10, rawStream(`/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << ${k < 29 ? `/XObject << /X ${k + 11} 0 R >>` : ''} >>`, k < 29 ? '/X Do' : '0 0 1 1 re f')]);
+    for (let k = 0; k < 5; k++) chain.push([k + 50, rawStream(`/Type /XObject /Subtype /Form /BBox [0 0 10 10] /Resources << /XObject << /X ${k < 4 ? k + 51 : 10} 0 R >> >>`, '/X Do')]);
+    expect(await copyRulesBreak(onPage('/F Do /A Do', '/XObject << /F 10 0 R /A 50 0 R >>', chain), 'show')).toBe(deep);
+    expect(await copyRulesBreak(onPage('/F Do', '/XObject << /F 10 0 R /A 50 0 R >>', chain), 'show')).toBeNull();
+    // A Type 3 font set by an ExtGState's /Font, its glyph setting it again.
+    const viaState = onPage('BT /GS1 gs (A) Tj ET', '/ExtGState << /GS1 10 0 R >>', [
+      [10, '<< /Type /ExtGState /Font [11 0 R 12] >>'],
+      [11, '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /g 12 0 R >> /Encoding << /Differences [65 /g] >> /FirstChar 65 /LastChar 65 /Widths [1000] /Resources << /ExtGState << /GS1 10 0 R >> >> >>'],
+      [12, rawStream('', '1000 0 0 0 1000 1000 d1 /GS1 gs (A) Tj')],
+    ]);
+    expect(await copyRulesBreak(viaState, 'show')).toBe(deep);
+  });
+
+  it('reads a soft mask\'s group as content under "blur" and "hide": an inline picture drawn in one is refused by the pdf-lib rules too (l4, defence in depth)', async () => {
+    const inline = `q 64 0 0 64 0 0 cm BI /W 2 /H 2 /CS /G /BPC 8 /F /AHx ID 00ff00ff> EI Q`;
+    for (const group of ['/BBox [0 0 612 792] /Group << /S /Transparency >>', '/Group << /S /Transparency >>']) {
+      const pdf = onPage('q /GS1 gs 0 0 100 100 re f Q', `/ExtGState << /GS1 << /SMask << /S /Luminosity /G 6 0 R >> >> >>`, [[6, rawStream(group, inline)]]);
+      for (const image of ['blur', 'hide'] as const) expect(await copyRulesBreak(pdf, image), `${group}, ${image}`).toBe(`an inline picture is in a content stream under the "${image}" policy`);
+    }
   });
 });

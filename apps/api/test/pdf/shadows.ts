@@ -8,6 +8,7 @@
 // Each case has a control: the same copy written plainly, which the gate refused all along. Small,
 // bounded PDFs, written byte by byte here; nothing in them runs. Every name is made up.
 import { deflateSync } from 'node:zlib';
+import { PDFDocument } from '@cantoo/pdf-lib';
 
 const latin1 = (text: string): Buffer => Buffer.from(text, 'latin1');
 type Body = string | Buffer;
@@ -22,6 +23,8 @@ export interface RawOptions {
   prev?: boolean;
   /** Leaves this object number out of the xref (marked free), though its definition is in the file. */
   omit?: number;
+  /** The catalog's object number, for the trailer's /Root (1 when not given). */
+  root?: number;
 }
 
 /** A PDF written as given: objects in order (a number may repeat), the xref naming each number's FIRST definition. */
@@ -42,7 +45,8 @@ export function rawPdf(objects: readonly RawObject[], options: RawOptions = {}):
   let xref = `xref\n0 ${max + 1}\n0000000000 65535 f \n`;
   for (let n = 1; n <= max; n++) xref += first.has(n) ? `${String(first.get(n)).padStart(10, '0')} 00000 n \n` : '0000000000 65535 f \n';
   const prev = options.prev === true ? ` /Prev ${xrefAt}` : '';
-  const tail = latin1(`${xref}trailer\n<< /Size ${max + 1} /Root 1 0 R${prev} >>\nstartxref\n${xrefAt}\n%%EOF\n`);
+  const root = options.root ?? 1;
+  const tail = latin1(`${xref}trailer\n<< /Size ${max + 1} /Root ${root} 0 R${prev} >>\nstartxref\n${xrefAt}\n%%EOF\n`);
   parts.push(tail);
   at += tail.length;
   if (options.update !== undefined) {
@@ -51,7 +55,7 @@ export function rawPdf(objects: readonly RawObject[], options: RawOptions = {}):
     const chunk = Buffer.concat([latin1(`${num} 0 obj\n`), typeof body === 'string' ? latin1(body) : body, latin1('\nendobj\n')]);
     parts.push(chunk);
     at += chunk.length;
-    parts.push(latin1(`xref\n${num} 1\n${String(objectAt).padStart(10, '0')} 00000 n \ntrailer\n<< /Size ${max + 1} /Root 1 0 R /Prev ${xrefAt} >>\nstartxref\n${at}\n%%EOF\n`));
+    parts.push(latin1(`xref\n${num} 1\n${String(objectAt).padStart(10, '0')} 00000 n \ntrailer\n<< /Size ${max + 1} /Root ${root} 0 R /Prev ${xrefAt} >>\nstartxref\n${at}\n%%EOF\n`));
   }
   return new Uint8Array(Buffer.concat(parts));
 }
@@ -245,6 +249,14 @@ const drawn: M1Case[] = [];
 const addDrawn = (id: string, name: string, attack: Uint8Array, control: Uint8Array = PLAIN_INLINE): void => void drawn.push({ id, name, image: 'hide', attack, control });
 const PLAIN = '200 0 0 200 72 400';
 const PLAIN_INLINE = rawPdf([[1, CATALOG], PAGES, page(), contents(inline(PLAIN).toString('latin1')), FONT]);
+// The photo as a function-based shading over a 64 x 64 sampled function (n5, l1), objects 16 and 17.
+const FLIPPED = Buffer.alloc(KEPT.length);
+for (let row = 0; row < SIDE; row++) KEPT.copy(FLIPPED, row * SIDE * 3, (SIDE - 1 - row) * SIDE * 3, (SIDE - row) * SIDE * 3);
+const LATTICE: RawObject[] = [
+  [16, `<< /ShadingType 1 /ColorSpace /DeviceRGB /Domain [0 ${SIDE} 0 ${SIDE}] /Function 17 0 R >>`],
+  [17, rawStream(`/FunctionType 0 /Domain [0 ${SIDE} 0 ${SIDE}] /Range [0 1 0 1 0 1] /Size [${SIDE} ${SIDE}] /BitsPerSample 8 /Filter /FlateDecode`, deflateSync(FLIPPED))],
+];
+const SHADED = 'q 3.125 0 0 3.125 72 400 cm /Sh1 sh Q\n';
 // n1. pdf-lib's decoder has no predictor; pdf.js undoes /Predictor 12 (PNG rows of one byte, filter None).
 {
   const content = Buffer.concat([latin1(TEXT), inline(PLAIN)]);
@@ -287,22 +299,7 @@ addDrawn('n2c', 'the inline photo as "{BI"', lexed(`q ${PLAIN} cm {`, 'BI'));
 }
 // n5. The photo as a function-based shading over a 64 x 64 sampled function: no picture at all to pdf-lib.
 {
-  const flipped = Buffer.alloc(KEPT.length);
-  for (let row = 0; row < SIDE; row++) KEPT.copy(flipped, row * SIDE * 3, (SIDE - 1 - row) * SIDE * 3, (SIDE - row) * SIDE * 3);
-  addDrawn(
-    'n5',
-    'the photo as a function-based shading (ShadingType 1)',
-    rawPdf([
-      [1, CATALOG],
-      PAGES,
-      page('/Shading << /Sh1 16 0 R >>'),
-      contents('q 3.125 0 0 3.125 72 400 cm /Sh1 sh Q\n'),
-      FONT,
-      [16, `<< /ShadingType 1 /ColorSpace /DeviceRGB /Domain [0 ${SIDE} 0 ${SIDE}] /Function 17 0 R >>`],
-      [17, rawStream(`/FunctionType 0 /Domain [0 ${SIDE} 0 ${SIDE}] /Range [0 1 0 1 0 1] /Size [${SIDE} ${SIDE}] /BitsPerSample 8 /Filter /FlateDecode`, deflateSync(flipped))],
-    ]),
-    kept('/Image'),
-  );
+  addDrawn('n5', 'the photo as a function-based shading (ShadingType 1)', rawPdf([[1, CATALOG], PAGES, page('/Shading << /Sh1 16 0 R >>'), contents(SHADED), FONT, ...LATTICE]), kept('/Image'));
 }
 /** Round 4's n1 to n5 (all under "hide"), each with its control. */
 export const M1_DRAWN_CASES: readonly M1Case[] = drawn;
@@ -323,3 +320,132 @@ export const Q1 = ((): Uint8Array => {
       .replace(/startxref\n(\d+)/, (_line, offset: string) => `startxref\n${moved(Number(offset))}`),
   );
 })();
+
+// Round 5 (fix round 5, M1, from test/chal-r5/cases5.mjs): a linearized copy. Object 1 is a /Linearized
+// dictionary whose /O names object 9, a page outside the page tree; the tree's one page is object 4. When /L
+// is the file's length, pdf.js takes page 1 from /O, while pdf-lib (and PDFium, poppler, MuPDF) take the
+// tree's page. The gate checks its own writing of the copy, so /L must be that writing's length: build(L)
+// writes the copy with a given /L, and linearizedCopy finds the L at which the writing is L bytes long.
+const LINEARIZED_QUOTE = 'Kestrel Ambry';
+const LIN_LETTERS = [...new Set(LINEARIZED_QUOTE.replace(/ /g, ''))].sort();
+const linCode = (c: string): number => (c === ' ' ? 0x20 : 0x41 + LIN_LETTERS.indexOf(c));
+/** A /ToUnicode that maps every glyph of the quote to "x" (r4 N3): the text layer reads no quote. */
+const LYING_CMAP = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def 1 begincodespacerange <00> <FF> endcodespacerange ${LIN_LETTERS.length + 1} beginbfchar <20> <0020> ${LIN_LETTERS.map((c) => `<${linCode(c).toString(16)}> <0078>`).join(' ')} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end`;
+const LYING_FONT = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [65 ${LIN_LETTERS.map((c) => `/${c}`).join(' ')}] >> /ToUnicode 19 0 R >>`;
+
+interface TreePage {
+  content: Body;
+  resources: string;
+  objects: readonly RawObject[];
+}
+const linearizedPdf = (L: number, tree: TreePage): Uint8Array =>
+  rawPdf(
+    [
+      [1, `<< /Linearized 1 /L ${L} /H [1000 100] /O 9 /E 1000 /N 1 /T 1000 >>`],
+      [2, '<< /Type /Catalog /Pages 3 0 R >>'],
+      [3, '<< /Type /Pages /Kids [4 0 R] /Count 1 >>'],
+      [4, `<< /Type /Page /Parent 3 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << ${tree.resources} >> >>`],
+      [5, rawStream('', tree.content)],
+      [6, FONT[1]],
+      [9, '<< /Type /Page /MediaBox [0 0 612 792] /Contents 10 0 R /Resources << /Font << /F1 6 0 R >> >> >>'],
+      [10, rawStream('', TEXT)],
+      ...tree.objects,
+    ],
+    { root: 2 },
+  );
+
+export interface LinearizedCase {
+  id: string;
+  name: string;
+  image: 'hide';
+  build: (L: number) => Uint8Array;
+}
+const LIN_FONT = '/Font << /F1 6 0 R >>';
+/** l1, l3 and l4: each tree page draws what "hide" forbids, or a withheld quote, and pdf.js would judge object 9 instead. */
+export const M1_LINEARIZED_CASES: readonly LinearizedCase[] = [
+  { id: 'l1', name: 'the tree page draws the photo as a function-based shading (n5)', image: 'hide', build: (L) => linearizedPdf(L, { content: TEXT + SHADED, resources: `${LIN_FONT} /Shading << /Sh1 16 0 R >>`, objects: LATTICE }) },
+  {
+    id: 'l3',
+    name: 'the tree page shows a withheld quote through a /ToUnicode that lies',
+    image: 'hide',
+    build: (L) =>
+      linearizedPdf(L, {
+        content: `${TEXT}BT /F2 14 Tf 72 690 Td <${[...LINEARIZED_QUOTE].map((c) => linCode(c).toString(16).padStart(2, '0')).join('')}> Tj ET\n`,
+        resources: '/Font << /F1 6 0 R /F2 18 0 R >>',
+        objects: [
+          [18, LYING_FONT],
+          [19, rawStream('', LYING_CMAP)],
+        ],
+      }),
+  },
+  {
+    id: 'l4',
+    name: 'the tree page draws the photo inline, in a soft mask\'s group with no /Subtype',
+    image: 'hide',
+    build: (L) =>
+      linearizedPdf(L, {
+        content: `${TEXT}q /GS1 gs 0 0 0 rg 72 400 200 200 re f Q\n`,
+        resources: `${LIN_FONT} /ExtGState << /GS1 << /SMask << /S /Luminosity /G 16 0 R >> >> >>`,
+        objects: [[16, rawStream('/BBox [0 0 612 792] /Group << /S /Transparency /CS /DeviceRGB >>', inline(PLAIN))]],
+      }),
+  },
+];
+
+/**
+ * The gate's writing of a copy up to fix round 5 (pdf-lib's, every object kept, /Linearized too): the round-5
+ * challenge set /L to its length, so pdf.js read the gate's own writing as linearized. Since fix round 5b the
+ * gate refuses such a copy as it comes, and its writing holds no /Linearized.
+ */
+export const roundFiveWriting = async (copy: Uint8Array): Promise<Uint8Array> =>
+  (await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true })).save({ rewrite: true, useObjectStreams: false, addDefaultPage: false, updateFieldAppearances: false });
+
+/** The copy `build` writes with /L equal to the length of `write`'s writing of it (pdf.js then reads it as linearized). */
+export async function linearizedCopy(build: (L: number) => Uint8Array, write: (copy: Uint8Array) => Promise<Uint8Array>): Promise<Uint8Array> {
+  let L = 10_000;
+  for (let i = 0; i < 4; i++) {
+    const written = (await write(build(L))).byteLength;
+    if (written === L) return build(L);
+    L = written;
+  }
+  throw new Error('no length at which the writing is as long as its /L');
+}
+
+// Round 5, S1 (from test/chal-r5/cases5.mjs r1): the photo as 64 axial shadings, one per row of pixels, each
+// over its row of one sampled function (the photo row by row), so a gradient carries 64 colours.
+const rows = (functionRef: string): { resources: string; content: string } => {
+  const step = 200 / SIDE;
+  const [x0, x1] = [72 + step / 2, 72 + 200 - step / 2];
+  let resources = '/Shading <<';
+  let content = '';
+  for (let r = 0; r < SIDE; r++) {
+    resources += ` /S${r} << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [${x0} 0 ${x1} 0] /Domain [${SIDE * r} ${SIDE * r + SIDE - 1}] /Extend [true true] /Function ${functionRef} >>`;
+    content += `q 72 ${(600 - (r + 1) * step).toFixed(4)} 200 ${step} re W n /S${r} sh Q\n`;
+  }
+  return { resources: `${resources} >>`, content };
+};
+const ROW_SAMPLES = SIDE * SIDE - 1;
+/** The photo as 64 axial shadings over one sampled (Type 0) function. */
+export const S1_ROWS = ((): Uint8Array => {
+  const { resources, content } = rows('6 0 R');
+  return rawPdf([[1, CATALOG], PAGES, page(resources), contents(content), FONT, [6, rawStream(`/FunctionType 0 /Domain [0 ${ROW_SAMPLES}] /Range [0 1 0 1 0 1] /Size [${SIDE * SIDE}] /BitsPerSample 8 /Encode [0 ${ROW_SAMPLES}] /Filter /FlateDecode`, deflateSync(KEPT))]]);
+})();
+/** The same photo with no sampled function: one stitching (Type 3) function of 4095 linear (Type 2) pieces, sample to sample. */
+export const S1_STITCHED_ROWS = ((): Uint8Array => {
+  const { resources, content } = rows('6 0 R');
+  const colour = (p: number): string => [0, 1, 2].map((c) => ((KEPT[p * 3 + c] as number) / 255).toFixed(3)).join(' ');
+  const pieces = Array.from({ length: ROW_SAMPLES }, (_, p) => `<< /FunctionType 2 /Domain [0 1] /C0 [${colour(p)}] /C1 [${colour(p + 1)}] /N 1 >>`);
+  const bounds = Array.from({ length: ROW_SAMPLES - 1 }, (_, p) => p + 1).join(' ');
+  const encode = Array.from({ length: ROW_SAMPLES }, () => '0 1').join(' ');
+  return rawPdf([[1, CATALOG], PAGES, page(resources), contents(content), FONT, [6, `<< /FunctionType 3 /Domain [0 ${ROW_SAMPLES}] /Functions [${pieces.join(' ')}] /Bounds [${bounds}] /Encode [${encode}] >>`]]);
+})();
+
+// Round 5, S3: forms nested `depth` deep, the last filling a square (d3, e1500); pdf.js's stack gives out
+// near 1,500 and pdf.js carries on as if the page ended there.
+export const nestedForms = (depth: number, last = '0 0 1 1 re f'): Uint8Array => {
+  const forms: RawObject[] = [];
+  for (let k = 0; k < depth; k++) {
+    const next = k + 1 < depth;
+    forms.push([k + 10, rawStream(`/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << ${next ? `/XObject << /X ${k + 11} 0 R >>` : ''} >>`, next ? 'q /X Do Q' : last)]);
+  }
+  return rawPdf([[1, CATALOG], PAGES, page('/XObject << /X 10 0 R >>'), contents('q /X Do Q\n'), FONT, ...forms]);
+};
