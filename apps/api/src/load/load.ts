@@ -60,6 +60,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { recordAudit } from '../audit/audit.js';
 import type { Caller } from '../auth/caller.js';
 import { canonicalJson } from '../content/hash.js';
+import { readRule } from '../approval/service.js';
 import { type VersionRow, addEditor, applyApproval, readyVersion } from '../content/workflow.js';
 import { type Db, type Env, createPool } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -357,7 +358,9 @@ async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<
     actingOfficeId: office.id,
   });
   const reason = approvalReason(bundle.approval);
-  await applyApproval(client, LOADER_CALLER, { id: itemId, live_version_id: null }, version, { kind: 'self_breakglass', reason });
+  // The rule in force, recorded with the approval; the loader breaks glass under either (SOLO-APPROVE).
+  const rule = await readRule(client, 'content');
+  await applyApproval(client, LOADER_CALLER, { id: itemId, live_version_id: null }, version, { kind: 'self_breakglass', reason, rule });
   return { status: 'loaded', itemId, publicFileId: ids.public, membersFileId: ids.members, marks: bundle.marks.length };
 }
 

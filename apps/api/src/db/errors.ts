@@ -17,6 +17,10 @@ const BY_SQLSTATE: Record<string, [Code, string]> = {
   '22008': [Code.InvalidArgument, 'a date or time is out of range'],
   // object_not_in_prerequisite_state: the workflow triggers (0003, 0007).
   '55000': [Code.FailedPrecondition, 'not allowed in this state'],
+  // insufficient_privilege, from a SECURITY DEFINER function's own check (0013, 0023), and
+  // invalid_parameter_value from one's argument check: the API checks first, so these are backstops.
+  '42501': [Code.PermissionDenied, 'not permitted'],
+  '22023': [Code.InvalidArgument, 'a value is not allowed'],
   '40001': [Code.Aborted, 'conflict, try again'],
   '40P01': [Code.Aborted, 'conflict, try again'],
 };

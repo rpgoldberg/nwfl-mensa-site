@@ -6,7 +6,9 @@
 // ============================================================================
 import type { DescService } from '@bufbuild/protobuf';
 import type { ConnectRouter } from '@connectrpc/connect';
+import { approvalRoutes } from '../approval/service.js';
 import { contentRoutes } from '../content/service.js';
+import { ApprovalRuleService } from '../gen/nwfl/mensa/v1/approval_pb.js';
 import { Health } from '../gen/grpc/health/v1/health_pb.js';
 import { ContentService } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../gen/nwfl/mensa/v1/event_pb.js';
@@ -33,6 +35,7 @@ export const SERVED_SERVICES: readonly DescService[] = [
   MembershipVerifierService,
   MembershipService,
   RedactionPolicyService,
+  ApprovalRuleService,
 ];
 
 export interface ApiDeps {
@@ -53,6 +56,7 @@ export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
     membershipRoutes({ db: deps.db, now }),
     verifierRoutes({ db: deps.db, now }),
     redactionRoutes({ db: deps.db }),
+    approvalRoutes({ db: deps.db }),
   ];
   return (router) => routes.forEach((register) => register(router));
 }

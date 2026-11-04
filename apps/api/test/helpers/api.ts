@@ -55,6 +55,8 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'verifier-token': { client: 'verifier', subject: 'svc-nwfl-verifier', groups: [], scopes: ['membership.verify'] },
   // The Webmaster, who also holds the webmaster seat.
   'webmaster-token': { client: 'site', subject: 'sub-webmaster', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-webmaster', 'nwfl-webmaster'], scopes: [] },
+  // SOLO-APPROVE: an officer whose token carries an admin group under another chapter's prefix, which the gate drops.
+  'stray-admin-token': { client: 'site', subject: 'sub-stray', groups: ['nwfl-members', 'nwfl-officers', 'mensa-nwfl-admin', 'admin'], scopes: [] },
 };
 
 export const fakeVerifier: TokenVerifier = {

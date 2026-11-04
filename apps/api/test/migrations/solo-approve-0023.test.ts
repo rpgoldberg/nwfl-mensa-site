@@ -335,10 +335,10 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
       expect(applied).toMatchObject({ status: 'applied', proposed_by_sub: 'sub-officer', approved_by_sub: 'sub-officer', approval_rule: 'one_approver' });
       expect(applied['approved_at']).not.toBeNull();
       expect(await action('member_email')).toBe('show');
-      const { rows } = await owner.query(`SELECT action, subject_kind, payload FROM audit_event WHERE id > $1 ORDER BY id`, [before]);
+      const { rows } = await owner.query<{ action: string; payload: Record<string, unknown> }>(`SELECT action, payload FROM audit_event WHERE id > $1 ORDER BY id`, [before]);
       expect(rows.map((row) => row.action)).toEqual(['redaction_propose', 'redaction_approve', 'redaction_set']);
-      expect(rows[1].payload).toEqual({ rule: 'one_approver' });
-      expect(rows[0].payload).toMatchObject({ rule: 'one_approver', audience: 'public', category: 'member_email' });
+      expect(rows[1]?.payload).toEqual({ rule: 'one_approver' });
+      expect(rows[0]?.payload).toMatchObject({ rule: 'one_approver', audience: 'public', category: 'member_email' });
       await one(app, PROPOSE, ['public', 'member_email', 'hide', OFFICER.sub, OFFICER.groups]);
       await reset();
     });

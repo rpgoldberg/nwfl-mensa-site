@@ -2,6 +2,7 @@
 import { Code, createClient, createRouterTransport } from '@connectrpc/connect';
 import { describe, expect, it } from 'vitest';
 import { rejectAllTokens } from '../../src/auth/caller.js';
+import { ApprovalRuleService } from '../../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
 import { MembershipService } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
@@ -45,6 +46,7 @@ describe('apiRoutes', () => {
     ['NewsletterService', () => createClient(NewsletterService, transport).listEditions({})],
     ['MembershipVerifierService', () => createClient(MembershipVerifierService, transport).listPendingVerifications({})],
     ['RedactionPolicyService', () => createClient(RedactionPolicyService, transport).getRedactionPolicy({})],
+    ['ApprovalRuleService', () => createClient(ApprovalRuleService, transport).getApprovalRules({})],
   ])('serves %s behind the caller gate: no token, no answer', async (_name, call) => {
     await expect(call()).rejects.toMatchObject({ code: Code.Unauthenticated });
   });

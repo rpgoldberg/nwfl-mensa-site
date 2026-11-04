@@ -17,6 +17,9 @@ describe('dbError', () => {
     ['22007', Code.InvalidArgument],
     ['22008', Code.InvalidArgument],
     ['55000', Code.FailedPrecondition],
+    // A SECURITY DEFINER function's refusal (0013, 0023): not INTERNAL.
+    ['42501', Code.PermissionDenied],
+    ['22023', Code.InvalidArgument],
     ['40001', Code.Aborted],
     ['40P01', Code.Aborted],
   ])('maps SQLSTATE %s, with a fixed message', (sqlstate, code) => {
