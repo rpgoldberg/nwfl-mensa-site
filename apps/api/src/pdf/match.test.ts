@@ -462,6 +462,13 @@ describe('copiesOf: a withheld word drawn again by another text object near it (
     expect(after('Bos')).toEqual([]);
   });
 
+  it('reads only the withheld glyphs of a word for the withheld text: "Bo" of a line\'s "Bo\'s" is copied by a "Bo" beside it', () => {
+    // "Ask Bo's now" a word per object, "Bo" of "Bo's" [96,108] withheld, its "'s" not; a copy "Bo" by an object of its own.
+    const own = page(["Ask Bo's now"]);
+    const chars = [...own, ...moved(page(['Bo']), 30, 4)];
+    expect(copiesOf(chars, new Set([4, 5]), wordsOf(chars, objectsOf([[0, 3], [4, 8], [9, 11], [12, 13]])))).toEqual([12, 13]);
+  });
+
   it('takes no word of the withheld word\'s own object, and no word that has a withheld glyph, for a copy', () => {
     const chars = withCopy('Bo', 6, 4);
     const own = { bounds: { left: 0, right: 0, bottom: 0, top: 0 }, chars: [4, 5, 10, 11] };
