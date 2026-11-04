@@ -187,6 +187,17 @@ test.describe('the Admin\'s switch', () => {
 test.describe('a stale switch, and the Admin without the officers group', () => {
   test.use({ javaScriptEnabled: false });
 
+  test('links the Admin who is not in the officers group to the switch from the officer area, not to a refusal', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'lone-admin');
+    const res = await page.goto('/officer-area');
+    expect(res?.status()).toBe(200);
+    await expect(page.getByText("This area is for the club's officers.")).toHaveCount(0);
+    await page.getByRole('link', { name: 'Approval setting' }).click();
+    await expect(page).toHaveURL(new RegExp(`${HERE}$`));
+    await expect(page.getByRole('group', { name: 'Publishing content', exact: true })).toBeVisible();
+  });
+
   test('opens the switch for the Admin who is not in the officers group, with the setting read', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'lone-admin');
@@ -235,6 +246,14 @@ test.describe('axe on the officer pages', () => {
     await signIn(page, 'officer');
     await page.goto('/officer-area');
     await expect(page.getByRole('note').filter({ hasText: 'One approver' })).toBeVisible();
+    expect(await axe(page)).toEqual([]);
+  });
+
+  test('the officer area as the Admin who is not in the officers group', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'lone-admin');
+    await page.goto('/officer-area');
+    await expect(page.getByRole('link', { name: 'Approval setting' })).toBeVisible();
     expect(await axe(page)).toEqual([]);
   });
 
