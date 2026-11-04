@@ -256,13 +256,14 @@ const FAR_WORD_SHADOWS: ReadonlyArray<[string, number, number, 'after' | 'before
  * "Ask <name> now." (the name a word at a time, or in one Tj) with the name drawn again at (dx, dy) a glyph at a
  * time, a text object per glyph, after the line or before it (REDACT-LOOK fix round 3, beyond the challenger's
  * sweep): no text object holds more than one glyph of the copy, so only where its glyphs lie joins them into words.
+ * `track`: points added after each glyph's advance (a copy letter-spaced unlike the name, challenger r4 F1).
  */
-const perGlyph = (name: string, dx: number, dy: number, line: 'word' | 'one', order: 'after' | 'before'): string => {
+const perGlyph = (name: string, dx: number, dy: number, line: 'word' | 'one', order: 'after' | 'before', track = 0): string => {
   let x = 20 + 27.23 + dx;
   const again = [...name]
     .map((ch) => {
       const glyph = `BT /F1 14 Tf ${x.toFixed(4)} ${(60 + dy).toFixed(4)} Td ${RED} (${ch}) Tj ET`;
-      x += ((HELVETICA_WIDTHS[ch] as number) * 14) / 1000;
+      x += ((HELVETICA_WIDTHS[ch] as number) * 14) / 1000 + track;
       return glyph;
     })
     .join('\n');
@@ -277,6 +278,46 @@ const GLYPH_SHADOWS: ReadonlyArray<[string, number, number, 'word' | 'one', 'aft
   ['Ivo Brumm', 11.2, 0, 'word', 'before'],
   ['Ivo Brumm', -3.2, 4, 'one', 'before'],
 ];
+
+/**
+ * The challenger's r4 F1 layouts: a copy drawn a glyph at a time, letter-spaced `track` pt more than the name, so the
+ * glyphs that abut a pulled one are more than a tenth of an em apart and the abut chain stops. A glyph left so beside
+ * the box refuses the page (match.ts loneGlyphs); a copy the box logic does not tie to the passage refuses it too.
+ */
+const TRACKED_GLYPH_SHADOWS: ReadonlyArray<[string, number, number, 'word' | 'one', number]> = [
+  ['Quillon Brask', 6, 0, 'one', 1.6],
+  ['Ivo Brumm', 1.2, 0, 'word', 1.6],
+  ['Ivo Brumm', 0, 2.5, 'one', 2],
+];
+
+/**
+ * "Ask <name>'s car." with the name a word at a time and drawn again so at (dx, dy) (challenger r4 F2): the
+ * passage ends inside its last word ("Marsh's"), and the copy's "Marsh's" repeats the withheld "Marsh" with a
+ * possessive. The 's is drawn with the name, so it is red in both, and the line's is left by design.
+ */
+export const possessiveShadow = (name: string, dx: number, dy: number, order: 'after' | 'before'): string => {
+  const line = `BT /F1 14 Tf 20 60 Td ${BLUE} (Ask ) Tj ${RED} ${wordByWord(`${name}'s`)} ${BLUE} ( car.) Tj ET`;
+  const again = `BT /F1 14 Tf ${(20 + 27.23 + dx).toFixed(4)} ${(60 + dy).toFixed(4)} Td ${RED} ${wordByWord(`${name}'s`)} ET`;
+  return order === 'after' ? `${line}\n${again}` : `${again}\n${line}`;
+};
+
+/** An ordinary paragraph at 11 pt on 12 pt leading, a Tj per line, the name on its fourth line (challenger r4 F3). */
+export const TIGHT_PARAGRAPH = [
+  'Our spring picnic is at the bayou pavilion, with grilled shrimp,',
+  'hot dogs, and a quiz: bring a guess at the jar of jellybeans.',
+  'Parking is by the gym; carpools from the hall leave at eight.',
+  '@ by Friday so we can plan enough supply for you.',
+  'Questions go to the program chair, who is happy to help.',
+];
+export const tightParagraph = (): Promise<Uint8Array> =>
+  fitPdf(
+    TIGHT_PARAGRAPH.map((line, n) => {
+      const [before = '', after = ''] = line.split('@');
+      const ops = line.includes('@') ? `${before === '' ? '' : `${BLUE} (${before}) Tj `}${RED} (Quillon Brask) Tj ${BLUE} (${after}) Tj` : `${BLUE} (${line}) Tj`;
+      return `BT /F1 11 Tf 30 ${(120 - 12 * n).toFixed(2)} Td ${ops} ET`;
+    }).join('\n'),
+    { width: 420 },
+  );
 
 /** The page's and the outer form's matrices for a form two deep: a rotation and a stretch, each way round. */
 export const NESTED: ReadonlyArray<[string, string, string]> = [
@@ -354,6 +395,16 @@ export const FIT_FIXTURES: FitFixture[] = [
     quotes: [name],
     needles: [name, ...name.split(' ')],
   })),
+  // L2: a copy drawn a glyph at a time, letter-spaced unlike the name (challenger r4 F1): no glyph of it is left, or
+  // the page is refused.
+  ...TRACKED_GLYPH_SHADOWS.map(([name, dx, dy, line, track]): FitFixture => ({
+    surface: 'L2',
+    name: `"${name}" (${line === 'one' ? 'in one Tj' : 'a word at a time'}) drawn again a glyph at a time, ${track} pt apart, at (${dx}, ${dy}) after it`,
+    pdf: () => fitPdf(perGlyph(name, dx, dy, line, 'after', track)),
+    quotes: [name],
+    needles: [name, ...name.split(' ')],
+    mayRefuse: /a glyph drawn on its own is left beside a withheld passage|withheld text is drawn again elsewhere on the page/,
+  })),
   // L2: a shadow in a font whose ToUnicode reads every letter as x (challenger r3, F3): no reading holds a copy of
   // the name, so only where its glyphs lie says what it is.
   ...([[7, 4], [30, 0]] as const).map(([dx, dy]): FitFixture => ({
@@ -414,6 +465,7 @@ export const FIT_FIXTURES: FitFixture[] = [
   // L7: unmarked neighbours whose ink reaches into the marked passage.
   { surface: 'L7', name: 'a kerned neighbour (“ tucked over V)', pdf: () => fitPdf(`BT /F1 24 Tf 20 60 Td ${BLUE} (Ask \\223) Tj ${RED} [250 (Vola)] TJ ${BLUE} (\\224 now.) Tj ET`), quotes: ['Vola'], needles: ['Vola'] },
   { surface: 'L7', name: 'an italic f reaching across a tight space', pdf: () => fitPdf(`BT /F2 24 Tf 20 60 Td ${BLUE} (Ask the staff ) Tj ${RED} [150 (Bolam)] TJ ${BLUE} ( now.) Tj ET`), quotes: ['Bolam'], needles: ['Bolam'] },
+  { surface: 'L7', name: 'descenders of the line above reaching into the passage (11 pt on 12 pt leading)', pdf: tightParagraph, ...QUILLON },
   { surface: 'L7', name: 'a Type 3 neighbour whose ink overlaps the passage', pdf: () => fitPdf(`BT /F1 18 Tf 20 60 Td ${BLUE} (Ask ) Tj /F3 18 Tf (F ) Tj ${RED} (GHIH) Tj /F1 18 Tf ${BLUE} ( now.) Tj ET`), quotes: ['Rene'], needles: ['Rene'] },
   // L9: a page that leaves its graphics state open, before the box is appended.
   {

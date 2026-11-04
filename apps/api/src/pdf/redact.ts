@@ -39,6 +39,11 @@
 //     whose second copy PDFium's reading left out while the first was there;
 //   - text PDFium does not read is left at a passage after removal (the page's
 //     text objects are counted against its reading again);
+//   - a glyph a text object draws on its own is left within an em of a box, on
+//     its line (a copy drawn a glyph at a time that the boxes stopped short of);
+//   - a withheld word of 3 letters or 4 digits or more is drawn again, on the
+//     page, where no box reached: withheld text drawn twice, which honest pages
+//     rarely do, goes to a person;
 //   - the page has text drawn as a clip (render mode 4 to 7): PDFium's rewrite
 //     of the page would end the clip, and what it clipped would flood the page;
 //   - a content stream or a JPEG cannot be read, or a passage is still
@@ -46,7 +51,7 @@
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
-import { type Box, type Region, boxesFor, copiesOf, matchedChars, meeting, regionsFor, stillThere, unread, wordsOf } from './match.js';
+import { type Box, type Region, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -135,6 +140,10 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     // And the count again: a removal can leave text that no reading after it holds either.
     const left = unread(after, page.textObjects());
     if (meeting([...left.objects, ...left.parts], found.regions).length > 0) return `page ${index + 1}: text PDFium does not read is left at a withheld passage`;
+    // A copy drawn a glyph at a time, letter-spaced unlike the passage, can end beyond the glyphs the boxes reached, and
+    // withheld text can be drawn again where no box reaches at all: fail closed on both (challenger r4, F1).
+    if (loneGlyphs(chars, objects, found.regions, there).length > 0) return `page ${index + 1}: a glyph drawn on its own is left beside a withheld passage`;
+    if (drawnAgain(chars, objects, quotes, there).length > 0) return `page ${index + 1}: withheld text is drawn again elsewhere on the page`;
     // The boxes cover exactly what was removed: the passages, any neighbour and any unread text that went with them.
     const removed = new Set([...chars.keys()].filter((i) => !there.has(i)));
     const drawn = boxesFor(chars, withheld, removed, index, meeting(hidden.objects, found.regions));

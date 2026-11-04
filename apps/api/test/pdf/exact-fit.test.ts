@@ -12,7 +12,7 @@ import { matchedChars, regionsFor, stillThere, unread } from '../../src/pdf/matc
 import { Document, LABEL_EMS, Page, labelSize, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { extractAll, leaked, rawText } from './extract.js';
-import { BLUE, FIT_FIXTURES, type FitFixture, NESTED, RED, askLine, fitPdf, pictureNearFixture, scaledTypeFixture, shadowed } from './fit-fixtures.js';
+import { BLUE, FIT_FIXTURES, type FitFixture, NESTED, RED, askLine, fitPdf, pictureNearFixture, possessiveShadow, scaledTypeFixture, shadowed, tightParagraph } from './fit-fixtures.js';
 import { twoMarksFixture } from './fixtures.js';
 import { black, blue, contrast, inAny, inside, lost, red, render, where } from './pixels.js';
 
@@ -142,23 +142,112 @@ describe('exact fit: no marked pixel is left, no unmarked pixel goes missing out
       // object PDFium does not read (text drawn twice) that a box reached is removed whole, and boxed whole.
       const { chars, objects } = await pageText(original);
       const there = stillThere(chars, await pageChars(pdf));
-      // Spaces have no ink and are never boxed (match.ts exactRegions).
-      const removed = chars.filter((c, i) => !there.has(i) && !c.generated && c.text.trim() !== '' && (c.box ?? c.ink) !== null).map((c) => (c.box ?? c.ink) as Box);
+      // Spaces have no ink and are never boxed (match.ts exactRegions). A glyph of another line removed with a
+      // passage is boxed at its advance by its ink's height (fix round 4, F3): its box holds its ink, not its line.
+      const removed = chars.filter((c, i) => !there.has(i) && !c.generated && c.text.trim() !== '' && (c.box ?? c.ink) !== null);
       const unreadObjects = unread(chars, objects).objects;
       // Loose boxes of adjacent lines can overlap a little: a box's glyphs are the ones it contains.
       const contains = (box: Box, b: Box): boolean => b.left >= box.left - 0.01 && b.right <= box.right + 0.01 && b.bottom >= box.bottom - 0.01 && b.top <= box.top + 0.01;
+      const holds = (box: Box, c: PageChar): boolean => {
+        const loose = (c.box ?? c.ink) as Box;
+        return contains(box, loose) || (c.ink !== null && contains(box, { ...loose, bottom: c.ink.bottom, top: c.ink.top }));
+      };
       for (const box of boxes) {
-        const under = [...removed, ...unreadObjects].filter((b) => contains(box, b));
+        const under = [...removed.filter((c) => holds(box, c)).map((c) => (c.box ?? c.ink) as Box), ...unreadObjects.filter((b) => contains(box, b))];
         expect(under.length, JSON.stringify(box)).toBeGreaterThan(0);
         expect(near(box.left, Math.min(...under.map((b) => b.left))), JSON.stringify(box)).toBe(true);
         expect(near(box.right, Math.max(...under.map((b) => b.right))), JSON.stringify(box)).toBe(true);
       }
-      for (const b of removed) expect(boxes.some((box) => contains(box, b)), JSON.stringify(b)).toBe(true);
+      for (const c of removed) expect(boxes.some((box) => holds(box, c)), JSON.stringify(c.box)).toBe(true);
       // (v) The same bytes every time.
       const again = copyOf(await redactPdf(original, request));
       expect(Buffer.from(again.pdf).equals(Buffer.from(pdf))).toBe(true);
     });
   }
+});
+
+describe('a glyph of another line PDFium removes with a passage (challenger r4, F3)', () => {
+  it('boxes the passage once on its line and each descender of the line above on its own, and takes nothing else of that line', async () => {
+    const original = await tightParagraph();
+    const { pdf, boxes } = copyOf(await redactPdf(original, { quotes: ['Quillon Brask'], redactsAny: true }));
+    const chars = await pageChars(original);
+    const held = [...matchedChars(chars, ['Quillon Brask'])].map((i) => (chars[i] as PageChar).box as Box);
+    const band = { bottom: Math.min(...held.map((b) => b.bottom)), top: Math.max(...held.map((b) => b.top)) };
+    // On the passage's line: at least half of a box's height is in its band.
+    const onLine = (b: Box): boolean => Math.min(b.top, band.top) - Math.max(b.bottom, band.bottom) >= (b.top - b.bottom) / 2;
+    const passage = boxes.filter(onLine);
+    expect(passage).toHaveLength(1);
+    const there = stillThere(chars, await pageChars(pdf));
+    const glyph = (c: PageChar): boolean => !c.generated && c.text.trim() !== '' && c.box !== null;
+    // Off the passage's line, what went is exactly the glyphs whose ink reaches into its box, which PDFium must take.
+    const gone = chars.flatMap((c, i) => (glyph(c) && !onLine(c.box as Box) && !there.has(i) ? [i] : []));
+    const reached = chars.flatMap((c, i) => (glyph(c) && !onLine(c.box as Box) && c.ink !== null && overlaps(c.ink, passage[0] as Box) ? [i] : []));
+    expect(reached.length).toBeGreaterThan(0);
+    expect(gone).toEqual(reached);
+    // Each of them is boxed alone, at its own glyph's box.
+    const others = boxes.filter((b) => !onLine(b));
+    expect(others.map((b) => [b.left, b.right].map((v) => v.toFixed(2)))).toEqual(reached.map((i) => [((chars[i] as PageChar).box as Box).left, ((chars[i] as PageChar).box as Box).right].map((v) => v.toFixed(2))));
+    expect(where(await render(pdf), red)).toEqual([]);
+  });
+});
+
+describe('a possessive copy of a withheld word (challenger r4, F2)', () => {
+  for (const order of ['after', 'before'] as const) {
+    it(`leaves no glyph of the far copy's "Marsh's" (52, 0), ${order} the line: refused, or only the line's own unmarked 's is red`, async () => {
+      const original = await fitPdf(possessiveShadow('Ada Marsh', 52, 0, order), { width: 420 });
+      const result = await redactPdf(original, { quotes: ['Ada Marsh'], redactsAny: true });
+      // With the copy withheld, the box runs on over " car.", whose space PDFium did not read: fail closed.
+      if (result.kind === 'refused') {
+        expect(result.reason).toBe('page 1: text PDFium reads only in part meets a withheld passage');
+        return;
+      }
+      const { pdf } = copyOf(result);
+      // The line's "'s" is drawn red with the name and is not in the quote: its pixels are the only red left.
+      const chars = await pageChars(original);
+      // The line's "Marsh" ends at 114.0; the copy's "Marsh's" begins at 128.8.
+      const own = chars.filter((c) => (c.text === "'" || c.text === 's') && c.box !== null && c.box.left > 113 && c.box.right < 128).map((c) => c.box as Box);
+      expect(own).toHaveLength(2);
+      expect(where(await render(pdf), red).filter((p) => !inAny(p, own))).toEqual([]);
+      const seen = { extracted: await extractAll(pdf), raw: rawText(pdf) };
+      expect(['Ada Marsh', 'Marsh'].filter((needle) => leaked(needle, seen.extracted, seen.raw))).toEqual([]);
+    });
+  }
+
+  for (const [dx, order] of [[36, 'after'], [-36, 'before']] as const) {
+    it(`gives a copy with no red left when "Quillon Brask's" is drawn again at (${dx}, 0) ${order} the line: its "Brask's" is withheld`, async () => {
+      const original = await fitPdf(possessiveShadow('Quillon Brask', dx, 0, order), { width: 420 });
+      const { pdf } = copyOf(await redactPdf(original, { quotes: ['Quillon Brask'], redactsAny: true }));
+      expect(where(await render(pdf), red)).toEqual([]);
+      const seen = { extracted: await extractAll(pdf), raw: rawText(pdf) };
+      expect(['Quillon Brask', 'Quillon', 'Brask'].filter((needle) => leaked(needle, seen.extracted, seen.raw))).toEqual([]);
+    });
+  }
+});
+
+describe('withheld text drawn again elsewhere on the page (challenger r4, F1)', () => {
+  // A masthead with the editor's name, the name in an article, and another article below.
+  const issue = (article: string): Promise<Uint8Array> =>
+    fitPdf([`BT /F1 16 Tf 20 115 Td ${BLUE} (The Picnic Post, edited by ) Tj ${RED} (Quillon Brask) Tj ET`, askLine('(Quillon Brask) Tj', { y: 80 }), `BT /F1 12 Tf 20 40 Td ${BLUE} (${article}) Tj ET`].join('\n'), { width: 420 });
+
+  it('gives a copy when every drawing of a withheld name is marked: the masthead and an article', async () => {
+    const { pdf, boxes } = copyOf(await redactPdf(await issue('The raffle is at noon.'), { quotes: ['Quillon Brask'], redactsAny: true }));
+    expect(boxes).toHaveLength(2);
+    expect(where(await render(pdf), red)).toEqual([]);
+  });
+
+  it('refuses the page when a withheld word is drawn again where no mark is, in another article or as a possessive', async () => {
+    for (const article of ['Brask won the raffle.', "The raffle prize is Brask's.", 'Ask QUILLON about the raffle.']) {
+      const result = await redactPdf(await issue(article), { quotes: ['Quillon Brask'], redactsAny: true });
+      expect(result, article).toEqual({ kind: 'refused', reason: 'page 1: withheld text is drawn again elsewhere on the page' });
+    }
+  });
+
+  it('gives a copy when only a short word or a number under 4 digits of a passage recurs', async () => {
+    const page = fitPdf([askLine('(Bo Pell) Tj (, 850-555-0142) Tj', { y: 80 }), `BT /F1 12 Tf 20 40 Td ${BLUE} (Bo said 555 came.) Tj ET`].join('\n'), { width: 420 });
+    copyOf(await redactPdf(await page, { quotes: ['Bo Pell', '850-555-0142'], redactsAny: true }));
+    const again = fitPdf([askLine('(850-555-0142) Tj', { y: 80 }), `BT /F1 12 Tf 20 40 Td ${BLUE} (Room 0142.) Tj ET`].join('\n'), { width: 420 });
+    expect(await redactPdf(await again, { quotes: ['850-555-0142'], redactsAny: true })).toEqual({ kind: 'refused', reason: 'page 1: withheld text is drawn again elsewhere on the page' });
+  });
 });
 
 describe('pictures near a narrower box (L8)', () => {
