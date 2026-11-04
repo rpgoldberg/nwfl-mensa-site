@@ -16,7 +16,7 @@ describe('/documents/[id].pdf, with no API', () => {
   it('answers a signed-in reader the same', async () => {
     const id = '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20';
     const anonymous = (await GET({ params: { id }, locals: {} } as unknown as Ctx)) as Response;
-    const session = { sid: 's', sub: 'u', name: 'n', groups: ['nwfl-members'], member: true, officer: false, iat: 0, exp: 4_000_000_000, sliding: true };
+    const session = { sid: 's', sub: 'u', name: 'n', groups: ['nwfl-members'], member: true, enrolee: true, officer: false, iat: 0, exp: 4_000_000_000, sliding: true };
     const signedIn = (await GET({ params: { id }, locals: { session } } as unknown as Ctx)) as Response;
     expect(signedIn.status).toBe(anonymous.status);
     expect([...signedIn.headers]).toEqual([...anonymous.headers]);

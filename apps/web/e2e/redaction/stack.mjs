@@ -8,8 +8,10 @@
 // (SITE_OIDC_ISSUER, over https; IDP_CA_FILE is its certificate): a call
 // without a token is the public's, as every call of the crawl is.
 //
-// A14: the members view. MEMBER_SUB has member standing (a member_account
-// row, verified today); the provider's pending account has none. A public
+// A14: the members view. Each of MEMBER_SUBS (comma separated) has member
+// standing (a member_account row, verified today); each of PENDING_SUBS a
+// pending row (AC6 b: standing lives here, not in the token's groups); the
+// provider's pending account has no row. A public
 // article carries a members passage, a members article and an officers
 // article carry canaries of their own: the public, and the pending account,
 // must see none of them, a member the first two, and /news shows nobody the
@@ -43,9 +45,12 @@ const pg = new URL(url);
 const apiPort = Number(process.env['API_PORT'] ?? 9101);
 const healthPort = Number(process.env['API_HEALTH_PORT'] ?? 9102);
 const stackPort = Number(process.env['STACK_PORT'] ?? 9103);
-// A14: the API's token client, and the account with member standing.
+// A14: the API's token client, and the accounts with member standing, and with pending standing.
 const oidc = { issuer: process.env['SITE_OIDC_ISSUER'], jwks: process.env['SITE_OIDC_JWKS_URL'], ca: process.env['IDP_CA_FILE'] };
-const memberSub = process.env['MEMBER_SUB'];
+/** @param {string | undefined} list */
+const subs = (list) => (list ?? '').split(',').filter((s) => s !== '');
+const memberSubs = subs(process.env['MEMBER_SUBS']);
+const pendingSubs = subs(process.env['PENDING_SUBS']);
 const API_MAIN = path.resolve(import.meta.dirname, '../../../api/dist/main.js');
 // The PDF worker (W-WORKER): its own process and database role make the redacted copies.
 const API_WORKER = path.resolve(import.meta.dirname, '../../../api/dist/worker.js');
@@ -262,7 +267,8 @@ ${item({
 })}
 ${item({ id: ids.membersArticle, slug: 'members-picnic', kind: 'article', office: ids.president, title: MEMBERS_TEASER.title, summary: MEMBERS_TEASER.summary, visibility: 'members', body: [para(`Meet at ${C.membersBody}.`)], publicBody: [{ type: 'redacted' }], daysAgo: 3 })}
 ${item({ id: ids.officersArticle, slug: 'board-notes', kind: 'article', office: ids.president, title: `Board notes ${C.officersTitle}`, visibility: 'officers', body: [para(`Notes: ${C.officersBody}.`)], publicBody: [{ type: 'redacted' }], daysAgo: 4 })}
-${memberSub ? `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES (${q(memberSub)}, 'member', 'invite', 'sub-officer', now(), current_date);` : ''}
+${memberSubs.map((sub) => `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES (${q(sub)}, 'member', 'invite', 'sub-officer', now(), current_date);`).join('\n')}
+${pendingSubs.map((sub) => `INSERT INTO member_account (sub, status, route) VALUES (${q(sub)}, 'pending', 'signup');`).join('\n')}
 INSERT INTO venue (id, kind, name, business_address, city, area) VALUES (${q(ids.bistro)}, 'business', 'Sample Bistro', '100 Example Way', 'Destin', 'okaloosa');
 INSERT INTO venue (id, kind, name, area, url, host_office_id) VALUES (${q(ids.room)}, 'virtual', ${q(`Room ${C.venueName}`)}, 'virtual', ${q(`https://example.org/${C.venueUrl}`)}, ${q(ids.president)});
 INSERT INTO venue (id, kind, name, area, host_office_id) VALUES (${q(ids.home)}, 'member_home', ${q(`The ${C.homeName} home`)}, 'okaloosa', ${q(ids.president)});

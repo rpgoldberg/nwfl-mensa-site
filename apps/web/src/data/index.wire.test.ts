@@ -11,7 +11,6 @@ import http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemVisibility } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { MEMBERS_ITEM } from '../lib/document';
 import { liveFromEnv } from './index';
 
 const MEMBERS_BODY = 'WIRING CANARY MEMBERS BODY';
@@ -110,6 +109,6 @@ describe("the production wiring's /news (D1: members teasers on)", () => {
     const live = liveFromEnv({ API_URL: server.url }, { publicOnly: false, log: () => {} })!;
     const [a, b] = await Promise.all([live.news(), live.news()]);
     expect(a).toEqual(b);
-    expect(a.items[1]!.bodyHtml).toBe(`<p class="members-note">${MEMBERS_ITEM}</p>`);
+    expect(a.items[1]!.bodyHtml).toBe('<p class="members-note">Members only.</p>');
   });
 });

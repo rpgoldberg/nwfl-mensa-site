@@ -5,10 +5,13 @@
 // a token that is one RFC 6750 b64token with more than 30 seconds to live.
 // There is no refresh (the provider grants no offline_access, and the API
 // takes a site token for an hour at most): past that, the reader gets the
-// public view, and the page says to sign in again. D4: the reader carries
-// whether the session's groups claim holds the members group (session.member,
-// server/session.mjs; an officers group alone is not it), and the news reads
-// send the token only when it does (src/data/live.ts).
+// public view, and the page says to sign in again. D4 with AC6 (b): the reader
+// carries whether the session's groups claim holds an nwfl enrolee group
+// (session.enrolee, server/session.mjs: nwfl-users, or nwfl-members set by
+// hand; an officers group alone is not one), and the news reads send the token
+// only when it does (src/data/live.ts); member standing is the API's to say.
+// A session with no enrolee group never has its token sent, so its token's
+// expiry is never news to it: the page says the account has no member access.
 import type { AuthSetup } from '../../../server/auth-config.mjs';
 import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
@@ -24,17 +27,18 @@ export interface ReaderDeps {
   now: () => number;
 }
 
-/** The reader to send, if any; lapsed when a session is there but its token has run out (sign in again). */
+/** The reader to send, if any; lapsed when an enrolee's session is there but its token has run out (sign in again). */
 export function readerFor(session: Session | undefined, { tokens, now }: ReaderDeps): { reader: Reader | undefined; lapsed: boolean } {
   const at = now();
   if (session === undefined || session.exp <= at) return { reader: undefined, lapsed: false };
   const record = tokens.get(session.sid, at);
   const expiresAt = record?.expires_at;
   if (record === undefined || record.access_token === '' || typeof expiresAt !== 'number' || Number.isNaN(expiresAt)) return { reader: undefined, lapsed: false };
-  if (expiresAt - EXPIRY_MARGIN_SECONDS <= at) return { reader: undefined, lapsed: true };
+  // D4: whether the groups claim holds an nwfl enrolee group goes with the reader; anything but true is no.
+  const enrolee = session.enrolee === true;
+  if (enrolee && expiresAt - EXPIRY_MARGIN_SECONDS <= at) return { reader: undefined, lapsed: true };
   // A token that is not one b64token is never sent (client.ts): it is no token, not a reader (S5a-1).
-  // D4: whether the groups claim holds the members group goes with it; anything but true is no.
-  return { reader: sendable({ bearer: record.access_token, member: session.member === true }), lapsed: false };
+  return { reader: sendable({ bearer: record.access_token, enrolee }), lapsed: false };
 }
 
 /**

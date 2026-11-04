@@ -7,7 +7,8 @@
 // A14: read with a signed-in reader's token (src/lib/auth/bearer.ts), the page
 // shows what the API sent that reader: a member gets each issue's members copy
 // and the newsletter's members articles and passages. A lapsed token gives the
-// public view and a line to sign in again; a token the API refuses, the public
+// public view and a line to sign in again (an enrolee's session only: one with
+// no nwfl enrolee group is told it has no member access); a token the API refuses, the public
 // view and a line to ask for help, since signing in again would be refused too.
 // The articles section appears only once one is published, so the public page
 // is unchanged till then. Articles the API cannot give a signed-in reader leave

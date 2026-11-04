@@ -12,9 +12,13 @@
 // the whole answer as a member's, and says only that a part is not shown.
 // D1 (11-03): the public, and any reader without member access, sees each
 // members article by title and summary with a "Members only, sign in to read"
-// box, never its body or files. D4: a session whose groups claim lacks the
-// members group is the public's view, whatever the API's records say: its
-// token is never sent (the "stale" and "officer-only" accounts).
+// box, never its body or files. D4 with AC6 (b): the members view needs an
+// nwfl enrolee group in the session's claim (nwfl-users, or nwfl-members set
+// by hand) AND member standing in the API's records ("enrolee" has both). A
+// session with no enrolee group is the public's view, whatever the records
+// say: its token is never sent ("stale", "officer-only"), and a lapsed token
+// there is not called expired ("lapsed-outsider"). Pending standing with the
+// group is the public's view too ("enrolee-pending").
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
@@ -289,8 +293,13 @@ for (const scheme of ['light', 'dark'] as const) {
   });
 }
 
-for (const login of ['stale', 'officer-only'] as const) {
-  test(`D4: ${login === 'stale' ? 'member standing in the records but no members group in the claim' : 'the officers group without the members group'} gives the public's view, with the box that says so, and no members id`, async ({ page }) => {
+const D4_PUBLIC = {
+  stale: 'member standing in the records but no enrolee group in the claim',
+  'officer-only': 'the officers group without an enrolee group',
+  'enrolee-pending': 'nwfl-users in the claim but pending standing in the records',
+} as const;
+for (const login of Object.keys(D4_PUBLIC) as (keyof typeof D4_PUBLIC)[]) {
+  test(`D4: ${D4_PUBLIC[login]} gives the public's view, with the box that says so, and no members id`, async ({ page }) => {
     await page.goto('/news');
     await signIn(page, login);
     const res = await page.goto('/news');
@@ -309,6 +318,37 @@ for (const login of ['stale', 'officer-only'] as const) {
     expect(await withheld.text()).toBe(await random.text());
   });
 }
+
+test('AC6 b: nwfl-users alone in the claim, with member standing in the records, gets the members view', async ({ page }) => {
+  await page.goto('/news');
+  await signIn(page, 'enrolee');
+  const res = await page.goto('/news');
+  expect(res?.status()).toBe(200);
+  await expect(page.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toHaveAttribute('href', pdf(current!.membersPdf));
+  const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
+  await expect(open.getByRole('complementary', { name: 'Members only' })).toContainText(ARTICLES.open.passage);
+  await expect(page.getByRole('article').filter({ hasText: ARTICLES.members.title })).toContainText(ARTICLES.members.body);
+  const html = await page.content();
+  expect(noneOf(html, [...NEVER, NO_ACCESS, TEASER_NO_ACCESS, EXPIRED, REFUSED])).toEqual([]);
+  expect(res?.headers()['cache-control']).toBe('private, no-store');
+  const members = await page.request.get(pdf(current!.membersPdf));
+  expect(members.status()).toBe(200);
+  expect((await members.body()).toString('latin1')).toContain(MEMBERS_PDF_MARK);
+});
+
+test('a lapsed token on a session with no enrolee group is never told its sign-in expired: the boxes say the account has no member access', async ({ page }) => {
+  await page.goto('/news');
+  await signIn(page, 'lapsed-outsider');
+  const res = await page.goto('/news');
+  expect(res?.status()).toBe(200);
+  await teasers(page, TEASER_NO_ACCESS, { name: 'Ask for help', href: '/help' });
+  const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
+  await expect(open).toContainText(`Members-only passage. ${NO_ACCESS}`);
+  await expect(page.getByRole('link', { name: 'Sign in again' })).toHaveCount(0);
+  await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
+  const html = await page.content();
+  expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, EXPIRED, REFUSED])).toEqual([]);
+});
 
 test('anonymous: the public article with its passage hidden behind a sign-in link, and none of the members content', async ({ page }) => {
   const res = await page.goto('/news');

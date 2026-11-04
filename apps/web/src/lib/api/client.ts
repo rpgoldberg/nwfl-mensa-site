@@ -58,10 +58,11 @@ export class ApiTokenRefused extends Error {
 export interface Reader {
   bearer: string;
   /**
-   * D4: the session's groups claim holds the configured members group (server/session.mjs). The site
-   * sends the token only when it does (src/data/live.ts); absent is no. This client never reads it.
+   * D4 with AC6 (b): the session's groups claim holds an nwfl enrolee group (nwfl-users or nwfl-members,
+   * under the configured prefix: server/session.mjs). The site sends the token only when it does
+   * (src/data/live.ts); absent is no. This client never reads it.
    */
-  member?: boolean;
+  enrolee?: boolean;
 }
 
 // RFC 6750 b64token, the one form the API reads (apps/api/src/auth/caller.ts): anything else is not sent at all.

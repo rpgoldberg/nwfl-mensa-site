@@ -1,7 +1,7 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 import { type Block, type Document, DocumentSchema, type Inline } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { MEMBERS_ITEM, MEMBERS_PASSAGE, MEMBERS_RULE, NOT_SHOWN, NO_MEMBER_ACCESS, NO_MEMBER_ACCESS_ITEM, documentHtml, escapeHtml, hasMembers, hasRedacted, withheldHtml } from './document';
+import { MEMBERS_ITEM, MEMBERS_ITEM_NO_SIGN_IN, MEMBERS_PASSAGE, MEMBERS_RULE, NOT_SHOWN, NO_MEMBER_ACCESS, NO_MEMBER_ACCESS_ITEM, documentHtml, escapeHtml, hasMembers, hasRedacted, withheldHtml } from './document';
 
 const text = (value: string, style: { bold?: boolean; italic?: boolean } = {}): Inline => ({ $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'text', value: { $typeName: 'nwfl.mensa.v1.Text', text: value, bold: false, italic: false, ...style } } });
 const para = (...inlines: Inline[]): Block => ({ $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'paragraph', value: { $typeName: 'nwfl.mensa.v1.Paragraph', inlines } } });
@@ -146,8 +146,15 @@ describe('documentHtml views', () => {
 describe('withheldHtml (a teaser, D1)', () => {
   it('is a box that says the whole item is members only, with a real sign-in link when the page says where, and nothing of the item', () => {
     expect(MEMBERS_ITEM).toBe('Members only, sign in to read.');
-    expect(withheldHtml()).toBe(`<p class="members-note">${MEMBERS_ITEM}</p>`);
     expect(withheldHtml({ signIn: '/sign-in?a=1&b=2' })).toBe('<p class="members-note">Members only, <a href="/sign-in?a=1&amp;b=2">sign in</a> to read.</p>');
+    expect(withheldHtml({ signIn: '/sign-in' }).replace(/<[^>]+>/g, '')).toBe(MEMBERS_ITEM);
+  });
+
+  it('says "Members only." and nothing about signing in where the page offers no sign-in (N4)', () => {
+    expect(MEMBERS_ITEM_NO_SIGN_IN).toBe('Members only.');
+    expect(withheldHtml()).toBe('<p class="members-note">Members only.</p>');
+    expect(withheldHtml({ view: 'public', signIn: undefined })).toBe('<p class="members-note">Members only.</p>');
+    expect(withheldHtml().toLowerCase()).not.toContain('sign in');
   });
 
   it('tells a signed-in reader without member access so, with a link to ask for help, and never to sign in again', () => {

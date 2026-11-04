@@ -13,7 +13,11 @@ import {
 } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeSchema, TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type Reader } from '../lib/api/client';
-import { MEMBERS_ITEM, MEMBERS_PASSAGE, NOT_SHOWN, NO_MEMBER_ACCESS, NO_MEMBER_ACCESS_ITEM } from '../lib/document';
+import { MEMBERS_ITEM_NO_SIGN_IN, MEMBERS_PASSAGE, NOT_SHOWN, NO_MEMBER_ACCESS, NO_MEMBER_ACCESS_ITEM } from '../lib/document';
+import { newSession } from '../../server/session.mjs';
+import { TokenStore } from '../../server/token-store.mjs';
+import { readerFor } from '../lib/auth/bearer';
+import type { Tokens } from '../lib/auth/oidc';
 import { isPublicEvent, liveData } from './live';
 
 const SERIES = '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20';
@@ -474,10 +478,10 @@ describe('liveData.issues (the newsletter)', () => {
 // shows what the API sent for it, never more: members items and files only when the API answered as
 // for a member, never an officers item or file, never a source file, and no state between readers.
 describe('liveData.news', () => {
-  /** A session whose groups claim holds the members group (D4): the only reader whose token goes. */
-  const member: Reader = { bearer: 'member.token', member: true };
-  /** A members claim the API answers as the public's (its member record has lapsed, say). */
-  const notInRecords: Reader = { bearer: 'pending.token', member: true };
+  /** A session whose groups claim holds an nwfl enrolee group (D4): the only reader whose token goes. */
+  const member: Reader = { bearer: 'member.token', enrolee: true };
+  /** An enrolee claim the API answers as the public's (pending, or its member record has lapsed, say). */
+  const notInRecords: Reader = { bearer: 'pending.token', enrolee: true };
   const UUIDS = {
     issue: 'd0c00000-0000-4000-8000-000000000010',
     issuePublic: 'f0000000-0000-4000-8000-000000000010',
@@ -629,14 +633,14 @@ describe('liveData.news', () => {
   it("as an officer: the same as a member's view, never an officers item, an officers file or a source file (D5)", async () => {
     const officerAnswer = memberAnswer();
     const { reads: r } = api(() => officerAnswer);
-    const news = await liveData(r).news({ bearer: 'officer.token', member: true });
+    const news = await liveData(r).news({ bearer: 'officer.token', enrolee: true });
     expect(news.items.map((i) => i.slug)).toEqual(['open-letter', 'members-picnic']);
     expect(news.issues[0]!.membersPdf).toBe(`/documents/${UUIDS.issueMembers}.pdf`);
     expect(news.items[0]!.files.map((f) => f.href)).toEqual([`/documents/${UUIDS.articlePublic}.pdf`, `/documents/${UUIDS.articleMembers}.pdf`]);
     expect(JSON.stringify(news)).not.toMatch(new RegExp(`${UUIDS.issueOfficers}|${UUIDS.issueSource}|${UUIDS.articleOfficers}|${UUIDS.articleSource}|OFFICERS ONLY`));
   });
 
-  it("keys on the API's answer too: a members claim the API answers as the public's reads as signed in without member access", async () => {
+  it("keys on the API's answer too: an enrolee claim the API answers as the public's reads as signed in without member access", async () => {
     const { reads: r } = api(() => publicAnswer());
     const news = await liveData(r).news(notInRecords);
     expect(news.signedIn).toBe(true);
@@ -648,7 +652,7 @@ describe('liveData.news', () => {
 
   it('reads a bearer that is not one b64token as no reader at all: the public view, even when the API sends more than it should (S5a-1)', async () => {
     const { reads: r, asked } = api(() => memberAnswer());
-    const news = await liveData(r).news({ bearer: 'not a b64token', member: true });
+    const news = await liveData(r).news({ bearer: 'not a b64token', enrolee: true });
     expect(news).toEqual(await liveData(api(() => memberAnswer()).reads).news());
     expect(news.signedIn).toBe(false);
     expect(asked.map(([, , bearer]) => bearer)).toEqual([undefined, undefined]);
@@ -674,7 +678,7 @@ describe('liveData.news', () => {
     });
     // With no reader, /news is exactly what it was before A14 read any article: the issues, no line, no 503 (NOTE-1).
     expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news()).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
-    expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news({ bearer: 'not a b64token', member: true })).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
+    expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news({ bearer: 'not a b64token', enrolee: true })).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
     const asMember = await liveData(articlesDown(api((as) => (as ? memberAnswer() : publicAnswer())).reads)).news(member);
     expect(asMember).toMatchObject({ items: [], itemsUnavailable: true, signedIn: true, tokenRefused: false });
     expect(asMember.issues[0]!.membersPdf).toBe(`/documents/${UUIDS.issueMembers}.pdf`);
@@ -830,7 +834,7 @@ describe('liveData.news', () => {
       slug: 'members-picnic',
       title: 'Title of members-picnic',
       summary: 'Summary of members-picnic',
-      bodyHtml: `<p class="members-note">${MEMBERS_ITEM}</p>`,
+      bodyHtml: `<p class="members-note">${MEMBERS_ITEM_NO_SIGN_IN}</p>`,
       publishedOn: '2026-10-20',
       source: 'submitted',
       files: [],
@@ -850,13 +854,13 @@ describe('liveData.news', () => {
   });
 
   // D4 (11-03): a second guard. The members view needs both the API's answer as a member's AND the
-  // session's groups claim holding the configured members group. A session without it is the public's:
+  // session's groups claim holding an nwfl enrolee group (AC6 b). A session without one is the public's:
   // its token is never sent, so nothing members-only can even arrive, and the box says the account has
   // no member access (never "sign in", which would only sign the same account in again).
-  describe("a session without the members group (D4): the public's view, whatever the API would say", () => {
+  describe("a session without an nwfl enrolee group (D4): the public's view, whatever the API would say", () => {
     const claimless: [string, Reader][] = [
-      ['no members claim at all', { bearer: 'stale.token' }],
-      ['an officers-only claim', { bearer: 'officer.token', member: false }],
+      ['no enrolee claim at all', { bearer: 'stale.token' }],
+      ['an officers-only claim', { bearer: 'officer.token', enrolee: false }],
     ];
     const BOX = `<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`;
     const SECRETS = new RegExp(`1234|gate code|Bring a chair|OFFICERS ONLY|board-notes|sign-in|${Object.values(UUIDS).filter((id) => id !== UUIDS.issuePublic && id !== UUIDS.articlePublic).join('|')}`);
@@ -900,8 +904,8 @@ describe('liveData.news', () => {
       const cases: [Reader | undefined, 'member' | 'public', boolean][] = [
         [member, 'member', true],
         [member, 'public', false],
-        [{ bearer: 'stale.token', member: false }, 'member', false],
-        [{ bearer: 'stale.token', member: false }, 'public', false],
+        [{ bearer: 'stale.token', enrolee: false }, 'member', false],
+        [{ bearer: 'stale.token', enrolee: false }, 'public', false],
         [undefined, 'member', false],
       ];
       for (const [reader, apiSays, membersView] of cases) {
@@ -912,6 +916,83 @@ describe('liveData.news', () => {
         expect(news.items.some((i) => i.bodyHtml.includes('1234')), label).toBe(membersView);
         expect(news.items.find((i) => i.slug === 'members-picnic')?.teaser, label).toBe(membersView ? undefined : true);
       }
+    });
+  });
+
+  // AC6 (b) with D4, from the sign-in to the page: every nwfl enrolee is in nwfl-users (nwfl-members for an
+  // account set by hand); member standing lives only in the API's records. The members view needs both.
+  describe('from the sign-in to the page: an nwfl enrolee group in the claim AND member standing in the API', () => {
+    const NOW = 1_800_000_000;
+    const BOX = `<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`;
+    /** The reader the page would send for a sign-in with these groups and a token with `left` seconds to live. */
+    function signedIn(groups: string[], bearer: string, left = 3600, prefix?: string) {
+      const store = new TokenStore<Tokens>();
+      const session = newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups }, NOW - 60, prefix);
+      store.put(session.sid, { access_token: bearer, expires_at: NOW + left }, session.exp);
+      return readerFor(session, { tokens: store, now: () => NOW });
+    }
+    /** The API as AC6 b has it: standing by the token's subject in its records, officers by their group. */
+    const STANDING: Record<string, 'member' | 'pending' | 'officers'> = { 'member.tok': 'member', 'pending.tok': 'pending', 'officers.tok': 'officers' };
+    const byStanding = (as: Reader | undefined) => (as !== undefined && STANDING[as.bearer] !== 'pending' ? memberAnswer() : publicAnswer());
+
+    const cases: [string, string[], string, boolean, string?][] = [
+      ['nwfl-users alone, member standing', ['nwfl-users'], 'member.tok', true],
+      ['nwfl-users and an officers group, member standing', ['nwfl-users', 'nwfl-officers'], 'member.tok', true],
+      ['nwfl-members (set by hand), member standing', ['nwfl-members'], 'member.tok', true],
+      ['mensa-nwfl-users under the mensa-nwfl- prefix, member standing', ['mensa-nwfl-users'], 'member.tok', true, 'mensa-nwfl-'],
+      ['nwfl-users alone, pending standing', ['nwfl-users'], 'pending.tok', false],
+      ['nwfl-members, pending standing', ['nwfl-members'], 'pending.tok', false],
+      ['neither group, member standing', [], 'member.tok', false],
+      ['the pending group alone, member standing', ['nwfl-pending'], 'member.tok', false],
+      ['officers only (the API would answer as officers)', ['nwfl-officers'], 'officers.tok', false],
+      ['officers and a seat, no enrolee group', ['nwfl-officers', 'nwfl-office-president'], 'officers.tok', false],
+      ['a foreign account on the shared provider', ['fc-users', 'mensa-other-users'], 'member.tok', false],
+      ['upper case', ['NWFL-USERS'], 'member.tok', false],
+      ['padded', [' nwfl-users '], 'member.tok', false],
+      ['zero-width', ['nwfl-users\u200b'], 'member.tok', false],
+      ['homoglyph', ['nwfl-us\u0435rs'], 'member.tok', false],
+      ['singular', ['nwfl-user'], 'member.tok', false],
+      ['another prefix', ['mensa-nwfl-users'], 'member.tok', false],
+      ['the bare group under a configured prefix', ['nwfl-users'], 'member.tok', false, 'mensa-nwfl-'],
+      ['past the 20th group', [...Array.from({ length: 20 }, (_, i) => `nwfl-g${i}`), 'nwfl-users'], 'member.tok', false],
+    ];
+    for (const [name, groups, bearer, membersView, prefix] of cases) {
+      it(`${name}: ${membersView ? 'the members view' : "the public's view, with the box that says the account has no member access"}`, async () => {
+        const { reader, lapsed } = signedIn(groups, bearer, 3600, prefix);
+        expect(lapsed).toBe(false);
+        const { reads: r, asked } = api(byStanding);
+        const news = await liveData(r, { membersTeasers: true }).news(reader, { signIn: '/sign-in?return=%2Fnews&again=1' });
+        const sent = asked.map(([, , b]) => b);
+        expect(news.issues[0]!.membersPdf !== undefined).toBe(membersView);
+        expect(news.items.some((i) => i.bodyHtml.includes('1234'))).toBe(membersView);
+        expect(news.items.find((i) => i.slug === 'members-picnic')?.teaser).toBe(membersView ? undefined : true);
+        if (membersView) {
+          expect(sent).toEqual([bearer, bearer]);
+        } else {
+          // Signed in with no member access: never the box that sends the reader to sign in again.
+          expect(news.items[0]!.bodyHtml).toBe(`<p>Hello &amp; welcome</p>${BOX}`);
+          expect(JSON.stringify(news)).not.toContain('sign-in');
+          // An enrolee's token goes and the API says pending; any other session never has its token sent.
+          expect(sent).toEqual(bearer === 'pending.tok' ? [bearer, bearer] : [undefined, undefined]);
+        }
+      });
+    }
+
+    it('a lapsed token without an enrolee group: no token goes, and the page shows the box that says the account has no member access, not "sign in again"', async () => {
+      for (const groups of [['nwfl-officers'], []]) {
+        const { reader, lapsed } = signedIn(groups, 'officers.tok', 0);
+        expect(lapsed, String(groups)).toBe(false);
+        const { reads: r, asked } = api(byStanding);
+        const news = await liveData(r, { membersTeasers: true }).news(reader, { signIn: '/sign-in?return=%2Fnews&again=1' });
+        expect(asked.map(([, , b]) => b)).toEqual([undefined, undefined]);
+        expect(news.items[0]!.bodyHtml).toBe(`<p>Hello &amp; welcome</p>${BOX}`);
+        expect(news.items[1]!.bodyHtml).toBe(`<p class="members-note">${NO_MEMBER_ACCESS_ITEM} <a href="/help">Ask for help</a></p>`);
+      }
+    });
+
+    it('a lapsed token with an enrolee group says lapsed and sends nothing: the public view, with the sign-in box', async () => {
+      const { reader, lapsed } = signedIn(['nwfl-users'], 'member.tok', 0);
+      expect({ reader, lapsed }).toEqual({ reader: undefined, lapsed: true });
     });
   });
 });
@@ -928,9 +1009,9 @@ describe('liveData.file as a signed-in reader', () => {
         },
       }),
     );
-    expect(await live.file(FILE, { bearer: 'member.token', member: true })).toEqual({ kind: 'not_found' });
-    expect(await live.file(FILE, { bearer: 'refused', member: true })).toEqual({ kind: 'not_found' });
-    expect(await live.file('../x', { bearer: 'member.token', member: true })).toEqual({ kind: 'not_found' });
+    expect(await live.file(FILE, { bearer: 'member.token', enrolee: true })).toEqual({ kind: 'not_found' });
+    expect(await live.file(FILE, { bearer: 'refused', enrolee: true })).toEqual({ kind: 'not_found' });
+    expect(await live.file('../x', { bearer: 'member.token', enrolee: true })).toEqual({ kind: 'not_found' });
     expect(asked).toEqual(['member.token', 'refused', undefined]);
     await expect(liveData(reads({ readFile: () => Promise.reject(new ApiTokenRefused('ReadFile')) })).file(FILE)).rejects.toBeInstanceOf(ApiTokenRefused);
   });
@@ -938,14 +1019,14 @@ describe('liveData.file as a signed-in reader', () => {
   it('reads the file as the public for a bearer that is not one b64token (S5a-1)', async () => {
     const asked: (string | undefined)[] = [];
     const live = liveData(reads({ readFile: (_id, as) => (asked.push(as?.bearer), Promise.resolve({ kind: 'not_found' as const })) }));
-    expect(await live.file(FILE, { bearer: 'two words', member: true })).toEqual({ kind: 'not_found' });
+    expect(await live.file(FILE, { bearer: 'two words', enrolee: true })).toEqual({ kind: 'not_found' });
     expect(asked).toEqual([undefined]);
   });
 
   it('passes an unavailable API on with a reader too, without asking again', async () => {
     let asked = 0;
     const live = liveData(reads({ readFile: () => (asked++, Promise.reject(new ApiUnavailable('ReadFile'))) }));
-    await expect(live.file(FILE, { bearer: 'member.token', member: true })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(live.file(FILE, { bearer: 'member.token', enrolee: true })).rejects.toBeInstanceOf(ApiUnavailable);
     expect(asked).toBe(1);
   });
 });

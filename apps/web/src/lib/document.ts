@@ -18,6 +18,8 @@ export const NO_MEMBER_ACCESS = 'Members-only passage. Your account does not hav
 export const MEMBERS_RULE = "Members only, please don't forward";
 /** A whole members item the reader may not read (a teaser, D1): its own box, which never says "passage". */
 export const MEMBERS_ITEM = 'Members only, sign in to read.';
+/** The same box where the page offers no sign-in (N4): nothing about signing in. */
+export const MEMBERS_ITEM_NO_SIGN_IN = 'Members only.';
 export const NO_MEMBER_ACCESS_ITEM = 'Members only. Your account does not have member access yet.';
 /** Where the API withheld a part from a member too. */
 export const NOT_SHOWN = 'Part of this text is not shown.';
@@ -128,13 +130,14 @@ export function documentHtml(
 
 /**
  * The box alone, in place of a whole members item the reader may not read (a teaser, D1): nothing of its
- * body is read. "Sign in" is a real link when the page says where; a signed-in reader without member
- * access is told so, with a link to ask for help, never one to sign in again.
+ * body is read. "Sign in" is a real link when the page says where, and is not mentioned where it does not
+ * (N4); a signed-in reader without member access is told so, with a link to ask for help, never one to
+ * sign in again.
  */
 export function withheldHtml({ view = 'public', signIn }: { view?: View; signIn?: string | undefined } = {}): string {
   if (view === 'signed-in-public') return `<p class="members-note">${NO_MEMBER_ACCESS_ITEM} <a href="/help">Ask for help</a></p>`;
   if (signIn !== undefined) return `<p class="members-note">Members only, <a href="${escapeHtml(signIn)}">sign in</a> to read.</p>`;
-  return `<p class="members-note">${MEMBERS_ITEM}</p>`;
+  return `<p class="members-note">${MEMBERS_ITEM_NO_SIGN_IN}</p>`;
 }
 
 /**

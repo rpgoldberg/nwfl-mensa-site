@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { accountHtml, escapeHtml, stampAccount } from '../account.mjs';
 
-const member = { sid: 's', sub: 'u', name: 'Jordan Example', groups: ['nwfl-members'], member: true, officer: false, iat: 1, exp: 2, sliding: true };
+const member = { sid: 's', sub: 'u', name: 'Jordan Example', groups: ['nwfl-members'], member: true, enrolee: true, officer: false, iat: 1, exp: 2, sliding: true };
 const officer = { ...member, name: 'Alex Sample', officer: true, groups: ['nwfl-members', 'nwfl-officers'] };
 
 describe('accountHtml (the header’s account area)', () => {

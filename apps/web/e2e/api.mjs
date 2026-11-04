@@ -40,10 +40,11 @@ const noIssuesPort = Number(process.env['NO_ISSUES_API_PORT'] ?? 9093);
 const CANARY = { membersInFull: 'MEMBERS-ONLY CANARY PICNIC', noStatus: 'UNPUBLISHED CANARY' };
 
 // A14: the test identity provider's subjects (e2e/idp.mjs), as in e2e/stand-in.ts (ACCOUNTS).
-const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6', articlesDown: '00000000-0000-4000-8000-0000000000a7', stale: '00000000-0000-4000-8000-0000000000b8' };
+const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6', articlesDown: '00000000-0000-4000-8000-0000000000a7', stale: '00000000-0000-4000-8000-0000000000b8', enrolee: '00000000-0000-4000-8000-0000000000c1', lapsedOutsider: '00000000-0000-4000-8000-0000000000c4' };
 /** Who has member standing (member_account, in the real API): not the pending account, and the officers by their group. */
-// D4: "stale" has member standing here but no members group in its claim, so the site never sends its token.
-const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.refused, SUBJECT.lapsed, SUBJECT.articlesDown, SUBJECT.stale]);
+// D4: "stale" and "lapsed-outsider" have member standing here but no enrolee group in their claim, so the site never
+// sends their token. AC6 (b): "enrolee" is in nwfl-users alone, with member standing; "enrolee-pending" has none.
+const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.refused, SUBJECT.lapsed, SUBJECT.articlesDown, SUBJECT.stale, SUBJECT.enrolee, SUBJECT.lapsedOutsider]);
 const idpIssuer = process.env['IDP_ISSUER'];
 const jwks = process.env['IDP_JWKS_URL'] ? createRemoteJWKSet(new URL(process.env['IDP_JWKS_URL'])) : undefined;
 

@@ -15,6 +15,12 @@
 export const INTERNAL_GROUP_PREFIX = 'nwfl-';
 /** Today's Authentik names, so no env change keeps today's behaviour. */
 export const DEFAULT_SITE_GROUP_PREFIX = 'nwfl-';
+/**
+ * AC6 (b), D4: an nwfl enrolee's groups, by their internal names (<prefix>users and <prefix>members in
+ * Authentik): every enrolee is in nwfl-users, and nwfl-members is an account set by hand. Being in one
+ * says only that the account is the chapter's; member standing lives in the API's records alone.
+ */
+export const ENROLEE_GROUPS = Object.freeze([`${INTERNAL_GROUP_PREFIX}users`, `${INTERNAL_GROUP_PREFIX}members`]);
 
 const PREFIX = /^[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*-$/;
 const MAX_LENGTH = 32;

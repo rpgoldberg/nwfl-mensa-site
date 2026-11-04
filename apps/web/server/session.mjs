@@ -7,7 +7,7 @@
 // (state, nonce, PKCE verifier) for ten minutes.
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readCookie } from './cookies.mjs';
-import { DEFAULT_SITE_GROUP_PREFIX, groupsClaim, internalGroups } from './groups.mjs';
+import { DEFAULT_SITE_GROUP_PREFIX, ENROLEE_GROUPS, groupsClaim, internalGroups } from './groups.mjs';
 import { SESSION_COOKIE } from './policy.mjs';
 
 export { SESSION_COOKIE };
@@ -70,8 +70,11 @@ export function openValue(sealed, key, purpose) {
 }
 
 /**
+ * `enrolee` (AC6 b, D4): the claim holds an nwfl enrolee group (groups.mjs ENROLEE_GROUPS); the
+ * site sends the token to the API for the members view only then. `member` is the members group alone.
+ *
  * @typedef {{ sid: string, sub: string, name: string, groups: string[], member: boolean,
- *   officer: boolean, iat: number, exp: number, sliding: boolean }} Session
+ *   enrolee: boolean, officer: boolean, iat: number, exp: number, sliding: boolean }} Session
  */
 
 /** Printable: no control character (C0 or DEL). @param {string} c */
@@ -104,6 +107,7 @@ export function newSession(claims, now, groupPrefix = DEFAULT_SITE_GROUP_PREFIX)
     name: displayName(claims['name']) || displayName(claims['preferred_username']) || 'Member',
     groups,
     member: groups.includes('nwfl-members'),
+    enrolee: groups.some((g) => ENROLEE_GROUPS.includes(g)),
     officer,
     iat: now,
     exp: now + lifetime,
