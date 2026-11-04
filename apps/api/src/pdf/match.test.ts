@@ -544,6 +544,14 @@ describe('regionsFor: a neighbour pulled in brings the rest of its word (challen
     expect(edges(regionsFor(kerned, new Set([2, 3]), 0, [before]))).toEqual([[78, 96, 700, 712]]);
   });
 
+  it('never takes an unread object that only abuts another unread object for its word (objects alone do not chain)', () => {
+    // "Ask Bo" with "Bo" withheld [96,108], an unread object over the o's end, and a second touching that one's end.
+    const chars = page(['Ask Bo']);
+    const over = { left: 107, right: 114.5, bottom: 701, top: 710 };
+    const touching = { left: 114.5, right: 122, bottom: 701, top: 710 };
+    expect(edges(regionsFor(chars, new Set([4, 5]), 0, [over, touching], wordsOf(chars, objectsOf([[0, 3], [4, 5]]))))).toEqual([[96, 114.5, 700, 712]]);
+  });
+
   it('follows a chain: the far end of a word pulled in can pull in the next', () => {
     // "pq" | "xA" | "Vo": A pulled in brings x, whose ink reaches q's, which brings p.
     const chain = withChar(withChar(page(['pqxAVo']), 3, { ink: { right: 98 } }), 1, { ink: { right: 85 } });
