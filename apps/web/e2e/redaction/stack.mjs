@@ -108,9 +108,9 @@ const C = {
   homeName: canary('homename'),
   // In the PDF and, so that its mark anchors (a mark found in no field hides the item), in the body.
   pdfName: canary('pdfname'),
-  // A14: a members passage in a public article; a members article's title and body; an officers article's.
+  // A14: a members passage in a public article; a members article's body; an officers article's title and body.
+  // D1 (11-03): a members article's title and summary are public (a teaser), so they are no canary: MEMBERS_TEASER.
   membersPassage: canary('memberspassage'),
-  membersTitle: canary('memberstitle'),
   membersBody: canary('membersbody'),
   officersTitle: canary('officerstitle'),
   officersBody: canary('officersbody'),
@@ -142,6 +142,8 @@ const ids = {
 };
 /** A14: what the open article says to everyone, beside its members passage. */
 const ARTICLE_PLAIN = 'The lunch moves across town in March';
+/** D1: what the public is shown of the members article, by title and summary with the box: the teaser's positive control. */
+const MEMBERS_TEASER = { title: 'Members picnic sign-up', summary: 'Bring a dish to share.' };
 /** What the PDF says besides its canaries: the crawl's sign that it read the copy. */
 const PDF_PLAIN = 'Bring a folding chair';
 
@@ -258,7 +260,7 @@ ${item({
   publicBody: [para(`${ARTICLE_PLAIN}.`), { type: 'redacted' }],
   daysAgo: 2,
 })}
-${item({ id: ids.membersArticle, slug: 'members-picnic', kind: 'article', office: ids.president, title: `Picnic with ${C.membersTitle}`, visibility: 'members', body: [para(`Meet at ${C.membersBody}.`)], publicBody: [{ type: 'redacted' }], daysAgo: 3 })}
+${item({ id: ids.membersArticle, slug: 'members-picnic', kind: 'article', office: ids.president, title: MEMBERS_TEASER.title, summary: MEMBERS_TEASER.summary, visibility: 'members', body: [para(`Meet at ${C.membersBody}.`)], publicBody: [{ type: 'redacted' }], daysAgo: 3 })}
 ${item({ id: ids.officersArticle, slug: 'board-notes', kind: 'article', office: ids.president, title: `Board notes ${C.officersTitle}`, visibility: 'officers', body: [para(`Notes: ${C.officersBody}.`)], publicBody: [{ type: 'redacted' }], daysAgo: 4 })}
 ${memberSub ? `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES (${q(memberSub)}, 'member', 'invite', 'sub-officer', now(), current_date);` : ''}
 INSERT INTO venue (id, kind, name, business_address, city, area) VALUES (${q(ids.bistro)}, 'business', 'Sample Bistro', '100 Example Way', 'Destin', 'okaloosa');
@@ -423,6 +425,7 @@ try {
     stored: counts,
     issue: { title: ISSUE.title, summary: ISSUE.summary, plain: ISSUE.plain, publicSha256: createHash('sha256').update(ISSUE_PUBLIC_PDF).digest('hex') },
     articlePlain: ARTICLE_PLAIN,
+    membersTeaser: MEMBERS_TEASER,
   });
   http
     .createServer((req, res) => {

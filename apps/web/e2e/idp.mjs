@@ -43,6 +43,10 @@ const LOGINS = {
   refused: { id: '00000000-0000-4000-8000-0000000000e5', name: 'Riley Testcase', groups: ['nwfl-members'] },
   lapsed: { id: '00000000-0000-4000-8000-0000000000f6', name: 'Quinn Example', groups: ['nwfl-members'], tokenSeconds: 20 },
   'articles-down': { id: '00000000-0000-4000-8000-0000000000a7', name: 'Morgan Example', groups: ['nwfl-members'] },
+  // D4: member standing in the API's records, but no members group in the claim (a stale or missing group).
+  stale: { id: '00000000-0000-4000-8000-0000000000b8', name: 'Avery Sample', groups: [] },
+  // D4: the officers group alone, without the members group: the site does not read it as a member's.
+  'officer-only': { id: '00000000-0000-4000-8000-0000000000a9', name: 'Drew Example', groups: ['nwfl-officers'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

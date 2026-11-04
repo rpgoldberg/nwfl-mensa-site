@@ -40,9 +40,10 @@ const noIssuesPort = Number(process.env['NO_ISSUES_API_PORT'] ?? 9093);
 const CANARY = { membersInFull: 'MEMBERS-ONLY CANARY PICNIC', noStatus: 'UNPUBLISHED CANARY' };
 
 // A14: the test identity provider's subjects (e2e/idp.mjs), as in e2e/stand-in.ts (ACCOUNTS).
-const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6', articlesDown: '00000000-0000-4000-8000-0000000000a7' };
+const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6', articlesDown: '00000000-0000-4000-8000-0000000000a7', stale: '00000000-0000-4000-8000-0000000000b8' };
 /** Who has member standing (member_account, in the real API): not the pending account, and the officers by their group. */
-const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.refused, SUBJECT.lapsed, SUBJECT.articlesDown]);
+// D4: "stale" has member standing here but no members group in its claim, so the site never sends its token.
+const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.refused, SUBJECT.lapsed, SUBJECT.articlesDown, SUBJECT.stale]);
 const idpIssuer = process.env['IDP_ISSUER'];
 const jwks = process.env['IDP_JWKS_URL'] ? createRemoteJWKSet(new URL(process.env['IDP_JWKS_URL'])) : undefined;
 
