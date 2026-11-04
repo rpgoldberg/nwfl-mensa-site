@@ -167,8 +167,9 @@ describe('exact fit: no marked pixel is left, no unmarked pixel goes missing out
 });
 
 describe('a glyph of another line PDFium removes with a passage (challenger r4, F3)', () => {
-  it('boxes the passage once on its line and each descender of the line above on its own, and takes nothing else of that line', async () => {
-    const original = await tightParagraph();
+  // A Tj per line, or per word (challenger r5: PDFium keeps a word object's bounds over its removed last glyph).
+  it.each(['line', 'word'] as const)('boxes the passage once on its line and each descender of the line above on its own, and takes nothing else of that line (a Tj per %s)', async (per) => {
+    const original = await tightParagraph(per);
     const { pdf, boxes } = copyOf(await redactPdf(original, { quotes: ['Quillon Brask'], redactsAny: true }));
     const chars = await pageChars(original);
     const held = [...matchedChars(chars, ['Quillon Brask'])].map((i) => (chars[i] as PageChar).box as Box);

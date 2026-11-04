@@ -51,7 +51,7 @@
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
-import { type Box, type Region, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, regionsFor, stillThere, unread, wordsOf } from './match.js';
+import { type Box, type Region, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -137,9 +137,10 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     if (after.some((c, i) => !c.generated && c.box !== null && !isBlank(c) && !known.has(i))) {
       return `page ${index + 1}: text drawn twice is left after removal`;
     }
-    // And the count again: a removal can leave text that no reading after it holds either.
+    // And the count again: a removal can leave text that no reading after it holds either. Where a glyph of
+    // another line was removed from a word's end, PDFium keeps the word's bounds over its place: that is not it.
     const left = unread(after, page.textObjects());
-    if (meeting([...left.objects, ...left.parts], found.regions).length > 0) return `page ${index + 1}: text PDFium does not read is left at a withheld passage`;
+    if (meeting([...left.objects, ...notVacated(chars, withheld, there, left.parts)], found.regions).length > 0) return `page ${index + 1}: text PDFium does not read is left at a withheld passage`;
     // A copy drawn a glyph at a time, letter-spaced unlike the passage, can end beyond the glyphs the boxes reached, and
     // withheld text can be drawn again where no box reaches at all: fail closed on both (challenger r4, F1).
     if (loneGlyphs(chars, objects, found.regions, there).length > 0) return `page ${index + 1}: a glyph drawn on its own is left beside a withheld passage`;

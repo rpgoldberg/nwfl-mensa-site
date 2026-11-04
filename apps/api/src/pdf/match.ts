@@ -683,6 +683,20 @@ export function unread(chars: readonly PageChar[], objects: readonly TextObject[
 }
 
 /**
+ * Of the parts `unread` finds once the text is removed, those that are more than the place a removed glyph of another
+ * line left (challenger r5, the para family): PDFium keeps a word object's bounds over a glyph removed from its end,
+ * which the reading after no longer holds. A part is only that place when it lies within the loose box of a glyph of
+ * `before` that is gone (not in `there`), neither withheld nor on a passage's line, and is clear of every passage's
+ * line band. Any other part is kept, and refuses.
+ */
+export function notVacated(before: readonly PageChar[], withheld: ReadonlySet<number>, there: ReadonlySet<number>, parts: readonly Box[]): Box[] {
+  const bands = passageBands(before, withheld, linesOf(before));
+  const places = before.flatMap((c, i) => (!c.generated && !there.has(i) && offLine(c, withheld.has(i), bands) ? [c.box as Box] : []));
+  const within = (part: Box, place: Box): boolean => part.left >= place.left - SLIP && part.right <= place.right + SLIP && part.bottom >= place.bottom - SLIP && part.top <= place.top + SLIP;
+  return parts.filter((part) => bands.some((band) => overlap(part, band)) || !places.some((place) => within(part, place)));
+}
+
+/**
  * The characters of `before` still on the page in `after`: the same text with a loose box within a
  * hundredth of a point, each character of `after` standing for one of `before`. Generated
  * characters and ones with no position are never counted.

@@ -309,11 +309,13 @@ export const TIGHT_PARAGRAPH = [
   '@ by Friday so we can plan enough supply for you.',
   'Questions go to the program chair, who is happy to help.',
 ];
-export const tightParagraph = (): Promise<Uint8Array> =>
+export const tightParagraph = (per: 'line' | 'word' = 'line'): Promise<Uint8Array> =>
   fitPdf(
     TIGHT_PARAGRAPH.map((line, n) => {
       const [before = '', after = ''] = line.split('@');
-      const ops = line.includes('@') ? `${before === '' ? '' : `${BLUE} (${before}) Tj `}${RED} (Quillon Brask) Tj ${BLUE} (${after}) Tj` : `${BLUE} (${line}) Tj`;
+      // A Tj per line, or a Tj per word with its following space (the challenger's para-word layouts).
+      const tj = (text: string): string => (per === 'line' ? `(${text}) Tj` : text.split(/(?<= )/u).map((word) => `(${word}) Tj`).join(' '));
+      const ops = line.includes('@') ? `${before === '' ? '' : `${BLUE} ${tj(before)} `}${RED} ${tj('Quillon Brask')} ${BLUE} ${tj(after)}` : `${BLUE} ${tj(line)}`;
       return `BT /F1 11 Tf 30 ${(120 - 12 * n).toFixed(2)} Td ${ops} ET`;
     }).join('\n'),
     { width: 420 },
@@ -465,7 +467,8 @@ export const FIT_FIXTURES: FitFixture[] = [
   // L7: unmarked neighbours whose ink reaches into the marked passage.
   { surface: 'L7', name: 'a kerned neighbour (“ tucked over V)', pdf: () => fitPdf(`BT /F1 24 Tf 20 60 Td ${BLUE} (Ask \\223) Tj ${RED} [250 (Vola)] TJ ${BLUE} (\\224 now.) Tj ET`), quotes: ['Vola'], needles: ['Vola'] },
   { surface: 'L7', name: 'an italic f reaching across a tight space', pdf: () => fitPdf(`BT /F2 24 Tf 20 60 Td ${BLUE} (Ask the staff ) Tj ${RED} [150 (Bolam)] TJ ${BLUE} ( now.) Tj ET`), quotes: ['Bolam'], needles: ['Bolam'] },
-  { surface: 'L7', name: 'descenders of the line above reaching into the passage (11 pt on 12 pt leading)', pdf: tightParagraph, ...QUILLON },
+  { surface: 'L7', name: 'descenders of the line above reaching into the passage (11 pt on 12 pt leading)', pdf: () => tightParagraph(), ...QUILLON },
+  { surface: 'L7', name: 'descenders of the line above reaching into the passage (11 pt on 12 pt leading), a Tj per word', pdf: () => tightParagraph('word'), ...QUILLON },
   { surface: 'L7', name: 'a Type 3 neighbour whose ink overlaps the passage', pdf: () => fitPdf(`BT /F1 18 Tf 20 60 Td ${BLUE} (Ask ) Tj /F3 18 Tf (F ) Tj ${RED} (GHIH) Tj /F1 18 Tf ${BLUE} ( now.) Tj ET`), quotes: ['Rene'], needles: ['Rene'] },
   // L9: a page that leaves its graphics state open, before the box is appended.
   {

@@ -3,7 +3,7 @@
 // characters as PDFium reports them (text, generated or not, a line-end
 // hyphen or not, a box). Every name here is made up.
 import { describe, expect, it } from 'vitest';
-import { type Box, type PageChar, type Region, type TextObject, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, regionsFor, stillThere, textMatches, unread, wordsOf } from './match.js';
+import { type Box, type PageChar, type Region, type TextObject, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, textMatches, unread, wordsOf } from './match.js';
 import { LABEL_EMS, MIN_LABEL_PT, labelSize } from './pdfium.js';
 
 const SIZE = 12;
@@ -660,6 +660,43 @@ describe('loneGlyphs: a glyph of a one-glyph text object left beside a region (c
     // A glyph with no position is never found.
     expect(lone({ ...at(110), box: null, ink: null })).toEqual([]);
     expect(lone({ ...at(110), ink: null })).toEqual([6]);
+  });
+});
+
+describe('notVacated: what unread text left after removal still counts (challenger r5, the para family)', () => {
+  // "pig spring" over "Ask Bo now", "Bo" withheld [96,108] on the lower line; the p of "spring" [102,108] on the upper
+  // line removed with it, as a descender would be. PDFium keeps a word object's bounds over a glyph removed from its end.
+  const chars = page(['pig spring', 'Ask Bo now']);
+  const withheld = new Set([16, 17]);
+  const thereWithout = (...gone: number[]): Set<number> => new Set([...chars.keys()].filter((i) => !chars[i]?.generated && !gone.includes(i)));
+  const part = (left: number, right: number, bottom: number, top: number): Box => ({ left, right, bottom, top });
+
+  it('drops a part that lies within the place a removed glyph of another line left', () => {
+    expect(notVacated(chars, withheld, thereWithout(5, 16, 17), [part(102, 108, 702, 710)])).toEqual([]);
+    expect(notVacated(chars, withheld, thereWithout(5, 16, 17), [part(102, 108, 700, 712)])).toEqual([]);
+  });
+
+  it('keeps a part beyond that place, at a removed withheld glyph or one of the passage\'s line, or at a glyph still there', () => {
+    const kept = [part(102, 110, 702, 710), part(102, 108, 698, 710), part(96, 102, 682, 690)];
+    expect(notVacated(chars, withheld, thereWithout(5, 16, 17), kept)).toEqual(kept);
+    // The k of "Ask" [84,90], unmarked but on the passage's line, removed.
+    expect(notVacated(chars, withheld, thereWithout(14, 16, 17), [part(84, 90, 682, 690)])).toEqual([part(84, 90, 682, 690)]);
+    // The p still there.
+    expect(notVacated(chars, withheld, thereWithout(16, 17), [part(102, 108, 702, 710)])).toEqual([part(102, 108, 702, 710)]);
+  });
+
+  it('keeps a part in that place that reaches into a passage\'s line band', () => {
+    // The p's loose box down to 690, into the band [680,692], still off the line (it shares 2 of its 22 pt).
+    const low = withChar(chars, 5, { box: { bottom: 690 } });
+    expect(notVacated(low, withheld, thereWithout(5, 16, 17), [part(102, 108, 690, 700)])).toEqual([part(102, 108, 690, 700)]);
+    expect(notVacated(low, withheld, thereWithout(5, 16, 17), [part(102, 108, 693, 700)])).toEqual([]);
+  });
+
+  it('never counts a generated character or one with no box for a removed glyph', () => {
+    const blank = withChar(chars, 5, { box: null });
+    expect(notVacated(blank, withheld, thereWithout(5, 16, 17), [part(102, 108, 702, 710)])).toEqual([part(102, 108, 702, 710)]);
+    const generated = chars.map((c, i) => (i === 5 ? { ...c, generated: true } : c));
+    expect(notVacated(generated, withheld, thereWithout(5, 16, 17), [part(102, 108, 702, 710)])).toEqual([part(102, 108, 702, 710)]);
   });
 });
 
