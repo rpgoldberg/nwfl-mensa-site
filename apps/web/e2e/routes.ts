@@ -7,6 +7,8 @@
 //           itself gave, so the crawl sees exactly what the public is served.
 //   STATIC  reads nothing from the API (test/routes.test.ts checks its source),
 //           and is crawled all the same.
+//   OFFICER reads the API for a signed-in officer only; the public is sent to
+//           sign in. Crawled as STATIC is.
 import { eventPath } from '../src/lib/calendar';
 
 export interface RouteContext {
@@ -32,6 +34,16 @@ export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
   '/officers': () => ['/officers'],
 };
 
+/**
+ * OFFICER: reads the API for a signed-in officer only, with the officer's own token
+ * (src/lib/api/officer.ts, SOLO-APPROVE); the public is sent to sign in, so it reads
+ * nothing for the public, and is crawled as STATIC is.
+ */
+export const OFFICER: Readonly<Record<string, readonly string[]>> = {
+  '/officer-area': ['/officer-area'],
+  '/officer-area/approval-rules': ['/officer-area/approval-rules'],
+};
+
 export const STATIC: Readonly<Record<string, readonly string[]>> = {
   '/404': ['/404', '/no-such-page'],
   '/about': ['/about'],
@@ -43,7 +55,6 @@ export const STATIC: Readonly<Record<string, readonly string[]>> = {
   '/join': ['/join'],
   '/minutes': ['/minutes'],
   '/more': ['/more'],
-  '/officer-area': ['/officer-area'],
   '/prefs': ['/prefs'],
   '/robots.txt': ['/robots.txt'],
   // A placeholder: test/search-contract.test.ts holds what it may read once built (R29).
@@ -65,7 +76,7 @@ export function routeOf(file: string): string {
 
 /** The route pattern a path matches, or undefined. */
 export function patternOf(pathname: string): string | undefined {
-  const all = [...Object.keys(LIVE), ...Object.keys(STATIC)];
+  const all = [...Object.keys(LIVE), ...Object.keys(STATIC), ...Object.keys(OFFICER)];
   const exact = all.find((p) => p === pathname);
   if (exact) return exact;
   // The longest pattern first: /events/x.ics is /events/[id].ics, not /events/[id].
@@ -76,5 +87,5 @@ export function patternOf(pathname: string): string | undefined {
 
 /** Every URL to start a crawl from. */
 export function crawlSeeds(c: RouteContext): string[] {
-  return [...Object.values(LIVE).flatMap((urls) => urls(c)), ...Object.values(STATIC).flat()];
+  return [...Object.values(LIVE).flatMap((urls) => urls(c)), ...Object.values(STATIC).flat(), ...Object.values(OFFICER).flat()];
 }

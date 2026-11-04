@@ -1,0 +1,99 @@
+// The approval rule (SOLO-APPROVE): whether a second officer must approve,
+// per scope. Two-person is the default and today's rule; the Admin alone may
+// switch a scope to one approver, with a written reason, and back. Every
+// switch is recorded once, with who, when, from, to and why; switching to the
+// rule already set changes nothing. Officers read the setting and the record;
+// nobody else does.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// What a rule covers.
+enum ApprovalScope {
+  APPROVAL_SCOPE_UNSPECIFIED = 0;
+  // Publishing content: an approver who edited the version may approve it
+  // under one approver; who may approve at all does not change.
+  APPROVAL_SCOPE_CONTENT = 1;
+  // Loosening a public redaction-policy setting: under one approver it
+  // applies at once, approved by the officer who proposed it.
+  APPROVAL_SCOPE_REDACTION_POLICY = 2;
+}
+
+enum ApprovalRule {
+  APPROVAL_RULE_UNSPECIFIED = 0;
+  // A second officer approves (the default).
+  APPROVAL_RULE_TWO_PERSON = 1;
+  // One officer's approval is enough.
+  APPROVAL_RULE_ONE_APPROVER = 2;
+}
+
+service ApprovalRuleService {
+  // Officers and the Admin: both scopes, content first. Never says who set a rule.
+  rpc GetApprovalRules(GetApprovalRulesRequest) returns (GetApprovalRulesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // The Admin only, with a reason of 1 to 2000 characters that has a letter
+  // or a digit in it.
+  rpc SetApprovalRule(SetApprovalRuleRequest) returns (SetApprovalRuleResponse);
+  // Officers and the Admin: the switches, newest first.
+  rpc ListApprovalRuleChanges(ListApprovalRuleChangesRequest) returns (ListApprovalRuleChangesResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+message ApprovalSetting {
+  ApprovalScope scope = 1;
+  ApprovalRule rule = 2;
+  // When the rule was last switched; unset while it is still the default.
+  google.protobuf.Timestamp set_at = 3;
+  // Which switch set it (its change_id); empty while it is still the default.
+  // Send it back as SetApprovalRuleRequest.expected_revision.
+  string revision = 4;
+}
+
+message ApprovalRuleChange {
+  string change_id = 1;
+  ApprovalScope scope = 2;
+  ApprovalRule from_rule = 3;
+  ApprovalRule to_rule = 4;
+  string reason = 5;
+  // The subject who switched it.
+  string changed_by = 6;
+  google.protobuf.Timestamp changed_at = 7;
+}
+
+message GetApprovalRulesRequest {}
+
+message GetApprovalRulesResponse {
+  repeated ApprovalSetting settings = 1;
+}
+
+message SetApprovalRuleRequest {
+  ApprovalScope scope = 1;
+  ApprovalRule rule = 2;
+  string reason = 3;
+  // The revision the Admin read (ApprovalSetting.revision). When set, a switch
+  // from a setting that has moved on since is refused with FAILED_PRECONDITION,
+  // so a stale form sent again cannot undo a later switch. Asking for the rule
+  // already set still changes nothing, whatever this says.
+  optional string expected_revision = 4;
+}
+
+message SetApprovalRuleResponse {
+  ApprovalSetting setting = 1;
+  // False when the scope already had this rule: nothing was written.
+  bool changed = 2;
+}
+
+message ListApprovalRuleChangesRequest {
+  // UNSPECIFIED: both scopes.
+  ApprovalScope scope = 1;
+  // At most 50; 0 is 20.
+  int32 page_size = 2;
+}
+
+message ListApprovalRuleChangesResponse {
+  repeated ApprovalRuleChange changes = 1;
+}

@@ -80,6 +80,22 @@ export const ACCOUNTS = {
   enrolee: '00000000-0000-4000-8000-0000000000c1',
   'enrolee-pending': '00000000-0000-4000-8000-0000000000c2',
   'lapsed-outsider': '00000000-0000-4000-8000-0000000000c4',
+  admin: '00000000-0000-4000-8000-0000000000ad',
+  webmaster: '00000000-0000-4000-8000-0000000000eb',
+  'lone-admin': '00000000-0000-4000-8000-0000000000ae',
+};
+
+/**
+ * SOLO-APPROVE: the approval rule as api.mjs answers each officer. The real API holds one setting for
+ * everyone; the stand-in keeps one per signed-in subject, so tests in parallel cannot disturb each
+ * other: "officer" reads publishing content as set to one approver (by the Admin on November 3, 2026),
+ * "long-name" reads two officers, and the Admin's own setting starts at two officers and is the one
+ * the Admin's switch changes.
+ */
+export const APPROVAL = {
+  oneApproverNote: "One approver: a second officer's approval is not required right now (set by the Admin on November 3, 2026).",
+  /** src/lib/approval-rules.ts NOTE_UNKNOWN: what an officer reads when the setting could not be read. */
+  unknownNote: 'We could not check the approval setting just now.',
 };
 
 /**

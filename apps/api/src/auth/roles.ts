@@ -8,7 +8,8 @@
 //
 //   nwfl-admin                  Admin: approves content; acts for any office,
 //                               recorded as on behalf of it; approves members
-//                               while the Membership seat is vacant
+//                               while the Membership seat is vacant; alone
+//                               switches the approval rule (SOLO-APPROVE)
 //   nwfl-webmaster              Webmaster: approves content
 //   nwfl-officers               every officeholder: reads drafts
 //   nwfl-office-<slug>          holds that seat: writes as that office
@@ -69,6 +70,17 @@ export function requireOffice(caller: Caller, officeSlug: string): { onBehalfOf:
 
 export function requireOfficer(caller: Caller): void {
   if (!requireUser(caller).officer) throw denied();
+}
+
+/** An officer, or the Admin without the officers group (SOLO-APPROVE: who reads the approval setting). */
+export function requireOfficerOrAdmin(caller: Caller): void {
+  const roles = requireUser(caller);
+  if (!roles.officer && !roles.admin) throw denied();
+}
+
+/** The Admin alone (SOLO-APPROVE: the approval switch). */
+export function requireAdmin(caller: Caller): void {
+  if (!requireUser(caller).admin) throw denied();
 }
 
 export function requireContentApprover(caller: Caller): void {

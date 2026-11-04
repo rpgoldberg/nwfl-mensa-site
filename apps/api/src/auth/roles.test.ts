@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { ANONYMOUS, type Caller } from './caller.js';
 import { internalGroups } from './groups.js';
 import {
+  requireAdmin,
   requireContentApprover,
   requireGrantor,
   requireMembershipApprover,
   requireOffice,
   requireOfficer,
+  requireOfficerOrAdmin,
   requireScope,
   requireUser,
   rolesOf,
@@ -110,5 +112,29 @@ describe('who may hold a role at all', () => {
     expect(() => requireScope(agent, 'newsletter.read')).not.toThrow();
     expect(() => requireScope(agent, 'events.write')).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
     expect(() => requireScope(ANONYMOUS, 'newsletter.read')).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+  });
+});
+
+describe('requireAdmin (SOLO-APPROVE: the approval switch)', () => {
+  it('lets the Admin through, and no one else: not the Webmaster, an officer, a member or a machine', () => {
+    expect(() => requireAdmin(ross)).not.toThrow();
+    for (const caller of [webmaster, treasurer, approver, rvc, member, agent]) {
+      expect(() => requireAdmin(caller)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    }
+    expect(() => requireAdmin(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+  });
+
+  it('refuses an admin group under another prefix, which the gate drops', () => {
+    expect(() => requireAdmin(user(...internalGroups(['nwfl-admin', 'other-nwfl-admin'], 'mensa-nwfl-')))).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+  });
+});
+
+describe('requireOfficerOrAdmin (SOLO-APPROVE: reading the approval setting)', () => {
+  it('lets officers and the Admin through, the Admin without the officers group too, and no one else', () => {
+    for (const caller of [ross, webmaster, treasurer, user('nwfl-admin')]) expect(() => requireOfficerOrAdmin(caller)).not.toThrow();
+    for (const caller of [member, agent, user('nwfl-members', 'mensa-nwfl-admin')]) {
+      expect(() => requireOfficerOrAdmin(caller)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    }
+    expect(() => requireOfficerOrAdmin(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
   });
 });

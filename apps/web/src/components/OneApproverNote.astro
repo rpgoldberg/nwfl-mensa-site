@@ -1,0 +1,17 @@
+---
+// SOLO-APPROVE: on the officer pages where approval happens, a plain note for each scope the Admin
+// has set to one approver, and a plain line when the setting could not be read (never silence).
+// Bordered text in the page, not a toast: it cannot be dismissed. Imported only by /officer-area
+// pages, which render it for officers only; the public and members never see it.
+// The W5 approval queue and approve pages, and any redaction-policy page, include it too.
+interface Props {
+  /** From notesFor (src/lib/approval-rules.ts). */
+  notes: readonly string[];
+  /** Where to sign in again, when the setting could not be read because the sign-in ran out. */
+  signIn?: string | undefined;
+}
+const { notes, signIn } = Astro.props;
+---
+{notes.map((note) => (
+  <p class="notice notice--rule" role="note">{note}{signIn && <> <a href={signIn}>Sign in again</a> to check it.</>}</p>
+))}

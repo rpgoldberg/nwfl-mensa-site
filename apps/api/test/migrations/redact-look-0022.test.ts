@@ -4,6 +4,8 @@
 // publication ledger still read the past right. Each case gets a database
 // migrated up to just before 0022, is set up as the case needs, then gets
 // 0022. Every person here is made up.
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { policyCells } from '../../src/redaction/lens.js';
@@ -12,6 +14,7 @@ import { APP, APP_PW, dockerExec, dropDatabase, freshDatabase, live, migrate, sq
 const OFFICER = { sub: 'sub-officer-alex-sample', groups: ['nwfl-members', 'nwfl-officers'] };
 const SECOND = { sub: 'sub-officer-jo-ostley', groups: ['nwfl-members', 'nwfl-officers'] };
 const PROPOSER = 'system:migration-0022';
+const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
 const APPROVER = 'system:decision-ross-2026-11-02';
 
 /** The 24 cells after 0022: the 0012 defaults with the public's names and pictures shown. */
@@ -52,7 +55,7 @@ interface Db {
 async function beforeZeroTwentyTwo(prefix: string): Promise<Db> {
   const name = await freshDatabase(prefix);
   const dir = `/tmp/${name}-pre0022`;
-  const copy = await dockerExec(['sh', '-c', `rm -rf ${dir} && mkdir -p ${dir} && cp /repo/migrations/*.sql ${dir}/ && rm ${dir}/0022_*.sql`]);
+  const copy = await dockerExec(['sh', '-c', `rm -rf ${dir} && mkdir -p ${dir} && cp /repo/migrations/*.sql ${dir}/ && for f in ${dir}/*.sql; do n=$(basename "$f"); n=\${n%%_*}; if [ "$n" -ge 22 ]; then rm "$f"; fi; done`]);
   if (copy.code !== 0) throw new Error(`copy failed: ${copy.stderr}`);
   const run = await migrate(name, dir);
   if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
@@ -126,7 +129,8 @@ describe.skipIf(!live)('0022: the public copy shows member names and pictures (R
 
     it('applies, and a second run is a no-op', async () => {
       expect(migrated.code, migrated.stderr).toBe(0);
-      expect(migrated.stdout).toMatch(/applied=1 /);
+      // 0022 and every later migration (0023 SOLO-APPROVE) apply on top of the copy.
+      expect(migrated.stdout).toMatch(new RegExp(`applied=${readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql') && Number(f.slice(0, 4)) >= 22).length} `));
       const again = await migrate(db.name);
       expect(again.code, again.stderr).toBe(0);
       expect(again.stdout).toMatch(/applied=0 /);

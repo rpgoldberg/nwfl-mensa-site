@@ -1,17 +1,56 @@
 ---
 // The officer area (W5 fills it in). Officers only: anyone not signed in is
 // sent to sign in first; a member who is not an officer is told it is not theirs.
+// SOLO-APPROVE: an officer sees the one-approver note here while the Admin has
+// set a scope to one approver (read from the API with the officer's own token,
+// src/lib/api/officer.ts), and a plain line when it could not be read. The
+// Admin also gets the link to the approval setting, and so does the Admin who
+// is not in the officers group (the switch serves them; nothing else here
+// does). Nothing here reaches a member or the public.
+import OneApproverNote from '../../components/OneApproverNote.astro';
 import Base from '../../layouts/Base.astro';
+import { type Setting, isAdmin, notesFor } from '../../lib/approval-rules';
+import { OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
+import { runtimeDeps } from '../../lib/auth/flow';
 import { page } from '../../lib/site';
 
 const session = Astro.locals.session;
 if (!session) return Astro.redirect('/sign-in?return=%2Fofficer-area', 303);
-if (!session.officer) Astro.response.status = 403;
+const admin = isAdmin(session);
+if (!session.officer && !admin) Astro.response.status = 403;
 const p = page('/officer-area');
+
+let notes: string[] = [];
+let signIn: string | undefined;
+if (session.officer) {
+  const api = officerApi();
+  const { reader, lapsed } = officerReader(session, runtimeDeps());
+  let settings: Setting[] | undefined;
+  let refused = false;
+  if (api && reader) {
+    try {
+      settings = await api.getApprovalRules(reader);
+    } catch (error) {
+      // Unavailable, or the token was refused: the note says it could not check.
+      refused = error instanceof OfficerSignInAgain;
+    }
+  }
+  notes = notesFor(settings);
+  if (settings === undefined && (lapsed || refused)) signIn = '/sign-in?return=%2Fofficer-area&again=1';
+}
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
   {session.officer
-    ? <p class="lead">Welcome, {session.name}. Writing reports, the approval queue and events come here in the next update.</p>
-    : <p class="lead">This area is for the club's officers. If you are an officer and see this, ask the Webmaster to check your account.</p>}
+    ? <>
+        <p class="lead">Welcome, {session.name}. Writing reports, the approval queue and events come here in the next update.</p>
+        <OneApproverNote notes={notes} signIn={signIn} />
+        {admin && <ul class="link-list"><li><a href="/officer-area/approval-rules">Approval setting</a></li></ul>}
+      </>
+    : admin
+      ? <>
+          <p class="lead">Welcome, {session.name}. As the Admin, you can change the approval setting here.</p>
+          <ul class="link-list"><li><a href="/officer-area/approval-rules">Approval setting</a></li></ul>
+        </>
+      : <p class="lead">This area is for the club's officers. If you are an officer and see this, ask the Webmaster to check your account.</p>}
 </Base>

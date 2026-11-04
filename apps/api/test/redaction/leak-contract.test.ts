@@ -102,6 +102,10 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     'nwfl.mensa.v1.MembershipVerifierService': {
       ListPendingVerifications: () => [{}],
     },
+    'nwfl.mensa.v1.ApprovalRuleService': {
+      GetApprovalRules: () => [{}],
+      ListApprovalRuleChanges: () => [{}],
+    },
     'nwfl.mensa.v1.RedactionPolicyService': {
       GetRedactionPolicy: () => [{}],
       ListRedactionMarks: () => [
@@ -152,6 +156,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     'RedactionPolicyService.AddRedactionMark',
     'RedactionPolicyService.ProposeMarkRemoval',
     'RedactionPolicyService.ApproveMarkRemoval',
+    // SOLO-APPROVE: the Admin's switch; it carries a rule and a reason, no content.
+    'ApprovalRuleService.SetApprovalRule',
   ]);
   const rpcName = (method: DescMethod): string => `${method.parent.name}.${method.name}`;
   const allMethods = (): DescMethod[] => SERVED_SERVICES.flatMap((service) => service.methods);

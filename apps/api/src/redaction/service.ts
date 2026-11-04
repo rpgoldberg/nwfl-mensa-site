@@ -13,7 +13,10 @@
 // Every write goes through 0013's SECURITY DEFINER functions, the app role's
 // only way to change the policy: they lock the cell, hold four-eyes, and write
 // the change, the cell and the audit rows together. The checks here only give
-// a clear refusal first.
+// a clear refusal first. While the Admin has set the redaction_policy rule to
+// one approver (SOLO-APPROVE, 0023), a public loosening applies at once and a
+// proposer may approve their own waiting change: these checks then step aside,
+// and the functions decide under the cell lock, reading the rule again.
 // ============================================================================
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
@@ -21,6 +24,7 @@ import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@co
 import { traceId } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
 import { requireOfficer } from '../auth/roles.js';
+import { type Rule } from '../approval/service.js';
 import { ledgerHandlers } from '../ledger/handlers.js';
 import { recordAll } from '../ledger/ledger.js';
 import { dbError } from '../db/errors.js';
@@ -144,6 +148,10 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
     return resolveAction(new Map(rows.map((row) => [cellKey(audience, category), row.action])), audience, category);
   };
 
+  /** The redaction_policy rule now, unlocked: for a clear refusal only, as currentAction. */
+  const currentRule = async (client: TxClient): Promise<Rule> =>
+    ((await client.query<{ rule: Rule }>(`SELECT rule FROM approval_rule WHERE scope = 'redaction_policy'`)).rows[0] as { rule: Rule }).rule;
+
   return (router) => {
     router.service(RedactionPolicyService, {
       // Marks (R2a): add, list, and the four-eyes removal.
@@ -188,7 +196,7 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
         return tx(async (client) => {
           const from = await currentAction(client, audience, category);
           if (from === action) throw precondition('the policy already says that');
-          if (needsSecondOfficer(audience, category, from, action)) {
+          if (needsSecondOfficer(audience, category, from, action) && (await currentRule(client)) === 'two_person') {
             const waiting = await client.query(
               `SELECT 1 FROM redaction_change WHERE tenant_id = $1 AND audience = $2 AND category = $3 AND status = 'pending'`,
               [TENANT, audience, category],
@@ -220,7 +228,9 @@ export function redactionRoutes(deps: RedactionDeps): (router: ConnectRouter) =>
           ).rows[0];
           if (found === undefined) throw new ConnectError('change not found', Code.NotFound);
           if (found.status !== 'pending') throw precondition('this change is not waiting for approval');
-          if (found.proposed_by_sub === caller.subject) throw new ConnectError('a second officer approves this change', Code.PermissionDenied);
+          if (found.proposed_by_sub === caller.subject && (await currentRule(client)) === 'two_person') {
+            throw new ConnectError('a second officer approves this change', Code.PermissionDenied);
+          }
           const { rows } = await client.query<ChangeRow>(`SELECT ${CHANGE_COLUMNS} FROM redaction_approve($1, $2, $3, $4)`, [id, ...actor(caller)]);
           await recordAll(client);
           return { change: changeMessage(rows[0] as ChangeRow) };

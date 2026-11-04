@@ -13,7 +13,10 @@
 //               item never targets the newsletter or email; records the hash
 //   send back   an approver (Admin, Webmaster), with a note
 //   approve     an approver who did not edit the version (four eyes), or the
-//               Admin by break-glass with a written reason; bound to the hash
+//               Admin by break-glass with a written reason; while the Admin
+//               has set the content rule to one approver (SOLO-APPROVE, 0023),
+//               an approver who edited it too, recorded as self_single; every
+//               approval records the rule it was made under; bound to the hash
 //               the approver saw; derives public_ast and both search indexes;
 //               repoints the live version BEFORE superseding the old one
 //   withdraw    the item's office or an approver; 410 to the public at once
@@ -47,6 +50,7 @@ import { deriveForApproval, normalizeTree, referencedFiles, toProtoDocument } fr
 import { bylineFor, itemHidden, slugFor } from './redact.js';
 import { loadLens } from '../redaction/lens.js';
 import { recordItems } from '../ledger/ledger.js';
+import { type Rule, readRule } from '../approval/service.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
 
 export interface WorkflowDeps {
@@ -90,6 +94,10 @@ export interface VersionRow {
   ready_at: Date | null;
   approved_at: Date | null;
 }
+
+/** normal: a second officer; self_breakglass: the Admin's logged own approval; self_single: an editor's own, under one approver. */
+export type ApprovalKind = 'normal' | 'self_breakglass' | 'self_single';
+const AUDIT_ACTION: Record<ApprovalKind, string> = { normal: 'approve', self_breakglass: 'approve_self', self_single: 'approve_single' };
 
 interface Targets {
   website: boolean;
@@ -210,7 +218,7 @@ export async function applyApproval(
   caller: Caller,
   item: Pick<ItemRow, 'id' | 'live_version_id'>,
   version: VersionRow,
-  approval: { kind: 'normal' | 'self_breakglass'; reason: string | null },
+  approval: { kind: ApprovalKind; reason: string | null; rule: Rule },
 ): Promise<void> {
   const derived = deriveForApproval({ title: version.title, summary: version.summary, visibility: version.visibility, body: version.body_ast });
   // A file referenced only inside members passages becomes a members file (section 4 rule 4).
@@ -223,9 +231,9 @@ export async function applyApproval(
   }
   await client.query(
     `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = $2, approval_kind = $3, approval_reason = $4,
-       public_ast = $5, search_public = to_tsvector('english', $6), search_members = to_tsvector('english', $7)
+       public_ast = $5, search_public = to_tsvector('english', $6), search_members = to_tsvector('english', $7), approval_rule = $8
      WHERE id = $1`,
-    [version.id, caller.subject, approval.kind, approval.reason, JSON.stringify(derived.publicAst), derived.publicText, derived.membersText],
+    [version.id, caller.subject, approval.kind, approval.reason, JSON.stringify(derived.publicAst), derived.publicText, derived.membersText, approval.rule],
   );
   // Repoint live first: the old live version cannot be superseded while it is live.
   await client.query(
@@ -234,7 +242,7 @@ export async function applyApproval(
   );
   if (item.live_version_id !== null) await client.query(`UPDATE content_version SET status = 'superseded' WHERE id = $1`, [item.live_version_id]);
   await recordAudit(client, caller, {
-    action: approval.kind === 'normal' ? 'approve' : 'approve_self',
+    action: AUDIT_ACTION[approval.kind],
     subjectKind: 'content_version',
     subjectId: version.id,
     itemId: item.id,
@@ -243,6 +251,7 @@ export async function applyApproval(
     fromState: 'ready',
     toState: 'approved',
     note: approval.reason,
+    payload: { approval_rule: approval.rule },
   });
   await recordItems(client, [item.id]);
 }
@@ -495,15 +504,22 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         if (version.content_hash === null || !Buffer.from(request.contentHash).equals(version.content_hash)) {
           throw new ConnectError('the version changed since it was opened; reload it', Code.Aborted);
         }
+        // The rule under a share lock, after the item's lock and before the ledger head (0023's lock order).
+        const rule = await readRule(client, 'content');
         const editors = (await client.query<{ subject: string }>(`SELECT subject FROM content_version_editor WHERE version_id = $1`, [version.id])).rows.map((row) => row.subject);
-        let kind: 'normal' | 'self_breakglass' = 'normal';
+        let kind: ApprovalKind = 'normal';
         let reason: string | null = null;
         if (editors.includes(caller.subject as string)) {
-          if (!request.breakGlass) throw new ConnectError('you edited this version; the other approver must approve it', Code.PermissionDenied);
-          if (!rolesOf(caller).admin) throw new ConnectError('only the Admin may approve their own edit', Code.PermissionDenied);
-          reason = request.breakGlassReason.trim();
-          if (reason === '' || reason.length > MAX_NOTE) throw invalid('a break-glass approval needs a written reason');
-          kind = 'self_breakglass';
+          if (request.breakGlass) {
+            if (!rolesOf(caller).admin) throw new ConnectError('only the Admin may approve their own edit', Code.PermissionDenied);
+            reason = request.breakGlassReason.trim();
+            if (reason === '' || reason.length > MAX_NOTE) throw invalid('a break-glass approval needs a written reason');
+            kind = 'self_breakglass';
+          } else if (rule === 'one_approver') {
+            kind = 'self_single';
+          } else {
+            throw new ConnectError('you edited this version; a second officer must approve it', Code.PermissionDenied);
+          }
         }
 
         // The approver may change the targets or the edition first; each change is logged.
@@ -538,7 +554,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           if (editionChanged) await recordAudit(client, caller, { ...common, action: 'edition_changed', payload: { from: beforeEdition, to: editionId } });
         }
 
-        await applyApproval(client, caller, item, version, { kind, reason });
+        await applyApproval(client, caller, item, version, { kind, reason, rule });
         return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
       });
     },

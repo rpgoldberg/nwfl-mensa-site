@@ -17,6 +17,8 @@
 // the "refused" account; the "articles-down" member's articles read fails as an
 // API that could not answer it. Without a token the public's answer is a buggy API's:
 // it lists members files, a members article in full, an officers article.
+// SOLO-APPROVE: ApprovalRuleService takes the officer's token as the API does (officers and the Admin
+// read the rule, the Admin alone sets it), keeping one setting per subject (below).
 //
 // SILENT_API_PORT is a second listener that accepts connections and never
 // answers: the API that hangs, for the timeout test. NO_ISSUES_API_PORT is a
@@ -26,8 +28,10 @@ import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
 import net from 'node:net';
+import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { Area, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
@@ -384,6 +388,63 @@ async function audienceOf(ctx, { articles = false } = {}) {
   return MEMBER_SUBJECTS.has(String(payload.sub)) ? 'members' : 'public';
 }
 
+// SOLO-APPROVE: the approval rule, one setting per signed-in subject (e2e/stand-in.ts APPROVAL), so
+// tests in parallel cannot disturb each other. "officer" reads publishing content as set to one
+// approver on November 3, 2026; everyone else starts at two officers. The member starts at one
+// approver on both scopes and is answered, as a buggy API might answer, so a page that ever asks for
+// a member would show it. Only the Admin may set it, and only their own; a switch from a revision
+// that has moved on is refused, as the API refuses it.
+const OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000a1';
+const NOV_3 = new Date('2026-11-03T19:35:00Z');
+const SEEDED = 'aaaaaaaa-0000-4000-8000-000000000003';
+const SCOPES = [ApprovalScope.CONTENT, ApprovalScope.REDACTION_POLICY];
+/** @type {Map<string, Map<number, { rule: number, setAt?: Date, revision: string }>>} */
+const APPROVAL_RULES = new Map();
+
+/** @param {string} sub */
+function rulesFor(sub) {
+  let rules = APPROVAL_RULES.get(sub);
+  if (!rules) {
+    const one = { rule: ApprovalRule.ONE_APPROVER, setAt: NOV_3, revision: SEEDED };
+    const two = { rule: ApprovalRule.TWO_PERSON, revision: '' };
+    rules = new Map([
+      [ApprovalScope.CONTENT, sub === OFFICER_SUBJECT || sub === SUBJECT.member ? one : two],
+      [ApprovalScope.REDACTION_POLICY, sub === SUBJECT.member ? one : two],
+    ]);
+    APPROVAL_RULES.set(sub, rules);
+  }
+  return rules;
+}
+
+/** @param {number} scope @param {{ rule: number, setAt?: Date, revision: string }} setting */
+const approvalSetting = (scope, setting) => ({ scope, rule: setting.rule, ...(setting.setAt ? { setAt: timestampFromDate(setting.setAt) } : {}), revision: setting.revision });
+
+/**
+ * The signed-in caller of the officer area's RPCs, from the verified token, as the API reads it; never a cookie.
+ * An officer or the Admin; for `read`, the member too (the buggy answer above).
+ * @param {import('@connectrpc/connect').HandlerContext} ctx @param {{ read?: boolean }} [options]
+ * @returns {Promise<{ sub: string, groups: string[] }>}
+ */
+async function officerOf(ctx, { read = false } = {}) {
+  if (ctx.requestHeader.has('cookie')) throw new ConnectError('the site must never send a cookie', Code.PermissionDenied);
+  const header = ctx.requestHeader.get('authorization');
+  if (header === null) throw new ConnectError('sign in first', Code.Unauthenticated);
+  const token = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i.exec(header)?.[1];
+  if (token === undefined || jwks === undefined) throw new ConnectError('invalid token', Code.Unauthenticated);
+  /** @type {import('jose').JWTPayload} */
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(token, jwks, { ...(idpIssuer ? { issuer: idpIssuer } : {}), audience: 'nwfl-site', algorithms: ['RS256'], requiredClaims: ['exp', 'sub', 'iat'], maxTokenAge: 3600 }));
+  } catch {
+    throw new ConnectError('invalid token', Code.Unauthenticated);
+  }
+  if (payload.sub === SUBJECT.refused) throw new ConnectError('invalid token', Code.Unauthenticated);
+  const groups = Array.isArray(payload['groups']) ? payload['groups'].map(String) : [];
+  const leaky = read && payload.sub === SUBJECT.member;
+  if (!groups.includes('nwfl-officers') && !groups.includes('nwfl-admin') && !leaky) throw new ConnectError('not permitted', Code.PermissionDenied);
+  return { sub: String(payload.sub), groups };
+}
+
 /** The API's routes; with `issues: false`, nothing of the newsletter is published yet. @param {{ issues: boolean }} options */
 const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').ConnectRouter} */ router) => {
   router.service(EventService, {
@@ -441,6 +502,32 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       // The same title-based name for both copies, as the API builds it.
       yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(bytes.length) } } };
       yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(bytes) } };
+    },
+  });
+  router.service(ApprovalRuleService, {
+    getApprovalRules: async (_req, ctx) => {
+      const rules = rulesFor((await officerOf(ctx, { read: true })).sub);
+      return { settings: SCOPES.map((scope) => approvalSetting(scope, /** @type {{ rule: number, revision: string }} */ (rules.get(scope)))) };
+    },
+    setApprovalRule: async (req, ctx) => {
+      const { sub, groups } = await officerOf(ctx);
+      if (!groups.includes('nwfl-admin')) throw new ConnectError('not permitted', Code.PermissionDenied);
+      const reason = req.reason.trim();
+      if (!SCOPES.includes(req.scope) || ![ApprovalRule.TWO_PERSON, ApprovalRule.ONE_APPROVER].includes(req.rule) || !/[\p{Alphabetic}0-9]/u.test(reason) || reason.length > 2000) {
+        throw new ConnectError('a value is not allowed', Code.InvalidArgument);
+      }
+      const rules = rulesFor(sub);
+      const now = /** @type {{ rule: number, revision: string }} */ (rules.get(req.scope));
+      const changed = now.rule !== req.rule;
+      if (changed && req.expectedRevision !== undefined && req.expectedRevision !== now.revision) {
+        throw new ConnectError('the approval rule was switched since it was read', Code.FailedPrecondition);
+      }
+      if (changed) rules.set(req.scope, { rule: req.rule, setAt: new Date(), revision: randomUUID() });
+      return { setting: approvalSetting(req.scope, /** @type {{ rule: number, revision: string }} */ (rules.get(req.scope))), changed };
+    },
+    listApprovalRuleChanges: async (_req, ctx) => {
+      await officerOf(ctx);
+      return { changes: [] };
     },
   });
 };

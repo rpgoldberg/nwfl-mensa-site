@@ -1,4 +1,57 @@
 {
+  "ApprovalRuleService.GetApprovalRules": {
+    "input": "nwfl.mensa.v1.GetApprovalRulesRequest",
+    "fields": []
+  },
+  "ApprovalRuleService.ListApprovalRuleChanges": {
+    "input": "nwfl.mensa.v1.ListApprovalRuleChangesRequest",
+    "fields": [
+      {
+        "name": "scope",
+        "number": 1,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.ApprovalScope"
+      },
+      {
+        "name": "page_size",
+        "number": 2,
+        "type": "int32",
+        "label": "optional"
+      }
+    ]
+  },
+  "ApprovalRuleService.SetApprovalRule": {
+    "input": "nwfl.mensa.v1.SetApprovalRuleRequest",
+    "fields": [
+      {
+        "name": "scope",
+        "number": 1,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.ApprovalScope"
+      },
+      {
+        "name": "rule",
+        "number": 2,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.ApprovalRule"
+      },
+      {
+        "name": "reason",
+        "number": 3,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "expected_revision",
+        "number": 4,
+        "type": "string",
+        "label": "proto3_optional"
+      }
+    ]
+  },
   "ContentService.Approve": {
     "input": "nwfl.mensa.v1.ApproveRequest",
     "fields": [
