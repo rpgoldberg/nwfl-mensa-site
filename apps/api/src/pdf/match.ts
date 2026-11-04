@@ -25,10 +25,17 @@
 // glyph whose tight box a region overlaps, so an unmarked neighbour whose ink
 // reaches into a region (a kerned A, an italic f) goes too: the region is
 // extended over it, until nothing more is reached (the collateral fixpoint), so
-// no gap is left unboxed. PDFium's reading leaves out a text object drawn again
+// no gap is left unboxed. A neighbour pulled in brings the rest of its word
+// (its text object's run of glyphs with no blank between, wordsOf, and the
+// glyphs that abut it on its line, however they are drawn), so no word is cut
+// at the box's edge. PDFium's reading leaves out a text object drawn again
 // at nearly its place (a shadow, a fake bold), so no character stands for it
 // (unread): a region is extended over the whole of such an object it meets,
-// so all of it is removed and boxed. After the removal, the boxes drawn are
+// so all of it is removed and boxed. A passage drawn a word at a time and drawn
+// again so (a shadow) is read with the two interleaved ("Quillon Quillon Brask
+// Brask"), so a quote matches once, across them: each word left out of the
+// match that repeats a withheld word of another object near it is a copy
+// (copiesOf), withheld too. After the removal, the boxes drawn are
 // exactly the characters that were removed and those objects (boxesFor), and
 // a marked character still there is found by stillThere.
 //
@@ -206,6 +213,21 @@ const overlap = (a: Box, b: Box): boolean =>
 const SAME = 0.01;
 const isBlank = (c: PageChar): boolean => /^\s*$/u.test(c.text);
 
+/** How far apart two glyphs' loose boxes may be, in ems of the larger type, for one to continue the other's word. */
+const ABUT = 0.1;
+
+/**
+ * Whether box b continues box a's word on the page (REDACT-LOOK fix round 3), however each is drawn: on a's line
+ * (they share at least half the height of the shorter), beginning where a ends or ending where a begins, within
+ * ABUT of an em of type `size` (a glyph's loose box beside a glyph's, or beside an unread object's bounds).
+ */
+function abutting(a: Box, b: Box, size: number): boolean {
+  const near = ABUT * size;
+  const shared = Math.min(a.top, b.top) - Math.max(a.bottom, b.bottom);
+  const inLine = shared >= Math.min(a.top - a.bottom, b.top - b.bottom) / 2;
+  return inLine && (Math.abs(b.left - a.right) <= near || Math.abs(b.right - a.left) <= near);
+}
+
 /** Each character's line: a line break starts one, and so does PDFium's line-end hyphen with none after it. */
 function linesOf(chars: readonly PageChar[]): number[] {
   const lineOf: number[] = [];
@@ -298,11 +320,15 @@ function absorb(regions: readonly Region[], boxes: readonly Box[], page: number)
 /**
  * The regions to remove and box for these withheld characters, or why there can be none: exactly
  * their extent per line, extended over every unmarked character PDFium would remove with them (its
- * ink overlaps a region) and over the bounds of every text object PDFium does not read (`unreadObjects`,
- * from unread) that overlaps a region, until no more is reached.
+ * ink overlaps a region), over the bounds of every text object PDFium does not read (`unreadObjects`,
+ * from unread) that overlaps a region, and, given the page's `words` (from wordsOf), over the rest of
+ * the word of each character pulled in: its text object's run, and every glyph and unread object that
+ * abuts it on its line (REDACT-LOOK fix round 3, challenger F1), until no more is reached.
  */
-export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<number>, page = 0, unreadObjects: readonly Box[] = []): Regions {
+export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<number>, page = 0, unreadObjects: readonly Box[] = [], words?: readonly Word[]): Regions {
   const lineOf = linesOf(chars);
+  const wordOf = new Map<number, readonly number[]>();
+  for (const word of words ?? []) for (const i of word.chars) wordOf.set(i, word.chars);
   const boxed = new Set(withheld);
   const reached: Box[] = [];
   const regions = (): Regions => {
@@ -313,11 +339,40 @@ export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<num
   // Each round boxes at least one more character or object, so as many rounds as there are reach the fixpoint.
   for (let round = 0; round < chars.length + unreadObjects.length && found.ok; round++) {
     const meets = (box: Box): boolean => (found as { regions: Region[] }).regions.some((region) => overlap(box, region));
-    const more = chars.flatMap((c, i) => (boxed.has(i) || c.generated || isBlank(c) || c.ink === null || !meets(c.ink) ? [] : [i]));
+    // A glyph pulled in brings the rest of its word: its text object's run (words), and, given the page's words,
+    // every glyph and unread object that abuts it on its line however it is drawn (a copy drawn a glyph at a time,
+    // one of whose glyphs the reading left out), so no copy of a passage is cut at the box's edge.
+    const glyphs = chars.flatMap((c, i) => (boxed.has(i) || c.generated || isBlank(c) || c.ink === null || !meets(c.ink) ? [] : [i]));
     const objects = unreadObjects.filter((box) => !reached.includes(box) && meets(box));
-    if (more.length === 0 && objects.length === 0) break;
-    for (const i of more) boxed.add(i);
-    reached.push(...objects);
+    const pulled = new Set<number>();
+    const touched: Box[] = [];
+    const free = (j: number): boolean => !boxed.has(j) && !pulled.has(j);
+    // What abuts a glyph's loose box (`size` its type size) or an unread object's bounds (size 0: the glyph's own).
+    const abutters = (box: Box, size: number): void => {
+      if (words === undefined) return;
+      chars.forEach((d, j) => {
+        if (free(j) && !d.generated && !isBlank(d) && d.box !== null && abutting(box, d.box, Math.max(size, d.fontSize))) glyphs.push(j);
+      });
+      for (const object of unreadObjects) {
+        if (size > 0 && !reached.includes(object) && !objects.includes(object) && !touched.includes(object) && abutting(box, object, size)) objects.push(object);
+      }
+    };
+    while (glyphs.length > 0 || objects.length > 0) {
+      const i = glyphs.pop();
+      if (i === undefined) {
+        const object = objects.pop() as Box;
+        touched.push(object);
+        abutters(object, 0);
+      } else if (free(i)) {
+        pulled.add(i);
+        const c = chars[i] as PageChar;
+        glyphs.push(...(wordOf.get(i) ?? []).filter(free));
+        if (c.box !== null) abutters(c.box, c.fontSize);
+      }
+    }
+    if (pulled.size === 0 && touched.length === 0) break;
+    for (const i of pulled) boxed.add(i);
+    reached.push(...touched);
     found = regions();
   }
   return found;
@@ -344,6 +399,79 @@ export function meeting(boxes: readonly Box[], regions: readonly Box[]): Box[] {
 export interface TextObject {
   bounds: Box;
   chars: readonly number[];
+}
+
+/** A word: a run of one text object's characters (`object`, its index) with no blank or generated one between them. */
+export interface Word {
+  object: number;
+  chars: number[];
+}
+
+/**
+ * The words of the page's text objects (REDACT-LOOK fix round 3, challenger F1): each object's characters split
+ * at every blank or generated one, and wherever the reading puts a character of another object between two of them.
+ */
+export function wordsOf(chars: readonly PageChar[], objects: readonly TextObject[]): Word[] {
+  const words: Word[] = [];
+  objects.forEach(({ chars: drawn }, object) => {
+    let run: number[] = [];
+    const end = (): void => {
+      if (run.length > 0) words.push({ object, chars: run });
+      run = [];
+    };
+    for (const i of drawn) {
+      const c = chars[i] as PageChar;
+      if (run.length > 0 && run.at(-1) !== i - 1) end();
+      if (c.generated || isBlank(c)) end();
+      else run.push(i);
+    }
+    end();
+  });
+  return words;
+}
+
+/** The extent of these characters: their loose boxes, or their ink where they have none; null when none has either. */
+function extentOf(chars: readonly PageChar[], indices: readonly number[]): Box | null {
+  const boxes = indices.flatMap((i) => (chars[i] as PageChar).box ?? (chars[i] as PageChar).ink ?? []);
+  if (boxes.length === 0) return null;
+  return {
+    left: Math.min(...boxes.map((b) => b.left)),
+    right: Math.max(...boxes.map((b) => b.right)),
+    bottom: Math.min(...boxes.map((b) => b.bottom)),
+    top: Math.max(...boxes.map((b) => b.top)),
+  };
+}
+
+/** What is not a letter, digit or mark at either end of a word. */
+const EDGE_PUNCTUATION = /^[^\p{L}\p{N}\p{M}]+|[^\p{L}\p{N}\p{M}]+$/gu;
+
+/**
+ * The characters of every word that repeats a withheld word of another text object within an em of it
+ * (REDACT-LOOK fix round 3, challenger F1): a copy of a passage drawn a word at a time and drawn again so (a
+ * shadow), which PDFium reads interleaved with it word by word, so that a quote matches once, across the two,
+ * and the words it leaves are in no match. A word repeats a withheld one when the quotes' matcher reads the
+ * withheld glyphs' text as all of it (folded; punctuation at either end aside, so "Brask," repeats "Brask" and
+ * "12:30" does not repeat "12"); the em is the withheld word's type size. A word with a withheld glyph is never
+ * a copy.
+ */
+export function copiesOf(chars: readonly PageChar[], withheld: ReadonlySet<number>, words: readonly Word[]): number[] {
+  const marked = words.flatMap(({ object, chars: run }) => {
+    const held = run.filter((i) => withheld.has(i));
+    const box = extentOf(chars, held);
+    if (box === null) return [];
+    const em = Math.max(...held.map((i) => (chars[i] as PageChar).fontSize));
+    return [{ object, text: held.map((i) => (chars[i] as PageChar).text).join(''), near: { left: box.left - em, right: box.right + em, bottom: box.bottom - em, top: box.top + em } }];
+  });
+  const out: number[] = [];
+  for (const { object, chars: run } of words) {
+    const box = extentOf(chars, run);
+    if (box === null || run.some((i) => withheld.has(i))) continue;
+    // The word's letters and digits, the punctuation at either end aside, are all a match of the withheld text.
+    const core = run.map((i) => (chars[i] as PageChar).text).join('').replace(EDGE_PUNCTUATION, '');
+    const repeats = (text: string): boolean => quoteSpans(core, [text]).some(([start, end]) => start === 0 && end === core.length);
+    if (marked.some((m) => m.object !== object && overlap(box, m.near) && repeats(m.text))) out.push(...run);
+  }
+  return out;
 }
 
 /**

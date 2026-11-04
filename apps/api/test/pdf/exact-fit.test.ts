@@ -12,7 +12,7 @@ import { matchedChars, regionsFor, stillThere, unread } from '../../src/pdf/matc
 import { Document, LABEL_EMS, Page, labelSize, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { extractAll, leaked, rawText } from './extract.js';
-import { BLUE, FIT_FIXTURES, type FitFixture, RED, askLine, fitPdf, pictureNearFixture, scaledTypeFixture } from './fit-fixtures.js';
+import { BLUE, FIT_FIXTURES, type FitFixture, NESTED, RED, askLine, fitPdf, pictureNearFixture, scaledTypeFixture, shadowed } from './fit-fixtures.js';
 import { twoMarksFixture } from './fixtures.js';
 import { black, blue, contrast, inAny, inside, lost, red, render, where } from './pixels.js';
 
@@ -250,10 +250,11 @@ describe('text PDFium does not read, by a passage (challenger r2, F2)', () => {
     const { pdf, boxes } = copyOf(await redactPdf(original, { quotes: ['Quillon Brask'], redactsAny: true }));
     expect(boxes).toHaveLength(1);
     const box = boxes[0] as Region;
-    // The shadow's k lies over the n of " now.", which goes with it: the box ends with the n (134.38 + 7.784).
-    expect([box.left, box.right].map((v) => Number(v.toFixed(2)))).toEqual([47.23, 142.15]);
+    // The shadow's k lies over the n of " now.", which goes with it, and the rest of its word with the n (fix round
+    // 3, F1): the box ends with the full stop (160.04 + 3.892).
+    expect([box.left, box.right].map((v) => Number(v.toFixed(2)))).toEqual([47.23, 163.93]);
     expect(box.top).toBeGreaterThanOrEqual((shadow[0] as Box).top);
-    expect((await extractAll(pdf)).split('\n')[0]).toMatch(/^Ask\s+ow\.\s+withheld$/);
+    expect((await extractAll(pdf)).split('\n')[0]).toMatch(/^Ask\s+withheld$/);
     expect(where(await render(pdf), red)).toEqual([]);
   });
 
@@ -293,6 +294,46 @@ describe('text PDFium does not read, by a passage (challenger r2, F2)', () => {
       kind: 'refused',
       reason: 'page 1: text drawn twice is left after removal',
     });
+  });
+
+  it('boxes a shadow PDFium never reads up to its own top with no decoy, on the page and in a form drawn moved (challenger r3, N2)', async () => {
+    const content = shadowed('Quillon Brask', 6.3, 4);
+    for (const original of [await fitPdf(content), await fitPdf('q 1 0 0 1 0 -20 cm /Fm1 Do Q', { form: content })]) {
+      const { chars, objects } = await pageText(original);
+      const shadow = unread(chars, objects).objects;
+      expect(shadow).toHaveLength(1);
+      // 4 pt up, the shadow's ink reaches above every loose box the reading has: only its own bounds box it.
+      const top = (shadow[0] as Box).top;
+      expect(top).toBeGreaterThan(Math.max(...chars.flatMap((c) => (c.box === null ? [] : [c.box.top]))));
+      const { pdf, boxes } = copyOf(await redactPdf(original, { quotes: ['Quillon Brask'], redactsAny: true }));
+      expect(boxes).toHaveLength(1);
+      expect((boxes[0] as Region).top).toBeGreaterThanOrEqual(top);
+      expect(where(await render(pdf), red)).toEqual([]);
+    }
+  });
+
+  it('places text two forms deep on the page by the inner form\'s matrix, then the outer\'s, which do not commute (challenger r3, N1)', async () => {
+    type M = [number, number, number, number, number, number];
+    const times = ([a, b, c, d, e, f]: M, [A, B, C, D, E, F]: M): M => [a * A + b * C, a * B + b * D, c * A + d * C, c * B + d * D, e * A + f * C + E, e * B + f * D + F];
+    const carried = (box: Box, [a, b, c, d, e, f]: M): Box => {
+      const xs = [box.left, box.right].flatMap((x) => [box.bottom, box.top].map((y) => a * x + c * y + e));
+      const ys = [box.left, box.right].flatMap((x) => [box.bottom, box.top].map((y) => b * x + d * y + f));
+      return { left: Math.min(...xs), right: Math.max(...xs), bottom: Math.min(...ys), top: Math.max(...ys) };
+    };
+    const matrix = (ops: string): M => (ops.match(/(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) cm/) as RegExpMatchArray).slice(1, 7).map(Number) as M;
+    const flat = await pageText(await fitPdf(shadowed('Quillon Brask', 6.3, 4)));
+    const alone = unread(flat.chars, flat.objects).objects;
+    expect(alone).toHaveLength(1);
+    for (const [order, page, form] of NESTED) {
+      const { chars, objects } = await pageText(await (FIT_FIXTURES.find((f) => f.name === `F-A with no decoy two forms deep, ${order}`) as FitFixture).pdf());
+      const got = unread(chars, objects).objects;
+      const want = carried(alone[0] as Box, times(matrix(form), matrix(page)));
+      expect(got, order).toHaveLength(1);
+      for (const side of ['left', 'right', 'bottom', 'top'] as const) expect(Math.abs((got[0] as Box)[side] - want[side]), `${order} ${side}`).toBeLessThan(0.01);
+      // The other way round is somewhere else: the order is pinned.
+      const swapped = carried(alone[0] as Box, times(matrix(page), matrix(form)));
+      expect(Math.abs((got[0] as Box).left - swapped.left) + Math.abs((got[0] as Box).top - swapped.top), order).toBeGreaterThan(1);
+    }
   });
 
   it('counts text objects in a form XObject, in page space', async () => {

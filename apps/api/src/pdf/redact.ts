@@ -9,9 +9,11 @@
 //
 // The copy: annotations and form fields are drawn into their pages (so what
 // they show is matched like the page), the marked passages are found in each
-// page's text (match.ts), every glyph in their regions (exactly the passages'
-// extent, any neighbour removed with them, and any text drawn twice there that
-// PDFium does not read) is removed from the content
+// page's text (match.ts), with every copy of a withheld word drawn by another
+// text object beside it (a shadow drawn a word at a time), every glyph in their
+// regions (exactly the passages' extent, any neighbour removed with them and the
+// rest of its word, and any text drawn twice there that PDFium does not read)
+// is removed from the content
 // (PDFium, form XObjects included) and an opaque box is drawn over exactly
 // what was removed, labelled "withheld" where the label fits at a readable
 // size (pdfium.ts labelSize). Then the pages are rebuilt alone
@@ -44,7 +46,7 @@
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
-import { type Box, type Region, boxesFor, matchedChars, meeting, regionsFor, stillThere, unread } from './match.js';
+import { type Box, type Region, boxesFor, copiesOf, matchedChars, meeting, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -98,11 +100,16 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     if (chars.length === 0 && page.objectCount > 0) return `page ${index + 1} has no text layer`;
     if (isScan(page)) return `page ${index + 1} is a scan: pictures cover most of it`;
     if (unmapped > 0) return `page ${index + 1} has text that cannot be read`;
-    const withheld = matchedChars(chars, quotes);
     // Text drawn twice at nearly one place (a shadow, a fake bold, a decoy) is read once: the copy PDFium
     // left out is in no reading, so the page's text objects are counted against it (challenger r2, F2).
-    const hidden = unread(chars, page.textObjects());
-    const found = regionsFor(chars, withheld, index, hidden.objects);
+    const objects = page.textObjects();
+    const hidden = unread(chars, objects);
+    // A passage drawn a word at a time and again so beside it is read interleaved, and matched once across
+    // the two: the words the match left that repeat a withheld word near it are withheld too (challenger r3, F1).
+    const words = wordsOf(chars, objects);
+    const matched = matchedChars(chars, quotes);
+    const withheld = new Set([...matched, ...copiesOf(chars, matched, words)]);
+    const found = regionsFor(chars, withheld, index, hidden.objects, words);
     if (!found.ok) return found.reason;
     if (found.regions.length === 0) return null;
     if (meeting(hidden.parts, found.regions).length > 0) return `page ${index + 1}: text PDFium reads only in part meets a withheld passage`;

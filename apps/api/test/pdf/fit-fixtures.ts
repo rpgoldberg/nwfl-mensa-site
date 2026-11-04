@@ -50,6 +50,10 @@ export interface PageOptions {
   picture?: { left: number; bottom: number; width: number; height: number };
   /** A form XObject /Fm1 with this content, drawn by the page as "/Fm1 Do". */
   form?: string;
+  /** A form XObject /Fm2 with this content, which /Fm1 draws ("/Fm2 Do"): a form two deep. */
+  innerForm?: string;
+  /** F5: Helvetica whose ToUnicode reads every letter, digit and mark but the space as "x" (a font that lies about its text). */
+  lyingFont?: boolean;
   /** An ExtGState /GS0 with these entries. */
   extGState?: Record<string, unknown>;
 }
@@ -88,9 +92,16 @@ export async function fitPdf(content: string, options: PageOptions = {}): Promis
       }),
     ),
   );
+  const bbox = [0, 0, options.width ?? 400, options.height ?? 140];
   if (options.form !== undefined) {
-    const form = context.flateStream(options.form, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, options.width ?? 400, options.height ?? 140], Resources: { Font: { F1: helvetica } } });
+    const inner = options.innerForm === undefined ? {} : { XObject: { Fm2: context.register(context.flateStream(options.innerForm, { Type: 'XObject', Subtype: 'Form', BBox: bbox, Resources: { Font: { F1: helvetica } } })) } };
+    const form = context.flateStream(options.form, { Type: 'XObject', Subtype: 'Form', BBox: bbox, Resources: { Font: { F1: helvetica }, ...inner } });
     page.node.setXObject(PDFName.of('Fm1'), context.register(form));
+  }
+  if (options.lyingFont === true) {
+    const codes = Array.from({ length: 0x7f - 0x21 }, (_, i) => `<${(0x21 + i).toString(16).toUpperCase()}> <0078>`);
+    const cmap = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /FitLie def /CIDSystemInfo <</Registry (Fit) /Ordering (Lie) /Supplement 0>> def 1 begincodespacerange <00> <FF> endcodespacerange ${codes.length + 1} beginbfchar <20> <0020> ${codes.join(' ')} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end`;
+    page.node.setFontDictionary(PDFName.of('F5'), context.register(context.obj({ ...HELVETICA, ToUnicode: context.register(context.flateStream(cmap)) })));
   }
   if (options.extGState !== undefined) page.node.setExtGState(PDFName.of('GS0'), context.register(context.obj(options.extGState as never)));
   page.node.set(PDFName.of('Contents'), context.obj([context.register(context.flateStream(content))]));
@@ -147,7 +158,7 @@ const twice = (dx: number, dy: number, extra = ''): string =>
  * at an offset PDFium's text page takes for a duplicate (a drop shadow, a fake bold): it reads the name
  * once, so the second copy is in no reading taken before the removal (REDACT-LOOK fix round, F1 and F2).
  */
-const shadowed = (name: string, dx: number, dy: number): string =>
+export const shadowed = (name: string, dx: number, dy: number): string =>
   `${askLine(`(${name}) Tj`)}\nBT /F1 14 Tf ${(20 + 27.23 + dx).toFixed(4)} ${(60 + dy).toFixed(4)} Td ${RED} (${name}) Tj ET`;
 
 /** The offsets of the challenger's sweep (14 pt) where the shadow's first, last or x-height glyphs were left. */
@@ -217,6 +228,70 @@ const DECOYS: ReadonlyArray<[string, number, number, readonly number[]]> = [
   ['Quillon Braskett', 0, -11, [1, 5, 6, 7, 9, 10, 11, 13]],
 ];
 
+/**
+ * "Ask <name> now." drawn a word at a time (one Tj per word, as producers that write a text object per word do),
+ * and the name drawn again so at (dx, dy) from it, after the line or before it, with no decoy (challenger r3, F1
+ * and F2). PDFium reads both copies, interleaved word by word ("Quillon Quillon Brask Brask"), so the quote
+ * matches once, across the two, and each word the match leaves is a copy of a withheld one by the box.
+ */
+const wordByWord = (name: string): string => name.split(' ').map((word, i, list) => `(${word}${i < list.length - 1 ? ' ' : ''}) Tj`).join(' ');
+const perWord = (name: string, dx: number, dy: number, order: 'after' | 'before'): string => {
+  const line = `BT /F1 14 Tf 20 60 Td ${BLUE} (Ask ) Tj ${RED} ${wordByWord(name)} ${BLUE} ( now.) Tj ET`;
+  const again = `BT /F1 14 Tf ${(20 + 27.23 + dx).toFixed(4)} ${(60 + dy).toFixed(4)} Td ${RED} ${wordByWord(name)} ET`;
+  return order === 'after' ? `${line}\n${again}` : `${again}\n${line}`;
+};
+
+/**
+ * Per-word shadows past the challenger's range (REDACT-LOOK fix round 3): the reading pairs a twin's word with
+ * the name's, and the word it leaves lies near the passage (within an em) but meets no box, so only the copy rule
+ * (match.ts copiesOf) withholds it.
+ */
+const FAR_WORD_SHADOWS: ReadonlyArray<[string, number, number, 'after' | 'before']> = [
+  ['Ivo Brumm', 19, 0, 'after'],
+  ['Quillon Brask', -40, 0, 'before'],
+  ['Ada Marsh', -30, 0, 'after'],
+];
+
+/**
+ * "Ask <name> now." (the name a word at a time, or in one Tj) with the name drawn again at (dx, dy) a glyph at a
+ * time, a text object per glyph, after the line or before it (REDACT-LOOK fix round 3, beyond the challenger's
+ * sweep): no text object holds more than one glyph of the copy, so only where its glyphs lie joins them into words.
+ */
+const perGlyph = (name: string, dx: number, dy: number, line: 'word' | 'one', order: 'after' | 'before'): string => {
+  let x = 20 + 27.23 + dx;
+  const again = [...name]
+    .map((ch) => {
+      const glyph = `BT /F1 14 Tf ${x.toFixed(4)} ${(60 + dy).toFixed(4)} Td ${RED} (${ch}) Tj ET`;
+      x += ((HELVETICA_WIDTHS[ch] as number) * 14) / 1000;
+      return glyph;
+    })
+    .join('\n');
+  const main = line === 'one' ? askLine(`(${name}) Tj`) : `BT /F1 14 Tf 20 60 Td ${BLUE} (Ask ) Tj ${RED} ${wordByWord(name)} ${BLUE} ( now.) Tj ET`;
+  return order === 'after' ? `${main}\n${again}` : `${again}\n${main}`;
+};
+
+/** Per-glyph copies whose glyphs past the box's edge the exact fit left (the last two leave them on main too). */
+const GLYPH_SHADOWS: ReadonlyArray<[string, number, number, 'word' | 'one', 'after' | 'before']> = [
+  ['Quillon Brask', 6.4, 0, 'word', 'after'],
+  ['Quillon Brask', 16, 4, 'one', 'after'],
+  ['Ivo Brumm', 11.2, 0, 'word', 'before'],
+  ['Ivo Brumm', -3.2, 4, 'one', 'before'],
+];
+
+/** The page's and the outer form's matrices for a form two deep: a rotation and a stretch, each way round. */
+export const NESTED: ReadonlyArray<[string, string, string]> = [
+  ['rotated, then stretched', 'q 0.866 0.5 -0.5 0.866 150 20 cm /Fm1 Do Q', '1.5 0 0 0.7 0 0 cm /Fm2 Do'],
+  ['stretched, then rotated', 'q 1.5 0 0 0.7 20 20 cm /Fm1 Do Q', '0.866 0.5 -0.5 0.866 60 0 cm /Fm2 Do'],
+];
+
+/** The challenger's r3 layouts (sweep2 and AT8b) whose copies left a glyph of the name beside the box. */
+const WORD_SHADOWS: ReadonlyArray<[string, number, number, 'after' | 'before']> = [
+  ['Quillon Brask', 6.4, 0, 'after'],
+  ['Ada Marsh', -8.8, 0, 'before'],
+  ['Quillon Brask', 6.3, 4, 'after'],
+  ['Ivo Brumm', 12.8, 1.5, 'after'],
+];
+
 export const FIT_FIXTURES: FitFixture[] = [
   // L1: ink outside the loose box.
   { surface: 'L1', name: 'accents above the ascent (Å, Ç, ÿ)', pdf: () => fitPdf(askLine('(\\305sa \\307ald\\377ry) Tj', { size: 18 })), quotes: ['Åsa Çaldÿry'], needles: ['Åsa', 'Çaldÿry', 'aldÿry'] },
@@ -263,6 +338,38 @@ export const FIT_FIXTURES: FitFixture[] = [
   })),
   { surface: 'L2', name: 'F-A in a form XObject drawn moved', pdf: decoyed('Quillon Brask', 6.3, 4, [12], { form: true }), ...QUILLON },
   { surface: 'L2', name: 'F-A with the decoy drawn as a clip (Tr 7)', pdf: decoyed('Quillon Brask', 6.3, 4, [12], { mode: 7 }), ...QUILLON, mayRefuse: /drawn as a clip/ },
+  // L2: drawn a word at a time, and again so beside it (challenger r3, F1 and F2): a copy, never refused.
+  ...[...WORD_SHADOWS, ...FAR_WORD_SHADOWS].map(([name, dx, dy, order]): FitFixture => ({
+    surface: 'L2',
+    name: `"${name}" drawn a word at a time, and again so at (${dx}, ${dy}) ${order} it`,
+    pdf: () => fitPdf(perWord(name, dx, dy, order)),
+    quotes: [name],
+    needles: [name, ...name.split(' ')],
+  })),
+  // L2: the same, the copy drawn a glyph at a time: a copy, never refused.
+  ...GLYPH_SHADOWS.map(([name, dx, dy, line, order]): FitFixture => ({
+    surface: 'L2',
+    name: `"${name}" (${line === 'one' ? 'in one Tj' : 'a word at a time'}) drawn again a glyph at a time at (${dx}, ${dy}) ${order} it`,
+    pdf: () => fitPdf(perGlyph(name, dx, dy, line, order)),
+    quotes: [name],
+    needles: [name, ...name.split(' ')],
+  })),
+  // L2: a shadow in a font whose ToUnicode reads every letter as x (challenger r3, F3): no reading holds a copy of
+  // the name, so only where its glyphs lie says what it is.
+  ...([[7, 4], [30, 0]] as const).map(([dx, dy]): FitFixture => ({
+    surface: 'L2',
+    name: `a shadow at (${dx}, ${dy}) in a font that reads every letter as x`,
+    pdf: () => fitPdf(`${askLine('(Quillon Brask) Tj')}\nBT /F5 14 Tf ${(20 + 27.23 + dx).toFixed(4)} ${(60 + dy).toFixed(4)} Td ${RED} (Quillon Brask) Tj ET`, { lyingFont: true }),
+    ...QUILLON,
+  })),
+  // L2: F-A's shadow, with no decoy, two forms deep, the forms' matrices not commuting (challenger r3, N1): the
+  // count places it on the page only when it carries the inner form's matrix first, then the outer's.
+  ...NESTED.map(([order, page, form]): FitFixture => ({
+    surface: 'L2',
+    name: `F-A with no decoy two forms deep, ${order}`,
+    pdf: () => fitPdf(page, { width: 500, height: 400, form, innerForm: shadowed('Quillon Brask', 6.3, 4) }),
+    ...QUILLON,
+  })),
   // L3: one marked glyph left behind, which no whole-quote check sees.
   { surface: 'L3', name: 'a Type 3 glyph drawn 1.5 em from its advance', pdf: () => fitPdf(`BT /F1 18 Tf 20 60 Td ${BLUE} (Ask ) Tj /F3 18 Tf ${RED} (GHIBE) Tj /F1 18 Tf ${BLUE} (          now.) Tj ET`), quotes: ['Renaz'], needles: ['Renaz', 'Rena'], mayRefuse: /withheld/ },
   { surface: 'L3', name: 'a glyph pulled out of its place by a TJ', pdf: () => fitPdf(askLine('[(Quill) 2200 (on)] TJ', { after: '      now.' })), quotes: ['Quillon'], needles: ['Quillon', 'Quill'], mayRefuse: /withheld/ },

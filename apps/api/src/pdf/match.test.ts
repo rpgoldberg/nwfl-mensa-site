@@ -3,7 +3,7 @@
 // characters as PDFium reports them (text, generated or not, a line-end
 // hyphen or not, a box). Every name here is made up.
 import { describe, expect, it } from 'vitest';
-import { type Box, type PageChar, type Region, boxesFor, matchedChars, meeting, regionsFor, stillThere, textMatches, unread } from './match.js';
+import { type Box, type PageChar, type Region, type TextObject, boxesFor, copiesOf, matchedChars, meeting, regionsFor, stillThere, textMatches, unread, wordsOf } from './match.js';
 import { LABEL_EMS, MIN_LABEL_PT, labelSize } from './pdfium.js';
 
 const SIZE = 12;
@@ -389,6 +389,153 @@ describe('regionsFor: text PDFium does not read, by a passage (challenger r2, F2
 
   it('reaches no unread object when nothing is withheld', () => {
     expect(regionsFor(chars(), new Set(), 0, [{ left: 0, right: 500, bottom: 0, top: 800 }])).toEqual({ ok: true, regions: [] });
+  });
+});
+
+/** The text objects of a page laid out by page(), one per run of characters given by its first and last index. */
+const objectsOf = (runs: ReadonlyArray<readonly [number, number]>): TextObject[] =>
+  runs.map(([first, last]) => ({ bounds: { left: 0, right: 0, bottom: 0, top: 0 }, chars: Array.from({ length: last - first + 1 }, (_, k) => first + k) }));
+
+/** The characters moved by (dx, dy), loose boxes and ink together. */
+const moved = (chars: readonly PageChar[], dx: number, dy: number): PageChar[] =>
+  chars.map((c) => {
+    const shift = (b: Box | null): Box | null => b && { left: b.left + dx, right: b.right + dx, bottom: b.bottom + dy, top: b.top + dy };
+    return { ...c, box: shift(c.box), ink: shift(c.ink) };
+  });
+
+describe('wordsOf: each text object\'s runs of glyphs with no blank between (challenger r3, F1)', () => {
+  it('splits each object at its blanks, never joins two objects, and leaves blanks and generated characters out', () => {
+    // "Ask Bo now" as "Ask " | "Bo" | " now", and a generated space PDFium added after the last.
+    const chars = [...page(['Ask Bo now']), { text: ' ', generated: true, hyphen: false, box: null, ink: null, fontSize: SIZE }];
+    expect(wordsOf(chars, objectsOf([[0, 3], [4, 5], [6, 10]]))).toEqual([
+      { object: 0, chars: [0, 1, 2] },
+      { object: 1, chars: [4, 5] },
+      { object: 2, chars: [7, 8, 9] },
+    ]);
+    // One object drawing it all: a word per run of glyphs.
+    expect(wordsOf(chars, objectsOf([[0, 10]])).map((w) => w.chars)).toEqual([
+      [0, 1, 2],
+      [4, 5],
+      [7, 8, 9],
+    ]);
+  });
+});
+
+describe('copiesOf: a withheld word drawn again by another text object near it (challenger r3, F1)', () => {
+  // "Ask Bo now" a word per object, "Bo" [96,108] withheld, and a second "Bo" drawn by an object of its own.
+  const line = page(['Ask Bo now']);
+  const objects = objectsOf([[0, 3], [4, 5], [6, 9], [10, 11]]);
+  const withCopy = (copy: string, dx: number, dy: number): PageChar[] => [...line, ...moved(page([copy]), 24 + dx, dy)];
+  const copies = (chars: readonly PageChar[], runs = objects): number[] => copiesOf(chars, new Set([4, 5]), wordsOf(chars, runs));
+
+  it('finds a copy over the word, beside it and up to an em from it, each way', () => {
+    expect(copies(withCopy('Bo', 6.3, 4))).toEqual([10, 11]);
+    // Beside "Bo", 11.9 pt clear of it (the type is 12 pt), on the line and below it.
+    expect(copies(withCopy('Bo', 23.9, 0))).toEqual([10, 11]);
+    expect(copies(withCopy('Bo', -23.9, 0))).toEqual([10, 11]);
+    expect(copies(withCopy('Bo', 0, -23.9))).toEqual([10, 11]);
+  });
+
+  it('does not take the same text more than an em away for a copy', () => {
+    expect(copies(withCopy('Bo', 24.1, 0))).toEqual([]);
+    expect(copies(withCopy('Bo', 0, 24.1))).toEqual([]);
+  });
+
+  it('reads the copy as the quotes are read: folded, and as whole words', () => {
+    expect(copies(withCopy('BO', 6, 4))).toEqual([10, 11]);
+    expect(copies([...line, ...moved(page(['Bo.']), 30, 4)], objectsOf([[0, 3], [4, 5], [6, 9], [10, 12]]))).toEqual([10, 11, 12]);
+    expect(copies([...line, ...moved(page(['Bob']), 30, 4)], objectsOf([[0, 3], [4, 5], [6, 9], [10, 12]]))).toEqual([]);
+    // A word that only begins with the withheld one is other text (a time beside an address's number).
+    expect(copies([...line, ...moved(page(['Bo:3']), 30, 4)], objectsOf([[0, 3], [4, 5], [6, 9], [10, 13]]))).toEqual([]);
+    expect(copies([...line, ...moved(page(['(Bo)']), 30, 4)], objectsOf([[0, 3], [4, 5], [6, 9], [10, 13]]))).toEqual([10, 11, 12, 13]);
+  });
+
+  it('takes no word of the withheld word\'s own object, and no word that has a withheld glyph, for a copy', () => {
+    const chars = withCopy('Bo', 6, 4);
+    const own = { bounds: { left: 0, right: 0, bottom: 0, top: 0 }, chars: [4, 5, 10, 11] };
+    expect(wordsOf(chars, [own]).map((w) => w.chars)).toEqual([
+      [4, 5],
+      [10, 11],
+    ]);
+    expect(copies(chars, [...objectsOf([[0, 3], [6, 9]]), own])).toEqual([]);
+    expect(copiesOf(chars, new Set([4, 5, 10]), wordsOf(chars, objects))).toEqual([]);
+  });
+
+  it('finds nothing when nothing is withheld, and skips a word with no position', () => {
+    expect(copiesOf(withCopy('Bo', 6, 4), new Set(), wordsOf(withCopy('Bo', 6, 4), objects))).toEqual([]);
+    const placeless = withCopy('Bo', 6, 4).map((c, i) => (i >= 10 ? { ...c, box: null, ink: null } : c));
+    expect(copies(placeless)).toEqual([]);
+    // A copy with no loose box is placed by its ink.
+    const inked = withCopy('Bo', 6, 4).map((c, i) => (i >= 10 ? { ...c, box: null } : c));
+    expect(copies(inked)).toEqual([10, 11]);
+    expect(copies(inked.map((c, i) => (i >= 10 ? { ...c, ink: c.ink && { ...c.ink, left: c.ink.left + 30, right: c.ink.right + 30 } } : c)))).toEqual([]);
+  });
+});
+
+describe('regionsFor: a neighbour pulled in brings the rest of its word (challenger r3, F1)', () => {
+  // "xAVo y" as "xA" | "Vo" | " y": "Vo" is marked, A's ink reaches into it.
+  const chars = withChar(page(['xAVo y']), 1, { ink: { right: 86 } });
+  const words = wordsOf(chars, objectsOf([[0, 1], [2, 3], [4, 5]]));
+
+  it('boxes the whole word of a glyph whose ink reaches into the box, though the rest of it reaches nothing', () => {
+    expect(edges(regionsFor(chars, new Set([2, 3]), 0, [], words))).toEqual([[72, 96, 700, 712]]);
+    // Without the words, only the glyph itself.
+    expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[78, 96, 700, 712]]);
+  });
+
+  it('stops at a blank and at the object\'s end', () => {
+    // "ax A" | "Vo": the A's word is "A" alone.
+    const spaced = withChar(page(['ax AVo']), 3, { ink: { right: 98 } });
+    expect(edges(regionsFor(spaced, new Set([4, 5]), 0, [], wordsOf(spaced, objectsOf([[0, 3], [4, 5]]))))).toEqual([[90, 108, 700, 712]]);
+    // "ax", 2 pt clear of "A" | "Vo" (the type is 12 pt): the A's word is its object's alone, or with "ax" when one
+    // object draws all three.
+    const joined = withChar(withChar(withChar(page(['axAVo']), 0, { box: { left: 70, right: 76 } }), 1, { box: { left: 76, right: 82 } }), 2, { ink: { right: 92 } });
+    expect(edges(regionsFor(joined, new Set([3, 4]), 0, [], wordsOf(joined, objectsOf([[0, 1], [2, 2], [3, 4]]))))).toEqual([[84, 102, 700, 712]]);
+    expect(edges(regionsFor(joined, new Set([3, 4]), 0, [], wordsOf(joined, objectsOf([[0, 2], [3, 4]]))))).toEqual([[70, 102, 700, 712]]);
+  });
+
+  it('brings the glyphs that abut it on its line, however they are drawn (a copy drawn a glyph at a time), up to a tenth of an em apart', () => {
+    // Without the page's words, only the glyph itself: the fixpoint alone.
+    expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[78, 96, 700, 712]]);
+    // "xAVo y" a glyph per object: A pulled in brings the x it abuts.
+    const glyphs = wordsOf(chars, objectsOf([[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5]]));
+    expect(edges(regionsFor(chars, new Set([2, 3]), 0, [], glyphs))).toEqual([[72, 96, 700, 712]]);
+    // The x 1.1 pt clear of the A (the type is 12 pt): still its word; 1.3 pt clear: another.
+    const apart = (gap: number): PageChar[] => withChar(chars, 0, { box: { left: 72 - gap, right: 78 - gap }, ink: { left: 72.5 - gap, right: 77.5 - gap } });
+    expect(edges(regionsFor(apart(1.1), new Set([2, 3]), 0, [], glyphs))).toEqual([[70.9, 96, 700, 712]]);
+    expect(edges(regionsFor(apart(1.3), new Set([2, 3]), 0, [], glyphs))).toEqual([[78, 96, 700, 712]]);
+    // An x on another line, or with no loose box, is not the A's word.
+    expect(edges(regionsFor(withChar(chars, 0, { box: { bottom: 690, top: 702 } }), new Set([2, 3]), 0, [], glyphs))).toEqual([[78, 96, 700, 712]]);
+    expect(edges(regionsFor(withChar(chars, 0, { box: null }), new Set([2, 3]), 0, [], glyphs))).toEqual([[78, 96, 700, 712]]);
+    // Nor is a blank, or a glyph after one: "x A" leaves the x.
+    const spaced = withChar(page(['x AVo']), 2, { ink: { right: 92 } });
+    expect(edges(regionsFor(spaced, new Set([3, 4]), 0, [], wordsOf(spaced, objectsOf([[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]))))).toEqual([[84, 102, 700, 712]]);
+  });
+
+  it('brings, through a glyph the reading left out (an unread object), the glyphs beyond it, and an unread object a glyph pulled in abuts', () => {
+    // "Ask Bo" with "Bo" withheld [96,108], an unread one-glyph object over the o's end, and a z 1 pt past it.
+    const z: PageChar = { text: 'z', generated: false, hyphen: false, box: { left: 115.5, right: 121.5, bottom: 700, top: 712 }, ink: { left: 116, right: 121, bottom: 701, top: 710 }, fontSize: SIZE };
+    const chars = [...page(['Ask Bo']), z];
+    const left = { left: 107, right: 114.5, bottom: 701, top: 710 };
+    const words = wordsOf(chars, objectsOf([[0, 3], [4, 5], [6, 6]]));
+    expect(edges(regionsFor(chars, new Set([4, 5]), 0, [left], words))).toEqual([[96, 121.5, 700, 712]]);
+    expect(edges(regionsFor(chars, new Set([4, 5]), 0, [left]))).toEqual([[96, 114.5, 700, 712]]);
+    // "xAVo y" a glyph per object: A pulled in brings x, and x the unread object half a point before it, which
+    // meets no region and so is boxed on its own.
+    const kerned = withChar(page(['xAVo y']), 1, { ink: { right: 86 } });
+    const before = { left: 64, right: 71.5, bottom: 701, top: 710 };
+    const glyphs = wordsOf(kerned, objectsOf([[0, 0], [1, 1], [2, 2], [3, 3], [5, 5]]));
+    expect(edges(regionsFor(kerned, new Set([2, 3]), 0, [before], glyphs))).toEqual([
+      [72, 96, 700, 712],
+      [64, 71.5, 701, 710],
+    ]);
+    expect(edges(regionsFor(kerned, new Set([2, 3]), 0, [before]))).toEqual([[78, 96, 700, 712]]);
+  });
+
+  it('follows a chain: the far end of a word pulled in can pull in the next', () => {
+    // "pq" | "xA" | "Vo": A pulled in brings x, whose ink reaches q's, which brings p.
+    const chain = withChar(withChar(page(['pqxAVo']), 3, { ink: { right: 98 } }), 1, { ink: { right: 85 } });
+    expect(edges(regionsFor(chain, new Set([4, 5]), 0, [], wordsOf(chain, objectsOf([[0, 1], [2, 3], [4, 5]]))))).toEqual([[72, 108, 700, 712]]);
   });
 });
 
