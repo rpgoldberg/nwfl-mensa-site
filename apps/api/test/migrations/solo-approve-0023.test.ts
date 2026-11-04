@@ -20,6 +20,8 @@ const ADMIN = { sub: 'sub-admin', groups: ['nwfl-members', 'nwfl-officers', 'nwf
 const OFFICER = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
 const OTHER = { sub: 'sub-other', groups: ['nwfl-members', 'nwfl-officers'] };
 const SET = `SELECT rule, set_at, changed FROM approval_rule_set($1, $2, $3, $4, $5, $6)`;
+/** With the revision the Admin read (the change_id that set the rule; '' while the default). */
+const SET_EXPECTING = `SELECT rule, set_at, change_id, changed FROM approval_rule_set($1, $2, $3, $4, $5, NULL, $6)`;
 const PROPOSE = `SELECT * FROM redaction_propose('nwflorida', $1, $2, $3, $4, $5, NULL)`;
 const APPROVE = `SELECT * FROM redaction_approve($1, $2, $3, NULL)`;
 const MIGRATIONS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../migrations');
@@ -40,6 +42,9 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
   const flip = (scope: string, rule: string, reason = 'The Webmaster is away', who = ADMIN, client = app): Promise<{ rule: string; set_at: Date; changed: boolean }> =>
     one(client, SET, [scope, rule, reason, who.sub, who.groups, null]);
   const ruleOf = async (scope: string): Promise<string> => (await one<{ rule: string }>(app, `SELECT rule FROM approval_rule WHERE scope = $1`, [scope])).rule;
+  /** The revision an Admin reading the setting now would see: the flip that set it, '' for the default. */
+  const revision = async (scope: string): Promise<string> =>
+    (await one<{ rev: string }>(app, `SELECT coalesce(change_id::text, '') AS rev FROM approval_rule WHERE scope = $1`, [scope])).rev;
   const count = async (table: string, where = 'true', values: unknown[] = []): Promise<number> =>
     Number((await one<{ n: string }>(owner, `SELECT count(*) AS n FROM ${table} WHERE ${where}`, values)).n);
 
@@ -85,10 +90,10 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
 
   describe('the setting and its ledger', () => {
     it('starts both scopes at two-person, set by no one', async () => {
-      const { rows } = await app.query(`SELECT scope, rule, set_at, set_by_sub FROM approval_rule ORDER BY scope`);
+      const { rows } = await app.query(`SELECT scope, rule, set_at, set_by_sub, change_id FROM approval_rule ORDER BY scope`);
       expect(rows).toEqual([
-        { scope: 'content', rule: 'two_person', set_at: null, set_by_sub: null },
-        { scope: 'redaction_policy', rule: 'two_person', set_at: null, set_by_sub: null },
+        { scope: 'content', rule: 'two_person', set_at: null, set_by_sub: null, change_id: null },
+        { scope: 'redaction_policy', rule: 'two_person', set_at: null, set_by_sub: null, change_id: null },
       ]);
     });
 
@@ -116,14 +121,101 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
       expect(await sqlstate(owner, `TRUNCATE approval_rule CASCADE`)).toBe(STATE);
       expect(await sqlstate(owner, `UPDATE approval_rule_change SET reason = 'rewritten'`)).toBe(STATE);
       expect(await sqlstate(owner, `DELETE FROM approval_rule_change`)).toBe(STATE);
-      expect(await sqlstate(owner, `TRUNCATE approval_rule_change`)).toBe(STATE);
+      expect(await sqlstate(owner, `TRUNCATE approval_rule_change CASCADE`)).toBe(STATE);
+      // The setting points at its flip, so the flips alone cannot be emptied either.
+      expect(await sqlstate(owner, `TRUNCATE approval_rule_change`)).toBe('0A000');
       expect(await count('approval_rule')).toBe(2);
+    });
+
+    it('refuses the owner a switch written past approval_rule_set: no flip row, no audit row, or a flip already applied', async () => {
+      const before = { changes: await count('approval_rule_change'), audits: await count('audit_event', `action = 'approval_rule_set'`) };
+      for (const text of [
+        `UPDATE approval_rule SET rule = 'one_approver' WHERE scope = 'content'`,
+        `UPDATE approval_rule SET rule = 'one_approver', set_at = now(), set_by_sub = 'sub-owner' WHERE scope = 'content'`,
+        `UPDATE approval_rule SET set_at = now(), set_by_sub = 'sub-owner' WHERE scope = 'redaction_policy'`,
+        `UPDATE approval_rule SET rule = rule`,
+      ]) {
+        expect(await sqlstate(owner, text), text).toBe(STATE);
+      }
+      // A flip row the owner inserts by hand, then points the setting at. Refused without the marker
+      // approval_rule_set sets for its own update, then without the audit row, then with another
+      // subject or time than the flip's; with all of them it is a flip on the record, which is the
+      // point: the setting never moves without a ledger row and an audit row.
+      await owner.query('BEGIN');
+      try {
+        const forged = await one<{ id: string }>(
+          owner,
+          `INSERT INTO approval_rule_change (scope, from_rule, to_rule, reason, changed_by_sub, changed_by_groups) VALUES ('content', 'two_person', 'one_approver', 'by hand', 'sub-owner', '{nwfl-admin}') RETURNING id`,
+        );
+        // The flip's own time, to the microsecond (a JS Date keeps milliseconds), or `late` seconds after.
+        const point = (sub = 'sub-owner', late = 0): Promise<string> =>
+          failure(
+            owner,
+            `UPDATE approval_rule SET rule = 'one_approver', set_at = (SELECT changed_at FROM approval_rule_change WHERE id = $3) + make_interval(secs => $1), set_by_sub = $2, change_id = $3 WHERE scope = 'content'`,
+            [late, sub, forged.id],
+          );
+        const attempt = async (expected: RegExp | 'ok', ...args: Parameters<typeof point>): Promise<void> => {
+          await owner.query('SAVEPOINT s');
+          const result = await point(...args);
+          if (expected === 'ok') expect(result).toBe('ok');
+          else expect(result).toMatch(expected);
+          await owner.query('ROLLBACK TO SAVEPOINT s');
+        };
+        const marker = (value: string): Promise<unknown> => owner.query(`SELECT set_config('nwfl.approval_rule_change', $1, true)`, [value]);
+        await attempt(/approval_rule_set/);
+        await marker(forged.id);
+        await attempt(/approval_rule_set/);
+        await owner.query(
+          `INSERT INTO audit_event (actor_kind, actor_sub, action, subject_kind, subject_id, payload) VALUES ('user', 'sub-owner', 'approval_rule_set', 'approval_rule', 'content', jsonb_build_object('change_id', $1::text))`,
+          [forged.id],
+        );
+        await marker('');
+        await attempt(/approval_rule_set/);
+        await marker(forged.id);
+        await attempt(/approval_rule_set/, 'sub-someone-else');
+        await attempt(/approval_rule_set/, 'sub-owner', 1);
+        await attempt('ok');
+      } finally {
+        await owner.query('ROLLBACK');
+      }
+      // A real flip, then the owner re-pointing the setting at it, or switching back under it.
+      const done = await one<{ set_at: Date; change_id: string }>(app, SET_EXPECTING, ['content', 'one_approver', 'away', ADMIN.sub, ADMIN.groups, await revision('content')]);
+      expect(await sqlstate(owner, `UPDATE approval_rule SET rule = 'two_person' WHERE scope = 'content'`)).toBe(STATE);
+      expect(await sqlstate(owner, `UPDATE approval_rule SET rule = 'one_approver', set_at = $1, set_by_sub = 'sub-admin', change_id = $2 WHERE scope = 'redaction_policy'`, [done.set_at, done.change_id])).toBe(
+        STATE,
+      );
+      expect(await ruleOf('redaction_policy')).toBe('two_person');
+      await reset();
+      expect(await count('approval_rule_change')).toBe(before.changes + 2);
+      expect(await count('audit_event', `action = 'approval_rule_set'`)).toBe(before.audits + 2);
+    });
+
+    it('holds one approver only with when, who and the flip that set it, even with the guard switched off', async () => {
+      await flip('content', 'one_approver');
+      await reset();
+      await owner.query('BEGIN');
+      try {
+        await owner.query(`ALTER TABLE approval_rule DISABLE TRIGGER approval_rule_flip_guard`);
+        for (const text of [
+          `UPDATE approval_rule SET rule = 'one_approver', set_at = NULL, set_by_sub = NULL, change_id = NULL WHERE scope = 'content'`,
+          `UPDATE approval_rule SET change_id = NULL WHERE scope = 'content'`,
+          `UPDATE approval_rule SET set_by_sub = NULL WHERE scope = 'content'`,
+          `UPDATE approval_rule SET set_at = NULL, set_by_sub = NULL WHERE scope = 'content'`,
+        ]) {
+          await owner.query('SAVEPOINT s');
+          expect(await sqlstate(owner, text), text).toBe(CHECK);
+          await owner.query('ROLLBACK TO SAVEPOINT s');
+        }
+      } finally {
+        await owner.query('ROLLBACK');
+      }
     });
 
     it('refuses a flip row the function would never write', async () => {
       const insert = `INSERT INTO approval_rule_change (scope, from_rule, to_rule, reason, changed_by_sub, changed_by_groups) VALUES ($1, $2, $3, $4, $5, $6)`;
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'two_person', 'same', 'sub-admin', ['nwfl-admin']])).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', '   ', 'sub-admin', ['nwfl-admin']])).toBe(CHECK);
+      for (const blank of ['\t\n', '\u200b', '\u00a0', '?!']) expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', blank, 'sub-admin', ['nwfl-admin']]), JSON.stringify(blank)).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', 'x'.repeat(2001), 'sub-admin', ['nwfl-admin']])).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', 'why', '', ['nwfl-admin']])).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', 'why', 'sub-officer', ['nwfl-officers']])).toBe(CHECK);
@@ -139,7 +231,7 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
       );
       expect(rows).toEqual([
         { fn: 'approval_rule_read(text)', app: true },
-        { fn: 'approval_rule_set(text,text,text,text,text[],text)', app: true },
+        { fn: 'approval_rule_set(text,text,text,text,text[],text,text)', app: true },
       ]);
     });
 
@@ -157,7 +249,9 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
     });
 
     it('refuses a blank or over-long reason, an unknown scope and an unknown rule, even when nothing would change', async () => {
-      for (const reason of ['', '   ', null, 'x'.repeat(2001)]) {
+      // Blank includes every kind of space, a line break, a tab, and invisible characters: a reason
+      // says something, in at least one letter or digit.
+      for (const reason of ['', '   ', null, 'x'.repeat(2001), '\t\n', '\u200b', '\u00a0\u2003', '\ufeff\u2060', '...', '--']) {
         expect(await sqlstate(app, SET, ['content', 'two_person', reason, ADMIN.sub, ADMIN.groups, null]), String(reason)).toBe(BAD_VALUE);
         expect(await sqlstate(app, SET, ['content', 'one_approver', reason, ADMIN.sub, ADMIN.groups, null]), String(reason)).toBe(BAD_VALUE);
       }
@@ -214,6 +308,39 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
       expect(await ruleOf('redaction_policy')).toBe('two_person');
       await reset();
       expect(await ruleOf('content')).toBe('two_person');
+    });
+
+    it('takes a reason in any alphabet, or a bare number, and keeps it trimmed of every kind of space', async () => {
+      for (const reason of ['\u00c9t\u00e9', '\u0395\u03bb\u03bb\u03ac\u03b4\u03b1', '2', '\u00a0\tWebmaster away\n']) {
+        expect(await flip('content', 'one_approver', reason)).toMatchObject({ changed: true });
+        await reset();
+      }
+      const kept = await one<{ reason: string }>(owner, `SELECT reason FROM approval_rule_change WHERE to_rule = 'one_approver' ORDER BY changed_at DESC LIMIT 1`);
+      expect(kept.reason).toBe('Webmaster away');
+    });
+
+    it('refuses a flip from a rule the Admin no longer sees: the revision they read has moved on', async () => {
+      const changes = await count('approval_rule_change');
+      // The Admin reads two-person, at the revision in force, and switches to one approver.
+      const read = await revision('content');
+      const first = await one<{ rule: string; change_id: string; changed: boolean }>(app, SET_EXPECTING, ['content', 'one_approver', 'Webmaster away this week', ADMIN.sub, ADMIN.groups, read]);
+      expect(first).toMatchObject({ rule: 'one_approver', changed: true });
+      expect(first.change_id).toMatch(/^[0-9a-f-]{36}$/);
+      const row = await one<{ change_id: string }>(app, `SELECT change_id FROM approval_rule WHERE scope = 'content'`);
+      expect(row.change_id).toBe(first.change_id);
+      // Pressed twice: the same rule changes nothing, whatever revision the form carried.
+      expect(await one(app, SET_EXPECTING, ['content', 'one_approver', 'Webmaster away this week', ADMIN.sub, ADMIN.groups, read])).toMatchObject({ changed: false, change_id: first.change_id });
+      const back = await one<{ change_id: string }>(app, SET_EXPECTING, ['content', 'two_person', 'Webmaster back', ADMIN.sub, ADMIN.groups, first.change_id]);
+      // The first form, sent again after the switch back: refused, and nothing written.
+      expect(await failure(app, SET_EXPECTING, ['content', 'one_approver', 'Webmaster away this week', ADMIN.sub, ADMIN.groups, read])).toMatch(/switched since/);
+      expect(await sqlstate(app, SET_EXPECTING, ['content', 'one_approver', 'Webmaster away this week', ADMIN.sub, ADMIN.groups, ''])).toBe(STATE);
+      expect(await sqlstate(app, SET_EXPECTING, ['content', 'one_approver', 'Webmaster away this week', ADMIN.sub, ADMIN.groups, first.change_id])).toBe(STATE);
+      expect(await sqlstate(app, SET_EXPECTING, ['content', 'one_approver', 'Webmaster away this week', ADMIN.sub, ADMIN.groups, 'not-a-revision'])).toBe(STATE);
+      expect(await ruleOf('content')).toBe('two_person');
+      expect(await count('approval_rule_change')).toBe(changes + 2);
+      // With the revision now in force, it goes through; with none named, nothing is checked.
+      expect(await one(app, SET_EXPECTING, ['content', 'one_approver', 'away again', ADMIN.sub, ADMIN.groups, back.change_id])).toMatchObject({ changed: true });
+      expect(await flip('content', 'two_person', 'back again')).toMatchObject({ changed: true });
     });
 
     it('reads a rule under a share lock, through the one function the app role may call', async () => {
@@ -379,11 +506,13 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
     });
 
     it('keeps the scopes apart: content one-approver leaves a public loosening two-person', async () => {
+      // member_phone, not member_name or image: 0022 (REDACT-LOOK) shows those two to the public.
       await flip('content', 'one_approver');
-      const pending = await propose('image', 'show');
+      const pending = await propose('member_phone', 'show');
       expect(pending).toMatchObject({ status: 'pending', approval_rule: 'two_person' });
       expect(await sqlstate(app, APPROVE, [pending['id'], OFFICER.sub, OFFICER.groups])).toBe(PRIVILEGE);
-      await one(app, PROPOSE, ['public', 'image', 'hide', OFFICER.sub, OFFICER.groups]);
+      await one(app, APPROVE, [pending['id'], OTHER.sub, OTHER.groups]);
+      await one(app, PROPOSE, ['public', 'member_phone', 'hide', OFFICER.sub, OFFICER.groups]);
       await reset();
     });
 
@@ -396,14 +525,15 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
 
     it('refuses the owner a self-approved two-person row, a one-approver row while two-person holds, and a rule changed on supersede', async () => {
       const insert = `INSERT INTO redaction_change (audience, category, from_action, to_action, status, proposed_by_sub, approved_by_sub, approved_at, decided_at, approval_rule)
-                      VALUES ('public', 'member_name', 'hide', 'show', 'applied', 'sub-officer', $1, now(), now(), $2)`;
+                      VALUES ('public', 'member_phone', 'hide', 'show', 'applied', 'sub-officer', $1, now(), now(), $2)`;
       expect(await sqlstate(owner, insert, ['sub-officer', 'two_person'])).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['sub-officer', 'one_approver'])).toBe(STATE);
       expect(await sqlstate(owner, insert, ['sub-other', 'nobody'])).toBe(STATE);
-      const pending = await propose('member_name', 'show');
+      const pending = await propose('member_phone', 'show');
       expect(await sqlstate(owner, `UPDATE redaction_change SET status = 'superseded', decided_at = now(), approval_rule = 'one_approver' WHERE id = $1`, [pending['id']])).toBe(STATE);
       expect(await sqlstate(owner, `UPDATE redaction_change SET status = 'applied', decided_at = now(), approved_by_sub = 'sub-other', approved_at = now(), approval_rule = 'one_approver' WHERE id = $1`, [pending['id']])).toBe(STATE);
-      await one(app, PROPOSE, ['public', 'member_name', 'hide', OFFICER.sub, OFFICER.groups]);
+      await one(app, APPROVE, [pending['id'], OTHER.sub, OTHER.groups]);
+      await one(app, PROPOSE, ['public', 'member_phone', 'hide', OFFICER.sub, OFFICER.groups]);
     });
   });
 
@@ -505,7 +635,8 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
     it('marks every version approved before 0023 as approved under two-person, and nothing else', async () => {
       old = await freshDatabase('nwfl_solo_pre');
       const dir = `/tmp/${old}-pre`;
-      await dockerExec(['sh', '-c', `rm -rf ${dir} && mkdir -p ${dir} && cp /repo/migrations/*.sql ${dir}/ && rm ${dir}/0023_*.sql`]);
+      // 0023 and every later migration left out, so the copy is the schema just before 0023.
+      await dockerExec(['sh', '-c', `rm -rf ${dir} && mkdir -p ${dir} && cp /repo/migrations/*.sql ${dir}/ && for f in ${dir}/*.sql; do n=$(basename "$f"); n=\${n%%_*}; if [ "$n" -ge 23 ]; then rm "$f"; fi; done`]);
       const first = await migrate(old, dir);
       expect(first.code, first.stderr).toBe(0);
       const pre = await connect(APP, APP_PW, old);

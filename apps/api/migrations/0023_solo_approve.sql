@@ -12,11 +12,17 @@
 --
 --   * approval_rule_set, SECURITY DEFINER, is the one writer. It refuses a caller whose groups do
 --     not hold nwfl-admin (42501; the API passes the verified token's groups and is the wall, as
---     for 0016's officer check) and a blank or over-long reason (22023, before the no-op test). A
---     flip to the rule already set writes nothing (idempotent). Otherwise it updates the setting,
---     appends one approval_rule_change row (who, groups, when, from, to, reason, trace) and one
---     audit_event row. Both tables are append-only for every role, the owner included; the app
---     role only reads them.
+--     for 0016's officer check) and a reason that is over-long or says nothing: it needs a letter
+--     or a digit, after every kind of space is trimmed (22023, before the no-op test). A flip to
+--     the rule already set writes nothing (idempotent). A flip from a setting that has moved since
+--     the Admin read it (p_expected: the change_id they saw, '' for the default) is refused
+--     (55000), so a stale form sent again cannot undo a later switch. Otherwise it appends one
+--     approval_rule_change row (who, groups, when, from, to, reason, trace) and one audit_event row,
+--     then points the setting at the change. Both ledger tables are append-only for every role, the
+--     owner included; the app role only reads them.
+--   * approval_rule_flip_guard refuses every other UPDATE of approval_rule, the owner's too: the
+--     setting moves only to a flip that approval_rule_set wrote, with its audit row, in the same
+--     call. One approver is never held without when, who and which flip set it (CHECK).
 --   * approval_rule_read takes the setting under FOR SHARE (the app role may not lock a table it
 --     cannot update), so an approval and a flip serialize: the approval sees the rule committed
 --     before it, and a flip waits for the approvals holding the rule.
@@ -42,7 +48,10 @@ CREATE TABLE approval_rule (
   rule       text        NOT NULL CHECK (rule IN ('two_person', 'one_approver')),
   set_at     timestamptz,
   set_by_sub text        CHECK (set_by_sub <> ''),
-  CONSTRAINT approval_rule_set_together CHECK ((set_at IS NULL) = (set_by_sub IS NULL))
+  -- The flip that set it (approval_rule_change, below); the revision the Admin's form carries.
+  change_id  uuid,
+  CONSTRAINT approval_rule_set_together CHECK ((set_at IS NULL) = (set_by_sub IS NULL) AND (set_at IS NULL) = (change_id IS NULL)),
+  CONSTRAINT approval_rule_one_approver_set CHECK (rule = 'two_person' OR set_at IS NOT NULL)
 );
 
 INSERT INTO approval_rule (scope, rule) VALUES ('content', 'two_person'), ('redaction_policy', 'two_person');
@@ -55,7 +64,9 @@ CREATE TABLE approval_rule_change (
   scope             text        NOT NULL REFERENCES approval_rule (scope),
   from_rule         text        NOT NULL CHECK (from_rule IN ('two_person', 'one_approver')),
   to_rule           text        NOT NULL CHECK (to_rule IN ('two_person', 'one_approver')),
-  reason            text        NOT NULL CHECK (length(btrim(reason)) BETWEEN 1 AND 2000),
+  -- A letter (any alphabet: the builtin collation's Unicode classes) or a digit; never only spaces,
+  -- punctuation or invisible characters.
+  reason            text        NOT NULL CHECK (length(reason) <= 2000 AND (reason COLLATE pg_c_utf8) ~ '[[:alnum:]]'),
   changed_by_sub    text        NOT NULL CHECK (changed_by_sub <> ''),
   changed_by_groups text[]      NOT NULL CHECK ('nwfl-admin' = ANY (changed_by_groups)),
   changed_at        timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -64,6 +75,8 @@ CREATE TABLE approval_rule_change (
 );
 
 CREATE INDEX approval_rule_change_by_scope ON approval_rule_change (scope, changed_at);
+
+ALTER TABLE approval_rule ADD CONSTRAINT approval_rule_change_fk FOREIGN KEY (change_id) REFERENCES approval_rule_change (id);
 
 REVOKE INSERT, UPDATE, DELETE ON approval_rule_change FROM nwfl;
 
@@ -89,21 +102,51 @@ CREATE TRIGGER approval_rule_change_no_truncate BEFORE TRUNCATE ON approval_rule
 COMMENT ON TRIGGER approval_rule_change_guard ON approval_rule_change IS
   'Refuses every role''s UPDATE and DELETE, the owner''s included; the owner can disable or drop it, as for every guard trigger (0019).';
 
+-- The setting moves only to the flip approval_rule_set has just written: its change row (scope,
+-- from, to, when, who) and its audit row, named by the transaction-local marker the function sets
+-- just before its update and clears just after, so the marker never outlives the call.
+CREATE FUNCTION approval_rule_flip_guard() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_change approval_rule_change;
+BEGIN
+  IF NEW.scope = OLD.scope AND NEW.change_id IS DISTINCT FROM OLD.change_id
+     AND NEW.change_id::text = current_setting('nwfl.approval_rule_change', true) THEN
+    SELECT * INTO v_change FROM approval_rule_change c WHERE c.id = NEW.change_id;
+    IF FOUND AND v_change.scope = NEW.scope AND v_change.from_rule = OLD.rule AND v_change.to_rule = NEW.rule
+       AND v_change.changed_at = NEW.set_at AND v_change.changed_by_sub = NEW.set_by_sub
+       AND EXISTS (SELECT 1 FROM audit_event e WHERE e.subject_kind = 'approval_rule' AND e.subject_id = NEW.scope
+                     AND e.action = 'approval_rule_set' AND e.payload ->> 'change_id' = NEW.change_id::text) THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+  RAISE EXCEPTION 'the approval rule is switched only by approval_rule_set, with its record' USING ERRCODE = '55000';
+END
+$fn$;
+
+CREATE TRIGGER approval_rule_flip_guard BEFORE UPDATE ON approval_rule
+  FOR EACH ROW EXECUTE FUNCTION approval_rule_flip_guard();
+
+COMMENT ON TRIGGER approval_rule_flip_guard ON approval_rule IS
+  'Refuses every role''s UPDATE but approval_rule_set''s flip, the owner''s included; the owner can disable or drop it, as for every guard trigger (0019).';
+
 -- 3. The writer and the reader.
-CREATE FUNCTION approval_rule_set(p_scope text, p_rule text, p_reason text, p_sub text, p_groups text[], p_trace text)
-  RETURNS TABLE (rule text, set_at timestamptz, changed boolean)
+CREATE FUNCTION approval_rule_set(p_scope text, p_rule text, p_reason text, p_sub text, p_groups text[], p_trace text,
+                                  p_expected text DEFAULT NULL)
+  RETURNS TABLE (rule text, set_at timestamptz, change_id uuid, changed boolean)
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
 #variable_conflict use_column
 DECLARE
-  v_reason text := btrim(coalesce(p_reason, ''));
+  -- Trimmed of every kind of space (the builtin collation's Unicode class), not btrim's spaces alone.
+  v_reason text := regexp_replace(coalesce(p_reason, '') COLLATE pg_c_utf8, '^[[:space:]]+|[[:space:]]+$', '', 'g');
   v_row    approval_rule;
   v_change approval_rule_change;
 BEGIN
   IF coalesce(p_sub, '') = '' OR NOT coalesce('nwfl-admin' = ANY (p_groups), false) THEN
     RAISE EXCEPTION 'only the Admin sets the approval rule' USING ERRCODE = '42501';
   END IF;
-  IF length(v_reason) NOT BETWEEN 1 AND 2000 THEN
-    RAISE EXCEPTION 'a change of the approval rule needs a reason of 1 to 2000 characters' USING ERRCODE = '22023';
+  IF length(v_reason) > 2000 OR NOT (v_reason COLLATE pg_c_utf8) ~ '[[:alnum:]]' THEN
+    RAISE EXCEPTION 'a change of the approval rule needs a reason of 1 to 2000 characters, in words' USING ERRCODE = '22023';
   END IF;
   IF p_rule IS NULL OR p_rule NOT IN ('two_person', 'one_approver') THEN
     RAISE EXCEPTION 'no such approval rule' USING ERRCODE = '22023';
@@ -113,16 +156,21 @@ BEGIN
     RAISE EXCEPTION 'no such approval scope' USING ERRCODE = '22023';
   END IF;
   IF v_row.rule = p_rule THEN
-    RETURN QUERY SELECT v_row.rule, v_row.set_at, false;
+    RETURN QUERY SELECT v_row.rule, v_row.set_at, v_row.change_id, false;
     RETURN;
+  END IF;
+  IF p_expected IS NOT NULL AND p_expected <> coalesce(v_row.change_id::text, '') THEN
+    RAISE EXCEPTION 'the approval rule was switched since it was read: read it again' USING ERRCODE = '55000';
   END IF;
   INSERT INTO approval_rule_change (scope, from_rule, to_rule, reason, changed_by_sub, changed_by_groups, trace_id)
     VALUES (p_scope, v_row.rule, p_rule, v_reason, p_sub, p_groups, p_trace) RETURNING * INTO v_change;
-  UPDATE approval_rule a SET rule = p_rule, set_at = v_change.changed_at, set_by_sub = p_sub WHERE a.scope = p_scope;
   INSERT INTO audit_event (trace_id, actor_kind, actor_sub, actor_groups, action, subject_kind, subject_id, from_state, to_state, note, payload)
     VALUES (p_trace, 'user', p_sub, p_groups, 'approval_rule_set', 'approval_rule', p_scope, v_row.rule, p_rule, v_reason,
             jsonb_build_object('change_id', v_change.id));
-  RETURN QUERY SELECT p_rule, v_change.changed_at, true;
+  PERFORM set_config('nwfl.approval_rule_change', v_change.id::text, true);
+  UPDATE approval_rule a SET rule = p_rule, set_at = v_change.changed_at, set_by_sub = p_sub, change_id = v_change.id WHERE a.scope = p_scope;
+  PERFORM set_config('nwfl.approval_rule_change', '', true);
+  RETURN QUERY SELECT p_rule, v_change.changed_at, v_change.id, true;
 END
 $fn$;
 
@@ -139,8 +187,9 @@ BEGIN
 END
 $fn$;
 
-REVOKE EXECUTE ON FUNCTION approval_rule_set(text, text, text, text, text[], text), approval_rule_read(text), approval_rule_guard() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION approval_rule_set(text, text, text, text, text[], text), approval_rule_read(text) TO nwfl;
+REVOKE EXECUTE ON FUNCTION approval_rule_set(text, text, text, text, text[], text, text), approval_rule_read(text), approval_rule_guard(),
+  approval_rule_flip_guard() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION approval_rule_set(text, text, text, text, text[], text, text), approval_rule_read(text) TO nwfl;
 
 -- 4. The audit log learns the new subject (0014's list, plus approval_rule).
 ALTER TABLE audit_event DROP CONSTRAINT audit_event_subject_kind_check;

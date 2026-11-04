@@ -67,7 +67,7 @@ const FROZEN: Record<Name, unknown[]> = {
   definers: [
     // SOLO-APPROVE (0023): the approval rule's reader and writer; neither touches a PDF.
     { function: 'approval_rule_read(text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
-    { function: 'approval_rule_set(text,text,text,text,text[],text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
+    { function: 'approval_rule_set(text,text,text,text,text[],text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_copy_put(uuid,uuid,bytea,text,bytea,text)', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     { function: 'pdf_original_put(uuid,bytea,text,text[],text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_original_read(uuid,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },

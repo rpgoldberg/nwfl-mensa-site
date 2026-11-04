@@ -85,8 +85,11 @@ describe.skipIf(!live)('the redaction policy under the approval rule', () => {
   });
 
   it('leaves a public loosening two-person while only content is one-approver ("content only")', async () => {
+    // business_venue, which the public sees: tightened first, so the loosening back is one whatever
+    // 0022 (REDACT-LOOK) has done to the public member_name and image cells.
     await set(ApprovalScope.CONTENT, ApprovalRule.ONE_APPROVER);
-    const change = (await propose(Category.IMAGE, Action.SHOW)).change!;
+    expect((await propose(Category.BUSINESS_VENUE, Action.HIDE)).change?.status).toBe(Status.APPLIED);
+    const change = (await propose(Category.BUSINESS_VENUE, Action.SHOW)).change!;
     expect(change.status).toBe(Status.PENDING);
     await expect(policy.approveRedactionChange({ changeId: change.changeId }, OFFICER)).rejects.toMatchObject({ code: Code.PermissionDenied });
     expect(await ruleOf(change.changeId)).toBe('two_person');
