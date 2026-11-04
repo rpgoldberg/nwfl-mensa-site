@@ -15,7 +15,9 @@
 -- (lens.ts policyCells) and the publication ledger (0016) still read the past right, and no
 -- constraint is touched:
 --
---   * each cell is locked as redaction_propose locks it (redaction_lock_cell);
+--   * both cells are locked first, as redaction_propose locks one (redaction_lock_cell), member_name
+--     then image, and only then the ledger: the order the narrow path takes them in (its cell, then the
+--     ledger when the cell is set), so an officer's change to either cell cannot deadlock with this;
 --   * a change still waiting on the cell is superseded, as redaction_propose does;
 --   * an applied redaction_change row records the loosening, proposed by the migration and approved
 --     on Ross's recorded decision: two distinct subjects, so not_self_approved and
@@ -44,23 +46,29 @@ DECLARE
   c_approver constant text := 'system:decision-ross-2026-11-02';
   c_note     constant text := 'Ross''s 11-02 decision (REDACT-LOOK): the public copy shows member names and pictures; contacts stay redacted.';
   v_cell     record;
+  v_names    text;
+  v_images   text;
   v_from     text;
   v_whole    bigint;
   v_change   redaction_change;
   v_id       uuid;
   v_payload  jsonb;
 BEGIN
-  FOR v_cell IN SELECT * FROM (VALUES ('member_name', 'redact'), ('image', 'blur')) AS t (category, expected) LOOP
-    v_from := redaction_lock_cell('nwflorida', 'public', v_cell.category);
+  -- Both cells, in a fixed order, then the ledger: the narrow path takes a cell, then the ledger as it sets
+  -- the cell (0016's trigger), so taking the ledger before a cell here could deadlock with it (challenger
+  -- r3, N3). A mark is written under the ledger lock (0016: its stamp trigger takes it): taken before the
+  -- count, a whole-item mark that commits meanwhile is counted, and none can be written until this ends.
+  v_names := redaction_lock_cell('nwflorida', 'public', 'member_name');
+  v_images := redaction_lock_cell('nwflorida', 'public', 'image');
+  PERFORM publication_ledger_lock();
+  FOR v_cell IN SELECT * FROM (VALUES ('member_name', 'redact', v_names), ('image', 'blur', v_images)) AS t (category, expected, action) LOOP
+    v_from := v_cell.action;
     CONTINUE WHEN v_from = 'show';
     IF v_from <> v_cell.expected THEN
       RAISE EXCEPTION '0022: the public % cell is %, not the 0012 default %: an officer has changed it since; Ross decides',
         v_cell.category, v_from, v_cell.expected USING ERRCODE = '55000';
     END IF;
     IF v_cell.category = 'member_name' THEN
-      -- A mark is written under the ledger lock (0016: its stamp trigger takes it). Taken here, before the
-      -- count, a whole-item mark that commits meanwhile is counted, and none can be written until this ends.
-      PERFORM publication_ledger_lock();
       SELECT count(*) INTO v_whole FROM redaction_mark
         WHERE tenant_id = 'nwflorida' AND category = 'member_name' AND quote IS NULL AND status = 'active';
       IF v_whole > 0 THEN

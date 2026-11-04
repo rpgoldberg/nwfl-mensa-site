@@ -231,6 +231,41 @@ describe.skipIf(!live)('0022: the public copy shows member names and pictures (R
     });
   });
 
+  describe('lock order (challenger r3, N3)', () => {
+    let db: Db | undefined;
+    afterAll(() => close(db));
+
+    it('takes both cells, then the ledger, as the narrow path does: an officer holding the image cell, then taking the ledger, never deadlocks with it', async () => {
+      db = await beforeZeroTwentyTwo('nwfl_0022_order');
+      const d = db;
+      const target = new URL(url as string);
+      target.pathname = `/${d.name}`;
+      const officer = new pg.Client({ connectionString: target.toString() });
+      await officer.connect();
+      try {
+        // A change to the public image cell as redaction_propose makes it: the cell first ...
+        await officer.query('BEGIN');
+        await officer.query(`SELECT redaction_lock_cell('nwflorida', 'public', 'image')`);
+        const running = migrate(d.name);
+        const waiting = async (): Promise<number> =>
+          (await d.owner.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1 AND application_name = 'nwfl-migrate' AND wait_event_type = 'Lock'`, [d.name])).rows[0]!.n;
+        for (let tries = 0; (await waiting()) === 0; tries++) {
+          if (tries > 200) throw new Error('0022 never waited for the image cell');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        // ... then the ledger, which setting the cell takes (0016's trigger). 0022 holds no ledger lock yet.
+        await officer.query('SELECT publication_ledger_lock()');
+        await officer.query('COMMIT');
+        const run = await running;
+        expect(run.stderr).not.toMatch(/deadlock/);
+        expect(run.code, run.stderr).toBe(0);
+        expect(await cells(d)).toEqual(EXPECTED);
+      } finally {
+        await officer.end();
+      }
+    });
+  });
+
   describe('refuses, applying nothing, so Ross decides', () => {
     let db: Db | undefined;
     afterAll(() => close(db));
