@@ -22,7 +22,8 @@
 --     owner included; the app role only reads them.
 --   * approval_rule_flip_guard refuses every other UPDATE of approval_rule, the owner's too: the
 --     setting moves only to a flip that approval_rule_set wrote, with its audit row, in the same
---     call. One approver is never held without when, who and which flip set it (CHECK).
+--     call, and only forward: never back to an older flip. One approver is never held without
+--     when, who and which flip set it (CHECK).
 --   * approval_rule_read takes the setting under FOR SHARE (the app role may not lock a table it
 --     cannot update), so an approval and a flip serialize: the approval sees the rule committed
 --     before it, and a flip waits for the approvals holding the rule.
@@ -115,6 +116,8 @@ BEGIN
     SELECT * INTO v_change FROM approval_rule_change c WHERE c.id = NEW.change_id;
     IF FOUND AND v_change.scope = NEW.scope AND v_change.from_rule = OLD.rule AND v_change.to_rule = NEW.rule
        AND v_change.changed_at = NEW.set_at AND v_change.changed_by_sub = NEW.set_by_sub
+       -- Only forward: a flip older than the one in force is never replayed, marker or not.
+       AND v_change.changed_at > coalesce(OLD.set_at, '-infinity')
        AND EXISTS (SELECT 1 FROM audit_event e WHERE e.subject_kind = 'approval_rule' AND e.subject_id = NEW.scope
                      AND e.action = 'approval_rule_set' AND e.payload ->> 'change_id' = NEW.change_id::text) THEN
       RETURN NEW;

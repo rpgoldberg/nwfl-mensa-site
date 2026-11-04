@@ -190,6 +190,51 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
       expect(await count('audit_event', `action = 'approval_rule_set'`)).toBe(before.audits + 2);
     });
 
+    it('refuses the owner a replay of an older flip, marker and audit row and all: the setting moves only forward', async () => {
+      await reset();
+      const older = await one<{ change_id: string }>(app, SET_EXPECTING, ['content', 'one_approver', 'replay one away', ADMIN.sub, ADMIN.groups, await revision('content')]);
+      await one(app, SET_EXPECTING, ['content', 'two_person', 'replay two back', ADMIN.sub, ADMIN.groups, await revision('content')]);
+      const before = { changes: await count('approval_rule_change'), audits: await count('audit_event', `action = 'approval_rule_set'`) };
+      await owner.query('BEGIN');
+      try {
+        await owner.query(`SELECT set_config('nwfl.approval_rule_change', $1, true)`, [older.change_id]);
+        const replay = await failure(
+          owner,
+          `UPDATE approval_rule a SET rule = c.to_rule, set_at = c.changed_at, set_by_sub = c.changed_by_sub, change_id = c.id
+             FROM approval_rule_change c WHERE a.scope = 'content' AND c.id = $1`,
+          [older.change_id],
+        );
+        expect(replay).toMatch(/approval_rule_set/);
+      } finally {
+        await owner.query('ROLLBACK');
+      }
+      // A newer flip by hand, marker and audit row and all, but from a rule other than the one in force.
+      await owner.query('BEGIN');
+      try {
+        const forged = await one<{ id: string }>(
+          owner,
+          `INSERT INTO approval_rule_change (scope, from_rule, to_rule, reason, changed_by_sub, changed_by_groups) VALUES ('content', 'one_approver', 'two_person', 'by hand', 'sub-owner', '{nwfl-admin}') RETURNING id`,
+        );
+        await owner.query(
+          `INSERT INTO audit_event (actor_kind, actor_sub, action, subject_kind, subject_id, payload) VALUES ('user', 'sub-owner', 'approval_rule_set', 'approval_rule', 'content', jsonb_build_object('change_id', $1::text))`,
+          [forged.id],
+        );
+        await owner.query(`SELECT set_config('nwfl.approval_rule_change', $1, true)`, [forged.id]);
+        const chain = await failure(
+          owner,
+          `UPDATE approval_rule a SET rule = c.to_rule, set_at = c.changed_at, set_by_sub = c.changed_by_sub, change_id = c.id
+             FROM approval_rule_change c WHERE a.scope = 'content' AND c.id = $1`,
+          [forged.id],
+        );
+        expect(chain).toMatch(/approval_rule_set/);
+      } finally {
+        await owner.query('ROLLBACK');
+      }
+      expect(await ruleOf('content')).toBe('two_person');
+      expect(await count('approval_rule_change')).toBe(before.changes);
+      expect(await count('audit_event', `action = 'approval_rule_set'`)).toBe(before.audits);
+    });
+
     it('holds one approver only with when, who and the flip that set it, even with the guard switched off', async () => {
       await flip('content', 'one_approver');
       await reset();
