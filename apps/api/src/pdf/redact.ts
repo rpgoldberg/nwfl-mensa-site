@@ -40,10 +40,15 @@
 //   - text PDFium does not read is left at a passage after removal (the page's
 //     text objects are counted against its reading again);
 //   - a glyph a text object draws on its own is left within an em of a box, on
-//     its line (a copy drawn a glyph at a time that the boxes stopped short of);
-//   - a withheld word of 3 letters or 4 digits or more is drawn again, on the
-//     page, where no box reached: withheld text drawn twice, which honest pages
-//     rarely do, goes to a person;
+//     its line (a copy drawn a glyph at a time that the boxes stopped short of),
+//     unless it is punctuation, a bullet or the next run of its line, is no
+//     letter or digit of the passage, and has no other such glyph beside it;
+//   - withheld text is drawn again where no box reached: a word of 3 letters or
+//     more of a passage beside a box on its line, or within an em of a withheld
+//     drawing of it (a shadow the boxes stopped short of), or anywhere on the
+//     page a passage of two words or more, 4 digits or more of one, or an email
+//     or web address. A word of a passage that recurs on its own elsewhere is
+//     ordinary text, and is shown;
 //   - the page has text drawn as a clip (render mode 4 to 7): PDFium's rewrite
 //     of the page would end the clip, and what it clipped would flood the page;
 //   - a content stream or a JPEG cannot be read, or a passage is still
@@ -142,9 +147,11 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     const left = unread(after, page.textObjects());
     if (meeting([...left.objects, ...notVacated(chars, withheld, there, left.parts)], found.regions).length > 0) return `page ${index + 1}: text PDFium does not read is left at a withheld passage`;
     // A copy drawn a glyph at a time, letter-spaced unlike the passage, can end beyond the glyphs the boxes reached, and
-    // withheld text can be drawn again where no box reaches at all: fail closed on both (challenger r4, F1).
-    if (loneGlyphs(chars, objects, found.regions, there).length > 0) return `page ${index + 1}: a glyph drawn on its own is left beside a withheld passage`;
-    if (drawnAgain(chars, objects, quotes, there).length > 0) return `page ${index + 1}: withheld text is drawn again elsewhere on the page`;
+    // withheld text can be drawn again beside the passage where no box reached, or whole elsewhere: fail closed on both
+    // (challenger r4, F1). Ordinary text is not counted: a bullet, a link's full stop, a word of a passage on its own
+    // elsewhere on the page (challenger r5, S1).
+    if (loneGlyphs(chars, objects, found.regions, there, withheld).length > 0) return `page ${index + 1}: a glyph drawn on its own is left beside a withheld passage`;
+    if (drawnAgain(chars, objects, quotes, there, withheld, found.regions).length > 0) return `page ${index + 1}: withheld text is drawn again elsewhere on the page`;
     // The boxes cover exactly what was removed: the passages, any neighbour and any unread text that went with them.
     const removed = new Set([...chars.keys()].filter((i) => !there.has(i)));
     const drawn = boxesFor(chars, withheld, removed, index, meeting(hidden.objects, found.regions));

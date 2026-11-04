@@ -516,3 +516,126 @@ export async function lookFixture(): Promise<Uint8Array> {
 export const LOOK_PUBLIC_QUOTES = ['850-555-0142', '12 Example Lane, Pensacola'];
 /** The look page's marks as the public was given them before 0022: names redacted too. */
 export const LOOK_OLD_PUBLIC_QUOTES = [...LOOK_PUBLIC_QUOTES, 'Alex Sample', 'Bo Pellingham', 'Quillon Brask', 'Jo Ostley'];
+
+/** A content-stream string: its parentheses and backslashes escaped. */
+const pdfString = (text: string): string => text.replace(/[()\\]/g, (m) => `\\${m}`);
+
+/**
+ * The challenger's r5 S1 repros, lines as Word writes them at 11 pt: a passage last on a wrapped line, a bullet drawn
+ * as a run of its own before a passage, and a link drawn as a run of its own with the sentence's full stop after it.
+ * Plain: as Word draws them, all blue, the passage inside the line's run; red: the passage a red run of its own.
+ * The bullet is \225 in Helvetica's WinAnsiEncoding (F1) and \267 in Times' StandardEncoding (F4).
+ */
+export const lineRepros = (font: 'F1' | 'F4', red: boolean): ReadonlyArray<{ name: string; content: string; quotes: string[] }> => {
+  const bullet = font === 'F1' ? '\\225' : '\\267';
+  const run = (before: string, passage: string, after: string): string =>
+    red ? `${before === '' ? '' : `[(${before})] TJ `}${RED} [(${passage})] TJ ${BLUE}${after === '' ? '' : ` [(${after})] TJ`}` : `[(${before}${passage}${after})] TJ`;
+  return [
+    { name: 'a phone last on a wrapped line', content: `BT /${font} 11 Tf 13 TL 40 100 Td ${BLUE} ${run('For rides call ', '850-555-0142', ' ')} T* [(before Friday noon.)] TJ ET`, quotes: ['850-555-0142'] },
+    { name: 'a bullet run before a phone', content: `BT /${font} 11 Tf 40 100 Td ${BLUE} (${bullet}) Tj 10 0 Td ${run('', '850-555-0142', ' for RSVP.')} ET`, quotes: ['850-555-0142'] },
+    { name: 'a link run, then its full stop', content: `BT /${font} 11 Tf 40 100 Td ${BLUE} [(Write to )] TJ ${red ? RED : ''} [(qbrask@example.org)] TJ ${BLUE} [(.)] TJ ET`, quotes: ['qbrask@example.org'] },
+  ];
+};
+
+/**
+ * The challenger's r5 S1 probe: a word of a passage that recurs on its own elsewhere on the page, 40 pt below it at
+ * 11 pt Times, where no mark is: a street, a drive and a first name. The passage is red, the rest blue.
+ */
+export const REPEATS: ReadonlyArray<{ name: string; content: string; quotes: string[]; shown: string }> = [
+  { name: "'Garden Street' under '400 Palafox Street'", content: `BT /F4 11 Tf 40 100 Td ${BLUE} [(Dinner at )] TJ ${RED} [(400 Palafox Street)] TJ ${BLUE} [( at six.)] TJ ET BT /F4 11 Tf 40 60 Td ${BLUE} [(The board meets on Garden Street.)] TJ ET`, quotes: ['400 Palafox Street'], shown: 'Garden Street' },
+  { name: "'food drive' under '18 Bayou Drive'", content: `BT /F4 11 Tf 40 100 Td ${BLUE} [(Game night at )] TJ ${RED} [(18 Bayou Drive)] TJ ${BLUE} [(, Pensacola.)] TJ ET BT /F4 11 Tf 40 60 Td ${BLUE} [(Bring cans for the food drive.)] TJ ET`, quotes: ['18 Bayou Drive'], shown: 'food drive' },
+  { name: "'Thanks, Quillon,' under 'Quillon Brask'", content: `BT /F4 11 Tf 40 100 Td ${BLUE} [(RSVP to )] TJ ${RED} [(Quillon Brask)] TJ ${BLUE} [( by Friday.)] TJ ET BT /F4 11 Tf 40 60 Td ${BLUE} [(Thanks, Quillon, for hosting.)] TJ ET`, quotes: ['Quillon Brask'], shown: 'Thanks, Quillon,' },
+];
+
+const NEWSLETTER = {
+  locsec: 'Thanks to everyone who came to the October social in Pensacola. Quillon Brask and Ada Marsh hosted, and Ivo Brumm ran the quiz. Thanks, Quillon, for opening your home again. The board meets at the library on Garden Street; members are always welcome. Ada Marsh is collecting books for the food drive.',
+  welcome: ['Ada Marsh, Gulf Breeze', 'Pell Orwin, Milton', 'Juna Treese, Pensacola'],
+  birthdays: 'Happy birthday to Ivo Brumm (Nov 3) and Ada Marsh (Nov 19). Quillon Brask turns 70 this month.',
+  calendar: [
+    'Nov 14: Game night at the Brask home, 18 Bayou Drive, Pensacola. RSVP to Quillon Brask, 850-555-0142 or qbrask@example.org.',
+    'Nov 21: Dinner at Bayou Grill, 400 Palafox Street, Pensacola. Ask Ivo Brumm for a seat.',
+    'Nov 28: Food drive at the Pensacola library on Garden Street. Bring two cans.',
+  ],
+  caption: 'Quillon Brask and Ada Marsh at the October social.',
+  contact: 'Editor: Ivo Brumm, ivo.brumm@example.org, 850-555-0199. Next issue: December.',
+};
+
+/** The challenger's r5 S1 quote sets for the newsletter page: contacts, addresses, a venue, names, an age. */
+export const NEWSLETTER_QUOTES: Readonly<Record<string, string[]>> = {
+  phone: ['850-555-0142'],
+  email: ['qbrask@example.org'],
+  'phone and email': ['850-555-0142', 'qbrask@example.org'],
+  editor: ['ivo.brumm@example.org', '850-555-0199'],
+  address: ['18 Bayou Drive'],
+  venue: ['the Brask home, 18 Bayou Drive'],
+  'venue, short': ['Brask home'],
+  street: ['400 Palafox Street'],
+  'name Quillon Brask': ['Quillon Brask'],
+  'name Ada Marsh': ['Ada Marsh'],
+  'name Ivo Brumm': ['Ivo Brumm'],
+  'a new member': ['Pell Orwin'],
+  age: ['turns 70'],
+};
+
+/**
+ * A letter-size newsletter page as Word lays one out (the challenger's r5 S1 plain mode, made-up people): a masthead,
+ * a column with a paragraph, a bulleted list (each bullet a run of its own) and birthdays, a calendar column, a
+ * caption and a footer, in Helvetica (F1) 10.5 pt on 13 pt leading, all blue, one TJ a line, kerned where Word kerns.
+ */
+export function newsletterPage(): Promise<Uint8Array> {
+  const KERN: Record<string, number> = { To: 80, Te: 70, Wa: 60, Wo: 50, Av: 40, ay: 15, Ye: 60, 'r.': 30, 'y,': 25, Va: 60 };
+  const kerned = (text: string): string => {
+    const parts: string[] = [];
+    let current = '';
+    for (let k = 0; k < text.length; k++) {
+      current += text[k];
+      const kern = KERN[text.slice(k, k + 2)];
+      if (kern !== undefined && k < text.length - 1) {
+        parts.push(`(${pdfString(current)}) ${kern}`);
+        current = '';
+      }
+    }
+    return `[${[...parts, `(${pdfString(current)})`].join(' ')}] TJ`;
+  };
+  const wrap = (text: string, chars = 42): string[] => {
+    const out: string[] = [];
+    let line = '';
+    for (const word of text.split(' ')) {
+      if (line !== '' && line.length + 1 + word.length > chars) {
+        out.push(line);
+        line = word;
+      } else line = line === '' ? word : `${line} ${word}`;
+    }
+    return [...out, line];
+  };
+  const paragraph = (x: number, y: number, text: string): [string, number] => {
+    const lines = wrap(text);
+    const body = lines.map((line, k) => `${k === 0 ? '' : 'T* '}${kerned(k < lines.length - 1 ? `${line} ` : line)}`).join('\n');
+    return [`BT /F1 10.5 Tf 13 TL ${x} ${y} Td ${BLUE}\n${body}\nET`, y - lines.length * 13];
+  };
+  const heading = (x: number, y: number, text: string): string => `BT /F1 12 Tf ${x} ${y} Td ${BLUE} (${text}) Tj ET`;
+  const out = [`BT /F1 24 Tf 50 740 Td ${BLUE} (The Gulf Coast Mind) Tj ET`, `BT /F1 10 Tf 50 722 Td ${BLUE} (Newsletter of Northwest Florida Mensa, November 2026) Tj ET`, '0 0 1 RG 1 w 50 714 m 562 714 l S'];
+  let y = 690;
+  out.push(heading(50, y, 'From the LocSec'));
+  let block: string;
+  [block, y] = paragraph(50, y - 16, NEWSLETTER.locsec);
+  out.push(block, heading(50, y - 10, 'Welcome, new members'));
+  y -= 26;
+  for (const member of NEWSLETTER.welcome) {
+    out.push(`BT /F1 10.5 Tf 58 ${y} Td ${BLUE} (\\225) Tj 10 0 Td ${kerned(member)} ET`);
+    y -= 13;
+  }
+  out.push(heading(50, y - 10, 'Birthdays'));
+  [block] = paragraph(50, y - 26, NEWSLETTER.birthdays);
+  out.push(block);
+  let y2 = 690;
+  out.push(heading(320, y2, 'Calendar'));
+  y2 -= 16;
+  for (const item of NEWSLETTER.calendar) {
+    [block, y2] = paragraph(320, y2, item);
+    out.push(block);
+    y2 -= 6;
+  }
+  out.push(`0 0 1 RG 0.5 w 320 ${y2 - 116} 240 110 re S`, `BT /F1 9 Tf 320 ${y2 - 130} Td ${BLUE} ${kerned(NEWSLETTER.caption)} ET`, `BT /F1 9 Tf 50 60 Td ${BLUE} ${kerned(NEWSLETTER.contact)} ET`);
+  return fitPdf(out.join('\n'), { width: 612, height: 792 });
+}

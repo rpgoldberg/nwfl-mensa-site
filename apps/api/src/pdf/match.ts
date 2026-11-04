@@ -43,8 +43,12 @@
 // (boxesFor), and a marked character still there is found by stillThere. Then the
 // page fails closed on a second drawing of withheld text the boxes do not tie to
 // the passage (fix round 4, challenger F1): a glyph drawn alone left within an em
-// of a box on its line band (loneGlyphs), or a withheld word drawn again where no
-// box reached (drawnAgain).
+// of a box on its line band (loneGlyphs; punctuation, a bullet or a line's next run
+// aside, unless it is a letter or digit of the passage or a glyph drawn alone is
+// beside it), or a withheld word drawn again where no box reached (drawnAgain): a
+// word of 3 letters or more beside a box on its line or within an em of a withheld
+// drawing of it, and anywhere on the page a passage of two words or more, 4 digits
+// or more, or an email or web address (fix round 5, challenger S1).
 //
 // textMatches reads a plain string the same ways: the output gate's matcher.
 // ============================================================================
@@ -523,6 +527,20 @@ function extentOf(chars: readonly PageChar[], indices: readonly number[]): Box |
   };
 }
 
+/**
+ * Each word's withheld glyphs: their text object, their text, and their reach, an em of their type (the largest)
+ * around their extent, within which a copy of them is looked for (copiesOf, drawnAgain).
+ */
+function heldDrawings(chars: readonly PageChar[], withheld: ReadonlySet<number>, words: readonly Word[]): Array<{ object: number; text: string; near: Box }> {
+  return words.flatMap(({ object, chars: run }) => {
+    const held = run.filter((i) => withheld.has(i));
+    const box = extentOf(chars, held);
+    if (box === null) return [];
+    const em = Math.max(...held.map((i) => (chars[i] as PageChar).fontSize));
+    return [{ object, text: textAt(chars, held), near: { left: box.left - em, right: box.right + em, bottom: box.bottom - em, top: box.top + em } }];
+  });
+}
+
 /** A possessive after a word: 's, or an apostrophe alone. */
 const POSSESSIVE = /^['’ʼ]s?$/iu;
 
@@ -536,13 +554,7 @@ const POSSESSIVE = /^['’ʼ]s?$/iu;
  * the em is the withheld word's type size. A word with a withheld glyph is never a copy.
  */
 export function copiesOf(chars: readonly PageChar[], withheld: ReadonlySet<number>, words: readonly Word[]): number[] {
-  const marked = words.flatMap(({ object, chars: run }) => {
-    const held = run.filter((i) => withheld.has(i));
-    const box = extentOf(chars, held);
-    if (box === null) return [];
-    const em = Math.max(...held.map((i) => (chars[i] as PageChar).fontSize));
-    return [{ object, text: textAt(chars, held), near: { left: box.left - em, right: box.right + em, bottom: box.bottom - em, top: box.top + em } }];
-  });
+  const marked = heldDrawings(chars, withheld, words);
   const out: number[] = [];
   for (const { object, chars: run } of words) {
     const box = extentOf(chars, run);
@@ -563,23 +575,50 @@ function oneGlyphObjects(chars: readonly PageChar[], objects: readonly TextObjec
     .filter(({ glyphs }) => glyphs.length <= 1);
 }
 
+/** Whether a glyph's ink is within an em of a region (the larger of the two type sizes) and on its line band. */
+const beside = (ink: Box, fontSize: number, region: Region): boolean =>
+  Math.max(region.left - ink.right, ink.left - region.right, 0) <= Math.max(fontSize, region.fontSize) && Math.min(ink.top, region.top) - Math.max(ink.bottom, region.bottom) > SLIP;
+
+/** A letter or a digit. */
+const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
+
 /**
  * The glyphs of text objects that draw one glyph each, still on the page (`left`), within an em of a region (the
  * larger of the two type sizes) with their ink on its line band (REDACT-LOOK fix round 4, challenger F1): a copy of a
  * passage drawn a glyph at a time and letter-spaced unlike it, so that the glyphs that abut the ones a box reached are
- * too far apart to be taken for its word, and are left beside the box. The page is refused.
+ * too far apart to be taken for its word, and are left beside the box. The page is refused. Ordinary text drawn a
+ * glyph to an object is not counted (fix round 5, challenger S1): punctuation or a symbol (a list's bullet, the full
+ * stop after a link), or the next run of a line, the glyph before it in the reading on its line being one of an object
+ * of several. It still counts when it is a letter or digit of a `withheld` glyph, folded, or when a glyph of another
+ * one-glyph object is next to it on its line (a copy drawn a glyph at a time, whatever its font says its glyphs are).
  */
-export function loneGlyphs(chars: readonly PageChar[], objects: readonly TextObject[], regions: readonly Region[], left: ReadonlySet<number>): number[] {
+export function loneGlyphs(chars: readonly PageChar[], objects: readonly TextObject[], regions: readonly Region[], left: ReadonlySet<number>, withheld: ReadonlySet<number>): number[] {
+  const single = new Set(oneGlyphObjects(chars, objects).flatMap((object) => object.chars));
+  const held = new Set([...withheld].flatMap((i) => [...probeFolded((chars[i] as PageChar).text)]).filter((ch) => LETTER_OR_DIGIT.test(ch)));
+  // The glyph next to glyph i in the reading, before it (step -1) or after it (+1), when that one is on i's line.
+  const nextTo = (i: number, step: number, box: Box): number | undefined => {
+    for (let j = i + step; j >= 0 && j < chars.length; j += step) {
+      const d = chars[j] as PageChar;
+      if (!d.generated && !isBlank(d) && d.box !== null) return inLine(d.box, box) ? j : undefined;
+    }
+    return undefined;
+  };
+  const ordinary = (i: number): boolean => {
+    const c = chars[i] as PageChar;
+    if (c.box === null || [...probeFolded(c.text)].some((ch) => held.has(ch))) return false;
+    const before = nextTo(i, -1, c.box);
+    const after = nextTo(i, 1, c.box);
+    if ([before, after].some((j) => j !== undefined && single.has(j))) return false;
+    return !LETTER_OR_DIGIT.test(c.text) || before !== undefined;
+  };
   const out: number[] = [];
   for (const { glyphs } of oneGlyphObjects(chars, objects)) {
     const i = glyphs[0];
     if (i === undefined || !left.has(i)) continue;
     const c = chars[i] as PageChar;
     const ink = c.ink ?? c.box;
-    if (ink === null) continue;
-    const beside = (region: Region): boolean =>
-      Math.max(region.left - ink.right, ink.left - region.right, 0) <= Math.max(c.fontSize, region.fontSize) && Math.min(ink.top, region.top) - Math.max(ink.bottom, region.bottom) > SLIP;
-    if (regions.some(beside)) out.push(i);
+    if (ink === null || ordinary(i)) continue;
+    if (regions.some((region) => beside(ink, c.fontSize, region))) out.push(i);
   }
   return out.sort((a, b) => a - b);
 }
@@ -591,29 +630,35 @@ const ADDRESS = /@|:\/\/|(?:^|[^\p{L}\p{N}])www\./iu;
 
 /**
  * A quote's withheld words: each of its words of 3 letters or 4 digits or more, but an email or web address whole,
- * as one word (`whole`), since its parts (a name, a domain) are often shown elsewhere and are not the address.
+ * as one word (`whole`), since its parts (a name, a domain) are often shown elsewhere and are not the address; and
+ * each quote of two words or more with no address in it, whole (`runs`).
  */
-function withheldWordsOf(quotes: readonly string[]): { whole: string[]; parts: string[] } {
+function withheldWordsOf(quotes: readonly string[]): { whole: string[]; parts: string[]; runs: string[] } {
   const tokens = quotes.flatMap((quote) => quote.split(/\s+/u)).map((token) => token.replace(EDGE_PUNCTUATION, ''));
   return {
     whole: [...new Set(tokens.filter((token) => ADDRESS.test(token)))],
     parts: [...new Set(tokens.filter((token) => !ADDRESS.test(token)).flatMap((token) => token.match(WORD) ?? []))].filter(counts),
+    runs: quotes.filter((quote) => !ADDRESS.test(quote) && (quote.match(WORD) ?? []).length >= 2),
   };
 }
 
 /**
  * The characters still on the page (`left`) of each withheld word drawn again (REDACT-LOOK fix round 4, challenger F1).
  * The withheld words are the words of the quotes found on the page, of 3 letters or more or 4 digits or more (an email
- * or web address whole, and no word counted inside one drawn on the page); each is
- * looked for as the quotes are (folded, look-alikes, as a whole word, so a possessive after it counts) in the page's
- * reading, with the characters PDFium generated between two glyphs of text objects that draw one glyph each taken
- * out, so that a copy drawn a glyph at a time reads as its words. A word found where any glyph of it is left is a
- * second drawing of withheld text that no box ties to the passage, near it or elsewhere on the page: the page is
- * refused.
+ * or web address whole, and no word counted inside one drawn on the page), and each of those quotes of two words or
+ * more, whole; each is looked for as the quotes are (folded, look-alikes, as a whole word, so a possessive after it
+ * counts) in the page's reading, with the characters PDFium generated between two glyphs of text objects that draw one
+ * glyph each taken out, so that a copy drawn a glyph at a time reads as its words. A passage of two words or more, a
+ * run of digits or an address found where any glyph of it is left is a second drawing of withheld text that no box ties
+ * to the passage, wherever it is on the page. A word of letters is one only where a glyph of it that is left is beside
+ * one of the `regions` on its line band (within an em, as loneGlyphs) or within an em of a `withheld` drawing of that
+ * word (copiesOf's reach): a shadow's word the boxes stopped short of. The same word elsewhere on the page ("Thanks,
+ * Quillon," where "Quillon Brask" is withheld, a "Street" or a "Drive" of another address) is ordinary text (fix round
+ * 5, challenger S1). Any found refuses the page.
  */
-export function drawnAgain(chars: readonly PageChar[], objects: readonly TextObject[], quotes: readonly string[], left: ReadonlySet<number>): number[] {
-  const { whole, parts } = withheldWordsOf(quotes.filter((quote) => matchedChars(chars, [quote]).size > 0));
-  if (whole.length + parts.length === 0) return [];
+export function drawnAgain(chars: readonly PageChar[], objects: readonly TextObject[], quotes: readonly string[], left: ReadonlySet<number>, withheld: ReadonlySet<number>, regions: readonly Region[]): number[] {
+  const { whole, parts, runs } = withheldWordsOf(quotes.filter((quote) => matchedChars(chars, [quote]).size > 0));
+  if (whole.length + parts.length + runs.length === 0) return [];
   const single = new Set(oneGlyphObjects(chars, objects).flatMap((object) => object.chars));
   const drawn = (c: PageChar): boolean => !c.generated && !isBreak(c);
   // For each character, the last drawn one before it and the first after it (-1 for none).
@@ -640,7 +685,18 @@ export function drawnAgain(chars: readonly PageChar[], objects: readonly TextObj
     const after = reading.text.slice(end);
     return ADDRESS.test(`${before.slice(before.search(/\S*$/u))}${reading.text.slice(start, end)}${after.slice(0, after.search(/\s|$/u))}`);
   };
-  const spans = [...quoteSpans(reading.text, whole), ...quoteSpans(reading.text, parts).filter((span) => !inAddress(span))];
+  const drawings = heldDrawings(chars, withheld, wordsOf(chars, objects));
+  // A glyph of a word drawn again that ties it to the passage: beside a box on its line, or near a withheld drawing of the word.
+  const near = (i: number, word: string): boolean => {
+    const c = chars[i] as PageChar;
+    const box = c.box ?? c.ink;
+    return box !== null && (regions.some((region) => beside(c.ink ?? box, c.fontSize, region)) || drawings.some((d) => overlap(box, d.near) && quoteSpans(d.text, [word]).length > 0));
+  };
+  const glyphsOf = ([start, end]: [number, number]): number[] => reading.source.slice(start, end).flat();
+  const spans = [
+    ...quoteSpans(reading.text, [...whole, ...runs]),
+    ...parts.flatMap((word) => quoteSpans(reading.text, [word]).filter((span) => !inAddress(span) && (/^\p{N}/u.test(word) || glyphsOf(span).some((i) => left.has(i) && near(i, word))))),
+  ];
   const out = new Set<number>();
   for (const [start, end] of spans) {
     for (let u = start; u < end; u++) for (const i of reading.source[u] as number[]) if (left.has(i)) out.add(i);
@@ -683,17 +739,33 @@ export function unread(chars: readonly PageChar[], objects: readonly TextObject[
 }
 
 /**
- * Of the parts `unread` finds once the text is removed, those that are more than the place a removed glyph of another
- * line left (challenger r5, the para family): PDFium keeps a word object's bounds over a glyph removed from its end,
- * which the reading after no longer holds. A part is only that place when it lies within the loose box of a glyph of
- * `before` that is gone (not in `there`), neither withheld nor on a passage's line, and is clear of every passage's
- * line band. Any other part is kept, and refuses.
+ * Of the parts `unread` finds once the text is removed, those that are more than the place the removal vacated:
+ * PDFium keeps a text object's bounds over the glyphs removed from its end, which the reading after no longer holds.
+ * A part is only that place when it lies within the loose box of a glyph of `before` that is gone (not in `there`),
+ * neither withheld nor on a passage's line, and is clear of every passage's line band (challenger r5, the para
+ * family); or when it lies within the extent of a run of characters gone from one line, one after the other in the
+ * reading (generated ones aside), a withheld one among them: the passage and the spaces beside it at the end of its
+ * line's own object (fix round 5, challenger S1). Any other part is kept, and refuses.
  */
 export function notVacated(before: readonly PageChar[], withheld: ReadonlySet<number>, there: ReadonlySet<number>, parts: readonly Box[]): Box[] {
-  const bands = passageBands(before, withheld, linesOf(before));
+  const lineOf = linesOf(before);
+  const bands = passageBands(before, withheld, lineOf);
   const places = before.flatMap((c, i) => (!c.generated && !there.has(i) && offLine(c, withheld.has(i), bands) ? [c.box as Box] : []));
+  const vacated: Box[] = [];
+  let run: number[] = [];
+  const close = (): void => {
+    if (run.some((i) => withheld.has(i))) vacated.push(extentOf(before, run) as Box);
+    run = [];
+  };
+  before.forEach((c, i) => {
+    if (c.generated) return;
+    const gone = !there.has(i) && c.box !== null;
+    if (!gone || (run.length > 0 && lineOf[run[0] as number] !== lineOf[i])) close();
+    if (gone) run.push(i);
+  });
+  close();
   const within = (part: Box, place: Box): boolean => part.left >= place.left - SLIP && part.right <= place.right + SLIP && part.bottom >= place.bottom - SLIP && part.top <= place.top + SLIP;
-  return parts.filter((part) => bands.some((band) => overlap(part, band)) || !places.some((place) => within(part, place)));
+  return parts.filter((part) => !vacated.some((place) => within(part, place)) && (bands.some((band) => overlap(part, band)) || !places.some((place) => within(part, place))));
 }
 
 /**

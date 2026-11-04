@@ -12,7 +12,7 @@ import { matchedChars, regionsFor, stillThere, unread } from '../../src/pdf/matc
 import { Document, LABEL_EMS, Page, labelSize, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { extractAll, leaked, rawText } from './extract.js';
-import { BLUE, FIT_FIXTURES, type FitFixture, NESTED, RED, askLine, fitPdf, pictureNearFixture, possessiveShadow, scaledTypeFixture, shadowed, tightParagraph } from './fit-fixtures.js';
+import { BLUE, FIT_FIXTURES, type FitFixture, NESTED, NEWSLETTER_QUOTES, RED, REPEATS, askLine, fitPdf, lineRepros, newsletterPage, pictureNearFixture, possessiveShadow, scaledTypeFixture, shadowed, tightParagraph } from './fit-fixtures.js';
 import { twoMarksFixture } from './fixtures.js';
 import { black, blue, contrast, inAny, inside, lost, red, render, where } from './pixels.js';
 
@@ -236,11 +236,25 @@ describe('withheld text drawn again elsewhere on the page (challenger r4, F1)', 
     expect(where(await render(pdf), red)).toEqual([]);
   });
 
-  it('refuses the page when a withheld word is drawn again where no mark is, in another article or as a possessive', async () => {
+  it('gives a copy that shows a word of the name recurring on its own in another article, as a possessive too (challenger r5, S1)', async () => {
+    // Below the name, beyond an em of it: the name is withheld, not its words.
     for (const article of ['Brask won the raffle.', "The raffle prize is Brask's.", 'Ask QUILLON about the raffle.']) {
-      const result = await redactPdf(await issue(article), { quotes: ['Quillon Brask'], redactsAny: true });
-      expect(result, article).toEqual({ kind: 'refused', reason: 'page 1: withheld text is drawn again elsewhere on the page' });
+      const { pdf } = copyOf(await redactPdf(await issue(article), { quotes: ['Quillon Brask'], redactsAny: true }));
+      expect(where(await render(pdf), red), article).toEqual([]);
+      expect((await pageChars(pdf)).map((c) => c.text).join(''), article).toContain(article);
     }
+  });
+
+  it('refuses the page when a word of the name is drawn again a glyph at a time just below it, where no box reaches', async () => {
+    // "Brask" a glyph per text object, 14 pt under the name's "Brask" (a copy the boxes do not tie to it).
+    let x = 20 + 27.23 + 47.46;
+    const glyphs = [...'Brask'].map((ch) => {
+      const g = `BT /F1 14 Tf ${x.toFixed(3)} 66 Td ${RED} (${ch}) Tj ET`;
+      x += { B: 9.338, r: 4.662, a: 7.784, s: 7, k: 7 }[ch] as number;
+      return g;
+    });
+    const page = fitPdf([askLine('(Quillon Brask) Tj', { y: 80 }), ...glyphs].join('\n'), { width: 420 });
+    expect(await redactPdf(await page, { quotes: ['Quillon Brask'], redactsAny: true })).toEqual({ kind: 'refused', reason: 'page 1: withheld text is drawn again elsewhere on the page' });
   });
 
   it('gives a copy when only a short word or a number under 4 digits of a passage recurs', async () => {
@@ -248,6 +262,40 @@ describe('withheld text drawn again elsewhere on the page (challenger r4, F1)', 
     copyOf(await redactPdf(await page, { quotes: ['Bo Pell', '850-555-0142'], redactsAny: true }));
     const again = fitPdf([askLine('(850-555-0142) Tj', { y: 80 }), `BT /F1 12 Tf 20 40 Td ${BLUE} (Room 0142.) Tj ET`].join('\n'), { width: 420 });
     expect(await redactPdf(await again, { quotes: ['850-555-0142'], redactsAny: true })).toEqual({ kind: 'refused', reason: 'page 1: withheld text is drawn again elsewhere on the page' });
+  });
+});
+
+describe('a newsletter page as Word draws one (challenger r5, S1)', () => {
+  /** The copy, checked: nothing of the quotes readable, no red pixel left, and no blue one lost outside a box. */
+  const checked = async (original: Uint8Array, quotes: string[]): Promise<{ pdf: Uint8Array; boxes: Region[] }> => {
+    const copy = copyOf(await redactPdf(original, { quotes, redactsAny: true }));
+    const after = await render(copy.pdf);
+    expect(where(after, red)).toEqual([]);
+    expect(lost(await render(original), after, blue).filter((p) => !inAny(p, copy.boxes))).toEqual([]);
+    const seen = { extracted: await extractAll(copy.pdf), raw: rawText(copy.pdf), pdfium: (await pageChars(copy.pdf)).map((c) => c.text).join('') };
+    expect(quotes.filter((quote) => leaked(quote, seen.extracted, seen.raw) || leaked(quote, seen.pdfium, ''))).toEqual([]);
+    return copy;
+  };
+
+  for (const font of ['F1', 'F4'] as const) {
+    for (const red of [false, true]) {
+      for (const { name, content, quotes } of lineRepros(font, red)) {
+        it(`gives a copy of ${name} (${font}, ${red ? 'the passage a red run' : 'all blue, as Word draws it'})`, async () => {
+          expect((await checked(await fitPdf(content), quotes)).boxes).toHaveLength(1);
+        });
+      }
+    }
+  }
+
+  for (const { name, content, quotes, shown } of REPEATS) {
+    it(`gives a copy that shows ${name}, a word of the passage recurring on its own`, async () => {
+      const { pdf } = await checked(await fitPdf(content), quotes);
+      expect((await pageChars(pdf)).map((c) => c.text).join('')).toContain(shown);
+    });
+  }
+
+  it.each(Object.entries(NEWSLETTER_QUOTES))('gives a copy of a plain newsletter page with %s withheld', async (_, quotes) => {
+    await checked(await newsletterPage(), quotes);
   });
 });
 
