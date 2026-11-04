@@ -543,3 +543,24 @@ export const deepText = (depth: number, split: boolean): Uint8Array => {
   const streams: RawObject[] = parts.map((part, k) => [k === 0 ? 4 : 6, rawStream('', part)]);
   return rawPdf([[1, CATALOG], PAGES, [3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${split ? '[4 0 R 6 0 R]' : '4 0 R'} /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 20 0 R >> >> >>`], ...streams, FONT, font, [10, rawStream('', cmap)], ...forms]);
 };
+
+/**
+ * Fix round 6b (REDACT-LOOK L10/N8): `quote` drawn in Helvetica on page 3 0 R, its /ToUnicode mapping every letter
+ * to "x", so the text layer reads no quote and only the glyphs drawn spell it (r4 N3; the challenger's
+ * ship-order-0022 copy).
+ */
+export function lyingToUnicode(quote: string): Uint8Array {
+  const letters = [...new Set(quote.replace(/ /g, ''))].sort();
+  const code = (c: string): number => (c === ' ' ? 0x20 : 0x41 + letters.indexOf(c));
+  const hex = [...quote].map((c) => code(c).toString(16).padStart(2, '0')).join('');
+  const cmap = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def 1 begincodespacerange <00> <FF> endcodespacerange ${letters.length + 1} beginbfchar <20> <0020> ${letters.map((c) => `<${code(c).toString(16)}> <0078>`).join(' ')} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end`;
+  return rawPdf([
+    [1, CATALOG],
+    PAGES,
+    [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> >>'],
+    [4, rawStream('', `BT /F2 12 Tf 72 720 Td (Picnic flyer) Tj ET BT /F1 14 Tf 72 690 Td <${hex}> Tj ET`)],
+    [5, `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [65 ${letters.map((c) => `/${c}`).join(' ')}] >> /ToUnicode 6 0 R >>`],
+    [6, rawStream('', cmap)],
+    [7, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'],
+  ]);
+}

@@ -23,9 +23,11 @@
 // Forms and soft masks are in a page's own list; tiling patterns and Type 3
 // glyphs carry lists of their own, read the same way. It also matches the
 // withheld quotes against the glyphs drawn (r4 N3: a /ToUnicode can lie to the
-// text layer, not to the glyphs). Under "show" it does not run: the pictures
-// are the originals then, and decoding every one would cost the child memory
-// for nothing the policy forbids.
+// text layer, not to the glyphs). Under "show" it runs only when there are
+// quotes, and for them alone (fix round 6b, REDACT-LOOK L10/N8: the public
+// copy is "show", and the glyph match was skipped there): the pictures are
+// the originals then, so none is judged, while the pages, the end of each
+// list, the fonts and the Type 3 glyphs are, as the quotes need them read.
 //
 // Fix round 5 (S3): pdf.js carries on past an error (a form it cannot find,
 // forms nested until its stack gives out), as if the page ended there, and
@@ -39,7 +41,7 @@
 // ============================================================================
 import type { PDFPageProxy } from 'pdfjs-dist/types/src/display/api.js';
 import { type PdfJs, loadPdfJs, watchedReading } from './gate.js';
-import { BLUR_MAX } from './images.js';
+import { BLUR_MAX, type ImageAction } from './images.js';
 import { textMatches } from './match.js';
 
 export interface DrawnBreak {
@@ -72,10 +74,11 @@ export class PageWalk {
   readonly chars: string[] = [];
   private readonly fonts = new Set<string>();
 
+  /** `side`: the largest picture the policy draws, or null when no picture is judged ("show", fix round 6b). */
   constructor(
     private readonly pdfjs: PdfJs,
     private readonly page: Pick<PDFPageProxy, 'objs' | 'commonObjs'>,
-    private readonly side: number,
+    private readonly side: number | null,
     private readonly settleMs = SETTLE_MS,
   ) {}
 
@@ -99,31 +102,37 @@ export class PageWalk {
     return ir[0] === 'Mesh' ? `pdf.js draws a shading of type ${String(ir[1])}` : null;
   }
 
-  private sized(what: string, width: unknown, height: unknown): string | null {
-    return typeof width === 'number' && typeof height === 'number' && width <= this.side && height <= this.side ? null : `pdf.js draws ${what} of ${String(width)} x ${String(height)}`;
+  private sized(side: number, what: string, width: unknown, height: unknown): string | null {
+    return typeof width === 'number' && typeof height === 'number' && width <= side && height <= side ? null : `pdf.js draws ${what} of ${String(width)} x ${String(height)}`;
   }
 
   /** Why the list draws a picture the policy forbids, or null; collects the glyphs it draws. */
   async read(list: OperatorList): Promise<string | null> {
     const { OPS } = this.pdfjs;
-    const inline = new Set<number>([OPS.paintInlineImageXObject, OPS.paintInlineImageXObjectGroup, OPS.paintImageXObjectRepeat, OPS.paintImageMaskXObjectGroup, OPS.paintImageMaskXObjectRepeat]);
     for (let i = 0; i < list.fnArray.length; i++) {
       const op = list.fnArray[i] as number;
       const args = (list.argsArray[i] ?? []) as unknown[];
       let found: string | null = null;
-      if (inline.has(op)) found = 'pdf.js draws an inline picture';
-      else if (op === OPS.paintImageXObject) found = this.sized('a picture', args[1], args[2]);
-      else if (op === OPS.paintImageMaskXObject) {
-        const mask = args[0] as { width?: unknown; height?: unknown } | undefined;
-        found = this.sized('a stencil', mask?.width, mask?.height);
-      } else if (op === OPS.shadingFill) found = await this.shading(args[0]);
-      else if (op === OPS.setFillColorN || op === OPS.setStrokeColorN) {
-        if (args[0] === 'TilingPattern') found = await this.read(args[2] as OperatorList);
-        else if (args[0] === 'Shading') found = await this.shading(args[1]);
-      } else if (op === OPS.setFont) found = await this.font(args[0]);
+      if ((op === OPS.setFillColorN || op === OPS.setStrokeColorN) && args[0] === 'TilingPattern') found = await this.read(args[2] as OperatorList);
+      else if (op === OPS.setFont) found = await this.font(args[0]);
       else if (op === OPS.showText) this.glyphs(args[0]);
+      else if (this.side !== null) found = await this.picture(op, args, this.side);
       if (found !== null) return found;
     }
+    return null;
+  }
+
+  /** Why one operator draws an inline picture, a picture or stencil larger than `side`, or a lattice or mesh shading, or null. */
+  private async picture(op: number, args: unknown[], side: number): Promise<string | null> {
+    const { OPS } = this.pdfjs;
+    if ([OPS.paintInlineImageXObject, OPS.paintInlineImageXObjectGroup, OPS.paintImageXObjectRepeat, OPS.paintImageMaskXObjectGroup, OPS.paintImageMaskXObjectRepeat].includes(op)) return 'pdf.js draws an inline picture';
+    if (op === OPS.paintImageXObject) return this.sized(side, 'a picture', args[1], args[2]);
+    if (op === OPS.paintImageMaskXObject) {
+      const mask = args[0] as { width?: unknown; height?: unknown } | undefined;
+      return this.sized(side, 'a stencil', mask?.width, mask?.height);
+    }
+    if (op === OPS.shadingFill) return this.shading(args[0]);
+    if ((op === OPS.setFillColorN || op === OPS.setStrokeColorN) && args[0] === 'Shading') return this.shading(args[1]);
     return null;
   }
 
@@ -169,10 +178,11 @@ export class PageWalk {
 const named = (ref: PageRef | null | undefined): string => (ref === null || ref === undefined ? 'no object' : ref.gen === 0 ? `object ${ref.num}` : `object ${ref.num} generation ${ref.gen}`);
 
 /**
- * Why pdf.js would draw a picture `image` forbids in `pdf`, or would draw withheld text, or reads other pages than
- * `pages` (pdf-lib's, in order), or stops before the end of a page, or null. Throws when pdf.js cannot open the copy.
+ * Why pdf.js would draw a picture `image` forbids in `pdf` (none under "show"), or would draw withheld text, or reads
+ * other pages than `pages` (pdf-lib's, in order), or stops before the end of a page, or null. Throws when pdf.js
+ * cannot open the copy.
  */
-export async function drawnBreak(pdf: Uint8Array, image: 'blur' | 'hide', quotes: readonly string[], pages: readonly PageRef[]): Promise<DrawnBreak | null> {
+export async function drawnBreak(pdf: Uint8Array, image: ImageAction, quotes: readonly string[], pages: readonly PageRef[]): Promise<DrawnBreak | null> {
   const pdfjs = await loadPdfJs();
   // A worker of its own, so the walk hears an operator list that ends in an error (S3).
   return watchedReading(pdf, async (doc, stopped): Promise<DrawnBreak | null> => {
@@ -181,7 +191,7 @@ export async function drawnBreak(pdf: Uint8Array, image: 'blur' | 'hide', quotes
       const page = await doc.getPage(n);
       const tree = pages[n - 1] as PageRef;
       if (page.ref?.num !== tree.num || page.ref.gen !== tree.gen) return { code: 'rules', reason: `page ${n}: pdf.js reads ${named(page.ref)} where pdf-lib reads ${named(tree)}` };
-      const walk = new PageWalk(pdfjs, page, image === 'hide' ? 1 : BLUR_MAX);
+      const walk = new PageWalk(pdfjs, page, image === 'hide' ? 1 : image === 'blur' ? BLUR_MAX : null);
       const list = await page.getOperatorList();
       // pdf.js posts an operator list's error before it hands over the list it had, so it is heard by now.
       const found = stopped() ? 'pdf.js stopped before the end of it' : await walk.read(list);

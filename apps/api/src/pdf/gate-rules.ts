@@ -587,7 +587,8 @@ async function nestedPast(copy: Uint8Array): Promise<string | null> {
 
 /**
  * The gate's verdict on one copy: nesting past the cap first, before pdf.js reads it, then withheld text (gate.ts),
- * then the rules above, then under "blur" and "hide" what pdf.js draws (drawn.ts), then the original's pictures.
+ * then the rules above, then what pdf.js draws (drawn.ts; under "show" only its glyphs, and only with quotes), then
+ * under "blur" and "hide" the original's pictures.
  * Never throws.
  */
 export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
@@ -596,7 +597,8 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
     if ((await checkCopy(job.copy, job.quotes)) !== null) return { pass: false, code: 'withheld' };
     const { broken, pages } = await readRules(job.copy, job.image);
     if (broken !== null) return { pass: false, code: 'rules' };
-    const drawn = job.image === 'show' ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
+    // Under "show" only for the quotes (fix round 6b, REDACT-LOOK L10/N8), with no picture judged.
+    const drawn = job.image === 'show' && job.quotes.length === 0 ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
     if (drawn !== null) return { pass: false, code: drawn.code };
     if (job.image !== 'show' && (await keepsPicture(job.copy, await pictureWindows(job.original)))) return { pass: false, code: 'rules' };
     if (job.image !== 'show' && (await keepsSamples(job.copy, await changedByBlur(job.original)))) return { pass: false, code: 'rules' };

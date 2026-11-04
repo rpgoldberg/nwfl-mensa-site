@@ -2,7 +2,7 @@
 // "hide", the gate refuses any picture a viewer would draw that is not the policy's shape, wherever it is
 // drawn from. Small PDFs written byte by byte; nothing in them runs. Every name is made up.
 import { describe, expect, it } from 'vitest';
-import { M1_LINEARIZED_CASES, M1_QUOTES, type RawObject, linearizedCopy, nestedForms, plainCopy, rawPdf, rawStream } from '../../test/pdf/shadows.js';
+import { M1_LINEARIZED_CASES, M1_QUOTES, type RawObject, linearizedCopy, lyingToUnicode, nestedForms, plainCopy, rawPdf, rawStream } from '../../test/pdf/shadows.js';
 import { PageWalk, drawnBreak } from './drawn.js';
 import { loadPdfJs } from './gate.js';
 
@@ -73,23 +73,32 @@ describe('drawnBreak: the pictures pdf.js draws, under "blur" and "hide"', () =>
     expect(await drawnBreak(plainCopy(), 'hide', [], [...PAGE, { num: 13, gen: 0 }])).toEqual({ code: 'rules', reason: 'pdf.js reads 1 pages where pdf-lib reads 2' });
   });
 
-  it('finds a withheld quote in the glyphs pdf.js draws, where a /ToUnicode lies to the text layer (r4 N3)', async () => {
+  it('finds a withheld quote in the glyphs pdf.js draws, where a /ToUnicode lies to the text layer, under every policy (r4 N3; fix round 6b: "show" too)', async () => {
     const quote = 'Kestrel Ambry';
-    const letters = [...new Set(quote.replace(/ /g, ''))].sort();
-    const code = (c: string): number => (c === ' ' ? 0x20 : 0x41 + letters.indexOf(c));
-    const hex = [...quote].map((c) => code(c).toString(16).padStart(2, '0')).join('');
-    const cmap = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def 1 begincodespacerange <00> <FF> endcodespacerange ${letters.length + 1} beginbfchar <20> <0020> ${letters.map((c) => `<${code(c).toString(16)}> <0078>`).join(' ')} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end`;
-    const lying = rawPdf([
-      CATALOG,
-      PAGES,
-      [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> >>'],
-      [4, rawStream('', `BT /F2 12 Tf 72 720 Td (Picnic flyer) Tj ET BT /F1 14 Tf 72 690 Td <${hex}> Tj ET`)],
-      [5, `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [65 ${letters.map((c) => `/${c}`).join(' ')}] >> /ToUnicode 6 0 R >>`],
-      [6, rawStream('', cmap)],
-      [7, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'],
-    ]);
-    expect(await drawnBreak(lying, 'blur', [quote], PAGE)).toEqual({ code: 'withheld', reason: 'page 1: withheld text is in the glyphs pdf.js draws' });
-    expect(await drawnBreak(lying, 'blur', [], PAGE)).toBeNull();
+    const lying = lyingToUnicode(quote);
+    for (const image of ['show', 'blur', 'hide'] as const) {
+      expect(await drawnBreak(lying, image, [quote], PAGE), image).toEqual({ code: 'withheld', reason: 'page 1: withheld text is in the glyphs pdf.js draws' });
+      expect(await drawnBreak(lying, image, [], PAGE), image).toBeNull();
+    }
+  });
+
+  it('under "show" reads for the quotes alone (fix round 6b): no picture is judged (a picture, an inline picture, a stencil, a mesh shading pass), and pdf.js still reads each page to its end', async () => {
+    const quotes = ['Kestrel Ambry'];
+    const drawn: Array<[string, Uint8Array]> = [
+      ['a picture', onPage(DRAW, '/XObject << /Im1 6 0 R >>', [picture(25)])],
+      ['an inline picture', onPage(inline(4))],
+      ['a large inline picture', onPage(inline(128))],
+      ['a stencil', onPage(`q 100 0 0 100 0 0 cm BI /W 64 /H 64 /IM true /F /AHx ID ${varied(64 * 8)}> EI Q`)],
+      ['a mesh shading', onPage('q /Sh1 sh Q', '/Shading << /Sh1 6 0 R >>', [[6, rawStream(MESH, TRIANGLE)]])],
+      ['a mesh through a shading pattern', onPage('/Pattern cs /P1 scn 72 400 200 200 re f', '/Pattern << /P1 7 0 R >>', [[6, rawStream(MESH, TRIANGLE)], [7, '<< /Type /Pattern /PatternType 2 /Shading 6 0 R >>']])],
+    ];
+    for (const [name, pdf] of drawn) {
+      expect(await drawnBreak(pdf, 'show', quotes, PAGE), name).toBeNull();
+      expect(await drawnBreak(pdf, 'hide', quotes, PAGE), `${name}, hide`).toMatchObject({ code: 'rules' });
+    }
+    const type3 = onPage('BT /T3 12 Tf 72 400 Td (A) Tj ET', '/Font << /F1 5 0 R /T3 6 0 R >>', [[6, '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /g 7 0 R >> /Encoding << /Differences [65 /g] >> /FirstChar 65 /LastChar 65 /Widths [1000] /Resources << >> >>'], [7, rawStream('', '')]]);
+    expect(await drawnBreak(type3, 'show', quotes, PAGE)).toEqual({ code: 'rules', reason: 'page 1: pdf.js could not read a Type 3 glyph' });
+    expect(await drawnBreak(plainCopy(), 'show', quotes, [...PAGE, { num: 13, gen: 0 }])).toEqual({ code: 'rules', reason: 'pdf.js reads 1 pages where pdf-lib reads 2' });
   });
 });
 

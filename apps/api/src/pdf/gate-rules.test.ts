@@ -6,10 +6,11 @@ import { deflateSync } from 'node:zlib';
 import { type PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFString, StandardFonts } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { leakFixture, linesPdf, pictureUnderTextFixture, twoMarksFixture } from '../../test/pdf/fixtures.js';
-import { M1_CASES, M1_DRAWN_CASES, M1_LINEARIZED_CASES, M1_ORIGINAL, M1_QUOTES, Q1, type RawObject, HONEST_ORIGINALS, HONEST_QUOTES, S1_ROWS, S1_STITCHED_ROWS, formChain, linearizedCopy, meshShading, nestedForms, onSplitPage, plainCopy, rawPdf, rawStream, roundFiveWriting } from '../../test/pdf/shadows.js';
+import { M1_CASES, M1_DRAWN_CASES, M1_LINEARIZED_CASES, M1_ORIGINAL, M1_QUOTES, Q1, type RawObject, HONEST_ORIGINALS, HONEST_QUOTES, S1_ROWS, S1_STITCHED_ROWS, formChain, linearizedCopy, lyingToUnicode, meshShading, nestedForms, onSplitPage, plainCopy, rawPdf, rawStream, roundFiveWriting } from '../../test/pdf/shadows.js';
 import { drawnBreak } from './drawn.js';
 import { sha256Hex } from './engine-protocol.js';
 import { copyRulesBreak, gateReply, gateVerdict, rewrite } from './gate-rules.js';
+import { checkCopy } from './gate.js';
 import { BLUR_MAX, FILL_GRAY } from './images.js';
 import { structureBreak } from './pdf-structure.js';
 import { redactPdf } from './redact.js';
@@ -768,4 +769,29 @@ describe('fix round 6: refused by class under "blur" and "hide" (M-6, S1-6), and
     expect(Date.now() - t0).toBeLessThan(30_000);
     expect(await copyRulesBreak(fanned(100), 'show')).toBeNull();
   }, 60_000);
+});
+
+describe('fix round 6b (REDACT-LOOK L10/N8): the glyphs pdf.js draws are matched under "show" too, for the quotes alone', () => {
+  const quote = 'Kestrel Ambry';
+
+  it('refuses, under every policy, a copy whose glyphs draw a withheld quote its /ToUnicode hides from the text layer (the challenger\'s ship-order-0022 test)', async () => {
+    const copy = lyingToUnicode(quote);
+    expect(await checkCopy(copy, [quote])).toBeNull();
+    const verdicts: Record<string, unknown> = {};
+    for (const image of ['hide', 'blur', 'show'] as const) verdicts[image] = await gateVerdict({ copy, original: copy, quotes: [quote], image });
+    expect(verdicts).toEqual({ hide: { pass: false, code: 'withheld' }, blur: { pass: false, code: 'withheld' }, show: { pass: false, code: 'withheld' } });
+    expect((await gateReply({ copy, original: copy, quotes: [quote], image: 'show' })).verdict).toEqual({ pass: false, code: 'withheld' });
+  });
+
+  it('leaves "show" with no quotes as it was: pdf.js does not walk the copy (a Type 3 glyph it cannot read passes), and the bytes given are the gate\'s writing', async () => {
+    const unreadGlyph = onSplitPage(['BT /T3 12 Tf 72 400 Td (A) Tj ET'], '/Font << /F1 5 0 R /T3 30 0 R >>', [[30, '<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /g 31 0 R >> /Encoding << /Differences [65 /g] >> /FirstChar 65 /LastChar 65 /Widths [1000] /Resources << >> >>'], [31, rawStream('', '')]]);
+    expect(await gateVerdict({ copy: unreadGlyph, original: unreadGlyph, quotes: [], image: 'show' })).toEqual({ pass: true });
+    expect(await gateVerdict({ copy: unreadGlyph, original: unreadGlyph, quotes: [quote], image: 'show' })).toEqual({ pass: false, code: 'rules' });
+    // Under "blur" and "hide" the walk runs with or without quotes, as before.
+    for (const image of ['blur', 'hide'] as const) expect(await gateVerdict({ copy: unreadGlyph, original: unreadGlyph, quotes: [], image }), image).toEqual({ pass: false, code: 'rules' });
+    const copy = lyingToUnicode(quote);
+    const reply = await gateReply({ copy, original: copy, quotes: [], image: 'show' });
+    expect(reply.verdict).toEqual({ pass: true });
+    expect(Buffer.from(reply.checked?.pdf ?? []).equals(Buffer.from(await rewrite(copy)))).toBe(true);
+  });
 });

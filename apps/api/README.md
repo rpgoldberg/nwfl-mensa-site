@@ -522,8 +522,9 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   not read to the end, a font it could not load or a Type 3 glyph it could
   not read refuses the copy (fix round 5), where a viewer that recovers
   would draw them. The glyphs drawn are matched against the withheld quotes
-  too, so a `/ToUnicode` that lies to the text layer does not hide them
-  (under "show" this pass does not run);
+  too, so a `/ToUnicode` that lies to the text layer does not hide them.
+  Under "show" this pass runs only when there are quotes, and judges no
+  picture (fix round 6b: the public copy is "show");
 - the page tree is one pdf.js and pdf-lib read alike: every node `/Type
   /Pages` with its `/Kids` and their `/Count`, every leaf `/Type /Page`,
   each once (fix round 4);
