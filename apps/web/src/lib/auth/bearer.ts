@@ -46,6 +46,23 @@ export function readerFor(session: Session | undefined, { tokens, now }: ReaderD
  * fresh sign-in even when signed in (flow.ts), so a lapsed token is replaced. None while
  * sign-in is not set up (it would answer 503) or in a build that offers none.
  */
-export function signInLink({ setup, key }: { setup: AuthSetup; key: Buffer | undefined }, publicOnly: boolean, back: string): string | undefined {
-  return setup.enabled && key !== undefined && !publicOnly ? `/sign-in?return=${encodeURIComponent(back)}&again=1` : undefined;
+export function signInLink(auth: SignInSetup, publicOnly: boolean, back: string): string | undefined {
+  return signInOffered(auth, publicOnly) ? `/sign-in?return=${encodeURIComponent(back)}&again=1` : undefined;
+}
+
+export type SignInSetup = { setup: AuthSetup; key: Buffer | undefined };
+
+/** Whether /sign-in works here: set up, with a session key, in a build that offers it. */
+function signInOffered({ setup, key }: SignInSetup, publicOnly: boolean): boolean {
+  return setup.enabled && key !== undefined && !publicOnly;
+}
+
+/**
+ * The line on /news that sends a reader who is not signed in to the members copy: where "sign in"
+ * leads, back to `back`. None for anyone signed in (a member already has the copy, an officer too, and
+ * any other account has its own box) and wherever /sign-in is not available. It depends on the
+ * session alone, so it is the same for every signed-out reader and the anonymous page stays cacheable.
+ */
+export function membersSignInLink(session: Session | undefined, auth: SignInSetup, publicOnly: boolean, back: string): string | undefined {
+  return session === undefined && signInOffered(auth, publicOnly) ? `/sign-in?return=${encodeURIComponent(back)}` : undefined;
 }

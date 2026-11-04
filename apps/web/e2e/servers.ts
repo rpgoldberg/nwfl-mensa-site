@@ -25,3 +25,6 @@ export const DOWN_URL = `http://127.0.0.1:${DOWN_PORT}`;
 /** The site whose API has published no issue of the newsletter: /news keeps its sample. */
 export const NO_ISSUES_BACKEND_URL = `http://127.0.0.1:${NO_ISSUES_PORT}`;
 export const NO_ISSUES_SITE_URL = `https://localhost:${NO_ISSUES_TLS_PORT}`;
+/** The site with issues published and sign-in not set up (no OIDC, no session key): /sign-in answers 503 there. */
+export const SIGN_IN_OFF_PORT = Number(process.env['E2E_SIGN_IN_OFF_PORT'] ?? 8090);
+export const SIGN_IN_OFF_URL = `http://127.0.0.1:${SIGN_IN_OFF_PORT}`;

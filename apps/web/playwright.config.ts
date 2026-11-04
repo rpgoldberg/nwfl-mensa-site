@@ -15,6 +15,8 @@ import {
   NO_ISSUES_SITE_URL,
   NO_ISSUES_TLS_PORT,
   SILENT_API_PORT,
+  SIGN_IN_OFF_PORT,
+  SIGN_IN_OFF_URL,
   SITE_URL,
   TLS_PORT,
 } from './e2e/servers';
@@ -72,6 +74,13 @@ export default defineConfig({
       command: 'node server/serve.mjs',
       url: `${DOWN_URL}/healthz`,
       env: { PORT: String(DOWN_PORT), HOST: '127.0.0.1', API_URL: `http://127.0.0.1:${SILENT_API_PORT}`, API_TIMEOUT_MS: '1000' },
+      reuseExistingServer: false,
+    },
+    // The same site and API with sign-in not set up: no OIDC, no session key.
+    {
+      command: 'node server/serve.mjs',
+      url: `${SIGN_IN_OFF_URL}/healthz`,
+      env: { PORT: String(SIGN_IN_OFF_PORT), HOST: '127.0.0.1', API_URL },
       reuseExistingServer: false,
     },
     {

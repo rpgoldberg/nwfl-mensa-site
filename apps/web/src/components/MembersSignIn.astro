@@ -1,0 +1,11 @@
+---
+// The one line under an issue for a reader who is not signed in: signing in gives
+// the members copy, with the phone numbers and e-mails. Plain words in the body
+// size; "sign in" is an ordinary underlined link. Only /news shows it, only where
+// /sign-in works (membersSignInLink in src/lib/auth/bearer.ts).
+interface Props {
+  href: string;
+}
+const { href } = Astro.props;
+---
+<p class="members-signin">Members: <a href={href}>sign in</a> to read the members copy, with phone numbers and e-mails.</p>

@@ -79,6 +79,12 @@ test.describe('/news signed in as a member', () => {
     }
   });
 
+  test('shows no line to sign in: the members copy is already there', async ({ page }) => {
+    await expect(page.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toBeVisible();
+    await expect(page.getByText('to read the members copy')).toHaveCount(0);
+    await expect(page.getByRole('main').getByRole('link', { name: 'sign in', exact: true })).toHaveCount(0);
+  });
+
   test('shows the members passage in its labelled box, the members article marked members only, and the members PDF; never an officers article', async ({ page }) => {
     const articles = page.getByRole('region', { name: 'From the newsletter' });
     const open = articles.getByRole('article').filter({ hasText: ARTICLES.open.title });
@@ -183,6 +189,7 @@ test('an officer gets the members view and never an officers article, an officer
   await expect(page.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toHaveAttribute('href', pdf(current!.membersPdf));
   await expect(page.getByText(ARTICLES.open.passage)).toBeVisible();
   expect(noneOf(await page.content(), NEVER)).toEqual([]);
+  await expect(page.getByText('to read the members copy')).toHaveCount(0);
 });
 
 test('a pending account gets the public view, a box saying it has no member access yet, and no members id', async ({ page }) => {
@@ -191,6 +198,8 @@ test('a pending account gets the public view, a box saying it has no member acce
   const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
   await expect(open).toContainText('Members-only passage. Your account does not have member access yet.');
   await expect(open.getByRole('link', { name: 'Ask for help' })).toHaveAttribute('href', '/help');
+  // Signed in already: the line to sign in is for the signed-out only.
+  await expect(page.getByText('to read the members copy')).toHaveCount(0);
   const html = await page.content();
   expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, RULE.replace("'", '&#39;'), RULE])).toEqual([]);
   // Its members copy is the same 404 as a random id's.

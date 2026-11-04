@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { newSession } from '../../../server/session.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
-import { EXPIRY_MARGIN_SECONDS, readerFor, signInLink } from './bearer';
+import { EXPIRY_MARGIN_SECONDS, membersSignInLink, readerFor, signInLink } from './bearer';
 import type { Tokens } from './oidc';
 
 const NOW = 1_800_000_000;
@@ -139,5 +139,22 @@ describe('signInLink', () => {
     expect(signInLink({ ...on, key: undefined }, false, '/news')).toBeUndefined();
     expect(signInLink({ setup: { enabled: false, reason: 'OIDC_ISSUER is not set' }, key }, false, '/news')).toBeUndefined();
     expect(signInLink(on, true, '/news')).toBeUndefined();
+  });
+});
+
+describe('membersSignInLink', () => {
+  const key = Buffer.alloc(32, 1);
+  const on = { setup: { enabled: true as const, config: {} as never }, key };
+
+  it('is the plain sign-in link, back to the page, for a reader who is not signed in and only when sign-in is set up and the build offers it', () => {
+    expect(membersSignInLink(undefined, on, false, '/news')).toBe('/sign-in?return=%2Fnews');
+    expect(membersSignInLink(undefined, { ...on, key: undefined }, false, '/news')).toBeUndefined();
+    expect(membersSignInLink(undefined, { setup: { enabled: false, reason: 'OIDC_ISSUER is not set' }, key }, false, '/news')).toBeUndefined();
+    expect(membersSignInLink(undefined, on, true, '/news')).toBeUndefined();
+  });
+
+  it('is nothing for anyone signed in, member, officer or a pending account: they have their view already', () => {
+    const { session } = signedIn({ access_token: 'tok', expires_at: NOW + 3600 });
+    expect(membersSignInLink(session, on, false, '/news')).toBeUndefined();
   });
 });
