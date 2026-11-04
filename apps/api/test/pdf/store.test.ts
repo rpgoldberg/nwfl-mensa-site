@@ -189,7 +189,14 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(await readPdf(pool, file, 'nobody')).toEqual({ kind: 'not_found' });
     });
 
-    it('keys a copy by the image action too: public photos blur, members\' show', async () => {
+    it('gives the public and members the same inputs under the 0022 defaults (pictures shown to both), so one copy', async () => {
+      const [pub, members] = [await inputsFor(pool, file, 'public'), await inputsFor(pool, file, 'members')];
+      expect(pub).toMatchObject({ kind: 'copy', request: { quotes: [], redactsAny: true, image: 'show' } });
+      expect(pub?.kind === 'copy' && members?.kind === 'copy' && pub.hash.equals(members.hash)).toBe(true);
+    });
+
+    it('keys a copy by the image action too: public photos blurred (tightened from the default), members\' shown', async () => {
+      await propose('public', 'image', 'blur');
       calls.length = 0;
       expect(await drain(worker, { redact: stub() })).toBe(1);
       expect(calls).toEqual(expect.arrayContaining([{ quotes: [], redactsAny: true, image: 'blur' }, { quotes: [], redactsAny: true, image: 'show' }]));
@@ -368,7 +375,8 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const bytes = pdfBytes('hidden');
       const id = await newFile({ version: v }, bytes);
       await storeOriginal(pool, { fileId: id, bytes, ...OFFICER });
-      await mark(i, null, 'member_name');
+      // A category the public redacts and members see (member_name was, before 0022).
+      await mark(i, null, 'private_venue');
       await drain(worker, { redact: stub() });
       expect(await readPdf(pool, id, 'public')).toEqual({ kind: 'hidden' });
       expect(await inputsFor(pool, id, 'public')).toEqual({ kind: 'hidden' });

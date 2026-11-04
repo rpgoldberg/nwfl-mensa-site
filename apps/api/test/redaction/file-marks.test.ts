@@ -10,7 +10,7 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
-import { MarkField, MarkSubjectKind, RedactionCategory, RedactionPolicyService } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
+import { MarkField, MarkSubjectKind, RedactionAction, RedactionAudience, RedactionCategory, RedactionPolicyService } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { readPdf, storeOriginal } from '../../src/pdf/store.js';
 import { redactPdf } from '../../src/pdf/redact.js';
 import { drain } from '../../src/pdf/regenerate.js';
@@ -94,6 +94,9 @@ describe.skipIf(!live)('file marks (0020)', () => {
 
   beforeAll(async () => {
     api = await startApi('nwfl_filemarks');
+    // 0022 shows member names to the public by default (Ross, 11-02). These tests mark names as a
+    // category the public redacts, so the public's cell is tightened back to redact (applied at once).
+    await api.client(RedactionPolicyService).proposeRedactionChange({ audience: RedactionAudience.PUBLIC, category: RedactionCategory.MEMBER_NAME, action: RedactionAction.REDACT }, OFFICER);
     office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('editor', 'Newsletter Editor', 'appointed') RETURNING id`);
     const both = [`Call ${NAME} at ${PHONE}.`];
     // The title names the person too: a file mark is for the PDFs, and leaves the item's own text alone.

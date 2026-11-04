@@ -63,20 +63,20 @@ describe.skipIf(!live)('RedactionPolicyService', () => {
   });
 
   describe('the defaults', () => {
-    it('seeds every cell for this group: public redacts member contacts and home venues, and shows business venues', async () => {
+    it('seeds every cell for this group: public redacts member contacts and home venues, and shows names, business venues and pictures (0022)', async () => {
       const { cells, pending } = await policy.getRedactionPolicy({}, OFFICER);
       expect(pending).toEqual([]);
       expect(cells).toHaveLength(24);
       const grid = Object.fromEntries(cells.map((c) => [`${Audience[c.audience]}/${Category[c.category]}`, Action[c.action]]));
       expect(grid).toEqual({
-        'PUBLIC/MEMBER_NAME': 'REDACT',
+        'PUBLIC/MEMBER_NAME': 'SHOW',
         'PUBLIC/MEMBER_ADDRESS': 'REDACT',
         'PUBLIC/MEMBER_PHONE': 'REDACT',
         'PUBLIC/MEMBER_EMAIL': 'REDACT',
         'PUBLIC/PRIVATE_VENUE': 'REDACT',
         'PUBLIC/BUSINESS_VENUE': 'SHOW',
         'PUBLIC/OFFICER_CONTACT': 'REDACT',
-        'PUBLIC/IMAGE': 'BLUR',
+        'PUBLIC/IMAGE': 'SHOW',
         'MEMBERS/MEMBER_NAME': 'SHOW',
         'MEMBERS/MEMBER_ADDRESS': 'REDACT',
         'MEMBERS/MEMBER_PHONE': 'SHOW',
@@ -95,6 +95,9 @@ describe.skipIf(!live)('RedactionPolicyService', () => {
         'OFFICERS/IMAGE': 'SHOW',
       });
       expect(await cell('public', 'member_phone')).toMatchObject({ tenant_id: 'nwflorida', updated_by_sub: null });
+      // Ross's 11-02 decision, applied by 0022 through the change history.
+      expect(await cell('public', 'member_name')).toMatchObject({ action: 'show', updated_by_sub: 'system:migration-0022' });
+      expect(await cell('public', 'image')).toMatchObject({ action: 'show', updated_by_sub: 'system:migration-0022' });
     });
   });
 
@@ -143,7 +146,7 @@ describe.skipIf(!live)('RedactionPolicyService', () => {
       ]);
     });
 
-    it('applies a blur-to-hide on images at once', async () => {
+    it('applies a hiding of public images at once', async () => {
       const { change } = await policy.proposeRedactionChange({ audience: Audience.PUBLIC, category: Category.IMAGE, action: Action.HIDE }, OFFICER);
       expect(change?.status).toBe(Status.APPLIED);
       expect(await action(Audience.PUBLIC, Category.IMAGE)).toBe(Action.HIDE);
@@ -283,19 +286,19 @@ describe.skipIf(!live)('RedactionPolicyService', () => {
     });
 
     it('A1: refuses a direct write to a policy cell, which would leave no change row and no audit row', async () => {
-      expect(await asApp(`UPDATE redaction_policy SET action = 'show' WHERE audience = 'public' AND category = 'member_name'`)).toBe('42501');
-      expect(await asApp(`INSERT INTO redaction_policy (audience, category, action) VALUES ('public', 'member_name', 'show') ON CONFLICT DO NOTHING`)).toBe('42501');
-      expect((await cell('public', 'member_name'))?.action).not.toBe('show');
+      expect(await asApp(`UPDATE redaction_policy SET action = 'show' WHERE audience = 'public' AND category = 'member_address'`)).toBe('42501');
+      expect(await asApp(`INSERT INTO redaction_policy (audience, category, action) VALUES ('public', 'member_address', 'show') ON CONFLICT DO NOTHING`)).toBe('42501');
+      expect((await cell('public', 'member_address'))?.action).not.toBe('show');
     });
 
     it('A2: refuses an applied public loosening inserted directly, approver or not', async () => {
       expect(
         await asApp(
           `INSERT INTO redaction_change (audience, category, from_action, to_action, status, proposed_by_sub, approved_by_sub, approved_at, decided_at)
-           VALUES ('public', 'member_name', 'redact', 'show', 'applied', 'sub-officer', 'ghost', now(), now())`,
+           VALUES ('public', 'member_address', 'redact', 'show', 'applied', 'sub-officer', 'ghost', now(), now())`,
         ),
       ).toBe('42501');
-      expect(await asApp(`INSERT INTO redaction_change (audience, category, from_action, to_action, status, proposed_by_sub) VALUES ('public', 'member_name', 'redact', 'show', 'pending', 'sub-officer')`)).toBe('42501');
+      expect(await asApp(`INSERT INTO redaction_change (audience, category, from_action, to_action, status, proposed_by_sub) VALUES ('public', 'member_address', 'redact', 'show', 'pending', 'sub-officer')`)).toBe('42501');
     });
 
     it('A3: refuses a rewrite of an applied change’s proposer, approver or action', async () => {
@@ -316,6 +319,8 @@ describe.skipIf(!live)('RedactionPolicyService', () => {
     });
 
     it('holds four-eyes in the narrow path itself, whatever the app role passes it', async () => {
+      // 0022 set the public's names to show: tighten back to redact (applied at once), then loosen again.
+      await policy.proposeRedactionChange({ audience: Audience.PUBLIC, category: Category.MEMBER_NAME, action: Action.REDACT }, OFFICER);
       const proposed = (
         await api.pool.query<{ id: string; status: string }>(
           `SELECT id, status FROM redaction_propose('nwflorida', 'public', 'member_name', 'show', 'sub-officer', '{nwfl-officers}', NULL)`,

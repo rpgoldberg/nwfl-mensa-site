@@ -64,15 +64,32 @@ describe.skipIf(!live)('ContentService.ReadFile', () => {
     api = await startApi('nwfl_readfile');
     office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
     original = await linesPdf([`Picnic with ${NAME}`, `Rides: call ${PHONE} by Friday.`, 'Bring a chair.']);
+    const namesPdf = await linesPdf([`Supper with ${NAME}`, `Ask ${NAME} or call ${PHONE}.`]);
 
     const flyer = await publish('picnic', `Picnic with ${NAME}`, original);
     files['flyer'] = flyer.file;
     await mark(flyer.itemId, MarkField.BODY, PHONE, RedactionCategory.MEMBER_PHONE);
-    await mark(flyer.itemId, MarkField.TITLE, NAME, RedactionCategory.MEMBER_NAME);
+    // A category the public still redacts and members see, as member_name was before 0022.
+    await mark(flyer.itemId, MarkField.TITLE, NAME, RedactionCategory.PRIVATE_VENUE);
 
     const whole = await publish('whole', 'Remembering a friend', await linesPdf(['Words by a friend']));
     files['whole'] = whole.file;
-    await mark(whole.itemId, MarkField.UNSPECIFIED, '', RedactionCategory.MEMBER_NAME);
+    await mark(whole.itemId, MarkField.UNSPECIFIED, '', RedactionCategory.PRIVATE_VENUE);
+
+    // 0022 (Ross, 11-02): the public sees member names, in the text, the byline and the PDF, while a
+    // phone in the same item stays withheld.
+    const names = await publishItem(api.pool, {
+      slug: 'names',
+      officeId: office,
+      title: `Supper with ${NAME}`,
+      onBehalfOf: `${NAME}, guest writer`,
+      body: { blocks: [paragraph(text(`Ask ${NAME} or call ${PHONE}.`))] },
+      files: [{ objectKey: 'k-names', audience: 'public', bytes: namesPdf }],
+    });
+    files['names'] = (await api.pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [names.versionId])).rows[0]!.id;
+    await storeOriginal(api.pool, { fileId: files['names'], bytes: namesPdf, ...STORER });
+    await mark(names.itemId, MarkField.TITLE, NAME, RedactionCategory.MEMBER_NAME);
+    await mark(names.itemId, MarkField.BODY, PHONE, RedactionCategory.MEMBER_PHONE);
 
     files['members'] = (await publish('members-file', 'Members flyer', await linesPdf(['For members']), { audience: 'members' })).file;
     files['officersItem'] = (await publish('officers-item', 'Board notes', await linesPdf(['Board only']), { visibility: 'officers' })).file;
@@ -136,6 +153,20 @@ describe.skipIf(!live)('ContentService.ReadFile', () => {
     expect(extracted).toContain('Bring a chair');
     expect(extracted).not.toContain(PHONE);
     expect(extracted).not.toContain('Quillon');
+  }, 60_000);
+
+  it('shows the public a member\'s name in the title, the byline, the body and the PDF, and withholds the phone beside it (0022)', async () => {
+    await drain(api.worker);
+    const { messages, bytes } = await pdfOf(files['names'] as string);
+    expect(messages[0]?.part.case === 'head' && messages[0].part.value.filename).toBe('supper-with-quillon-brask.pdf');
+    const extracted = await extractAll(bytes);
+    expect(extracted).toContain(`Ask ${NAME} or call`);
+    expect(extracted).not.toContain(PHONE);
+    const { item } = await api.client(ContentService).getPublishedItem({ slug: (await api.pool.query<{ id: string }>(`SELECT id FROM content_item WHERE slug = 'names'`)).rows[0]!.id });
+    expect(item?.live?.title).toBe(`Supper with ${NAME}`);
+    expect(item?.live?.onBehalfOf).toBe(`${NAME}, guest writer`);
+    expect(JSON.stringify(item?.live?.body)).toContain(NAME);
+    expect(JSON.stringify(item?.live?.body)).not.toContain(PHONE);
   }, 60_000);
 
   it('serves an officer, whose policy shows everything, the original itself, named from the title', async () => {

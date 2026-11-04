@@ -83,20 +83,20 @@ describe('redactPdf: an audience that redacts nothing', () => {
   });
 });
 
-describe('redactPdf: the length hint', () => {
-  it('gives two passages of different lengths in one width step boxes of the same width, drawn on the page', async () => {
+describe('redactPdf: exact-fit boxes (REDACT-LOOK: a box shows the passage\'s length, by decision)', () => {
+  it('boxes two passages of different lengths at their own widths, drawn on the page, labelling only the one that fits', async () => {
     const result = await redactPdf(await twoMarksFixture(), { quotes: ['Bo', 'Quillon'], redactsAny: true });
     if (result.kind !== 'redacted') throw new Error(JSON.stringify(result));
+    // Helvetica 12 pt: "Bo" is (667 + 556) / 1000 em, "Quillon" 3112 / 1000 em.
     const widths = result.boxes.map((box) => Number((box.right - box.left).toFixed(3)));
-    expect(widths).toHaveLength(2);
-    expect(widths[0]).toBe(48);
-    expect(widths[1]).toBe(48);
+    expect(widths).toEqual([14.676, 37.344]);
     // The boxes are really drawn: PDFium writes each as a rectangle path of that width.
     const drawn = [...rawText(result.pdf).matchAll(/(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) re\b/g)].map((m) => Number(Number(m[3]).toFixed(3)));
-    expect(drawn.filter((w) => w === 48)).toHaveLength(2);
+    expect(drawn.filter((w) => w === 14.676)).toHaveLength(1);
+    expect(drawn.filter((w) => w === 37.344)).toHaveLength(1);
     const seen = await readBack(result.pdf);
     expect(leaked('Quillon', seen.extracted, seen.raw)).toBe(false);
-    expect(seen.extracted.match(/withheld/g)).toHaveLength(2);
+    expect(seen.extracted.match(/withheld/g)).toHaveLength(1);
   });
 });
 

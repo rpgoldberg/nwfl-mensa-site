@@ -9,9 +9,14 @@
 //
 // The copy: annotations and form fields are drawn into their pages (so what
 // they show is matched like the page), the marked passages are found in each
-// page's text (match.ts), every glyph in their widened regions is removed
-// from the content (PDFium, form XObjects included) and an opaque box
-// labelled "withheld" is drawn over each. Then the pages are rebuilt alone
+// page's text (match.ts), with every copy of a withheld word drawn by another
+// text object beside it (a shadow drawn a word at a time), every glyph in their
+// regions (exactly the passages' extent, any neighbour removed with them and the
+// rest of its word, and any text drawn twice there that PDFium does not read)
+// is removed from the content
+// (PDFium, form XObjects included) and an opaque box is drawn over exactly
+// what was removed, labelled "withheld" where the label fits at a readable
+// size (pdfium.ts labelSize). Then the pages are rebuilt alone
 // (sanitize.ts): no metadata, outline, attachments, JavaScript, annotations or
 // marked-content text. Last, PDFium reads the copy again, then the output
 // gate (gate.ts) reads it with pdf.js and decodes every object in it: if
@@ -23,14 +28,35 @@
 //     SCAN_SHARE of what it draws: a scan, whose words cannot be found, so
 //     cannot be checked, whenever the audience redacts anything;
 //   - a page has characters with no Unicode value: its text cannot be checked;
-//   - a passage has no position, or lies over a picture (removing the text
-//     would leave the picture's pixels under the box);
+//   - a passage has no position, or it or its glyphs' ink lies over a picture
+//     (removing the text would leave the picture's pixels under the box);
+//   - a withheld glyph is still on the page after removal, even one no whole
+//     quote can be read in;
+//   - a text object PDFium reads only in part meets a passage: what its reading
+//     left out of it is unknown (a text object it reads none of, text drawn
+//     twice, is removed and boxed whole with the passage it meets instead);
+//   - a glyph is read after removal that was not read before: text drawn twice,
+//     whose second copy PDFium's reading left out while the first was there;
+//   - text PDFium does not read is left at a passage after removal (the page's
+//     text objects are counted against its reading again);
+//   - a glyph a text object draws on its own is left within an em of a box, on
+//     its line (a copy drawn a glyph at a time that the boxes stopped short of),
+//     unless it is punctuation, a bullet or the next run of its line, is no
+//     letter or digit of the passage, and has no other such glyph beside it;
+//   - withheld text is drawn again where no box reached: a word of 3 letters or
+//     more of a passage beside a box on its line, or within an em of a withheld
+//     drawing of it (a shadow the boxes stopped short of), or anywhere on the
+//     page a passage of two words or more, 4 digits or more of one, or an email
+//     or web address. A word of a passage that recurs on its own elsewhere is
+//     ordinary text, and is shown;
+//   - the page has text drawn as a clip (render mode 4 to 7): PDFium's rewrite
+//     of the page would end the clip, and what it clipped would flood the page;
 //   - a content stream or a JPEG cannot be read, or a passage is still
 //     readable after (PDFium), or the gate finds one or cannot check a stream.
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
-import { type Box, type Region, matchedChars, regionsFor } from './match.js';
+import { type Box, type Region, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -71,8 +97,8 @@ function isScan(page: Page): boolean {
   return extent > 0 && pictures >= SCAN_SHARE * extent;
 }
 
-const overlaps = (a: Region, b: { left: number; right: number; bottom: number; top: number }): boolean =>
-  a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
+const isBlank = (c: { text: string }): boolean => /^\s*$/u.test(c.text);
+const overlaps = (a: Box, b: Box): boolean => a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
 
 /** Why one page cannot be given, or null once its passages are removed and boxed (added to `boxes`). */
 function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[], regenerate: boolean): string | null {
@@ -84,16 +110,53 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     if (chars.length === 0 && page.objectCount > 0) return `page ${index + 1} has no text layer`;
     if (isScan(page)) return `page ${index + 1} is a scan: pictures cover most of it`;
     if (unmapped > 0) return `page ${index + 1} has text that cannot be read`;
-    const found = regionsFor(chars, matchedChars(chars, quotes), index, page.width);
+    // Text drawn twice at nearly one place (a shadow, a fake bold, a decoy) is read once: the copy PDFium
+    // left out is in no reading, so the page's text objects are counted against it (challenger r2, F2).
+    const objects = page.textObjects();
+    const hidden = unread(chars, objects);
+    // A passage drawn a word at a time and again so beside it is read interleaved, and matched once across
+    // the two: the words the match left that repeat a withheld word near it are withheld too (challenger r3, F1).
+    const words = wordsOf(chars, objects);
+    const matched = matchedChars(chars, quotes);
+    const withheld = new Set([...matched, ...copiesOf(chars, matched, words)]);
+    const found = regionsFor(chars, withheld, index, hidden.objects, words);
     if (!found.ok) return found.reason;
     if (found.regions.length === 0) return null;
+    if (meeting(hidden.parts, found.regions).length > 0) return `page ${index + 1}: text PDFium reads only in part meets a withheld passage`;
+    // A box is as narrow as the passage, so the marked glyphs' own ink is checked too.
+    const covered: Box[] = [...found.regions, ...[...withheld].flatMap((i) => chars[i]?.ink ?? [])];
     const pictures = page.pictures();
-    if (found.regions.some((region) => pictures.some((picture) => overlaps(region, picture)))) {
+    if (covered.some((area) => pictures.some((picture) => overlaps(area, picture)))) {
       return `page ${index + 1}: a withheld passage lies over a picture`;
     }
+    if (page.hasClipText()) return `page ${index + 1} has text drawn as a clip, which removal would lose`;
     page.removeText(found.regions);
-    page.drawBoxes(found.regions);
-    boxes.push(...found.regions);
+    const after = page.chars().chars;
+    const there = stillThere(chars, after);
+    // No glyph of a passage is exempt, a space included: PDFium reads none of a removed passage again.
+    if ([...withheld].some((i) => there.has(i))) return `page ${index + 1}: a withheld glyph survived removal`;
+    // Text drawn twice at a small offset (a shadow, a fake bold) is read once: PDFium leaves the second
+    // copy out while the first is there, and reads it once the first is removed. A glyph read after the
+    // removal and not before is such a copy, perhaps of a withheld glyph, and no box was measured for it.
+    const known = stillThere(after, chars);
+    if (after.some((c, i) => !c.generated && c.box !== null && !isBlank(c) && !known.has(i))) {
+      return `page ${index + 1}: text drawn twice is left after removal`;
+    }
+    // And the count again: a removal can leave text that no reading after it holds either. Where a glyph of
+    // another line was removed from a word's end, PDFium keeps the word's bounds over its place: that is not it.
+    const left = unread(after, page.textObjects());
+    if (meeting([...left.objects, ...notVacated(chars, withheld, there, left.parts)], found.regions).length > 0) return `page ${index + 1}: text PDFium does not read is left at a withheld passage`;
+    // A copy drawn a glyph at a time, letter-spaced unlike the passage, can end beyond the glyphs the boxes reached, and
+    // withheld text can be drawn again beside the passage where no box reached, or whole elsewhere: fail closed on both
+    // (challenger r4, F1). Ordinary text is not counted: a bullet, a link's full stop, a word of a passage on its own
+    // elsewhere on the page (challenger r5, S1).
+    if (loneGlyphs(chars, objects, found.regions, there, withheld).length > 0) return `page ${index + 1}: a glyph drawn on its own is left beside a withheld passage`;
+    if (drawnAgain(chars, objects, quotes, there, withheld, found.regions).length > 0) return `page ${index + 1}: withheld text is drawn again elsewhere on the page`;
+    // The boxes cover exactly what was removed: the passages, any neighbour and any unread text that went with them.
+    const removed = new Set([...chars.keys()].filter((i) => !there.has(i)));
+    const drawn = boxesFor(chars, withheld, removed, index, meeting(hidden.objects, found.regions));
+    page.drawBoxes(drawn);
+    boxes.push(...drawn);
     return null;
   });
 }

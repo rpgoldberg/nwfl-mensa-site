@@ -39,6 +39,8 @@ const WEBMASTER = as('webmaster-token');
 const ADMIN = as('admin-token');
 const PHONE = '850-555-0199';
 const NAME = 'Quillon Brask';
+// The marks below use private_venue, a category the public redacts and members see, as member_name
+// was before 0022 (Ross, 11-02: the public sees member names).
 const sha = (bytes: Uint8Array): Buffer => createHash('sha256').update(bytes).digest();
 const zero = Buffer.alloc(32);
 
@@ -440,13 +442,13 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       const copy = (await q<{ bytes: Buffer }>(`SELECT bytes FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [file, pub.inputs['input_hash']])).rows[0]!;
       expect(pub.output_sha256).toEqual(sha(copy.bytes));
       expect(pub.inputs['engine']).toBe(ENGINE_VERSION);
-      expect(pub.inputs['image']).toBe('blur');
+      expect(pub.inputs['image']).toBe('show'); // 0022: the public sees pictures
     });
 
     it('records "not ready" in the mark transaction, then the new copy, and re-renders each as of its time', async () => {
       const before = (await current(file, 'public'))!;
       await redaction.addRedactionMark(
-        { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: item, field: MarkField.BODY, quote: NAME, category: RedactionCategory.MEMBER_NAME },
+        { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: item, field: MarkField.BODY, quote: NAME, category: RedactionCategory.PRIVATE_VENUE },
         OFFICER,
       );
       const waiting = (await current(file, 'public'))!;
@@ -463,7 +465,8 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       // with no original read.
       const at = new Date(before.current_from.getTime() + 1);
       const kept = await owner.query<{ stale: boolean; sha: Buffer }>(`SELECT stale, sha256(bytes) AS sha FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [file, before.inputs['input_hash']]);
-      expect(kept.rows).toEqual([{ stale: true, sha: before.output_sha256 }]);
+      // Kept, and not stale: under 0022 members share it (pictures shown to both, no private_venue redacted).
+      expect(kept.rows).toEqual([{ stale: false, sha: before.output_sha256 }]);
       const reads = async () => (await owner.query(`SELECT 1 FROM audit_event WHERE action = 'ledger_original_read' AND subject_id = $1`, [file])).rows.length;
       const readsBefore = await reads();
       const fromKept = await ledgerAsOf(api.pool, 'stored_file', file, 'public', at);
@@ -520,7 +523,7 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       const first = (await current(realFile, 'public'))!;
       expect(first.inputs['served']).toBe('copy');
       await redaction.addRedactionMark(
-        { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: published.itemId, field: MarkField.BODY, quote: 'Ottoline Varga', category: RedactionCategory.MEMBER_NAME },
+        { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: published.itemId, field: MarkField.BODY, quote: 'Ottoline Varga', category: RedactionCategory.PRIVATE_VENUE },
         OFFICER,
       );
       await drain(api.worker);
@@ -578,7 +581,7 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
         await atBarrier;
         const marking = redaction
           .addRedactionMark(
-            { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: raced.itemId, field: MarkField.BODY, quote: 'Pellingham Farrow', category: RedactionCategory.MEMBER_NAME },
+            { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: raced.itemId, field: MarkField.BODY, quote: 'Pellingham Farrow', category: RedactionCategory.PRIVATE_VENUE },
             OFFICER,
           )
           .then(() => {

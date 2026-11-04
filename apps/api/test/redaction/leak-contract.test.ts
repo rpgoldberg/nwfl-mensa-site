@@ -1,5 +1,6 @@
 // THE REDACTION LEAK CONTRACT (REDACT R2a). Random canaries are seeded where
-// the redaction policy or a mark withholds them from the public:
+// the redaction policy or a mark withholds them from the public (the public's
+// member_name cell tightened back to redact, as 0022 shows names by default):
 //   - marked passages: a body (member_phone), a title (member_name), an
 //     event's status note (member_address, withheld from members too), a
 //     series description (member_phone);
@@ -296,6 +297,9 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     await mark(MarkSubjectKind.EVENT_SERIES, ids['series'], MarkField.DESCRIPTION, C.description, RedactionCategory.MEMBER_PHONE);
     // A tightening applies at once: the public no longer gets items with a marked email at all.
     await policy.proposeRedactionChange({ audience: RedactionAudience.PUBLIC, category: RedactionCategory.MEMBER_EMAIL, action: RedactionAction.HIDE }, OFFICER);
+    // 0022 shows member names to the public by default (Ross, 11-02). The contract tightens the cell back
+    // to redact, which applies at once, so the title, whole-item and byline paths stay checked.
+    await policy.proposeRedactionChange({ audience: RedactionAudience.PUBLIC, category: RedactionCategory.MEMBER_NAME, action: RedactionAction.REDACT }, OFFICER);
     // The originals, then their copies, made by the real engine as the background job would.
     const storer = { sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] };
     await storeOriginal(pool, { fileId: ids['publicFile'], bytes: publicPdf, ...storer });

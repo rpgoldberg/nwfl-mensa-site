@@ -13,6 +13,12 @@ describe('ENGINE_VERSION', () => {
     expect(ENGINE_VERSION).toContain(`pdf-lib-${version('@cantoo/pdf-lib')}`);
     expect(ENGINE_VERSION).toContain(`pdfjs-${version('pdfjs-dist')}`);
   });
+
+  it('names the boxes\' revision, so no copy boxed the old, widened way is taken for an exact-fit one (REDACT-LOOK)', () => {
+    // 0022 leaves the members' and the officers' inputs as they were: only this keys their copies anew.
+    expect(ENGINE_VERSION.split('+')).toContain('box-exact');
+    expect(ENGINE_VERSION).not.toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b');
+  });
 });
 
 describe('inputHash', () => {
