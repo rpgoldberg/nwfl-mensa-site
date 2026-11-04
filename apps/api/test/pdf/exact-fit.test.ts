@@ -12,7 +12,7 @@ import { stillThere } from '../../src/pdf/match.js';
 import { Document, LABEL_EMS, Page, labelSize, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { extractAll, leaked, rawText } from './extract.js';
-import { FIT_FIXTURES, askLine, fitPdf, pictureNearFixture, scaledTypeFixture } from './fit-fixtures.js';
+import { BLUE, FIT_FIXTURES, RED, askLine, fitPdf, pictureNearFixture, scaledTypeFixture } from './fit-fixtures.js';
 import { twoMarksFixture } from './fixtures.js';
 import { black, blue, contrast, inAny, inside, lost, red, render, where } from './pixels.js';
 
@@ -159,6 +159,57 @@ describe('pictures near a narrower box (L8)', () => {
     const ring = chars.find((c) => c.text === 'Å') as PageChar;
     expect(ring.ink !== null && ring.box !== null && ring.ink.top <= ring.box.top).toBe(true);
   });
+
+  describe('the ink guard, with a glyph whose ink reaches past its loose box (defensive: no real file tried does this)', () => {
+    afterEach(() => vi.restoreAllMocks());
+    const read = Object.getOwnPropertyDescriptor(Page.prototype, 'chars')?.value as (this: Page) => ReturnType<Page['chars']>;
+
+    it('refuses when the marked a\'s ink, not its box, reaches the picture beside "Åsa"', async () => {
+      // The picture starts at 89; the a's loose box ends at 86.02. Only the first reading is changed.
+      let first = true;
+      vi.spyOn(Page.prototype, 'chars').mockImplementation(function (this: Page) {
+        const got = read.call(this);
+        if (!first) return got;
+        first = false;
+        const a = got.chars.findLastIndex((c) => c.text === 'a');
+        const ink = got.chars[a]?.ink as Box;
+        return { ...got, chars: got.chars.map((c, i) => (i === a ? { ...c, ink: { ...ink, right: 90 } } : c)) };
+      });
+      expect(await redactPdf(await pictureNearFixture('beside'), { quotes: ['Åsa'], redactsAny: true })).toEqual({
+        kind: 'refused',
+        reason: 'page 1: a withheld passage lies over a picture',
+      });
+    });
+  });
+});
+
+describe('text drawn as a clip (Tr 4 to 7, challenger F5)', () => {
+  // PDFium's rewrite of the page wraps each text object in q ... Q, so a text clip ends with its text
+  // object, and the fill it clipped floods the page (a probe: an untouched clip's 3,773 blue pixels
+  // became 320,000 once the page was rewritten). So a page with one is refused whenever it is rewritten.
+  const refused = { kind: 'refused', reason: 'page 1 has text drawn as a clip, which removal would lose' };
+  const clipped = (tr: number): string =>
+    `BT /F1 24 Tf 20 60 Td ${BLUE} (Ask ) Tj ET q BT /F1 24 Tf ${20 + 1.945 * 24} 60 Td ${tr} Tr ${RED} (Quillon Brask) Tj ET ${RED} 0 0 400 140 re f Q BT /F1 24 Tf 250 20 Td ${BLUE} (now.) Tj ET`;
+  const apart = `q BT /F1 24 Tf 20 100 Td 7 Tr (Ask) Tj ET ${BLUE} 0 0 400 140 re f Q`;
+
+  for (const tr of [4, 5, 6, 7]) {
+    it(`refuses the marked words drawn as a clip for a fill (Tr ${tr})`, async () => {
+      expect(await redactPdf(await fitPdf(clipped(tr)), { quotes: ['Quillon Brask'], redactsAny: true })).toEqual(refused);
+    });
+  }
+
+  it('refuses a clip the passage never reaches, on the page or in a form XObject, since the rewrite loses it too', async () => {
+    const marked = askLine('(Quillon Brask) Tj', { y: 40 });
+    expect(await redactPdf(await fitPdf(`${apart} ${marked}`), { quotes: ['Quillon Brask'], redactsAny: true })).toEqual(refused);
+    expect(await redactPdf(await fitPdf(`q /Fm1 Do Q ${marked}`, { form: apart }), { quotes: ['Quillon Brask'], redactsAny: true })).toEqual(refused);
+  });
+
+  it('keeps a clip on a page with nothing withheld, which is not rewritten, and redacts invisible text (Tr 3)', async () => {
+    const { pdf } = copyOf(await redactPdf(await fitPdf(apart), { quotes: ['Quillon Brask'], redactsAny: true }));
+    const above = (raster: Awaited<ReturnType<typeof render>>): number => where(raster, blue).filter((p) => p.y > 90).length;
+    expect(above(await render(pdf))).toBe(above(await render(await fitPdf(apart))));
+    expect((await redactPdf(await fitPdf(askLine('3 Tr (Quillon Brask) Tj 0 Tr')), { quotes: ['Quillon Brask'], redactsAny: true })).kind).toBe('redacted');
+  });
 });
 
 describe('a withheld glyph that survives removal (L3)', () => {
@@ -166,9 +217,11 @@ describe('a withheld glyph that survives removal (L3)', () => {
   // The real removal, taken before any spy replaces it.
   const remove = Object.getOwnPropertyDescriptor(Page.prototype, 'removeText')?.value as (this: Page, regions: readonly Region[]) => boolean;
 
-  // PDFium's loose box held every glyph's tight box in every shape tried (Type 3 glyphs with d1 boxes
-  // that lie, sit off their advance or are empty), so no file makes a glyph survive. These stand in
-  // for a removal that misses: the quads are trimmed so the passage's last glyph is left.
+  // A glyph PDFium reads survives only if a quad misses its tight box, and PDFium's loose box held the
+  // tight box in every shape tried (Type 3 glyphs with d1 boxes that lie, sit off their advance or are
+  // empty). Text drawn twice can leave a glyph PDFium never read: a different check, tested with real
+  // files under L2 above (challenger F1, F2). These stand in for a removal that misses: the quads are
+  // trimmed so the passage's last glyph is left.
   const trimmed = (by: number): void => {
     vi.spyOn(Page.prototype, 'removeText').mockImplementation(function (this: Page, regions: readonly Region[]) {
       return remove.call(this, regions.map((region) => ({ ...region, right: region.right - by })));
@@ -230,6 +283,14 @@ describe('labels (L12)', () => {
     const pixels = inside(await render(pdf), boxes[0] as Region);
     expect(pixels.length).toBeGreaterThan(0);
     expect(pixels.every(([r, g, b]) => black(r, g, b))).toBe(true);
+  });
+
+  it('refuses a passage that is itself the word "withheld": the label reads as the passage (fail closed, challenger F8)', async () => {
+    expect(await redactPdf(await fitPdf(askLine('(withheld) Tj')), { quotes: ['withheld'], redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: 'page 1: withheld text is still readable after removal',
+    });
+    expect((await redactPdf(await fitPdf(askLine('(Anna Held) Tj')), { quotes: ['Anna Held'], redactsAny: true })).kind).toBe('redacted');
   });
 
   it('adds no text but the label: the copy reads as the original with each passage replaced', async () => {

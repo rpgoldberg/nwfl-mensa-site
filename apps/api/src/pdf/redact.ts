@@ -29,6 +29,10 @@
 //     (removing the text would leave the picture's pixels under the box);
 //   - a withheld glyph is still on the page after removal, even one no whole
 //     quote can be read in;
+//   - a glyph is read after removal that was not read before: text drawn twice,
+//     whose second copy PDFium's reading left out while the first was there;
+//   - the page has text drawn as a clip (render mode 4 to 7): PDFium's rewrite
+//     of the page would end the clip, and what it clipped would flood the page;
 //   - a content stream or a JPEG cannot be read, or a passage is still
 //     readable after (PDFium), or the gate finds one or cannot check a stream.
 // ============================================================================
@@ -75,6 +79,7 @@ function isScan(page: Page): boolean {
   return extent > 0 && pictures >= SCAN_SHARE * extent;
 }
 
+const isBlank = (c: PageChar): boolean => /^\s*$/u.test(c.text);
 const overlaps = (a: Box, b: Box): boolean => a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
 
 /** Why one page cannot be given, or null once its passages are removed and boxed (added to `boxes`). */
@@ -97,10 +102,19 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     if (covered.some((area) => pictures.some((picture) => overlaps(area, picture)))) {
       return `page ${index + 1}: a withheld passage lies over a picture`;
     }
+    if (page.hasClipText()) return `page ${index + 1} has text drawn as a clip, which removal would lose`;
     page.removeText(found.regions);
-    const there = stillThere(chars, page.chars().chars);
-    if ([...withheld].some((i) => there.has(i) && !/^\s*$/u.test((chars[i] as PageChar).text))) {
+    const after = page.chars().chars;
+    const there = stillThere(chars, after);
+    if ([...withheld].some((i) => there.has(i) && !isBlank(chars[i] as PageChar))) {
       return `page ${index + 1}: a withheld glyph survived removal`;
+    }
+    // Text drawn twice at a small offset (a shadow, a fake bold) is read once: PDFium leaves the second
+    // copy out while the first is there, and reads it once the first is removed. A glyph read after the
+    // removal and not before is such a copy, perhaps of a withheld glyph, and no box was measured for it.
+    const known = stillThere(after, chars);
+    if (after.some((c, i) => !c.generated && c.box !== null && !isBlank(c) && !known.has(i))) {
+      return `page ${index + 1}: text drawn twice is left after removal`;
     }
     // The boxes cover exactly what was removed: the passages, and any neighbour that went with them.
     const drawn = boxesFor(chars, withheld, new Set([...chars.keys()].filter((i) => !there.has(i))), index);

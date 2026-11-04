@@ -276,6 +276,22 @@ describe('regionsFor: neighbours PDFium removes with the passage (the collateral
     expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[84, 96, 700, 712]]);
   });
 
+  it('does not extend over a neighbour whose ink reaches in by less than SLIP (0.0005 pt: a precision slip, not ink)', () => {
+    const chars = withChar(kerned(), 1, { ink: { right: 84.0005 } });
+    expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[84, 96, 700, 712]]);
+  });
+
+  it('extends over a neighbour whose ink reaches in by more than SLIP (0.002 pt), each way', () => {
+    expect(edges(regionsFor(withChar(kerned(), 1, { ink: { right: 84.002 } }), new Set([2, 3])))).toEqual([[78, 96, 700, 712]]);
+    // A descender of the line above reaching 0.0005 pt into the line's top is not ink; 0.002 pt is.
+    const above = (bottom: number): PageChar[] => withChar(page(['xg', 'Bo y']), 1, { ink: { bottom } });
+    expect(edges(regionsFor(above(691.9995), new Set([4, 5])))).toEqual([[72, 84, 680, 692]]);
+    expect(edges(regionsFor(above(691.998), new Set([4, 5])))).toEqual([
+      [78, 84, 700, 712],
+      [72, 84, 680, 692],
+    ]);
+  });
+
   it('follows a chain: a neighbour pulled in can pull in the next', () => {
     const chars = withChar(withChar(kerned(), 1, { ink: { right: 86 } }), 0, { ink: { right: 80 } });
     expect(edges(regionsFor(chars, new Set([2, 3])))).toEqual([[72, 96, 700, 712]]);

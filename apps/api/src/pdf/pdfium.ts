@@ -38,8 +38,12 @@ export function pdfium(): Promise<Module> {
 }
 
 const FLAT_NORMALDISPLAY = 0;
+const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_IMAGE = 3;
+const FPDF_PAGEOBJ_FORM = 5;
 const FPDF_FILLMODE_ALTERNATE = 1;
+/** Text render modes 4 to 7 add the glyphs to the clipping path (PDF 32000-1, 9.3.6). */
+const FPDF_TEXTRENDERMODE_FILL_CLIP = 4;
 /** Helvetica's advance for "withheld", in ems (its AFM widths: w i t h h e l d). */
 const LABEL = 'withheld';
 export const LABEL_EMS = (722 + 222 + 278 + 556 + 556 + 556 + 222 + 556) / 1000;
@@ -200,6 +204,23 @@ export class Page {
       m.FPDFText_ClosePage(text);
     }
     return { chars, unmapped };
+  }
+
+  /**
+   * Whether any text on the page, form XObjects included, is drawn as a clip (render mode 4 to 7).
+   * PDFium's rewrite of a page (removeText, drawBoxes) wraps each text object in q ... Q, so such a
+   * clip would end with its text object, and what it clipped would be drawn unclipped.
+   */
+  hasClipText(): boolean {
+    const m = this.m;
+    const pending: number[] = [];
+    for (let i = 0; i < this.objectCount; i++) pending.push(m.FPDFPage_GetObject(this.handle, i));
+    for (let object = pending.pop(); object !== undefined; object = pending.pop()) {
+      const type = m.FPDFPageObj_GetType(object);
+      if (type === FPDF_PAGEOBJ_TEXT && m.FPDFTextObj_GetTextRenderMode(object) >= FPDF_TEXTRENDERMODE_FILL_CLIP) return true;
+      if (type === FPDF_PAGEOBJ_FORM) for (let i = 0; i < m.FPDFFormObj_CountObjects(object); i++) pending.push(m.FPDFFormObj_GetObject(object, i));
+    }
+    return false;
   }
 
   /** A character's tight box (FPDFText_GetCharBox, the box PDFium's removal tests), or null. */

@@ -142,6 +142,30 @@ const QUILLON = { quotes: ['Quillon Brask'], needles: ['Quillon Brask', 'Quillon
 const twice = (dx: number, dy: number, extra = ''): string =>
   `${askLine('(Quillon Brask) Tj')}\nBT /F1 14 Tf ${extra} ${20 + 27.23 + dx} ${60 + dy} Td ${RED} (Quillon Brask) Tj ET`;
 
+/**
+ * "Ask <name> now." with the name drawn a second time at (dx, dy) from the first, in its own text object,
+ * at an offset PDFium's text page takes for a duplicate (a drop shadow, a fake bold): it reads the name
+ * once, so the second copy is in no reading taken before the removal (REDACT-LOOK fix round, F1 and F2).
+ */
+const shadowed = (name: string, dx: number, dy: number): string =>
+  `${askLine(`(${name}) Tj`)}\nBT /F1 14 Tf ${(20 + 27.23 + dx).toFixed(4)} ${(60 + dy).toFixed(4)} Td ${RED} (${name}) Tj ET`;
+
+/** The offsets of the challenger's sweep (14 pt) where the shadow's first, last or x-height glyphs were left. */
+const SHADOWS: ReadonlyArray<[string, number, number]> = [
+  ['Quillon Brell', 2.2, 0],
+  ['Quillon Brell', 2.5, 0],
+  ['Quillon Brell', 2.75, 0],
+  ['Quillon Brell', 2.5, -2.5],
+  ['Quillon Brask', 6.1, 0],
+  ['Quillon Brask', 6.2, 0],
+  ['Quillon Brask', 6.3, 0],
+  ['Ivo Brumm', -2.7, 0],
+  ['Ivo Brumm', -5, 0],
+  ['Ivo Brumm', -10.4, 0],
+  ['Quillon Braskett', 0, -10.5],
+  ['Quillon Braskett', 0, -11],
+];
+
 export const FIT_FIXTURES: FitFixture[] = [
   // L1: ink outside the loose box.
   { surface: 'L1', name: 'accents above the ascent (Å, Ç, ÿ)', pdf: () => fitPdf(askLine('(\\305sa \\307ald\\377ry) Tj', { size: 18 })), quotes: ['Åsa Çaldÿry'], needles: ['Åsa', 'Çaldÿry', 'aldÿry'] },
@@ -166,6 +190,15 @@ export const FIT_FIXTURES: FitFixture[] = [
   { surface: 'L2', name: 'drawn twice, half a line up', pdf: () => fitPdf(twice(0, 8.4)), ...QUILLON },
   { surface: 'L2', name: 'drawn twice, half a line down', pdf: () => fitPdf(twice(0, -8.4)), ...QUILLON },
   { surface: 'L2', name: 'fake bold (Tr 2 and a 0.4 pt offset)', pdf: () => fitPdf(`${RED_STROKE} 0.5 w ${twice(0.4, 0, '2 Tr')}`), ...QUILLON },
+  // L2: drawn twice at an offset PDFium reads once; the copy it left out is read once the first is removed.
+  ...SHADOWS.map(([name, dx, dy]): FitFixture => ({
+    surface: 'L2',
+    name: `"${name}" drawn twice, PDFium reading it once (${dx}, ${dy})`,
+    pdf: () => fitPdf(shadowed(name, dx, dy)),
+    quotes: [name],
+    needles: [name, ...name.split(' ')],
+    mayRefuse: /drawn twice/,
+  })),
   // L3: one marked glyph left behind, which no whole-quote check sees.
   { surface: 'L3', name: 'a Type 3 glyph drawn 1.5 em from its advance', pdf: () => fitPdf(`BT /F1 18 Tf 20 60 Td ${BLUE} (Ask ) Tj /F3 18 Tf ${RED} (GHIBE) Tj /F1 18 Tf ${BLUE} (          now.) Tj ET`), quotes: ['Renaz'], needles: ['Renaz', 'Rena'], mayRefuse: /withheld/ },
   { surface: 'L3', name: 'a glyph pulled out of its place by a TJ', pdf: () => fitPdf(askLine('[(Quill) 2200 (on)] TJ', { after: '      now.' })), quotes: ['Quillon'], needles: ['Quillon', 'Quill'], mayRefuse: /withheld/ },
