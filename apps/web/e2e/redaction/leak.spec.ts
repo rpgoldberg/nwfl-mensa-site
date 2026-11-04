@@ -2,10 +2,12 @@
 // API serves a database seeded with random canaries that the public policy or
 // a mark withholds (e2e/redaction/stack.mjs): marked passages in item and event
 // titles, bodies, status notes, details, links and a series description;
-// policy-redacted fields (an on-behalf-of name, a private venue's name and
-// link, a member's home); a whole-item mark; an item the public policy hides;
-// and an accented name in an item's slug, which the API must replace by the
-// item's id.
+// policy-redacted fields (a private venue's name and link, a member's home); a
+// whole-item mark; an item the public policy hides; and an accented name in an
+// item's slug, which the API must replace by the item's id. REDACT-LOOK (0022,
+// Ross's 11-02 decision): the public is shown members' names, so the canaries
+// are marked as phones, addresses and e-mails, which it still has withheld,
+// and a marked name and a marked on-behalf-of byline must now reach it.
 //
 // As the public, the test crawls every route under src/pages/ (e2e/routes.ts,
 // which test/routes.test.ts holds to the pages folder), every link those pages
@@ -29,6 +31,8 @@
 // API itself would answer as an officer's, never has its token sent.
 import { inflateSync } from 'node:zlib';
 import { expect, test, type APIRequest, type APIRequestContext } from '@playwright/test';
+import { ContentKind } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { grpcReads } from '../../src/lib/api/client';
 import { PUBLIC_CACHE } from '../../server/policy.mjs';
 import { SESSION_COOKIE } from '../../server/policy.mjs';
 import { LIVE, STATIC, crawlSeeds, patternOf } from '../routes';
@@ -36,6 +40,8 @@ import { REDACTION } from './servers';
 
 interface Fixture {
   canaries: Record<string, string>;
+  /** Marked member names the public is shown since 0022: on a page, in the PDF, and the report's byline. */
+  shown: { name: string; pdfName: string; byline: string };
   ids: Record<string, string>;
   plainSlug: string;
   pdfPlain: string;
@@ -247,6 +253,20 @@ test('the redacted copies render: "[withheld]" in every format, the dropped item
   // A private venue's name and link, and a member's home, by area only.
   expect(body(`/events/${fixture.ids['online']}`)).toContain('Online: [withheld]');
   expect(body(`/events/${fixture.ids['potluck']}`)).toContain("A member's home in Okaloosa County");
+});
+
+test("0022 (SPEC L11): the public is shown a marked member's name on a page and in the PDF copy, and the API gives it the marked byline", async () => {
+  expect(fold(fetched.get('/')!.body)).toContain(fold(fixture.shown.name));
+  // The copy is still a redacted one: its phone withheld, the name shown.
+  const pdf = fetched.get(`/documents/${fixture.ids['pdf']}.pdf`);
+  expect(pdf?.status).toBe(200);
+  expect(pdf!.pdf?.text).toContain(`Thanks to ${fixture.shown.pdfName}.`);
+  expect(fold(pdf!.body)).not.toContain(fold(fixture.canaries['phone']!));
+  // The site shows no byline: the API's answer to the public (no token) carries it.
+  const items = await grpcReads({ baseUrl: REDACTION.apiUrl, timeoutMs: 5000 }, () => undefined).listPublishedItems(ContentKind.UNSPECIFIED, 100);
+  const report = items.find((item) => item.id === fixture.ids['report']);
+  expect(report?.live?.onBehalfOf).toBe(`${fixture.shown.byline}, guest writer`);
+  expect(fold(JSON.stringify(report, (_, value: unknown) => (typeof value === 'bigint' ? String(value) : value)))).not.toContain(fold(fixture.canaries['reportPhone']!));
 });
 
 test('an item whose slug the API withheld is shown by its id; an unmarked item keeps its slug', () => {

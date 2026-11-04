@@ -166,6 +166,57 @@ const SHADOWS: ReadonlyArray<[string, number, number]> = [
   ['Quillon Braskett', 0, -11],
 ];
 
+/** Helvetica's advance widths (its AFM, thousandths of an em) of the letters the decoys are set in. */
+const HELVETICA_WIDTHS: Readonly<Record<string, number>> = { ' ': 278, B: 667, I: 278, Q: 778, a: 556, e: 556, i: 222, k: 500, l: 222, m: 833, n: 556, o: 556, r: 333, s: 500, t: 278, u: 556, v: 500 };
+
+/**
+ * An invisible text object (render mode `mode`, 3 unless given) of the name's glyphs at `keep` alone, each
+ * where it is in the name set from (x, y) at 14 pt, the others skipped by TJ spacing.
+ */
+const remnantOf = (name: string, keep: readonly number[], x: number, y: number, mode: number): string => {
+  const glyphs = [...name];
+  const at = (k: number): number => (glyphs.slice(0, k).reduce((sum, ch) => sum + (HELVETICA_WIDTHS[ch] as number), 0) * 14) / 1000;
+  const parts: string[] = [];
+  keep.forEach((k, n) => {
+    if (n > 0) {
+      const gap = glyphs.slice((keep[n - 1] as number) + 1, k).reduce((sum, ch) => sum + (HELVETICA_WIDTHS[ch] as number), 0);
+      if (gap > 0) parts.push(String(-gap));
+    }
+    parts.push(`(${glyphs[k]})`);
+  });
+  return `BT /F1 14 Tf ${mode} Tr ${(x + at(keep[0] as number)).toFixed(4)} ${y.toFixed(4)} Td ${BLUE} [${parts.join(' ')}] TJ 0 Tr ET`;
+};
+
+/**
+ * A shadow (`shadowed`) with a decoy (challenger r2, F-A): an invisible copy of exactly the glyphs a removal of
+ * the marked name leaves of its shadow (`keep`, by index in the name), at their places, drawn between the two.
+ * After the removal PDFium takes what is left of the shadow for a copy of the decoy and reads it no more, so a
+ * check of the reading after the removal alone cannot see it: the shadow is in no reading before the removal
+ * either, so the page's text objects are counted against the reading (redact.ts). `form`: all of it in a form
+ * XObject the page draws moved down 20 pt, which the count walks into.
+ */
+const decoyed = (name: string, dx: number, dy: number, keep: readonly number[], opts: { mode?: number; form?: boolean } = {}): (() => Promise<Uint8Array>) => {
+  const x = 20 + 27.23 + dx;
+  const decoy = remnantOf(name, keep, x, 60 + dy, opts.mode ?? 3);
+  const content = `${askLine(`(${name}) Tj`)}\n${decoy}\nBT /F1 14 Tf ${x.toFixed(4)} ${(60 + dy).toFixed(4)} Td ${RED} (${name}) Tj ET`;
+  return () => (opts.form === true ? fitPdf('q 1 0 0 1 0 -20 cm /Fm1 Do Q', { form: content }) : fitPdf(content));
+};
+
+/**
+ * The challenger's F-A, and a decoy for each shadow of the sweep (SHADOWS), of exactly the glyphs its removal
+ * left before the count: the last glyph, the first, an x-height one, or a run of them.
+ */
+const DECOYS: ReadonlyArray<[string, number, number, readonly number[]]> = [
+  ['Quillon Brask', 6.3, 4, [12]],
+  ['Quillon Brell', 2.2, 0, [12]],
+  ['Quillon Brell', 2.5, -2.5, [12]],
+  ['Quillon Brask', 6.1, 0, [12]],
+  ['Ivo Brumm', -2.7, 0, [0]],
+  ['Ivo Brumm', -10.4, 0, [0]],
+  ['Quillon Braskett', 0, -10.5, [1]],
+  ['Quillon Braskett', 0, -11, [1, 5, 6, 7, 9, 10, 11, 13]],
+];
+
 export const FIT_FIXTURES: FitFixture[] = [
   // L1: ink outside the loose box.
   { surface: 'L1', name: 'accents above the ascent (Å, Ç, ÿ)', pdf: () => fitPdf(askLine('(\\305sa \\307ald\\377ry) Tj', { size: 18 })), quotes: ['Åsa Çaldÿry'], needles: ['Åsa', 'Çaldÿry', 'aldÿry'] },
@@ -199,6 +250,19 @@ export const FIT_FIXTURES: FitFixture[] = [
     needles: [name, ...name.split(' ')],
     mayRefuse: /drawn twice/,
   })),
+  // L2: the same, with a decoy that hides what removal leaves of the shadow from the reading after it (F-A).
+  ...DECOYS.map(([name, dx, dy, keep]): FitFixture => ({
+    surface: 'L2',
+    name: `"${name}" drawn twice (${dx}, ${dy}), with an invisible decoy of glyphs ${keep.join(' ')}`,
+    pdf: decoyed(name, dx, dy, keep),
+    quotes: [name],
+    needles: [name, ...name.split(' ')],
+    // On the name's own baseline the decoy runs on into it ("Brelll"): PDFium's reading then holds no passage,
+    // and the output gate, reading as pdf.js does, finds the name and refuses the copy.
+    ...(dy === 0 ? { mayRefuse: /can still be read by another reader/ } : {}),
+  })),
+  { surface: 'L2', name: 'F-A in a form XObject drawn moved', pdf: decoyed('Quillon Brask', 6.3, 4, [12], { form: true }), ...QUILLON },
+  { surface: 'L2', name: 'F-A with the decoy drawn as a clip (Tr 7)', pdf: decoyed('Quillon Brask', 6.3, 4, [12], { mode: 7 }), ...QUILLON, mayRefuse: /drawn as a clip/ },
   // L3: one marked glyph left behind, which no whole-quote check sees.
   { surface: 'L3', name: 'a Type 3 glyph drawn 1.5 em from its advance', pdf: () => fitPdf(`BT /F1 18 Tf 20 60 Td ${BLUE} (Ask ) Tj /F3 18 Tf ${RED} (GHIBE) Tj /F1 18 Tf ${BLUE} (          now.) Tj ET`), quotes: ['Renaz'], needles: ['Renaz', 'Rena'], mayRefuse: /withheld/ },
   { surface: 'L3', name: 'a glyph pulled out of its place by a TJ', pdf: () => fitPdf(askLine('[(Quill) 2200 (on)] TJ', { after: '      now.' })), quotes: ['Quillon'], needles: ['Quillon', 'Quill'], mayRefuse: /withheld/ },

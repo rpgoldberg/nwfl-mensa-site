@@ -24,7 +24,10 @@
 --   * the cell is set, which takes the ledger lock and queues every stored original again (0015);
 --   * audit_event rows record it as the narrow path's do (redaction_propose, redaction_approve,
 --     redaction_set), as the system, with the reason in the note and the payload: redaction_change
---     has no reason column.
+--     has no reason column. The approval's from_state is NULL: the change is written applied, never
+--     pending.
+--   * the whole-item member_name count is taken under the ledger lock, which every mark write takes,
+--     so no such mark can commit unseen between the count and the cell's change.
 --
 -- Identities (no person's identifier is written into this immutable file):
 --   proposer  system:migration-0022
@@ -55,6 +58,9 @@ BEGIN
         v_cell.category, v_from, v_cell.expected USING ERRCODE = '55000';
     END IF;
     IF v_cell.category = 'member_name' THEN
+      -- A mark is written under the ledger lock (0016: its stamp trigger takes it). Taken here, before the
+      -- count, a whole-item mark that commits meanwhile is counted, and none can be written until this ends.
+      PERFORM publication_ledger_lock();
       SELECT count(*) INTO v_whole FROM redaction_mark
         WHERE tenant_id = 'nwflorida' AND category = 'member_name' AND quote IS NULL AND status = 'active';
       IF v_whole > 0 THEN
@@ -85,7 +91,8 @@ BEGIN
                                     'category', v_cell.category, 'decision', 'ross-2026-11-02');
     INSERT INTO audit_event (actor_kind, actor_sub, action, subject_kind, subject_id, from_state, to_state, note, payload) VALUES
       ('system', c_proposer, 'redaction_propose', 'redaction_change', v_change.id::text, v_from, 'show', c_note, v_payload),
-      ('system', c_approver, 'redaction_approve', 'redaction_change', v_change.id::text, 'pending', 'applied', c_note, v_payload),
+      -- Written applied on the recorded decision, the change was never pending: its approval has no from_state.
+      ('system', c_approver, 'redaction_approve', 'redaction_change', v_change.id::text, NULL, 'applied', c_note, v_payload),
       ('system', c_proposer, 'redaction_set', 'redaction_policy', 'nwflorida:public:' || v_cell.category, v_from, 'show', c_note, v_payload);
   END LOOP;
 END

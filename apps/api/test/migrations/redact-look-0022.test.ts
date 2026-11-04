@@ -163,20 +163,21 @@ describe.skipIf(!live)('0022: the public copy shows member names and pictures (R
     });
 
     it('audits each change as the narrow path does, as the system, with the reason', async () => {
-      const { rows } = await db.owner.query<{ category: string; action: string; actor_kind: string; actor_sub: string; from_state: string; to_state: string; note: string; payload: Record<string, string> }>(
+      const { rows } = await db.owner.query<{ category: string; action: string; actor_kind: string; actor_sub: string; from_state: string | null; to_state: string; note: string; payload: Record<string, string> }>(
         `SELECT c.category, a.action, a.actor_kind, a.actor_sub, a.from_state, a.to_state, a.note, a.payload
            FROM redaction_change c
            JOIN audit_event a ON (a.subject_kind = 'redaction_change' AND a.subject_id = c.id::text)
                               OR (a.subject_kind = 'redaction_policy' AND a.subject_id = c.tenant_id || ':' || c.audience || ':' || c.category AND a.payload ->> 'change_id' = c.id::text)
           WHERE c.status = 'applied' ORDER BY c.category, a.id`,
       );
+      // The change is written applied, on the recorded decision: it was never pending, so its approval has no from_state.
       const shape = rows.map((r) => [r.category, r.action, r.actor_kind, r.actor_sub, r.from_state, r.to_state]);
       expect(shape).toEqual([
         ['image', 'redaction_propose', 'system', PROPOSER, 'blur', 'show'],
-        ['image', 'redaction_approve', 'system', APPROVER, 'pending', 'applied'],
+        ['image', 'redaction_approve', 'system', APPROVER, null, 'applied'],
         ['image', 'redaction_set', 'system', PROPOSER, 'blur', 'show'],
         ['member_name', 'redaction_propose', 'system', PROPOSER, 'redact', 'show'],
-        ['member_name', 'redaction_approve', 'system', APPROVER, 'pending', 'applied'],
+        ['member_name', 'redaction_approve', 'system', APPROVER, null, 'applied'],
         ['member_name', 'redaction_set', 'system', PROPOSER, 'redact', 'show'],
       ]);
       for (const row of rows) {
@@ -258,6 +259,34 @@ describe.skipIf(!live)('0022: the public copy shows member names and pictures (R
 
     it('when a whole item is marked as a member\'s name: it would silently become public', async () => {
       await refusesWith('nwfl_0022_whole', async (d) => void (await wholeItemMark(d, await item(d, 'roster-note'), 'member_name')), /0022: 1 active whole-item member_name mark/);
+    });
+
+    it('when such a mark is being written as it runs: it waits for the mark, then counts it (challenger r2, N7)', async () => {
+      await close(db);
+      db = await beforeZeroTwentyTwo('nwfl_0022_race');
+      const d = db;
+      const subject = await item(d, 'late-note');
+      const writer = await d.app.connect();
+      try {
+        // An officer's whole-item name mark, written and not yet committed: it holds the ledger lock (0016).
+        await writer.query('BEGIN');
+        await writer.query(`SELECT redaction_mark_add('content_item', $1, NULL, NULL, 'member_name', $2, $3, NULL)`, [subject, OFFICER.sub, OFFICER.groups]);
+        const running = migrate(d.name);
+        const waiting = async (): Promise<number> =>
+          (await d.owner.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1 AND application_name = 'nwfl-migrate' AND wait_event_type = 'Lock'`, [d.name])).rows[0]!.n;
+        for (let tries = 0; (await waiting()) === 0; tries++) {
+          if (tries > 200) throw new Error('0022 never waited for the mark');
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        await writer.query('COMMIT');
+        const run = await running;
+        expect(run.code).not.toBe(0);
+        expect(run.stderr).toMatch(/0022: 1 active whole-item member_name mark/);
+        expect(await cells(d)).toMatchObject({ 'public:member_name': 'redact', 'public:image': 'blur' });
+        expect((await d.owner.query(`SELECT 1 FROM schema_migrations WHERE filename LIKE '0022_%'`)).rowCount).toBe(0);
+      } finally {
+        writer.release();
+      }
     });
   });
 });

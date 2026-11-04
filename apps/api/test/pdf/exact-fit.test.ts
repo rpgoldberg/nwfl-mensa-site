@@ -7,21 +7,26 @@
 // These PDFs are adversarial in shape: run this file only in the capped
 // container (SPEC section 4).
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Box, PageChar, Region } from '../../src/pdf/match.js';
-import { stillThere } from '../../src/pdf/match.js';
+import type { Box, PageChar, Region, TextObject } from '../../src/pdf/match.js';
+import { matchedChars, regionsFor, stillThere, unread } from '../../src/pdf/match.js';
 import { Document, LABEL_EMS, Page, labelSize, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { extractAll, leaked, rawText } from './extract.js';
-import { BLUE, FIT_FIXTURES, RED, askLine, fitPdf, pictureNearFixture, scaledTypeFixture } from './fit-fixtures.js';
+import { BLUE, FIT_FIXTURES, type FitFixture, RED, askLine, fitPdf, pictureNearFixture, scaledTypeFixture } from './fit-fixtures.js';
 import { twoMarksFixture } from './fixtures.js';
 import { black, blue, contrast, inAny, inside, lost, red, render, where } from './pixels.js';
 
 async function pageChars(pdf: Uint8Array, index = 0): Promise<PageChar[]> {
+  return (await pageText(pdf, index)).chars;
+}
+
+/** A page's reading and its text objects, as redact.ts takes them. */
+async function pageText(pdf: Uint8Array, index = 0): Promise<{ chars: PageChar[]; objects: TextObject[] }> {
   const doc = Document.open(await pdfium(), pdf);
   if (doc === null) throw new Error('unopenable');
   try {
     doc.flatten(index);
-    return doc.page(index, (page) => page.chars().chars);
+    return doc.page(index, (page) => ({ chars: page.chars().chars, objects: page.textObjects() }));
   } finally {
     doc.close();
   }
@@ -79,6 +84,23 @@ describe('exact fit: the boxes are the passages\' own widths', () => {
     expect((await extractAll(pdf)).match(/withheld/g)).toHaveLength(1);
   });
 
+  it('gives two passages on one line two boxes and keeps the unmarked word between them (challenger r2, F3)', async () => {
+    const quotes = ['Bo Pellingham', 'Quillon Brask'];
+    const apart = `BT /F1 14 Tf 20 60 Td ${BLUE} (Ask ) Tj ${RED} (Bo Pellingham) Tj ${BLUE} ( and ) Tj ${RED} (Quillon Brask) Tj ${BLUE} ( now.) Tj ET`;
+    const together = 'BT /F1 14 Tf 20 60 Td (Ask Bo Pellingham and Quillon Brask now.) Tj ET';
+    for (const content of [apart, together]) {
+      const { pdf, boxes } = copyOf(await redactPdf(await fitPdf(content), { quotes, redactsAny: true }));
+      // "Ask " is 27.23 pt, "Bo Pellingham" 90.258, " and " 31.136 and "Quillon Brask" 83.244, at 14 pt from 20.
+      expect(boxes, content).toHaveLength(2);
+      const [first, second] = boxes as [Region, Region];
+      for (const [got, want] of [[first.left, 47.23], [first.right, 137.488], [second.left, 168.624], [second.right, 251.868]] as const) {
+        // PDFium sums the advances in single precision: within 0.02 pt of the AFM widths' sum.
+        expect(Math.abs(got - want), `${content}: ${got} ${want}`).toBeLessThan(0.02);
+      }
+      expect((await extractAll(pdf)).split('\n')[0], content).toMatch(/^Ask\s+and\s+now\./);
+    }
+  });
+
   it('labels type set at 1 pt and scaled to 12 pt by its matrix as 12 pt type', async () => {
     const { pdf, boxes } = copyOf(await redactPdf(await scaledTypeFixture(), { quotes: ['Quillon Brask'], redactsAny: true }));
     expect(boxes.map((box) => box.fontSize)).toEqual([12]);
@@ -116,15 +138,17 @@ describe('exact fit: no marked pixel is left, no unmarked pixel goes missing out
       expect(fixture.needles.filter((needle) => leaked(needle, seen.extracted, seen.raw))).toEqual([]);
       const pdfiumText = (await pageChars(pdf)).map((c) => c.text).join('');
       expect(fixture.needles.filter((needle) => leaked(needle, pdfiumText, ''))).toEqual([]);
-      // (iv) Each box is exactly the extent of the glyphs removed under it: not widened, not run on.
-      const chars = await pageChars(original);
+      // (iv) Each box is exactly the extent of the glyphs removed under it: not widened, not run on. A text
+      // object PDFium does not read (text drawn twice) that a box reached is removed whole, and boxed whole.
+      const { chars, objects } = await pageText(original);
       const there = stillThere(chars, await pageChars(pdf));
       // Spaces have no ink and are never boxed (match.ts exactRegions).
       const removed = chars.filter((c, i) => !there.has(i) && !c.generated && c.text.trim() !== '' && (c.box ?? c.ink) !== null).map((c) => (c.box ?? c.ink) as Box);
+      const unreadObjects = unread(chars, objects).objects;
       // Loose boxes of adjacent lines can overlap a little: a box's glyphs are the ones it contains.
       const contains = (box: Box, b: Box): boolean => b.left >= box.left - 0.01 && b.right <= box.right + 0.01 && b.bottom >= box.bottom - 0.01 && b.top <= box.top + 0.01;
       for (const box of boxes) {
-        const under = removed.filter((b) => contains(box, b));
+        const under = [...removed, ...unreadObjects].filter((b) => contains(box, b));
         expect(under.length, JSON.stringify(box)).toBeGreaterThan(0);
         expect(near(box.left, Math.min(...under.map((b) => b.left))), JSON.stringify(box)).toBe(true);
         expect(near(box.right, Math.max(...under.map((b) => b.right))), JSON.stringify(box)).toBe(true);
@@ -212,6 +236,74 @@ describe('text drawn as a clip (Tr 4 to 7, challenger F5)', () => {
   });
 });
 
+describe('text PDFium does not read, by a passage (challenger r2, F2)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const remove = Object.getOwnPropertyDescriptor(Page.prototype, 'removeText')?.value as (this: Page, regions: readonly Region[]) => boolean;
+  const fa = (): Promise<Uint8Array> => (FIT_FIXTURES.find((f) => f.name.startsWith('"Quillon Brask" drawn twice (6.3, 4)')) as FitFixture).pdf();
+
+  it('removes and boxes the whole of a shadow PDFium never reads, so no decoy can hide what a removal leaves of it (F-A)', async () => {
+    const original = await fa();
+    const { chars, objects } = await pageText(original);
+    const shadow = unread(chars, objects).objects;
+    // The shadow, 6.3 pt right and 4 pt up of the name: in no reading.
+    expect(shadow.map((b) => Number(b.right.toFixed(2)))).toEqual([136.79]);
+    const { pdf, boxes } = copyOf(await redactPdf(original, { quotes: ['Quillon Brask'], redactsAny: true }));
+    expect(boxes).toHaveLength(1);
+    const box = boxes[0] as Region;
+    // The shadow's k lies over the n of " now.", which goes with it: the box ends with the n (134.38 + 7.784).
+    expect([box.left, box.right].map((v) => Number(v.toFixed(2)))).toEqual([47.23, 142.15]);
+    expect(box.top).toBeGreaterThanOrEqual((shadow[0] as Box).top);
+    expect((await extractAll(pdf)).split('\n')[0]).toMatch(/^Ask\s+ow\.\s+withheld$/);
+    expect(where(await render(pdf), red)).toEqual([]);
+  });
+
+  it('refuses a page where a text object PDFium reads only in part meets a passage: what it left out is unknown', async () => {
+    // An invisible "Ask Bo Smith" laid over a visible "Ask Bo": PDFium reads its "Ask Bo" once, as the visible
+    // one's, and reads " Smith" of it.
+    const content = 'BT /F1 14 Tf 20 60 Td (Ask Bo) Tj ET BT /F1 14 Tf 3 Tr 20 60 Td (Ask Bo Smith) Tj 0 Tr ET';
+    const { chars, objects } = await pageText(await fitPdf(content));
+    expect(unread(chars, objects).parts.length).toBeGreaterThan(0);
+    expect(await redactPdf(await fitPdf(content), { quotes: ['Bo'], redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: 'page 1: text PDFium reads only in part meets a withheld passage',
+    });
+    // Apart from the passage, on another line, the same object is no reason to refuse.
+    const apart = `${content}\n${askLine('(Quillon Brask) Tj', { y: 20 })}`;
+    expect((await redactPdf(await fitPdf(apart), { quotes: ['Quillon Brask'], redactsAny: true })).kind).toBe('redacted');
+  });
+
+  it('refuses when a removal leaves text PDFium does not read at a passage (the second guard: the count is taken again after it)', async () => {
+    // A removal that stops at the name's own right edge (20 + 27.23 + 83.258), as an exact one did before the
+    // count: it misses the shadow's last glyph, and the decoy hides that from the reading after it.
+    vi.spyOn(Page.prototype, 'removeText').mockImplementation(function (this: Page, regions: readonly Region[]) {
+      return remove.call(this, regions.map((region) => ({ ...region, right: Math.min(region.right, 130.49) })));
+    });
+    expect(await redactPdf(await fa(), { quotes: ['Quillon Brask'], redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: 'page 1: text PDFium does not read is left at a withheld passage',
+    });
+  });
+
+  it('refuses when the count misses a copy and removal uncovers it (the reading after removal, kept as a guard)', async () => {
+    // F-A's shadow with no decoy, and the count blinded: the shadow is in none, so only the name's own extent
+    // is removed, and what is left of the shadow is read once the name is gone.
+    vi.spyOn(Page.prototype, 'textObjects').mockReturnValue([]);
+    const original = await fitPdf(`${askLine('(Quillon Brask) Tj')}\nBT /F1 14 Tf 53.53 64 Td ${RED} (Quillon Brask) Tj ET`);
+    expect(await redactPdf(original, { quotes: ['Quillon Brask'], redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: 'page 1: text drawn twice is left after removal',
+    });
+  });
+
+  it('counts text objects in a form XObject, in page space', async () => {
+    const original = await (FIT_FIXTURES.find((f) => f.name === 'F-A in a form XObject drawn moved') as FitFixture).pdf();
+    const { chars, objects } = await pageText(original);
+    // The form is drawn 20 pt down: the shadow's bounds are too.
+    expect(unread(chars, objects).objects.map((b) => [Number(b.right.toFixed(2)), Number(b.top.toFixed(2))])).toEqual([[136.79, 54.32]]);
+    expect(objects.length).toBeGreaterThanOrEqual(5);
+  });
+});
+
 describe('a withheld glyph that survives removal (L3)', () => {
   afterEach(() => vi.restoreAllMocks());
   // The real removal, taken before any spy replaces it.
@@ -244,16 +336,53 @@ describe('a withheld glyph that survives removal (L3)', () => {
     });
   });
 
-  it('is not refused for a space of the passage that PDFium keeps: a space shows nothing', async () => {
-    // The quads skip the space between the two words, so PDFium keeps it.
-    vi.spyOn(Page.prototype, 'removeText').mockImplementation(function (this: Page, regions: readonly Region[]) {
-      const space = this.chars().chars.find((c) => c.text === ' ' && c.box !== null && regions.some((r) => (c.box as Box).left > r.left && (c.box as Box).right < r.right));
-      if (space === undefined) throw new Error('no space inside the passage');
-      const gap = space.box as Box;
-      return remove.call(this, regions.flatMap((r) => [{ ...r, right: gap.left }, { ...r, left: gap.right }]));
+  it('is refused when a space of the passage is still read after removal (fail closed: no glyph of a passage is exempt)', async () => {
+    // The real removal, then the space read back at its place, as if PDFium had kept it in its reading.
+    const read = Object.getOwnPropertyDescriptor(Page.prototype, 'chars')?.value as (this: Page) => ReturnType<Page['chars']>;
+    let space: PageChar | undefined;
+    let calls = 0;
+    vi.spyOn(Page.prototype, 'chars').mockImplementation(function (this: Page) {
+      const got = read.call(this);
+      calls += 1;
+      if (calls === 1) space = got.chars.find((c, i) => c.text === ' ' && got.chars[i - 1]?.text === 'n' && got.chars[i + 1]?.text === 'B');
+      return calls === 2 && space !== undefined ? { ...got, chars: [...got.chars, space] } : got;
     });
-    const result = await redactPdf(await fitPdf(askLine('(Quillon Brask) Tj')), { quotes: ['Quillon Brask'], redactsAny: true });
-    expect(result.kind).toBe('redacted');
+    expect(await redactPdf(await fitPdf(askLine('(Quillon Brask) Tj')), { quotes: ['Quillon Brask'], redactsAny: true })).toEqual({
+      kind: 'refused',
+      reason: 'page 1: a withheld glyph survived removal',
+    });
+    expect(space).toBeDefined();
+  });
+
+  it('is never refused for a space in the layouts producers write: PDFium reads no space of a removed passage again', async () => {
+    const layouts = [
+      'BT /F1 14 Tf 20 60 Td (Ask Quillon Brask now.) Tj ET',
+      'BT /F1 14 Tf 20 60 Td (Ask) Tj ( ) Tj (Quillon) Tj ( ) Tj (Brask) Tj ( ) Tj (now.) Tj ET',
+      'BT /F1 14 Tf 20 60 Td [(Ask) -278 (Quillon) -278 (Brask) -278 (now.)] TJ ET',
+      'BT /F1 14 Tf 20 60 Td 6 Tw (Ask Quillon Brask now.) Tj ET',
+      'BT /F1 14 Tf 20 60 Td 2 Tc (Ask Quillon Brask now.) Tj ET',
+    ];
+    for (const layout of layouts) {
+      const doc = Document.open(await pdfium(), await fitPdf(layout));
+      if (doc === null) throw new Error('unopenable');
+      try {
+        const left = doc.page(0, (page) => {
+          const before = page.chars().chars;
+          const withheld = matchedChars(before, ['Quillon Brask']);
+          const found = regionsFor(before, withheld);
+          if (!found.ok) throw new Error(found.reason);
+          page.removeText(found.regions);
+          const there = stillThere(before, page.chars().chars);
+          // The passage's own space is withheld with its words, and is not read again.
+          expect(withheld.has(before.findIndex((c, i) => c.text === ' ' && before[i - 1]?.text === 'n' && before[i + 1]?.text === 'B')), layout).toBe(true);
+          return [...withheld].filter((i) => there.has(i));
+        });
+        expect(left, layout).toEqual([]);
+      } finally {
+        doc.close();
+      }
+      expect((await redactPdf(await fitPdf(layout), { quotes: ['Quillon Brask'], redactsAny: true })).kind, layout).toBe('redacted');
+    }
   });
 });
 
@@ -274,6 +403,27 @@ describe('labels (L12)', () => {
     const pixels = inside(await render(pdf), box);
     expect(contrast(pixels)).toBeGreaterThanOrEqual(15);
     expect(pixels.some(([r, g, b]) => r === 255 && g === 255 && b === 255)).toBe(true);
+  });
+
+  it('keeps a label bound by the box\'s height wholly inside it (a box under 1 em tall)', async () => {
+    // 18 pt tall for 20 pt type: the label is 0.8 x 18 = 14.4 pt, under the 16 pt of the type size.
+    const region: Region = { page: 0, left: 50, right: 250, bottom: 50, top: 68, fontSize: 20 };
+    expect(labelSize(region)).toBeCloseTo(14.4, 6);
+    const doc = Document.open(await pdfium(), await fitPdf(''));
+    if (doc === null) throw new Error('unopenable');
+    let pdf: Uint8Array;
+    try {
+      doc.page(0, (page) => page.drawBoxes([region]));
+      pdf = doc.save();
+    } finally {
+      doc.close();
+    }
+    const label = (await pageChars(pdf)).filter((c) => c.ink !== null);
+    expect(label.map((c) => c.text).join('')).toBe('withheld');
+    for (const c of label) {
+      const ink = c.ink as Box;
+      expect(ink.left >= region.left && ink.right <= region.right && ink.bottom >= region.bottom && ink.top <= region.top, JSON.stringify(ink)).toBe(true);
+    }
   });
 
   it('leaves a box too narrow for a readable label without one, all black', async () => {

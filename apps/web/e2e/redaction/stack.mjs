@@ -17,6 +17,12 @@
 // must see none of them, a member the first two, and /news shows nobody the
 // officers article.
 //
+// REDACT-LOOK (0022, Ross's 11-02 decision): the public is shown members'
+// names, and still has their phones, addresses and e-mails withheld. So every
+// canary is marked in one of those categories, and S holds what the public must
+// now be shown: a marked member's name on a page and in the PDF, and a marked
+// on-behalf-of byline.
+//
 // A PDF on a marked item carries a canary of its own and a marked phone
 // (REDACT R3c); the stack is ready only once the PDF worker (dist/worker.js,
 // as its own role nwfl_worker, W-WORKER) has made its copies, so the crawl
@@ -93,12 +99,11 @@ const canary = (/** @type {string} */ name) => `${name}${randomBytes(6).toString
 // The canaries: random, so none can already be in the site's code or content.
 const hex = randomBytes(6).toString('hex');
 const C = {
-  // An accented name, in a marked title and in the item's slug (which the API must withhold).
+  // An accented name, in a title marked as an address, and in the item's slug (which the API must withhold).
   accentedName: `Zoë Quillfeather${hex}`,
   slugName: `zoe-quillfeather${hex}`,
   phone: canary('phone'),
   reportPhone: canary('reportphone'),
-  byline: canary('byline'),
   whole: canary('whole'),
   email: canary('email'),
   occurrenceTitle: canary('occtitle'),
@@ -119,6 +124,16 @@ const C = {
   membersBody: canary('membersbody'),
   officersTitle: canary('officerstitle'),
   officersBody: canary('officersbody'),
+};
+
+// What the public is shown since 0022 (Ross, 11-02): each marked member_name. The positive control of SPEC L11.
+const S = {
+  // On the home page, in an announcement's body.
+  name: canary('shownname'),
+  // In the PDF and, so that its mark anchors, in the body.
+  pdfName: canary('shownpdfname'),
+  // The president's report's on-behalf-of byline. The site shows no byline: the API's answer to the public carries it.
+  byline: canary('shownbyline'),
 };
 
 const ids = {
@@ -184,7 +199,7 @@ function linesPdf(lines) {
   return Buffer.concat(parts);
 }
 
-const PDF = linesPdf([`Receipts: call ${C.phone} by Friday.`, `Signed by ${C.pdfName} for the board.`, `${PDF_PLAIN} to the picnic.`]);
+const PDF = linesPdf([`Receipts: call ${C.phone} by Friday.`, `Signed by ${C.pdfName} for the board.`, `${PDF_PLAIN} to the picnic.`, `Thanks to ${S.pdfName}.`]);
 // The newsletter issue's two PDFs, as the issue loader stores them (apps/api README, "Loading a newsletter issue").
 const ISSUE = { title: 'Pensa Mensa, October-November 2026', summary: 'Volume 30, Number 5', plain: 'Puzzle corner answers' };
 const ISSUE_PUBLIC_PDF = linesPdf(['Pensa Mensa', `${ISSUE.plain} on page 4.`]);
@@ -235,12 +250,12 @@ INSERT INTO office (id, slug, title, kind, sort_order, role_alias, role_alias_ve
 INSERT INTO office_term (office_id, holder_display_name, starts_on, status) VALUES
   (${q(ids.president)}, 'Alex Sample', '2026-01-01', 'active'),
   (${q(ids.treasurer)}, 'Riley Testcase', '2026-01-01', 'active');
-${item({ id: ids.accented, slug: `${C.slugName}-q3`, kind: 'treasurer_summary', office: ids.treasurer, title: `Report by ${C.accentedName}`, body: [para(`Receipts: call ${C.phone} by Friday.`), para(`Signed by ${C.pdfName}.`)], daysAgo: 2, files: [{ id: ids.pdf, bytes: PDF, name: 'receipts.pdf', audience: 'public' }] })}
+${item({ id: ids.accented, slug: `${C.slugName}-q3`, kind: 'treasurer_summary', office: ids.treasurer, title: `Report by ${C.accentedName}`, body: [para(`Receipts: call ${C.phone} by Friday.`), para(`Signed by ${C.pdfName}.`), para(`Thanks to ${S.pdfName}.`)], daysAgo: 2, files: [{ id: ids.pdf, bytes: PDF, name: 'receipts.pdf', audience: 'public' }] })}
 ${item({ id: ids.plain, slug: PLAIN_SLUG, kind: 'treasurer_summary', office: ids.treasurer, title: 'April to June', body: [para('Closing balance: $2,543.10')], daysAgo: 90 })}
-${item({ id: ids.report, slug: 'president-report', kind: 'president_report', office: ids.president, title: 'A busy autumn', onBehalfOf: `${C.byline}, guest writer`, body: [para(`Rides to the picnic: call ${C.reportPhone} any evening.`)], daysAgo: 1 })}
+${item({ id: ids.report, slug: 'president-report', kind: 'president_report', office: ids.president, title: 'A busy autumn', onBehalfOf: `${S.byline}, guest writer`, body: [para(`Rides to the picnic: call ${C.reportPhone} any evening.`)], daysAgo: 1 })}
 ${item({ id: ids.whole, slug: 'remembering-a-friend', kind: 'announcement', office: ids.president, title: 'Remembering a friend', body: [para(`Words by ${C.whole}`)], daysAgo: 1 })}
 ${item({ id: ids.hidden, slug: 'mailing-list', kind: 'announcement', office: ids.president, title: 'Mailing list', body: [para(`Write to ${C.email} to join.`)], daysAgo: 2 })}
-${item({ id: ids.helpers, slug: 'helpers-wanted', kind: 'announcement', office: ids.president, title: 'Helpers wanted', body: [para('The picnic needs two more helpers.')], daysAgo: 3 })}
+${item({ id: ids.helpers, slug: 'helpers-wanted', kind: 'announcement', office: ids.president, title: 'Helpers wanted', body: [para('The picnic needs two more helpers.'), para(`Sign up with ${S.name}.`)], daysAgo: 3 })}
 ${item({
   id: ids.issue,
   slug: 'pensa-mensa-2026-10',
@@ -280,22 +295,24 @@ INSERT INTO event_occurrence (id, title, starts_at, visibility, venue_id, status
    ${q(`Meet at ${C.address} instead.`)}, ${q(`Bring ${C.detail} and a snack.`)}, ${q(`https://example.org/${C.eventUrl}`)}, ${q(ids.president)}),
   (${q(ids.potluck)}, 'Potluck', date_trunc('day', now()) + interval '3 days 23 hours', 'public', ${q(ids.home)}, 'scheduled', NULL, NULL, NULL, ${q(ids.president)}),
   (${q(ids.online)}, 'Online chat', date_trunc('day', now()) + interval '4 days 23 hours', 'public', ${q(ids.room)}, 'scheduled', NULL, NULL, NULL, ${q(ids.president)});
-${mark('content_item', ids.accented, 'title', C.accentedName, 'member_name')}
+${mark('content_item', ids.accented, 'title', C.accentedName, 'member_address')}
 ${mark('content_item', ids.accented, 'body', C.phone, 'member_phone')}
-${mark('content_item', ids.accented, 'body', C.pdfName, 'member_name')}
+${mark('content_item', ids.accented, 'body', C.pdfName, 'member_address')}
+${mark('content_item', ids.accented, 'body', S.pdfName, 'member_name')}
 -- The PDF's original, through the API's own writer (0015), which queues its copies.
 SELECT pdf_original_put(${q(ids.pdf)}, decode(${q(PDF.toString('hex'))}, 'hex'), 'sub-officer', ARRAY['nwfl-members', 'nwfl-officers'], NULL);
 SELECT pdf_original_put(${q(ids.issuePublicPdf)}, decode(${q(ISSUE_PUBLIC_PDF.toString('hex'))}, 'hex'), 'sub-officer', ARRAY['nwfl-members', 'nwfl-officers'], NULL);
 SELECT pdf_original_put(${q(ids.issueMembersPdf)}, decode(${q(ISSUE_MEMBERS_PDF.toString('hex'))}, 'hex'), 'sub-officer', ARRAY['nwfl-members', 'nwfl-officers'], NULL);
 ${mark('content_item', ids.report, 'body', C.reportPhone, 'member_phone')}
-${mark('content_item', ids.report, 'on_behalf_of', C.byline, 'member_name')}
-${mark('content_item', ids.whole, null, null, 'member_name')}
+${mark('content_item', ids.report, 'on_behalf_of', S.byline, 'member_name')}
+${mark('content_item', ids.helpers, 'body', S.name, 'member_name')}
+${mark('content_item', ids.whole, null, null, 'member_phone')}
 ${mark('content_item', ids.hidden, 'body', C.email, 'member_email')}
-${mark('event_occurrence', ids.games, 'title', C.occurrenceTitle, 'member_name')}
+${mark('event_occurrence', ids.games, 'title', C.occurrenceTitle, 'member_address')}
 ${mark('event_occurrence', ids.games, 'status_note', C.address, 'member_address')}
 ${mark('event_occurrence', ids.games, 'detail', C.detail, 'member_phone')}
 ${mark('event_occurrence', ids.games, 'url', C.eventUrl, 'member_address')}
-${mark('event_series', ids.series, 'title', C.seriesTitle, 'member_name')}
+${mark('event_series', ids.series, 'title', C.seriesTitle, 'member_phone')}
 ${mark('event_series', ids.series, 'description', C.description, 'member_phone')}
 -- A tightening applies at once: the public no longer gets an item with a marked email at all.
 SELECT 1 FROM redaction_propose('nwflorida', 'public', 'member_email', 'hide', 'sub-officer', ARRAY['nwfl-members', 'nwfl-officers'], '0af7651916cd43dd8448eb211c80319c');
@@ -424,6 +441,7 @@ try {
   // The original too, so the test can show its PDF check finds the canaries in it.
   const fixture = JSON.stringify({
     canaries: C,
+    shown: S,
     ids,
     plainSlug: PLAIN_SLUG,
     pdfPlain: PDF_PLAIN,

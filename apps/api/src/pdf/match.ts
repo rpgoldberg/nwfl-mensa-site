@@ -25,9 +25,12 @@
 // glyph whose tight box a region overlaps, so an unmarked neighbour whose ink
 // reaches into a region (a kerned A, an italic f) goes too: the region is
 // extended over it, until nothing more is reached (the collateral fixpoint), so
-// no gap is left unboxed. After the removal, the boxes drawn are exactly the
-// characters that were removed (boxesFor), and a marked one still there is
-// found by stillThere.
+// no gap is left unboxed. PDFium's reading leaves out a text object drawn again
+// at nearly its place (a shadow, a fake bold), so no character stands for it
+// (unread): a region is extended over the whole of such an object it meets,
+// so all of it is removed and boxed. After the removal, the boxes drawn are
+// exactly the characters that were removed and those objects (boxesFor), and
+// a marked character still there is found by stillThere.
 //
 // textMatches reads a plain string the same ways: the output gate's matcher.
 // ============================================================================
@@ -268,35 +271,113 @@ function exactRegions(chars: readonly PageChar[], boxed: ReadonlySet<number>, ma
 }
 
 /**
+ * The regions with each box merged into the regions it overlaps (they become one region, its type size
+ * the largest of theirs), or made a region of its own when it overlaps none: one with no type size, so
+ * with no label.
+ */
+function absorb(regions: readonly Region[], boxes: readonly Box[], page: number): Region[] {
+  let out = regions.map((region) => ({ ...region }));
+  for (const box of boxes) {
+    const into = out.filter((region) => overlap(box, region));
+    const all: Box[] = [box, ...into];
+    out = [
+      ...out.filter((region) => !into.includes(region)),
+      {
+        page,
+        left: Math.min(...all.map((b) => b.left)),
+        right: Math.max(...all.map((b) => b.right)),
+        bottom: Math.min(...all.map((b) => b.bottom)),
+        top: Math.max(...all.map((b) => b.top)),
+        fontSize: Math.max(0, ...into.map((region) => region.fontSize)),
+      },
+    ];
+  }
+  return out;
+}
+
+/**
  * The regions to remove and box for these withheld characters, or why there can be none: exactly
  * their extent per line, extended over every unmarked character PDFium would remove with them (its
- * ink overlaps a region), until no more is reached.
+ * ink overlaps a region) and over the bounds of every text object PDFium does not read (`unreadObjects`,
+ * from unread) that overlaps a region, until no more is reached.
  */
-export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<number>, page = 0): Regions {
+export function regionsFor(chars: readonly PageChar[], withheld: ReadonlySet<number>, page = 0, unreadObjects: readonly Box[] = []): Regions {
   const lineOf = linesOf(chars);
   const boxed = new Set(withheld);
-  let found = exactRegions(chars, boxed, withheld, lineOf, page);
-  // Each round boxes at least one more character, so as many rounds as characters reach the fixpoint.
-  for (let round = 0; round < chars.length && found.ok; round++) {
-    const regions = found.regions;
-    const reached = chars.flatMap((c, i) =>
-      boxed.has(i) || c.generated || isBlank(c) || c.ink === null || !regions.some((region) => overlap(c.ink as Box, region)) ? [] : [i],
-    );
-    if (reached.length === 0) break;
-    for (const i of reached) boxed.add(i);
-    found = exactRegions(chars, boxed, withheld, lineOf, page);
+  const reached: Box[] = [];
+  const regions = (): Regions => {
+    const exact = exactRegions(chars, boxed, withheld, lineOf, page);
+    return exact.ok ? { ok: true, regions: absorb(exact.regions, reached, page) } : exact;
+  };
+  let found = regions();
+  // Each round boxes at least one more character or object, so as many rounds as there are reach the fixpoint.
+  for (let round = 0; round < chars.length + unreadObjects.length && found.ok; round++) {
+    const meets = (box: Box): boolean => (found as { regions: Region[] }).regions.some((region) => overlap(box, region));
+    const more = chars.flatMap((c, i) => (boxed.has(i) || c.generated || isBlank(c) || c.ink === null || !meets(c.ink) ? [] : [i]));
+    const objects = unreadObjects.filter((box) => !reached.includes(box) && meets(box));
+    if (more.length === 0 && objects.length === 0) break;
+    for (const i of more) boxed.add(i);
+    reached.push(...objects);
+    found = regions();
   }
   return found;
 }
 
 /**
  * The boxes to draw once PDFium has removed the text: exactly the marked and the removed characters,
- * per line, with no fixpoint (nothing more is removed). A character with no loose box is boxed at
- * its ink, or not at all when it has neither (regionsFor has already refused a marked one).
+ * per line, with no fixpoint (nothing more is removed), and the text objects PDFium does not read that
+ * were removed with them (`unreadObjects`, those the regions reached). A character with no loose box is
+ * boxed at its ink, or not at all when it has neither (regionsFor has already refused a marked one).
  */
-export function boxesFor(chars: readonly PageChar[], withheld: ReadonlySet<number>, removed: ReadonlySet<number>, page = 0): Region[] {
+export function boxesFor(chars: readonly PageChar[], withheld: ReadonlySet<number>, removed: ReadonlySet<number>, page = 0, unreadObjects: readonly Box[] = []): Region[] {
   // With no character treated as marked, exactRegions never refuses.
-  return (exactRegions(chars, new Set([...withheld, ...removed]), new Set(), linesOf(chars), page) as { ok: true; regions: Region[] }).regions;
+  const exact = exactRegions(chars, new Set([...withheld, ...removed]), new Set(), linesOf(chars), page) as { ok: true; regions: Region[] };
+  return absorb(exact.regions, unreadObjects, page);
+}
+
+/** The boxes that overlap a region, by the test the collateral fixpoint makes. */
+export function meeting(boxes: readonly Box[], regions: readonly Box[]): Box[] {
+  return boxes.filter((box) => regions.some((region) => overlap(box, region)));
+}
+
+/** A text object PDFium's page draws: its bounds in page space, and the characters of the reading it draws. */
+export interface TextObject {
+  bounds: Box;
+  chars: readonly number[];
+}
+
+/**
+ * What PDFium's reading leaves out of a page's text objects (REDACT-LOOK fix round 2, challenger F2).
+ * PDFium reads a text object drawn again at nearly the place of one before it once (a shadow, a fake bold),
+ * and a glyph drawn again at its own place once: what it leaves out is in no reading, so no character
+ * stands for it, and no box is measured for it. `objects`: the bounds of each text object the reading has
+ * no character of (a generated one aside); `parts`: for one it reads in part, each side of its bounds
+ * that the characters it read do not reach, loose boxes and ink together.
+ */
+export function unread(chars: readonly PageChar[], objects: readonly TextObject[]): { objects: Box[]; parts: Box[] } {
+  const out: { objects: Box[]; parts: Box[] } = { objects: [], parts: [] };
+  for (const { bounds, chars: drawn } of objects) {
+    const boxes = drawn.flatMap((i) => {
+      const c = chars[i] as PageChar;
+      return c.generated ? [] : [c.box, c.ink].filter((box): box is Box => box !== null);
+    });
+    if (boxes.length === 0) {
+      out.objects.push(bounds);
+      continue;
+    }
+    const { left, right, bottom, top } = bounds;
+    const read = {
+      left: Math.min(...boxes.map((b) => b.left)),
+      right: Math.max(...boxes.map((b) => b.right)),
+      bottom: Math.min(...boxes.map((b) => b.bottom)),
+      top: Math.max(...boxes.map((b) => b.top)),
+    };
+    if (read.left > left) out.parts.push({ left, right: read.left, bottom, top });
+    if (right > read.right) out.parts.push({ left: read.right, right, bottom, top });
+    if (read.bottom > bottom) out.parts.push({ left, right, bottom, top: read.bottom });
+    if (top > read.top) out.parts.push({ left, right, bottom: read.top, top });
+  }
+  return out;
 }
 
 /**

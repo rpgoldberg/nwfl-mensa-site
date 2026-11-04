@@ -10,7 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { type WrappedPdfiumModule, init } from '@embedpdf/pdfium';
-import type { Box, PageChar, Region } from './match.js';
+import type { Box, PageChar, Region, TextObject } from './match.js';
 
 type Module = WrappedPdfiumModule;
 
@@ -61,6 +61,26 @@ const LABEL_PAD = 1;
 export function labelSize(region: Region): number | null {
   const size = Math.min(0.8 * region.fontSize, 0.8 * (region.top - region.bottom), (region.right - region.left - 2 * LABEL_PAD) / LABEL_EMS);
   return size < Math.max(MIN_LABEL_PT, 0.6 * region.fontSize) ? null : size;
+}
+
+/** A PDF matrix [a b c d e f]: (x, y) goes to (a x + c y + e, b x + d y + f). */
+type Matrix = [number, number, number, number, number, number];
+const IDENTITY: Matrix = [1, 0, 0, 1, 0, 0];
+
+/** `first`, then `then`. */
+const times = ([a, b, c, d, e, f]: Matrix, [A, B, C, D, E, F]: Matrix): Matrix => [a * A + b * C, a * B + b * D, c * A + d * C, c * B + d * D, e * A + f * C + E, e * B + f * D + F];
+
+/** The box around a box's corners carried by a matrix. */
+function transformed(box: Box, [a, b, c, d, e, f]: Matrix): Box {
+  const corners = [
+    [box.left, box.bottom],
+    [box.left, box.top],
+    [box.right, box.bottom],
+    [box.right, box.top],
+  ].map(([x = 0, y = 0]) => [a * x + c * y + e, b * x + d * y + f] as const);
+  const xs = corners.map(([x]) => x);
+  const ys = corners.map(([, y]) => y);
+  return { left: Math.min(...xs), right: Math.max(...xs), bottom: Math.min(...ys), top: Math.max(...ys) };
 }
 
 /** An open document: the bytes stay in wasm memory until it is closed. */
@@ -223,6 +243,45 @@ export class Page {
     return false;
   }
 
+  /**
+   * Every text object the page draws, on the page or in a form XObject at any depth, with its bounds in
+   * page space and the characters of the page's reading (chars(), in its order) that PDFium took from it.
+   */
+  textObjects(): TextObject[] {
+    const m = this.m;
+    const objects: Array<{ bounds: Box; chars: number[] }> = [];
+    const index = new Map<number, number>();
+    // FS_RECTF's four floats (FPDFPageObj_GetBounds), then FS_MATRIX's six.
+    const at = rt(m).wasmExports.malloc(40);
+    try {
+      const pending: Array<[number, Matrix]> = [];
+      for (let i = 0; i < this.objectCount; i++) pending.push([m.FPDFPage_GetObject(this.handle, i), IDENTITY]);
+      for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+        const [object, matrix] = next;
+        const type = m.FPDFPageObj_GetType(object);
+        if (type === FPDF_PAGEOBJ_TEXT) {
+          m.FPDFPageObj_GetBounds(object, at, at + 4, at + 8, at + 12);
+          const [left = 0, bottom = 0, right = 0, top = 0] = new Float32Array(rt(m).HEAPU8.buffer, at, 4);
+          index.set(object, objects.length);
+          objects.push({ bounds: transformed({ left, bottom, right, top }, matrix), chars: [] });
+        } else if (type === FPDF_PAGEOBJ_FORM) {
+          m.FPDFPageObj_GetMatrix(object, at + 16);
+          const inner = [...new Float32Array(rt(m).HEAPU8.buffer, at + 16, 6)] as Matrix;
+          for (let i = 0; i < m.FPDFFormObj_CountObjects(object); i++) pending.push([m.FPDFFormObj_GetObject(object, i), times(inner, matrix)]);
+        }
+      }
+    } finally {
+      rt(m).wasmExports.free(at);
+    }
+    const text = m.FPDFText_LoadPage(this.handle);
+    try {
+      for (let i = 0; i < m.FPDFText_CountChars(text); i++) objects[index.get(m.FPDFText_GetTextObject(text, i)) ?? -1]?.chars.push(i);
+    } finally {
+      m.FPDFText_ClosePage(text);
+    }
+    return objects;
+  }
+
   /** A character's tight box (FPDFText_GetCharBox, the box PDFium's removal tests), or null. */
   private ink(text: number, i: number, at: number): Box | null {
     const placed = this.m.FPDFText_GetCharBox(text, i, at, at + 8, at + 16, at + 24);
@@ -267,17 +326,22 @@ export class Page {
     return m.FPDFPage_GenerateContent(this.handle);
   }
 
-  /** An opaque box over each region, labelled "withheld" in white, centred, where the label fits (labelSize). */
+  /**
+   * An opaque box over each region, labelled "withheld" in white, centred, where the label fits
+   * (labelSize). The labels go on after every box, so no box is drawn over another's label.
+   */
   drawBoxes(regions: readonly Region[]): void {
     const m = this.m;
+    for (const { left, right, bottom, top } of regions) {
+      const box = m.FPDFPageObj_CreateNewRect(left, bottom, right - left, top - bottom);
+      m.FPDFPageObj_SetFillColor(box, 0, 0, 0, 255);
+      m.FPDFPath_SetDrawMode(box, FPDF_FILLMODE_ALTERNATE, false);
+      m.FPDFPage_InsertObject(this.handle, box);
+    }
     for (const region of regions) {
       const { left, right, bottom, top } = region;
       const width = right - left;
       const height = top - bottom;
-      const box = m.FPDFPageObj_CreateNewRect(left, bottom, width, height);
-      m.FPDFPageObj_SetFillColor(box, 0, 0, 0, 255);
-      m.FPDFPath_SetDrawMode(box, FPDF_FILLMODE_ALTERNATE, false);
-      m.FPDFPage_InsertObject(this.handle, box);
       const size = labelSize(region);
       if (size === null) continue;
       const label = m.FPDFPageObj_NewTextObj(this.doc.handle, 'Helvetica', size);

@@ -3,7 +3,7 @@
 // characters as PDFium reports them (text, generated or not, a line-end
 // hyphen or not, a box). Every name here is made up.
 import { describe, expect, it } from 'vitest';
-import { type Box, type PageChar, type Region, boxesFor, matchedChars, regionsFor, stillThere, textMatches } from './match.js';
+import { type Box, type PageChar, type Region, boxesFor, matchedChars, meeting, regionsFor, stillThere, textMatches, unread } from './match.js';
 import { LABEL_EMS, MIN_LABEL_PT, labelSize } from './pdfium.js';
 
 const SIZE = 12;
@@ -231,6 +231,15 @@ describe('regionsFor: exact fit (REDACT-LOOK, Ross 11-02)', () => {
     ]);
   });
 
+  it('gives two passages on one line two boxes, never one over the unmarked word between them (challenger r2, F3)', () => {
+    // "Ask Bo Pell and Quill now": "Bo Pell" [96,138], " and " between, "Quill" [168,198].
+    const chars = page(['Ask Bo Pell and Quill now']);
+    expect(edges(regionsFor(chars, matchedChars(chars, ['Bo Pell', 'Quill'])))).toEqual([
+      [96, 138, 700, 712],
+      [168, 198, 700, 712],
+    ]);
+  });
+
   it('merges passages whose boxes overlap on a line, without widening the merge', () => {
     // "Bo" and "Al" kerned together over a zero-width space: their boxes overlap by 2 pt.
     let chars = page(['Bo Al']);
@@ -318,7 +327,96 @@ describe('regionsFor: neighbours PDFium removes with the passage (the collateral
   });
 });
 
+describe('unread: what PDFium\'s reading leaves out of each text object (challenger r2, F2)', () => {
+  // "Bo now": B [72,78], o [78,84], " " [84,90], n [90,96], o [96,102], w [102,108].
+  const chars = page(['Bo now']);
+
+  it('gives the bounds of an object the reading has no character of: text drawn twice, read once', () => {
+    const shadow = { left: 73, right: 85, bottom: 699, top: 711 };
+    expect(unread(chars, [{ bounds: { left: 72, right: 84, bottom: 700, top: 712 }, chars: [0, 1] }, { bounds: shadow, chars: [] }])).toEqual({ objects: [shadow], parts: [] });
+  });
+
+  it('counts an object the reading has only generated characters of as unread', () => {
+    const generated = [...chars, { text: ' ', generated: true, hyphen: false, box: { left: 108, right: 114, bottom: 700, top: 712 }, ink: null, fontSize: SIZE }];
+    const bounds = { left: 108, right: 114, bottom: 700, top: 712 };
+    expect(unread(generated, [{ bounds, chars: [6] }])).toEqual({ objects: [bounds], parts: [] });
+  });
+
+  it('gives nothing for an object whose bounds its characters cover, loose boxes and ink together', () => {
+    // The ink reaches a point below and past the loose boxes: still the characters' own.
+    const reaching = withChar(chars, 1, { ink: { right: 85, bottom: 699 } });
+    expect(unread(reaching, [{ bounds: { left: 72, right: 85, bottom: 699, top: 712 }, chars: [0, 1] }])).toEqual({ objects: [], parts: [] });
+  });
+
+  it('gives each side of an object\'s bounds that its read characters do not reach, for one read in part', () => {
+    // An object drawing "XBo now" whose X the reading left out (a glyph drawn again at its own place), and
+    // whose bounds reach 2 pt above and below its characters.
+    const bounds = { left: 66, right: 108, bottom: 698, top: 714 };
+    expect(unread(chars, [{ bounds, chars: [0, 1, 2, 3, 4, 5] }])).toEqual({
+      objects: [],
+      parts: [
+        { left: 66, right: 72, bottom: 698, top: 714 },
+        { left: 66, right: 108, bottom: 698, top: 700 },
+        { left: 66, right: 108, bottom: 712, top: 714 },
+      ],
+    });
+    expect(unread(chars, [{ bounds: { left: 72, right: 114, bottom: 700, top: 712 }, chars: [0, 1, 2, 3, 4, 5] }]).parts).toEqual([{ left: 108, right: 114, bottom: 700, top: 712 }]);
+  });
+});
+
+describe('regionsFor: text PDFium does not read, by a passage (challenger r2, F2)', () => {
+  // "Ask Bo now": B [96,102], o [102,108]; "Bo" is marked.
+  const chars = (): PageChar[] => page(['Ask Bo now']);
+
+  it('extends the box over the bounds of an unread object that overlaps it, so all of that object is removed and boxed', () => {
+    const shadow = { left: 99, right: 111, bottom: 702, top: 714 };
+    expect(edges(regionsFor(chars(), new Set([4, 5]), 0, [shadow]))).toEqual([[96, 111, 700, 714]]);
+  });
+
+  it('leaves an unread object that only touches the box, or lies apart from it, alone', () => {
+    const touching = { left: 108, right: 120, bottom: 700, top: 712 };
+    const apart = { left: 200, right: 212, bottom: 700, top: 712 };
+    expect(edges(regionsFor(chars(), new Set([4, 5]), 0, [touching, apart]))).toEqual([[96, 108, 700, 712]]);
+  });
+
+  it('follows a chain: the extended box pulls in a neighbour\'s ink, and that the next unread object', () => {
+    // "now": n [114,120], o [120,126] (ink half a point in). The shadow reaches the n's ink; once the n is
+    // boxed, a second unread object reaches past it into the o's ink; the o's loose box ends at 126.
+    const shadow = { left: 99, right: 116, bottom: 700, top: 712 };
+    const second = { left: 119, right: 125, bottom: 700, top: 712 };
+    expect(edges(regionsFor(chars(), new Set([4, 5]), 0, [second, shadow]))).toEqual([[96, 126, 700, 712]]);
+  });
+
+  it('reaches no unread object when nothing is withheld', () => {
+    expect(regionsFor(chars(), new Set(), 0, [{ left: 0, right: 500, bottom: 0, top: 800 }])).toEqual({ ok: true, regions: [] });
+  });
+});
+
+describe('meeting: which boxes overlap a region', () => {
+  it('takes the overlap the fixpoint takes: positive area, more than SLIP each way', () => {
+    const region = { left: 100, right: 110, bottom: 700, top: 712 };
+    const boxes = [
+      { left: 109, right: 120, bottom: 700, top: 712 },
+      { left: 110, right: 120, bottom: 700, top: 712 },
+      { left: 109.9995, right: 120, bottom: 700, top: 712 },
+      { left: 0, right: 10, bottom: 0, top: 10 },
+    ];
+    expect(meeting(boxes, [region])).toEqual([boxes[0]]);
+    expect(meeting(boxes, [])).toEqual([]);
+  });
+});
+
 describe('boxesFor: the boxes drawn over what PDFium removed', () => {
+  it('merges each unread object removed with the passage into the box it overlaps, and boxes one that overlaps none on its own, unlabelled', () => {
+    const chars = page(['Ask Bo now']);
+    const shadow = { left: 99, right: 111, bottom: 702, top: 714 };
+    const apart = { left: 200, right: 212, bottom: 650, top: 662 };
+    expect(boxesFor(chars, new Set([4, 5]), new Set([4, 5]), 0, [shadow, apart])).toEqual([
+      { page: 0, left: 96, right: 111, bottom: 700, top: 714, fontSize: SIZE },
+      { page: 0, ...apart, fontSize: 0 },
+    ]);
+  });
+
   it('boxes exactly the marked and the removed characters, with no fixpoint', () => {
     // A's ink reaches into "Vo", but PDFium removed only V and o: A keeps its place, unboxed.
     const chars = withChar(page(['xAVo y']), 1, { ink: { right: 86 } });
