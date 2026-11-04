@@ -695,6 +695,39 @@ describe('fix round 6: refused by class under "blur" and "hide" (M-6, S1-6), and
     expect(await copyRulesBreak(onSplitPage(['/Pattern cs /P scn 0 0 100 100 re f'], '/XObject << /Fm0 20 0 R >> /Pattern << /P 19 0 R >>', [[19, rawStream('/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9] /XStep 9 /YStep 9 /Resources << /XObject << /Fm0 60 0 R >> >>', '/Fm0 Do')], [60, FORM('0 0 1 1 re f')], ...formChain(40, 20)]), 'show')).toBeNull();
   });
 
+  it('follows a name only into the kinds its drawer\'s content can draw (Do, scn or SCN, Tf, gs), so a name reused across kinds is no loop (n5b: a form, pattern, Type 3 glyph and soft mask chain, every name /X), while a pattern drawing itself through its parent\'s resources is one (S3-6)', async () => {
+    const deep = 'forms, patterns, Type 3 glyphs or soft masks nest more than 32 deep, or in a loop';
+    const chain = (depth: number): Uint8Array => {
+      const objects: RawObject[] = [];
+      for (let i = 0; i < depth; i++) {
+        const next = i + 1 < depth;
+        const to = `${21 + i} 0 R`;
+        const kind = i % 4;
+        if (kind === 0) objects.push([20 + i, FORM(next ? '/Pattern cs /X scn 0 0 1 1 re f' : '0 0 1 1 re f', next ? `/Pattern << /X ${to} >>` : '')]);
+        if (kind === 1) objects.push([20 + i, rawStream(`/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1 /Resources << ${next ? `/Font << /X ${to} >>` : ''} >>`, next ? 'BT /X 1 Tf (a) Tj ET' : '0 0 1 1 re f')]);
+        if (kind === 2) {
+          objects.push([20 + i, `<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a ${1_000 + i} 0 R >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1] /Resources << ${next ? `/ExtGState << /X << /SMask << /S /Luminosity /G ${to} >> >> >>` : ''} >> >>`]);
+          objects.push([1_000 + i, rawStream('', next ? '1 0 d0 /X gs 0 0 1 1 re f' : '1 0 d0 0 0 1 1 re f')]);
+        }
+        if (kind === 3) objects.push([20 + i, rawStream(`/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Group << /S /Transparency /CS /DeviceGray >> /Resources << ${next ? `/XObject << /X ${to} >>` : ''} >>`, next ? '/X Do' : '0 0 1 1 re f')]);
+      }
+      return onSplitPage(['/Fm0 Do'], '/XObject << /Fm0 20 0 R >>', objects);
+    };
+    for (const image of ['show', 'hide'] as const) expect(await copyRulesBreak(chain(30), image), `30 deep, ${image}`).toBeNull();
+    expect(await copyRulesBreak(chain(32), 'show')).toBeNull();
+    expect(await copyRulesBreak(chain(33), 'show')).toBe(deep);
+    const drawsItself = onSplitPage(['/Fm0 Do'], '/XObject << /Fm0 20 0 R >>', [
+      [20, FORM('/Pattern cs /X scn 0 0 1 1 re f', '/Pattern << /X 21 0 R >>')],
+      [21, rawStream('/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1 /Resources << /Font << /F1 5 0 R >> >>', '/Pattern cs /X scn 0 0 1 1 re f')],
+    ]);
+    expect(await copyRulesBreak(drawsItself, 'show')).toBe(deep);
+    // Patterns stroked with SCN count as those filled with scn: 33 deep is refused, 32 passes.
+    const stroked = (depth: number): Uint8Array =>
+      onSplitPage(['/Pattern CS /P0 SCN 0 0 9 9 re S'], '/Pattern << /P0 20 0 R >>', Array.from({ length: depth }, (_, k): RawObject => [20 + k, rawStream(`/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9] /XStep 9 /YStep 9 /Resources << ${k + 1 < depth ? `/Pattern << /P0 ${21 + k} 0 R >>` : ''} >>`, k + 1 < depth ? '/Pattern CS /P0 SCN 0 0 9 9 re S' : '0 0 9 9 re f')]));
+    expect(await copyRulesBreak(stroked(33), 'show')).toBe(deep);
+    expect(await copyRulesBreak(stroked(32), 'show')).toBeNull();
+  });
+
   it('passes the real engine\'s copy of each honest original (h1 to h4, h6 to h9) under "show", "blur" and "hide", with and without a withheld quote (round 6, no false refusal)', async () => {
     for (const [id, build] of HONEST_ORIGINALS) {
       const original = build();

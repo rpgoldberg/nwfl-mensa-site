@@ -485,8 +485,9 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   nested 1,500 deep ran pdf.js's stack out), before pdf.js reads the copy at
   all. Names are read as pdf.js reads them (fix round 6): over a page's
   `/Contents` joined, and for a tiling pattern in its resources, then its
-  parent's. A copy whose drawers are reached in more than 100,000 ways is
-  refused too. pdf.js reads the text twice, past errors as a viewer does and
+  parent's; a name is looked up in a kind only when the content holds an
+  operator that draws from it (`Do`, `scn` or `SCN`, `Tf`, `gs`). A copy
+  whose drawers are reached in more than 100,000 ways is refused too. pdf.js reads the text twice, past errors as a viewer does and
   with `stopAtErrors`; a page it does not read to the end is refused;
 - under "blur" or "hide", each picture is exactly what the policy draws
   (the 1 x 1 grey fill, or under "blur" a Flate grey or RGB picture at most

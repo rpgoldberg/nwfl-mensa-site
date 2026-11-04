@@ -355,6 +355,13 @@ interface Drawer {
 
 /** The resource kinds a drawer's names are followed through. */
 const KINDS = ['XObject', 'Pattern', 'Font', 'ExtGState'] as const;
+/**
+ * The operators that draw from each kind (Do; scn and SCN; Tf; gs, which sets a soft mask or a font too): a
+ * drawer's names are looked up in a kind only when its content holds one (fix round 6, S3-6: with a pattern's
+ * resources merged with its parent's, a font named as the pattern was read as the pattern drawing itself). Operators
+ * cannot be escaped, so a content stream draws from a kind only when it holds those bytes.
+ */
+const DRAWS_FROM: Readonly<Record<(typeof KINDS)[number], RegExp>> = { XObject: /Do/, Pattern: /scn|SCN/, Font: /Tf/, ExtGState: /gs/ };
 /** The dictionary of each kind a drawer looks its names up in, and a key that says which they are. */
 interface Effective {
   key: string;
@@ -396,26 +403,31 @@ function nestingBreak(doc: PDFDocument): string | null {
     const dicts = KINDS.map((key, k) => resources.lookupMaybe(PDFName.of(key), PDFDict) ?? (merged ? parent?.dicts[k] : undefined));
     return effective(dicts);
   };
-  const used = new Map<PDFObject, Set<string>>();
-  const namesOf = (drawer: Drawer): Set<string> => {
-    let names = used.get(drawer.node);
-    if (names === undefined) {
-      names = new Set();
+  const used = new Map<PDFObject, { names: Set<string>; kinds: boolean[] }>();
+  const namesOf = (drawer: Drawer): { names: Set<string>; kinds: boolean[] } => {
+    let read = used.get(drawer.node);
+    if (read === undefined) {
+      read = { names: new Set(), kinds: KINDS.map(() => false) };
       const texts = drawer.content.map(contentOf).filter((bytes) => bytes !== null);
       for (const bytes of drawer.joined === true && texts.length > 1 ? [...texts, Buffer.concat(texts)] : texts) {
-        for (const [, raw] of Buffer.from(bytes).toString('latin1').matchAll(NAME_TOKEN)) names.add((raw as string).replace(/#([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))));
+        const text = Buffer.from(bytes).toString('latin1');
+        for (const [, raw] of text.matchAll(NAME_TOKEN)) read.names.add((raw as string).replace(/#([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))));
+        KINDS.forEach((key, k) => {
+          if (DRAWS_FROM[key].test(text)) (read as { kinds: boolean[] }).kinds[k] = true;
+        });
       }
-      used.set(drawer.node, names);
+      used.set(drawer.node, read);
     }
-    return names;
+    return read;
   };
   const type3 = (font: PDFObject | undefined): Drawer[] =>
     font instanceof PDFDict && nameIn(font, 'Subtype') === 'Type3' ? [{ node: font, content: (font.lookupMaybe(PDFName.of('CharProcs'), PDFDict)?.values() ?? []).map(resolve).filter((proc) => proc !== undefined), resources: own(font) }] : [];
   const drawn = (stream: PDFObject | undefined, is: boolean, merged = false): Drawer[] => (stream instanceof PDFRawStream && is ? [{ node: stream, content: [stream], resources: own(stream.dict), merged }] : []);
   const children = (drawer: Drawer, reads: Effective | undefined): Drawer[] => {
-    const [forms, patterns, fonts, states] = KINDS.map((_, k) => named(reads?.dicts[k])) as [Map<string, PDFObject | undefined>, Map<string, PDFObject | undefined>, Map<string, PDFObject | undefined>, Map<string, PDFObject | undefined>];
+    const { names, kinds } = namesOf(drawer);
+    const [forms, patterns, fonts, states] = KINDS.map((_, k) => named(kinds[k] === true ? reads?.dicts[k] : undefined)) as [Map<string, PDFObject | undefined>, Map<string, PDFObject | undefined>, Map<string, PDFObject | undefined>, Map<string, PDFObject | undefined>];
     const out: Drawer[] = [];
-    for (const name of namesOf(drawer)) {
+    for (const name of names) {
       const form = forms.get(name);
       out.push(...drawn(form, form instanceof PDFRawStream && nameIn(form.dict, 'Subtype') === 'Form'));
       const pattern = patterns.get(name);
