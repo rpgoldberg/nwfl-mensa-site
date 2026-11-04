@@ -237,7 +237,7 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       expect(await stored(loaded.membersFileId, 'public')).toEqual({ kind: 'not_found' });
     });
 
-    it('holds, for the public, a redacted copy of the public file: no marked quote, the rest readable', async () => {
+    it('holds, for the public, a redacted copy of the public file: no marked contact, the names and the rest readable (0022)', async () => {
       const loaded = await loading;
       const result = await stored(loaded.publicFileId, 'public');
       expect(result).toMatchObject({ kind: 'pdf', original: false });
@@ -247,7 +247,9 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       expect(sha256(bytes).equals(sha256(members))).toBe(false);
       const text = await extractAll(bytes);
       expect(text).toContain(KEPT);
-      for (const quote of [NAME, PHONE, ADDRESS, EMAIL, 'Quillon', 'Brask']) expect(text).not.toContain(quote);
+      // Ross, 11-02: the public sees member names; phones, addresses and e-mails stay withheld.
+      expect(text).toContain(NAME);
+      for (const quote of [PHONE, ADDRESS, EMAIL]) expect(text).not.toContain(quote);
       expect(text).not.toContain(MEMBERS_ONLY);
     }, 60_000);
 

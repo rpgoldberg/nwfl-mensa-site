@@ -28,9 +28,15 @@ export const publicPdf = (label: string): Promise<Uint8Array> => linesPdf([`Pens
 /** The full (members) PDF: the same, plus a members-only line. */
 export const membersPdf = (label: string): Promise<Uint8Array> => linesPdf([`Pensa Mensa ${label}`, ...LINES, MEMBERS_ONLY]);
 
-/** The public copy's input hash under the default policy: the public redacts every mark's category and blurs images. */
+/**
+ * The categories the public redacts under the default policy (0012, then 0022: the public sees
+ * member names and pictures; contacts, home venues and officer contacts stay redacted).
+ */
+const PUBLIC_REDACTS: ReadonlySet<string> = new Set(['member_address', 'member_phone', 'member_email', 'private_venue', 'officer_contact']);
+
+/** The public copy's input hash under the default policy: the marks of the categories the public redacts, pictures shown. */
 export const publicInputHash = (pdf: Uint8Array, marks: readonly Mark[]): string =>
-  inputHash(sha256(pdf), { quotes: marks.map((mark) => mark.quote), redactsAny: true, image: 'blur' }).toString('hex');
+  inputHash(sha256(pdf), { quotes: marks.filter((mark) => PUBLIC_REDACTS.has(mark.category)).map((mark) => mark.quote), redactsAny: true, image: 'show' }).toString('hex');
 
 export interface BundleOptions {
   period?: string;

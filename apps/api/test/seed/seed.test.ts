@@ -143,7 +143,8 @@ describe.skipIf(!live)('applySeed and runSeed', () => {
 
   it('records every row it writes in the audit log, as the system, with no payload', async () => {
     const { rows } = await api.pool.query<{ actor_kind: string; action: string; payload: unknown; n: string }>(
-      `SELECT actor_kind, action, payload, count(*) AS n FROM audit_event GROUP BY 1, 2, 3`,
+      // Migration 0022 audits its own policy change, as system:migration-0022 and the decision it cites.
+      `SELECT actor_kind, action, payload, count(*) AS n FROM audit_event WHERE coalesce(actor_sub, '') NOT LIKE 'system:%' GROUP BY 1, 2, 3`,
     );
     expect(rows).toEqual([{ actor_kind: 'system', action: 'seed', payload: {}, n: String(3 * 20) }]);
   });
