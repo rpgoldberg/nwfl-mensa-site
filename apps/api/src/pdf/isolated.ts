@@ -57,26 +57,32 @@ export const ENGINE_CHILD = fileURLToPath(new URL('./engine-child.js', import.me
  */
 export const ENGINE_ENV: Readonly<NodeJS.ProcessEnv> = Object.freeze({});
 
-const DROPPED_WITH_VALUE = new Set(['--env-file', '--env-file-if-exists', '--allow-fs-read', '--allow-fs-write']);
-const DROPPED_FLAGS = new Set(['--permission', '--experimental-permission']);
-/** Every grant of the permission model starts so: those Node 24 has (--allow-inspector, --allow-openssl-store among them) and any later one. */
-const GRANT = '--allow-';
+/**
+ * The parent's Node flags a child may keep (fix round 6, S2b): the sidecars' --disable-sigusr1, two that only
+ * change what is logged, and those the test runner and the TypeScript loader need. Anything else the worker or a
+ * sidecar was started with is dropped, so no environment file, no grant or audit mode of the permission model, and
+ * no flag a later Node adds reaches a child. Names are read with _ as -, as Node reads them.
+ */
+const KEPT_FLAGS = new Set(['--disable-sigusr1', '--enable-source-maps', '--no-warnings', '--experimental-import-meta-resolve', '--experimental-strip-types', '--experimental-transform-types']);
+/** Kept with their value, given as --flag=value or as the next argument. */
+const KEPT_WITH_VALUE = new Set(['--disable-warning', '--import', '--require', '-r', '--conditions', '-C']);
 
 /**
- * The child's Node flags: the worker's own (fork() passes process.execArgv on), minus any that load an
- * environment file (CF-ISO-0 N1). Without this, a worker started with --env-file would hand the child
- * the very variables ENGINE_ENV keeps out. Both spellings: --env-file=<path> and --env-file <path>. Minus
- * any flag of the permission model too (fix round 4, S2): the child gets CHILD_PERMISSION, and no grant
- * its parent was started with (fix round 5: no --allow-* flag at all).
+ * The child's Node flags: those of the worker's own (fork() passes process.execArgv on) on the lists above, each
+ * with its value. Before this was a list of what to drop (CF-ISO-0 N1: --env-file; fix round 4 and 5, S2: the
+ * permission model's flags and grants); the round-6 challenge got --permission-audit and --allow_fs_write=* past it.
  */
 export function engineExecArgv(argv: readonly string[]): string[] {
   const kept: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i] as string;
-    const name = flag.split('=', 1)[0] as string;
-    if (DROPPED_WITH_VALUE.has(name)) {
-      if (!flag.includes('=')) i += 1;
-    } else if (!DROPPED_FLAGS.has(name) && !name.startsWith(GRANT)) kept.push(flag);
+    const [raw = '', value] = flag.split(/=(.*)/s, 2);
+    const name = raw.startsWith('--') ? `--${raw.slice(2).replaceAll('_', '-')}` : raw;
+    if (KEPT_FLAGS.has(name) && value === undefined) kept.push(flag);
+    else if (KEPT_WITH_VALUE.has(name)) {
+      if (value !== undefined) kept.push(flag);
+      else if (i + 1 < argv.length) kept.push(flag, argv[++i] as string);
+    }
   }
   return kept;
 }

@@ -1,9 +1,12 @@
 // REDACT R3a fix 1: the output gate on its own. Each PDF here is built by
 // hand so one place holds the name, mostly in an object no page draws, so only
 // the full decode can find it. Every name is made up.
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { checkCopy } from '../../src/pdf/gate.js';
+import { DEEP_QUOTE, deepText, onSplitPage } from './shadows.js';
 
 const B = (s: string | Buffer): Buffer => (typeof s === 'string' ? Buffer.from(s, 'latin1') : s);
 const stream = (dict: string, data: string | Buffer): Buffer => Buffer.concat([B(`<< ${dict} /Length ${B(data).length} >>\nstream\n`), B(data), B('\nendstream')]);
@@ -215,4 +218,25 @@ describe('checkCopy: every string and name object', () => {
   it('finds the name in a stream\'s dictionary', async () => {
     expect(await checkCopy(hidden('q Q', `/Comment (${NAME})`), [NAME])).toBe(IN_FILE);
   });
+});
+
+describe('checkCopy: what pdf.js cannot read to the end is refused (fix round 6, S3-6)', () => {
+  const readable = 'page 1: withheld text can still be read by another reader';
+
+  it('finds the withheld name 40 and 600 forms deep, split edge or not', async () => {
+    for (const split of [false, true]) for (const depth of [40, 600]) expect(await checkCopy(deepText(depth, split), [DEEP_QUOTE]), `${depth}, ${split}`).toBe(readable);
+  }, 120_000);
+
+  it('refuses a page pdf.js stops reading at an error, and still reads past one as a viewer does (a font it cannot load)', async () => {
+    const drawsNoForm = onSplitPage(['BT /F1 12 Tf 72 720 Td (Picnic flyer) Tj ET /X Do'], '/XObject << /X 20 0 R >>', [[20, '<< /Type /XObject /Subtype /Form >>']]);
+    expect(await checkCopy(drawsNoForm, [DEEP_QUOTE])).toBe('page 1: pdf.js stopped before the end of its text');
+    expect(await checkCopy(onSplitPage([`BT /F9 12 Tf 72 720 Td (${DEEP_QUOTE}) Tj ET`]), [DEEP_QUOTE])).toBe(readable);
+  });
+
+  it('in a process of its own (where pdf.js overflows its stack): refuses the copy 1,500 and 3,000 forms deep, split edge or not', () => {
+    const child = fileURLToPath(new URL('./children/check-copy.mjs', import.meta.url));
+    const reason = (depth: number, split: string): string =>
+      (JSON.parse(execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', '--experimental-transform-types', child, String(depth), split], { env: {}, encoding: 'utf8', timeout: 60_000 })) as { reason: string }).reason;
+    for (const split of ['split', 'whole']) for (const depth of [1_500, 3_000]) expect(reason(depth, split), `${depth}, ${split}`).toBe('page 1: pdf.js stopped before the end of its text');
+  }, 240_000);
 });

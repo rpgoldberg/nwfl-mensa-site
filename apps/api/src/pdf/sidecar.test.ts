@@ -494,9 +494,12 @@ describe('sidecarMain (the entry\'s logic)', () => {
     expect(modeled['write']).toBe('ERR_ACCESS_DENIED');
     // The guard refuses a listen with the permission model (fix round 5b, S2); behind it, as the socket takeover tests need, it does not.
     expect(modeled['listen']).toBe('ERR_ACCESS_DENIED');
+    // And the two ways under a listen, called directly (fix round 6, S2-6): no socket file is left.
+    expect([modeled['listen2'], modeled['createServerHandle'], modeled['namedHandle'], modeled['left']]).toEqual(['ERR_ACCESS_DENIED', 'ERR_ACCESS_DENIED', 'ERR_ACCESS_DENIED', '']);
     const bare = await tried(['--no-child-permission']);
     expect(bare['write']).toBe('done');
     expect(bare['listen']).toBe('done');
+    expect([bare['listen2'], bare['createServerHandle'], bare['namedHandle']]).toEqual(['done', 'done', 'done']);
   });
 
   it('serves only as PID 1 of its container, never as root, and in production only with --disable-sigusr1, exit 2 (fix round 2)', async () => {

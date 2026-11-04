@@ -29,8 +29,11 @@
 // (fix round 5, S2): a listen on a unix socket leaves a socket file, a write
 // the model does not check, so the guard closes it with the model. Every
 // server listens through net.Server's listen and _listen2 (http, https, tls
-// and http2 servers are net servers); both are replaced, so they cannot be
-// put back, before the child's own module runs. Without the model (only
+// and http2 servers are net servers), and node:net exports the function
+// under them that binds the socket, _createServerHandle (fix round 6, S2-6:
+// called directly, it left a socket file). All three are replaced, so they
+// cannot be put back, before the child's own module runs; the named export
+// node:net's ES module gives is brought in line too. Without the model (only
 // --no-child-permission, refused in production) a test can still reach the
 // layers behind it, the sidecar's socket check among them.
 // Not covered in-process (it runs only in children); the tests drive it
@@ -39,6 +42,7 @@
 // ============================================================================
 import { spawnSync } from 'node:child_process';
 import { promises as fs, readFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import net from 'node:net';
 import process from 'node:process';
 
@@ -47,6 +51,8 @@ const refuseListen = (): never => {
 };
 if (process.permission !== undefined) {
   for (const name of ['listen', '_listen2']) Object.defineProperty(net.Server.prototype, name, { value: refuseListen, writable: false, configurable: false });
+  Object.defineProperty(net, '_createServerHandle', { value: refuseListen, writable: false, configurable: false });
+  syncBuiltinESMExports();
 }
 
 const gone = (): never => process.exit(1);

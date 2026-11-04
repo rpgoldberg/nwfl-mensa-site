@@ -64,7 +64,7 @@ describe('isolatedRedact', () => {
       writeFileSync(path.join(dir, 'kept'), 'x');
       const result = await isolatedRedact({ module: child('try-write') })(Uint8Array.from([1]), { quotes: [dir], redactsAny: true });
       const denied = 'ERR_ACCESS_DENIED';
-      expect(JSON.parse((result as { reason: string }).reason)).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied, listen: denied });
+      expect(JSON.parse((result as { reason: string }).reason)).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied, listen: denied, listen2: denied, createServerHandle: denied, namedHandle: denied, left: 'kept' });
       expect(readdirSync(dir)).toEqual(['kept']);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -112,15 +112,40 @@ describe('isolatedRedact', () => {
     }
   });
 
-  it('drops only the flags that load an environment file from the child\'s Node flags', () => {
+  it('keeps the permission model on in the child of a parent started with --permission-audit or underscore grants (fix round 6, S2b: flags6)', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'nwfl-flags-'));
+    try {
+      writeFileSync(path.join(dir, 'kept'), 'x');
+      const parent = fileURLToPath(new URL('../../test/pdf/children/flags-parent.mjs', import.meta.url));
+      // Node takes grants only with --permission, so the underscore grants come with it (and a read grant, to load the stand-in).
+      const grants = ['--permission', '--allow-fs-read=*', '--allow_fs_write=*', '--allow_child_process', '--allow_worker', '--allow_addons'];
+      for (const flags of [['--permission-audit'], ['--permission_audit'], grants]) {
+        const out = execFileSync(process.execPath, [...flags, '--disable-warning=ExperimentalWarning', '--experimental-transform-types', parent, 'try-write', dir], { env: {}, encoding: 'utf8' });
+        const outcome = JSON.parse((JSON.parse(out) as { reason: string }).reason) as Record<string, string>;
+        expect([outcome['write'], outcome['spawn'], outcome['left']], flags.join(' ')).toEqual(['ERR_ACCESS_DENIED', 'ERR_ACCESS_DENIED', 'kept']);
+      }
+      expect(readdirSync(dir)).toEqual(['kept']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the child only the parent\'s flags on its allowlist, each name read with _ as -, as Node reads it: no environment file, no grant or audit mode of the permission model, nothing else (fix round 6, S2b)', () => {
     expect(
       engineExecArgv(['--max-old-space-size=512', '--env-file=/a', '--env-file', '/b', '--env-file-if-exists=/c', '--env-file-if-exists', '/d', '--import', 'x', '--enable-source-maps']),
-    ).toEqual(['--max-old-space-size=512', '--import', 'x', '--enable-source-maps']);
+    ).toEqual(['--import', 'x', '--enable-source-maps']);
     expect(engineExecArgv(['--env-file'])).toEqual([]);
-    // Nor any flag of the permission model a parent may have been started with: the child gets CHILD_PERMISSION alone (fix round 4, S2).
-    expect(engineExecArgv(['--permission', '--allow-fs-write=*', '--allow-fs-write', '/x', '--allow-fs-read', '/', '--allow-child-process', '--allow-worker', '--allow-addons', '--allow-wasi', '--max-old-space-size=1'])).toEqual(['--max-old-space-size=1']);
-    // Every grant, those Node 24 added since and any later one (fix round 5b, S2): --allow-inspector, --allow-openssl-store, --allow-net.
-    expect(engineExecArgv(['--allow-inspector', '--allow-openssl-store', '--allow-net', '--allow-net=x', '--experimental-sqlite'])).toEqual(['--experimental-sqlite']);
+    expect(engineExecArgv(['--import'])).toEqual([]);
+    // No flag of the permission model a parent may have been started with: the child gets CHILD_PERMISSION alone (fix round 4, S2).
+    expect(engineExecArgv(['--permission', '--allow-fs-write=*', '--allow-fs-write', '/x', '--allow-fs-read', '/', '--allow-child-process', '--allow-worker', '--allow-addons', '--allow-wasi'])).toEqual([]);
+    expect(engineExecArgv(['--allow-inspector', '--allow-openssl-store', '--allow-net', '--allow-net=x', '--experimental-sqlite', '--experimental-webstorage', '--localstorage-file=/x', '--no-freeze-flags-after-init'])).toEqual([]);
+    // The round-6 challenge's (flags6): the audit mode, which turns the model off with --permission after it, and the underscore spellings.
+    expect(engineExecArgv(['--permission-audit', '--permission_audit', '--allow_fs_write=*', '--allow_child_process', '--allow_worker', '--allow_addons', '--experimental_permission', '--env_file=/x', '--env_file', '/y', '--no_freeze_flags_after_init'])).toEqual([]);
+    // What the test runner and the TypeScript loader need, either spelling, values in both forms.
+    const kept = ['--experimental-import-meta-resolve', '--require', '/s.cjs', '-r', '/t.cjs', '--conditions', 'development', '-C', 'node', '--conditions=x', '--import=file:///h.mjs', '--experimental_transform_types', '--experimental-strip-types', '--disable-warning=ExperimentalWarning', '--disable-warning', 'DEP0040', '--no-warnings', '--disable-sigusr1', '--enable_source_maps'];
+    expect(engineExecArgv(kept)).toEqual(kept);
+    // A value of a dropped flag is dropped with it, never left for Node to read as a flag or a script.
+    expect(engineExecArgv(['--title', 'x', '--disable-sigusr1', 'stray'])).toEqual(['--disable-sigusr1']);
   });
 
   it('puts the permission model\'s flags after every flag the child inherits, then the guard, so none it inherits can undo them (fix round 5, S2)', async () => {

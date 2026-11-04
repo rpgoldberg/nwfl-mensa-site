@@ -66,7 +66,7 @@ describe('isolatedGate', () => {
     writeFileSync(path.join(dir, 'kept'), 'x');
     const outcome = await isolatedGate({ module: child('try-write') })({ ...JOB, quotes: [dir] });
     const denied = 'ERR_ACCESS_DENIED';
-    expect(JSON.parse(new TextDecoder().decode(outcome.checked?.pdf))).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied, listen: denied });
+    expect(JSON.parse(new TextDecoder().decode(outcome.checked?.pdf))).toEqual({ write: denied, mkdir: denied, rename: denied, remove: denied, chmod: denied, dlopen: 'ERR_DLOPEN_DISABLED', spawn: denied, listen: denied, listen2: denied, createServerHandle: denied, namedHandle: denied, left: 'kept' });
     expect(readdirSync(dir)).toEqual(['kept']);
   });
 
@@ -128,9 +128,9 @@ describe('isolatedGate', () => {
     expect(report.pid).not.toBe(process.pid);
   });
 
-  it('drops every --env-file flag of its parent, both spellings, keeps the rest, puts the permission model\'s flags after them, caps the heap, and preloads the guard last (S4; fix round 5, S2)', () => {
-    const parent = ['--env-file=/srv/worker.env', '--conditions', 'node', '--env-file', '/srv/other.env', '--env-file-if-exists=/srv/maybe.env', '--env-file-if-exists', '/srv/maybe2.env', '--max-semi-space-size=16', '--experimental-sqlite'];
-    expect(gateExecArgv(parent, ['--import', '/hook.mjs'], '/guard.js')).toEqual(['--conditions', 'node', '--max-semi-space-size=16', '--experimental-sqlite', '--import', '/hook.mjs', ...CHILD_PERMISSION, '--max-old-space-size=512', '--import=file:///guard.js']);
+  it('keeps only its parent\'s flags on the allowlist (no --env-file, both spellings, no grant or audit mode), puts the permission model\'s flags after them, caps the heap, and preloads the guard last (S4; fix round 5, S2; fix round 6, S2b)', () => {
+    const parent = ['--env-file=/srv/worker.env', '--conditions', 'node', '--env-file', '/srv/other.env', '--env-file-if-exists=/srv/maybe.env', '--env-file-if-exists', '/srv/maybe2.env', '--max-semi-space-size=16', '--experimental-sqlite', '--permission-audit', '--allow_fs_write=*', '--allow_child_process'];
+    expect(gateExecArgv(parent, ['--import', '/hook.mjs'], '/guard.js')).toEqual(['--conditions', 'node', '--import', '/hook.mjs', ...CHILD_PERMISSION, '--max-old-space-size=512', '--import=file:///guard.js']);
     expect(gateExecArgv([])).toEqual([...CHILD_PERMISSION, '--max-old-space-size=512', guardFlag()]);
     expect(gateExecArgv([], [], undefined, false)).toEqual(['--max-old-space-size=512', guardFlag()]);
   });

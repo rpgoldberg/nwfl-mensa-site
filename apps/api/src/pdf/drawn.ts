@@ -38,7 +38,7 @@
 // picture".
 // ============================================================================
 import type { PDFPageProxy } from 'pdfjs-dist/types/src/display/api.js';
-import { type PdfJs, loadPdfJs } from './gate.js';
+import { type PdfJs, loadPdfJs, watchedReading } from './gate.js';
 import { BLUR_MAX } from './images.js';
 import { textMatches } from './match.js';
 
@@ -51,19 +51,6 @@ export interface DrawnBreak {
 export interface PageRef {
   num: number;
   gen: number;
-}
-
-/**
- * pdf.js's message on its worker's port for a stream that ended in an error (StreamKind.ERROR in its message
- * handler, pdfjs-dist 6.4.299): what an operator list that stopped early sends. The tests read real copies that
- * end so, so a pdf.js that sends it otherwise fails them.
- */
-const STREAM_ERROR = 5;
-const isStreamError = (data: unknown): boolean => typeof data === 'object' && data !== null && (data as { stream?: unknown }).stream === STREAM_ERROR;
-
-/** The port of a pdf.js worker, as the walk listens on it. */
-interface Port {
-  addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
 }
 
 interface OperatorList {
@@ -188,34 +175,20 @@ const named = (ref: PageRef | null | undefined): string => (ref === null || ref 
 export async function drawnBreak(pdf: Uint8Array, image: 'blur' | 'hide', quotes: readonly string[], pages: readonly PageRef[]): Promise<DrawnBreak | null> {
   const pdfjs = await loadPdfJs();
   // A worker of its own, so the walk hears an operator list that ends in an error (S3).
-  const worker = new pdfjs.PDFWorker({ verbosity: 0 });
-  try {
-    await worker.promise;
-    let stopped = false;
-    (worker.port as unknown as Port).addEventListener('message', ({ data }) => {
-      if (isStreamError(data)) stopped = true;
-    });
-    const task = pdfjs.getDocument({ data: new Uint8Array(pdf), verbosity: 0, disableFontFace: true, stopAtErrors: true, worker });
-    try {
-      const doc = await task.promise;
-      if (doc.numPages !== pages.length) return { code: 'rules', reason: `pdf.js reads ${doc.numPages} pages where pdf-lib reads ${pages.length}` };
-      for (let n = 1; n <= doc.numPages; n++) {
-        const page = await doc.getPage(n);
-        const tree = pages[n - 1] as PageRef;
-        if (page.ref?.num !== tree.num || page.ref.gen !== tree.gen) return { code: 'rules', reason: `page ${n}: pdf.js reads ${named(page.ref)} where pdf-lib reads ${named(tree)}` };
-        const walk = new PageWalk(pdfjs, page, image === 'hide' ? 1 : BLUR_MAX);
-        const list = await page.getOperatorList();
-        // pdf.js posts an operator list's error before it hands over the list it had, so it is heard by now.
-        const found = stopped ? 'pdf.js stopped before the end of it' : await walk.read(list);
-        if (found !== null) return { code: 'rules', reason: `page ${n}: ${found}` };
-        if (quotes.length > 0 && walk.spells(quotes)) return { code: 'withheld', reason: `page ${n}: withheld text is in the glyphs pdf.js draws` };
-        page.cleanup();
-      }
-      return null;
-    } finally {
-      await task.destroy();
+  return watchedReading(pdf, async (doc, stopped): Promise<DrawnBreak | null> => {
+    if (doc.numPages !== pages.length) return { code: 'rules', reason: `pdf.js reads ${doc.numPages} pages where pdf-lib reads ${pages.length}` };
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const tree = pages[n - 1] as PageRef;
+      if (page.ref?.num !== tree.num || page.ref.gen !== tree.gen) return { code: 'rules', reason: `page ${n}: pdf.js reads ${named(page.ref)} where pdf-lib reads ${named(tree)}` };
+      const walk = new PageWalk(pdfjs, page, image === 'hide' ? 1 : BLUR_MAX);
+      const list = await page.getOperatorList();
+      // pdf.js posts an operator list's error before it hands over the list it had, so it is heard by now.
+      const found = stopped() ? 'pdf.js stopped before the end of it' : await walk.read(list);
+      if (found !== null) return { code: 'rules', reason: `page ${n}: ${found}` };
+      if (quotes.length > 0 && walk.spells(quotes)) return { code: 'withheld', reason: `page ${n}: withheld text is in the glyphs pdf.js draws` };
+      page.cleanup();
     }
-  } finally {
-    worker.destroy();
-  }
+    return null;
+  });
 }

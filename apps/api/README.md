@@ -317,9 +317,18 @@ and took its socket over), most load-bearing first:
    24.22.1): `node:sqlite`, V8 flags set at run time, Web Storage and a listen
    on a unix socket each wrote a file. So the child also gets
    `--no-experimental-sqlite --freeze-flags-after-init
-   --no-experimental-webstorage`, after every flag it inherits and with no
-   `--allow-*` grant of its parent's, and its guard refuses any listen while
-   the model is on. Network is outside the model; the pod's NetworkPolicy
+   --no-experimental-webstorage`, after the flags it keeps of its parent's,
+   and its guard refuses any listen while the model is on (net.Server's
+   `listen` and `_listen2`, and `net._createServerHandle`, which a child
+   called itself to leave a socket file: fix round 6). A child keeps only an
+   allowlist of its parent's flags, each name read with `_` as `-`, as Node
+   reads it (fix round 6: `--permission-audit` and `--allow_fs_write=*` got
+   past a list of what to drop): `--disable-sigusr1`,
+   `--enable-source-maps`, `--no-warnings`, `--disable-warning`, and the test
+   runner's and TypeScript loader's `--import`, `--require`, `--conditions`,
+   `--experimental-import-meta-resolve`, `--experimental-strip-types` and
+   `--experimental-transform-types`. A flag fc adds to a sidecar's command
+   reaches its children only once it is on that list. Network is outside the model; the pod's NetworkPolicy
    bounds it. Node then refuses the guard's spawn itself
    (`ERR_ACCESS_DENIED`), which the parent accepts as it accepts the limit's
    `EAGAIN`; the limit stays beneath it. In a capped
@@ -473,7 +482,12 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   one is refused as it comes, and the gate's own writing drops the key;
 - forms, tiling patterns, Type 3 fonts and soft masks drawn more than 32
   deep, or in a loop, are refused under every policy (fix round 5: forms
-  nested 1,500 deep ran pdf.js's stack out);
+  nested 1,500 deep ran pdf.js's stack out), before pdf.js reads the copy at
+  all. Names are read as pdf.js reads them (fix round 6): over a page's
+  `/Contents` joined, and for a tiling pattern in its resources, then its
+  parent's. A copy whose drawers are reached in more than 100,000 ways is
+  refused too. pdf.js reads the text twice, past errors as a viewer does and
+  with `stopAtErrors`; a page it does not read to the end is refused;
 - under "blur" or "hide", each picture is exactly what the policy draws
   (the 1 x 1 grey fill, or under "blur" a Flate grey or RGB picture at most
   24 pixels a side), with no inline picture in any content stream (BI read
@@ -485,6 +499,18 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   function, or from a list or stitching of functions with one in it (fix
   round 5: 64 of them, one per row of pixels, drew a photo). A copy with an
   honest gradient drawn so is refused under these policies too;
+- under "blur" or "hide", refused by class wherever it is in the file (fix
+  round 6, since each can carry a picture): a shading other than axial or
+  radial (function-based and the mesh types 4 to 7); a gradient whose
+  colour space has a table or program of its own (an Indexed one of more
+  than 4 colours or from a stream, a Separation or DeviceN one whose tint is
+  not a type 2 function, DeviceN attributes, a named space); a PostScript
+  (type 4) function; a `/TR`, `/TR2`, `/BG`, `/BG2`, `/UCR` or `/UCR2`
+  other than `/Identity` or `/Default`; and a content operator given more
+  operands than it takes, an unknown one given any, or operands left over,
+  read as pdf.js reads it and as MuPDF and poppler read it (which keep a
+  different one of two names). Honest copies with any of these are refused
+  under these policies too;
 - under "blur" or "hide", what pdf.js draws (`src/pdf/drawn.ts`, fix round
   4): the gate reads the operator list of every page of its own writing of
   the copy, tiling patterns and Type 3 glyphs included, and refuses any
@@ -518,7 +544,9 @@ many small tiles or from vector shapes, gradients among them (fix round 5
 refuses only gradients drawn from sampled functions: a photo drawn row by
 row from 4,095 linear pieces passes); a tiny inline picture of the
 original (under 64 bytes) kept as a picture object; and a picture of a single
-grey, which is its own blur and so may come through unchanged.
+grey, which is its own blur and so may come through unchanged. A soft mask
+given as a stream (no dictionary) is not read as content; pdf.js and the
+other readers measured draw nothing from it.
 
 What fc's manifest gives the gate container: what the engine's gets, with
 uid and gid 10004, its own emptyDir at `/run/pdf-gate` (never mounted in the

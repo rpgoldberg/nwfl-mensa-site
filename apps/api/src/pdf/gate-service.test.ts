@@ -191,9 +191,12 @@ describe('gateSidecarMain (the gate entry\'s logic)', () => {
     expect(modeled['write']).toBe('ERR_ACCESS_DENIED');
     // The guard refuses a listen with the permission model (fix round 5b, S2); behind it, as the socket takeover tests need, it does not.
     expect(modeled['listen']).toBe('ERR_ACCESS_DENIED');
+    // And the two ways under a listen, called directly (fix round 6, S2-6): no socket file is left.
+    expect([modeled['listen2'], modeled['createServerHandle'], modeled['namedHandle'], modeled['left']]).toEqual(['ERR_ACCESS_DENIED', 'ERR_ACCESS_DENIED', 'ERR_ACCESS_DENIED', '']);
     const bare = await tried(['--no-child-permission']);
     expect(bare['write']).toBe('done');
     expect(bare['listen']).toBe('done');
+    expect([bare['listen2'], bare['createServerHandle'], bare['namedHandle']]).toEqual(['done', 'done', 'done']);
     const lines: string[] = [];
     expect(await gateSidecarMain(['--no-child-permission'], { NODE_ENV: 'production' }, (line) => void lines.push(line))).toEqual({ code: 2 });
     expect(lines.join('\n')).toContain('--no-child-permission is for tests and refused in production');

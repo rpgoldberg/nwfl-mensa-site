@@ -6,7 +6,7 @@ import { deflateSync } from 'node:zlib';
 import { type PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream, PDFString, StandardFonts } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { leakFixture, linesPdf, pictureUnderTextFixture, twoMarksFixture } from '../../test/pdf/fixtures.js';
-import { M1_CASES, M1_DRAWN_CASES, M1_LINEARIZED_CASES, M1_ORIGINAL, M1_QUOTES, Q1, type RawObject, S1_ROWS, S1_STITCHED_ROWS, linearizedCopy, nestedForms, plainCopy, rawPdf, rawStream, roundFiveWriting } from '../../test/pdf/shadows.js';
+import { M1_CASES, M1_DRAWN_CASES, M1_LINEARIZED_CASES, M1_ORIGINAL, M1_QUOTES, Q1, type RawObject, HONEST_ORIGINALS, HONEST_QUOTES, S1_ROWS, S1_STITCHED_ROWS, formChain, linearizedCopy, meshShading, nestedForms, onSplitPage, plainCopy, rawPdf, rawStream, roundFiveWriting } from '../../test/pdf/shadows.js';
 import { drawnBreak } from './drawn.js';
 import { sha256Hex } from './engine-protocol.js';
 import { copyRulesBreak, gateReply, gateVerdict, rewrite } from './gate-rules.js';
@@ -311,13 +311,13 @@ describe('M1, fix round 4: pictures judged by what pdf.js draws from the gate\'s
     }
   });
 
-  it('refuses n1 to n4 by the pdf-lib rules too (defence in depth): /DecodeParms on content, BI as pdf.js lexes it, a page-tree node with no /Type, a /Contents array read joined; n5 only pdf.js sees', async () => {
+  it('refuses n1 to n5 by the pdf-lib rules too (defence in depth): /DecodeParms on content, BI as pdf.js lexes it, a page-tree node with no /Type, a /Contents array read joined, and since fix round 6 (M-6) a function-based shading', async () => {
     const reasons: Record<string, string | null> = {};
     for (const c of M1_DRAWN_CASES) reasons[c.id] = await copyRulesBreak(c.attack, 'hide');
     expect(reasons['n1']).toMatch(/^object 4: a stream that is not a picture has \/DecodeParms$/);
     for (const id of ['n2', 'n2b', 'n2c', 'n4']) expect(reasons[id], id).toBe('an inline picture is in a content stream under the "hide" policy');
     for (const id of ['n3', 'n3b']) expect(reasons[id], id).toBe('the page tree: every node must be /Type /Pages with its /Kids and their /Count, every leaf /Type /Page, each once');
-    expect(reasons['n5']).toBeNull();
+    expect(reasons['n5']).toBe('object 16: a shading of type 1');
     // Outside "blur" and "hide" pictures may be shown: only the page tree is a rule there.
     expect(await copyRulesBreak((M1_DRAWN_CASES[0] as { attack: Uint8Array }).attack, 'show')).toBeNull();
     expect(await copyRulesBreak((M1_DRAWN_CASES[4] as { attack: Uint8Array }).attack, 'show')).toMatch(/^the page tree: /);
@@ -520,4 +520,219 @@ describe('M1, S1, S3, fix round 5: one page for every reader, no gradient drawn 
       for (const image of ['blur', 'hide'] as const) expect(await copyRulesBreak(pdf, image), `${group}, ${image}`).toBe(`an inline picture is in a content stream under the "${image}" policy`);
     }
   });
+});
+
+describe('fix round 6: refused by class under "blur" and "hide" (M-6, S1-6), and the nesting cap read as pdf.js reads (S3-6)', () => {
+  const job = (pdf: Uint8Array, image: 'show' | 'blur' | 'hide') => ({ copy: pdf, original: M1_ORIGINAL, quotes: M1_QUOTES, image });
+  const both = ['blur', 'hide'] as const;
+  const LINEAR = '<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0.9 0.9 0.9] /N 1 >>';
+  const AXIAL = (space = '/DeviceRGB', key = 'ColorSpace', fn = LINEAR): string => `<< /ShadingType 2 /${key} ${space} /Coords [72 0 272 0] /Function ${fn} >>`;
+  const SAMPLED_ROW: RawObject = [40, rawStream('/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1] /Size [4] /BitsPerSample 8', Buffer.from([255, 0, 0, 0, 255, 0, 0, 0, 255, 9, 9, 9]))];
+  const FORM = (content: string, resources = ''): Buffer => rawStream(`/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << ${resources} >>`, content);
+  const TYPE3 = (proc: string, resources: string): RawObject[] => [
+    [30, `<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /g 31 0 R >> /Encoding << /Differences [65 /g] >> /FirstChar 65 /LastChar 65 /Widths [1000] /Resources << ${resources} >> >>`],
+    [31, rawStream('', `1000 0 0 0 1000 1000 d1 ${proc}`)],
+  ];
+  const expectRefused = async (pdf: Uint8Array, reason: string | RegExp, name: string): Promise<void> => {
+    for (const image of both) {
+      const found = await copyRulesBreak(pdf, image);
+      if (typeof reason === 'string') expect(found, `${name}, ${image}`).toBe(reason);
+      else expect(found, `${name}, ${image}`).toEqual(expect.stringMatching(reason));
+    }
+    expect(await copyRulesBreak(pdf, 'show'), `${name}, show`).toBeNull();
+  };
+
+  it('refuses a shading of type 1 or 4 to 7 wherever it is (sh, a shading pattern, a form, a soft mask, a Type 3 glyph, or no use at all), under "blur" and "hide", not "show" (M-6)', async () => {
+    const fnBased = '<< /ShadingType 1 /ColorSpace /DeviceRGB /Domain [0 1 0 1] /Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >>';
+    for (const type of [4, 5, 6, 7] as const) {
+      await expectRefused(onSplitPage(['q /M sh Q'], '/Shading << /M 20 0 R >>', [[20, meshShading(type)]]), `object 20: a shading of type ${type}`, `type ${type} by sh`);
+    }
+    const places: Array<[string, Uint8Array]> = [
+      ['type 1 by sh', onSplitPage(['/M sh'], `/Shading << /M ${fnBased} >>`)],
+      ['in a shading pattern', onSplitPage(['/Pattern cs /P scn 0 0 9 9 re f'], '/Pattern << /P << /PatternType 2 /Shading 20 0 R >> >>', [[20, meshShading(4)]])],
+      ['in a form', onSplitPage(['/Fm1 Do'], '/XObject << /Fm1 21 0 R >>', [[21, FORM('/M sh', '/Shading << /M 20 0 R >>')], [20, meshShading(4)]])],
+      ['in a soft mask\'s group', onSplitPage(['/GS1 gs 0 0 9 9 re f'], '/ExtGState << /GS1 << /SMask << /S /Luminosity /G 21 0 R >> >> >>', [[21, FORM('/M sh', '/Shading << /M 20 0 R >>')], [20, meshShading(6)]])],
+      ['in a Type 3 glyph', onSplitPage(['BT /T 12 Tf (A) Tj ET'], '/Font << /T 30 0 R >>', [...TYPE3('/M sh', '/Shading << /M 20 0 R >>'), [20, meshShading(7)]])],
+      ['drawn by no one', onSplitPage([''], '', [[20, meshShading(5)]])],
+      ['a type by reference', onSplitPage(['/M sh'], '/Shading << /M << /ShadingType 22 0 R /ColorSpace /DeviceRGB /Function 23 0 R >> >>', [[22, '4'], [23, LINEAR]])],
+      ['a type no reader agrees on (4.5)', onSplitPage(['/M sh'], '/Shading << /M << /ShadingType 4.5 /ColorSpace /DeviceRGB >> >>')],
+    ];
+    for (const [name, pdf] of places) await expectRefused(pdf, /^object \d+: a shading of type /, name);
+    // w1m and w2m (r6): the mesh behind a second operand, and w2mc, the differential pdf.js draws; all by the shading.
+    const mesh: RawObject = [20, meshShading(4)];
+    const w1m = onSplitPage(['/Fm1 /Fm2 Do'], '/XObject << /Fm1 21 0 R /Fm2 22 0 R >>', [[21, FORM('/M sh', '/Shading << /M 20 0 R >>')], [22, FORM('BT /F1 10 Tf 72 380 Td (caption) Tj ET', '/Font << /F1 5 0 R >>')], mesh]);
+    for (const [name, pdf] of [['w1m', w1m], ['w2m', onSplitPage(['/M /Sh2 sh'], `/Shading << /M 20 0 R /Sh2 ${AXIAL()} >>`, [mesh])], ['w2mc', onSplitPage(['/Sh2 /M sh'], `/Shading << /M 20 0 R /Sh2 ${AXIAL()} >>`, [mesh])]] as const) {
+      await expectRefused(pdf, 'object 20: a shading of type 4', name);
+      for (const image of both) expect((await gateReply(job(pdf, image))).verdict, `${name}, ${image}`).toEqual({ pass: false, code: 'rules' });
+    }
+    // Gradients (types 2 and 3) pass, as before.
+    expect(await copyRulesBreak(onSplitPage(['/Sh2 sh'], `/Shading << /Sh2 ${AXIAL()} >>`), 'hide')).toBeNull();
+  });
+
+  it('refuses a content operator given more operands than it takes, an unknown one given any, operands no operator takes, and a number readers split otherwise, in every content stream, under "blur" and "hide", not "show" (M-6)', async () => {
+    const res = `/XObject << /Fm1 21 0 R /Fm2 22 0 R >> /Shading << /Sh1 ${AXIAL()} /Sh2 ${AXIAL()} >> /ExtGState << /A << /CA 1 >> /B << /CA 0.5 >> >> /Pattern << /P1 23 0 R /P2 23 0 R >>`;
+    const forms: RawObject[] = [[21, FORM('0 0 1 1 re f')], [22, FORM('0 0 1 1 re f')], [23, rawStream('/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9] /XStep 9 /YStep 9 /Resources << >>', '0 0 9 9 re f')]];
+    const more = (op: string): RegExp => new RegExp(`^a content stream gives ${op.replace(/[*'"]/g, '\\$&')} more operands than it takes$`);
+    const surplus: Array<[string, string, RegExp]> = [
+      ['two forms', '/Fm1 /Fm2 Do', more('Do')],
+      ['two shadings', '/Sh1 /Sh2 sh', more('sh')],
+      ['two graphics states', '/A /B gs', more('gs')],
+      ['a width too many', '1 2 w', more('w')],
+      ['a font too many', '/F1 /F1 12 Tf', more('Tf')],
+      ['seven for cm', '1 0 0 1 0 0 0 cm', more('cm')],
+      ['null counted', '/Sh1 null sh', more('sh')],
+      ['two pattern names', '/Pattern cs /P1 /P2 scn 0 0 9 9 re f', more('scn')],
+      ['a pattern name not last', '/Pattern cs /P1 0.5 scn 0 0 9 9 re f', more('scn')],
+      ['a name in sc', '0.5 /P1 sc', more('sc')],
+      ['five for sc', '1 2 3 4 5 sc', more('sc')],
+      ['34 for scn', `${Array(34).fill('0').join(' ')} scn`, more('scn')],
+      ['operands q takes none of, pdf.js reading "qq" as q q', '/Sh1 qq', /^a content stream gives (q|the unknown operator qq) more operands than it takes$/],
+      ['an unknown operator', '/Sh1 foo /Sh2 sh', /^a content stream gives (f|the unknown operator foo) more operands than it takes$/],
+      ['a word MuPDF reads whole', '/Sh1 shq', /^a content stream gives the unknown operator shq more operands than it takes$/],
+      ['a number pdf.js reads after an operator ("q1" as q 1, which Q is then given)', 'q1 Q', /^a content stream holds a number readers split otherwise \(q1\)$/],
+      ['a word pdf.js reads as two operands ("truetrue" as true true, which w is then given)', 'truetrue w', more('w')],
+    ];
+    for (const [name, content, reason] of surplus) await expectRefused(onSplitPage([content], res, forms), reason, name);
+    await expectRefused(onSplitPage(['q /Sh1'], res, forms), 'a content stream ends with operands no operator takes', 'trailing operands');
+    await expectRefused(onSplitPage(['q /Sh1', 'sh Q'], res, forms), 'a content stream ends with operands no operator takes', 'an operand in one stream, its operator in the next');
+    for (const word of ['1.5.3', '--1', '1-2', '.']) await expectRefused(onSplitPage([`${word} w`], res, forms), `a content stream holds a number readers split otherwise (${word})`, word);
+    // In a form, a tiling pattern, a Type 3 glyph and a soft mask's group too.
+    const inForm = onSplitPage(['/Fm1 Do'], '/XObject << /Fm1 21 0 R >>', [[21, FORM('/Sh1 /Sh2 sh', `/Shading << /Sh1 ${AXIAL()} /Sh2 ${AXIAL()} >>`)]]);
+    const inPattern = onSplitPage(['/Pattern cs /P1 scn 0 0 9 9 re f'], '/Pattern << /P1 23 0 R >>', [[23, rawStream('/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9] /XStep 9 /YStep 9 /Resources << /ExtGState << /A << /CA 1 >> >> >>', '/A /A gs 0 0 9 9 re f')]]);
+    const inGlyph = onSplitPage(['BT /T 12 Tf (A) Tj ET'], '/Font << /T 30 0 R >>', TYPE3('1 2 w', ''));
+    const inMask = onSplitPage(['/GS1 gs 0 0 9 9 re f'], '/ExtGState << /GS1 << /SMask << /S /Luminosity /G 21 0 R >> >> >>', [[21, FORM('0 0 0 0 0 9 9 re f')]]);
+    for (const [name, pdf, op] of [['a form', inForm, 'sh'], ['a tiling pattern', inPattern, 'gs'], ['a Type 3 glyph', inGlyph, 'w'], ['a soft mask', inMask, 're']] as const) await expectRefused(pdf, more(op), name);
+    // What an honest copy writes passes, an unknown operator with no operands and one short of operands among it (h8).
+    const honest = [
+      'BT /F1 12 Tf 72 720 Td 14 TL (Picnic) Tj T* [(A) 120 (B)] TJ (a) \' 1 2 (b) " ET',
+      'q 1 0 0 1 0 0 cm 0.2 0.3 0.5 RG 2 w [3 2] 0 d 72 728 m 540 728 l S Q /Sh1 sh /Fm1 Do /A gs',
+      '/Pattern cs /P1 scn 0 0 9 9 re f 0.2 0.3 0.4 /P2 scn /Span << /MCID 0 >> BDC EMC /Tag BMC EMC /OC /L1 DP /M MP',
+      'foo 1 0 0 cm 5 w 0.1 0.2 0.3 0.4 k 1 g 0.5 sc 0.1 0.2 0.3 0.4 SC % a comment /Sh1 /Sh2 sh',
+    ];
+    for (const content of honest) expect(await copyRulesBreak(onSplitPage([content], res, forms), 'hide'), content).toBeNull();
+    expect(await copyRulesBreak(onSplitPage(['q 72 720', 'Td Q'], res, forms), 'hide')).toBe('a content stream ends with operands no operator takes');
+    expect(await copyRulesBreak(onSplitPage(['q /Sh1 sh', 'Q'], res, forms), 'hide')).toBeNull();
+  });
+
+  it('refuses a gradient whose colour space reads a table or program of its own, a PostScript function anywhere, and transfer, black-generation and undercolour-removal functions, under "blur" and "hide", not "show"; the honest kinds pass (S1-6)', async () => {
+    const space = 'a gradient is drawn in a colour space with a table or program of its own';
+    const palette = (colours: number): string => `<${'ff0000'.repeat(colours)}>`;
+    const gradient = (cs: string, extra: RawObject[] = [], key = 'ColorSpace', resources = ''): Uint8Array => onSplitPage(['/Sh sh'], `/Shading << /Sh 20 0 R >> ${resources}`, [[20, AXIAL(cs, key)], ...extra]);
+    const refused: Array<[string, Uint8Array]> = [
+      ['Separation, a sampled tint (s6sep)', gradient('[/Separation /Row /DeviceRGB 40 0 R]', [SAMPLED_ROW])],
+      ['DeviceN, a sampled tint', gradient('[/DeviceN [/A] /DeviceRGB 40 0 R]', [SAMPLED_ROW])],
+      ['Separation, a stitched tint', gradient(`[/Separation /Row /DeviceRGB << /FunctionType 3 /Domain [0 1] /Functions [${LINEAR}] /Bounds [] /Encode [0 1] >>]`)],
+      ['DeviceN with attributes', gradient(`[/DeviceN [/A] /DeviceRGB ${LINEAR.replace('[1 1 1]', '[1]').replace('[0.9 0.9 0.9]', '[0]')} << /Colorants << >> >>]`)],
+      ['Separation over a sampled Separation', gradient(`[/Separation /A [/Separation /Row /DeviceRGB 40 0 R] ${LINEAR}]`, [SAMPLED_ROW])],
+      ['Indexed of 64 colours (s6idx)', gradient(`[/Indexed /DeviceRGB 63 ${palette(64)}]`)],
+      ['Indexed of 5 colours', gradient(`[/Indexed /DeviceRGB 4 ${palette(5)}]`)],
+      ['Indexed from a stream', gradient('[/Indexed /DeviceRGB 1 41 0 R]', [[41, rawStream('', Buffer.from([255, 0, 0, 0, 0, 255]))]])],
+      ['Indexed over a sampled Separation', gradient(`[/Indexed [/Separation /Row /DeviceRGB 40 0 R] 1 <00ff>]`, [SAMPLED_ROW])],
+      ['ICCBased, its /Alternate a palette', gradient('[/ICCBased 42 0 R]', [[42, rawStream(`/N 1 /Alternate [/Indexed /DeviceRGB 63 ${palette(64)}]`, 'icc')]])],
+      ['a name the page\'s resources define', gradient('/CS0', [], 'ColorSpace', `/ColorSpace << /CS0 [/Indexed /DeviceRGB 63 ${palette(64)}] >>`)],
+      ['/CS, as pdf.js also reads it', gradient(`[/Indexed /DeviceRGB 63 ${palette(64)}]`, [], 'CS')],
+      ['Pattern', gradient('/Pattern')],
+      ['by reference', gradient('43 0 R', [[43, `[/Indexed /DeviceRGB 63 ${palette(64)}]`]])],
+      ['none given', onSplitPage(['/Sh sh'], '/Shading << /Sh 20 0 R >>', [[20, `<< /ShadingType 2 /Coords [72 0 272 0] /Function ${LINEAR} >>`]])],
+    ];
+    for (const [name, pdf] of refused) await expectRefused(pdf, `object 20: ${space}`, name);
+    const passed: Array<[string, Uint8Array]> = [
+      ['DeviceRGB', gradient('/DeviceRGB')],
+      ['DeviceCMYK', gradient('/DeviceCMYK')],
+      ['CalRGB', gradient('[/CalRGB << /WhitePoint [0.95 1 1.09] >>]')],
+      ['ICCBased', gradient('[/ICCBased 42 0 R]', [[42, rawStream('/N 3 /Alternate /DeviceRGB', 'icc')]])],
+      ['a spot colour, a type 2 tint (h3)', gradient(`[/Separation /PMS286 /DeviceCMYK << /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [1 0.66 0 0.02] /N 1 >>]`)],
+      ['Indexed of 4 colours', gradient(`[/Indexed /DeviceRGB 3 ${palette(4)}]`)],
+      // A flat fill in a spot colour with a sampled tint (h6): one colour per fill, no gradient.
+      ['a sampled tint on a flat fill (h6)', onSplitPage(['/Spot cs 1 scn 72 300 468 20 re f'], '/ColorSpace << /Spot [/Separation /PMS286 /DeviceRGB 40 0 R] >>', [SAMPLED_ROW])],
+    ];
+    for (const [name, pdf] of passed) for (const image of both) expect(await copyRulesBreak(pdf, image), `${name}, ${image}`).toBeNull();
+    // A PostScript (type 4) function anywhere: a gradient's, a flat fill's tint, one no one uses; and a type no reader agrees on.
+    const PS = rawStream('/FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1]', '{ dup dup }');
+    const functions: Array<[string, Uint8Array, number]> = [
+      ['a gradient\'s (s6ps)', onSplitPage(['/Sh sh'], '/Shading << /Sh << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 9 0] /Function 44 0 R >> >>', [[44, PS]]), 44],
+      ['a flat fill\'s tint', onSplitPage(['/Spot cs 1 scn 0 0 9 9 re f'], '/ColorSpace << /Spot [/Separation /A /DeviceRGB 44 0 R] >>', [[44, PS]]), 44],
+      ['no one\'s', onSplitPage([''], '', [[44, PS]]), 44],
+      ['FunctionType 4 by reference', onSplitPage([''], '', [[44, '<< /FunctionType 45 0 R /Domain [0 1] >>'], [45, '4']]), 44],
+      ['FunctionType 2.5', onSplitPage([''], '', [[44, '<< /FunctionType 2.5 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>']]), 44],
+    ];
+    for (const [name, pdf, object] of functions) await expectRefused(pdf, new RegExp(`^object ${object}: a function of type (4|2\\.5)$`), name);
+    // Transfer, black-generation and undercolour-removal functions, in a graphics state or a soft mask (s6trg, s6trm).
+    const transfer = (dict: string, extra: RawObject[] = []): Uint8Array => onSplitPage(['/T gs 0 0 9 9 re f'], `/ExtGState << /T 46 0 R >>`, [[46, dict], ...extra]);
+    for (const key of ['TR', 'TR2', 'BG', 'BG2', 'UCR', 'UCR2']) {
+      await expectRefused(transfer(`<< /${key} 40 0 R >>`, [SAMPLED_ROW]), `object 46: a transfer, black-generation or undercolour-removal function (/${key})`, key);
+    }
+    await expectRefused(transfer('<< /TR [40 0 R 40 0 R 40 0 R 40 0 R] >>', [SAMPLED_ROW]), 'object 46: a transfer, black-generation or undercolour-removal function (/TR)', 'four transfer functions');
+    await expectRefused(transfer('<< /SMask << /S /Luminosity /G 47 0 R /TR 40 0 R >> >>', [SAMPLED_ROW, [47, FORM('0 0 9 9 re f')]]), 'object 46: a transfer, black-generation or undercolour-removal function (/TR)', 'a soft mask\'s (s6trm)');
+    await expectRefused(transfer('<< /TR /Inverse >>'), 'object 46: a transfer, black-generation or undercolour-removal function (/TR)', 'a name other than /Identity or /Default');
+    for (const image of both) expect(await copyRulesBreak(transfer('<< /TR /Identity /TR2 /Default /BG2 /Default /UCR2 /Default /SA false >>'), image), image).toBeNull();
+    // Through gateReply too.
+    for (const image of both) expect((await gateReply(job(refused[0]![1], image))).verdict, image).toEqual({ pass: false, code: 'rules' });
+  });
+
+  it('reads the names a page draws over its /Contents joined, as pdf.js joins them, and a tiling pattern\'s in its own resources, then its parent\'s, under every policy (S3-6: n1s, n1h, n2s, n2h, n1d)', async () => {
+    const deep = 'forms, patterns, Type 3 glyphs or soft masks nest more than 32 deep, or in a loop';
+    // n1s: forms 40 deep behind a page edge split across two streams ("q /F" and "m0 Do Q").
+    const split = onSplitPage(['q /F', 'm0 Do Q\n'], '/XObject << /Fm0 20 0 R >>', formChain(40, 20));
+    // n2s: a tiling pattern with /Resources of its own but no /XObject draws /Fm0, the page's: 40 forms deep.
+    const merged = onSplitPage(['/Pattern cs /P scn 0 0 100 100 re f'], '/XObject << /Fm0 20 0 R >> /Pattern << /P 19 0 R >>', [[19, rawStream('/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9] /XStep 9 /YStep 9 /Resources << /ExtGState << >> >>', '/Fm0 Do')], ...formChain(40, 20)]);
+    // n1d: patterns 34 deep, each drawing the next twice, behind a split edge: refused at once, not after 2^34 reads.
+    const cells: RawObject[] = [];
+    for (let k = 0; k < 34; k++) {
+      const next = k + 1 < 34;
+      cells.push([k + 20, rawStream(`/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << ${next ? `/Pattern << /A ${k + 21} 0 R /B ${k + 21} 0 R >>` : ''} >>`, next ? '/Pattern cs /A scn 0 0 5 5 re f /B scn 5 5 5 5 re f' : '0 0 10 10 re f')]);
+    }
+    const fanned = onSplitPage(['q /Pattern cs /P', '0 scn 72 400 200 200 re f Q\n'], '/Pattern << /P0 20 0 R >>', cells);
+    for (const image of ['show', 'blur', 'hide'] as const) {
+      for (const [name, pdf] of [['split', split], ['merged', merged]] as const) expect(await copyRulesBreak(pdf, image), `${name}, ${image}`).toBe(deep);
+      const t0 = Date.now();
+      expect(await copyRulesBreak(fanned, image), `fanned, ${image}`).toBe(deep);
+      expect(Date.now() - t0, `fanned, ${image}`).toBeLessThan(10_000);
+    }
+    expect((await gateReply(job(split, 'show'))).verdict).toEqual({ pass: false, code: 'rules' });
+    // Controls: 32 deep behind the same split, and a pattern whose own /XObject holds the name, pass under "show".
+    expect(await copyRulesBreak(onSplitPage(['q /F', 'm0 Do Q\n'], '/XObject << /Fm0 20 0 R >>', formChain(32, 20)), 'show')).toBeNull();
+    expect(await copyRulesBreak(onSplitPage(['/Pattern cs /P scn 0 0 100 100 re f'], '/XObject << /Fm0 20 0 R >> /Pattern << /P 19 0 R >>', [[19, rawStream('/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 9 9] /XStep 9 /YStep 9 /Resources << /XObject << /Fm0 60 0 R >> >>', '/Fm0 Do')], [60, FORM('0 0 1 1 re f')], ...formChain(40, 20)]), 'show')).toBeNull();
+  });
+
+  it('passes the real engine\'s copy of each honest original (h1 to h4, h6 to h9) under "show", "blur" and "hide", with and without a withheld quote (round 6, no false refusal)', async () => {
+    for (const [id, build] of HONEST_ORIGINALS) {
+      const original = build();
+      for (const image of ['show', 'blur', 'hide'] as const) {
+        for (const quotes of [[], HONEST_QUOTES]) {
+          const made = await redactPdf(original, { quotes, redactsAny: true, image });
+          expect(made.kind, `${id}, ${image}, ${quotes.length}`).toBe('redacted');
+          if (made.kind !== 'redacted') continue;
+          expect((await gateReply({ copy: made.pdf, original, quotes, image })).verdict, `${id}, ${image}, ${quotes.length}`).toEqual({ pass: true });
+        }
+      }
+    }
+  }, 240_000);
+
+  it('reads #xx in a name as a reader does (C6e: forms 40 deep named /X#30 for /X0), and reads a form reached many ways once (C6d: forms 30 deep, each drawing the next as /A and /B, answered at once) (S3-6)', async () => {
+    const deep = 'forms, patterns, Type 3 glyphs or soft masks nest more than 32 deep, or in a loop';
+    const escaped = onSplitPage(['q /Fm#30 Do Q'], '/XObject << /Fm0 20 0 R >>', formChain(40, 20, { name: 'X0', written: 'X#30' }));
+    for (const image of ['show', 'hide'] as const) expect(await copyRulesBreak(escaped, image), image).toBe(deep);
+    const fan: RawObject[] = [];
+    for (let k = 0; k < 30; k++) {
+      const next = k + 1 < 30;
+      fan.push([k + 20, rawStream(`/Type /XObject /Subtype /Form /BBox [0 0 1 1] /Resources << ${next ? `/XObject << /A ${k + 21} 0 R /B ${k + 21} 0 R >>` : ''} >>`, next ? '/A Do /B Do' : '0 0 1 1 re f')]);
+    }
+    const t0 = Date.now();
+    expect(await copyRulesBreak(onSplitPage(['/Fm0 Do'], '/XObject << /Fm0 20 0 R >>', fan), 'show')).toBeNull();
+    expect(Date.now() - t0).toBeLessThan(5_000);
+  });
+
+  it('refuses drawers reached in more than 100,000 ways, each with resources of its own (patterns with a /Font each, all drawing forms 30 deep they find in the page\'s /XObject), and passes 100 such patterns (S3-6)', async () => {
+    const forms: RawObject[] = Array.from({ length: 30 }, (_, k): RawObject => [20 + k, rawStream('/Type /XObject /Subtype /Form /BBox [0 0 1 1]', k + 1 < 30 ? `/X${k + 1} Do` : '0 0 1 1 re f')]);
+    const xobjects = `/XObject << ${forms.map(([n], k) => `/X${k} ${n} 0 R`).join(' ')} >>`;
+    const fanned = (count: number): Uint8Array => {
+      const patterns: RawObject[] = Array.from({ length: count }, (_, i): RawObject => [1_000 + i, rawStream(`/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 1 1] /XStep 1 /YStep 1 /Resources << /Font << /F 5 0 R >> >>`, '/X0 Do')]);
+      return onSplitPage([patterns.map((_, i) => `/Pattern cs /P${i} scn 0 0 1 1 re f`).join('\n')], `${xobjects} /Pattern << ${patterns.map(([n], i) => `/P${i} ${n} 0 R`).join(' ')} >>`, [...forms, ...patterns]);
+    };
+    const t0 = Date.now();
+    expect(await copyRulesBreak(fanned(3_300), 'show')).toBe('forms, patterns, Type 3 glyphs or soft masks are drawn in more than 100000 ways');
+    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(await copyRulesBreak(fanned(100), 'show')).toBeNull();
+  }, 60_000);
 });

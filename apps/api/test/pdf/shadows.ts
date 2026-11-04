@@ -449,3 +449,97 @@ export const nestedForms = (depth: number, last = '0 0 1 1 re f'): Uint8Array =>
   }
   return rawPdf([[1, CATALOG], PAGES, page('/XObject << /X 10 0 R >>'), contents('q /X Do Q\n'), FONT, ...forms]);
 };
+
+// Round 6 (M-6, S1-6, S3-6). A one-page copy drawing `parts` as its /Contents (an array when there are
+// several, as a page split across streams is), with these resources and objects; and a mesh shading of the
+// given type (4 to 7), three vertices or one patch, enough for a reader to take it for one.
+export const R6_CATALOG: RawObject = [1, CATALOG];
+export const R6_PAGES: RawObject = PAGES;
+export const onSplitPage = (parts: readonly (string | Buffer)[], resources = '', extra: RawObject[] = []): Uint8Array => {
+  const refs = parts.map((_, k) => `${k === 0 ? 4 : 100 + k} 0 R`);
+  const streams: RawObject[] = parts.map((part, k) => [k === 0 ? 4 : 100 + k, rawStream('', part)]);
+  const contents = parts.length === 1 ? (refs[0] as string) : `[${refs.join(' ')}]`;
+  return rawPdf([[1, CATALOG], PAGES, [3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contents} /Resources << /Font << /F1 5 0 R >> ${resources} >> >>`], ...streams, FONT, ...extra]);
+};
+export const meshShading = (type: 4 | 5 | 6 | 7): Buffer => {
+  const decode = '/Decode [0 612 0 792 0 1 0 1 0 1]';
+  if (type === 4) return rawStream(`/ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 ${decode}`, Buffer.from([0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 0, 0, 255, 255, 0]));
+  if (type === 5) return rawStream(`/ShadingType 5 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /VerticesPerRow 2 ${decode}`, Buffer.from([0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0]));
+  return rawStream(`/ShadingType ${type} /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 ${decode}`, Buffer.alloc(type === 6 ? 1 + 24 + 12 : 1 + 32 + 12, 0x40));
+};
+/**
+ * Forms `depth` deep from object `first`, each drawing the next under the resource name `name`, written `written` in
+ * its content (an #xx spelling, say), the last running `last` with `resources`.
+ */
+export const formChain = (depth: number, first: number, options: { name?: string; written?: string; last?: string; resources?: string } = {}): RawObject[] => {
+  const { name = 'X', last = '0 0 1 1 re f', resources = '' } = options;
+  const written = options.written ?? name;
+  return Array.from({ length: depth }, (_, k): RawObject => {
+    const next = k + 1 < depth;
+    return [first + k, rawStream(`/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << ${next ? `/XObject << /${name} ${first + k + 1} 0 R >>` : resources} >>`, next ? `/${written} Do` : last)];
+  });
+};
+
+// Round 6: ordinary newsletter-like originals, after the round-6 challenge's honest set (h1 to h4, h6 to h9):
+// text, a photo, vector rules and an axial gradient (h1), with a multi-stop gradient (h2), a spot-colour band with
+// a type 2 tint (h3), a linearized layout (h4), a sampled tint on a flat fill (h6), a broken embedded TrueType
+// program (h7), an unknown operator and one short of operands (h8), a Do of a name its resources lack (h9). The
+// real engine's copy of each must pass the gate under every policy.
+const HONEST_BODY = [
+  'BT /F1 22 Tf 72 740 Td (Northwest Florida Mensa: The Flyer) Tj ET',
+  '0.2 0.2 0.5 RG 2 w 72 728 m 540 728 l S',
+  'BT /F2 11 Tf 72 700 Td 14 TL (Picnic at the bayou park on the third Saturday.) Tj T* (Call Kestrel Ambry at 850-555-0142 to bring a dish.) Tj ET',
+  'q 200 0 0 200 72 400 cm /Im1 Do Q',
+  'BT /F2 9 Tf 72 388 Td (Photo: last year at the park.) Tj ET',
+  '0.6 g 300 400 240 0.75 re f',
+  'q 300 600 240 60 re W n /Band sh Q',
+].join('\n');
+const HONEST_AXIAL = '<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [300 0 540 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [0.85 0.9 1] /C1 [0.2 0.3 0.7] /N 1 >> /Extend [true true] >>';
+const HONEST_STITCH = '<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [300 0 540 0] /Function << /FunctionType 3 /Domain [0 1] /Functions [<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0.9 0.6 0.2] /N 1 >> << /FunctionType 2 /Domain [0 1] /C0 [0.9 0.6 0.2] /C1 [0.2 0.3 0.7] /N 1.5 >>] /Bounds [0.4] /Encode [0 1 0 1] >> /Extend [true true] >>';
+const honest = (band: string, { extra = [] as RawObject[], resources = '', content = HONEST_BODY, body = '<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman /Encoding /WinAnsiEncoding >>', first = [] as RawObject[] } = {}): Uint8Array =>
+  rawPdf([
+    ...first,
+    [1, CATALOG],
+    PAGES,
+    [3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 7 0 R >> /XObject << /Im1 6 0 R >> /Shading << /Band 8 0 R >> ${resources} >> >>`],
+    [4, rawStream('/Filter /FlateDecode', deflateSync(Buffer.from(`${content}\n`, 'latin1')))],
+    [5, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>'],
+    [6, picture('/Image', SAMPLES)],
+    [7, body],
+    [8, band],
+    ...extra,
+  ], { root: 1 });
+const SPOT = (tint: string): RawObject => [9, `[/Separation /PMS286 /DeviceCMYK ${tint}]`];
+export const HONEST_ORIGINALS: ReadonlyArray<[string, () => Uint8Array]> = [
+  ['h1', () => honest(HONEST_AXIAL)],
+  ['h2', () => honest(HONEST_STITCH)],
+  ['h3', () => honest(HONEST_AXIAL, { extra: [SPOT('<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [1 0.66 0 0.02] /N 1 >>')], resources: '/ColorSpace << /Spot 9 0 R >>', content: `${HONEST_BODY}\n/Spot cs 1 scn 72 300 468 20 re f` })],
+  ['h4', () => {
+    const build = (length: number): Uint8Array => honest(HONEST_AXIAL, { first: [[10, `<< /Linearized 1 /L ${String(length).padStart(7, '0')} /H [0 0] /O 3 /E 0 /N 1 /T 0 >>`]] });
+    return build(build(0).byteLength);
+  }],
+  ['h6', () => honest(HONEST_AXIAL, { extra: [[9, '[/Separation /PMS286 /DeviceRGB 11 0 R]'], [11, rawStream('/FunctionType 0 /Domain [0 1] /Range [0 1 0 1 0 1] /Size [2] /BitsPerSample 8', Buffer.from([255, 255, 255, 0, 56, 168]))]], resources: '/ColorSpace << /Spot 9 0 R >>', content: `${HONEST_BODY}\n/Spot cs 1 scn 72 300 468 20 re f` })],
+  ['h7', () => honest(HONEST_AXIAL, {
+    body: `<< /Type /Font /Subtype /TrueType /BaseFont /Junk /FirstChar 32 /LastChar 126 /Widths [${Array(95).fill(500).join(' ')}] /FontDescriptor 13 0 R /Encoding /WinAnsiEncoding >>`,
+    extra: [[12, rawStream('', Buffer.alloc(3000, 0x5a))], [13, '<< /Type /FontDescriptor /FontName /Junk /Flags 32 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 900 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 12 0 R >>']],
+  })],
+  ['h8', () => honest(HONEST_AXIAL, { content: `${HONEST_BODY}\nfoo 1 0 0 cm 5 w` })],
+  ['h9', () => honest(HONEST_AXIAL, { content: `${HONEST_BODY}\nq 10 0 0 10 500 100 cm /ImX Do Q` })],
+];
+export const HONEST_QUOTES = ['850-555-0142'];
+
+// Round 6 (S3-6, n1t): the withheld name in a font of its own (a custom encoding, an honest /ToUnicode, so no
+// string in the file spells it) at the bottom of `depth` nested forms, the page's edge split across two streams
+// when `split`. Past about 1,000 forms pdf.js's getTextContent runs out of stack.
+export const DEEP_QUOTE = 'Kestrel Ambry';
+export const deepText = (depth: number, split: boolean): Uint8Array => {
+  const glyphs = [...new Set(DEEP_QUOTE.replace(/ /g, ''))].sort();
+  const code = (c: string): number => (c === ' ' ? 0x20 : 0x41 + glyphs.indexOf(c));
+  const hex = [...DEEP_QUOTE].map((c) => code(c).toString(16).padStart(2, '0')).join('');
+  const cmap = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Y def 1 begincodespacerange <00> <FF> endcodespacerange ${glyphs.length + 1} beginbfchar <20> <0020> ${glyphs.map((c) => `<${code(c).toString(16)}> <${c.charCodeAt(0).toString(16).padStart(4, '0')}>`).join(' ')} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end`;
+  const font: RawObject = [9, `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding << /Type /Encoding /BaseEncoding /WinAnsiEncoding /Differences [${0x41} ${glyphs.map((c) => `/${c}`).join(' ')}] >> /ToUnicode 10 0 R >>`];
+  const forms = formChain(depth, 20, { last: `BT /W 14 Tf 72 500 Td <${hex}> Tj ET`, resources: '/Font << /W 9 0 R >>' });
+  const parts = split ? [`${TEXT}q /F`, 'm0 Do Q\n'] : [`${TEXT}q /Fm0 Do Q\n`];
+  const streams: RawObject[] = parts.map((part, k) => [k === 0 ? 4 : 6, rawStream('', part)]);
+  return rawPdf([[1, CATALOG], PAGES, [3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${split ? '[4 0 R 6 0 R]' : '4 0 R'} /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 20 0 R >> >> >>`], ...streams, FONT, font, [10, rawStream('', cmap)], ...forms]);
+};
