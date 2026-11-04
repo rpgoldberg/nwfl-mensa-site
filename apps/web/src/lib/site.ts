@@ -131,6 +131,8 @@ const PAGES: readonly Page[] = [
   { path: '/sign-in', title: 'Sign in', description: 'Sign in to the site, for officers and members.' },
   { path: '/signed-out', title: "You're signed out", description: 'You have signed out of this site. You can sign in again at any time.' },
   { path: '/officer-area', title: 'Officer area', description: 'Where officers write reports and approve what goes on the site.' },
+  // SOLO-APPROVE: the Admin's alone; never linked for anyone else (robots.txt keeps /officer-area out of search).
+  { path: '/officer-area/approval-rules', title: 'Approval setting', description: 'Whether a second officer must approve before something is published.' },
 ];
 
 export type NavIcon = 'home' | 'calendar' | 'newsletter' | 'more';

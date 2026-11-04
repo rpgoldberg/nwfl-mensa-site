@@ -1,0 +1,166 @@
+---
+// SOLO-APPROVE: the Admin's approval switch. One plain form per scope (publishing content, and
+// loosening a public privacy setting): two officers or one, and a required reason; then a
+// confirmation step that says what the change does; then the API sets it (ApprovalRuleService,
+// with the Admin's own token: the API is the wall, and refuses anyone else). It works with no
+// script: each step is a form post, answered with a page or a 303 back here.
+//
+// Not signed in: sign in first. Signed in but not the Admin: the plain not-found page, so the
+// switch is hidden from everyone else, and it is never linked for them either. Astro's origin
+// check refuses a cross-site post first; the form body is capped as /prefs caps its own.
+import OneApproverNote from '../../components/OneApproverNote.astro';
+import Unavailable from '../../components/Unavailable.astro';
+import Base from '../../layouts/Base.astro';
+import {
+  MAX_REASON,
+  RULES,
+  RULE_LABEL,
+  SCOPES,
+  SCOPE_LABEL,
+  type FormErrors,
+  type RuleForm,
+  type Scope,
+  type Setting,
+  confirmText,
+  doneFromQuery,
+  doneText,
+  formatSetDate,
+  isAdmin,
+  notesFor,
+  parseRuleForm,
+} from '../../lib/approval-rules';
+import { OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
+import { markUnavailable } from '../../lib/api/page';
+import { runtimeDeps } from '../../lib/auth/flow';
+import { readForm } from '../../lib/form';
+import { page } from '../../lib/site';
+
+export const prerender = false;
+
+const HERE = '/officer-area/approval-rules';
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+/** Four short fields; a reason of 500 characters, percent-encoded, fits many times over. */
+const MAX_FORM_BYTES = 16 * 1024;
+
+const session = Astro.locals.session;
+if (!session) return Astro.redirect(SIGN_IN, 303);
+if (!isAdmin(session)) return Astro.rewrite('/404');
+const p = page(HERE);
+const api = officerApi();
+const { reader } = officerReader(session, runtimeDeps());
+
+let review: RuleForm | undefined;
+let invalid: { scope: Scope | undefined; errors: FormErrors; values: { rule: string; reason: string } } | undefined;
+let problem: 'sign-in' | 'unavailable' | undefined;
+
+if (Astro.request.method === 'POST') {
+  const read = await readForm(Astro.request, MAX_FORM_BYTES);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const parsed = parseRuleForm(read.field);
+  if (!parsed.ok) {
+    invalid = parsed;
+    Astro.response.status = 400;
+  } else if (parsed.value.step === 'review') {
+    review = parsed.value;
+  } else if (api === undefined) {
+    problem = 'unavailable';
+  } else if (reader === undefined) {
+    problem = 'sign-in';
+  } else {
+    try {
+      const { changed } = await api.setApprovalRule(reader, parsed.value);
+      return Astro.redirect(`${HERE}?done=${parsed.value.scope}&changed=${changed ? 1 : 0}`, 303);
+    } catch (error) {
+      problem = error instanceof OfficerSignInAgain ? 'sign-in' : 'unavailable';
+    }
+  }
+}
+
+let settings: Setting[] | undefined;
+if (api !== undefined && reader !== undefined) {
+  try {
+    settings = await api.getApprovalRules(reader);
+  } catch (error) {
+    if (error instanceof OfficerSignInAgain) problem ??= 'sign-in';
+  }
+} else if (api !== undefined) {
+  problem ??= 'sign-in';
+}
+if (problem === 'sign-in') Astro.response.headers.set('Cache-Control', 'no-store');
+else if (settings === undefined || problem === 'unavailable') markUnavailable(Astro.response);
+
+const done = Astro.request.method === 'GET' ? doneFromQuery(Astro.url.searchParams) : undefined;
+const current = (scope: Scope): Setting | undefined => settings?.find((s) => s.scope === scope);
+const errorsFor = (scope: Scope): FormErrors => (invalid !== undefined && (invalid.scope === scope || invalid.scope === undefined) ? invalid.errors : {});
+const valuesFor = (scope: Scope) => (invalid?.scope === scope ? invalid.values : undefined);
+const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">Whether a second officer must approve. Two officers is the usual rule. Only you, as the Admin, can change it, and every change is recorded with your reason.</p>
+  {settings !== undefined && <OneApproverNote notes={notesFor(settings)} />}
+  {done && <p class="notice" role="status">{SCOPE_LABEL[done.scope]}: {doneText(done.changed)}</p>}
+  {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then make the change again.</p>}
+  {problem === 'unavailable' || (settings === undefined && problem === undefined) ? <Unavailable what="The approval setting" /> : null}
+
+  {review ? (
+    <section class="card" aria-labelledby="review-title">
+      <h2 id="review-title">Check this change</h2>
+      <p>{SCOPE_LABEL[review.scope]}: {RULE_LABEL[review.rule]}.</p>
+      <p><b>{confirmText(review.scope, review.rule)}</b></p>
+      <p>Reason: {review.reason}</p>
+      <form method="post" action={HERE} class="rule-form">
+        <input type="hidden" name="step" value="apply" />
+        <input type="hidden" name="scope" value={review.scope} />
+        <input type="hidden" name="rule" value={review.rule} />
+        <input type="hidden" name="reason" value={review.reason} />
+        <div class="btns">
+          <button class="button" type="submit">Yes, make this change</button>
+          <a class="button button--secondary" href={HERE}>Cancel</a>
+        </div>
+      </form>
+    </section>
+  ) : settings !== undefined && SCOPES.map((scope) => {
+    const setting = current(scope);
+    const errors = errorsFor(scope);
+    const values = valuesFor(scope);
+    const chosen = values?.rule ?? setting?.rule;
+    return (
+      <form method="post" action={HERE} class="rule-form" novalidate>
+        <input type="hidden" name="step" value="review" />
+        <input type="hidden" name="scope" value={scope} />
+        <fieldset>
+          <legend>{SCOPE_LABEL[scope]}</legend>
+          <p class="hint" id={`${scope}-now`}>
+            Now: {setting ? RULE_LABEL[setting.rule] : 'not known'}{setting?.setAt ? `, set on ${formatSetDate(setting.setAt)}` : setting ? ', the usual rule' : ''}.
+          </p>
+          {errors.step && <p class="error" id={`${scope}-step-error`}>Problem: {errors.step}</p>}
+          <fieldset aria-describedby={describedBy(`${scope}-now`, errors.rule && `${scope}-rule-error`)}>
+            <legend>Who must approve</legend>
+            {errors.rule && <p class="error" id={`${scope}-rule-error`}>Problem: {errors.rule}</p>}
+            {RULES.map((rule) => (
+              <div class="choice">
+                <input type="radio" id={`${scope}-${rule}`} name="rule" value={rule} checked={chosen === rule} />
+                <label for={`${scope}-${rule}`}>{RULE_LABEL[rule]}</label>
+              </div>
+            ))}
+          </fieldset>
+          <label for={`${scope}-reason`}>Why are you making this change?</label>
+          <p class="hint" id={`${scope}-reason-hint`}>Needed. Up to {MAX_REASON} characters. It is kept in the record with your name.</p>
+          {errors.reason && <p class="error" id={`${scope}-reason-error`}>Problem: {errors.reason}</p>}
+          <textarea
+            id={`${scope}-reason`}
+            name="reason"
+            rows="4"
+            maxlength={MAX_REASON}
+            required
+            aria-invalid={errors.reason ? 'true' : undefined}
+            aria-describedby={describedBy(`${scope}-reason-hint`, errors.reason && `${scope}-reason-error`)}
+          >{values?.reason ?? ''}</textarea>
+          <div class="btns"><button class="button" type="submit">Review this change</button></div>
+        </fieldset>
+      </form>
+    );
+  })}
+  <p><a href="/officer-area">Back to the officer area</a></p>
+</Base>

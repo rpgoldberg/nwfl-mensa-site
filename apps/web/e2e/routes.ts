@@ -3,7 +3,7 @@
 // has no entry, or an entry has no file, so a new page or endpoint cannot ship
 // until the redaction leak test (e2e/redaction/) crawls it.
 //
-//   LIVE    reads the API (liveData): reached with the ids and months the API
+//   LIVE    reads the API (liveData, or an officer's client under lib/api/): reached with the ids and months the API
 //           itself gave, so the crawl sees exactly what the public is served.
 //   STATIC  reads nothing from the API (test/routes.test.ts checks its source),
 //           and is crawled all the same.
@@ -30,6 +30,9 @@ export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
   // The newsletter's issues, once the issue loader has published one; the bundled sample until then.
   '/news': () => ['/news'],
   '/officers': () => ['/officers'],
+  // SOLO-APPROVE: officers only (the approval rule, with the officer's own token); the public is sent to sign in.
+  '/officer-area': () => ['/officer-area'],
+  '/officer-area/approval-rules': () => ['/officer-area/approval-rules'],
 };
 
 export const STATIC: Readonly<Record<string, readonly string[]>> = {
@@ -43,7 +46,6 @@ export const STATIC: Readonly<Record<string, readonly string[]>> = {
   '/join': ['/join'],
   '/minutes': ['/minutes'],
   '/more': ['/more'],
-  '/officer-area': ['/officer-area'],
   '/prefs': ['/prefs'],
   '/robots.txt': ['/robots.txt'],
   // A placeholder: test/search-contract.test.ts holds what it may read once built (R29).

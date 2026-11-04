@@ -1,6 +1,6 @@
 // @ts-check
 // A local OpenID provider for the e2e suite only (oidc-provider), standing in
-// for the club's Authentik: never a shared host. It knows twelve made-up
+// for the club's Authentik: never a shared host. It knows fourteen made-up
 // people, requires PKCE, takes the client secret in the body
 // (client_secret_post), puts name and groups in the ID token as Authentik does,
 // and offers RP-initiated logout. Consent is skipped for the one client, as a
@@ -52,6 +52,9 @@ const LOGINS = {
   'enrolee-pending': { id: '00000000-0000-4000-8000-0000000000c2', name: 'Robin Example', groups: ['nwfl-users'] },
   // No enrolee group and a token that lapses at once: never told to sign in again for members reading.
   'lapsed-outsider': { id: '00000000-0000-4000-8000-0000000000c4', name: 'Jamie Placeholder', groups: ['nwfl-officers'], tokenSeconds: 20 },
+  // SOLO-APPROVE: the Admin, who alone sets the approval rule, and the Webmaster, who approves but is not the Admin.
+  admin: { id: '00000000-0000-4000-8000-0000000000ad', name: 'Pat Example', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-admin'] },
+  webmaster: { id: '00000000-0000-4000-8000-0000000000eb', name: 'Lee Placeholder', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-webmaster'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

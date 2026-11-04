@@ -28,7 +28,7 @@ describe('the route registry (e2e/routes.ts)', () => {
   });
 
   it('lists as LIVE every page that reads the API', () => {
-    const notReaders = Object.keys(LIVE).filter((route) => !/\bliveData\b/.test(readFileSync(path.join(PAGES, byRoute.get(route)!), 'utf8')));
+    const notReaders = Object.keys(LIVE).filter((route) => !/\bliveData\b|lib\/api\//.test(readFileSync(path.join(PAGES, byRoute.get(route)!), 'utf8')));
     expect(notReaders).toEqual([]);
   });
 
