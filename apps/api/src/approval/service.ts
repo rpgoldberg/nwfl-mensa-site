@@ -9,7 +9,8 @@
 //                            never who set it
 //   SetApprovalRule          the Admin alone (checked first, authoritative):
 //                            a known scope and rule and a reason of 1 to 2000
-//                            characters with a letter or digit in it, all
+//                            characters with a letter or digit in it and
+//                            no control character but a tab or line break, all
 //                            checked before the database is asked; the same
 //                            rule again changes nothing; a switch from a
 //                            revision that has moved on is refused
@@ -53,6 +54,8 @@ const MAX_REASON = 2_000;
 const MAX_REVISION = 64;
 /** A reason says something: a letter in any alphabet, or a digit (0023's [[:alnum:]] under pg_c_utf8). */
 const SAYS_SOMETHING = /[\p{Alphabetic}0-9]/u;
+/** A control character but a tab or a line break: a NUL Postgres cannot store, an escape code (0023 refuses both). */
+const CONTROL = /[^\P{Cc}\t\n\r]/u;
 
 /** The stored name for a wire value, or undefined for UNSPECIFIED and unknown numbers. */
 function nameOf<K extends string, V>(table: Record<K, V>, value: V): K | undefined {
@@ -124,6 +127,7 @@ export function approvalRoutes(deps: ApprovalDeps): (router: ConnectRouter) => v
         if (scope === undefined) throw invalid('choose what the rule is for');
         if (rule === undefined) throw invalid('choose two officers or one');
         if (reason.length > MAX_REASON || !SAYS_SOMETHING.test(reason)) throw invalid('say why, in 1 to 2000 characters, in words');
+        if (CONTROL.test(reason)) throw invalid('write the reason in plain text, without control characters');
         const expected = request.expectedRevision;
         if (expected !== undefined && expected.length > MAX_REVISION) throw invalid('no such revision');
         try {

@@ -95,8 +95,17 @@ describe('the switch form', () => {
         errors: { reason: 'Write why you are making this change.' },
       });
     }
-    for (const reason of ['\u00c9t\u00e9', '\u0395\u03bb\u03bb\u03ac\u03b4\u03b1', '2']) {
+    for (const reason of ['\u00c9t\u00e9', '\u0395\u03bb\u03bb\u03ac\u03b4\u03b1', '2', 'away\r\nback\tFriday']) {
       expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'one_approver', reason, revision: '' })), reason).toMatchObject({ ok: true });
+    }
+  });
+
+  it('refuses a reason with a hidden control character in it (a NUL, an escape code), as the API does, in plain words', () => {
+    for (const reason of ['a\u0000b', 'away\u001b[2J', 'away\u007f', 'away\u0085', '\u0007away']) {
+      expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'one_approver', reason, revision: '' })), JSON.stringify(reason)).toMatchObject({
+        ok: false,
+        errors: { reason: 'Type the reason again: it has a hidden character that cannot be kept.' },
+      });
     }
   });
 

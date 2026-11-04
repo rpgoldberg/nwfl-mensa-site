@@ -260,7 +260,7 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
       const insert = `INSERT INTO approval_rule_change (scope, from_rule, to_rule, reason, changed_by_sub, changed_by_groups) VALUES ($1, $2, $3, $4, $5, $6)`;
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'two_person', 'same', 'sub-admin', ['nwfl-admin']])).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', '   ', 'sub-admin', ['nwfl-admin']])).toBe(CHECK);
-      for (const blank of ['\t\n', '\u200b', '\u00a0', '?!']) expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', blank, 'sub-admin', ['nwfl-admin']]), JSON.stringify(blank)).toBe(CHECK);
+      for (const blank of ['\t\n', '\u200b', '\u00a0', '?!', 'why\u001b', 'why\u0085not']) expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', blank, 'sub-admin', ['nwfl-admin']]), JSON.stringify(blank)).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', 'x'.repeat(2001), 'sub-admin', ['nwfl-admin']])).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', 'why', '', ['nwfl-admin']])).toBe(CHECK);
       expect(await sqlstate(owner, insert, ['content', 'two_person', 'one_approver', 'why', 'sub-officer', ['nwfl-officers']])).toBe(CHECK);
@@ -299,6 +299,12 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
       for (const reason of ['', '   ', null, 'x'.repeat(2001), '\t\n', '\u200b', '\u00a0\u2003', '\ufeff\u2060', '...', '--']) {
         expect(await sqlstate(app, SET, ['content', 'two_person', reason, ADMIN.sub, ADMIN.groups, null]), String(reason)).toBe(BAD_VALUE);
         expect(await sqlstate(app, SET, ['content', 'one_approver', reason, ADMIN.sub, ADMIN.groups, null]), String(reason)).toBe(BAD_VALUE);
+      }
+      // A control character (an escape code, DEL, a C1 code) is never kept in the record; a tab or a
+      // line break inside the reason is. A NUL never reaches the function: Postgres refuses it in text.
+      for (const reason of ['away\u001b[2J', 'away\u007f', 'away\u0085now', 'away\u009b31m', '\u0007why']) {
+        expect(await sqlstate(app, SET, ['content', 'one_approver', reason, ADMIN.sub, ADMIN.groups, null]), JSON.stringify(reason)).toBe(BAD_VALUE);
+        expect(await failure(app, SET, ['content', 'one_approver', reason, ADMIN.sub, ADMIN.groups, null]), JSON.stringify(reason)).toMatch(/plain text/);
       }
       expect(await sqlstate(app, SET, ['members', 'one_approver', 'why', ADMIN.sub, ADMIN.groups, null])).toBe(BAD_VALUE);
       expect(await sqlstate(app, SET, ['content', 'three_person', 'why', ADMIN.sub, ADMIN.groups, null])).toBe(BAD_VALUE);
@@ -356,7 +362,7 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
     });
 
     it('takes a reason in any alphabet, or a bare number, and keeps it trimmed of every kind of space', async () => {
-      for (const reason of ['\u00c9t\u00e9', '\u0395\u03bb\u03bb\u03ac\u03b4\u03b1', '2', '\u00a0\tWebmaster away\n']) {
+      for (const reason of ['\u00c9t\u00e9', '\u0395\u03bb\u03bb\u03ac\u03b4\u03b1', '2', 'one line\r\nand\tanother', '\u00a0\tWebmaster away\n']) {
         expect(await flip('content', 'one_approver', reason)).toMatchObject({ changed: true });
         await reset();
       }

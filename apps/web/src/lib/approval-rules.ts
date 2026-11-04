@@ -68,6 +68,8 @@ const isScope = (value: string | undefined): value is Scope => SCOPES.includes(v
 const isRevision = (value: string | undefined): value is string => value !== undefined && /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/.test(value);
 /** A reason says something: a letter in any alphabet, or a digit (as the API and 0023 check). */
 const SAYS_SOMETHING = /[\p{Alphabetic}0-9]/u;
+/** A control character but a tab or a line break (a NUL, an escape code): the API and 0023 refuse it. */
+const CONTROL = /[^\P{Cc}\t\n\r]/u;
 const isRule = (value: string | undefined): value is Rule => RULES.includes(value as Rule);
 
 /** The switch form's fields, checked; each problem is said in words, by field. */
@@ -83,6 +85,7 @@ export function parseRuleForm(field: (name: string) => string | undefined): Pars
   if (!isRule(rule)) errors.rule = 'Choose two officers or one officer.';
   if (!SAYS_SOMETHING.test(reason)) errors.reason = 'Write why you are making this change.';
   else if (reason.length > MAX_REASON) errors.reason = `Keep the reason to ${MAX_REASON} characters or fewer.`;
+  else if (CONTROL.test(reason)) errors.reason = 'Type the reason again: it has a hidden character that cannot be kept.';
   if (Object.keys(errors).length > 0 || !isScope(scope) || !isRule(rule) || (step !== 'review' && step !== 'apply') || !isRevision(revision)) {
     return { ok: false, scope: isScope(scope) ? scope : undefined, errors, values: { rule: rule ?? '', reason } };
   }

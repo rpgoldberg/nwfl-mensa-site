@@ -13,7 +13,8 @@
 --   * approval_rule_set, SECURITY DEFINER, is the one writer. It refuses a caller whose groups do
 --     not hold nwfl-admin (42501; the API passes the verified token's groups and is the wall, as
 --     for 0016's officer check) and a reason that is over-long or says nothing: it needs a letter
---     or a digit, after every kind of space is trimmed (22023, before the no-op test). A flip to
+--     or a digit, after every kind of space is trimmed, and no control character but a tab or a
+--     line break (22023, before the no-op test). A flip to
 --     the rule already set writes nothing (idempotent). A flip from a setting that has moved since
 --     the Admin read it (p_expected: the change_id they saw, '' for the default) is refused
 --     (55000), so a stale form sent again cannot undo a later switch. Otherwise it appends one
@@ -67,7 +68,9 @@ CREATE TABLE approval_rule_change (
   to_rule           text        NOT NULL CHECK (to_rule IN ('two_person', 'one_approver')),
   -- A letter (any alphabet: the builtin collation's Unicode classes) or a digit; never only spaces,
   -- punctuation or invisible characters.
-  reason            text        NOT NULL CHECK (length(reason) <= 2000 AND (reason COLLATE pg_c_utf8) ~ '[[:alnum:]]'),
+  -- No control character but a tab or a line break: no escape code is kept in the record.
+  reason            text        NOT NULL CHECK (length(reason) <= 2000 AND (reason COLLATE pg_c_utf8) ~ '[[:alnum:]]'
+                                                AND NOT (translate(reason, E'\t\n\r', '') COLLATE pg_c_utf8) ~ '[[:cntrl:]]'),
   changed_by_sub    text        NOT NULL CHECK (changed_by_sub <> ''),
   changed_by_groups text[]      NOT NULL CHECK ('nwfl-admin' = ANY (changed_by_groups)),
   changed_at        timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -150,6 +153,9 @@ BEGIN
   END IF;
   IF length(v_reason) > 2000 OR NOT (v_reason COLLATE pg_c_utf8) ~ '[[:alnum:]]' THEN
     RAISE EXCEPTION 'a change of the approval rule needs a reason of 1 to 2000 characters, in words' USING ERRCODE = '22023';
+  END IF;
+  IF (translate(v_reason, E'\t\n\r', '') COLLATE pg_c_utf8) ~ '[[:cntrl:]]' THEN
+    RAISE EXCEPTION 'write the reason in plain text, without control characters' USING ERRCODE = '22023';
   END IF;
   IF p_rule IS NULL OR p_rule NOT IN ('two_person', 'one_approver') THEN
     RAISE EXCEPTION 'no such approval rule' USING ERRCODE = '22023';
