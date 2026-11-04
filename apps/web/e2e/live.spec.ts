@@ -13,7 +13,8 @@ test.describe('Events, the calendar', () => {
     await page.goto('/events');
     const list = page.getByRole('list', { name: 'Coming up' });
     await expect(list.getByRole('listitem').first()).toBeVisible();
-    const lunch = list.getByRole('listitem').filter({ hasText: 'Wednesday Lunchers' }).first();
+    // Today's lunch reads "Past" once its start time has gone by: check the next one.
+    const lunch = list.getByRole('listitem').filter({ hasText: 'Wednesday Lunchers' }).filter({ hasNotText: 'Past' }).first();
     await expect(lunch).toContainText('11:30 am · Sample Bistro, 100 Example Way, Destin');
     await expect(lunch).toContainText('Scheduled');
     await expect(list.getByRole('listitem').filter({ hasText: 'Cancelled' }).first()).toContainText('The restaurant is closed for a private party.');
