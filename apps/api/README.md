@@ -53,6 +53,12 @@ skip locally; with `CI=true` they fail instead. The migration suites run
 `scripts/migrate.sh` inside that container (`docker exec`), against the repo
 mounted read-only at `/repo`, each in a database of its own.
 
+Run the tests with Node 24 (`.nvmrc`, as CI does). The PDF children start
+`.ts` stand-ins with `--experimental-transform-types`, which a newer Node a
+host may default to does not accept, so with another Node they fail to start.
+The per-copy children also need util-linux `prlimit` and `choom` at
+`/usr/bin` (Debian and Ubuntu ship both).
+
 ## Secrets and fixtures
 
 This repository's whole history is meant to be publishable.
@@ -254,6 +260,305 @@ so only when both test files pinned in the gate test
 (`test/pdf/engine-sidecar.test.ts` and `test/pdf/gate-rerun.test.ts`) exist,
 each holding a real, unskipped test under its pinned title. Setting it to true
 without them fails. The request snapshot and the catalog are never lifted.
+
+Both pieces now exist (below) and both tests pass, but `UNTRUSTED_PDF_READY`
+stays false until fc's manifest runs both sidecars as their own uids and
+validate-nwfl checks them.
+
+### The engine sidecar
+
+The PDF engine can run as a sidecar process in a container of its own beside
+the worker, from the same image, with node as PID 1 and no init:
+`command: ["node", "--disable-sigusr1", "dist/pdf/engine-sidecar.js"]`
+(`src/pdf/sidecar.ts`). It listens on one unix socket, by default
+`/run/pdf-engine/engine.sock`, mode 0660, and still forks one child per copy
+with an empty environment. It opens no other socket and makes no connection.
+
+It will not start (exit 2) when:
+
+- its environment holds any name off its allow-list (`ALLOWED_ENV`: what the
+  image and the runtime set, the locale, the two socket paths, and the
+  `KUBERNETES_*` address the kubelet always injects). It names the variables,
+  never their values;
+- `--socket` is not directly in `/run/pdf-engine`, or holds anything but
+  letters, digits and `. _ - /`;
+- it runs as root;
+- it is not PID 1 of its container (dumb-init or any other init in front of
+  it, which is what `args` instead of `command` gives);
+- `NODE_ENV=production` (the image sets it) and Node was started without
+  `--disable-sigusr1`.
+
+What keeps a subverted copy's processes from outliving it (fix round 2, after
+the round-2 challenge froze a sidecar with SIGSTOP from a fork-and-exit chain
+and took its socket over), most load-bearing first:
+
+1. PID 1. The kernel does not deliver SIGKILL or SIGSTOP to a namespace's PID
+   1 from inside the namespace, nor any signal it has no handler for, so no
+   child can freeze the sidecar. As PID 1 it still gets SIGUSR1, which would
+   start Node's inspector on 127.0.0.1:9229, reachable from a child even with
+   no network (measured); `--disable-sigusr1` and a listener of its own take
+   it (`holdSignals`). The same listener-that-does-nothing takes every other
+   signal that would end it by default and that Node lets it hold (SIGHUP,
+   SIGUSR2, SIGALRM and the rest, `HELD_SIGNALS`): the round-3 challenge
+   ended PID 1 with a burst of SIGCHLD, which Node handles, followed by one
+   of those. A child can still make the sidecar exit (a real-time signal,
+   SIGTERM): it fails closed, with no reply, and the job is retried.
+2. No fork. Every per-copy child preloads a guard (`src/pdf/child-guard.ts`,
+   `src/pdf/no-fork.ts`) that starts the threads it needs and says it is
+   ready; the sidecar then sets the child's RLIMIT_NPROC to 1 with util-linux
+   `prlimit` (in the base image), and the guard tries a spawn on purpose. The
+   copy is sent only when that spawn failed; a limit that cannot be set, or a
+   spawn that works, refuses the copy. Every child also runs under Node's
+   permission model with read access only (`--permission --allow-fs-read=*`,
+   fix round 4): through `node:fs` it cannot write, create, rename, remove or
+   chmod a file (so it cannot squat on or lock its sidecar's socket), and it
+   cannot load native code, or start a process, a worker or a WASI instance.
+   The model does not check every writer (fix round 5, measured on node
+   24.22.1): `node:sqlite`, V8 flags set at run time, Web Storage and a listen
+   on a unix socket each wrote a file. So the child also gets
+   `--no-experimental-sqlite --freeze-flags-after-init
+   --no-experimental-webstorage`, after the flags it keeps of its parent's,
+   and its guard refuses any listen while the model is on (net.Server's
+   `listen` and `_listen2`, and `net._createServerHandle`, which a child
+   called itself to leave a socket file: fix round 6). A child keeps only an
+   allowlist of its parent's flags, each name read with `_` as `-`, as Node
+   reads it (fix round 6: `--permission-audit` and `--allow_fs_write=*` got
+   past a list of what to drop): `--disable-sigusr1`,
+   `--enable-source-maps`, `--no-warnings`, `--disable-warning`, and the test
+   runner's and TypeScript loader's `--import`, `--require`, `--conditions`,
+   `--experimental-import-meta-resolve`, `--experimental-strip-types` and
+   `--experimental-transform-types`. A flag fc adds to a sidecar's command
+   reaches its children only once it is on that list. Network is outside the model; the pod's NetworkPolicy
+   bounds it. Node then refuses the guard's spawn itself
+   (`ERR_ACCESS_DENIED`), which the parent accepts as it accepts the limit's
+   `EAGAIN`; the limit stays beneath it. In a capped
+   container spawn, exec and fork then all fail, and zlib, crypto and the real
+   engine and gate still run. pdf.js's optional canvas would need threads
+   later, which is one more reason it is not in the image. Each child is also
+   started through util-linux `choom` with `oom_score_adj` 1000 (fix round 3),
+   the kernel's first pick when a container's memory runs out; the guard ends a
+   child whose score is not 1000. On k3s with cgroup v2 the kernel kills the
+   whole container then (fix round 4): if the kernel acts, the container
+   restarts and the job is retried under the attempt cap. Node cannot set it
+   itself: the image makes `node` execute-only (0711), which leaves every node
+   process non-dumpable, so a child cannot read the worker's environment or
+   memory through `/proc` (and its own `/proc/self` files belong to root). Its
+   stdout is dropped and its stderr reaches the log only up to 64 KiB.
+3. Before every reply, `kill(-1, SIGKILL)` (everything but PID 1), then `/proc`
+   re-read until the sidecar is alone, in bounded passes. Anything left, or
+   any zombie (its own children are reaped by then, so a zombie is an
+   orphan), is doubt: it exits 1 without the reply, and the kernel kills the
+   whole namespace with it. The `/proc` reading is best-effort on its own;
+   1 and 2 are what make it hold.
+4. Then the socket's device and inode are checked, before the reply, at each
+   connection, and every second, and so are its mode (0660), owner and group
+   as bound (fix round 3: a child of the sidecar's uid could `chmod 0` it in
+   place and lock the worker out). A socket replaced, removed or changed
+   stops it with exit 1 and no reply, and the job fails closed.
+
+At start it empties its socket directory (its own emptyDir) and logs each
+entry it removed (fix round 4): a socket a dead sidecar left, and whatever
+else is there, so a directory left at the socket's path cannot keep it from
+starting. SIGTERM and SIGINT kill the copy in flight, close the
+listener, remove the socket and exit 0. Arguments: `--socket <path>`,
+`--timeout-ms <ms>` (per copy, default 300000) and `--engine <module>`
+(another engine child; tests use it, and production accepts it). Three more are
+for tests and refused when `NODE_ENV=production`: `--socket-dir <dir>` (bind
+outside `/run/pdf-engine`) and `--shared-pid-namespace` (run on a test host,
+not as PID 1, clearing nothing, since `kill(-1)` there would reach the host's
+processes). The third, `--no-child-permission`, runs the children without the
+permission model, so the hostile tests can reach the layers behind it. Every hostile, process-starting or memory-heavy test runs the
+sidecar as PID 1 of a capped container instead (`test/helpers/contained.ts`).
+
+The worker picks the engine with `PDF_ENGINE_SOCKET`:
+
+- unset: the in-pod child, as before;
+- an absolute path directly in `/run/pdf-engine`: the sidecar only, never
+  the child, and `PDF_GATE_SOCKET` must be set too;
+- anything else, including a trailing newline: the worker refuses to start.
+
+Each copy uses one connection carrying one length-prefixed frame each way
+(`src/pdf/engine-protocol.ts`). The request carries the original (at most
+10 MiB) and the typed request (header at most 1 MiB). The reply carries the
+copy (at most 20 MiB) and a small typed result. Neither side sends an
+environment, a path or a credential. Each side stops reading at a declared
+size over its cap. The sidecar drops a connection whose first bytes take more
+than 5 s, or whose request takes more than 30 s, without a reply.
+
+A missing socket, a dead sidecar, a malformed reply, or no reply within
+330 s fails the job closed with `RetryableEngineError`. No copy is stored,
+the file stays queued, and the next run takes it once the lease (600 s)
+ends. After 5 such failures for one file (`MAX_ENGINE_ATTEMPTS`) the copies
+are stored refused, with the fixed reason "the engine could not be reached
+in 5 attempts". The count is kept in the database (`pdf_regen.attempts`,
+migration 0021, fix round 3): each claim counts before any engine reads the
+file, so a restart does not start it again, and a run that never finishes (a
+child of the worker's uid could kill the worker mid-job) still counts. Past 5
+claims the copies are refused without asking the engine. A file queued again
+while a run works starts again at 0. If the engine itself fails on the file inside the sidecar (its child
+crashed or ran past 300 s), or the request cannot be sent at all (over a
+cap), the copy is refused, as it is in the pod.
+
+What fc's manifest gives the sidecar container:
+
+- its own `runAsUser` and `runAsGroup` (10002), different from the worker's;
+- `runAsNonRoot: true`, `readOnlyRootFilesystem: true`,
+  `allowPrivilegeEscalation: false`, capabilities `drop: [ALL]`;
+- no env from Secrets (no `envFrom` secret, no `secretKeyRef`), no secret
+  volume, and no service account token (`automountServiceAccountToken:
+  false` on the pod);
+- `shareProcessNamespace: false` and `enableServiceLinks: false` on the pod
+  (with a shared namespace the sidecar would not be PID 1);
+- an emptyDir mounted at `/run/pdf-engine` in the worker and this sidecar
+  only, with the pod's `fsGroup` (10003) as the socket's shared group;
+- no ports, and no egress: the pod's NetworkPolicy allows only what the
+  worker needs, and the sidecar's uid gets no network;
+- CPU and memory requests and limits;
+- `command: ["node", "--disable-sigusr1", "dist/pdf/engine-sidecar.js"]` and
+  no `args`, so node is PID 1 and dumb-init does not run (this reverses round
+  1's `args`, for point 1 above);
+- a uid (10002) no other workload on the node uses: RLIMIT_NPROC is counted per
+  uid across the node, and with a limit of 1 the child can start nothing
+  whatever the count, so this is hygiene, not what the limit rests on;
+- in the worker, `PDF_ENGINE_SOCKET=/run/pdf-engine/engine.sock`.
+
+### The gate sidecar
+
+The output gate is re-run on every copy before `pdf_copy_put`
+(`src/pdf/rerun.ts`), and never in the worker, which holds the database
+login. A subverted engine's copy is attacker-made bytes, such as a Flate
+stream that inflates to gigabytes, millions of strings or 100,000 pages, so
+every check runs in a child forked for it alone (`src/pdf/gate-isolated.ts`).
+The child has an empty environment, a 512 MiB heap, a watchdog that kills it
+past 768 MiB resident (640 MiB in the worker's own pod, fix round 4: 384
+refused ordinary photo copies),
+and a 120 s deadline, and its process group is killed after it. A crash, a
+kill or a timeout means the copy is refused, never passed; a child that ends
+because V8 ran out of heap is logged as memory. A child that passes and then
+exits non-zero or is killed is unfinished too.
+
+With `PDF_GATE_SOCKET`, that child runs in a sidecar of its own:
+`command: ["node", "--disable-sigusr1", "dist/pdf/gate-sidecar.js"]`
+(`src/pdf/gate-service.ts`), uid 10004, its socket `/run/pdf-gate/gate.sock`
+in an emptyDir only it and the worker mount, mode 0660, group 10003. It shares
+the engine sidecar's code: the env allow-list, the directory rule (it will not
+bind in `/run/pdf-engine`), the framing, caps and deadlines, PID 1, the no-fork
+children, the namespace cleared and the socket checked before every reply, and
+the socket watch. It logs why a check was unfinished (memory, deadline,
+signal, crash or no-fork). Extra arguments: `--max-rss-mb <MiB>` (each child's
+memory cap) and `--gate <module>` (another gate child; tests use it, and
+production accepts it).
+
+The worker sends the copy and its original with their sha256s, the quotes and
+the picture policy. The gate refuses bytes that do not match their hash
+before any child reads them. Its child reads the copy with pdf-lib, writes
+it again with pdf-lib's writer (as the sanitizer does: no object streams, no
+incremental update), and checks those bytes, read afresh. It replies with a
+verdict naming the copy's sha256 and, on a pass, those bytes with their own
+sha256 (fix round 3, M1). **What is stored is the gate's bytes, never the
+engine's copy:** the worker stores them only on a pass naming the copy's hash,
+once their sha256 is the one named: the bytes stored are the bytes the gate
+checked. Anything
+else stores a refused copy with a fixed reason per outcome (withheld text, a
+broken rule, unfinished, other bytes). A missing or dead gate sidecar fails
+the job closed and retryably, under the same cap of 5.
+
+Without either socket (the in-pod mode) the worker forks the same capped
+child itself. This is the pre-sidecar mode only: the child is still the
+worker's uid, beside its login. With `PDF_ENGINE_SOCKET` set,
+`PDF_GATE_SOCKET` is required, in another directory, or the worker refuses to
+start. Once `UNTRUSTED_PDF_READY` is true, the worker refuses to start
+without both sockets, so the in-pod mode cannot read an uploaded PDF.
+
+Besides withheld text (`src/pdf/gate.ts`), the gate re-checks the
+sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
+
+- no JavaScript, OpenAction, additional actions, Launch, URI or any other
+  action, no embedded or attached file, no XFA, no AcroForm, no annotation
+  (an empty annotation list is let through), no encryption;
+- no `/Linearized` key (fix round 5): pdf.js takes page 1 of a linearized
+  file from its `/O`, which need not be in the page tree, where other
+  viewers show the tree's page. The sanitizer writes none, a copy holding
+  one is refused as it comes, and the gate's own writing drops the key;
+- forms, tiling patterns, Type 3 fonts and soft masks drawn more than 32
+  deep, or in a loop, are refused under every policy (fix round 5: forms
+  nested 1,500 deep ran pdf.js's stack out), before pdf.js reads the copy at
+  all. Names are read as pdf.js reads them (fix round 6): over a page's
+  `/Contents` joined, and for a tiling pattern in its resources, then its
+  parent's; a name is looked up in a kind only when the content holds an
+  operator that draws from it (`Do`, `scn` or `SCN`, `Tf`, `gs`). A copy
+  whose drawers are reached in more than 100,000 ways is refused too. pdf.js reads the text twice, past errors as a viewer does and
+  with `stopAtErrors`; a page it does not read to the end is refused;
+- under "blur" or "hide", each picture is exactly what the policy draws
+  (the 1 x 1 grey fill, or under "blur" a Flate grey or RGB picture at most
+  24 pixels a side), with no inline picture in any content stream (BI read
+  as pdf.js's lexer reads it, so `qBI` and `BI%` count, and a page's
+  `/Contents` array read joined, as pdf.js joins it) and no `/DecodeParms`
+  on a stream that is not a picture (fix round 4); a soft mask's group is
+  read as content too (fix round 5);
+- under "blur" or "hide", no axial or radial gradient drawn from a sampled
+  function, or from a list or stitching of functions with one in it (fix
+  round 5: 64 of them, one per row of pixels, drew a photo). A copy with an
+  honest gradient drawn so is refused under these policies too;
+- under "blur" or "hide", refused by class wherever it is in the file (fix
+  round 6, since each can carry a picture): a shading other than axial or
+  radial (function-based and the mesh types 4 to 7); a gradient whose
+  colour space has a table or program of its own (an Indexed one of more
+  than 4 colours or from a stream, a Separation or DeviceN one whose tint is
+  not a type 2 function, DeviceN attributes, a named space); a PostScript
+  (type 4) function; a `/TR`, `/TR2`, `/BG`, `/BG2`, `/UCR` or `/UCR2`
+  other than `/Identity` or `/Default`; and a content operator given more
+  operands than it takes, an unknown one given any, or operands left over,
+  read as pdf.js reads it and as MuPDF and poppler read it (which keep a
+  different one of two names). Honest copies with any of these are refused
+  under these policies too;
+- under "blur" or "hide", what pdf.js draws (`src/pdf/drawn.ts`, fix round
+  4): the gate reads the operator list of every page of its own writing of
+  the copy, tiling patterns and Type 3 glyphs included, and refuses any
+  inline picture, any picture or stencil larger than the policy draws, any
+  shading drawn as a lattice or mesh of colours (function-based, types 4 to
+  7), and pages other than pdf-lib's tree gives (fix round 5: the count, and
+  each page's object). pdf.js reads with `stopAtErrors`, and a page it does
+  not read to the end, a font it could not load or a Type 3 glyph it could
+  not read refuses the copy (fix round 5), where a viewer that recovers
+  would draw them. The glyphs drawn are matched against the withheld quotes
+  too, so a `/ToUnicode` that lies to the text layer does not hide them.
+  Under "show" this pass runs only when there are quotes, and judges no
+  picture (fix round 6b: the public copy is "show");
+- the page tree is one pdf.js and pdf-lib read alike: every node `/Type
+  /Pages` with its `/Kids` and their `/Count`, every leaf `/Type /Page`,
+  each once (fix round 4);
+- no run of an original picture's samples is kept, and no picture has the
+  very samples of an original that blurring would change;
+- one reading (`src/pdf/pdf-structure.ts`, fix round 3): pdf-lib keeps the
+  last definition of an object and ignores the xref, while a viewer follows
+  the xref. So, as defence in depth beside storing the gate's own bytes, a
+  copy is refused when it has more than one xref section or startxref, a
+  trailer with anything beside `/Size` and `/Root`, an object defined twice,
+  an xref entry that does not land on its object, or an object or xref
+  stream. Every value a rule reads is resolved as a viewer resolves it, and
+  `/S`, `/Subtype`, `/Type`, `/PatternType` or `/Filter` given by reference
+  is refused.
+
+Its limits, as for any text gate: text written so it does not read as text
+(reversed, encoded, drawn as curves or as a picture); a picture rebuilt from
+many small tiles or from vector shapes, gradients among them (fix round 5
+refuses only gradients drawn from sampled functions: a photo drawn row by
+row from 4,095 linear pieces passes); a tiny inline picture of the
+original (under 64 bytes) kept as a picture object; and a picture of a single
+grey, which is its own blur and so may come through unchanged. A soft mask
+given as a stream (no dictionary) is not read as content; pdf.js and the
+other readers measured draw nothing from it.
+
+What fc's manifest gives the gate container: what the engine's gets, with
+uid and gid 10004, its own emptyDir at `/run/pdf-gate` (never mounted in the
+engine), limits of 1 CPU and 1Gi,
+`command: ["node", "--disable-sigusr1", "dist/pdf/gate-sidecar.js"]` and no
+`args` (so node is PID 1), and in the worker
+`PDF_GATE_SOCKET=/run/pdf-gate/gate.sock`. Both emptyDirs are
+`medium: Memory` with a 16Mi `sizeLimit`; their pages count against the
+memory of the container that writes them. No HEALTHCHECK or exec probe runs
+in either sidecar: any process exec'd into its namespace makes it exit 1.
 
 ### The api-gate check
 

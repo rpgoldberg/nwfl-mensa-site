@@ -67,15 +67,32 @@ describe('blurred', () => {
 });
 
 describe('hasInlinePicture', () => {
-  it('finds BI as an operator only', () => {
-    const t = (s: string) => hasInlinePicture(new Uint8Array(Buffer.from(s, 'latin1')));
+  const t = (s: string) => hasInlinePicture(new Uint8Array(Buffer.from(s, 'latin1')));
+
+  it('finds BI as an operator, never in a string, a hex string, a name or a comment', () => {
     expect(t('q BI /W 1 /H 1 ID x EI Q')).toBe(true);
     expect(t('BI\n/W 1')).toBe(true);
-    expect(t('<4142> Tj /FBI Do 0 BIG')).toBe(false);
-    // PDF whitespace is NUL, tab, LF, FF, CR and space; nothing else (not U+00A0).
+    expect(t('<4142> Tj /FBI Do (BI) Tj (a \\) BI) Tj (nested (BI) parens) Tj % BI in a comment\nQ')).toBe(false);
+    // PDF whitespace is NUL, tab, LF, FF, CR and space.
     expect(t('q\x00BI\x00/W 1')).toBe(true);
     expect(t('q\fBI\f/W 1')).toBe(true);
-    expect(t('q\xa0BI\xa0/W 1')).toBe(false);
+  });
+
+  it('finds BI as pdf.js\'s lexer reads it: a command ends at the longest operator pdf.js knows, so BI needs no space around it (fix round 4, M1)', () => {
+    // n2, n2b, n2c of the round-4 challenge: q then BI; BI then a comment; { then BI.
+    expect(t('200 0 0 200 72 400 cm qBI /W 64')).toBe(true);
+    expect(t('q BI%c\n/W 64')).toBe(true);
+    expect(t('q {BI /W 64')).toBe(true);
+    // A number, then BI; BI, then a regular character (pdf.js: BI, then G); a byte past ASCII on its own, then BI.
+    expect(t('0 0 cm 200BI /W 1')).toBe(true);
+    expect(t('0 BIG')).toBe(true);
+    expect(t('q\x80BI /W 1')).toBe(true);
+    expect(t('q\xa0BI\xa0/W 1')).toBe(true);
+  });
+
+  it('counts content it cannot read to its end as a picture (an unterminated string or hex string)', () => {
+    expect(t('BT (no end')).toBe(true);
+    expect(t('BT <4142')).toBe(true);
   });
 });
 
@@ -94,5 +111,23 @@ describe('pictureWindows and keepsPicture', () => {
     expect(await keepsPicture(copyWith(new Uint8Array(300).fill(255)), windows)).toBe(false);
     expect(await keepsPicture(new Uint8Array(Buffer.from('not a pdf')), windows)).toBe(false);
     expect((await pictureWindows(new Uint8Array(Buffer.from('not a pdf')))).size).toBe(0);
+  });
+
+  it('reads an original\'s inline pictures as pdf.js lexes them ("qBI"), and none out of a string (fix round 4, M1)', async () => {
+    const varied = Buffer.from(Array.from({ length: 640 }, (_, i) => (Math.imul(i + 1, 2654435761) >>> 13) & 0xff));
+    const original = async (content: Buffer): Promise<Uint8Array> => {
+      const doc = await PDFDocument.create({ updateMetadata: false });
+      doc.addPage().node.addContentStream(doc.context.register(doc.context.flateStream(content)));
+      return doc.save();
+    };
+    const inline = (begin: string): Buffer => Buffer.concat([Buffer.from(`q 10 0 0 10 0 0 cm ${begin} /W 32 /H 20 /CS /G /BPC 8 ID `, 'latin1'), varied, Buffer.from('\nEI Q', 'latin1')]);
+    expect((await pictureWindows(await original(inline('q BI')))).size).toBe(19);
+    expect((await pictureWindows(await original(inline('qBI')))).size).toBe(19);
+    // The same bytes inside a string are text, not a picture.
+    const quoted = Buffer.concat([Buffer.from('BT (BI /W 32 ID ', 'latin1'), Buffer.from(varied.toString('hex'), 'latin1'), Buffer.from(' EI) Tj ET', 'latin1')]);
+    expect((await pictureWindows(await original(quoted))).size).toBe(0);
+    // A BI with no ID after it has no data to read, nor has content that cannot be read to its end.
+    expect((await pictureWindows(await original(Buffer.from('q BI /W 32 /H 20 Q', 'latin1'))))).toHaveProperty('size', 0);
+    expect((await pictureWindows(await original(Buffer.from('BT (no end', 'latin1'))))).toHaveProperty('size', 0);
   });
 });

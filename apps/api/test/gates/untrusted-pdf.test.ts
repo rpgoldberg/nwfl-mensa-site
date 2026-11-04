@@ -514,6 +514,11 @@ describe('UNTRUSTED-PDF-GATE: each check catches what it guards', () => {
     it('today\'s untrusted.ts names the pinned files and is false', () => {
       expect(liftState(readFileSync(path.join(API, READY_FILE), 'utf8'), reading({}))).toEqual({ lifted: false, problems: [] });
     });
+
+    it('the pinned lift tests exist and each holds a real test (PDF-ISO), while the flag stays false until fc runs the sidecar', () => {
+      for (const { file, title } of LIFT_TESTS) expect(hasRealTest(readIfThere(file) ?? '', title), file).toBe(true);
+      expect(UNTRUSTED_PDF_READY).toBe(false);
+    });
   });
 });
 

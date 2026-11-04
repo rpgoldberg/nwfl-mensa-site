@@ -15,7 +15,11 @@
 // A JPEG keeps only what draws it (jpeg.ts). Objects nothing points at any
 // more are deleted before saving.
 // Pictures follow the audience's image policy (images.ts); under "blur" or
-// "hide", an inline picture left in any content stream means no copy.
+// "hide", an inline picture left in any content stream means no copy, BI read
+// as pdf.js reads it, and a page's /Contents array read joined, as pdf.js
+// joins it (fix round 4, M1). A content stream with /DecodeParms means no
+// copy under any policy: pdf-lib decodes no predictor, so it would be read
+// wrong (fix round 4, M1).
 // No date or id is written, so the same input gives the same bytes.
 // ============================================================================
 import {
@@ -40,17 +44,19 @@ const RESOURCE_KINDS = new Set(['/XObject', '/Font', '/Pattern', '/ExtGState', '
 
 const name = (dict: PDFDict, key: string): string | undefined => dict.get(PDFName.of(key))?.toString();
 
+/** A content entry's streams: a stream, or an array of them, either one possibly behind a reference. */
+function refsOf(doc: PDFDocument, value: PDFObject | undefined): PDFRef[] {
+  if (value instanceof PDFArray) return value.asArray().flatMap((item) => refsOf(doc, item));
+  if (!(value instanceof PDFRef)) return [];
+  const target = doc.context.lookup(value);
+  return target instanceof PDFArray ? refsOf(doc, target) : [value];
+}
+
 function contentStreams(doc: PDFDocument): Set<PDFRef> {
   const { context } = doc;
   const out = new Set<PDFRef>();
   const seen = new Set<PDFDict>();
-  // A content entry is a stream, or an array of them, either one possibly behind a reference.
-  const refsOf = (value: PDFObject | undefined): PDFRef[] => {
-    if (value instanceof PDFArray) return value.asArray().flatMap(refsOf);
-    if (!(value instanceof PDFRef)) return [];
-    const target = context.lookup(value);
-    return target instanceof PDFArray ? refsOf(target) : [value];
-  };
+  const refsOfHere = (value: PDFObject | undefined): PDFRef[] => refsOf(doc, value);
   const resources = (value: PDFObject | undefined): void => {
     const dict = context.lookupMaybe(value, PDFDict);
     if (dict === undefined || seen.has(dict)) return;
@@ -75,14 +81,14 @@ function contentStreams(doc: PDFDocument): Set<PDFRef> {
         if (ref instanceof PDFRef && target instanceof PDFStream && (name(head, 'Subtype') === '/Form' || name(head, 'PatternType') === '1')) out.add(ref);
         if (name(head, 'Subtype') === '/Type3') {
           const procs = context.lookupMaybe(head.get(PDFName.of('CharProcs')), PDFDict);
-          for (const [, proc] of procs?.entries() ?? []) for (const r of refsOf(proc)) out.add(r);
+          for (const [, proc] of procs?.entries() ?? []) for (const r of refsOfHere(proc)) out.add(r);
         }
         resources(head.get(PDFName.of('Resources')));
       }
     }
   };
   for (const page of doc.getPages()) {
-    for (const ref of refsOf(page.node.get(PDFName.of('Contents')))) out.add(ref);
+    for (const ref of refsOfHere(page.node.get(PDFName.of('Contents')))) out.add(ref);
     resources(page.node.get(PDFName.of('Resources')));
   }
   return out;
@@ -178,14 +184,22 @@ export async function sanitize(bytes: Uint8Array, image: ImageAction = 'show'): 
   const { context } = out;
   for (const [, object] of context.enumerateIndirectObjects()) scrub(object);
   pruneResources(out);
+  const decodedContent = new Map<string, Uint8Array>();
   for (const ref of contentStreams(out)) {
     const stream = context.lookup(ref);
     if (!(stream instanceof PDFRawStream)) throw new Error('a page has content that is not a stream');
+    if (stream.dict.has(PDFName.of('DecodeParms'))) throw new Error('a content stream has /DecodeParms, which it cannot read');
     const content = stripMarkedContentProperties(decodePDFRawStream(stream).decode());
     if (image !== 'show' && hasInlinePicture(content)) throw new Error('an inline picture cannot be replaced');
+    decodedContent.set(ref.toString(), content);
     const stripped = context.flateStream(content);
     for (const [key, value] of stream.dict.entries()) if (!STREAM_KEYS.has(key.toString())) stripped.dict.set(key, value);
     context.assign(ref, stripped);
+  }
+  // A page's /Contents array is one stream to pdf.js, joined byte to byte: "B" ending one and "I" starting the next is BI.
+  for (const page of image === 'show' ? [] : out.getPages()) {
+    const joined = Buffer.concat(refsOf(out, page.node.get(PDFName.of('Contents'))).map((ref) => decodedContent.get(ref.toString()) as Uint8Array));
+    if (hasInlinePicture(joined)) throw new Error('an inline picture cannot be replaced');
   }
   applyImagePolicy(out, image);
   const keep = reachable(out);

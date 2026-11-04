@@ -83,6 +83,17 @@ describe('Dockerfile', () => {
     expect(dockerfile).not.toMatch(/licen[cs]e/i);
   });
 
+  it('makes node execute-only (0711) in the runtime stage, so every node process is non-dumpable: a child of the same uid cannot read its environment or memory (fix round 3, S6)', () => {
+    expect(finalStage()).toContain('COPY --from=deps --chown=root:root --chmod=0711 /usr/local/bin/node /usr/local/bin/node');
+  });
+
+  it('runs on a Debian base with no node of its own, node copied in once with its mode: no layer copies all of it again to change its mode (fix round 4, N4)', () => {
+    const from = /^FROM\s+\$\{(\w+)\}\s+AS\s+production$/.exec(finalStage()[0] as string)?.[1];
+    expect(from).toBe('DEBIAN_IMAGE');
+    expect(args.get('DEBIAN_IMAGE')).toMatch(/^debian:\d+\.\d+-slim@sha256:[0-9a-f]{64}$/);
+    expect(finalStage().join('\n')).not.toMatch(/chmod\s+\S*\s*\/usr\/local\/bin\/node/);
+  });
+
   it('declares no VOLUME, so a read-only root filesystem needs no writable mount', () => {
     expect(lines.some((line) => /^VOLUME\s/.test(line))).toBe(false);
   });

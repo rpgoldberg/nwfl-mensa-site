@@ -174,6 +174,22 @@ export async function pictureUnderTextFixture(): Promise<Uint8Array> {
   return doc.save({ useObjectStreams: false });
 }
 
+/**
+ * Text over a small picture of varied greys, `side` pixels a side (Flate, DeviceGray): under BLUR_MAX,
+ * so kept as it is it has the shape of a blurred picture, and only a comparison with the original
+ * tells them apart.
+ */
+export async function smallPictureFixture(side: number): Promise<Uint8Array> {
+  const doc = await PDFDocument.create({ updateMetadata: false });
+  const page = doc.addPage([612, 792]);
+  const samples = Uint8Array.from({ length: side * side }, (_, i) => (i * 37 + (i >> 2) * 11) % 251);
+  const picture = doc.context.flateStream(samples, { Type: 'XObject', Subtype: 'Image', Width: side, Height: side, ColorSpace: 'DeviceGray', BitsPerComponent: 8 });
+  page.node.setXObject(PDFName.of('Im1'), doc.context.register(picture));
+  page.node.addContentStream(doc.context.register(doc.context.stream('q 300 0 0 30 60 690 cm /Im1 Do Q')));
+  page.drawText('Picnic flyer', { x: 72, y: 700, size: 12, font: await doc.embedFont(StandardFonts.Helvetica) });
+  return doc.save({ useObjectStreams: false });
+}
+
 /** Text in a Type 3 font whose glyphs have no Unicode value: PDFium cannot say what it reads. */
 export async function unmappedFixture(): Promise<Uint8Array> {
   const doc = await PDFDocument.create({ updateMetadata: false });

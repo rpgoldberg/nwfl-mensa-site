@@ -5,6 +5,9 @@ import { PDFDocument, PDFName } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { sanitize } from '../../src/pdf/sanitize.js';
 import { rawText } from './extract.js';
+import { M1_DRAWN_CASES } from './shadows.js';
+
+const drawnCase = (id: string): Uint8Array => (M1_DRAWN_CASES.find((c) => c.id === id) as { attack: Uint8Array }).attack;
 
 const MARKED = '/Span <</ActualText (Quillon Brask)>> BDC 0 0 1 1 re f EMC';
 
@@ -27,6 +30,17 @@ describe('sanitize', () => {
     const after = rawText(await sanitize(before));
     expect(after).not.toContain('Quillon');
     expect(after.match(/\/Span BMC/g)).toHaveLength(3);
+  });
+
+  it('refuses an original\'s inline picture as pdf.js reads it, under "blur" or "hide": "qBI" (n2), and BI split across a /Contents array (n4) (fix round 4, M1)', async () => {
+    for (const id of ['n2', 'n4']) {
+      for (const image of ['blur', 'hide'] as const) await expect(sanitize(drawnCase(id), image), `${id}, ${image}`).rejects.toThrow('an inline picture cannot be replaced');
+      expect((await sanitize(drawnCase(id), 'show')).byteLength, id).toBeGreaterThan(0);
+    }
+  });
+
+  it('refuses a content stream with /DecodeParms, which it cannot decode (pdf-lib has no predictor), under every policy (n1, fix round 4, M1)', async () => {
+    for (const image of ['show', 'blur', 'hide'] as const) await expect(sanitize(drawnCase('n1'), image), image).rejects.toThrow('a content stream has /DecodeParms, which it cannot read');
   });
 
   it('refuses a page whose content is not a stream', async () => {

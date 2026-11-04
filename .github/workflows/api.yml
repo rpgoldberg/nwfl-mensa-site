@@ -44,6 +44,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Pull the sidecars' base image for the contained tests
+        # The hostile, process-starting and memory-heavy sidecar tests run the sidecars as PID 1 of a
+        # capped container with no network (UNTRUSTED-PDF-GATE M1, test/helpers/contained.ts), on the
+        # Dockerfile's own pinned node image; pulled here, since those containers cannot.
+        run: docker pull --quiet "$(sed -n 's/^ARG NODE_IMAGE=//p' Dockerfile)"
+
       - name: Start a throwaway Postgres
         # Writes NWFL_TEST_PG_CONTAINER and NWFL_TEST_DATABASE_URL for the
         # live suites; with CI=true a missing database fails them.
@@ -141,6 +147,14 @@ jobs:
           code=$(docker inspect "$id" --format '{{.State.ExitCode}}')
           docker logs "$id" | tail -5
           [ "$code" = "0" ] || { echo "::error::exit code ${code} after SIGTERM"; exit 1; }
+
+      - name: Both PDF sidecars run from it, read-only and with no network
+        # scripts/smoke-sidecar-image.sh (UNTRUSTED-PDF-GATE): the engine and the gate each refuse
+        # a name off their env allow-list and refuse to be PID 1; the gate will not bind in the
+        # engine's directory; each listens on a 0660 socket in its own volume; the worker's uid
+        # gets a copy made by one and checked by the other; a uid outside the socket's group is
+        # refused at both; each exits 0 on SIGTERM.
+        run: sh scripts/smoke-sidecar-image.sh nwfl-mensa-api:ci
 
   migrate-image:
     name: Build and run the migration image

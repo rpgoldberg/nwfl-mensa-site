@@ -5,6 +5,9 @@
 # Base: Node 24 LTS on Debian 13 (trixie) slim, pinned by DIGEST in every stage
 # so a retagged upstream image cannot change the runtime under us. Node 24
 # matches the fc-shared engines floor (>= 24.15.0) and the CI test runtime.
+# The runtime stage is Debian 13 slim itself, the Node image's own base, with
+# node copied in from the Node image, execute-only (fix round 4, N4): a chmod
+# on top of the Node image copied all 127 MB of node into a layer of its own.
 #
 # Runtime contract:
 #   - non-root, numeric uid/gid 10001, so a pod can enforce runAsNonRoot;
@@ -13,6 +16,7 @@
 #   - gRPC (h2c) on 50051, plain-HTTP health on 8081;
 #   - dumb-init as PID 1 forwards SIGTERM, so the graceful drain runs.
 ARG NODE_IMAGE=node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
+ARG DEBIAN_IMAGE=debian:13.7-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 
 # ============================================================================
 FROM ${NODE_IMAGE} AS builder
@@ -35,12 +39,14 @@ COPY package.json package-lock.json ./
 COPY vendor ./vendor
 # --omit=optional: pdf.js's optional canvas (@napi-rs/canvas, about 71 MB) is only for rendering;
 # the gate only reads text. Without it pdf.js prints three "Warning: Cannot ..." lines on its first
-# load (src/pdf/gate.ts): expected. @cantoo/pdf-lib: Node loads es/ (and dist/standard-fonts, dist/upng),
+# load (src/pdf/gate.ts): expected. It must stay out: it starts a thread pool on first use, and a
+# per-copy child may start no thread once its limit is set (src/pdf/no-fork.ts), so with it every
+# copy would be refused. @cantoo/pdf-lib: Node loads es/ (and dist/standard-fonts, dist/upng),
 # never its CommonJS build, sources or UMD bundles.
 RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund && npm cache clean --force && cd node_modules/@cantoo/pdf-lib && rm -rf cjs src ts3.4 dist/*.js dist/*.map && cd /app && chmod -R u=rwX,go=rX node_modules
 
 # ============================================================================
-FROM ${NODE_IMAGE} AS production
+FROM ${DEBIAN_IMAGE} AS production
 
 ARG SERVICE_VERSION=0.0.0
 # Bump to force the apt layer to rebuild and pick up Debian security fixes.
@@ -50,18 +56,24 @@ LABEL org.opencontainers.image.title="nwfl-mensa-api"
 LABEL org.opencontainers.image.description="gRPC API for the NW Florida Mensa website"
 LABEL org.opencontainers.image.version="${SERVICE_VERSION}"
 
-# Security patches, dumb-init, the runtime user. npm, npx, corepack and yarn
-# are build tools; removing them drops their bundled dependencies (and their
-# CVEs) from the runtime.
+# Security patches, dumb-init, the runtime user. Only node comes from the Node
+# image: npm, npx, corepack and yarn are build tools, and leaving them out
+# keeps their bundled dependencies (and their CVEs) out of the runtime. node
+# needs libstdc++6, libgcc-s1 and libc6, all in Debian's slim base, as are
+# util-linux's prlimit and choom (src/pdf/no-fork.ts).
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends dumb-init && \
     rm -rf /var/lib/apt/lists/* && \
-    rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
-           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
-           /opt/yarn* /usr/local/bin/yarn /usr/local/bin/yarnpkg && \
     groupadd -g 10001 nwfl && \
     useradd -u 10001 -g nwfl -M -s /usr/sbin/nologin nwfl
+
+# node, execute-only (0711): a process whose executable it cannot read is
+# non-dumpable, so its /proc environ and mem are EACCES even to a process of
+# the same uid, such as a PDF check child reading the worker's database login
+# (fix round 3, S6; /proc status stays readable). Its mode is set as it is
+# copied, so the image holds it once (fix round 4, N4).
+COPY --from=deps --chown=root:root --chmod=0711 /usr/local/bin/node /usr/local/bin/node
 
 WORKDIR /app
 # Owned by root and read-only to the runtime user. The mode is set, not

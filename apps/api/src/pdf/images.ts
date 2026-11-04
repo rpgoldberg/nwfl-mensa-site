@@ -21,7 +21,7 @@
 // ============================================================================
 import { PDFArray, PDFDocument, type PDFContext, PDFName, PDFNumber, PDFRawStream, PDFBool, decodePDFRawStream } from '@cantoo/pdf-lib';
 import jpeg from 'jpeg-js';
-import { PDF_WS } from './content.js';
+import { PDF_WS, inlinePictureStarts } from './content.js';
 
 export type ImageAction = 'show' | 'blur' | 'hide';
 
@@ -35,7 +35,7 @@ const DCT = PDFName.of('DCTDecode');
 const DECODABLE = new Set(['/FlateDecode', '/LZWDecode', '/ASCIIHexDecode', '/ASCII85Decode', '/RunLengthDecode']);
 const WINDOW = 64;
 
-interface Pixels {
+export interface Pixels {
   width: number;
   height: number;
   channels: 1 | 3;
@@ -56,8 +56,8 @@ function channelsOf(context: PDFContext, space: unknown): 1 | 3 | null {
   return null;
 }
 
-/** A picture's pixels, or null when it cannot be decoded. */
-function decodePicture(picture: PDFRawStream): Pixels | null {
+/** A picture's pixels, or null when it cannot be decoded. Exported for the gate's check (gate-rules.ts). */
+export function decodePicture(picture: PDFRawStream): Pixels | null {
   const { dict } = picture;
   const number = (key: string): number | undefined => {
     const value = dict.lookup(PDFName.of(key));
@@ -148,8 +148,11 @@ export function applyImagePolicy(doc: PDFDocument, action: ImageAction): void {
   }
 }
 
-/** Whether decoded content draws an inline picture (BI standing alone between PDF whitespace or delimiters). */
-export const hasInlinePicture = (content: Uint8Array): boolean => new RegExp(`(?:^|[${PDF_WS}\\]>)}])BI[${PDF_WS}/]`).test(Buffer.from(content).toString('latin1'));
+/**
+ * Whether decoded content may draw an inline picture: BI as pdf.js's lexer reads it (content.ts
+ * inlinePictureStarts, fix round 4: "qBI" and "BI%" are BI), or content that cannot be read to its end.
+ */
+export const hasInlinePicture = (content: Uint8Array): boolean => (inlinePictureStarts(content)?.length ?? 1) > 0;
 
 // ---------------------------------------------------------------------------
 // The last check. Every original picture's samples (a picture XObject's
@@ -221,18 +224,17 @@ function bytesOf(stream: PDFRawStream): Uint8Array {
 function inlinePictures(content: Uint8Array): Uint8Array[] {
   const text = Buffer.from(content).toString('latin1');
   const out: Uint8Array[] = [];
-  const begin = new RegExp(`(?:^|[${PDF_WS}\\]>)}])BI[${PDF_WS}/]`, 'g');
-  const id = new RegExp(`[${PDF_WS}/\\])>]ID[${PDF_WS}]`, 'g');
+  const id = new RegExp(`ID[${PDF_WS}]`, 'g');
   const end = new RegExp(`[${PDF_WS}]EI(?=[${PDF_WS}]|$)`, 'g');
-  for (let found = begin.exec(text); found !== null; found = begin.exec(text)) {
-    id.lastIndex = found.index;
+  // Each BI as pdf.js lexes it (fix round 4, M1); none in a string or a comment.
+  for (const begin of inlinePictureStarts(content) ?? []) {
+    id.lastIndex = begin;
     const data = id.exec(text);
     if (data === null) break;
     const from = data.index + data[0].length;
     end.lastIndex = from;
     const stop = end.exec(text);
     out.push(content.subarray(from, stop === null ? content.length : stop.index));
-    begin.lastIndex = stop === null ? text.length : stop.index;
   }
   return out;
 }

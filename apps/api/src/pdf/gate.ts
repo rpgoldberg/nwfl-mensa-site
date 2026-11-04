@@ -22,8 +22,15 @@
 //
 // Each text is matched as a page is (match.ts: folded, look-alikes, line
 // breaks, hyphens, letter spacing). Any hit means no copy, with the reason.
+//
+// pdf.js carries on past an error (forms nested until its stack gives out),
+// as if the page's text ended there (fix round 6, S3-6: a name 1,500 forms
+// deep was not read and the copy passed). So it reads with stopAtErrors, on
+// a worker of its own whose port tells when a stream ends in an error; a
+// page whose text pdf.js could not read to its end is refused.
 // ============================================================================
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, type PDFObject, PDFRawStream, PDFString, decodePDFRawStream } from '@cantoo/pdf-lib';
+import type { PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api.js';
 import { probeFolded } from '../redaction/render.js';
 import { textMatches } from './match.js';
 
@@ -36,10 +43,50 @@ import { textMatches } from './match.js';
 // (getTextContent), which needs neither. pdf.js prints them while the module loads, before any
 // option (verbosity) can reach it, so no setting silences them; the engine's child process drops
 // exactly these three (isolated.ts withoutCanvasWarnings).
-type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+export type PdfJs = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 let pdfjs: Promise<PdfJs> | undefined;
+/** pdf.js, loaded once, on first use (the gate's text reader here, and drawn.ts). */
+export const loadPdfJs = (): Promise<PdfJs> => (pdfjs ??= import('pdfjs-dist/legacy/build/pdf.mjs'));
 
 const UNREADABLE = 'the copy could not be read';
+
+/**
+ * pdf.js's message on its worker's port for a stream that ended in an error (StreamKind.ERROR in its message
+ * handler, pdfjs-dist 6.4.299): what an operator list or a page's text that stopped early sends. The tests read real
+ * copies that end so, so a pdf.js that sends it otherwise fails them.
+ */
+const STREAM_ERROR = 5;
+const isStreamError = (data: unknown): boolean => typeof data === 'object' && data !== null && (data as { stream?: unknown }).stream === STREAM_ERROR;
+
+/** The port of a pdf.js worker, as a reading listens on it. */
+interface Port {
+  addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
+}
+
+/**
+ * `read` on pdf.js's reading of `pdf`, with stopAtErrors, on a worker of its own: `stopped()` says whether a stream
+ * pdf.js ran so far (an operator list, a page's text) ended in an error, which pdf.js may hand over as if it had
+ * ended (fix round 5, S3; fix round 6, S3-6). Throws when pdf.js cannot open the copy.
+ */
+export async function watchedReading<T>(pdf: Uint8Array, read: (doc: PDFDocumentProxy, stopped: () => boolean) => Promise<T>): Promise<T> {
+  const pdfjs = await loadPdfJs();
+  const worker = new pdfjs.PDFWorker({ verbosity: 0 });
+  try {
+    await worker.promise;
+    let stopped = false;
+    (worker.port as unknown as Port).addEventListener('message', ({ data }) => {
+      if (isStreamError(data)) stopped = true;
+    });
+    const task = pdfjs.getDocument({ data: new Uint8Array(pdf), verbosity: 0, disableFontFace: true, stopAtErrors: true, worker });
+    try {
+      return await read(await task.promise, () => stopped);
+    } finally {
+      await task.destroy();
+    }
+  } finally {
+    worker.destroy();
+  }
+}
 
 /** The fewest folded letters and digits a quote needs before picture samples and font programs are searched for it. */
 export const SHORT_QUOTE = 5;
@@ -79,24 +126,43 @@ function byPosition(items: readonly Item[]): string {
     .join('\n');
 }
 
-/** Why pdf.js can read a quote on a page, or null. Throws when pdf.js cannot open the copy. */
+type TextContent = Awaited<ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['getTextContent']>>;
+
+/** Whether a quote is in a page's text, in the order it is drawn or by position. */
+function spells(content: TextContent, quotes: readonly string[]): boolean {
+  const items = content.items.flatMap((item): Item[] =>
+    'str' in item ? [{ str: item.str, x: item.transform[4] as number, y: item.transform[5] as number, width: item.width, height: item.height, eol: item.hasEOL }] : [],
+  );
+  const drawn = items.map((item) => item.str + (item.eol ? '\n' : ' ')).join('');
+  return textMatches(drawn, quotes) || textMatches(byPosition(items), quotes);
+}
+
+const readable = (n: number): string => `page ${n}: withheld text can still be read by another reader`;
+
+/**
+ * Why pdf.js can read a quote on a page, or cannot read a page's text to its end, or null. pdf.js reads twice: past
+ * any error, as a viewer shows the page (a font it cannot load is drawn in another; the second reading dropped that
+ * text), and stopping at the first error (fix round 6, S3-6: past an overflow the first reading gave the text as if
+ * it had ended there). Throws when pdf.js cannot open the copy or a page.
+ */
 async function readerFinds(pdf: Uint8Array, quotes: readonly string[]): Promise<string | null> {
-  const { getDocument } = await (pdfjs ??= import('pdfjs-dist/legacy/build/pdf.mjs'));
+  const { getDocument } = await loadPdfJs();
   const task = getDocument({ data: new Uint8Array(pdf), verbosity: 0, disableFontFace: true });
   try {
     const doc = await task.promise;
-    for (let n = 1; n <= doc.numPages; n++) {
-      const content = await (await doc.getPage(n)).getTextContent();
-      const items = content.items.flatMap((item): Item[] =>
-        'str' in item ? [{ str: item.str, x: item.transform[4] as number, y: item.transform[5] as number, width: item.width, height: item.height, eol: item.hasEOL }] : [],
-      );
-      const drawn = items.map((item) => item.str + (item.eol ? '\n' : ' ')).join('');
-      if (textMatches(drawn, quotes) || textMatches(byPosition(items), quotes)) return `page ${n}: withheld text can still be read by another reader`;
-    }
-    return null;
+    for (let n = 1; n <= doc.numPages; n++) if (spells(await (await doc.getPage(n)).getTextContent(), quotes)) return readable(n);
   } finally {
     await task.destroy();
   }
+  // With stopAtErrors pdf.js ends a page's text in an error (a stream error on its port) where it would have gone on.
+  return watchedReading(pdf, async (doc) => {
+    for (let n = 1; n <= doc.numPages; n++) {
+      const content = await (await doc.getPage(n)).getTextContent().catch(() => null);
+      if (content === null) return `page ${n}: pdf.js stopped before the end of its text`;
+      if (spells(content, quotes)) return readable(n);
+    }
+    return null;
+  });
 }
 
 const latin1 = (bytes: Uint8Array): string => Buffer.from(bytes).toString('latin1');

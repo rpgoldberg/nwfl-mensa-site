@@ -3,6 +3,7 @@
 // original only to an audience whose policy shows everything (what that audience is given anyway).
 // Every name is made up.
 import { execFile } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -169,6 +170,8 @@ describe.skipIf(!live)('0017: the PDF worker role', () => {
 
 // The role is cluster-wide and every suite creates it, so "no role yet" needs a Postgres of its own.
 const SCRIPTS = fileURLToPath(new URL('../../scripts/', import.meta.url));
+/** Every migration on disk: a second run skips them all. */
+const MIGRATION_COUNT = readdirSync(fileURLToPath(new URL('../../migrations/', import.meta.url))).filter((name) => name.endsWith('.sql')).length;
 
 function run(file: string, args: string[], env: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -231,7 +234,8 @@ describe.skipIf(!live)('0017 before fc creates the worker role', () => {
       // Re-running the migration Job applies them: nothing is pending, the grants follow the role.
       const again = await run('docker', ['exec', '-e', 'PGHOST=127.0.0.1', '-e', `PGUSER=${MIGRATOR}`, '-e', `PGPASSWORD=${MIGRATOR_PW}`, '-e', 'PGDATABASE=nwfl', id as string, 'sh', '/repo/scripts/migrate.sh', '/repo/migrations']);
       expect(again.code, again.stderr).toBe(0);
-      expect(again.stdout).toMatch(/applied=0 skipped=21/);
+      expect(MIGRATION_COUNT).toBeGreaterThanOrEqual(22);
+      expect(again.stdout).toContain(`applied=0 skipped=${MIGRATION_COUNT}`);
       expect(again.stdout).toContain('migrate: worker grants t');
       expect(await sqlstate(app, `SELECT * FROM pdf_regen_claim(60)`)).toBe('42501');
       const worker = new pg.Client({ connectionString: at(WORKER, WORKER_PW, 'nwfl') });
