@@ -7,10 +7,13 @@
 import { PUBLIC_ONLY } from 'astro:env/server';
 import { apiSetup, grpcReads, unavailableReads } from '../lib/api/client';
 import { fixtureData } from './fixtures';
-import { type LiveData, liveData as liveFrom } from './live';
+import { type LiveData, type LiveOptions, liveData as liveFrom } from './live';
 import type { SiteData } from './site-data';
 
 export const siteData: SiteData = fixtureData;
+
+/** D1 (11-03): members items are listed to the public by title and summary, with the box, never their body or files. */
+const PRODUCTION: LiveOptions = { membersTeasers: true };
 
 /**
  * The live data for this environment. A public-only build shows no officer- or
@@ -22,9 +25,9 @@ export function liveFromEnv(env: Record<string, string | undefined>, { publicOnl
   if (!setup.enabled) return undefined;
   if ('error' in setup) {
     log(JSON.stringify({ level: 'error', msg: setup.error }));
-    return liveFrom(unavailableReads());
+    return liveFrom(unavailableReads(), PRODUCTION);
   }
-  return liveFrom(grpcReads(setup.config, log));
+  return liveFrom(grpcReads(setup.config, log), PRODUCTION);
 }
 
 let live: { data: LiveData | undefined } | undefined;

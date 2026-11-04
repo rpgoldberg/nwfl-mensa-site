@@ -76,7 +76,7 @@ const items = news?.items ?? [];
           {items.map((a) => (
             <article class="item" data-source={a.source}>
               <h3>{a.title}</h3>
-              {a.membersOnly && <p class="members-rule">{MEMBERS_RULE}</p>}
+              {a.membersOnly && !a.teaser && <p class="members-rule">{MEMBERS_RULE}</p>}
               {a.publishedOn && <p class="muted">{formatDate(a.publishedOn)}</p>}
               {a.summary && <p>{a.summary}</p>}
               <div class="prose" set:html={a.bodyHtml} />

@@ -5,7 +5,10 @@
 // a token that is one RFC 6750 b64token with more than 30 seconds to live.
 // There is no refresh (the provider grants no offline_access, and the API
 // takes a site token for an hour at most): past that, the reader gets the
-// public view, and the page says to sign in again.
+// public view, and the page says to sign in again. D4: the reader carries
+// whether the session's groups claim holds the members group (session.member,
+// server/session.mjs; an officers group alone is not it), and the news reads
+// send the token only when it does (src/data/live.ts).
 import type { AuthSetup } from '../../../server/auth-config.mjs';
 import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
@@ -30,7 +33,8 @@ export function readerFor(session: Session | undefined, { tokens, now }: ReaderD
   if (record === undefined || record.access_token === '' || typeof expiresAt !== 'number' || Number.isNaN(expiresAt)) return { reader: undefined, lapsed: false };
   if (expiresAt - EXPIRY_MARGIN_SECONDS <= at) return { reader: undefined, lapsed: true };
   // A token that is not one b64token is never sent (client.ts): it is no token, not a reader (S5a-1).
-  return { reader: sendable({ bearer: record.access_token }), lapsed: false };
+  // D4: whether the groups claim holds the members group goes with it; anything but true is no.
+  return { reader: sendable({ bearer: record.access_token, member: session.member === true }), lapsed: false };
 }
 
 /**

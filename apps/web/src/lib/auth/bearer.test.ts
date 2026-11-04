@@ -7,9 +7,9 @@ import type { Tokens } from './oidc';
 
 const NOW = 1_800_000_000;
 
-function signedIn(tokens: Tokens | undefined) {
+function signedIn(tokens: Tokens | undefined, groups: string[] = ['nwfl-members']) {
   const store = new TokenStore<Tokens>();
-  const session = newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups: ['nwfl-members'] }, NOW - 60);
+  const session = newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups }, NOW - 60);
   if (tokens) store.put(session.sid, tokens, session.exp);
   return { session, deps: { tokens: store, now: () => NOW } };
 }
@@ -18,7 +18,37 @@ describe('readerFor', () => {
   it('gives the access token of a valid session whose token has more than 30 s to live', () => {
     const { session, deps } = signedIn({ access_token: 'tok.en-1', expires_at: NOW + EXPIRY_MARGIN_SECONDS + 1 });
     expect(EXPIRY_MARGIN_SECONDS).toBe(30);
-    expect(readerFor(session, deps)).toEqual({ reader: { bearer: 'tok.en-1' }, lapsed: false });
+    expect(readerFor(session, deps)).toEqual({ reader: { bearer: 'tok.en-1', member: true }, lapsed: false });
+  });
+
+  it("carries whether the session's groups claim holds the members group (D4): an officers or pending claim alone is not a member's", () => {
+    const cases: [string[], boolean][] = [
+      [['nwfl-members'], true],
+      [['nwfl-members', 'nwfl-officers'], true],
+      [['nwfl-officers'], false],
+      [['nwfl-officers', 'nwfl-office-president'], false],
+      [['nwfl-pending'], false],
+      [[], false],
+    ];
+    for (const [groups, member] of cases) {
+      const { session, deps } = signedIn({ access_token: 'tok.en-1', expires_at: NOW + 3600 }, groups);
+      expect(readerFor(session, deps), JSON.stringify(groups)).toEqual({ reader: { bearer: 'tok.en-1', member }, lapsed: false });
+    }
+  });
+
+  it('reads the claim under the configured prefix only: another prefix\'s members group is no members group', () => {
+    const store = new TokenStore<Tokens>();
+    const session = newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups: ['nwfl-members'] }, NOW - 60, 'mensa-nwfl-');
+    store.put(session.sid, { access_token: 'tok', expires_at: NOW + 3600 }, session.exp);
+    expect(readerFor(session, { tokens: store, now: () => NOW }).reader).toEqual({ bearer: 'tok', member: false });
+    const ours = newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups: ['mensa-nwfl-members'] }, NOW - 60, 'mensa-nwfl-');
+    store.put(ours.sid, { access_token: 'tok', expires_at: NOW + 3600 }, ours.exp);
+    expect(readerFor(ours, { tokens: store, now: () => NOW }).reader).toEqual({ bearer: 'tok', member: true });
+  });
+
+  it('fails closed on a session whose member flag is anything but true', () => {
+    const { session, deps } = signedIn({ access_token: 'tok', expires_at: NOW + 3600 });
+    for (const member of [undefined, 'true', 1, null]) expect(readerFor({ ...session, member } as never, deps).reader, String(member)).toEqual({ bearer: 'tok', member: false });
   });
 
   it('gives nothing to no session', () => {

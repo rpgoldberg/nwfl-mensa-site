@@ -1,7 +1,7 @@
 import { create } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 import { type Block, type Document, DocumentSchema, type Inline } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { MEMBERS_PASSAGE, MEMBERS_RULE, NOT_SHOWN, NO_MEMBER_ACCESS, documentHtml, escapeHtml, hasMembers, hasRedacted, withheldHtml } from './document';
+import { MEMBERS_ITEM, MEMBERS_PASSAGE, MEMBERS_RULE, NOT_SHOWN, NO_MEMBER_ACCESS, NO_MEMBER_ACCESS_ITEM, documentHtml, escapeHtml, hasMembers, hasRedacted, withheldHtml } from './document';
 
 const text = (value: string, style: { bold?: boolean; italic?: boolean } = {}): Inline => ({ $typeName: 'nwfl.mensa.v1.Inline', kind: { case: 'text', value: { $typeName: 'nwfl.mensa.v1.Text', text: value, bold: false, italic: false, ...style } } });
 const para = (...inlines: Inline[]): Block => ({ $typeName: 'nwfl.mensa.v1.Block', kind: { case: 'paragraph', value: { $typeName: 'nwfl.mensa.v1.Paragraph', inlines } } });
@@ -144,12 +144,21 @@ describe('documentHtml views', () => {
 
 // A14: the API sends a redacted node only to a caller it reads as the public: that decides the view.
 describe('withheldHtml (a teaser, D1)', () => {
-  it("is the box a redacted node gets, for each reader, and nothing else", () => {
+  it('is a box that says the whole item is members only, with a real sign-in link when the page says where, and nothing of the item', () => {
+    expect(MEMBERS_ITEM).toBe('Members only, sign in to read.');
+    expect(withheldHtml()).toBe(`<p class="members-note">${MEMBERS_ITEM}</p>`);
+    expect(withheldHtml({ signIn: '/sign-in?a=1&b=2' })).toBe('<p class="members-note">Members only, <a href="/sign-in?a=1&amp;b=2">sign in</a> to read.</p>');
+  });
+
+  it('tells a signed-in reader without member access so, with a link to ask for help, and never to sign in again', () => {
+    expect(withheldHtml({ view: 'signed-in-public', signIn: '/sign-in' })).toBe(`<p class="members-note">${NO_MEMBER_ACCESS_ITEM} <a href="/help">Ask for help</a></p>`);
+    expect(NO_MEMBER_ACCESS_ITEM).toBe('Members only. Your account does not have member access yet.');
+  });
+
+  it('never says "passage" for a whole item: the passage box stays for a passage', () => {
+    for (const view of ['public', 'signed-in-public'] as const) expect(withheldHtml({ view })).not.toContain('passage');
     const redacted = create(DocumentSchema, { blocks: [{ kind: { case: 'redacted', value: {} } }] });
-    expect(withheldHtml()).toBe(`<p class="members-note">${MEMBERS_PASSAGE}</p>`);
-    expect(withheldHtml()).toBe(documentHtml(redacted));
-    expect(withheldHtml({ signIn: '/sign-in?a=1&b=2' })).toBe(documentHtml(redacted, { signIn: '/sign-in?a=1&b=2' }));
-    expect(withheldHtml({ view: 'signed-in-public' })).toBe(`<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`);
+    expect(documentHtml(redacted)).toBe(`<p class="members-note">${MEMBERS_PASSAGE}</p>`);
   });
 });
 

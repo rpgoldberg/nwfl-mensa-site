@@ -13,7 +13,7 @@ import {
 } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeSchema, TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type Reader } from '../lib/api/client';
-import { MEMBERS_PASSAGE, NOT_SHOWN, NO_MEMBER_ACCESS } from '../lib/document';
+import { MEMBERS_ITEM, MEMBERS_PASSAGE, NOT_SHOWN, NO_MEMBER_ACCESS, NO_MEMBER_ACCESS_ITEM } from '../lib/document';
 import { isPublicEvent, liveData } from './live';
 
 const SERIES = '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20';
@@ -474,7 +474,10 @@ describe('liveData.issues (the newsletter)', () => {
 // shows what the API sent for it, never more: members items and files only when the API answered as
 // for a member, never an officers item or file, never a source file, and no state between readers.
 describe('liveData.news', () => {
-  const member: Reader = { bearer: 'member.token' };
+  /** A session whose groups claim holds the members group (D4): the only reader whose token goes. */
+  const member: Reader = { bearer: 'member.token', member: true };
+  /** A members claim the API answers as the public's (its member record has lapsed, say). */
+  const notInRecords: Reader = { bearer: 'pending.token', member: true };
   const UUIDS = {
     issue: 'd0c00000-0000-4000-8000-000000000010',
     issuePublic: 'f0000000-0000-4000-8000-000000000010',
@@ -626,16 +629,16 @@ describe('liveData.news', () => {
   it("as an officer: the same as a member's view, never an officers item, an officers file or a source file (D5)", async () => {
     const officerAnswer = memberAnswer();
     const { reads: r } = api(() => officerAnswer);
-    const news = await liveData(r).news({ bearer: 'officer.token' });
+    const news = await liveData(r).news({ bearer: 'officer.token', member: true });
     expect(news.items.map((i) => i.slug)).toEqual(['open-letter', 'members-picnic']);
     expect(news.issues[0]!.membersPdf).toBe(`/documents/${UUIDS.issueMembers}.pdf`);
     expect(news.items[0]!.files.map((f) => f.href)).toEqual([`/documents/${UUIDS.articlePublic}.pdf`, `/documents/${UUIDS.articleMembers}.pdf`]);
     expect(JSON.stringify(news)).not.toMatch(new RegExp(`${UUIDS.issueOfficers}|${UUIDS.issueSource}|${UUIDS.articleOfficers}|${UUIDS.articleSource}|OFFICERS ONLY`));
   });
 
-  it("keys on the API's answer, not the session: a token the API answers as the public's reads as signed in without member access", async () => {
+  it("keys on the API's answer too: a members claim the API answers as the public's reads as signed in without member access", async () => {
     const { reads: r } = api(() => publicAnswer());
-    const news = await liveData(r).news({ bearer: 'pending.token' });
+    const news = await liveData(r).news(notInRecords);
     expect(news.signedIn).toBe(true);
     expect(news.issues).toEqual(ANONYMOUS.issues);
     expect(news.items.map((i) => i.slug)).toEqual(['open-letter']);
@@ -645,7 +648,7 @@ describe('liveData.news', () => {
 
   it('reads a bearer that is not one b64token as no reader at all: the public view, even when the API sends more than it should (S5a-1)', async () => {
     const { reads: r, asked } = api(() => memberAnswer());
-    const news = await liveData(r).news({ bearer: 'not a b64token' });
+    const news = await liveData(r).news({ bearer: 'not a b64token', member: true });
     expect(news).toEqual(await liveData(api(() => memberAnswer()).reads).news());
     expect(news.signedIn).toBe(false);
     expect(asked.map(([, , bearer]) => bearer)).toEqual([undefined, undefined]);
@@ -671,7 +674,7 @@ describe('liveData.news', () => {
     });
     // With no reader, /news is exactly what it was before A14 read any article: the issues, no line, no 503 (NOTE-1).
     expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news()).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
-    expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news({ bearer: 'not a b64token' })).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
+    expect(await liveData(articlesDown(api(() => publicAnswer()).reads)).news({ bearer: 'not a b64token', member: true })).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
     const asMember = await liveData(articlesDown(api((as) => (as ? memberAnswer() : publicAnswer())).reads)).news(member);
     expect(asMember).toMatchObject({ items: [], itemsUnavailable: true, signedIn: true, tokenRefused: false });
     expect(asMember.issues[0]!.membersPdf).toBe(`/documents/${UUIDS.issueMembers}.pdf`);
@@ -808,7 +811,7 @@ describe('liveData.news', () => {
     const live = liveData(api((as) => (as ? publicAnswer() : publicAnswer())).reads);
     const signIn = '/sign-in?return=%2Fnews';
     expect((await live.news(undefined, { signIn })).items[0]!.bodyHtml).toContain(`<a href="${signIn}">sign in</a>`);
-    expect((await live.news({ bearer: 'pending.token' }, { signIn })).items[0]!.bodyHtml).not.toContain('sign-in');
+    expect((await live.news(notInRecords, { signIn })).items[0]!.bodyHtml).not.toContain('sign-in');
   });
 
   it('shows members items to the public by title and summary only when the teaser switch is on (D1), never a body or a file the API sent; hidden by default', async () => {
@@ -827,19 +830,89 @@ describe('liveData.news', () => {
       slug: 'members-picnic',
       title: 'Title of members-picnic',
       summary: 'Summary of members-picnic',
-      bodyHtml: `<p class="members-note">${MEMBERS_PASSAGE}</p>`,
+      bodyHtml: `<p class="members-note">${MEMBERS_ITEM}</p>`,
       publishedOn: '2026-10-20',
       source: 'submitted',
       files: [],
       membersOnly: true,
+      teaser: true,
     });
     expect(JSON.stringify(teased)).not.toMatch(new RegExp(`MEMBERS BODY|1234|gate code|${UUIDS.articleMembers}|${teaserPublicPdf}`));
     const signIn = '/sign-in?return=%2Fnews';
-    expect((await liveData(r, { membersTeasers: true }).news(undefined, { signIn })).items[1]!.bodyHtml).toBe(`<p class="members-note">Members-only passage, <a href="${signIn}">sign in</a> to read.</p>`);
+    expect((await liveData(r, { membersTeasers: true }).news(undefined, { signIn })).items[1]!.bodyHtml).toBe(`<p class="members-note">Members only, <a href="${signIn}">sign in</a> to read.</p>`);
     // A signed-in reader the API answered as the public's gets the same switch, with the box that says so.
-    expect((await liveData(r).news({ bearer: 'pending.token' })).items.map((i) => i.slug)).toEqual(['open-letter']);
-    const pending = await liveData(r, { membersTeasers: true }).news({ bearer: 'pending.token' }, { signIn });
-    expect(pending.items[1]).toMatchObject({ slug: 'members-picnic', membersOnly: true, files: [], bodyHtml: `<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>` });
+    expect((await liveData(r).news(notInRecords)).items.map((i) => i.slug)).toEqual(['open-letter']);
+    const pending = await liveData(r, { membersTeasers: true }).news(notInRecords, { signIn });
+    expect(pending.items[1]).toMatchObject({ slug: 'members-picnic', membersOnly: true, teaser: true, files: [], bodyHtml: `<p class="members-note">${NO_MEMBER_ACCESS_ITEM} <a href="/help">Ask for help</a></p>` });
+    // A members item a member may read is no teaser.
+    const asMember = await liveData(api(() => memberAnswer()).reads, { membersTeasers: true }).news(member);
+    expect(asMember.items.find((i) => i.slug === 'members-picnic')).not.toHaveProperty('teaser');
+  });
+
+  // D4 (11-03): a second guard. The members view needs both the API's answer as a member's AND the
+  // session's groups claim holding the configured members group. A session without it is the public's:
+  // its token is never sent, so nothing members-only can even arrive, and the box says the account has
+  // no member access (never "sign in", which would only sign the same account in again).
+  describe("a session without the members group (D4): the public's view, whatever the API would say", () => {
+    const claimless: [string, Reader][] = [
+      ['no members claim at all', { bearer: 'stale.token' }],
+      ['an officers-only claim', { bearer: 'officer.token', member: false }],
+    ];
+    const BOX = `<p class="members-note">${NO_MEMBER_ACCESS} <a href="/help">Ask for help</a></p>`;
+    const SECRETS = new RegExp(`1234|gate code|Bring a chair|OFFICERS ONLY|board-notes|sign-in|${Object.values(UUIDS).filter((id) => id !== UUIDS.issuePublic && id !== UUIDS.articlePublic).join('|')}`);
+
+    for (const [name, reader] of claimless) {
+      it(`${name}: no token is sent; the public's issues and articles, and the box that says the account has no member access`, async () => {
+        // The API would read this token as a member's (its records say so): it is never asked.
+        const { reads: r, asked } = api((as) => (as ? memberAnswer() : publicAnswer()));
+        const news = await liveData(r).news(reader, { signIn: '/sign-in?return=%2Fnews&again=1' });
+        expect(asked).toEqual([[ContentKind.DOCUMENT, 50, undefined], [ContentKind.ARTICLE, 10, undefined]]);
+        expect(news).toEqual({ ...ANONYMOUS, items: [{ ...ANONYMOUS.items[0]!, bodyHtml: `<p>Hello &amp; welcome</p>${BOX}` }] });
+        expect(JSON.stringify(news)).not.toMatch(SECRETS);
+      });
+
+      it(`${name}: with teasers on, the members item by title and summary with the same box, and from an API that sends the public too much, none of it`, async () => {
+        const { reads: r, asked } = api(() => memberAnswer());
+        const news = await liveData(r, { membersTeasers: true }).news(reader, { signIn: '/sign-in?return=%2Fnews&again=1' });
+        expect(asked.map(([, , bearer]) => bearer)).toEqual([undefined, undefined]);
+        expect(news.signedIn).toBe(false);
+        expect(news.issues).toEqual(ANONYMOUS.issues);
+        expect(news.items.map((i) => [i.slug, i.membersOnly, i.teaser])).toEqual([['open-letter', false, undefined], ['members-picnic', true, true]]);
+        expect(news.items[1]).toEqual({ slug: 'members-picnic', title: 'Title of members-picnic', summary: 'Summary of members-picnic', bodyHtml: `<p class="members-note">${NO_MEMBER_ACCESS_ITEM} <a href="/help">Ask for help</a></p>`, publishedOn: '2026-10-20', source: 'submitted', files: [], membersOnly: true, teaser: true });
+        expect(news.items[0]!.files).toEqual(ANONYMOUS.items[0]!.files);
+        expect(JSON.stringify(news)).not.toMatch(SECRETS);
+      });
+
+      it(`${name}: articles that cannot be read are left out as for the public, with no line and no 503`, async () => {
+        const down: ApiReads = reads({ listPublishedItems: (kind) => (kind === ContentKind.ARTICLE ? Promise.reject(new ApiUnavailable('ListPublishedItems')) : Promise.resolve(publicAnswer()[ContentKind.DOCUMENT])) });
+        expect(await liveData(down).news(reader)).toEqual({ ...ANONYMOUS, items: [], itemsUnavailable: false });
+      });
+
+      it(`${name}: a file is read as the public's`, async () => {
+        const asked: (string | undefined)[] = [];
+        const live = liveData(reads({ readFile: (_id, as) => (asked.push(as?.bearer), Promise.resolve({ kind: 'not_found' as const })) }));
+        expect(await live.file(UUIDS.issueMembers, reader)).toEqual({ kind: 'not_found' });
+        expect(asked).toEqual([undefined]);
+      });
+    }
+
+    it('takes the members view only when both say member: the claim and the API', async () => {
+      const cases: [Reader | undefined, 'member' | 'public', boolean][] = [
+        [member, 'member', true],
+        [member, 'public', false],
+        [{ bearer: 'stale.token', member: false }, 'member', false],
+        [{ bearer: 'stale.token', member: false }, 'public', false],
+        [undefined, 'member', false],
+      ];
+      for (const [reader, apiSays, membersView] of cases) {
+        const { reads: r } = api((as) => (as === undefined ? publicAnswer() : apiSays === 'member' ? memberAnswer() : publicAnswer()));
+        const news = await liveData(r, { membersTeasers: true }).news(reader);
+        const label = `${JSON.stringify(reader)} ${apiSays}`;
+        expect(news.issues[0]!.membersPdf !== undefined, label).toBe(membersView);
+        expect(news.items.some((i) => i.bodyHtml.includes('1234')), label).toBe(membersView);
+        expect(news.items.find((i) => i.slug === 'members-picnic')?.teaser, label).toBe(membersView ? undefined : true);
+      }
+    });
   });
 });
 
@@ -855,9 +928,9 @@ describe('liveData.file as a signed-in reader', () => {
         },
       }),
     );
-    expect(await live.file(FILE, { bearer: 'member.token' })).toEqual({ kind: 'not_found' });
-    expect(await live.file(FILE, { bearer: 'refused' })).toEqual({ kind: 'not_found' });
-    expect(await live.file('../x', { bearer: 'member.token' })).toEqual({ kind: 'not_found' });
+    expect(await live.file(FILE, { bearer: 'member.token', member: true })).toEqual({ kind: 'not_found' });
+    expect(await live.file(FILE, { bearer: 'refused', member: true })).toEqual({ kind: 'not_found' });
+    expect(await live.file('../x', { bearer: 'member.token', member: true })).toEqual({ kind: 'not_found' });
     expect(asked).toEqual(['member.token', 'refused', undefined]);
     await expect(liveData(reads({ readFile: () => Promise.reject(new ApiTokenRefused('ReadFile')) })).file(FILE)).rejects.toBeInstanceOf(ApiTokenRefused);
   });
@@ -865,14 +938,14 @@ describe('liveData.file as a signed-in reader', () => {
   it('reads the file as the public for a bearer that is not one b64token (S5a-1)', async () => {
     const asked: (string | undefined)[] = [];
     const live = liveData(reads({ readFile: (_id, as) => (asked.push(as?.bearer), Promise.resolve({ kind: 'not_found' as const })) }));
-    expect(await live.file(FILE, { bearer: 'two words' })).toEqual({ kind: 'not_found' });
+    expect(await live.file(FILE, { bearer: 'two words', member: true })).toEqual({ kind: 'not_found' });
     expect(asked).toEqual([undefined]);
   });
 
   it('passes an unavailable API on with a reader too, without asking again', async () => {
     let asked = 0;
     const live = liveData(reads({ readFile: () => (asked++, Promise.reject(new ApiUnavailable('ReadFile'))) }));
-    await expect(live.file(FILE, { bearer: 'member.token' })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(live.file(FILE, { bearer: 'member.token', member: true })).rejects.toBeInstanceOf(ApiUnavailable);
     expect(asked).toBe(1);
   });
 });
