@@ -1,7 +1,9 @@
 // SOLO-APPROVE, through the browser with no script: the one-approver note on the officer area, the
 // Admin's switch (two plain forms, a confirmation step and a reason), and who may not see either.
 // The stand-in API keeps one setting per signed-in subject (e2e/stand-in.ts APPROVAL): "officer"
-// reads publishing as one approver, "long-name" as two officers, and the Admin flips their own.
+// reads publishing as one approver, "long-name" as two officers, and the Admin flips their own. The
+// member is seeded at one approver on both scopes and answered as a buggy API would, so a page that
+// ever asked for a member would show it.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
@@ -48,18 +50,24 @@ test.describe('the one-approver note', () => {
 
   test('the public and members never see it, nor the switch\'s address, on any page', async ({ page }) => {
     const pages = ['/', '/news', '/events', '/officers', '/about', '/more', '/help'];
-    for (const path of pages) {
-      await page.goto(path);
+    /** Nothing of the approval rule: not the note, not the could-not-check line, not the switch. */
+    const nothingOfIt = async (path: string): Promise<void> => {
+      await expect(page.locator('.notice--rule'), path).toHaveCount(0);
+      // Every page has a role=note (the in-app browser hint, Base.astro), so: none about approval.
+      await expect(page.getByRole('note').filter({ hasText: /approv/i }), path).toHaveCount(0);
       const html = await page.content();
-      expect(html, path).not.toContain('One approver');
-      expect(html, path).not.toContain('approval-rules');
+      for (const text of ['One approver', 'approval setting', APPROVAL.unknownNote, 'approval-rules']) expect(html, `${path}: ${text}`).not.toContain(text);
+    };
+    // Signed out, /officer-area sends to sign in: that page too.
+    for (const path of [...pages, '/officer-area']) {
+      await page.goto(path);
+      await nothingOfIt(path);
     }
+    await page.goto('/');
     await signIn(page, 'member');
     for (const path of [...pages, '/officer-area']) {
       await page.goto(path);
-      const html = await page.content();
-      expect(html, path).not.toContain('One approver');
-      expect(html, path).not.toContain('approval-rules');
+      await nothingOfIt(path);
     }
   });
 });
@@ -159,7 +167,7 @@ test.describe('the Admin\'s switch', () => {
     await expect(page.getByRole('note').filter({ hasText: 'One approver' })).toHaveText(note);
 
     // The confirmation posted again (back, then resubmit): nothing changes.
-    const again = await post(page, { step: 'apply', scope: 'content', rule: 'one_approver', reason: 'The Webmaster is away until Monday' });
+    const again = await post(page, { step: 'apply', scope: 'content', rule: 'one_approver', reason: 'The Webmaster is away until Monday', revision: '' });
     expect(again.status()).toBe(303);
     expect(again.headers()['location']).toBe(`${HERE}?done=content&changed=0`);
     await page.goto(`${HERE}?done=content&changed=0`);
@@ -172,6 +180,50 @@ test.describe('the Admin\'s switch', () => {
     await expect(page.getByText("You are about to require a second officer's approval again before anything is published.")).toBeVisible();
     await page.getByRole('button', { name: 'Yes, make this change' }).click();
     await expect(page.getByRole('status')).toHaveText('Publishing content: Saved.');
+    expect(await page.content()).not.toContain('One approver');
+  });
+});
+
+test.describe('a stale switch, and the Admin without the officers group', () => {
+  test.use({ javaScriptEnabled: false });
+
+  test('opens the switch for the Admin who is not in the officers group, with the setting read', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'lone-admin');
+    const res = await page.goto(HERE);
+    expect(res?.status()).toBe(200);
+    await expect(page.getByRole('group', { name: 'Publishing content', exact: true }).getByText(/^Now: /)).toBeVisible();
+    expect(await page.content()).not.toContain('Sign in again');
+  });
+
+  // "lone-admin" is its own subject: only this test flips it, in one project.
+  test('refuses a confirmation sent again after a later switch: nothing changes, and the page says so', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium-desktop', 'the flip runs in one project only: the setting is shared by subject');
+    await page.goto('/');
+    await signIn(page, 'lone-admin');
+    const review = async (rule: string, reason: string): Promise<Record<string, string>> => {
+      await page.goto(HERE);
+      const group = page.getByRole('group', { name: 'Publishing content', exact: true });
+      await group.getByRole('radio', { name: rule }).check();
+      await group.getByRole('textbox', { name: 'Why are you making this change?' }).fill(reason);
+      await group.getByRole('button', { name: 'Review this change' }).click();
+      await expect(page.getByRole('heading', { name: 'Check this change' })).toBeVisible();
+      const fields: Record<string, string> = {};
+      for (const input of await page.locator('form input[type="hidden"]').all()) fields[(await input.getAttribute('name'))!] = (await input.getAttribute('value')) ?? '';
+      await page.getByRole('button', { name: 'Yes, make this change' }).click();
+      await expect(page.getByRole('status')).toHaveText('Publishing content: Saved.');
+      return fields;
+    };
+    const away = await review('One officer', 'The Webmaster is away this week');
+    expect(away).toMatchObject({ step: 'apply', scope: 'content', rule: 'one_approver', revision: '' });
+    await review('Two officers (a second officer approves)', 'The Webmaster is back');
+
+    const stale = await post(page, away);
+    expect(stale.status()).toBe(409);
+    const body = await stale.text();
+    expect(body).toContain('Nothing was changed: this setting was changed after you looked at it.');
+    expect(body).toContain('Now: Two officers (a second officer approves)');
+    await page.goto(HERE);
     expect(await page.content()).not.toContain('One approver');
   });
 });

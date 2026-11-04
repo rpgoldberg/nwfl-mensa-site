@@ -3,7 +3,9 @@
 // loosening a public privacy setting): two officers or one, and a required reason; then a
 // confirmation step that says what the change does; then the API sets it (ApprovalRuleService,
 // with the Admin's own token: the API is the wall, and refuses anyone else). It works with no
-// script: each step is a form post, answered with a page or a 303 back here.
+// script: each step is a form post, answered with a page or a 303 back here. Both steps carry the
+// revision the Admin read the setting at; if it has been switched since, nothing changes and the
+// page says so, with the setting as it is now (a stale form sent again cannot undo a later switch).
 //
 // Not signed in: sign in first. Signed in but not the Admin: the plain not-found page, so the
 // switch is hidden from everyone else, and it is never linked for them either. Astro's origin
@@ -29,7 +31,7 @@ import {
   notesFor,
   parseRuleForm,
 } from '../../lib/approval-rules';
-import { OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
+import { ApprovalSettingMoved, OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
 import { markUnavailable } from '../../lib/api/page';
 import { runtimeDeps } from '../../lib/auth/flow';
 import { readForm } from '../../lib/form';
@@ -51,7 +53,7 @@ const { reader } = officerReader(session, runtimeDeps());
 
 let review: RuleForm | undefined;
 let invalid: { scope: Scope | undefined; errors: FormErrors; values: { rule: string; reason: string } } | undefined;
-let problem: 'sign-in' | 'unavailable' | undefined;
+let problem: 'sign-in' | 'unavailable' | 'moved' | undefined;
 
 if (Astro.request.method === 'POST') {
   const read = await readForm(Astro.request, MAX_FORM_BYTES);
@@ -68,10 +70,12 @@ if (Astro.request.method === 'POST') {
     problem = 'sign-in';
   } else {
     try {
-      const { changed } = await api.setApprovalRule(reader, parsed.value);
-      return Astro.redirect(`${HERE}?done=${parsed.value.scope}&changed=${changed ? 1 : 0}`, 303);
+      const { scope, rule, reason, revision } = parsed.value;
+      const { changed } = await api.setApprovalRule(reader, { scope, rule, reason, expectedRevision: revision });
+      return Astro.redirect(`${HERE}?done=${scope}&changed=${changed ? 1 : 0}`, 303);
     } catch (error) {
-      problem = error instanceof OfficerSignInAgain ? 'sign-in' : 'unavailable';
+      problem = error instanceof OfficerSignInAgain ? 'sign-in' : error instanceof ApprovalSettingMoved ? 'moved' : 'unavailable';
+      if (problem === 'moved') Astro.response.status = 409;
     }
   }
 }
@@ -101,6 +105,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {settings !== undefined && <OneApproverNote notes={notesFor(settings)} />}
   {done && <p class="notice" role="status">{SCOPE_LABEL[done.scope]}: {doneText(done.changed)}</p>}
   {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then make the change again.</p>}
+  {problem === 'moved' && <p class="notice" role="alert">Nothing was changed: this setting was changed after you looked at it. It is shown below as it is now. Make the change again if you still want it.</p>}
   {problem === 'unavailable' || (settings === undefined && problem === undefined) ? <Unavailable what="The approval setting" /> : null}
 
   {review ? (
@@ -114,6 +119,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
         <input type="hidden" name="scope" value={review.scope} />
         <input type="hidden" name="rule" value={review.rule} />
         <input type="hidden" name="reason" value={review.reason} />
+        <input type="hidden" name="revision" value={review.revision} />
         <div class="btns">
           <button class="button" type="submit">Yes, make this change</button>
           <a class="button button--secondary" href={HERE}>Cancel</a>
@@ -129,6 +135,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
       <form method="post" action={HERE} class="rule-form" novalidate>
         <input type="hidden" name="step" value="review" />
         <input type="hidden" name="scope" value={scope} />
+        <input type="hidden" name="revision" value={setting?.revision ?? ''} />
         <fieldset>
           <legend>{SCOPE_LABEL[scope]}</legend>
           <p class="hint" id={`${scope}-now`}>

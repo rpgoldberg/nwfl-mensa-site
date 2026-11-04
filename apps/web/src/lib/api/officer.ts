@@ -6,8 +6,11 @@
 // switch from everyone else.
 //
 // A refused token (UNAUTHENTICATED), or a bearer that is not one b64token, is OfficerSignInAgain:
-// the page asks the officer to sign in again. Any other failure is logged by call and code (never
-// the API's message, the token or the reason) and becomes ApiUnavailable, as for the public reads.
+// the page asks the officer to sign in again. A switch refused because the setting moved since the
+// Admin read it (FAILED_PRECONDITION on SetApprovalRule) is ApprovalSettingMoved: the page shows the
+// setting now. Any other failure is logged by call and code (never the API's message, the token or
+// the reason) and becomes ApiUnavailable, as for the public reads.
+// The Admin's token is sent as an officer's is, also when the Admin is not in the officers group.
 import { PUBLIC_ONLY } from 'astro:env/server';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
@@ -15,7 +18,7 @@ import { createGrpcTransport } from '@connectrpc/connect-node';
 import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope, type ApprovalSetting } from '../../gen/nwfl/mensa/v1/approval_pb.js';
-import type { Rule, Scope, Setting } from '../approval-rules';
+import { type Rule, type Scope, type Setting, isAdmin } from '../approval-rules';
 import { EXPIRY_MARGIN_SECONDS } from '../auth/bearer';
 import type { Tokens } from '../auth/oidc';
 import { type ApiConfig, ApiUnavailable, READ_MAX_BYTES, type Reader, apiSetup, sendable } from './client';
@@ -28,9 +31,18 @@ export class OfficerSignInAgain extends Error {
   }
 }
 
+/** The Admin's switch was refused: the setting has been switched since they read it. */
+export class ApprovalSettingMoved extends Error {
+  constructor(readonly rpc: string) {
+    super(`the approval setting moved before ${rpc}`);
+    this.name = 'ApprovalSettingMoved';
+  }
+}
+
 export interface OfficerApi {
   getApprovalRules(as: Reader): Promise<Setting[]>;
-  setApprovalRule(as: Reader, change: { scope: Scope; rule: Rule; reason: string }): Promise<{ changed: boolean }>;
+  /** expectedRevision: the revision the Admin read ('' for the default); always sent, so the API checks it. */
+  setApprovalRule(as: Reader, change: { scope: Scope; rule: Rule; reason: string; expectedRevision: string }): Promise<{ changed: boolean }>;
 }
 
 const SCOPE_IN: Record<Scope, ApprovalScope> = { content: ApprovalScope.CONTENT, redaction_policy: ApprovalScope.REDACTION_POLICY };
@@ -47,7 +59,7 @@ function settingOf(setting: ApprovalSetting): Setting {
   const scope = nameOf(SCOPE_IN, setting.scope);
   const rule = nameOf(RULE_IN, setting.rule);
   if (scope === undefined || rule === undefined) throw new ConnectError('an approval setting the site cannot read', Code.DataLoss);
-  return { scope, rule, ...(setting.setAt ? { setAt: timestampDate(setting.setAt) } : {}) };
+  return { scope, rule, ...(setting.setAt ? { setAt: timestampDate(setting.setAt) } : {}), revision: setting.revision };
 }
 
 export function grpcOfficer(config: ApiConfig, log: (line: string) => void): OfficerApi {
@@ -65,6 +77,10 @@ export function grpcOfficer(config: ApiConfig, log: (line: string) => void): Off
         log(JSON.stringify({ level: 'warn', msg: 'api refused the token', rpc, code: codeName(code) }));
         throw new OfficerSignInAgain(rpc);
       }
+      if (code === Code.FailedPrecondition && rpc === 'SetApprovalRule') {
+        log(JSON.stringify({ level: 'warn', msg: 'the approval setting moved', rpc, code: codeName(code) }));
+        throw new ApprovalSettingMoved(rpc);
+      }
       log(JSON.stringify({ level: 'error', msg: 'api call failed', rpc, code: codeName(code) }));
       throw new ApiUnavailable(rpc);
     }
@@ -74,7 +90,10 @@ export function grpcOfficer(config: ApiConfig, log: (line: string) => void): Off
     getApprovalRules: (as) => call('GetApprovalRules', as, async (headers) => (await rules.getApprovalRules({}, { headers })).settings.map(settingOf)),
     setApprovalRule: (as, change) =>
       call('SetApprovalRule', as, async (headers) => {
-        const answer = await rules.setApprovalRule({ scope: SCOPE_IN[change.scope], rule: RULE_IN[change.rule], reason: change.reason }, { headers });
+        const answer = await rules.setApprovalRule(
+          { scope: SCOPE_IN[change.scope], rule: RULE_IN[change.rule], reason: change.reason, expectedRevision: change.expectedRevision },
+          { headers },
+        );
         if (answer.setting === undefined) throw new ConnectError('no setting in the answer', Code.DataLoss);
         settingOf(answer.setting);
         return { changed: answer.changed };
@@ -117,11 +136,11 @@ export interface OfficerReaderDeps {
 }
 
 /**
- * The officer's access token to send, if any: for an officer's live session whose token has more than
- * 30 seconds to live. Lapsed when an officer's session or token has run out (sign in again).
+ * The officer's access token to send, if any: for an officer's (or the Admin's) live session whose
+ * token has more than 30 seconds to live. Lapsed when that session or token has run out (sign in again).
  */
 export function officerReader(session: Session | undefined, { tokens, now }: OfficerReaderDeps): { reader: Reader | undefined; lapsed: boolean } {
-  if (session?.officer !== true) return { reader: undefined, lapsed: false };
+  if (session === undefined || (!session.officer && !isAdmin(session))) return { reader: undefined, lapsed: false };
   const at = now();
   if (session.exp <= at) return { reader: undefined, lapsed: true };
   const record = tokens.get(session.sid, at);

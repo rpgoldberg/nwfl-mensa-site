@@ -55,6 +55,8 @@ const LOGINS = {
   // SOLO-APPROVE: the Admin, who alone sets the approval rule, and the Webmaster, who approves but is not the Admin.
   admin: { id: '00000000-0000-4000-8000-0000000000ad', name: 'Pat Example', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-admin'] },
   webmaster: { id: '00000000-0000-4000-8000-0000000000eb', name: 'Lee Placeholder', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-webmaster'] },
+  // SOLO-APPROVE: the Admin's group alone, without the officers group (the API serves the Admin either way).
+  'lone-admin': { id: '00000000-0000-4000-8000-0000000000ae', name: 'Rowan Example', groups: ['nwfl-admin'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

@@ -13,7 +13,7 @@ import { TokenStore } from '../../../server/token-store.mjs';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope, ApprovalSettingSchema } from '../../gen/nwfl/mensa/v1/approval_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
-import { OfficerSignInAgain, grpcOfficer, officerFromEnv, officerReader, unavailableOfficer } from './officer';
+import { ApprovalSettingMoved, OfficerSignInAgain, grpcOfficer, officerFromEnv, officerReader, unavailableOfficer } from './officer';
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -50,7 +50,7 @@ describe('grpcOfficer', () => {
       router.service(ApprovalRuleService, {
         getApprovalRules: () => ({
           settings: [
-            create(ApprovalSettingSchema, { scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, setAt: timestampFromDate(NOV_3) }),
+            create(ApprovalSettingSchema, { scope: ApprovalScope.CONTENT, rule: ApprovalRule.ONE_APPROVER, setAt: timestampFromDate(NOV_3), revision: '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10' }),
             create(ApprovalSettingSchema, { scope: ApprovalScope.REDACTION_POLICY, rule: ApprovalRule.TWO_PERSON }),
           ],
         }),
@@ -58,8 +58,8 @@ describe('grpcOfficer', () => {
     );
     const api = grpcOfficer({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
     expect(await api.getApprovalRules(OFFICER)).toEqual([
-      { scope: 'content', rule: 'one_approver', setAt: NOV_3 },
-      { scope: 'redaction_policy', rule: 'two_person' },
+      { scope: 'content', rule: 'one_approver', setAt: NOV_3, revision: '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10' },
+      { scope: 'redaction_policy', rule: 'two_person', revision: '' },
     ]);
     expect(server.headers[0]?.['authorization']).toBe('Bearer officer.tok-en');
     expect(server.headers[0]?.['content-type']).toBe('application/grpc+proto');
@@ -71,14 +71,19 @@ describe('grpcOfficer', () => {
     const server = await grpcServer((router) =>
       router.service(ApprovalRuleService, {
         setApprovalRule: (req) => {
-          seen.push({ scope: req.scope, rule: req.rule, reason: req.reason });
+          seen.push({ scope: req.scope, rule: req.rule, reason: req.reason, expectedRevision: req.expectedRevision });
           return { setting: { scope: req.scope, rule: req.rule, setAt: timestampFromDate(NOV_3) }, changed: true };
         },
       }),
     );
     const api = grpcOfficer({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
-    expect(await api.setApprovalRule(OFFICER, { scope: 'redaction_policy', rule: 'one_approver', reason: 'away' })).toEqual({ changed: true });
-    expect(seen).toEqual([{ scope: ApprovalScope.REDACTION_POLICY, rule: ApprovalRule.ONE_APPROVER, reason: 'away' }]);
+    expect(await api.setApprovalRule(OFFICER, { scope: 'redaction_policy', rule: 'one_approver', reason: 'away', expectedRevision: '' })).toEqual({ changed: true });
+    expect(await api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'back', expectedRevision: '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10' })).toEqual({ changed: true });
+    // The revision is always sent, the default's empty one too: present, so the API checks it.
+    expect(seen).toEqual([
+      { scope: ApprovalScope.REDACTION_POLICY, rule: ApprovalRule.ONE_APPROVER, reason: 'away', expectedRevision: '' },
+      { scope: ApprovalScope.CONTENT, rule: ApprovalRule.TWO_PERSON, reason: 'back', expectedRevision: '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10' },
+    ]);
     expect(server.headers[0]?.['authorization']).toBe('Bearer officer.tok-en');
   });
 
@@ -96,12 +101,27 @@ describe('grpcOfficer', () => {
     const lines: string[] = [];
     const api = grpcOfficer({ baseUrl: server.url, timeoutMs: 2000 }, (line) => lines.push(line));
     await expect(api.getApprovalRules(OFFICER)).rejects.toBeInstanceOf(OfficerSignInAgain);
-    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'one_approver', reason: SECRET_REASON })).rejects.toBeInstanceOf(OfficerSignInAgain);
+    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'one_approver', reason: SECRET_REASON, expectedRevision: '' })).rejects.toBeInstanceOf(OfficerSignInAgain);
     expect(lines.map((l) => JSON.parse(l) as unknown)).toEqual([
       { level: 'warn', msg: 'api refused the token', rpc: 'GetApprovalRules', code: 'unauthenticated' },
       { level: 'warn', msg: 'api refused the token', rpc: 'SetApprovalRule', code: 'unauthenticated' },
     ]);
     expect(lines.join('\n')).not.toMatch(/tok-en|expired|reason-not/);
+  });
+
+  it('says the setting moved when the API refuses a switch from a revision it no longer holds, logging the call and code only', async () => {
+    const server = await grpcServer((router) =>
+      router.service(ApprovalRuleService, {
+        setApprovalRule: () => {
+          throw new ConnectError('the approval rule was switched since it was read', Code.FailedPrecondition);
+        },
+      }),
+    );
+    const lines: string[] = [];
+    const api = grpcOfficer({ baseUrl: server.url, timeoutMs: 2000 }, (line) => lines.push(line));
+    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'one_approver', reason: SECRET_REASON, expectedRevision: '' })).rejects.toBeInstanceOf(ApprovalSettingMoved);
+    expect(lines.map((l) => JSON.parse(l) as unknown)).toEqual([{ level: 'warn', msg: 'the approval setting moved', rpc: 'SetApprovalRule', code: 'failed_precondition' }]);
+    expect(lines.join('\n')).not.toMatch(/reason-not|switched/);
   });
 
   it('makes any other refusal or failure unavailable', async () => {
@@ -118,7 +138,7 @@ describe('grpcOfficer', () => {
     const lines: string[] = [];
     const api = grpcOfficer({ baseUrl: server.url, timeoutMs: 2000 }, (line) => lines.push(line));
     await expect(api.getApprovalRules(OFFICER)).rejects.toBeInstanceOf(ApiUnavailable);
-    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'x' })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'x', expectedRevision: '' })).rejects.toBeInstanceOf(ApiUnavailable);
     expect(lines.map((l) => (JSON.parse(l) as { code: string }).code)).toEqual(['permission_denied', 'invalid_argument']);
   });
 
@@ -131,7 +151,7 @@ describe('grpcOfficer', () => {
     );
     const api = grpcOfficer({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
     await expect(api.getApprovalRules(OFFICER)).rejects.toBeInstanceOf(ApiUnavailable);
-    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'x' })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'x', expectedRevision: '' })).rejects.toBeInstanceOf(ApiUnavailable);
   });
 
   it('never sends a bearer that is not one b64token: it asks to sign in again instead', async () => {
@@ -144,7 +164,7 @@ describe('grpcOfficer', () => {
   it('is unavailable everywhere when the API is set up wrongly', async () => {
     const api = unavailableOfficer();
     await expect(api.getApprovalRules(OFFICER)).rejects.toBeInstanceOf(ApiUnavailable);
-    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'x' })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'x', expectedRevision: '' })).rejects.toBeInstanceOf(ApiUnavailable);
   });
 });
 
@@ -171,6 +191,13 @@ describe('officerReader', () => {
   it('gives an officer\'s token with more than 30 s to live', () => {
     const { session, deps } = signedIn(['nwfl-members', 'nwfl-officers'], { access_token: 'tok.en', expires_at: NOW + 31 });
     expect(officerReader(session, deps)).toEqual({ reader: { bearer: 'tok.en' }, lapsed: false });
+  });
+
+  it('gives the Admin\'s token too, when the Admin is not in the officers group', () => {
+    const { session, deps } = signedIn(['nwfl-admin'], { access_token: 'tok.en', expires_at: NOW + 3600 });
+    expect(officerReader(session, deps)).toEqual({ reader: { bearer: 'tok.en' }, lapsed: false });
+    const stray = signedIn(['mensa-nwfl-admin'], { access_token: 'tok.en', expires_at: NOW + 3600 });
+    expect(officerReader(stray.session, stray.deps)).toEqual({ reader: undefined, lapsed: false });
   });
 
   it('gives nothing to no session, a member, or an officer with no token on the server', () => {

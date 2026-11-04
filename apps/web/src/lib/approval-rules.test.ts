@@ -67,16 +67,41 @@ describe('who sees the switch', () => {
 });
 
 describe('the switch form', () => {
-  it('reads a review and an apply, trimming the reason', () => {
-    expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'one_approver', reason: '  Webmaster away  ' }))).toEqual({
+  it('reads a review and an apply, trimming the reason, with the revision the Admin read', () => {
+    expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'one_approver', reason: '  Webmaster away  ', revision: '' }))).toEqual({
       ok: true,
-      value: { step: 'review', scope: 'content', rule: 'one_approver', reason: 'Webmaster away' },
+      value: { step: 'review', scope: 'content', rule: 'one_approver', reason: 'Webmaster away', revision: '' },
     });
-    expect(parseRuleForm(form({ step: 'apply', scope: 'redaction_policy', rule: 'two_person', reason: 'back' }))).toMatchObject({ ok: true, value: { step: 'apply', scope: 'redaction_policy' } });
+    expect(parseRuleForm(form({ step: 'apply', scope: 'redaction_policy', rule: 'two_person', reason: 'back', revision: '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10' }))).toMatchObject({
+      ok: true,
+      value: { step: 'apply', scope: 'redaction_policy', revision: '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10' },
+    });
+  });
+
+  it('asks for the form again when it carries no revision, or one the site never gave out', () => {
+    for (const revision of [undefined, 'not-a-revision', '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10x', '0B0E7A52-6D5C-4C43-9D55-3F0A3A1C2B10']) {
+      expect(parseRuleForm(form({ step: 'apply', scope: 'content', rule: 'one_approver', reason: 'away', ...(revision === undefined ? {} : { revision }) })), String(revision)).toMatchObject({
+        ok: false,
+        scope: 'content',
+        errors: { step: 'Send the form again.' },
+      });
+    }
+  });
+
+  it('takes as a reason only words: a letter in any alphabet, or a digit, not spaces, dots or invisible characters', () => {
+    for (const reason of ['\t\n', '\u200b', '\u00a0\ufeff', '...', '-- !']) {
+      expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'one_approver', reason, revision: '' })), JSON.stringify(reason)).toMatchObject({
+        ok: false,
+        errors: { reason: 'Write why you are making this change.' },
+      });
+    }
+    for (const reason of ['\u00c9t\u00e9', '\u0395\u03bb\u03bb\u03ac\u03b4\u03b1', '2']) {
+      expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'one_approver', reason, revision: '' })), reason).toMatchObject({ ok: true });
+    }
   });
 
   it('says what is missing, by field, in words', () => {
-    const result = parseRuleForm(form({ step: 'review', scope: 'content' }));
+    const result = parseRuleForm(form({ step: 'review', scope: 'content', revision: '' }));
     expect(result).toEqual({
       ok: false,
       scope: 'content',
@@ -86,13 +111,13 @@ describe('the switch form', () => {
   });
 
   it('refuses a reason over the limit, an unknown scope, rule or step', () => {
-    expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'one_approver', reason: 'x'.repeat(MAX_REASON + 1) }))).toMatchObject({
+    expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'one_approver', reason: 'x'.repeat(MAX_REASON + 1), revision: '' }))).toMatchObject({
       ok: false,
       errors: { reason: `Keep the reason to ${MAX_REASON} characters or fewer.` },
     });
-    expect(parseRuleForm(form({ step: 'review', scope: 'members', rule: 'one_approver', reason: 'why' }))).toMatchObject({ ok: false, scope: undefined, errors: { scope: 'Choose what this is for.' } });
-    expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'three', reason: 'why' }))).toMatchObject({ ok: false, errors: { rule: 'Choose two officers or one officer.' } });
-    expect(parseRuleForm(form({ step: 'publish', scope: 'content', rule: 'one_approver', reason: 'why' }))).toMatchObject({ ok: false, errors: { step: 'Send the form again.' } });
+    expect(parseRuleForm(form({ step: 'review', scope: 'members', rule: 'one_approver', reason: 'why', revision: '' }))).toMatchObject({ ok: false, scope: undefined, errors: { scope: 'Choose what this is for.' } });
+    expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'three', reason: 'why', revision: '' }))).toMatchObject({ ok: false, errors: { rule: 'Choose two officers or one officer.' } });
+    expect(parseRuleForm(form({ step: 'publish', scope: 'content', rule: 'one_approver', reason: 'why', revision: '' }))).toMatchObject({ ok: false, errors: { step: 'Send the form again.' } });
     expect(parseRuleForm(form({}))).toMatchObject({ ok: false, errors: { step: 'Send the form again.', scope: 'Choose what this is for.' } });
   });
 

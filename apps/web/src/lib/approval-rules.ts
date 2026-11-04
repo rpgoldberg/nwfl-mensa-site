@@ -6,11 +6,12 @@ import { ZONE } from './calendar';
 export type Scope = 'content' | 'redaction_policy';
 export type Rule = 'two_person' | 'one_approver';
 
-/** One scope's rule, and when the Admin set it (none while it is still the default). */
+/** One scope's rule, when the Admin set it (none while it is still the default), and which switch set it ('' for none). */
 export interface Setting {
   scope: Scope;
   rule: Rule;
   setAt?: Date;
+  revision: string;
 }
 
 export const SCOPES: readonly Scope[] = ['content', 'redaction_policy'];
@@ -34,7 +35,7 @@ export function formatSetDate(at: Date): string {
  * The notes an officer sees where approval happens: one per scope set to one approver, content
  * first; none under two officers; and a plain line when the setting could not be read (undefined).
  */
-export function notesFor(settings: readonly Setting[] | undefined): string[] {
+export function notesFor(settings: readonly Omit<Setting, 'revision'>[] | undefined): string[] {
   if (settings === undefined) return [NOTE_UNKNOWN];
   return SCOPES.flatMap((scope) => {
     const setting = settings.find((s) => s.scope === scope);
@@ -54,6 +55,8 @@ export interface RuleForm {
   scope: Scope;
   rule: Rule;
   reason: string;
+  /** The revision the Admin read the setting at, carried by both steps: a switch since then refuses the change. */
+  revision: string;
 }
 
 export type FormErrors = Partial<Record<'step' | 'scope' | 'rule' | 'reason', string>>;
@@ -61,6 +64,10 @@ export type FormErrors = Partial<Record<'step' | 'scope' | 'rule' | 'reason', st
 export type ParsedForm = { ok: true; value: RuleForm } | { ok: false; scope: Scope | undefined; errors: FormErrors; values: { rule: string; reason: string } };
 
 const isScope = (value: string | undefined): value is Scope => SCOPES.includes(value as Scope);
+/** The API's revisions: a switch's id, lower-case, or '' for the default. */
+const isRevision = (value: string | undefined): value is string => value !== undefined && /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/.test(value);
+/** A reason says something: a letter in any alphabet, or a digit (as the API and 0023 check). */
+const SAYS_SOMETHING = /[\p{Alphabetic}0-9]/u;
 const isRule = (value: string | undefined): value is Rule => RULES.includes(value as Rule);
 
 /** The switch form's fields, checked; each problem is said in words, by field. */
@@ -69,16 +76,17 @@ export function parseRuleForm(field: (name: string) => string | undefined): Pars
   const scope = field('scope');
   const rule = field('rule');
   const reason = (field('reason') ?? '').trim();
+  const revision = field('revision');
   const errors: FormErrors = {};
-  if (step !== 'review' && step !== 'apply') errors.step = 'Send the form again.';
+  if ((step !== 'review' && step !== 'apply') || !isRevision(revision)) errors.step = 'Send the form again.';
   if (!isScope(scope)) errors.scope = 'Choose what this is for.';
   if (!isRule(rule)) errors.rule = 'Choose two officers or one officer.';
-  if (reason === '') errors.reason = 'Write why you are making this change.';
+  if (!SAYS_SOMETHING.test(reason)) errors.reason = 'Write why you are making this change.';
   else if (reason.length > MAX_REASON) errors.reason = `Keep the reason to ${MAX_REASON} characters or fewer.`;
-  if (Object.keys(errors).length > 0 || !isScope(scope) || !isRule(rule) || (step !== 'review' && step !== 'apply')) {
+  if (Object.keys(errors).length > 0 || !isScope(scope) || !isRule(rule) || (step !== 'review' && step !== 'apply') || !isRevision(revision)) {
     return { ok: false, scope: isScope(scope) ? scope : undefined, errors, values: { rule: rule ?? '', reason } };
   }
-  return { ok: true, value: { step, scope, rule, reason } };
+  return { ok: true, value: { step, scope, rule, reason, revision } };
 }
 
 /** What the confirmation step says the change will do. */

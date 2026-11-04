@@ -82,6 +82,7 @@ export const ACCOUNTS = {
   'lapsed-outsider': '00000000-0000-4000-8000-0000000000c4',
   admin: '00000000-0000-4000-8000-0000000000ad',
   webmaster: '00000000-0000-4000-8000-0000000000eb',
+  'lone-admin': '00000000-0000-4000-8000-0000000000ae',
 };
 
 /**
@@ -93,6 +94,8 @@ export const ACCOUNTS = {
  */
 export const APPROVAL = {
   oneApproverNote: "One approver: a second officer's approval is not required right now (set by the Admin on November 3, 2026).",
+  /** src/lib/approval-rules.ts NOTE_UNKNOWN: what an officer reads when the setting could not be read. */
+  unknownNote: 'We could not check the approval setting just now.',
 };
 
 /**
