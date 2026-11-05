@@ -17,6 +17,10 @@
 // the "refused" account; the "articles-down" member's articles read fails as an
 // API that could not answer it. Without a token the public's answer is a buggy API's:
 // it lists members files, a members article in full, an officers article.
+// LINKS L4: GetLinkTarget answers for the links of e2e/stand-in.ts LINKS, as the API would, the members
+// link for a member (or an officer) alone; and three a buggy API might send (a javascript: URL, an
+// angle-bracketed one and an RTL-override host), which the site must refuse to render. A link turned
+// off comes with its URL here, which the real API never sends, so the page is seen not to show it.
 // SOLO-APPROVE: ApprovalRuleService takes the officer's token as the API does (officers and the Admin
 // read the rule, the Admin alone sets it), keeping one setting per subject (below).
 // W-SIGNUP: MembershipService takes the person's own token as the API does: their own account and
@@ -36,7 +40,7 @@ import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
 import net from 'node:net';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
-import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility } from '../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility, LinkTargetKind, LinkTargetStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { AccountRoute, MemberStatus, MembershipService, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
@@ -362,6 +366,23 @@ const ROSTER = [
   office('editor', 'Newsletter Editor', 8, [{ name: 'Morgan Dummy', status: TermStatus.ACTIVE }], 'editor@nwflorida.us'),
 ];
 
+// LINKS L4, as in e2e/stand-in.ts (LINKS): every link is on the newest issue's public PDF.
+const LINK_FILE = 'f0000000-0000-4000-8000-000000000010';
+const LINK_AT = timestampFromDate(new Date('2026-11-04T15:00:00Z'));
+const LONG_PATH = `/archive/${'pensa-mensa-'.repeat(160)}end`;
+/** @type {Record<string, { url: string, host: string, kind: number, confirm?: boolean, page?: number, members?: true, disabled?: true }>} */
+const LINKS = {
+  outwebaaaaaaaaaaaaaaaaaaaa: { url: 'https://club.example/picnic?day=sat', host: 'club.example', kind: LinkTargetKind.WEB, page: 2 },
+  outsocialaaaaaaaaaaaaaaaaa: { url: 'https://www.facebook.com/groups/nwfl-sample', host: 'www.facebook.com', kind: LinkTargetKind.WEB, confirm: true },
+  outmailaaaaaaaaaaaaaaaaaaa: { url: 'mailto:events@example.org', host: 'example.org', kind: LinkTargetKind.MAIL },
+  outoffaaaaaaaaaaaaaaaaaaaa: { url: 'https://parked.example/', host: 'parked.example', kind: LinkTargetKind.WEB, page: 3, disabled: true },
+  outmembersaaaaaaaaaaaaaaaa: { url: 'https://club.example/members-night', host: 'club.example', kind: LinkTargetKind.WEB, members: true },
+  outlongaaaaaaaaaaaaaaaaaaa: { url: `https://club.example${LONG_PATH}`, host: 'club.example', kind: LinkTargetKind.WEB },
+  outscriptaaaaaaaaaaaaaaaaa: { url: 'javascript:alert(document.cookie)', host: 'club.example', kind: LinkTargetKind.WEB },
+  outanglesaaaaaaaaaaaaaaaaa: { url: 'https://club.example/"><script>alert(1)</script>', host: 'club.example', kind: LinkTargetKind.WEB },
+  outrtlaaaaaaaaaaaaaaaaaaaa: { url: 'https://xn--clb-ex-9ua.example/', host: 'clu\u202eb.example', kind: LinkTargetKind.WEB },
+};
+
 /** @param {import('@connectrpc/connect').HandlerContext} ctx */
 function anonymousOnly(ctx) {
   if (ctx.requestHeader.has('authorization') || ctx.requestHeader.has('cookie')) throw new ConnectError('the site must call as the public', Code.PermissionDenied);
@@ -581,6 +602,14 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       // The same title-based name for both copies, as the API builds it.
       yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(bytes.length) } } };
       yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(bytes) } };
+    },
+    getLinkTarget: async (req, ctx) => {
+      const audience = await audienceOf(ctx);
+      const link = Object.hasOwn(LINKS, req.linkId) ? LINKS[req.linkId] : undefined;
+      if (!issues || link === undefined || (link.members && audience !== 'members' && audience !== 'officers')) throw new ConnectError('link not found', Code.NotFound);
+      const place = { fileId: LINK_FILE, page: link.page ?? 1, statusAt: LINK_AT };
+      if (link.disabled) return { status: LinkTargetStatus.DISABLED, url: link.url, host: link.host, ...place };
+      return { status: LinkTargetStatus.ACTIVE, url: link.url, host: link.host, kind: link.kind, confirm: link.confirm ?? false, ...place };
     },
   });
   router.service(ApprovalRuleService, {

@@ -53,6 +53,8 @@ interface Fixture {
   articlePlain: string;
   /** D1: the members article's title and summary, which the public is shown as a teaser. */
   membersTeaser: { title: string; summary: string };
+  /** LINKS L4: two links in every copy of the marked PDF; the held one's target holds the phone canary. */
+  links: { plain: string; held: string };
 }
 
 interface Fetched {
@@ -140,7 +142,7 @@ function context(f: Fixture) {
   const month = today.slice(0, 7);
   const [y, m] = month.split('-').map(Number) as [number, number];
   const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-  return { eventIds: [f.ids['games']!, f.ids['potluck']!, f.ids['online']!, `${f.ids['series']}:${today}`], months: [month, next], fileIds: [f.ids['pdf']!] };
+  return { eventIds: [f.ids['games']!, f.ids['potluck']!, f.ids['online']!, `${f.ids['series']}:${today}`], months: [month, next], fileIds: [f.ids['pdf']!], linkIds: [f.links.plain, f.links.held] };
 }
 
 async function get(request: APIRequestContext, url: string): Promise<Fetched> {
@@ -356,6 +358,33 @@ async function signedIn(request: APIRequest, login: 'member' | 'pending' | 'offi
 }
 
 const seen = (html: string, names: readonly string[]) => names.filter((name) => fold(html).includes(fold(fixture.canaries[name]!)));
+
+test('LINKS L4: through the real API, the public is shown a link of the copy it is served, and the 404 for one whose target holds a withheld phone', async () => {
+  const plain = fetched.get(`/out/${fixture.links.plain}`);
+  expect(plain?.status).toBe(200);
+  expect(plain!.body).toContain('<p class="out-host">club.example</p>');
+  expect(plain!.body).toContain('href="https://club.example/receipts" target="_blank" rel="noopener noreferrer" data-out-continue');
+  expect(plain!.body).toContain(`href="/documents/${fixture.ids['pdf']}.pdf#page=1"`);
+  expect(plain!.headers['cache-control']).toBe('private, no-store');
+  expect(plain!.headers['referrer-policy']).toBe('no-referrer');
+  const held = fetched.get(`/out/${fixture.links.held}`);
+  const none = fetched.get('/out/aaaaaaaaaaaaaaaaaaaaaaaaaa');
+  expect([held?.status, none?.status]).toEqual([404, 404]);
+  // The same page as for no link at all, but for its own address.
+  const own = (body: string, id: string) => body.replaceAll(`/out/${id}`, '/out/ID').replaceAll(`%2Fout%2F${id}`, '%2Fout%2FID');
+  expect(own(held!.body, fixture.links.held)).toBe(own(none!.body, 'aaaaaaaaaaaaaaaaaaaaaaaaaa'));
+  expect(fold(held!.body)).not.toContain(fold(fixture.canaries['phone']!));
+});
+
+test('LINKS L4: a member, whose policy shows phones, follows the held link from the members copy (the positive control), never stored', async ({ playwright }) => {
+  const member = await signedIn(playwright.request, 'member');
+  const held = await get(member, `/out/${fixture.links.held}`);
+  expect(held.status).toBe(200);
+  expect(held.body).toContain(`href="https://club.example/call/${fixture.canaries['phone']}"`);
+  expect(held.headers['cache-control']).toBe('private, no-store');
+  await member.dispose();
+});
+
 const stamp = (text: string) => text.replace(/^DTSTAMP:.*$/gm, '');
 
 test("D1: the public's /news, through the real API, lists the members article by title and summary with the members box, and none of its body", async ({ playwright }) => {

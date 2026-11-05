@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, cdnCacheControl, hasCookie, isHostOnlyCookie, parseCsp, securityHeaders } from '../policy.mjs';
+import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, cdnCacheControl, hasCookie, isHostOnlyCookie, parseCsp, referrerPolicy, securityHeaders } from '../policy.mjs';
 
 describe('security headers', () => {
   it('sends CSP, HSTS, nosniff, Referrer-Policy, Permissions-Policy and COOP, and nothing else', () => {
@@ -57,6 +57,16 @@ describe('security headers', () => {
       'default-src': ["'self'"],
       'img-src': ["'self'"],
     });
+  });
+});
+
+describe('referrerPolicy (LINKS L4)', () => {
+  it('sends no referrer at all from the leaving page, so the site a reader leaves for learns nothing of where they came from', () => {
+    for (const path of ['/out', '/out/', '/out/abcdefghijklmnopqrstuvwxyz', '/out/x/y', '/OUT/abcdefghijklmnopqrstuvwxyz', '/Out/x']) expect(referrerPolicy(path), path).toBe('no-referrer');
+  });
+
+  it("keeps the site's policy everywhere else", () => {
+    for (const path of ['/', '/outings', '/about', '/documents/x.pdf', '/news/out', '/out-of-date']) expect(referrerPolicy(path), path).toBe('strict-origin-when-cross-origin');
   });
 });
 

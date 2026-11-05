@@ -45,6 +45,20 @@ export function securityHeaders({ formAction = [] }) {
   });
 }
 
+/** LINKS L4: the leaving page /out/<id>, and anything under /out, in any case. */
+const LEAVING_PAGE = /^\/out(\/|$)/i;
+
+/**
+ * The Referrer-Policy for a path: none at all on the leaving page, so the site a
+ * reader leaves for (by Continue, the countdown or the 303) learns nothing of the
+ * page they came from; the site's policy everywhere else.
+ *
+ * @param {string} path
+ */
+export function referrerPolicy(path) {
+  return LEAVING_PAGE.test(path) ? 'no-referrer' : 'strict-origin-when-cross-origin';
+}
+
 /** The headers with no sign-in provider configured. */
 export const SECURITY_HEADERS = securityHeaders({});
 

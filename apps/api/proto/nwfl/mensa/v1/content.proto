@@ -261,6 +261,18 @@ service ContentService {
   rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+  // Where a link in a PDF copy leads (LINKS L4), for the site's leaving page
+  // /out/<id>. A link resolves only when it is in the copy the caller's
+  // audience is served now, is active, and its target holds none of the
+  // audience's withheld passages as they stand now. A link turned off is
+  // DISABLED, with its date, file and page and never its URL, to an audience
+  // that may have its file. Anything else (an unknown or malformed id,
+  // another audience's link, one dropped from the copy served now or held by
+  // a mark, an officer's read of a file served as its original) is answered
+  // exactly as an unknown id: NOT_FOUND, "link not found".
+  rpc GetLinkTarget(GetLinkTargetRequest) returns (GetLinkTargetResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
 message ListPublishedItemsRequest {
@@ -481,4 +493,40 @@ message ReadFileResponse {
     FileNotReady not_ready = 2;
     bytes chunk = 3;
   }
+}
+
+message GetLinkTargetRequest {
+  // 26 lower-case base32 characters, as the copy's /out/<id> carries it.
+  string link_id = 1;
+}
+
+enum LinkTargetStatus {
+  LINK_TARGET_STATUS_UNSPECIFIED = 0;
+  LINK_TARGET_STATUS_ACTIVE = 1;
+  // Turned off (the site it led to changed); the page says so, with no URL.
+  LINK_TARGET_STATUS_DISABLED = 2;
+}
+
+enum LinkTargetKind {
+  LINK_TARGET_KIND_UNSPECIFIED = 0;
+  // An https URL.
+  LINK_TARGET_KIND_WEB = 1;
+  // mailto:<one address>.
+  LINK_TARGET_KIND_MAIL = 2;
+}
+
+message GetLinkTargetResponse {
+  LinkTargetStatus status = 1;
+  // Active only: the approved URL, its host (a mail link's domain) in ASCII,
+  // its kind, and whether it is login-walled (confirmed by hand).
+  string url = 2;
+  string host = 3;
+  LinkTargetKind kind = 4;
+  bool confirm = 5;
+  // The file and 1-based page the link is on: the page's way back.
+  string file_id = 6;
+  int32 page = 7;
+  // Active: when the link was last checked (approved, or re-checked);
+  // disabled: when it was turned off.
+  google.protobuf.Timestamp status_at = 8;
 }

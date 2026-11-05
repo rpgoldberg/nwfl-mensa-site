@@ -204,6 +204,19 @@ describe('withSitePolicy', () => {
     error.mockRestore();
   });
 
+  it('sends no referrer from the leaving page /out/<id> (LINKS L4), whatever the handler set, on its 303 and its 404, by raw or decoded path', async () => {
+    const base = await serve((req, res) => {
+      res.writeHead(req.url?.endsWith('go') ? 303 : 404, { 'Referrer-Policy': 'unsafe-url', ...(req.url?.endsWith('go') ? { Location: 'https://club.example/' } : {}) });
+      res.end();
+    });
+    for (const path of ['/out/abcdefghijklmnopqrstuvwxyz', '/out/go', '/%6Fut/go', '/OUT/x']) {
+      const res = await fetch(`${base}${path}`, { redirect: 'manual' });
+      expect(res.headers.get('referrer-policy'), path).toBe('no-referrer');
+    }
+    const other = await fetch(`${base}/about`);
+    expect(other.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
+  });
+
   it('overrides a Cache-Control the handler set', async () => {
     const base = await serve((_req, res) => {
       res.setHeader('Cache-Control', 'public, max-age=99999');

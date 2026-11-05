@@ -31,6 +31,9 @@
 // the issue loader's shape, holds a public PDF and a members PDF: /news links
 // the first, and the members file's id must reach no public response.
 //
+// LINKS L4: two approved links on that PDF, in every copy made of it: one plain, one whose target holds
+// the marked phone canary. The leaving page shows the first and is the 404 for the second.
+//
 // Ready when GET /fixture on STACK_PORT answers: the canaries, the ids the
 // test needs and how many times each canary is stored (the positive control:
 // a canary that never reached the database would pass vacuously). On SIGTERM
@@ -68,6 +71,8 @@ const MIGRATOR = { user: 'nwfl_migrator', password: 'migrator-pw' };
 const APP = { user: 'nwfl', password: 'app-pw' };
 const WORKER = { user: 'nwfl_worker', password: 'worker-pw' };
 const db = `nwfl_redact_e2e_${randomBytes(4).toString('hex')}`;
+// LINKS L4: the link ids of the marked item's public PDF (26 lower-case base32 characters).
+const LINK_IDS = { plain: 'redactlinkplainaaaaaaaaaaa', held: 'redactlinkheldaaaaaaaaaaaa' };
 
 /**
  * @param {string[]} args
@@ -391,6 +396,16 @@ try {
     env: { PGPASSWORD: MIGRATOR.password },
   });
   await psql(db, SEED);
+  // LINKS L4: two approved links on the marked item's public PDF, as the loader (L2) writes them, before
+  // the worker makes its copies: one plain, and one whose target holds the withheld phone canary (which
+  // the loader would refuse; the API must hold it at the read all the same).
+  await psql(
+    db,
+    `INSERT INTO pdf_link (id, file_id, page, rect, url, host, kind, confirm, approval_reference, links_sha256, created_by_sub) VALUES
+       (${q(LINK_IDS.plain)}, ${q(ids.pdf)}, 1, '{72, 500, 300, 514}', 'https://club.example/receipts', 'club.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader'),
+       (${q(LINK_IDS.held)}, ${q(ids.pdf)}, 1, '{72, 400, 300, 414}', ${q(`https://club.example/call/${C.phone}`)}, 'club.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader');
+     INSERT INTO pdf_link_status (link_id, status, reason, by_sub) SELECT id, 'active', 'attached', 'system:issue-loader' FROM pdf_link;`,
+  );
   const counts = await stored();
 
   const dsn = new URL(url);
@@ -441,6 +456,14 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
+  // LINKS L4: every copy made of the PDF holds both links, as the worker (L3) will write them; so the read's
+  // own check against the marks is all that stands between the public and the held link's target.
+  await psql(
+    db,
+    `INSERT INTO pdf_copy_link (file_id, input_hash, link_id)
+       SELECT c.file_id, c.input_hash, l.id FROM pdf_copy c JOIN pdf_link l ON l.file_id = c.file_id WHERE c.file_id = ${q(ids.pdf)} AND c.status = 'ready';`,
+  );
+
   // The original too, so the test can show its PDF check finds the canaries in it.
   const fixture = JSON.stringify({
     canaries: C,
@@ -453,6 +476,7 @@ try {
     issue: { title: ISSUE.title, summary: ISSUE.summary, plain: ISSUE.plain, publicSha256: createHash('sha256').update(ISSUE_PUBLIC_PDF).digest('hex') },
     articlePlain: ARTICLE_PLAIN,
     membersTeaser: MEMBERS_TEASER,
+    links: LINK_IDS,
   });
   http
     .createServer((req, res) => {

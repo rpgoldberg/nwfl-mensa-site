@@ -19,7 +19,7 @@ import type { MessageInitShape } from '@bufbuild/protobuf';
 import type { ReadFileResponseSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { loadLens } from '../redaction/lens.js';
 import { subjectKey } from '../redaction/render.js';
-import { type ReadResult, readPdf } from '../pdf/store.js';
+import { type ReadResult, inputsFor, readPdf } from '../pdf/store.js';
 import { itemHidden } from './redact.js';
 
 type Query = Pick<Db, 'query'>;
@@ -62,6 +62,20 @@ export async function servableFile(db: Query, fileId: string, audience: Audience
   if (row.item_id === null) return { title: row.edition_title };
   if (itemHidden({ id: row.item_id, on_behalf_of: row.on_behalf_of }, row.version_id as string, lens)) return null;
   return { title: lens.text(row.title as string, [subjectKey('content_item', row.item_id)]) };
+}
+
+/**
+ * LINKS L4 (link-target.ts): what this audience is served for the file now (pdf/store.ts inputsFor):
+ * nothing (no stored original, not this audience's, or hidden by a mark), the original, or a copy, by
+ * its key and the passages it withholds. Here, as files.ts is the content side's one way into the store.
+ */
+export type ServedInputs = { kind: 'none' } | { kind: 'original' } | { kind: 'copy'; hash: Buffer; quotes: readonly string[] };
+
+export async function servedInputs(db: Query, fileId: string, audience: Audience): Promise<ServedInputs> {
+  const inputs = await inputsFor(db, fileId, audience);
+  if (inputs === null || inputs.kind === 'hidden') return { kind: 'none' };
+  if (inputs.kind === 'original') return inputs;
+  return { kind: 'copy', hash: inputs.hash, quotes: inputs.request.quotes };
 }
 
 export interface FileDeps {

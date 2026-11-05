@@ -75,6 +75,7 @@ function reads(over: Partial<ApiReads> = {}): ApiReads {
     getRoster: () => Promise.resolve([]),
     listPublishedItems: () => Promise.resolve([]),
     readFile: () => Promise.resolve({ kind: 'not_found' }),
+    getLinkTarget: () => Promise.resolve({ kind: 'not_found' }),
     ...over,
   };
 }
@@ -1028,5 +1029,46 @@ describe('liveData.file as a signed-in reader', () => {
     const live = liveData(reads({ readFile: () => (asked++, Promise.reject(new ApiUnavailable('ReadFile'))) }));
     await expect(live.file(FILE, { bearer: 'member.token', enrolee: true })).rejects.toBeInstanceOf(ApiUnavailable);
     expect(asked).toBe(1);
+  });
+});
+
+describe('liveData.link (LINKS L4)', () => {
+  const LINK = 'abcdefghijklmnopqrstuvwxyz';
+  const ACTIVE = { kind: 'active' as const, url: 'https://club.example/a', host: 'club.example', mail: false, confirm: false, fileId: 'f1000000-0000-4000-8000-000000000010', page: 1 };
+
+  it('asks the API only for an id of 26 lower-case base32 characters', async () => {
+    const asked: string[] = [];
+    const live = liveData(reads({ getLinkTarget: (id) => (asked.push(id), Promise.resolve(ACTIVE)) }));
+    expect(await live.link(LINK)).toEqual(ACTIVE);
+    for (const id of ['', LINK.toUpperCase(), `${LINK}a`, LINK.slice(1), `${LINK.slice(0, 25)}1`, `../${LINK.slice(3)}`, `${LINK}?x=1`, `${LINK.slice(0, 25)}é`]) {
+      expect(await live.link(id), id).toEqual({ kind: 'not_found' });
+    }
+    expect(asked).toEqual([LINK]);
+  });
+
+  it("reads with an enrolee's token, as the public once more when the API refuses it, and as the public for anyone else", async () => {
+    const asked: (string | undefined)[] = [];
+    const live = liveData(
+      reads({
+        getLinkTarget: (_id, as) => {
+          asked.push(as?.bearer);
+          return as?.bearer === 'refused' ? Promise.reject(new ApiTokenRefused('GetLinkTarget')) : Promise.resolve(ACTIVE);
+        },
+      }),
+    );
+    expect(await live.link(LINK, { bearer: 'member.token', enrolee: true })).toEqual(ACTIVE);
+    expect(await live.link(LINK, { bearer: 'refused', enrolee: true })).toEqual(ACTIVE);
+    // D4: no enrolee group in the claim, or a bearer that is not one b64token: the public's read.
+    expect(await live.link(LINK, { bearer: 'officer.token' })).toEqual(ACTIVE);
+    expect(await live.link(LINK, { bearer: 'two words', enrolee: true })).toEqual(ACTIVE);
+    expect(asked).toEqual(['member.token', 'refused', undefined, undefined, undefined]);
+  });
+
+  it('passes an unavailable API on, without asking again', async () => {
+    let asked = 0;
+    const live = liveData(reads({ getLinkTarget: () => (asked++, Promise.reject(new ApiUnavailable('GetLinkTarget'))) }));
+    await expect(live.link(LINK, { bearer: 'member.token', enrolee: true })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(live.link(LINK)).rejects.toBeInstanceOf(ApiUnavailable);
+    expect(asked).toBe(2);
   });
 });

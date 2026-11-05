@@ -953,3 +953,16 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 .error-summary h2 { margin: 0 0 var(--space-2); }
 .error-summary ul { margin: 0; padding-left: 1.5em; display: grid; gap: var(--space-2); }
 .error-summary a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+
+/* LINKS L4: the leaving page. The host large and in ASCII, the full URL below it, smaller, wrapping
+   anywhere; Continue and Back as large buttons; the countdown's Stop as large as Continue. */
+.out-lead { margin-bottom: 0; }
+.out-host { margin: 0; font-family: var(--font-head); font-weight: 600; font-size: 2rem; line-height: 1.2; overflow-wrap: anywhere; }
+.out-url { margin-top: var(--space-1); color: var(--muted); font-size: var(--fs-small); overflow-wrap: anywhere; }
+.out-go .button { overflow-wrap: anywhere; text-align: left; padding-top: var(--space-2); padding-bottom: var(--space-2); }
+.out-newtab { font-weight: 400; }
+.out-status:empty { display: none; }
+.out-countdown { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: var(--space-4) 0; }
+.out-countdown[hidden] { display: none; }
+.out-count { margin: 0; font-weight: 700; font-size: 1.25rem; }
+.out-stop { min-width: 8rem; }

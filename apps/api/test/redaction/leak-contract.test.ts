@@ -16,7 +16,9 @@
 //
 //
 // A PDF carries the marked canaries too (REDACT R3c): ReadFile's streamed
-// bytes are searched as served and with every Flate stream inflated.
+// bytes are searched as served and with every Flate stream inflated. And
+// (LINKS L4) links in every copy of that PDF lead to targets holding the
+// marked phone and name: GetLinkTarget must hold them from the public.
 //
 // The reads are enumerated from the service definitions (every
 // NO_SIDE_EFFECTS method of every served service), and a read with no request
@@ -42,7 +44,7 @@ import {
 import { SERVED_SERVICES } from '../../src/grpc/routes.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
-import { live } from '../helpers/pg.js';
+import { live, url, withClient } from '../helpers/pg.js';
 import { drain } from '../../src/pdf/regenerate.js';
 import { storeOriginal } from '../../src/pdf/store.js';
 import { extractAll } from '../pdf/extract.js';
@@ -63,6 +65,8 @@ const C = {
 const ALIAS = 'hospitality@nwflorida.us';
 const RANGE = { from: { year: 2026, month: 11, day: 1 }, to: { year: 2026, month: 11, day: 30 } };
 const AGENT = as('agent-token');
+/** LINKS L4: links on the public PDF, in every copy of it: one plain, and two whose targets hold marked canaries. */
+const LINK = { plain: 'leaklinkplainqqqqqqqqqqqqq', phone: 'leaklinkphoneqqqqqqqqqqqqq', name: 'leaklinknameqqqqqqqqqqqqqq' };
 
 type Requests = Record<string, () => Array<MessageInitShape<DescMessage>>>;
 
@@ -86,6 +90,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       GetWorkingItem: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
       ListItemHistory: () => [{ itemId: ids['public'] }],
       ReadFile: () => [{ fileId: ids['publicFile'] }, { fileId: ids['wholeFile'] }],
+      GetLinkTarget: () => [{ linkId: LINK.plain }, { linkId: LINK.phone }, { linkId: LINK.name }],
     },
     'nwfl.mensa.v1.MembershipService': {
       GetMyAccount: () => [{}],
@@ -311,6 +316,25 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     await storeOriginal(pool, { fileId: ids['publicFile'], bytes: publicPdf, ...storer });
     await storeOriginal(pool, { fileId: ids['wholeFile'], bytes: wholePdf, ...storer });
     await drain(api.worker);
+    // LINKS L4: as the loader (L2) and the worker (L3) would leave them, written as the superuser.
+    const database = (await pool.query<{ db: string }>(`SELECT current_database() AS db`)).rows[0]!.db;
+    const rootUrl = new URL(url as string);
+    rootUrl.pathname = `/${database}`;
+    await withClient(rootUrl.toString(), async (root) => {
+      const targets: Array<[string, string]> = [[LINK.plain, 'https://club.example/picnic'], [LINK.phone, `https://club.example/call/${C.phone}`], [LINK.name, `https://club.example/host/${C.name}`]];
+      for (const [id, target] of targets) {
+        await root.query(
+          `INSERT INTO pdf_link (id, file_id, page, rect, url, host, kind, confirm, approval_reference, links_sha256, created_by_sub)
+           VALUES ($1, $2, 1, '{72, 500, 300, 514}', $3, 'club.example', 'web', false, 'LINKS-LEAK', sha256('leak'::bytea), 'system:issue-loader')`,
+          [id, ids['publicFile'], target],
+        );
+        await root.query(`INSERT INTO pdf_link_status (link_id, status, reason, by_sub) VALUES ($1, 'active', 'attached', 'system:issue-loader')`, [id]);
+      }
+      await root.query(
+        `INSERT INTO pdf_copy_link (file_id, input_hash, link_id) SELECT c.file_id, c.input_hash, l.id FROM pdf_copy c JOIN pdf_link l ON l.file_id = c.file_id WHERE c.file_id = $1 AND c.status = 'ready'`,
+        [ids['publicFile']],
+      );
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -349,6 +373,15 @@ describe.skipIf(!live)('the redaction leak contract', () => {
 
   it('never gives the public a length-revealing mask', async () => {
     expect(whole(await sweep({}))).not.toMatch(/█|\*{3,}|x{5,}/);
+  });
+
+  it('resolves the plain link for the public, and the held ones for a member, whose policy shows them (the link positive control)', async () => {
+    const content = api.client(ContentService);
+    expect((await content.getLinkTarget({ linkId: LINK.plain })).url).toBe('https://club.example/picnic');
+    for (const id of [LINK.phone, LINK.name]) await expect(content.getLinkTarget({ linkId: id }), id).rejects.toMatchObject({ code: Code.NotFound });
+    const swept = found(await sweep(MEMBER, 'nwfl.mensa.v1.ContentService'), { phone: C.phone, name: C.name });
+    expect(swept['phone']).toContain('ContentService.GetLinkTarget');
+    expect(swept['name']).toContain('ContentService.GetLinkTarget');
   });
 
   it('gives a member what the members policy shows, and not a member’s address', async () => {

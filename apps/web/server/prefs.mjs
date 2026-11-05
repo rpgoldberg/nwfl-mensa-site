@@ -3,6 +3,9 @@
 // render <html data-size data-theme>, so pages arrive in the reader's settings
 // with no script. Seven sizes, 75 to 175 %, and four themes besides the device's. Shared by the Astro layout, the /prefs form handler and the
 // server wrapper, which stamps them on prerendered pages.
+// LINKS L4 (D3b): a third cookie, what the leaving page /out/<id> does next
+// time: guard (the default, no cookie) waits for a press, countdown goes on
+// after 5 seconds, direct goes straight there. Per device (Q3).
 //
 // Host-only by the __Host- prefix (Secure, Path=/, no Domain): the staging host
 // sits under a parent domain shared with other apps, and a browser refuses a
@@ -12,10 +15,12 @@ import { readCookie } from './cookies.mjs';
 
 export const SIZE_COOKIE = '__Host-nwfl-size';
 export const THEME_COOKIE = '__Host-nwfl-theme';
+export const LINKS_COOKIE = '__Host-nwfl-links';
 
 /** @typedef {(typeof SIZES)[number]} Size */
 /** @typedef {'light' | 'dark' | 'contrast-yellow' | 'contrast-white'} Theme */
-/** @typedef {{ size: Size, theme: Theme | undefined }} Prefs */
+/** @typedef {(typeof LINK_MODES)[number]} LinkMode */
+/** @typedef {{ size: Size, theme: Theme | undefined, links?: Exclude<LinkMode, 'guard'> | undefined }} Prefs */
 
 /**
  * The seven text sizes in percent, the slider's notches 0 to 6 (Ross, 2026-10-23).
@@ -25,6 +30,8 @@ export const THEME_COOKIE = '__Host-nwfl-theme';
 export const SIZES = /** @type {const} */ ([75, 80, 90, 100, 115, 140, 175]);
 /** In menu order; undefined, the device setting, comes first. */
 export const THEMES = /** @type {const} */ (['light', 'dark', 'contrast-yellow', 'contrast-white']);
+/** The leaving page's three choices; guard, the default, is stored as no cookie (links undefined). */
+export const LINK_MODES = /** @type {const} */ (['guard', 'countdown', 'direct']);
 
 /** No cookie: 100 % and whatever the device asks for. */
 export const DEFAULT_PREFS = Object.freeze(/** @type {Prefs} */ ({ size: 100, theme: undefined }));
@@ -53,36 +60,51 @@ function toTheme(value) {
 }
 
 /**
+ * A stored links choice: countdown or direct; guard and anything else (a forged value) is undefined, the guard.
+ *
+ * @param {string | undefined} value
+ * @returns {Prefs['links']}
+ */
+function toLinks(value) {
+  return value === 'countdown' || value === 'direct' ? value : undefined;
+}
+
+/**
  * @param {string | null | undefined} cookieHeader
  * @returns {Prefs}
  */
 export function readPrefs(cookieHeader) {
   const size = readCookie(cookieHeader, SIZE_COOKIE);
   const theme = readCookie(cookieHeader, THEME_COOKIE);
+  const links = toLinks(readCookie(cookieHeader, LINKS_COOKIE));
   return {
     size: toSize(size) ?? (size !== undefined && Object.hasOwn(OLD_SIZES, size) ? OLD_SIZES[size] : undefined) ?? DEFAULT_PREFS.size,
     theme: toTheme(theme) ?? (theme !== undefined && Object.hasOwn(OLD_THEMES, theme) ? OLD_THEMES[theme] : undefined),
+    ...(links === undefined ? {} : { links }),
   };
 }
 
 /**
  * One press of a reader control. `size` is "smaller" or "larger", or "set" for
  * the slider's Use this size, which takes the notch in `step` (0 to 6); `theme`
- * is a theme, or "system" for the device setting. Anything else changes nothing.
+ * is a theme, or "system" for the device setting; `links` is one of LINK_MODES
+ * (the leaving page's "Next time"). Anything else changes nothing.
  *
  * @param {Prefs} prefs
- * @param {{ size?: string | undefined, step?: string | undefined, theme?: string | undefined }} change
+ * @param {{ size?: string | undefined, step?: string | undefined, theme?: string | undefined, links?: string | undefined }} change
  * @returns {Prefs}
  */
 export function applyChange(prefs, change) {
-  let { size, theme } = prefs;
+  let { size, theme, links } = prefs;
+  if (change.links === 'guard') links = undefined;
+  else links = toLinks(change.links) ?? links;
   const at = SIZES.indexOf(size);
   if (change.size === 'larger') size = SIZES[Math.min(at + 1, SIZES.length - 1)] ?? size;
   if (change.size === 'smaller') size = SIZES[Math.max(at - 1, 0)] ?? size;
   if (change.size === 'set' && /^[0-6]$/.test(change.step ?? '')) size = SIZES[Number(change.step)] ?? size;
   if (change.theme === 'system') theme = undefined;
   else theme = toTheme(change.theme) ?? theme;
-  return { size, theme };
+  return { size, theme, ...(links === undefined ? {} : { links }) };
 }
 
 /**
@@ -101,6 +123,7 @@ export function prefsCookies(prefs) {
   return [
     cookie(SIZE_COOKIE, prefs.size === DEFAULT_PREFS.size ? undefined : String(prefs.size)),
     cookie(THEME_COOKIE, prefs.theme),
+    cookie(LINKS_COOKIE, prefs.links),
   ];
 }
 

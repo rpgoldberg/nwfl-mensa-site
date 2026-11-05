@@ -6,7 +6,7 @@
 // theme stamped on <html>, as the layout does for on-request pages.
 import http from 'node:http';
 import { stampAccount } from './account.mjs';
-import { cacheControl, cdnCacheControl, isHostOnlyCookie, securityHeaders } from './policy.mjs';
+import { cacheControl, cdnCacheControl, isHostOnlyCookie, referrerPolicy, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 import { renamedPath, resolveOldUrl } from './redirects.mjs';
 import { readSession } from './session.mjs';
@@ -92,9 +92,12 @@ function keepOwnSiteData(res, path) {
  * @param {http.ServerResponse} res
  * @param {string} path
  * @param {Readonly<Record<string, string>>} headers the security headers
+ * @param {string | undefined} [decoded] the path as the handler reads it
  */
-function applyPolicy(req, res, path, headers) {
+function applyPolicy(req, res, path, headers, decoded) {
   for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+  // LINKS L4: the leaving page, by the raw path or the one the handler serves.
+  if (referrerPolicy(path) === 'no-referrer' || (decoded !== undefined && referrerPolicy(decoded) === 'no-referrer')) res.setHeader('Referrer-Policy', 'no-referrer');
   const setsCookie = res.hasHeader('set-cookie');
   if (setsCookie) keepHostOnlyCookies(res, path);
   if (res.hasHeader('clear-site-data')) keepOwnSiteData(res, path);
@@ -217,7 +220,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     beforeHeaders(res, () => {
       if (old?.status === 410) res.statusCode = 410;
       // The cache rule reads the raw path: only a plain /_astro/ name is immutable.
-      applyPolicy(req, res, raw, headers);
+      applyPolicy(req, res, raw, headers, path);
     });
     if (path === undefined) {
       res.statusCode = 400;

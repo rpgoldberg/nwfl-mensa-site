@@ -5,7 +5,8 @@
 // members event or item never reaches a page or a feed, even if the API sent
 // more than it should.
 //
-// /news alone (A14: news() and file()) may be read as a signed-in reader, with
+// /news alone (A14: news() and file()), and the links in its PDFs (LINKS L4:
+// link(), the leaving page), may be read as a signed-in reader, with
 // their token. The API decides what the token may see; the view here follows
 // the API's answer, gated by the session's nwfl enrolee claim (D4): a members
 // copy, a members item, a members passage or a members file only where the
@@ -26,9 +27,10 @@ import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility, type StoredFile } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { Area, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
-import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type FileRead, type Reader, sendable } from '../lib/api/client';
+import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type FileRead, type LinkRead, type Reader, sendable } from '../lib/api/client';
 import { type CalendarEvent, type CalendarVenue, type EventStatus, centralParts, eventPath } from '../lib/calendar';
 import { type View, documentHtml, hasMembers, hasRedacted, withheldHtml } from '../lib/document';
+import { LINK_ID } from '../lib/out';
 import { type Issue, type Office, newestFirst } from './site-data';
 
 /** A published item as a page shows it. */
@@ -103,6 +105,8 @@ export interface LiveData {
   news(as?: Reader, options?: { signIn?: string | undefined }): Promise<News>;
   /** A PDF as the public, or the reader, may have it; not found for anything that is not a file id. */
   file(id: string, as?: Reader): Promise<FileRead>;
+  /** LINKS L4: where a link in a PDF leads, as for file(); not found for anything that is not a link id. */
+  link(id: string, as?: Reader): Promise<LinkRead>;
 }
 
 export interface LiveOptions {
@@ -374,6 +378,19 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
       } catch (error) {
         if (!(error instanceof ApiTokenRefused)) throw error;
         return reads.readFile(id);
+      }
+    },
+
+    // The links in the PDFs file() serves: read the same way, so a member's members copy's links resolve for them.
+    link: async (id, given) => {
+      if (!LINK_ID.test(id)) return { kind: 'not_found' };
+      const as = withEnroleeClaim(sendable(given));
+      if (as === undefined) return reads.getLinkTarget(id);
+      try {
+        return await reads.getLinkTarget(id, as);
+      } catch (error) {
+        if (!(error instanceof ApiTokenRefused)) throw error;
+        return reads.getLinkTarget(id);
       }
     },
   };
