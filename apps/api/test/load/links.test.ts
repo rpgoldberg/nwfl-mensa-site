@@ -7,16 +7,27 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentService, ItemVisibility } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { applyLinksBundle, parseLinksBundle, runAttach } from '../../src/load/attach.js';
-import { LOADER, LoadError, type LoadResult, applyBundle, parseBundle } from '../../src/load/load.js';
+import { LOADER, LoadError, type LoadResult, type Mark, applyBundle, parseBundle } from '../../src/load/load.js';
 import { type IssueLinks, linksSha256 } from '../../src/load/links.js';
 import { type Api, as, insertId, startApi } from '../helpers/api.js';
 import { APP, APP_PW, urlFor, live } from '../helpers/pg.js';
-import { LINKS, MARKS, bundleJson, linksBundleJson, mailLink, membersPdf, publicInputHash, publicPdf, sha256, stdinOf, webLink } from './bundle.js';
+import { linesPdf } from '../pdf/fixtures.js';
+import { EMAIL, LINKS, MARKS, bundleJson, linksBundleJson, mailLink, membersPdf, publicInputHash, publicPdf, sha256, stdinOf, webLink } from './bundle.js';
 
 const ADMIN = as('admin-token');
 /** The links command's own links: an id is attached once in the whole database, so not LINKS, which the nwfl-issue/2 loads hold. */
 const CLI_LINKS: IssueLinks = { public: [webLink(61), mailLink(62)], members: [webLink(63), mailLink(64), webLink(65, 'https://social.example.net/groups/nwfl', true)] };
 const WEBMASTER = as('webmaster-token');
+/** A made-up venue the public policy withholds (private_venue), beside the withheld address. */
+const VENUE = 'Müllerhaus Ballroom';
+const VENUE_MARKS: Mark[] = [...MARKS, { quote: VENUE, category: 'private_venue' }];
+/** The four encoded targets the round-2 challenger loaded through both loaders (B1): each must be refused. */
+const ENCODED_TARGETS = [
+  'https://example.org/redirect?to=https://xn--mllerhaus-ballroom-m6b.example/',
+  'https://example.org/l?u=https%3A%2F%2Fxn--mllerhaus-ballroom-m6b.example%2F',
+  `https://example.org/t?e=${Buffer.from(EMAIL).toString('base64url')}`,
+  'https://example.org/q.brask%25252540example.org',
+];
 
 describe.skipIf(!live)('approved links, through the loader and the links command', () => {
   let api: Api;
@@ -41,6 +52,11 @@ describe.skipIf(!live)('approved links, through the loader and the links command
   /** A loaded issue's period, PDFs and the bundle options that load it. */
   const issue = async (period: string) => ({ period, publicPdf: await publicPdf(period), membersPdf: await membersPdf(period) });
   type Issue = Awaited<ReturnType<typeof issue>>;
+  /** An issue that also names the withheld venue, with its marks. */
+  const venueIssue = async (period: string) => {
+    const lines = ['Game night host: Quillon Brask', 'Rides: call 850-555-0142 by Friday.', 'Potluck at 12 Example Lane on Sunday.', `Write to ${EMAIL} to join.`, `Party at ${VENUE} on Saturday.`];
+    return { period, publicPdf: await linesPdf([`Pensa Mensa ${period}`, ...lines]), membersPdf: await linesPdf([`Pensa Mensa ${period}`, ...lines, 'Members only: the board meets Tuesday.']), marks: VENUE_MARKS };
+  };
   /** Both files' sha256, as the links hash binds them. */
   const filesOf = (loaded: Issue) => ({ public: sha256(loaded.publicPdf).toString('hex'), members: sha256(loaded.membersPdf).toString('hex') });
   const linksFor = (loaded: Issue, options: { links?: IssueLinks; reference?: string; linksSha256?: string; publicInputHash?: string; slug?: string; publicSha256?: string; membersSha256?: string } = {}) =>
@@ -153,6 +169,17 @@ describe.skipIf(!live)('approved links, through the loader and the links command
       expect((await load({ public: [webLink(85, 'https://example.org/quillon-brask')], members: [] })).status).toBe('loaded');
     });
 
+    it('refuses a withheld quote in a nested, base64 or deeply escaped target, applying nothing (CONTRACT item 9)', async () => {
+      const next = await venueIssue('2022-03');
+      const before = await counts();
+      for (const [n, target] of ENCODED_TARGETS.entries()) {
+        const bundle = parseBundle(await bundleJson({ ...next, format: 'nwfl-issue/2', links: { public: [webLink(101), webLink(102 + n, target)], members: [] } }));
+        await expect(applyBundle(api.pool, bundle)).rejects.toThrow(/^links\.public\[1\]: its target holds a passage the public policy withholds$/);
+      }
+      expect(await counts()).toEqual(before);
+      expect((await applyBundle(api.pool, parseBundle(await bundleJson({ ...next, format: 'nwfl-issue/2', links: { public: [webLink(101)], members: [] } })))).status).toBe('loaded');
+    });
+
     it('still checks the public input hash, after the links are in', async () => {
       const next = await issue('2026-04');
       const before = await counts();
@@ -261,6 +288,16 @@ describe.skipIf(!live)('approved links, through the loader and the links command
         const fresh = await issue('2023-08');
         await applyBundle(api.pool, parseBundle(await bundleJson(fresh)));
         await refused(linksFor(fresh, { links: { public: [webLink(86)], members: [webLink(87, 'https://12.example.lane.example.org/')] } }), /^links\.members\[0\]: its target holds a passage the public policy withholds$/);
+      });
+
+      it('refuses a withheld quote in a nested, base64 or deeply escaped target (CONTRACT item 9)', async () => {
+        const fresh = await venueIssue('2022-05');
+        await applyBundle(api.pool, parseBundle(await bundleJson(fresh)));
+        const inputs = publicInputHash(fresh.publicPdf, VENUE_MARKS);
+        for (const [n, target] of ENCODED_TARGETS.entries()) {
+          await refused(linksFor(fresh, { links: { public: [webLink(111)], members: [webLink(112 + n, target)] }, publicInputHash: inputs }), /^links\.members\[0\]: its target holds a passage the public policy withholds$/);
+        }
+        expect((await applyLinksBundle(api.pool, linksFor(fresh, { links: { public: [webLink(111)], members: [] }, publicInputHash: inputs }))).status).toBe('attached');
       });
 
       it('refuses, never reports unchanged, when the two files hold the same hash under two approvals', async () => {

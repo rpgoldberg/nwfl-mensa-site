@@ -184,33 +184,77 @@ function percentDecoded(text: string): string {
   return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => Buffer.from(run.replace(/%/g, ''), 'hex').toString('utf8'));
 }
 
-/** The separators a URL (or a reader) puts between the words of a quote. */
-const SEPARATORS = /[\s._\-+/@?=&:#,;~!*'()[\]%]+/gu;
+/** Every %uXXXX escape (JavaScript's old escape()) decoded, one UTF-16 unit each. */
+const percentUDecoded = (text: string): string => text.replace(/%u([0-9A-Fa-f]{4})/g, (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+
+/** Every HTML numeric character reference (&#64; &#x40;, the ; optional as browsers take it) decoded; one past Unicode is kept. */
+const entitiesDecoded = (text: string): string =>
+  text.replace(/&#(?:[xX]([0-9A-Fa-f]{1,6})|([0-9]{1,7}));?/g, (reference, hex: string | undefined, decimal: string | undefined) => {
+    const point = hex === undefined ? Number(decimal) : parseInt(hex, 16);
+    return point <= 0x10ffff ? String.fromCodePoint(point) : reference;
+  });
+
+/** Every xn-- label, wherever it stands (a host, a redirect in a query, a path), from punycode; domainToUnicode keeps one that does not decode as it is. */
+const punycodeDecoded = (text: string): string => text.replace(/(?<![a-z0-9-])xn--[a-z0-9-]+/gi, (label) => domainToUnicode(label));
+
+/** One pass of every decoding a reader, a browser or a redirector applies to a URL. */
+const decodedOnce = (text: string): string => punycodeDecoded(entitiesDecoded(percentUDecoded(percentDecoded(text))));
+
+/** How many decoding passes a URL may need; one still changing after them is held (it hides what it holds). */
+export const MAX_DECODE_PASSES = 8;
+/** The shortest base64 run looked for: a quote of four bytes or fewer is not looked for in base64, where noise would match its few characters. */
+const MIN_BASE64 = 6;
+
+/** The separators a URL (or a reader) puts between the words of a quote: any space, punctuation, symbol or format character (soft hyphen, zero-width space). */
+const SEPARATORS = /[\s\p{P}\p{S}\p{Z}\p{Cf}]+/gu;
 const spaced = (text: string): string => text.replace(SEPARATORS, ' ').trim();
 const joined = (text: string): string => text.replace(SEPARATORS, '');
 const folded = (text: string): string => text.normalize('NFKC').toLowerCase();
 
 /**
- * Whether a URL holds any of the quotes, in any form a reader or a server could decode it to: the URL
- * as written, percent-decoded (up to three times, for %25-escaped escapes), with its host or mail
- * domain in Unicode (from punycode), all lower-cased; then each form with the separators
- * (. _ - + / @ ? = & and the like) turned into spaces, and with them taken out, against the quote
- * treated the same way, so "Quillon Brask" is found in quillon.brask and quillonbrask.
+ * A quote's base64 and base64url forms at each of the three byte alignments it can take inside a
+ * longer payload: only the characters that encode its bytes alone (the stable middle), so they are
+ * found wherever the quote sits.
+ */
+function base64Forms(quote: string): string[] {
+  const out = new Set<string>();
+  for (const variant of new Set([quote, quote.normalize('NFC'), folded(quote)])) {
+    const bytes = Buffer.from(variant, 'utf8');
+    for (let skip = 0; skip < 3; skip++) {
+      const encoded = Buffer.concat([Buffer.alloc(skip), bytes]).toString('base64');
+      const middle = encoded.slice(Math.ceil((4 * skip) / 3), Math.floor((4 * (skip + bytes.length)) / 3));
+      if (middle.length >= MIN_BASE64) out.add(middle).add(middle.replace(/\+/g, '-').replace(/\//g, '_'));
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Whether a URL holds any of the quotes, in any form a reader or a server could decode it to
+ * (CONTRACT items 5 and 9). Its forms are the URL as written and after each decoding pass (%XX
+ * escapes as UTF-8, %uXXXX escapes, HTML numeric references, every xn-- label from punycode)
+ * until it stops changing, at most MAX_DECODE_PASSES: one still changing then is held, whatever it
+ * holds. Each form is NFKC-folded and lower-cased, then also taken with the separators turned into
+ * spaces and with them taken out, against the quote treated the same way, so "Quillon Brask" is
+ * found in quillon.brask, quillonbrask and quillon$brask. Each form as decoded (its case kept) is
+ * also searched for the quote's base64 and base64url, at every alignment (base64Forms).
  */
 export function targetHolds(url: string, quotes: readonly string[]): boolean {
-  const forms = new Set<string>([url]);
-  let decoded = url;
-  for (let n = 0; n < 3; n++) forms.add((decoded = percentDecoded(decoded)));
-  for (const form of [...forms]) {
-    // The host of a web form, or the domain of a mail form: whatever follows // or the last @, up to the path.
-    const host = /^[a-z]+:(?:\/\/)?(?:[^/?#]*@)?([^/?#@]+)/i.exec(form)?.[1] ?? '';
-    forms.add(form.replace(host, domainToUnicode(host.toLowerCase()) || host));
+  if (quotes.length === 0) return false;
+  const forms = [url];
+  for (let current = url, pass = 0; ; pass++) {
+    const next = decodedOnce(current);
+    if (next === current) break;
+    if (pass === MAX_DECODE_PASSES) return true;
+    forms.push((current = next));
   }
-  const haystacks = [...forms].map(folded).flatMap((form) => [form, spaced(form), joined(form)]);
+  const haystacks = forms.map(folded).flatMap((form) => [form, spaced(form), joined(form)]);
   return quotes.some((quote) => {
     const needle = folded(quote);
     const needles = [needle, spaced(needle), joined(needle)].filter((form) => form !== '');
-    return haystacks.some((haystack) => needles.some((form) => haystack.includes(form)));
+    if (haystacks.some((haystack) => needles.some((form) => haystack.includes(form)))) return true;
+    const encoded = base64Forms(quote);
+    return forms.some((form) => encoded.some((run) => form.includes(run)));
   });
 }
 

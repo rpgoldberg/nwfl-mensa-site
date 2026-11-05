@@ -264,7 +264,7 @@ describe('linksSha256', () => {
 describe('the shared links contract (CONTRACT.md, the same fixture in apps/linkcheck)', () => {
   const FIXTURE = new URL('./fixtures/links-contract.json', import.meta.url);
   /** The fixture both parts commit, byte for byte: L1's suite pins the same sha256. */
-  const CONTRACT_SHA256 = '081f392b43481492d6cecd6ce100babd515fc87ee01b1a1f0982e1840e8b910f';
+  const CONTRACT_SHA256 = 'b0e3eed8d272e27cd59f4cc6c4647d992b7204c402719e9194fc26c355276269';
   const bytes = (): Buffer => readFileSync(FIXTURE);
   const cases = (): Array<{ in: string; out: string | null }> => JSON.parse(bytes().toString('utf8')) as Array<{ in: string; out: string | null }>;
 
@@ -323,14 +323,83 @@ describe('targetHolds: a URL that holds a withheld quote (CONTRACT item 5)', () 
     expect(targetHolds(url, QUOTES)).toBe(true);
   });
 
+  /** Every byte as a %XX escape, as a tracker or a wrapper writes it. */
+  const escaped = (text: string): string => [...Buffer.from(text, 'utf8')].map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`).join('');
+  const b64 = (text: string): string => Buffer.from(text, 'utf8').toString('base64');
+  const b64url = (text: string): string => Buffer.from(text, 'utf8').toString('base64url');
+  const VENUE_ACE = 'xn--mllerhaus-ballroom-m6b.example';
+
+  it.each([
+    // The four forms the challenger loaded through both loaders (round 2, B1).
+    ['a withheld venue in punycode, in a redirect inside the URL', `https://example.org/redirect?to=https://${VENUE_ACE}/`],
+    ['a withheld venue in punycode, in a percent-encoded wrapper', `https://example.org/l?u=${encodeURIComponent(`https://${VENUE_ACE}/`)}`],
+    ['a withheld address in base64url, as a tracking link carries it', `https://example.org/t?e=${b64url(EMAIL)}`],
+    ['a withheld address percent-encoded four times', 'https://example.org/q.brask%25252540example.org'],
+    // The rest of CONTRACT item 9.
+    ['a withheld address percent-encoded eight times', `https://example.org/q.brask%${'25'.repeat(7)}40example.org`],
+    ['a withheld venue in punycode, in the path', `https://example.org/${VENUE_ACE}/`],
+    ['a withheld venue in an upper-case punycode label', 'https://example.org/go/XN--MLLERHAUS-BALLROOM-M6B'],
+    ['a withheld address with %u0040 for its @', 'https://example.org/q.brask%u0040example.org'],
+    ['a withheld address with %u escapes, percent-encoded', 'https://example.org/q.brask%25u0040example.org'],
+    ['a withheld address with &#64; for its @', 'https://example.org/?to=q.brask&#64;example.org'],
+    ['a withheld address with &#x40; for its @', 'https://example.org/?to=q.brask&#x40;example.org'],
+    ['a withheld address with &#64 for its @, no semicolon', 'https://example.org/?to=q.brask&#64example.org'],
+    ['a withheld address with an encoded HTML reference', `https://example.org/?to=q.brask${encodeURIComponent('&#64;')}example.org`],
+    ['a withheld address in padded base64', `https://example.org/?to=${b64(EMAIL)}`],
+    ['a withheld address in base64, percent-encoded padding', `https://example.org/?to=${encodeURIComponent(b64(EMAIL))}`],
+    ['a withheld address in base64 one byte into a payload', `https://example.org/?d=${b64url(`x${EMAIL}`)}`],
+    ['a withheld address in base64 two bytes into a payload', `https://example.org/?d=${b64url(`u=${EMAIL}&n=1`)}`],
+    ['a withheld address in base64 three bytes into a payload', `https://example.org/?d=${b64(`to=${EMAIL}`)}`],
+    ['a withheld venue in base64, its UTF-8 at every alignment', `https://example.org/?d=${b64url(`xy${'Müllerhaus Ballroom'}`)}`],
+    ['a withheld name in base64 in lower case', `https://example.org/?d=${b64url('quillon brask')}`],
+    ['a withheld phone split by $', 'https://example.org/850$555$0142'],
+    ['a withheld phone split by |', 'https://example.org/850|555|0142'],
+    ['a withheld address split by "', 'https://example.org/12%22example%22lane'],
+    ['a withheld address split by ^', 'https://example.org/12^example^lane'],
+    ['a withheld phone split by en dashes', `https://example.org/850${escaped('–')}555${escaped('–')}0142`],
+    ['a withheld phone split by zero-width spaces', `https://example.org/850${escaped('​')}555${escaped('​')}0142`],
+    ['a withheld phone split by soft hyphens', `https://example.org/850${escaped('­')}555${escaped('­')}0142`],
+    // The NFKC fold (round 2, S2): compatibility and decomposed forms fold to the quote's.
+    ['a withheld phone in fullwidth digits', `https://example.org/${escaped('８５０-５５５-０１４２')}`],
+    ['a withheld venue in NFD (u and a combining diaeresis)', `https://example.org/${escaped('Müllerhaus Ballroom')}`],
+  ])('finds %s', (_label, url) => {
+    expect(targetHolds(url, QUOTES)).toBe(true);
+  });
+
+  it('finds a quote whose base64 holds + or /, in base64 and in base64url', () => {
+    const quote = 'Lake Hall ~ West';
+    const payload = Buffer.from(`x${quote}`, 'utf8');
+    expect(payload.toString('base64')).toContain('+');
+    expect(targetHolds(`https://example.org/?d=${encodeURIComponent(payload.toString('base64'))}`, [quote])).toBe(true);
+    expect(targetHolds(`https://example.org/?d=${payload.toString('base64url')}`, [quote])).toBe(true);
+    expect(targetHolds('https://example.org/?d=eExha2UgSGFsbCB-IFdlc3', [quote])).toBe(true);
+  });
+
+  it('holds a URL that is still decoding after eight passes, whatever it holds, so nothing nested deeper passes', () => {
+    expect(targetHolds(`https://example.org/games%${'25'.repeat(8)}41`, QUOTES)).toBe(true);
+    // Eight passes are enough for a link holding no quote.
+    expect(targetHolds(`https://example.org/games%${'25'.repeat(7)}41`, QUOTES)).toBe(false);
+    expect(targetHolds(`https://example.org/games%${'25'.repeat(8)}41`, [])).toBe(false);
+  });
+
   it.each([
     ['a plain web link', 'https://example.org/games/1'],
+    ['base64 of something else', `https://example.org/?d=${b64url('the games night is on')}`],
+    ['an HTML reference to something else', 'https://example.org/?q=a&#65;b&#x42;'],
+    ['an HTML reference past Unicode', 'https://example.org/?q=&#x110000;&#99999999;'],
+    ['a %u escape of something else, and a lone surrogate', 'https://example.org/?q=%u0041%uD800'],
+    ['a punycode label that does not decode', 'https://example.org/xn--zz/xn--'],
     ['a plain mailto', 'mailto:games@example.org'],
     ['a malformed percent-escape', 'https://example.org/100%zz'],
     ['an IDN host holding no quote', 'https://xn--bcher-kva.example/'],
     ['a host that is no domain name, holding no quote', 'https://a%zz.example/games'],
   ])('passes %s', (_label, url) => {
     expect(targetHolds(url, QUOTES)).toBe(false);
+  });
+
+  it("never looks for a quote's base64 shorter than six characters, which noise would match", () => {
+    expect(b64('Bo')).toBe('Qm8=');
+    expect(targetHolds(`https://example.org/?d=${b64('Bo')}`, ['Bo'])).toBe(false);
   });
 
   it('holds nothing when nothing is withheld', () => {

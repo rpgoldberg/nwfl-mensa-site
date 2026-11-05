@@ -292,6 +292,10 @@ describe.skipIf(!live)('0024: the approved links of a stored PDF', () => {
       ['an IPv4 domain', { url: 'mailto:games@127.0.0.1', host: '127.0.0.1' }],
       ['a dotless domain', { url: 'mailto:games@localhost', host: 'localhost' }],
       ['an empty label', { url: 'mailto:games@example..org', host: 'example..org' }],
+      // The local part: no query, fragment or escape in it either (round 2, S1).
+      ['a ? in the local part', { url: 'mailto:a?subject=x@example.org' }],
+      ['a # in the local part', { url: 'mailto:a#b@example.org' }],
+      ['a % in the local part', { url: 'mailto:a%40b@example.org' }],
     ])('refuses a mail link with %s', async (_label, change) => {
       const fileId = await file();
       expect(await sqlstate(appc, ATTACH, [fileId, JSON.stringify([mail(60, change as Partial<Row>)]), 'LINKS', SHA, LOADER, null])).toBe('23514');
