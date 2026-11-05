@@ -66,8 +66,13 @@ at all: no https, a private address, a URL that does not parse, another scheme o
     refuses the URL;
   - a web link is https, with no userinfo, no port (not even :80 or :443), no IP literal and no dotless
     host;
+  - the host, or a mail domain, is a DNS name (the loader's HOST and the 0024 CHECK): two labels or
+    more, each 1 to 63 of `a-z`, `0-9` and inner hyphens, the last starting with a letter, 4 to 253
+    characters; anything else is refused (`host-name`);
   - a mail link is exactly `mailto:<one address>`: the checker drops any query (`?subject=`, `?cc=`) and
-    fragment, and the loader refuses one.
+    fragment, and the loader refuses one. The local part holds no `#`, `%` or `?`;
+  - a kept URL is at most 2048 characters, and `check` refuses to write a check.json whose kept URL is not
+    its own kept form.
   `test/fixtures/links-contract.json` pins the cases; the loader commits the same file, and both suites
   check its sha256.
 - `kind` is `web` or `mail`; `confirm` is true when the officer's own yes kept it from the login-walled or

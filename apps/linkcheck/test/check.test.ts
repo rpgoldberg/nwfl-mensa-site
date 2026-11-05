@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type CheckDeps, type CheckResult, checkAll, makeChecker } from '../src/check.js';
+import { type CheckDeps, type CheckResult, assertKeptForms, checkAll, makeChecker } from '../src/check.js';
 import { DnsFailure } from '../src/dns.js';
 import type { Rdap, RdapResult } from '../src/rdap.js';
 import { type Stand, fakeDns, routedConnect, startHttp, startHttps, testPki } from './helpers/servers.js';
@@ -161,6 +161,9 @@ describe('checkLink: one verdict per link, with its reasons', () => {
     ['https://93.184.216.1/', 'drop', ['ip-literal']],
     ['https://[2606:4700::1]/', 'drop', ['ip-literal']],
     ['https://localhost/', 'drop', ['local-name']],
+    ['https://my_site.example/', 'drop', ['host-name']],
+    ['https://a-.site.example/', 'drop', ['host-name']],
+    ['mailto:a%23b@example.org', 'drop', ['malformed']],
     ['https://site.example:443/', 'drop', ['port']],
     ['https://site.example/to-members', 'review', ['no-fetch']],
     ['https://site.example/to-fb-dots', 'confirm', ['login-walled']],
@@ -366,6 +369,18 @@ describe('mailto links', () => {
     // domains only, and the point here is a mail domain on the no-fetch list.
     expect(await check(['mailto:someone', 'us.mensa.org'].join('@'), d)).toMatchObject({ verdict: 'review', reasons: ['no-fetch'] });
     expect(d.dns.calls).toEqual([]);
+  });
+});
+
+describe('assertKeptForms (S3: every kept URL is its own kept form before check.json is written)', () => {
+  const base: CheckResult = { url: 'x', kind: 'mail', verdict: 'ok', reasons: [], notes: [], keepable: true, chain: [] };
+
+  it('passes results whose kept URLs are their own kept forms, or that keep nothing', () => {
+    expect(() => assertKeptForms([{ ...base, kept: 'mailto:editor@example.org' }, { ...base, kind: 'web', kept: 'https://example.org/' }, { ...base, keepable: false }])).not.toThrow();
+  });
+
+  it.each(['mailto:a#b@example.org', `https://example.org/${'a'.repeat(2029)}`, 'https://my_site.example.org/', 'https://example.org:443/'])('throws on a kept %j, naming only its place', (kept) => {
+    expect(() => assertKeptForms([{ ...base, kept: 'mailto:editor@example.org' }, { ...base, kept }])).toThrow(/^results\[1\]\.kept is not its own kept form$/);
   });
 });
 

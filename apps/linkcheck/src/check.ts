@@ -29,7 +29,7 @@ import { DnsFailure, resolveAddresses } from './dns.js';
 import { type Fetched, type HopFailure, type NetDeps, follow } from './net.js';
 import { type ParkedSignal, parkedSignals } from './parked.js';
 import { type Rdap, rdapDomain } from './rdap.js';
-import { type Kind, type ParsedLink, isLoginWalled, isNoFetch, keptUrl, parseKept, registrableDomain, trimTrailing } from './urls.js';
+import { type Kind, type ParsedLink, isLoginWalled, isNoFetch, keptForm, keptUrl, parseKept, registrableDomain, trimTrailing } from './urls.js';
 
 export const VERDICTS = ['ok', 'upgrade', 'confirm', 'review', 'flag', 'drop'] as const;
 export type Verdict = (typeof VERDICTS)[number];
@@ -44,6 +44,7 @@ export const REASONS = {
   credentials: ['drop', false, 'It carries a user name or password; it cannot be kept.'],
   'ip-literal': ['drop', false, 'It names a bare IP address instead of a site name; it cannot be kept.'],
   'local-name': ['drop', false, 'Its host has no dot (a local name such as localhost); it cannot be kept.'],
+  'host-name': ['drop', false, 'Its host is not a plain site name (letters, digits and inner hyphens only); it cannot be kept.'],
   'too-long': ['drop', false, 'It is over 2048 characters; it cannot be kept.'],
   control: ['drop', false, 'It holds hidden control characters; it cannot be kept.'],
   nxdomain: ['drop', true, 'No such domain; check the spelling.'],
@@ -271,4 +272,14 @@ export async function checkAll(urls: readonly string[], deps: CheckDeps, concurr
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, unique.length)) }, lane));
   return out;
+}
+
+/**
+ * S3: every kept URL is its own kept form (keptForm(kept) === kept), checked before check.json is
+ * written, so the list step can never refuse what the check wrote. Names the result's place only.
+ */
+export function assertKeptForms(results: readonly CheckResult[]): void {
+  results.forEach((r, i) => {
+    if (r.kept !== undefined && keptForm(r.kept) !== r.kept) throw new Error(`results[${String(i)}].kept is not its own kept form`);
+  });
 }

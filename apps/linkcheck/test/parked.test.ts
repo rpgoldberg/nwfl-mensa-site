@@ -62,4 +62,21 @@ describe('parkedSignals: any one means parked or for sale (Ross confirms)', () =
     expect(parkedSignals({ body: '<scripts>Buy this domain</scripts>' })).toEqual(['for-sale-text']);
     expect(parkedSignals({ body: 'Buy&nbsp;this&nbsp;domain' })).toEqual(['for-sale-text']);
   });
+
+  // S4 (round 2): U+0130 lower-cases to two code units in full Unicode, which would shift every index
+  // after it; the scan lower-cases ASCII only, so its indices stay those of the body.
+  it.each([
+    ['ten U+0130 before a tag', `${'\u0130'.repeat(10)}<b>x</b> This domain is for sale`],
+    ['sixty U+0130 before a tag', `${'\u0130'.repeat(60)}<b>x</b> This domain is for sale`],
+    ['U+0130 before a comment', `\u0130\u0130<!-- note --> This domain is for sale`],
+    ['U+0130 before an empty tag', `\u0130\u0130\u0130<br> Buy this domain`],
+    ['U+0130 before a script', `\u0130<script>var x = 1;</script><p>Make an offer on this domain</p>`],
+  ])('finds for-sale text after %s', (_name, body) => {
+    expect(parkedSignals({ body })).toEqual(['for-sale-text']);
+  });
+
+  it('still hides a for-sale phrase in a script or comment after U+0130', () => {
+    expect(parkedSignals({ body: `\u0130\u0130<SCRIPT>buy this domain</SCRIPT><p>Welcome</p>` })).toEqual([]);
+    expect(parkedSignals({ body: `\u0130<!-- buy this domain --><p>Welcome</p>` })).toEqual([]);
+  });
 });

@@ -135,6 +135,53 @@ describe('parseKept: a link as it may be kept (CONTRACT 2, 3)', () => {
     expect(parseKept(raw)).toEqual({ ok: false, reason });
   });
 
+  // CONTRACT 6 (round 2): the host is L2's HOST, after canonicalisation; a mail domain too.
+  it.each([
+    'https://my_site.example.org/',
+    'https://a-.example.org/',
+    'https://-a.example.org/',
+    `https://${'a'.repeat(64)}.example.org/`,
+    'https://example.1a/',
+    'https://example.org-/',
+    'https://a.b/',
+    `https://${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}.${'e'.repeat(58)}.org/`,
+    ...[...'$*!~=\'+&(){},;"`'].map((c) => `https://a${c}b.example.org/`),
+    'HTTPS://A_B.Example.ORG./',
+    'http://a-.example.org/',
+    'mailto:x~@my_host.example.org',
+    'mailto:x~@a-.example.org',
+    'mailto:x~@a$b.example.org',
+    'mailto:x~@example.1a',
+    `mailto:x~@${'a'.repeat(64)}.example.org`,
+  ])('%j is refused: its host is not a DNS name (host-name)', (raw) => {
+    expect(parseKept(raw)).toEqual({ ok: false, reason: 'host-name' });
+  });
+
+  it.each([
+    'https://a-b.example.org/',
+    'https://123.example.org/',
+    'https://example.a1/',
+    'https://a.bc/',
+    `https://${'a'.repeat(63)}.example.org/`,
+    `https://${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}.${'e'.repeat(57)}.org/`,
+    'https://xn--bcher-kva.example/',
+  ])('%j, a DNS name, is kept', (raw) => {
+    expect(keptForm(raw)).toBe(raw);
+  });
+
+  // CONTRACT 7 (round 2): the local part is L2's MAILTO class, so no '#' however it is written.
+  it.each(['mailto:a%23b@example.org', 'mailto:a#b@example.org', 'mailto:a%3Fb@example.org', 'mailto:a%25b@example.org'])('%j is refused (malformed)', (raw) => {
+    expect(parseKept(raw)).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('refuses a link whose kept URL is over 2048 characters, though as written it is under', () => {
+    const long = `https://example.org/${'\u00fc'.repeat(700)}`;
+    expect(long.length).toBeLessThan(2048);
+    expect(parseKept(long)).toEqual({ ok: false, reason: 'too-long' });
+    expect(parseKept(`http://example.org/${'a'.repeat(2023)}\u00fc`)).toEqual({ ok: false, reason: 'too-long' });
+    expect(keptForm(`http://example.org/${'a'.repeat(2022)}\u00fc`)).toHaveLength(2048);
+  });
+
   it('reads the rest as parseLink does', () => {
     expect(parseKept('http://Example.org./a')).toEqual(parseLink('http://Example.org./a'));
     expect(parseKept('mailto:a@example.org?subject=x')).toEqual(parseLink('mailto:a@example.org?subject=x'));

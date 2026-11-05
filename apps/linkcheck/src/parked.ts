@@ -36,7 +36,9 @@ const RAW_TEXT = ['script', 'style', 'noscript', 'template'];
  * search starts where the last one stopped and a failed search ends the scan, so no byte is read twice.
  */
 function visible(html: string): string {
-  const lower = html.toLowerCase();
+  // ASCII only (S4): a full Unicode lower-casing can change the length (U+0130 becomes two code units),
+  // and the indices found in it are used on the body. Tag names are ASCII; the phrases match with /i.
+  const lower = html.replace(/[A-Z]/g, (c) => c.toLowerCase());
   let out = '';
   let at = 0;
   while (at < html.length) {

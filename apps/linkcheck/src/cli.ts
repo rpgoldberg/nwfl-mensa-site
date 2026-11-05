@@ -10,7 +10,7 @@
 // ============================================================================
 import path from 'node:path';
 import { answersTemplate, needsAnswer, parseAnswers, buildLinkList } from './build.js';
-import { type CheckDeps, VERDICTS, checkAll } from './check.js';
+import { type CheckDeps, VERDICTS, assertKeptForms, checkAll } from './check.js';
 import { EXTRACT_FORMAT, ExtractError, type Extraction, parseExtraction } from './extract.js';
 import { AUDIENCES, type Audience, ListError } from './list.js';
 import { CHECK_FORMAT, type CheckReport, ReportError, parseCheckReport } from './report.js';
@@ -113,6 +113,7 @@ async function checkCommand(io: Io, flags: Map<string, string>, files: readonly 
   if (io.env['NWFL_SAFE_BROWSING_KEY'] !== undefined) io.warn('linkcheck: a Safe Browsing key is set, but this version does not consult Safe Browsing yet');
   const urls = AUDIENCES.flatMap((audience) => extractions[audience].links.map((l) => l.url));
   const results = await checkAll(urls, io.checkDeps(issueDate));
+  assertKeptForms(results);
   const report: CheckReport = { format: CHECK_FORMAT, issueDate, checkedAt: io.now().toISOString(), results };
   await io.writeFile(path.join(out, 'check.json'), json(report));
   await io.writeFile(path.join(out, 'sheet.md'), renderSheet(report, extractions));

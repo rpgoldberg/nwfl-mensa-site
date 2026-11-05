@@ -106,6 +106,32 @@ describe('the CLI', () => {
     expect(parseLinkList(JSON.parse(text(io, '/out/links.json'))).links.public.map((l) => l.url)).toEqual(['mailto:editor@example.org']);
   });
 
+  // S3 and C1 (round 2): a link whose kept form L2 would refuse, or that is not its own kept form, is
+  // dropped at check, so check.json always passes list; one such link no longer blocks the issue.
+  it('drops a non-DNS host, a "#" local part and an over-long kept URL at check, and list still runs', async () => {
+    const long = `https://example.org/${'{'.repeat(700)}x`;
+    const odd = buildPdf([
+      {
+        text: [{ x: 72, y: 700, str: 'Odd links' }],
+        annots: [uriLink([72, 696, 150, 712], 'https://my_site.example.org/u'), uriLink([160, 696, 250, 712], 'mailto:a%23b@example.org'), uriLink([72, 600, 150, 612], long), uriLink([72, 500, 150, 512], 'mailto:editor@example.org')],
+      },
+    ]);
+    const io = memoryIo({ '/in/p.pdf': odd, '/in/m.pdf': pdf });
+    expect(await main(['extract', '--audience', 'public', '--in', '/in/p.pdf', '--out', '/o'], io)).toBe(0);
+    expect(await main(['extract', '--audience', 'members', '--in', '/in/m.pdf', '--out', '/o'], io)).toBe(0);
+    expect(await main(['check', '--issue-date', '2026-09-01', '--out', '/o', '/o/extract-public.json'], io)).toBe(0);
+    const report = parseCheckReport(JSON.parse(text(io, '/o/check.json')));
+    expect(report.results.map((r) => [r.url, r.verdict, r.reasons, r.kept])).toEqual([
+      ['https://my_site.example.org/u', 'drop', ['host-name'], undefined],
+      ['mailto:a%23b@example.org', 'drop', ['malformed'], undefined],
+      [long, 'drop', ['too-long'], undefined],
+      ['mailto:editor@example.org', 'ok', [], 'mailto:editor@example.org'],
+    ]);
+    expect(await main(['check', '--issue-date', '2026-09-01', '--out', '/o', '/o/extract-public.json', '/o/extract-members.json'], io)).toBe(0);
+    expect(await main(['list', '--check', '/o/check.json', '--public', '/o/extract-public.json', '--members', '/o/extract-members.json', '--out', '/o'], io)).toBe(0);
+    expect(parseLinkList(JSON.parse(text(io, '/o/links.json'))).links.public.map((l) => l.url)).toEqual(['mailto:editor@example.org']);
+  });
+
   it('refuses two extractions for the same audience', async () => {
     const io = memoryIo({ '/in/p.pdf': pdf });
     await main(['extract', '--audience', 'public', '--in', '/in/p.pdf', '--out', '/o'], io);
