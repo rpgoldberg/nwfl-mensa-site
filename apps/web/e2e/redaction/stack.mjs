@@ -31,10 +31,13 @@
 // the issue loader's shape, holds a public PDF and a members PDF: /news links
 // the first, and the members file's id must reach no public response.
 //
-// LINKS L4: three approved links on that PDF, in every copy made of it: one plain, one whose target holds
-// the marked phone canary, and one turned off before the worker ran. The leaving page shows the first,
-// is the 404 for the second, and says the third was turned off (the ledger the worker writes names the
-// copies each audience was served, so the read can tell the audience's copy carried it).
+// LINKS L4: three approved links on that PDF, attached before the worker runs: one plain, one whose
+// target holds the marked phone canary, and one (on its second page) turned off once the worker has made
+// copies holding it. The worker (L3) writes into each copy the links it holds: the plain one in every
+// copy, the held one only in the members copy (store.ts leaves it out of the public's), and the third in
+// the first copies only; it then makes the copies served now without it. The leaving page shows the
+// first, is the 404 for the second, and says the third was turned off (the ledger the worker writes
+// names the copies each audience was served, so the read can tell the audience's copy carried it).
 //
 // Ready when GET /fixture on STACK_PORT answers: the canaries, the ids the
 // test needs and how many times each canary is stored (the positive control:
@@ -177,20 +180,27 @@ const MEMBERS_TEASER = { title: 'Members picnic sign-up', summary: 'Bring a dish
 const PDF_PLAIN = 'Bring a folding chair';
 
 /**
- * A one-page PDF in Helvetica, its page drawn by a Flate-compressed content stream, with a correct
- * cross-reference table. Built by hand: the web app carries no PDF writer.
- * @param {string[]} lines
+ * A PDF in Helvetica, a page for each list of lines, each page drawn by a Flate-compressed content
+ * stream, with a correct cross-reference table. Built by hand: the web app carries no PDF writer.
+ * @param {string[][]} pages
  */
-function linesPdf(lines) {
+function linesPdf(...pages) {
   const esc = (/** @type {string} */ t) => t.replace(/[\\()]/g, '\\$&');
-  const content = deflateSync(Buffer.from(lines.map((line, n) => `BT /F1 12 Tf 72 ${720 - 20 * n} Td (${esc(line)}) Tj ET`).join('\n'), 'latin1'));
+  const stream = (/** @type {string[]} */ lines) => {
+    const content = deflateSync(Buffer.from(lines.map((line, n) => `BT /F1 12 Tf 72 ${720 - 20 * n} Td (${esc(line)}) Tj ET`).join('\n'), 'latin1'));
+    return Buffer.concat([Buffer.from(`<< /Length ${content.length} /Filter /FlateDecode >>\nstream\n`), content, Buffer.from('\nendstream')]);
+  };
+  // Objects 1 to 3: the catalog, the page tree and the font; then each page (4, 6, ...) and its content stream.
+  const page = (/** @type {number} */ n) => 4 + 2 * n;
   /** @type {Buffer[]} */
   const objects = [
     Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
-    Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
-    Buffer.from('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>'),
+    Buffer.from(`<< /Type /Pages /Kids [${pages.map((_, n) => `${page(n)} 0 R`).join(' ')}] /Count ${pages.length} >>`),
     Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'),
-    Buffer.concat([Buffer.from(`<< /Length ${content.length} /Filter /FlateDecode >>\nstream\n`), content, Buffer.from('\nendstream')]),
+    ...pages.flatMap((lines, n) => [
+      Buffer.from(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${page(n) + 1} 0 R >>`),
+      stream(lines),
+    ]),
   ];
   const header = Buffer.from('%PDF-1.7\n');
   const parts = [header];
@@ -208,7 +218,8 @@ function linesPdf(lines) {
   return Buffer.concat(parts);
 }
 
-const PDF = linesPdf([`Receipts: call ${C.phone} by Friday.`, `Signed by ${C.pdfName} for the board.`, `${PDF_PLAIN} to the picnic.`, `Thanks to ${S.pdfName}.`]);
+// Two pages: LINKS L4's turned-off link is on the second.
+const PDF = linesPdf([`Receipts: call ${C.phone} by Friday.`, `Signed by ${C.pdfName} for the board.`, `${PDF_PLAIN} to the picnic.`, `Thanks to ${S.pdfName}.`], ['Directions on the back.']);
 // The newsletter issue's two PDFs, as the issue loader stores them (apps/api README, "Loading a newsletter issue").
 const ISSUE = { title: 'Pensa Mensa, October-November 2026', summary: 'Volume 30, Number 5', plain: 'Puzzle corner answers' };
 const ISSUE_PUBLIC_PDF = linesPdf(['Pensa Mensa', `${ISSUE.plain} on page 4.`]);
@@ -398,17 +409,16 @@ try {
     env: { PGPASSWORD: MIGRATOR.password },
   });
   await psql(db, SEED);
-  // LINKS L4: two approved links on the marked item's public PDF, as the loader (L2) writes them, before
-  // the worker makes its copies: one plain, and one whose target holds the withheld phone canary (which
-  // the loader would refuse; the API must hold it at the read all the same).
+  // LINKS L4: three approved links on the marked item's public PDF, as the loader (L2) writes them, before
+  // the worker makes its copies: one plain, one whose target holds the withheld phone canary (which the
+  // loader would refuse; the API holds it from the public all the same), and one turned off below.
   await psql(
     db,
     `INSERT INTO pdf_link (id, file_id, page, rect, url, host, kind, confirm, approval_reference, links_sha256, created_by_sub) VALUES
        (${q(LINK_IDS.plain)}, ${q(ids.pdf)}, 1, '{72, 500, 300, 514}', 'https://club.example/receipts', 'club.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader'),
        (${q(LINK_IDS.held)}, ${q(ids.pdf)}, 1, '{72, 400, 300, 414}', ${q(`https://club.example/call/${C.phone}`)}, 'club.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader'),
        (${q(LINK_IDS.off)}, ${q(ids.pdf)}, 2, '{72, 300, 300, 314}', 'https://parked.example/gone', 'parked.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader');
-     INSERT INTO pdf_link_status (link_id, status, reason, by_sub) SELECT id, 'active', 'attached', 'system:issue-loader' FROM pdf_link;
-     SELECT pdf_link_disable(${q(LINK_IDS.off)}, 'parked', 'svc-nwfl-linkcheck', NULL);`,
+     INSERT INTO pdf_link_status (link_id, status, reason, by_sub) SELECT id, 'active', 'attached', 'system:issue-loader' FROM pdf_link;`,
   );
   const counts = await stored();
 
@@ -451,22 +461,24 @@ try {
     }
   });
   // The worker makes the PDFs' copies; the crawl starts once none is queued and the public's of each public file is made.
-  for (let tries = 0; ; tries++) {
-    const ready = (/** @type {string} */ id) => `(SELECT count(*) FROM pdf_copy WHERE file_id = ${q(id)} AND status = 'ready')`;
-    const state = (await psql(db, `SELECT (SELECT count(*) FROM pdf_regen) || ' ' || ${ready(ids.pdf)} || ' ' || ${ready(ids.issuePublicPdf)};`)).trim();
-    const [queued, ...made] = state.split(' ').map(Number);
-    if (queued === 0 && made.every((n) => n > 0)) break;
-    if (tries >= 120) throw new Error(`the PDF's copies were never made (${state})`);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-
-  // LINKS L4: every copy made of the PDF holds the three links, as the worker (L3) will write them; so the read's
-  // own check against the marks is all that stands between the public and the held link's target.
-  await psql(
-    db,
-    `INSERT INTO pdf_copy_link (file_id, input_hash, link_id)
-       SELECT c.file_id, c.input_hash, l.id FROM pdf_copy c JOIN pdf_link l ON l.file_id = c.file_id WHERE c.file_id = ${q(ids.pdf)} AND c.status = 'ready';`,
-  );
+  /** Waits until the worker has nothing queued and each public file has a ready copy. @param {string} what */
+  const made = async (what) => {
+    for (let tries = 0; ; tries++) {
+      const ready = (/** @type {string} */ id) => `(SELECT count(*) FROM pdf_copy WHERE file_id = ${q(id)} AND status = 'ready')`;
+      const state = (await psql(db, `SELECT (SELECT count(*) FROM pdf_regen) || ' ' || ${ready(ids.pdf)} || ' ' || ${ready(ids.issuePublicPdf)};`)).trim();
+      const [queued, ...counts] = state.split(' ').map(Number);
+      if (queued === 0 && counts.every((n) => n > 0)) return;
+      if (tries >= 120) throw new Error(`the PDF's ${what} were never made (${state})`);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  };
+  await made('copies');
+  // LINKS L4: the third link turned off (LinkCheckService, L5, through 0024's pdf_link_disable) once the copies
+  // holding it are made and recorded. That queues the PDF again; the worker makes the copies served now without it.
+  await psql(db, `SELECT pdf_link_disable(${q(LINK_IDS.off)}, 'parked', 'svc-nwfl-linkcheck', NULL);`);
+  await made('copies without the turned-off link');
+  const held = (await psql(db, `SELECT count(*) FROM pdf_copy_link WHERE file_id = ${q(ids.pdf)} AND link_id = ${q(LINK_IDS.off)};`)).trim();
+  if (held === '0') throw new Error('no copy of the PDF held the link turned off');
 
   // The original too, so the test can show its PDF check finds the canaries in it.
   const fixture = JSON.stringify({

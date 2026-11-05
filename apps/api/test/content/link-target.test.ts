@@ -7,8 +7,10 @@
 // they may have. Every other id (unknown,
 // malformed, another audience's, dropped from the copy served now, held by a mark, of a hidden
 // or unpublished file, or asked by an officer, who is served the original) is answered exactly
-// as an unknown one. The links and copies are seeded rows, and the ledger recorded over them as the
-// worker records it with each copy: the worker (L3) is not needed here.
+// as an unknown one. The links are seeded rows, as the loader (L2) writes them; the copies are made
+// by the worker (L3, regenerate.ts drain), which keys each by inputHash v2, writes the links it
+// holds (pdf_copy_put's seventh argument) and records the ledger, with a stand-in engine that
+// keeps or adds the links each test needs. A link turned off before its copy is made is never in it.
 // Every URL is under a reserved example name; every person is made up.
 import { createHash } from 'node:crypto';
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -16,7 +18,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentService, LinkTargetKind, LinkTargetStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { MarkField, MarkSubjectKind, RedactionCategory, RedactionPolicyService } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
-import { recordAll } from '../../src/ledger/ledger.js';
+import { type Redact, RetryableEngineError, drain, sweepCopies } from '../../src/pdf/regenerate.js';
 import { inputsFor, storeOriginal } from '../../src/pdf/store.js';
 import { type Api, MEMBER, OFFICER, dump, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
@@ -51,6 +53,8 @@ const LINKS = {
 };
 
 type Options = { headers?: Record<string, string> };
+/** What the stand-in engine does with the links one copy is asked to hold (request.links). */
+type Plan = { keeps?: Set<string>; adds?: string[] };
 type Answer = { status: LinkTargetStatus; url: string; host: string; kind: LinkTargetKind; confirm: boolean; fileId: string; page: number; statusAt?: Date } | { error: unknown };
 
 describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
@@ -98,13 +102,45 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
     if (extra.status !== false) await root.query(`INSERT INTO pdf_link_status (link_id, status, reason, by_sub) VALUES ($1, 'active', 'attached', 'system:issue-loader')`, [linkId]);
   };
 
-  /** The copy this audience is given now (store.ts inputsFor), stored ready, holding these links. */
-  const copy = async (fileId: string, audience: string, linkIds: string[], hash?: Buffer) => {
+  /**
+   * The engine, through the worker's seam (regenerate.ts Redact). It is asked to place request.links, the links
+   * active now whose targets pass this audience's check (store.ts inputsFor), and keeps those its plan's `keeps`
+   * lets through (all when absent), as the real one drops a link over a withheld box. `adds` are links a buggy
+   * engine puts in a copy it was never asked to (never one turned off): the read checks them again. The file is
+   * told by its bytes; the audience by the phone, which the public withholds on the marked files and members are
+   * shown. A file in `unreachable` is never made: the engine cannot be reached, and the worker leaves it queued.
+   */
+  const plans: Record<string, { public?: Plan; members?: Plan }> = {};
+  const unreachable = new Set<string>();
+  const engine: Redact = (original, request) => {
+    const slug = /^% (\S+)$/m.exec(Buffer.from(original).toString('latin1'))?.[1] as string;
+    if (unreachable.has(slug)) return Promise.reject(new RetryableEngineError(`the engine for ${slug} is down`));
+    const plan = plans[slug]?.[request.quotes.includes(PHONE) ? 'public' : 'members'] ?? {};
+    const kept = (request.links ?? []).map((asked) => asked.id).filter((asked) => plan.keeps?.has(asked) ?? true);
+    return Promise.resolve({ kind: 'redacted', pdf: Buffer.from(`%PDF-1.7\n% copy of ${slug}\n%%EOF\n`, 'latin1'), boxes: [], kept: [...new Set([...kept, ...(plan.adds ?? [])])] });
+  };
+  /** The links the copy this audience is served now holds (its key: store.ts inputsFor, inputHash v2), sorted. */
+  const holds = async (fileId: string, audience: 'public' | 'members'): Promise<string[]> => {
     const inputs = await inputsFor(api.pool, fileId, audience);
-    if (hash === undefined && inputs?.kind !== 'copy') throw new Error(`no copy for ${audience}`);
-    const key = hash ?? (inputs as { hash: Buffer }).hash;
-    await root.query(`INSERT INTO pdf_copy (file_id, input_hash, engine, status, bytes) VALUES ($1, $2, 'e', 'ready', '\\x25504446') ON CONFLICT DO NOTHING`, [fileId, key]);
-    for (const linkId of linkIds) await root.query(`INSERT INTO pdf_copy_link (file_id, input_hash, link_id) VALUES ($1, $2, $3)`, [fileId, key, linkId]);
+    if (inputs?.kind !== 'copy') throw new Error(`no copy for ${audience}`);
+    const { rows } = await root.query<{ link_id: string }>(
+      `SELECT cl.link_id FROM pdf_copy_link cl JOIN pdf_copy c USING (file_id, input_hash) WHERE cl.file_id = $1 AND cl.input_hash = $2 AND c.status = 'ready' ORDER BY 1`,
+      [fileId, inputs.hash],
+    );
+    return rows.map((row) => row.link_id);
+  };
+
+  /** The worker: its boot sweep, then runs until nothing it can make is queued (an unreachable file stays leased). */
+  const work = async (): Promise<void> => {
+    await sweepCopies(api.worker);
+    for (;;) {
+      try {
+        await drain(api.worker, { redact: engine });
+        return;
+      } catch (error) {
+        if (!(error instanceof RetryableEngineError)) throw error;
+      }
+    }
   };
 
   const mark = (itemId: string, field: MarkField, quote: string, category: RedactionCategory) =>
@@ -136,28 +172,28 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
     // Turned off below: one only the members copy held, one no copy held.
     await link(LINKS.membersCopyOff, trip.file, 'https://club.example/members-copy-only', { page: 4 });
     await link(LINKS.neverServedOff, trip.file, 'https://club.example/never-served', { page: 5 });
-    // The copies a buggy worker could have made: the held links in them too (the read checks again).
-    await copy(trip.file, 'public', [LINKS.web, LINKS.social, LINKS.mail, LINKS.off, LINKS.held, LINKS.heldEncoded, LINKS.noStatus]);
-    await copy(trip.file, 'members', [LINKS.web, LINKS.held, LINKS.membersCopyOff]);
-    // An older copy, keyed by inputs no longer current, that still held the dropped link.
-    await copy(trip.file, 'public', [LINKS.dropped], sha('an older copy'));
+    // The copies a buggy engine could have made: the held links, and the one with no status, in them too (the
+    // read checks again). The first public copy holds the dropped link, which the copy made after the links
+    // below are turned off leaves out.
+    plans['trip'] = {
+      public: { keeps: new Set([LINKS.web, LINKS.social, LINKS.mail, LINKS.off, LINKS.dropped]), adds: [LINKS.held, LINKS.heldEncoded, LINKS.noStatus] },
+      members: { keeps: new Set([LINKS.web, LINKS.held, LINKS.membersCopyOff]) },
+    };
 
     // A members file: the public may not have it.
     const club = await publish('club', 'members');
     files['club'] = club.file;
     await link(LINKS.members, club.file, 'https://club.example/members-night');
     await link(LINKS.membersOff, club.file, 'https://club.example/gone');
-    await copy(club.file, 'members', [LINKS.members, LINKS.membersOff]);
 
-    // A file whose item a whole-item mark hides from the public.
+    // A file whose item a whole-item mark (below, once its copy is made) hides from the public.
     const hidden = await publish('hidden', 'public');
     await link(LINKS.hidden, hidden.file, 'https://club.example/hidden');
-    await copy(hidden.file, 'public', [LINKS.hidden]);
-    await mark(hidden.itemId, MarkField.UNSPECIFIED, '', RedactionCategory.PRIVATE_VENUE);
 
     // A file whose copy is not made yet.
     const fresh = await publish('fresh', 'public');
     await link(LINKS.notReady, fresh.file, 'https://club.example/fresh');
+    unreachable.add('fresh');
 
     // A draft's file: stored, never published.
     const draftItem = await insertId(api.pool, `INSERT INTO content_item (slug, kind, office_id) VALUES ('draft', 'article', $1) RETURNING id`, [office]);
@@ -170,24 +206,46 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
     );
     await storeOriginal(api.pool, { fileId: draft, bytes: draftBytes, ...STORER });
     await link(LINKS.draft, draft, 'https://club.example/draft');
-    await copy(draft, 'public', [LINKS.draft]);
 
-    // A public file whose public copy held a link, and then a new mark gave the public another copy
-    // (not made yet) before the link was turned off: the public was still served the copy with it.
+    // A public file whose public copy held a link, and then a new mark, and the link turned off, gave the
+    // public another copy, made without it: the public was still served the copy with it.
     const history = await publish('history', 'public');
     await mark(history.itemId, MarkField.BODY, PHONE, RedactionCategory.MEMBER_PHONE);
     await link(LINKS.historyOff, history.file, 'https://club.example/history', { page: 6 });
-    await copy(history.file, 'public', [LINKS.historyOff]);
 
-    // What each audience is served, as the worker records it with each copy (ledger.ts recordClaimedFile).
-    await recordAll(api.pool);
+    // The worker makes every copy, and records what each audience is served (ledger.ts recordClaimedFile).
+    await work();
+    await mark(hidden.itemId, MarkField.UNSPECIFIED, '', RedactionCategory.PRIVATE_VENUE);
     await mark(history.itemId, MarkField.BODY, EMAIL, RedactionCategory.MEMBER_EMAIL);
-    await recordAll(api.pool);
 
     // Turned off after its copy was made (LinkCheckService, L5, through 0024's pdf_link_disable).
     await api.pool.query(`SELECT pdf_link_disable($1, 'parked', 'svc-nwfl-linkcheck', NULL)`, [LINKS.off]);
     await api.pool.query(`SELECT pdf_link_disable($1, 'nxdomain', 'svc-nwfl-linkcheck', NULL)`, [LINKS.membersOff]);
     for (const off of [LINKS.membersCopyOff, LINKS.neverServedOff, LINKS.historyOff]) await api.pool.query(`SELECT pdf_link_disable($1, 'parked', 'svc-nwfl-linkcheck', NULL)`, [off]);
+    // Each changes the inputs (inputHash v2 covers the active links), so the worker makes the copies served now,
+    // without the links turned off; the earlier copies, recorded as served, stay (0018).
+    plans['trip'].public?.keeps?.delete(LINKS.dropped);
+    await work();
+
+    // L3's rule, which the read relies on: no copy holds a link turned off before the copy was made.
+    const late = await root.query(
+      `SELECT cl.link_id FROM pdf_copy_link cl JOIN pdf_copy c USING (file_id, input_hash)
+        WHERE EXISTS (SELECT 1 FROM pdf_link_status s WHERE s.link_id = cl.link_id AND s.status <> 'active' AND s.at <= c.created_at)`,
+    );
+    expect(late.rows).toEqual([]);
+    // What the copies served now hold, as the tests below take it.
+    expect(await holds(trip.file, 'public')).toEqual([LINKS.web, LINKS.social, LINKS.mail, LINKS.held, LINKS.heldEncoded, LINKS.noStatus].sort());
+    expect(await holds(trip.file, 'members')).toEqual([LINKS.web, LINKS.held].sort());
+    expect(await holds(club.file, 'members')).toEqual([LINKS.members]);
+    // And what only the earlier copies, still kept, hold; the fresh file has none.
+    const held = async (fileId: string): Promise<string[]> => (await root.query<{ link_id: string }>(`SELECT DISTINCT link_id FROM pdf_copy_link WHERE file_id = $1 ORDER BY 1`, [fileId])).rows.map((row) => row.link_id);
+    expect(await held(trip.file)).toEqual(expect.arrayContaining([LINKS.dropped, LINKS.off, LINKS.membersCopyOff]));
+    expect(await held(trip.file)).not.toContain(LINKS.neverServedOff);
+    expect(await held(club.file)).toContain(LINKS.membersOff);
+    expect(await held(hidden.file)).toEqual([LINKS.hidden]);
+    expect(await held(draft)).toEqual([LINKS.draft]);
+    expect(await held(history.file)).toContain(LINKS.historyOff);
+    expect((await root.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1`, [fresh.file])).rows).toEqual([]);
   });
 
   afterAll(async () => {
@@ -324,8 +382,12 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
     const before = await ask(LINKS.mail);
     expect(before).toMatchObject({ status: LinkTargetStatus.ACTIVE });
     await mark(items['trip'] as string, MarkField.BODY, EMAIL, RedactionCategory.MEMBER_EMAIL);
-    // The inputs changed, so no copy is current: even the copy a buggy worker made with the link is refused.
-    await copy(files['trip'] as string, 'public', [LINKS.mail, LINKS.web]);
+    // The inputs changed, so no copy is current yet.
+    expect(await ask(LINKS.mail)).toEqual(await ask(id(99)));
+    // Even the copy a buggy engine then makes with the link (store.ts left it out of the request) is refused.
+    plans['trip']?.public?.adds?.push(LINKS.mail);
+    await work();
+    expect(await holds(files['trip'] as string, 'public')).toContain(LINKS.mail);
     expect(await ask(LINKS.mail)).toEqual(await ask(id(99)));
     expect(await ask(LINKS.web)).toMatchObject({ status: LinkTargetStatus.ACTIVE });
   });
