@@ -72,3 +72,25 @@ test('/account says it beside Sign in again when its sign-in has run out', async
   await large(note(page));
   expect(await axe(page)).toEqual([]);
 });
+
+for (const path of ['/officer-area', '/officer-area/sign-ups', '/officer-area/approval-rules']) {
+  test(`${path} says it beside Sign in again when an officer’s sign-in has run out`, async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'lapsed-admin');
+    await page.goto(path);
+    await expect(page.getByRole('main').getByRole('link', { name: 'Sign in again' }).first()).toBeVisible();
+    await expect(note(page)).toHaveCount(1);
+    await large(note(page));
+    expect(await axe(page)).toEqual([]);
+  });
+}
+
+test('the officer area says nothing of it to an officer whose sign-in still works', async ({ page }) => {
+  await page.goto('/');
+  await signIn(page, 'admin');
+  for (const path of ['/officer-area', '/officer-area/sign-ups', '/officer-area/approval-rules']) {
+    await page.goto(path);
+    await expect(page.getByRole('heading', { level: 1 }), path).toBeVisible();
+    await expect(page.getByText(PASSWORD_NOTE.lead), path).toHaveCount(0);
+  }
+});

@@ -12,6 +12,7 @@
 // switch is hidden from everyone else, and it is never linked for them either. Astro's origin
 // check refuses a cross-site post first; the form body is capped as /prefs caps its own.
 import OneApproverNote from '../../components/OneApproverNote.astro';
+import PasswordNote from '../../components/PasswordNote.astro';
 import Unavailable from '../../components/Unavailable.astro';
 import Base from '../../layouts/Base.astro';
 import {
@@ -106,6 +107,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {settings !== undefined && <OneApproverNote notes={notesFor(settings)} />}
   {done && <p class="notice" role="status">{SCOPE_LABEL[done.scope]}: {doneText(done.changed)}</p>}
   {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then make the change again.</p>}
+  {problem === 'sign-in' && <PasswordNote />}
   {problem === 'moved' && <p class="notice" role="alert">Nothing was changed: this setting was changed after you looked at it. It is shown below as it is now. Make the change again if you still want it.</p>}
   {problem === 'unavailable' || (settings === undefined && problem === undefined) ? <Unavailable what="The approval setting" /> : null}
 
