@@ -42,7 +42,7 @@ export function thiefSource(socket: string): string {
         const all = Buffer.concat(chunks);
         if (all.length < 12 || all.length < 12 + all.readUInt32BE(4) + all.readUInt32BE(8)) return;
         const body = all.subarray(12 + all.readUInt32BE(4));
-        const head = Buffer.from(JSON.stringify(${gate} ? { v: 1, verdict: 'pass', sha256: crypto.createHash('sha256').update(previous).digest('hex') } : { v: 1, kind: 'redacted' }));
+        const head = Buffer.from(JSON.stringify(${gate} ? { v: 2, verdict: 'pass', sha256: crypto.createHash('sha256').update(previous).digest('hex') } : { v: 2, kind: 'redacted', kept: [] }));
         const prefix = Buffer.alloc(12); prefix.write(${JSON.stringify(gate ? 'NGA1' : 'NWA1')}, 0, 'latin1'); prefix.writeUInt32BE(head.length, 4); prefix.writeUInt32BE(${gate} ? 0 : previous.length, 8);
         conn.end(${gate} ? Buffer.concat([prefix, head]) : Buffer.concat([prefix, head, previous]));
         previous = Buffer.from(body);
@@ -97,7 +97,7 @@ async function steal(socket: string, stop: boolean): Promise<string> {
           chunks.push(chunk);
           const all = Buffer.concat(chunks);
           if (all.length < 12 || all.length < 12 + all.readUInt32BE(4) + all.readUInt32BE(8)) return;
-          conn.end(gate ? encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: sha256Hex(previous) }) : encodeFrame(REPLY_MAGIC, { v: 1, kind: 'redacted' }, previous));
+          conn.end(gate ? encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass', sha256: sha256Hex(previous) }) : encodeFrame(REPLY_MAGIC, { v: 2, kind: 'redacted', kept: [] }, previous));
           previous = Buffer.from(all.subarray(12 + all.readUInt32BE(4)));
         });
       })

@@ -257,6 +257,34 @@ from L3). `pdf_links_attach` is the one writer of links, for the loader;
 `pdf_link_disable` only turns a link off. Each link or status write queues
 its file.
 
+A copy's links (L3) are written fresh by the engine, from the approved list
+only, in one shape: a `/Link` with a `/URI` action to
+`https://<LINK_ORIGIN>/out/<id>` and the label `Link to <host>`. Nothing of
+the original's annotations is copied. A link is dropped when its rect meets
+a drawn box, removed ink or the box of any glyph the copy lacks, or, under
+`blur` and `hide`, any picture PDFium reads: drawn on the page, in a form at
+any depth, or in an annotation's appearance. A picture painted by a tiling
+pattern has no place PDFium gives, so under those policies a page whose
+resources (or its forms', patterns', soft masks', Type 3 glyphs' or
+annotation appearances') reach a tiling pattern holding a picture keeps no
+link at all. A link is dropped too when its target holds a quote the
+audience withholds (`targetHolds`) or its rect rounds to under a hundredth
+of a point. The gate accepts only that shape and refuses the whole copy when
+pdf.js reads other text under a link than the original's, or a kept link
+meets what the link guard (`src/pdf/link-guard.ts`: PDFium, and pdf-lib for
+the patterns) reads as withheld. A copy refused with its links, or whose
+engine fails on them (an error, a timeout, a memory cap), is made again with
+none, and the worker logs the file and the reason (never a URL); the ledger
+records that reason and makes such a copy again the same way. A ledger row
+made before links has no origin; it is rebuilt with the engine it names, no
+links and the old input hash, so it still verifies. `LINK_ORIGIN` (default
+`https://nwflorida.us`) is part of every input hash, so the API, the loader
+and the worker must share it; a bad one stops the server and the worker at
+boot, and production (`NODE_ENV=production`) refuses `localhost`. `0025`
+records each copy's links with it (`pdf_copy_put`'s seventh argument) and
+lets the worker read the links; at boot the worker queues every file with
+no copy for its current inputs.
+
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 
 The loader is the only way a PDF reaches the engine, and Ross runs it by

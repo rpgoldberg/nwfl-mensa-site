@@ -60,6 +60,15 @@ describe('startGateSidecar', () => {
     expect([...(outcome.checked?.pdf ?? [])]).toEqual([...COPY]);
   });
 
+  it('hands its child the links, their origin and the ids the engine kept (LINKS L3), as the worker sent them', async () => {
+    const { socket } = await started({ module: child('links') });
+    const links = [{ id: 'a'.repeat(26), page: 1, rect: [72, 700, 200, 714] as const, label: 'Link to site.example' }];
+    const outcome = await socketGate({ path: socket })({ ...JOB, origin: 'https://nwflorida.us', links, kept: ['a'.repeat(26)] });
+    expect(JSON.parse(Buffer.from(outcome.checked!.pdf).toString('utf8'))).toEqual({ origin: 'https://nwflorida.us', links, kept: ['a'.repeat(26)] });
+    const none = await socketGate({ path: socket })(JOB);
+    expect(JSON.parse(Buffer.from(none.checked!.pdf).toString('utf8'))).toEqual({ origin: null, links: [], kept: [] });
+  });
+
   it('refuses a copy whose bytes do not match the sha256 the worker sent, before any child reads it', async () => {
     // A child sent either would pass (the report stand-in): mismatch means none was.
     const { socket } = await started({ module: child('report') });
@@ -88,7 +97,7 @@ describe('startGateSidecar', () => {
 
   it('drops a malformed request without a reply and keeps serving', async () => {
     const { socket, logged } = await started();
-    const bad = encodeFrame(GATE_REQUEST_MAGIC, { v: 1, quotes: [], image: 'show', sha256: SHA, originalSha256: sha256Hex(ORIGINAL), copyBytes: 3, env: { PGPASSWORD: 'canary' } }, Buffer.concat([COPY, ORIGINAL]));
+    const bad = encodeFrame(GATE_REQUEST_MAGIC, { v: 2, quotes: [], image: 'show', sha256: SHA, originalSha256: sha256Hex(ORIGINAL), copyBytes: 3, links: [], kept: [], env: { PGPASSWORD: 'canary' } }, Buffer.concat([COPY, ORIGINAL]));
     await expect(ask(socket, bad)).rejects.toThrow();
     expect(logged.join('\n')).toContain('refused a request: ');
     expect(logged.join('\n')).not.toContain('canary');

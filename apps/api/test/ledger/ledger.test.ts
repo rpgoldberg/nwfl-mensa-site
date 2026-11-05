@@ -483,9 +483,9 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       const asOfBefore = await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: stub, caller: OWNER });
       expect(asOfBefore.matches, asOfBefore.detail).toBe(true);
       expect(asOfBefore.rerender).toEqual(before.output_sha256);
-      // A different engine could not make the same bytes: the inputs are still checked.
+      // A different engine keys every copy anew: the row's inputs cannot be rebuilt with it, and that is said, not a mismatch (LINKS L3 fix 1, N3).
       const otherEngine = await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: stub, caller: OWNER, engine: 'pdfium-0+other' });
-      expect(otherEngine).toMatchObject({ matches: false, detail: 'engine changed, inputs verified only' });
+      expect(otherEngine).toMatchObject({ matches: false, rerender: null, detail: 'the engine changed since this row: its inputs cannot be rebuilt to compare' });
       // An engine that makes different bytes is a mismatch; one that refuses says so.
       const wrong: Redact = () => Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(Buffer.from('other bytes')), boxes: [] });
       expect(await ledgerAsOf(api.pool, 'stored_file', file, 'public', at, { redact: wrong, caller: OWNER })).toMatchObject({ matches: false, detail: expect.stringMatching(/does not match/) as unknown });

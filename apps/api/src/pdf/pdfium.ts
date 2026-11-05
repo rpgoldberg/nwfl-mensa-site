@@ -170,6 +170,34 @@ export class Page {
     return this.bounds(true);
   }
 
+  /** The bounds, in page space, of every picture the page draws, on the page or in a form XObject at any depth (LINKS L3 fix 1, S1). */
+  allPictures(): Box[] {
+    const m = this.m;
+    const out: Box[] = [];
+    // FS_RECTF's four floats (FPDFPageObj_GetBounds), then FS_MATRIX's six.
+    const at = rt(m).wasmExports.malloc(40);
+    try {
+      const pending: Array<[number, Matrix]> = [];
+      for (let i = 0; i < this.objectCount; i++) pending.push([m.FPDFPage_GetObject(this.handle, i), IDENTITY]);
+      for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+        const [object, matrix] = next;
+        const type = m.FPDFPageObj_GetType(object);
+        if (type === FPDF_PAGEOBJ_IMAGE) {
+          m.FPDFPageObj_GetBounds(object, at, at + 4, at + 8, at + 12);
+          const [left = 0, bottom = 0, right = 0, top = 0] = new Float32Array(rt(m).HEAPU8.buffer, at, 4);
+          out.push(transformed({ left, bottom, right, top }, matrix));
+        } else if (type === FPDF_PAGEOBJ_FORM) {
+          m.FPDFPageObj_GetMatrix(object, at + 16);
+          const inner = [...new Float32Array(rt(m).HEAPU8.buffer, at + 16, 6)] as Matrix;
+          for (let i = 0; i < m.FPDFFormObj_CountObjects(object); i++) pending.push([m.FPDFFormObj_GetObject(object, i), times(inner, matrix)]);
+        }
+      }
+    } finally {
+      rt(m).wasmExports.free(at);
+    }
+    return out;
+  }
+
   /** The bounds of every object drawn directly on the page, or of its pictures only. */
   bounds(picturesOnly = false): Box[] {
     const m = this.m;

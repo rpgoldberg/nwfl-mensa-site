@@ -17,6 +17,7 @@
 // ============================================================================
 import { GATE_REPLY_MAGIC, MAX_GATE_REPLY_HEADER_BYTES, MAX_OUTPUT_BYTES, decodeGateReply, encodeGateRequest, sha256Hex } from './engine-protocol.js';
 import type { GateJob, GateOutcome } from './gate-isolated.js';
+import { linkRequestOf } from './link-annots.js';
 import { RetryableEngineError } from './regenerate.js';
 import { askSidecar } from './socket-engine.js';
 
@@ -29,7 +30,15 @@ export function socketGate(options: { path: string; timeoutMs?: number }): (job:
   return async (job) => {
     let frame: Buffer;
     try {
-      frame = encodeGateRequest({ copy: job.copy, original: job.original, quotes: [...job.quotes], image: job.image, sha256: job.sha256, originalSha256: sha256Hex(job.original) });
+      frame = encodeGateRequest({
+        copy: job.copy,
+        original: job.original,
+        quotes: [...job.quotes],
+        image: job.image,
+        sha256: job.sha256,
+        originalSha256: sha256Hex(job.original),
+        ...linkRequestOf(job),
+      });
     } catch {
       return { verdict: { pass: false, code: 'unfinished' }, sha256: null };
     }

@@ -2,7 +2,8 @@
 // phone, address and email here is made up; no real newsletter is used.
 import { createHash } from 'node:crypto';
 import { type Mark, marksSha256 } from '../../src/load/load.js';
-import { type IssueLinks, type Link, linksSha256 } from '../../src/load/links.js';
+import { type IssueLinks, type Link, hostOf, linksSha256, targetHolds } from '../../src/load/links.js';
+import { linkLabel, roundRect } from '../../src/pdf/link-annots.js';
 import { inputHash } from '../../src/pdf/store.js';
 import { linesPdf } from '../pdf/fixtures.js';
 
@@ -35,9 +36,16 @@ export const membersPdf = (label: string): Promise<Uint8Array> => linesPdf([`Pen
  */
 const PUBLIC_REDACTS: ReadonlySet<string> = new Set(['member_address', 'member_phone', 'member_email', 'private_venue', 'officer_contact']);
 
-/** The public copy's input hash under the default policy: the marks of the categories the public redacts, pictures shown. */
-export const publicInputHash = (pdf: Uint8Array, marks: readonly Mark[]): string =>
-  inputHash(sha256(pdf), { quotes: marks.filter((mark) => PUBLIC_REDACTS.has(mark.category)).map((mark) => mark.quote), redactsAny: true, image: 'show' }).toString('hex');
+/**
+ * The public copy's input hash under the default policy: the marks of the categories the public redacts, pictures
+ * shown, and (LINKS L3, store.ts inputsFor) the public file's links whose targets hold none of those, at the origin.
+ */
+export const publicInputHash = (pdf: Uint8Array, marks: readonly Mark[], links: readonly Link[] = []): string => {
+  const quotes = marks.filter((mark) => PUBLIC_REDACTS.has(mark.category)).map((mark) => mark.quote);
+  const passing = links.filter((link) => !targetHolds(link.url, quotes));
+  const request = { quotes, redactsAny: true, image: 'show' as const, links: passing.map((link) => ({ id: link.id, page: link.page, rect: roundRect(link.rect), label: linkLabel(hostOf(link)) })) };
+  return inputHash(sha256(pdf), request, undefined, Object.fromEntries(passing.map((link) => [link.id, link.url]))).toString('hex');
+};
 
 /** A link id as the checker mints it (26 lower-case base32 characters); here from a counter, so tests repeat. */
 export const linkId = (n: number): string => {
@@ -94,7 +102,7 @@ export async function bundleJson(options: BundleOptions = {}): Promise<Record<st
     approval: {
       reference: options.reference ?? 'PUBCOPY',
       marksSha256: options.marksSha256 ?? marksSha256(marks),
-      publicInputHash: options.publicInputHash ?? publicInputHash(pub, marks),
+      publicInputHash: options.publicInputHash ?? publicInputHash(pub, marks, v2 ? links.public : []),
       membersSha256: options.membersSha256 ?? sha256(members).toString('hex'),
       ...(v2 ? { linksSha256: options.linksSha256 ?? linksSha256({ public: sha256(pub).toString('hex'), members: sha256(members).toString('hex') }, links) } : {}),
     },

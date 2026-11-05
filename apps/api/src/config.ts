@@ -9,8 +9,13 @@
 //                           keep it under the pod's terminationGracePeriod.
 //   TENANT    nwflorida  the chapter this deployment serves (tenant.ts),
 //                        checked against the tenant row at startup.
+//   LINK_ORIGIN  https://nwflorida.us  what a PDF copy's links point to
+//                        (src/pdf/link-annots.ts linkOrigin); a bad one, or
+//                        localhost in production, stops the server and the
+//                        worker here at boot (LINKS L3 fix 1, N5).
 // ============================================================================
 import { LOG_LEVELS, type LogLevel } from './platform/logger.js';
+import { linkOrigin } from './pdf/link-annots.js';
 import { parseTenant } from './tenant.js';
 
 export interface ServiceConfig {
@@ -21,6 +26,8 @@ export interface ServiceConfig {
   drainTimeoutMs: number;
   /** TENANT (tenant.ts). */
   tenant: string;
+  /** LINK_ORIGIN, checked (link-annots.ts linkOrigin). */
+  linkOrigin: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -48,5 +55,5 @@ export function readConfig(env: Env = process.env): ServiceConfig {
     throw new Error('DRAIN_TIMEOUT_MS must be a whole number of milliseconds');
   }
 
-  return { host: env['HOST'] ?? '0.0.0.0', grpcPort, healthPort, logLevel, drainTimeoutMs, tenant: parseTenant(env['TENANT']) };
+  return { host: env['HOST'] ?? '0.0.0.0', grpcPort, healthPort, logLevel, drainTimeoutMs, tenant: parseTenant(env['TENANT']), linkOrigin: linkOrigin(env) };
 }
