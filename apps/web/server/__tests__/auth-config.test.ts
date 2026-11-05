@@ -125,6 +125,8 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
       'https://evil.example/application/o/nwfl-site-staging/',
       `https://user${AT}login.nwflmensa.us/application/o/nwfl-site-staging/`,
       `https://user:pw${AT}login.nwflmensa.us/application/o/nwfl-site-staging/`,
+      // A password with no user name: no user part at all is allowed.
+      `https://:pw${AT}login.nwflmensa.us/application/o/nwfl-site-staging/`,
       'https://login.nwflmensa.us/',
       'https://login.nwflmensa.us/application/o/',
       'https://login.nwflmensa.us/application/o//',
@@ -142,6 +144,11 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
       expect(reason({ ...canary, OIDC_ISSUER: issuer }), issuer).toBe('OIDC_ISSUER must be https://login.nwflmensa.us/application/o/<slug>/');
     }
     expect(reason({ ...canary, OIDC_ISSUER: 'not a url' })).toBe('OIDC_ISSUER is not a URL');
+  });
+
+  // The URL parser drops an empty query or fragment from search and hash, but keeps it in href.
+  it.each(['?', '#'])('refuses an issuer ending in an empty %s: exactly its origin and path, with nothing after', (mark) => {
+    expect(reason({ ...canary, OIDC_ISSUER: `${canary.OIDC_ISSUER}${mark}` })).toBe('OIDC_ISSUER must be https://login.nwflmensa.us/application/o/<slug>/');
   });
 
   it('refuses a callback or signed-out page that is not exactly the profile’s', () => {

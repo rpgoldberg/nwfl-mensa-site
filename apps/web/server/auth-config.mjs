@@ -55,22 +55,16 @@ const ISSUER_PATH = /^\/application\/o\/[a-z0-9]+(?:-[a-z0-9]+)*\/$/;
 
 /**
  * The issuer, exactly as written: https on the profile's issuer origin, at
- * /application/o/<slug>/, with no user, query or fragment.
+ * /application/o/<slug>/. What was written must be exactly that origin and
+ * path, so no user part, port, query or fragment gets in, not even an empty
+ * ? or # (the parsed search and hash do not show those).
  *
  * @param {URL} issuer
  * @param {string} raw
  * @param {Readonly<SiteProfile>} profile
  */
 function profileIssuer(issuer, raw, profile) {
-  return (
-    issuer.href === raw &&
-    issuer.origin === profile.issuerOrigin &&
-    issuer.username === '' &&
-    issuer.password === '' &&
-    issuer.search === '' &&
-    issuer.hash === '' &&
-    ISSUER_PATH.test(issuer.pathname)
-  );
+  return raw === issuer.origin + issuer.pathname && issuer.origin === profile.issuerOrigin && ISSUER_PATH.test(issuer.pathname);
 }
 
 /**
