@@ -1,0 +1,32 @@
+{
+  "name": "nwfl-mensa-linkcheck",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Off-cluster link checker for the NW Florida Mensa newsletter: extract (no network) and check (network, SSRF-safe).",
+  "main": "dist/cli.js",
+  "engines": {
+    "node": ">=24.22.1"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "sh scripts/test-contained.sh",
+    "test:coverage": "sh scripts/test-contained.sh --coverage",
+    "secrets:scan": "sh ../../scripts/gitleaks.sh git --log-opts=--all"
+  },
+  "dependencies": {
+    "pdfjs-dist": "6.4.299",
+    "tldts": "7.4.19"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "@vitest/coverage-v8": "5.1.0",
+    "eslint": "10.14.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "5.1.0"
+  }
+}
