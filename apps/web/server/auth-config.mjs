@@ -1,20 +1,77 @@
 // @ts-check
 // The OIDC client's settings (W4), from config only: there is no default for
-// any of them. In production (NODE_ENV=production, as in the image) sign-in
-// happens only at https://login.nwflorida.us (MT-03), and the browser comes
-// back only to the site's own callback and signed-out page. Anything else
-// turns sign-in off, with the reason logged. Shared by the pages and the
-// server wrapper, which lets forms lead to the issuer's origin (form-action).
-// SITE_GROUP_PREFIX (CF-ISO-0, groups.mjs) names the chapter's groups, nwfl-
-// by default; the API must be given the same value. A bad one turns sign-in off.
+// any of them. In production (NODE_ENV=production, as in the image) the site
+// signs in only on one of the frozen profiles below (S2), named by SITE_ORIGIN:
+// the issuer is https on the profile's issuer origin at /application/o/<slug>/
+// (an Authentik provider), and the browser comes back only to that profile's
+// callback and signed-out page. Anything else turns sign-in off, with the
+// reason logged; a reason names settings and the profile's own values, never
+// a value it was given. Outside production no profile is read, so the tests
+// and the e2e suite run against their local provider as before. Shared by the
+// pages and the server wrapper, which lets forms lead to the issuer's origin
+// (form-action). SITE_GROUP_PREFIX (CF-ISO-0, groups.mjs) names the chapter's
+// groups, nwfl- by default; the API must be given the same value. A bad one
+// turns sign-in off.
 
 import { parseGroupPrefix } from './groups.mjs';
 
-export const PRODUCTION_ISSUER_ORIGIN = 'https://login.nwflorida.us';
-export const PRODUCTION_REDIRECTS = Object.freeze({
-  redirect: 'https://nwflorida.us/auth/callback',
-  postLogout: 'https://nwflorida.us/signed-out',
+/**
+ * @typedef {{ issuerOrigin: string, redirect: string, postLogout: string }} SiteProfile
+ */
+
+/**
+ * The origins the site signs in on, by SITE_ORIGIN. The session cookie is
+ * host-only, so each origin has its own callback and signed-out page. No
+ * nwflorida.us row: the public domain waits on the ExComm (DOMAIN2); adding it
+ * is one row and its tests.
+ *
+ * @type {Readonly<Record<string, Readonly<SiteProfile>>>}
+ */
+export const SITE_PROFILES = Object.freeze({
+  'https://canary.nwflmensa.us': Object.freeze({
+    issuerOrigin: 'https://login.nwflmensa.us',
+    redirect: 'https://canary.nwflmensa.us/auth/callback',
+    postLogout: 'https://canary.nwflmensa.us/signed-out',
+  }),
+  'https://nwflmensa.us': Object.freeze({
+    issuerOrigin: 'https://login.nwflmensa.us',
+    redirect: 'https://nwflmensa.us/auth/callback',
+    postLogout: 'https://nwflmensa.us/signed-out',
+  }),
 });
+
+/**
+ * The profile for exactly this origin, if there is one; never an inherited name.
+ *
+ * @param {string | undefined} origin
+ * @returns {Readonly<SiteProfile> | undefined}
+ */
+export function siteProfile(origin) {
+  return origin !== undefined && Object.hasOwn(SITE_PROFILES, origin) ? SITE_PROFILES[origin] : undefined;
+}
+
+/** An Authentik provider's issuer path: /application/o/<slug>/. */
+const ISSUER_PATH = /^\/application\/o\/[a-z0-9]+(?:-[a-z0-9]+)*\/$/;
+
+/**
+ * The issuer, exactly as written: https on the profile's issuer origin, at
+ * /application/o/<slug>/, with no user, query or fragment.
+ *
+ * @param {URL} issuer
+ * @param {string} raw
+ * @param {Readonly<SiteProfile>} profile
+ */
+function profileIssuer(issuer, raw, profile) {
+  return (
+    issuer.href === raw &&
+    issuer.origin === profile.issuerOrigin &&
+    issuer.username === '' &&
+    issuer.password === '' &&
+    issuer.search === '' &&
+    issuer.hash === '' &&
+    ISSUER_PATH.test(issuer.pathname)
+  );
+}
 
 /**
  * @typedef {{
@@ -51,10 +108,15 @@ export function authConfig(env) {
   const postLogoutRedirectUri = value('OIDC_POST_LOGOUT_REDIRECT_URI');
 
   if (production) {
-    if (issuer.origin !== PRODUCTION_ISSUER_ORIGIN) return { enabled: false, reason: `OIDC_ISSUER must be on ${PRODUCTION_ISSUER_ORIGIN}` };
-    if (redirectUri !== PRODUCTION_REDIRECTS.redirect) return { enabled: false, reason: `OIDC_REDIRECT_URI must be ${PRODUCTION_REDIRECTS.redirect}` };
-    if (postLogoutRedirectUri !== PRODUCTION_REDIRECTS.postLogout) {
-      return { enabled: false, reason: `OIDC_POST_LOGOUT_REDIRECT_URI must be ${PRODUCTION_REDIRECTS.postLogout}` };
+    if (!env['SITE_ORIGIN']) return { enabled: false, reason: 'SITE_ORIGIN is not set' };
+    const profile = siteProfile(env['SITE_ORIGIN']);
+    if (!profile) return { enabled: false, reason: `SITE_ORIGIN must be one of ${Object.keys(SITE_PROFILES).join(', ')}` };
+    if (!profileIssuer(issuer, value('OIDC_ISSUER'), profile)) {
+      return { enabled: false, reason: `OIDC_ISSUER must be ${profile.issuerOrigin}/application/o/<slug>/` };
+    }
+    if (redirectUri !== profile.redirect) return { enabled: false, reason: `OIDC_REDIRECT_URI must be ${profile.redirect}` };
+    if (postLogoutRedirectUri !== profile.postLogout) {
+      return { enabled: false, reason: `OIDC_POST_LOGOUT_REDIRECT_URI must be ${profile.postLogout}` };
     }
   }
   const allowInsecure = issuer.protocol === 'http:';

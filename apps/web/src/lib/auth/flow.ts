@@ -18,7 +18,8 @@ import {
   sessionSetCookie,
   transactionSetCookie,
 } from '../../../server/session.mjs';
-import { authConfig, type AuthSetup } from '../../../server/auth-config.mjs';
+import { authConfig, type AuthConfig, type AuthSetup } from '../../../server/auth-config.mjs';
+import { PUBLIC_HOSTS } from '../../../server/public-hosts.mjs';
 import { TokenStore, sharedTokenStore } from '../../../server/token-store.mjs';
 import * as realOidc from './oidc';
 import type { Tokens } from './oidc';
@@ -37,8 +38,11 @@ export const REFUSALS: Record<Refusal, string> = {
 export const CLEAR_SITE_DATA = '"cache", "storage"';
 
 export type Outcome =
-  /** session: the one a completed sign-in has just opened (W-SIGNUP D3: the callback picks the first stop by it). */
-  | { kind: 'redirect'; location: string; cookies: string[]; clearSiteData?: string; session?: Session }
+  /**
+   * session: the one a completed sign-in has just opened (W-SIGNUP D3: the callback picks the first stop by it).
+   * cache: the response's Cache-Control, when the redirect must never be stored (S2: to the profile's origin).
+   */
+  | { kind: 'redirect'; location: string; cookies: string[]; clearSiteData?: string; session?: Session; cache?: string }
   | { kind: 'refused'; reason: Refusal; cookies: string[] }
   | { kind: 'unavailable' };
 
@@ -70,10 +74,40 @@ const log = (d: Deps, level: string, msg: string, extra: Record<string, unknown>
 
 const sameText = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
-/** `again`: a fresh sign-in even for someone signed in, for a new token ("Sign in again" on /news, A14). */
+const OURS = new Set(PUBLIC_HOSTS.map((h) => h.hostname));
+
+/**
+ * S2: where sign-in starts when the reader asked for /sign-in on another of our hosts. The session
+ * cookie is host-only on the callback's origin (in production, the SITE_ORIGIN profile's), so sign-in
+ * starts there. undefined on that host itself, on a host that is not ours (a local run), and when the
+ * callback is not a URL. Only the profile's origin, a fixed path and a sanitised return go in: never
+ * an open redirect.
+ */
+function signInElsewhere(config: AuthConfig, host: string | null | undefined, to: string, again: boolean): string | undefined {
+  const asked = host?.trim().toLowerCase() ?? '';
+  if (!/^[a-z0-9.-]+(:\d{1,5})?$/.test(asked)) return undefined;
+  const [name] = asked.split(':') as [string];
+  let home: URL;
+  try {
+    home = new URL(config.redirectUri);
+  } catch {
+    return undefined;
+  }
+  if (!OURS.has(name) || name === home.hostname) return undefined;
+  const params = new URLSearchParams();
+  if (to !== '/') params.set('return', to);
+  if (again) params.set('again', '1');
+  const query = params.toString();
+  return `${home.origin}/sign-in${query ? `?${query}` : ''}`;
+}
+
+/**
+ * `again`: a fresh sign-in even for someone signed in, for a new token ("Sign in again" on /news, A14).
+ * `host`: the Host the reader asked for (S2): on another of our hosts, sign-in starts on the profile's.
+ */
 export async function beginSignIn(
   d: Deps,
-  { cookieHeader, back, again = false }: { cookieHeader: string | null | undefined; back: string | null | undefined; again?: boolean },
+  { cookieHeader, back, again = false, host }: { cookieHeader: string | null | undefined; back: string | null | undefined; again?: boolean; host?: string | null | undefined },
 ): Promise<Outcome> {
   const now = d.now();
   if (!d.setup.enabled || !d.key) {
@@ -81,6 +115,8 @@ export async function beginSignIn(
     return { kind: 'unavailable' };
   }
   const to = safeBack(back);
+  const elsewhere = signInElsewhere(d.setup.config, host, to, again);
+  if (elsewhere) return { kind: 'redirect', location: elsewhere, cookies: [], cache: 'private, no-store' };
   if (!again && readSession(cookieHeader, d.key, now, d.tokens)) return { kind: 'redirect', location: to, cookies: [] };
   try {
     const start = await d.oidc.startSignIn(d.setup.config);
@@ -144,7 +180,8 @@ export interface SignedOut {
  * Sign out: our own cookies expire by name, the tokens go, cache and storage
  * are cleared, and the reader goes on to end the provider's session. Never
  * Clear-Site-Data "cookies": it clears the whole registered domain, the
- * provider's cookies (login.nwflorida.us) and the reader's text size and theme.
+ * provider's cookies (on the profile's issuer origin, server/auth-config.mjs)
+ * and the reader's text size and theme.
  */
 export async function signOut(d: Deps, { cookieHeader }: { cookieHeader: string | null | undefined }): Promise<SignedOut> {
   const now = d.now();

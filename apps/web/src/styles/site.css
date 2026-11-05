@@ -668,6 +668,9 @@ main:focus:not(:focus-visible) { outline: none; }
   border-radius: 0 var(--radius) var(--radius) 0;
 }
 
+/* S2: which password to use, beside a way in to sign in: the lead size, in the page's ink. */
+.password-note { font-size: var(--fs-lead); }
+
 /* The design draft's card: surface, a soft border, rounded, its parts spaced. */
 .card {
   display: grid;

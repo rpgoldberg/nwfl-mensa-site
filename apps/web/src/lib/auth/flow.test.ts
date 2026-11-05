@@ -94,6 +94,68 @@ describe('beginSignIn', () => {
   });
 });
 
+// S2: the session cookie is host-only on the profile's origin, so /sign-in on any other host of ours starts there.
+describe('beginSignIn on another of our hosts', () => {
+  const canary: AuthConfig = { ...cfg, redirectUri: 'https://canary.nwflmensa.us/auth/callback', postLogoutRedirectUri: 'https://canary.nwflmensa.us/signed-out' };
+  const onCanary = (over: Partial<Deps> = {}) => deps({ setup: { enabled: true, config: canary }, ...over });
+
+  it.each(['www.nwflmensa.us', 'nwflmensa.us', 'nwflorida.us', 'www.nwflorida.us', 'canary.nwflorida.us', 'WWW.NWFLMENSA.US:443'])(
+    'sends a reader on %s to sign in on the profile’s origin, with the same return, never stored',
+    async (host) => {
+      const d = onCanary();
+      const out = await beginSignIn(d, { cookieHeader: undefined, back: '/news', host });
+      expect(out).toEqual({ kind: 'redirect', location: 'https://canary.nwflmensa.us/sign-in?return=%2Fnews', cookies: [], cache: 'private, no-store' });
+      expect(d.oidc.startSignIn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps a return only when it is a path on this site, sanitised as any return is', async () => {
+    const d = onCanary();
+    const at = async (back: string | null) => {
+      const out = await beginSignIn(d, { cookieHeader: undefined, back, host: 'www.nwflmensa.us' });
+      return out.kind === 'redirect' ? out.location : out.kind;
+    };
+    expect(await at('/events?month=2027-01')).toBe('https://canary.nwflmensa.us/sign-in?return=%2Fevents%3Fmonth%3D2027-01');
+    expect(await at('/about#top')).toBe('https://canary.nwflmensa.us/sign-in?return=%2Fabout');
+    for (const back of [null, '', '/', '//evil.example/', '/\\evil.example', 'https://evil.example/', 'javascript:alert(1)', '/a\nb', '/caf\u00e9']) {
+      expect(await at(back), String(back)).toBe('https://canary.nwflmensa.us/sign-in');
+    }
+  });
+
+  it('keeps asking again (a fresh token, A14)', async () => {
+    const out = await beginSignIn(onCanary(), { cookieHeader: undefined, back: '/news', again: true, host: 'nwflorida.us' });
+    expect(out.kind === 'redirect' && out.location).toBe('https://canary.nwflmensa.us/sign-in?return=%2Fnews&again=1');
+  });
+
+  it.each(['canary.nwflmensa.us', 'canary.nwflmensa.us:443', 'Canary.NWFLmensa.us', 'localhost:8443', 'evil.example', 'canary.nwflmensa.us.evil.example', `x${'@'}www.nwflmensa.us`, '', undefined, null])(
+    'signs in as before on the profile’s own host, or on a host that is not ours (%j)',
+    async (host) => {
+      const d = onCanary();
+      const out = await beginSignIn(d, { cookieHeader: undefined, back: '/about', host });
+      expect(out).toMatchObject({ kind: 'redirect', location: 'https://login.nwflorida.us/auth?n=1' });
+      expect(d.oidc.startSignIn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('is unavailable on any host when sign-in is off, as before', async () => {
+    const off = deps({ setup: { enabled: false, reason: 'SITE_ORIGIN is not set' } as AuthSetup });
+    expect(await beginSignIn(off, { cookieHeader: undefined, back: '/news', host: 'www.nwflmensa.us' })).toEqual({ kind: 'unavailable' });
+    expect(await beginSignIn(onCanary({ key: undefined }), { cookieHeader: undefined, back: '/news', host: 'www.nwflmensa.us' })).toEqual({ kind: 'unavailable' });
+  });
+
+  it('starts there for the local provider too: the callback’s origin is where the cookie lives', async () => {
+    const local = deps({ setup: { enabled: true, config: { ...cfg, redirectUri: 'https://localhost:8443/auth/callback' } } });
+    const out = await beginSignIn(local, { cookieHeader: undefined, back: '/news', host: 'www.nwflmensa.us' });
+    expect(out.kind === 'redirect' && out.location).toBe('https://localhost:8443/sign-in?return=%2Fnews');
+  });
+
+  it('signs in as before when the callback is not a URL (a local misconfiguration), rather than guess', async () => {
+    const d = deps({ setup: { enabled: true, config: { ...cfg, redirectUri: 'not a url' } } });
+    const out = await beginSignIn(d, { cookieHeader: undefined, back: '/news', host: 'www.nwflmensa.us' });
+    expect(out).toMatchObject({ kind: 'redirect', location: 'https://login.nwflorida.us/auth?n=1' });
+  });
+});
+
 describe('completeSignIn: the callback', () => {
   const url = (params: Record<string, string>) => new URL(`https://nwflorida.us/auth/callback?${new URLSearchParams(params)}`);
 

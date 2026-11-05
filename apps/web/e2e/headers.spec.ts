@@ -4,7 +4,7 @@ import { expect, test, type APIResponse } from '@playwright/test';
 import { SESSION_COOKIE, parseCsp, securityHeaders } from '../server/policy.mjs';
 import { SIZES, SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../server/prefs.mjs';
 import { ALL_PAGES, PRERENDERED } from './pages';
-import { BACKEND_URL, IDP_ORIGIN } from './servers';
+import { BACKEND_URL, IDP_ORIGIN, SITE_URL } from './servers';
 
 // With the test identity provider configured, forms may lead to it (sign-out).
 const SECURITY_HEADERS = securityHeaders({ formAction: [IDP_ORIGIN] });
@@ -181,6 +181,47 @@ test('the full build keeps sign-in: it starts at the provider, and the header li
   expect(res.status()).toBe(303);
   expect(res.headers()['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/auth\\?`));
   expect(await (await request.get('/about')).text()).toMatch(/href="\/sign-in\?return=%2Fabout"/);
+});
+
+/** A GET to the server as cloudflared sends it, with the Host the reader asked for. */
+function onHost(path: string, host: string) {
+  return new Promise<{ status: number; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
+    const req = http.request(`${BACKEND_URL}${path}`, { headers: { host, 'x-forwarded-proto': 'https' } });
+    req.on('response', (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode!, headers: res.headers }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// S2: the session cookie is host-only on the callback's origin (in production, the SITE_ORIGIN
+// profile's; here the e2e edge's), so /sign-in on another of our hosts starts there, never stored.
+test('/sign-in on another of our hosts starts on the callback’s origin, with the same return', async () => {
+  for (const host of ['www.nwflmensa.us', 'nwflorida.us', 'canary.nwflorida.us', 'canary.nwflmensa.us']) {
+    const res = await onHost('/sign-in?return=%2Fnews', host);
+    expect(res.status, host).toBe(303);
+    expect(res.headers['location'], host).toBe(`${SITE_URL}/sign-in?return=%2Fnews`);
+    expect(res.headers['cache-control'], host).toBe('private, no-store');
+    expect(res.headers['set-cookie'], host).toBeUndefined();
+  }
+  expect((await onHost('/sign-in?return=%2Fnews&again=1', 'www.nwflmensa.us')).headers['location']).toBe(`${SITE_URL}/sign-in?return=%2Fnews&again=1`);
+});
+
+test('/sign-in on another of our hosts never carries a return off the site', async () => {
+  for (const back of ['%2F%2Fevil.example%2F', 'https%3A%2F%2Fevil.example%2F', '%2F%5Cevil.example', '']) {
+    const res = await onHost(`/sign-in?return=${back}`, 'www.nwflmensa.us');
+    expect(res.status, back).toBe(303);
+    expect(res.headers['location'], back).toBe(`${SITE_URL}/sign-in`);
+  }
+});
+
+test('/sign-in on a host that is not ours starts at the provider, as before; a callback on another host is refused', async () => {
+  const res = await onHost('/sign-in?return=%2Fnews', 'evil.example');
+  expect(res.status).toBe(303);
+  expect(res.headers['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/auth\\?`));
+  expect((await onHost('/auth/callback?code=x&state=y', 'www.nwflmensa.us')).status).toBe(400);
 });
 
 test('the full build shows the submitted content the canary hides (the other half of canary condition 3)', async ({ request }) => {

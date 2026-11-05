@@ -6,6 +6,7 @@
 // are listed honestly. Large-type reading views arrive with the archive (MB3).
 // Under each issue with a PDF, a reader who is not signed in is told to sign in for the
 // members copy, where sign-in works (membersSignInLink); a signed-in reader never is.
+// S2: with that line, or the one to sign in again, the page says once which password to use.
 // A14: read with a signed-in reader's token (src/lib/auth/bearer.ts), the page
 // shows what the API sent that reader: a member gets each issue's members copy
 // and the newsletter's members articles and passages. A lapsed token gives the
@@ -20,6 +21,7 @@ import { PUBLIC_ONLY } from 'astro:env/server';
 import IssueCard from '../components/IssueCard.astro';
 import ItemFiles from '../components/ItemFiles.astro';
 import MembersSignIn from '../components/MembersSignIn.astro';
+import PasswordNote from '../components/PasswordNote.astro';
 import SampleNotice from '../components/SampleNotice.astro';
 import Unavailable from '../components/Unavailable.astro';
 import { liveData, siteData } from '../data';
@@ -52,6 +54,7 @@ const items = news?.items ?? [];
   <h1>{p.title}</h1>
   <p class="lead">Pensa Mensa, our newsletter: {p.description.charAt(0).toLowerCase()}{p.description.slice(1)}</p>
   {lapsed && <p class="notice" role="note">Your sign-in has expired for members-only reading. {signIn ? <a href={signIn}>Sign in again</a> : 'Sign in again'}.</p>}
+  {(membersSignIn || (lapsed && signIn)) && <PasswordNote />}
   {news?.tokenRefused && <p class="notice" role="note">Members-only reading is not available for this sign-in. <a href="/help">Ask for help</a>.</p>}
   {!loaded.ok ? <Unavailable what="The list of issues" /> : (
     <>

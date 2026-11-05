@@ -52,7 +52,30 @@ CI for this app is the root's `.github/workflows/web.yml`; it runs when `apps/we
 
 ## Sign-in and sessions
 
-Sign-in needs `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `OIDC_POST_LOGOUT_REDIRECT_URI` and `SESSION_KEY` (`openssl rand -base64 32`); without them the site runs with everyone signed out. In production the issuer must be on `https://login.nwflorida.us`. The provider must use `client_secret_post` and put the chapter's groups in the ID token. `SITE_GROUP_PREFIX` (default `nwfl-`, e.g. `mensa-nwfl-`) names them; the session keeps only those, by their internal `nwfl-` names (`server/groups.mjs`), and the API must be given the same value. A malformed prefix, or a one-word prefix other than the default, turns sign-in off. A groups claim that is not a list of strings refuses the sign-in, as the API refuses such a token. The session keeps at most 20 groups after the rename, while the API reads them all from the token, so a person with more than 20 can only get less on the web side, never more. **Rotate `SESSION_KEY` whenever `SITE_GROUP_PREFIX` changes.** A session holds the role names it was given at sign-in, so without a new key an officer session from the old prefix keeps its role for up to 12 hours, and a member session for up to 30 days.
+Sign-in needs `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URI`, `OIDC_POST_LOGOUT_REDIRECT_URI` and `SESSION_KEY` (`openssl rand -base64 32`); without them the site runs with everyone signed out. In production (`NODE_ENV=production`, as in the image) it also needs `SITE_ORIGIN`, which must be exactly one of the frozen profiles in `server/auth-config.mjs` (`SITE_PROFILES`):
+
+| `SITE_ORIGIN` | Issuer origin | `OIDC_REDIRECT_URI` | `OIDC_POST_LOGOUT_REDIRECT_URI` |
+|---|---|---|---|
+| `https://canary.nwflmensa.us` | `https://login.nwflmensa.us` | `https://canary.nwflmensa.us/auth/callback` | `https://canary.nwflmensa.us/signed-out` |
+| `https://nwflmensa.us` | `https://login.nwflmensa.us` | `https://nwflmensa.us/auth/callback` | `https://nwflmensa.us/signed-out` |
+
+`OIDC_ISSUER` must then be https on the profile's issuer origin at `/application/o/<slug>/` (an Authentik provider; no port, user, query or fragment), and the two redirects must equal the profile's exactly. Anything else turns sign-in off; the server logs `sign-in is off` with the reason at start, naming settings and the profile's own values but never a value it was given. There is no nwflorida.us profile: the public domain waits on the ExComm, and adding it is one row and its tests. Outside production no profile is read, so the tests and the e2e suite use their local provider. A valid `SITE_ORIGIN` is also the origin the site falls back to for a Host it does not know (`server/public-hosts.mjs`). The session cookie is host-only on the callback's origin, so `/sign-in` asked for on another of the site's hosts (www, the old domain) answers 303 to the profile's `/sign-in`, with the same return when it is a path on this site, never stored; a callback on another host is refused.
+
+For the canary, with fc's F-D1 provider, the cluster sets exactly:
+
+```sh
+NODE_ENV=production            # the image's own
+SITE_ORIGIN=https://canary.nwflmensa.us
+OIDC_ISSUER=https://login.nwflmensa.us/application/o/nwfl-site-staging/
+OIDC_CLIENT_ID=nwfl-site-staging
+OIDC_CLIENT_SECRET=<client_secret from OpenBao secret/nwfl-mensa/site/oidc-staging>
+OIDC_REDIRECT_URI=https://canary.nwflmensa.us/auth/callback
+OIDC_POST_LOGOUT_REDIRECT_URI=https://canary.nwflmensa.us/signed-out
+SITE_GROUP_PREFIX=mensa-nwfl-
+SESSION_KEY=<32 random bytes, base64>
+```
+
+The API gets the same issuer and prefix (`SITE_OIDC_ISSUER`, `SITE_GROUP_PREFIX`) and `SITE_OIDC_AUDIENCE=nwfl-site-staging`. Sign-in pages say, in plain words, that this is not the reader's American Mensa password: the site never asks for that one. The provider must use `client_secret_post` and put the chapter's groups in the ID token. `SITE_GROUP_PREFIX` (default `nwfl-`, e.g. `mensa-nwfl-`) names them; the session keeps only those, by their internal `nwfl-` names (`server/groups.mjs`), and the API must be given the same value. A malformed prefix, or a one-word prefix other than the default, turns sign-in off. A groups claim that is not a list of strings refuses the sign-in, as the API refuses such a token. The session keeps at most 20 groups after the rename, while the API reads them all from the token, so a person with more than 20 can only get less on the web side, never more. **Rotate `SESSION_KEY` whenever `SITE_GROUP_PREFIX` changes.** A session holds the role names it was given at sign-in, so without a new key an officer session from the old prefix keeps its role for up to 12 hours, and a member session for up to 30 days.
 
 Sessions and their tokens are held in the server's memory, so **the site runs as one replica until W5a**, which moves them to a shared store behind the API; the server logs `session_store: memory (single replica)` at start. A session is valid only while its record is there: sign-out deletes it, so a copy of the cookie is dead at once, and a restart signs everyone out.
 
