@@ -205,7 +205,7 @@ describe('acceptedLinks: exactly the shape, at the request\'s place, for the ids
       ['a GoToR action', (annot, doc) => annot.set(PDFName.of('A'), doc.context.obj({ S: 'GoToR', F: PDFString.of('x.pdf'), D: [0, 'Fit'] }))],
       ['a URI action with an extra key', (annot, doc) => annot.set(PDFName.of('A'), doc.context.obj({ S: 'URI', URI: PDFString.of(linkUri(ORIGIN, id(1))), Next: { S: 'Launch' } }))],
       ['another origin, as a suffix', uri(`https://nwflorida.us.evil.example/out/${id(1)}`)],
-      ['credentials before another host', uri(`https://nwflorida.us@evil.example/out/${id(1)}`)],
+      ['credentials before another host', uri(`https://nwflorida.us@example.net/out/${id(1)}`)],
       ['a dot segment', uri(`https://nwflorida.us/out/../${id(1)}`)],
       ['a dot segment after the id', uri(`https://nwflorida.us/out/${id(1)}/../../x`)],
       ['a query', uri(`https://nwflorida.us/out/${id(1)}?to=https://evil.example/`)],

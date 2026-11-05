@@ -177,7 +177,7 @@ describe('the gate: exactly the engine\'s links, and the text under each is the 
       ['a JavaScript action', (doc) => page(doc, [doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [...OVER_URL], Border: [0, 0, 0], F: 4, A: { S: 'JavaScript', JS: PDFString.of('app.launchURL("https://evil.example/")') }, Contents: PDFString.of('Link to site.example') })), plainD(doc)])],
       ['a Launch action', (doc) => page(doc, [doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [...OVER_URL], Border: [0, 0, 0], F: 4, A: { S: 'Launch', F: PDFString.of('cmd.exe') }, Contents: PDFString.of('Link to site.example') })), plainD(doc)])],
       ['<origin>.evil', (doc) => page(doc, [annot(doc, {}, `https://nwflorida.us.evil.example/out/${id('a')}`), plainD(doc)])],
-      ['<origin>@evil', (doc) => page(doc, [annot(doc, {}, `https://nwflorida.us@evil.example/out/${id('a')}`), plainD(doc)])],
+      ['<origin>@evil', (doc) => page(doc, [annot(doc, {}, `https://nwflorida.us@example.net/out/${id('a')}`), plainD(doc)])],
       ['/out/../', (doc) => page(doc, [annot(doc, {}, `https://nwflorida.us/out/../${id('a')}`), plainD(doc)])],
       ['upper case', (doc) => page(doc, [annot(doc, {}, `HTTPS://NWFLORIDA.US/out/${id('a')}`), plainD(doc)])],
       ['a homoglyph origin', (doc) => page(doc, [annot(doc, {}, `https://nwflоrida.us/out/${id('a')}`), plainD(doc)])],
@@ -210,5 +210,26 @@ describe('the gate: exactly the engine\'s links, and the text under each is the 
     expect(await linkTextBreak(copy, original, { origin: ORIGIN, links: [link('a', OVER_URL, { page: 2 })], kept: [id('a')] })).toBeTypeOf('string');
     expect(await linkTextBreak(copy, Uint8Array.from([1, 2, 3]), { origin: ORIGIN, links, kept: [id('a')] })).toBe('the text under the links cannot be read');
     expect(await linkTextBreak(copy, original, { origin: ORIGIN, links, kept: [] })).toBeNull();
+  });
+
+  it('refuses what pdf.js reads besides the kept links: another annotation, a link twice, a request with no origin or no links; a link over blank paper reads alike', async () => {
+    const original = await newsletter();
+    const links = [link('a', OVER_URL)];
+    const kept = [id('a')];
+    const STRAY = 'pdf.js reads other annotations in the copy than the links the engine kept';
+    const withNote = await subverted(original, (doc) => {
+      writeLinks(doc, ORIGIN, links);
+      const note = doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Text', Rect: [400, 400, 420, 420], Contents: PDFString.of('note') }));
+      doc.getPage(0).node.lookup(PDFName.of('Annots'), PDFArray).push(note);
+    });
+    expect(await linkTextBreak(withNote, original, { origin: ORIGIN, links, kept })).toBe(STRAY);
+    const twice = await subverted(original, (doc) => writeLinks(doc, ORIGIN, [links[0]!, links[0]!]));
+    expect(await linkTextBreak(twice, original, { origin: ORIGIN, links, kept })).toBe(STRAY);
+    const copy = await subverted(original, (doc) => writeLinks(doc, ORIGIN, links));
+    expect(await linkTextBreak(copy, original, { links, kept })).toBe(STRAY);
+    expect(await linkTextBreak(copy, original, { origin: ORIGIN, kept })).toBe(STRAY);
+    expect(await linkTextBreak(copy, original, { origin: ORIGIN, links })).toBeNull();
+    const blank = [link('b', [400, 100, 500, 120])];
+    expect(await linkTextBreak(await subverted(original, (doc) => writeLinks(doc, ORIGIN, blank)), original, { origin: ORIGIN, links: blank, kept: [id('b')] })).toBeNull();
   });
 });

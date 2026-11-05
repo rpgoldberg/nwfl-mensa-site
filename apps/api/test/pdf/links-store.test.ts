@@ -131,17 +131,17 @@ describe.skipIf(!live)('LINKS L3: links in the inputs, the kept ids and the boot
       await attach(f, [
         web('f', 'rides/kestrel-ambry'),
         web('g', 'picnic'),
-        { ...web('h', 'h'), url: 'mailto:wrenhallow.lane@mail.example', host: 'mail.example', kind: 'mail' },
+        { ...web('h', 'h'), url: 'mailto:wrenhallow.lane@example.org', host: 'example.org', kind: 'mail' },
         web('i', 'p?to=Kestrel%20Ambry'),
         // In the host, split by dots; in punycode; a mail address withheld itself.
         { ...web('r', 'x'), url: 'https://kestrel.ambry.example/x', host: 'kestrel.ambry.example' },
         { ...web('s', 'x'), url: 'https://xn--qillon-brask-dlb.example/x', host: 'xn--qillon-brask-dlb.example' },
-        { ...web('t', 't'), url: 'mailto:q.brask@mail.example', host: 'mail.example', kind: 'mail' },
+        { ...web('t', 't'), url: 'mailto:q.brask@example.org', host: 'example.org', kind: 'mail' },
       ]);
       await mark(item, 'Kestrel Ambry', 'member_phone');
       await mark(item, 'Wrenhallow Lane', 'member_address');
       await mark(item, 'qüillon brask', 'member_phone');
-      await mark(item, 'q.brask@mail.example', 'member_email');
+      await mark(item, 'q.brask@example.org', 'member_email');
       const pub = await copyOf(f, 'public');
       const members = await copyOf(f, 'members');
       // The public redacts phones, emails and addresses; members redact addresses only.
@@ -255,6 +255,21 @@ describe.skipIf(!live)('LINKS L3: links in the inputs, the kept ids and the boot
       await drain(worker, { redact: refusing, origin: ORIGIN });
       expect((await root.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND status = 'refused'`, [f])).rowCount).toBeGreaterThan(0);
       expect(await sweepCopies(worker, { origin: ORIGIN })).toEqual([]);
+    });
+
+    it('passes over a file no audience is given a copy of, reads LINK_ORIGIN when given no origin, and stores no links for an engine that names none', async () => {
+      const silent: Redact = () => Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(Buffer.from('copy')), boxes: [] });
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      // Officers only: officers are given the original, everyone else nothing.
+      const { file: officers } = await file('officers');
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      const { file: f } = await file();
+      await attach(f, [web('u', 'u')]);
+      await drain(worker, { redact: silent });
+      expect(await linksOf(f)).toEqual([]);
+      expect((await root.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND status = 'ready'`, [f])).rowCount).toBeGreaterThan(0);
+      expect(await sweepCopies(worker)).toEqual([]);
+      expect(await queued(officers)).toBe(false);
     });
   });
 
