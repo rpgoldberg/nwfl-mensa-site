@@ -7,7 +7,7 @@ import { SIZES, SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
 import { isSignInPath } from '../../src/lib/access';
 import { ALL_PAGES } from '../pages';
 
-const GATED = ['/sign-in', '/sign-out', '/signed-out', '/auth', '/auth/callback', '/auth/callback?code=x&state=y', '/auth/sign-out', '/officer-area', '/officer-area/new', '/officer-area/queue'];
+const GATED = ['/sign-in', '/sign-out', '/signed-out', '/auth', '/auth/callback', '/auth/callback?code=x&state=y', '/auth/sign-out', '/officer-area', '/officer-area/new', '/officer-area/queue', '/officer-area/sign-ups', '/account'];
 const PUBLIC = ALL_PAGES.filter((path) => !isSignInPath(path));
 
 const setCookies = (res: APIResponse) => res.headersArray().filter((h) => h.name.toLowerCase() === 'set-cookie').map((h) => h.value);
@@ -42,7 +42,7 @@ test('(3) no officer- or member-submitted content, and no way to sign in, on any
   for (const path of PUBLIC) {
     const html = await (await request.get(path)).text();
     expect(html, path).not.toMatch(/data-source="submitted"/);
-    expect(html, path).not.toMatch(/href="\/(sign-in|auth|officer-area)\b/);
+    expect(html, path).not.toMatch(/href="\/(sign-in|auth|officer-area|account)\b/);
   }
   // The archive pipeline's items still show.
   expect(await (await request.get('/news')).text()).toMatch(/data-source="pipeline"/);
@@ -106,7 +106,7 @@ const SPELLINGS = (route: string) => {
 };
 
 test('(5) the gate holds however the path is spelled, for every sign-in route and method', async ({ request, baseURL }) => {
-  for (const route of ['/sign-in', '/sign-out', '/signed-out', '/auth/callback', '/officer-area', '/officer-area/new']) {
+  for (const route of ['/sign-in', '/sign-out', '/signed-out', '/auth/callback', '/officer-area', '/officer-area/new', '/account']) {
     for (const path of SPELLINGS(route)) {
       // Joined by hand: a leading // would otherwise be read as another host.
       const url = `${baseURL}${path}`;

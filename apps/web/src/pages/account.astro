@@ -1,0 +1,148 @@
+---
+// W-SIGNUP D3: a signed-in person's own account. One of the group's enrolees with no account yet gets
+// plain words and the sign-up form: their last name and Mensa membership number, both required (D1),
+// sent to the API with their own token (src/lib/api/membership.ts), which takes their name and email
+// from that token. Then: "Your sign-up is waiting for an officer to approve it." A member (officers
+// too) sees their standing and the day it was last checked. An account that is not the group's (no
+// enrolee group) gets a plain line and no form. The callback sends a person with no account here
+// once, after signing in (src/lib/signup.ts firstStop).
+//
+// Not signed in: sign in first. It works with no script: the form posts here, answered with this page
+// or a 303 back here. Astro's origin check refuses a cross-site post first; the body is capped and
+// must be a form (src/lib/form.ts). The number is never given back in the page, nor logged (D6).
+import Unavailable from '../components/Unavailable.astro';
+import Base from '../layouts/Base.astro';
+import { MembershipSignInAgain, type MyAccount, SignupRefused, membershipApi, sessionReader } from '../lib/api/membership';
+import { markUnavailable } from '../lib/api/page';
+import { runtimeDeps } from '../lib/auth/flow';
+import { readForm } from '../lib/form';
+import { ACCOUNT_PATH, MAX_LAST_NAME, MAX_NUMBER_DIGITS, SIGNUP_REFUSED, STANDING_TEXT, type SignupErrors, accountView, formatDay, parseSignupForm } from '../lib/signup';
+import { page } from '../lib/site';
+
+export const prerender = false;
+
+const HERE = ACCOUNT_PATH;
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+/** Two short fields: a last name of 80 characters, percent-encoded, fits many times over. */
+const MAX_FORM_BYTES = 4 * 1024;
+
+const session = Astro.locals.session;
+if (!session) return Astro.redirect(SIGN_IN, 303);
+const p = page(HERE);
+const api = membershipApi();
+const { reader } = sessionReader(session, runtimeDeps());
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+let invalid: { errors: SignupErrors; values: { lastName: string } } | undefined;
+let refused: keyof typeof SIGNUP_REFUSED | undefined;
+let problem: 'sign-in' | 'unavailable' | undefined;
+const posted = Astro.request.method === 'POST';
+
+if (posted) {
+  const read = await readForm(Astro.request, MAX_FORM_BYTES);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const parsed = parseSignupForm(read.field);
+  if (!session.enrolee) {
+    // Not one of the group's accounts: there is no sign-up to send (the page says so below).
+    Astro.response.status = 403;
+  } else if (!parsed.ok) {
+    invalid = parsed;
+    Astro.response.status = 400;
+  } else if (api === undefined) {
+    problem = 'unavailable';
+  } else if (reader === undefined) {
+    problem = 'sign-in';
+  } else {
+    try {
+      await api.submitSignup(reader, parsed.value);
+      return Astro.redirect(`${HERE}?sent=1`, 303);
+    } catch (error) {
+      if (error instanceof SignupRefused) {
+        refused = error.reason;
+        Astro.response.status = error.reason === 'invalid' ? 400 : 409;
+      } else {
+        problem = error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+      }
+    }
+  }
+}
+
+let account: MyAccount | undefined;
+let loaded = false;
+if (api !== undefined && reader !== undefined) {
+  try {
+    account = await api.getMyAccount(reader);
+    loaded = true;
+  } catch (error) {
+    problem ??= error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+  }
+} else {
+  problem ??= api === undefined ? 'unavailable' : 'sign-in';
+}
+if (problem === 'unavailable') markUnavailable(Astro.response);
+
+const view = loaded ? accountView(session, account) : undefined;
+const sent = !posted && Astro.url.searchParams.get('sent') === '1' && view === 'waiting';
+const checked = account?.verifiedOn !== undefined && (view === 'member' || view === 'affiliate' || view === 'lapsed') ? formatDay(account.verifiedOn) : undefined;
+const errors = invalid?.errors ?? {};
+const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  {problem === 'sign-in' && (
+    <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>{posted ? ', then send your sign-up again.' : '.'}</p>
+  )}
+  {problem === 'unavailable' && <Unavailable what="Your account" />}
+  {refused && <p class="notice" role="alert">{SIGNUP_REFUSED[refused]}</p>}
+  {sent && <p class="notice" role="status">Thank you. Your sign-up has been sent.</p>}
+
+  {view === 'form' && (
+    <>
+      <p class="lead">Welcome, {session.name}. To read the members' pages, tell us your last name and your Mensa membership number. An officer checks them against the group's membership list, then approves your account.</p>
+      <form method="post" action={HERE} class="rule-form" novalidate>
+        <fieldset>
+          <legend>Your sign-up</legend>
+          <label for="lastName">Last name</label>
+          <p class="hint" id="lastName-hint">Needed. As it is on your Mensa membership.</p>
+          {errors.lastName && <p class="error" id="lastName-error">Problem: {errors.lastName}</p>}
+          <input
+            type="text"
+            id="lastName"
+            name="lastName"
+            autocomplete="family-name"
+            maxlength={MAX_LAST_NAME}
+            required
+            value={invalid?.values.lastName ?? ''}
+            aria-invalid={errors.lastName ? 'true' : undefined}
+            aria-describedby={describedBy('lastName-hint', errors.lastName && 'lastName-error')}
+          />
+          <label for="membershipNumber">Mensa membership number</label>
+          <p class="hint" id="membershipNumber-hint">Needed. Digits only, up to {MAX_NUMBER_DIGITS}. It is on your membership card and in your renewal email. It is used only for this check, then erased.</p>
+          {errors.membershipNumber && <p class="error" id="membershipNumber-error">Problem: {errors.membershipNumber}</p>}
+          <input
+            type="text"
+            id="membershipNumber"
+            name="membershipNumber"
+            inputmode="numeric"
+            autocomplete="off"
+            maxlength={MAX_NUMBER_DIGITS}
+            required
+            aria-invalid={errors.membershipNumber ? 'true' : undefined}
+            aria-describedby={describedBy('membershipNumber-hint', errors.membershipNumber && 'membershipNumber-error')}
+          />
+          <div class="btns"><button class="button" type="submit">Send my sign-up</button></div>
+        </fieldset>
+      </form>
+      <p>Once you send it, an officer will look at it. Until then you can read every public page.</p>
+    </>
+  )}
+
+  {view !== undefined && view !== 'form' && (
+    <>
+      <p class="lead">{STANDING_TEXT[view]}</p>
+      {checked && <p>It was last checked against the membership list on {checked}.</p>}
+      {view === 'waiting' && <p>Until then you can read every public page. Member access starts as soon as it is approved.</p>}
+      {(view === 'lapsed' || view === 'removed' || view === 'not-club') && <p>If you think this is a mistake, please <a href="/officers">contact an officer</a>.</p>}
+    </>
+  )}
+</Base>

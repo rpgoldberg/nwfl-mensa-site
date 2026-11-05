@@ -19,9 +19,9 @@ import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope, type ApprovalSetting } from '../../gen/nwfl/mensa/v1/approval_pb.js';
 import { type Rule, type Scope, type Setting, isAdmin } from '../approval-rules';
-import { EXPIRY_MARGIN_SECONDS } from '../auth/bearer';
 import type { Tokens } from '../auth/oidc';
 import { type ApiConfig, ApiUnavailable, READ_MAX_BYTES, type Reader, apiSetup, sendable } from './client';
+import { sessionReader } from './membership';
 
 /** The officer's token was refused, has run out, or is not one to send: sign in again. */
 export class OfficerSignInAgain extends Error {
@@ -139,12 +139,8 @@ export interface OfficerReaderDeps {
  * The officer's access token to send, if any: for an officer's (or the Admin's) live session whose
  * token has more than 30 seconds to live. Lapsed when that session or token has run out (sign in again).
  */
-export function officerReader(session: Session | undefined, { tokens, now }: OfficerReaderDeps): { reader: Reader | undefined; lapsed: boolean } {
+export function officerReader(session: Session | undefined, deps: OfficerReaderDeps): { reader: Reader | undefined; lapsed: boolean } {
   if (session === undefined || (!session.officer && !isAdmin(session))) return { reader: undefined, lapsed: false };
-  const at = now();
-  if (session.exp <= at) return { reader: undefined, lapsed: true };
-  const record = tokens.get(session.sid, at);
-  const expiresAt = record?.expires_at;
-  if (record === undefined || record.access_token === '' || typeof expiresAt !== 'number' || expiresAt - EXPIRY_MARGIN_SECONDS <= at) return { reader: undefined, lapsed: true };
-  return { reader: { bearer: record.access_token }, lapsed: false };
+  // W-SIGNUP: the same token rule as every signed-in call (membership.ts sessionReader).
+  return sessionReader(session, deps);
 }

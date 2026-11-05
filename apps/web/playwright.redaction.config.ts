@@ -44,7 +44,9 @@ export default defineConfig({
         SITE_OIDC_JWKS_URL: `${REDACTION.idpUrl}/jwks`,
         IDP_CA_FILE: tls.caFile,
         // AC6 (b): standing in the API's records; the enrolees' claims hold nwfl-users alone (e2e/idp.mjs).
-        MEMBER_SUBS: [ACCOUNTS.member, ACCOUNTS.enrolee].join(','),
+        // W-SIGNUP D3: the officer (an enrolee by the members group) has a member account too, as officers
+        // do, so signing in returns them to /news rather than sending them to /account to sign up.
+        MEMBER_SUBS: [ACCOUNTS.member, ACCOUNTS.enrolee, ACCOUNTS.officer].join(','),
         PENDING_SUBS: ACCOUNTS['enrolee-pending'],
       },
       timeout: 180_000,

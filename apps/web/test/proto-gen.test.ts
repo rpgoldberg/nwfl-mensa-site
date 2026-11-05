@@ -25,6 +25,15 @@ describe('src/gen', () => {
 
   it('holds the read side the site uses, and nothing it should not call', () => {
     // approval_pb.js: the officer area's approval rule (SOLO-APPROVE), read by officers and set by the Admin.
-    expect(files('src/gen').filter((f) => f.endsWith('.js'))).toEqual(['nwfl/mensa/v1/approval_pb.js', 'nwfl/mensa/v1/common_pb.js', 'nwfl/mensa/v1/content_pb.js', 'nwfl/mensa/v1/edition_pb.js', 'nwfl/mensa/v1/event_pb.js', 'nwfl/mensa/v1/roster_pb.js']);
+    // membership_pb.js: W-SIGNUP's first-sign-in page and the approvers' queue (MembershipService).
+    expect(files('src/gen').filter((f) => f.endsWith('.js'))).toEqual([
+      'nwfl/mensa/v1/approval_pb.js',
+      'nwfl/mensa/v1/common_pb.js',
+      'nwfl/mensa/v1/content_pb.js',
+      'nwfl/mensa/v1/edition_pb.js',
+      'nwfl/mensa/v1/event_pb.js',
+      'nwfl/mensa/v1/membership_pb.js',
+      'nwfl/mensa/v1/roster_pb.js',
+    ]);
   });
 });

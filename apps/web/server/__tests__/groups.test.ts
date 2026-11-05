@@ -18,7 +18,7 @@ describe('parseGroupPrefix', () => {
     expect(() => parseGroupPrefix(prefix)).toThrow(/SITE_GROUP_PREFIX/);
   });
 
-  it.each(['nwfl-office-', 'mensa-nwfl-role-', 'nwfl-officers-', 'mensa-admin-', 'members-', 'nwfl-membership-', 'x-approvers-', 'webmaster-x-', 'affiliates-'])(
+  it.each(['nwfl-office-', 'mensa-nwfl-role-', 'nwfl-officers-', 'mensa-admin-', 'members-', 'nwfl-membership-', 'x-approvers-', 'webmaster-x-', 'affiliates-', 'mensa-invited-', 'invited-x-'])(
     'refuses %s, which holds a role word',
     (prefix) => {
       expect(() => parseGroupPrefix(prefix)).toThrow(/SITE_GROUP_PREFIX .* role word/);
@@ -35,6 +35,10 @@ describe('parseGroupPrefix: a family and a chapter (CF-ISO-0 N5)', () => {
 describe('internalGroups', () => {
   it('with the default prefix, keeps today\'s nwfl- groups and drops every other', () => {
     expect(internalGroups(['nwfl-members', 'nwfl-officers', 'fc-admins', 'NWFL-OFFICERS', 'mensa-nwfl-officers'], 'nwfl-')).toEqual(['nwfl-members', 'nwfl-officers']);
+  });
+
+  it('W-SIGNUP D2: with mensa-nwfl-, reads mensa-nwfl-invited as nwfl-invited, the same as the API', () => {
+    expect(internalGroups(['mensa-nwfl-users', 'mensa-nwfl-members', 'mensa-nwfl-invited', 'nwfl-invited', 'mensa-other-invited'], 'mensa-nwfl-')).toEqual(['nwfl-users', 'nwfl-members', 'nwfl-invited']);
   });
 
   it('with mensa-nwfl-, renames its groups and drops a bare nwfl- group and another chapter\'s', () => {

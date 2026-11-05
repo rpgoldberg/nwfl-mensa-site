@@ -920,6 +920,21 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
   border-radius: var(--radius);
   font: inherit;
 }
+/* W-SIGNUP: the sign-up form's two text boxes, as large and plain as the reason box. */
+.rule-form input[type="text"] {
+  width: 100%;
+  max-width: 24rem;
+  min-height: var(--target);
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink);
+  background: var(--surface);
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+  font: inherit;
+}
 .rule-form .hint { margin: 0; color: var(--muted); }
 .rule-form .error { margin: 0; color: var(--ink); font-weight: 700; }
 .rule-form [aria-invalid="true"] { border-color: var(--warn); border-width: 0.1875rem; }
+
+/* W-SIGNUP: the approvers' queue: one card per sign-up, its decisions as plain buttons below. */
+.signup-card form { margin: 0; }

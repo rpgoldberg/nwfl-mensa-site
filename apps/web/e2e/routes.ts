@@ -9,6 +9,8 @@
 //           and is crawled all the same.
 //   OFFICER reads the API for a signed-in officer only; the public is sent to
 //           sign in. Crawled as STATIC is.
+//   SIGNED_IN reads the API for any signed-in person, about their own account
+//           only (W-SIGNUP); the public is sent to sign in. Crawled as STATIC is.
 import { eventPath } from '../src/lib/calendar';
 
 export interface RouteContext {
@@ -42,6 +44,17 @@ export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
 export const OFFICER: Readonly<Record<string, readonly string[]>> = {
   '/officer-area': ['/officer-area'],
   '/officer-area/approval-rules': ['/officer-area/approval-rules'],
+  // W-SIGNUP D4: the approvers' queue, read with their own token (src/lib/api/membership.ts).
+  '/officer-area/sign-ups': ['/officer-area/sign-ups'],
+};
+
+/**
+ * SIGNED_IN: reads the API for any signed-in person, about their own account only, with their own
+ * token (src/lib/api/membership.ts, W-SIGNUP D3); the public is sent to sign in, so it reads nothing
+ * for the public, and is crawled as STATIC is.
+ */
+export const SIGNED_IN: Readonly<Record<string, readonly string[]>> = {
+  '/account': ['/account'],
 };
 
 export const STATIC: Readonly<Record<string, readonly string[]>> = {
@@ -76,7 +89,7 @@ export function routeOf(file: string): string {
 
 /** The route pattern a path matches, or undefined. */
 export function patternOf(pathname: string): string | undefined {
-  const all = [...Object.keys(LIVE), ...Object.keys(STATIC), ...Object.keys(OFFICER)];
+  const all = [...Object.keys(LIVE), ...Object.keys(STATIC), ...Object.keys(OFFICER), ...Object.keys(SIGNED_IN)];
   const exact = all.find((p) => p === pathname);
   if (exact) return exact;
   // The longest pattern first: /events/x.ics is /events/[id].ics, not /events/[id].
@@ -87,5 +100,5 @@ export function patternOf(pathname: string): string | undefined {
 
 /** Every URL to start a crawl from. */
 export function crawlSeeds(c: RouteContext): string[] {
-  return [...Object.values(LIVE).flatMap((urls) => urls(c)), ...Object.values(STATIC).flat(), ...Object.values(OFFICER).flat()];
+  return [...Object.values(LIVE).flatMap((urls) => urls(c)), ...Object.values(STATIC).flat(), ...Object.values(OFFICER).flat(), ...Object.values(SIGNED_IN).flat()];
 }

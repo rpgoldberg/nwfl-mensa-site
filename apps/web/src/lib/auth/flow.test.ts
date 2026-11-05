@@ -107,6 +107,8 @@ describe('completeSignIn: the callback', () => {
     expect(out.cookies[0]).toBe(`${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`);
     const session = readSession(jar(out.cookies), key, NOW, d.tokens);
     expect(session).toMatchObject({ sub: 'user-1', name: 'Alex Sample', officer: true });
+    // W-SIGNUP D3: the new session goes back to the callback, which picks the first stop by it.
+    expect(out.session).toEqual(session);
     expect(out.cookies.join()).not.toMatch(/access-1|id-1/);
     expect(d.tokens.get(session!.sid, NOW)).toMatchObject({ access_token: 'access-1', id_token: 'id-1' });
     expect(d.oidc.finishSignIn).toHaveBeenCalledWith(cfg, expect.any(URL), expect.objectContaining({ state, nonce: 'nonce-1', verifier: 'verifier-1' }));

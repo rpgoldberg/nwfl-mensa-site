@@ -1,0 +1,160 @@
+---
+// W-SIGNUP D4: the approvers' queue. The pending sign-ups, oldest first, one card each: the name and
+// email from the person's sign-in account, how they came (invited by an officer, or signed up on the
+// site), and the membership check's outcome and day. Never the membership number or the last name:
+// the API never sends them. Approve, or Reject after a confirmation step (a rejection cannot be
+// undone). No one decides their own sign-up: the API refuses it, and the page says so. A sign-up the
+// check found in another local group is not approved as a member (R33): it has no Approve button,
+// and the API refuses it too. Each decision goes to the API with the approver's own token
+// (src/lib/api/membership.ts), which alone decides who may.
+//
+// Not signed in: sign in first. Signed in but neither a membership approver nor the Admin: the plain
+// not-found page, as for the approval setting, and it is never linked for them. It works with no
+// script: each step is a form post, answered with a page or a 303 back here. Astro's origin check
+// refuses a cross-site post first; the body is capped and must be a form (src/lib/form.ts).
+import Unavailable from '../../components/Unavailable.astro';
+import Base from '../../layouts/Base.astro';
+import { DecisionRefused, MembershipSignInAgain, type PendingSignup, membershipApi, sessionReader } from '../../lib/api/membership';
+import { markUnavailable } from '../../lib/api/page';
+import { runtimeDeps } from '../../lib/auth/flow';
+import { readForm } from '../../lib/form';
+import {
+  DECISION_REFUSED,
+  ROUTE_TEXT,
+  type DecisionForm,
+  checkText,
+  doneFromQuery,
+  doneText,
+  formatMoment,
+  isMembershipApprover,
+  parseDecisionForm,
+} from '../../lib/signup';
+import { page } from '../../lib/site';
+
+export const prerender = false;
+
+const HERE = '/officer-area/sign-ups';
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+/** Three short fields. */
+const MAX_FORM_BYTES = 4 * 1024;
+
+const session = Astro.locals.session;
+if (!session) return Astro.redirect(SIGN_IN, 303);
+if (!isMembershipApprover(session)) return Astro.rewrite('/404');
+const p = page(HERE);
+const api = membershipApi();
+const { reader } = sessionReader(session, runtimeDeps());
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+let confirming: DecisionForm | undefined;
+let refused: keyof typeof DECISION_REFUSED | undefined;
+let problem: 'sign-in' | 'unavailable' | 'form' | undefined;
+
+if (Astro.request.method === 'POST') {
+  const read = await readForm(Astro.request, MAX_FORM_BYTES);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const parsed = parseDecisionForm(read.field);
+  if (!parsed.ok) {
+    problem = 'form';
+    Astro.response.status = 400;
+  } else if (parsed.value.decision === 'reject' && !parsed.value.confirmed) {
+    confirming = parsed.value;
+  } else if (api === undefined) {
+    problem = 'unavailable';
+  } else if (reader === undefined) {
+    problem = 'sign-in';
+  } else {
+    try {
+      const { decision, requestId } = parsed.value;
+      if (decision === 'approve') await api.approveSignup(reader, requestId);
+      else await api.rejectSignup(reader, requestId);
+      return Astro.redirect(`${HERE}?done=${decision === 'approve' ? 'approved' : 'rejected'}`, 303);
+    } catch (error) {
+      if (error instanceof DecisionRefused) {
+        refused = error.reason;
+        Astro.response.status = 409;
+      } else {
+        problem = error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+      }
+    }
+  }
+}
+
+let requests: PendingSignup[] | undefined;
+if (api !== undefined && reader !== undefined) {
+  try {
+    requests = await api.listSignupRequests(reader);
+  } catch (error) {
+    problem ??= error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+  }
+} else {
+  problem ??= api === undefined ? 'unavailable' : 'sign-in';
+}
+if (problem === 'unavailable') markUnavailable(Astro.response);
+
+const done = Astro.request.method === 'GET' ? doneFromQuery(Astro.url.searchParams) : undefined;
+const confirmed = confirming === undefined ? undefined : requests?.find((r) => r.requestId === confirming.requestId);
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">People who signed up and are waiting for member access. Approve a sign-up to give the account member access, or reject it. The membership number and last name they typed are never shown here.</p>
+  {done && <p class="notice" role="status">{doneText(done)}</p>}
+  {refused && <p class="notice" role="alert">{DECISION_REFUSED[refused]}</p>}
+  {problem === 'form' && <p class="notice" role="alert">Nothing was changed: send the form again from the list below.</p>}
+  {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then try again.</p>}
+  {problem === 'unavailable' && <Unavailable what="The sign-up list" />}
+
+  {confirmed ? (
+    <section class="card" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Reject this sign-up?</h2>
+      <p>{confirmed.displayName} ({confirmed.email}).</p>
+      <p><b>A rejected sign-up is removed from the queue, and its membership number and last name are erased. This cannot be undone.</b></p>
+      <form method="post" action={HERE}>
+        <input type="hidden" name="decision" value="reject" />
+        <input type="hidden" name="request" value={confirmed.requestId} />
+        <input type="hidden" name="confirmed" value="yes" />
+        <div class="btns">
+          <button class="button" type="submit">Yes, reject it</button>
+          <a class="button button--secondary" href={HERE}>Cancel</a>
+        </div>
+      </form>
+    </section>
+  ) : requests !== undefined && (
+    requests.length === 0 ? (
+      <p class="card empty">No sign-ups are waiting.</p>
+    ) : (
+      <>
+        <p>{requests.length === 1 ? 'One sign-up is waiting.' : `${requests.length} sign-ups are waiting.`}</p>
+        {requests.map((r, i) => (
+          <section class="card signup-card" aria-labelledby={`signup-${i}`}>
+            <h2 id={`signup-${i}`}>{r.displayName}</h2>
+            <dl class="facts">
+              <div><dt>Email</dt><dd>{r.email}</dd></div>
+              <div><dt>How they came</dt><dd>{ROUTE_TEXT[r.route]}</dd></div>
+              <div><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
+              {r.createdAt && <div><dt>Signed up</dt><dd>{formatMoment(r.createdAt)}</dd></div>}
+            </dl>
+            {r.verification === 'verified_other_group' && (
+              <p>This person is a member of another local group, so the sign-up cannot be approved as a member here. Reject it, or ask the Admin or the Webmaster about affiliate access.</p>
+            )}
+            <div class="btns">
+              {r.verification !== 'verified_other_group' && (
+                <form method="post" action={HERE}>
+                  <input type="hidden" name="decision" value="approve" />
+                  <input type="hidden" name="request" value={r.requestId} />
+                  <button class="button" type="submit" aria-describedby={`signup-${i}`}>Approve</button>
+                </form>
+              )}
+              <form method="post" action={HERE}>
+                <input type="hidden" name="decision" value="reject" />
+                <input type="hidden" name="request" value={r.requestId} />
+                <button class="button button--secondary" type="submit" aria-describedby={`signup-${i}`}>Reject</button>
+              </form>
+            </div>
+          </section>
+        ))}
+      </>
+    )
+  )}
+  <p><a href="/officer-area">Back to the officer area</a></p>
+</Base>

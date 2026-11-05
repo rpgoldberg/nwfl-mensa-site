@@ -19,6 +19,10 @@
 // it lists members files, a members article in full, an officers article.
 // SOLO-APPROVE: ApprovalRuleService takes the officer's token as the API does (officers and the Admin
 // read the rule, the Admin alone sets it), keeping one setting per subject (below).
+// W-SIGNUP: MembershipService takes the person's own token as the API does: their own account and
+// sign-up (the number and last name both required, the invited group making the route "invite"), and
+// for the membership approvers and the Admin the queue and its decisions, never their own. Sign-ups
+// and decisions are kept per sign-in (the token's jti), so tests in parallel cannot disturb each other.
 //
 // SILENT_API_PORT is a second listener that accepts connections and never
 // answers: the API that hangs, for the timeout test. NO_ISSUES_API_PORT is a
@@ -33,6 +37,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility } from '../src/gen/nwfl/mensa/v1/content_pb.js';
+import { AccountRoute, MemberStatus, MembershipService, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
 
@@ -445,6 +450,72 @@ async function officerOf(ctx, { read = false } = {}) {
   return { sub: String(payload.sub), groups };
 }
 
+// W-SIGNUP: as in e2e/stand-in.ts (ACCOUNTS, SIGNUP_QUEUE). Every member account was last checked on October 20, 2026.
+const ENROLEE_PENDING_SUBJECT = '00000000-0000-4000-8000-0000000000c2';
+const APPROVER_SUBJECT = '00000000-0000-4000-8000-0000000000d3';
+const CHECKED = { year: 2026, month: 10, day: 20 };
+const SIGNUP_QUEUE = [
+  { requestId: 'b1000000-0000-4000-8000-000000000001', sub: '00000000-0000-4000-8000-0000000001e1', displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T15:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000002', sub: '00000000-0000-4000-8000-0000000001e2', displayName: 'Kendall Sample', email: 'kendall@example.org', route: AccountRoute.SIGNUP, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T16:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000001e3', displayName: 'Harper Placeholder', email: 'harper@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 3 }, createdAt: new Date('2026-11-02T15:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000004', sub: APPROVER_SUBJECT, displayName: 'Blair Example', email: 'blair@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED, createdAt: new Date('2026-11-03T15:00:00Z') },
+];
+/** @type {Map<string, number>} a sign-in's own sign-up, by the token's jti: its route */
+const SIGNUPS = new Map();
+/** @type {Map<string, Set<string>>} a sign-in's decisions, by the token's jti */
+const DECIDED = new Map();
+
+/**
+ * The signed-in person of a membership RPC, from the verified token, as the API reads it; never a cookie.
+ * @param {import('@connectrpc/connect').HandlerContext} ctx
+ * @returns {Promise<{ sub: string, groups: string[], session: string }>}
+ */
+async function personOf(ctx) {
+  if (ctx.requestHeader.has('cookie')) throw new ConnectError('the site must never send a cookie', Code.PermissionDenied);
+  const header = ctx.requestHeader.get('authorization');
+  if (header === null) throw new ConnectError('sign in first', Code.Unauthenticated);
+  const token = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i.exec(header)?.[1];
+  if (token === undefined || jwks === undefined) throw new ConnectError('invalid token', Code.Unauthenticated);
+  /** @type {import('jose').JWTPayload} */
+  let payload;
+  try {
+    ({ payload } = await jwtVerify(token, jwks, { ...(idpIssuer ? { issuer: idpIssuer } : {}), audience: 'nwfl-site', algorithms: ['RS256'], requiredClaims: ['exp', 'sub', 'iat'], maxTokenAge: 3600 }));
+  } catch {
+    throw new ConnectError('invalid token', Code.Unauthenticated);
+  }
+  if (payload.sub === SUBJECT.refused) throw new ConnectError('invalid token', Code.Unauthenticated);
+  const groups = Array.isArray(payload['groups']) ? payload['groups'].map(String) : [];
+  return { sub: String(payload.sub), groups, session: String(payload.jti ?? token) };
+}
+
+/** The account the API would hold: members (officers too) since October 20, the pending enrolee, this sign-in's own sign-up. @param {{ sub: string, groups: string[], session: string }} person */
+function accountOf({ sub, groups, session }) {
+  const route = SIGNUPS.get(session);
+  if (route !== undefined) return { status: MemberStatus.PENDING, route };
+  if (MEMBER_SUBJECTS.has(sub) || groups.includes('nwfl-officers') || groups.includes('nwfl-admin')) return { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, verifiedOn: CHECKED };
+  if (sub === ENROLEE_PENDING_SUBJECT) return { status: MemberStatus.PENDING, route: AccountRoute.SIGNUP };
+  return undefined;
+}
+
+/** The approvers and the Admin, as requireMembershipApprover. @param {import('@connectrpc/connect').HandlerContext} ctx */
+async function approverOf(ctx) {
+  const person = await personOf(ctx);
+  if (!person.groups.includes('nwfl-membership-approvers') && !person.groups.includes('nwfl-admin')) throw new ConnectError('not permitted', Code.PermissionDenied);
+  return person;
+}
+
+/** A pending sign-up this sign-in may decide, marked decided. @param {{ sub: string, session: string }} person @param {string} id @param {boolean} approve */
+function decide(person, id, approve) {
+  const request = SIGNUP_QUEUE.find((r) => r.requestId === id);
+  if (request === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
+  if (request.sub === person.sub) throw new ConnectError('no one decides their own sign-up', Code.PermissionDenied);
+  const decided = DECIDED.get(person.session) ?? new Set();
+  if (decided.has(id)) throw new ConnectError('this sign-up is already decided', Code.FailedPrecondition);
+  if (approve && request.verification === Verification.VERIFIED_OTHER_GROUP) throw new ConnectError('an other-group member is not approved', Code.FailedPrecondition);
+  decided.add(id);
+  DECIDED.set(person.session, decided);
+}
+
 /** The API's routes; with `issues: false`, nothing of the newsletter is published yet. @param {{ issues: boolean }} options */
 const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').ConnectRouter} */ router) => {
   router.service(EventService, {
@@ -528,6 +599,47 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     listApprovalRuleChanges: async (_req, ctx) => {
       await officerOf(ctx);
       return { changes: [] };
+    },
+  });
+  router.service(MembershipService, {
+    getMyAccount: async (_req, ctx) => {
+      const account = accountOf(await personOf(ctx));
+      return account === undefined ? {} : { account };
+    },
+    submitSignup: async (req, ctx) => {
+      const person = await personOf(ctx);
+      if (accountOf(person) !== undefined) throw new ConnectError('a sign-up is already on file for this account', Code.AlreadyExists);
+      const number = req.membershipNumber.trim();
+      const lastName = req.lastName.trim();
+      if (number === '') throw new ConnectError('a membership number is needed', Code.InvalidArgument);
+      if (!/^[0-9]{1,12}$/.test(number)) throw new ConnectError('a membership number is 1 to 12 digits', Code.InvalidArgument);
+      if (lastName === '' || [...lastName].length > 80) throw new ConnectError('a last name is needed', Code.InvalidArgument);
+      SIGNUPS.set(person.session, person.groups.includes('nwfl-invited') ? AccountRoute.INVITE : AccountRoute.SIGNUP);
+      return { requestId: randomUUID() };
+    },
+    listSignupRequests: async (_req, ctx) => {
+      const { session } = await approverOf(ctx);
+      const decided = DECIDED.get(session) ?? new Set();
+      return {
+        // The subject stays here: the API never sends it.
+        requests: SIGNUP_QUEUE.filter((r) => !decided.has(r.requestId)).map((r) => ({
+          requestId: r.requestId,
+          displayName: r.displayName,
+          email: r.email,
+          route: r.route,
+          verification: r.verification,
+          ...(r.verifiedOn ? { verifiedOn: r.verifiedOn } : {}),
+          createdAt: timestampFromDate(r.createdAt),
+        })),
+      };
+    },
+    approveSignup: async (req, ctx) => {
+      decide(await approverOf(ctx), req.requestId, true);
+      return { account: { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP } };
+    },
+    rejectSignup: async (req, ctx) => {
+      decide(await approverOf(ctx), req.requestId, false);
+      return {};
     },
   });
 };

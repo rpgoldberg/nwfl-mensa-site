@@ -24,7 +24,8 @@ export const ENROLEE_GROUPS = Object.freeze([`${INTERNAL_GROUP_PREFIX}users`, `$
 
 const PREFIX = /^[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*-$/;
 const MAX_LENGTH = 32;
-const ROLE_WORDS = new Set(['admin', 'webmaster', 'officers', 'members', 'membership', 'approvers', 'affiliates', 'office', 'role']);
+// W-SIGNUP D2: 'invited' too, since <prefix>invited marks a person an officer invited (fc INVITE1).
+const ROLE_WORDS = new Set(['admin', 'webmaster', 'officers', 'members', 'membership', 'approvers', 'affiliates', 'office', 'role', 'invited']);
 
 /**
  * SITE_GROUP_PREFIX, validated; unset is the default. Throws on a bad value.

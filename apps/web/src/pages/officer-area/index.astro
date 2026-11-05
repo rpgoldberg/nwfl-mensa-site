@@ -6,17 +6,20 @@
 // src/lib/api/officer.ts), and a plain line when it could not be read. The
 // Admin also gets the link to the approval setting, and so does the Admin who
 // is not in the officers group (the switch serves them; nothing else here
-// does). Nothing here reaches a member or the public.
+// does). Nothing here reaches a member or the public. W-SIGNUP D4: the membership approvers and the
+// Admin get the link to the sign-ups waiting for approval; no one else does.
 import OneApproverNote from '../../components/OneApproverNote.astro';
 import Base from '../../layouts/Base.astro';
 import { type Setting, isAdmin, notesFor } from '../../lib/approval-rules';
 import { OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
 import { runtimeDeps } from '../../lib/auth/flow';
+import { isMembershipApprover } from '../../lib/signup';
 import { page } from '../../lib/site';
 
 const session = Astro.locals.session;
 if (!session) return Astro.redirect('/sign-in?return=%2Fofficer-area', 303);
 const admin = isAdmin(session);
+const approver = isMembershipApprover(session);
 if (!session.officer && !admin) Astro.response.status = 403;
 const p = page('/officer-area');
 
@@ -45,12 +48,20 @@ if (session.officer) {
     ? <>
         <p class="lead">Welcome, {session.name}. Writing reports, the approval queue and events come here in the next update.</p>
         <OneApproverNote notes={notes} signIn={signIn} />
-        {admin && <ul class="link-list"><li><a href="/officer-area/approval-rules">Approval setting</a></li></ul>}
+        {(admin || approver) && (
+          <ul class="link-list">
+            {approver && <li><a href="/officer-area/sign-ups">Sign-ups to approve</a></li>}
+            {admin && <li><a href="/officer-area/approval-rules">Approval setting</a></li>}
+          </ul>
+        )}
       </>
     : admin
       ? <>
           <p class="lead">Welcome, {session.name}. As the Admin, you can change the approval setting here.</p>
-          <ul class="link-list"><li><a href="/officer-area/approval-rules">Approval setting</a></li></ul>
+          <ul class="link-list">
+            <li><a href="/officer-area/sign-ups">Sign-ups to approve</a></li>
+            <li><a href="/officer-area/approval-rules">Approval setting</a></li>
+          </ul>
         </>
       : <p class="lead">This area is for the club's officers. If you are an officer and see this, ask the Webmaster to check your account.</p>}
 </Base>

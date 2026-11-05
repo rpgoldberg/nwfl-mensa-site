@@ -8,6 +8,7 @@ import { safeBack } from '../../../server/prefs.mjs';
 import {
   AUTH_COOKIE,
   SESSION_COOKIE,
+  type Session,
   TRANSACTION_SECONDS,
   clearCookie,
   newSession,
@@ -36,7 +37,8 @@ export const REFUSALS: Record<Refusal, string> = {
 export const CLEAR_SITE_DATA = '"cache", "storage"';
 
 export type Outcome =
-  | { kind: 'redirect'; location: string; cookies: string[]; clearSiteData?: string }
+  /** session: the one a completed sign-in has just opened (W-SIGNUP D3: the callback picks the first stop by it). */
+  | { kind: 'redirect'; location: string; cookies: string[]; clearSiteData?: string; session?: Session }
   | { kind: 'refused'; reason: Refusal; cookies: string[] }
   | { kind: 'unavailable' };
 
@@ -125,7 +127,7 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
     if (replaced) d.tokens.take(replaced.sid, now);
     d.tokens.put(session.sid, withExpiry(signedIn.tokens, now), session.exp);
     log(d, 'info', 'signed in', { officer: session.officer, member: session.member });
-    return { kind: 'redirect', location: tx.back, cookies: [...cookies, sessionSetCookie(session, d.key, now)] };
+    return { kind: 'redirect', location: tx.back, cookies: [...cookies, sessionSetCookie(session, d.key, now)], session };
   } catch (err) {
     return refuse('failed', { err: String(err).slice(0, 200) });
   }

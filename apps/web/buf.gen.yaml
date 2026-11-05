@@ -1,7 +1,8 @@
 # The API client's types, generated from the API's own protos (apps/api/proto),
 # the one source of truth. Only the read side the site uses: the calendar,
 # the roster and published items, and the messages they import; and the
-# approval rule (SOLO-APPROVE), the officer area's one write. JavaScript
+# approval rule (SOLO-APPROVE), the officer area's first write; and membership
+# (W-SIGNUP): the sign-up and the approvers' decisions. JavaScript
 # with declarations, so plain Node (the e2e stand-in API) can load it too.
 # The output is COMMITTED under src/gen; test/proto-gen.test.ts regenerates it
 # and fails on any difference.
@@ -14,6 +15,8 @@ inputs:
       - ../api/proto/nwfl/mensa/v1/content.proto
       # SOLO-APPROVE: the officer area reads the approval rule, and the Admin sets it.
       - ../api/proto/nwfl/mensa/v1/approval.proto
+      # W-SIGNUP: a person's own account and sign-up, and the approvers' queue.
+      - ../api/proto/nwfl/mensa/v1/membership.proto
 plugins:
   - local: protoc-gen-es
     out: src/gen
