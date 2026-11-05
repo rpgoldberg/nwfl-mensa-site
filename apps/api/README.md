@@ -215,6 +215,38 @@ officers the originals. Anchoring reads the originals as officers do, so the
 load fails, with nothing applied, while the officers' policy hides or
 redacts any category.
 
+### Approved links (LINKS)
+
+An `nwfl-issue/2` bundle is `nwfl-issue/1` plus `links` (`public` and
+`members`, each a list of the checker's approved links: `id`, `page`, `rect`,
+`url`, `kind`, `confirm`) and `approval.linksSha256`. The links' hash is
+checked before the database (`linksSha256` in `src/load/links.ts`, whose
+header pins the canonical form), and the approval reason names it. The links
+are attached as the loader in the same transaction, before the public input
+hash is checked. A repeated run compares the links too. `nwfl-issue/1`
+bundles load and repeat as before.
+
+For an issue already loaded, the links command attaches its links and
+nothing else:
+
+    node dist/load/links-cli.js -   # nwfl-links/1 on stdin, never a path
+
+Its bundle names the issue by slug (`pensa-mensa-YYYY-MM`), both files by
+`sha256`, the `links`, and `approval` (`reference`, `linksSha256`,
+`publicInputHash`). It runs in one transaction and prints ids and counts
+only. A second run of the same bundle reports `unchanged`. It is refused,
+with nothing applied, for a slug the loader did not write or never loaded,
+an issue edited or withdrawn since, files other than the bundle's, a file
+that already has other links, or a public input hash other than the
+approved one.
+
+`0024_pdf_links.sql` keeps the links (`pdf_link`, kept as written), their
+status (`pdf_link_status`, appended to at the ledger stamp, so as-of reads
+hold) and the links each copy holds (`pdf_copy_link`, written with the copy
+from L3). `pdf_links_attach` is the one writer of links, for the loader;
+`pdf_link_disable` only turns a link off. Each link or status write queues
+its file.
+
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 
 The loader is the only way a PDF reaches the engine, and Ross runs it by

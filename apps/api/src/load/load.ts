@@ -44,6 +44,14 @@
 //   - One transaction: all of it lands, or none of it. It lifts the server's
 //     idle-in-transaction timeout for itself (SET LOCAL), since anchoring
 //     the marks reads both PDFs while it is open.
+//   - LINKS (nwfl-issue/2): the bundle may carry each file's approved links
+//     (links.ts) and their hash, approval.linksSha256, checked before the
+//     database. They are attached as the loader (0024 pdf_links_attach) in the
+//     same transaction, before the public input hash is checked, so that check
+//     covers them once the input hash names the links (L3). The approval
+//     reason names the links hash too. nwfl-issue/1 loads, and repeats, as
+//     before: a repeated nwfl-issue/1 run does not look at links, which the
+//     links command (attach.ts) may have attached since.
 //   - Idempotent: the item by its slug, the files by sha256 and audience,
 //     the marks as a set, the approval by its reason. File ids are random,
 //     never derived (N10). An issue already loaded differently or under
@@ -66,10 +74,10 @@ import { type Db, type Env, createPool } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import { MAX_ORIGINAL_BYTES, inputsFor, storeOriginal } from '../pdf/store.js';
 import { FileMarkError, addFileMarks } from '../redaction/file-marks.js';
+import { HEX64, LoadError, REFERENCE, type Stdin, known, matching, object, own, readBundleJson, wholeNumber } from './input.js';
+import { type IssueLinks, LINK_FILES, attachLinks, linksSha256, parseLinks, storedLinks } from './links.js';
 
-export class LoadError extends Error {
-  override name = 'LoadError';
-}
+export { LoadError, type Stdin, type StdinKind, stdinKind } from './input.js';
 
 /** The writer, approver and storer of every loaded issue. */
 export const LOADER = 'system:issue-loader';
@@ -80,6 +88,8 @@ export type MarkCategory = (typeof MARK_CATEGORIES)[number];
 export const MAX_BUNDLE_BYTES = 32 * 1024 * 1024;
 export const MAX_MARKS = 1000;
 export const FORMAT = 'nwfl-issue/1';
+/** nwfl-issue/1 and each file's approved links, with their hash in the approval. */
+export const FORMAT_V2 = 'nwfl-issue/2';
 
 export interface Mark {
   quote: string;
@@ -94,19 +104,16 @@ export interface Issue {
 }
 
 export interface Bundle {
+  format: typeof FORMAT | typeof FORMAT_V2;
   issue: Issue;
   /** The slug of the office the issue is posted as. */
   office: string;
-  approval: { reference: string; marksSha256: string; publicInputHash: string; membersSha256: string };
+  /** linksSha256: in nwfl-issue/2 only. */
+  approval: { reference: string; marksSha256: string; publicInputHash: string; membersSha256: string; linksSha256?: string };
   pdfs: { public: Uint8Array; members: Uint8Array };
   marks: Mark[];
-}
-
-export type StdinKind = 'pipe' | 'socket' | 'file' | 'device' | 'other';
-
-export interface Stdin {
-  kind: StdinKind;
-  chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
+  /** nwfl-issue/2 only. */
+  links?: IssueLinks;
 }
 
 export interface LoadResult {
@@ -137,33 +144,8 @@ export function marksSha256(marks: readonly Mark[]): string {
   return createHash('sha256').update(canonicalJson({ v: 1, marks: sorted })).digest('hex');
 }
 
-const HEX64 = /^[0-9a-f]{64}$/;
 // One character class, no groups: linear on a 14 MB string, where a grouped pattern overflows the regex stack.
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
-
-type Json = Record<string, unknown>;
-
-function object(value: unknown, where: string): Json {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new LoadError(`${where} must be a JSON object`);
-  return value as Json;
-}
-
-/** Own keys only, each one known: __proto__, constructor and the like are unknown fields like any other. */
-function known(json: Json, where: string, keys: readonly string[]): void {
-  for (const key of Object.keys(json)) if (!keys.includes(key)) throw new LoadError(`${where}: unknown field ${key}`);
-}
-
-const own = (json: Json, key: string): unknown => (Object.hasOwn(json, key) ? json[key] : undefined);
-
-function wholeNumber(value: unknown, where: string, max: number): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) throw new LoadError(`${where} must be a whole number from 1 to ${max}`);
-  return value;
-}
-
-function matching(value: unknown, pattern: RegExp, where: string, what: string): string {
-  if (typeof value !== 'string' || !pattern.test(value)) throw new LoadError(`${where} must be ${what}`);
-  return value;
-}
 
 function pdf(value: unknown, where: string): Uint8Array {
   if (typeof value !== 'string' || value === '' || value.length % 4 !== 0 || !BASE64.test(value)) throw new LoadError(`${where} must be a PDF in base64`);
@@ -200,8 +182,10 @@ function marksOf(value: unknown): Mark[] {
 /** A bundle, checked whole before anything touches the database. */
 export function parseBundle(input: unknown): Bundle {
   const json = object(input, 'the bundle');
-  known(json, 'the bundle', ['format', 'issue', 'office', 'approval', 'pdfs', 'marks']);
-  if (own(json, 'format') !== FORMAT) throw new LoadError(`the bundle's format must be ${FORMAT}`);
+  const format = own(json, 'format');
+  if (format !== FORMAT && format !== FORMAT_V2) throw new LoadError(`the bundle's format must be ${FORMAT} or ${FORMAT_V2}`);
+  const v2 = format === FORMAT_V2;
+  known(json, 'the bundle', ['format', 'issue', 'office', 'approval', 'pdfs', 'marks', ...(v2 ? ['links'] : [])]);
 
   const issueJson = object(own(json, 'issue'), 'issue');
   known(issueJson, 'issue', ['period', 'volume', 'number']);
@@ -213,14 +197,15 @@ export function parseBundle(input: unknown): Bundle {
   const office = matching(own(json, 'office'), /^[a-z0-9][a-z0-9-]{0,62}$/, 'office', "an office's slug");
 
   const approvalJson = object(own(json, 'approval'), 'approval');
-  known(approvalJson, 'approval', ['reference', 'marksSha256', 'publicInputHash', 'membersSha256']);
-  const approval = {
+  known(approvalJson, 'approval', ['reference', 'marksSha256', 'publicInputHash', 'membersSha256', ...(v2 ? ['linksSha256'] : [])]);
+  const approval: Bundle['approval'] = {
     // A reply tag (PUBCOPY, ML-H7): no free text, so no name.
-    reference: matching(own(approvalJson, 'reference'), /^[A-Z][A-Z0-9-]{1,39}$/, 'approval.reference', 'a reply tag: capital letters, digits and hyphens'),
+    reference: matching(own(approvalJson, 'reference'), REFERENCE, 'approval.reference', 'a reply tag: capital letters, digits and hyphens'),
     marksSha256: matching(own(approvalJson, 'marksSha256'), HEX64, 'approval.marksSha256', '64 lower-case hex digits'),
     publicInputHash: matching(own(approvalJson, 'publicInputHash'), HEX64, 'approval.publicInputHash', '64 lower-case hex digits'),
     // The members PDF has no copy hash to approve: its own sha256 binds it.
     membersSha256: matching(own(approvalJson, 'membersSha256'), HEX64, 'approval.membersSha256', '64 lower-case hex digits'),
+    ...(v2 ? { linksSha256: matching(own(approvalJson, 'linksSha256'), HEX64, 'approval.linksSha256', '64 lower-case hex digits') } : {}),
   };
 
   const pdfsJson = object(own(json, 'pdfs'), 'pdfs');
@@ -232,27 +217,11 @@ export function parseBundle(input: unknown): Bundle {
   const marks = marksOf(own(json, 'marks'));
   const computed = marksSha256(marks);
   if (computed !== approval.marksSha256) throw new LoadError(`the marks are not the approved ones: their sha256 is ${computed}`);
-  return { issue, office, approval, pdfs, marks };
-}
-
-/** What stdin is, from its fstat. */
-export function stdinKind(stat: { isFIFO(): boolean; isSocket(): boolean; isFile(): boolean; isCharacterDevice(): boolean }): StdinKind {
-  if (stat.isFIFO()) return 'pipe';
-  if (stat.isSocket()) return 'socket';
-  if (stat.isFile()) return 'file';
-  if (stat.isCharacterDevice()) return 'device';
-  return 'other';
-}
-
-async function readCapped(chunks: Stdin['chunks']): Promise<Buffer> {
-  const parts: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of chunks) {
-    size += chunk.length;
-    if (size > MAX_BUNDLE_BYTES) throw new LoadError('the bundle is larger than 32 MiB');
-    parts.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(parts);
+  if (!v2) return { format, issue, office, approval, pdfs, marks };
+  const links = parseLinks(own(json, 'links'));
+  const linksHash = linksSha256(links);
+  if (linksHash !== approval.linksSha256) throw new LoadError(`the links are not the approved ones: their sha256 is ${linksHash}`);
+  return { format, issue, office, approval, pdfs, marks, links };
 }
 
 /** The loader as the audit log's actor: audit.ts records a caller that holds no token as the system. */
@@ -262,9 +231,10 @@ const sha256 = (bytes: Uint8Array): Buffer => createHash('sha256').update(bytes)
 
 /** The self_breakglass reason: the operator's approval reference and the three hashes approved with it. */
 const approvalReason = (approval: Bundle['approval']): string =>
-  `Issue loader, approved as ${approval.reference}: marks sha256 ${approval.marksSha256}, public inputHash ${approval.publicInputHash}, members sha256 ${approval.membersSha256}`;
+  `Issue loader, approved as ${approval.reference}: marks sha256 ${approval.marksSha256}, public inputHash ${approval.publicInputHash}, members sha256 ${approval.membersSha256}` +
+  (approval.linksSha256 === undefined ? '' : `, links sha256 ${approval.linksSha256}`);
 
-interface Existing {
+export interface Existing {
   id: string;
   kind: string;
   state: string;
@@ -283,15 +253,9 @@ async function unchanged(client: TxClient, bundle: Bundle, slug: string, existin
   if (existing.created_by_sub !== LOADER || existing.working_version_id !== null) {
     throw new LoadError(`${slug} was edited after loading: the loader never revises an issue`);
   }
-  const files = (
-    await client.query<{ id: string; audience: string; sha256: Buffer }>(
-      `SELECT f.id, f.audience, f.sha256 FROM stored_file f WHERE f.version_id = $1 AND EXISTS (SELECT 1 FROM pdf_original o WHERE o.file_id = f.id)`,
-      [existing.live_version_id],
-    )
-  ).rows;
-  const found = (audience: string, bytes: Uint8Array) => files.find((file) => file.audience === audience && file.sha256.equals(sha256(bytes)));
-  const publicFile = found('public', bundle.pdfs.public);
-  const membersFile = found('members', bundle.pdfs.members);
+  const files = await loadedFiles(client, existing.live_version_id as string);
+  const publicFile = fileOf(files, 'public', sha256(bundle.pdfs.public));
+  const membersFile = fileOf(files, 'members', sha256(bundle.pdfs.members));
   const marks = (await client.query<Mark>(`SELECT quote, category FROM redaction_mark WHERE content_item_id = $1 AND status = 'active'`, [existing.id])).rows;
   if (
     existing.state !== 'published' ||
@@ -302,6 +266,11 @@ async function unchanged(client: TxClient, bundle: Bundle, slug: string, existin
     marksSha256(marks) !== marksSha256(bundle.marks)
   ) {
     throw new LoadError(`${slug} is already loaded, and its files, marks or state differ from the bundle's: the loader never revises an issue`);
+  }
+  // nwfl-issue/1 knows no links: links attached since (attach.ts) are the links command's to compare.
+  if (bundle.links !== undefined) {
+    const stored = await storedLinks(client, { public: publicFile.id, members: membersFile.id });
+    if (linksSha256(stored.links) !== linksSha256(bundle.links)) throw new LoadError(`${slug} is already loaded with other links: the loader never revises an issue`);
   }
   if (existing.approval_reason !== approvalReason(bundle.approval)) throw new LoadError(`${slug} is already loaded under another approval: the loader never revises an issue`);
   return { status: 'unchanged', itemId: existing.id, publicFileId: publicFile.id, membersFileId: membersFile.id, marks: marks.length };
@@ -340,11 +309,18 @@ async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<
   await addFileMarks(client, { itemId, marks: bundle.marks, sub: LOADER, groups: [] }).catch((error: unknown) => {
     throw error instanceof FileMarkError ? new LoadError(error.message) : error;
   });
+  // The links before the input hash, which will name them (L3); a file with none attaches nothing.
+  const links = bundle.links;
+  if (links !== undefined) {
+    for (const audience of LINK_FILES) {
+      if (links[audience].length > 0) {
+        await attachLinks(client, { fileId: ids[audience], links: links[audience], reference: bundle.approval.reference, linksSha256: bundle.approval.linksSha256 as string, sub: LOADER });
+      }
+    }
+  }
 
-  // What the public will be given, from the policy and the marks as they now stand in this transaction.
-  const inputs = await inputsFor(client, ids.public, 'public');
-  const computed = inputs?.kind === 'copy' ? inputs.hash.toString('hex') : 'none';
-  if (computed !== bundle.approval.publicInputHash) throw new LoadError(`the public copy's inputs are not the approved ones: computed ${computed}`);
+  // What the public will be given, from the policy, the marks and the links as they now stand in this transaction.
+  await checkPublicInputs(client, ids.public, bundle.approval.publicInputHash);
 
   version = await readyVersion(client, { id: itemId, state: 'draft' }, version, { targets: { website: true, newsletter: false, email: false }, editionId: null, printAsIs: false });
   await recordAudit(client, LOADER_CALLER, {
@@ -364,6 +340,45 @@ async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<
   return { status: 'loaded', itemId, publicFileId: ids.public, membersFileId: ids.members, marks: bundle.marks.length };
 }
 
+/** The item at a slug, locked for the rest of the transaction, with what decides whether the loader wrote it as it stands. */
+export async function findIssue(client: TxClient, slug: string): Promise<Existing | undefined> {
+  return (
+    await client.query<Existing>(
+      `SELECT i.id, i.kind, i.state, i.working_version_id, i.live_version_id, v.created_by_sub, v.approval_reason,
+         EXISTS (SELECT 1 FROM content_version f WHERE f.item_id = i.id AND f.n = 1 AND f.created_by_sub = $2) AS loaded
+       FROM content_item i LEFT JOIN content_version v ON v.id = i.live_version_id WHERE i.slug = $1 FOR UPDATE OF i`,
+      [slug, LOADER],
+    )
+  ).rows[0];
+}
+
+export interface LoadedFile {
+  id: string;
+  audience: string;
+  sha256: Buffer;
+}
+
+/** A version's files whose originals are stored. */
+export async function loadedFiles(client: TxClient, versionId: string): Promise<LoadedFile[]> {
+  return (
+    await client.query<LoadedFile>(
+      `SELECT f.id, f.audience, f.sha256 FROM stored_file f WHERE f.version_id = $1 AND EXISTS (SELECT 1 FROM pdf_original o WHERE o.file_id = f.id)`,
+      [versionId],
+    )
+  ).rows;
+}
+
+/** The file for this audience with these bytes' sha256, if the version holds one. */
+export const fileOf = (files: readonly LoadedFile[], audience: string, digest: Buffer): LoadedFile | undefined =>
+  files.find((file) => file.audience === audience && file.sha256.equals(digest));
+
+/** Refuses unless the public's copy of the file would be made from the approved inputs (store.ts inputHash), as they stand in this transaction. */
+export async function checkPublicInputs(client: TxClient, fileId: string, approved: string): Promise<void> {
+  const inputs = await inputsFor(client, fileId, 'public');
+  const computed = inputs?.kind === 'copy' ? inputs.hash.toString('hex') : 'none';
+  if (computed !== approved) throw new LoadError(`the public copy's inputs are not the approved ones: computed ${computed}`);
+}
+
 /** Loads the issue in one transaction, or finds it already loaded exactly so. A LoadError leaves nothing behind. */
 export function applyBundle(db: Db, bundle: Bundle): Promise<LoadResult> {
   const contract = issueContract(bundle.issue);
@@ -371,14 +386,7 @@ export function applyBundle(db: Db, bundle: Bundle): Promise<LoadResult> {
     // Reading both PDFs to anchor the marks keeps this transaction idle for seconds on a large
     // issue; the server's idle-in-transaction timeout (30 s on pg-nwfl) must not end it midway.
     await client.query('SET LOCAL idle_in_transaction_session_timeout = 0');
-    const existing = (
-      await client.query<Existing>(
-        `SELECT i.id, i.kind, i.state, i.working_version_id, i.live_version_id, v.created_by_sub, v.approval_reason,
-           EXISTS (SELECT 1 FROM content_version f WHERE f.item_id = i.id AND f.n = 1 AND f.created_by_sub = $2) AS loaded
-         FROM content_item i LEFT JOIN content_version v ON v.id = i.live_version_id WHERE i.slug = $1 FOR UPDATE OF i`,
-        [contract.slug, LOADER],
-      )
-    ).rows[0];
+    const existing = await findIssue(client, contract.slug);
     return existing === undefined ? loadIssue(client, bundle, contract) : unchanged(client, bundle, contract.slug, existing);
   });
 }
@@ -391,17 +399,7 @@ export async function runLoad(argv: string[], env: Env, stdin: Stdin, say: (line
   }
   let bundle: Bundle;
   try {
-    if (env['NODE_ENV'] === 'production' && stdin.kind !== 'pipe' && stdin.kind !== 'socket') {
-      throw new LoadError('in production the bundle must arrive on a pipe (the attached stdin of the Job), not a file, terminal or device');
-    }
-    let json: unknown;
-    try {
-      json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await readCapped(stdin.chunks)));
-    } catch (error) {
-      if (error instanceof LoadError) throw error;
-      throw new LoadError('the bundle is not valid JSON');
-    }
-    bundle = parseBundle(json);
+    bundle = parseBundle(await readBundleJson(env, stdin, MAX_BUNDLE_BYTES));
   } catch (error) {
     say(`load: ${(error as Error).message}`);
     return 2;

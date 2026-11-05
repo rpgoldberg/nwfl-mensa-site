@@ -47,13 +47,15 @@ const QUERIES = {
 
 type Name = keyof typeof QUERIES;
 
-/** FROZEN: today's catalog after 0000-0020, with nwfl_worker present (its grants applied). */
+/** FROZEN: today's catalog after 0000-0024, with nwfl_worker present (its grants applied). */
 const FROZEN: Record<Name, unknown[]> = {
   writers: [
     { role: 'nwfl_migrator', privileges: ['DELETE', 'INSERT', 'TRUNCATE', 'UPDATE'] },
   ],
   functions: [
     { function: 'nwfl_worker_grants()', owner: 'nwfl_migrator', definer: false, executors: ['nwfl_migrator'] },
+    // LINKS L2 (0024): it checks that a stored original exists and never reads its bytes.
+    { function: 'pdf_links_attach(uuid,jsonb,text,bytea,text,text)', owner: 'nwfl_migrator', definer: true, executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_original_put(uuid,bytea,text,text[],text)', owner: 'nwfl_migrator', definer: true, executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_original_read(uuid,text)', owner: 'nwfl_migrator', definer: true, executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_regen_original(uuid,uuid)', owner: 'nwfl_migrator', definer: true, executors: ['nwfl_migrator', 'nwfl_worker'] },
@@ -69,6 +71,12 @@ const FROZEN: Record<Name, unknown[]> = {
     { function: 'approval_rule_read(text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'approval_rule_set(text,text,text,text,text[],text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_copy_put(uuid,uuid,bytea,text,bytea,text)', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
+    // LINKS L2 (0024): the link writer and disabler, and the triggers that stamp and queue; none reads a PDF.
+    { function: 'pdf_link_disable(text,text,text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
+    { function: 'pdf_link_stale()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
+    { function: 'pdf_link_stamp()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
+    { function: 'pdf_link_status_stale()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
+    { function: 'pdf_links_attach(uuid,jsonb,text,bytea,text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_original_put(uuid,bytea,text,text[],text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_original_read(uuid,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_regen_claim(integer)', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },

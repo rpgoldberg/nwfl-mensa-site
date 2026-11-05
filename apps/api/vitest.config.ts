@@ -40,6 +40,8 @@ export default defineConfig({
         'src/seed/cli.ts',
         // The issue loader's entrypoint: argv, env, stdin's fstat and stdout only (load.ts is tested).
         'src/load/cli.ts',
+        // The links command's entrypoint, the same (attach.ts is tested).
+        'src/load/links-cli.ts',
       ],
       thresholds: {
         perFile: true,
