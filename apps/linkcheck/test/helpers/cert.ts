@@ -47,14 +47,27 @@ export interface TestPki {
   ca: string;
   key: string;
   cert: string;
+  /** The CA's own key, so another leaf can be signed by the same CA. */
+  caKey: KeyObject;
 }
 
-/** A CA, and a leaf for the given names signed by it. */
-export function testPki(dnsNames: string[]): TestPki {
-  const caPair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+/**
+ * A CA, and a leaf for the given names signed by it. With `authority`, the leaf is signed by that
+ * pki's CA instead of a new one: a leaf for another name that the client still trusts, so a test can
+ * tell the hostname check from the chain check.
+ */
+export function testPki(dnsNames: string[], authority?: Pick<TestPki, 'ca' | 'caKey'>): TestPki {
   const leafPair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-  const ca = certificate('nwfl test CA', caPair.publicKey, 'nwfl test CA', caPair.privateKey, true, []);
-  const cert = certificate(dnsNames[0] ?? 'leaf', leafPair.publicKey, 'nwfl test CA', caPair.privateKey, false, dnsNames);
+  let ca: string;
+  let caKey: KeyObject;
+  if (authority === undefined) {
+    const caPair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    ca = certificate('nwfl test CA', caPair.publicKey, 'nwfl test CA', caPair.privateKey, true, []);
+    caKey = caPair.privateKey;
+  } else {
+    ({ ca, caKey } = authority);
+  }
+  const cert = certificate(dnsNames[0] ?? 'leaf', leafPair.publicKey, 'nwfl test CA', caKey, false, dnsNames);
   const key = leafPair.privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
-  return { ca, key, cert };
+  return { ca, key, cert, caKey };
 }

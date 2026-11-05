@@ -61,11 +61,23 @@ at all: no https, a private address, a URL that does not parse, another scheme o
 
 - `id`: 128 random bits as 26 lower-case base32 characters (RFC 4648 alphabet, no padding), never derived.
 - `page` is 1-based; `rect` is in PDF points, clamped to the crop box, rounded to 0.01, x1 < x2, y1 < y2.
-- `url` is https (or mailto) as the WHATWG URL parser writes it; `kind` is `web` or `mail`; `confirm` is
-  true when the officer's own yes kept it from the login-walled or no-fetch list.
-- `linksSha256` = sha256 hex of `canonicalJson({ v: 1, links: { public, members } })`, each list sorted by
-  id, `canonicalJson` exactly `apps/api/src/content/hash.ts`'s. `test/list.test.ts` pins a test vector,
-  computed independently with Python.
+- `url` is its own kept form (`src/urls.ts` `keptForm`), the links contract shared with the loader:
+  - the host is canonical: lower case, every trailing dot stripped, IDN in punycode; an empty label
+    refuses the URL;
+  - a web link is https, with no userinfo, no port (not even :80 or :443), no IP literal and no dotless
+    host;
+  - a mail link is exactly `mailto:<one address>`: the checker drops any query (`?subject=`, `?cc=`) and
+    fragment, and the loader refuses one.
+  `test/fixtures/links-contract.json` pins the cases; the loader commits the same file, and both suites
+  check its sha256.
+- `kind` is `web` or `mail`; `confirm` is true when the officer's own yes kept it from the login-walled or
+  no-fetch list.
+- `linksSha256` = sha256 hex of `canonicalJson({ v: 2, sha256: { public, members }, links: { public,
+  members } })`, each list sorted by id, `canonicalJson` exactly `apps/api/src/content/hash.ts`'s. The file
+  sha256s are inside the hash, so links approved for one issue's files cannot attach to another's.
+  `test/list.test.ts` pins a test vector, computed independently with Python.
+- The sheet shows the text under each link from both files, the members file included. That text can
+  name members, so the sheet stays on the officer's own machine and is never committed.
 
 ## Tests
 

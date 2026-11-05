@@ -4,7 +4,7 @@
 //   - marketplace    the final page is on a domain marketplace;
 //   - for-sale-text  the page's visible text says the domain is for sale or parked;
 //   - parking-feed   a near-empty page that only loads a parking ad feed.
-// The page is read as text only (tags, scripts, styles and comments stripped by pattern), never run.
+// The page is read as text only (tags, scripts, styles and comments stripped by a linear scan), never run.
 // The lists are a starting set, meant to grow as Ross's answers show what they miss.
 // ============================================================================
 import { hostIsUnder } from './urls.js';
@@ -27,14 +27,40 @@ const FOR_SALE = [
 const FEEDS = [/\/\/(www\.)?google\.com\/adsense\/domains\/caf\.js/i, /parkingcrew/i, /sedoparking/i, /bodis\.com/i, /parklogic/i];
 const NEAR_EMPTY = 200;
 
-const visible = (html: string): string =>
-  html
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1\s*>/gi, ' ')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+const RAW_TEXT = ['script', 'style', 'noscript', 'template'];
+
+/**
+ * The visible text of a page, by one linear scan (N2: the earlier patterns took seconds on a hostile
+ * 256 KiB body such as "<" repeated). Comments, tags and raw-text elements (script, style, noscript,
+ * template) become a space; one left open runs to the end of the body, as a browser reads it. Every
+ * search starts where the last one stopped and a failed search ends the scan, so no byte is read twice.
+ */
+function visible(html: string): string {
+  const lower = html.toLowerCase();
+  let out = '';
+  let at = 0;
+  while (at < html.length) {
+    const open = html.indexOf('<', at);
+    if (open === -1) {
+      out += html.slice(at);
+      break;
+    }
+    out += `${html.slice(at, open)} `;
+    let end: number;
+    if (lower.startsWith('<!--', open)) {
+      const close = lower.indexOf('-->', open + 4);
+      end = close === -1 ? html.length : close + 3;
+    } else {
+      const name = RAW_TEXT.find((n) => lower.startsWith(n, open + 1) && !/[a-z0-9-]/.test(lower.charAt(open + 1 + n.length)));
+      const close = name === undefined ? -1 : lower.indexOf(`</${name}`, open + 1);
+      const from = name === undefined ? open : close;
+      const gt = from === -1 ? -1 : lower.indexOf('>', from);
+      end = gt === -1 ? html.length : gt + 1;
+    }
+    at = end;
+  }
+  return out.replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+}
 
 export interface ParkedInput {
   ns?: readonly string[];

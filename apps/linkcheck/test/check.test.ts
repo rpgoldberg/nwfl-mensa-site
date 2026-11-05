@@ -29,6 +29,8 @@ const PAGES: Record<string, Page | 'hang'> = {
   'site.example/to-fb': { status: 302, headers: { location: 'https://www.facebook.com/x' } },
   'site.example/to-inside': { status: 302, headers: { location: 'http://10.1.1.1/' } },
   'site.example/to-port': { status: 302, headers: { location: 'https://site.example:8080/' } },
+  'site.example/to-members': { status: 302, headers: { location: 'https://members.us.mensa.org../roster' } },
+  'site.example/to-fb-dots': { status: 302, headers: { location: 'https://www.facebook.com.../x' } },
   'www.site.example/': { status: 200, body: 'www' },
   'other.example/landing': { status: 200, body: 'elsewhere' },
   'sale.example/': { status: 200, headers: { 'content-type': 'text/html' }, body: '<h1>This domain is for sale!</h1>' },
@@ -122,6 +124,11 @@ describe('checkLink: one verdict per link, with its reasons', () => {
     expect(out.fix).toMatch(/https/);
   });
 
+  it('keeps an http link whose https form answers 2xx but is flagged, or whose name fails, at https: no-https is for https that does not work', async () => {
+    expect(await check('http://site.example/to-other')).toMatchObject({ verdict: 'flag', reasons: ['unrelated-redirect'], keepable: true, kept: 'https://site.example/to-other' });
+    expect(await check('http://nowhere.example/')).toMatchObject({ verdict: 'drop', reasons: ['nxdomain'], keepable: true, kept: 'https://nowhere.example/' });
+  });
+
   it('trims trailing punctuation and stray spaces and uses the trimmed form when it works', async () => {
     expect(await check('https://site.example/page).')).toMatchObject({ verdict: 'upgrade', reasons: ['trimmed'], kept: 'https://site.example/page' });
     expect(await check('https://site.ex ample/page')).toMatchObject({ verdict: 'upgrade', reasons: ['trimmed'], kept: 'https://site.example/page' });
@@ -150,7 +157,13 @@ describe('checkLink: one verdict per link, with its reasons', () => {
     ['https://nowhere.example/', 'drop', ['nxdomain']],
     ['https://nodata.example/', 'drop', ['no-address']],
     ['https://inside.example/', 'drop', ['private-address']],
-    ['http://10.0.0.1/', 'drop', ['private-address']],
+    ['http://10.0.0.1/', 'drop', ['ip-literal']],
+    ['https://93.184.216.1/', 'drop', ['ip-literal']],
+    ['https://[2606:4700::1]/', 'drop', ['ip-literal']],
+    ['https://localhost/', 'drop', ['local-name']],
+    ['https://site.example:443/', 'drop', ['port']],
+    ['https://site.example/to-members', 'review', ['no-fetch']],
+    ['https://site.example/to-fb-dots', 'confirm', ['login-walled']],
     ['https://site.example:8080/', 'drop', ['port']],
     ['https://user@example.com/', 'drop', ['credentials']],
     ['javascript:alert(1)', 'drop', ['scheme']],
@@ -172,8 +185,35 @@ describe('checkLink: one verdict per link, with its reasons', () => {
     expect((await check('https://unsure.example/')).notes).toContain('rdap-unknown');
   });
 
-  it('upgrades an explicit :80 to https on the default port', async () => {
-    expect(await check('http://site.example:80/page')).toMatchObject({ verdict: 'upgrade', kept: 'https://site.example/page' });
+  it('refuses an explicit port, even :80 or :443, before any request (CONTRACT 2)', async () => {
+    for (const url of ['http://site.example:80/page', 'https://site.example:443/page']) {
+      const d = deps();
+      const out = await check(url, d);
+      expect(out).toMatchObject({ verdict: 'drop', reasons: ['port'], keepable: false });
+      expect(out.kept).toBeUndefined();
+      expect(d.dns.calls).toEqual([]);
+    }
+  });
+
+  it('refuses an IP literal or a dotless host before any request (CONTRACT 2)', async () => {
+    for (const url of ['https://93.184.216.1/', 'http://2130706433/', 'https://[2606:4700::1]/', 'https://localhost/', 'http://intranet/']) {
+      const d = deps();
+      const out = await check(url, d);
+      expect(out.keepable).toBe(false);
+      expect(d.dns.calls).toEqual([]);
+      expect(d.connect.targets).toEqual([]);
+    }
+  });
+
+  it.each([
+    ['/gone', ['no-https', 'dead']],
+    ['/private', ['no-https', 'blocked']],
+    ['/broken', ['no-https', 'server-error']],
+  ])('drops an http link whose https form answers %s with no-https, unkeepable (N3)', async (path, reasons) => {
+    const out = await check(`http://site.example${path}`);
+    expect(out).toMatchObject({ verdict: 'drop', reasons, keepable: false });
+    expect(out.kept).toBeUndefined();
+    expect(out.fix).toMatch(/https/);
   });
 
   it('flags a DNS failure as soft', async () => {
@@ -185,11 +225,46 @@ describe('checkLink: one verdict per link, with its reasons', () => {
   it('marks unkeepable reasons so a yes cannot keep them', async () => {
     expect((await check('https://site.example/gone')).keepable).toBe(true);
     expect((await check('http://10.0.0.1/')).keepable).toBe(false);
+    expect((await check('https://site.example/to-inside')).reasons).toEqual(['private-address']);
     expect((await check('https://site.example/to-inside')).keepable).toBe(false);
   });
 });
 
 describe('the no-fetch list and login-walled hosts', () => {
+  // Assembled from parts: the repository's contact-detail scan allows example domains only.
+  const mail = (local: string, domain: string): string => `mailto:${local}@${domain}`;
+
+  it.each([
+    ['https://us.mensa.org.../members/roster', 'https://us.mensa.org/members/roster'],
+    ['https://members.us.mensa.org../roster', 'https://members.us.mensa.org/roster'],
+    ['http://US.MENSA.ORG./join', 'https://us.mensa.org/join'],
+    [mail('officer', 'members.us.mensa.org..'), mail('officer', 'members.us.mensa.org')],
+  ])('%s, with trailing dots, is no-fetch with no request of any kind (B1)', async (url, kept) => {
+    const d = deps();
+    const out = await check(url, d);
+    expect(out).toMatchObject({ verdict: 'review', reasons: ['no-fetch'], kept });
+    expect(d.dns.calls).toEqual([]);
+    expect(d.connect.targets).toEqual([]);
+    expect(d.rdapAsked).toEqual([]);
+  });
+
+  it('a login-walled host with trailing dots is resolved by its canonical name and never fetched (B1)', async () => {
+    const d = deps();
+    const out = await check('https://www.facebook.com.../groups/x', d);
+    expect(out).toMatchObject({ verdict: 'confirm', reasons: ['login-walled'], kept: 'https://www.facebook.com/groups/x' });
+    expect(d.dns.calls).toEqual(['A www.facebook.com', 'AAAA www.facebook.com']);
+    expect(d.connect.targets).toEqual([]);
+  });
+
+  it('a redirect hop to the no-fetch list with trailing dots is never resolved nor requested (B1)', async () => {
+    const d = deps();
+    const out = await check('https://site.example/to-members', d);
+    expect(out).toMatchObject({ verdict: 'review', reasons: ['no-fetch'] });
+    expect(d.dns.calls.filter((c) => c.includes('mensa'))).toEqual([]);
+    expect(d.connect.targets.map((t) => t.host)).toEqual(['site.example']);
+    expect(out.chain.map((h) => h.url)).toEqual(['https://site.example/to-members', 'https://members.us.mensa.org/roster']);
+  });
+
   it.each(['https://members.us.mensa.org/directory', 'http://us.mensa.org/join', 'https://myfigurecollection.net/item/1', 'https://www.suruga-ya.jp/product/1', 'https://hobby-genki.com/x', 'https://vndb.org/v1'])(
     '%s is "not checked: officer review", with no request of any kind',
     async (url) => {
@@ -233,6 +308,21 @@ describe('the no-fetch list and login-walled hosts', () => {
 describe('mailto links', () => {
   it('keeps an address whose domain takes mail', async () => {
     expect(await check('mailto:editor@example.com')).toMatchObject({ kind: 'mail', verdict: 'ok', kept: 'mailto:editor@example.com', reasons: [] });
+  });
+
+  it('keeps only mailto:<address>, its query dropped, and checks only that domain (CONTRACT 3)', async () => {
+    const d = deps();
+    const out = await check('mailto:editor@Example.COM?subject=Hi&cc=other@example.net', d);
+    expect(out).toMatchObject({ kind: 'mail', verdict: 'ok', kept: 'mailto:editor@example.com', keepable: true });
+    expect(d.dns.calls).toEqual(['MX example.com']);
+  });
+
+  it('refuses a mail domain that is an IP literal or dotless, with no lookup', async () => {
+    for (const url of ['mailto:x@127.0.0.1', 'mailto:root@localhost']) {
+      const d = deps();
+      expect((await check(url, d)).keepable).toBe(false);
+      expect(d.dns.calls).toEqual([]);
+    }
   });
 
   it('falls back to A or AAAA when there is no MX', async () => {

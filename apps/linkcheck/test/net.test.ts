@@ -95,6 +95,11 @@ describe('follow: one guarded request per hop, redirects by hand', () => {
     ['the no-fetch list', 'https://members.us.mensa.org/x', 'no-fetch'],
     ['a figure site on the no-fetch list', 'https://myfigurecollection.net/item/1', 'no-fetch'],
     ['a login-walled host', 'https://www.facebook.com/groups/x', 'login-walled'],
+    ['the no-fetch list, with two trailing dots', 'https://members.us.mensa.org../roster', 'no-fetch'],
+    ['the no-fetch list, with three trailing dots', 'https://us.mensa.org.../members/roster', 'no-fetch'],
+    ['the no-fetch list, upper case with a trailing dot', 'https://MEMBERS.US.MENSA.ORG./x', 'no-fetch'],
+    ['a login-walled host with trailing dots', 'https://www.facebook.com.../groups/x', 'login-walled'],
+    ['a host with an empty label', 'https://a..site.example/', 'malformed'],
     ['another port', 'https://site.example:8443/', 'port'],
     ['a javascript: URL', 'javascript:alert(1)', 'scheme'],
     ['a broken URL', 'http://[', 'malformed'],
@@ -128,8 +133,19 @@ describe('follow: one guarded request per hop, redirects by hand', () => {
     expect(d.connect.targets.map((t) => t.address)).toEqual([PUBLIC, '2606:4700::1']);
   });
 
-  it('reports a certificate for another name, and a server that does not speak TLS, as tls', async () => {
-    const wrong = testPki(['elsewhere.example']);
+  it('reports a certificate for another name signed by the trusted CA as tls: the name check alone (S1)', async () => {
+    const wrongName = testPki(['elsewhere.example'], pki);
+    const stand = await startHttps((_req, res) => res.end('x'), wrongName);
+    stands.push(stand);
+    expect((await follow('https://site.example/', deps({ 'site.example': [PUBLIC] }, { [PUBLIC]: stand.port }))).failure).toBe('tls');
+    // The same CA and the right name is answered: only the name differs.
+    const rightName = await startHttps((_req, res) => res.end('x'), testPki(['site.example'], pki));
+    stands.push(rightName);
+    expect((await follow('https://site.example/', deps({ 'site.example': [PUBLIC] }, { [PUBLIC]: rightName.port }))).final.status).toBe(200);
+  });
+
+  it('reports a certificate from an untrusted CA, and a server that does not speak TLS, as tls', async () => {
+    const wrong = testPki(['site.example']);
     const stand = await startHttps((_req, res) => res.end('x'), wrong);
     stands.push(stand);
     expect((await follow('https://site.example/', deps({ 'site.example': [PUBLIC] }, { [PUBLIC]: stand.port }))).failure).toBe('tls');

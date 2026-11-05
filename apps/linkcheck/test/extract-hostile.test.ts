@@ -50,9 +50,12 @@ describe('extract against hostile annotations', () => {
       ]),
       'public',
     ).catch((error: unknown) => error as Error);
-    // Either pdf.js refuses the file (a refusal of the whole file) or every one of these links is refused.
-    if (out instanceof Error) expect(out).toBeInstanceOf(ExtractError);
-    else expect(out.links.filter((l) => l.rect.some((n) => !Number.isFinite(n))).map((l) => l.url)).toEqual([]);
+    // Every one of these links is refused for its rect, and none is kept (N5: the exact list, not a property
+    // clamp() makes true anyway).
+    expect(out).not.toBeInstanceOf(Error);
+    const read = out as Extraction;
+    expect(read.links).toEqual([]);
+    expect(read.refused).toEqual([1, 2, 3, 4].map(() => ({ page: 1, reason: 'rect' })));
   });
 
   it('refuses a javascript: or control-laden URI, never writing it out', async () => {

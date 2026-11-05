@@ -11,12 +11,16 @@
 //     1000 refused links, or past its deadline is refused whole;
 //   - a link is refused (page and reason only, never its URL; the scheme's name when it is one) when
 //     its scheme is not https, http or mailto, when it holds a control, bidi or zero-width character,
-//     when it is over 2048 characters, when it is not a URI action (pdf.js marks the URLs it recovers
-//     from JavaScript, Launch and GoToR actions with newWindow), or when its rect misses the page.
+//     when it is over 2048 characters, when its rect misses the page, or when pdf.js shows it came from
+//     an action other than URI (reason "action"): pdf.js sets newWindow on every URL it recovers from a
+//     JavaScript action, and on a Launch or GoToR URL only when the action's /NewWindow is a boolean;
+//     for a GoToR with an explicit destination it appends the destination as a JSON fragment
+//     ("#[0,{"name":"Fit"}]"), so a URL whose fragment starts with "[" is refused too.
 //   - nothing of the annotation's own dictionary (/Contents, /T, /Alt, /AP) is read or written.
-// pdf.js gives no action type for a URL it hands over, so a URL from an action that sets no
-// newWindow is checked like any other; the copy never carries the original's action either way
-// (SPEC D1b: the engine draws fresh annotations from the approved list).
+// pdf.js gives no action type for a URL it hands over, so a Launch or GoToR URL with neither mark (no
+// /NewWindow, no explicit destination) reads like a URI one and is checked like any other; the copy
+// never carries the original's action either way (SPEC D1b: the engine draws fresh annotations from
+// the approved list).
 // ============================================================================
 import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
@@ -95,6 +99,9 @@ export function screenUrl(input: string): Screened {
   if (scheme === 'http' || scheme === 'https' || scheme === 'mailto') return { ok: true, url: raw };
   return scheme !== undefined && SCHEME_NAME.test(scheme) ? { ok: false, reason: 'scheme', scheme } : { ok: false, reason: 'scheme' };
 }
+
+/** The fragment pdf.js writes for a GoToR action's explicit destination: JSON.stringify(dest), an array. */
+const REMOTE_DEST = /^[^#]*#\[/;
 
 const round = (n: number): number => Math.round(n * 100) / 100;
 
@@ -200,7 +207,7 @@ export async function readPdf(pdf: Uint8Array, audience: Audience, options: Read
           refused.push(scheme === undefined ? { page: n, reason } : { page: n, reason, scheme });
           if (refused.length > MAX_REFUSED) throw new ExtractError(`the file has more than ${MAX_REFUSED} refused links`);
         };
-        if (annotation.newWindow !== undefined) {
+        if (annotation.newWindow !== undefined || REMOTE_DEST.test(annotation.unsafeUrl)) {
           refuse('action');
           continue;
         }

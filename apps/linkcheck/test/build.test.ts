@@ -98,7 +98,7 @@ describe('buildLinkList', () => {
     ]);
     const ids = [...list.links.public, ...list.links.members].map((l) => l.id);
     expect(new Set(ids).size).toBe(6);
-    expect(list.linksSha256).toBe(linksSha256(list.links));
+    expect(list.linksSha256).toBe(linksSha256(list.links, list.sha256));
     expect(parseLinkList(JSON.parse(JSON.stringify(list)))).toEqual(list);
   });
 

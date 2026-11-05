@@ -81,6 +81,27 @@ describe('readPdf: the links of a PDF, with page, rect and the text under each',
     ]);
   });
 
+  it('refuses a URL with the remote-destination fragment pdf.js writes for a GoToR action, and reads a Launch with no /NewWindow like a URI (N1)', async () => {
+    const pdf = buildPdf([
+      {
+        annots: [
+          '<< /Type /Annot /Subtype /Link /Rect [10 10 100 30] /A << /S /GoToR /F (https://remote.example/file.pdf) /D [0 /Fit] >> >>',
+          '<< /Type /Annot /Subtype /Link /Rect [10 40 100 60] /A << /S /GoToR /F (https://remote.example/file.pdf#page=2) /D [1 /XYZ 0 0 0] >> >>',
+          uriLink([10, 70, 100, 90], 'https://example.org/a#[0,{"name":"Fit"}]'),
+          '<< /Type /Annot /Subtype /Link /Rect [10 100 100 120] /A << /S /Launch /F (https://launch.example/run) >> >>',
+          uriLink([10, 130, 100, 150], 'https://example.org/a#section-2'),
+        ],
+      },
+    ]);
+    const out = await extract(pdf, 'public');
+    expect(out.links.map((l) => l.url)).toEqual(['https://launch.example/run', 'https://example.org/a#section-2']);
+    expect(out.refused).toEqual([
+      { page: 1, reason: 'action' },
+      { page: 1, reason: 'action' },
+      { page: 1, reason: 'action' },
+    ]);
+  });
+
   it('refuses a file with more than 500 links, a file over 10 MiB and bytes that are not a PDF', async () => {
     const many = buildPdf([{ annots: Array.from({ length: 501 }, (_, i) => uriLink([10, 10, 20, 20], `https://example.org/${i}`)) }]);
     await expect(extract(many, 'public')).rejects.toThrow(new ExtractError('the file has more than 500 links'));

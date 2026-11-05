@@ -1,11 +1,11 @@
 // ============================================================================
 // check.json, the check's report, and its strict reader: the list and the sheet read it back, so a
 // report edited by hand cannot keep a link its reasons drop. Each result's verdict, keepable and fix
-// are recomputed from its reasons and must match; a kept URL must be https (or mailto) in its parsed
-// form and of the result's kind. No page body is ever in a report, only status codes and URLs.
+// are recomputed from its reasons and must match; a kept URL must be its own kept form (urls.ts
+// keptForm: https or mailto, by the links contract) and of the result's kind. No page body is ever in a report, only status codes and URLs.
 // ============================================================================
 import { type CheckResult, NOTES, REASONS, type Reason, VERDICTS } from './check.js';
-import { parseLink } from './urls.js';
+import { keptForm } from './urls.js';
 
 export const CHECK_FORMAT = 'nwfl-link-check/1';
 const MAX_RESULTS = 1000;
@@ -59,9 +59,8 @@ function result(value: unknown, where: string): CheckResult {
   if (verdict !== expected) throw new ReportError(`${where}.verdict does not match its reasons`);
   const kept = own(json, 'kept');
   if (kept !== undefined) {
-    const parsed = typeof kept === 'string' ? parseLink(kept) : undefined;
-    if (parsed?.ok !== true || parsed.link.url !== kept || !['https', 'mailto'].includes(parsed.link.scheme) || parsed.link.kind !== kind) {
-      throw new ReportError(`${where}.kept must be an https or mailto URL, in its parsed form, of the result's kind`);
+    if (typeof kept !== 'string' || keptForm(kept) !== kept || (kept.startsWith('mailto:') ? 'mail' : 'web') !== kind) {
+      throw new ReportError(`${where}.kept must be an https or mailto URL, in its kept form, of the result's kind`);
     }
   }
   const keepable = own(json, 'keepable');

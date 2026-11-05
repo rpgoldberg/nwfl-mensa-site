@@ -13,8 +13,10 @@
 //     works, else the form as written is tried;
 //   - the no-fetch list: no request of any kind, not even DNS (Binding additions, 11-04);
 //   - login-walled hosts: DNS only, never fetched; kept at https;
-//   - http: only its https form is ever fetched (Ross: always https). If it fails at the transport,
-//     the link has no https and is dropped;
+//   - the link must be keepable as written (urls.ts parseKept, the contract with L2): no port, no IP
+//     literal, no dotless host, no userinfo; a mailto keeps only its one address, its query dropped;
+//   - http: only its https form is ever fetched (Ross: always https). If it fails at the transport, or
+//     answers with a final status outside 2xx, the link has no https and is dropped;
 //   - the status and the chain; an unrelated redirect (another registrable domain, by the Public
 //     Suffix List; www to apex and http to https on one site are related); a redirect down to http;
 //   - parked or for sale (parked.ts), with the nameservers of the registrable domain;
@@ -27,7 +29,7 @@ import { DnsFailure, resolveAddresses } from './dns.js';
 import { type Fetched, type HopFailure, type NetDeps, follow } from './net.js';
 import { type ParkedSignal, parkedSignals } from './parked.js';
 import { type Rdap, rdapDomain } from './rdap.js';
-import { type Kind, type ParsedLink, isLoginWalled, isNoFetch, parseLink, registrableDomain, trimTrailing } from './urls.js';
+import { type Kind, type ParsedLink, isLoginWalled, isNoFetch, keptUrl, parseKept, registrableDomain, trimTrailing } from './urls.js';
 
 export const VERDICTS = ['ok', 'upgrade', 'confirm', 'review', 'flag', 'drop'] as const;
 export type Verdict = (typeof VERDICTS)[number];
@@ -38,8 +40,10 @@ export const REASONS = {
   'private-address': ['drop', false, 'It points into a private network; it cannot be kept.'],
   malformed: ['drop', false, 'The address cannot be read; correct it by hand or remove the link.'],
   scheme: ['drop', false, 'Only web (https) and email links are kept.'],
-  port: ['drop', false, 'It uses a port other than 80 or 443; it cannot be kept.'],
+  port: ['drop', false, 'It names a port (even 80 or 443); remove the port, or the link.'],
   credentials: ['drop', false, 'It carries a user name or password; it cannot be kept.'],
+  'ip-literal': ['drop', false, 'It names a bare IP address instead of a site name; it cannot be kept.'],
+  'local-name': ['drop', false, 'Its host has no dot (a local name such as localhost); it cannot be kept.'],
   'too-long': ['drop', false, 'It is over 2048 characters; it cannot be kept.'],
   control: ['drop', false, 'It holds hidden control characters; it cannot be kept.'],
   nxdomain: ['drop', true, 'No such domain; check the spelling.'],
@@ -116,22 +120,14 @@ function result(url: string, kind: Kind | undefined, reasons: Reason[], extra: P
   return out;
 }
 
-/** The link's https form: http becomes https, and an explicit :80 goes with it. */
-function toHttps(url: string): string {
-  const u = new URL(url);
-  if (u.protocol === 'http:') {
-    u.protocol = 'https:';
-    if (u.port === '80') u.port = '';
-  }
-  return u.href;
-}
-
 /** Trailing sentence punctuation and stray spaces trimmed: a URL never holds a raw space. */
 export const hygiene = (raw: string): string => trimTrailing(raw.replace(/\s+/g, ''));
 
 const TRANSPORT: readonly HopFailure[] = ['tls', 'unreachable', 'timeout', 'protocol'];
 const UNREADABLE: readonly HopFailure[] = ['scheme', 'port', 'credentials', 'malformed', 'too-long', 'control'];
 const NOT_THERE: readonly HopFailure[] = ['nxdomain', 'nodata', 'private-address', 'no-fetch', 'login-walled'];
+
+const is2xx = (status: number): boolean => status >= 200 && status <= 299;
 
 function evaluate(fetched: Fetched, origin: string): Reason[] {
   const { failure } = fetched;
@@ -146,7 +142,7 @@ function evaluate(fetched: Fetched, origin: string): Reason[] {
   else if (status === 401 || status === 403) reasons.push('blocked');
   else if (status === 429) reasons.push('rate-limited');
   else if (status >= 500 && status <= 599) reasons.push('server-error');
-  else if (status < 200 || status > 299) reasons.push('http-error');
+  else if (!is2xx(status)) reasons.push('http-error');
   if (fetched.downgraded) reasons.push('redirect-to-http');
   const final = new URL(fetched.final.url).hostname.replace(/^\[(.*)\]$/, '$1');
   if (fetched.hops.length > 1 && registrableDomain(final) !== registrableDomain(origin)) reasons.push('unrelated-redirect');
@@ -193,7 +189,7 @@ export function makeChecker(deps: CheckDeps): Checker {
   }
 
   async function web(raw: string, link: ParsedLink): Promise<CheckResult> {
-    const https = toHttps(link.url);
+    const https = keptUrl(link);
     if (isNoFetch(link.host)) return result(raw, 'web', ['no-fetch'], { kept: https });
     const notes: Note[] = [];
     if (isLoginWalled(link.host)) {
@@ -205,8 +201,11 @@ export function makeChecker(deps: CheckDeps): Checker {
     const reasons = evaluate(fetched, link.host);
     let kept: string | undefined = https;
     if (link.scheme === 'http') {
+      // Only a working https answer upgrades: a transport failure or any final status outside 2xx
+      // means the https form does not work, so the link has no https (N3; Ross: always https).
+      const noHttps = fetched.failure === undefined ? !is2xx(fetched.final.status as number) : TRANSPORT.includes(fetched.failure);
       if (reasons.length === 0) reasons.unshift('upgraded');
-      else if (fetched.failure !== undefined && TRANSPORT.includes(fetched.failure)) {
+      else if (noHttps) {
         reasons.unshift('no-https');
         kept = undefined;
       }
@@ -240,7 +239,7 @@ export function makeChecker(deps: CheckDeps): Checker {
   }
 
   async function one(raw: string, candidate: string): Promise<CheckResult> {
-    const parsed = parseLink(candidate);
+    const parsed = parseKept(candidate);
     if (!parsed.ok) return result(raw, undefined, [parsed.reason]);
     return parsed.link.kind === 'mail' ? mail(raw, parsed.link) : web(raw, parsed.link);
   }

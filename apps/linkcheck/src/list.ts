@@ -1,7 +1,8 @@
 // ============================================================================
 // links.json, the approved link list (SPEC D2, D4), and its hash, linksSha256.
 //
-// THE CONTRACT with the loader (L2, apps/api src/load/links.ts), pinned by test/list.test.ts:
+// THE CONTRACT with the loader (L2, apps/api src/load/links.ts; CONTRACT.md), pinned by test/list.test.ts
+// and test/contract.test.ts:
 //   links.json = {
 //     "format": "nwfl-link-list/1",
 //     "sha256": { "public": <hex>, "members": <hex> },          the sha256 of each original PDF
@@ -10,15 +11,16 @@
 //   }
 //   Link = { "id": 26 lower-case base32 chars (128 random bits, minted here, never derived),
 //            "page": 1-based page number, "rect": [x1, y1, x2, y2] in PDF points, rounded to 0.01,
-//            x1 < x2 and y1 < y2, "url": the https URL (or mailto) as the WHATWG parser writes it,
-//            "kind": "web" | "mail", "confirm": true for a login-walled host Ross confirmed }
-//   linksSha256 = sha256 hex of canonicalJson({ v: 1, links: { public: [...], members: [...] } }),
-//   computed as the loader computes marksSha256 (apps/api src/load/load.ts marksSha256), with
-//   canonicalJson exactly apps/api src/content/hash.ts's.
+//            x1 < x2 and y1 < y2, "url": its own kept form (urls.ts keptForm: https, or mailto:<one
+//            address>), "kind": "web" | "mail", "confirm": true for a login-walled host Ross confirmed }
+//   linksSha256 = sha256 hex of canonicalJson({ v: 2, sha256: { public, members }, links: { public: [...],
+//   members: [...] } }), so the links approved for one issue's files cannot attach to another's; computed
+//   as the loader computes marksSha256 (apps/api src/load/load.ts marksSha256), with canonicalJson
+//   exactly apps/api src/content/hash.ts's.
 // At most 500 links per file. Every refusal names the place, never the URL.
 // ============================================================================
 import { createHash, randomBytes } from 'node:crypto';
-import { type Kind, parseLink } from './urls.js';
+import { type Kind, keptForm } from './urls.js';
 
 export const LIST_FORMAT = 'nwfl-link-list/1';
 export const MAX_LINKS_PER_FILE = 500;
@@ -79,10 +81,12 @@ export function mintId(random: (size: number) => Uint8Array = randomBytes): stri
 const byId = (a: ListedLink, b: ListedLink): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const shape = (link: ListedLink): ListedLink => ({ id: link.id, page: link.page, rect: link.rect, url: link.url, kind: link.kind, confirm: link.confirm });
 
-/** The approved list's hash, as Ross approves it ("LINKS: ok <prefix>"). */
-export function linksSha256(links: LinksByAudience): string {
+/** The approved list's hash, as Ross approves it ("LINKS: ok <prefix>"): over the links and the two files' sha256s. */
+export function linksSha256(links: LinksByAudience, sha256: Record<Audience, string>): string {
   const sorted = { public: links.public.map(shape).sort(byId), members: links.members.map(shape).sort(byId) };
-  return createHash('sha256').update(canonicalJson({ v: 1, links: sorted })).digest('hex');
+  return createHash('sha256')
+    .update(canonicalJson({ v: 2, sha256: { public: sha256.public, members: sha256.members }, links: sorted }))
+    .digest('hex');
 }
 
 // --- strict reading ---------------------------------------------------------
@@ -122,11 +126,8 @@ function listedLink(value: unknown, where: string): ListedLink {
   const kind = own(json, 'kind');
   if (kind !== 'web' && kind !== 'mail') throw new ListError(`${where}.kind must be web or mail`);
   const url = own(json, 'url');
-  const parsed = typeof url === 'string' ? parseLink(url) : undefined;
-  if (parsed?.ok !== true || parsed.link.url !== url || (parsed.link.scheme !== 'https' && parsed.link.scheme !== 'mailto')) {
-    throw new ListError(`${where}.url must be an https or mailto URL in its parsed form`);
-  }
-  if (parsed.link.kind !== kind) throw new ListError(`${where}.kind does not match its url`);
+  if (typeof url !== 'string' || keptForm(url) !== url) throw new ListError(`${where}.url must be an https or mailto URL in its kept form`);
+  if ((url.startsWith('mailto:') ? 'mail' : 'web') !== kind) throw new ListError(`${where}.kind does not match its url`);
   const confirm = own(json, 'confirm');
   if (typeof confirm !== 'boolean') throw new ListError(`${where}.confirm must be true or false`);
   return { id, page, rect, url, kind, confirm };
@@ -159,6 +160,6 @@ export function parseLinkList(input: unknown): LinkList {
     });
   }
   const hash = own(json, 'linksSha256');
-  if (hash !== linksSha256(links)) throw new ListError('linksSha256 does not match the links');
+  if (hash !== linksSha256(links, sha256)) throw new ListError('linksSha256 does not match the links');
   return { format: LIST_FORMAT, sha256, links, linksSha256: hash };
 }

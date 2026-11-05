@@ -39,4 +39,27 @@ describe('parkedSignals: any one means parked or for sale (Ross confirms)', () =
     expect(parkedSignals({})).toEqual([]);
     expect(parkedSignals({ ns: ['ns1.bodis.com'], finalUrl: 'https://dan.com/buy-domain/site.example', body: 'This domain is for sale' })).toEqual(['parking-ns', 'marketplace', 'for-sale-text']);
   });
+
+  it.each([
+    ['<', '<'],
+    ['<!--', '<!--'],
+    ['<script', '<script'],
+    ['<style>', '<style>'],
+    ['<a ', '<a '],
+  ])('reads a 256 KiB body of %j repeated in linear time (N2)', (_name, unit) => {
+    const body = unit.repeat(Math.ceil((256 * 1024) / unit.length));
+    const start = performance.now();
+    expect(parkedSignals({ body })).toEqual([]);
+    expect(performance.now() - start).toBeLessThan(500);
+  }, 60_000);
+
+  it('strips tags, comments and raw-text elements as the pattern did, unterminated ones to the end', () => {
+    expect(parkedSignals({ body: '<p>This domain</p> <b>is</b> for <i>sale</i>' })).toEqual(['for-sale-text']);
+    expect(parkedSignals({ body: '<STYLE>x</style ><p>Buy this domain</p>' })).toEqual(['for-sale-text']);
+    expect(parkedSignals({ body: '<p>Welcome</p><!-- buy this domain' })).toEqual([]);
+    expect(parkedSignals({ body: '<p>Welcome</p><script>buy this domain' })).toEqual([]);
+    expect(parkedSignals({ body: '<p>Welcome</p><a href="buy this domain"' })).toEqual([]);
+    expect(parkedSignals({ body: '<scripts>Buy this domain</scripts>' })).toEqual(['for-sale-text']);
+    expect(parkedSignals({ body: 'Buy&nbsp;this&nbsp;domain' })).toEqual(['for-sale-text']);
+  });
 });

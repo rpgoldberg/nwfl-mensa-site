@@ -95,11 +95,7 @@ export function buildLinkList(extractions: Record<Audience, Extraction>, report:
       });
     }
   }
-  const list = {
-    format: LIST_FORMAT,
-    sha256: { public: extractions.public.sha256, members: extractions.members.sha256 },
-    links,
-    linksSha256: linksSha256(links),
-  };
+  const sha256 = { public: extractions.public.sha256, members: extractions.members.sha256 };
+  const list = { format: LIST_FORMAT, sha256, links, linksSha256: linksSha256(links, sha256) };
   return parseLinkList(JSON.parse(JSON.stringify(list)));
 }
