@@ -1,5 +1,6 @@
-// The text size and theme controls post here (R30): a plain HTML form, so they
-// work with no script. The new settings go into two cookies, then the reader
+// The text size and theme controls post here (R30), and the leaving page's
+// "Next time" choice (LINKS L4): a plain HTML form, so they
+// work with no script. The new settings go into three cookies, then the reader
 // goes back to the page, with the Aa panel open again if the press came from it.
 // Astro's origin check (security.checkOrigin) refuses a cross-site post first.
 import type { APIRoute } from 'astro';
@@ -64,6 +65,7 @@ export const POST: APIRoute = async ({ request }) => {
     size: field(form, 'size'),
     step: field(form, 'step'),
     theme: field(form, 'theme'),
+    links: field(form, 'links'),
   });
   const headers = new Headers({
     Location: `${safeBack(field(form, 'back'))}${field(form, 'from') === 'menu' ? '#reader-menu' : ''}`,

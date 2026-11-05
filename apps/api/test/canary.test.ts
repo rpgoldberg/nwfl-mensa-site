@@ -29,9 +29,9 @@ import { MarkSubjectKind } from '../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { SERVED_SERVICES } from '../src/grpc/routes.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from './helpers/api.js';
 import { membersSpan, paragraph, publishItem, text } from './helpers/content.js';
-import { live } from './helpers/pg.js';
+import { live, url, withClient } from './helpers/pg.js';
 import { drain } from '../src/pdf/regenerate.js';
-import { storeOriginal } from '../src/pdf/store.js';
+import { inputsFor, storeOriginal } from '../src/pdf/store.js';
 import { extractAll } from './pdf/extract.js';
 import { linesPdf } from './pdf/fixtures.js';
 
@@ -39,7 +39,16 @@ const TOKEN = `canary${randomBytes(8).toString('hex')}`;
 // What a member typed at sign-up for the verifier: shown to the verifier and to no one else.
 const NUMBER = String(randomInt(100_000_000_000, 999_999_999_999));
 const LAST_NAME = `Canary${randomBytes(4).toString('hex')}`;
+// LINKS L4: a link on the members PDF, in its members copy, whose target holds the token.
+const LINK_ID = 'canarylinkqqqqqqqqqqqqqqqq';
 const RANGE = { from: { year: 2026, month: 10, day: 22 }, to: { year: 2027, month: 1, day: 31 } };
+
+/** The superuser's address on the test's own database. */
+const urlForDatabase = (database: string): string => {
+  const at = new URL(url as string);
+  at.pathname = `/${database}`;
+  return at.toString();
+};
 
 type Requests = Record<string, () => Array<MessageInitShape<DescMessage>>>;
 
@@ -64,6 +73,7 @@ describe.skipIf(!live)('the members-only canary', () => {
       GetWorkingItem: () => [{ itemId: ids['publicItem'] }],
       ListItemHistory: () => [{ itemId: ids['publicItem'] }],
       ReadFile: () => [{ fileId: ids['pdf'] }],
+      GetLinkTarget: () => [{ linkId: LINK_ID }],
     },
     'nwfl.mensa.v1.MembershipService': {
       GetMyAccount: () => [{}],
@@ -152,7 +162,24 @@ describe.skipIf(!live)('the members-only canary', () => {
     const pdfItem = await publishItem(pool, { slug: 'canary-pdf', officeId: office, title: 'Flyer', body: { blocks: [] }, files: [{ objectKey: 'canary-flyer.pdf', audience: 'members', bytes: pdf }] });
     ids['pdf'] = (await pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [pdfItem.versionId])).rows[0]!.id;
     await storeOriginal(pool, { fileId: ids['pdf'], bytes: pdf, sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] });
+    // A link on it, seeded as the loader (L2) leaves it: a link row and its status. Then the worker (L3) makes the
+    // copies with the real engine, which places the link in the members copy and records it there (pdf_copy_put).
+    const database = (await pool.query<{ db: string }>(`SELECT current_database() AS db`)).rows[0]!.db;
+    await withClient(urlForDatabase(database), async (root) => {
+      await root.query(
+        `INSERT INTO pdf_link (id, file_id, page, rect, url, host, kind, confirm, approval_reference, links_sha256, created_by_sub)
+         VALUES ($1, $2, 1, '{72, 500, 300, 514}', $3, 'example.org', 'web', false, 'LINKS-CANARY', sha256('canary'::bytea), 'system:issue-loader')`,
+        [LINK_ID, ids['pdf'], `https://example.org/join?code=${TOKEN}`],
+      );
+      await root.query(`INSERT INTO pdf_link_status (link_id, status, reason, by_sub) VALUES ($1, 'active', 'attached', 'system:issue-loader')`, [LINK_ID]);
+    });
     await drain(api.worker);
+    await withClient(urlForDatabase(database), async (root) => {
+      const inputs = await inputsFor(pool, ids['pdf'] as string, 'members');
+      if (inputs?.kind !== 'copy') throw new Error('the members copy of the canary PDF is missing');
+      const held = await root.query(`SELECT 1 FROM pdf_copy_link WHERE file_id = $1 AND input_hash = $2 AND link_id = $3`, [ids['pdf'], inputs.hash, LINK_ID]);
+      if (held.rows.length !== 1) throw new Error('the members copy of the canary PDF does not hold its link');
+    });
     await publishItem(pool, { slug: 'canary-members', officeId: office, visibility: 'members', title: 'Members notice', body: { blocks: [paragraph(text(`Notice ${TOKEN}`))] } });
     await publishItem(pool, { slug: 'canary-officers', officeId: office, visibility: 'officers', title: `Officers ${TOKEN}`, body: { blocks: [paragraph(text(TOKEN))] } });
     ids['series'] = await insertId(pool,
@@ -206,6 +233,7 @@ describe.skipIf(!live)('the members-only canary', () => {
       ['the members series', () => api.client(EventService).listSeries({}, MEMBER), () => `Series ${TOKEN}`],
       ['the members one-off event', () => api.client(EventService).listOccurrences(RANGE, MEMBER), () => `Event ${TOKEN}`],
       ['the members PDF\'s text', () => streamed(content().readFile({ fileId: ids['pdf'] as string }, MEMBER)), () => `File ${TOKEN}`],
+      ['the target of a link in the members PDF', () => content().getLinkTarget({ linkId: LINK_ID }, MEMBER), () => `code=${TOKEN}`],
       ['the members one-off event link', () => api.client(EventService).getOccurrence({ id: ids['oneOff'] as string }, MEMBER), () => `https://example.org/${TOKEN}`],
     ];
 

@@ -3,7 +3,7 @@
 // against that build; the four conditions from the multi-tenancy audit.
 import { expect, test, type APIResponse } from '@playwright/test';
 import { isHostOnlyCookie, parseCsp } from '../../server/policy.mjs';
-import { SIZES, SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
+import { LINKS_COOKIE, SIZES, SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
 import { isSignInPath } from '../../src/lib/access';
 import { ALL_PAGES } from '../pages';
 
@@ -35,7 +35,8 @@ test('(2) only the __Host- reader cookies are ever set: never a session cookie, 
       names.add(cookie.split('=')[0]!);
     }
   }
-  expect([...names].sort()).toEqual([SIZE_COOKIE, THEME_COOKIE].sort());
+  // The three reader cookies: size, theme and (LINKS L4) the leaving page's choice.
+  expect([...names].sort()).toEqual([SIZE_COOKIE, THEME_COOKIE, LINKS_COOKIE].sort());
 });
 
 test('(3) no officer- or member-submitted content, and no way to sign in, on any page', async ({ request }) => {

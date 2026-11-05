@@ -360,7 +360,7 @@ html[data-size="175"] .tick[data-for-size="175"] { color: var(--accent); font-we
 .sz-set[hidden] { display: none; }
 
 .theme-options { display: grid; gap: 8px; }
-.theme-btn {
+.theme-btn, .links-btn {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -398,6 +398,17 @@ html[data-theme="light"] .theme-btn[value="light"] .chosen,
 html[data-theme="dark"] .theme-btn[value="dark"] .chosen,
 html[data-theme="contrast-yellow"] .theme-btn[value="contrast-yellow"] .chosen,
 html[data-theme="contrast-white"] .theme-btn[value="contrast-white"] .chosen { display: inline-flex; }
+/* LINKS L4: the leaving page's choice, guard (no cookie) by default. */
+html:not([data-links]) .links-btn[value="guard"],
+html[data-links="countdown"] .links-btn[value="countdown"],
+html[data-links="direct"] .links-btn[value="direct"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 6px 0 0 var(--accent);
+}
+html:not([data-links]) .links-btn[value="guard"] .chosen,
+html[data-links="countdown"] .links-btn[value="countdown"] .chosen,
+html[data-links="direct"] .links-btn[value="direct"] .chosen { display: inline-flex; }
 
 /* Primary nav: the same four links, words at the top on wide screens, icons
    and words in a bottom bar on phones. Fixed in px: one row of four, always. */
@@ -956,3 +967,16 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 .error-summary h2 { margin: 0 0 var(--space-2); }
 .error-summary ul { margin: 0; padding-left: 1.5em; display: grid; gap: var(--space-2); }
 .error-summary a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
+
+/* LINKS L4: the leaving page. The host large and in ASCII, the full URL below it, smaller, wrapping
+   anywhere; Continue and Back as large buttons; the countdown's Stop as large as Continue. */
+.out-lead { margin-bottom: 0; }
+.out-host { margin: 0; font-family: var(--font-head); font-weight: 600; font-size: 2rem; line-height: 1.2; overflow-wrap: anywhere; }
+.out-url { margin-top: var(--space-1); color: var(--muted); font-size: var(--fs-small); overflow-wrap: anywhere; }
+.out-go .button { overflow-wrap: anywhere; text-align: left; padding-top: var(--space-2); padding-bottom: var(--space-2); }
+.out-newtab { font-weight: 400; }
+.out-status:empty { display: none; }
+.out-countdown { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: var(--space-4) 0; }
+.out-countdown[hidden] { display: none; }
+.out-count { margin: 0; font-weight: 700; font-size: 1.25rem; }
+.out-stop { min-width: 8rem; }

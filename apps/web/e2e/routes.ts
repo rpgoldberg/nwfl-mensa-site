@@ -20,6 +20,8 @@ export interface RouteContext {
   months: readonly string[];
   /** API file ids: a published item's PDF (REDACT R3c). */
   fileIds?: readonly string[];
+  /** LINKS L4: link ids in the PDF copies, for the leaving page. */
+  linkIds?: readonly string[];
 }
 
 export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
@@ -30,6 +32,8 @@ export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
   '/calendar.ics': () => ['/calendar.ics'],
   '/events.ics': () => ['/events.ics'],
   '/documents/[id].pdf': (c) => (c.fileIds ?? []).map((id) => `/documents/${id}.pdf`),
+  // LINKS L4: the leaving page, for each link id the test knows, and one that is no link.
+  '/out/[id]': (c) => ['/out/aaaaaaaaaaaaaaaaaaaaaaaaaa', ...(c.linkIds ?? []).map((id) => `/out/${id}`)],
   '/finances': () => ['/finances'],
   // The newsletter's issues, once the issue loader has published one; the bundled sample until then.
   '/news': () => ['/news'],
