@@ -17,7 +17,10 @@
 //     (input.ts), a bundle over 4 MiB, an unknown field, a link links.ts
 //     refuses, links other than the approved hash, and a bundle with no links;
 //   - in it: a slug that is not loaded, or that the loader did not write; an
-//     issue edited or withdrawn after loading; files other than the bundle's;
+//     issue edited or withdrawn after loading; files other than the bundle's
+//     (the stored originals' sha256, which the links hash names, so links
+//     approved for one issue never attach to another); a link whose target
+//     holds one of the issue's withheld quotes (links.ts targetHolds);
 //     a file that already has links, unless they are exactly the bundle's,
 //     under the same approval (then it reports "unchanged"); a public input
 //     hash other than the approved one.
@@ -26,8 +29,8 @@
 import { type Db, type Env, createPool } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { HEX64, LoadError, REFERENCE, type Stdin, known, matching, object, own, readBundleJson } from './input.js';
-import { type IssueLinks, LINK_FILES, attachLinks, hasLinks, linksSha256, parseLinks, storedLinks } from './links.js';
-import { LOADER, checkPublicInputs, fileOf, findIssue, loadedFiles } from './load.js';
+import { type IssueLinks, LINK_FILES, attachLinks, hasLinks, linksSha256, parseLinks, refuseWithheldTargets, storedLinks, withheldQuotes } from './links.js';
+import { LOADER, approvedFiles, checkPublicInputs, findIssue } from './load.js';
 
 export const LINKS_FORMAT = 'nwfl-links/1';
 /** 1000 links of 2 KiB fit well inside this. */
@@ -73,7 +76,8 @@ export function parseLinksBundle(input: unknown): LinksBundle {
 
   const links = parseLinks(own(json, 'links'));
   if (links.public.length + links.members.length === 0) throw new LoadError('the links bundle has no links: there is nothing to attach');
-  const computed = linksSha256(links);
+  // The hash names both files (CONTRACT item 4): links approved for one issue's files are not another's.
+  const computed = linksSha256(sha256, links);
   if (computed !== approval.linksSha256) throw new LoadError(`the links are not the approved ones: their sha256 is ${computed}`);
   return { slug, sha256, links, approval };
 }
@@ -88,13 +92,9 @@ export function applyLinksBundle(db: Db, bundle: LinksBundle): Promise<AttachRes
     if (existing.created_by_sub !== LOADER || existing.working_version_id !== null || existing.state !== 'published') {
       throw new LoadError(`${slug} was edited or withdrawn after loading: links are attached only to an issue as loaded`);
     }
-    const files = await loadedFiles(client, existing.live_version_id as string);
-    const publicFile = fileOf(files, 'public', Buffer.from(bundle.sha256.public, 'hex'));
-    const membersFile = fileOf(files, 'members', Buffer.from(bundle.sha256.members, 'hex'));
-    if (files.length !== 2 || publicFile === undefined || membersFile === undefined) {
-      throw new LoadError(`${slug}'s files are not the bundle's: links are attached only to the files approved with them`);
-    }
-    const ids = { public: publicFile.id, members: membersFile.id };
+    const files = await approvedFiles(client, existing.live_version_id as string, bundle.sha256, `${slug}'s files are not the bundle's`);
+    const ids = { public: files.public.id, members: files.members.id };
+    refuseWithheldTargets(bundle.links, await withheldQuotes(client, existing.id));
     const result = (status: AttachResult['status']): AttachResult => ({
       status,
       itemId: existing.id,
@@ -106,7 +106,7 @@ export function applyLinksBundle(db: Db, bundle: LinksBundle): Promise<AttachRes
     const stored = await storedLinks(client, ids);
     if (hasLinks(stored)) {
       const same =
-        linksSha256(stored.links) === bundle.approval.linksSha256 &&
+        linksSha256(bundle.sha256, stored.links) === bundle.approval.linksSha256 &&
         stored.approvals.length === 1 &&
         stored.approvals[0]?.reference === bundle.approval.reference &&
         stored.approvals[0].linksSha256 === bundle.approval.linksSha256;

@@ -14,7 +14,15 @@
 //            largest page a PDF allows), x1 < x2 and y1 < y2.
 //   url      an https URL in its canonical form (WHATWG href: ASCII, the host
 //            in punycode and lower case, a path, no credentials, no port), or
-//            mailto:<address> with no query. At most 2048 characters.
+//            mailto:<address> with no query, its domain in lower-case
+//            punycode. At most 2048 characters. A host (or a mail domain) is
+//            a DNS name of two labels or more, each 1 to 63 letters, digits
+//            and inner hyphens, the last starting with a letter: no IP
+//            literal (v4, v6, decimal, octal or hex), no dotless name such as
+//            localhost, no trailing dot, no empty label (CONTRACT items 1-3).
+//            The checker writes exactly these forms (the shared fixture
+//            test/load/fixtures/links-contract.json pins both parts); the
+//            loader keeps nothing else, and rewrites nothing.
 //   kind     web (https) or mail (mailto).
 //   confirm  a login-walled host Ross confirmed by hand (Facebook and the
 //            like); the leaving page says so.
@@ -23,13 +31,25 @@
 //
 // linksSha256, the hash Ross approves: SHA-256 of canonicalJson (content/
 // hash.ts: keys sorted at every depth, arrays in order) of
-//   { v: 1, links: { public: [...], members: [...] } }
-// with each list sorted by id and each link exactly { confirm, id, kind, page,
-// rect, url }. The checker computes the same hash over the same JSON.
+//   { v: 2, sha256: { public, members }, links: { public: [...], members: [...] } }
+// with both files' sha256 (lower-case hex), each list sorted by id and each
+// link exactly { confirm, id, kind, page, rect, url }. The checker computes
+// the same hash over the same JSON. The file hashes bind the links to the
+// issue they were approved for: both loaders take them from the stored
+// originals, so links approved for one issue never attach to another
+// (CONTRACT item 4).
+//
+// A link whose URL holds one of the issue's own withheld quotes (a mark in a
+// category the public policy does not show) is refused, before anything is
+// attached (CONTRACT item 5; targetHolds names the forms). L3 and L4 check
+// targets again when a copy is made and when a link is followed.
 // ============================================================================
 import { createHash } from 'node:crypto';
+import { domainToUnicode } from 'node:url';
 import { canonicalJson } from '../content/hash.js';
 import type { Db } from '../db/pool.js';
+import { TENANT, cellKey, resolveAction } from '../redaction/policy.js';
+import { policyCells } from '../redaction/lens.js';
 import { type Json, LoadError, known, object, own, wholeNumber } from './input.js';
 
 export const MAX_LINKS_PER_FILE = 500;
@@ -58,12 +78,18 @@ export interface IssueLinks {
 
 export const LINK_FILES = ['public', 'members'] as const;
 
+type Query = Pick<Db, 'query'>;
+
 /** Printable ASCII, no space: what a canonical href or a plain mailto holds. */
 const PRINTABLE = /^[!-~]+$/;
-/** mailto:local@domain, a dotted domain, no query and no second @. */
-const MAILTO = /^mailto:[A-Za-z0-9.!#$%&'*+/=^_`{|}~-]+@([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+)$/;
-/** A host as the database keeps it: lower-case ASCII letters, digits, dots and hyphens. */
-const HOST = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/;
+/**
+ * A host as both loaders and the database keep it (0024 pdf_link_host): two labels or more, each 1 to
+ * 63 lower-case letters, digits and inner hyphens, the last starting with a letter, so never an IP
+ * literal in any form, a dotless name, a trailing dot or an empty label. At most 253 characters.
+ */
+const HOST = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+/** mailto:local@domain: one address, no query or fragment, the domain a HOST; no # or % in the local part, which a mail client would read as a fragment or an escape. */
+const MAILTO = /^mailto:[A-Za-z0-9.!$&'*+/=^_`{|}~-]+@([^@]+)$/;
 
 function rectOf(value: unknown, where: string): Rect {
   const bad = (): LoadError => new LoadError(`${where} must be [x1, y1, x2, y2]: four finite numbers within ${MAX_COORDINATE} of 0, with x1 < x2 and y1 < y2`);
@@ -82,7 +108,8 @@ function webUrl(url: string, where: string): string {
   } catch {
     throw bad();
   }
-  if (parsed.href !== url || parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.port !== '' || !HOST.test(parsed.hostname)) throw bad();
+  if (parsed.href !== url || parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== '' || parsed.port !== '') throw bad();
+  if (!HOST.test(parsed.hostname)) throw new LoadError(`${where} must name a host by its DNS name, in lower case: no IP address, dotless name, trailing dot or empty label`);
   return url;
 }
 
@@ -91,7 +118,8 @@ function urlOf(value: unknown, kind: LinkKind, where: string): string {
     throw new LoadError(`${where} must be at most ${MAX_URL_LENGTH} printable ASCII characters`);
   }
   if (kind === 'web') return webUrl(value, where);
-  if (!MAILTO.test(value)) throw new LoadError(`${where} must be mailto: and one address, with no query`);
+  const domain = MAILTO.exec(value)?.[1];
+  if (domain === undefined || !HOST.test(domain)) throw new LoadError(`${where} must be mailto: and one address, with no query, at a DNS name in lower case`);
   return value;
 }
 
@@ -138,12 +166,72 @@ const canonicalLink = (link: Link) => ({ confirm: link.confirm, id: link.id, kin
 // Ids are unique across both lists (parseLinks; pdf_link's key), so no two compare equal.
 const byId = (list: readonly Link[]) => [...list].sort((a, b) => (a.id < b.id ? -1 : 1)).map(canonicalLink);
 
-/** The links' hash, as Ross approves it (see the header). */
-export function linksSha256(links: IssueLinks): string {
-  return createHash('sha256').update(canonicalJson({ v: 1, links: { public: byId(links.public), members: byId(links.members) } })).digest('hex');
+/** Both files' sha256, lower-case hex: what the links hash binds the links to. */
+export interface FileHashes {
+  public: string;
+  members: string;
 }
 
-type Query = Pick<Db, 'query'>;
+/** The links' hash, as Ross approves it (see the header): over the links and the two files they were approved for. */
+export function linksSha256(files: FileHashes, links: IssueLinks): string {
+  return createHash('sha256')
+    .update(canonicalJson({ v: 2, sha256: { public: files.public, members: files.members }, links: { public: byId(links.public), members: byId(links.members) } }))
+    .digest('hex');
+}
+
+/** Every %XX escape decoded, as UTF-8 where it is (a stray % is kept as it is). */
+function percentDecoded(text: string): string {
+  return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => Buffer.from(run.replace(/%/g, ''), 'hex').toString('utf8'));
+}
+
+/** The separators a URL (or a reader) puts between the words of a quote. */
+const SEPARATORS = /[\s._\-+/@?=&:#,;~!*'()[\]%]+/gu;
+const spaced = (text: string): string => text.replace(SEPARATORS, ' ').trim();
+const joined = (text: string): string => text.replace(SEPARATORS, '');
+const folded = (text: string): string => text.normalize('NFKC').toLowerCase();
+
+/**
+ * Whether a URL holds any of the quotes, in any form a reader or a server could decode it to: the URL
+ * as written, percent-decoded (up to three times, for %25-escaped escapes), with its host or mail
+ * domain in Unicode (from punycode), all lower-cased; then each form with the separators
+ * (. _ - + / @ ? = & and the like) turned into spaces, and with them taken out, against the quote
+ * treated the same way, so "Quillon Brask" is found in quillon.brask and quillonbrask.
+ */
+export function targetHolds(url: string, quotes: readonly string[]): boolean {
+  const forms = new Set<string>([url]);
+  let decoded = url;
+  for (let n = 0; n < 3; n++) forms.add((decoded = percentDecoded(decoded)));
+  for (const form of [...forms]) {
+    // The host of a web form, or the domain of a mail form: whatever follows // or the last @, up to the path.
+    const host = /^[a-z]+:(?:\/\/)?(?:[^/?#]*@)?([^/?#@]+)/i.exec(form)?.[1] ?? '';
+    forms.add(form.replace(host, domainToUnicode(host.toLowerCase()) || host));
+  }
+  const haystacks = [...forms].map(folded).flatMap((form) => [form, spaced(form), joined(form)]);
+  return quotes.some((quote) => {
+    const needle = folded(quote);
+    const needles = [needle, spaced(needle), joined(needle)].filter((form) => form !== '');
+    return haystacks.some((haystack) => needles.some((form) => haystack.includes(form)));
+  });
+}
+
+/** Refuses the first link whose URL holds one of the quotes, by its place: never its URL or the quote. */
+export function refuseWithheldTargets(links: IssueLinks, quotes: readonly string[], where = 'links'): void {
+  for (const file of LINK_FILES) {
+    const at = links[file].findIndex((link) => targetHolds(link.url, quotes));
+    if (at >= 0) throw new LoadError(`${where}.${file}[${at}]: its target holds a passage the public policy withholds`);
+  }
+}
+
+/** The quotes of an item's active marks whose category the public policy does not show, as they stand in this transaction. */
+export async function withheldQuotes(db: Query, itemId: string): Promise<string[]> {
+  const [cells, marks] = await Promise.all([
+    policyCells(db, 'public'),
+    db.query<{ quote: string; category: string }>(`SELECT quote, category FROM redaction_mark WHERE tenant_id = $1 AND content_item_id = $2 AND status = 'active' AND quote IS NOT NULL`, [TENANT, itemId]),
+  ]);
+  const policy = new Map(cells.map((cell) => [cellKey('public', cell.category), cell.action]));
+  return marks.rows.filter((mark) => resolveAction(policy, 'public', mark.category) !== 'show').map((mark) => mark.quote);
+}
+
 
 /** Attaches one file's links through pdf_links_attach (0024), as the loader; the database checks the rest. */
 export async function attachLinks(db: Query, input: { fileId: string; links: readonly Link[]; reference: string; linksSha256: string; sub: string }): Promise<number> {

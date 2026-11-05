@@ -41,6 +41,8 @@ describe.skipIf(!live)('approved links, through the loader and the links command
   /** A loaded issue's period, PDFs and the bundle options that load it. */
   const issue = async (period: string) => ({ period, publicPdf: await publicPdf(period), membersPdf: await membersPdf(period) });
   type Issue = Awaited<ReturnType<typeof issue>>;
+  /** Both files' sha256, as the links hash binds them. */
+  const filesOf = (loaded: Issue) => ({ public: sha256(loaded.publicPdf).toString('hex'), members: sha256(loaded.membersPdf).toString('hex') });
   const linksFor = (loaded: Issue, options: { links?: IssueLinks; reference?: string; linksSha256?: string; publicInputHash?: string; slug?: string; publicSha256?: string; membersSha256?: string } = {}) =>
     parseLinksBundle(
       linksBundleJson({
@@ -81,7 +83,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
       expect(pub.map(({ id, page, rect, url, kind, confirm }) => ({ id, page, rect, url, kind, confirm }))).toEqual(LINKS.public);
       expect(members.map(({ id, page, rect, url, kind, confirm }) => ({ id, page, rect, url, kind, confirm }))).toEqual(LINKS.members);
       expect([...pub, ...members].map((row) => row.host)).toEqual(['example.org', 'example.org', 'example.org', 'example.org', 'social.example.net']);
-      for (const row of [...pub, ...members]) expect(row).toMatchObject({ approval_reference: 'PUBCOPY', links_sha256: Buffer.from(linksSha256(LINKS), 'hex'), created_by_sub: LOADER });
+      for (const row of [...pub, ...members]) expect(row).toMatchObject({ approval_reference: 'PUBCOPY', links_sha256: Buffer.from(linksSha256(filesOf(first), LINKS), 'hex'), created_by_sub: LOADER });
       const active = await api.pool.query(`SELECT DISTINCT status, reason, by_sub FROM pdf_link_status`);
       expect(active.rows).toEqual([{ status: 'active', reason: 'attached', by_sub: LOADER }]);
       const audit = await api.pool.query(`SELECT subject_id, payload->>'links' AS n FROM audit_event WHERE action = 'pdf_links_attach' ORDER BY payload->>'links'`);
@@ -94,7 +96,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
     it('names the links hash in the approval reason, after the three hashes of nwfl-issue/1', async () => {
       const loaded = await loading;
       expect(await reasonOf(loaded.itemId)).toBe(
-        `Issue loader, approved as PUBCOPY: marks sha256 ${parseBundle(await bundleJson(first)).approval.marksSha256}, public inputHash ${publicInputHash(first.publicPdf, MARKS)}, members sha256 ${sha256(first.membersPdf).toString('hex')}, links sha256 ${linksSha256(LINKS)}`,
+        `Issue loader, approved as PUBCOPY: marks sha256 ${parseBundle(await bundleJson(first)).approval.marksSha256}, public inputHash ${publicInputHash(first.publicPdf, MARKS)}, members sha256 ${sha256(first.membersPdf).toString('hex')}, links sha256 ${linksSha256(filesOf(first), LINKS)}`,
       );
     });
 
@@ -135,6 +137,20 @@ describe.skipIf(!live)('approved links, through the loader and the links command
       await expect(applyBundle(api.pool, parseBundle(await bundleJson({ ...next, format: 'nwfl-issue/2', links: reused })))).rejects.toMatchObject({ code: '23505' });
       expect(await counts()).toEqual(before);
       expect((await api.pool.query(`SELECT 1 FROM content_item WHERE slug = 'pensa-mensa-2026-06'`)).rowCount).toBe(0);
+    });
+
+    it("refuses a link whose target holds a passage the public policy withholds, on either file, applying nothing (CONTRACT item 5)", async () => {
+      const next = await issue('2023-04');
+      const before = await counts();
+      const load = async (links: IssueLinks) => applyBundle(api.pool, parseBundle(await bundleJson({ ...next, format: 'nwfl-issue/2', links })));
+      await expect(load({ public: [webLink(81), mailLink(82, 'mailto:q.brask@example.org')], members: [] })).rejects.toThrow(
+        /^links\.public\[1\]: its target holds a passage the public policy withholds$/,
+      );
+      await expect(load({ public: [], members: [webLink(83, 'https://example.org/call/850.555.0142')] })).rejects.toThrow(/^links\.members\[0\]: its target holds/);
+      await expect(load({ public: [webLink(84, 'https://example.org/q.brask%40example.org')], members: [] })).rejects.toThrow(/^links\.public\[0\]: its target holds/);
+      expect(await counts()).toEqual(before);
+      // A member's name is shown to the public (0022), so a link that names one is kept.
+      expect((await load({ public: [webLink(85, 'https://example.org/quillon-brask')], members: [] })).status).toBe('loaded');
     });
 
     it('still checks the public input hash, after the links are in', async () => {
@@ -230,6 +246,33 @@ describe.skipIf(!live)('approved links, through the loader and the links command
         const three = await applyBundle(api.pool, parseBundle(await bundleJson(withdrawn)));
         await content.withdraw({ itemId: three.itemId }, WEBMASTER);
         await refused(linksFor(withdrawn), /^pensa-mensa-2024-08 was edited or withdrawn after loading/);
+      });
+
+      it("refuses links approved for another issue: its hash names that issue's files (CONTRACT item 4)", async () => {
+        const other = await issue('2023-06');
+        await applyBundle(api.pool, parseBundle(await bundleJson(other)));
+        // The other issue's own files, with this issue's approved hash: refused before the database.
+        expect(() => linksFor(other, { linksSha256: linksSha256(filesOf(loadedIssue), CLI_LINKS) })).toThrow(/^the links are not the approved ones/);
+        // This issue's files and hash, named as the other issue: its files are not the bundle's.
+        await refused(linksFor(loadedIssue, { slug: 'pensa-mensa-2023-06' }), /^pensa-mensa-2023-06's files are not the bundle's/);
+      });
+
+      it('refuses a link whose target holds a passage the public policy withholds (CONTRACT item 5)', async () => {
+        const fresh = await issue('2023-08');
+        await applyBundle(api.pool, parseBundle(await bundleJson(fresh)));
+        await refused(linksFor(fresh, { links: { public: [webLink(86)], members: [webLink(87, 'https://12.example.lane.example.org/')] } }), /^links\.members\[0\]: its target holds a passage the public policy withholds$/);
+      });
+
+      it('refuses, never reports unchanged, when the two files hold the same hash under two approvals', async () => {
+        const fresh = await issue('2023-09');
+        const one = await applyBundle(api.pool, parseBundle(await bundleJson(fresh)));
+        const links: IssueLinks = { public: [webLink(88)], members: [webLink(89)] };
+        const hash = Buffer.from(linksSha256(filesOf(fresh), links), 'hex');
+        const rows = (list: IssueLinks['public']) => JSON.stringify(list.map((link) => ({ ...link, host: 'example.org' })));
+        // Straight through the one writer: the public file under LINKS, the members file under OTHER.
+        await api.pool.query(`SELECT pdf_links_attach($1, $2::jsonb, 'LINKS', $3, $4, NULL)`, [one.publicFileId, rows(links.public), hash, LOADER]);
+        await api.pool.query(`SELECT pdf_links_attach($1, $2::jsonb, 'OTHER', $3, $4, NULL)`, [one.membersFileId, rows(links.members), hash, LOADER]);
+        for (const reference of ['LINKS', 'OTHER']) await refused(linksFor(fresh, { links, reference }), /^pensa-mensa-2023-09 already has other links/);
       });
 
       it("refuses files other than the issue's, by either sha256", async () => {

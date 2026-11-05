@@ -6,8 +6,10 @@
 // reserved example name and every person is made up; the "PDFs" are a few bytes the database never
 // parses.
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { hostOf } from '../../src/load/links.js';
 import { APP, APP_PW, MIGRATOR, MIGRATOR_PW, WORKER, WORKER_PW, dropDatabase, failure, freshDatabase, live, migrate, sqlstate, url, urlFor } from '../helpers/pg.js';
 
 const LOADER = 'system:issue-loader';
@@ -29,7 +31,7 @@ interface Row {
   confirm: boolean;
 }
 const web = (n: number, extra: Partial<Row> = {}): Row => ({ id: id(n), page: 1, rect: [72, 700, 300, 714.5], url: `https://example.org/p/${n}`, host: 'example.org', kind: 'web', confirm: false, ...extra });
-const mail = (n: number, extra: Partial<Row> = {}): Row => ({ id: id(n), page: 2, rect: [72, 600, 200, 612], url: 'mailto:Games@Example.org', host: 'example.org', kind: 'mail', confirm: false, ...extra });
+const mail = (n: number, extra: Partial<Row> = {}): Row => ({ id: id(n), page: 2, rect: [72, 600, 200, 612], url: 'mailto:Games@example.org', host: 'example.org', kind: 'mail', confirm: false, ...extra });
 
 describe.skipIf(!live)('0024: the approved links of a stored PDF', () => {
   let name: string;
@@ -258,6 +260,17 @@ describe.skipIf(!live)('0024: the approved links of a stored PDF', () => {
       ['a host that is only the start of the url\'s', { url: 'https://example.org.evil.example/', host: 'example.org' }],
       ['a host with credentials before it', { url: 'https://example.org@example.net/', host: 'example.org' }],
       ['an upper-case host', { url: 'https://Example.org/', host: 'Example.org' }],
+      ['an IPv4 host', { url: 'https://127.0.0.1/', host: '127.0.0.1' }],
+      ['a private IPv4 host', { url: 'https://10.0.0.1/admin', host: '10.0.0.1' }],
+      ['a decimal IPv4 host', { url: 'https://2130706433/', host: '2130706433' }],
+      ['a hex IPv4 host', { url: 'https://0x7f.0.0.1/', host: '0x7f.0.0.1' }],
+      ['an IPv6 host', { url: 'https://[::1]/', host: '[::1]' }],
+      ['a dotless host', { url: 'https://localhost/', host: 'localhost' }],
+      ['a trailing dot', { url: 'https://example.org./', host: 'example.org.' }],
+      ['an empty label', { url: 'https://example..org/', host: 'example..org' }],
+      ['a label that starts with a hyphen', { url: 'https://-x.example.org/', host: '-x.example.org' }],
+      ['a numeric last label', { url: 'https://example.123/', host: 'example.123' }],
+      ['an explicit port', { url: 'https://example.org:443/', host: 'example.org' }],
       ['a web link to mailto', { url: 'mailto:a@example.org', host: 'example.org' }],
       ['an unknown kind', { kind: 'tel' }],
     ])('refuses a web link with %s, adding nothing', async (_label, change) => {
@@ -272,9 +285,27 @@ describe.skipIf(!live)('0024: the approved links of a stored PDF', () => {
       ['an https url', { url: 'https://example.org/' }],
       ['two at signs', { url: 'mailto:a@b@example.org' }],
       ['no address', { url: 'mailto:@example.org' }],
+      ['an upper-case domain', { url: 'mailto:games@Example.org' }],
+      ['a subject', { url: 'mailto:games@example.org?subject=hi' }],
+      ['a subject, its host named with it', { url: 'mailto:games@example.org?subject=hi', host: 'example.org?subject=hi' }],
+      ['a cc', { url: 'mailto:games@example.org?cc=a@example.org' }],
+      ['an IPv4 domain', { url: 'mailto:games@127.0.0.1', host: '127.0.0.1' }],
+      ['a dotless domain', { url: 'mailto:games@localhost', host: 'localhost' }],
+      ['an empty label', { url: 'mailto:games@example..org', host: 'example..org' }],
     ])('refuses a mail link with %s', async (_label, change) => {
       const fileId = await file();
       expect(await sqlstate(appc, ATTACH, [fileId, JSON.stringify([mail(60, change as Partial<Row>)]), 'LINKS', SHA, LOADER, null])).toBe('23514');
+    });
+
+    it("accepts every kept form of the shared links contract (CONTRACT.md), each with the loader's host", async () => {
+      const cases = JSON.parse(readFileSync(new URL('../load/fixtures/links-contract.json', import.meta.url), 'utf8')) as Array<{ in: string; out: string | null }>;
+      const kept = [...new Set(cases.flatMap((entry) => (entry.out === null ? [] : [entry.out])))];
+      expect(kept.length).toBeGreaterThan(5);
+      const rows = kept.map((u, n) => {
+        const kind = u.startsWith('mailto:') ? 'mail' : 'web';
+        return (kind === 'mail' ? mail : web)(300 + n, { url: u, host: hostOf({ url: u, kind }) });
+      });
+      expect((await attach(await file(), rows)).rows[0]?.n).toBe(rows.length);
     });
 
     it('refuses an id already used, on this file or another', async () => {

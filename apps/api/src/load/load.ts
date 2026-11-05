@@ -46,10 +46,13 @@
 //     the marks reads both PDFs while it is open.
 //   - LINKS (nwfl-issue/2): the bundle may carry each file's approved links
 //     (links.ts) and their hash, approval.linksSha256, checked before the
-//     database. They are attached as the loader (0024 pdf_links_attach) in the
-//     same transaction, before the public input hash is checked, so that check
-//     covers them once the input hash names the links (L3). The approval
-//     reason names the links hash too. nwfl-issue/1 loads, and repeats, as
+//     database; the hash names both PDFs' sha256, so links approved for one
+//     issue never load with another. In the same transaction, once the files
+//     are checked to be those stored originals and no link's target holds one
+//     of the issue's withheld quotes, they are attached as the loader (0024
+//     pdf_links_attach), before the public input hash is checked, so that
+//     check covers them once the input hash names the links (L3). The
+//     approval reason names the links hash too. nwfl-issue/1 loads, and repeats, as
 //     before: a repeated nwfl-issue/1 run does not look at links, which the
 //     links command (attach.ts) may have attached since.
 //   - Idempotent: the item by its slug, the files by sha256 and audience,
@@ -75,7 +78,7 @@ import { type TxClient, inTransaction } from '../db/tx.js';
 import { MAX_ORIGINAL_BYTES, inputsFor, storeOriginal } from '../pdf/store.js';
 import { FileMarkError, addFileMarks } from '../redaction/file-marks.js';
 import { HEX64, LoadError, REFERENCE, type Stdin, known, matching, object, own, readBundleJson, wholeNumber } from './input.js';
-import { type IssueLinks, LINK_FILES, attachLinks, linksSha256, parseLinks, storedLinks } from './links.js';
+import { type FileHashes, type IssueLinks, LINK_FILES, attachLinks, linksSha256, parseLinks, refuseWithheldTargets, storedLinks, withheldQuotes } from './links.js';
 
 export { LoadError, type Stdin, type StdinKind, stdinKind } from './input.js';
 
@@ -219,7 +222,8 @@ export function parseBundle(input: unknown): Bundle {
   if (computed !== approval.marksSha256) throw new LoadError(`the marks are not the approved ones: their sha256 is ${computed}`);
   if (!v2) return { format, issue, office, approval, pdfs, marks };
   const links = parseLinks(own(json, 'links'));
-  const linksHash = linksSha256(links);
+  // The links are approved for these two files (CONTRACT item 4): the public PDF's sha256 and the approved members one.
+  const linksHash = linksSha256({ public: sha256(pdfs.public).toString('hex'), members }, links);
   if (linksHash !== approval.linksSha256) throw new LoadError(`the links are not the approved ones: their sha256 is ${linksHash}`);
   return { format, issue, office, approval, pdfs, marks, links };
 }
@@ -270,7 +274,8 @@ async function unchanged(client: TxClient, bundle: Bundle, slug: string, existin
   // nwfl-issue/1 knows no links: links attached since (attach.ts) are the links command's to compare.
   if (bundle.links !== undefined) {
     const stored = await storedLinks(client, { public: publicFile.id, members: membersFile.id });
-    if (linksSha256(stored.links) !== linksSha256(bundle.links)) throw new LoadError(`${slug} is already loaded with other links: the loader never revises an issue`);
+    const files = { public: publicFile.sha256.toString('hex'), members: membersFile.sha256.toString('hex') };
+    if (linksSha256(files, stored.links) !== linksSha256(files, bundle.links)) throw new LoadError(`${slug} is already loaded with other links: the loader never revises an issue`);
   }
   if (existing.approval_reason !== approvalReason(bundle.approval)) throw new LoadError(`${slug} is already loaded under another approval: the loader never revises an issue`);
   return { status: 'unchanged', itemId: existing.id, publicFileId: publicFile.id, membersFileId: membersFile.id, marks: marks.length };
@@ -312,6 +317,9 @@ async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<
   // The links before the input hash, which will name them (L3); a file with none attaches nothing.
   const links = bundle.links;
   if (links !== undefined) {
+    // The files the links hash names are the originals just stored (CONTRACT item 4), and no target holds a withheld quote (item 5).
+    await approvedFiles(client, version.id, { public: sha256(bundle.pdfs.public).toString('hex'), members: bundle.approval.membersSha256 }, `${contract.slug}'s files are not the bundle's`);
+    refuseWithheldTargets(links, await withheldQuotes(client, itemId));
     for (const audience of LINK_FILES) {
       if (links[audience].length > 0) {
         await attachLinks(client, { fileId: ids[audience], links: links[audience], reference: bundle.approval.reference, linksSha256: bundle.approval.linksSha256 as string, sub: LOADER });
@@ -371,6 +379,18 @@ export async function loadedFiles(client: TxClient, versionId: string): Promise<
 /** The file for this audience with these bytes' sha256, if the version holds one. */
 export const fileOf = (files: readonly LoadedFile[], audience: string, digest: Buffer): LoadedFile | undefined =>
   files.find((file) => file.audience === audience && file.sha256.equals(digest));
+
+/**
+ * The version's two stored originals, by the sha256 the links hash names (CONTRACT item 4): refused,
+ * with `refusal`, unless both are there and the version holds no other.
+ */
+export async function approvedFiles(client: TxClient, versionId: string, sha: FileHashes, refusal: string): Promise<{ public: LoadedFile; members: LoadedFile }> {
+  const files = await loadedFiles(client, versionId);
+  const publicFile = fileOf(files, 'public', Buffer.from(sha.public, 'hex'));
+  const membersFile = fileOf(files, 'members', Buffer.from(sha.members, 'hex'));
+  if (files.length !== 2 || publicFile === undefined || membersFile === undefined) throw new LoadError(`${refusal}: links are attached only to the files approved with them`);
+  return { public: publicFile, members: membersFile };
+}
 
 /** Refuses unless the public's copy of the file would be made from the approved inputs (store.ts inputHash), as they stand in this transaction. */
 export async function checkPublicInputs(client: TxClient, fileId: string, approved: string): Promise<void> {

@@ -2,16 +2,19 @@
 // (src/load/links.ts), its hash, the issue bundle nwfl-issue/2 and the links bundle nwfl-links/1.
 // Every URL here is under a reserved example name; every person is made up.
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { LINKS_FORMAT, MAX_LINKS_BUNDLE_BYTES, parseLinksBundle, runAttach } from '../../src/load/attach.js';
 import { canonicalJson } from '../../src/content/hash.js';
 import { LoadError, parseBundle } from '../../src/load/load.js';
-import { type IssueLinks, type Link, MAX_LINKS_PER_FILE, hostOf, linksSha256, parseLinks } from '../../src/load/links.js';
-import { LINKS, bundleJson, linkId, linksBundleJson, linksJson, mailLink, stdinOf, webLink } from './bundle.js';
+import { type IssueLinks, type Link, MAX_LINKS_PER_FILE, hostOf, linksSha256, parseLinks, refuseWithheldTargets, targetHolds } from '../../src/load/links.js';
+import { ADDRESS, EMAIL, LINKS, NAME, PHONE, bundleJson, linkId, linksBundleJson, linksJson, mailLink, sha256, stdinOf, webLink } from './bundle.js';
 
 const NO_DB = { DATABASE_URL: 'postgres://nobody:nothing@127.0.0.1:1/none' };
 const PRODUCTION = { ...NO_DB, NODE_ENV: 'production' };
 const HASH = 'a'.repeat(64);
+/** The two files' sha256, as a links bundle names them. */
+const FILES = { public: 'b'.repeat(64), members: 'c'.repeat(64) };
 
 /** A copy of a JSON value with one path set (or deleted with undefined). */
 function withPath(json: Record<string, unknown>, path: Array<string | number>, value: unknown): Record<string, unknown> {
@@ -124,6 +127,19 @@ describe('parseLinks', () => {
       ['a user only', 'https://user@example.org/'],
       ['a port', 'https://example.org:8443/'],
       ['an IPv6 literal', 'https://[2001:db8::1]/'],
+      ['an IPv4 literal', 'https://127.0.0.1/'],
+      ['a private IPv4 literal', 'https://10.0.0.1/admin'],
+      ['an IPv4 literal in decimal', 'https://2130706433/'],
+      ['an IPv4 literal in hex', 'https://0x7f.0.0.1/'],
+      ['a dotless host', 'https://localhost/'],
+      ['a one-label host', 'https://intranet/'],
+      ['a trailing dot', 'https://example.org./'],
+      ['two trailing dots', 'https://example.org../'],
+      ['an empty label', 'https://example..org/'],
+      ['a leading dot', 'https://.example.org/'],
+      ['a numeric last label', 'https://example.123/'],
+      ['an explicit :443', 'https://example.org:443/'],
+      ['an explicit :80', 'https://example.org:80/'],
       ['a mailto', 'mailto:games@example.org'],
       ['too long', `https://example.org/${'a'.repeat(2048 - 20 + 1)}`],
       ['not a string', 42],
@@ -137,11 +153,31 @@ describe('parseLinks', () => {
       expect(parseLinks(oneLink('url', long)).public[0]?.url).toBe(long);
       expect(parseLinks(oneLink('url', 'https://example.org/p?q=1&r=2#top')).public[0]?.url).toBe('https://example.org/p?q=1&r=2#top');
       expect(parseLinks(oneLink('url', 'https://xn--bcher-kva.example/')).public[0]?.url).toBe('https://xn--bcher-kva.example/');
+      expect(parseLinks(oneLink('url', 'https://a-1.b2.example.org/')).public[0]?.url).toBe('https://a-1.b2.example.org/');
+    });
+
+    it('accepts a mailto of one address, its local part as written and its domain in lower-case punycode', () => {
+      // An IDN domain in punycode is the shared fixture's (mailto:club~@xn--bcher-kva.example): made-up-people allows only example.com, .org and .net addresses.
+      for (const url of ['mailto:games@example.org', 'mailto:Games.Night@example.org', 'mailto:club~@xn--bcher-kva.example', 'mailto:first.last+news@example.com']) {
+        const json = withPath(linksJson({ public: [mailLink(1)], members: [] }), ['public', 0, 'url'], url);
+        expect(parseLinks(json).public[0]?.url).toBe(url);
+      }
     });
 
     it.each([
       ['an https URL', 'https://example.org/'],
       ['a query', 'mailto:games@example.org?subject=hi'],
+      ['a subject', 'mailto:games@example.org?subject=Game%20night'],
+      ['a cc', 'mailto:games@example.org?cc=host@example.org'],
+      ['a fragment', 'mailto:games@example.org#x'],
+      ['an upper-case domain (not the canonical form)', 'mailto:games@Example.ORG'],
+      ['an upper-case scheme', 'MAILTO:games@example.org'],
+      ['a percent-encoded IDN domain (it must arrive in punycode)', 'mailto:games@b%C3%BCcher.example'],
+      ['an IPv4 domain', 'mailto:games@127.0.0.1'],
+      ['an IP domain literal', 'mailto:games@[127.0.0.1]'],
+      ['a trailing dot', 'mailto:games@example.org.'],
+      ['an empty label', 'mailto:games@example..org'],
+      ['a numeric last label', 'mailto:games@example.123'],
       ['no address', 'mailto:'],
       ['no domain', 'mailto:games@'],
       ['two at signs', 'mailto:games@club@example.org'],
@@ -167,34 +203,46 @@ describe('hostOf', () => {
   it("is a web link's host, in ASCII, and a mail link's domain, in lower case", () => {
     expect(hostOf(webLink(1, 'https://xn--bcher-kva.example/p'))).toBe('xn--bcher-kva.example');
     expect(hostOf(webLink(1, 'https://www.example.org/p?q=1'))).toBe('www.example.org');
-    expect(hostOf(mailLink(1, 'mailto:Games@Example.ORG'))).toBe('example.org');
+    expect(hostOf(mailLink(1, 'mailto:Games@example.org'))).toBe('example.org');
   });
 });
 
 describe('linksSha256', () => {
-  /** The canonical form, pinned: L1's checker computes the same hash over the same JSON. */
-  const pinned = (links: IssueLinks): string => {
+  /** The canonical form, pinned (CONTRACT item 4): L1's checker computes the same hash over the same JSON. */
+  const pinned = (files: { public: string; members: string }, links: IssueLinks): string => {
     const sorted = (list: readonly Link[]) =>
       [...list].sort((a, b) => (a.id < b.id ? -1 : 1)).map((link) => ({ confirm: link.confirm, id: link.id, kind: link.kind, page: link.page, rect: [...link.rect], url: link.url }));
-    return createHash('sha256').update(canonicalJson({ v: 1, links: { members: sorted(links.members), public: sorted(links.public) } })).digest('hex');
+    return createHash('sha256')
+      .update(canonicalJson({ v: 2, sha256: { public: files.public, members: files.members }, links: { members: sorted(links.members), public: sorted(links.public) } }))
+      .digest('hex');
   };
 
-  it('is SHA-256 of the canonical JSON of both lists, each sorted by id', () => {
-    expect(linksSha256(LINKS)).toBe(pinned(LINKS));
-    expect(linksSha256(LINKS)).toMatch(/^[0-9a-f]{64}$/);
-    expect(linksSha256({ public: [webLink(1)], members: [] })).toBe(
+  it("is SHA-256 of the canonical JSON of v 2, both files' sha256 and both lists, each sorted by id", () => {
+    expect(linksSha256(FILES, LINKS)).toBe(pinned(FILES, LINKS));
+    expect(linksSha256(FILES, LINKS)).toMatch(/^[0-9a-f]{64}$/);
+    expect(linksSha256(FILES, { public: [webLink(1)], members: [] })).toBe(
       createHash('sha256')
-        .update(`{"links":{"members":[],"public":[{"confirm":false,"id":"${linkId(1)}","kind":"web","page":1,"rect":[72,680,300,694],"url":"https://example.org/games/1"}]},"v":1}`)
+        .update(
+          `{"links":{"members":[],"public":[{"confirm":false,"id":"${linkId(1)}","kind":"web","page":1,"rect":[72,680,300,694],"url":"https://example.org/games/1"}]},"sha256":{"members":"${FILES.members}","public":"${FILES.public}"},"v":2}`,
+        )
         .digest('hex'),
     );
   });
 
-  it('does not depend on the order of the links in a list', () => {
-    expect(linksSha256({ public: [...LINKS.public].reverse(), members: [...LINKS.members].reverse() })).toBe(linksSha256(LINKS));
+  it("reproduces L1's pinned test vector (apps/linkcheck test/list.test.ts), byte for byte", () => {
+    const link = (over: Partial<Link>): Link => ({ id: 'aaaaaaaaaaaaaaaaaaaaaaaaaa', page: 1, rect: [72, 700.5, 200.25, 714], url: 'https://example.org/a', kind: 'web', confirm: false, ...over });
+    const a = link({ id: 'bbbbbbbbbbbbbbbbbbbbbbbbbb' });
+    const b = link({ page: 2, kind: 'mail', url: 'mailto:editor@example.org' });
+    const c = link({ id: 'cccccccccccccccccccccccccc', url: 'https://www.facebook.com/groups/example', confirm: true });
+    expect(linksSha256({ public: '1'.repeat(64), members: '2'.repeat(64) }, { public: [a, b], members: [c] })).toBe('59ac3705ac3b1d00c13c0865375092a973f4c636929b08fb7371439b1fe70375');
   });
 
-  it('changes with every field of a link, and with the file a link is on', () => {
-    const base = linksSha256(LINKS);
+  it('does not depend on the order of the links in a list', () => {
+    expect(linksSha256(FILES, { public: [...LINKS.public].reverse(), members: [...LINKS.members].reverse() })).toBe(linksSha256(FILES, LINKS));
+  });
+
+  it('changes with every field of a link, with the file a link is on, and with either file\'s sha256', () => {
+    const base = linksSha256(FILES, LINKS);
     const first = LINKS.public[0] as Link;
     const variants: Link[] = [
       { ...first, id: linkId(99) },
@@ -204,8 +252,96 @@ describe('linksSha256', () => {
       { ...first, kind: 'mail' },
       { ...first, confirm: true },
     ];
-    for (const variant of variants) expect(linksSha256({ ...LINKS, public: [variant, ...LINKS.public.slice(1)] })).not.toBe(base);
-    expect(linksSha256({ public: LINKS.public.slice(1), members: [first, ...LINKS.members] })).not.toBe(base);
+    for (const variant of variants) expect(linksSha256(FILES, { ...LINKS, public: [variant, ...LINKS.public.slice(1)] })).not.toBe(base);
+    expect(linksSha256(FILES, { public: LINKS.public.slice(1), members: [first, ...LINKS.members] })).not.toBe(base);
+    // Links approved for one issue's files are not approved for another's (CONTRACT item 4).
+    expect(linksSha256({ ...FILES, public: 'd'.repeat(64) }, LINKS)).not.toBe(base);
+    expect(linksSha256({ ...FILES, members: 'd'.repeat(64) }, LINKS)).not.toBe(base);
+    expect(linksSha256({ public: FILES.members, members: FILES.public }, LINKS)).not.toBe(base);
+  });
+});
+
+describe('the shared links contract (CONTRACT.md, the same fixture in apps/linkcheck)', () => {
+  const FIXTURE = new URL('./fixtures/links-contract.json', import.meta.url);
+  /** The fixture both parts commit, byte for byte: L1's suite pins the same sha256. */
+  const CONTRACT_SHA256 = '081f392b43481492d6cecd6ce100babd515fc87ee01b1a1f0982e1840e8b910f';
+  const bytes = (): Buffer => readFileSync(FIXTURE);
+  const cases = (): Array<{ in: string; out: string | null }> => JSON.parse(bytes().toString('utf8')) as Array<{ in: string; out: string | null }>;
+
+  it('is the agreed fixture, byte for byte', () => {
+    expect(createHash('sha256').update(bytes()).digest('hex')).toBe(CONTRACT_SHA256);
+    const list = cases();
+    expect(`${JSON.stringify([...list].sort((a, b) => (a.in < b.in ? -1 : a.in > b.in ? 1 : 0)), null, 2)}\n`).toBe(bytes().toString('utf8'));
+    expect(list.length).toBeGreaterThan(20);
+  });
+
+  /** Whether the loader keeps this url as a link of this kind. */
+  const keeps = (url: string, kind: 'web' | 'mail'): boolean => {
+    const link = kind === 'web' ? webLink(1, url) : mailLink(1, url);
+    try {
+      return parseLinks(linksJson({ public: [link], members: [] })).public[0]?.url === url;
+    } catch (error) {
+      expect(error).toBeInstanceOf(LoadError);
+      return false;
+    }
+  };
+  const kindOf = (url: string): 'web' | 'mail' => (url.startsWith('mailto:') ? 'mail' : 'web');
+
+  it('runs every case through the loader: a kept form is kept as it is, and nothing else is', () => {
+    for (const { in: input, out } of cases()) {
+      // The loader takes only what the checker writes: the kept form itself, never a form it rewrites.
+      expect({ input, web: keeps(input, 'web'), mail: keeps(input, 'mail') }).toEqual({ input, web: out === input && kindOf(input) === 'web', mail: out === input && kindOf(input) === 'mail' });
+      if (out !== null) expect({ out, kept: keeps(out, kindOf(out)) }).toEqual({ out, kept: true });
+    }
+  });
+});
+
+describe('targetHolds: a URL that holds a withheld quote (CONTRACT item 5)', () => {
+  const QUOTES = [NAME, PHONE, ADDRESS, EMAIL, 'Müllerhaus Ballroom'];
+
+  it.each([
+    ['a mailto to a withheld address', 'mailto:q.brask@example.org'],
+    ['a withheld phone in the path', 'https://example.org/call/850-555-0142'],
+    ['a withheld address percent-encoded', 'https://example.org/q.brask%40example.org'],
+    ['a withheld address percent-encoded twice', 'https://example.org/q.brask%2540example.org'],
+    ['a withheld address in upper case', 'https://example.org/Q.BRASK@EXAMPLE.ORG'],
+    ['a withheld address in a query', 'https://example.org/join?to=q.brask%40example.org'],
+    ['a withheld name split by dots in the host', 'https://quillon.brask.example.org/'],
+    ['a withheld name split by hyphens', 'https://example.org/quillon-brask'],
+    ['a withheld name split by underscores and plus signs', 'https://example.org/?who=quillon_brask+x'],
+    ['a withheld name run together', 'https://example.org/quillonbrask'],
+    ['a withheld name split inside its words', 'https://quil.lon.br-ask.example.org/'],
+    ['a withheld street split by slashes', 'https://example.org/12/example/lane'],
+    ['a withheld phone split by dots', 'https://example.org/850.555.0142'],
+    ['a withheld phone run together', 'https://example.org/tel/8505550142'],
+    ['a withheld venue in a punycode host', 'https://xn--mllerhaus-ballroom-m6b.example/'],
+    ['a withheld venue percent-encoded in Unicode', 'https://example.org/m%C3%BCllerhaus%20ballroom'],
+    ['a withheld venue in a mailto domain in punycode', 'mailto:events~@xn--mllerhaus-ballroom-m6b.example'],
+    ['a withheld address with no scheme at all', 'q.brask@example.org'],
+    ['a withheld phone under a host that is no domain name', 'https://a%zz.example/850-555-0142'],
+  ])('finds %s', (_label, url) => {
+    expect(targetHolds(url, QUOTES)).toBe(true);
+  });
+
+  it.each([
+    ['a plain web link', 'https://example.org/games/1'],
+    ['a plain mailto', 'mailto:games@example.org'],
+    ['a malformed percent-escape', 'https://example.org/100%zz'],
+    ['an IDN host holding no quote', 'https://xn--bcher-kva.example/'],
+    ['a host that is no domain name, holding no quote', 'https://a%zz.example/games'],
+  ])('passes %s', (_label, url) => {
+    expect(targetHolds(url, QUOTES)).toBe(false);
+  });
+
+  it('holds nothing when nothing is withheld', () => {
+    expect(targetHolds('mailto:q.brask@example.org', [])).toBe(false);
+  });
+
+  it('refuses the first link that holds one, by its place only, never its URL or the quote', () => {
+    const links: IssueLinks = { public: [webLink(1)], members: [mailLink(2), mailLink(3, 'mailto:q.brask@example.org')] };
+    expect(() => refuseWithheldTargets(links, QUOTES)).toThrow(LoadError);
+    expect(() => refuseWithheldTargets(links, QUOTES)).toThrow(/^links\.members\[1\]: its target holds a passage the public policy withholds$/);
+    expect(() => refuseWithheldTargets(LINKS, QUOTES)).not.toThrow();
   });
 });
 
@@ -214,7 +350,7 @@ describe('parseBundle, nwfl-issue/2', () => {
     const bundle = parseBundle(await bundleJson({ format: 'nwfl-issue/2' }));
     expect(bundle.format).toBe('nwfl-issue/2');
     expect(bundle.links).toEqual(LINKS);
-    expect(bundle.approval.linksSha256).toBe(linksSha256(LINKS));
+    expect(bundle.approval.linksSha256).toBe(linksSha256({ public: sha256(bundle.pdfs.public).toString('hex'), members: sha256(bundle.pdfs.members).toString('hex') }, LINKS));
   });
 
   it('still reads nwfl-issue/1, with no links', async () => {
@@ -241,7 +377,14 @@ describe('parseBundle, nwfl-issue/2', () => {
 
   it('refuses links other than the approved ones, naming the hash it computed', async () => {
     const json = await bundleJson({ format: 'nwfl-issue/2', linksSha256: HASH });
-    expect(() => parseBundle(json)).toThrow(`the links are not the approved ones: their sha256 is ${linksSha256(LINKS)}`);
+    const files = { public: sha256(Buffer.from(String((json['pdfs'] as Record<string, string>)['public']), 'base64')).toString('hex'), members: (json['approval'] as Record<string, string>)['membersSha256'] as string };
+    expect(() => parseBundle(json)).toThrow(`the links are not the approved ones: their sha256 is ${linksSha256(files, LINKS)}`);
+  });
+
+  it("refuses links approved for another issue's files: the hash binds both files' sha256", async () => {
+    const other = await bundleJson({ format: 'nwfl-issue/2', period: '2026-08' });
+    const json = withPath(await bundleJson({ format: 'nwfl-issue/2' }), ['approval', 'linksSha256'], (other['approval'] as Record<string, string>)['linksSha256']);
+    expect(() => parseBundle(json)).toThrow(/^the links are not the approved ones/);
   });
 });
 
@@ -254,7 +397,7 @@ describe('parseLinksBundle, nwfl-links/1', () => {
       slug: 'pensa-mensa-2026-10',
       sha256: { public: 'b'.repeat(64), members: 'c'.repeat(64) },
       links: LINKS,
-      approval: { reference: 'LINKS', linksSha256: linksSha256(LINKS), publicInputHash: 'd'.repeat(64) },
+      approval: { reference: 'LINKS', linksSha256: linksSha256(FILES, LINKS), publicInputHash: 'd'.repeat(64) },
     });
   });
 
@@ -278,7 +421,13 @@ describe('parseLinksBundle, nwfl-links/1', () => {
   });
 
   it('refuses links other than the approved ones, naming the hash it computed', () => {
-    expect(() => parseLinksBundle(withPath(json(), ['approval', 'linksSha256'], HASH))).toThrow(`the links are not the approved ones: their sha256 is ${linksSha256(LINKS)}`);
+    expect(() => parseLinksBundle(withPath(json(), ['approval', 'linksSha256'], HASH))).toThrow(`the links are not the approved ones: their sha256 is ${linksSha256(FILES, LINKS)}`);
+  });
+
+  it("refuses links approved for other files: either file's sha256 changed, or the two swapped", () => {
+    for (const sha of [{ ...FILES, public: 'd'.repeat(64) }, { ...FILES, members: 'd'.repeat(64) }, { public: FILES.members, members: FILES.public }]) {
+      expect(() => parseLinksBundle(withPath(json(), ['sha256'], sha))).toThrow(/^the links are not the approved ones/);
+    }
   });
 
   it('refuses a bundle with no links at all: there is nothing to attach', () => {

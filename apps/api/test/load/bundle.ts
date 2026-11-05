@@ -96,7 +96,7 @@ export async function bundleJson(options: BundleOptions = {}): Promise<Record<st
       marksSha256: options.marksSha256 ?? marksSha256(marks),
       publicInputHash: options.publicInputHash ?? publicInputHash(pub, marks),
       membersSha256: options.membersSha256 ?? sha256(members).toString('hex'),
-      ...(v2 ? { linksSha256: options.linksSha256 ?? linksSha256(links) } : {}),
+      ...(v2 ? { linksSha256: options.linksSha256 ?? linksSha256({ public: sha256(pub).toString('hex'), members: sha256(members).toString('hex') }, links) } : {}),
     },
     pdfs: { public: Buffer.from(pub).toString('base64'), members: Buffer.from(members).toString('base64') },
     marks: marks.map((mark) => ({ ...mark })),
@@ -114,7 +114,7 @@ export interface LinksBundleOptions {
   publicInputHash: string;
 }
 
-/** A links bundle (nwfl-links/1) for an issue already loaded, approved for its own links. */
+/** A links bundle (nwfl-links/1) for an issue already loaded, approved for its own links on its own two files. */
 export function linksBundleJson(options: LinksBundleOptions): Record<string, unknown> {
   const links = options.links ?? LINKS;
   return {
@@ -122,7 +122,11 @@ export function linksBundleJson(options: LinksBundleOptions): Record<string, unk
     issue: options.slug ?? 'pensa-mensa-2026-10',
     sha256: { public: options.publicSha256, members: options.membersSha256 },
     links: linksJson(links),
-    approval: { reference: options.reference ?? 'LINKS', linksSha256: options.linksSha256 ?? linksSha256(links), publicInputHash: options.publicInputHash },
+    approval: {
+      reference: options.reference ?? 'LINKS',
+      linksSha256: options.linksSha256 ?? linksSha256({ public: options.publicSha256, members: options.membersSha256 }, links),
+      publicInputHash: options.publicInputHash,
+    },
   };
 }
 

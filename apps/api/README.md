@@ -219,12 +219,17 @@ redacts any category.
 
 An `nwfl-issue/2` bundle is `nwfl-issue/1` plus `links` (`public` and
 `members`, each a list of the checker's approved links: `id`, `page`, `rect`,
-`url`, `kind`, `confirm`) and `approval.linksSha256`. The links' hash is
-checked before the database (`linksSha256` in `src/load/links.ts`, whose
-header pins the canonical form), and the approval reason names it. The links
-are attached as the loader in the same transaction, before the public input
-hash is checked. A repeated run compares the links too. `nwfl-issue/1`
-bundles load and repeat as before.
+`url`, `kind`, `confirm`) and `approval.linksSha256`. The links' hash covers
+the links and both PDFs' sha256, so links approved for one issue never attach
+to another. It is checked before the database (`linksSha256` in
+`src/load/links.ts`, whose header pins the canonical form), and the approval
+reason names it. A link is an https URL to a DNS name (no IP address, dotless
+name, port or credentials) or `mailto:` one address with no query, exactly as
+the checker writes it; `test/load/fixtures/links-contract.json`, shared with
+`apps/linkcheck`, pins the forms. A link whose URL holds one of the issue's
+withheld quotes is refused. The links are attached as the loader in the same
+transaction, before the public input hash is checked. A repeated run compares
+the links too. `nwfl-issue/1` bundles load and repeat as before.
 
 For an issue already loaded, the links command attaches its links and
 nothing else:
@@ -236,7 +241,8 @@ Its bundle names the issue by slug (`pensa-mensa-YYYY-MM`), both files by
 `publicInputHash`). It runs in one transaction and prints ids and counts
 only. A second run of the same bundle reports `unchanged`. It is refused,
 with nothing applied, for a slug the loader did not write or never loaded,
-an issue edited or withdrawn since, files other than the bundle's, a file
+an issue edited or withdrawn since, files other than the bundle's (the
+stored originals' sha256), a link whose URL holds a withheld quote, a file
 that already has other links, or a public input hash other than the
 approved one.
 

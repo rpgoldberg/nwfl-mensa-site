@@ -28,8 +28,19 @@
 --     passes. A loader role of its own would need CREATEROLE, which only fc holds.
 --   * pdf_link_disable only ever turns an active link off (LinkCheckService, L5), with a reason
 --     code, and audits it. Turning a link back on is a new approval, never this function.
--- The worker (nwfl_worker) gets its reads of these tables, and pdf_copy_put's link list, with L3;
--- nwfl_worker_grants() is unchanged here.
+--
+-- Left to L3, in 0025_pdf_links_worker.sql (SPEC D5a lists them here; they are the worker's and
+-- ship with the worker code that uses them, so 0024 can be applied first):
+--   * pdf_copy_put's seventh argument, the kept link ids, writing pdf_copy_link with the copy;
+--   * pdf_regen_request_files(uuid[]), for the worker's boot sweep;
+--   * a replaced nwfl_worker_grants(): SELECT on pdf_link and pdf_link_status and EXECUTE on the
+--     new put and request functions for nwfl_worker. Until then the worker reads none of these
+--     tables, and nwfl_worker_grants() is unchanged here.
+--
+-- Hosts and URLs (the shared links contract, CONTRACT.md, pinned in both parts by
+-- test/load/fixtures/links-contract.json): a host is a DNS name in lower-case ASCII, never an IP
+-- literal or a dotless name; a web link is https with no userinfo or port; a mail link is one
+-- address with no query. The links hash the loaders store binds both files' sha256 (v 2).
 --
 -- The guards hold for every role's writes, the owner's too; the owner can disable or drop them
 -- (0019).
@@ -46,18 +57,24 @@ CREATE TABLE pdf_link (
                        AND rect[3] BETWEEN -14400 AND 14400 AND rect[4] BETWEEN -14400 AND 14400
                        AND rect[1] < rect[3] AND rect[2] < rect[4]),
   url                text             NOT NULL CHECK (octet_length(url) <= 2048 AND url ~ '^[!-~]+$'),
-  host               text             NOT NULL CHECK (host ~ '^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$'),
+  -- A DNS name (CONTRACT items 1-2, src/load/links.ts HOST): two labels or more, each 1 to 63
+  -- lower-case letters, digits and inner hyphens, the last starting with a letter. So never an IP
+  -- literal (v4, v6, decimal, octal or hex), a dotless name such as localhost, a trailing dot or an
+  -- empty label.
+  host               text             NOT NULL CONSTRAINT pdf_link_host CHECK (length(host) BETWEEN 4 AND 253
+                       AND host ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'),
   kind               text             NOT NULL CHECK (kind IN ('web', 'mail')),
   confirm            boolean          NOT NULL,
   approval_reference text             NOT NULL CHECK (approval_reference ~ '^[A-Z][A-Z0-9-]{1,39}$'),
   links_sha256       bytea            NOT NULL CHECK (octet_length(links_sha256) = 32),
   created_by_sub     text             NOT NULL CHECK (created_by_sub <> ''),
   created_at         timestamptz      NOT NULL DEFAULT now(),
-  -- A web link is https on exactly its host, a path following; a mail link one address at it.
+  -- A web link is https on exactly its host, a path following; a mail link one address at it, its
+  -- domain exactly the host (so in lower case), with no query, fragment or escape (CONTRACT item 3).
   CONSTRAINT pdf_link_web CHECK (kind <> 'web' OR (
     left(url, 8 + length(host)) = 'https://' || host AND substr(url, 9 + length(host), 1) = '/')),
   CONSTRAINT pdf_link_mail CHECK (kind <> 'mail' OR (
-    url ~ '^mailto:[^@]+@[^@]+$' AND lower(substr(url, strpos(url, '@') + 1)) = host))
+    url ~ '^mailto:[^@?#%]+@[^@?#%]+$' AND substr(url, strpos(url, '@') + 1) = host))
 );
 CREATE INDEX pdf_link_file ON pdf_link (file_id);
 

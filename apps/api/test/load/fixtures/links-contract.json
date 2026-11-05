@@ -1,0 +1,242 @@
+[
+  {
+    "in": "HTTPS://Example.ORG/Path",
+    "out": "https://example.org/Path"
+  },
+  {
+    "in": "MAILTO:Editor@Example.ORG",
+    "out": "mailto:Editor@example.org"
+  },
+  {
+    "in": "data:text/html,x",
+    "out": null
+  },
+  {
+    "in": "ftp://example.org/",
+    "out": null
+  },
+  {
+    "in": "http://example.org/a",
+    "out": "https://example.org/a"
+  },
+  {
+    "in": "http://example.org:80/x",
+    "out": null
+  },
+  {
+    "in": "http://intranet/",
+    "out": null
+  },
+  {
+    "in": "https://.../",
+    "out": null
+  },
+  {
+    "in": "https://./",
+    "out": null
+  },
+  {
+    "in": "https://.example.org/",
+    "out": null
+  },
+  {
+    "in": "https://0177.0.0.1/",
+    "out": null
+  },
+  {
+    "in": "https://0x7f.0.0.1/",
+    "out": null
+  },
+  {
+    "in": "https://127.0.0.1/",
+    "out": null
+  },
+  {
+    "in": "https://2130706433/",
+    "out": null
+  },
+  {
+    "in": "https://93.184.216.34/",
+    "out": null
+  },
+  {
+    "in": "https://@example.org/",
+    "out": null
+  },
+  {
+    "in": "https://[2606:4700::1]/",
+    "out": null
+  },
+  {
+    "in": "https://[::1]/",
+    "out": null
+  },
+  {
+    "in": "https://[::ffff:10.0.0.1]/",
+    "out": null
+  },
+  {
+    "in": "https://a..example.org/",
+    "out": null
+  },
+  {
+    "in": "https://bücher.example/",
+    "out": "https://xn--bcher-kva.example/"
+  },
+  {
+    "in": "https://ex%61mple.org/",
+    "out": "https://example.org/"
+  },
+  {
+    "in": "https://example.org",
+    "out": "https://example.org/"
+  },
+  {
+    "in": "https://example.org../a",
+    "out": "https://example.org/a"
+  },
+  {
+    "in": "https://example.org./a",
+    "out": "https://example.org/a"
+  },
+  {
+    "in": "https://example.org/\u0000x",
+    "out": null
+  },
+  {
+    "in": "https://example.org/events?month=11#top",
+    "out": "https://example.org/events?month=11#top"
+  },
+  {
+    "in": "https://example.org:/x",
+    "out": null
+  },
+  {
+    "in": "https://example.org:443/x",
+    "out": null
+  },
+  {
+    "in": "https://example.org:80/x",
+    "out": null
+  },
+  {
+    "in": "https://example.org:8443/x",
+    "out": null
+  },
+  {
+    "in": "https://localhost/",
+    "out": null
+  },
+  {
+    "in": "https://members.us.mensa.org../roster",
+    "out": "https://members.us.mensa.org/roster"
+  },
+  {
+    "in": "https://us.mensa.org.../members/roster",
+    "out": "https://us.mensa.org/members/roster"
+  },
+  {
+    "in": "https://user:pw@example.org/",
+    "out": null
+  },
+  {
+    "in": "https://user@example.org/",
+    "out": null
+  },
+  {
+    "in": "https://www.example.org/",
+    "out": "https://www.example.org/"
+  },
+  {
+    "in": "https://www.facebook.com.../groups/x",
+    "out": "https://www.facebook.com/groups/x"
+  },
+  {
+    "in": "https://xn--bcher-kva.example/",
+    "out": "https://xn--bcher-kva.example/"
+  },
+  {
+    "in": "https://ｅｘａｍｐｌｅ.org/",
+    "out": "https://example.org/"
+  },
+  {
+    "in": "javascript:alert(1)",
+    "out": null
+  },
+  {
+    "in": "mailto:?to=club@example.org",
+    "out": null
+  },
+  {
+    "in": "mailto:a%40b@example.com",
+    "out": null
+  },
+  {
+    "in": "mailto:club@example.org#top",
+    "out": "mailto:club@example.org"
+  },
+  {
+    "in": "mailto:club@example.org?bcc=other@example.net&body=x",
+    "out": "mailto:club@example.org"
+  },
+  {
+    "in": "mailto:club@example.org?cc=other@example.net",
+    "out": "mailto:club@example.org"
+  },
+  {
+    "in": "mailto:club@example.org?subject=Hi",
+    "out": "mailto:club@example.org"
+  },
+  {
+    "in": "mailto:club~@bücher.example",
+    "out": "mailto:club~@xn--bcher-kva.example"
+  },
+  {
+    "in": "mailto:club~@xn--bcher-kva.example",
+    "out": "mailto:club~@xn--bcher-kva.example"
+  },
+  {
+    "in": "mailto:editor@example.org",
+    "out": "mailto:editor@example.org"
+  },
+  {
+    "in": "mailto:editor@example.org..",
+    "out": "mailto:editor@example.org"
+  },
+  {
+    "in": "mailto:first.last+news@example.com",
+    "out": "mailto:first.last+news@example.com"
+  },
+  {
+    "in": "mailto:info@ｅｘａｍｐｌｅ.com",
+    "out": "mailto:info@example.com"
+  },
+  {
+    "in": "mailto:j%C3%B6rg@example.com",
+    "out": null
+  },
+  {
+    "in": "mailto:one@example.com,two@example.com",
+    "out": null
+  },
+  {
+    "in": "mailto:root@localhost",
+    "out": null
+  },
+  {
+    "in": "mailto:x@127.0.0.1",
+    "out": null
+  },
+  {
+    "in": "mailto:x@[127.0.0.1]",
+    "out": null
+  },
+  {
+    "in": "mailto:x@mail..example.com",
+    "out": null
+  },
+  {
+    "in": "www.example.org/x",
+    "out": "https://www.example.org/x"
+  }
+]
