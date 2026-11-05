@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { sha256Hex } from './engine-protocol.js';
 import { RetryableEngineError, type Redact } from './regenerate.js';
-import { type Gate, RERUN_REASONS, RERUN_REFUSAL, withGateRerun } from './rerun.js';
+import { type Gate, LINKED_ENGINE_FAILED, RERUN_REASONS, RERUN_REFUSAL, withGateRerun, withLinkFallback } from './rerun.js';
 
 const COPY = Uint8Array.from([1, 2, 3]);
 const SHA = sha256Hex(COPY);
@@ -119,6 +119,43 @@ describe('withGateRerun', () => {
       expect(redact).toHaveBeenCalledTimes(1);
       const flaky = vi.fn<Redact>((_original, request) => ((request.links ?? []).length > 0 ? Promise.resolve({ kind: 'refused', reason: 'no' }) : Promise.reject(new RetryableEngineError('the engine socket is missing'))));
       await expect(withGateRerun(flaky, answering(PASS))(COPY, LINKED)).rejects.toBeInstanceOf(RetryableEngineError);
+    });
+  });
+
+  describe('links fail safe when the engine fails (LINKS L3 fix 2, N2): an error, a timeout or a cap on the run with links', () => {
+    const LINKS = [{ id: 'a'.repeat(26), page: 1, rect: [1, 2, 3, 4] as const, label: 'Link to site.example' }];
+    const LINKED = { ...REQUEST, origin: 'https://nwflorida.us', links: LINKS };
+
+    it('asks once more with no links when the run with links fails, and names a fixed reason that echoes nothing of the failure', async () => {
+      for (const failure of ['the engine took longer than 300000 ms', 'the engine ran out of memory', 'the engine child exited (signal SIGKILL)']) {
+        const redact = vi.fn<Redact>((_original, request) => ((request.links ?? []).length > 0 ? Promise.reject(new Error(`${failure}: Kestrel Ambry`)) : Promise.resolve(made)));
+        const gate = vi.fn<Gate>(() => Promise.resolve(PASS));
+        const result = await withGateRerun(redact, gate)(COPY, LINKED);
+        expect(result, failure).toEqual({ kind: 'redacted', pdf: WRITTEN, boxes: [], linksDropped: LINKED_ENGINE_FAILED });
+        expect(JSON.stringify(result)).not.toContain('Kestrel');
+        expect(redact.mock.calls.map(([, request]) => request.links), failure).toEqual([LINKS, []]);
+        expect(gate, failure).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it('lets a second failure, with no links, stand as it does today, and a retryable failure of the first through untouched', async () => {
+      const both = vi.fn<Redact>(() => Promise.reject(new Error('the engine ran out of memory')));
+      await expect(withGateRerun(both, answering(PASS))(COPY, LINKED)).rejects.toThrow('the engine ran out of memory');
+      expect(both).toHaveBeenCalledTimes(2);
+      const unreachable = vi.fn<Redact>(() => Promise.reject(new RetryableEngineError('the engine socket is missing')));
+      await expect(withGateRerun(unreachable, answering(PASS))(COPY, LINKED)).rejects.toBeInstanceOf(RetryableEngineError);
+      expect(unreachable).toHaveBeenCalledTimes(1);
+      const plain = vi.fn<Redact>(() => Promise.reject(new Error('down')));
+      await expect(withGateRerun(plain, answering(PASS))(COPY, REQUEST)).rejects.toThrow('down');
+      expect(plain).toHaveBeenCalledTimes(1);
+    });
+
+    it('is the one fallback, withLinkFallback, also for an engine with no gate (the ledger\'s remake)', async () => {
+      const redact = vi.fn<Redact>((_original, request) => ((request.links ?? []).length > 0 ? Promise.resolve({ kind: 'refused', reason: 'the links could not be written' }) : Promise.resolve(made)));
+      expect(await withLinkFallback(redact)(COPY, LINKED)).toEqual({ ...made, linksDropped: 'the links could not be written' });
+      const original = vi.fn<Redact>(() => Promise.resolve({ kind: 'original' }));
+      expect(await withLinkFallback(original)(COPY, LINKED)).toEqual({ kind: 'original' });
+      expect(original).toHaveBeenCalledTimes(1);
     });
   });
 

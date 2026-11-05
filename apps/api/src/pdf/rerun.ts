@@ -29,8 +29,14 @@
 // links, and checked again in full. If that one passes, it is the copy, with
 // the first refusal's reason as `linksDropped` (regenerate.ts logs it for
 // officers, by file and never by URL); if it is refused too, the links were
-// not the cause, and that refusal stands. So links never leave an issue with
-// no copy.
+// not the cause, and that refusal stands. Fix round 2 (N2): an engine that
+// fails on the copy with links (an error, its child out of time or over its
+// memory cap, a crash; anything but RetryableEngineError, which is no answer
+// about the file) is asked once more the same way, and the copy names a fixed
+// reason (LINKED_ENGINE_FAILED) that echoes nothing of the failure; if the
+// run with no links fails too, that failure stands, as before links. So links
+// never leave an issue with no copy. The ledger's remake makes a copy again
+// with the same fallback (withLinkFallback, ledger.ts).
 // ============================================================================
 import { type GateCode, sha256Hex } from './engine-protocol.js';
 import { type GateJob, type GateOutcome, isolatedGate } from './gate-isolated.js';
@@ -44,21 +50,38 @@ export const RERUN_REASONS: Readonly<Record<GateCode, string>> = {
   mismatch: 'the output gate checked other bytes than the copy',
 };
 export const RERUN_REFUSAL = RERUN_REASONS.withheld;
+/** Why a copy was made with no links when the engine failed on the one with them (fix 2, N2). */
+export const LINKED_ENGINE_FAILED = 'the engine failed on the copy with its links';
 
 /** A gate: given a copy with its sha256, a verdict and the sha256 of what it checked. */
 export type Gate = (job: GateJob & { sha256: string }) => Promise<GateOutcome>;
 
 /**
  * `engine`, with every copy it returns checked by `gate` (by default the in-pod capped child) before it may be stored;
- * a copy with links that is refused is made again with none (see the header).
+ * a copy with links that is refused, or whose engine fails, is made again with none (see the header).
  */
 export function withGateRerun(engine: Redact, gate: Gate = isolatedGate()): Redact {
-  const checked = checkedBy(engine, gate);
+  return withLinkFallback(checkedBy(engine, gate));
+}
+
+/**
+ * `engine`, asked once more with no links when a request with links is refused or fails (not retryably): that copy, with
+ * why as `linksDropped`, or its own refusal or failure. A request with no links is asked once.
+ */
+export function withLinkFallback(engine: Redact): Redact {
   return async (original, request) => {
-    const result = await checked(original, request);
-    if (result.kind !== 'refused' || (request.links ?? []).length === 0) return result;
-    const plain = await checked(original, { ...request, links: [] });
-    return plain.kind === 'redacted' ? { ...plain, linksDropped: result.reason } : plain;
+    if ((request.links ?? []).length === 0) return engine(original, request);
+    let why: string;
+    try {
+      const result = await engine(original, request);
+      if (result.kind !== 'refused') return result;
+      why = result.reason;
+    } catch (error) {
+      if (error instanceof RetryableEngineError) throw error;
+      why = LINKED_ENGINE_FAILED;
+    }
+    const plain = await engine(original, { ...request, links: [] });
+    return plain.kind === 'redacted' ? { ...plain, linksDropped: why } : plain;
   };
 }
 

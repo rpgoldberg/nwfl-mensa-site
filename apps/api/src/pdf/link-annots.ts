@@ -17,8 +17,9 @@
 // its rect, clamped to the page's crop box (within the media box), is empty,
 // or when that clamped rect meets (touching counts) a box the engine drew or
 // the ink of a glyph it removed, or its whole rect meets what the link guard
-// reads as withheld (link-guard.ts: a picture the policy does not show, a
-// glyph of the original the copy lacks), as the gate reads it.
+// reads as withheld (link-guard.ts: a picture the policy does not show, the
+// whole of a page that reaches a tiling pattern holding one, a glyph of the
+// original the copy lacks), as the gate reads it.
 //
 // The gate (gate-rules.ts) reads a copy with acceptedLinks: on each page,
 // /Annots must be a list in the page of references, each to a dictionary of

@@ -5,11 +5,11 @@
 // stand-in. Every URL is under a reserved example name and every person is made up.
 import { createHash } from 'node:crypto';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { RedactRequest } from '../../src/pdf/redact.js';
 import { type Redact, drain, regenerateOne, startRegenerator, sweepCopies } from '../../src/pdf/regenerate.js';
-import { ENGINE_VERSION, inputHash, inputsFor } from '../../src/pdf/store.js';
-import { ledgerAsOf } from '../../src/ledger/ledger.js';
+import { ENGINE_VERSION, inputHash, inputHashV1, inputsFor } from '../../src/pdf/store.js';
+import { ledgerAsOf, renderFile } from '../../src/ledger/ledger.js';
 import { APP, APP_PW, MIGRATOR, MIGRATOR_PW, WORKER, WORKER_PW, dropDatabase, freshDatabase, live, migrate, sqlstate, url, urlFor, testPool } from '../helpers/pg.js';
 
 const LOADER = 'system:issue-loader';
@@ -337,6 +337,125 @@ describe.skipIf(!live)('LINKS L3: links in the inputs, the kept ids and the boot
       expect(JSON.stringify(warnings)).not.toContain('site.example');
       expect((await root.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND status = 'ready'`, [f])).rowCount).toBeGreaterThan(0);
       expect(await linksOf(f)).toEqual([]);
+    });
+  });
+
+  describe('LINKS L3 fix round 2', () => {
+    // 0017 takes publication_ledger_original from the app role once the worker role exists; granting it back stands for a
+    // database where fc has not created the role yet, so an officer's remake reads the original (as in ledger.test.ts).
+    const LEGACY_GRANT = `GRANT EXECUTE ON FUNCTION publication_ledger_original(bigint, text, text[], text) TO nwfl`;
+    const LEGACY_REVOKE = `REVOKE EXECUTE ON FUNCTION publication_ledger_original(bigint, text, text[], text) FROM nwfl`;
+    const latest = async (fileId: string, audience = 'public') =>
+      (await root.query<{ current_from: Date; inputs: Record<string, unknown>; output_sha256: Buffer | null }>(`SELECT current_from, inputs, output_sha256 FROM publication_ledger WHERE subject_id = $1 AND audience = $2 ORDER BY seq DESC LIMIT 1`, [fileId, audience])).rows[0]!;
+    const dropCopy = (fileId: string, hash: unknown) => owner.query(`DELETE FROM pdf_copy WHERE file_id = $1 AND input_hash = decode($2, 'hex')`, [fileId, hash]);
+    const hasLinks = (request: RedactRequest): boolean => (request.links ?? []).length > 0;
+    const WITHOUT = 'copy without links';
+    /** An engine whose copy names whether it was given links, keeping each one. */
+    const keeping = () =>
+      vi.fn<Redact>((_original, request) =>
+        Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(Buffer.from(hasLinks(request) ? 'copy with links' : WITHOUT)), boxes: [], kept: (request.links ?? []).map((link) => link.id) }),
+      );
+
+    it('N4: the ledger records a copy made without its links, and the remake makes it again without them', async () => {
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      const { file: f } = await file();
+      await attach(f, [web('o', 'o')]);
+      const dropping: Redact = (_original, request) =>
+        Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(Buffer.from(WITHOUT)), boxes: [], kept: [], ...(hasLinks(request) ? { linksDropped: 'the links could not be written' } : {}) });
+      await drain(worker, { redact: dropping, origin: ORIGIN });
+      const row = await latest(f);
+      expect(row.inputs).toMatchObject({ served: 'copy', links_dropped: 'the links could not be written' });
+      expect(row.output_sha256).toEqual(sha(WITHOUT));
+      // A copy whose links were kept records nothing of the kind.
+      const { file: g } = await file();
+      await attach(g, [web('p', 'p')]);
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      expect((await latest(g)).inputs).not.toHaveProperty('links_dropped');
+      const at = new Date(row.current_from.getTime() + 1);
+      await dropCopy(f, row.inputs['input_hash']);
+      await owner.query(LEGACY_GRANT);
+      try {
+        // An engine that would keep the links today is asked with none, as the row says: the same bytes.
+        const redact = keeping();
+        expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: ORIGIN, caller: OFFICER, redact })).toMatchObject({ matches: true, detail: '', rerender: sha(WITHOUT) });
+        expect(redact.mock.calls.map(([, request]) => request.links)).toEqual([[]]);
+      } finally {
+        await owner.query(LEGACY_REVOKE);
+      }
+    });
+
+    it('N4: a remake with no such record uses the worker\'s fallback: a run with links that is refused or fails is asked again with none', async () => {
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      const { file: f } = await file();
+      await attach(f, [web('q', 'q')]);
+      // An engine that met every link (all vetoed): the copy holds none, and nothing was dropped by the fallback.
+      const vetoing: Redact = () => Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(Buffer.from(WITHOUT)), boxes: [], kept: [] });
+      await drain(worker, { redact: vetoing, origin: ORIGIN });
+      const row = await latest(f);
+      expect(row.inputs).not.toHaveProperty('links_dropped');
+      const at = new Date(row.current_from.getTime() + 1);
+      await dropCopy(f, row.inputs['input_hash']);
+      await owner.query(LEGACY_GRANT);
+      try {
+        for (const linked of [() => Promise.resolve({ kind: 'refused' as const, reason: 'the links could not be written' }), () => Promise.reject(new Error('the engine took longer than 300000 ms'))]) {
+          const redact = vi.fn<Redact>((original, request) => (hasLinks(request) ? linked() : keeping()(original, request)));
+          expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: ORIGIN, caller: OFFICER, redact })).toMatchObject({ matches: true, detail: '', rerender: sha(WITHOUT) });
+          expect(redact.mock.calls.map(([, request]) => request.links?.length)).toEqual([1, 0]);
+        }
+      } finally {
+        await owner.query(LEGACY_REVOKE);
+      }
+    });
+
+    it('N5: a row made before links-1 (no origin, the box-exact engine, input hash v1) rebuilds under its own engine with no links, and verifies', async () => {
+      const BOX_EXACT = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact';
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      const { file: f, bytes } = await file();
+      // As the worker did before links-1: claim the file, put its copy under the v1 key and the old engine, and record the
+      // row main's renderFile wrote (today's, less the origin, with the old engine and key), then finish.
+      const now = await copyOf(f, 'public');
+      // main's inputHash, written out (store-unit.test.ts pins inputHashV1 to the same text).
+      const v1 = sha(JSON.stringify({ v: 1, engine: BOX_EXACT, original: sha(bytes).toString('hex'), redactsAny: true, quotes: now.request.quotes, image: now.request.image }));
+      const old = Buffer.from('copy made under box-exact');
+      const client = await worker.connect();
+      try {
+        const claim = (await client.query<{ file_id: string; claim: string }>(`SELECT file_id, claim FROM pdf_regen_claim(600)`)).rows[0]!;
+        expect(claim.file_id).toBe(f);
+        await client.query(`SELECT pdf_copy_put($1, $2, $3, $4, $5, NULL, '{}')`, [f, claim.claim, v1, BOX_EXACT, old]);
+        const inputs: Record<string, unknown> = { ...(await renderFile(app, f, 'public')).inputs, engine: BOX_EXACT, input_hash: v1.toString('hex'), served: 'copy' };
+        delete inputs['origin'];
+        await client.query('BEGIN');
+        await client.query('SELECT publication_ledger_lock()');
+        await client.query(`SELECT publication_ledger_record_file($1, $2, 'public', $3, $4, $5)`, [f, claim.claim, sha(old), inputs, now.request.quotes.length]);
+        await client.query(`SELECT pdf_regen_finish($1, $2, $3::bytea[])`, [f, claim.claim, [v1]]);
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+      const row = await latest(f);
+      expect(row.inputs).not.toHaveProperty('origin');
+      expect(row.inputs['engine']).toBe(BOX_EXACT);
+      const at = new Date(row.current_from.getTime() + 1);
+      // The copy is kept (0021), and the row's inputs rebuild to its own key: it verifies, under any origin now.
+      expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: ORIGIN })).toMatchObject({ matches: true, detail: '', rerender: sha(old) });
+      expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: 'https://nwflmensa.us' })).toMatchObject({ matches: true, detail: '' });
+      // A copy no longer kept is made again only by the engine that made it, with no links.
+      await dropCopy(f, v1.toString('hex'));
+      await owner.query(LEGACY_GRANT);
+      try {
+        const redact = vi.fn<Redact>(() => Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(old), boxes: [] }));
+        expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: ORIGIN, caller: OFFICER, redact })).toMatchObject({
+          matches: false,
+          rerender: null,
+          detail: 'the copy is no longer kept and another engine made it: inputs verified only',
+        });
+        expect(redact).not.toHaveBeenCalled();
+        expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: ORIGIN, caller: OFFICER, redact, engine: BOX_EXACT })).toMatchObject({ matches: true, detail: '', rerender: sha(old) });
+        expect(redact.mock.calls.map(([, request]) => request)).toEqual([{ quotes: now.request.quotes, redactsAny: true, image: now.request.image, links: [] }]);
+        expect(v1).toEqual(inputHashV1(sha(bytes), now.request, BOX_EXACT));
+      } finally {
+        await owner.query(LEGACY_REVOKE);
+      }
     });
   });
 

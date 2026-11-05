@@ -33,6 +33,7 @@ import { type ContainedSidecar, containedSidecar, ensureImage, probe, removeLeft
 import { GATE_CHILD_SOURCE, GATE_SIDECAR_ENTRY, NODE_FLAGS, type Spawned, gateStandIn, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
 import { CANARIES, leakFixture, linesPdf, smallPictureFixture } from './fixtures.js';
 import { flateBomb, manyPages, manyShows } from './hostile.js';
+import { patternPage } from './photo.js';
 import { M1_CASES, M1_DRAWN_CASES, M1_LINEARIZED_CASES, M1_ORIGINAL, M1_QUOTES, linearizedCopy, plainCopy, roundFiveWriting } from './shadows.js';
 
 const QUOTE = 'Kestrel Ambry';
@@ -203,6 +204,30 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the
     // Refused with the link, and again when asked with none (the copy still holds its annotation).
     expect(await subverted(original, { quotes: [file, QUOTE], redactsAny: true, origin: LINK_ORIGIN, links: [overBox] })).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
   }, 120_000);
+
+  it('LINKS L3 (fix 2, F1): under "blur" and "hide", the real sidecars keep no link on a page whose tiling pattern paints a photo, and refuse a subverted engine\'s link there', async () => {
+    const real = await sidecar('engine');
+    const gate = await sidecar('gate');
+    const redact = workerRedact({ PDF_ENGINE_SOCKET: real.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [real.dir], gateSocketDirs: [gate.dir] });
+    const given = await sidecar('engine', ['--engine', standIn('given')]);
+    const subverted = workerRedact({ PDF_ENGINE_SOCKET: given.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [given.dir], gateSocketDirs: [gate.dir] });
+    const original = await patternPage('image', 2);
+    const over = { id: 'p'.repeat(26), page: 1, rect: [150, 450, 250, 550] as const, label: 'Link to site.example' };
+    const far = { id: 'f'.repeat(26), page: 1, rect: [400, 700, 500, 720] as const, label: 'Link to site.example' };
+    const next = { id: 'n'.repeat(26), page: 2, rect: [72, 697, 250, 711] as const, label: 'Link to site.example' };
+    for (const image of ['blur', 'hide'] as const) {
+      const result = await redact(original, { quotes: [], redactsAny: true, origin: LINK_ORIGIN, links: [over, far, next], image });
+      expect(result, image).toMatchObject({ kind: 'redacted', kept: [next.id] });
+      expect((result as { linksDropped?: string }).linksDropped, image).toBeUndefined();
+      // A subverted engine (children/given.ts) hands back the copy with a link far from the photo, on its page, and says it kept it.
+      const plain = await redactPdf(original, { quotes: [], redactsAny: true, image });
+      const doc = await PDFDocument.load((plain as { pdf: Uint8Array }).pdf, { updateMetadata: false });
+      writeLinks(doc, LINK_ORIGIN, [far]);
+      const file = path.join(gate.dir, `pattern-${image}.pdf`);
+      writeFileSync(file, await doc.save({ useObjectStreams: false }));
+      expect(await subverted(original, { quotes: [file], redactsAny: true, origin: LINK_ORIGIN, links: [far], image }), image).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
+    }
+  }, 180_000);
 
   it('UNTRUSTED-PDF-GATE gate re-run: refuses a copy when the gate names other bytes than the copy, on both transports', async () => {
     const clean = await linesPdf(['Picnic flyer']);

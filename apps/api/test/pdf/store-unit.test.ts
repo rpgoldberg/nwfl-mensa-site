@@ -2,7 +2,8 @@
 // when the engine would be given the same inputs for the same original.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LINK_ORIGIN, ENGINE_VERSION, canonicalInputs, inputHash, linkOrigin } from '../../src/pdf/store.js';
+import { createHash } from 'node:crypto';
+import { DEFAULT_LINK_ORIGIN, ENGINE_VERSION, canonicalInputs, inputHash, inputHashV1, linkOrigin } from '../../src/pdf/store.js';
 
 const version = (name: string): string => (JSON.parse(readFileSync(new URL(`../../node_modules/${name}/package.json`, import.meta.url), 'utf8')) as { version: string }).version;
 const SHA = Buffer.alloc(32, 1);
@@ -41,6 +42,17 @@ describe('inputHash', () => {
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'show' }).equals(base)).toBe(true);
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'blur' }).equals(base)).toBe(false);
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'hide' }).equals(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'blur' }))).toBe(false);
+  });
+});
+
+describe('inputHashV1 (LINKS L3 fix 2, N5): the key of a copy made before links-1, for the ledger\'s older rows', () => {
+  const BOX_EXACT = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact';
+  it('is the hash of exactly the text main\'s inputHash hashed: version 1, no origin and no links', () => {
+    const request = { quotes: [' Kestrel Ambry', 'Bo Tamsin', 'Kestrel Ambry'], redactsAny: true, image: 'blur' as const, origin: 'https://ignored.example', links: [] };
+    const text = `{"v":1,"engine":"${BOX_EXACT}","original":"${SHA.toString('hex')}","redactsAny":true,"quotes":["Bo Tamsin","Kestrel Ambry"],"image":"blur"}`;
+    expect(inputHashV1(SHA, request, BOX_EXACT)).toEqual(createHash('sha256').update(text).digest());
+    expect(inputHashV1(SHA, { quotes: [], redactsAny: false }, BOX_EXACT)).toEqual(createHash('sha256').update(`{"v":1,"engine":"${BOX_EXACT}","original":"${SHA.toString('hex')}","redactsAny":false,"quotes":[],"image":"show"}`).digest());
+    expect(inputHashV1(SHA, request, BOX_EXACT)).not.toEqual(inputHash(SHA, request, BOX_EXACT));
   });
 });
 

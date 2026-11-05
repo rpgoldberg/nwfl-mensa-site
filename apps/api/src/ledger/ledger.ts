@@ -17,7 +17,11 @@
 //
 // ledgerAsOf re-renders a row from the kept history: the immutable version,
 // the marks active then and the policy cells then (lens.ts), with the item's
-// state from the row's manifest (items change state in place). verifyLedger
+// state from the row's manifest (items change state in place). A file row
+// made before LINKS L3 has no origin: it is rebuilt as it was made, under the
+// engine it names, with no links and input hash v1; a copy no longer kept is
+// made again with the worker's link fallback, and with no links when the row
+// says it was made without them (LINKS L3 fix round 2, N4 and N5). verifyLedger
 // rebuilds every row's canonical text HERE, outside the database, and walks
 // the chain, the windows and the head.
 //
@@ -32,6 +36,7 @@ import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { ContentItemSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { type RedactRequest, redactPdf } from '../pdf/redact.js';
+import { withLinkFallback } from '../pdf/rerun.js';
 import { ENGINE_VERSION, type Inputs, inputsFor, linkOrigin } from '../pdf/store.js';
 import { loadLens, markActive, policyCells } from '../redaction/lens.js';
 import { AUDIENCES, CATEGORIES, TENANT, cellKey, resolveAction } from '../redaction/policy.js';
@@ -159,17 +164,22 @@ export async function renderVersion(db: Query, versionId: string, audience: Audi
 export interface Running {
   origin?: string | undefined;
   engine?: string | undefined;
+  /** The copies this worker run made with no links (rerun.ts), by input hash (hex), and why (fix 2, N4). */
+  linksDropped?: ReadonlyMap<string, string>;
+  /** The inputs of a row made before LINKS L3: no origin, no links, input hash v1 (fix 2, N5). */
+  legacy?: boolean;
 }
 
 /**
  * The PDF bytes this audience is given for the file (store.ts readPdf): now, or from the inputs at `asOf`. The inputs
- * record the engine and (LINKS L3 fix 1, N3) the origin the copy's input hash was made with.
+ * record the engine and (LINKS L3 fix 1, N3) the origin the copy's input hash was made with, and (fix 2, N4) why a
+ * copy this run made was made with no links (`links_dropped`), so the ledger makes it again the same way.
  */
 export async function renderFile(db: Query, fileId: string, audience: Audience, asOf?: Date, running: Running = {}): Promise<Rendering> {
   const origin = running.origin ?? linkOrigin();
   const engine = running.engine ?? ENGINE_VERSION;
   const [inputs, file, policy, marks] = await Promise.all([
-    inputsFor(db, fileId, audience, asOf, origin, engine),
+    inputsFor(db, fileId, audience, asOf, origin, engine, running.legacy === true ? 1 : 2),
     db.query<{ version_id: string | null; edition_id: string | null; sha256: Buffer }>(`SELECT version_id, edition_id, sha256 FROM stored_file WHERE id = $1`, [fileId]),
     policySnapshot(db, audience, asOf),
     db.query<{ id: string }>(
@@ -181,7 +191,7 @@ export async function renderFile(db: Query, fileId: string, audience: Audience, 
   const base = {
     v: 1,
     engine,
-    origin,
+    ...(running.legacy === true ? {} : { origin }),
     file_id: fileId,
     version_id: stored?.version_id ?? null,
     edition_id: stored?.edition_id ?? null,
@@ -200,10 +210,12 @@ export async function renderFile(db: Query, fileId: string, audience: Audience, 
   ]);
   const made = copy.rows[0];
   const served = made === undefined ? 'not_ready' : made.status === 'ready' ? 'copy' : 'refused';
+  const hash = inputs.hash.toString('hex');
+  const dropped = served === 'copy' ? running.linksDropped?.get(hash) : undefined;
   return {
     output: served === 'copy' ? (made?.sha as Buffer) : null,
     withheld: inputs.request.quotes.length,
-    inputs: { ...base, input_hash: inputs.hash.toString('hex'), served },
+    inputs: { ...base, input_hash: hash, served, ...(dropped === undefined ? {} : { links_dropped: dropped }) },
   };
 }
 
@@ -271,11 +283,11 @@ export function recordItems(db: Query, items: readonly string[]): Promise<number
  * publication_ledger_record_file under its claim, then `finish` in the same transaction (which
  * drops the claim, so it comes last). Throws 42501 when the claim is no longer live.
  */
-export function recordClaimedFile<T>(db: Query, fileId: string, claim: string, origin: string, finish: (client: Query) => Promise<T>): Promise<T> {
+export function recordClaimedFile<T>(db: Query, fileId: string, claim: string, running: Running, finish: (client: Query) => Promise<T>): Promise<T> {
   return inTx(db, async (client) => {
     await client.query('SELECT publication_ledger_lock()');
     for (const audience of AUDIENCES) {
-      const rendering = await renderFile(client, fileId, audience, undefined, { origin });
+      const rendering = await renderFile(client, fileId, audience, undefined, running);
       await client.query(`SELECT publication_ledger_record_file($1, $2, $3, $4, $5, $6)`, [
         fileId,
         claim,
@@ -338,11 +350,20 @@ export const ORIGIN_CHANGED = 'the link origin changed since this row: its input
 
 const MISMATCH = 'the re-render does not match the row';
 
-/** Makes a copy no longer kept again: the original, the inputs as of `at`, the same engine. */
-async function remake(db: Query, row: LedgerRowData, audience: Audience, at: Date, options: AsOfOptions): Promise<{ detail: string; rerender: Buffer | null }> {
-  // The row's input hash was rebuilt with the running engine and origin (fileVerdict), so the row was made with both.
+/** Why a copy made before LINKS L3 by another engine than this one is not made again (fix 2, N5). */
+export const OTHER_ENGINE = 'the copy is no longer kept and another engine made it: inputs verified only';
+
+/**
+ * Makes a copy no longer kept again: the original, the inputs as of `at`, the same engine, and the worker's link fallback
+ * (rerun.ts withLinkFallback); with no links when the row says the copy was made without them (fix 2, N4).
+ */
+async function remake(db: Query, row: LedgerRowData, audience: Audience, at: Date, options: AsOfOptions, legacy: boolean): Promise<{ detail: string; rerender: Buffer | null }> {
   if (options.caller === undefined) return { detail: 'the copy is no longer kept: an officer makes it again', rerender: null };
-  const inputs = (await inputsFor(db, row.subject_id, audience, at, options.origin ?? linkOrigin(), options.engine ?? ENGINE_VERSION)) as Extract<Inputs, { kind: 'copy' }>;
+  const engine = options.engine ?? ENGINE_VERSION;
+  // A row made with links-1 or later had its input hash rebuilt with this engine (fileVerdict), so this engine made it; an
+  // older row's was rebuilt with the engine it names, which only that engine makes again byte for byte.
+  if (legacy && row.inputs['engine'] !== engine) return { detail: OTHER_ENGINE, rerender: null };
+  const inputs = (await inputsFor(db, row.subject_id, audience, at, options.origin ?? linkOrigin(), engine, legacy ? 1 : 2)) as Extract<Inputs, { kind: 'copy' }>;
   // 0017: once the worker role exists, the app role reaches no original. Asked first, so a transaction is not aborted.
   const allowed = await db.query<{ ok: boolean }>(`SELECT has_function_privilege('publication_ledger_original(bigint, text, text[], text)', 'EXECUTE') AS ok`);
   if (allowed.rows[0]?.ok !== true) return { detail: 'the copy is no longer kept and only the worker reads originals: inputs verified only', rerender: null };
@@ -352,14 +373,15 @@ async function remake(db: Query, row: LedgerRowData, audience: Audience, at: Dat
     [...options.caller.groups],
     options.caller.trace ?? null,
   ]);
-  const result = await (options.redact ?? redactPdf)(new Uint8Array((original.rows[0] as { bytes: Buffer }).bytes), inputs.request);
+  const request = typeof row.inputs['links_dropped'] === 'string' ? { ...inputs.request, links: [] } : inputs.request;
+  const result = await withLinkFallback(options.redact ?? redactPdf)(new Uint8Array((original.rows[0] as { bytes: Buffer }).bytes), request);
   if (result.kind !== 'redacted') return { detail: 'the engine refused to make the copy again', rerender: null };
   const rerender = sha256(result.pdf);
   return { detail: same(rerender, row.output_sha256) ? '' : MISMATCH, rerender };
 }
 
 /** Whether a re-render of a file row agrees with it; a copy no longer kept is made again. */
-async function fileVerdict(db: Query, row: LedgerRowData, again: Rendering, audience: Audience, at: Date, options: AsOfOptions): Promise<{ detail: string; rerender: Buffer | null }> {
+async function fileVerdict(db: Query, row: LedgerRowData, again: Rendering, audience: Audience, at: Date, options: AsOfOptions, legacy: boolean): Promise<{ detail: string; rerender: Buffer | null }> {
   const was = row.inputs['served'];
   const now = again.inputs['served'];
   const verdict = (ok: boolean): { detail: string; rerender: Buffer | null } => ({ detail: ok ? '' : MISMATCH, rerender: again.output });
@@ -371,7 +393,7 @@ async function fileVerdict(db: Query, row: LedgerRowData, again: Rendering, audi
       return { detail: 'the inputs rebuilt from the history do not match the row', rerender: again.output };
     }
     if (was !== 'copy') return verdict(true);
-    if (now === 'not_ready') return remake(db, row, audience, at, options);
+    if (now === 'not_ready') return remake(db, row, audience, at, options, legacy);
     return verdict(same(again.output, row.output_sha256));
   }
   return verdict(now === was && same(again.output, row.output_sha256));
@@ -397,8 +419,11 @@ export async function ledgerAsOf(db: Query, kind: LedgerKind, subject: string, a
     });
     verdict = { detail: same(again.output, row.output_sha256) ? '' : MISMATCH, rerender: again.output };
   } else {
-    again = await renderFile(db, subject, audience, at, { origin: options.origin, engine: options.engine });
-    verdict = await fileVerdict(db, row, again, audience, at, options);
+    // A row made before LINKS L3 has no origin: it is rebuilt as it was made, under the engine it names, with no links and
+    // input hash v1, so the rows of the issues loaded before links still verify (fix 2, N5).
+    const legacy = !('origin' in row.inputs);
+    again = await renderFile(db, subject, audience, at, legacy ? { engine: String(row.inputs['engine']), legacy } : { origin: options.origin, engine: options.engine });
+    verdict = await fileVerdict(db, row, again, audience, at, options, legacy);
   }
   let detail = verdict.detail;
   if (detail === '' && again.withheld !== row.passages_withheld) detail = 'the re-render withholds a different number of passages';

@@ -162,6 +162,23 @@ describe('placeLinks: fresh annotations from the approved list only', () => {
     expect(on.kept).toEqual([]);
   });
 
+  it('asks the veto last, once, with the links that survive the rest, and drops the ids it names (LINKS L3 fix 2, N1: F24)', async () => {
+    const pdf = await copy(2);
+    const seen: string[][] = [];
+    const vetoed = (links: readonly EngineLink[]): Promise<ReadonlySet<string>> => {
+      seen.push(links.map((l) => l.id));
+      return Promise.resolve(new Set([id(1)]));
+    };
+    const placed = await placeLinks(pdf, [link(1), link(2, { page: 2 }), link(3, { page: 3 })], ORIGIN, [], vetoed);
+    expect(placed.kept).toEqual([id(2)]);
+    expect(seen).toEqual([[id(1), id(2)]]);
+    // Everything vetoed: the copy as it came, byte for byte; nothing placed: the veto is not asked.
+    const none = await placeLinks(pdf, [link(1)], ORIGIN, [], vetoed);
+    expect(none).toEqual({ pdf, kept: [] });
+    expect((await placeLinks(pdf, [link(3, { page: 3 })], ORIGIN, [], vetoed)).kept).toEqual([]);
+    expect(seen).toHaveLength(2);
+  });
+
   it('refuses links without an origin, rather than write a link to nowhere', async () => {
     await expect(placeLinks(await copy(), [link(1)], undefined, [])).rejects.toThrow('links need an origin');
   });

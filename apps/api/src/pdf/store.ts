@@ -95,6 +95,16 @@ export function inputHash(sha256: Uint8Array, request: RedactRequest, engine = E
   return createHash('sha256').update(canonicalInputs(sha256, request, engine, urls)).digest();
 }
 
+/**
+ * The key of a copy made before LINKS L3 (v 1: the engine, the original's sha256, redactsAny, the quotes and the image
+ * action; no origin and no links), exactly as main's inputHash made it: the ledger rebuilds its older rows with it,
+ * under the engine each recorded (fix 2, N5).
+ */
+export function inputHashV1(sha256: Uint8Array, request: RedactRequest, engine: string): Buffer {
+  const canonical = JSON.stringify({ v: 1, engine, original: Buffer.from(sha256).toString('hex'), redactsAny: request.redactsAny, quotes: canonicalQuotes(request.quotes), image: request.image ?? 'show' });
+  return createHash('sha256').update(canonical).digest();
+}
+
 /** The file's links active at `asOf` (now when absent): the latest status at or before it, ties to the later one. */
 async function activeLinks(db: Query, fileId: string, asOf?: Date): Promise<Array<{ id: string; page: number; rect: number[]; url: string; host: string }>> {
   const at = asOf === undefined ? '' : ' AND s.at <= $2';
@@ -112,8 +122,10 @@ async function activeLinks(db: Query, fileId: string, asOf?: Date): Promise<Arra
  * What this audience is given for the file; null when the file has no stored original or is not for
  * this audience. `asOf`: from the policy and marks as they stood then (the ledger's re-render). `origin` and
  * `engine`: what the copy would be made with (LINK_ORIGIN's and this engine's, unless the ledger asks otherwise).
+ * `version` 1: the inputs of a copy made before LINKS L3, for a ledger row of then (fix 2, N5): no origin, no links,
+ * keyed by inputHashV1.
  */
-export async function inputsFor(db: Query, fileId: string, audience: string, asOf?: Date, origin = linkOrigin(), engine = ENGINE_VERSION): Promise<Inputs | null> {
+export async function inputsFor(db: Query, fileId: string, audience: string, asOf?: Date, origin = linkOrigin(), engine = ENGINE_VERSION, version: 1 | 2 = 2): Promise<Inputs | null> {
   const asked = RANK[audience];
   if (asked === undefined) return null;
   const [file, cells, marks] = await Promise.all([
@@ -136,6 +148,10 @@ export async function inputsFor(db: Query, fileId: string, audience: string, asO
   const quotes = canonicalQuotes(marks.rows.flatMap((mark) => (mark.quote !== null && action(mark.category) === 'redact' ? [mark.quote] : [])));
   // Each link whose target holds none of this audience's passages, as the loader checks them (CONTRACT item 5), and
   // whose rect is a hundredth of a point wide and high once rounded (fix 1, N4: one attached before 0025's CHECK).
+  if (version === 1) {
+    const request: CopyRequest = { quotes, redactsAny: true, image: action('image') as ImageAction, links: [] };
+    return { kind: 'copy', hash: inputHashV1(row.sha256, request, engine), request };
+  }
   const passing = (await activeLinks(db, fileId, asOf)).filter((link) => wideEnough(link.rect as unknown as Rect) && !targetHolds(link.url, quotes));
   const links: EngineLink[] = passing.map((link) => ({ id: link.id, page: link.page, rect: roundRect(link.rect as unknown as Rect), label: linkLabel(link.host) }));
   const urls = Object.fromEntries(passing.map((link) => [link.id, link.url]));

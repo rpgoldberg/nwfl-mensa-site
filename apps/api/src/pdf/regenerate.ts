@@ -35,7 +35,8 @@
 // counts as made, so it is not queued again at every boot. A copy made without
 // its links (fix round 1, N9: rerun.ts) is logged through `warn`, by file,
 // input hash, link count and reason, never a URL; the ledger row records the
-// origin the copy's inputs were made with.
+// origin the copy's inputs were made with, and (fix round 2, N4) the reason a
+// copy this run made has no links, so the ledger makes it again without them.
 // ============================================================================
 import type { Db, Warn } from '../db/pool.js';
 import { AUDIENCES } from '../redaction/policy.js';
@@ -133,6 +134,7 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
   const existing = await db.query<{ input_hash: Buffer }>(`SELECT input_hash FROM pdf_copy WHERE file_id = $1`, [fileId]);
   const made = new Set(existing.rows.map((copy) => copy.input_hash.toString('hex')));
   const missing = [...targets].filter(([hex]) => !made.has(hex)).map(([, target]) => target);
+  const linksDropped = new Map<string, string>();
   try {
     if (missing.length > 0) {
       const original = await db.query<{ bytes: Buffer }>(`SELECT pdf_regen_original($1, $2) AS bytes`, [fileId, claim]);
@@ -149,13 +151,14 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
         }
         if (copy.linksDropped !== undefined) {
           options.warn?.({ file_id: fileId, input_hash: target.hash.toString('hex'), links: target.request.links.length, reason: copy.linksDropped }, 'a PDF copy was made without its links');
+          linksDropped.set(target.hash.toString('hex'), copy.linksDropped);
         }
         await db.query(`SELECT pdf_copy_put($1, $2, $3, $4, $5, $6, $7)`, [fileId, claim, target.hash, ENGINE_VERSION, copy.pdf, copy.reason, copy.kept]);
       }
     }
     // The ledger records what each audience is given now (R-LEDGER), under the claim, and the run
     // finishes in the same transaction (0019: the worker appends only for the file it holds).
-    const done = await recordClaimedFile(db, fileId, claim, origin, async (client) => {
+    const done = await recordClaimedFile(db, fileId, claim, { origin, linksDropped }, async (client) => {
       const finished = await client.query<{ done: boolean }>(`SELECT pdf_regen_finish($1, $2, $3::bytea[]) AS done`, [
         fileId,
         claim,

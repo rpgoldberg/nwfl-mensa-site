@@ -59,8 +59,11 @@
 // page (link-annots.ts placeLinks), unless its rect meets a box drawn here,
 // the ink of a glyph removed here, or (fix round 1, S1 and N1) what the link
 // guard reads as withheld: a glyph of the original the copy lacks, and under
-// "blur" or "hide" every picture on every page (link-guard.ts, the gate's own
-// check too); the reply names the ids kept. PDFium and the gate read the copy
+// "blur" or "hide" every picture PDFium reads on every page (drawn on the
+// page, in a form at any depth, or in an annotation's appearance) and (fix
+// round 2, F1) the whole of every page whose resources reach a tiling pattern
+// holding a picture, whose place PDFium does not give (link-guard.ts, the
+// gate's own check too); the reply names the ids kept. PDFium and the gate read the copy
 // with the annotations in place, so every string they hold is searched for
 // every passage too. With no links, nothing is written and the copy is byte
 // for byte what it was before links. When the links cannot be placed, there
@@ -89,6 +92,8 @@ export interface RedactRequest {
 
 export interface RedactDeps {
   sanitize?: (pdf: Uint8Array, image: ImageAction) => Promise<Uint8Array>;
+  /** The link guard (link-guard.ts linkGuardAreas), for tests only: each of the engine's two blocks is tested alone (fix 2, N1). */
+  guard?: typeof linkGuardAreas;
 }
 
 export type RedactResult =
@@ -245,7 +250,7 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
   const plain = pdf;
   // The link guard reads the original and this copy as the gate will (fix 1, S1 and N1): a link that meets anything it reads is dropped.
   const guarded = async (links: readonly EngineLink[]): Promise<ReadonlySet<string>> => {
-    const areas = await linkGuardAreas(original, plain, image);
+    const areas = await (deps.guard ?? linkGuardAreas)(original, plain, image);
     return new Set(links.filter((link) => areas.some((area) => area.page === link.page - 1 && meets(boxOf(link.rect), area))).map((link) => link.id));
   };
   try {
