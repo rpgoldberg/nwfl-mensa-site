@@ -2,9 +2,9 @@
 // enhancement only. Without it the countdown box stays hidden and the page waits for a press, as
 // the guard does. With it the box shows, Stop takes focus, the countdown is announced once (never
 // every second), and when it ends the same tab goes on with location.replace (a browser blocks a
-// new tab no press opened). Stop, Continue, or anything else the reader does on the page (a focus, an
-// input, a press or a key that is not on Stop: the radio, the form, Back, anywhere) ends it, and the
-// stop is said once. Here it runs against small stand-ins.
+// new tab no press opened). Stop, Continue, or anything else the reader does on the page (any key or
+// press, Stop included; a wheel or a touch scroll; an input; a focus that is not on Stop) ends it, and
+// the stop is said once. Here it runs against small stand-ins.
 import { describe, expect, it } from 'vitest';
 import { SECONDS, wireCountdown } from '../public/scripts/out.js';
 
@@ -12,7 +12,10 @@ class FakeElement extends EventTarget {
   hidden = true;
   focused = false;
   textContent = '';
-  constructor(readonly attrs: Record<string, string> = {}) {
+  constructor(
+    readonly attrs: Record<string, string> = {},
+    readonly kids: unknown[] = [],
+  ) {
     super();
   }
   getAttribute(name: string) {
@@ -25,20 +28,21 @@ class FakeElement extends EventTarget {
     this.focused = true;
   }
   contains(other: unknown) {
-    return other === this;
+    return other === this || this.kids.includes(other);
   }
 }
 
 /** Whatever the reader does on the page: the capture listeners the script puts on the document. */
 class FakeDoc {
   readonly listeners = new Map<string, Set<(event: { type: string; target: unknown }) => void>>();
-  readonly captures: boolean[] = [];
+  readonly options: unknown[] = [];
+  activeElement: unknown = null;
   constructor(readonly found: Record<string, FakeElement | null>) {}
   querySelector(sel: string) {
     return this.found[sel] ?? null;
   }
-  addEventListener(type: string, fn: (event: { type: string; target: unknown }) => void, capture?: boolean) {
-    this.captures.push(capture === true);
+  addEventListener(type: string, fn: (event: { type: string; target: unknown }) => void, options?: unknown) {
+    this.options.push(options);
     const set = this.listeners.get(type) ?? new Set();
     set.add(fn);
     this.listeners.set(type, set);
@@ -67,11 +71,11 @@ class FakeStatus extends FakeElement {
 const STOPPED = 'Stopped. You are still on our site. Choose Continue when you are ready.';
 
 function setup(parts: { box?: boolean; go?: boolean; status?: boolean; seconds?: boolean; stop?: boolean; host?: boolean } = {}) {
-  const box = new FakeElement(parts.host === false ? {} : { 'data-host': 'club.example' });
   const go = new FakeElement({ href: 'https://club.example/picnic?day=sat' });
   const status = new FakeStatus();
   const seconds = new FakeElement();
   const stop = new FakeElement();
+  const box = new FakeElement(parts.host === false ? {} : { 'data-host': 'club.example' }, [seconds, stop]);
   const found: Record<string, FakeElement | null> = {
     '[data-out-countdown]': parts.box === false ? null : box,
     'a[data-out-continue]': parts.go === false ? null : go,
@@ -108,6 +112,8 @@ function setup(parts: { box?: boolean; go?: boolean; status?: boolean; seconds?:
   const announcements: string[] = [];
   const watched = { box, go, status, seconds, stop, doc };
   wireCountdown(doc as never, win as never);
+  // The focus Stop took, as the page has it.
+  if (stop.focused) doc.activeElement = stop;
   announcements.push(status.textContent);
   return { ...watched, timers, replaced, advance, announcements };
 }
@@ -163,11 +169,12 @@ describe('the countdown', () => {
     expect(box.hidden).toBe(true);
   });
 
-  for (const type of ['focusin', 'input', 'pointerdown', 'keydown']) {
+  for (const type of ['focusin', 'input', 'pointerdown', 'keydown', 'wheel', 'touchmove']) {
     it(`stops, as Stop does, on a ${type} anywhere but Stop (the radio, the form, Back), and leaves the focus where the reader put it`, () => {
       const { box, go, status, advance, replaced, timers, doc } = setup();
       const radio = new FakeElement();
       advance(2000);
+      doc.activeElement = radio;
       doc.fire(type, radio);
       if (type === 'pointerdown') doc.fire('pointerup', radio);
       advance(10_000);
@@ -206,15 +213,58 @@ describe('the countdown', () => {
     expect(status.said).toEqual(['Going to club.example in 5 seconds. Press Stop to stay on this page.', STOPPED]);
   });
 
-  it('listens on the whole page, in the capture phase, so a control that stops its events still stops the countdown', () => {
+  it('listens on the whole page, in the capture phase, so a control that stops its events still stops the countdown, and never holds up a scroll', () => {
     const { doc } = setup();
-    expect([...doc.listeners.keys()].sort()).toEqual(['focusin', 'input', 'keydown', 'pointerdown']);
-    expect(doc.captures).toEqual([true, true, true, true]);
+    expect([...doc.listeners.keys()].sort()).toEqual(['focusin', 'input', 'keydown', 'pointerdown', 'touchmove', 'wheel']);
+    expect(doc.options).toEqual(Array.from({ length: 6 }, () => ({ capture: true, passive: true })));
   });
 
-  it('goes on when the focus, a press or a key is on Stop itself, which only its own press ends', () => {
+  // Stop holds the focus from the start, so every key a reader presses lands on it: an arrow or Page
+  // Down to read on, Ctrl and + to zoom, Escape. None of them may send the reader away.
+  for (const type of ['keydown', 'input', 'wheel', 'touchmove']) {
+    it(`stops at once on ${type === 'input' ? 'an' : 'a'} ${type} on Stop itself, then takes the box away, says the stop once, and hands the focus to Continue`, () => {
+      const { box, go, stop, status, advance, replaced, doc } = setup();
+      advance(2000);
+      doc.fire(type, stop);
+      expect(box.hidden).toBe(false);
+      advance(0);
+      expect(box.hidden).toBe(true);
+      advance(10_000);
+      expect(replaced).toEqual([]);
+      expect(go.focused).toBe(true);
+      expect(status.said).toEqual(['Going to club.example in 5 seconds. Press Stop to stay on this page.', STOPPED]);
+      expect(doc.count).toBe(0);
+    });
+  }
+
+  it('a key on Stop that presses it (Enter) ends the countdown once, through its own click', () => {
+    const { box, go, stop, status, advance, replaced, doc, timers } = setup();
+    doc.fire('keydown', stop);
+    stop.dispatchEvent(new Event('click'));
+    expect(box.hidden).toBe(true);
+    expect(go.focused).toBe(true);
+    advance(10_000);
+    expect(replaced).toEqual([]);
+    expect(timers.size).toBe(0);
+    expect(status.said).toEqual(['Going to club.example in 5 seconds. Press Stop to stay on this page.', STOPPED]);
+  });
+
+  it('stops at once on a press that starts on Stop and slides off, so no click comes, and hands the focus to Continue once it is over', () => {
+    const { box, go, stop, status, advance, replaced, doc } = setup();
+    doc.fire('pointerdown', stop);
+    advance(10_000);
+    expect(replaced).toEqual([]);
+    expect(box.hidden).toBe(false);
+    doc.fire('pointerup', new FakeElement());
+    advance(0);
+    expect(box.hidden).toBe(true);
+    expect(go.focused).toBe(true);
+    expect(status.said).toEqual(['Going to club.example in 5 seconds. Press Stop to stay on this page.', STOPPED]);
+  });
+
+  it('goes on when only the focus comes to Stop, with no key or press: that is not the reader acting', () => {
     const { stop, advance, replaced, doc } = setup();
-    for (const type of ['focusin', 'input', 'pointerdown', 'keydown']) doc.fire(type, stop);
+    doc.fire('focusin', stop);
     advance(5000);
     expect(replaced).toEqual(['https://club.example/picnic?day=sat']);
   });

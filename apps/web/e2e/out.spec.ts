@@ -1,8 +1,8 @@
 // LINKS L4: the leaving page /out/<id> in a real browser, desktop and phone. The guard waits for a
 // press on Continue, which opens a new tab with no opener and no referrer; the countdown goes on in
 // this tab after 5 seconds unless Stop (which has the focus) is pressed or the reader does anything
-// else on the page (the radio, Tab, Back, a click), and is the guard with JavaScript off; direct goes
-// straight there. The same choice is in the Aa panel on every page. An officer, served the original,
+// else on the page (any key or press, Stop included, the wheel, a touch scroll, the radio, Back), and
+// is the guard with JavaScript off; direct goes straight there. The same choice is in the Aa panel on every page. An officer, served the original,
 // is shown the public copy's link (the site asks again as the public). A mail link always shows the page; a link turned off
 // shows that it was, with no URL. Keyboard alone reaches Continue, Back and Stop. axe is clean in all
 // three modes, at 175 % text and in both high contrast themes, and a 320 px phone never scrolls
@@ -223,6 +223,69 @@ test.describe('the countdown', () => {
       expect(await said(page)).toEqual([ANNOUNCED, STOPPED]);
     });
   }
+
+  // Stop holds the focus from the start, so every key a reader presses lands on it. Reading on, zooming
+  // or a slip of the finger must not send anyone away: any key or press stops it, Stop included.
+  const onStop: Array<[string, (page: Page) => Promise<void>]> = [
+    ['the down arrow, with the focus on Stop', (page) => page.keyboard.press('ArrowDown')],
+    ['Page Down, with the focus on Stop', (page) => page.keyboard.press('PageDown')],
+    ['Ctrl and + to zoom, with the focus on Stop', (page) => page.keyboard.press('Control+Equal')],
+    ['Escape, with the focus on Stop', (page) => page.keyboard.press('Escape')],
+    [
+      'the mouse wheel',
+      async (page) => {
+        await page.mouse.move(100, 200);
+        await page.mouse.wheel(0, 300);
+      },
+    ],
+    [
+      'a press on Stop that slides off before it is let go',
+      async (page) => {
+        const box = (await page.getByRole('button', { name: 'Stop' }).boundingBox())!;
+        await page.mouse.move(box.x + 5, box.y + 5);
+        await page.mouse.down();
+        await page.mouse.move(5, 5, { steps: 5 });
+        await page.mouse.up();
+      },
+    ],
+  ];
+  for (const [name, act] of onStop) {
+    test(`${name} stops it: said once, nothing moves, and the focus goes to Continue`, async ({ page, context }) => {
+      const seen = await otherSites(context);
+      await statusLog(page);
+      await page.goto(out(LINKS.web.id));
+      await expect(page.getByRole('button', { name: 'Stop' })).toBeFocused();
+      await act(page);
+      await expect(page.locator('[data-out-status]')).toHaveText(STOPPED);
+      await expect(page.locator('[data-out-countdown]')).toBeHidden();
+      await expect(continueLink(page)).toBeFocused();
+      await page.waitForTimeout(6500);
+      expect(page.url()).toContain(out(LINKS.web.id));
+      expect(seen).toEqual([]);
+      expect(await said(page)).toEqual([ANNOUNCED, STOPPED]);
+    });
+  }
+
+  test('a touch scroll that starts on Stop stops it, says so once, and nothing moves', async ({ page, context, browserName }) => {
+    // A real touch drag needs the browser's own input (CDP), so Chromium on the phone only.
+    test.skip(browserName !== 'chromium' || !test.info().project.use.hasTouch, 'a touch drag through CDP, Chromium phone only');
+    const seen = await otherSites(context);
+    await statusLog(page);
+    await page.goto(out(LINKS.web.id));
+    await expect(page.getByRole('button', { name: 'Stop' })).toBeFocused();
+    const box = (await page.getByRole('button', { name: 'Stop' }).boundingBox())!;
+    const [x, y] = [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)];
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+    for (let step = 1; step <= 5; step += 1) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y - step * 30 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await expect(page.locator('[data-out-status]')).toHaveText(STOPPED);
+    await expect(page.locator('[data-out-countdown]')).toBeHidden();
+    await page.waitForTimeout(6500);
+    expect(page.url()).toContain(out(LINKS.web.id));
+    expect(seen).toEqual([]);
+    expect(await said(page)).toEqual([ANNOUNCED, STOPPED]);
+  });
 
   test('Stop, then more on the page, says the stop once', async ({ page }) => {
     await statusLog(page);
