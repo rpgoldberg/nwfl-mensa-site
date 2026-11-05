@@ -228,9 +228,10 @@ name, port or credentials) or `mailto:` one address with no query, exactly as
 the checker writes it; `test/load/fixtures/links-contract.json`, shared with
 `apps/linkcheck`, pins the forms. A link whose URL holds one of the issue's
 withheld quotes is refused, in any form it decodes to (percent, `%u` and HTML
-escapes until stable, punycode labels anywhere, base64 and base64url,
-NFKC-folded, with any separator; `targetHolds` lists them). One still decoding
-after eight passes is refused too. The links are attached as the loader in the same
+escapes until stable, each decoder on its own and all in turn, punycode labels
+anywhere, base64 and base64url, NFKC-folded, with any separator; `targetHolds`
+lists them). One still decoding after eight passes, or decoding to more than
+256 forms, is refused too. The links are attached as the loader in the same
 transaction, before the public input hash is checked. A repeated run compares
 the links too. `nwfl-issue/1` bundles load and repeat as before.
 

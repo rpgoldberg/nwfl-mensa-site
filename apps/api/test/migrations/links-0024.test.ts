@@ -296,6 +296,11 @@ describe.skipIf(!live)('0024: the approved links of a stored PDF', () => {
       ['a ? in the local part', { url: 'mailto:a?subject=x@example.org' }],
       ['a # in the local part', { url: 'mailto:a#b@example.org' }],
       ['a % in the local part', { url: 'mailto:a%40b@example.org' }],
+      // Nor a local part starting with '/' (round 3, CONTRACT item 10).
+      ['a local part starting with /', { url: 'mailto:/x@example.org' }],
+      ['an authority', { url: 'mailto://x@example.org' }],
+      ['a dot segment', { url: 'mailto:/./x@example.org' }],
+      ['a dot-dot segment', { url: 'mailto:/a/../b@example.org' }],
     ])('refuses a mail link with %s', async (_label, change) => {
       const fileId = await file();
       expect(await sqlstate(appc, ATTACH, [fileId, JSON.stringify([mail(60, change as Partial<Row>)]), 'LINKS', SHA, LOADER, null])).toBe('23514');

@@ -88,8 +88,11 @@ const PRINTABLE = /^[!-~]+$/;
  * literal in any form, a dotless name, a trailing dot or an empty label. At most 253 characters.
  */
 const HOST = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-/** mailto:local@domain: one address, no query or fragment, the domain a HOST; no # or % in the local part, which a mail client would read as a fragment or an escape. */
-const MAILTO = /^mailto:[A-Za-z0-9.!$&'*+/=^_`{|}~-]+@([^@]+)$/;
+/**
+ * mailto:local@domain: one address, no query or fragment, the domain a HOST; no # or % in the local part, which a mail client would read as a fragment or an escape,
+ * and no '/' first, which a URL parser reads as an authority (mailto://) or a path it normalises (mailto:/a/../b) (CONTRACT item 10).
+ */
+const MAILTO = /^mailto:[A-Za-z0-9.!$&'*+=^_`{|}~-][A-Za-z0-9.!$&'*+/=^_`{|}~-]*@([^@]+)$/;
 
 function rectOf(value: unknown, where: string): Rect {
   const bad = (): LoadError => new LoadError(`${where} must be [x1, y1, x2, y2]: four finite numbers within ${MAX_COORDINATE} of 0, with x1 < x2 and y1 < y2`);
@@ -187,9 +190,9 @@ function percentDecoded(text: string): string {
 /** Every %uXXXX escape (JavaScript's old escape()) decoded, one UTF-16 unit each. */
 const percentUDecoded = (text: string): string => text.replace(/%u([0-9A-Fa-f]{4})/g, (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 
-/** Every HTML numeric character reference (&#64; &#x40;, the ; optional as browsers take it) decoded; one past Unicode is kept. */
+/** Every HTML numeric character reference (&#64; &#x40; &#00064;, the ; optional and any leading zeros, as browsers take them) decoded; one past Unicode is kept. */
 const entitiesDecoded = (text: string): string =>
-  text.replace(/&#(?:[xX]([0-9A-Fa-f]{1,6})|([0-9]{1,7}));?/g, (reference, hex: string | undefined, decimal: string | undefined) => {
+  text.replace(/&#(?:[xX]0*([0-9A-Fa-f]{1,6})|0*([0-9]{1,7}));?/g, (reference, hex: string | undefined, decimal: string | undefined) => {
     const point = hex === undefined ? Number(decimal) : parseInt(hex, 16);
     return point <= 0x10ffff ? String.fromCodePoint(point) : reference;
   });
@@ -197,11 +200,15 @@ const entitiesDecoded = (text: string): string =>
 /** Every xn-- label, wherever it stands (a host, a redirect in a query, a path), from punycode; domainToUnicode keeps one that does not decode as it is. */
 const punycodeDecoded = (text: string): string => text.replace(/(?<![a-z0-9-])xn--[a-z0-9-]+/gi, (label) => domainToUnicode(label));
 
-/** One pass of every decoding a reader, a browser or a redirector applies to a URL. */
-const decodedOnce = (text: string): string => punycodeDecoded(entitiesDecoded(percentUDecoded(percentDecoded(text))));
+/** Every decoding a reader, a browser or a redirector applies to a URL, each on its own. */
+const DECODERS: ReadonlyArray<(text: string) => string> = [percentDecoded, percentUDecoded, entitiesDecoded, punycodeDecoded];
+/** All of them in turn, as one pass. */
+const decodedOnce = (text: string): string => DECODERS.reduce((form, decode) => decode(form), text);
 
-/** How many decoding passes a URL may need; one still changing after them is held (it hides what it holds). */
+/** How many decoding passes a URL may need; one still yielding new forms after them is held (it hides what it holds). */
 export const MAX_DECODE_PASSES = 8;
+/** How many forms a URL may decode to; one with more is held (a plain link has a handful, and the bound keeps the search small). */
+export const MAX_FORMS = 256;
 /** The shortest base64 run looked for: a quote of four bytes or fewer is not looked for in base64, where noise would match its few characters. */
 const MIN_BASE64 = 6;
 
@@ -230,24 +237,35 @@ function base64Forms(quote: string): string[] {
 }
 
 /**
+ * Every form a URL decodes to (CONTRACT items 9 and 11): the URL as written, then on each pass the
+ * output of each decoder on its own (%XX escapes as UTF-8, %uXXXX escapes, HTML numeric references,
+ * every xn-- label from punycode) and of all four in turn, applied to every form the last pass
+ * found, so no decoder hides what another reveals. Undefined (held) when a pass past
+ * MAX_DECODE_PASSES still finds a new form, or when there are more than maxForms.
+ */
+export function decodedForms(url: string, maxForms = MAX_FORMS): string[] | undefined {
+  const forms = new Set([url]);
+  for (let found = [url], pass = 0; ; pass++) {
+    const next = [...new Set(found.flatMap((form) => [...DECODERS, decodedOnce].map((decode) => decode(form))))].filter((form) => !forms.has(form));
+    if (next.length === 0) return [...forms];
+    if (pass === MAX_DECODE_PASSES || forms.size + next.length > maxForms) return undefined;
+    for (const form of next) forms.add(form);
+    found = next;
+  }
+}
+
+/**
  * Whether a URL holds any of the quotes, in any form a reader or a server could decode it to
- * (CONTRACT items 5 and 9). Its forms are the URL as written and after each decoding pass (%XX
- * escapes as UTF-8, %uXXXX escapes, HTML numeric references, every xn-- label from punycode)
- * until it stops changing, at most MAX_DECODE_PASSES: one still changing then is held, whatever it
- * holds. Each form is NFKC-folded and lower-cased, then also taken with the separators turned into
+ * (CONTRACT items 5, 9 and 11): its forms are decodedForms', and one held there is held, whatever
+ * it holds. Each form is NFKC-folded and lower-cased, then also taken with the separators turned into
  * spaces and with them taken out, against the quote treated the same way, so "Quillon Brask" is
  * found in quillon.brask, quillonbrask and quillon$brask. Each form as decoded (its case kept) is
  * also searched for the quote's base64 and base64url, at every alignment (base64Forms).
  */
 export function targetHolds(url: string, quotes: readonly string[]): boolean {
   if (quotes.length === 0) return false;
-  const forms = [url];
-  for (let current = url, pass = 0; ; pass++) {
-    const next = decodedOnce(current);
-    if (next === current) break;
-    if (pass === MAX_DECODE_PASSES) return true;
-    forms.push((current = next));
-  }
+  const forms = decodedForms(url);
+  if (forms === undefined) return true;
   const haystacks = forms.map(folded).flatMap((form) => [form, spaced(form), joined(form)]);
   return quotes.some((quote) => {
     const needle = folded(quote);

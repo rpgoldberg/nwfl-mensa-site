@@ -21,12 +21,15 @@ const WEBMASTER = as('webmaster-token');
 /** A made-up venue the public policy withholds (private_venue), beside the withheld address. */
 const VENUE = 'Müllerhaus Ballroom';
 const VENUE_MARKS: Mark[] = [...MARKS, { quote: VENUE, category: 'private_venue' }];
-/** The four encoded targets the round-2 challenger loaded through both loaders (B1): each must be refused. */
+/** The encoded targets the round-2 and round-3 challengers loaded through both loaders (B1, B3, S4): each must be refused. */
 const ENCODED_TARGETS = [
   'https://example.org/redirect?to=https://xn--mllerhaus-ballroom-m6b.example/',
   'https://example.org/l?u=https%3A%2F%2Fxn--mllerhaus-ballroom-m6b.example%2F',
   `https://example.org/t?e=${Buffer.from(EMAIL).toString('base64url')}`,
   'https://example.org/q.brask%25252540example.org',
+  // Round 3: a quote one decoder reveals and the next would eat (B3), and a zero-padded HTML reference (S4).
+  'https://example.org/xn--qbrask%40example.org',
+  'https://example.org/q.brask&#00000064;example.org',
 ];
 
 describe.skipIf(!live)('approved links, through the loader and the links command', () => {

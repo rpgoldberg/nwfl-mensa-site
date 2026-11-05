@@ -70,11 +70,12 @@ CREATE TABLE pdf_link (
   created_by_sub     text             NOT NULL CHECK (created_by_sub <> ''),
   created_at         timestamptz      NOT NULL DEFAULT now(),
   -- A web link is https on exactly its host, a path following; a mail link one address at it, its
-  -- domain exactly the host (so in lower case), with no query, fragment or escape (CONTRACT item 3).
+  -- domain exactly the host (so in lower case), with no query, fragment or escape (CONTRACT item 3),
+  -- its local part not starting with '/' (CONTRACT item 10).
   CONSTRAINT pdf_link_web CHECK (kind <> 'web' OR (
     left(url, 8 + length(host)) = 'https://' || host AND substr(url, 9 + length(host), 1) = '/')),
   CONSTRAINT pdf_link_mail CHECK (kind <> 'mail' OR (
-    url ~ '^mailto:[^@?#%]+@[^@?#%]+$' AND substr(url, strpos(url, '@') + 1) = host))
+    url ~ '^mailto:[^@?#%/][^@?#%]*@[^@?#%]+$' AND substr(url, strpos(url, '@') + 1) = host))
 );
 CREATE INDEX pdf_link_file ON pdf_link (file_id);
 

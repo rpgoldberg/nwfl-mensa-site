@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { LINKS_FORMAT, MAX_LINKS_BUNDLE_BYTES, parseLinksBundle, runAttach } from '../../src/load/attach.js';
 import { canonicalJson } from '../../src/content/hash.js';
 import { LoadError, parseBundle } from '../../src/load/load.js';
-import { type IssueLinks, type Link, MAX_LINKS_PER_FILE, hostOf, linksSha256, parseLinks, refuseWithheldTargets, targetHolds } from '../../src/load/links.js';
+import { type IssueLinks, type Link, MAX_FORMS, MAX_LINKS_PER_FILE, decodedForms, hostOf, linksSha256, parseLinks, refuseWithheldTargets, targetHolds } from '../../src/load/links.js';
 import { ADDRESS, EMAIL, LINKS, NAME, PHONE, bundleJson, linkId, linksBundleJson, linksJson, mailLink, sha256, stdinOf, webLink } from './bundle.js';
 
 const NO_DB = { DATABASE_URL: 'postgres://nobody:nothing@127.0.0.1:1/none' };
@@ -184,6 +184,11 @@ describe('parseLinks', () => {
       ['a one-label domain', 'mailto:games@localhost'],
       ['a space', 'mailto:games @example.org'],
       ['a non-ASCII address', 'mailto:spiele@bücher.example'],
+      // A local part never starts with '/', which a URL parser reads as a path or an authority (round 3, CONTRACT item 10).
+      ['a local part starting with /', 'mailto:/x@example.org'],
+      ['an authority', 'mailto://x@example.org'],
+      ['a dot segment', 'mailto:/./x@example.org'],
+      ['a dot-dot segment', 'mailto:/a/../b@example.org'],
     ])('refuses a mail link with %s', (_label, url) => {
       const json = withPath(linksJson({ public: [mailLink(1)], members: [] }), ['public', 0, 'url'], url);
       expect(() => parseLinks(json)).toThrow(/links\.public\[0\]\.url/);
@@ -264,7 +269,7 @@ describe('linksSha256', () => {
 describe('the shared links contract (CONTRACT.md, the same fixture in apps/linkcheck)', () => {
   const FIXTURE = new URL('./fixtures/links-contract.json', import.meta.url);
   /** The fixture both parts commit, byte for byte: L1's suite pins the same sha256. */
-  const CONTRACT_SHA256 = 'b0e3eed8d272e27cd59f4cc6c4647d992b7204c402719e9194fc26c355276269';
+  const CONTRACT_SHA256 = '744f1e310b4a1dd2133d121bede97fd62f1c60111d8966db8b1fe4e8741fb045';
   const bytes = (): Buffer => readFileSync(FIXTURE);
   const cases = (): Array<{ in: string; out: string | null }> => JSON.parse(bytes().toString('utf8')) as Array<{ in: string; out: string | null }>;
 
@@ -362,6 +367,20 @@ describe('targetHolds: a URL that holds a withheld quote (CONTRACT item 5)', () 
     // The NFKC fold (round 2, S2): compatibility and decomposed forms fold to the quote's.
     ['a withheld phone in fullwidth digits', `https://example.org/${escaped('８５０-５５５-０１４２')}`],
     ['a withheld venue in NFD (u and a combining diaeresis)', `https://example.org/${escaped('Müllerhaus Ballroom')}`],
+    // Every decoder's output is a form on its own (round 3, B3; CONTRACT item 11): none hides another's.
+    ['a withheld address after %26%23, which an HTML reference would eat once percent-decoded', 'https://example.org/s?q=%26%2312%20Example%20Lane'],
+    ['a withheld phone after &#, its dashes percent-encoded', 'https://example.org/?x=1&#850%2D555%2D0142'],
+    ['a withheld phone after %26%23, its dashes percent-encoded', 'https://example.org/s?q=%26%23850%2D555%2D0142'],
+    ['a withheld address after xn--, its @ percent-encoded', 'https://example.org/xn--qbrask%40example.org'],
+    ['a withheld name after xn--, its space percent-encoded', 'https://example.org/xn--quillon%20brask'],
+    ['a withheld address whose percent-decoding would lengthen the HTML reference before it', 'https://example.org/?a=&#49%32%20Example%20Lane'],
+    // Every xn-- label, not only the first (round 3, S3).
+    ['a withheld venue in punycode after a label that does not decode', 'https://example.org/xn--zz/?to=xn--mllerhaus-ballroom-m6b.example'],
+    ['a withheld venue in a mailto domain after a label that does not decode', 'mailto:events~@xn--zz.xn--mllerhaus-ballroom-m6b.example'],
+    // HTML numeric references with any number of leading zeros (round 3, S4).
+    ['a withheld address with &#00000064; for its @', 'https://example.org/q.brask&#00000064;example.org'],
+    ['a withheld address with &#x0000040; for its @', 'https://example.org/q.brask&#x0000040;example.org'],
+    ['a withheld address with forty leading zeros in its reference', `https://example.org/q.brask&#x${'0'.repeat(40)}40;example.org`],
   ])('finds %s', (_label, url) => {
     expect(targetHolds(url, QUOTES)).toBe(true);
   });
@@ -373,6 +392,43 @@ describe('targetHolds: a URL that holds a withheld quote (CONTRACT item 5)', () 
     expect(targetHolds(`https://example.org/?d=${encodeURIComponent(payload.toString('base64'))}`, [quote])).toBe(true);
     expect(targetHolds(`https://example.org/?d=${payload.toString('base64url')}`, [quote])).toBe(true);
     expect(targetHolds('https://example.org/?d=eExha2UgSGFsbCB-IFdlc3', [quote])).toBe(true);
+  });
+
+  /** A %XX escape nested n deep, an HTML reference nested n deep and a %u escape nested n deep, beside an IDN label. */
+  const percentNested = (n: number): string => `%${'25'.repeat(n - 1)}41`;
+  const entityNested = (n: number): string => `&#38;${'#38;'.repeat(n - 2)}#66;`;
+  const percentUNested = (n: number): string => `%u0025${'u0025'.repeat(n - 2)}u0043`;
+  const everyWay = (n: number): string => `https://example.org/${percentNested(n)}/${entityNested(n)}/${percentUNested(n)}/xn--bcher-kva`;
+
+  it("decodes with each decoder on its own and with all of them in turn, on every form (CONTRACT item 11)", () => {
+    expect(decodedForms('https://example.org/?a=&#49%32')).toEqual(
+      expect.arrayContaining([
+        'https://example.org/?a=&#49%32',
+        // %XX alone, which makes the HTML reference &#492.
+        'https://example.org/?a=&#492',
+        // The HTML reference alone, then %XX on that form.
+        'https://example.org/?a=1%32',
+        'https://example.org/?a=12',
+        // All of them in turn.
+        'https://example.org/?a=\u01ec',
+      ]),
+    );
+    expect(decodedForms('https://example.org/games/1')).toEqual(['https://example.org/games/1']);
+  });
+
+  it('passes a link escaped five deep two ways, which all the decoders in turn finish within the eight passes', () => {
+    const url = `https://example.org/${percentNested(5)}/${entityNested(5)}`;
+    expect(decodedForms(url)).toContain('https://example.org/A/B');
+    expect(targetHolds(url, QUOTES)).toBe(false);
+  });
+
+  it(`holds a URL that decodes to more than ${MAX_FORMS} forms, whatever it holds`, () => {
+    expect(decodedForms(everyWay(2))).toHaveLength(54);
+    expect(decodedForms(everyWay(2), 54)).toHaveLength(54);
+    expect(decodedForms(everyWay(2), 53)).toBeUndefined();
+    expect(decodedForms(everyWay(5))).toBeUndefined();
+    expect(targetHolds(everyWay(5), QUOTES)).toBe(true);
+    expect(targetHolds(everyWay(2), QUOTES)).toBe(false);
   });
 
   it('holds a URL that is still decoding after eight passes, whatever it holds, so nothing nested deeper passes', () => {
