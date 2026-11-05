@@ -96,8 +96,11 @@ describe('beginSignIn', () => {
 
 // S2: the session cookie is host-only on the profile's origin, so /sign-in on any other host of ours starts there.
 describe('beginSignIn on another of our hosts', () => {
-  const canary: AuthConfig = { ...cfg, redirectUri: 'https://canary.nwflmensa.us/auth/callback', postLogoutRedirectUri: 'https://canary.nwflmensa.us/signed-out' };
+  // In production authConfig names the SITE_ORIGIN profile's origin (siteOrigin); outside it, none.
+  const local: AuthConfig = { ...cfg, redirectUri: 'https://canary.nwflmensa.us/auth/callback', postLogoutRedirectUri: 'https://canary.nwflmensa.us/signed-out' };
+  const canary: AuthConfig = { ...local, siteOrigin: 'https://canary.nwflmensa.us' };
   const onCanary = (over: Partial<Deps> = {}) => deps({ setup: { enabled: true, config: canary }, ...over });
+  const outsideProduction = () => deps({ setup: { enabled: true, config: local } });
 
   it.each(['www.nwflmensa.us', 'nwflmensa.us', 'nwflorida.us', 'www.nwflorida.us', 'canary.nwflorida.us', 'WWW.NWFLMENSA.US:443'])(
     'sends a reader on %s to sign in on the profile’s origin, with the same return, never stored',
@@ -127,10 +130,38 @@ describe('beginSignIn on another of our hosts', () => {
     expect(out.kind === 'redirect' && out.location).toBe('https://canary.nwflmensa.us/sign-in?return=%2Fnews&again=1');
   });
 
-  it.each(['canary.nwflmensa.us', 'canary.nwflmensa.us:443', 'Canary.NWFLmensa.us', 'localhost:8443', 'evil.example', 'canary.nwflmensa.us.evil.example', `x${'@'}www.nwflmensa.us`, '', undefined, null])(
-    'signs in as before on the profile’s own host, or on a host that is not ours (%j)',
+  it.each(['canary.nwflmensa.us', 'canary.nwflmensa.us:443', 'Canary.NWFLmensa.us', ' canary.nwflmensa.us '])('signs in on the profile’s own host (%j)', async (host) => {
+    for (const d of [onCanary(), outsideProduction()]) {
+      const out = await beginSignIn(d, { cookieHeader: undefined, back: '/about', host });
+      expect(out).toMatchObject({ kind: 'redirect', location: 'https://login.nwflorida.us/auth?n=1' });
+      expect(d.oidc.startSignIn).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  // F5: in production every other Host, listed or not, a trailing dot, or none, gets the same fixed address.
+  it.each(['www.nwflmensa.us.', 'canary.nwflmensa.us.', 'evil.example', 'canary.nwflmensa.us.evil.example', 'localhost:8443', `x${'@'}canary.nwflmensa.us`, 'canary.nwflmensa.us:x', '', undefined, null])(
+    'in production, sends a reader on any other host (%j) to sign in on the profile’s origin, never stored',
     async (host) => {
       const d = onCanary();
+      const out = await beginSignIn(d, { cookieHeader: undefined, back: '/news', again: true, host });
+      expect(out).toEqual({ kind: 'redirect', location: 'https://canary.nwflmensa.us/sign-in?return=%2Fnews&again=1', cookies: [], cache: 'private, no-store' });
+      expect(d.oidc.startSignIn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('in production, sends an unlisted host on with the return sanitised, so the address is never the reader’s to choose', async () => {
+    for (const host of ['evil.example', 'www.nwflmensa.us.']) {
+      for (const back of ['//evil.example/', '/\\evil.example', 'https://evil.example/', 'javascript:alert(1)', '/a\r\nSet-Cookie: x=1']) {
+        const out = await beginSignIn(onCanary(), { cookieHeader: undefined, back, host });
+        expect(out, `${host} ${back}`).toEqual({ kind: 'redirect', location: 'https://canary.nwflmensa.us/sign-in', cookies: [], cache: 'private, no-store' });
+      }
+    }
+  });
+
+  it.each(['localhost:8443', 'evil.example', 'canary.nwflmensa.us.evil.example', 'www.nwflmensa.us.', `x${'@'}www.nwflmensa.us`, '', undefined, null])(
+    'outside production, signs in as before on a host that is not ours (%j): a local run stays where it is',
+    async (host) => {
+      const d = outsideProduction();
       const out = await beginSignIn(d, { cookieHeader: undefined, back: '/about', host });
       expect(out).toMatchObject({ kind: 'redirect', location: 'https://login.nwflorida.us/auth?n=1' });
       expect(d.oidc.startSignIn).toHaveBeenCalledTimes(1);

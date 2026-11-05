@@ -77,23 +77,25 @@ const sameText = (a: string, b: string) => a.length === b.length && timingSafeEq
 const OURS = new Set(PUBLIC_HOSTS.map((h) => h.hostname));
 
 /**
- * S2: where sign-in starts when the reader asked for /sign-in on another of our hosts. The session
- * cookie is host-only on the callback's origin (in production, the SITE_ORIGIN profile's), so sign-in
- * starts there. undefined on that host itself, on a host that is not ours (a local run), and when the
- * callback is not a URL. Only the profile's origin, a fixed path and a sanitised return go in: never
- * an open redirect.
+ * S2: where sign-in starts when the reader asked for /sign-in on another host. The session cookie is
+ * host-only on the callback's origin, so sign-in starts there. In production that is the SITE_ORIGIN
+ * profile's origin, and every other Host goes there: one of ours, an unlisted one, one with a
+ * trailing dot, or none. Outside production only our listed hosts go to the callback's origin, and
+ * a local run (localhost, any host not ours) signs in where it is, as does a callback that is not a
+ * URL. undefined on the home host itself. Only that origin, a fixed path and a sanitised return go
+ * in: never an open redirect.
  */
 function signInElsewhere(config: AuthConfig, host: string | null | undefined, to: string, again: boolean): string | undefined {
   const asked = host?.trim().toLowerCase() ?? '';
-  if (!/^[a-z0-9.-]+(:\d{1,5})?$/.test(asked)) return undefined;
-  const [name] = asked.split(':') as [string];
+  const name = /^[a-z0-9.-]+(:\d{1,5})?$/.test(asked) ? asked.split(':')[0] : undefined;
   let home: URL;
   try {
-    home = new URL(config.redirectUri);
+    home = new URL(config.siteOrigin ?? config.redirectUri);
   } catch {
     return undefined;
   }
-  if (!OURS.has(name) || name === home.hostname) return undefined;
+  if (name === home.hostname) return undefined;
+  if (config.siteOrigin === undefined && (name === undefined || !OURS.has(name))) return undefined;
   const params = new URLSearchParams();
   if (to !== '/') params.set('return', to);
   if (again) params.set('again', '1');
@@ -103,7 +105,7 @@ function signInElsewhere(config: AuthConfig, host: string | null | undefined, to
 
 /**
  * `again`: a fresh sign-in even for someone signed in, for a new token ("Sign in again" on /news, A14).
- * `host`: the Host the reader asked for (S2): on another of our hosts, sign-in starts on the profile's.
+ * `host`: the Host the reader asked for (S2): on another host (signInElsewhere), sign-in starts on the profile's.
  */
 export async function beginSignIn(
   d: Deps,

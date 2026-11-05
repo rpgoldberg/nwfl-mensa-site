@@ -71,7 +71,10 @@ function profileIssuer(issuer, raw, profile) {
  * @typedef {{
  *   issuer: URL, clientId: string, clientSecret: string, redirectUri: string,
  *   postLogoutRedirectUri: string, scope: string, allowInsecure: boolean, groupPrefix: string,
- * }} AuthConfig allowInsecure: a plain-http issuer, the local test provider, never in production
+ *   siteOrigin?: string | undefined,
+ * }} AuthConfig allowInsecure: a plain-http issuer, the local test provider, never in production.
+ *   siteOrigin: in production, the SITE_ORIGIN profile's origin, the one host sign-in starts on (a
+ *   /sign-in on any other is sent there, src/lib/auth/flow.ts); undefined outside production.
  * @typedef {{ enabled: true, config: AuthConfig } | { enabled: false, reason: string }} AuthSetup
  */
 
@@ -128,6 +131,6 @@ export function authConfig(env) {
 
   return {
     enabled: true,
-    config: { issuer, clientId: value('OIDC_CLIENT_ID'), clientSecret: value('OIDC_CLIENT_SECRET'), redirectUri, postLogoutRedirectUri, scope, allowInsecure, groupPrefix },
+    config: { issuer, clientId: value('OIDC_CLIENT_ID'), clientSecret: value('OIDC_CLIENT_SECRET'), redirectUri, postLogoutRedirectUri, scope, allowInsecure, groupPrefix, siteOrigin: production ? env['SITE_ORIGIN'] : undefined },
   };
 }

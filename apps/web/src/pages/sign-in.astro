@@ -3,9 +3,11 @@
 // provider, and comes back to the page the reader was on. Someone already
 // signed in goes straight back, unless they ask again (again=1: a fresh token,
 // A14). If sign-in is not set up, or the provider cannot be reached, the
-// reader is told so in plain words. S2: asked for on another of our hosts, it
-// starts on the profile's origin, where the host-only session cookie lives
-// (beginSignIn), never stored. The page says which password to use.
+// reader is told so in plain words, and which password to use. S2: asked for
+// on another host (in production, any but the profile's), it starts on the
+// profile's origin, where the host-only session cookie lives (beginSignIn),
+// never stored. A working sign-in shows no page here, so the same note goes
+// on the provider's own password page (fc's side).
 import PasswordNote from '../components/PasswordNote.astro';
 import Base from '../layouts/Base.astro';
 import { beginSignIn, runtimeDeps } from '../lib/auth/flow';

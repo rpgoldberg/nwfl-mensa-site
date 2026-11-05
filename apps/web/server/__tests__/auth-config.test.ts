@@ -89,6 +89,7 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
       scope: 'openid profile',
       allowInsecure: false,
       groupPrefix: 'mensa-nwfl-',
+      siteOrigin: 'https://canary.nwflmensa.us',
     });
   });
 
@@ -96,6 +97,7 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
     const setup = authConfig(apex);
     expect(setup.enabled && setup.config.redirectUri).toBe('https://nwflmensa.us/auth/callback');
     expect(setup.enabled && setup.config.postLogoutRedirectUri).toBe('https://nwflmensa.us/signed-out');
+    expect(setup.enabled && setup.config.siteOrigin).toBe('https://nwflmensa.us');
   });
 
   it('needs SITE_ORIGIN, and it must be exactly one of the profiles', () => {
@@ -226,7 +228,10 @@ describe('authConfig outside production: unchanged, for the tests and e2e', () =
 
   it('needs no SITE_ORIGIN, and reads none: a profile binds production only', () => {
     expect(authConfig({ ...local, SITE_ORIGIN: 'https://nwflorida.us' }).enabled).toBe(true);
-    expect(authConfig({ ...local, SITE_ORIGIN: 'https://canary.nwflmensa.us' }).enabled).toBe(true);
+    const named = authConfig({ ...local, SITE_ORIGIN: 'https://canary.nwflmensa.us' });
+    expect(named.enabled).toBe(true);
+    // No site origin either, so sign-in stays on a local run's own host (src/lib/auth/flow.ts).
+    expect(named.enabled && named.config.siteOrigin).toBeUndefined();
     expect(authConfig({ ...canary, NODE_ENV: 'test', OIDC_ISSUER: 'https://idp.example.org/' }).enabled).toBe(true);
   });
 });
