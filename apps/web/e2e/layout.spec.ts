@@ -307,7 +307,7 @@ test.describe('signed in, at 320px wide', () => {
   test.use({ viewport: { width: 320, height: 640 } });
 
   for (const size of [SIZES[0], SIZES[6]]) {
-    test(`a long name, the Officer area and Sign out fit at ${size} %, each control a 48px target`, async ({ page, context, baseURL }) => {
+    test(`a long name, Your account, the Officer area and Sign out fit at ${size} %, each control a 48px target`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       await page.goto('/');
       await signIn(page, 'long-name');
@@ -317,7 +317,7 @@ test.describe('signed in, at 320px wide', () => {
         await expect(banner).toContainText('Maximiliana Bartholomew-Fitzgerald Examplesworth');
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         expect(overflow, `${path} at size ${size}`).toBeLessThanOrEqual(0);
-        for (const control of [banner.getByRole('link', { name: 'Officer area' }), banner.getByRole('button', { name: 'Sign out' })]) {
+        for (const control of [banner.getByRole('link', { name: 'Your account' }), banner.getByRole('link', { name: 'Officer area' }), banner.getByRole('button', { name: 'Sign out' })]) {
           await expect(control).toBeVisible();
           const box = (await control.boundingBox())!;
           expect(box.width).toBeGreaterThanOrEqual(48);

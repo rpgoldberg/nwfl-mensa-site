@@ -1,6 +1,6 @@
 // @ts-check
 // A local OpenID provider for the e2e suite only (oidc-provider), standing in
-// for the club's Authentik: never a shared host. It knows fourteen made-up
+// for the club's Authentik: never a shared host. It knows twenty made-up
 // people, requires PKCE, takes the client secret in the body
 // (client_secret_post), puts name and groups in the ID token as Authentik does,
 // and offers RP-initiated logout. Consent is skipped for the one client, as a
@@ -57,6 +57,16 @@ const LOGINS = {
   webmaster: { id: '00000000-0000-4000-8000-0000000000eb', name: 'Lee Placeholder', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-webmaster'] },
   // SOLO-APPROVE: the Admin's group alone, without the officers group (the API serves the Admin either way).
   'lone-admin': { id: '00000000-0000-4000-8000-0000000000ae', name: 'Rowan Example', groups: ['nwfl-admin'] },
+  // W-SIGNUP: an enrolee with no account yet; one an officer invited (fc INVITE1's groups); and the
+  // Membership Officer, a membership approver, who also has a sign-up of their own in the queue.
+  newcomer: { id: '00000000-0000-4000-8000-0000000000d1', name: 'Sky Sample', groups: ['nwfl-users'] },
+  invitee: { id: '00000000-0000-4000-8000-0000000000d2', name: 'Taylor Example', groups: ['nwfl-users', 'nwfl-members', 'nwfl-invited'] },
+  approver: { id: '00000000-0000-4000-8000-0000000000d3', name: 'Blair Example', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers'] },
+  // W-SIGNUP fix 1: an enrolee whose sign-up an approver rejected (the API removed the account with it);
+  // a membership approver who is not an officer; and a Webmaster who is not in the officers group.
+  'turned-down': { id: '00000000-0000-4000-8000-0000000000d5', name: 'Dana Sample', groups: ['nwfl-users'] },
+  'lone-approver': { id: '00000000-0000-4000-8000-0000000000d6', name: 'Jordan Placeholder', groups: ['nwfl-users', 'nwfl-membership-approvers'] },
+  'lone-webmaster': { id: '00000000-0000-4000-8000-0000000000d7', name: 'Kai Example', groups: ['nwfl-users', 'nwfl-webmaster'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

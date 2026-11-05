@@ -1,7 +1,7 @@
 // SOLO-APPROVE, through the browser with no script: the one-approver note on the officer area, the
 // Admin's switch (two plain forms, a confirmation step and a reason), and who may not see either.
 // The stand-in API keeps one setting per signed-in subject (e2e/stand-in.ts APPROVAL): "officer"
-// reads publishing as one approver, "long-name" as two officers, and the Admin flips their own. The
+// reads publishing as one approver, "long-name" as two approvers, and the Admin flips their own. The
 // member is seeded at one approver on both scopes and answered as a buggy API would, so a page that
 // ever asked for a member would show it.
 import AxeBuilder from '@axe-core/playwright';
@@ -40,7 +40,7 @@ test.describe('the one-approver note', () => {
     await expect(page.getByRole('link', { name: 'Approval setting' })).toHaveCount(0);
   });
 
-  test('an officer under two officers sees none', async ({ page }) => {
+  test('an officer under the usual two approvers sees none', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'long-name');
     await page.goto('/officer-area');
@@ -111,10 +111,16 @@ test.describe('the Admin\'s switch', () => {
     await page.goto('/officer-area');
     await page.getByRole('link', { name: 'Approval setting' }).click();
     await expect(page).toHaveURL(new RegExp(`${HERE}$`));
-    for (const scope of ['Publishing content', 'Loosening a public privacy setting']) {
+    // W-SIGNUP fix 1: content is approved by people other than the writer; a privacy setting by officers.
+    await expect(page.locator('.lead')).toHaveText('Whether a second person must approve. Two is the usual rule. Only you, as the Admin, can change it, and every change is recorded with your reason.');
+    const labels: Record<string, readonly [string, string]> = {
+      'Publishing content': ['Two people: someone other than the writer approves (the Admin or the Webmaster)', 'One person: the writer may approve their own edit'],
+      'Loosening a public privacy setting': ['Two officers: another officer approves', 'One officer'],
+    };
+    for (const [scope, [two, one]] of Object.entries(labels)) {
       const group = page.getByRole('group', { name: scope, exact: true });
-      await expect(group.getByRole('radio', { name: 'Two officers (a second officer approves)' })).toBeVisible();
-      await expect(group.getByRole('radio', { name: 'One officer' })).toBeVisible();
+      await expect(group.getByRole('radio', { name: two, exact: true })).toBeVisible();
+      await expect(group.getByRole('radio', { name: one, exact: true })).toBeVisible();
       await expect(group.getByRole('textbox', { name: 'Why are you making this change?' })).toHaveAttribute('maxlength', '500');
       await expect(group.getByRole('button', { name: 'Review this change' })).toBeVisible();
     }
@@ -135,7 +141,7 @@ test.describe('the Admin\'s switch', () => {
     await signIn(page, 'admin');
     await page.goto(HERE);
     const group = page.getByRole('group', { name: 'Publishing content', exact: true });
-    await group.getByRole('radio', { name: 'One officer' }).check();
+    await group.getByRole('radio', { name: 'One person: the writer may approve their own edit' }).check();
     await group.getByRole('button', { name: 'Review this change' }).click();
     const box = page.getByRole('group', { name: 'Publishing content', exact: true }).getByRole('textbox', { name: 'Why are you making this change?' });
     await expect(box).toHaveAttribute('aria-invalid', 'true');
@@ -143,25 +149,25 @@ test.describe('the Admin\'s switch', () => {
   });
 
   // One project flips the Admin's own setting, so the steps never race another browser's.
-  test('flips publishing to one officer and back: review, confirm, saved, and a repeat changes nothing', async ({ page }, testInfo) => {
+  test('flips publishing to one person and back: review, confirm, saved, and a repeat changes nothing', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'chromium-desktop', 'the flip runs in one project only: the Admin\'s setting is shared by subject');
     await page.goto('/');
     await signIn(page, 'admin');
     await page.goto(HERE);
     let group = page.getByRole('group', { name: 'Publishing content', exact: true });
-    await group.getByRole('radio', { name: 'One officer' }).check();
+    await group.getByRole('radio', { name: 'One person: the writer may approve their own edit' }).check();
     await group.getByRole('textbox', { name: 'Why are you making this change?' }).fill('The Webmaster is away until Monday');
     await group.getByRole('button', { name: 'Review this change' }).click();
 
     await expect(page.getByRole('heading', { name: 'Check this change' })).toBeVisible();
-    await expect(page.getByText('You are about to let one officer publish without a second approval.')).toBeVisible();
+    await expect(page.getByText("You are about to let the writer approve and publish their own edit without a second person's approval.")).toBeVisible();
     await expect(page.getByText('Reason: The Webmaster is away until Monday')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Cancel' })).toHaveAttribute('href', HERE);
     await page.getByRole('button', { name: 'Yes, make this change' }).click();
 
     await expect(page).toHaveURL(new RegExp(`${HERE}\\?done=content&changed=1$`));
     await expect(page.getByRole('status')).toHaveText('Publishing content: Saved.');
-    const note = `One approver: a second officer's approval is not required right now (set by the Admin on ${today()}).`;
+    const note = `One approver: a second person's approval is not required right now (set by the Admin on ${today()}).`;
     await expect(page.getByRole('note').filter({ hasText: 'One approver' })).toHaveText(note);
     await page.goto('/officer-area');
     await expect(page.getByRole('note').filter({ hasText: 'One approver' })).toHaveText(note);
@@ -174,10 +180,10 @@ test.describe('the Admin\'s switch', () => {
     await expect(page.getByRole('status')).toHaveText('Publishing content: No change: it was already set that way.');
 
     group = page.getByRole('group', { name: 'Publishing content', exact: true });
-    await group.getByRole('radio', { name: 'Two officers (a second officer approves)' }).check();
+    await group.getByRole('radio', { name: 'Two people: someone other than the writer approves (the Admin or the Webmaster)' }).check();
     await group.getByRole('textbox', { name: 'Why are you making this change?' }).fill('The Webmaster is back');
     await group.getByRole('button', { name: 'Review this change' }).click();
-    await expect(page.getByText("You are about to require a second officer's approval again before anything is published.")).toBeVisible();
+    await expect(page.getByText('You are about to require someone other than the writer (the Admin or the Webmaster) to approve again before anything is published.')).toBeVisible();
     await page.getByRole('button', { name: 'Yes, make this change' }).click();
     await expect(page.getByRole('status')).toHaveText('Publishing content: Saved.');
     expect(await page.content()).not.toContain('One approver');
@@ -225,15 +231,15 @@ test.describe('a stale switch, and the Admin without the officers group', () => 
       await expect(page.getByRole('status')).toHaveText('Publishing content: Saved.');
       return fields;
     };
-    const away = await review('One officer', 'The Webmaster is away this week');
+    const away = await review('One person: the writer may approve their own edit', 'The Webmaster is away this week');
     expect(away).toMatchObject({ step: 'apply', scope: 'content', rule: 'one_approver', revision: '' });
-    await review('Two officers (a second officer approves)', 'The Webmaster is back');
+    await review('Two people: someone other than the writer approves (the Admin or the Webmaster)', 'The Webmaster is back');
 
     const stale = await post(page, away);
     expect(stale.status()).toBe(409);
     const body = await stale.text();
     expect(body).toContain('Nothing was changed: this setting was changed after you looked at it.');
-    expect(body).toContain('Now: Two officers (a second officer approves)');
+    expect(body).toContain('Now: Two people: someone other than the writer approves (the Admin or the Webmaster)');
     await page.goto(HERE);
     expect(await page.content()).not.toContain('One approver');
   });
@@ -274,7 +280,7 @@ test.describe('axe on the officer pages', () => {
       await again.getByRole('textbox', { name: 'Why are you making this change?' }).fill('A trial week');
       await again.getByRole('button', { name: 'Review this change' }).click();
       await expect(page.getByRole('heading', { name: 'Check this change' })).toBeVisible();
-      await expect(page.getByText('You are about to let one officer loosen a public privacy setting without a second approval.')).toBeVisible();
+      await expect(page.getByText("You are about to let one officer loosen a public privacy setting without another officer's approval.")).toBeVisible();
       expect(await axe(page)).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     });

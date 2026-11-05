@@ -7,6 +7,7 @@
 import { type Client, Code } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AccountRoute, MemberStatus, MembershipService, Verification } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
+import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
 import { type Api, MEMBER, NOW, as, dump, startApi } from '../helpers/api.js';
 import { live } from '../helpers/pg.js';
 
@@ -77,9 +78,18 @@ describe.skipIf(!live)('MembershipService', () => {
       expect((await membership.getMyAccount({}, JOINER)).account).toMatchObject({ status: MemberStatus.PENDING, route: AccountRoute.SIGNUP });
     });
 
-    it('takes a sign-up without a number, for officer approval, and keeps no last name without one', async () => {
-      await membership.submitSignup({ lastName: LAST }, JOINER2);
-      expect(await signupRow('sub-joiner2')).toMatchObject({ last_name: null, membership_number: null, decision: 'pending' });
+    it('takes a sign-up with the shortest number, a single digit', async () => {
+      await membership.submitSignup({ lastName: LAST, membershipNumber: '9' }, JOINER2);
+      expect(await signupRow('sub-joiner2')).toMatchObject({ last_name: LAST, membership_number: '9', decision: 'pending' });
+    });
+
+    it('W-SIGNUP D2: stores an invited person\'s sign-up with the invite route, still pending, still needing the number', async () => {
+      const INVITEE = as('invitee-token');
+      await expect(membership.submitSignup({ lastName: LAST }, INVITEE)).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: 'a membership number is needed' });
+      const { requestId } = await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, INVITEE);
+      expect(await signupRow('sub-invitee')).toMatchObject({ id: requestId, display_name: 'Taylor Example', membership_number: NUMBER, decision: 'pending' });
+      expect(await account('sub-invitee')).toMatchObject({ status: 'pending', route: 'invite' });
+      expect((await membership.getMyAccount({}, INVITEE)).account).toMatchObject({ status: MemberStatus.PENDING, route: AccountRoute.INVITE });
     });
 
     it('gives a repeat sign-up, an account already decided and an existing member the same answer, so it tells nothing', async () => {
@@ -93,10 +103,21 @@ describe.skipIf(!live)('MembershipService', () => {
     });
 
     it.each([
-      ['a number without a last name', { membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is needed with a membership number'],
+      ['no number at all (W-SIGNUP D1)', { lastName: LAST }, Code.InvalidArgument, 'a membership number is needed'],
+      ['a number of spaces only', { lastName: LAST, membershipNumber: '   ' }, Code.InvalidArgument, 'a membership number is needed'],
+      ['neither a number nor a last name', {}, Code.InvalidArgument, 'a membership number is needed'],
+      ['a number without a last name', { membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is needed'],
+      ['a number with a last name of spaces only', { lastName: '   ', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is needed'],
       ['a number with a letter', { lastName: LAST, membershipNumber: `${NUMBER}x` }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
       ['a number of 13 digits', { lastName: LAST, membershipNumber: '1234567890123' }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
       ['a last name over 80 characters', { lastName: 'L'.repeat(81), membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is at most 80 characters'],
+      // W-SIGNUP fix 1 (NOTE-1): any control character, as the site refuses it; a NUL is refused here, never Internal.
+      ['a last name with a NUL', { lastName: 'Exam\u0000ple', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name has a hidden character'],
+      ['a last name with a line break', { lastName: 'Exam\nple', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name has a hidden character'],
+      ['a last name with a tab', { lastName: 'Exam\tple', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name has a hidden character'],
+      ['a last name with an escape code', { lastName: '\u001b[31mExample', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name has a hidden character'],
+      ['a last name with a DEL', { lastName: 'Example\u007f', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name has a hidden character'],
+      ['a last name with a C1 control', { lastName: 'Exam\u0085ple', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name has a hidden character'],
     ])('refuses %s, without echoing it', async (_label, request, code, message) => {
       const error = await membership.submitSignup(request, JOINER3).then(
         () => undefined,
@@ -117,7 +138,7 @@ describe.skipIf(!live)('MembershipService', () => {
       try {
         await other.query('BEGIN');
         await other.query(`INSERT INTO signup_request (sub, display_name, email) VALUES ('sub-racer', 'Quinn Example', 'quinn@example.org')`);
-        const racing = membership.submitSignup({}, as('racer-token')).then(
+        const racing = membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, as('racer-token')).then(
           () => 'accepted',
           (e: unknown) => e as { code: Code; rawMessage: string },
         );
@@ -136,11 +157,12 @@ describe.skipIf(!live)('MembershipService', () => {
       expect(requests.map((r) => [r.displayName, r.email, r.route, r.verification])).toEqual([
         ['Jamie Example', 'jamie@example.org', AccountRoute.SIGNUP, Verification.UNCHECKED],
         ['Robin Sample', 'robin@example.org', AccountRoute.SIGNUP, Verification.UNCHECKED],
+        ['Taylor Example', 'taylor@example.org', AccountRoute.INVITE, Verification.UNCHECKED],
         ['Quinn Example', 'quinn@example.org', AccountRoute.SIGNUP, Verification.UNCHECKED],
       ]);
       expect(dump(requests)).not.toContain(NUMBER);
       expect(dump(requests)).not.toContain(LAST);
-      expect((await membership.listSignupRequests({}, ADMIN)).requests).toHaveLength(3);
+      expect((await membership.listSignupRequests({}, ADMIN)).requests).toHaveLength(4);
     });
 
     it('is for approvers and the Admin only', async () => {
@@ -184,11 +206,45 @@ describe.skipIf(!live)('MembershipService', () => {
       await expect(membership.rejectSignup({ requestId }, APPROVER)).rejects.toMatchObject({ code: Code.PermissionDenied });
       await membership.rejectSignup({ requestId }, ADMIN);
       expect(await signupRow('sub-approver')).toMatchObject({ decision: 'rejected', decided_by_sub: 'sub-admin', membership_number: null, last_name: null });
-      expect(await account('sub-approver')).toMatchObject({ status: 'pending' });
+      expect(await account('sub-approver')).toMatchObject({ status: 'removed' });
       expect((await audits(requestId)).map((a) => [a.action, a.payload])).toEqual([
         ['signup', {}],
         ['reject', {}],
       ]);
+    });
+
+    it('W-SIGNUP SHOULD-1: a rejection removes the waiting account in the same step, so GetMyAccount says so and no second sign-up is taken', async () => {
+      const TURNED_DOWN = as('turned-down-token');
+      const { requestId } = await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, TURNED_DOWN);
+      expect((await membership.getMyAccount({}, TURNED_DOWN)).account?.status).toBe(MemberStatus.PENDING);
+      await membership.rejectSignup({ requestId }, APPROVER);
+      const { rows } = await api.pool.query<{ status: string; removed_at: Date | null; verified_on: string | null }>(
+        `SELECT status, removed_at, verified_on::text AS verified_on FROM member_account WHERE sub = 'sub-turned-down'`,
+      );
+      expect(rows[0]).toMatchObject({ status: 'removed', verified_on: null });
+      expect(rows[0]?.removed_at).toBeInstanceOf(Date);
+      const mine = (await membership.getMyAccount({}, TURNED_DOWN)).account;
+      expect(mine).toMatchObject({ status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP });
+      // Never approved: no date it was checked, which is how the site tells a rejected sign-up from a removed member.
+      expect(mine?.verifiedOn).toBeUndefined();
+      expect(await signupRow('sub-turned-down')).toMatchObject({ decision: 'rejected', decided_by_sub: 'sub-approver', membership_number: null, last_name: null });
+      expect((await audits('sub-turned-down')).map((a) => [a.action, a.subject_kind, a.to_state, a.payload])).toEqual([['reject', 'member_account', 'removed', {}]]);
+      await expect(membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, TURNED_DOWN)).rejects.toMatchObject({
+        code: Code.AlreadyExists,
+        rawMessage: 'a sign-up is already on file for this account',
+      });
+      expect((await membership.listSignupRequests({}, APPROVER)).requests.map((r) => r.requestId)).not.toContain(requestId);
+    });
+
+    it('W-SIGNUP SHOULD-1: a rejection leaves an account that is no longer waiting as it is', async () => {
+      await api.pool.query(`INSERT INTO signup_request (sub, display_name, email) VALUES ('sub-raced-grant', 'Reese Example', 'reese@example.org')`);
+      await api.pool.query(
+        `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES ('sub-raced-grant', 'member', 'signup', 'sub-admin', now(), '2026-10-01')`,
+      );
+      const row = await signupRow('sub-raced-grant');
+      await membership.rejectSignup({ requestId: row?.id as string }, APPROVER);
+      expect(await account('sub-raced-grant')).toMatchObject({ status: 'member', verified_on: '2026-10-01' });
+      expect((await audits('sub-raced-grant')).map((a) => a.action)).toEqual([]);
     });
 
     it('does not approve an other-group match as a member: it is rejected or granted as an affiliate', async () => {
@@ -351,4 +407,57 @@ describe.skipIf(!live)('MembershipService', () => {
     expect(JSON.stringify(api.logs)).not.toContain(LAST);
     expect(NOW.toISOString()).toBe('2026-10-22T15:00:00.000Z');
   });
+});
+
+// W-SIGNUP fix 1 (SHOULD-3): only the exact <prefix>invited group marks an invitation. Every near miss,
+// another prefix's, a bare one under a longer prefix, a different case, a suffix or a padded name, stores
+// the plain sign-up route. A small verifier of its own, so each person signs up once on a fresh database.
+describe.skipIf(!live)('MembershipService: the invited marker, exactly', () => {
+  const person = (subject: string, groups: string[]): VerifiedToken => ({ client: 'site', subject, groups, scopes: [], name: 'Pat Example', email: 'pat@example.org' });
+  const routeOf = async (api: Api, subject: string): Promise<string | undefined> =>
+    (await api.pool.query<{ route: string }>(`SELECT route FROM member_account WHERE sub = $1`, [subject])).rows[0]?.route;
+
+  const cases: Record<'nwfl-' | 'mensa-nwfl-', Array<[string, string, 'invite' | 'signup']>> = {
+    'nwfl-': [
+      ['the real marker', 'nwfl-invited', 'invite'],
+      ['a bare word', 'invited', 'signup'],
+      ['the longer prefix’s marker', 'mensa-nwfl-invited', 'signup'],
+      ['another family’s marker', 'mensa-invited', 'signup'],
+      ['a suffix', 'nwfl-invited-x', 'signup'],
+      ['a plural', 'nwfl-inviteds', 'signup'],
+      ['upper case', 'NWFL-INVITED', 'signup'],
+      ['mixed case', 'nwfl-Invited', 'signup'],
+      ['a letter before it', 'xnwfl-invited', 'signup'],
+      ['a trailing space', 'nwfl-invited ', 'signup'],
+    ],
+    'mensa-nwfl-': [
+      ['the real marker', 'mensa-nwfl-invited', 'invite'],
+      ['a bare nwfl-invited', 'nwfl-invited', 'signup'],
+      ['another chapter’s marker', 'mensa-other-invited', 'signup'],
+      ['the family’s marker', 'mensa-invited', 'signup'],
+      ['a bare word', 'invited', 'signup'],
+    ],
+  };
+
+  for (const [groupPrefix, list] of Object.entries(cases) as Array<[keyof typeof cases, (typeof cases)[keyof typeof cases]]>) {
+    describe(`under the prefix ${groupPrefix}`, () => {
+      const tokens = new Map(list.map(([, group], i) => [`t${i}`, person(`sub-marker-${i}`, [`${groupPrefix}users`, group])]));
+      const verifier: TokenVerifier = { verify: (token) => (tokens.has(token) ? Promise.resolve(tokens.get(token) as VerifiedToken) : Promise.reject(new Error('unknown token'))) };
+      let api: Api;
+
+      beforeAll(async () => {
+        api = await startApi(`nwfl_invited_${groupPrefix === 'nwfl-' ? 'default' : 'mensa'}`, { verifier, groupPrefix });
+      });
+
+      afterAll(async () => {
+        await api?.close();
+      });
+
+      it.each(list.map(([label, group, route], i) => [label, group, route, i] as const))('%s (%j) stores the route %s', async (_label, _group, route, i) => {
+        const membership = api.client(MembershipService);
+        await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, { headers: { authorization: `Bearer t${i}` } });
+        expect(await routeOf(api, `sub-marker-${i}`)).toBe(route);
+      });
+    });
+  }
 });

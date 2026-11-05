@@ -3,7 +3,12 @@
 // list and affiliate grants. Site callers only (auth/caller.ts).
 //
 //   SubmitSignup        a signed-in person: name and email from the token,
-//                       last name and number as typed. A repeat, or an
+//                       last name and number as typed, both required for
+//                       every sign-up, invited or not (W-SIGNUP D1), with
+//                       no control character in the last name. A token
+//                       with the invited group (fc INVITE1) opens the
+//                       account with the invite route; it still waits for
+//                       the verifier or an approver (D2). A repeat, or an
 //                       account already past pending, gets ONE answer
 //                       whatever the reason, so the call tells nothing.
 //   GetMyAccount        the caller's own account
@@ -12,7 +17,10 @@
 //                       last name
 //   ApproveSignup /     approvers and the Admin, never on their own sign-up.
 //   RejectSignup        The decision erases the number and the last name in
-//                       the same statement (0007, 0009). An approval makes
+//                       the same statement (0007, 0009). A rejection removes
+//                       the account still waiting on it, in the same
+//                       transaction, so GetMyAccount reports it and no second
+//                       sign-up is taken (W-SIGNUP fix 1). An approval makes
 //                       the account a member from the verifier's date for a
 //                       local match, else from today on the approver's word;
 //                       an other-group match is never approved as a member
@@ -80,10 +88,14 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NUMBER = /^[0-9]{1,12}$/;
 const EMAIL = /^[^@\s]+@[^@\s]+$/;
 const MAX_LAST_NAME = 80;
+/** Any control character (a NUL, a line break, an escape code), as the site's sign-up form checks (web src/lib/signup.ts). */
+const CONTROL = /\p{Cc}/u;
 const MAX_DISPLAY_NAME = 120;
 /** The one answer to a sign-up that cannot be taken, whatever the reason (MT-19). */
 const ON_FILE = 'a sign-up is already on file for this account';
 const RECHECK_MONTHS = 12;
+/** W-SIGNUP D2: an officer invited this person (fc INVITE1's <prefix>invited, renamed by groups.ts). */
+const INVITED_GROUP = 'nwfl-invited';
 
 interface AccountRow {
   status: string;
@@ -173,24 +185,27 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const email = (caller.email ?? '').trim();
         if (name === '' || email === '') throw precondition('add your name and email to your account first');
         if (email.length > 254 || !EMAIL.test(email)) throw precondition('the email on your account is not an address');
+        // W-SIGNUP D1: the number and the last name, for every sign-up. Neither is ever echoed.
         const number = request.membershipNumber.trim();
-        let lastName: string | null = null;
-        if (number !== '') {
-          if (!NUMBER.test(number)) throw invalid('a membership number is 1 to 12 digits');
-          lastName = request.lastName.trim();
-          if (lastName === '') throw invalid('a last name is needed with a membership number');
-          if ([...lastName].length > MAX_LAST_NAME) throw invalid(`a last name is at most ${MAX_LAST_NAME} characters`);
-        }
+        if (number === '') throw invalid('a membership number is needed');
+        if (!NUMBER.test(number)) throw invalid('a membership number is 1 to 12 digits');
+        const lastName = request.lastName.trim();
+        if (lastName === '') throw invalid('a last name is needed');
+        if ([...lastName].length > MAX_LAST_NAME) throw invalid(`a last name is at most ${MAX_LAST_NAME} characters`);
+        // As the site refuses it: no last name holds a control character, and a NUL would never reach the database.
+        if (CONTROL.test(lastName)) throw invalid('a last name has a hidden character');
+        // D2: an officer's invitation (the <prefix>invited group, by its internal name) is the account's route.
+        const route = caller.groups.includes(INVITED_GROUP) ? 'invite' : 'signup';
         return tx(async (client) => {
           // A sign-up racing this one waits here for it, then gets the same one answer.
           const { rows } = await client.query<{ id: string }>(
             `INSERT INTO signup_request (sub, display_name, email, last_name, membership_number) VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (sub) DO NOTHING RETURNING id`,
-            [sub, name, email, lastName, number === '' ? null : number],
+            [sub, name, email, lastName, number],
           );
           const id = rows[0]?.id;
           if (id === undefined) throw new ConnectError(ON_FILE, Code.AlreadyExists);
-          await client.query(`INSERT INTO member_account (sub, status, route) VALUES ($1, 'pending', 'signup') ON CONFLICT (sub) DO NOTHING`, [sub]);
+          await client.query(`INSERT INTO member_account (sub, status, route) VALUES ($1, 'pending', $2) ON CONFLICT (sub) DO NOTHING`, [sub, route]);
           await recordAudit(client, caller, { action: 'signup', subjectKind: 'signup_request', subjectId: id });
           return { requestId: id };
         });
@@ -269,9 +284,16 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         requireMembershipApprover(caller);
         const id = requestId(request.requestId);
         return tx(async (client) => {
-          await decidable(client, caller, id);
+          const row = await decidable(client, caller, id);
           await decide(client, id, 'rejected', caller.subject as string);
           await recordAudit(client, caller, { action: 'reject', subjectKind: 'signup_request', subjectId: id, fromState: 'pending', toState: 'rejected' });
+          // W-SIGNUP fix 1: the account waiting on it is removed with it, so GetMyAccount tells the person; an
+          // account no longer waiting (approved or granted meanwhile) is left as it is.
+          const { rowCount } = await client.query(
+            `UPDATE member_account SET status = 'removed', removed_at = now(), updated_at = now() WHERE sub = $1 AND status = 'pending'`,
+            [row.sub],
+          );
+          if (rowCount === 1) await recordAudit(client, caller, { action: 'reject', subjectKind: 'member_account', subjectId: row.sub, fromState: 'pending', toState: 'removed' });
           return {};
         });
       },

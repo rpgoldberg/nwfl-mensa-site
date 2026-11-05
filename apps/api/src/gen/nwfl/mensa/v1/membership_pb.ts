@@ -599,8 +599,10 @@ export const VerificationSchema: GenEnum<Verification> = /*@__PURE__*/
  */
 export const MembershipService: GenService<{
   /**
-   * Called by a signed-in pending user. The number is optional; without it
-   * the sign-up still goes to officer approval.
+   * Called by a signed-in pending user. The number and the last name are
+   * both required, invited or not; the verifier matches them, and an
+   * approver decides. A token with the invited group opens the account with
+   * the invite route.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.SubmitSignup
    */

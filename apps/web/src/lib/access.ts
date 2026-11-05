@@ -5,8 +5,8 @@
 // OIDC client or a session.
 import type { MiddlewareHandler } from 'astro';
 
-/** Sign-in and sign-out, every OIDC route (the callback included) and the officer area. */
-export const SIGN_IN_PATHS = ['/sign-in', '/sign-out', '/signed-out', '/auth', '/officer-area'] as const;
+/** Sign-in and sign-out, every OIDC route (the callback included), the officer area and the person's own account page (W-SIGNUP). */
+export const SIGN_IN_PATHS = ['/sign-in', '/sign-out', '/signed-out', '/auth', '/officer-area', '/account'] as const;
 
 export function isSignInPath(path: string): boolean {
   return SIGN_IN_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));

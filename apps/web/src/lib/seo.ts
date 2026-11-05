@@ -15,6 +15,7 @@ export function robotsTxt(host: string): string {
     'Disallow: /signed-out',
     'Disallow: /auth/',
     'Disallow: /officer-area',
+    'Disallow: /account',
     '',
     `Sitemap: https://${CANONICAL_HOST}/sitemap.xml`,
     '',

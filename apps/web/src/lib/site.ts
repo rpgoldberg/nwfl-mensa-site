@@ -132,7 +132,11 @@ const PAGES: readonly Page[] = [
   { path: '/signed-out', title: "You're signed out", description: 'You have signed out of this site. You can sign in again at any time.' },
   { path: '/officer-area', title: 'Officer area', description: 'Where officers write reports and approve what goes on the site.' },
   // SOLO-APPROVE: the Admin's alone; never linked for anyone else (robots.txt keeps /officer-area out of search).
-  { path: '/officer-area/approval-rules', title: 'Approval setting', description: 'Whether a second officer must approve before something is published.' },
+  { path: '/officer-area/approval-rules', title: 'Approval setting', description: 'Whether a second person must approve before something is published.' },
+  // W-SIGNUP D4: the membership approvers' and the Admin's alone; never linked for anyone else.
+  { path: '/officer-area/sign-ups', title: 'Sign-ups to approve', description: 'New sign-ups waiting for an officer to approve or reject them.' },
+  // W-SIGNUP D3: a signed-in person's own account: their sign-up, or their standing (robots.txt keeps it out of search).
+  { path: '/account', title: 'Your account', description: 'Your sign-up for member access, or your account\u2019s standing.' },
 ];
 
 export type NavIcon = 'home' | 'calendar' | 'newsletter' | 'more';

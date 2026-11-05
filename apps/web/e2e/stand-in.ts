@@ -83,17 +83,38 @@ export const ACCOUNTS = {
   admin: '00000000-0000-4000-8000-0000000000ad',
   webmaster: '00000000-0000-4000-8000-0000000000eb',
   'lone-admin': '00000000-0000-4000-8000-0000000000ae',
+  newcomer: '00000000-0000-4000-8000-0000000000d1',
+  invitee: '00000000-0000-4000-8000-0000000000d2',
+  approver: '00000000-0000-4000-8000-0000000000d3',
+  'turned-down': '00000000-0000-4000-8000-0000000000d5',
+  'lone-approver': '00000000-0000-4000-8000-0000000000d6',
+  'lone-webmaster': '00000000-0000-4000-8000-0000000000d7',
 };
+
+/**
+ * W-SIGNUP: the sign-ups waiting in api.mjs's queue (SIGNUP_QUEUE there), oldest first. The stand-in
+ * keeps sign-ups and decisions per sign-in (the access token's jti), so tests in parallel cannot
+ * disturb each other. "Blair Example" is the approver's own sign-up, which they may not decide;
+ * "Harper Placeholder" was found in another local group, so it is never approved as a member.
+ * The member accounts were last checked on October 20, 2026.
+ */
+export const SIGNUP_QUEUE = [
+  { name: 'Jesse Example', email: 'jesse@example.org', route: 'Invited by an officer', check: 'Found on our group\u2019s membership list, on November 2, 2026' },
+  { name: 'Kendall Sample', email: 'kendall@example.org', route: 'Signed up on the site', check: 'Not found on the membership list (members who opted out or lapsed may not appear), on November 2, 2026' },
+  { name: 'Harper Placeholder', email: 'harper@example.org', route: 'Signed up on the site', check: 'Found as a member of another local group, on November 3, 2026' },
+  { name: 'Blair Example', email: 'blair@example.org', route: 'Signed up on the site', check: 'Not checked yet' },
+] as const;
+export const MEMBER_CHECKED_ON = 'October 20, 2026';
 
 /**
  * SOLO-APPROVE: the approval rule as api.mjs answers each officer. The real API holds one setting for
  * everyone; the stand-in keeps one per signed-in subject, so tests in parallel cannot disturb each
  * other: "officer" reads publishing content as set to one approver (by the Admin on November 3, 2026),
- * "long-name" reads two officers, and the Admin's own setting starts at two officers and is the one
+ * "long-name" reads two approvers, and the Admin's own setting starts at two approvers and is the one
  * the Admin's switch changes.
  */
 export const APPROVAL = {
-  oneApproverNote: "One approver: a second officer's approval is not required right now (set by the Admin on November 3, 2026).",
+  oneApproverNote: "One approver: a second person's approval is not required right now (set by the Admin on November 3, 2026).",
   /** src/lib/approval-rules.ts NOTE_UNKNOWN: what an officer reads when the setting could not be read. */
   unknownNote: 'We could not check the approval setting just now.',
 };

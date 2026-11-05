@@ -3,14 +3,14 @@ import { SIGN_IN_PATHS, isSignInPath, makeGate } from './access';
 
 describe('isSignInPath', () => {
   it('covers sign-in, every OIDC route under /auth and the officer area', () => {
-    expect(SIGN_IN_PATHS).toEqual(['/sign-in', '/sign-out', '/signed-out', '/auth', '/officer-area']);
-    for (const path of ['/sign-in', '/sign-in/', '/sign-out', '/signed-out', '/auth', '/auth/callback', '/auth/sign-out', '/officer-area', '/officer-area/new', '/officer-area/queue']) {
+    expect(SIGN_IN_PATHS).toEqual(['/sign-in', '/sign-out', '/signed-out', '/auth', '/officer-area', '/account']);
+    for (const path of ['/sign-in', '/sign-in/', '/sign-out', '/signed-out', '/auth', '/auth/callback', '/auth/sign-out', '/officer-area', '/officer-area/new', '/officer-area/queue', '/officer-area/sign-ups', '/account']) {
       expect(isSignInPath(path), path).toBe(true);
     }
   });
 
   it('leaves the public pages alone, the public roster included', () => {
-    for (const path of ['/', '/officers', '/officer-areas', '/authors', '/sign-in-help', '/about', '/prefs']) {
+    for (const path of ['/', '/officers', '/officer-areas', '/authors', '/sign-in-help', '/about', '/prefs', '/accounts', '/accountability']) {
       expect(isSignInPath(path), path).toBe(false);
     }
   });

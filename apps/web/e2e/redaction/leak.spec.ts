@@ -343,7 +343,7 @@ const MEMBERS_CANARIES = ['membersPassage', 'membersBody'] as const;
 const OFFICERS_CANARIES = ['officersTitle', 'officersBody'] as const;
 
 /** Signed in on the site with sign-in on, at the test provider, as one of its people: a context that carries the session. */
-async function signedIn(request: APIRequest, login: 'member' | 'pending' | 'officer' | 'officer-only' | 'enrolee' | 'enrolee-pending'): Promise<APIRequestContext> {
+async function signedIn(request: APIRequest, login: 'member' | 'pending' | 'officer' | 'officer-only' | 'enrolee' | 'enrolee-pending' | 'turned-down'): Promise<APIRequestContext> {
   const ctx = await request.newContext({ baseURL: REDACTION.memberSiteUrl, ignoreHTTPSErrors: true });
   const form = await ctx.get('/sign-in?return=%2Fnews');
   expect(form.status(), 'the provider asks who it is').toBe(200);
@@ -391,12 +391,28 @@ test('a member sees the members passage and the members article (the positive co
   await member.dispose();
 });
 
-test('an officer gets the members view, and /news never shows the officers article the API sends them', async ({ playwright }) => {
+test('an officer with no member account is returned to /news, gets the members view, and /news never shows the officers article the API sends them', async ({ playwright }) => {
+  // W-SIGNUP fix 1: the officer has no member_account row here (signedIn checks the return to /news).
   const officer = await signedIn(playwright.request, 'officer');
   const news = await get(officer, '/news');
   expect(seen(news.body, MEMBERS_CANARIES)).toEqual([...MEMBERS_CANARIES]);
   expect(seen(news.body, OFFICERS_CANARIES)).toEqual([]);
+  const account = await get(officer, '/account');
+  expect(account.status).toBe(200);
+  expect(account.body).toContain('You need no member account to use the officer area.');
+  expect(account.body).not.toContain('Send my sign-up');
   await officer.dispose();
+});
+
+test('W-SIGNUP fix 1: a rejected sign-up, through the real API, is told it was not approved and never that it waits', async ({ playwright }) => {
+  const turnedDown = await signedIn(playwright.request, 'turned-down');
+  const account = await get(turnedDown, '/account');
+  expect(account.status).toBe(200);
+  expect(account.body).toContain('Your sign-up was not approved.');
+  expect(account.body).toContain('Membership Officer');
+  expect(account.body).not.toContain('Your sign-up is waiting for an officer to approve it.');
+  expect(account.body).not.toContain('Send my sign-up');
+  await turnedDown.dispose();
 });
 
 test('a pending account (no member standing) sees no members canary and no members file id; its members copy is a missing file\'s 404', async ({ playwright }) => {

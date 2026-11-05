@@ -44,8 +44,12 @@ export default defineConfig({
         SITE_OIDC_JWKS_URL: `${REDACTION.idpUrl}/jwks`,
         IDP_CA_FILE: tls.caFile,
         // AC6 (b): standing in the API's records; the enrolees' claims hold nwfl-users alone (e2e/idp.mjs).
+        // The officer has no member account, as officers need none (W-SIGNUP fix 1): signing in still
+        // returns them to /news, and the API reads them as an officer by their groups.
         MEMBER_SUBS: [ACCOUNTS.member, ACCOUNTS.enrolee].join(','),
         PENDING_SUBS: ACCOUNTS['enrolee-pending'],
+        // W-SIGNUP fix 1: a sign-up an approver rejected (the account removed with it, never checked).
+        REJECTED_SUBS: ACCOUNTS['turned-down'],
       },
       timeout: 180_000,
       // Lets it stop the API and drop its database.

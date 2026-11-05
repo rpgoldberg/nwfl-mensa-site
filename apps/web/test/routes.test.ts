@@ -4,7 +4,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { LIVE, OFFICER, STATIC, crawlSeeds, patternOf, routeOf } from '../e2e/routes';
+import { LIVE, OFFICER, SIGNED_IN, STATIC, crawlSeeds, patternOf, routeOf } from '../e2e/routes';
 
 const PAGES = 'src/pages';
 const files = readdirSync(PAGES, { recursive: true })
@@ -14,7 +14,7 @@ const byRoute = new Map(files.map((f) => [routeOf(f), f]));
 
 describe('the route registry (e2e/routes.ts)', () => {
   it('names every route under src/pages/, once, and nothing else', () => {
-    const listed = [...Object.keys(LIVE), ...Object.keys(STATIC), ...Object.keys(OFFICER)];
+    const listed = [...Object.keys(LIVE), ...Object.keys(STATIC), ...Object.keys(OFFICER), ...Object.keys(SIGNED_IN)];
     expect(listed.filter((r, i) => listed.indexOf(r) !== i)).toEqual([]);
     expect(listed.sort()).toEqual([...byRoute.keys()].sort());
   });
@@ -24,15 +24,34 @@ describe('the route registry (e2e/routes.ts)', () => {
       const source = readFileSync(path.join(PAGES, byRoute.get(route)!), 'utf8');
       return /\bliveData\b|lib\/api\//.test(source);
     });
-    expect(readers).toEqual([]);
+    // W-SIGNUP D3: the callback alone, and only for the session a sign-in has just opened (below).
+    expect(readers).toEqual(['/auth/callback']);
+  });
+
+  it('lets the callback read the API only for the session a completed sign-in has just opened, with the person\'s own token (W-SIGNUP D3)', () => {
+    const source = readFileSync(path.join(PAGES, byRoute.get('/auth/callback')!), 'utf8');
+    expect(source).not.toMatch(/\bliveData\b|lib\/api\/officer/);
+    expect([...source.matchAll(/lib\/api\/[a-z]+/g)].map((m) => m[0])).toEqual(['lib/api/membership']);
+    expect([...source.matchAll(/membershipApi\(\)/g)]).toHaveLength(1);
+    expect(source).toMatch(/out\.session === undefined \? out\.location : await firstStop\(out\.session, out\.location, membershipApi\(\), deps\)/);
   });
 
   it('lists as OFFICER only pages that read the API with the officer\'s own client, and send the public to sign in', () => {
     for (const route of Object.keys(OFFICER)) {
       const source = readFileSync(path.join(PAGES, byRoute.get(route)!), 'utf8');
       expect(source, route).not.toMatch(/\bliveData\b/);
-      expect(source, route).toMatch(/lib\/api\/officer/);
-      expect(source, route).toMatch(/if \(!session\) return Astro\.redirect\(/);
+      expect(source, route).toMatch(/lib\/api\/(officer|membership)/);
+      expect(source, route).toMatch(/if \(!session\) return (Astro\.redirect|signInFirst)\(/);
+    }
+  });
+
+  it('lists as SIGNED_IN only pages that read the API with the person\'s own token, and send the public to sign in (W-SIGNUP)', () => {
+    expect(Object.keys(SIGNED_IN)).toEqual(['/account']);
+    for (const route of Object.keys(SIGNED_IN)) {
+      const source = readFileSync(path.join(PAGES, byRoute.get(route)!), 'utf8');
+      expect(source, route).not.toMatch(/\bliveData\b|lib\/api\/officer/);
+      expect(source, route).toMatch(/lib\/api\/membership/);
+      expect(source, route).toMatch(/if \(!session\) return (Astro\.redirect|signInFirst)\(/);
     }
   });
 
@@ -68,6 +87,6 @@ describe('the route registry (e2e/routes.ts)', () => {
     expect(seeds).toContain('/events/0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20_2026-11-04');
     expect(seeds).toContain('/events?month=2026-11');
     const covered = new Set(seeds.map((url) => patternOf(new URL(url, 'https://x.invalid').pathname)));
-    expect([...Object.keys(LIVE), ...Object.keys(STATIC), ...Object.keys(OFFICER)].filter((r) => !covered.has(r))).toEqual([]);
+    expect([...Object.keys(LIVE), ...Object.keys(STATIC), ...Object.keys(OFFICER), ...Object.keys(SIGNED_IN)].filter((r) => !covered.has(r))).toEqual([]);
   });
 });

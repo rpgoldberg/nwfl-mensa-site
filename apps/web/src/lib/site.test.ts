@@ -96,6 +96,13 @@ describe('page', () => {
     expect(page('/join').title).toBe('Join Mensa');
     expect(() => page('/jion')).toThrow('/jion');
   });
+
+  it('W-SIGNUP: registers the person\'s own account page and the approvers\' queue, under the officer area', () => {
+    expect(page('/account').title).toBe('Your account');
+    expect(page('/officer-area/sign-ups').title).toBe('Sign-ups to approve');
+    expect(trailFor('/officer-area/sign-ups', 'Sign-ups to approve').map((c) => c.label)).toEqual(['Home', 'Officer area', 'Sign-ups to approve']);
+    expect(MORE_PAGES.map((p) => p.path)).not.toContain('/account');
+  });
 });
 
 describe('currentNav', () => {

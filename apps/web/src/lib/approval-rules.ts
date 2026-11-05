@@ -17,12 +17,22 @@ export interface Setting {
 export const SCOPES: readonly Scope[] = ['content', 'redaction_policy'];
 export const RULES: readonly Rule[] = ['two_person', 'one_approver'];
 export const SCOPE_LABEL: Record<Scope, string> = { content: 'Publishing content', redaction_policy: 'Loosening a public privacy setting' };
-export const RULE_LABEL: Record<Rule, string> = { two_person: 'Two officers (a second officer approves)', one_approver: 'One officer' };
+/**
+ * W-SIGNUP fix 1: in each scope's own words. Content is approved by someone other than the writer (the
+ * Admin or the Webmaster, apps/api src/content/workflow.ts), so it says "people"; a privacy setting
+ * really is approved by another officer.
+ */
+export const RULE_LABEL: Record<Scope, Record<Rule, string>> = {
+  content: { two_person: 'Two people: someone other than the writer approves (the Admin or the Webmaster)', one_approver: 'One person: the writer may approve their own edit' },
+  redaction_policy: { two_person: 'Two officers: another officer approves', one_approver: 'One officer' },
+};
 /** The API takes 2000; a short reason is what the ledger needs, and the box says so. */
 export const MAX_REASON = 500;
 
 export const NOTE_UNKNOWN = 'We could not check the approval setting just now.';
 const NOTE_LEAD: Record<Scope, string> = { content: 'One approver', redaction_policy: 'One approver for public privacy settings' };
+/** Whose second approval is not required: a person's for content, an officer's for a privacy setting. */
+const SECOND: Record<Scope, string> = { content: "a second person's", redaction_policy: "a second officer's" };
 
 const DATE = new Intl.DateTimeFormat('en-US', { timeZone: ZONE, year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -33,7 +43,7 @@ export function formatSetDate(at: Date): string {
 
 /**
  * The notes an officer sees where approval happens: one per scope set to one approver, content
- * first; none under two officers; and a plain line when the setting could not be read (undefined).
+ * first; none under the usual two-approver rule; and a plain line when the setting could not be read (undefined).
  */
 export function notesFor(settings: readonly Omit<Setting, 'revision'>[] | undefined): string[] {
   if (settings === undefined) return [NOTE_UNKNOWN];
@@ -41,7 +51,7 @@ export function notesFor(settings: readonly Omit<Setting, 'revision'>[] | undefi
     const setting = settings.find((s) => s.scope === scope);
     if (setting?.rule !== 'one_approver') return [];
     const when = setting.setAt === undefined ? '' : ` on ${formatSetDate(setting.setAt)}`;
-    return [`${NOTE_LEAD[scope]}: a second officer's approval is not required right now (set by the Admin${when}).`];
+    return [`${NOTE_LEAD[scope]}: ${SECOND[scope]} approval is not required right now (set by the Admin${when}).`];
   });
 }
 
@@ -82,7 +92,7 @@ export function parseRuleForm(field: (name: string) => string | undefined): Pars
   const errors: FormErrors = {};
   if ((step !== 'review' && step !== 'apply') || !isRevision(revision)) errors.step = 'Send the form again.';
   if (!isScope(scope)) errors.scope = 'Choose what this is for.';
-  if (!isRule(rule)) errors.rule = 'Choose two officers or one officer.';
+  if (!isRule(rule)) errors.rule = 'Choose who must approve.';
   if (!SAYS_SOMETHING.test(reason)) errors.reason = 'Write why you are making this change.';
   else if (reason.length > MAX_REASON) errors.reason = `Keep the reason to ${MAX_REASON} characters or fewer.`;
   else if (CONTROL.test(reason)) errors.reason = 'Type the reason again: it has a hidden character that cannot be kept.';
@@ -96,12 +106,12 @@ export function parseRuleForm(field: (name: string) => string | undefined): Pars
 export function confirmText(scope: Scope, rule: Rule): string {
   if (scope === 'content') {
     return rule === 'one_approver'
-      ? 'You are about to let one officer publish without a second approval.'
-      : "You are about to require a second officer's approval again before anything is published.";
+      ? "You are about to let the writer approve and publish their own edit without a second person's approval."
+      : 'You are about to require someone other than the writer (the Admin or the Webmaster) to approve again before anything is published.';
   }
   return rule === 'one_approver'
-    ? 'You are about to let one officer loosen a public privacy setting without a second approval.'
-    : "You are about to require a second officer's approval again before a public privacy setting is loosened.";
+    ? "You are about to let one officer loosen a public privacy setting without another officer's approval."
+    : "You are about to require another officer's approval again before a public privacy setting is loosened.";
 }
 
 /** The outcome named by the address the page lands on after saving (?done=<scope>&changed=0|1). */
