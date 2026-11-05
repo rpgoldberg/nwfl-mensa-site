@@ -70,7 +70,8 @@ at all: no https, a private address, a URL that does not parse, another scheme o
     more, each 1 to 63 of `a-z`, `0-9` and inner hyphens, the last starting with a letter, 4 to 253
     characters; anything else is refused (`host-name`);
   - a mail link is exactly `mailto:<one address>`: the checker drops any query (`?subject=`, `?cc=`) and
-    fragment, and the loader refuses one. The local part holds no `#`, `%` or `?`;
+    fragment, and the loader refuses one. The local part holds no `#`, `%` or `?`, and does not start
+    with `/`;
   - a kept URL is at most 2048 characters, and `check` refuses to write a check.json whose kept URL is not
     its own kept form.
   `test/fixtures/links-contract.json` pins the cases; the loader commits the same file, and both suites

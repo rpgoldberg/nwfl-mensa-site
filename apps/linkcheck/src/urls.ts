@@ -12,7 +12,8 @@
 //   2. a kept web link (parseKept, keptForm): https (http upgraded by the check), no userinfo (not even
 //      an empty "@"), no port written (not even :80 or :443), no IP literal, no dotless host;
 //   3. a kept mailto: exactly mailto:<one address>, its query and fragment dropped, the domain in
-//      punycode and lower case, the local part plain atext and dots (no '#', '%' or '?': L2's MAILTO);
+//      punycode and lower case, the local part plain atext and dots (no '#', '%' or '?': L2's MAILTO),
+//      not starting with '/' (CONTRACT 10);
 //   6. the kept host, or mail domain, is L2's HOST (DNS_NAME below), refused otherwise ('host-name');
 //   7. a kept URL is at most 2048 characters, and is its own kept form (keptForm(kept) === kept).
 // parseLink alone, without parseKept, is what a redirect hop may be (ports 80 and 443 allowed).
@@ -69,8 +70,12 @@ export function canonicalHost(host: string): string | undefined {
   return out === '' || out.split('.').includes('') ? undefined : out;
 }
 
-/** atext and dots (RFC 5322) without '%', '#' and '?', which a mail client reads as an escape, a fragment or a query: L2's MAILTO class exactly. */
-const LOCAL_PART = /^[A-Za-z0-9.!$&'*+/=^_`{|}~-]+$/;
+/**
+ * atext and dots (RFC 5322) without '%', '#' and '?', which a mail client reads as an escape, a fragment or a
+ * query: L2's MAILTO class exactly. Nor a leading '/' (CONTRACT 10): the URL parser reads mailto:// as an
+ * authority and dot-segment-normalises a mailto:/ path, so the address kept would not be the one written.
+ */
+const LOCAL_PART = /^[A-Za-z0-9.!$&'*+=^_`{|}~-][A-Za-z0-9.!$&'*+/=^_`{|}~-]*$/;
 
 /**
  * A host by its DNS name, as L2 and the 0024 pdf_link_host CHECK keep it (CONTRACT 6; the same regex as

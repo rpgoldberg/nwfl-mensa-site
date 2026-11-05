@@ -9,7 +9,7 @@ import { LIST_FORMAT, type ListedLink, linksSha256, parseLinkList } from '../src
 import { keptForm } from '../src/urls.js';
 
 /** The sha256 of the fixture; the same constant in L2's suite. */
-export const LINKS_CONTRACT_SHA256 = 'b0e3eed8d272e27cd59f4cc6c4647d992b7204c402719e9194fc26c355276269';
+export const LINKS_CONTRACT_SHA256 = '744f1e310b4a1dd2133d121bede97fd62f1c60111d8966db8b1fe4e8741fb045';
 
 interface Case {
   in: string;
@@ -59,11 +59,12 @@ describe('the links contract fixture', () => {
 });
 
 // CONTRACT 6 and 7, as a property: a copy of L2's url rules (links-l2 0897636, apps/api/src/load/links.ts
-// urlOf, webUrl, HOST and MAILTO), run over the fixture and a generated corpus. Every keptForm is null or
+// urlOf, webUrl, HOST and MAILTO, with CONTRACT 10's leading-'/' refusal), run over the fixture and a generated corpus. Every keptForm is null or
 // L2-shaped and its own kept form, and L2 accepts an input exactly when keptForm leaves it as it is.
 const L2_PRINTABLE = /^[!-~]+$/;
 const L2_HOST = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-const L2_MAILTO = /^mailto:[A-Za-z0-9.!$&'*+/=^_`{|}~-]+@([^@]+)$/;
+// CONTRACT 10 (round 3): the local part may not start with '/', in L2's MAILTO as here.
+const L2_MAILTO = /^mailto:[A-Za-z0-9.!$&'*+=^_`{|}~-][A-Za-z0-9.!$&'*+/=^_`{|}~-]*@([^@]+)$/;
 
 function l2Accepts(value: string): boolean {
   if (value.length > 2048 || !L2_PRINTABLE.test(value)) return false;

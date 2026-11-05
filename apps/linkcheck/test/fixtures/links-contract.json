@@ -204,6 +204,14 @@
     "out": "https://example.a1/"
   },
   {
+    "in": "https://example.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
+    "out": "https://example.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+  },
+  {
+    "in": "https://example.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
+    "out": null
+  },
+  {
     "in": "https://example.org",
     "out": "https://example.org/"
   },
@@ -301,6 +309,26 @@
   },
   {
     "in": "javascript:alert(1)",
+    "out": null
+  },
+  {
+    "in": "mailto:/./x@example.org",
+    "out": null
+  },
+  {
+    "in": "mailto://x@example.org",
+    "out": null
+  },
+  {
+    "in": "mailto:/a/../b@example.org",
+    "out": null
+  },
+  {
+    "in": "mailto:/x@example.com/../y@example.org",
+    "out": null
+  },
+  {
+    "in": "mailto:/x@example.org",
     "out": null
   },
   {
@@ -409,6 +437,14 @@
   },
   {
     "in": "mailto:x~@example.1a",
+    "out": null
+  },
+  {
+    "in": "mailto:x~@example.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "out": "mailto:x~@example.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "in": "mailto:x~@example.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "out": null
   },
   {

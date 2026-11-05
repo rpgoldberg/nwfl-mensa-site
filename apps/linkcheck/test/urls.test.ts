@@ -153,6 +153,8 @@ describe('parseKept: a link as it may be kept (CONTRACT 2, 3)', () => {
     'mailto:x~@a$b.example.org',
     'mailto:x~@example.1a',
     `mailto:x~@${'a'.repeat(64)}.example.org`,
+    `https://example.${'a'.repeat(64)}/`,
+    `mailto:x~@example.${'a'.repeat(64)}`,
   ])('%j is refused: its host is not a DNS name (host-name)', (raw) => {
     expect(parseKept(raw)).toEqual({ ok: false, reason: 'host-name' });
   });
@@ -163,6 +165,8 @@ describe('parseKept: a link as it may be kept (CONTRACT 2, 3)', () => {
     'https://example.a1/',
     'https://a.bc/',
     `https://${'a'.repeat(63)}.example.org/`,
+    `https://example.${'a'.repeat(63)}/`,
+    `mailto:x~@example.${'a'.repeat(63)}`,
     `https://${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}.${'e'.repeat(57)}.org/`,
     'https://xn--bcher-kva.example/',
   ])('%j, a DNS name, is kept', (raw) => {
@@ -172,6 +176,20 @@ describe('parseKept: a link as it may be kept (CONTRACT 2, 3)', () => {
   // CONTRACT 7 (round 2): the local part is L2's MAILTO class, so no '#' however it is written.
   it.each(['mailto:a%23b@example.org', 'mailto:a#b@example.org', 'mailto:a%3Fb@example.org', 'mailto:a%25b@example.org'])('%j is refused (malformed)', (raw) => {
     expect(parseKept(raw)).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  // CONTRACT 10 (round 3): a local part may not start with '/', so no address is read from an authority
+  // or from a path the URL parser dot-segment-normalises into another one.
+  it.each(['mailto://x@example.org', 'mailto:/./x@example.org', 'mailto:/a/../b@example.org', 'mailto:/x@example.org', 'mailto:%2Fx@example.org', 'mailto:/x@example.com/../y@example.org'])(
+    '%j, a local part starting with a slash, is refused (malformed)',
+    (raw) => {
+      expect(parseKept(raw)).toEqual({ ok: false, reason: 'malformed' });
+      expect(parseLink(raw)).toEqual({ ok: false, reason: 'malformed' });
+    },
+  );
+
+  it('keeps a slash inside a local part', () => {
+    expect(keptForm('mailto:a/b@example.org')).toBe('mailto:a/b@example.org');
   });
 
   it('refuses a link whose kept URL is over 2048 characters, though as written it is under', () => {
