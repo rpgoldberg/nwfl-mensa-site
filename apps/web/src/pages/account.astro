@@ -2,21 +2,38 @@
 // W-SIGNUP D3: a signed-in person's own account. One of the group's enrolees with no account yet gets
 // plain words and the sign-up form: their last name and Mensa membership number, both required (D1),
 // sent to the API with their own token (src/lib/api/membership.ts), which takes their name and email
-// from that token. Then: "Your sign-up is waiting for an officer to approve it." A member (officers
-// too) sees their standing and the day it was last checked. An account that is not the group's (no
-// enrolee group) gets a plain line and no form. The callback sends a person with no account here
-// once, after signing in (src/lib/signup.ts firstStop).
+// from that token. Then: "Your sign-up is waiting for an officer to approve it." A rejected sign-up
+// is told so in plain words, with whom to contact (fix 1). A member (an officer with an account too)
+// sees their standing and the day it was last checked. Officers and the Admin with no account get a
+// plain line: the officer area needs none (fix 1). An account that is not the group's (no enrolee
+// group) gets a plain line and no form. The callback sends one of the group's enrolees with no
+// account here after each sign-in until they sign up, officers and the Admin never (src/lib/signup.ts
+// firstStop); the header links here for every enrolee.
 //
-// Not signed in: sign in first. It works with no script: the form posts here, answered with this page
-// or a 303 back here. Astro's origin check refuses a cross-site post first; the body is capped and
-// must be a form (src/lib/form.ts). The number is never given back in the page, nor logged (D6).
+// Not signed in: sign in first (a 303 never stored, fix 1). It works with no script: the form posts
+// here, answered with this page or a 303 back here. A form with problems opens with a summary at the
+// top that links to each field; public/scripts/error-summary.js moves focus to it (fix 1). Astro's
+// origin check refuses a cross-site post first; the body is capped and must be a form
+// (src/lib/form.ts). The number is never given back in the page, nor logged (D6).
 import Unavailable from '../components/Unavailable.astro';
 import Base from '../layouts/Base.astro';
 import { MembershipSignInAgain, type MyAccount, SignupRefused, membershipApi, sessionReader } from '../lib/api/membership';
-import { markUnavailable } from '../lib/api/page';
+import { markUnavailable, signInFirst } from '../lib/api/page';
 import { runtimeDeps } from '../lib/auth/flow';
 import { readForm } from '../lib/form';
-import { ACCOUNT_PATH, MAX_LAST_NAME, MAX_NUMBER_DIGITS, SIGNUP_REFUSED, STANDING_TEXT, type SignupErrors, accountView, formatDay, parseSignupForm } from '../lib/signup';
+import {
+  ACCOUNT_PATH,
+  MAX_LAST_NAME,
+  MAX_NUMBER_DIGITS,
+  REJECTED_CONTACT,
+  SIGNUP_REFUSED,
+  STANDING_TEXT,
+  type SignupErrors,
+  accountView,
+  errorSummary,
+  formatDay,
+  parseSignupForm,
+} from '../lib/signup';
 import { page } from '../lib/site';
 
 export const prerender = false;
@@ -27,7 +44,8 @@ const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
 const MAX_FORM_BYTES = 4 * 1024;
 
 const session = Astro.locals.session;
-if (!session) return Astro.redirect(SIGN_IN, 303);
+// Never stored by a shared cache (fix 1, src/lib/api/page.ts signInFirst).
+if (!session) return signInFirst(SIGN_IN);
 const p = page(HERE);
 const api = membershipApi();
 const { reader } = sessionReader(session, runtimeDeps());
@@ -85,6 +103,8 @@ const view = loaded ? accountView(session, account) : undefined;
 const sent = !posted && Astro.url.searchParams.get('sent') === '1' && view === 'waiting';
 const checked = account?.verifiedOn !== undefined && (view === 'member' || view === 'affiliate' || view === 'lapsed') ? formatDay(account.verifiedOn) : undefined;
 const errors = invalid?.errors ?? {};
+const problems = errorSummary(errors);
+const [contactBefore, contactAfter] = REJECTED_CONTACT.split('Membership Officer');
 const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
 ---
 <Base {...p}>
@@ -95,6 +115,19 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {problem === 'unavailable' && <Unavailable what="Your account" />}
   {refused && <p class="notice" role="alert">{SIGNUP_REFUSED[refused]}</p>}
   {sent && <p class="notice" role="status">Thank you. Your sign-up has been sent.</p>}
+
+  {view === 'form' && problems.length > 0 && (
+    <>
+      {/* Focus, not role="alert": the script moves focus here, and a screen reader reads it once. */}
+      <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+        <h2 id="error-summary-title">There is a problem with your sign-up</h2>
+        <ul>
+          {problems.map((item) => <li><a href={`#${item.field}`}>{item.text}</a></li>)}
+        </ul>
+      </section>
+      <script is:inline type="module" src="/scripts/error-summary.js"></script>
+    </>
+  )}
 
   {view === 'form' && (
     <>
@@ -142,6 +175,8 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
       <p class="lead">{STANDING_TEXT[view]}</p>
       {checked && <p>It was last checked against the membership list on {checked}.</p>}
       {view === 'waiting' && <p>Until then you can read every public page. Member access starts as soon as it is approved.</p>}
+      {view === 'rejected' && <p>{contactBefore}<a href="/officers">Membership Officer</a>{contactAfter}</p>}
+      {view === 'officer' && <p><a href="/officer-area">Go to the officer area</a></p>}
       {(view === 'lapsed' || view === 'removed' || view === 'not-club') && <p>If you think this is a mistake, please <a href="/officers">contact an officer</a>.</p>}
     </>
   )}

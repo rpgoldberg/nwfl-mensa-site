@@ -4,7 +4,8 @@
 //
 //   SubmitSignup        a signed-in person: name and email from the token,
 //                       last name and number as typed, both required for
-//                       every sign-up, invited or not (W-SIGNUP D1). A token
+//                       every sign-up, invited or not (W-SIGNUP D1), with
+//                       no control character in the last name. A token
 //                       with the invited group (fc INVITE1) opens the
 //                       account with the invite route; it still waits for
 //                       the verifier or an approver (D2). A repeat, or an
@@ -16,7 +17,10 @@
 //                       last name
 //   ApproveSignup /     approvers and the Admin, never on their own sign-up.
 //   RejectSignup        The decision erases the number and the last name in
-//                       the same statement (0007, 0009). An approval makes
+//                       the same statement (0007, 0009). A rejection removes
+//                       the account still waiting on it, in the same
+//                       transaction, so GetMyAccount reports it and no second
+//                       sign-up is taken (W-SIGNUP fix 1). An approval makes
 //                       the account a member from the verifier's date for a
 //                       local match, else from today on the approver's word;
 //                       an other-group match is never approved as a member
@@ -84,6 +88,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NUMBER = /^[0-9]{1,12}$/;
 const EMAIL = /^[^@\s]+@[^@\s]+$/;
 const MAX_LAST_NAME = 80;
+/** Any control character (a NUL, a line break, an escape code), as the site's sign-up form checks (web src/lib/signup.ts). */
+const CONTROL = /\p{Cc}/u;
 const MAX_DISPLAY_NAME = 120;
 /** The one answer to a sign-up that cannot be taken, whatever the reason (MT-19). */
 const ON_FILE = 'a sign-up is already on file for this account';
@@ -186,6 +192,8 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const lastName = request.lastName.trim();
         if (lastName === '') throw invalid('a last name is needed');
         if ([...lastName].length > MAX_LAST_NAME) throw invalid(`a last name is at most ${MAX_LAST_NAME} characters`);
+        // As the site refuses it: no last name holds a control character, and a NUL would never reach the database.
+        if (CONTROL.test(lastName)) throw invalid('a last name has a hidden character');
         // D2: an officer's invitation (the <prefix>invited group, by its internal name) is the account's route.
         const route = caller.groups.includes(INVITED_GROUP) ? 'invite' : 'signup';
         return tx(async (client) => {
@@ -276,9 +284,16 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         requireMembershipApprover(caller);
         const id = requestId(request.requestId);
         return tx(async (client) => {
-          await decidable(client, caller, id);
+          const row = await decidable(client, caller, id);
           await decide(client, id, 'rejected', caller.subject as string);
           await recordAudit(client, caller, { action: 'reject', subjectKind: 'signup_request', subjectId: id, fromState: 'pending', toState: 'rejected' });
+          // W-SIGNUP fix 1: the account waiting on it is removed with it, so GetMyAccount tells the person; an
+          // account no longer waiting (approved or granted meanwhile) is left as it is.
+          const { rowCount } = await client.query(
+            `UPDATE member_account SET status = 'removed', removed_at = now(), updated_at = now() WHERE sub = $1 AND status = 'pending'`,
+            [row.sub],
+          );
+          if (rowCount === 1) await recordAudit(client, caller, { action: 'reject', subjectKind: 'member_account', subjectId: row.sub, fromState: 'pending', toState: 'removed' });
           return {};
         });
       },

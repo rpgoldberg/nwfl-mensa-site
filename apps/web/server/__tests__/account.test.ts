@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountHtml, escapeHtml, stampAccount } from '../account.mjs';
+import { accountHtml, escapeHtml, officerAreaFor, stampAccount } from '../account.mjs';
 
 const member = { sid: 's', sub: 'u', name: 'Jordan Example', groups: ['nwfl-members'], member: true, enrolee: true, officer: false, iat: 1, exp: 2, sliding: true };
 const officer = { ...member, name: 'Alex Sample', officer: true, groups: ['nwfl-members', 'nwfl-officers'] };
@@ -24,6 +24,27 @@ describe('accountHtml (the header’s account area)', () => {
 
   it('adds the Officer area for an officer', () => {
     expect(accountHtml(officer, { back: '/', signIn: true })).toContain('<a class="hbtn" href="/officer-area">Officer area</a>');
+  });
+
+  it('fix 1: adds Your account for one of the group\u2019s enrolees, right after the name, and for no one else', () => {
+    expect(accountHtml(member, { back: '/', signIn: true })).toContain('Jordan Example</span><a class="hbtn" href="/account">Your account</a>');
+    expect(accountHtml(officer, { back: '/', signIn: true })).toContain('<a class="hbtn" href="/account">Your account</a>');
+    const loneAdmin = { ...member, groups: ['nwfl-admin'], member: false, enrolee: false };
+    expect(accountHtml(loneAdmin, { back: '/', signIn: true })).not.toContain('Your account');
+  });
+
+  it('fix 1: adds the Officer area for everyone it admits: officers, the Admin, the Webmaster and the membership approvers', () => {
+    const outsider = { ...member, groups: [], member: false, enrolee: false };
+    for (const groups of [['nwfl-admin'], ['nwfl-webmaster'], ['nwfl-users', 'nwfl-membership-approvers']]) {
+      const s = { ...outsider, groups };
+      expect(officerAreaFor(s), groups.join()).toBe(true);
+      expect(accountHtml(s, { back: '/', signIn: true }), groups.join()).toContain('<a class="hbtn" href="/officer-area">Officer area</a>');
+    }
+    expect(officerAreaFor(officer)).toBe(true);
+    for (const groups of [['nwfl-members'], ['nwfl-users', 'nwfl-invited'], ['mensa-nwfl-admin'], ['nwfl-affiliates']]) {
+      expect(officerAreaFor({ ...outsider, groups }), groups.join()).toBe(false);
+    }
+    expect(officerAreaFor(undefined)).toBe(false);
   });
 
   it('escapes the name, whatever the provider sent', () => {

@@ -15,7 +15,7 @@
 import Unavailable from '../../components/Unavailable.astro';
 import Base from '../../layouts/Base.astro';
 import { DecisionRefused, MembershipSignInAgain, type PendingSignup, membershipApi, sessionReader } from '../../lib/api/membership';
-import { markUnavailable } from '../../lib/api/page';
+import { markUnavailable, signInFirst } from '../../lib/api/page';
 import { runtimeDeps } from '../../lib/auth/flow';
 import { readForm } from '../../lib/form';
 import {
@@ -39,7 +39,8 @@ const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
 const MAX_FORM_BYTES = 4 * 1024;
 
 const session = Astro.locals.session;
-if (!session) return Astro.redirect(SIGN_IN, 303);
+// Never stored by a shared cache (fix 1, src/lib/api/page.ts signInFirst).
+if (!session) return signInFirst(SIGN_IN);
 if (!isMembershipApprover(session)) return Astro.rewrite('/404');
 const p = page(HERE);
 const api = membershipApi();

@@ -10,8 +10,9 @@
 //
 // A14: the members view. Each of MEMBER_SUBS (comma separated) has member
 // standing (a member_account row, verified today); each of PENDING_SUBS a
-// pending row (AC6 b: standing lives here, not in the token's groups); the
-// provider's pending account has no row. A public
+// pending row (AC6 b: standing lives here, not in the token's groups); each of
+// REJECTED_SUBS the removed, never-checked row RejectSignup leaves (W-SIGNUP
+// fix 1); the provider's pending account has no row. A public
 // article carries a members passage, a members article and an officers
 // article carry canaries of their own: the public, and the pending account,
 // must see none of them, a member the first two, and /news shows nobody the
@@ -57,6 +58,7 @@ const oidc = { issuer: process.env['SITE_OIDC_ISSUER'], jwks: process.env['SITE_
 const subs = (list) => (list ?? '').split(',').filter((s) => s !== '');
 const memberSubs = subs(process.env['MEMBER_SUBS']);
 const pendingSubs = subs(process.env['PENDING_SUBS']);
+const rejectedSubs = subs(process.env['REJECTED_SUBS']);
 const API_MAIN = path.resolve(import.meta.dirname, '../../../api/dist/main.js');
 // The PDF worker (W-WORKER): its own process and database role make the redacted copies.
 const API_WORKER = path.resolve(import.meta.dirname, '../../../api/dist/worker.js');
@@ -284,6 +286,7 @@ ${item({ id: ids.membersArticle, slug: 'members-picnic', kind: 'article', office
 ${item({ id: ids.officersArticle, slug: 'board-notes', kind: 'article', office: ids.president, title: `Board notes ${C.officersTitle}`, visibility: 'officers', body: [para(`Notes: ${C.officersBody}.`)], publicBody: [{ type: 'redacted' }], daysAgo: 4 })}
 ${memberSubs.map((sub) => `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES (${q(sub)}, 'member', 'invite', 'sub-officer', now(), current_date);`).join('\n')}
 ${pendingSubs.map((sub) => `INSERT INTO member_account (sub, status, route) VALUES (${q(sub)}, 'pending', 'signup');`).join('\n')}
+${rejectedSubs.map((sub) => `INSERT INTO member_account (sub, status, route, removed_at) VALUES (${q(sub)}, 'removed', 'signup', now());`).join('\n')}
 INSERT INTO venue (id, kind, name, business_address, city, area) VALUES (${q(ids.bistro)}, 'business', 'Sample Bistro', '100 Example Way', 'Destin', 'okaloosa');
 INSERT INTO venue (id, kind, name, area, url, host_office_id) VALUES (${q(ids.room)}, 'virtual', ${q(`Room ${C.venueName}`)}, 'virtual', ${q(`https://example.org/${C.venueUrl}`)}, ${q(ids.president)});
 INSERT INTO venue (id, kind, name, area, host_office_id) VALUES (${q(ids.home)}, 'member_home', ${q(`The ${C.homeName} home`)}, 'okaloosa', ${q(ids.president)});

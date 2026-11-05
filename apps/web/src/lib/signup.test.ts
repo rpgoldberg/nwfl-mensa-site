@@ -11,9 +11,12 @@ import {
   CHECK_TEXT,
   DECISION_REFUSED,
   ROUTE_TEXT,
+  REJECTED_CONTACT,
   SIGNUP_REFUSED,
+  STANDING_TEXT,
   WAITING,
   accountView,
+  errorSummary,
   checkText,
   doneFromQuery,
   doneText,
@@ -84,10 +87,41 @@ describe('accountView (D3)', () => {
     }
   });
 
-  it('gives no form to an account that is not the group\'s (no enrolee group), only a plain line', () => {
+  it('fix 1 (SHOULD-1): tells a rejected sign-up (removed, never checked) it was not approved, never that it waits', () => {
+    const rejected: MyAccount = { status: 'removed', route: 'signup' };
+    expect(accountView(session(['nwfl-users']), rejected)).toBe('rejected');
+    expect(accountView(session(['nwfl-users', 'nwfl-members', 'nwfl-invited']), { status: 'removed', route: 'invite' })).toBe('rejected');
+    expect(STANDING_TEXT.rejected).toBe('Your sign-up was not approved.');
+    expect(REJECTED_CONTACT).toBe("If you think this is a mistake, please contact the club's Membership Officer.");
+    expect(STANDING_TEXT.rejected).not.toContain('waiting');
+    // A member removed later was checked once, so their words stay "no longer has member access".
+    expect(accountView(session(['nwfl-users']), account('removed'))).toBe('removed');
+  });
+
+  it('fix 1 (NOTE-8): tells an officer or the Admin with no account that the officer area needs none, with no form', () => {
+    for (const groups of [['nwfl-officers'], ['nwfl-members', 'nwfl-officers'], ['nwfl-admin'], ['nwfl-users', 'nwfl-admin']]) {
+      expect(accountView(session(groups), undefined), groups.join()).toBe('officer');
+    }
+    expect(STANDING_TEXT.officer).toBe('You need no member account to use the officer area.');
+    expect(accountView(session(['nwfl-members', 'nwfl-officers']), account('member'))).toBe('member');
+    expect(accountView(session(['nwfl-members', 'nwfl-officers']), account('pending'))).toBe('waiting');
+  });
+
+  it('gives no form to an account that is not the group\'s (no enrolee group, not an officer, not the Admin), only a plain line', () => {
     expect(accountView(session([]), undefined)).toBe('not-club');
-    expect(accountView(session(['nwfl-officers']), undefined)).toBe('not-club');
-    expect(accountView(session(['nwfl-officers']), account('member'))).toBe('member');
+    expect(accountView(session(['nwfl-webmaster']), undefined)).toBe('not-club');
+    expect(accountView(session(['mensa-nwfl-admin']), undefined)).toBe('not-club');
+  });
+});
+
+describe('errorSummary (fix 1, NOTE-6: the summary at the top of a form with problems)', () => {
+  it('lists each problem in the form\'s order, each pointing at its field', () => {
+    expect(errorSummary({ membershipNumber: 'Enter your membership number.', lastName: 'Enter your last name.' })).toEqual([
+      { field: 'lastName', text: 'Enter your last name.' },
+      { field: 'membershipNumber', text: 'Enter your membership number.' },
+    ]);
+    expect(errorSummary({ membershipNumber: 'Enter your membership number.' })).toEqual([{ field: 'membershipNumber', text: 'Enter your membership number.' }]);
+    expect(errorSummary({})).toEqual([]);
   });
 });
 
@@ -119,6 +153,15 @@ describe('the queue\'s words (D4)', () => {
     expect(parseDecisionForm(form({ decision: 'reject', request: ID, confirmed: 'yes' }))).toEqual({ ok: true, value: { decision: 'reject', requestId: ID, confirmed: true } });
     for (const values of [{}, { decision: 'approve' }, { decision: 'grant', request: ID }, { decision: 'approve', request: 'nope' }, { decision: 'approve', request: ID.toUpperCase() }]) {
       expect(parseDecisionForm(form(values)), JSON.stringify(values)).toEqual({ ok: false });
+    }
+  });
+
+  it('fix 1 (NOTE-2): confirms a rejection only by the exact word, and takes no id with anything around it', () => {
+    for (const confirmed of ['no', '1', 'true', 'Yes', 'yes ', '']) {
+      expect(parseDecisionForm(form({ decision: 'reject', request: ID, confirmed })), confirmed).toEqual({ ok: true, value: { decision: 'reject', requestId: ID, confirmed: false } });
+    }
+    for (const request of [`${ID}x`, `${ID}\n`, ` ${ID}`, `x${ID}`, `${ID}/../${ID}`]) {
+      expect(parseDecisionForm(form({ decision: 'approve', request })), JSON.stringify(request)).toEqual({ ok: false });
     }
   });
 
@@ -177,6 +220,19 @@ describe('firstStop (D3: the callback sends a person with no account to /account
     const enrolee = signedIn(['nwfl-users']);
     expect(await firstStop(enrolee.session, '/news', undefined, enrolee.deps)).toBe('/news');
     expect(seen).toEqual([]);
+  });
+
+  it('fix 1 (SHOULD-2): honours the return for officers and the Admin without asking: they need no account', async () => {
+    const seen: string[] = [];
+    const ask = api(() => Promise.resolve(undefined), seen);
+    for (const groups of [['nwfl-members', 'nwfl-officers'], ['nwfl-users', 'nwfl-officers'], ['nwfl-users', 'nwfl-admin'], ['nwfl-members', 'nwfl-officers', 'nwfl-membership-approvers']]) {
+      const { session: s, deps } = signedIn(groups);
+      expect(await firstStop(s, '/news', ask, deps), groups.join()).toBe('/news');
+    }
+    expect(seen).toEqual([]);
+    // A membership approver who is neither still signs up like anyone else.
+    const lone = signedIn(['nwfl-users', 'nwfl-membership-approvers']);
+    expect(await firstStop(lone.session, '/news', ask, lone.deps)).toBe(ACCOUNT_PATH);
   });
 
   it('honours the return when the API cannot say: signing in never fails for this', async () => {

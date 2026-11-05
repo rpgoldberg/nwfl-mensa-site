@@ -165,7 +165,7 @@ test('MT-30: no response sets a cookie with Domain=, and every cookie is host-on
 });
 
 test('the full build has the same strict CSP on every response as the canary', async ({ request }) => {
-  for (const path of [...ALL_PAGES, '/no-such-page', '/manifest.webmanifest', '/scripts/install.js', '/scripts/size.js']) {
+  for (const path of [...ALL_PAGES, '/no-such-page', '/manifest.webmanifest', '/scripts/install.js', '/scripts/size.js', '/scripts/error-summary.js']) {
     const policy = (await request.get(path)).headers()['content-security-policy'] ?? '';
     const csp = parseCsp(policy);
     expect(csp['script-src'], path).toEqual(["'self'"]);

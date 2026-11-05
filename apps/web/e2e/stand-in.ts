@@ -86,6 +86,9 @@ export const ACCOUNTS = {
   newcomer: '00000000-0000-4000-8000-0000000000d1',
   invitee: '00000000-0000-4000-8000-0000000000d2',
   approver: '00000000-0000-4000-8000-0000000000d3',
+  'turned-down': '00000000-0000-4000-8000-0000000000d5',
+  'lone-approver': '00000000-0000-4000-8000-0000000000d6',
+  'lone-webmaster': '00000000-0000-4000-8000-0000000000d7',
 };
 
 /**
@@ -107,11 +110,11 @@ export const MEMBER_CHECKED_ON = 'October 20, 2026';
  * SOLO-APPROVE: the approval rule as api.mjs answers each officer. The real API holds one setting for
  * everyone; the stand-in keeps one per signed-in subject, so tests in parallel cannot disturb each
  * other: "officer" reads publishing content as set to one approver (by the Admin on November 3, 2026),
- * "long-name" reads two officers, and the Admin's own setting starts at two officers and is the one
+ * "long-name" reads two approvers, and the Admin's own setting starts at two approvers and is the one
  * the Admin's switch changes.
  */
 export const APPROVAL = {
-  oneApproverNote: "One approver: a second officer's approval is not required right now (set by the Admin on November 3, 2026).",
+  oneApproverNote: "One approver: a second person's approval is not required right now (set by the Admin on November 3, 2026).",
   /** src/lib/approval-rules.ts NOTE_UNKNOWN: what an officer reads when the setting could not be read. */
   unknownNote: 'We could not check the approval setting just now.',
 };

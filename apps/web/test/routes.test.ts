@@ -41,7 +41,7 @@ describe('the route registry (e2e/routes.ts)', () => {
       const source = readFileSync(path.join(PAGES, byRoute.get(route)!), 'utf8');
       expect(source, route).not.toMatch(/\bliveData\b/);
       expect(source, route).toMatch(/lib\/api\/(officer|membership)/);
-      expect(source, route).toMatch(/if \(!session\) return Astro\.redirect\(/);
+      expect(source, route).toMatch(/if \(!session\) return (Astro\.redirect|signInFirst)\(/);
     }
   });
 
@@ -51,7 +51,7 @@ describe('the route registry (e2e/routes.ts)', () => {
       const source = readFileSync(path.join(PAGES, byRoute.get(route)!), 'utf8');
       expect(source, route).not.toMatch(/\bliveData\b|lib\/api\/officer/);
       expect(source, route).toMatch(/lib\/api\/membership/);
-      expect(source, route).toMatch(/if \(!session\) return Astro\.redirect\(/);
+      expect(source, route).toMatch(/if \(!session\) return (Astro\.redirect|signInFirst)\(/);
     }
   });
 

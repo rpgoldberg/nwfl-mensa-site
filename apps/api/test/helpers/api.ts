@@ -42,6 +42,8 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'bademail-token': { client: 'site', subject: 'sub-bademail', groups: ['nwfl-pending'], scopes: [], name: 'Lee Example', email: 'not an address' },
   // W-SIGNUP D2: invited by an officer (fc INVITE1): the enrolee groups and <prefix>invited; still signs up.
   'invitee-token': { client: 'site', subject: 'sub-invitee', groups: ['nwfl-users', 'nwfl-members', 'nwfl-invited'], scopes: [], name: 'Taylor Example', email: 'taylor@example.org' },
+  // W-SIGNUP fix 1 (SHOULD-1): a sign-up an approver rejects, whose account is then removed.
+  'turned-down-token': { client: 'site', subject: 'sub-turned-down', groups: ['nwfl-users'], scopes: [], name: 'Morgan Example', email: 'morgan@example.org' },
   'racer-token': { client: 'site', subject: 'sub-racer', groups: ['nwfl-pending'], scopes: [], name: 'Quinn Example', email: 'quinn@example.org' },
   // The Membership Officer: approves sign-ups; also signs up once, to show no one decides their own.
   'approver-token': {

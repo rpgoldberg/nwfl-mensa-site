@@ -4,9 +4,12 @@
 // D1: every sign-up gives a last name and a Mensa membership number, invited or not; the API checks
 // them again and refuses anything else. The number is digits only, as the API and the schema take
 // it, and it is never given back in a page or a log line (D6). D3: an enrolee with no account gets
-// the form; a pending account the waiting line; anyone else their standing. D4: the queue is for the
-// membership approvers and the Admin only, in plain words, never by colour alone.
+// the form; a pending account the waiting line; a rejected sign-up says it was not approved; anyone
+// else their standing. Officers and the Admin need no account (fix 1): no form and no stop after
+// signing in. D4: the queue is for the membership approvers and the Admin only, in plain words,
+// never by colour alone.
 import type { Session } from '../../server/session.mjs';
+import { isAdmin } from './approval-rules';
 import type { Check, MembershipApi, MyAccount, Route } from './api/membership';
 import { type SessionReaderDeps, sessionReader } from './api/membership';
 import { ZONE } from './calendar';
@@ -46,13 +49,32 @@ export function parseSignupForm(field: (name: string) => string | undefined): Pa
   return { ok: true, value: { lastName, membershipNumber } };
 }
 
-/** What /account shows. */
-export type AccountView = 'form' | 'waiting' | 'member' | 'affiliate' | 'lapsed' | 'removed' | 'not-club';
+/** The order of the form's fields, which its error summary follows. */
+const FIELDS: readonly (keyof SignupForm)[] = ['lastName', 'membershipNumber'];
 
-/** D3: the form only for one of the group's enrolees with no account yet; a standing for any account. */
+/** Fix 1 (NOTE-6): the summary at the top of the form, one entry per problem, each linking to its field. */
+export function errorSummary(errors: SignupErrors): Array<{ field: keyof SignupForm; text: string }> {
+  return FIELDS.flatMap((field) => (errors[field] === undefined ? [] : [{ field, text: errors[field] }]));
+}
+
+/** What /account shows. */
+export type AccountView = 'form' | 'waiting' | 'member' | 'affiliate' | 'lapsed' | 'removed' | 'rejected' | 'officer' | 'not-club';
+
+/** Fix 1 (SHOULD-2): officers and the Admin use the officer area with no member account. */
+export function needsNoAccount(session: Session): boolean {
+  return session.officer || isAdmin(session);
+}
+
+/**
+ * D3: the form only for one of the group's enrolees with no account yet who is neither an officer nor
+ * the Admin (they get a plain line instead); a standing for any account. A removed account that was
+ * never checked is a sign-up an approver rejected (the API removes it with the rejection, fix 1); a
+ * member removed later was checked when approved, so the two read differently.
+ */
 export function accountView(session: Session, account: MyAccount | undefined): AccountView {
-  if (account === undefined) return session.enrolee ? 'form' : 'not-club';
-  return account.status === 'pending' ? 'waiting' : account.status;
+  if (account === undefined) return needsNoAccount(session) ? 'officer' : session.enrolee ? 'form' : 'not-club';
+  if (account.status === 'pending') return 'waiting';
+  return account.status === 'removed' && account.verifiedOn === undefined ? 'rejected' : account.status;
 }
 
 export const STANDING_TEXT: Record<Exclude<AccountView, 'form'>, string> = {
@@ -61,8 +83,13 @@ export const STANDING_TEXT: Record<Exclude<AccountView, 'form'>, string> = {
   affiliate: 'Your account has member access as an affiliated officer.',
   lapsed: 'Your member access is paused until an officer completes the yearly membership check.',
   removed: 'Your account no longer has member access.',
+  rejected: 'Your sign-up was not approved.',
+  officer: 'You need no member account to use the officer area.',
   'not-club': 'This sign-in is not one of the group’s accounts, so there is nothing to sign up for here.',
 };
+
+/** Fix 1 (SHOULD-1): after "Your sign-up was not approved." The page links the officer's title to /officers. */
+export const REJECTED_CONTACT = "If you think this is a mistake, please contact the club's Membership Officer.";
 
 export const SIGNUP_REFUSED: Record<'invalid' | 'on_file' | 'profile', string> = {
   invalid: 'Your sign-up was not accepted. Check your last name and membership number, and send it again.',
@@ -142,12 +169,14 @@ export const DECISION_REFUSED: Record<'own' | 'closed', string> = {
 };
 
 /**
- * D3: where a sign-in goes first. One of the group's enrolees with no account yet goes to /account
- * (once: after the sign-up they have a pending account); anyone else goes back where they were. When
- * the API cannot say, the return is honoured: signing in never fails for this.
+ * D3: where a sign-in goes first. One of the group's enrolees with no account yet goes to /account,
+ * after each sign-in until they have signed up (then they have an account, pending or decided);
+ * anyone else goes back where they were. Officers and the Admin are never stopped: they need no
+ * member account (fix 1, SHOULD-2), so the API is not asked. When the API cannot say, the return is
+ * honoured: signing in never fails for this.
  */
 export async function firstStop(session: Session, back: string, api: MembershipApi | undefined, deps: SessionReaderDeps): Promise<string> {
-  if (!session.enrolee || api === undefined) return back;
+  if (!session.enrolee || needsNoAccount(session) || api === undefined) return back;
   const { reader } = sessionReader(session, deps);
   if (reader === undefined) return back;
   try {

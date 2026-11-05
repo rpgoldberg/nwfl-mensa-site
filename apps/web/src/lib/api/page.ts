@@ -20,3 +20,11 @@ export function markUnavailable(response: { status?: number | undefined; headers
   response.status = 503;
   response.headers.set('Cache-Control', 'no-store');
 }
+
+/**
+ * W-SIGNUP fix 1 (NOTE-7): a signed-out reader sent to sign in, by a 303 marked private, which
+ * server/policy.mjs answers private, no-store: no shared cache keeps the redirect for anyone.
+ */
+export function signInFirst(location: string): Response {
+  return new Response(null, { status: 303, headers: { Location: location, 'Cache-Control': 'private' } });
+}

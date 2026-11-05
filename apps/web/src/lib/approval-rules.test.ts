@@ -21,7 +21,7 @@ const NOV_3 = new Date('2026-11-03T19:35:00Z');
 describe('the one-approver note', () => {
   it('says plainly that a second approval is not needed, set by the Admin on a Central date', () => {
     expect(notesFor([{ scope: 'content', rule: 'one_approver', setAt: NOV_3 }])).toEqual([
-      "One approver: a second officer's approval is not required right now (set by the Admin on November 3, 2026).",
+      "One approver: a second person's approval is not required right now (set by the Admin on November 3, 2026).",
     ]);
   });
 
@@ -42,7 +42,7 @@ describe('the one-approver note', () => {
   });
 
   it('leaves the date out when the API gave none, rather than make one up', () => {
-    expect(notesFor([{ scope: 'content', rule: 'one_approver' }])).toEqual(["One approver: a second officer's approval is not required right now (set by the Admin)."]);
+    expect(notesFor([{ scope: 'content', rule: 'one_approver' }])).toEqual(["One approver: a second person's approval is not required right now (set by the Admin)."]);
   });
 
   it('never stays silent when the setting could not be read', () => {
@@ -114,7 +114,7 @@ describe('the switch form', () => {
     expect(result).toEqual({
       ok: false,
       scope: 'content',
-      errors: { rule: 'Choose two officers or one officer.', reason: 'Write why you are making this change.' },
+      errors: { rule: 'Choose who must approve.', reason: 'Write why you are making this change.' },
       values: { rule: '', reason: '' },
     });
   });
@@ -125,21 +125,27 @@ describe('the switch form', () => {
       errors: { reason: `Keep the reason to ${MAX_REASON} characters or fewer.` },
     });
     expect(parseRuleForm(form({ step: 'review', scope: 'members', rule: 'one_approver', reason: 'why', revision: '' }))).toMatchObject({ ok: false, scope: undefined, errors: { scope: 'Choose what this is for.' } });
-    expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'three', reason: 'why', revision: '' }))).toMatchObject({ ok: false, errors: { rule: 'Choose two officers or one officer.' } });
+    expect(parseRuleForm(form({ step: 'review', scope: 'content', rule: 'three', reason: 'why', revision: '' }))).toMatchObject({ ok: false, errors: { rule: 'Choose who must approve.' } });
     expect(parseRuleForm(form({ step: 'publish', scope: 'content', rule: 'one_approver', reason: 'why', revision: '' }))).toMatchObject({ ok: false, errors: { step: 'Send the form again.' } });
     expect(parseRuleForm(form({}))).toMatchObject({ ok: false, errors: { step: 'Send the form again.', scope: 'Choose what this is for.' } });
   });
 
   it('labels each scope and rule in plain words', () => {
     expect(SCOPE_LABEL).toEqual({ content: 'Publishing content', redaction_policy: 'Loosening a public privacy setting' });
-    expect(RULE_LABEL).toEqual({ two_person: 'Two officers (a second officer approves)', one_approver: 'One officer' });
+    // W-SIGNUP fix 1: publishing content is approved by the Admin or the Webmaster, not by "officers"; the
+    // privacy setting really is officers.
+    expect(RULE_LABEL).toEqual({
+      content: { two_person: 'Two people: someone other than the writer approves (the Admin or the Webmaster)', one_approver: 'One person: the writer may approve their own edit' },
+      redaction_policy: { two_person: 'Two officers: another officer approves', one_approver: 'One officer' },
+    });
+    expect(JSON.stringify(RULE_LABEL.content)).not.toMatch(/officer/i);
   });
 
   it('asks for a plain confirmation of what the change does', () => {
-    expect(confirmText('content', 'one_approver')).toBe('You are about to let one officer publish without a second approval.');
-    expect(confirmText('content', 'two_person')).toBe("You are about to require a second officer's approval again before anything is published.");
-    expect(confirmText('redaction_policy', 'one_approver')).toBe('You are about to let one officer loosen a public privacy setting without a second approval.');
-    expect(confirmText('redaction_policy', 'two_person')).toBe("You are about to require a second officer's approval again before a public privacy setting is loosened.");
+    expect(confirmText('content', 'one_approver')).toBe("You are about to let the writer approve and publish their own edit without a second person's approval.");
+    expect(confirmText('content', 'two_person')).toBe('You are about to require someone other than the writer (the Admin or the Webmaster) to approve again before anything is published.');
+    expect(confirmText('redaction_policy', 'one_approver')).toBe("You are about to let one officer loosen a public privacy setting without another officer's approval.");
+    expect(confirmText('redaction_policy', 'two_person')).toBe("You are about to require another officer's approval again before a public privacy setting is loosened.");
   });
 
   it('reports the outcome from the address it lands on after saving', () => {

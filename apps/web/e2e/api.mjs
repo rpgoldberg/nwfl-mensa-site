@@ -452,6 +452,8 @@ async function officerOf(ctx, { read = false } = {}) {
 
 // W-SIGNUP: as in e2e/stand-in.ts (ACCOUNTS, SIGNUP_QUEUE). Every member account was last checked on October 20, 2026.
 const ENROLEE_PENDING_SUBJECT = '00000000-0000-4000-8000-0000000000c2';
+/** W-SIGNUP fix 1: a sign-up an approver rejected; the API removed the account with it, never checked. */
+const TURNED_DOWN_SUBJECT = '00000000-0000-4000-8000-0000000000d5';
 const APPROVER_SUBJECT = '00000000-0000-4000-8000-0000000000d3';
 const CHECKED = { year: 2026, month: 10, day: 20 };
 const SIGNUP_QUEUE = [
@@ -488,12 +490,18 @@ async function personOf(ctx) {
   return { sub: String(payload.sub), groups, session: String(payload.jti ?? token) };
 }
 
-/** The account the API would hold: members (officers too) since October 20, the pending enrolee, this sign-in's own sign-up. @param {{ sub: string, groups: string[], session: string }} person */
-function accountOf({ sub, groups, session }) {
+/**
+ * The account the API would hold: the members since October 20, the pending enrolee, the rejected
+ * sign-up (removed, never checked), this sign-in's own sign-up. Being an officer or the Admin gives no
+ * account, as in the API: nothing opens one for them, and they need none (W-SIGNUP fix 1).
+ * @param {{ sub: string, session: string }} person
+ */
+function accountOf({ sub, session }) {
   const route = SIGNUPS.get(session);
   if (route !== undefined) return { status: MemberStatus.PENDING, route };
-  if (MEMBER_SUBJECTS.has(sub) || groups.includes('nwfl-officers') || groups.includes('nwfl-admin')) return { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, verifiedOn: CHECKED };
+  if (MEMBER_SUBJECTS.has(sub)) return { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, verifiedOn: CHECKED };
   if (sub === ENROLEE_PENDING_SUBJECT) return { status: MemberStatus.PENDING, route: AccountRoute.SIGNUP };
+  if (sub === TURNED_DOWN_SUBJECT) return { status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP };
   return undefined;
 }
 

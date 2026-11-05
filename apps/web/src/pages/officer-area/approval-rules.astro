@@ -1,6 +1,7 @@
 ---
 // SOLO-APPROVE: the Admin's approval switch. One plain form per scope (publishing content, and
-// loosening a public privacy setting): two officers or one, and a required reason; then a
+// loosening a public privacy setting): two approvers or one, in each scope's own words (two people
+// for content, two officers for a privacy setting; W-SIGNUP fix 1), and a required reason; then a
 // confirmation step that says what the change does; then the API sets it (ApprovalRuleService,
 // with the Admin's own token: the API is the wall, and refuses anyone else). It works with no
 // script: each step is a form post, answered with a page or a 303 back here. Both steps carry the
@@ -101,7 +102,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
-  <p class="lead">Whether a second officer must approve. Two officers is the usual rule. Only you, as the Admin, can change it, and every change is recorded with your reason.</p>
+  <p class="lead">Whether a second person must approve. Two is the usual rule. Only you, as the Admin, can change it, and every change is recorded with your reason.</p>
   {settings !== undefined && <OneApproverNote notes={notesFor(settings)} />}
   {done && <p class="notice" role="status">{SCOPE_LABEL[done.scope]}: {doneText(done.changed)}</p>}
   {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then make the change again.</p>}
@@ -111,7 +112,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {review ? (
     <section class="card" aria-labelledby="review-title">
       <h2 id="review-title">Check this change</h2>
-      <p>{SCOPE_LABEL[review.scope]}: {RULE_LABEL[review.rule]}.</p>
+      <p>{SCOPE_LABEL[review.scope]}: {RULE_LABEL[review.scope][review.rule]}.</p>
       <p><b>{confirmText(review.scope, review.rule)}</b></p>
       <p>Reason: {review.reason}</p>
       <form method="post" action={HERE} class="rule-form">
@@ -139,7 +140,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
         <fieldset>
           <legend>{SCOPE_LABEL[scope]}</legend>
           <p class="hint" id={`${scope}-now`}>
-            Now: {setting ? RULE_LABEL[setting.rule] : 'not known'}{setting?.setAt ? `, set on ${formatSetDate(setting.setAt)}` : setting ? ', the usual rule' : ''}.
+            Now: {setting ? RULE_LABEL[scope][setting.rule] : 'not known'}{setting?.setAt ? `, set on ${formatSetDate(setting.setAt)}` : setting ? ', the usual rule' : ''}.
           </p>
           {errors.step && <p class="error" id={`${scope}-step-error`}>Problem: {errors.step}</p>}
           <fieldset aria-describedby={describedBy(`${scope}-now`, errors.rule && `${scope}-rule-error`)}>
@@ -148,7 +149,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
             {RULES.map((rule) => (
               <div class="choice">
                 <input type="radio" id={`${scope}-${rule}`} name="rule" value={rule} checked={chosen === rule} />
-                <label for={`${scope}-${rule}`}>{RULE_LABEL[rule]}</label>
+                <label for={`${scope}-${rule}`}>{RULE_LABEL[scope][rule]}</label>
               </div>
             ))}
           </fieldset>

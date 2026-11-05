@@ -3,8 +3,10 @@
 // them in and returns them to their page; anything else is refused in plain
 // words (src/lib/auth/flow.ts), never with what the provider said.
 // W-SIGNUP D3: one of the group's enrolees with no account yet goes to
-// /account first, to sign up (src/lib/signup.ts firstStop); the return is
-// honoured for everyone else, and whenever the API cannot say.
+// /account first, after each sign-in until they sign up (src/lib/signup.ts
+// firstStop); officers and the Admin never do, as they need no member account
+// (fix 1). The return is honoured for everyone else, and whenever the API
+// cannot say.
 import Base from '../../layouts/Base.astro';
 import { membershipApi } from '../../lib/api/membership';
 import { REFUSALS, completeSignIn, runtimeDeps } from '../../lib/auth/flow';
