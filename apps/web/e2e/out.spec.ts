@@ -250,7 +250,11 @@ test.describe('the countdown', () => {
     ],
   ];
   for (const [name, act] of onStop) {
-    test(`${name} stops it: said once, nothing moves, and the focus goes to Continue`, async ({ page, context }) => {
+    test(`${name} stops it: said once, nothing moves, and the focus goes to Continue`, async ({ page, context, isMobile, browserName }) => {
+      test.skip(
+        name === 'the mouse wheel' && isMobile && browserName === 'webkit',
+        'mobile WebKit has no mouse wheel; the touch-drag case covers scrolling on the phone',
+      );
       const seen = await otherSites(context);
       await statusLog(page);
       await page.goto(out(LINKS.web.id));
