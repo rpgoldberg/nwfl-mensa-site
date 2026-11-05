@@ -220,7 +220,7 @@ test('/sign-in on another of our hosts never carries a return off the site', asy
   }
 });
 
-test('/sign-in on a host that is not ours starts at the provider, as before; a callback on another host is refused', async () => {
+test('/sign-in on a host that is not ours starts at the provider outside production, as here; a callback on another host is refused', async () => {
   const res = await onHost('/sign-in?return=%2Fnews', 'evil.example');
   expect(res.status).toBe(303);
   expect(res.headers['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/auth\\?`));
