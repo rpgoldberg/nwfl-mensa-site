@@ -66,6 +66,12 @@ describe('runWorker', () => {
     expect(timeouts()).toBe(before);
   });
 
+  it('refuses a LINK_ORIGIN that is not https and a host, before it opens a pool (LINKS L3)', () => {
+    for (const bad of ['http://nwflorida.us', 'https://nwflorida.us/out', 'https://evil.example@nwflorida.us']) {
+      expect(() => runWorker({ env: { PGHOST: '127.0.0.1', PGPORT: '1', LINK_ORIGIN: bad }, intervalMs: 3_600_000 }), bad).toThrow("LINK_ORIGIN must be https:// and the site's host, with no path");
+    }
+  });
+
   it('claims nothing until the tenant is verified: a database that is down is retried, never a job run (CF-ISO-0)', async () => {
     const errors: unknown[] = [];
     const retries: unknown[] = [];

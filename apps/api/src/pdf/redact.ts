@@ -53,9 +53,18 @@
 //     of the page would end the clip, and what it clipped would flood the page;
 //   - a content stream or a JPEG cannot be read, or a passage is still
 //     readable after (PDFium), or the gate finds one or cannot check a stream.
+//
+// LINKS L3: then each approved link the request gives (by id, page, rect and
+// label, never its target) gets a fresh annotation pointing to the leaving
+// page (link-annots.ts placeLinks), unless its rect meets a box drawn here or
+// the ink of a glyph removed here; the reply names the ids kept. PDFium and
+// the gate read the copy with the annotations in place, so every string they
+// hold is searched for every passage too. With no links, nothing is written
+// and the copy is byte for byte what it was before links.
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
+import { type EngineLink, type PageBox, placeLinks } from './link-annots.js';
 import { type Box, type Region, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
@@ -67,6 +76,10 @@ export interface RedactRequest {
   redactsAny: boolean;
   /** This audience's image policy (images.ts); "show" when absent. */
   image?: ImageAction;
+  /** What the links point to (https://<origin>/out/<id>); set whenever there are links. */
+  origin?: string;
+  /** The approved links whose targets pass this audience's check (store.ts inputsFor); none when absent. */
+  links?: readonly EngineLink[];
 }
 
 export interface RedactDeps {
@@ -75,7 +88,8 @@ export interface RedactDeps {
 
 export type RedactResult =
   | { kind: 'original' }
-  | { kind: 'redacted'; pdf: Uint8Array; boxes: Region[] }
+  /** `kept`: the links the copy holds (none when absent). */
+  | { kind: 'redacted'; pdf: Uint8Array; boxes: Region[]; kept?: string[] }
   | { kind: 'refused'; reason: string };
 
 const UNOPENABLE = 'the PDF could not be opened';
@@ -101,7 +115,7 @@ const isBlank = (c: { text: string }): boolean => /^\s*$/u.test(c.text);
 const overlaps = (a: Box, b: Box): boolean => a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
 
 /** Why one page cannot be given, or null once its passages are removed and boxed (added to `boxes`). */
-function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[], regenerate: boolean): string | null {
+function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[], regenerate: boolean, blocked: PageBox[]): string | null {
   doc.flatten(index);
   return doc.page(index, (page) => {
     // Inline pictures become picture XObjects, which sanitize can replace.
@@ -157,18 +171,24 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     const drawn = boxesFor(chars, withheld, removed, index, meeting(hidden.objects, found.regions));
     page.drawBoxes(drawn);
     boxes.push(...drawn);
+    // No link may sit over what was withheld: the boxes, and every removed glyph's ink (LINKS L3).
+    blocked.push(...found.regions, ...drawn, ...[...removed].flatMap((i) => {
+      const ink = chars[i]?.ink;
+      return ink === null || ink === undefined ? [] : [{ ...ink, page: index }];
+    }));
     return null;
   });
 }
 
 /** The document with the passages removed from every page, or why there can be no copy. */
-function redactPages(doc: Document, quotes: readonly string[], regenerate: boolean): { pdf: Uint8Array; boxes: Region[] } | string {
+function redactPages(doc: Document, quotes: readonly string[], regenerate: boolean): { pdf: Uint8Array; boxes: Region[]; blocked: PageBox[] } | string {
   const boxes: Region[] = [];
+  const blocked: PageBox[] = [];
   for (let index = 0; index < doc.pageCount; index++) {
-    const refused = redactPage(doc, index, quotes, boxes, regenerate);
+    const refused = redactPage(doc, index, quotes, boxes, regenerate, blocked);
     if (refused !== null) return refused;
   }
-  return { pdf: doc.save(), boxes };
+  return { pdf: doc.save(), boxes, blocked };
 }
 
 /** Null when no passage can be read in the PDF's text, else why the copy fails. */
@@ -193,7 +213,7 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
   if (quotes.length === 0 && !request.redactsAny && image === 'show') return { kind: 'original' };
   const doc = Document.open(await pdfium(), original);
   if (doc === null) return { kind: 'refused', reason: UNOPENABLE };
-  let redacted: { pdf: Uint8Array; boxes: Region[] } | string;
+  let redacted: { pdf: Uint8Array; boxes: Region[]; blocked: PageBox[] } | string;
   try {
     redacted = redactPages(doc, quotes, image !== 'show');
   } finally {
@@ -207,6 +227,12 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
     return { kind: 'refused', reason: error instanceof Error ? error.message : String(error) };
   }
   if (image !== 'show' && (await keepsPicture(pdf, await pictureWindows(original)))) return { kind: 'refused', reason: 'an original picture is still in the copy' };
+  let kept: string[];
+  try {
+    ({ pdf, kept } = await placeLinks(pdf, request.links ?? [], request.origin, redacted.blocked));
+  } catch (error) {
+    return { kind: 'refused', reason: `the links could not be written: ${error instanceof Error ? error.message : String(error)}` };
+  }
   const left = (await verifyRedacted(pdf, quotes)) ?? (await checkCopy(pdf, quotes));
-  return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes } : { kind: 'refused', reason: left };
+  return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes, kept } : { kind: 'refused', reason: left };
 }

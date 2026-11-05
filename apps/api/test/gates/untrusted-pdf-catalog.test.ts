@@ -47,7 +47,7 @@ const QUERIES = {
 
 type Name = keyof typeof QUERIES;
 
-/** FROZEN: today's catalog after 0000-0024, with nwfl_worker present (its grants applied). */
+/** FROZEN: today's catalog after 0000-0025, with nwfl_worker present (its grants applied). */
 const FROZEN: Record<Name, unknown[]> = {
   writers: [
     { role: 'nwfl_migrator', privileges: ['DELETE', 'INSERT', 'TRUNCATE', 'UPDATE'] },
@@ -70,7 +70,8 @@ const FROZEN: Record<Name, unknown[]> = {
     // SOLO-APPROVE (0023): the approval rule's reader and writer; neither touches a PDF.
     { function: 'approval_rule_read(text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'approval_rule_set(text,text,text,text,text[],text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
-    { function: 'pdf_copy_put(uuid,uuid,bytea,text,bytea,text)', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
+    // LINKS L3 (0025): the put records the copy's kept link ids; it still takes bytes only from the worker's claim.
+    { function: 'pdf_copy_put(uuid,uuid,bytea,text,bytea,text,text[])', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     // LINKS L2 (0024): the link writer and disabler, and the triggers that stamp and queue; none reads a PDF.
     { function: 'pdf_link_disable(text,text,text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'pdf_link_stale()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
@@ -82,6 +83,8 @@ const FROZEN: Record<Name, unknown[]> = {
     { function: 'pdf_regen_claim(integer)', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     { function: 'pdf_regen_finish(uuid,uuid,bytea[])', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     { function: 'pdf_regen_original(uuid,uuid)', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
+    // LINKS L3 (0025): the worker's boot sweep queues files; it reads no original.
+    { function: 'pdf_regen_request_files(uuid[])', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     { function: 'pdf_stale_on_edition_item()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
     { function: 'pdf_stale_on_mark()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
     { function: 'pdf_stale_on_policy()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },

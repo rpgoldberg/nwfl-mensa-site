@@ -54,7 +54,7 @@ export function startGateSidecar(options: GateSidecarOptions): Promise<Sidecar> 
         ...(options.maxRssBytes === undefined ? {} : { maxRssBytes: options.maxRssBytes }),
         ...(options.nodeFlags === undefined ? {} : { nodeFlags: options.nodeFlags }),
         permission: options.childPermission !== false,
-      })({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image });
+      })({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image, ...(request.origin === undefined ? {} : { origin: request.origin }), links: request.links ?? [], kept: request.kept ?? [] });
       if (outcome.cause !== undefined) options.log(`a check was unfinished (${outcome.cause})`);
       if (outcome.sha256 !== null && outcome.sha256 !== sha256) return encodeGateReply({ verdict: { pass: false, code: 'mismatch' }, sha256 });
       // A pass carries the bytes the child checked, its own writing of the copy (M1): the worker stores only those.

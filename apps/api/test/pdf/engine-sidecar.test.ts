@@ -201,21 +201,24 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
     const header = (value: unknown): Buffer => encodeFrame(REQUEST_MAGIC, value, body);
     const cases: Array<[string, Buffer, boolean?]> = [
       ['not a frame', Buffer.from('GET / HTTP/1.1\r\nHost: x\r\n\r\n')],
-      ['a reply frame sent as a request', encodeFrame(REPLY_MAGIC, { v: 1, kind: 'original' })],
+      ['a reply frame sent as a request', encodeFrame(REPLY_MAGIC, { v: 2, kind: 'original' })],
       ['cut short', good.subarray(0, good.length - 1), true],
       ['bytes after the frame', Buffer.concat([good, Buffer.from('x')])],
       ['a header that is not JSON', rawFrame(Buffer.from('{"v":1,'), body)],
       ['a header that is not UTF-8', rawFrame(Buffer.from([0x22, 0xff, 0xfe, 0x22]), body)],
       ['a header that is a list', header([])],
-      ['another version', header({ ...REQUEST, v: 2 })],
-      ['a path beside the request', header({ ...REQUEST, v: 1, path: '/etc/passwd' })],
-      ['an environment beside the request', header({ ...REQUEST, v: 1, env: { PGPASSWORD: 'x' } })],
-      ['a quote that is not text', header({ v: 1, quotes: [7], redactsAny: true })],
-      ['too many quotes', header({ v: 1, quotes: Array.from({ length: MAX_QUOTES + 1 }, () => 'abc'), redactsAny: true })],
-      ['a quote too long', header({ v: 1, quotes: ['x'.repeat(MAX_QUOTE_CHARS + 1)], redactsAny: true })],
-      ['redactsAny not a boolean', header({ v: 1, quotes: [], redactsAny: 'yes' })],
-      ['an unknown image action', header({ v: 1, quotes: [], redactsAny: true, image: 'melt' })],
-      ['no original', encodeFrame(REQUEST_MAGIC, { ...REQUEST, v: 1 })],
+      ['another version', header({ ...REQUEST, v: 1, links: [] })],
+      ['a version 2 request without its links', header({ ...REQUEST, v: 2 })],
+      ['a path beside the request', header({ ...REQUEST, v: 2, links: [], path: '/etc/passwd' })],
+      ['an environment beside the request', header({ ...REQUEST, v: 2, links: [], env: { PGPASSWORD: 'x' } })],
+      ['a quote that is not text', header({ v: 2, quotes: [7], redactsAny: true, links: [] })],
+      ['too many quotes', header({ v: 2, quotes: Array.from({ length: MAX_QUOTES + 1 }, () => 'abc'), redactsAny: true, links: [] })],
+      ['a quote too long', header({ v: 2, quotes: ['x'.repeat(MAX_QUOTE_CHARS + 1)], redactsAny: true, links: [] })],
+      ['redactsAny not a boolean', header({ v: 2, quotes: [], redactsAny: 'yes', links: [] })],
+      ['an unknown image action', header({ v: 2, quotes: [], redactsAny: true, image: 'melt', links: [] })],
+      ['a link with its target beside it', header({ v: 2, quotes: [], redactsAny: true, origin: 'https://nwflorida.us', links: [{ id: 'a'.repeat(26), page: 1, rect: [1, 2, 3, 4], label: 'Link to site.example', url: 'https://site.example/' }] })],
+      ['links with no origin', header({ v: 2, quotes: [], redactsAny: true, links: [{ id: 'a'.repeat(26), page: 1, rect: [1, 2, 3, 4], label: 'Link to site.example' }] })],
+      ['no original', encodeFrame(REQUEST_MAGIC, { ...REQUEST, v: 2, links: [] })],
     ];
     for (const [name, bytes, end] of cases) {
       expect(await exchange(socket, bytes, { end: end === true }), name).toEqual({ reply: Buffer.alloc(0) });
@@ -239,18 +242,20 @@ describe('UNTRUSTED-PDF-GATE: the engine sidecar, as its own process', () => {
       const cases: Array<[string, Buffer]> = [
         ['nothing', Buffer.alloc(0)],
         ['not a frame', Buffer.from('HTTP/1.1 200 OK\r\n\r\n')],
-        ['a request frame sent back', encodeFrame(REQUEST_MAGIC, { v: 1, kind: 'original' })],
-        ['cut short', frame({ v: 1, kind: 'original' }).subarray(0, 14)],
-        ['bytes after the frame', Buffer.concat([frame({ v: 1, kind: 'original' }), Buffer.from('x')])],
+        ['a request frame sent back', encodeFrame(REQUEST_MAGIC, { v: 2, kind: 'original' })],
+        ['cut short', frame({ v: 2, kind: 'original' }).subarray(0, 14)],
+        ['bytes after the frame', Buffer.concat([frame({ v: 2, kind: 'original' }), Buffer.from('x')])],
         ['a header that is not JSON', Buffer.concat([REPLY_MAGIC, u32(3), u32(0), Buffer.from('{{{')])],
-        ['another version', frame({ v: 2, kind: 'original' })],
-        ['an unknown kind', frame({ v: 1, kind: 'leaked' })],
-        ['an environment beside the result', frame({ v: 1, kind: 'original', env: { PGPASSWORD: 'x' } })],
-        ['a copy with no bytes', frame({ v: 1, kind: 'redacted' })],
-        ['a refusal with bytes', frame({ v: 1, kind: 'refused', reason: 'no' }, Uint8Array.from([1]))],
-        ['a refusal with no reason', frame({ v: 1, kind: 'refused' })],
-        ['a reason too long', frame({ v: 1, kind: 'refused', reason: 'x'.repeat(1001) })],
-        ['a failure whose message is not text', frame({ v: 1, kind: 'failed', message: 7 })],
+        ['another version', frame({ v: 1, kind: 'original' })],
+        ['an unknown kind', frame({ v: 2, kind: 'leaked' })],
+        ['an environment beside the result', frame({ v: 2, kind: 'original', env: { PGPASSWORD: 'x' } })],
+        ['a copy with no bytes', frame({ v: 2, kind: 'redacted', kept: [] })],
+        ['a copy with no kept list', frame({ v: 2, kind: 'redacted' }, Uint8Array.from([1]))],
+        ['a copy keeping a link id twice', frame({ v: 2, kind: 'redacted', kept: ['a'.repeat(26), 'a'.repeat(26)] }, Uint8Array.from([1]))],
+        ['a refusal with bytes', frame({ v: 2, kind: 'refused', reason: 'no' }, Uint8Array.from([1]))],
+        ['a refusal with no reason', frame({ v: 2, kind: 'refused' })],
+        ['a reason too long', frame({ v: 2, kind: 'refused', reason: 'x'.repeat(1001) })],
+        ['a failure whose message is not text', frame({ v: 2, kind: 'failed', message: 7 })],
       ];
       for (const [name, bytes] of cases) {
         reply = bytes;
@@ -389,7 +394,7 @@ describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1, fix round 2
       expect(sidecar.processes()).toBe(1);
       expect(lstatSync(sidecar.socket).ino).toBe(inode);
       const job = own('job B: these bytes only');
-      expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [] });
+      expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [], kept: [] });
       expect(sidecar.stderr()).not.toContain('stops');
     }, 120_000);
   }
@@ -403,7 +408,7 @@ describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1, fix round 2
     expect(lstatSync(sidecar.socket).ino).toBe(inode);
     expect(existsSync(`${sidecar.socket}.stolen`)).toBe(false);
     const job = own('job B: these bytes only');
-    expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [] });
+    expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [], kept: [] });
     expect(sidecar.processes()).toBe(1);
     expect(sidecar.stderr()).not.toContain('stops');
   }, 120_000);
@@ -414,7 +419,7 @@ describe('UNTRUSTED-PDF-GATE: nothing a copy starts outlives it (M1, fix round 2
     expect(hit).toMatchObject({ kind: 'refused' });
     expect((hit as { reason: string }).reason).toMatch(/^parent 1 after SIGSTOP: [RS]; after SIGKILL: [RS]$/);
     const job = own('job B: these bytes only');
-    expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [] });
+    expect(await socketRedact({ path: sidecar.socket })(job, { quotes: ['echo'], redactsAny: true })).toEqual({ kind: 'redacted', pdf: job, boxes: [], kept: [] });
   }, 120_000);
 
   for (const mode of ['stop-steal', 'steal'] as const) {

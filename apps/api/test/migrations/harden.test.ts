@@ -75,7 +75,7 @@ describe.skipIf(!live)('0019: HARDEN-1', () => {
       const original = await worker.query<{ seq: string }>(RECORD_FILE, [file, claim, 'members', fileSha, { v: 1, served: 'original' }, 0]);
       expect(original.rows[0]!.seq).not.toBeNull();
       const hash = sha('inputs');
-      await worker.query(`SELECT pdf_copy_put($1, $2, $3, 'e', $4, NULL)`, [file, claim, hash, Buffer.from('%PDF-copy')]);
+      await worker.query(`SELECT pdf_copy_put($1, $2, $3, 'e', $4, NULL, NULL)`, [file, claim, hash, Buffer.from('%PDF-copy')]);
       const copy = await worker.query<{ seq: string }>(RECORD_FILE, [file, claim, 'public', sha('%PDF-copy'), { v: 1, served: 'copy', input_hash: hash.toString('hex') }, 1]);
       expect(copy.rows[0]!.seq).not.toBeNull();
       const hidden = await worker.query<{ seq: string | null }>(RECORD_FILE, [file, claim, 'public', null, { v: 1, served: 'hidden' }, 0]);

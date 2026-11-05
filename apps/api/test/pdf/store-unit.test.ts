@@ -2,7 +2,7 @@
 // when the engine would be given the same inputs for the same original.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ENGINE_VERSION, inputHash } from '../../src/pdf/store.js';
+import { DEFAULT_LINK_ORIGIN, ENGINE_VERSION, canonicalInputs, inputHash, linkOrigin } from '../../src/pdf/store.js';
 
 const version = (name: string): string => (JSON.parse(readFileSync(new URL(`../../node_modules/${name}/package.json`, import.meta.url), 'utf8')) as { version: string }).version;
 const SHA = Buffer.alloc(32, 1);
@@ -18,6 +18,10 @@ describe('ENGINE_VERSION', () => {
     // 0022 leaves the members' and the officers' inputs as they were: only this keys their copies anew.
     expect(ENGINE_VERSION.split('+')).toContain('box-exact');
     expect(ENGINE_VERSION).not.toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b');
+  });
+
+  it('names the links\' revision (LINKS L3), the first bump after the two issues were loaded under box-exact', () => {
+    expect(ENGINE_VERSION).toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1');
   });
 });
 
@@ -37,5 +41,66 @@ describe('inputHash', () => {
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'show' }).equals(base)).toBe(true);
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'blur' }).equals(base)).toBe(false);
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'hide' }).equals(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, image: 'blur' }))).toBe(false);
+  });
+});
+
+describe('inputHash v2 (LINKS L3): the origin and the links that pass', () => {
+  const ORIGIN = 'https://nwflorida.us';
+  const id = (c: string): string => c.repeat(26);
+  const LINKS = [
+    { id: id('b'), page: 2, rect: [72, 600, 200.25, 614] as const, label: 'Link to site.example' },
+    { id: id('a'), page: 1, rect: [72, 700, 200, 714] as const, label: 'Link to mail.example' },
+  ];
+  const URLS = { [id('a')]: 'mailto:games~@mail.example', [id('b')]: 'https://site.example/p' };
+  const request = { quotes: ['Bo'], redactsAny: true, origin: ORIGIN, links: LINKS };
+
+  it('is canonical: version 2, every input by name, the links sorted by id with their urls, rects to hundredths', () => {
+    expect(canonicalInputs(SHA, request, 'e', URLS)).toBe(
+      JSON.stringify({
+        v: 2,
+        engine: 'e',
+        original: '01'.repeat(32),
+        redactsAny: true,
+        quotes: ['Bo'],
+        image: 'show',
+        origin: ORIGIN,
+        links: [
+          { id: id('a'), page: 1, rect: [72, 700, 200, 714], url: 'mailto:games~@mail.example', label: 'Link to mail.example' },
+          { id: id('b'), page: 2, rect: [72, 600, 200.25, 614], url: 'https://site.example/p', label: 'Link to site.example' },
+        ],
+      }),
+    );
+  });
+
+  it('ignores the order of the links and a rect moved less than half a hundredth', () => {
+    const base = inputHash(SHA, request, 'e', URLS);
+    expect(inputHash(SHA, { ...request, links: [...LINKS].reverse() }, 'e', URLS).equals(base)).toBe(true);
+    expect(inputHash(SHA, { ...request, links: [{ ...LINKS[0]!, rect: [72.004, 600, 200.25, 614] }, LINKS[1]!] }, 'e', URLS).equals(base)).toBe(true);
+  });
+
+  it('changes with the origin and with each field of each link: id, page, rect, url and label', () => {
+    const base = inputHash(SHA, request, 'e', URLS);
+    const differs = (changed: Parameters<typeof inputHash>[1], urls: Record<string, string> = URLS): boolean => !inputHash(SHA, changed, 'e', urls).equals(base);
+    expect(differs({ ...request, origin: 'https://nwflmensa.us' })).toBe(true);
+    expect(differs({ ...request, links: [LINKS[0]!] })).toBe(true);
+    expect(differs({ ...request, links: [] })).toBe(true);
+    expect(differs({ ...request, links: [{ ...LINKS[0]!, id: id('c') }, LINKS[1]!] }, { ...URLS, [id('c')]: 'https://site.example/p' })).toBe(true);
+    expect(differs({ ...request, links: [{ ...LINKS[0]!, page: 3 }, LINKS[1]!] })).toBe(true);
+    expect(differs({ ...request, links: [{ ...LINKS[0]!, rect: [72, 600, 200.26, 614] }, LINKS[1]!] })).toBe(true);
+    expect(differs({ ...request, links: [{ ...LINKS[0]!, label: 'Link to else.example' }, LINKS[1]!] })).toBe(true);
+    expect(differs(request, { ...URLS, [id('b')]: 'https://site.example/q' })).toBe(true);
+  });
+
+  it('refuses a link with no url to hash, rather than hash it as nothing', () => {
+    expect(() => inputHash(SHA, request, 'e', { [id('a')]: 'mailto:games~@mail.example' })).toThrow('every link needs its url to be hashed');
+  });
+
+  it('takes the origin from LINK_ORIGIN, the site by default, and refuses one that is not https and a host', () => {
+    expect(DEFAULT_LINK_ORIGIN).toBe('https://nwflorida.us');
+    expect(linkOrigin({})).toBe('https://nwflorida.us');
+    expect(linkOrigin({ LINK_ORIGIN: 'https://nwflmensa.us' })).toBe('https://nwflmensa.us');
+    for (const bad of ['http://nwflorida.us', 'https://nwflorida.us/', 'https://evil.example/out/x', '']) expect(() => linkOrigin({ LINK_ORIGIN: bad }), bad).toThrow('LINK_ORIGIN must be https:// and the site\'s host, with no path');
+    // A request without an origin is hashed with LINK_ORIGIN's, as inputsFor gives it.
+    expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true }).equals(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, origin: linkOrigin(), links: [] }))).toBe(true);
   });
 });

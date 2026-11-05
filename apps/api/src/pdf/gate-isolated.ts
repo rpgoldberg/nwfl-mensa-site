@@ -37,6 +37,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { type CheckedCopy, GATE_CODES, type GateCode, type GateVerdict, MAX_OUTPUT_BYTES } from './engine-protocol.js';
 import type { ImageAction } from './images.js';
+import type { LinkRequest } from './link-annots.js';
 import { engineExecArgv, killGroup, relayChildLog } from './isolated.js';
 import { CHILD_PERMISSION, type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
 
@@ -49,8 +50,8 @@ export const GATE_HEAP_MB = 512;
 export const GATE_MAX_RSS_BYTES = 768 * 1024 * 1024;
 const RSS_POLL_MS = 50;
 
-/** What a gate child is sent: the copy, its original (for its pictures), and what this audience withholds. */
-export interface GateJob {
+/** What a gate child is sent: the copy, its original (for its pictures), what this audience withholds, and the links the engine was given and kept (LINKS L3; none when absent). */
+export interface GateJob extends LinkRequest {
   copy: Uint8Array;
   original: Uint8Array;
   quotes: readonly string[];

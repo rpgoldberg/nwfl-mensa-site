@@ -144,7 +144,7 @@ describe('startSidecar', () => {
 
   it('passes on the engine\'s copy, its failure, and a copy over the output cap as a failure', async () => {
     const echo = await started({ module: child('echo') });
-    expect(await socketRedact({ path: echo.socket })(Uint8Array.from([1, 2, 3]), REQUEST)).toEqual({ kind: 'redacted', pdf: Uint8Array.from([3, 2, 1]), boxes: [] });
+    expect(await socketRedact({ path: echo.socket })(Uint8Array.from([1, 2, 3]), REQUEST)).toEqual({ kind: 'redacted', pdf: Uint8Array.from([3, 2, 1]), boxes: [], kept: [] });
     const fail = await started({ module: child('fail') });
     const failed = socketRedact({ path: fail.socket })(ONE, REQUEST);
     await expect(failed).rejects.toThrow('the engine threw');
@@ -185,7 +185,7 @@ describe('startSidecar', () => {
     expect(await exchange(socket, frame.subarray(0, 20), true)).toEqual(Buffer.alloc(0));
     expect(await exchange(socket, REQUEST_MAGIC)).toEqual(Buffer.alloc(0));
     expect(await exchange(socket, Buffer.concat([frame, Buffer.from('x')]))).toEqual(Buffer.alloc(0));
-    const header = Buffer.from(JSON.stringify({ v: 1, quotes: [], redactsAny: true, env: { PGPASSWORD: 'canary' } }));
+    const header = Buffer.from(JSON.stringify({ v: 2, quotes: [], redactsAny: true, links: [], env: { PGPASSWORD: 'canary' } }));
     const sizes = Buffer.alloc(8);
     sizes.writeUInt32BE(header.length, 0);
     sizes.writeUInt32BE(1, 4);

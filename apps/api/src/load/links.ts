@@ -87,7 +87,7 @@ const PRINTABLE = /^[!-~]+$/;
  * 63 lower-case letters, digits and inner hyphens, the last starting with a letter, so never an IP
  * literal in any form, a dotless name, a trailing dot or an empty label. At most 253 characters.
  */
-const HOST = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+export const HOST = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 /**
  * mailto:local@domain: one address, no query or fragment, the domain a HOST; no # or % in the local part, which a mail client would read as a fragment or an escape,
  * and no '/' first, which a URL parser reads as an authority (mailto://) or a path it normalises (mailto:/a/../b) (CONTRACT item 10).

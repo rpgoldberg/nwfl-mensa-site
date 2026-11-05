@@ -53,18 +53,30 @@ describe('socketGate', () => {
   });
 
   it('sends the copy and the original with their sha256s, the quotes and the image action, and hands back the verdict and the hash the gate names', async () => {
-    const { socket, seen } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'refused', code: 'rules', sha256: SHA }));
+    const { socket, seen } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'refused', code: 'rules', sha256: SHA }));
     expect(await socketGate({ path: socket })(JOB)).toEqual({ verdict: { pass: false, code: 'rules' }, sha256: SHA });
     const request = seen[0] as Buffer;
     expect(JSON.parse(request.subarray(12, 12 + request.readUInt32BE(4)).toString('utf8'))).toEqual({
-      v: 1,
+      v: 2,
       quotes: ['Kestrel Ambry'],
       image: 'hide',
       sha256: SHA,
       originalSha256: sha256Hex(ORIGINAL),
       copyBytes: COPY.length,
+      links: [],
+      kept: [],
     });
     expect(request.subarray(12 + request.readUInt32BE(4))).toEqual(Buffer.concat([COPY, ORIGINAL]));
+  });
+
+  it('sends the links, their origin and the ids the engine kept (LINKS L3), and fails closed on links it cannot send', async () => {
+    const links = [{ id: 'a'.repeat(26), page: 1, rect: [72, 700, 200, 714] as const, label: 'Link to site.example' }];
+    const { socket, seen } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'refused', code: 'rules', sha256: SHA }));
+    await socketGate({ path: socket })({ ...JOB, origin: 'https://nwflorida.us', links, kept: ['a'.repeat(26)] });
+    const request = seen[0] as Buffer;
+    expect(JSON.parse(request.subarray(12, 12 + request.readUInt32BE(4)).toString('utf8'))).toMatchObject({ origin: 'https://nwflorida.us', links, kept: ['a'.repeat(26)] });
+    expect(await socketGate({ path: socket })({ ...JOB, links, kept: ['a'.repeat(26)] })).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: null });
+    expect(seen).toHaveLength(1);
   });
 
   it('fails the job closed, retryably, when the socket is missing, not a socket, or a symlink to a live one (S4)', async () => {
@@ -75,7 +87,7 @@ describe('socketGate', () => {
     const file = path.join(at, 'file.sock');
     writeFileSync(file, 'x');
     await expect(socketGate({ path: file })(JOB)).rejects.toThrow('the gate socket path holds something other than a socket');
-    const { socket, seen } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: SHA }));
+    const { socket, seen } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass', sha256: SHA }));
     const link = path.join(at, 'link.sock');
     symlinkSync(socket, link);
     const linked = socketGate({ path: link })(JOB);
@@ -90,8 +102,8 @@ describe('socketGate', () => {
     await expect(gone).rejects.toBeInstanceOf(RetryableEngineError);
     await expect(gone).rejects.toThrow('the gate sidecar gave no usable reply');
     for (const bad of [
-      encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass' }),
-      encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: SHA, note: 'Kestrel' }),
+      encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass' }),
+      encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass', sha256: SHA, note: 'Kestrel' }),
       Buffer.from('HTTP/1.1 200 OK\r\n\r\n'),
     ]) {
       const { socket } = await fakeGate(() => bad);
@@ -110,12 +122,12 @@ describe('socketGate', () => {
 
   it('hands back a pass with the bytes the gate checked, up to MAX_OUTPUT_BYTES of them, and their sha256 as named (M1)', async () => {
     const written = Buffer.from('the gate\'s own writing of the copy');
-    const { socket } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: SHA, checkedSha256: sha256Hex(written) }, written));
+    const { socket } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass', sha256: SHA, checkedSha256: sha256Hex(written) }, written));
     const outcome = await socketGate({ path: socket })(JOB);
     expect(outcome).toEqual({ verdict: { pass: true }, sha256: SHA, checked: { pdf: expect.any(Uint8Array) as unknown, sha256: sha256Hex(written) } });
     expect(Buffer.from(outcome.checked?.pdf ?? []).equals(written)).toBe(true);
     const full = Buffer.alloc(MAX_OUTPUT_BYTES, 1);
-    const big = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: SHA, checkedSha256: sha256Hex(full) }, full));
+    const big = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass', sha256: SHA, checkedSha256: sha256Hex(full) }, full));
     expect((await socketGate({ path: big.socket })(JOB)).checked?.pdf.byteLength).toBe(MAX_OUTPUT_BYTES);
   });
 
@@ -125,7 +137,7 @@ describe('socketGate', () => {
       [MAX_GATE_REPLY_HEADER_BYTES, 'read'],
       [MAX_GATE_REPLY_HEADER_BYTES + 1, 'over'],
     ] as const) {
-      const json = `{"v":1,"verdict":"refused","code":"rules","sha256":"${SHA}"}`;
+      const json = `{"v":2,"verdict":"refused","code":"rules","sha256":"${SHA}"}`;
       const head = Buffer.from(json + ' '.repeat(size - json.length), 'utf8');
       const prefix = Buffer.alloc(12);
       GATE_REPLY_MAGIC.copy(prefix, 0);
@@ -138,7 +150,7 @@ describe('socketGate', () => {
   });
 
   it('gives no pass for a check it cannot send, and does not connect for it', async () => {
-    const { socket, seen } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: SHA }));
+    const { socket, seen } = await fakeGate(() => encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass', sha256: SHA }));
     const tooBig = new Uint8Array(MAX_OUTPUT_BYTES + 1);
     expect(await socketGate({ path: socket })({ ...JOB, copy: tooBig, sha256: sha256Hex(tooBig) })).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: null });
     expect(await socketGate({ path: socket })({ ...JOB, quotes: Array.from({ length: 2200 }, (_, n) => `${n}`.padEnd(500, 'q')) })).toEqual({ verdict: { pass: false, code: 'unfinished' }, sha256: null });

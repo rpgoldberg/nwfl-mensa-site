@@ -257,6 +257,19 @@ from L3). `pdf_links_attach` is the one writer of links, for the loader;
 `pdf_link_disable` only turns a link off. Each link or status write queues
 its file.
 
+A copy's links (L3) are written fresh by the engine, from the approved list
+only, in one shape: a `/Link` with a `/URI` action to
+`https://<LINK_ORIGIN>/out/<id>` and the label `Link to <host>`. Nothing of
+the original's annotations is copied. A link whose rect meets a drawn box or
+removed ink is dropped, as is one whose target holds a quote the audience
+withholds (`targetHolds`). The gate accepts only that shape and refuses the
+whole copy when pdf.js reads other text under a link than the original's.
+`LINK_ORIGIN` (default `https://nwflorida.us`) is part of every input hash,
+so the API, the loader and the worker must share it. `0025` records each
+copy's links with it (`pdf_copy_put`'s seventh argument) and lets the
+worker read the links; at boot the worker queues every file with no copy
+for its current inputs.
+
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 
 The loader is the only way a PDF reaches the engine, and Ross runs it by

@@ -29,7 +29,17 @@ export function socketGate(options: { path: string; timeoutMs?: number }): (job:
   return async (job) => {
     let frame: Buffer;
     try {
-      frame = encodeGateRequest({ copy: job.copy, original: job.original, quotes: [...job.quotes], image: job.image, sha256: job.sha256, originalSha256: sha256Hex(job.original) });
+      frame = encodeGateRequest({
+        copy: job.copy,
+        original: job.original,
+        quotes: [...job.quotes],
+        image: job.image,
+        sha256: job.sha256,
+        originalSha256: sha256Hex(job.original),
+        ...(job.origin === undefined ? {} : { origin: job.origin }),
+        links: job.links ?? [],
+        kept: job.kept ?? [],
+      });
     } catch {
       return { verdict: { pass: false, code: 'unfinished' }, sha256: null };
     }

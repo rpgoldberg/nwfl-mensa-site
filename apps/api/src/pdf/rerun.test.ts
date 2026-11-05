@@ -59,10 +59,28 @@ describe('withGateRerun', () => {
     const gate = vi.fn<Gate>(() => Promise.resolve(PASS));
     const original = Uint8Array.from([8, 8]);
     await withGateRerun(engine(made), gate)(original, { quotes: ['  Kestrel ', '', '  ', 'Kestrel'], redactsAny: true, image: 'blur' });
-    expect(gate).toHaveBeenCalledWith({ copy: COPY, original, quotes: ['Kestrel'], image: 'blur', sha256: SHA });
+    expect(gate).toHaveBeenCalledWith({ copy: COPY, original, quotes: ['Kestrel'], image: 'blur', sha256: SHA, links: [], kept: [] });
     await withGateRerun(engine(made), gate)(original, { quotes: [], redactsAny: true });
     // No quotes still means a check: the copy's structure and pictures (S3); "show" when no image action.
-    expect(gate).toHaveBeenLastCalledWith({ copy: COPY, original, quotes: [], image: 'show', sha256: SHA });
+    expect(gate).toHaveBeenLastCalledWith({ copy: COPY, original, quotes: [], image: 'show', sha256: SHA, links: [], kept: [] });
+  });
+
+  it('asks the gate with the links and their origin (LINKS L3) and the ids the engine kept, and keeps the kept ids on a pass', async () => {
+    const gate = vi.fn<Gate>(() => Promise.resolve(PASS));
+    const links = [{ id: 'a'.repeat(26), page: 1, rect: [1, 2, 3, 4] as const, label: 'Link to site.example' }, { id: 'b'.repeat(26), page: 2, rect: [1, 2, 3, 4] as const, label: 'Link to site.example' }];
+    const request = { ...REQUEST, origin: 'https://nwflorida.us', links };
+    expect(await withGateRerun(engine({ ...made, kept: ['b'.repeat(26)] }), gate)(COPY, request)).toEqual({ kind: 'redacted', pdf: WRITTEN, boxes: [], kept: ['b'.repeat(26)] });
+    expect(gate).toHaveBeenCalledWith({ copy: COPY, original: COPY, quotes: ['Kestrel Ambry'], image: 'show', sha256: SHA, origin: 'https://nwflorida.us', links, kept: ['b'.repeat(26)] });
+  });
+
+  it('refuses, without asking the gate, an engine that says it kept a link it was not given, or one twice', async () => {
+    const gate = vi.fn<Gate>(() => Promise.resolve(PASS));
+    const links = [{ id: 'a'.repeat(26), page: 1, rect: [1, 2, 3, 4] as const, label: 'Link to site.example' }];
+    const request = { ...REQUEST, origin: 'https://nwflorida.us', links };
+    for (const kept of [['c'.repeat(26)], ['a'.repeat(26), 'a'.repeat(26)]]) {
+      expect(await withGateRerun(engine({ ...made, kept }), gate)(COPY, request), kept.join()).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
+    }
+    expect(gate).not.toHaveBeenCalled();
   });
 
   it('lets a gate that cannot be asked fail the job retryably, and refuses on any other failure', async () => {

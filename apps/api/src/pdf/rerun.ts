@@ -14,7 +14,8 @@
 //     the worker (gate-isolated.ts), no environment, a heap cap, a memory
 //     watchdog and a deadline.
 // The worker sends the copy, its sha256, the original (for its pictures), the
-// image policy and the quotes as the engine takes them. A pass names the
+// image policy, the quotes as the engine takes them, and (LINKS L3) the links
+// the engine was given with their origin and the ids it says it kept. A pass names the
 // copy's own sha256 and carries the bytes the gate checked: its own writing
 // of the copy (gate-rules.ts gateReply, fix round 3, M1). Only those bytes
 // are stored, once their sha256 is the one the gate names; the engine's copy
@@ -47,9 +48,14 @@ export function withGateRerun(engine: Redact, gate: Gate = isolatedGate()): Reda
     const sha256 = sha256Hex(copy);
     // The quotes as the engine takes them (redact.ts redactPdf).
     const quotes = [...new Set(request.quotes.map((quote) => quote.trim()).filter((quote) => quote !== ''))];
+    // The links it was given and the ids it says it kept (LINKS L3): an id it was not given, or one twice, is no copy.
+    const links = request.links ?? [];
+    const kept = result.kept ?? [];
+    const given = new Set(links.map((link) => link.id));
+    if (new Set(kept).size !== kept.length || kept.some((id) => !given.has(id))) return { kind: 'refused', reason: RERUN_REASONS.rules };
     let outcome: GateOutcome;
     try {
-      outcome = await gate({ copy, original, quotes, image: request.image ?? 'show', sha256 });
+      outcome = await gate({ copy, original, quotes, image: request.image ?? 'show', sha256, ...(request.origin === undefined ? {} : { origin: request.origin }), links, kept });
     } catch (error) {
       if (error instanceof RetryableEngineError) throw error;
       return { kind: 'refused', reason: RERUN_REASONS.unfinished };
