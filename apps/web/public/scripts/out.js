@@ -4,13 +4,24 @@
 // the page's status region (never every second; the seconds on screen are hidden from screen
 // readers). When it ends this tab goes on with location.replace, since a browser blocks a new tab
 // that no press opened, and the leaving page drops out of the history, so Back returns to the
-// newsletter. Stop ends it for good and hands the focus to Continue; pressing Continue (its own
-// new tab) ends it too. Loaded as a same-origin module (CSP script-src 'self'); no inline script.
+// newsletter. Stop ends it for good and hands the focus to Continue. Anything else the reader does
+// on the page ends it the same way, so no one is sent away mid-choice: a focus, an input, a press or
+// a key that is not on Stop (the radio for next time, the form, Continue, Back, anywhere), heard on
+// the whole page in the capture phase; the focus then stays where the reader put it. The timer ends
+// at once; on a press the box goes only once the press is over, so the page never moves under the
+// pointer mid-click. The stop is said once. Loaded as a same-origin module (CSP script-src 'self');
+// no inline script.
 
 export const SECONDS = 5;
 
+const STOPPED = 'Stopped. You are still on our site. Choose Continue when you are ready.';
+/** What the reader does on the page that ends the countdown, unless it is on Stop. */
+const READER_EVENTS = /** @type {const} */ (['focusin', 'input', 'pointerdown', 'keydown']);
+/** The end of a press. */
+const PRESS_OVER = /** @type {const} */ (['pointerup', 'pointercancel']);
+
 /**
- * @param {Pick<Document, 'querySelector'>} doc
+ * @param {Pick<Document, 'querySelector' | 'addEventListener' | 'removeEventListener'>} doc
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout, setInterval: typeof setInterval, clearInterval: typeof clearInterval, location: Pick<Location, 'replace'> }} win
  */
 export function wireCountdown(doc, win) {
@@ -33,14 +44,40 @@ export function wireCountdown(doc, win) {
     win.clearInterval(tick);
     win.location.replace(go.href);
   }, SECONDS * 1000);
-  const end = () => {
+  let running = true;
+  let settled = false;
+  /** The timer ends, and the page stops listening for the reader. */
+  const halt = () => {
+    if (!running) return;
+    running = false;
     win.clearTimeout(timer);
     win.clearInterval(tick);
-    box.hidden = true;
+    for (const type of READER_EVENTS) doc.removeEventListener(type, elsewhere, true);
   };
+  /** The countdown ends for good: its box goes, and the stop is said, once. */
+  const end = () => {
+    halt();
+    for (const type of PRESS_OVER) doc.removeEventListener(type, pressOver, true);
+    if (settled) return;
+    settled = true;
+    box.hidden = true;
+    status.textContent = STOPPED;
+  };
+  // After the press's own click, so what was pressed is still where it was.
+  const pressOver = () => {
+    for (const type of PRESS_OVER) doc.removeEventListener(type, pressOver, true);
+    win.setTimeout(end, 0);
+  };
+  /** @param {Event} event */
+  const elsewhere = (event) => {
+    if (stop.contains(/** @type {Node | null} */ (event.target))) return;
+    halt();
+    if (event.type !== 'pointerdown') end();
+    else for (const type of PRESS_OVER) doc.addEventListener(type, pressOver, true);
+  };
+  for (const type of READER_EVENTS) doc.addEventListener(type, elsewhere, true);
   stop.addEventListener('click', () => {
     end();
-    status.textContent = 'Stopped. You are still on our site. Choose Continue when you are ready.';
     go.focus();
   });
   go.addEventListener('click', end);

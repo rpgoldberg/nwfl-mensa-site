@@ -382,12 +382,15 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
     },
 
     // The links in the PDFs file() serves: read the same way, so a member's members copy's links resolve for them.
+    // Not found as the reader is asked again as the public, as a refused token is: an officer is served the
+    // original (the API's Q8), and a member may hold a public copy (by email, say). The public's answer leaks nothing.
     link: async (id, given) => {
       if (!LINK_ID.test(id)) return { kind: 'not_found' };
       const as = withEnroleeClaim(sendable(given));
       if (as === undefined) return reads.getLinkTarget(id);
       try {
-        return await reads.getLinkTarget(id, as);
+        const own = await reads.getLinkTarget(id, as);
+        return own.kind === 'not_found' ? await reads.getLinkTarget(id) : own;
       } catch (error) {
         if (!(error instanceof ApiTokenRefused)) throw error;
         return reads.getLinkTarget(id);

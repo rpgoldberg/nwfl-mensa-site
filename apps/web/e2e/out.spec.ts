@@ -1,14 +1,16 @@
 // LINKS L4: the leaving page /out/<id> in a real browser, desktop and phone. The guard waits for a
 // press on Continue, which opens a new tab with no opener and no referrer; the countdown goes on in
-// this tab after 5 seconds unless Stop (which has the focus) is pressed, and is the guard with
-// JavaScript off; direct goes straight there. A mail link always shows the page; a link turned off
+// this tab after 5 seconds unless Stop (which has the focus) is pressed or the reader does anything
+// else on the page (the radio, Tab, Back, a click), and is the guard with JavaScript off; direct goes
+// straight there. The same choice is in the Aa panel on every page. An officer, served the original,
+// is shown the public copy's link (the site asks again as the public). A mail link always shows the page; a link turned off
 // shows that it was, with no URL. Keyboard alone reaches Continue, Back and Stop. axe is clean in all
 // three modes, at 175 % text and in both high contrast themes, and a 320 px phone never scrolls
 // sideways. No test leaves this machine: the other site is answered by the browser's own route (the
 // direct choice's 303, which a route cannot follow, is in out-direct.spec.ts).
 import AxeBuilder from '@axe-core/playwright';
 import { type BrowserContext, type Page, expect, test } from '@playwright/test';
-import { SIZES } from '../server/prefs.mjs';
+import { LINKS_COOKIE, SIZES } from '../server/prefs.mjs';
 import { setPrefs } from './prefs';
 import { signIn } from './signin';
 import { LINKS } from './stand-in';
@@ -136,6 +138,18 @@ test.describe('the guard (the default)', () => {
     await expect(host(page)).toHaveText(LINKS.members.host);
     await expect(page.locator('.out-url')).toHaveText(LINKS.members.url);
   });
+
+  test("an officer, served the original, is shown the public copy's link, and a link turned off; the members copy's link is the 404", async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'officer');
+    expect((await page.goto(out(LINKS.web.id)))?.status()).toBe(200);
+    await expect(host(page)).toHaveText(LINKS.web.host);
+    await expect(continueLink(page)).toHaveAttribute('href', LINKS.web.url);
+    expect((await page.goto(out(LINKS.off.id)))?.status()).toBe(200);
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('This link was turned off');
+    expect(await page.content()).not.toContain(LINKS.off.host);
+    expect((await page.goto(out(LINKS.members.id)))?.status()).toBe(404);
+  });
 });
 
 test.describe('the countdown', () => {
@@ -172,6 +186,54 @@ test.describe('the countdown', () => {
     expect(seen).toEqual([]);
   });
 
+  const STOPPED = 'Stopped. You are still on our site. Choose Continue when you are ready.';
+  /** Every text the status region is given, from the first: the stop is said once. */
+  const statusLog = (page: Page) =>
+    page.addInitScript(() => {
+      const said: string[] = [];
+      (window as unknown as { said: string[] }).said = said;
+      new MutationObserver((records) => {
+        for (const r of records) if (r.target instanceof Element && r.target.matches('[data-out-status]')) said.push(r.target.textContent ?? '');
+      }).observe(document, { subtree: true, childList: true, characterData: true });
+    });
+  const said = (page: Page) => page.evaluate(() => (window as unknown as { said: string[] }).said);
+  const ANNOUNCED = `Going to ${LINKS.web.host} in 5 seconds. Press Stop to stay on this page.`;
+
+  const elsewhere: Array<[string, (page: Page) => Promise<void>, string | undefined]> = [
+    ['choosing a radio for next time', (page) => page.getByRole('radio', { name: /wait until I choose Continue/ }).check(), 'radio'],
+    ['the keyboard moving on from Stop, to Continue', (page) => page.keyboard.press('Tab'), 'continue'],
+    ['the focus on Back', (page) => page.getByRole('link', { name: 'Back to the newsletter' }).focus(), 'back'],
+    ['a press anywhere on the page', (page) => page.getByRole('heading', { level: 1 }).click(), undefined],
+  ];
+  for (const [name, act, keeps] of elsewhere) {
+    test(`${name} stops it, as Stop does: said once, nothing moves, and the focus stays where the reader put it`, async ({ page, context }) => {
+      const seen = await otherSites(context);
+      await statusLog(page);
+      await page.goto(out(LINKS.web.id));
+      await expect(page.getByRole('button', { name: 'Stop' })).toBeFocused();
+      await act(page);
+      await expect(page.locator('[data-out-status]')).toHaveText(STOPPED);
+      await expect(page.locator('[data-out-countdown]')).toBeHidden();
+      if (keeps === 'radio') await expect(page.getByRole('radio', { name: /wait until I choose Continue/ })).toBeFocused();
+      if (keeps === 'continue') await expect(continueLink(page)).toBeFocused();
+      if (keeps === 'back') await expect(page.getByRole('link', { name: 'Back to the newsletter' })).toBeFocused();
+      await page.waitForTimeout(6500);
+      expect(page.url()).toContain(out(LINKS.web.id));
+      expect(seen).toEqual([]);
+      expect(await said(page)).toEqual([ANNOUNCED, STOPPED]);
+    });
+  }
+
+  test('Stop, then more on the page, says the stop once', async ({ page }) => {
+    await statusLog(page);
+    await page.goto(out(LINKS.web.id));
+    await page.keyboard.press('Enter');
+    await page.getByRole('radio', { name: /Go straight/ }).check();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('[data-out-status]')).toHaveText(STOPPED);
+    expect(await said(page)).toEqual([ANNOUNCED, STOPPED]);
+  });
+
   test('right after the reader saves a choice, the page shows and does not count down', async ({ page, context }) => {
     const seen = await otherSites(context);
     await page.goto(out(LINKS.web.id));
@@ -200,6 +262,64 @@ test.describe('the countdown with JavaScript off', () => {
     expect(page.url()).toContain(out(LINKS.web.id));
     expect(seen).toEqual([]);
   });
+});
+
+// The same choice in the Aa panel, on every page: a reader who chose to go straight there never sees
+// the leaving page's form again, so the panel is their way back (orchestrator's decision 6).
+test.describe('the choice in the Aa panel', () => {
+  const choice = (page: Page) => page.locator('#reader-menu').getByRole('group', { name: 'Leaving the site' });
+  const LABELS = ['Show a page first, and wait for me to continue', 'Show a page first, then continue after 5 seconds', 'Go straight to the other site'] as const;
+
+  test.describe('with JavaScript off', () => {
+    test.use({ javaScriptEnabled: false });
+
+    // One page rendered on request, one prerendered: both must show the choice from the cookie.
+    for (const path of ['/officers', '/about']) {
+      test(`a reader who chose to go straight there sees it chosen, and can choose the page again, from ${path}`, async ({ page, context, baseURL }) => {
+        await setPrefs(context, baseURL!, { links: 'direct' });
+        await page.goto(`${path}#reader-menu`);
+        await expect(choice(page).getByRole('button')).toHaveText(LABELS.map((label) => new RegExp(`^${label}`)));
+        await expect(choice(page).getByRole('button', { name: `${LABELS[2]} Chosen`, exact: true })).toBeVisible();
+        await choice(page).getByRole('button', { name: LABELS[0], exact: true }).click();
+        await expect(page).toHaveURL(new RegExp(`${path}#reader-menu$`));
+        await expect(choice(page).getByRole('button', { name: `${LABELS[0]} Chosen`, exact: true })).toBeVisible();
+        expect((await context.cookies()).map((c) => c.name)).not.toContain(LINKS_COOKIE);
+        expect((await page.goto(out(LINKS.web.id)))?.status()).toBe(200);
+        await expect(host(page)).toHaveText(LINKS.web.host);
+
+        await page.goto(`${path}#reader-menu`);
+        await choice(page).getByRole('button', { name: LABELS[1], exact: true }).click();
+        await expect(choice(page).getByRole('button', { name: `${LABELS[1]} Chosen`, exact: true })).toBeVisible();
+        expect((await context.cookies()).find((c) => c.name === LINKS_COOKIE)).toMatchObject({ value: 'countdown', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
+        await choice(page).getByRole('button', { name: LABELS[2], exact: true }).click();
+        expect((await context.cookies()).find((c) => c.name === LINKS_COOKIE)?.value).toBe('direct');
+        // A press here keeps the size and theme.
+        await expect(page.locator('html')).toHaveAttribute('data-size', '100');
+        await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/);
+      });
+    }
+  });
+
+  test('each choice is a labelled button of at least 48 px, whole at 175 % on any screen', async ({ page, context, baseURL }) => {
+    await setPrefs(context, baseURL!, { size: SIZES[6], links: 'countdown' });
+    await page.goto('/about#reader-menu');
+    await expect(choice(page)).toBeVisible();
+    for (const button of await choice(page).getByRole('button').all()) {
+      const box = (await button.boundingBox())!;
+      expect(box.height, await button.textContent() ?? '').toBeGreaterThanOrEqual(48);
+      expect(await button.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+
+  for (const links of ['guard', 'direct'] as const) {
+    test(`axe on the open Aa panel at 175 % text, ${links} chosen`, async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { size: SIZES[6], links });
+      await page.goto('/about#reader-menu');
+      await expect(choice(page)).toBeVisible();
+      expect(await axe(page)).toEqual([]);
+    });
+  }
 });
 
 test.describe('accessibility', () => {

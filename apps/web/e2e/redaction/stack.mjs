@@ -31,8 +31,10 @@
 // the issue loader's shape, holds a public PDF and a members PDF: /news links
 // the first, and the members file's id must reach no public response.
 //
-// LINKS L4: two approved links on that PDF, in every copy made of it: one plain, one whose target holds
-// the marked phone canary. The leaving page shows the first and is the 404 for the second.
+// LINKS L4: three approved links on that PDF, in every copy made of it: one plain, one whose target holds
+// the marked phone canary, and one turned off before the worker ran. The leaving page shows the first,
+// is the 404 for the second, and says the third was turned off (the ledger the worker writes names the
+// copies each audience was served, so the read can tell the audience's copy carried it).
 //
 // Ready when GET /fixture on STACK_PORT answers: the canaries, the ids the
 // test needs and how many times each canary is stored (the positive control:
@@ -72,7 +74,7 @@ const APP = { user: 'nwfl', password: 'app-pw' };
 const WORKER = { user: 'nwfl_worker', password: 'worker-pw' };
 const db = `nwfl_redact_e2e_${randomBytes(4).toString('hex')}`;
 // LINKS L4: the link ids of the marked item's public PDF (26 lower-case base32 characters).
-const LINK_IDS = { plain: 'redactlinkplainaaaaaaaaaaa', held: 'redactlinkheldaaaaaaaaaaaa' };
+const LINK_IDS = { plain: 'redactlinkplainaaaaaaaaaaa', held: 'redactlinkheldaaaaaaaaaaaa', off: 'redactlinkoffaaaaaaaaaaaaa' };
 
 /**
  * @param {string[]} args
@@ -403,8 +405,10 @@ try {
     db,
     `INSERT INTO pdf_link (id, file_id, page, rect, url, host, kind, confirm, approval_reference, links_sha256, created_by_sub) VALUES
        (${q(LINK_IDS.plain)}, ${q(ids.pdf)}, 1, '{72, 500, 300, 514}', 'https://club.example/receipts', 'club.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader'),
-       (${q(LINK_IDS.held)}, ${q(ids.pdf)}, 1, '{72, 400, 300, 414}', ${q(`https://club.example/call/${C.phone}`)}, 'club.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader');
-     INSERT INTO pdf_link_status (link_id, status, reason, by_sub) SELECT id, 'active', 'attached', 'system:issue-loader' FROM pdf_link;`,
+       (${q(LINK_IDS.held)}, ${q(ids.pdf)}, 1, '{72, 400, 300, 414}', ${q(`https://club.example/call/${C.phone}`)}, 'club.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader'),
+       (${q(LINK_IDS.off)}, ${q(ids.pdf)}, 2, '{72, 300, 300, 314}', 'https://parked.example/gone', 'parked.example', 'web', false, 'LINKS-E2E', sha256('e2e'::bytea), 'system:issue-loader');
+     INSERT INTO pdf_link_status (link_id, status, reason, by_sub) SELECT id, 'active', 'attached', 'system:issue-loader' FROM pdf_link;
+     SELECT pdf_link_disable(${q(LINK_IDS.off)}, 'parked', 'svc-nwfl-linkcheck', NULL);`,
   );
   const counts = await stored();
 
@@ -456,7 +460,7 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  // LINKS L4: every copy made of the PDF holds both links, as the worker (L3) will write them; so the read's
+  // LINKS L4: every copy made of the PDF holds the three links, as the worker (L3) will write them; so the read's
   // own check against the marks is all that stands between the public and the held link's target.
   await psql(
     db,

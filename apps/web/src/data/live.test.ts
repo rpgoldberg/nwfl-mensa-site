@@ -1064,6 +1064,38 @@ describe('liveData.link (LINKS L4)', () => {
     expect(asked).toEqual(['member.token', 'refused', undefined, undefined, undefined]);
   });
 
+  it("asks once more as the public when the reader's own read is not found (an officer, served the original; a member holding a public copy's link)", async () => {
+    const asked: (string | undefined)[] = [];
+    const live = liveData(
+      reads({
+        getLinkTarget: (_id, as) => {
+          asked.push(as?.bearer);
+          return Promise.resolve(as === undefined ? ACTIVE : { kind: 'not_found' as const });
+        },
+      }),
+    );
+    expect(await live.link(LINK, { bearer: 'officer.token', enrolee: true })).toEqual(ACTIVE);
+    expect(asked).toEqual(['officer.token', undefined]);
+  });
+
+  it("keeps the reader's own answer when it is found or turned off, and not found when the public's is too", async () => {
+    const OFF = { kind: 'disabled' as const, fileId: ACTIVE.fileId, page: 3 };
+    const asked: (string | undefined)[] = [];
+    const answers: Record<string, Awaited<ReturnType<ApiReads['getLinkTarget']>>> = { 'member.token': ACTIVE, 'off.token': OFF, 'none.token': { kind: 'not_found' } };
+    const live = liveData(
+      reads({
+        getLinkTarget: (_id, as) => {
+          asked.push(as?.bearer);
+          return Promise.resolve(as === undefined ? { kind: 'not_found' as const } : (answers[as.bearer] ?? { kind: 'not_found' as const }));
+        },
+      }),
+    );
+    expect(await live.link(LINK, { bearer: 'member.token', enrolee: true })).toEqual(ACTIVE);
+    expect(await live.link(LINK, { bearer: 'off.token', enrolee: true })).toEqual(OFF);
+    expect(await live.link(LINK, { bearer: 'none.token', enrolee: true })).toEqual({ kind: 'not_found' });
+    expect(asked).toEqual(['member.token', 'off.token', 'none.token', undefined]);
+  });
+
   it('passes an unavailable API on, without asking again', async () => {
     let asked = 0;
     const live = liveData(reads({ getLinkTarget: () => (asked++, Promise.reject(new ApiUnavailable('GetLinkTarget'))) }));

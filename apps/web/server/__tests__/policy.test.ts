@@ -68,6 +68,16 @@ describe('referrerPolicy (LINKS L4)', () => {
   it("keeps the site's policy everywhere else", () => {
     for (const path of ['/', '/outings', '/about', '/documents/x.pdf', '/news/out', '/out-of-date']) expect(referrerPolicy(path), path).toBe('strict-origin-when-cross-origin');
   });
+
+  it('knows the leaving page behind repeated slashes, which the router serves as the page', () => {
+    for (const path of ['//out/abcdefghijklmnopqrstuvwxyz', '///out/x', '//OUT/x', '//out']) expect(referrerPolicy(path), path).toBe('no-referrer');
+    for (const path of ['//outings', '//news/out', '/x//out/y']) expect(referrerPolicy(path), path).toBe('strict-origin-when-cross-origin');
+  });
+
+  it("never loosens a handler's no-referrer, on any path; a looser one the handler set is the site's", () => {
+    for (const handler of ['no-referrer', 'No-Referrer', ' no-referrer ', 'strict-origin, no-referrer', ['no-referrer']]) expect(referrerPolicy('/about', handler), String(handler)).toBe('no-referrer');
+    for (const handler of [undefined, 'unsafe-url', 'origin', 'no-referrer-when-downgrade', 7]) expect(referrerPolicy('/about', handler), String(handler)).toBe('strict-origin-when-cross-origin');
+  });
 });
 
 describe('hasCookie', () => {
@@ -143,6 +153,21 @@ describe('cacheControl (R26)', () => {
 
 // A14: a members response stays private even if a handler is the only one that knows it is one, and a CDN
 // rule that overrides the origin's Cache-Control still sees CDN-Cache-Control (D6).
+describe('the leaving page is never stored (LINKS L4)', () => {
+  const anon = { cookieHeader: undefined, setsCookie: false };
+  it('whatever its answer: the page, the 303, the 301 of a trailing slash and the 404', () => {
+    for (const status of [200, 301, 303, 404]) {
+      for (const path of ['/out/abcdefghijklmnopqrstuvwxyz', '/out/x/', '//out/x', '/OUT/x']) expect(cacheControl({ ...anon, path, status }), `${status} ${path}`).toBe('private, no-store');
+    }
+  });
+
+  it('by the path the handler serves, when the raw one hides it', () => {
+    expect(cacheControl({ ...anon, path: '/%6Fut/x/', served: ['/out/x/'], status: 301 })).toBe('private, no-store');
+    expect(cacheControl({ ...anon, path: '/x/', served: [undefined, '//out/x/'], status: 301 })).toBe('private, no-store');
+    expect(cacheControl({ ...anon, path: '/outings', served: ['/outings', undefined], status: 200 })).toBe('public, max-age=60, stale-while-revalidate=60');
+  });
+});
+
 describe('a handler that marks its response private (A14)', () => {
   const anon = { path: '/documents/f1000000-0000-4000-8000-000000000010.pdf', cookieHeader: undefined, status: 200, setsCookie: false };
 

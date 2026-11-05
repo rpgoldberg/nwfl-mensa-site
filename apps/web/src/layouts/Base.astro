@@ -38,7 +38,7 @@ const attrs = htmlAttributes(prefs);
 const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.search}`;
 ---
 <!doctype html>
-<html lang="en" data-size={attrs['data-size']} data-theme={attrs['data-theme']}>
+<html lang="en" data-size={attrs['data-size']} data-theme={attrs['data-theme']} data-links={attrs['data-links']}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

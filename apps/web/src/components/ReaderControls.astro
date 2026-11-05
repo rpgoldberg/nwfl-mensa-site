@@ -5,6 +5,9 @@
 // at once and hides the button. Which size and theme are current is shown by
 // CSS from <html data-size data-theme>, so a prerendered page shows it too; only
 // the slider's value differs by reader, and the server stamps it (prefs.mjs).
+// LINKS L4: the leaving page's choice too, the same three as its "Next time" form,
+// so a reader who chose to go straight to other sites always has a way back. The
+// one chosen is shown by CSS from <html data-links>, as the theme is.
 import { SIZES, sizeSlider, type Size } from '../../server/prefs.mjs';
 
 interface Props {
@@ -20,6 +23,11 @@ const THEME_OPTIONS = [
   { value: 'dark', label: 'Dark' },
   { value: 'contrast-yellow', label: 'High contrast, soft yellow' },
   { value: 'contrast-white', label: 'High contrast, warm white' },
+];
+const LINK_OPTIONS = [
+  { value: 'guard', label: 'Show a page first, and wait for me to continue' },
+  { value: 'countdown', label: 'Show a page first, then continue after 5 seconds' },
+  { value: 'direct', label: 'Go straight to the other site' },
 ];
 ---
 <form class="reader-form" method="post" action="/prefs">
@@ -51,6 +59,17 @@ const THEME_OPTIONS = [
     <div class="theme-options">
       {THEME_OPTIONS.map((o) => (
         <button class="theme-btn" type="submit" name="theme" value={o.value}>
+          {o.label} <span class="chosen">Chosen</span>
+        </button>
+      ))}
+    </div>
+  </fieldset>
+  <fieldset class="reader-group">
+    <legend>Leaving the site</legend>
+    <p class="links-note" id="links-note">When a link in our newsletter leads to another site. Email links always show a page first.</p>
+    <div class="theme-options">
+      {LINK_OPTIONS.map((o) => (
+        <button class="links-btn" type="submit" name="links" value={o.value} aria-describedby="links-note">
           {o.label} <span class="chosen">Chosen</span>
         </button>
       ))}

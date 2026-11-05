@@ -45,18 +45,34 @@ export function securityHeaders({ formAction = [] }) {
   });
 }
 
-/** LINKS L4: the leaving page /out/<id>, and anything under /out, in any case. */
-const LEAVING_PAGE = /^\/out(\/|$)/i;
+/**
+ * LINKS L4: the leaving page /out/<id>, and anything under /out, in any case, behind
+ * any number of slashes (the router serves //out/<id> as the page).
+ */
+const LEAVING_PAGE = /^\/+out(\/|$)/i;
+
+/**
+ * The leaving page, by any of the paths given (the raw one, the one the handler serves).
+ *
+ * @param {...(string | undefined)} paths
+ */
+export function isLeavingPage(...paths) {
+  return paths.some((path) => path !== undefined && LEAVING_PAGE.test(path));
+}
 
 /**
  * The Referrer-Policy for a path: none at all on the leaving page, so the site a
  * reader leaves for (by Continue, the countdown or the 303) learns nothing of the
- * page they came from; the site's policy everywhere else.
+ * page they came from; the site's policy everywhere else. A handler may make it
+ * stricter, never looser: its no-referrer stands on any path (as cacheControl
+ * keeps a handler's private), and any other value it set is the site's.
  *
  * @param {string} path
+ * @param {string | number | string[] | undefined} [handler] the Referrer-Policy the handler set, if any
  */
-export function referrerPolicy(path) {
-  return LEAVING_PAGE.test(path) ? 'no-referrer' : 'strict-origin-when-cross-origin';
+export function referrerPolicy(path, handler) {
+  const strict = handler !== undefined && String(handler).split(',').some((token) => token.trim().toLowerCase() === 'no-referrer');
+  return strict || isLeavingPage(path) ? 'no-referrer' : 'strict-origin-when-cross-origin';
 }
 
 /** The headers with no sign-in provider configured. */
@@ -119,13 +135,16 @@ export const PUBLIC_CACHE = 'public, max-age=60, stale-while-revalidate=60';
  * are never stored, so a page that is back a moment later is not kept missing.
  * A handler may make its response private (A14: a members copy read with a
  * reader's token), never looser: any other Cache-Control it set is overridden.
+ * The leaving page (LINKS L4) depends on the reader's cookie and token, so every
+ * answer under it, the 301 of a trailing slash too, is private.
  *
- * @param {{ path: string, cookieHeader: string | undefined, status: number, setsCookie: boolean, handler?: string | number | string[] | undefined }} r
- *   handler: the Cache-Control the handler set, if any
+ * @param {{ path: string, served?: ReadonlyArray<string | undefined>, cookieHeader: string | undefined, status: number, setsCookie: boolean, handler?: string | number | string[] | undefined }} r
+ *   served: the other forms of the path the handler may serve it as (decoded, or as the request
+ *   target wrote it); handler: the Cache-Control the handler set, if any
  */
 export function cacheControl(r) {
   const handlerPrivate = r.handler !== undefined && /(^|,)\s*private\s*(,|$)/i.test(String(r.handler));
-  if (r.setsCookie || handlerPrivate || hasCookie(r.cookieHeader, SESSION_COOKIE)) return 'private, no-store';
+  if (r.setsCookie || handlerPrivate || hasCookie(r.cookieHeader, SESSION_COOKIE) || isLeavingPage(r.path, ...(r.served ?? []))) return 'private, no-store';
   if (r.status >= 400 || r.path === '/healthz') return 'no-store';
   if (HASHED_ASSET.test(r.path) && r.status === 200) return 'public, max-age=31536000, immutable';
   return PUBLIC_CACHE;

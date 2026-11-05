@@ -17,11 +17,16 @@
 //   * its URL holds none of this audience's withheld quotes as the marks
 //     stand now (targetHolds, load/links.ts: the loader's own check, every
 //     decoded form), so a mark added since the copy was made holds it at once.
-// A link turned off (pdf_link_disable) is DISABLED with its date, file and
-// page, and never its URL, host or kind, to an audience that may have the
-// file; it never resolves. Everything else, an officer's read included (an
-// officer is served the original, with its own links: Q8), is NOT_FOUND
-// "link not found", exactly as an unknown id. Nothing about a link is logged.
+// A link turned off (pdf_link_disable) never resolves. It is DISABLED, with
+// its date, file and page and never its URL, host or kind, only to a reader
+// who may have the file now and could hold the link: an officer, or an
+// audience whose copy carried it (the publication ledger, 0016, names each
+// copy the audience was served, by its input hash; pdf_copy_link what that
+// copy held). So a link only the members copy held is NOT_FOUND to the public.
+// Everything else, an officer's read of an active link included (an officer
+// is served the original, with its own links: Q8; the site asks again as the
+// public), is NOT_FOUND "link not found", exactly as an unknown id. Nothing
+// about a link is logged.
 // ============================================================================
 import type { MessageInitShape } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
@@ -31,6 +36,7 @@ import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { type GetLinkTargetResponseSchema, LinkTargetKind, LinkTargetStatus } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { LINK_ID, targetHolds } from '../load/links.js';
+import { TENANT } from '../redaction/policy.js';
 import { servableFile, servedInputs } from './files.js';
 
 type Query = Pick<Db, 'query'>;
@@ -58,7 +64,10 @@ export async function linkTarget(db: Query, linkId: string, audience: Audience):
   if ((await servableFile(db, link.file_id, audience)) === null) return NOT_FOUND;
   const inputs = await servedInputs(db, link.file_id, audience);
   if (inputs.kind === 'none') return NOT_FOUND;
-  if (link.status !== 'active') return { kind: 'disabled', fileId: link.file_id, page: link.page, at: link.at };
+  if (link.status !== 'active') {
+    const carried = audience === 'officers' || (await everCarried(db, link.file_id, linkId, audience));
+    return carried ? { kind: 'disabled', fileId: link.file_id, page: link.page, at: link.at } : NOT_FOUND;
+  }
   if (inputs.kind !== 'copy') return NOT_FOUND;
   const held = await db.query(
     `SELECT 1 FROM pdf_copy_link cl JOIN pdf_copy c ON c.file_id = cl.file_id AND c.input_hash = cl.input_hash
@@ -67,6 +76,19 @@ export async function linkTarget(db: Query, linkId: string, audience: Audience):
   );
   if (held.rows.length === 0 || targetHolds(link.url, inputs.quotes)) return NOT_FOUND;
   return { kind: 'active', url: link.url, host: link.host, mail: link.kind === 'mail', confirm: link.confirm, fileId: link.file_id, page: link.page, at: link.at };
+}
+
+/** Whether a copy this audience was ever served (the ledger's 'copy' rows, by input hash) held the link. */
+async function everCarried(db: Query, fileId: string, linkId: string, audience: Audience): Promise<boolean> {
+  const { rows } = await db.query(
+    `SELECT 1 FROM publication_ledger g
+       JOIN pdf_copy_link cl ON cl.file_id = g.subject_id AND cl.input_hash = decode(g.inputs ->> 'input_hash', 'hex')
+      WHERE g.tenant_id = $1 AND g.subject_kind = 'stored_file' AND g.subject_id = $2 AND g.audience = $3
+        AND g.inputs ->> 'served' = 'copy' AND cl.link_id = $4
+      LIMIT 1`,
+    [TENANT, fileId, audience, linkId],
+  );
+  return rows.length > 0;
 }
 
 export interface LinkDeps {

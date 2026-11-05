@@ -2054,11 +2054,13 @@ export declare const ContentService: GenService<{
    * /out/<id>. A link resolves only when it is in the copy the caller's
    * audience is served now, is active, and its target holds none of the
    * audience's withheld passages as they stand now. A link turned off is
-   * DISABLED, with its date, file and page and never its URL, to an audience
-   * that may have its file. Anything else (an unknown or malformed id,
+   * DISABLED, with its date, file and page and never its URL, only to a
+   * caller who may have its file and could hold the link: an officer, or an
+   * audience whose copy carried it (so a link only the members copy held is
+   * NOT_FOUND to the public). Anything else (an unknown or malformed id,
    * another audience's link, one dropped from the copy served now or held by
-   * a mark, an officer's read of a file served as its original) is answered
-   * exactly as an unknown id: NOT_FOUND, "link not found".
+   * a mark, an officer's read of an active link, the officer being served the
+   * original) is answered exactly as an unknown id: NOT_FOUND, "link not found".
    *
    * @generated from rpc nwfl.mensa.v1.ContentService.GetLinkTarget
    */

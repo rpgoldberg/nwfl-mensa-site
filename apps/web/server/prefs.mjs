@@ -137,6 +137,8 @@ export function htmlAttributes(prefs) {
   /** @type {Record<string, string>} */
   const attrs = { lang: 'en', 'data-size': String(prefs.size) };
   if (prefs.theme) attrs['data-theme'] = prefs.theme;
+  // LINKS L4: the leaving page's choice, so the Aa panel shows it on any page, prerendered too.
+  if (prefs.links) attrs['data-links'] = prefs.links;
   return attrs;
 }
 

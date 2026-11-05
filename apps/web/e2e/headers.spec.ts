@@ -330,6 +330,43 @@ test.describe('the leaving page (LINKS L4)', () => {
     }
   });
 
+  /** A GET to the server with its path sent as written (no dot segment resolved), as cloudflared would pass it on. */
+  function rawGet(path: string, headers: Record<string, string>): Promise<http.IncomingMessage> {
+    const backend = new URL(BACKEND_URL);
+    return new Promise((resolve, reject) => {
+      const req = http.request({ host: backend.hostname, port: backend.port, path, headers: { 'X-Forwarded-Proto': 'https', ...headers } }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  test('a path variant that serves the leaving page keeps its no-referrer and is never stored, the 303 included', async () => {
+    const id = LINKS.web.id;
+    for (const [cookie, status] of [['', 200], [`${LINKS_COOKIE}=direct`, 303]] as const) {
+      for (const path of [`//out/${id}`, `///out/${id}`, `/./out/${id}`, `/%6Fut/${id}`, `//%6Fut/${id}`]) {
+        const res = await rawGet(path, cookie ? { cookie } : {});
+        expect(res.statusCode, `${cookie} ${path}`).toBe(status);
+        expect(res.headers['referrer-policy'], `${cookie} ${path}`).toBe('no-referrer');
+        expect(res.headers['cache-control'], `${cookie} ${path}`).toBe('private, no-store');
+        if (status === 303) expect(res.headers['location'], path).toBe(LINKS.web.url);
+      }
+    }
+  });
+
+  test("the trailing slash's 301 back to the leaving page is never stored either", async ({ request }) => {
+    for (const cookie of ['', `${LINKS_COOKIE}=direct`]) {
+      const res = await request.get(`${out(LINKS.web.id)}/`, { headers: cookie ? { cookie } : {}, maxRedirects: 0 });
+      expect(res.status(), cookie).toBe(301);
+      expect(res.headers()['location'], cookie).toBe(out(LINKS.web.id));
+      expect(res.headers()['cache-control'], cookie).toBe('private, no-store');
+      expect(res.headers()['cdn-cache-control'], cookie).toBe('no-store');
+      expect(res.headers()['referrer-policy'], cookie).toBe('no-referrer');
+    }
+  });
+
   test('a forged or unknown links cookie is the guard: the page, never a redirect', async ({ request }) => {
     for (const value of ['DIRECT', 'redirect', 'https://evil.example/', 'direct,direct', '1']) {
       const res = await request.get(out(LINKS.web.id), { headers: { cookie: `${LINKS_COOKIE}=${value}` }, maxRedirects: 0 });

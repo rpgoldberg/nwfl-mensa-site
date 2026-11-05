@@ -17,10 +17,13 @@
 // the "refused" account; the "articles-down" member's articles read fails as an
 // API that could not answer it. Without a token the public's answer is a buggy API's:
 // it lists members files, a members article in full, an officers article.
-// LINKS L4: GetLinkTarget answers for the links of e2e/stand-in.ts LINKS, as the API would, the members
-// link for a member (or an officer) alone; and three a buggy API might send (a javascript: URL, an
-// angle-bracketed one and an RTL-override host), which the site must refuse to render. A link turned
-// off comes with its URL here, which the real API never sends, so the page is seen not to show it.
+// LINKS L4: GetLinkTarget answers for the links of e2e/stand-in.ts LINKS as the API does
+// (apps/api/src/content/link-target.ts): a link resolves for an audience whose copy holds it (both
+// copies, or the members copy alone), never for an officer, who is served the original (Q8); a link
+// turned off says so to an audience whose copy held it, and to an officer. Also three a buggy API might
+// send (a javascript: URL, an angle-bracketed one and an RTL-override host), which the site must refuse
+// to render. A link turned off comes with its URL here, which the real API never sends, so the page is
+// seen not to show it.
 // SOLO-APPROVE: ApprovalRuleService takes the officer's token as the API does (officers and the Admin
 // read the rule, the Admin alone sets it), keeping one setting per subject (below).
 // W-SIGNUP: MembershipService takes the person's own token as the API does: their own account and
@@ -606,7 +609,9 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     getLinkTarget: async (req, ctx) => {
       const audience = await audienceOf(ctx);
       const link = Object.hasOwn(LINKS, req.linkId) ? LINKS[req.linkId] : undefined;
-      if (!issues || link === undefined || (link.members && audience !== 'members' && audience !== 'officers')) throw new ConnectError('link not found', Code.NotFound);
+      // The copy this audience is served holds the link: the members copy alone holds a members link.
+      const held = audience === 'members' || (audience !== 'officers' && !link?.members);
+      if (!issues || link === undefined || (!held && !(link.disabled && audience === 'officers'))) throw new ConnectError('link not found', Code.NotFound);
       const place = { fileId: LINK_FILE, page: link.page ?? 1, statusAt: LINK_AT };
       if (link.disabled) return { status: LinkTargetStatus.DISABLED, url: link.url, host: link.host, ...place };
       return { status: LinkTargetStatus.ACTIVE, url: link.url, host: link.host, kind: link.kind, confirm: link.confirm ?? false, ...place };

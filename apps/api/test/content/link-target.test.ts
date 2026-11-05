@@ -2,10 +2,13 @@
 // when it is in pdf_copy_link for the copy this audience is served now, its latest status is
 // active, and its URL holds none of this audience's withheld quotes as they stand at the read
 // (targetHolds, src/load/links.ts). A link turned off says so, with its date and file and page,
-// never its URL, and only to an audience that may have its file. Every other id (unknown,
+// never its URL, and only to an audience whose copy carried it (the publication ledger names the
+// copies each audience was served, and pdf_copy_link what each held), or to an officer, for a file
+// they may have. Every other id (unknown,
 // malformed, another audience's, dropped from the copy served now, held by a mark, of a hidden
 // or unpublished file, or asked by an officer, who is served the original) is answered exactly
-// as an unknown one. The links and copies are seeded rows: the worker (L3) is not needed here.
+// as an unknown one. The links and copies are seeded rows, and the ledger recorded over them as the
+// worker records it with each copy: the worker (L3) is not needed here.
 // Every URL is under a reserved example name; every person is made up.
 import { createHash } from 'node:crypto';
 import { Code, ConnectError } from '@connectrpc/connect';
@@ -13,6 +16,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentService, LinkTargetKind, LinkTargetStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { MarkField, MarkSubjectKind, RedactionCategory, RedactionPolicyService } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
+import { recordAll } from '../../src/ledger/ledger.js';
 import { inputsFor, storeOriginal } from '../../src/pdf/store.js';
 import { type Api, MEMBER, OFFICER, dump, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
@@ -41,6 +45,9 @@ const LINKS = {
   noStatus: id(11),
   notReady: id(12),
   draft: id(13),
+  membersCopyOff: id(14),
+  neverServedOff: id(15),
+  historyOff: id(16),
 };
 
 type Options = { headers?: Record<string, string> };
@@ -126,9 +133,12 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
     await link(LINKS.held, trip.file, `https://club.example/rides/call-${PHONE}`);
     await link(LINKS.heldEncoded, trip.file, 'https://club.example/r/850%2D555%2D0147');
     await link(LINKS.noStatus, trip.file, 'https://club.example/no-status', { status: false });
+    // Turned off below: one only the members copy held, one no copy held.
+    await link(LINKS.membersCopyOff, trip.file, 'https://club.example/members-copy-only', { page: 4 });
+    await link(LINKS.neverServedOff, trip.file, 'https://club.example/never-served', { page: 5 });
     // The copies a buggy worker could have made: the held links in them too (the read checks again).
     await copy(trip.file, 'public', [LINKS.web, LINKS.social, LINKS.mail, LINKS.off, LINKS.held, LINKS.heldEncoded, LINKS.noStatus]);
-    await copy(trip.file, 'members', [LINKS.web, LINKS.held]);
+    await copy(trip.file, 'members', [LINKS.web, LINKS.held, LINKS.membersCopyOff]);
     // An older copy, keyed by inputs no longer current, that still held the dropped link.
     await copy(trip.file, 'public', [LINKS.dropped], sha('an older copy'));
 
@@ -162,9 +172,22 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
     await link(LINKS.draft, draft, 'https://club.example/draft');
     await copy(draft, 'public', [LINKS.draft]);
 
+    // A public file whose public copy held a link, and then a new mark gave the public another copy
+    // (not made yet) before the link was turned off: the public was still served the copy with it.
+    const history = await publish('history', 'public');
+    await mark(history.itemId, MarkField.BODY, PHONE, RedactionCategory.MEMBER_PHONE);
+    await link(LINKS.historyOff, history.file, 'https://club.example/history', { page: 6 });
+    await copy(history.file, 'public', [LINKS.historyOff]);
+
+    // What each audience is served, as the worker records it with each copy (ledger.ts recordClaimedFile).
+    await recordAll(api.pool);
+    await mark(history.itemId, MarkField.BODY, EMAIL, RedactionCategory.MEMBER_EMAIL);
+    await recordAll(api.pool);
+
     // Turned off after its copy was made (LinkCheckService, L5, through 0024's pdf_link_disable).
     await api.pool.query(`SELECT pdf_link_disable($1, 'parked', 'svc-nwfl-linkcheck', NULL)`, [LINKS.off]);
     await api.pool.query(`SELECT pdf_link_disable($1, 'nxdomain', 'svc-nwfl-linkcheck', NULL)`, [LINKS.membersOff]);
+    for (const off of [LINKS.membersCopyOff, LINKS.neverServedOff, LINKS.historyOff]) await api.pool.query(`SELECT pdf_link_disable($1, 'parked', 'svc-nwfl-linkcheck', NULL)`, [off]);
   });
 
   afterAll(async () => {
@@ -225,6 +248,40 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
       expect(await ask(LINKS.membersOff, MEMBER)).toMatchObject({ status: LinkTargetStatus.DISABLED, url: '', fileId: files['club'] });
       expect(await ask(LINKS.membersOff)).toEqual(await ask(id(99)));
     });
+
+    it('goes only to an audience whose copy carried it: a link only the members copy held is not found for the public', async () => {
+      expect(await ask(LINKS.membersCopyOff, MEMBER)).toMatchObject({ status: LinkTargetStatus.DISABLED, url: '', host: '', fileId: files['trip'], page: 4 });
+      expect(await ask(LINKS.membersCopyOff)).toEqual(await ask(id(99)));
+    });
+
+    it('is not found for members when only the public copy held it', async () => {
+      expect(await ask(LINKS.off, MEMBER)).toEqual(await ask(id(99)));
+    });
+
+    it('is not found for the public or members when no copy they were served held it', async () => {
+      const unknown = await ask(id(99));
+      expect(await ask(LINKS.neverServedOff)).toEqual(unknown);
+      expect(await ask(LINKS.neverServedOff, MEMBER)).toEqual(unknown);
+    });
+
+    it('goes to an audience whose earlier copy held it, though the copy served now is another', async () => {
+      expect(await ask(LINKS.historyOff)).toMatchObject({ status: LinkTargetStatus.DISABLED, url: '', page: 6 });
+    });
+
+    it('goes to an officer for any link turned off on a file they may have, though no copy of theirs held it', async () => {
+      expect(await ask(LINKS.off, OFFICER)).toEqual({
+        status: LinkTargetStatus.DISABLED,
+        url: '',
+        host: '',
+        kind: LinkTargetKind.UNSPECIFIED,
+        confirm: false,
+        fileId: files['trip'],
+        page: 3,
+        statusAt: await statusAt(LINKS.off),
+      });
+      expect(await ask(LINKS.neverServedOff, OFFICER)).toMatchObject({ status: LinkTargetStatus.DISABLED, url: '', page: 5 });
+      expect(await ask(LINKS.membersOff, OFFICER)).toMatchObject({ status: LinkTargetStatus.DISABLED, url: '', fileId: files['club'] });
+    });
   });
 
   describe('every other id is answered exactly as an unknown one', () => {
@@ -252,7 +309,7 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
       ['a link of a file whose copy is not made yet', () => LINKS.notReady, {}],
       ["a link of a draft's file, never published", () => LINKS.draft, {}],
       ['a link with no status at all', () => LINKS.noStatus, {}],
-      ['an officer, who is served the original with its own links (Q8)', () => LINKS.web, OFFICER],
+      ['an officer, who is served the original with its own links (Q8): an active link', () => LINKS.web, OFFICER],
     ];
     it.each(others)('%s', async (_name, linkId, options) => {
       expect(await ask(linkId(), options)).toEqual(unknown);

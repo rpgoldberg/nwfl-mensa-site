@@ -360,7 +360,7 @@ html[data-size="175"] .tick[data-for-size="175"] { color: var(--accent); font-we
 .sz-set[hidden] { display: none; }
 
 .theme-options { display: grid; gap: 8px; }
-.theme-btn {
+.theme-btn, .links-btn {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -398,6 +398,17 @@ html[data-theme="light"] .theme-btn[value="light"] .chosen,
 html[data-theme="dark"] .theme-btn[value="dark"] .chosen,
 html[data-theme="contrast-yellow"] .theme-btn[value="contrast-yellow"] .chosen,
 html[data-theme="contrast-white"] .theme-btn[value="contrast-white"] .chosen { display: inline-flex; }
+/* LINKS L4: the leaving page's choice, guard (no cookie) by default. */
+html:not([data-links]) .links-btn[value="guard"],
+html[data-links="countdown"] .links-btn[value="countdown"],
+html[data-links="direct"] .links-btn[value="direct"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 6px 0 0 var(--accent);
+}
+html:not([data-links]) .links-btn[value="guard"] .chosen,
+html[data-links="countdown"] .links-btn[value="countdown"] .chosen,
+html[data-links="direct"] .links-btn[value="direct"] .chosen { display: inline-flex; }
 
 /* Primary nav: the same four links, words at the top on wide screens, icons
    and words in a bottom bar on phones. Fixed in px: one row of four, always. */

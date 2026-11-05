@@ -222,6 +222,13 @@ describe('htmlAttributes and stampHtml', () => {
   it('leaves a document with no html tag or slider alone', () => {
     expect(stampHtml('<p>hi</p>', { size: SIZES[4], theme: undefined })).toBe('<p>hi</p>');
   });
+
+  it("names the leaving page's choice (LINKS L4) only when it is not the guard, so the Aa panel shows it on any page", () => {
+    expect(htmlAttributes({ size: 100, theme: undefined, links: 'direct' })).toEqual({ lang: 'en', 'data-size': '100', 'data-links': 'direct' });
+    expect(htmlAttributes({ size: 100, theme: 'dark', links: 'countdown' })).toEqual({ lang: 'en', 'data-size': '100', 'data-theme': 'dark', 'data-links': 'countdown' });
+    expect(htmlAttributes({ size: 100, theme: undefined, links: undefined })).toEqual({ lang: 'en', 'data-size': '100' });
+    expect(stampHtml('<html lang="en" data-size="100"><body></body></html>', { size: 100, theme: undefined, links: 'direct' })).toBe('<html lang="en" data-size="100" data-links="direct"><body></body></html>');
+  });
 });
 
 describe('safeBack', () => {
