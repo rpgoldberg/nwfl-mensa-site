@@ -18,6 +18,16 @@
 --     never a link's kind, approval or a status's reason) and EXECUTE on the new put and the
 --     sweep's request, for nwfl_worker, revoked from nwfl. Until fc creates the role the app role
 --     keeps the regeneration path, as 0017 says.
+--   * pdf_link_rect_hundredth (fix round 1, N4): a link's rect is at least a hundredth of a point
+--     wide and high once each coordinate is rounded to hundredths as the worker rounds it
+--     (Math.round(x * 100), here floor(x * 100 + 0.5) in the same double precision), so no
+--     approved link can round to an empty rect and cost its file its copies. NOT VALID: a row
+--     attached before this migration stands, and inputsFor drops it (src/pdf/store.ts).
+
+ALTER TABLE pdf_link ADD CONSTRAINT pdf_link_rect_hundredth CHECK (
+  floor(rect[3] * 100 + 0.5) - floor(rect[1] * 100 + 0.5) >= 1
+  AND floor(rect[4] * 100 + 0.5) - floor(rect[2] * 100 + 0.5) >= 1
+) NOT VALID;
 
 DROP FUNCTION pdf_copy_put(uuid, uuid, bytea, text, bytea, text);
 

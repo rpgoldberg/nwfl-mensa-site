@@ -20,6 +20,7 @@
 // ============================================================================
 import { GATE_REQUEST_MAGIC, MAX_GATE_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, decodeGateRequest, encodeGateReply, sha256Hex } from './engine-protocol.js';
 import { GATE_CHILD, isolatedGate } from './gate-isolated.js';
+import { linkRequestOf } from './link-annots.js';
 import { type MainOptions, type ServeOptions, type Sidecar, type SidecarSpec, prepareSidecar, serveFrames, startPrepared, wholeArgument } from './sidecar.js';
 
 export const GATE_SOCKET_DIR = '/run/pdf-gate';
@@ -54,7 +55,7 @@ export function startGateSidecar(options: GateSidecarOptions): Promise<Sidecar> 
         ...(options.maxRssBytes === undefined ? {} : { maxRssBytes: options.maxRssBytes }),
         ...(options.nodeFlags === undefined ? {} : { nodeFlags: options.nodeFlags }),
         permission: options.childPermission !== false,
-      })({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image, ...(request.origin === undefined ? {} : { origin: request.origin }), links: request.links ?? [], kept: request.kept ?? [] });
+      })({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image, ...linkRequestOf(request) });
       if (outcome.cause !== undefined) options.log(`a check was unfinished (${outcome.cause})`);
       if (outcome.sha256 !== null && outcome.sha256 !== sha256) return encodeGateReply({ verdict: { pass: false, code: 'mismatch' }, sha256 });
       // A pass carries the bytes the child checked, its own writing of the copy (M1): the worker stores only those.

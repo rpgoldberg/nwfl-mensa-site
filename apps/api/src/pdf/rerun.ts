@@ -23,9 +23,18 @@
 // copy with a fixed reason per code (RERUN_REASONS), which echoes nothing from
 // the copy, the engine or the gate. A gate that cannot be asked fails the job
 // retryably (RetryableEngineError), under the attempt cap.
+//
+// LINKS L3 fix round 1 (N9): links fail safe. A copy with links that the
+// engine or the gate refuses, for any reason, is asked for again with no
+// links, and checked again in full. If that one passes, it is the copy, with
+// the first refusal's reason as `linksDropped` (regenerate.ts logs it for
+// officers, by file and never by URL); if it is refused too, the links were
+// not the cause, and that refusal stands. So links never leave an issue with
+// no copy.
 // ============================================================================
 import { type GateCode, sha256Hex } from './engine-protocol.js';
 import { type GateJob, type GateOutcome, isolatedGate } from './gate-isolated.js';
+import { linkRequestOf } from './link-annots.js';
 import { type Redact, RetryableEngineError } from './regenerate.js';
 
 export const RERUN_REASONS: Readonly<Record<GateCode, string>> = {
@@ -39,8 +48,22 @@ export const RERUN_REFUSAL = RERUN_REASONS.withheld;
 /** A gate: given a copy with its sha256, a verdict and the sha256 of what it checked. */
 export type Gate = (job: GateJob & { sha256: string }) => Promise<GateOutcome>;
 
-/** `engine`, with every copy it returns checked by `gate` (by default the in-pod capped child) before it may be stored. */
+/**
+ * `engine`, with every copy it returns checked by `gate` (by default the in-pod capped child) before it may be stored;
+ * a copy with links that is refused is made again with none (see the header).
+ */
 export function withGateRerun(engine: Redact, gate: Gate = isolatedGate()): Redact {
+  const checked = checkedBy(engine, gate);
+  return async (original, request) => {
+    const result = await checked(original, request);
+    if (result.kind !== 'refused' || (request.links ?? []).length === 0) return result;
+    const plain = await checked(original, { ...request, links: [] });
+    return plain.kind === 'redacted' ? { ...plain, linksDropped: result.reason } : plain;
+  };
+}
+
+/** One engine run with the gate re-run on its copy. */
+function checkedBy(engine: Redact, gate: Gate): Redact {
   return async (original, request) => {
     const result = await engine(original, request);
     if (result.kind !== 'redacted') return result;
@@ -55,7 +78,7 @@ export function withGateRerun(engine: Redact, gate: Gate = isolatedGate()): Reda
     if (new Set(kept).size !== kept.length || kept.some((id) => !given.has(id))) return { kind: 'refused', reason: RERUN_REASONS.rules };
     let outcome: GateOutcome;
     try {
-      outcome = await gate({ copy, original, quotes, image: request.image ?? 'show', sha256, ...(request.origin === undefined ? {} : { origin: request.origin }), links, kept });
+      outcome = await gate({ copy, original, quotes, image: request.image ?? 'show', sha256, ...linkRequestOf({ ...request, kept }) });
     } catch (error) {
       if (error instanceof RetryableEngineError) throw error;
       return { kind: 'refused', reason: RERUN_REASONS.unfinished };

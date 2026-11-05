@@ -32,7 +32,7 @@ import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { ContentItemSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { type RedactRequest, redactPdf } from '../pdf/redact.js';
-import { ENGINE_VERSION, type Inputs, inputsFor } from '../pdf/store.js';
+import { ENGINE_VERSION, type Inputs, inputsFor, linkOrigin } from '../pdf/store.js';
 import { loadLens, markActive, policyCells } from '../redaction/lens.js';
 import { AUDIENCES, CATEGORIES, TENANT, cellKey, resolveAction } from '../redaction/policy.js';
 import { subjectKey } from '../redaction/render.js';
@@ -155,10 +155,21 @@ export async function renderVersion(db: Query, versionId: string, audience: Audi
   };
 }
 
-/** The PDF bytes this audience is given for the file (store.ts readPdf): now, or from the inputs at `asOf`. */
-export async function renderFile(db: Query, fileId: string, audience: Audience, asOf?: Date): Promise<Rendering> {
+/** What a file's copies are made with: the links' origin (LINK_ORIGIN's when absent) and the engine (this one's when absent). */
+export interface Running {
+  origin?: string | undefined;
+  engine?: string | undefined;
+}
+
+/**
+ * The PDF bytes this audience is given for the file (store.ts readPdf): now, or from the inputs at `asOf`. The inputs
+ * record the engine and (LINKS L3 fix 1, N3) the origin the copy's input hash was made with.
+ */
+export async function renderFile(db: Query, fileId: string, audience: Audience, asOf?: Date, running: Running = {}): Promise<Rendering> {
+  const origin = running.origin ?? linkOrigin();
+  const engine = running.engine ?? ENGINE_VERSION;
   const [inputs, file, policy, marks] = await Promise.all([
-    inputsFor(db, fileId, audience, asOf),
+    inputsFor(db, fileId, audience, asOf, origin, engine),
     db.query<{ version_id: string | null; edition_id: string | null; sha256: Buffer }>(`SELECT version_id, edition_id, sha256 FROM stored_file WHERE id = $1`, [fileId]),
     policySnapshot(db, audience, asOf),
     db.query<{ id: string }>(
@@ -169,7 +180,8 @@ export async function renderFile(db: Query, fileId: string, audience: Audience, 
   const stored = file.rows[0];
   const base = {
     v: 1,
-    engine: ENGINE_VERSION,
+    engine,
+    origin,
     file_id: fileId,
     version_id: stored?.version_id ?? null,
     edition_id: stored?.edition_id ?? null,
@@ -259,11 +271,11 @@ export function recordItems(db: Query, items: readonly string[]): Promise<number
  * publication_ledger_record_file under its claim, then `finish` in the same transaction (which
  * drops the claim, so it comes last). Throws 42501 when the claim is no longer live.
  */
-export function recordClaimedFile<T>(db: Query, fileId: string, claim: string, finish: (client: Query) => Promise<T>): Promise<T> {
+export function recordClaimedFile<T>(db: Query, fileId: string, claim: string, origin: string, finish: (client: Query) => Promise<T>): Promise<T> {
   return inTx(db, async (client) => {
     await client.query('SELECT publication_ledger_lock()');
     for (const audience of AUDIENCES) {
-      const rendering = await renderFile(client, fileId, audience);
+      const rendering = await renderFile(client, fileId, audience, undefined, { origin });
       await client.query(`SELECT publication_ledger_record_file($1, $2, $3, $4, $5, $6)`, [
         fileId,
         claim,
@@ -310,21 +322,27 @@ export interface AsOf {
 
 const same = (a: Buffer | null, b: Buffer | null): boolean => (a === null ? b === null : b !== null && a.equals(b));
 
-/** Who asks for a copy to be made again (0016's publication_ledger_original audits it), and with which engine. */
+/** Who asks for a copy to be made again (0016's publication_ledger_original audits it), and with which engine and origin. */
 export interface AsOfOptions {
   caller?: { sub: string; groups: readonly string[]; trace?: string | null };
   redact?: Redact;
-  /** The running engine's version; a row made by another cannot be made again byte for byte. */
+  /** The running engine's version (this one's when absent); a row made by another cannot be rebuilt or made again byte for byte. */
   engine?: string;
+  /** The links' origin now (LINK_ORIGIN's when absent); a row made under another cannot be rebuilt (fix 1, N3). */
+  origin?: string;
 }
+
+/** Why a row's inputs cannot be rebuilt now: what they were made with has changed since (fix 1, N3). */
+export const ENGINE_CHANGED = 'the engine changed since this row: its inputs cannot be rebuilt to compare';
+export const ORIGIN_CHANGED = 'the link origin changed since this row: its inputs cannot be rebuilt to compare';
 
 const MISMATCH = 'the re-render does not match the row';
 
 /** Makes a copy no longer kept again: the original, the inputs as of `at`, the same engine. */
 async function remake(db: Query, row: LedgerRowData, audience: Audience, at: Date, options: AsOfOptions): Promise<{ detail: string; rerender: Buffer | null }> {
-  if (row.inputs['engine'] !== (options.engine ?? ENGINE_VERSION)) return { detail: 'engine changed, inputs verified only', rerender: null };
+  // The row's input hash was rebuilt with the running engine and origin (fileVerdict), so the row was made with both.
   if (options.caller === undefined) return { detail: 'the copy is no longer kept: an officer makes it again', rerender: null };
-  const inputs = (await inputsFor(db, row.subject_id, audience, at)) as Extract<Inputs, { kind: 'copy' }>;
+  const inputs = (await inputsFor(db, row.subject_id, audience, at, options.origin ?? linkOrigin(), options.engine ?? ENGINE_VERSION)) as Extract<Inputs, { kind: 'copy' }>;
   // 0017: once the worker role exists, the app role reaches no original. Asked first, so a transaction is not aborted.
   const allowed = await db.query<{ ok: boolean }>(`SELECT has_function_privilege('publication_ledger_original(bigint, text, text[], text)', 'EXECUTE') AS ok`);
   if (allowed.rows[0]?.ok !== true) return { detail: 'the copy is no longer kept and only the worker reads originals: inputs verified only', rerender: null };
@@ -346,7 +364,12 @@ async function fileVerdict(db: Query, row: LedgerRowData, again: Rendering, audi
   const now = again.inputs['served'];
   const verdict = (ok: boolean): { detail: string; rerender: Buffer | null } => ({ detail: ok ? '' : MISMATCH, rerender: again.output });
   if (was === 'copy' || was === 'not_ready' || was === 'refused') {
-    if (again.inputs['input_hash'] !== row.inputs['input_hash']) return { detail: 'the inputs rebuilt from the history do not match the row', rerender: again.output };
+    if (again.inputs['input_hash'] !== row.inputs['input_hash']) {
+      // An engine bump or a new origin changes every input hash: said as such, never as a mismatch (fix 1, N3).
+      if (row.inputs['engine'] !== again.inputs['engine']) return { detail: ENGINE_CHANGED, rerender: null };
+      if (row.inputs['origin'] !== again.inputs['origin']) return { detail: ORIGIN_CHANGED, rerender: null };
+      return { detail: 'the inputs rebuilt from the history do not match the row', rerender: again.output };
+    }
     if (was !== 'copy') return verdict(true);
     if (now === 'not_ready') return remake(db, row, audience, at, options);
     return verdict(same(again.output, row.output_sha256));
@@ -374,7 +397,7 @@ export async function ledgerAsOf(db: Query, kind: LedgerKind, subject: string, a
     });
     verdict = { detail: same(again.output, row.output_sha256) ? '' : MISMATCH, rerender: again.output };
   } else {
-    again = await renderFile(db, subject, audience, at);
+    again = await renderFile(db, subject, audience, at, { origin: options.origin, engine: options.engine });
     verdict = await fileVerdict(db, row, again, audience, at, options);
   }
   let detail = verdict.detail;

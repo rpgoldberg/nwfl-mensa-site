@@ -100,6 +100,12 @@ describe('inputHash v2 (LINKS L3): the origin and the links that pass', () => {
     expect(linkOrigin({})).toBe('https://nwflorida.us');
     expect(linkOrigin({ LINK_ORIGIN: 'https://nwflmensa.us' })).toBe('https://nwflmensa.us');
     for (const bad of ['http://nwflorida.us', 'https://nwflorida.us/', 'https://evil.example/out/x', '']) expect(() => linkOrigin({ LINK_ORIGIN: bad }), bad).toThrow('LINK_ORIGIN must be https:// and the site\'s host, with no path');
+    // In production (NODE_ENV=production, as the image sets it) no localhost, with a port or without (N5); tests and e2e keep it.
+    for (const local of ['https://localhost', 'https://localhost:4321']) {
+      expect(() => linkOrigin({ NODE_ENV: 'production', LINK_ORIGIN: local }), local).toThrow('LINK_ORIGIN must be the site\'s public https host in production, not localhost');
+      expect(linkOrigin({ NODE_ENV: 'test', LINK_ORIGIN: local }), local).toBe(local);
+    }
+    expect(linkOrigin({ NODE_ENV: 'production', LINK_ORIGIN: 'https://nwflmensa.us' })).toBe('https://nwflmensa.us');
     // A request without an origin is hashed with LINK_ORIGIN's, as inputsFor gives it.
     expect(inputHash(SHA, { quotes: ['Bo'], redactsAny: true }).equals(inputHash(SHA, { quotes: ['Bo'], redactsAny: true, origin: linkOrigin(), links: [] }))).toBe(true);
   });

@@ -32,13 +32,16 @@
 // queues every file with a stored original that has no copy for an
 // audience's current input hash: an ENGINE_VERSION bump or a new LINK_ORIGIN
 // changes every hash, and no trigger queues a file for either. A refused copy
-// counts as made, so it is not queued again at every boot.
+// counts as made, so it is not queued again at every boot. A copy made without
+// its links (fix round 1, N9: rerun.ts) is logged through `warn`, by file,
+// input hash, link count and reason, never a URL; the ledger row records the
+// origin the copy's inputs were made with.
 // ============================================================================
-import type { Db } from '../db/pool.js';
+import type { Db, Warn } from '../db/pool.js';
 import { AUDIENCES } from '../redaction/policy.js';
 import { type RedactRequest, type RedactResult, redactPdf } from './redact.js';
 import { linkOrigin } from './link-annots.js';
-import { ENGINE_VERSION, inputsFor } from './store.js';
+import { type CopyRequest, ENGINE_VERSION, inputsFor } from './store.js';
 import { recordClaimedFile } from '../ledger/ledger.js';
 
 type Query = Pick<Db, 'query'>;
@@ -61,6 +64,8 @@ export interface RegenerateOptions {
   leaseSeconds?: number;
   /** What the copies' links point to (LINK_ORIGIN's, or the site's, when absent). */
   origin?: string;
+  /** Hears a copy made without its links and why (LINKS L3 fix 1, N9), by file and input hash: the worker's log, for officers. */
+  warn?: Warn;
 }
 
 interface Made {
@@ -68,13 +73,15 @@ interface Made {
   reason: string | null;
   /** The ids of the links the copy holds (none for a refusal). */
   kept: string[];
+  /** Why the copy was made with no links (rerun.ts), when it was. */
+  linksDropped?: string;
 }
 
 /** A copy's bytes and the links it holds, or why there is none. */
 async function make(redact: Redact, original: Uint8Array, request: RedactRequest): Promise<Made> {
   try {
     const result = await redact(original, request);
-    if (result.kind === 'redacted') return { pdf: Buffer.from(result.pdf), reason: null, kept: result.kept ?? [] };
+    if (result.kind === 'redacted') return { pdf: Buffer.from(result.pdf), reason: null, kept: result.kept ?? [], ...(result.linksDropped === undefined ? {} : { linksDropped: result.linksDropped }) };
     if (result.kind === 'refused') return { pdf: null, reason: result.reason, kept: [] };
     return { pdf: null, reason: 'the engine returned the original for an audience that redacts', kept: [] };
   } catch (error) {
@@ -84,8 +91,8 @@ async function make(redact: Redact, original: Uint8Array, request: RedactRequest
 }
 
 /** Each copy the file's audiences are given now, by its input hash (hex): one per distinct inputs. */
-async function currentCopies(db: Query, fileId: string, origin: string): Promise<Map<string, { hash: Buffer; request: RedactRequest }>> {
-  const targets = new Map<string, { hash: Buffer; request: RedactRequest }>();
+async function currentCopies(db: Query, fileId: string, origin: string): Promise<Map<string, { hash: Buffer; request: CopyRequest }>> {
+  const targets = new Map<string, { hash: Buffer; request: CopyRequest }>();
   for (const audience of AUDIENCES) {
     const inputs = await inputsFor(db, fileId, audience, undefined, origin);
     if (inputs?.kind === 'copy') targets.set(inputs.hash.toString('hex'), inputs);
@@ -121,7 +128,8 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
   if (row === undefined) return null;
   // attempts counts this claim too (0021).
   const { file_id: fileId, claim, attempts } = row;
-  const targets = await currentCopies(db, fileId, options.origin ?? linkOrigin());
+  const origin = options.origin ?? linkOrigin();
+  const targets = await currentCopies(db, fileId, origin);
   const existing = await db.query<{ input_hash: Buffer }>(`SELECT input_hash FROM pdf_copy WHERE file_id = $1`, [fileId]);
   const made = new Set(existing.rows.map((copy) => copy.input_hash.toString('hex')));
   const missing = [...targets].filter(([hex]) => !made.has(hex)).map(([, target]) => target);
@@ -139,12 +147,15 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
             if (attempts < MAX_ENGINE_ATTEMPTS) throw error;
           }
         }
+        if (copy.linksDropped !== undefined) {
+          options.warn?.({ file_id: fileId, input_hash: target.hash.toString('hex'), links: target.request.links.length, reason: copy.linksDropped }, 'a PDF copy was made without its links');
+        }
         await db.query(`SELECT pdf_copy_put($1, $2, $3, $4, $5, $6, $7)`, [fileId, claim, target.hash, ENGINE_VERSION, copy.pdf, copy.reason, copy.kept]);
       }
     }
     // The ledger records what each audience is given now (R-LEDGER), under the claim, and the run
     // finishes in the same transaction (0019: the worker appends only for the file it holds).
-    const done = await recordClaimedFile(db, fileId, claim, async (client) => {
+    const done = await recordClaimedFile(db, fileId, claim, origin, async (client) => {
       const finished = await client.query<{ done: boolean }>(`SELECT pdf_regen_finish($1, $2, $3::bytea[]) AS done`, [
         fileId,
         claim,

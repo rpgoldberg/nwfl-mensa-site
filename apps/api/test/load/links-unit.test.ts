@@ -99,8 +99,15 @@ describe('parseLinks', () => {
       ['a left edge right of its right edge', [300, 700, 72, 714]],
       ['a zero width', [72, 700, 72, 714]],
       ['a bottom above its top', [72, 714, 300, 700]],
+      ['narrower than a hundredth of a point once rounded (LINKS L3 fix 1, N4)', [100.001, 700, 100.004, 710]],
+      ['shorter than a hundredth of a point once rounded', [72, 700.001, 300, 700.004]],
+      ['a hundredth wide that rounds to nothing', [100.005, 700, 100.0149, 710]],
     ])('refuses a rect that is %s', (_label, rect) => {
       expect(() => parseLinks(oneLink('rect', rect))).toThrow(/links\.public\[0\]\.rect must be \[x1, y1, x2, y2\]/);
+    });
+
+    it('accepts a rect a hundredth of a point wide and high once rounded', () => {
+      expect(parseLinks(oneLink('rect', [100.004, 700, 100.014, 700.01])).public[0]?.rect).toEqual([100.004, 700, 100.014, 700.01]);
     });
 
     it('accepts fractional and negative coordinates inside the bounds', () => {
@@ -392,6 +399,26 @@ describe('targetHolds: a URL that holds a withheld quote (CONTRACT item 5)', () 
     expect(targetHolds(`https://example.org/?d=${encodeURIComponent(payload.toString('base64'))}`, [quote])).toBe(true);
     expect(targetHolds(`https://example.org/?d=${payload.toString('base64url')}`, [quote])).toBe(true);
     expect(targetHolds('https://example.org/?d=eExha2UgSGFsbCB-IFdlc3', [quote])).toBe(true);
+  });
+
+  it('finds a quote base64-encoded after it was percent-encoded or form-encoded, at every alignment, in base64 and base64url (LINKS L3 fix 1, N2)', () => {
+    const quote = 'Kestrel Ambry';
+    const percent = encodeURIComponent(quote);
+    const forms = [percent, quote.replace(/ /g, '+'), percent.replace(/%20/g, '+'), encodeURIComponent('kestrel ambry'), 'kestrel+ambry'];
+    for (const form of forms) {
+      for (const lead of ['', 'x', 'xx']) {
+        const payload = Buffer.from(`${lead}${form}`, 'utf8');
+        for (const encoded of [payload.toString('base64'), payload.toString('base64url'), encodeURIComponent(payload.toString('base64'))]) {
+          expect(targetHolds(`https://example.org/p?q=${encoded}`, [quote]), `${lead}${form} as ${encoded}`).toBe(true);
+        }
+      }
+    }
+    // The challenger's case, as it was found (a percent-encoded quote inside base64), and a near miss that holds nothing.
+    expect(targetHolds(`https://example.org/p?q=${Buffer.from('Kestrel%20Ambry').toString('base64')}`, [quote])).toBe(true);
+    expect(targetHolds(`https://example.org/p?q=${Buffer.from('Kestrel%20Amber').toString('base64')}`, [quote])).toBe(false);
+    // A quote with a lone surrogate has no percent-encoded form: it is still looked for as written.
+    expect(() => targetHolds('https://example.org/p?q=x', ['Kestrel Ambry\uD800'])).not.toThrow();
+    expect(targetHolds('https://example.org/kestrel-ambry', ['Kestrel Ambry\uD800', quote])).toBe(true);
   });
 
   /** A %XX escape nested n deep, an HTML reference nested n deep and a %u escape nested n deep, beside an IDN label. */

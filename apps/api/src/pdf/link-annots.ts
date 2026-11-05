@@ -16,7 +16,9 @@
 // never reach a copy. A link is dropped when its page is not in the copy, when
 // its rect, clamped to the page's crop box (within the media box), is empty,
 // or when that clamped rect meets (touching counts) a box the engine drew or
-// the ink of a glyph it removed.
+// the ink of a glyph it removed, or its whole rect meets what the link guard
+// reads as withheld (link-guard.ts: a picture the policy does not show, a
+// glyph of the original the copy lacks), as the gate reads it.
 //
 // The gate (gate-rules.ts) reads a copy with acceptedLinks: on each page,
 // /Annots must be a list in the page of references, each to a dictionary of
@@ -29,7 +31,7 @@
 // check (gate-links.ts).
 // ============================================================================
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, type PDFObject, PDFRef, PDFStream, PDFString } from '@cantoo/pdf-lib';
-import { HOST, LINK_ID, MAX_COORDINATE, MAX_LINKS_PER_FILE, MAX_PAGE } from '../load/links.js';
+import { HOST, LINK_ID, MAX_COORDINATE, MAX_LINKS_PER_FILE, MAX_PAGE, roundRect } from '../load/links.js';
 import type { Box } from './match.js';
 
 export type Rect = readonly [number, number, number, number];
@@ -56,6 +58,11 @@ export interface PageBox extends Box {
   page: number;
 }
 
+/** What a request tells of its links, as the gate's job takes it: the origin when there is one, the links and the kept ids (none when absent). */
+export function linkRequestOf(request: LinkRequest): { origin?: string; links: readonly EngineLink[]; kept: readonly string[] } {
+  return { ...(request.origin === undefined ? {} : { origin: request.origin }), links: request.links ?? [], kept: request.kept ?? [] };
+}
+
 /** A file holds at most this many links (0024), so a request does too. */
 export const MAX_LINKS = MAX_LINKS_PER_FILE;
 export const LABEL_PREFIX = 'Link to ';
@@ -71,17 +78,22 @@ export const isOrigin = (value: unknown): value is string =>
 /** The site's canonical public origin (apps/web server/public-hosts.mjs SITE): what a copy's links point to unless LINK_ORIGIN says otherwise. */
 export const DEFAULT_LINK_ORIGIN = 'https://nwflorida.us';
 
-/** LINK_ORIGIN, or the site's; throws for one that is not https and a host, so a worker or a server never starts with it. */
+/**
+ * LINK_ORIGIN, or the site's; throws for one that is not https and a host, so a worker or a server never starts with
+ * it (readConfig reads it at boot, fix 1 N5). In production (NODE_ENV=production, as the image sets it) localhost is
+ * refused too: it is for tests and the local e2e only.
+ */
 export function linkOrigin(env: Record<string, string | undefined> = process.env): string {
   const origin = env['LINK_ORIGIN'] ?? DEFAULT_LINK_ORIGIN;
   if (!isOrigin(origin)) throw new Error("LINK_ORIGIN must be https:// and the site's host, with no path");
+  if (env['NODE_ENV'] === 'production' && !HOST.test(origin.slice(8))) throw new Error("LINK_ORIGIN must be the site's public https host in production, not localhost");
   return origin;
 }
 export const isLabel = (value: unknown): value is string => typeof value === 'string' && value.startsWith(LABEL_PREFIX) && HOST.test(value.slice(LABEL_PREFIX.length));
 /** The only target a copy's link may have: our leaving page, by the link's id (no URL in a query: no open redirect). */
 export const linkUri = (origin: string, id: string): string => `${origin}/out/${id}`;
 export const linkLabel = (host: string): string => `${LABEL_PREFIX}${host}`;
-export const roundRect = (rect: Rect): Rect => rect.map((n) => Math.round(n * 100) / 100) as unknown as Rect;
+export { roundRect };
 
 const isRect = (value: unknown): value is Rect =>
   Array.isArray(value) &&
@@ -149,20 +161,33 @@ export function writeLinks(doc: PDFDocument, origin: string, links: readonly Eng
   for (const [index, refs] of byPage) (doc.getPage(index).node as PDFDict).set(PDFName.of('Annots'), doc.context.obj(refs));
 }
 
+/** A link's rect as a box. */
+export const boxOf = (rect: Rect): Box => ({ left: rect[0], bottom: rect[1], right: rect[2], top: rect[3] });
+
 /**
  * The copy with a fresh annotation for each link that survives (see the header), and the ids kept, in the
- * request's order. No links, or none kept: the copy as it came, byte for byte.
+ * request's order. No links, or none kept: the copy as it came, byte for byte. `vetoed`, when given, is asked last,
+ * with the links that survive the rest, for the ids that may not be kept either (the engine's link guard, redact.ts,
+ * which tests a link's whole rect, as the gate does).
  */
-export async function placeLinks(pdf: Uint8Array, links: readonly EngineLink[], origin: string | undefined, blocked: readonly PageBox[]): Promise<{ pdf: Uint8Array; kept: string[] }> {
+export async function placeLinks(
+  pdf: Uint8Array,
+  links: readonly EngineLink[],
+  origin: string | undefined,
+  blocked: readonly PageBox[],
+  vetoed: (links: readonly EngineLink[]) => Promise<ReadonlySet<string>> = () => Promise.resolve(new Set()),
+): Promise<{ pdf: Uint8Array; kept: string[] }> {
   if (links.length === 0) return { pdf, kept: [] };
   if (!isOrigin(origin)) throw new Error(NO_ORIGIN);
   const doc = await PDFDocument.load(pdf, { updateMetadata: false });
   const pages = doc.getPages();
-  const kept = links.filter((link) => {
+  const placed = links.filter((link) => {
     const page = pages[link.page - 1];
     const area = page === undefined ? null : onPage(link.rect, page);
     return area !== null && !blocked.some((box) => box.page === link.page - 1 && meets(area, box));
   });
+  const vetoes = placed.length === 0 ? new Set<string>() : await vetoed(placed);
+  const kept = placed.filter((link) => !vetoes.has(link.id));
   if (kept.length === 0) return { pdf, kept: [] };
   writeLinks(doc, origin, kept);
   return { pdf: await doc.save({ useObjectStreams: false }), kept: kept.map((link) => link.id) };

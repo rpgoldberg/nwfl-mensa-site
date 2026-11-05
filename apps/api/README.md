@@ -260,15 +260,21 @@ its file.
 A copy's links (L3) are written fresh by the engine, from the approved list
 only, in one shape: a `/Link` with a `/URI` action to
 `https://<LINK_ORIGIN>/out/<id>` and the label `Link to <host>`. Nothing of
-the original's annotations is copied. A link whose rect meets a drawn box or
-removed ink is dropped, as is one whose target holds a quote the audience
-withholds (`targetHolds`). The gate accepts only that shape and refuses the
-whole copy when pdf.js reads other text under a link than the original's.
-`LINK_ORIGIN` (default `https://nwflorida.us`) is part of every input hash,
-so the API, the loader and the worker must share it. `0025` records each
-copy's links with it (`pdf_copy_put`'s seventh argument) and lets the
-worker read the links; at boot the worker queues every file with no copy
-for its current inputs.
+the original's annotations is copied. A link whose rect meets a drawn box,
+removed ink, the box of any glyph the copy lacks, or (under `blur` and
+`hide`) any picture on any page is dropped, as is one whose target holds a
+quote the audience withholds (`targetHolds`) or whose rect rounds to under a
+hundredth of a point. The gate accepts only that shape and refuses the whole
+copy when pdf.js reads other text under a link than the original's, or a
+kept link meets what the link guard (`src/pdf/link-guard.ts`, PDFium) reads
+as withheld. A copy refused with its links is made again with none, and the
+worker logs the file and the reason (never a URL). `LINK_ORIGIN` (default
+`https://nwflorida.us`) is part of every input hash, so the API, the loader
+and the worker must share it; a bad one stops the server and the worker at
+boot, and production (`NODE_ENV=production`) refuses `localhost`. `0025`
+records each copy's links with it (`pdf_copy_put`'s seventh argument) and
+lets the worker read the links; at boot the worker queues every file with
+no copy for its current inputs.
 
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 

@@ -83,6 +83,45 @@ describe('withGateRerun', () => {
     expect(gate).not.toHaveBeenCalled();
   });
 
+  describe('links fail safe (LINKS L3 fix 1, N9): a copy refused with its links is made again with none', () => {
+    const LINKS = [{ id: 'a'.repeat(26), page: 1, rect: [1, 2, 3, 4] as const, label: 'Link to site.example' }];
+    const LINKED = { ...REQUEST, origin: 'https://nwflorida.us', links: LINKS };
+    /** An engine that answers `withLinks` when it is given links and `without` when it is given none, and records each request. */
+    const twoWay = (withLinks: Awaited<ReturnType<Redact>>, without: Awaited<ReturnType<Redact>>) => vi.fn<Redact>((_original, request) => Promise.resolve((request.links ?? []).length > 0 ? withLinks : without));
+
+    it('stores the copy with no links when the gate refuses the one with them, and names why, for the logs', async () => {
+      const redact = twoWay({ ...made, kept: ['a'.repeat(26)] }, { ...made, kept: [] });
+      const gate = vi.fn<Gate>((job) => Promise.resolve((job.kept ?? []).length > 0 ? { verdict: { pass: false, code: 'rules' }, sha256: SHA } : PASS));
+      expect(await withGateRerun(redact, gate)(COPY, LINKED)).toEqual({ kind: 'redacted', pdf: WRITTEN, boxes: [], kept: [], linksDropped: RERUN_REASONS.rules });
+      expect(redact).toHaveBeenCalledTimes(2);
+      expect(redact.mock.calls[1]?.[1]).toEqual({ ...LINKED, links: [] });
+      expect(gate).toHaveBeenLastCalledWith(expect.objectContaining({ links: [], kept: [] }));
+    });
+
+    it('stores the copy with no links when the engine refuses the one with them, or keeps a link it was not given', async () => {
+      const refused = twoWay({ kind: 'refused', reason: 'the links could not be written' }, made);
+      expect(await withGateRerun(refused, answering(PASS))(COPY, LINKED)).toEqual({ kind: 'redacted', pdf: WRITTEN, boxes: [], linksDropped: 'the links could not be written' });
+      const stray = twoWay({ ...made, kept: ['c'.repeat(26)] }, made);
+      expect(await withGateRerun(stray, answering(PASS))(COPY, LINKED)).toEqual({ kind: 'redacted', pdf: WRITTEN, boxes: [], linksDropped: RERUN_REASONS.rules });
+    });
+
+    it('gives the refusal of the copy with no links when that one is refused too: the links were not the cause', async () => {
+      const redact = twoWay({ kind: 'refused', reason: 'page 1 is a scan' }, { kind: 'refused', reason: 'page 1 is a scan, again' });
+      expect(await withGateRerun(redact, answering(PASS))(COPY, LINKED)).toEqual({ kind: 'refused', reason: 'page 1 is a scan, again' });
+      const withheld = vi.fn<Gate>(() => Promise.resolve({ verdict: { pass: false, code: 'withheld' }, sha256: SHA }));
+      expect(await withGateRerun(twoWay({ ...made, kept: ['a'.repeat(26)] }, made), withheld)(COPY, LINKED)).toEqual({ kind: 'refused', reason: RERUN_REASONS.withheld });
+      expect(withheld).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks once when there are no links, and lets a retryable failure of the second run through', async () => {
+      const redact = vi.fn<Redact>(() => Promise.resolve({ kind: 'refused', reason: 'page 1 is a scan' }));
+      expect(await withGateRerun(redact, answering(PASS))(COPY, { ...REQUEST, links: [] })).toEqual({ kind: 'refused', reason: 'page 1 is a scan' });
+      expect(redact).toHaveBeenCalledTimes(1);
+      const flaky = vi.fn<Redact>((_original, request) => ((request.links ?? []).length > 0 ? Promise.resolve({ kind: 'refused', reason: 'no' }) : Promise.reject(new RetryableEngineError('the engine socket is missing'))));
+      await expect(withGateRerun(flaky, answering(PASS))(COPY, LINKED)).rejects.toBeInstanceOf(RetryableEngineError);
+    });
+  });
+
   it('lets a gate that cannot be asked fail the job retryably, and refuses on any other failure', async () => {
     const down: Gate = () => Promise.reject(new RetryableEngineError('the gate socket is missing'));
     await expect(withGateRerun(engine(made), down)(COPY, REQUEST)).rejects.toBeInstanceOf(RetryableEngineError);

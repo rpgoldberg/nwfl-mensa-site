@@ -73,8 +73,12 @@
 //      reference in its page's /Annots and referenced from nowhere else; any
 //      other annotation, action, /URI, /AP or /AA stays refused. Then pdf.js
 //      reads the text under each link in the copy and in the original
-//      (gate-links.ts): any difference refuses the whole copy. Both are
-//      "rules". With no links kept the rules are as before.
+//      (gate-links.ts): any difference refuses the whole copy. And (fix
+//      round 1) the link guard reads both with PDFium (link-guard.ts): a kept
+//      link that meets the box of a glyph the copy lacks, or under "blur" or
+//      "hide" any picture, refuses it too. All are "rules"; the worker then
+//      asks for the copy with no links (rerun.ts). With no links kept the
+//      rules are as before.
 //
 // Out of scope, as for any text gate: withheld text written so a reader does
 // not see it as text (reversed, encoded, drawn as curves or as a picture), a

@@ -32,7 +32,7 @@ import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
 import { markActive, policyCells } from '../redaction/lens.js';
 import { CATEGORIES, TENANT, cellKey, resolveAction } from '../redaction/policy.js';
-import { targetHolds } from '../load/links.js';
+import { targetHolds, wideEnough } from '../load/links.js';
 import type { ImageAction } from './images.js';
 import { DEFAULT_LINK_ORIGIN, type EngineLink, type Rect, linkLabel, linkOrigin, roundRect } from './link-annots.js';
 import type { RedactRequest } from './redact.js';
@@ -41,15 +41,17 @@ type Query = Pick<Db, 'query'>;
 
 /**
  * The engine libraries and the gate's and the boxes' revisions: a new one changes every key, so every
- * copy is made again (box-exact: REDACT-LOOK's exact-fit boxes; links-1: LINKS L3's link annotations;
- * older ledger rows verify as inputs only).
+ * copy is made again (box-exact: REDACT-LOOK's exact-fit boxes; links-1: LINKS L3's link annotations).
+ * The ledger reports an older row's engine as changed rather than re-render it (ledger.ts fileVerdict).
  */
 export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1';
 export { DEFAULT_LINK_ORIGIN, linkOrigin };
 /** R11: a PDF original is at most 10 MiB. */
 export const MAX_ORIGINAL_BYTES = 10 * 1024 * 1024;
 
-export type Inputs = { kind: 'hidden' } | { kind: 'original' } | { kind: 'copy'; hash: Buffer; request: RedactRequest };
+/** What a copy is made from: the engine's request, its links always listed (none for a file with no links). */
+export type CopyRequest = RedactRequest & { links: readonly EngineLink[] };
+export type Inputs = { kind: 'hidden' } | { kind: 'original' } | { kind: 'copy'; hash: Buffer; request: CopyRequest };
 
 export type ReadResult =
   | { kind: 'pdf'; pdf: Uint8Array; original: boolean }
@@ -108,9 +110,10 @@ async function activeLinks(db: Query, fileId: string, asOf?: Date): Promise<Arra
 
 /**
  * What this audience is given for the file; null when the file has no stored original or is not for
- * this audience. `asOf`: from the policy and marks as they stood then (the ledger's re-render).
+ * this audience. `asOf`: from the policy and marks as they stood then (the ledger's re-render). `origin` and
+ * `engine`: what the copy would be made with (LINK_ORIGIN's and this engine's, unless the ledger asks otherwise).
  */
-export async function inputsFor(db: Query, fileId: string, audience: string, asOf?: Date, origin = linkOrigin()): Promise<Inputs | null> {
+export async function inputsFor(db: Query, fileId: string, audience: string, asOf?: Date, origin = linkOrigin(), engine = ENGINE_VERSION): Promise<Inputs | null> {
   const asked = RANK[audience];
   if (asked === undefined) return null;
   const [file, cells, marks] = await Promise.all([
@@ -131,12 +134,13 @@ export async function inputsFor(db: Query, fileId: string, audience: string, asO
   if (marks.rows.some((mark) => action(mark.category) === 'hide' || (mark.quote === null && action(mark.category) !== 'show'))) return { kind: 'hidden' };
   if (CATEGORIES.every((category) => action(category) === 'show')) return { kind: 'original' };
   const quotes = canonicalQuotes(marks.rows.flatMap((mark) => (mark.quote !== null && action(mark.category) === 'redact' ? [mark.quote] : [])));
-  // Each link whose target holds none of this audience's passages, as the loader checks them (CONTRACT item 5).
-  const passing = (await activeLinks(db, fileId, asOf)).filter((link) => !targetHolds(link.url, quotes));
+  // Each link whose target holds none of this audience's passages, as the loader checks them (CONTRACT item 5), and
+  // whose rect is a hundredth of a point wide and high once rounded (fix 1, N4: one attached before 0025's CHECK).
+  const passing = (await activeLinks(db, fileId, asOf)).filter((link) => wideEnough(link.rect as unknown as Rect) && !targetHolds(link.url, quotes));
   const links: EngineLink[] = passing.map((link) => ({ id: link.id, page: link.page, rect: roundRect(link.rect as unknown as Rect), label: linkLabel(link.host) }));
   const urls = Object.fromEntries(passing.map((link) => [link.id, link.url]));
-  const request: RedactRequest = { quotes, redactsAny: true, image: action('image') as ImageAction, origin, links };
-  return { kind: 'copy', hash: inputHash(row.sha256, request, ENGINE_VERSION, urls), request };
+  const request: CopyRequest = { quotes, redactsAny: true, image: action('image') as ImageAction, origin, links };
+  return { kind: 'copy', hash: inputHash(row.sha256, request, engine, urls), request };
 }
 
 /** Stores a PDF file's original. The database checks who may, and that the bytes are the file's. */

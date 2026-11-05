@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { RedactRequest } from '../../src/pdf/redact.js';
 import { type Redact, drain, regenerateOne, startRegenerator, sweepCopies } from '../../src/pdf/regenerate.js';
 import { ENGINE_VERSION, inputHash, inputsFor } from '../../src/pdf/store.js';
+import { ledgerAsOf } from '../../src/ledger/ledger.js';
 import { APP, APP_PW, MIGRATOR, MIGRATOR_PW, WORKER, WORKER_PW, dropDatabase, freshDatabase, live, migrate, sqlstate, url, urlFor, testPool } from '../helpers/pg.js';
 
 const LOADER = 'system:issue-loader';
@@ -270,6 +271,72 @@ describe.skipIf(!live)('LINKS L3: links in the inputs, the kept ids and the boot
       expect((await root.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND status = 'ready'`, [f])).rowCount).toBeGreaterThan(0);
       expect(await sweepCopies(worker)).toEqual([]);
       expect(await queued(officers)).toBe(false);
+    });
+  });
+
+  describe('LINKS L3 fix round 1', () => {
+    it('N4: refuses a rect under a hundredth of a point wide or high once rounded (0025), and inputsFor drops one attached before 0025', async () => {
+      const { file: f } = await file();
+      for (const rect of [[100.001, 700, 100.004, 710], [72, 700.001, 300, 700.004], [100.005, 700, 100.0149, 710]]) {
+        await expect(attach(f, [web('v', 'v', { rect })]), rect.join(' ')).rejects.toMatchObject({ code: '23514' });
+      }
+      await attach(f, [web('v', 'v', { rect: [100.004, 700, 100.014, 700.01] })]);
+      expect((await copyOf(f, 'public')).request.links?.map((link) => link.rect)).toEqual([[100, 700, 100.01, 700.01]]);
+      // A row attached under 0024 alone, before the CHECK: the constraint is NOT VALID, so it may stand, and is dropped.
+      const { file: g } = await file();
+      const def = (await root.query<{ def: string }>(`SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'pdf_link_rect_hundredth'`)).rows[0]!.def;
+      expect(def).toMatch(/NOT VALID/);
+      await root.query(`ALTER TABLE pdf_link DROP CONSTRAINT pdf_link_rect_hundredth`);
+      try {
+        await attach(g, [web('w', 'w', { rect: [100.001, 700, 100.004, 710] }), web('x', 'x')]);
+      } finally {
+        await root.query(`ALTER TABLE pdf_link ADD CONSTRAINT pdf_link_rect_hundredth ${def}`);
+      }
+      expect((await copyOf(g, 'public')).request.links?.map((link) => link.id)).toEqual([id('x')]);
+      expect((await copyOf(g, 'members')).request.links?.map((link) => link.id)).toEqual([id('x')]);
+    });
+
+    it('N3: the ledger records the origin with each file row, and as of a date reports an origin or engine change, not a mismatch', async () => {
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      const { file: f } = await file();
+      await attach(f, [web('y', 'y')]);
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      const row = (await root.query<{ current_from: Date; inputs: Record<string, unknown> }>(`SELECT current_from, inputs FROM publication_ledger WHERE subject_id = $1 AND audience = 'public' ORDER BY seq DESC LIMIT 1`, [f])).rows[0]!;
+      expect(row.inputs['served']).toBe('copy');
+      expect(row.inputs['origin']).toBe(ORIGIN);
+      const at = new Date(row.current_from.getTime() + 1);
+      expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: ORIGIN })).toMatchObject({ matches: true, detail: '' });
+      expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: 'https://nwflmensa.us' })).toMatchObject({ matches: false, detail: 'the link origin changed since this row: its inputs cannot be rebuilt to compare' });
+      expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: ORIGIN, engine: 'pdfium-0+other' })).toMatchObject({ matches: false, detail: 'the engine changed since this row: its inputs cannot be rebuilt to compare' });
+      // With the same engine and origin, history that no longer gives the row's inputs is a mismatch: here a link's status rows
+      // are taken out by hand, past the append-only guard, so the link reads as never active.
+      await root.query('BEGIN');
+      try {
+        await root.query(`SET LOCAL session_replication_role = replica`);
+        await root.query(`DELETE FROM pdf_link_status WHERE link_id = $1`, [id('y')]);
+        await root.query('COMMIT');
+      } catch (error) {
+        await root.query('ROLLBACK');
+        throw error;
+      }
+      expect(await ledgerAsOf(app, 'stored_file', f, 'public', at, { origin: ORIGIN })).toMatchObject({ matches: false, detail: 'the inputs rebuilt from the history do not match the row' });
+    });
+
+    it('N9: logs, for officers, a copy made without its links and why, by file and never by URL', async () => {
+      await drain(worker, { redact: keepAll, origin: ORIGIN });
+      const { file: f } = await file();
+      await attach(f, [web('z', 'z')]);
+      const dropping: Redact = () => Promise.resolve({ kind: 'redacted', pdf: new Uint8Array(Buffer.from('copy without links')), boxes: [], kept: [], linksDropped: 'the links could not be written' });
+      const warnings: Array<[Record<string, unknown>, string]> = [];
+      await drain(worker, { redact: dropping, origin: ORIGIN, warn: (fields, message) => void warnings.push([fields, message]) });
+      expect(warnings.length).toBeGreaterThan(0);
+      for (const [fields, message] of warnings) {
+        expect(message).toBe('a PDF copy was made without its links');
+        expect(fields).toEqual({ file_id: f, input_hash: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown, links: 1, reason: 'the links could not be written' });
+      }
+      expect(JSON.stringify(warnings)).not.toContain('site.example');
+      expect((await root.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND status = 'ready'`, [f])).rowCount).toBeGreaterThan(0);
+      expect(await linksOf(f)).toEqual([]);
     });
   });
 
