@@ -64,6 +64,24 @@
 //        update). Only those bytes are stored (rerun.ts): the bytes stored
 //        are the bytes the gate checked.
 //
+//   4. Links (LINKS L3): the one exception to rule 1. The worker tells the
+//      gate the links the engine was given (id, page, rect, label), their
+//      origin and the ids the engine says it kept. acceptedLinks
+//      (link-annots.ts) lets through exactly the engine's annotation shape
+//      for those ids, each once, on its page, at its rect, with its label,
+//      pointing byte for byte to https://<origin>/out/<id>, listed by
+//      reference in its page's /Annots and referenced from nowhere else; any
+//      other annotation, action, /URI, /AP or /AA stays refused. Then pdf.js
+//      reads the text under each link in the copy and in the original
+//      (gate-links.ts): any difference refuses the whole copy. And (fix
+//      round 1) the link guard reads both with PDFium (link-guard.ts): a kept
+//      link that meets the box of a glyph the copy lacks, or under "blur" or
+//      "hide" any picture PDFium reads, or lies on a page that reaches a
+//      tiling pattern holding a picture (fix round 2), refuses it too. All
+//      are "rules"; the worker then
+//      asks for the copy with no links (rerun.ts). With no links kept the
+//      rules are as before.
+//
 // Out of scope, as for any text gate: withheld text written so a reader does
 // not see it as text (reversed, encoded, drawn as curves or as a picture), a
 // picture rebuilt from many small tiles or from vector shapes (gradients of
@@ -76,6 +94,8 @@ import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha2
 import { type PageRef, drawnBreak } from './drawn.js';
 import { checkCopy } from './gate.js';
 import type { GateJob } from './gate-isolated.js';
+import { linkTextBreak } from './gate-links.js';
+import { type Accepted, type LinkRequest, acceptedLinks } from './link-annots.js';
 import { BLUR_MAX, FILL_GRAY, type ImageAction, type Pixels, blurred, decodePicture, hasInlinePicture, keepsPicture, pictureWindows } from './images.js';
 import { structureBreak } from './pdf-structure.js';
 
@@ -123,8 +143,8 @@ const numberIn = (dict: PDFDict, key: string): number | undefined => {
 
 const isEmptyList = (value: unknown): boolean => value instanceof PDFArray && value.size() === 0;
 
-/** Why an object (with what it holds directly) breaks rule 1, or null. Collects the Type 3 glyphs it names. */
-function activeIn(object: PDFObject | undefined, glyphs: PDFObject[]): string | null {
+/** Why an object (with what it holds directly) breaks rule 1, or null. Collects the Type 3 glyphs it names. `pages`: those whose /Annots hold only accepted links (rule 4). */
+function activeIn(object: PDFObject | undefined, glyphs: PDFObject[], pages: ReadonlySet<PDFDict> = new Set()): string | null {
   if (object instanceof PDFRawStream) return activeIn(object.dict, glyphs);
   if (object instanceof PDFArray) {
     for (const value of object.asArray()) {
@@ -135,8 +155,8 @@ function activeIn(object: PDFObject | undefined, glyphs: PDFObject[]): string | 
   }
   if (!(object instanceof PDFDict)) return null;
   for (const [key, value] of object.entries()) {
-    // An empty annotation list (pdf-lib writes one on a new page) annotates nothing.
-    if (key.decodeText() === 'Annots' && isEmptyList(object.lookup(key))) continue;
+    // An empty annotation list (pdf-lib writes one on a new page) annotates nothing; a page's accepted links are read by acceptedLinks.
+    if (key.decodeText() === 'Annots' && (isEmptyList(object.lookup(key)) || pages.has(object))) continue;
     if (FORBIDDEN_KEYS.has(key.decodeText())) return `it holds /${key.decodeText()}`;
     if (STRUCTURAL.has(key.decodeText()) && indirect(value)) return `its /${key.decodeText()} is not direct`;
     const found = activeIn(value, glyphs);
@@ -471,7 +491,7 @@ function nestingBreak(doc: PDFDocument): string | null {
 }
 
 /** Why the copy breaks the sanitizer's rules or the picture policy's shape (or null), and the pages pdf-lib's tree gives, in order. */
-async function readRules(copy: Uint8Array, image: ImageAction): Promise<{ broken: string | null; pages: PageRef[] }> {
+async function readRules(copy: Uint8Array, image: ImageAction, links: LinkRequest = {}): Promise<{ broken: string | null; pages: PageRef[] }> {
   // One reading first (M1): no encryption, no second trailer, no shadowed object.
   const structure = await structureBreak(copy);
   if (structure !== null) return { broken: `the structure: ${structure}`, pages: [] };
@@ -484,9 +504,12 @@ async function readRules(copy: Uint8Array, image: ImageAction): Promise<{ broken
   const { context } = doc;
   const tree = pageTreeBreak(doc);
   if (tree !== null) return broken(tree);
+  const accepted: Accepted | string = acceptedLinks(doc, links);
+  if (typeof accepted === 'string') return broken(`the links: ${accepted}`);
   const glyphs: PDFObject[] = [];
   for (const [ref, object] of context.enumerateIndirectObjects()) {
-    const found = activeIn(object, glyphs);
+    if (accepted.annots.has(object)) continue;
+    const found = activeIn(object, glyphs, accepted.pages);
     if (found !== null) return broken(`object ${ref.objectNumber}: ${found}`);
   }
   const nesting = nestingBreak(doc);
@@ -532,9 +555,9 @@ async function readRules(copy: Uint8Array, image: ImageAction): Promise<{ broken
   return broken(null);
 }
 
-/** Why the copy breaks the sanitizer's rules or the picture policy's shape, or null. Reads the copy alone, through pdf-lib. */
-export async function copyRulesBreak(copy: Uint8Array, image: ImageAction): Promise<string | null> {
-  return (await readRules(copy, image)).broken;
+/** Why the copy breaks the sanitizer's rules or the picture policy's shape, or null. Reads the copy alone, through pdf-lib. `links`: what the engine was given and kept (rule 4). */
+export async function copyRulesBreak(copy: Uint8Array, image: ImageAction, links: LinkRequest = {}): Promise<string | null> {
+  return (await readRules(copy, image, links)).broken;
 }
 
 const samplesKey = (pixels: Pixels): string => `${pixels.width}x${pixels.height}x${pixels.channels}:${sha256Hex(pixels.data.subarray(0, pixels.width * pixels.height * pixels.channels))}`;
@@ -595,11 +618,12 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
   try {
     if ((await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
     if ((await checkCopy(job.copy, job.quotes)) !== null) return { pass: false, code: 'withheld' };
-    const { broken, pages } = await readRules(job.copy, job.image);
+    const { broken, pages } = await readRules(job.copy, job.image, job);
     if (broken !== null) return { pass: false, code: 'rules' };
     // Under "show" only for the quotes (fix round 6b, REDACT-LOOK L10/N8), with no picture judged.
     const drawn = job.image === 'show' && job.quotes.length === 0 ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
     if (drawn !== null) return { pass: false, code: drawn.code };
+    if ((await linkTextBreak(job.copy, job.original, job)) !== null) return { pass: false, code: 'rules' };
     if (job.image !== 'show' && (await keepsPicture(job.copy, await pictureWindows(job.original)))) return { pass: false, code: 'rules' };
     if (job.image !== 'show' && (await keepsSamples(job.copy, await changedByBlur(job.original)))) return { pass: false, code: 'rules' };
     return { pass: true };

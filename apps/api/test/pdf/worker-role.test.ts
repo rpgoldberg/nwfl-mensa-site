@@ -23,6 +23,9 @@ const WORKER_COLUMNS: Record<string, string[]> = {
   content_version: ['id', 'item_id'],
   edition_item: ['edition_id', 'item_id'],
   pdf_copy: ['bytes', 'file_id', 'input_hash', 'status'],
+  // LINKS L3 (0025): the links inputsFor reads, never their kind, approval or a status's reason.
+  pdf_link: ['created_at', 'file_id', 'host', 'id', 'page', 'rect', 'url'],
+  pdf_link_status: ['at', 'id', 'link_id', 'status'],
   pdf_original: ['file_id'],
   redaction_mark: ['category', 'content_item_id', 'id', 'quote', 'status', 'tenant_id'],
   redaction_policy: ['action', 'audience', 'category', 'tenant_id'],
@@ -35,6 +38,8 @@ const WORKER_FUNCTIONS = [
   'pdf_regen_claim',
   'pdf_regen_finish',
   'pdf_regen_original',
+  // LINKS L3 (0025): the boot sweep's queue.
+  'pdf_regen_request_files',
   'publication_ledger_lock',
   'publication_ledger_record_file',
 ];
@@ -70,7 +75,8 @@ describe.skipIf(!live)('0017: the PDF worker role', () => {
     for (const sql of [
       `SELECT * FROM pdf_regen_claim(60)`,
       `SELECT pdf_regen_original('${file}', '${FAKE}')`,
-      `SELECT pdf_copy_put('${file}', '${FAKE}', '\\x00'::bytea, 'e', NULL, 'r')`,
+      `SELECT pdf_copy_put('${file}', '${FAKE}', '\\x00'::bytea, 'e', NULL, 'r', NULL)`,
+      `SELECT pdf_regen_request_files(ARRAY['${file}']::uuid[])`,
       `SELECT pdf_regen_finish('${file}', '${FAKE}', ARRAY[]::bytea[])`,
       `SELECT publication_ledger_original(1, 'sub-officer', '{nwfl-officers}', NULL)`,
       `SELECT bytes FROM pdf_original`,
@@ -112,6 +118,26 @@ describe.skipIf(!live)('0017: the PDF worker role', () => {
     expect((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [file])).rowCount).toBe(0);
     const reasons = await api.pool.query<{ reason: string }>(`SELECT reason FROM pdf_copy WHERE file_id = $1 AND status = 'refused'`, [file]);
     expect(reasons.rows.map((row) => row.reason)).toContain('refused by the engine process');
+  });
+
+  it('sweeps at boot (LINKS L3): a file with no copy for its current inputs, and not queued, is queued and made again', async () => {
+    await owner.query(`DELETE FROM pdf_copy WHERE file_id = $1`, [file]);
+    expect((await api.pool.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [file])).rowCount).toBe(0);
+    const target = new URL(url as string);
+    const errors: unknown[] = [];
+    const job = runWorker({
+      env: { PGHOST: target.hostname, PGPORT: target.port, PGDATABASE: database, PGUSER: WORKER, PGPASSWORD: WORKER_PW },
+      engine: fileURLToPath(new URL('./children/refuse.ts', import.meta.url)),
+      intervalMs: 20,
+      onError: (error) => errors.push(error),
+    });
+    const deadline = Date.now() + 20_000;
+    while ((await api.pool.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1`, [file])).rowCount === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await job.stop();
+    expect(errors).toEqual([]);
+    expect((await api.pool.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1`, [file])).rowCount).toBeGreaterThan(0);
   });
 
   it('gives the worker nothing outside its grants: no other table, column or write, no other function', async () => {

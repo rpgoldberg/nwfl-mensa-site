@@ -53,10 +53,27 @@
 //     of the page would end the clip, and what it clipped would flood the page;
 //   - a content stream or a JPEG cannot be read, or a passage is still
 //     readable after (PDFium), or the gate finds one or cannot check a stream.
+//
+// LINKS L3: then each approved link the request gives (by id, page, rect and
+// label, never its target) gets a fresh annotation pointing to the leaving
+// page (link-annots.ts placeLinks), unless its rect meets a box drawn here,
+// the ink of a glyph removed here, or (fix round 1, S1 and N1) what the link
+// guard reads as withheld: a glyph of the original the copy lacks, and under
+// "blur" or "hide" every picture PDFium reads on every page (drawn on the
+// page, in a form at any depth, or in an annotation's appearance) and (fix
+// round 2, F1) the whole of every page whose resources reach a tiling pattern
+// holding a picture, whose place PDFium does not give (link-guard.ts, the
+// gate's own check too); the reply names the ids kept. PDFium and the gate read the copy
+// with the annotations in place, so every string they hold is searched for
+// every passage too. With no links, nothing is written and the copy is byte
+// for byte what it was before links. When the links cannot be placed, there
+// is no copy here; the worker then asks for one with no links (rerun.ts).
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
-import { type Box, type Region, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
+import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-annots.js';
+import { linkGuardAreas } from './link-guard.js';
+import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -67,18 +84,27 @@ export interface RedactRequest {
   redactsAny: boolean;
   /** This audience's image policy (images.ts); "show" when absent. */
   image?: ImageAction;
+  /** What the links point to (https://<origin>/out/<id>); set whenever there are links. */
+  origin?: string;
+  /** The approved links whose targets pass this audience's check (store.ts inputsFor); none when absent. */
+  links?: readonly EngineLink[];
 }
 
 export interface RedactDeps {
   sanitize?: (pdf: Uint8Array, image: ImageAction) => Promise<Uint8Array>;
+  /** The link guard (link-guard.ts linkGuardAreas), for tests only: each of the engine's two blocks is tested alone (fix 2, N1). */
+  guard?: typeof linkGuardAreas;
 }
 
 export type RedactResult =
   | { kind: 'original' }
-  | { kind: 'redacted'; pdf: Uint8Array; boxes: Region[] }
+  /** `kept`: the links the copy holds (none when absent). `linksDropped`: why the copy was made with no links, for the logs (rerun.ts). */
+  | { kind: 'redacted'; pdf: Uint8Array; boxes: Region[]; kept?: string[]; linksDropped?: string }
   | { kind: 'refused'; reason: string };
 
 const UNOPENABLE = 'the PDF could not be opened';
+/** Why there is no copy when its links cannot be placed: the worker then asks for one with no links (rerun.ts). */
+export const LINKS_UNWRITTEN = 'the links could not be written';
 /** The share of a page's drawn area that pictures may cover before it counts as a scan. */
 export const SCAN_SHARE = 0.8;
 
@@ -101,7 +127,7 @@ const isBlank = (c: { text: string }): boolean => /^\s*$/u.test(c.text);
 const overlaps = (a: Box, b: Box): boolean => a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
 
 /** Why one page cannot be given, or null once its passages are removed and boxed (added to `boxes`). */
-function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[], regenerate: boolean): string | null {
+function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[], regenerate: boolean, blocked: PageBox[]): string | null {
   doc.flatten(index);
   return doc.page(index, (page) => {
     // Inline pictures become picture XObjects, which sanitize can replace.
@@ -110,6 +136,8 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     if (chars.length === 0 && page.objectCount > 0) return `page ${index + 1} has no text layer`;
     if (isScan(page)) return `page ${index + 1} is a scan: pictures cover most of it`;
     if (unmapped > 0) return `page ${index + 1} has text that cannot be read`;
+    // A picture the policy does not show is withheld: no link may sit over it, on a page with no passage too (fix 1, S1).
+    if (regenerate) blocked.push(...page.allPictures().map((picture) => ({ ...picture, page: index })));
     // Text drawn twice at nearly one place (a shadow, a fake bold, a decoy) is read once: the copy PDFium
     // left out is in no reading, so the page's text objects are counted against it (challenger r2, F2).
     const objects = page.textObjects();
@@ -157,18 +185,29 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     const drawn = boxesFor(chars, withheld, removed, index, meeting(hidden.objects, found.regions));
     page.drawBoxes(drawn);
     boxes.push(...drawn);
+    blocked.push(...withheldAreas(index, found.regions, drawn, chars, removed));
     return null;
   });
 }
 
+/** What no link may sit over on a page (LINKS L3): the passages, the boxes drawn, and every removed glyph's ink, which can reach past its box. */
+export function withheldAreas(index: number, regions: readonly Box[], drawn: readonly Box[], chars: readonly PageChar[], removed: Iterable<number>): PageBox[] {
+  const inks = [...removed].flatMap((i) => {
+    const ink = chars[i]?.ink;
+    return ink === null || ink === undefined ? [] : [{ ...ink, page: index }];
+  });
+  return [...regions.map((box) => ({ ...box, page: index })), ...drawn.map((box) => ({ ...box, page: index })), ...inks];
+}
+
 /** The document with the passages removed from every page, or why there can be no copy. */
-function redactPages(doc: Document, quotes: readonly string[], regenerate: boolean): { pdf: Uint8Array; boxes: Region[] } | string {
+function redactPages(doc: Document, quotes: readonly string[], regenerate: boolean): { pdf: Uint8Array; boxes: Region[]; blocked: PageBox[] } | string {
   const boxes: Region[] = [];
+  const blocked: PageBox[] = [];
   for (let index = 0; index < doc.pageCount; index++) {
-    const refused = redactPage(doc, index, quotes, boxes, regenerate);
+    const refused = redactPage(doc, index, quotes, boxes, regenerate, blocked);
     if (refused !== null) return refused;
   }
-  return { pdf: doc.save(), boxes };
+  return { pdf: doc.save(), boxes, blocked };
 }
 
 /** Null when no passage can be read in the PDF's text, else why the copy fails. */
@@ -193,7 +232,7 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
   if (quotes.length === 0 && !request.redactsAny && image === 'show') return { kind: 'original' };
   const doc = Document.open(await pdfium(), original);
   if (doc === null) return { kind: 'refused', reason: UNOPENABLE };
-  let redacted: { pdf: Uint8Array; boxes: Region[] } | string;
+  let redacted: { pdf: Uint8Array; boxes: Region[]; blocked: PageBox[] } | string;
   try {
     redacted = redactPages(doc, quotes, image !== 'show');
   } finally {
@@ -207,6 +246,18 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
     return { kind: 'refused', reason: error instanceof Error ? error.message : String(error) };
   }
   if (image !== 'show' && (await keepsPicture(pdf, await pictureWindows(original)))) return { kind: 'refused', reason: 'an original picture is still in the copy' };
+  let kept: string[];
+  const plain = pdf;
+  // The link guard reads the original and this copy as the gate will (fix 1, S1 and N1): a link that meets anything it reads is dropped.
+  const guarded = async (links: readonly EngineLink[]): Promise<ReadonlySet<string>> => {
+    const areas = await (deps.guard ?? linkGuardAreas)(original, plain, image);
+    return new Set(links.filter((link) => areas.some((area) => area.page === link.page - 1 && meets(boxOf(link.rect), area))).map((link) => link.id));
+  };
+  try {
+    ({ pdf, kept } = await placeLinks(pdf, request.links ?? [], request.origin, redacted.blocked, guarded));
+  } catch {
+    return { kind: 'refused', reason: LINKS_UNWRITTEN };
+  }
   const left = (await verifyRedacted(pdf, quotes)) ?? (await checkCopy(pdf, quotes));
-  return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes } : { kind: 'refused', reason: left };
+  return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes, kept } : { kind: 'refused', reason: left };
 }

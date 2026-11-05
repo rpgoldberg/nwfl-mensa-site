@@ -141,7 +141,7 @@ describe('socketRedact', () => {
       conn.on('data', (chunk: Buffer) => {
         seen.push(chunk);
         const all = Buffer.concat(seen);
-        if (all.length >= 12 && all.length === 12 + all.readUInt32BE(4) + all.readUInt32BE(8)) conn.end(encodeFrame(REPLY_MAGIC, { v: 1, kind: 'original' }));
+        if (all.length >= 12 && all.length === 12 + all.readUInt32BE(4) + all.readUInt32BE(8)) conn.end(encodeFrame(REPLY_MAGIC, { v: 2, kind: 'original' }));
       });
     });
     await new Promise<void>((resolve) => fake.listen(socket, resolve));
@@ -149,7 +149,7 @@ describe('socketRedact', () => {
     expect(await socketRedact({ path: socket })(Uint8Array.from([5, 6]), REQUEST)).toEqual({ kind: 'original' });
     const all = Buffer.concat(seen);
     const header = JSON.parse(all.subarray(12, 12 + all.readUInt32BE(4)).toString('utf8')) as unknown;
-    expect(header).toEqual({ v: 1, quotes: ['Kestrel Ambry'], redactsAny: true, image: 'blur' });
+    expect(header).toEqual({ v: 2, quotes: ['Kestrel Ambry'], redactsAny: true, image: 'blur', links: [] });
     expect(all.subarray(12 + all.readUInt32BE(4))).toEqual(Buffer.from([5, 6]));
   });
 
@@ -159,7 +159,7 @@ describe('socketRedact', () => {
       [MAX_REPLY_HEADER_BYTES, 'read'],
       [MAX_REPLY_HEADER_BYTES + 1, 'over'],
     ] as const) {
-      const json = '{"v":1,"kind":"refused","reason":"refused by the engine process"}';
+      const json = '{"v":2,"kind":"refused","reason":"refused by the engine process"}';
       // JSON allows trailing whitespace: a valid reply, padded to the size under test.
       const head = Buffer.from(json + ' '.repeat(size - json.length), 'utf8');
       const prefix = Buffer.alloc(12);

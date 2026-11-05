@@ -71,7 +71,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
         links: options.links ?? CLI_LINKS,
         reference: options.reference,
         linksSha256: options.linksSha256,
-        publicInputHash: options.publicInputHash ?? publicInputHash(loaded.publicPdf, MARKS),
+        publicInputHash: options.publicInputHash ?? publicInputHash(loaded.publicPdf, MARKS, (options.links ?? CLI_LINKS).public),
       }),
     );
 
@@ -115,7 +115,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
     it('names the links hash in the approval reason, after the three hashes of nwfl-issue/1', async () => {
       const loaded = await loading;
       expect(await reasonOf(loaded.itemId)).toBe(
-        `Issue loader, approved as PUBCOPY: marks sha256 ${parseBundle(await bundleJson(first)).approval.marksSha256}, public inputHash ${publicInputHash(first.publicPdf, MARKS)}, members sha256 ${sha256(first.membersPdf).toString('hex')}, links sha256 ${linksSha256(filesOf(first), LINKS)}`,
+        `Issue loader, approved as PUBCOPY: marks sha256 ${parseBundle(await bundleJson(first)).approval.marksSha256}, public inputHash ${publicInputHash(first.publicPdf, MARKS, LINKS.public)}, members sha256 ${sha256(first.membersPdf).toString('hex')}, links sha256 ${linksSha256(filesOf(first), LINKS)}`,
       );
     });
 
@@ -296,7 +296,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
       it('refuses a withheld quote in a nested, base64 or deeply escaped target (CONTRACT item 9)', async () => {
         const fresh = await venueIssue('2022-05');
         await applyBundle(api.pool, parseBundle(await bundleJson(fresh)));
-        const inputs = publicInputHash(fresh.publicPdf, VENUE_MARKS);
+        const inputs = publicInputHash(fresh.publicPdf, VENUE_MARKS, [webLink(111)]);
         for (const [n, target] of ENCODED_TARGETS.entries()) {
           await refused(linksFor(fresh, { links: { public: [webLink(111)], members: [webLink(112 + n, target)] }, publicInputHash: inputs }), /^links\.members\[0\]: its target holds a passage the public policy withholds$/);
         }
@@ -323,7 +323,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
       it('refuses a public input hash other than the approved one, naming the one it computed', async () => {
         const fresh = await issue('2024-09');
         await applyBundle(api.pool, parseBundle(await bundleJson(fresh)));
-        await refused(linksFor(fresh, { publicInputHash: 'c'.repeat(64), links: { public: [webLink(71)], members: [] } }), new RegExp(`^the public copy's inputs are not the approved ones: computed ${publicInputHash(fresh.publicPdf, MARKS)}$`));
+        await refused(linksFor(fresh, { publicInputHash: 'c'.repeat(64), links: { public: [webLink(71)], members: [] } }), new RegExp(`^the public copy's inputs are not the approved ones: computed ${publicInputHash(fresh.publicPdf, MARKS, [webLink(71)])}$`));
       });
     });
 
@@ -338,7 +338,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
             publicSha256: sha256(fresh.publicPdf).toString('hex'),
             membersSha256: sha256(fresh.membersPdf).toString('hex'),
             links: { public: [webLink(51)], members: [webLink(52), mailLink(53)] },
-            publicInputHash: publicInputHash(fresh.publicPdf, MARKS),
+            publicInputHash: publicInputHash(fresh.publicPdf, MARKS, [webLink(51)]),
           }),
         );
         const lines: string[] = [];
@@ -367,7 +367,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
             publicSha256: sha256(fresh.publicPdf).toString('hex'),
             membersSha256: sha256(fresh.membersPdf).toString('hex'),
             links: { public: [LINKS.public[0]!], members: [] },
-            publicInputHash: publicInputHash(fresh.publicPdf, MARKS),
+            publicInputHash: publicInputHash(fresh.publicPdf, MARKS, [LINKS.public[0]!]),
           }),
         );
         expect(await runAttach(['-'], { DATABASE_URL: urlFor(APP, APP_PW, database) }, stdinOf(json), (line) => lines.push(line))).toBe(1);

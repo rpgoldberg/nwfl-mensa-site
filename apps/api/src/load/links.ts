@@ -87,19 +87,27 @@ const PRINTABLE = /^[!-~]+$/;
  * 63 lower-case letters, digits and inner hyphens, the last starting with a letter, so never an IP
  * literal in any form, a dotless name, a trailing dot or an empty label. At most 253 characters.
  */
-const HOST = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+export const HOST = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 /**
  * mailto:local@domain: one address, no query or fragment, the domain a HOST; no # or % in the local part, which a mail client would read as a fragment or an escape,
  * and no '/' first, which a URL parser reads as an authority (mailto://) or a path it normalises (mailto:/a/../b) (CONTRACT item 10).
  */
 const MAILTO = /^mailto:[A-Za-z0-9.!$&'*+=^_`{|}~-][A-Za-z0-9.!$&'*+/=^_`{|}~-]*@([^@]+)$/;
 
+/** A coordinate in hundredths of a point, as a copy's key and the engine take it (0025's CHECK rounds the same way). */
+export const hundredths = (n: number): number => Math.round(n * 100);
+/** A rect to hundredths of a point. */
+export const roundRect = (rect: Rect): Rect => rect.map((n) => hundredths(n) / 100) as unknown as Rect;
+/** Whether a rect is at least a hundredth of a point wide and high once rounded (LINKS L3 fix 1, N4): a thinner one is no link. */
+export const wideEnough = (rect: Rect): boolean => hundredths(rect[2]) - hundredths(rect[0]) >= 1 && hundredths(rect[3]) - hundredths(rect[1]) >= 1;
+
 function rectOf(value: unknown, where: string): Rect {
-  const bad = (): LoadError => new LoadError(`${where} must be [x1, y1, x2, y2]: four finite numbers within ${MAX_COORDINATE} of 0, with x1 < x2 and y1 < y2`);
+  const bad = (): LoadError =>
+    new LoadError(`${where} must be [x1, y1, x2, y2]: four finite numbers within ${MAX_COORDINATE} of 0, with x1 < x2 and y1 < y2, at least a hundredth of a point apart once rounded`);
   if (!Array.isArray(value) || value.length !== 4) throw bad();
   if (!value.every((n): n is number => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= MAX_COORDINATE)) throw bad();
   const [x1, y1, x2, y2] = value as [number, number, number, number];
-  if (!(x1 < x2 && y1 < y2)) throw bad();
+  if (!(x1 < x2 && y1 < y2) || !wideEnough([x1, y1, x2, y2])) throw bad();
   return [x1, y1, x2, y2];
 }
 
@@ -218,14 +226,27 @@ const spaced = (text: string): string => text.replace(SEPARATORS, ' ').trim();
 const joined = (text: string): string => text.replace(SEPARATORS, '');
 const folded = (text: string): string => text.normalize('NFKC').toLowerCase();
 
+/** encodeURIComponent's form, or the text as it is when it holds a lone surrogate (which has none). */
+function percentEncoded(text: string): string {
+  try {
+    return encodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
 /**
  * A quote's base64 and base64url forms at each of the three byte alignments it can take inside a
  * longer payload: only the characters that encode its bytes alone (the stable middle), so they are
- * found wherever the quote sits.
+ * found wherever the quote sits. The quote is taken as written and as a URL carries it before it is
+ * encoded: percent-encoded (encodeURIComponent), and with '+' for its spaces (fix 1, N2).
  */
 function base64Forms(quote: string): string[] {
   const out = new Set<string>();
-  for (const variant of new Set([quote, quote.normalize('NFC'), folded(quote)])) {
+  // Each as written and as a URL carries it before it is base64-encoded (fix 1, N2): percent-encoded, and with '+' for its spaces.
+  const written = [quote, quote.normalize('NFC'), folded(quote)];
+  const carried = written.flatMap((form) => [form, percentEncoded(form), percentEncoded(form).replace(/%20/g, '+'), form.replace(/ /g, '+')]);
+  for (const variant of new Set(carried)) {
     const bytes = Buffer.from(variant, 'utf8');
     for (let skip = 0; skip < 3; skip++) {
       const encoded = Buffer.concat([Buffer.alloc(skip), bytes]).toString('base64');

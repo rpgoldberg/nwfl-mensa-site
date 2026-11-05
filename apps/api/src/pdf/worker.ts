@@ -16,12 +16,19 @@
 // output gate is re-run on every copy before it is stored (rerun.ts), and
 // never in this process: in the gate sidecar, or (in the in-pod mode, the
 // pre-sidecar mode only) in a capped child of the worker (gate-isolated.ts).
+//
+// LINKS L3: LINK_ORIGIN (link-annots.ts linkOrigin; the site's by default) is what a
+// copy's links point to, checked before the pool opens. Once the job may run
+// (the tenant verified), the worker sweeps once before its first run (regenerate.ts sweepCopies):
+// every file with no copy for its current inputs is queued, so an engine bump
+// or a new origin is made good without waiting for a trigger.
 // ============================================================================
 import pg from 'pg';
 import { type Env, type Warn, onIdleError, poolConfigFromEnv } from '../db/pool.js';
 import { isolatedGate } from './gate-isolated.js';
 import { isolatedRedact } from './isolated.js';
-import { type Redact, type RegenerateOptions, startRegenerator } from './regenerate.js';
+import { type Redact, type RegenerateOptions, startRegenerator, sweepCopies } from './regenerate.js';
+import { linkOrigin } from './link-annots.js';
 import { type Gate, withGateRerun } from './rerun.js';
 import { socketRedact, workerSockets } from './socket-engine.js';
 import { socketGate } from './socket-gate.js';
@@ -134,8 +141,10 @@ export function runWorker(
   },
 ): { stop(): Promise<void> } {
   const redact = workerRedact(options.env, options);
+  const origin = options.origin ?? linkOrigin(options.env);
   const pool = createWorkerPool(options.env, options.warn);
-  const start = (): { stop(): Promise<void> } => startRegenerator({ ...options, redact, db: pool });
+  // The boot sweep runs before the first drain (regenerate.ts startRegenerator).
+  const start = (): { stop(): Promise<void> } => startRegenerator({ ...options, origin, redact, db: pool, before: () => sweepCopies(pool, { origin }) });
   let job: { stop(): Promise<void> } | undefined;
   let gate: TenantGate | undefined;
   let stopping = false;

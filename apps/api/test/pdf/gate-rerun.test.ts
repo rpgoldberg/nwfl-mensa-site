@@ -19,6 +19,8 @@ import { GATE_REPLY_MAGIC, encodeFrame, sha256Hex } from '../../src/pdf/engine-p
 import { checkCopy } from '../../src/pdf/gate.js';
 import { structureBreak } from '../../src/pdf/pdf-structure.js';
 import { isolatedRedact } from '../../src/pdf/isolated.js';
+import { linkUri, writeLinks } from '../../src/pdf/link-annots.js';
+import { redactPdf } from '../../src/pdf/redact.js';
 import { type Redact, RetryableEngineError } from '../../src/pdf/regenerate.js';
 import { socketGate } from '../../src/pdf/socket-gate.js';
 import { RERUN_REASONS, RERUN_REFUSAL } from '../../src/pdf/rerun.js';
@@ -31,9 +33,11 @@ import { type ContainedSidecar, containedSidecar, ensureImage, probe, removeLeft
 import { GATE_CHILD_SOURCE, GATE_SIDECAR_ENTRY, NODE_FLAGS, type Spawned, gateStandIn, listening, socketDir, spawnSidecar, standIn } from '../helpers/sidecar.js';
 import { CANARIES, leakFixture, linesPdf, smallPictureFixture } from './fixtures.js';
 import { flateBomb, manyPages, manyShows } from './hostile.js';
+import { patternPage } from './photo.js';
 import { M1_CASES, M1_DRAWN_CASES, M1_LINEARIZED_CASES, M1_ORIGINAL, M1_QUOTES, linearizedCopy, plainCopy, roundFiveWriting } from './shadows.js';
 
 const QUOTE = 'Kestrel Ambry';
+const LINK_ORIGIN = 'https://nwflorida.us';
 const REQUEST = { quotes: [QUOTE], redactsAny: true };
 const MiB = 1024 * 1024;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -174,7 +178,56 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the
         expect(await redact(M1_ORIGINAL, { quotes: [file, ...M1_QUOTES], redactsAny: true, image: 'hide' }), `${id} over the ${name}`).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
       }
     }
-  }, 60_000);
+    // 120 s: CI run 42011344720 attempt 1 (LINKS L3, f0d87cd) passed the 60 s budget here once; 12-14 s on its rerun and on main.
+  }, 120_000);
+
+  it('LINKS L3 (fix 1, N8): a real link goes through the real engine sidecar, which keeps it, and the real gate sidecar, which accepts it; a subverted engine\'s link over a box is refused', async () => {
+    const real = await sidecar('engine');
+    const gate = await sidecar('gate');
+    const redact = workerRedact({ PDF_ENGINE_SOCKET: real.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [real.dir], gateSocketDirs: [gate.dir] });
+    const original = await linesPdf([`Rides: call ${QUOTE}.`, 'See www.site.example for the picnic.']);
+    const kept = { id: 'k'.repeat(26), page: 1, rect: [92, 697, 190, 711] as const, label: 'Link to site.example' };
+    const result = await redact(original, { quotes: [QUOTE], redactsAny: true, origin: LINK_ORIGIN, links: [kept] });
+    expect(result).toMatchObject({ kind: 'redacted', kept: [kept.id] });
+    const stored = (result as { pdf: Uint8Array }).pdf;
+    expect(Buffer.from(stored).toString('latin1')).toContain(`(${linkUri(LINK_ORIGIN, kept.id)})`);
+    expect(await checkCopy(stored, [QUOTE])).toBeNull();
+    // A subverted engine (children/given.ts) hands back a copy with a link written over the withheld name's box and says it kept it.
+    const overBox = { id: 'v'.repeat(26), page: 1, rect: [140, 717, 200, 731] as const, label: 'Link to site.example' };
+    const plain = await redactPdf(original, { quotes: [QUOTE], redactsAny: true });
+    const doc = await PDFDocument.load((plain as { pdf: Uint8Array }).pdf, { updateMetadata: false });
+    writeLinks(doc, LINK_ORIGIN, [overBox]);
+    const file = path.join(gate.dir, 'over-box.pdf');
+    writeFileSync(file, await doc.save({ useObjectStreams: false }));
+    const given = await sidecar('engine', ['--engine', standIn('given')]);
+    const subverted = workerRedact({ PDF_ENGINE_SOCKET: given.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [given.dir], gateSocketDirs: [gate.dir] });
+    // Refused with the link, and again when asked with none (the copy still holds its annotation).
+    expect(await subverted(original, { quotes: [file, QUOTE], redactsAny: true, origin: LINK_ORIGIN, links: [overBox] })).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
+  }, 120_000);
+
+  it('LINKS L3 (fix 2, F1): under "blur" and "hide", the real sidecars keep no link on a page whose tiling pattern paints a photo, and refuse a subverted engine\'s link there', async () => {
+    const real = await sidecar('engine');
+    const gate = await sidecar('gate');
+    const redact = workerRedact({ PDF_ENGINE_SOCKET: real.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [real.dir], gateSocketDirs: [gate.dir] });
+    const given = await sidecar('engine', ['--engine', standIn('given')]);
+    const subverted = workerRedact({ PDF_ENGINE_SOCKET: given.socket, PDF_GATE_SOCKET: gate.socket }, { socketDirs: [given.dir], gateSocketDirs: [gate.dir] });
+    const original = await patternPage('image', 2);
+    const over = { id: 'p'.repeat(26), page: 1, rect: [150, 450, 250, 550] as const, label: 'Link to site.example' };
+    const far = { id: 'f'.repeat(26), page: 1, rect: [400, 700, 500, 720] as const, label: 'Link to site.example' };
+    const next = { id: 'n'.repeat(26), page: 2, rect: [72, 697, 250, 711] as const, label: 'Link to site.example' };
+    for (const image of ['blur', 'hide'] as const) {
+      const result = await redact(original, { quotes: [], redactsAny: true, origin: LINK_ORIGIN, links: [over, far, next], image });
+      expect(result, image).toMatchObject({ kind: 'redacted', kept: [next.id] });
+      expect((result as { linksDropped?: string }).linksDropped, image).toBeUndefined();
+      // A subverted engine (children/given.ts) hands back the copy with a link far from the photo, on its page, and says it kept it.
+      const plain = await redactPdf(original, { quotes: [], redactsAny: true, image });
+      const doc = await PDFDocument.load((plain as { pdf: Uint8Array }).pdf, { updateMetadata: false });
+      writeLinks(doc, LINK_ORIGIN, [far]);
+      const file = path.join(gate.dir, `pattern-${image}.pdf`);
+      writeFileSync(file, await doc.save({ useObjectStreams: false }));
+      expect(await subverted(original, { quotes: [file], redactsAny: true, origin: LINK_ORIGIN, links: [far], image }), image).toEqual({ kind: 'refused', reason: RERUN_REASONS.rules });
+    }
+  }, 180_000);
 
   it('UNTRUSTED-PDF-GATE gate re-run: refuses a copy when the gate names other bytes than the copy, on both transports', async () => {
     const clean = await linesPdf(['Picnic flyer']);
@@ -188,7 +241,7 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the
     const liar = net.createServer((conn) => {
       conn.on('error', () => {});
       const written = Buffer.from('another copy');
-      conn.once('data', () => conn.end(encodeFrame(GATE_REPLY_MAGIC, { v: 1, verdict: 'pass', sha256: sha256Hex(written), checkedSha256: sha256Hex(written) }, written)));
+      conn.once('data', () => conn.end(encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass', sha256: sha256Hex(written), checkedSha256: sha256Hex(written) }, written)));
     });
     await new Promise<void>((resolve) => liar.listen(fake.socket, resolve));
     try {

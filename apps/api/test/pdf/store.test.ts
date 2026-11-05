@@ -162,11 +162,11 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       const c = pool as unknown as pg.Client;
       const fake = '00000000-0000-0000-0000-000000000001';
       expect(await sqlstate(c, `SELECT pdf_regen_original($1, $2)`, [file, fake])).toBe('42501');
-      expect(await sqlstate(c, `SELECT pdf_copy_put($1, $2, $3, 'e', NULL, 'r')`, [file, fake, Buffer.alloc(32)])).toBe('42501');
+      expect(await sqlstate(c, `SELECT pdf_copy_put($1, $2, $3, 'e', NULL, 'r', NULL)`, [file, fake, Buffer.alloc(32)])).toBe('42501');
       expect(await sqlstate(c, `SELECT pdf_regen_finish($1, $2, ARRAY[]::bytea[])`, [file, fake])).toBe('42501'); // 0017: the worker's alone
       const w = worker as unknown as pg.Client;
       expect(await sqlstate(w, `SELECT pdf_regen_original($1, $2)`, [file, fake])).toBe('42501');
-      expect(await sqlstate(w, `SELECT pdf_copy_put($1, $2, $3, 'e', NULL, 'r')`, [file, fake, Buffer.alloc(32)])).toBe('42501');
+      expect(await sqlstate(w, `SELECT pdf_copy_put($1, $2, $3, 'e', NULL, 'r', NULL)`, [file, fake, Buffer.alloc(32)])).toBe('42501');
       expect(await sqlstate(w, `SELECT pdf_regen_finish($1, $2, ARRAY[]::bytea[])`, [file, fake])).toBe('ok');
       expect(await queued(file)).toBe(1);
     });
@@ -199,7 +199,8 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       await propose('public', 'image', 'blur');
       calls.length = 0;
       expect(await drain(worker, { redact: stub() })).toBe(1);
-      expect(calls).toEqual(expect.arrayContaining([{ quotes: [], redactsAny: true, image: 'blur' }, { quotes: [], redactsAny: true, image: 'show' }]));
+      // No links attached: each request names none, and the site's origin (LINKS L3).
+      expect(calls).toEqual(expect.arrayContaining([{ quotes: [], redactsAny: true, image: 'blur', origin: 'https://nwflorida.us', links: [] }, { quotes: [], redactsAny: true, image: 'show', origin: 'https://nwflorida.us', links: [] }]));
       expect(calls).toHaveLength(2);
       expect((await copies(file)).length).toBe(2);
     });
@@ -228,7 +229,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(text(await readPdf(pool, file, 'members'))).toBe('copy:');
       calls.length = 0;
       expect(await drain(worker, { redact: stub() })).toBe(1);
-      expect(calls).toEqual([{ quotes: [PHONE_NAME], redactsAny: true, image: 'blur' }]);
+      expect(calls).toEqual([{ quotes: [PHONE_NAME], redactsAny: true, image: 'blur', origin: 'https://nwflorida.us', links: [] }]);
       expect(text(await readPdf(pool, file, 'public'))).toBe(`copy:${PHONE_NAME}`);
       const after = await copies(file);
       expect(after.map((c) => [c.stale, c.status])).toEqual([[false, 'ready'], [true, 'ready'], [false, 'ready']]);
@@ -328,7 +329,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
 
     it('writes a copy once per inputs, however often it is put', async () => {
       await owner.query(`INSERT INTO pdf_regen (file_id, generation, claim, claimed_generation, claimed_until) VALUES ($1, 0, '00000000-0000-0000-0000-0000000000aa', 0, now() + interval '1 minute')`, [file]);
-      const put = (bytes: string) => worker.query(`SELECT pdf_copy_put($1, '00000000-0000-0000-0000-0000000000aa', $2, 'e', $3, NULL)`, [file, Buffer.alloc(32, 7), Buffer.from(bytes)]);
+      const put = (bytes: string) => worker.query(`SELECT pdf_copy_put($1, '00000000-0000-0000-0000-0000000000aa', $2, 'e', $3, NULL, NULL)`, [file, Buffer.alloc(32, 7), Buffer.from(bytes)]);
       await put('first');
       await put('second');
       const rows = await owner.query<{ bytes: Buffer }>(`SELECT bytes FROM pdf_copy WHERE input_hash = $1`, [Buffer.alloc(32, 7)]);
