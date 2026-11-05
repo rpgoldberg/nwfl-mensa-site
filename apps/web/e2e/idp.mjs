@@ -1,6 +1,6 @@
 // @ts-check
 // A local OpenID provider for the e2e suite only (oidc-provider), standing in
-// for the club's Authentik: never a shared host. It knows twenty made-up
+// for the club's Authentik: never a shared host. It knows twenty-two made-up
 // people, requires PKCE, takes the client secret in the body
 // (client_secret_post), puts name and groups in the ID token as Authentik does,
 // and offers RP-initiated logout. Consent is skipped for the one client, as a
@@ -57,6 +57,8 @@ const LOGINS = {
   webmaster: { id: '00000000-0000-4000-8000-0000000000eb', name: 'Lee Placeholder', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-webmaster'] },
   // SOLO-APPROVE: the Admin's group alone, without the officers group (the API serves the Admin either way).
   'lone-admin': { id: '00000000-0000-4000-8000-0000000000ae', name: 'Rowan Example', groups: ['nwfl-admin'] },
+  // S2: the Admin, an officer, whose token lapses at once: each officer page then says to sign in again.
+  'lapsed-admin': { id: '00000000-0000-4000-8000-0000000000af', name: 'Hollis Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-admin'], tokenSeconds: 20 },
   // W-SIGNUP: an enrolee with no account yet; one an officer invited (fc INVITE1's groups); and the
   // Membership Officer, a membership approver, who also has a sign-up of their own in the queue.
   newcomer: { id: '00000000-0000-4000-8000-0000000000d1', name: 'Sky Sample', groups: ['nwfl-users'] },

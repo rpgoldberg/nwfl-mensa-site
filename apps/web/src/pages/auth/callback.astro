@@ -7,6 +7,7 @@
 // firstStop); officers and the Admin never do, as they need no member account
 // (fix 1). The return is honoured for everyone else, and whenever the API
 // cannot say.
+import PasswordNote from '../../components/PasswordNote.astro';
 import Base from '../../layouts/Base.astro';
 import { membershipApi } from '../../lib/api/membership';
 import { REFUSALS, completeSignIn, runtimeDeps } from '../../lib/auth/flow';
@@ -28,6 +29,7 @@ const title = 'We could not sign you in';
 <Base path="/auth/callback" title={title} description="Signing in did not finish.">
   <h1>{title}</h1>
   <p class="lead">{message}</p>
+  <PasswordNote />
   <p><a class="button" href="/sign-in">Start signing in again</a></p>
   <p><a href="/help">Get help with signing in</a></p>
 </Base>

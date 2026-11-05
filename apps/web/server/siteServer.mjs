@@ -72,8 +72,9 @@ function keepHostOnlyCookies(res, path) {
 
 /**
  * Clear-Site-Data never clears cookies: "cookies" (and "*") reach every cookie
- * of the registered domain, the sign-in provider's at login.nwflorida.us too.
- * The other directives are this origin's own, and stay.
+ * of the registered domain, the sign-in provider's too: its issuer origin, the
+ * SITE_ORIGIN profile's (server/auth-config.mjs), shares that domain. The other
+ * directives are this origin's own, and stay.
  *
  * @param {http.ServerResponse} res
  * @param {string} path

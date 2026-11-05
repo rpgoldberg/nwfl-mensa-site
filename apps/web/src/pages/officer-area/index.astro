@@ -7,9 +7,11 @@
 // for approval for the membership approvers and the Admin (W-SIGNUP D4).
 // SOLO-APPROVE: an officer sees the one-approver note here while the Admin has set a scope to one
 // approver (read from the API with the officer's own token, src/lib/api/officer.ts), and a plain line
-// when it could not be read. Nothing here reaches a member who is none of these, or the public.
+// when it could not be read, with Sign in again and the password note (S2) when the sign-in ran out.
+// Nothing here reaches a member who is none of these, or the public.
 import { officerAreaFor } from '../../../server/account.mjs';
 import OneApproverNote from '../../components/OneApproverNote.astro';
+import PasswordNote from '../../components/PasswordNote.astro';
 import Base from '../../layouts/Base.astro';
 import { type Setting, isAdmin, notesFor } from '../../lib/approval-rules';
 import { OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
@@ -60,6 +62,7 @@ const lead = session.officer
     ? <>
         <p class="lead">Welcome, {session.name}.{lead && ` ${lead}`}</p>
         {session.officer && <OneApproverNote notes={notes} signIn={signIn} />}
+        {session.officer && signIn && <PasswordNote />}
         {links.length > 0 && (
           <ul class="link-list">
             {links.map((link) => <li><a href={link.href}>{link.text}</a></li>)}

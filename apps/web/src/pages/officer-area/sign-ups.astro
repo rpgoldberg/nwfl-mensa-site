@@ -12,6 +12,7 @@
 // not-found page, as for the approval setting, and it is never linked for them. It works with no
 // script: each step is a form post, answered with a page or a 303 back here. Astro's origin check
 // refuses a cross-site post first; the body is capped and must be a form (src/lib/form.ts).
+import PasswordNote from '../../components/PasswordNote.astro';
 import Unavailable from '../../components/Unavailable.astro';
 import Base from '../../layouts/Base.astro';
 import { DecisionRefused, MembershipSignInAgain, type PendingSignup, membershipApi, sessionReader } from '../../lib/api/membership';
@@ -103,6 +104,7 @@ const confirmed = confirming === undefined ? undefined : requests?.find((r) => r
   {refused && <p class="notice" role="alert">{DECISION_REFUSED[refused]}</p>}
   {problem === 'form' && <p class="notice" role="alert">Nothing was changed: send the form again from the list below.</p>}
   {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then try again.</p>}
+  {problem === 'sign-in' && <PasswordNote />}
   {problem === 'unavailable' && <Unavailable what="The sign-up list" />}
 
   {confirmed ? (

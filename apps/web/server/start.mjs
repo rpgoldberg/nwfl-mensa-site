@@ -71,10 +71,14 @@ export async function start({ env, loadHandler, proc, clientDir, oldSite, buildI
   const pages = clientDir ? await loadPrerendered(clientDir) : new Map();
   const redirects = oldSite ? compileRedirects(JSON.parse(await readFile(oldSite, 'utf8'))) : undefined;
   // Sign-in (W4): forms may lead to a validly set-up issuer (sign-out ends its
-  // session there), and prerendered pages read the session with the key. A
-  // public-only build has neither, whatever its environment says.
+  // session there), and prerendered pages read the session with the key. In
+  // production that issuer is on the SITE_ORIGIN profile's issuer origin (S2,
+  // auth-config.mjs). A public-only build has neither, whatever its
+  // environment says.
   const { publicOnly } = buildInfo ? await readBuildInfo(buildInfo) : { publicOnly: false };
   const auth = publicOnly ? undefined : authConfig(env);
+  // S2: why, once at start (the reason names settings, never a value given), so a rollout sees it at once.
+  if (auth && !auth.enabled) log(JSON.stringify({ level: 'warn', msg: 'sign-in is off', reason: auth.reason }));
   /** @type {Buffer | undefined} */
   let key;
   if (publicOnly) {

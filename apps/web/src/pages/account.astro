@@ -15,6 +15,7 @@
 // top that links to each field; public/scripts/error-summary.js moves focus to it (fix 1). Astro's
 // origin check refuses a cross-site post first; the body is capped and must be a form
 // (src/lib/form.ts). The number is never given back in the page, nor logged (D6).
+import PasswordNote from '../components/PasswordNote.astro';
 import Unavailable from '../components/Unavailable.astro';
 import Base from '../layouts/Base.astro';
 import { MembershipSignInAgain, type MyAccount, SignupRefused, membershipApi, sessionReader } from '../lib/api/membership';
@@ -112,6 +113,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {problem === 'sign-in' && (
     <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>{posted ? ', then send your sign-up again.' : '.'}</p>
   )}
+  {problem === 'sign-in' && <PasswordNote />}
   {problem === 'unavailable' && <Unavailable what="Your account" />}
   {refused && <p class="notice" role="alert">{SIGNUP_REFUSED[refused]}</p>}
   {sent && <p class="notice" role="status">Thank you. Your sign-up has been sent.</p>}

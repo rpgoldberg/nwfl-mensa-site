@@ -19,7 +19,7 @@ describe('Dockerfile', () => {
     expect(user).toMatch(/^[1-9]\d{3,}:[1-9]\d{3,}$/);
   });
 
-  it('runs in production mode, where sign-in accepts only login.nwflorida.us', () => {
+  it('runs in production mode, where sign-in needs a SITE_ORIGIN profile', () => {
     expect(runtime).toMatch(/^ENV NODE_ENV=production /m);
   });
 
