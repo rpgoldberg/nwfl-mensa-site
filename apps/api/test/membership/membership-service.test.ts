@@ -77,9 +77,18 @@ describe.skipIf(!live)('MembershipService', () => {
       expect((await membership.getMyAccount({}, JOINER)).account).toMatchObject({ status: MemberStatus.PENDING, route: AccountRoute.SIGNUP });
     });
 
-    it('takes a sign-up without a number, for officer approval, and keeps no last name without one', async () => {
-      await membership.submitSignup({ lastName: LAST }, JOINER2);
-      expect(await signupRow('sub-joiner2')).toMatchObject({ last_name: null, membership_number: null, decision: 'pending' });
+    it('takes a sign-up with the shortest number, a single digit', async () => {
+      await membership.submitSignup({ lastName: LAST, membershipNumber: '9' }, JOINER2);
+      expect(await signupRow('sub-joiner2')).toMatchObject({ last_name: LAST, membership_number: '9', decision: 'pending' });
+    });
+
+    it('W-SIGNUP D2: stores an invited person\'s sign-up with the invite route, still pending, still needing the number', async () => {
+      const INVITEE = as('invitee-token');
+      await expect(membership.submitSignup({ lastName: LAST }, INVITEE)).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: 'a membership number is needed' });
+      const { requestId } = await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, INVITEE);
+      expect(await signupRow('sub-invitee')).toMatchObject({ id: requestId, display_name: 'Taylor Example', membership_number: NUMBER, decision: 'pending' });
+      expect(await account('sub-invitee')).toMatchObject({ status: 'pending', route: 'invite' });
+      expect((await membership.getMyAccount({}, INVITEE)).account).toMatchObject({ status: MemberStatus.PENDING, route: AccountRoute.INVITE });
     });
 
     it('gives a repeat sign-up, an account already decided and an existing member the same answer, so it tells nothing', async () => {
@@ -93,7 +102,11 @@ describe.skipIf(!live)('MembershipService', () => {
     });
 
     it.each([
-      ['a number without a last name', { membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is needed with a membership number'],
+      ['no number at all (W-SIGNUP D1)', { lastName: LAST }, Code.InvalidArgument, 'a membership number is needed'],
+      ['a number of spaces only', { lastName: LAST, membershipNumber: '   ' }, Code.InvalidArgument, 'a membership number is needed'],
+      ['neither a number nor a last name', {}, Code.InvalidArgument, 'a membership number is needed'],
+      ['a number without a last name', { membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is needed'],
+      ['a number with a last name of spaces only', { lastName: '   ', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is needed'],
       ['a number with a letter', { lastName: LAST, membershipNumber: `${NUMBER}x` }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
       ['a number of 13 digits', { lastName: LAST, membershipNumber: '1234567890123' }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
       ['a last name over 80 characters', { lastName: 'L'.repeat(81), membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is at most 80 characters'],
@@ -117,7 +130,7 @@ describe.skipIf(!live)('MembershipService', () => {
       try {
         await other.query('BEGIN');
         await other.query(`INSERT INTO signup_request (sub, display_name, email) VALUES ('sub-racer', 'Quinn Example', 'quinn@example.org')`);
-        const racing = membership.submitSignup({}, as('racer-token')).then(
+        const racing = membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, as('racer-token')).then(
           () => 'accepted',
           (e: unknown) => e as { code: Code; rawMessage: string },
         );
@@ -136,11 +149,12 @@ describe.skipIf(!live)('MembershipService', () => {
       expect(requests.map((r) => [r.displayName, r.email, r.route, r.verification])).toEqual([
         ['Jamie Example', 'jamie@example.org', AccountRoute.SIGNUP, Verification.UNCHECKED],
         ['Robin Sample', 'robin@example.org', AccountRoute.SIGNUP, Verification.UNCHECKED],
+        ['Taylor Example', 'taylor@example.org', AccountRoute.INVITE, Verification.UNCHECKED],
         ['Quinn Example', 'quinn@example.org', AccountRoute.SIGNUP, Verification.UNCHECKED],
       ]);
       expect(dump(requests)).not.toContain(NUMBER);
       expect(dump(requests)).not.toContain(LAST);
-      expect((await membership.listSignupRequests({}, ADMIN)).requests).toHaveLength(3);
+      expect((await membership.listSignupRequests({}, ADMIN)).requests).toHaveLength(4);
     });
 
     it('is for approvers and the Admin only', async () => {

@@ -40,6 +40,8 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'affiliate-token': { client: 'site', subject: 'sub-affiliate', groups: ['nwfl-affiliates', 'nwfl-role-rvc'], scopes: [], name: 'Avery Madeup', email: 'avery@example.org' },
   'noprofile-token': { client: 'site', subject: 'sub-noprofile', groups: ['nwfl-pending'], scopes: [] },
   'bademail-token': { client: 'site', subject: 'sub-bademail', groups: ['nwfl-pending'], scopes: [], name: 'Lee Example', email: 'not an address' },
+  // W-SIGNUP D2: invited by an officer (fc INVITE1): the enrolee groups and <prefix>invited; still signs up.
+  'invitee-token': { client: 'site', subject: 'sub-invitee', groups: ['nwfl-users', 'nwfl-members', 'nwfl-invited'], scopes: [], name: 'Taylor Example', email: 'taylor@example.org' },
   'racer-token': { client: 'site', subject: 'sub-racer', groups: ['nwfl-pending'], scopes: [], name: 'Quinn Example', email: 'quinn@example.org' },
   // The Membership Officer: approves sign-ups; also signs up once, to show no one decides their own.
   'approver-token': {

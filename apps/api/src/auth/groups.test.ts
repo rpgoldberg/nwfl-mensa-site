@@ -30,7 +30,7 @@ describe('parseGroupPrefix', () => {
     expect(() => parseGroupPrefix(prefix)).toThrow(/SITE_GROUP_PREFIX/);
   });
 
-  it.each(['nwfl-office-', 'mensa-nwfl-role-', 'nwfl-officers-', 'mensa-admin-', 'members-', 'nwfl-membership-', 'x-approvers-', 'webmaster-x-', 'affiliates-'])(
+  it.each(['nwfl-office-', 'mensa-nwfl-role-', 'nwfl-officers-', 'mensa-admin-', 'members-', 'nwfl-membership-', 'x-approvers-', 'webmaster-x-', 'affiliates-', 'mensa-invited-', 'invited-x-'])(
     'refuses %s: a role word in the prefix would let another prefix\'s group read as <prefix>officers',
     (prefix) => {
       expect(() => parseGroupPrefix(prefix)).toThrow(/SITE_GROUP_PREFIX .* role word/);
@@ -45,7 +45,7 @@ describe('parseGroupPrefix: a family and a chapter (CF-ISO-0 N5)', () => {
 });
 
 describe('internalGroups', () => {
-  const ALL = ['admin', 'webmaster', 'officers', 'membership-approvers', 'affiliates', 'members', 'office-treasurer', 'role-rvc'];
+  const ALL = ['admin', 'webmaster', 'officers', 'membership-approvers', 'affiliates', 'members', 'invited', 'office-treasurer', 'role-rvc'];
 
   it('with the default prefix, keeps today\'s nwfl- groups as they are and drops every other', () => {
     expect(internalGroups(['nwfl-members', 'nwfl-officers', 'fc-admins', 'officers', 'NWFL-OFFICERS', 'mensa-nwfl-officers'], 'nwfl-')).toEqual(['nwfl-members', 'nwfl-officers']);

@@ -17,7 +17,7 @@
 // digits, each starting with a letter, joined by single hyphens and closed by
 // one, at most 32 characters, and at least two words (a family and a chapter;
 // only the default nwfl- is one word). No segment may be a role word (office, role,
-// officers, admin...): with nwfl-office- as the prefix, the default prefix's
+// officers, admin, invited...): with nwfl-office- as the prefix, the default prefix's
 // seat group nwfl-office-officers would read as <prefix>officers.
 // ============================================================================
 
@@ -28,7 +28,8 @@ export const DEFAULT_SITE_GROUP_PREFIX = 'nwfl-';
 
 const PREFIX = /^[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*-$/;
 const MAX_LENGTH = 32;
-const ROLE_WORDS = new Set(['admin', 'webmaster', 'officers', 'members', 'membership', 'approvers', 'affiliates', 'office', 'role']);
+// W-SIGNUP D2: 'invited' too, since <prefix>invited marks a person an officer invited (fc INVITE1).
+const ROLE_WORDS = new Set(['admin', 'webmaster', 'officers', 'members', 'membership', 'approvers', 'affiliates', 'office', 'role', 'invited']);
 
 /** SITE_GROUP_PREFIX, validated; unset is the default. Throws, so a bad value refuses to start. */
 export function parseGroupPrefix(value: string | undefined): string {

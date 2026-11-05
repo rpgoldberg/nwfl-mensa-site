@@ -79,8 +79,10 @@ message Member {
 // Accounts and approvals. The subject, display name and email come from the
 // verified token, never from a request field.
 service MembershipService {
-  // Called by a signed-in pending user. The number is optional; without it
-  // the sign-up still goes to officer approval.
+  // Called by a signed-in pending user. The number and the last name are
+  // both required, invited or not; the verifier matches them, and an
+  // approver decides. A token with the invited group opens the account with
+  // the invite route.
   rpc SubmitSignup(SubmitSignupRequest) returns (SubmitSignupResponse);
   rpc GetMyAccount(GetMyAccountRequest) returns (GetMyAccountResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
