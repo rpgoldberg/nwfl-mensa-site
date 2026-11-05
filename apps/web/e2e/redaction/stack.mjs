@@ -35,7 +35,9 @@
 // target holds the marked phone canary, and one (on its second page) turned off once the worker has made
 // copies holding it. The worker (L3) writes into each copy the links it holds: the plain one in every
 // copy, the held one only in the members copy (store.ts leaves it out of the public's), and the third in
-// the first copies only; it then makes the copies served now without it. The leaving page shows the
+// the first copies only; it then makes the copies served now without it. The stack then seeds the held one
+// into the public's copy too, as a worker with that bug would, so only the read's own check against the marks
+// (targetHolds) stands between the public and its target. The leaving page shows the
 // first, is the 404 for the second, and says the third was turned off (the ledger the worker writes
 // names the copies each audience was served, so the read can tell the audience's copy carried it).
 //
@@ -479,6 +481,23 @@ try {
   await made('copies without the turned-off link');
   const held = (await psql(db, `SELECT count(*) FROM pdf_copy_link WHERE file_id = ${q(ids.pdf)} AND link_id = ${q(LINK_IDS.off)};`)).trim();
   if (held === '0') throw new Error('no copy of the PDF held the link turned off');
+  // LINKS L4: a worker with the bug store.ts guards against: the held link in every ready copy of the PDF, the
+  // public's too (no duplicate key). So the read's own check against the marks (targetHolds) is all that
+  // stands between the public and the held link's target in this fixture.
+  await psql(
+    db,
+    `INSERT INTO pdf_copy_link (file_id, input_hash, link_id)
+       SELECT c.file_id, c.input_hash, ${q(LINK_IDS.held)} FROM pdf_copy c WHERE c.file_id = ${q(ids.pdf)} AND c.status = 'ready'
+       ON CONFLICT DO NOTHING;`,
+  );
+  const missing = (
+    await psql(
+      db,
+      `SELECT count(*) FROM pdf_copy c WHERE c.file_id = ${q(ids.pdf)} AND c.status = 'ready'
+         AND NOT EXISTS (SELECT 1 FROM pdf_copy_link k WHERE k.file_id = c.file_id AND k.input_hash = c.input_hash AND k.link_id = ${q(LINK_IDS.held)});`,
+    )
+  ).trim();
+  if (missing !== '0') throw new Error(`${missing} ready copies of the PDF do not hold the held link, so the read's own check would not be reached`);
 
   // The original too, so the test can show its PDF check finds the canaries in it.
   const fixture = JSON.stringify({

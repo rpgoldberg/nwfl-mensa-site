@@ -53,7 +53,7 @@ interface Fixture {
   articlePlain: string;
   /** D1: the members article's title and summary, which the public is shown as a teaser. */
   membersTeaser: { title: string; summary: string };
-  /** LINKS L4: three links on the marked PDF, in the copies the worker made; the held one's target holds the phone canary (only the members copy holds it); off is turned off once copies held it. */
+  /** LINKS L4: three links on the marked PDF, in the copies the worker made; the held one's target holds the phone canary (the stack seeds it into every ready copy, the public's too, so only the read's own check against the marks keeps it from the public); off is turned off once copies held it. */
   links: { plain: string; held: string; off: string };
 }
 
