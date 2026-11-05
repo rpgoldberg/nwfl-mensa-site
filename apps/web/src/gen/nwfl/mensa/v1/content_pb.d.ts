@@ -1528,6 +1528,83 @@ export declare type ReadFileResponse = Message<"nwfl.mensa.v1.ReadFileResponse">
 export declare const ReadFileResponseSchema: GenMessage<ReadFileResponse>;
 
 /**
+ * @generated from message nwfl.mensa.v1.GetLinkTargetRequest
+ */
+export declare type GetLinkTargetRequest = Message<"nwfl.mensa.v1.GetLinkTargetRequest"> & {
+  /**
+   * 26 lower-case base32 characters, as the copy's /out/<id> carries it.
+   *
+   * @generated from field: string link_id = 1;
+   */
+  linkId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.GetLinkTargetRequest.
+ * Use `create(GetLinkTargetRequestSchema)` to create a new message.
+ */
+export declare const GetLinkTargetRequestSchema: GenMessage<GetLinkTargetRequest>;
+
+/**
+ * @generated from message nwfl.mensa.v1.GetLinkTargetResponse
+ */
+export declare type GetLinkTargetResponse = Message<"nwfl.mensa.v1.GetLinkTargetResponse"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.LinkTargetStatus status = 1;
+   */
+  status: LinkTargetStatus;
+
+  /**
+   * Active only: the approved URL, its host (a mail link's domain) in ASCII,
+   * its kind, and whether it is login-walled (confirmed by hand).
+   *
+   * @generated from field: string url = 2;
+   */
+  url: string;
+
+  /**
+   * @generated from field: string host = 3;
+   */
+  host: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.LinkTargetKind kind = 4;
+   */
+  kind: LinkTargetKind;
+
+  /**
+   * @generated from field: bool confirm = 5;
+   */
+  confirm: boolean;
+
+  /**
+   * The file and 1-based page the link is on: the page's way back.
+   *
+   * @generated from field: string file_id = 6;
+   */
+  fileId: string;
+
+  /**
+   * @generated from field: int32 page = 7;
+   */
+  page: number;
+
+  /**
+   * Active: when the link was last checked (approved, or re-checked);
+   * disabled: when it was turned off.
+   *
+   * @generated from field: google.protobuf.Timestamp status_at = 8;
+   */
+  statusAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.GetLinkTargetResponse.
+ * Use `create(GetLinkTargetResponseSchema)` to create a new message.
+ */
+export declare const GetLinkTargetResponseSchema: GenMessage<GetLinkTargetResponse>;
+
+/**
  * @generated from enum nwfl.mensa.v1.ContentKind
  */
 export enum ContentKind {
@@ -1751,6 +1828,62 @@ export enum FileRole {
 export declare const FileRoleSchema: GenEnum<FileRole>;
 
 /**
+ * @generated from enum nwfl.mensa.v1.LinkTargetStatus
+ */
+export enum LinkTargetStatus {
+  /**
+   * @generated from enum value: LINK_TARGET_STATUS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: LINK_TARGET_STATUS_ACTIVE = 1;
+   */
+  ACTIVE = 1,
+
+  /**
+   * Turned off (the site it led to changed); the page says so, with no URL.
+   *
+   * @generated from enum value: LINK_TARGET_STATUS_DISABLED = 2;
+   */
+  DISABLED = 2,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.LinkTargetStatus.
+ */
+export declare const LinkTargetStatusSchema: GenEnum<LinkTargetStatus>;
+
+/**
+ * @generated from enum nwfl.mensa.v1.LinkTargetKind
+ */
+export enum LinkTargetKind {
+  /**
+   * @generated from enum value: LINK_TARGET_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * An https URL.
+   *
+   * @generated from enum value: LINK_TARGET_KIND_WEB = 1;
+   */
+  WEB = 1,
+
+  /**
+   * mailto:<one address>.
+   *
+   * @generated from enum value: LINK_TARGET_KIND_MAIL = 2;
+   */
+  MAIL = 2,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.LinkTargetKind.
+ */
+export declare const LinkTargetKindSchema: GenEnum<LinkTargetKind>;
+
+/**
  * Items, the roster and published editions for the site. Reads return what
  * the caller's token may see; the workflow RPCs need an officer token.
  *
@@ -1915,6 +2048,26 @@ export declare const ContentService: GenService<{
     methodKind: "server_streaming";
     input: typeof ReadFileRequestSchema;
     output: typeof ReadFileResponseSchema;
+  },
+  /**
+   * Where a link in a PDF copy leads (LINKS L4), for the site's leaving page
+   * /out/<id>. A link resolves only when it is in the copy the caller's
+   * audience is served now, is active, and its target holds none of the
+   * audience's withheld passages as they stand now. A link turned off is
+   * DISABLED, with its date, file and page and never its URL, only to a
+   * caller who may have its file and could hold the link: an officer, or an
+   * audience whose copy carried it (so a link only the members copy held is
+   * NOT_FOUND to the public). Anything else (an unknown or malformed id,
+   * another audience's link, one dropped from the copy served now or held by
+   * a mark, an officer's read of an active link, the officer being served the
+   * original) is answered exactly as an unknown id: NOT_FOUND, "link not found".
+   *
+   * @generated from rpc nwfl.mensa.v1.ContentService.GetLinkTarget
+   */
+  getLinkTarget: {
+    methodKind: "unary";
+    input: typeof GetLinkTargetRequestSchema;
+    output: typeof GetLinkTargetResponseSchema;
   },
 }>;
 

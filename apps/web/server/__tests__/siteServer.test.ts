@@ -204,6 +204,43 @@ describe('withSitePolicy', () => {
     error.mockRestore();
   });
 
+  it('sends no referrer from the leaving page /out/<id> (LINKS L4), whatever the handler set, on its 303 and its 404, by raw or decoded path', async () => {
+    const base = await serve((req, res) => {
+      res.writeHead(req.url?.endsWith('go') ? 303 : 404, { 'Referrer-Policy': 'unsafe-url', ...(req.url?.endsWith('go') ? { Location: 'https://club.example/' } : {}) });
+      res.end();
+    });
+    for (const path of ['/out/abcdefghijklmnopqrstuvwxyz', '/out/go', '/%6Fut/go', '/OUT/x']) {
+      const res = await fetch(`${base}${path}`, { redirect: 'manual' });
+      expect(res.headers.get('referrer-policy'), path).toBe('no-referrer');
+    }
+    const other = await fetch(`${base}/about`);
+    expect(other.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
+  });
+
+  it("never loosens a handler's no-referrer, whatever the path (LINKS L4: //out/<id> is served as the leaving page)", async () => {
+    const base = await serve((req, res) => {
+      res.writeHead(req.url?.endsWith('go') ? 303 : 200, { 'Referrer-Policy': 'no-referrer', ...(req.url?.endsWith('go') ? { Location: 'https://club.example/' } : {}) });
+      res.end();
+    });
+    for (const path of ['//out/go', '//out/abcdefghijklmnopqrstuvwxyz', '/about', '/x//out/go']) {
+      const res = await fetch(`${base}${path}`, { redirect: 'manual' });
+      expect(res.headers.get('referrer-policy'), path).toBe('no-referrer');
+    }
+  });
+
+  it('never stores an answer on the leaving page, the 301 of its trailing slash included, by raw or decoded path', async () => {
+    const base = await serve((_req, res) => {
+      res.writeHead(301, { Location: '/out/abcdefghijklmnopqrstuvwxyz' });
+      res.end();
+    });
+    for (const path of ['/out/abcdefghijklmnopqrstuvwxyz/', '//out/abcdefghijklmnopqrstuvwxyz/', '/%6Fut/abcdefghijklmnopqrstuvwxyz/']) {
+      const res = await fetch(`${base}${path}`, { redirect: 'manual' });
+      expect(res.status, path).toBe(301);
+      expect(res.headers.get('cache-control'), path).toBe('private, no-store');
+      expect(res.headers.get('cdn-cache-control'), path).toBe('no-store');
+    }
+  });
+
   it('overrides a Cache-Control the handler set', async () => {
     const base = await serve((_req, res) => {
       res.setHeader('Cache-Control', 'public, max-age=99999');

@@ -161,6 +161,17 @@
       }
     ]
   },
+  "ContentService.GetLinkTarget": {
+    "input": "nwfl.mensa.v1.GetLinkTargetRequest",
+    "fields": [
+      {
+        "name": "link_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
   "ContentService.GetPublishedItem": {
     "input": "nwfl.mensa.v1.GetPublishedItemRequest",
     "fields": [

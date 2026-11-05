@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PREFS,
+  LINKS_COOKIE,
+  LINK_MODES,
   SIZES,
   SIZE_COOKIE,
   THEMES,
@@ -19,6 +21,38 @@ describe('cookie names', () => {
   it('are host-only by prefix, so no other app on a parent domain can set them', () => {
     expect(SIZE_COOKIE).toBe('__Host-nwfl-size');
     expect(THEME_COOKIE).toBe('__Host-nwfl-theme');
+    expect(LINKS_COOKIE).toBe('__Host-nwfl-links');
+  });
+});
+
+// LINKS L4 (D3b): what the leaving page does next time, per device (Q3): guard, the default, waits for
+// a press; countdown continues after 5 seconds; direct goes straight there.
+describe('the links choice', () => {
+  it('is guard with no cookie, and reads the three choices, guard as the default (no value)', () => {
+    expect(LINK_MODES).toEqual(['guard', 'countdown', 'direct']);
+    expect(readPrefs(undefined).links).toBeUndefined();
+    expect(readPrefs(`${LINKS_COOKIE}=countdown`).links).toBe('countdown');
+    expect(readPrefs(`${LINKS_COOKIE}=direct`).links).toBe('direct');
+    expect(readPrefs(`${LINKS_COOKIE}=guard`).links).toBeUndefined();
+  });
+
+  it('reads a forged or unknown value as guard, and the name without its prefix or in another case not at all', () => {
+    for (const value of ['DIRECT', 'direct%00', 'di rect', '"direct"', 'redirect', 'countdown,direct', '1', 'https://evil.example/']) {
+      expect(readPrefs(`${LINKS_COOKIE}=${value}`).links, value).toBeUndefined();
+    }
+    expect(readPrefs('nwfl-links=direct').links).toBeUndefined();
+    expect(readPrefs('__HOST-nwfl-links=direct').links).toBeUndefined();
+    expect(readPrefs(`\u00a0${LINKS_COOKIE}=direct`).links).toBeUndefined();
+  });
+
+  it('is changed by a links field naming one of the three, keeps size and theme, and ignores anything else', () => {
+    const prefs = { size: SIZES[5], theme: 'dark' as const };
+    expect(applyChange(prefs, { links: 'direct' })).toEqual({ ...prefs, links: 'direct' });
+    expect(applyChange({ ...prefs, links: 'direct' }, { links: 'countdown' })).toEqual({ ...prefs, links: 'countdown' });
+    expect(applyChange({ ...prefs, links: 'direct' }, { links: 'guard' })).toEqual({ ...prefs, links: undefined });
+    for (const links of [undefined, '', 'DIRECT', 'next', 'system']) expect(applyChange({ ...prefs, links: 'countdown' }, { links }), String(links)).toEqual({ ...prefs, links: 'countdown' });
+    // A size or theme press leaves the links choice alone.
+    expect(applyChange({ ...prefs, links: 'direct' }, { size: 'larger', theme: 'light' })).toEqual({ size: SIZES[6], theme: 'light', links: 'direct' });
   });
 });
 
@@ -129,9 +163,10 @@ describe('applyChange', () => {
 
 describe('prefsCookies', () => {
   it('stores a choice for a year, for the whole site, unreadable to scripts', () => {
-    expect(prefsCookies({ size: SIZES[5], theme: 'dark' })).toEqual([
+    expect(prefsCookies({ size: SIZES[5], theme: 'dark', links: 'countdown' })).toEqual([
       `${SIZE_COOKIE}=${SIZES[5]}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
       `${THEME_COOKIE}=dark; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
+      `${LINKS_COOKIE}=countdown; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
     ]);
   });
 
@@ -139,16 +174,17 @@ describe('prefsCookies', () => {
     expect(prefsCookies(DEFAULT_PREFS)).toEqual([
       `${SIZE_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`,
       `${THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`,
+      `${LINKS_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`,
     ]);
   });
 
-  it('rewrites an old cookie in the new form on the next press', () => {
-    const prefs = applyChange(readPrefs(`${SIZE_COOKIE}=5; ${THEME_COOKIE}=contrast`), { size: 'smaller' });
-    expect(prefsCookies(prefs).map((c) => c.split(';')[0])).toEqual([`${SIZE_COOKIE}=${SIZES[5]}`, `${THEME_COOKIE}=contrast-white`]);
+  it('rewrites an old cookie in the new form on the next press, and keeps the links choice', () => {
+    const prefs = applyChange(readPrefs(`${SIZE_COOKIE}=5; ${THEME_COOKIE}=contrast; ${LINKS_COOKIE}=direct`), { size: 'smaller' });
+    expect(prefsCookies(prefs).map((c) => c.split(';')[0])).toEqual([`${SIZE_COOKIE}=${SIZES[5]}`, `${THEME_COOKIE}=contrast-white`, `${LINKS_COOKIE}=direct`]);
   });
 
   it('makes every cookie host-only: __Host-, Secure, Path=/, no Domain, SameSite=Lax', () => {
-    for (const prefs of [DEFAULT_PREFS, { size: SIZES[6], theme: 'contrast-white' as const }, { size: SIZES[0], theme: undefined }]) {
+    for (const prefs of [DEFAULT_PREFS, { size: SIZES[6], theme: 'contrast-white' as const, links: 'direct' as const }, { size: SIZES[0], theme: undefined }]) {
       for (const cookie of prefsCookies(prefs)) {
         const [pair, ...rest] = cookie.split(';').map((part) => part.trim());
         const attrs = rest.map((a) => a.toLowerCase());
@@ -185,6 +221,13 @@ describe('htmlAttributes and stampHtml', () => {
 
   it('leaves a document with no html tag or slider alone', () => {
     expect(stampHtml('<p>hi</p>', { size: SIZES[4], theme: undefined })).toBe('<p>hi</p>');
+  });
+
+  it("names the leaving page's choice (LINKS L4) only when it is not the guard, so the Aa panel shows it on any page", () => {
+    expect(htmlAttributes({ size: 100, theme: undefined, links: 'direct' })).toEqual({ lang: 'en', 'data-size': '100', 'data-links': 'direct' });
+    expect(htmlAttributes({ size: 100, theme: 'dark', links: 'countdown' })).toEqual({ lang: 'en', 'data-size': '100', 'data-theme': 'dark', 'data-links': 'countdown' });
+    expect(htmlAttributes({ size: 100, theme: undefined, links: undefined })).toEqual({ lang: 'en', 'data-size': '100' });
+    expect(stampHtml('<html lang="en" data-size="100"><body></body></html>', { size: 100, theme: undefined, links: 'direct' })).toBe('<html lang="en" data-size="100" data-links="direct"><body></body></html>');
   });
 });
 

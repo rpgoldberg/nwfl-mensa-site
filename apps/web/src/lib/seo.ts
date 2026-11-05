@@ -16,6 +16,8 @@ export function robotsTxt(host: string): string {
     'Disallow: /auth/',
     'Disallow: /officer-area',
     'Disallow: /account',
+    // LINKS L4: the leaving page, one per link, never for a search engine.
+    'Disallow: /out/',
     '',
     `Sitemap: https://${CANONICAL_HOST}/sitemap.xml`,
     '',

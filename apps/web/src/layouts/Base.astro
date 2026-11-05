@@ -25,8 +25,10 @@ interface Props {
   path: string;
   title: string;
   description: string;
+  /** Kept out of search engines (LINKS L4: the leaving page). */
+  noindex?: boolean;
 }
-const { path, title, description } = Astro.props;
+const { path, title, description, noindex = false } = Astro.props;
 const trail = trailFor(path, title);
 const documentTitle = path === '/' ? SITE_NAME : `${title} | ${SITE_NAME}`;
 // A prerendered page is built with the defaults; the server wrapper stamps the
@@ -36,13 +38,14 @@ const attrs = htmlAttributes(prefs);
 const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.search}`;
 ---
 <!doctype html>
-<html lang="en" data-size={attrs['data-size']} data-theme={attrs['data-theme']}>
+<html lang="en" data-size={attrs['data-size']} data-theme={attrs['data-theme']} data-links={attrs['data-links']}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>{documentTitle}</title>
     <meta name="description" content={description} />
+    {noindex && <meta name="robots" content="noindex" />}
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />

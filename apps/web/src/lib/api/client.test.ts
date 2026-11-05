@@ -6,7 +6,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ContentKind, ContentService } from '../../gen/nwfl/mensa/v1/content_pb.js';
+import { ContentKind, ContentService, LinkTargetKind, LinkTargetStatus } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import { EventOccurrenceSchema, EventService, EventVisibility } from '../../gen/nwfl/mensa/v1/event_pb.js';
 import { ApiNotFound, ApiTokenRefused, ApiUnavailable, type ApiReads, type Reader, apiSetup, grpcReads, unavailableReads } from './client';
 
@@ -443,6 +443,84 @@ describe('grpcReads as a signed-in reader', () => {
     const reads = unavailableReads();
     await expect(reads.listPublishedItems(ContentKind.ARTICLE, 10, member)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(reads.readFile(FILE, member)).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+});
+
+describe('grpcReads.getLinkTarget (LINKS L4)', () => {
+  const LINK = 'abcdefghijklmnopqrstuvwxyz';
+  const FILE = '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7';
+  const AT = new Date('2026-11-04T15:00:00Z');
+  const TOKEN = 'test.member-token.sig~nature+/=';
+
+  it('reads an active link as the public: its URL, host, kind, confirm flag, file, page and date, with no Authorization or Cookie', async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        getLinkTarget: (req) =>
+          req.linkId === LINK
+            ? { status: LinkTargetStatus.ACTIVE, url: 'https://club.example/a', host: 'club.example', kind: LinkTargetKind.WEB, confirm: true, fileId: FILE, page: 2, statusAt: timestampFromDate(AT) }
+            : { status: LinkTargetStatus.ACTIVE, url: 'mailto:events@example.org', host: 'example.org', kind: LinkTargetKind.MAIL, fileId: FILE, page: 1 },
+      }),
+    );
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, () => {});
+    expect(await reads.getLinkTarget(LINK)).toEqual({ kind: 'active', url: 'https://club.example/a', host: 'club.example', mail: false, confirm: true, fileId: FILE, page: 2, checkedAt: AT });
+    expect(await reads.getLinkTarget('bbbbbbbbbbbbbbbbbbbbbbbbbb')).toEqual({ kind: 'active', url: 'mailto:events@example.org', host: 'example.org', mail: true, confirm: false, fileId: FILE, page: 1 });
+    expect(api.seen.map((s) => s.path)).toEqual(['/nwfl.mensa.v1.ContentService/GetLinkTarget', '/nwfl.mensa.v1.ContentService/GetLinkTarget']);
+    for (const call of api.seen) {
+      expect(call.headers['authorization']).toBeUndefined();
+      expect(call.headers['cookie']).toBeUndefined();
+    }
+  });
+
+  it('reads a link turned off as disabled, with its date, file and page and nothing else', async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        getLinkTarget: (req) => ({ status: LinkTargetStatus.DISABLED, url: 'https://ignored.example/', host: 'ignored.example', fileId: FILE, page: 3, ...(req.linkId === LINK ? { statusAt: timestampFromDate(AT) } : {}) }),
+      }),
+    );
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, () => {});
+    expect(await reads.getLinkTarget(LINK)).toEqual({ kind: 'disabled', fileId: FILE, page: 3, at: AT });
+    expect(await reads.getLinkTarget('bbbbbbbbbbbbbbbbbbbbbbbbbb')).toEqual({ kind: 'disabled', fileId: FILE, page: 3 });
+  });
+
+  it('reads NOT_FOUND, an unknown status and an unknown kind as not found', async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        getLinkTarget: (req) => {
+          if (req.linkId === LINK) throw new ConnectError('link not found', Code.NotFound);
+          if (req.linkId.startsWith('b')) return { status: LinkTargetStatus.UNSPECIFIED, url: 'https://club.example/', host: 'club.example', kind: LinkTargetKind.WEB, fileId: FILE, page: 1 };
+          return { status: LinkTargetStatus.ACTIVE, url: 'https://club.example/', host: 'club.example', kind: LinkTargetKind.UNSPECIFIED, fileId: FILE, page: 1 };
+        },
+      }),
+    );
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, () => {});
+    expect(await reads.getLinkTarget(LINK)).toEqual({ kind: 'not_found' });
+    expect(await reads.getLinkTarget('bbbbbbbbbbbbbbbbbbbbbbbbbb')).toEqual({ kind: 'not_found' });
+    expect(await reads.getLinkTarget('cccccccccccccccccccccccccc')).toEqual({ kind: 'not_found' });
+  });
+
+  it("sends a signed-in reader's token, and turns UNAUTHENTICATED with one into ApiTokenRefused, any other failure into ApiUnavailable", async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        getLinkTarget: (req) => {
+          throw new ConnectError(`no ${TOKEN}`, req.linkId === LINK ? Code.Unauthenticated : Code.Internal);
+        },
+      }),
+    );
+    const { lines, log } = logs();
+    const reads = grpcReads({ baseUrl: api.url, timeoutMs: 2000 }, log);
+    expect(await reads.getLinkTarget(LINK, { bearer: TOKEN }).catch((e: unknown) => e)).toBeInstanceOf(ApiTokenRefused);
+    expect(await reads.getLinkTarget('bbbbbbbbbbbbbbbbbbbbbbbbbb', { bearer: TOKEN }).catch((e: unknown) => e)).toBeInstanceOf(ApiUnavailable);
+    expect(await reads.getLinkTarget(LINK).catch((e: unknown) => e)).toBeInstanceOf(ApiUnavailable);
+    await reads.getLinkTarget(LINK, { bearer: 'not a token' }).catch(() => undefined);
+    expect(api.seen.map((s) => s.headers['authorization'])).toEqual([`Bearer ${TOKEN}`, `Bearer ${TOKEN}`, undefined, undefined]);
+    expect(lines.map((l) => [l['rpc'], l['code']])).toEqual([
+      ['GetLinkTarget', 'unauthenticated'],
+      ['GetLinkTarget', 'internal'],
+      ['GetLinkTarget', 'unauthenticated'],
+      ['GetLinkTarget', 'unauthenticated'],
+    ]);
+    expect(JSON.stringify(lines)).not.toContain(TOKEN);
+    await expect(unavailableReads().getLinkTarget(LINK)).rejects.toBeInstanceOf(ApiUnavailable);
   });
 });
 

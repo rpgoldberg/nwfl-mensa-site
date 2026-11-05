@@ -41,6 +41,7 @@ import { type Tree, filterForPublic, normalizeTree, toProtoDocument } from './tr
 import { EDITION_SELECT, type EditionRow, editionHandlers, editionMessages } from './editions.js';
 import { workflowHandlers } from './workflow.js';
 import { fileHandlers } from './files.js';
+import { linkHandlers } from './link-target.js';
 import { loadLens } from '../redaction/lens.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
 import { bylineFor, itemHidden, slugFor } from './redact.js';
@@ -261,6 +262,7 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
       ...workflowHandlers({ db }),
       ...editionHandlers({ db }),
       ...fileHandlers({ db }),
+      ...linkHandlers({ db }),
       getRoster: async () => ({ offices: await rosterAsOf(db, todayIn(deps.now())) }),
 
       getPublishedItem: async (request, ctx) => {

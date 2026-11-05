@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { CANONICAL_HOST, robotsTxt, sitemapXml } from './seo';
 
 describe('robots.txt', () => {
-  it('lets search engines index the canonical host, apart from sign-in and the reader controls', () => {
+  it('lets search engines index the canonical host, apart from sign-in, the reader controls and the leaving page (LINKS L4)', () => {
     expect(CANONICAL_HOST).toBe('nwflorida.us');
     expect(robotsTxt('nwflorida.us')).toBe(
-      ['User-agent: *', 'Disallow: /prefs', 'Disallow: /sign-in', 'Disallow: /sign-out', 'Disallow: /signed-out', 'Disallow: /auth/', 'Disallow: /officer-area', 'Disallow: /account', '', 'Sitemap: https://nwflorida.us/sitemap.xml', ''].join('\n'),
+      ['User-agent: *', 'Disallow: /prefs', 'Disallow: /sign-in', 'Disallow: /sign-out', 'Disallow: /signed-out', 'Disallow: /auth/', 'Disallow: /officer-area', 'Disallow: /account', 'Disallow: /out/', '', 'Sitemap: https://nwflorida.us/sitemap.xml', ''].join('\n'),
     );
   });
 

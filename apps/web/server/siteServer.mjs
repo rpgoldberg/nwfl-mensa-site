@@ -6,7 +6,7 @@
 // theme stamped on <html>, as the layout does for on-request pages.
 import http from 'node:http';
 import { stampAccount } from './account.mjs';
-import { cacheControl, cdnCacheControl, isHostOnlyCookie, securityHeaders } from './policy.mjs';
+import { cacheControl, cdnCacheControl, isHostOnlyCookie, isLeavingPage, referrerPolicy, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 import { renamedPath, resolveOldUrl } from './redirects.mjs';
 import { readSession } from './session.mjs';
@@ -92,14 +92,22 @@ function keepOwnSiteData(res, path) {
  * @param {http.ServerResponse} res
  * @param {string} path
  * @param {Readonly<Record<string, string>>} headers the security headers
+ * @param {string | undefined} [decoded] the path as the handler reads it
  */
-function applyPolicy(req, res, path, headers) {
+function applyPolicy(req, res, path, headers, decoded) {
+  const handlerReferrer = res.getHeader('referrer-policy');
   for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
+  // LINKS L4: the leaving page by the raw path, the one the handler serves, or the request target
+  // as written: new URL reads //out/<id> as host "out", and the handler serves it as the page.
+  const served = [decoded, normalisePath(String(req.url).replace(/[?#][\s\S]*$/, ''))];
+  // No referrer from it, and a handler's own no-referrer is never loosened, on any path.
+  if (isLeavingPage(path, ...served) || referrerPolicy(path, handlerReferrer) === 'no-referrer') res.setHeader('Referrer-Policy', 'no-referrer');
   const setsCookie = res.hasHeader('set-cookie');
   if (setsCookie) keepHostOnlyCookies(res, path);
   if (res.hasHeader('clear-site-data')) keepOwnSiteData(res, path);
   const cache = cacheControl({
     path,
+    served,
     cookieHeader: req.headers.cookie,
     status: res.statusCode,
     setsCookie,
@@ -217,7 +225,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     beforeHeaders(res, () => {
       if (old?.status === 410) res.statusCode = 410;
       // The cache rule reads the raw path: only a plain /_astro/ name is immutable.
-      applyPolicy(req, res, raw, headers);
+      applyPolicy(req, res, raw, headers, path);
     });
     if (path === undefined) {
       res.statusCode = 400;

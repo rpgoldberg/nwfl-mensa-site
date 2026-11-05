@@ -106,6 +106,8 @@ test('robots.txt keeps this host out of search engines, and indexes the canonica
   });
   expect(canonical).toContain('Sitemap: https://nwflorida.us/sitemap.xml');
   expect(canonical).toContain('Disallow: /sign-in');
+  // LINKS L4: the leaving page is never for a search engine.
+  expect(canonical).toContain('Disallow: /out/');
 });
 
 test('sitemap.xml lists the public pages on the canonical host', async ({ request }) => {
