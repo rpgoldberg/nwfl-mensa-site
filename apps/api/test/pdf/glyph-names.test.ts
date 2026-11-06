@@ -26,6 +26,8 @@ import {
   type3Font,
   withFont,
   withFontRun,
+  withPageTwoRun,
+  withPatternRun,
   withRun,
 } from './glyph-fonts.js';
 import { SCALE, render } from './pixels.js';
@@ -191,11 +193,22 @@ async function runArea(pdf: Uint8Array): Promise<Buffer> {
   return Buffer.concat(Array.from({ length: y1 - y0 }, (_, y) => Buffer.from(r.rgb.subarray(((y0 + y) * r.width + x0) * 3, ((y0 + y) * r.width + x1) * 3))));
 }
 
-/** What PDFium draws for the run of `copy`: the name of the reference run it matches pixel for pixel, "nothing", or "something else". */
+/**
+ * What PDFium draws for the run of `copy`: the name of the reference run it matches pixel for pixel, "nothing", or
+ * "something else". Every reference must draw something, and something no other reference draws (fix round 2, S2), so
+ * a match says what is drawn: a run moved off the page matches no reference, where it matched one drawing nothing too.
+ */
 async function shows(copy: Uint8Array, refs: Record<string, Uint8Array>, blank: Uint8Array): Promise<string> {
+  const empty = await runArea(blank);
+  const areas: Array<[string, Buffer]> = [];
+  for (const [name, ref] of Object.entries(refs)) areas.push([name, await runArea(ref)]);
+  for (const [i, [name, ref]] of areas.entries()) {
+    expect(ref.equals(empty), `the reference "${name}" draws nothing`).toBe(false);
+    for (const [other, drawn] of areas.slice(i + 1)) expect(ref.equals(drawn), `the references "${name}" and "${other}" draw the same`).toBe(false);
+  }
   const area = await runArea(copy);
-  for (const [name, ref] of Object.entries(refs)) if (area.equals(await runArea(ref))) return name;
-  return area.equals(await runArea(blank)) ? 'nothing' : 'something else';
+  for (const [name, ref] of areas) if (area.equals(ref)) return name;
+  return area.equals(empty) ? 'nothing' : 'something else';
 }
 
 const run = (codes: string): string => `BT /FXA1 24 Tf 72 500 Td <${hex(codes)}> Tj ET`;
@@ -337,11 +350,11 @@ describe('GLYPHMAP fix round 1: each font class, what PDFium draws and what the 
   it('(f) KNOWN LIMIT: a Type0 Identity-H font whose /ToUnicode lies about the glyph ids it draws passes, while the honest one is refused', async () => {
     const original = await twoMarksFixture();
     const pdf = await redacted(original, [MEANT]);
-    const t0 = (reads: string): Promise<Uint8Array> => withFontRun(pdf, (ctx) => identityType0(ctx, MEANT, reads), `BT /FXA1 24 Tf 72 500 Td <${identityCodes(MEANT)}> Tj ET`);
+    const t0 = (reads: string, draws = MEANT): Promise<Uint8Array> => withFontRun(pdf, (ctx) => identityType0(ctx, draws, reads), `BT /FXA1 24 Tf 72 500 Td <${identityCodes(draws)}> Tj ET`);
     const honest = await t0(MEANT);
     const lying = await t0(CODES);
-    // The same glyphs are drawn: PDFium shows "Quillon" for both (fix1/png).
-    expect(await shows(lying, { 'the honest run': honest }, pdf)).toBe('the honest run');
+    // The same glyphs are drawn: PDFium shows "Quillon" for both (fix1/png), and not the harmless word's.
+    expect(await shows(lying, { 'the honest run': honest, 'the harmless word': await t0(CODES, CODES) }, pdf)).toBe('the honest run');
     expect(await verdict(honest, original)).toEqual(WITHHELD);
     // KNOWN LIMIT: a code is a glyph id, and with the /ToUnicode taken out PDFium reads no letter for it and pdf.js
     // reads the id itself as a character, so neither can be asked what the glyphs are. FOLLOWUP-type0-type3.md.
@@ -386,4 +399,50 @@ describe('GLYPHMAP: a page whose /Contents lists anything but streams (N5-3)', (
     const want = (shape: Shape): string => (shape === 'streams' ? 'pass' : 'rules');
     expect(verdicts).toEqual(Object.fromEntries(Object.keys(verdicts).map((key) => [key, want(key.split(' ')[0] as Shape)])));
   }, 120_000);
+});
+
+describe('GLYPHMAP fix round 2: a run in a tiling pattern (B1), a run on page 2 alone (S1), and an MMType1 font (N1)', () => {
+  const TILED = 'a tiling pattern shows text, or draws content that cannot be read';
+  const RULES = { pass: false, code: 'rules' };
+  const alt = (kind: FontSpec['kind'], extra: Partial<FontSpec> = {}): FontSpec => ({ kind, codes: CODES, names: namesOf(READ_CLASSES['suffix .alt'] as (c: string) => string, MEANT), reads: CODES, ...extra });
+
+  it.each(KINDS)('refuses as "rules" a %s run in a tiling pattern that PDFium draws as the quote while it reads no text there, under "show" and "blur"', async (kind) => {
+    const original = await twoMarksFixture();
+    const pdf = await redacted(original, [MEANT]);
+    const honest = await withPatternRun(pdf, { kind, codes: MEANT, names: [...MEANT], reads: MEANT });
+    const lying = await withPatternRun(pdf, alt(kind));
+    expect(await shows(lying, { 'the quote': honest, 'the harmless word': await withPatternRun(pdf, { kind, codes: CODES, names: [...CODES], reads: CODES }) }, pdf)).toBe('the quote');
+    // PDFium reads no text inside a tiling pattern, with the /ToUnicode taken out or not: the glyph-name reading is blind there.
+    expect(await namedBreak(lying, [MEANT])).toBeNull();
+    for (const image of ['show', 'blur'] as const) {
+      expect(await verdict(lying, original, [MEANT], image), image).toEqual(RULES);
+      expect(await verdict(honest, original, [MEANT], image), `honest, ${image}`).toEqual(RULES);
+      expect(await verdict(lying, original, [], image), `no quotes, ${image}`).toEqual(RULES);
+    }
+  }, 120_000);
+
+  it('the engine gives no copy, under any policy, of an original that draws the run in a tiling pattern (adv2 E2E: it made one, and the gate passed it)', async () => {
+    const original = await withPatternRun(await twoMarksFixture(), alt('embedded TrueType'));
+    for (const image of ['show', 'blur', 'hide'] as const) expect(await redactPdf(original, { quotes: [MEANT], redactsAny: true, image }), image).toEqual({ kind: 'refused', reason: TILED });
+  }, 60_000);
+
+  it('reads every page: a run on page 2 alone is found there, and refused (M14)', async () => {
+    const original = await twoMarksFixture();
+    const pdf = await redacted(original, [MEANT]);
+    const copy = await withPageTwoRun(pdf, alt('non-embedded Type1'));
+    expect((await PDFDocument.load(copy)).getPageCount()).toBe(2);
+    expect(await namedBreak(pdf, [MEANT])).toBeNull();
+    expect(await namedBreak(copy, [MEANT])).toBe('page 2: withheld text is in the glyph names PDFium draws');
+    expect(await verdict(copy, original)).toEqual(WITHHELD);
+  }, 60_000);
+
+  it('takes the /ToUnicode out of an MMType1 font, which PDFium draws by name as a Type1 one (M15)', async () => {
+    const original = await twoMarksFixture();
+    const pdf = await redacted(original, [MEANT]);
+    const copy = await withRun(pdf, alt('non-embedded Type1', { subtype: 'MMType1' }));
+    const refs = { 'the quote': await withRun(pdf, { kind: 'non-embedded Type1', codes: MEANT, names: [...MEANT], reads: MEANT, subtype: 'MMType1' }) };
+    expect(await shows(copy, refs, pdf)).toBe('the quote');
+    expect(await namedBreak(copy, [MEANT])).toBe('page 1: withheld text is in the glyph names PDFium draws');
+    expect(await verdict(copy, original)).toEqual(WITHHELD);
+  }, 60_000);
 });

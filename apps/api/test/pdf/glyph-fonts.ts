@@ -357,3 +357,31 @@ export async function contentText(pdf: Uint8Array): Promise<string> {
 
 /** The names `cls` gives the letters of `word`. */
 export const namesOf = (cls: (c: string) => string, word: string): string[] => [...word].map(cls);
+
+/**
+ * `pdf` with `spec`'s run drawn inside a tiling pattern (GLYPHMAP fix round 2, B1: the verifier's adv2 P1): one cell
+ * at 72 490 whose content shows the codes at 0 10 in the font (its own /Resources), and page 1 filling 72 490 300 40
+ * with it, after the page's content. PDFium draws the run there and reads no text from it.
+ */
+export async function withPatternRun(pdf: Uint8Array, spec: FontSpec): Promise<Uint8Array> {
+  const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+  const { context } = doc;
+  const page = doc.getPage(0);
+  const ref = page.node.get(PDFName.of('Contents')) as PDFRef;
+  const content = Buffer.from(decodePDFRawStream(context.lookup(ref) as PDFRawStream).decode()).toString('latin1');
+  const cell = { Type: 'Pattern', PatternType: 1, PaintType: 1, TilingType: 1, BBox: [0, 0, 1000, 60], XStep: 1000, YStep: 1000, Matrix: [1, 0, 0, 1, 72, 490], Resources: { Font: { FXA1: font(context, spec) } } };
+  const pattern = context.register(context.flateStream(`0 0 0 rg BT /FXA1 24 Tf 0 10 Td <${hex(spec.codes)}> Tj ET`, cell));
+  (page.node.Resources() as PDFDict).set(PDFName.of('Pattern'), context.obj({ FXP: pattern }));
+  context.assign(ref, context.flateStream(`${content}\nq /Pattern cs /FXP scn 72 490 300 40 re f Q`));
+  return doc.save({ useObjectStreams: false });
+}
+
+/** `pdf` with a second page whose only content is `spec`'s run at 72 500 (GLYPHMAP fix round 2, S1). */
+export async function withPageTwoRun(pdf: Uint8Array, spec: FontSpec): Promise<Uint8Array> {
+  const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+  const { context } = doc;
+  const page = doc.addPage([612, 792]);
+  page.node.set(PDFName.of('Resources'), context.obj({ Font: { FXA1: font(context, spec) } }));
+  page.node.set(PDFName.of('Contents'), context.register(context.flateStream(`q 0 0 0 rg BT /FXA1 24 Tf 72 500 Td <${hex(spec.codes)}> Tj ET Q`)));
+  return doc.save({ useObjectStreams: false });
+}

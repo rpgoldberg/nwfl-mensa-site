@@ -337,7 +337,7 @@ show. The engine request says so per quote (`membersWithhold`, one boolean
 per quote, protocol v3), so no request gains any text: the public's holds
 only the public's quotes, the members' only theirs. The input hash (v3)
 covers which quotes members withhold, so a change to the members' policy
-remakes the public copy; `ENGINE_VERSION` ends in `+labels-1`, so every copy
+remakes the public copy; `ENGINE_VERSION` gained `+labels-1`, so every copy
 labelled `withheld` is made again. The labels change no box: each region,
 and every pixel outside the boxes, is what the engine made before
 (`test/pdf/box-regions.golden.json`, recorded from main at b3668e4).
@@ -695,7 +695,12 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   each copy is also read with PDFium once the `/ToUnicode` is taken out of
   its fonts, and a quote found there is `withheld`. Left as they are: Type0
   and Type3 fonts, and a TrueType font with no `/Encoding` (as LibreOffice
-  embeds them), which draws by code through its own program;
+  embeds them), which draws by code through its own program. PDFium reads no
+  text inside a tiling pattern, so a tiling pattern that shows text, itself
+  or through what it draws, or holds content pdf-lib cannot decode, is
+  refused as `rules` under every policy, by the engine too (fix round 2).
+  `ENGINE_VERSION` gained `+glyphs-1`, so every stored copy is made again and
+  passes these checks; the engine's bytes are as they were;
 - the box labels (BOXLABEL, above): exactly `Members Only`, `Mbrs Only` or
   `Private`, one to a box, inside a box drawn before it, in the label
   style; no other glyph drawn over a box. Read with PDFium;
