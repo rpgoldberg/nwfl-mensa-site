@@ -165,6 +165,16 @@ describe('matchedChars: the ligatures a glyph may stand for, matched in one pass
     const chars = line('the o\uFFFDce: Ti\uFFFDn Shu\uFFFDeby 7 and Tiffin Shu\uFFFDleby 31 and Ti\uFFFDn Shuffleby 39 came');
     expect(textOf(chars, matchedChars(chars, quotes))).toBe('Ti\uFFFDn Shu\uFFFDeby 7Tiffin Shu\uFFFDleby 31Ti\uFFFDn Shuffleby 39');
   });
+
+  it('finds a letter-spaced run whose stand-in runs on into more letters, so the spaced reading needs its stand-in spans and no word bounds', () => {
+    const chars = line('Notes: T i \uFFFD a n y R a \uFFFD e s w o r t h a n d more.');
+    expect(textOf(chars, matchedChars(chars, ['Tiffany Rafflesworth']))).toBe('Ti\uFFFDanyRa\uFFFDesworth');
+  });
+
+  it('finds an accented quote whose ligature is matched only through the folded form of the quote', () => {
+    const chars = line('Notes: Ra\uFFFDaelle Dupont kept score.');
+    expect(textOf(chars, matchedChars(chars, ['Ra\u0066\u0066a\u00EBlle Dupont']))).toBe('Ra\uFFFDaelle Dupont');
+  });
 });
 
 describe('matchedChars: a ligature glyph with no readable text inside a quote (LIGATURE)', () => {
