@@ -82,6 +82,7 @@ import type { BoxKind } from './labels.js';
 import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-annots.js';
 import { linkGuardAreas } from './link-guard.js';
 import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, hull, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
+import { nameBreak } from './pdf-structure.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -292,7 +293,10 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
     return { kind: 'refused', reason: LINKS_UNWRITTEN };
   }
   // The labels are read as the gate reads them (gate-labels.ts): any other text in a box, or a label outside one, is no
-  // copy, and no label's own text counts as withheld text.
+  // copy, and no label's own text counts as withheld text. First, as the gate does (R3-1), no copy holds a name pdf-lib
+  // reads apart from pdf.js and PDFium, so the font a label's op names is the one each of them finds.
+  const names = await nameBreak(pdf);
+  if (names !== null) return { kind: 'refused', reason: names };
   const labels = await labelMarks(pdf);
   if (typeof labels === 'string') return { kind: 'refused', reason: labels };
   const left = await leakBreak(pdf, labels, async (bytes) => (await verifyRedacted(bytes, quotes)) ?? (await checkCopy(bytes, quotes)));

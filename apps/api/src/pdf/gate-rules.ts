@@ -62,7 +62,15 @@
 //      - gateReply checks, and hands back, its own writing of the copy: what
 //        pdf-lib read, written again (no object streams, no incremental
 //        update). Only those bytes are stored (rerun.ts): the bytes stored
-//        are the bytes the gate checked.
+//        are the bytes the gate checked;
+//      - each name is read as a viewer reads it (BOXLABEL fix round 3, R3-1):
+//        pdf-lib decodes a name's #XX twice, the viewers once, and its own
+//        writing of a name read as FXF#32 is "/FXF#2332", FXF2 to pdf-lib.
+//        A copy with a name, in its objects (pdf-structure.ts nameBreak) or
+//        in a content stream the rules read (nestingBreak), that still holds
+//        '#' once decoded, or a key twice in one dictionary, is refused as it
+//        comes (gateReply), before anything else in a verdict, and in the
+//        rules.
 //
 //   4. Links (LINKS L3): the one exception to rule 1. The worker tells the
 //      gate the links the engine was given (id, page, rect, label), their
@@ -102,7 +110,7 @@
 // limits.
 // ============================================================================
 import { PDFArray, type PDFContext, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber, type PDFObject, PDFRawStream, PDFRef, PDFString, decodePDFRawStream } from '@cantoo/pdf-lib';
-import { PDF_WS, operandBreak } from './content.js';
+import { PDF_WS, contentNames, operandBreak } from './content.js';
 import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha256Hex } from './engine-protocol.js';
 import { type PageRef, drawnBreak } from './drawn.js';
 import { checkCopy } from './gate.js';
@@ -111,7 +119,7 @@ import type { GateJob } from './gate-isolated.js';
 import { linkTextBreak } from './gate-links.js';
 import { type Accepted, type LinkRequest, acceptedLinks } from './link-annots.js';
 import { BLUR_MAX, FILL_GRAY, type ImageAction, type Pixels, blurred, decodePicture, hasInlinePicture, keepsPicture, pictureWindows } from './images.js';
-import { structureBreak } from './pdf-structure.js';
+import { nameBreak, structureBreak } from './pdf-structure.js';
 
 const FORBIDDEN_KEYS = new Set(['JS', 'JavaScript', 'OpenAction', 'AA', 'URI', 'EmbeddedFile', 'EmbeddedFiles', 'EF', 'XFA', 'AcroForm', 'Annots', 'Linearized']);
 const LINEARIZED = PDFName.of('Linearized');
@@ -395,6 +403,8 @@ const NESTING = `forms, patterns, Type 3 glyphs or soft masks nest more than ${M
  */
 export const MAX_DRAWS = 100_000;
 const DRAWS = `forms, patterns, Type 3 glyphs or soft masks are drawn in more than ${MAX_DRAWS} ways`;
+/** BOXLABEL fix round 3 (R3-1): a content stream names what no resource list may hold (pdf-structure.ts nameBreak). */
+const NAMES = 'a content stream holds a name that holds "#" once decoded';
 const NAME_TOKEN = new RegExp(`/([^${PDF_WS}()<>\\[\\]{}/%]*)`, 'g');
 
 /**
@@ -468,6 +478,7 @@ function nestingBreak(doc: PDFDocument): string | null {
       const texts = drawer.content.map(contentOf).filter((bytes) => bytes !== null);
       for (const bytes of drawer.joined === true && texts.length > 1 ? [...texts, Buffer.concat(texts)] : texts) {
         const text = Buffer.from(bytes).toString('latin1');
+        if (contentNames(bytes).some((name) => name.includes('#'))) throw new Error(NAMES);
         for (const [, raw] of text.matchAll(NAME_TOKEN)) read.names.add((raw as string).replace(/#([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))));
         KINDS.forEach((key, k) => {
           if (DRAWS_FROM[key].test(text)) (read as { kinds: boolean[] }).kinds[k] = true;
@@ -523,14 +534,14 @@ function nestingBreak(doc: PDFDocument): string | null {
     }
     return null;
   } catch (error) {
-    return error instanceof Error && error.message === DRAWS ? DRAWS : NESTING;
+    return error instanceof Error && (error.message === DRAWS || error.message === NAMES) ? error.message : NESTING;
   }
 }
 
 /** Why the copy breaks the sanitizer's rules or the picture policy's shape (or null), and the pages pdf-lib's tree gives, in order. */
 async function readRules(copy: Uint8Array, image: ImageAction, links: LinkRequest = {}): Promise<{ broken: string | null; pages: PageRef[] }> {
   // One reading first (M1): no encryption, no second trailer, no shadowed object.
-  const structure = await structureBreak(copy);
+  const structure = (await structureBreak(copy)) ?? (await nameBreak(copy));
   if (structure !== null) return { broken: `the structure: ${structure}`, pages: [] };
   const doc = await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
   // pdf-lib counts pages only through a tree that passed pageTreeBreak (it throws on some others).
@@ -655,7 +666,7 @@ async function nestedPast(copy: Uint8Array): Promise<string | null> {
  */
 export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
   try {
-    if ((await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
+    if ((await nameBreak(job.copy)) !== null || (await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
     const labels = await labelMarks(job.copy);
     if ((await leakBreak(job.copy, labels, (bytes) => checkCopy(bytes, job.quotes))) !== null) return { pass: false, code: 'withheld' };
     const { broken, pages } = await readRules(job.copy, job.image, job);
@@ -710,7 +721,7 @@ export async function gateReply(job: GateJob, maxBytes = MAX_OUTPUT_BYTES, write
   try {
     // Refused as it comes, by the verdict on it as handed over (its structure breaks copyRulesBreak).
     if ((await structureBreak(job.copy)) !== null) return { verdict: await gateVerdict(job), sha256 };
-    if (await holdsLinearized(job.copy)) return refused('rules');
+    if ((await holdsLinearized(job.copy)) || (await nameBreak(job.copy)) !== null) return refused('rules');
     pdf = await write(job.copy);
   } catch {
     return refused('unfinished');

@@ -213,8 +213,9 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
     // PDFium still reads the label, in its box; pdf.js draws the quote under it.
     expect(await labelMarks(bad)).toEqual(marks);
     expect.soft(await unlabelled(bad, marks)).toBeNull();
-    expect.soft(await verdictOf(bad, original, ['Quillon'])).toEqual({ pass: false, code: 'withheld' });
-    expect.soft((await gateReply({ copy: bad, original, quotes: ['Quillon'], image: 'show' })).verdict).toEqual({ pass: false, code: 'withheld' });
+    // The key FX#4a9 holds "#" once decoded, so since fix round 3 (R3-1) the gate refuses the copy before any label is read.
+    expect.soft(await verdictOf(bad, original, ['Quillon'])).toEqual({ pass: false, code: 'rules' });
+    expect.soft((await gateReply({ copy: bad, original, quotes: ['Quillon'], image: 'show' })).verdict).toEqual({ pass: false, code: 'rules' });
   });
 
   it('(a) finds no label whose op has any #XX escape, even one that names PDFium\'s own font (R2-1)', async () => {

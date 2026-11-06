@@ -30,15 +30,20 @@
 // turned to spaces. Nothing else of the copy changes. It is taken out only
 // when that op names its font in letters and digits, as PDFium does (no #XX
 // escape, which pdf-lib and the readers decode apart: round 2, R2-1), and the
-// font that name finds in the page's resources is exactly the one
-// PDFium writes for a label (/Type /Font /Subtype /Type1 /BaseFont /Helvetica
-// /Encoding /WinAnsiEncoding, and no other key: no /Differences, /ToUnicode,
-// /Widths or /FontDescriptor, nothing embedded), so its codes draw the glyphs
+// font pdf-lib finds under that name in the page's resources is exactly the
+// one PDFium writes for a label (/Type /Font /Subtype /Type1 /BaseFont
+// /Helvetica /Encoding /WinAnsiEncoding, and no other key: no /Differences,
+// /ToUnicode, /Widths or /FontDescriptor, nothing embedded), so its codes draw the glyphs
 // they read as (BOXLABEL fix round 1, F1: a font's /Differences drew a quote
 // under codes every text layer read as "Private"), and only from a content
 // stream written as PDFium writes one (/Filter /FlateDecode alone, no
-// /DecodeParms; F5). The glyph check (drawn.ts) takes a label out besides
-// only where pdf.js's glyphs and their text both spell it, once per label
+// /DecodeParms; F5). That font is the one pdf.js and PDFium find only because
+// the callers read the labels after refusing any copy whose names pdf-lib
+// reads apart from them (pdf-structure.ts nameBreak, round 3, R3-1: pdf-lib
+// decodes a name's #XX twice, the readers once): the gate in gateVerdict and
+// gateReply, the engine in redactPdf; unlabelled itself does not check.
+// The glyph check (drawn.ts) takes a label out besides only where pdf.js's
+// glyphs and their text both spell it, once per label
 // (F1, defence in depth). A copy whose labels fail, or whose label bytes are
 // not found so, is judged as it is. So the exemption is exactly those
 // strings, drawn as themselves, inside boxes; a label string drawn anywhere
@@ -146,9 +151,11 @@ const LABEL_FONT: ReadonlyArray<[string, string]> = [
 ];
 
 /**
- * A content op's name operand as pdf-lib's parser reads the same name in a dictionary: each #XX decoded in either
- * case, as pdf.js and PDFium decode it, then PDFName.of. PDFName.of alone decodes only upper-case #XX (R2-1). LABEL_OP
- * admits no '#', so for a label this changes nothing; it keeps the lookup right if that ever changes.
+ * A content op's name operand as pdf-lib's parser reads the same name in a dictionary: each #XX decoded in either case
+ * (R2-1: PDFName.of alone decodes only upper-case #XX), then PDFName.of, which decodes upper-case #XX a second time.
+ * pdf.js and PDFium decode once, so for a name that still holds '#' after the first pass this is not what they read
+ * (R3-1); no copy holding one reaches the label check (pdf-structure.ts nameBreak). LABEL_OP admits no '#', so for a
+ * label this changes nothing.
  */
 export function opFontName(name: string): PDFName {
   return PDFName.of(name.replace(/#([0-9A-Fa-f]{2})/g, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16))));

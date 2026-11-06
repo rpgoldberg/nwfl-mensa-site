@@ -455,11 +455,13 @@ export const nestedForms = (depth: number, last = '0 0 1 1 re f'): Uint8Array =>
 // given type (4 to 7), three vertices or one patch, enough for a reader to take it for one.
 export const R6_CATALOG: RawObject = [1, CATALOG];
 export const R6_PAGES: RawObject = PAGES;
+// Its resources hold one /Font list: `resources`' own when it has one (BOXLABEL fix round 3: a key twice is refused).
 export const onSplitPage = (parts: readonly (string | Buffer)[], resources = '', extra: RawObject[] = []): Uint8Array => {
   const refs = parts.map((_, k) => `${k === 0 ? 4 : 100 + k} 0 R`);
   const streams: RawObject[] = parts.map((part, k) => [k === 0 ? 4 : 100 + k, rawStream('', part)]);
   const contents = parts.length === 1 ? (refs[0] as string) : `[${refs.join(' ')}]`;
-  return rawPdf([[1, CATALOG], PAGES, [3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contents} /Resources << /Font << /F1 5 0 R >> ${resources} >> >>`], ...streams, FONT, ...extra]);
+  const fonts = resources.includes('/Font') ? '' : '/Font << /F1 5 0 R >> ';
+  return rawPdf([[1, CATALOG], PAGES, [3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contents} /Resources << ${fonts}${resources} >> >>`], ...streams, FONT, ...extra]);
 };
 export const meshShading = (type: 4 | 5 | 6 | 7): Buffer => {
   const decode = '/Decode [0 612 0 792 0 1 0 1 0 1]';

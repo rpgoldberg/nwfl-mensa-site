@@ -59,6 +59,22 @@ host may default to does not accept, so with another Node they fail to start.
 The per-copy children also need util-linux `prlimit` and `choom` at
 `/usr/bin` (Debian and Ubuntu ship both).
 
+Mutants the BOXLABEL challengers ran that no test kills, accepted with the
+reason:
+
+- M18 (the gate's policy walk not rerun without quotes after a quote is
+  found only in a label): equivalent. Every picture that walk refuses, the
+  rules (`readRules`) refuse first; ten probes gave `rules` with and without
+  it.
+- Na4 (a label's font read from the page's own `/Resources`, not inherited):
+  stricter only. It can take fewer labels out, never more.
+- Nf3d (a box's path not required to end where it began): equivalent.
+  PDFium's `h` adds a sixth segment, so an open path is still refused.
+- R2b (a label op's font name looked up undecoded): equivalent. The label op
+  admits only letters and digits, and no copy holding a name with `#` once
+  decoded reaches the label check. The decode is pinned by `opFontName`'s
+  own test.
+
 ## Secrets and fixtures
 
 This repository's whole history is meant to be publishable.
@@ -338,10 +354,15 @@ as withheld text: a leak check that finds a quote is run once more on the
 copy with exactly those labels' strings turned to spaces, each in the very
 bytes PDFium writes for a label at that label's place, as many as PDFium
 read and no more, and only when the label's op names its font in letters
-and digits, as PDFium does, and that font is exactly PDFium's own
-(non-embedded Helvetica, `/WinAnsiEncoding`, no other key: no
-`/Differences`, `/ToUnicode`, `/Widths` or `/FontDescriptor`) and its
-content stream is plain `/FlateDecode`. The glyph check reruns on the copy
+and digits, as PDFium does, and the font pdf-lib finds under that name is
+exactly PDFium's own (non-embedded Helvetica, `/WinAnsiEncoding`, no other
+key: no `/Differences`, `/ToUnicode`, `/Widths` or `/FontDescriptor`) and its
+content stream is plain `/FlateDecode`. pdf-lib decodes a name's `#XX`
+escapes twice where pdf.js and PDFium decode once, so before any label is
+read the gate refuses (`rules`), and the engine gives no copy, when a name
+anywhere in the copy still holds `#` once decoded, or a dictionary has a key
+twice (BOXLABEL fix round 3, R3-1). PDFium writes neither. So the font pdf-lib
+finds is the one the readers draw with. The glyph check reruns on the copy
 itself and skips only text whose drawn glyphs and text both spell a label.
 So a passage that is itself `Private` gets a copy, while the same word
 anywhere outside a box is still refused (`withheld`). A label that fails
@@ -679,7 +700,13 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   an xref entry that does not land on its object, or an object or xref
   stream. Every value a rule reads is resolved as a viewer resolves it, and
   `/S`, `/Subtype`, `/Type`, `/PatternType` or `/Filter` given by reference
-  is refused.
+  is refused. One reading of each name too (BOXLABEL fix round 3, R3-1):
+  pdf-lib decodes a name's `#XX` escapes twice, pdf.js and PDFium once, so
+  raw `/FXF#2332` is `FXF2` to pdf-lib and `FXF#32` to a viewer, and the
+  gate's own writing of a name pdf-lib reads as `FXF#32` is `/FXF#2332`. A
+  copy is refused, as it comes and in every verdict, when any name in its
+  objects (key or value) or in a content stream the rules read still holds
+  `#` once decoded, or a dictionary has a key twice.
 
 Its limits, as for any text gate: text written so it does not read as text
 (reversed, encoded, drawn as curves or as a picture); a picture rebuilt from
