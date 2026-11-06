@@ -77,7 +77,8 @@
 //      round 1) the link guard reads both with PDFium (link-guard.ts): a kept
 //      link that meets the box of a glyph the copy lacks, or under "blur" or
 //      "hide" any picture PDFium reads, or lies on a page that reaches a
-//      tiling pattern holding a picture (fix round 2), refuses it too. All
+//      tiling pattern or a soft mask's group that draws a picture (fix rounds
+//      2 and 3), or too many resources to walk, refuses it too. All
 //      are "rules"; the worker then
 //      asks for the copy with no links (rerun.ts). With no links kept the
 //      rules are as before.
@@ -205,7 +206,8 @@ function contentGroups(doc: PDFDocument, glyphs: readonly PDFObject[]): PDFObjec
   for (const [, object] of context.enumerateIndirectObjects()) {
     if (object instanceof PDFRawStream && (nameIn(object.dict, 'Subtype') === 'Form' || numberIn(object.dict, 'PatternType') === 1)) out.push([object]);
   }
-  out.push(...glyphs.map((glyph) => [glyph instanceof PDFRef ? (context.lookup(glyph) as PDFObject) : glyph]));
+  // One at a time: a Type 3 font can have more glyphs than a call takes arguments (LINKS L3 fix round 3, N5).
+  for (const glyph of glyphs) out.push([glyph instanceof PDFRef ? (context.lookup(glyph) as PDFObject) : glyph]);
   return out;
 }
 

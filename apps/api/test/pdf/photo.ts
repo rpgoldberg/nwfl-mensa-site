@@ -39,16 +39,23 @@ type Dict = NonNullable<Parameters<PDFDocument['context']['stream']>[1]>;
  *   pageform   the page draws a form whose resources hold the pattern;
  *   annot      a Stamp annotation's appearance paints with the pattern, in its down appearance's "On" state;
  *   smask      a soft mask's group paints with the pattern;
+ *   smaskimage a soft mask's group draws the photo itself, with no pattern (fix round 3, N1): PDFium lists no
+ *              object of a soft mask's group either;
+ *   smaskform  a soft mask's group draws a form that draws the photo, with no pattern (N1);
+ *   smaskinline a soft mask's group holds an inline picture, with no pattern (N1);
+ *   pages      the pattern is in the Pages node's resources, which the page inherits (it has none of its own;
+ *              fix round 3, N3);
  *   glyph      a Type 3 glyph paints with the pattern;
  *   unreadable the pattern's content is under a filter no reader knows;
  *   predictor  the pattern's content has /DecodeParms, which pdf-lib does not apply;
  *   vector     the pattern paints a plain square: no picture, so nothing is withheld; beside it the page's resources
- *              hold what draws no picture: a shading pattern, a state with no soft mask, and entries that are
- *              not what their kind names (a number for a picture or a font).
+ *              hold what draws no picture: a shading pattern, a state with no soft mask, a soft mask whose group
+ *              fills a square (N1), and entries that are not what their kind names (a number for a picture or a
+ *              font).
  * Pages after the first hold a line of text only.
  */
-export type PatternRoute = 'image' | 'flat' | 'inline' | 'form' | 'nested' | 'inherit' | 'pageform' | 'annot' | 'smask' | 'glyph' | 'unreadable' | 'predictor' | 'vector';
-export const PATTERN_ROUTES: readonly PatternRoute[] = ['image', 'flat', 'inline', 'form', 'nested', 'inherit', 'pageform', 'annot', 'smask', 'glyph', 'unreadable', 'predictor', 'vector'];
+export type PatternRoute = 'image' | 'flat' | 'inline' | 'form' | 'nested' | 'inherit' | 'pageform' | 'annot' | 'smask' | 'smaskimage' | 'smaskform' | 'smaskinline' | 'pages' | 'glyph' | 'unreadable' | 'predictor' | 'vector';
+export const PATTERN_ROUTES: readonly PatternRoute[] = ['image', 'flat', 'inline', 'form', 'nested', 'inherit', 'pageform', 'annot', 'smask', 'smaskimage', 'smaskform', 'smaskinline', 'pages', 'glyph', 'unreadable', 'predictor', 'vector'];
 
 export async function patternPage(route: PatternRoute, pages = 1): Promise<Uint8Array> {
   const doc = await PDFDocument.create({ updateMetadata: false });
@@ -92,6 +99,18 @@ export async function patternPage(route: PatternRoute, pages = 1): Promise<Uint8
     const group = form(FILL, { Pattern: { P1: holding } }, { Group: { S: 'Transparency', CS: 'DeviceGray' } });
     resources = { ExtGState: { GS1: ctx.obj({ Type: 'ExtGState', SMask: { Type: 'Mask', S: 'Luminosity', G: group } }) } };
     content = 'q /GS1 gs 0 0 0 rg 100 400 200 200 re f Q';
+  } else if (route === 'smaskimage' || route === 'smaskform' || route === 'smaskinline') {
+    const PHOTO = 'q 200 0 0 200 100 400 cm /Im1 Do Q';
+    const hex = Buffer.from(samples.subarray(0, 8 * 8 * 3)).toString('hex');
+    const drawings: Record<typeof route, [string, Dict]> = {
+      smaskimage: [PHOTO, { XObject: { Im1: picture } }],
+      smaskform: ['/Fm1 Do', { XObject: { Fm1: form(PHOTO, { XObject: { Im1: picture } }) } }],
+      smaskinline: [`q 200 0 0 200 100 400 cm BI /W 8 /H 8 /CS /RGB /BPC 8 /F /AHx ID ${hex}> EI Q`, {}],
+    };
+    const [drawing, held] = drawings[route];
+    const group = form(drawing, held, { Group: { S: 'Transparency', CS: 'DeviceGray' } });
+    resources = { ExtGState: { GS1: ctx.obj({ Type: 'ExtGState', SMask: { Type: 'Mask', S: 'Luminosity', G: group } }) } };
+    content = 'q /GS1 gs 0 0 0 rg 100 400 200 200 re f Q';
   } else if (route === 'glyph') {
     const proc = ctx.register(ctx.stream('200 0 d0 /Pattern cs /P1 scn 0 0 200 200 re f'));
     const t3 = ctx.register(ctx.obj({ Type: 'Font', Subtype: 'Type3', FontBBox: [0, 0, 200, 200], FontMatrix: [0.005, 0, 0, 0.005, 0, 0], CharProcs: { g: proc }, Encoding: { Type: 'Encoding', Differences: [65, 'g'] }, FirstChar: 65, LastChar: 65, Widths: [200], Resources: { Pattern: { P1: holding } } }));
@@ -105,14 +124,23 @@ export async function patternPage(route: PatternRoute, pages = 1): Promise<Uint8
     const shading = { ShadingType: 2, ColorSpace: 'DeviceRGB', Coords: [0, 0, 100, 0], Function: { FunctionType: 2, Domain: [0, 1], C0: [0, 0, 0], C1: [1, 1, 1], N: 1 } };
     resources = {
       Pattern: { P1: tile('0.2 0.4 0.6 rg 0 0 100 100 re f', {}), Sh1: ctx.obj({ PatternType: 2, Shading: shading }) },
-      ExtGState: { GS1: ctx.obj({ Type: 'ExtGState', CA: 1 }) },
+      ExtGState: { GS1: ctx.obj({ Type: 'ExtGState', CA: 1 }), GS2: ctx.obj({ Type: 'ExtGState', SMask: { Type: 'Mask', S: 'Luminosity', G: form('1 g 100 400 200 200 re f', {}, { Group: { S: 'Transparency', CS: 'DeviceGray' } }) } }) },
       XObject: { Odd: 7 },
       Font: { Odd: 7 },
     };
+    content = `${FILL} q /GS2 gs 0 0 0 rg 400 100 100 100 re f Q`;
   }
-  page.node.set(PDFName.of('Resources'), ctx.obj(resources));
-  if (content !== '') page.node.addContentStream(ctx.register(ctx.stream(content)));
-  page.drawText('Our members at the picnic.', { x: 72, y: 380, size: 12, font });
+  if (route === 'pages') {
+    // The leaf has no /Resources: the pattern and the font are the Pages node's, and the caption is written by hand.
+    // pdf-lib sets the inherited dictionary on the leaf when it adds content, so the leaf's entry is taken out after.
+    doc.catalog.Pages().set(PDFName.of('Resources'), ctx.obj({ ...resources, Font: { F1: font.ref } }));
+    page.node.addContentStream(ctx.register(ctx.stream(`${content} BT /F1 12 Tf 72 380 Td (Our members at the picnic.) Tj ET`)));
+    page.node.delete(PDFName.of('Resources'));
+  } else {
+    page.node.set(PDFName.of('Resources'), ctx.obj(resources));
+    if (content !== '') page.node.addContentStream(ctx.register(ctx.stream(content)));
+    page.drawText('Our members at the picnic.', { x: 72, y: 380, size: 12, font });
+  }
   for (let n = 1; n < pages; n++) doc.addPage([612, 792]).drawText(`Page ${n + 1}: the picnic schedule.`, { x: 72, y: 700, size: 12, font });
   return doc.save({ useObjectStreams: false });
 }

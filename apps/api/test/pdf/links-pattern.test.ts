@@ -3,7 +3,10 @@
 // known: under "blur" or "hide", a page whose resources reach a tiling pattern that holds a
 // picture (directly, through forms, nested patterns, soft masks, Type 3 glyphs or annotation
 // appearances) is withheld whole: the engine keeps no link on it and the gate refuses a copy that
-// does. And one engine-only test per guard path (N1: the challenger's mutants F03, F04 and F24).
+// does. So is (fix round 3, N1) a page that reaches a soft mask whose group draws a picture with no
+// pattern: PDFium lists no object of the group either. Routes include the Pages node's inherited
+// resources (fix round 3, N3). And one engine-only test per guard path (N1: the challenger's mutants
+// F03, F04 and F24).
 // Synthetic PDFs only; every person is made up and every host is a reserved example name.
 import { PDFDocument, PDFName } from '@cantoo/pdf-lib';
 import { describe, expect, it, vi } from 'vitest';
@@ -81,7 +84,8 @@ describe('F1: the engine keeps no link on such a page, and the gate refuses a co
       for (const route of HOLDING) {
         const original = await patternPage(route, 2);
         // Some routes give no copy at all, links or none: the engine refuses an inline picture, a filter it cannot read or a
-        // glyph it cannot read, and the gate the copy of a pattern that draws a picture its resources do not name.
+        // glyph it cannot read, and the gate the copy of a pattern that draws a picture its resources do not name, or of a
+        // page whose resources are its Pages node's (as main's gate does: challenger round 2, N2 and N4).
         if ((await plainCopy(original, image)) === null) continue;
         const result = await redactPdf(original, { quotes: [], redactsAny: true, origin: ORIGIN, links: [OVER, FAR, NEXT], image });
         if (result.kind !== 'redacted') throw new Error(`${route}: ${result.kind}`);
@@ -90,7 +94,7 @@ describe('F1: the engine keeps no link on such a page, and the gate refuses a co
         expect(await gateVerdict(job(result.pdf, original, [OVER, FAR, NEXT], result.kept ?? [], image)), route).toEqual({ pass: true });
       }
       // Not vacuous: the routes the challenger and this round found open give a copy.
-      expect(made).toEqual(['image', 'flat', 'form', 'nested', 'pageform', 'annot', 'smask', 'predictor']);
+      expect(made).toEqual(['image', 'flat', 'form', 'nested', 'pageform', 'annot', 'smask', 'smaskimage', 'smaskform', 'predictor']);
     });
 
     it(`under "${image}", the gate refuses a subverted engine's copy that keeps a link anywhere on the pattern's page, and passes one on page 2`, async () => {
@@ -106,7 +110,7 @@ describe('F1: the engine keeps no link on such a page, and the gate refuses a co
         const next = await subverted(original, [NEXT], image);
         if (next !== null) expect(await gateVerdict(job(next, original, [NEXT], [NEXT.id], image)), route).toEqual({ pass: true });
       }
-      expect(checked).toBe(16);
+      expect(checked).toBe(20);
     });
   }
 

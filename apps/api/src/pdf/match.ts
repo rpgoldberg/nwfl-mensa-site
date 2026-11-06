@@ -75,6 +75,37 @@ export interface PageChar {
   fontSize: number;
 }
 
+/**
+ * The box around these boxes, taken one at a time with Math.min and Math.max (NaN as a spread of them gives it), or
+ * null for none. Never spread a page's boxes into one call (fix round 3, N5): V8 throws RangeError past about 125,000
+ * arguments, and a page can hold millions.
+ */
+export function hull(boxes: Iterable<Box>): Box | null {
+  let out: Box | null = null;
+  for (const box of boxes) {
+    if (out === null) out = { left: box.left, right: box.right, bottom: box.bottom, top: box.top };
+    else {
+      out.left = Math.min(out.left, box.left);
+      out.right = Math.max(out.right, box.right);
+      out.bottom = Math.min(out.bottom, box.bottom);
+      out.top = Math.max(out.top, box.top);
+    }
+  }
+  return out;
+}
+
+/** Push each item onto `out`, one at a time: a spread of them into push throws past about 125,000 (hull, N5). */
+export function append<T>(out: T[], items: Iterable<T>): void {
+  for (const item of items) out.push(item);
+}
+
+/** The largest of these numbers and `floor`, one at a time (hull, N5). */
+function largest(values: Iterable<number>, floor = -Infinity): number {
+  let out = floor;
+  for (const value of values) out = Math.max(out, value);
+  return out;
+}
+
 /** An area to remove and box, on a page (0-based), in page space. */
 export interface Region extends Box {
   page: number;
@@ -150,7 +181,7 @@ function collapsed(reading: Reading): Reading {
   let at = 0;
   const keep = (to: number): void => {
     out.text += reading.text.slice(at, to);
-    out.source.push(...reading.source.slice(at, to));
+    append(out.source, reading.source.slice(at, to));
   };
   for (const gap of reading.text.matchAll(BETWEEN_SINGLES)) {
     keep(gap.index);
@@ -366,19 +397,8 @@ function exactRegions(chars: readonly PageChar[], boxed: ReadonlySet<number>, ma
 function absorb(regions: readonly Region[], boxes: readonly Box[], page: number): Region[] {
   let out = regions.map((region) => ({ ...region }));
   for (const box of boxes) {
-    const into = out.filter((region) => overlap(box, region));
-    const all: Box[] = [box, ...into];
-    out = [
-      ...out.filter((region) => !into.includes(region)),
-      {
-        page,
-        left: Math.min(...all.map((b) => b.left)),
-        right: Math.max(...all.map((b) => b.right)),
-        bottom: Math.min(...all.map((b) => b.bottom)),
-        top: Math.max(...all.map((b) => b.top)),
-        fontSize: Math.max(0, ...into.map((region) => region.fontSize)),
-      },
-    ];
+    const into = new Set(out.filter((region) => overlap(box, region)));
+    out = [...out.filter((region) => !into.has(region)), { page, ...(hull([box, ...into]) as Box), fontSize: largest([...into].map((region) => region.fontSize), 0) }];
   }
   return out;
 }
@@ -517,14 +537,7 @@ export function wordsOf(chars: readonly PageChar[], objects: readonly TextObject
 
 /** The extent of these characters: their loose boxes, or their ink where they have none; null when none has either. */
 function extentOf(chars: readonly PageChar[], indices: readonly number[]): Box | null {
-  const boxes = indices.flatMap((i) => (chars[i] as PageChar).box ?? (chars[i] as PageChar).ink ?? []);
-  if (boxes.length === 0) return null;
-  return {
-    left: Math.min(...boxes.map((b) => b.left)),
-    right: Math.max(...boxes.map((b) => b.right)),
-    bottom: Math.min(...boxes.map((b) => b.bottom)),
-    top: Math.max(...boxes.map((b) => b.top)),
-  };
+  return hull(indices.flatMap((i) => (chars[i] as PageChar).box ?? (chars[i] as PageChar).ink ?? []));
 }
 
 /**
@@ -536,7 +549,7 @@ function heldDrawings(chars: readonly PageChar[], withheld: ReadonlySet<number>,
     const held = run.filter((i) => withheld.has(i));
     const box = extentOf(chars, held);
     if (box === null) return [];
-    const em = Math.max(...held.map((i) => (chars[i] as PageChar).fontSize));
+    const em = largest(held.map((i) => (chars[i] as PageChar).fontSize));
     return [{ object, text: textAt(chars, held), near: { left: box.left - em, right: box.right + em, bottom: box.bottom - em, top: box.top + em } }];
   });
 }
@@ -563,7 +576,7 @@ export function copiesOf(chars: readonly PageChar[], withheld: ReadonlySet<numbe
     // for a possessive after it.
     const core = textAt(chars, run).replace(EDGE_PUNCTUATION, '');
     const repeats = (text: string): boolean => quoteSpans(core, [text]).some(([start, end]) => start === 0 && (end === core.length || POSSESSIVE.test(core.slice(end))));
-    if (marked.some((m) => m.object !== object && overlap(box, m.near) && repeats(m.text))) out.push(...run);
+    if (marked.some((m) => m.object !== object && overlap(box, m.near) && repeats(m.text))) append(out, run);
   }
   return out;
 }
@@ -724,12 +737,7 @@ export function unread(chars: readonly PageChar[], objects: readonly TextObject[
       continue;
     }
     const { left, right, bottom, top } = bounds;
-    const read = {
-      left: Math.min(...boxes.map((b) => b.left)),
-      right: Math.max(...boxes.map((b) => b.right)),
-      bottom: Math.min(...boxes.map((b) => b.bottom)),
-      top: Math.max(...boxes.map((b) => b.top)),
-    };
+    const read = hull(boxes) as Box;
     if (read.left > left) out.parts.push({ left, right: read.left, bottom, top });
     if (right > read.right) out.parts.push({ left: read.right, right, bottom, top });
     if (read.bottom > bottom) out.parts.push({ left, right, bottom, top: read.bottom });
