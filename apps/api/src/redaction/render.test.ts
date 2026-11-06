@@ -341,6 +341,10 @@ describe('standInSpans: a stand-in letter in a quote\'s ligature\'s place, in on
     expect(at('Ruffle', ['Ruffle'])).toEqual([]);
   });
 
+  it('covers a match from its earliest start where two starts reach one place: f then fi, or ffi whole', () => {
+    expect(standInSpans(`f${S}`, ['ffi'], ['ffi', 'fi'], S, false)).toEqual([[0, 2]]);
+  });
+
   it('reads a CJK word with no edge, digits on a digit edge, and separators between words', () => {
     expect(at(`x\u6771\u4EACRu${S}le`, ['\u6771\u4EAC Ruffle'])).toEqual([`\u6771\u4EACRu${S}le`]);
     expect(at(`Ru${S}le 7, Ru${S}le 77`, ['Ruffle 7'])).toEqual([`Ru${S}le 7`]);
