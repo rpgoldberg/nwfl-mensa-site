@@ -39,9 +39,10 @@
 // stream written as PDFium writes one (/Filter /FlateDecode alone, no
 // /DecodeParms; F5). That font is the one pdf.js and PDFium find only because
 // the callers read the labels after refusing any copy whose names pdf-lib
-// reads apart from them (pdf-structure.ts nameBreak, round 3, R3-1: pdf-lib
-// decodes a name's #XX twice, the readers once): the gate in gateVerdict and
-// gateReply, the engine in redactPdf; unlabelled itself does not check.
+// reads apart from them, or whose names cannot all be read (pdf-structure.ts
+// nameBreak, round 3, R3-1: pdf-lib decodes a name's #XX twice, the readers
+// once; round 4, B1: it fails closed): the gate in gateVerdict and gateReply,
+// the engine in redactPdf; unlabelled itself does not check.
 // The glyph check (drawn.ts) takes a label out besides only where pdf.js's
 // glyphs and their text both spell it, once per label
 // (F1, defence in depth). A copy whose labels fail, or whose label bytes are

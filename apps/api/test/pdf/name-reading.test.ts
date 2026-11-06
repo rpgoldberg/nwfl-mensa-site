@@ -92,6 +92,50 @@ function nestedForms(context: PDFContext, depth: number): PDFRef {
 }
 const emptyForm = (context: PDFContext): PDFRef => context.register(context.flateStream('', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 10, 10] }));
 
+const HASH = 'a name holds "#" once decoded, so pdf-lib reads it apart from pdf.js and PDFium';
+const NESTED = 'the names cannot all be read: dictionaries and arrays nest too deep';
+const UNREAD = 'the names cannot all be read';
+
+/** One indirect object written raw as `deep` (a placeholder name of its length, patched after saving). */
+function deepObject(doc: PDFDocument, deep: string): string {
+  const filler = `D${'d'.repeat(deep.length - 2)}`;
+  doc.context.register(PDFName.of(filler));
+  return `/${filler}`;
+}
+
+/** A one-page PDF as `edit` leaves it, with `from` patched to `to` and, if given, a deep object patched in. */
+async function placed(edit: (doc: PDFDocument) => void, from?: string, to?: string, deep?: string): Promise<Uint8Array> {
+  const doc = await PDFDocument.create({ updateMetadata: false });
+  doc.addPage([612, 792]);
+  edit(doc);
+  let bytes: Uint8Array = await doc.save({ useObjectStreams: false });
+  if (from !== undefined && to !== undefined) bytes = rawPatch(bytes, from, to);
+  if (deep !== undefined) bytes = rawPatch(bytes, `/D${'d'.repeat(deep.length - 2)}`, deep);
+  return bytes;
+}
+
+/** As collided, with `deep` written raw in an object before the list, which is written again last. */
+async function deepCollided(pdf: Uint8Array, list: string, key: (label: string) => string, rawKey: string, first: (c: PDFContext) => PDFObject, second: (c: PDFContext) => PDFObject, deep: string, content?: (text: string) => string): Promise<Uint8Array> {
+  const placeholder = `Q${'q'.repeat(rawKey.length - 1)}`;
+  let filler = '';
+  const bytes = await edited(
+    pdf,
+    (doc, label) => {
+      filler = deepObject(doc, deep);
+      const fresh = doc.context.obj({});
+      for (const [name, value] of kind(doc, list).entries()) fresh.set(name, value);
+      fresh.delete(PDFName.of(key(label)));
+      fresh.set(PDFName.of(key(label)), first(doc.context));
+      fresh.set(PDFName.of(placeholder), second(doc.context));
+      resources(doc).set(PDFName.of(list), doc.context.register(fresh));
+    },
+    content,
+  );
+  const text = Buffer.from(bytes).toString('latin1');
+  if (!(text.indexOf(filler) < text.indexOf(`/${placeholder} `))) throw new Error('the deep object is not before the list');
+  return rawPatch(rawPatch(bytes, `/${placeholder} `, `/${rawKey} `), filler, deep);
+}
+
 describe('R3-1: a font key pdf-lib decodes twice (the challenger\'s chal3-dd cases)', () => {
   // The label's own font (FXF2, PDFium's name) is made the lying font; a raw key holding PDFium's honest Helvetica,
   // written after it, reads as FXF2 to pdf-lib. The label op is exactly as PDFium wrote it.
@@ -176,10 +220,90 @@ describe('R3-1: every name, not only fonts', () => {
     expect(await gateVerdict(job(shown, original))).toEqual(RULES);
   });
 
-  it('keeps a name break found before the point pdf-lib stops parsing; finds none in what is not a PDF', async () => {
+  it('keeps a name break found before the point pdf-lib stops parsing; refuses what it cannot read to the end', async () => {
     const cut = Buffer.from('%PDF-1.7\n1 0 obj\n<< /A /a#23b >>\nendobj\n2 0 obj\n<< /B (never closed', 'latin1');
     expect(await nameBreak(new Uint8Array(cut))).toMatch(/#/);
-    expect(await nameBreak(new Uint8Array(Buffer.from('not a pdf', 'latin1')))).toBeNull();
+    // Fail closed (round 4, B1): a copy whose names cannot all be read is refused, never passed as holding none.
+    const unclosed = Buffer.from('%PDF-1.7\n1 0 obj\n<< /A /a >>\nendobj\n2 0 obj\n<< /B (never closed', 'latin1');
+    expect(await nameBreak(new Uint8Array(unclosed))).toBe(UNREAD);
+    expect(await nameBreak(new Uint8Array(Buffer.from('not a pdf', 'latin1')))).toBe(UNREAD);
+  });
+
+  // N1 (round 4): one name each, with no other break beside it.
+  it('refuses a lone key whose pdf-lib value holds no "#" but whose once-decoded form does, and a value that starts with "#"', async () => {
+    const key = await placed((doc) => doc.getPage(0).node.set(PDFName.of('Xqqqqq'), PDFName.of('Plain')), '/Xqqqqq ', '/X#2341 ');
+    expect(await nameBreak(key)).toBe(HASH);
+    const value = await placed((doc) => doc.getPage(0).node.set(PDFName.of('PZ'), PDFName.of('Vqqqq')), '/Vqqqq', '/#2323');
+    expect(await nameBreak(value)).toBe(HASH);
+    expect(await nameBreak(await placed(() => undefined))).toBeNull();
+  });
+});
+
+describe('B1 (round 4): nameBreak fails closed on nesting, whatever the stack', () => {
+  const dicts = (depth: number): string => `${'<</A'.repeat(depth - 1)}<<>>${'>>'.repeat(depth - 1)}`;
+  const arrays = (depth: number): string => `${'['.repeat(depth)}${']'.repeat(depth)}`;
+
+  it('reads 256 levels of dictionaries or arrays, and refuses 257, counted together', async () => {
+    const at = async (deep: string): Promise<string | null> => nameBreak(await placed((doc) => void deepObject(doc, deep), undefined, undefined, deep));
+    expect(await at(dicts(256))).toBeNull();
+    expect(await at(arrays(256))).toBeNull();
+    expect(await at(dicts(257))).toBe(NESTED);
+    expect(await at(arrays(257))).toBe(NESTED);
+    expect(await at(`${'<</A['.repeat(128)}<<>>${']>>'.repeat(128)}`)).toBe(NESTED);
+    expect(await at(`${'<</A['.repeat(127)}<</A<<>>>>${']>>'.repeat(127)}`)).toBeNull();
+  });
+
+  // The challenger's chal4-deep2 cases: one object nested deep, written before the resource list that holds a key
+  // pdf-lib reads twice. On f50b495 the parser behind nameBreak ran out of stack where pdf-lib's own load does not,
+  // and the copy passed and was stored.
+  const CASES: Array<[string, string, (label: string) => string, string, (c: PDFContext) => PDFObject, (c: PDFContext) => PDFObject, ((text: string) => string) | undefined]> = [
+    ['Font', 'FXF#2332', (label) => label, 'FXF#2332', (c) => lyingFont(c, 'Private', 'Quillon'), (c) => c.register(c.obj({ ...HELVETICA })), undefined],
+    ['XObject', 'Fm#232331', () => 'Fm1', 'Fm#232331', (c) => nestedForms(c, 40), emptyForm, (text) => `${text}\nq /Fm1 Do Q\n`],
+    ['ExtGState', 'GS#232331', () => 'GS1', 'GS#232331', (c) => c.register(c.flateStream('', { Type: 'ExtGState' })), (c) => c.obj({ Type: 'ExtGState' }), undefined],
+  ];
+  const DEPTHS: Array<[string, string]> = [
+    ['a dictionary 300 deep', dicts(300)],
+    ['a dictionary 1600 deep', dicts(1600)],
+    ['a dictionary 1800 deep', dicts(1800)],
+    ['a dictionary 2100 deep', dicts(2100)],
+    ['an array 3000 deep', arrays(3000)],
+  ];
+  it.each(CASES.flatMap(([list, tag, key, rawKey, first, second, content]) => DEPTHS.map(([what, deep]) => [what, tag, list, key, rawKey, first, second, content, deep] as const)))(
+    'refuses %s before a %s collision: "rules" at the verdict and the reply, and nothing stored',
+    async (_what, _tag, list, key, rawKey, first, second, content, deep) => {
+      const { original, pdf } = await quillon();
+      const bad = await deepCollided(pdf, list, key, rawKey, first, second, deep, content);
+      expect.soft(await nameBreak(bad)).toBe(NESTED);
+      expect.soft(await gateVerdict(job(bad, original))).toEqual(RULES);
+      const reply = await gateReply(job(bad, original));
+      expect.soft(reply.verdict).toEqual(RULES);
+      expect(reply.checked).toBeUndefined();
+    },
+    120_000,
+  );
+});
+
+describe('B1 (round 4): the other reader that recurses fails closed', () => {
+  // gate-labels.ts contentRefs, which reads a page's content streams for its labels, recurses into a list of them. It
+  // is read only when the text check finds a quote; on a list that holds itself it runs out of stack, and every caller
+  // takes the throw as no copy ("unfinished"). A quote that is a label's own text makes the gate read it.
+  it('refuses, and stores nothing of, a copy whose page lists its content streams in a list that holds itself, when it reads the labels', async () => {
+    const { original, pdf } = await quillon();
+    const marks = await labelMarks(pdf);
+    if (typeof marks === 'string') throw new Error(marks);
+    const cyclic = await edited(pdf, (doc) => {
+      const list = doc.context.obj([contentRef(doc)]);
+      const ref = doc.context.register(list);
+      list.push(ref);
+      doc.getPage(0).node.set(PDFName.of('Contents'), ref);
+    });
+    await expect(unlabelled(cyclic, marks)).rejects.toThrow(RangeError);
+    const labelled = (copy: Uint8Array) => ({ ...job(copy, original), quotes: ['Private'] });
+    expect(await gateVerdict(labelled(pdf))).toEqual({ pass: true });
+    expect(await gateVerdict(labelled(cyclic))).toEqual({ pass: false, code: 'unfinished' });
+    const reply = await gateReply(labelled(cyclic));
+    expect(reply.verdict).toEqual({ pass: false, code: 'unfinished' });
+    expect(reply.checked).toBeUndefined();
   });
 });
 

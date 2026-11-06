@@ -64,4 +64,9 @@ describe('contentNames', () => {
     expect(names('/a BI /W 1 ID /c')).toEqual(['a']);
     expect(names('/a ) /b')).toEqual(['a', 'b']);
   });
+
+  it('reads every name however deep arrays and dictionaries nest: it keeps no stack (round 4, B1)', () => {
+    const deep = 200_000;
+    expect(names(`${'[<</K '.repeat(deep)}/GS#2331${' >>]'.repeat(deep)} /b`)).toEqual([...Array.from({ length: deep }, () => 'K'), 'GS#31', 'b']);
+  });
 });

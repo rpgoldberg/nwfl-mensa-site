@@ -119,7 +119,7 @@ import type { GateJob } from './gate-isolated.js';
 import { linkTextBreak } from './gate-links.js';
 import { type Accepted, type LinkRequest, acceptedLinks } from './link-annots.js';
 import { BLUR_MAX, FILL_GRAY, type ImageAction, type Pixels, blurred, decodePicture, hasInlinePicture, keepsPicture, pictureWindows } from './images.js';
-import { nameBreak, structureBreak } from './pdf-structure.js';
+import { NAMES_UNPARSED, nameBreak, structureBreak } from './pdf-structure.js';
 
 const FORBIDDEN_KEYS = new Set(['JS', 'JavaScript', 'OpenAction', 'AA', 'URI', 'EmbeddedFile', 'EmbeddedFiles', 'EF', 'XFA', 'AcroForm', 'Annots', 'Linearized']);
 const LINEARIZED = PDFName.of('Linearized');
@@ -666,7 +666,10 @@ async function nestedPast(copy: Uint8Array): Promise<string | null> {
  */
 export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
   try {
-    if ((await nameBreak(job.copy)) !== null || (await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
+    // A copy pdf-lib cannot parse at all goes on to the checks below, which refuse it as before (withheld when there
+    // are quotes it cannot read it for, else rules: readRules takes nameBreak's reason). Every other break is rules.
+    const names = await nameBreak(job.copy);
+    if ((names !== null && names !== NAMES_UNPARSED) || (await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
     const labels = await labelMarks(job.copy);
     if ((await leakBreak(job.copy, labels, (bytes) => checkCopy(bytes, job.quotes))) !== null) return { pass: false, code: 'withheld' };
     const { broken, pages } = await readRules(job.copy, job.image, job);

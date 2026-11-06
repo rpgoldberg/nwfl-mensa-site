@@ -361,8 +361,12 @@ content stream is plain `/FlateDecode`. pdf-lib decodes a name's `#XX`
 escapes twice where pdf.js and PDFium decode once, so before any label is
 read the gate refuses (`rules`), and the engine gives no copy, when a name
 anywhere in the copy still holds `#` once decoded, or a dictionary has a key
-twice (BOXLABEL fix round 3, R3-1). PDFium writes neither. So the font pdf-lib
-finds is the one the readers draw with. The glyph check reruns on the copy
+twice (BOXLABEL fix round 3, R3-1), or when its names cannot all be read
+(they nest more than 256 deep, or pdf-lib cannot read them to the end: round
+4, B1). PDFium writes no such name of its own, but it carries one through
+from an original, so the engine refuses an original that holds a name with
+`#` once decoded (its page's font `/F#231`, say). So the font pdf-lib finds
+is the one the readers draw with. The glyph check reruns on the copy
 itself and skips only text whose drawn glyphs and text both spell a label.
 So a passage that is itself `Private` gets a copy, while the same word
 anywhere outside a box is still refused (`withheld`). A label that fails
@@ -706,7 +710,10 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   gate's own writing of a name pdf-lib reads as `FXF#32` is `/FXF#2332`. A
   copy is refused, as it comes and in every verdict, when any name in its
   objects (key or value) or in a content stream the rules read still holds
-  `#` once decoded, or a dictionary has a key twice.
+  `#` once decoded, or a dictionary has a key twice, and when its names
+  cannot all be read: pdf-lib's parser cannot read it to the end, or its
+  dictionaries and arrays nest more than 256 deep (round 4, B1), so where the
+  check stops depends on no stack size.
 
 Its limits, as for any text gate: text written so it does not read as text
 (reversed, encoded, drawn as curves or as a picture); a picture rebuilt from
