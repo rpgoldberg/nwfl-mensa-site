@@ -100,3 +100,54 @@ describe('serveFile as a signed-in reader', () => {
     }
   });
 });
+
+// PDFVIEW: "Download" asks for ?download=1. The answer is the same file under the same name, as an
+// attachment; nothing else changes: the copy read (the same id, the same reader), the length, and the
+// cache rule (none of its own for the public, private and never stored for a signed-in reader).
+describe('serveFile for a download', () => {
+  const member: Reader = { bearer: 'member.token' };
+  const pdf = (): Promise<FileRead> => Promise.resolve({ kind: 'pdf', filename: 'pensa-mensa-2026-10.pdf', size: 6, body: body('%PDF-1') });
+
+  it('answers the same file as an attachment under the same name', async () => {
+    const res = await serveFile(live(pdf), FILE, undefined, { download: true });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toBe('attachment; filename="pensa-mensa-2026-10.pdf"');
+    expect(await res.text()).toBe('%PDF-1');
+    const plain = await serveFile(live(() => Promise.resolve({ kind: 'pdf', filename: 'Zoë.pdf', size: 1, body: body('x') })), FILE, undefined, { download: true });
+    expect(plain.headers.get('content-disposition')).toBe(`attachment; filename="${FILE}.pdf"`);
+  });
+
+  it('changes nothing but the disposition: the copy asked for, the headers and the cache rule', async () => {
+    for (const reader of [undefined, member]) {
+      const asked: [string, string | undefined][] = [];
+      const read = (id: string, as?: Reader) => {
+        asked.push([id, as?.bearer]);
+        return pdf();
+      };
+      const inline = await serveFile(live(read), FILE, reader);
+      const attached = await serveFile(live(read), FILE, reader, { download: true });
+      expect(asked).toEqual([
+        [FILE, reader?.bearer],
+        [FILE, reader?.bearer],
+      ]);
+      const rest = (res: Response) => [...res.headers].filter(([name]) => name !== 'content-disposition');
+      expect(rest(attached)).toEqual(rest(inline));
+      expect(attached.headers.get('cache-control')).toBe(reader === undefined ? null : 'private, no-store');
+      expect(await attached.text()).toBe(await inline.text());
+    }
+  });
+
+  it('is inline unless download is asked for', async () => {
+    for (const options of [undefined, {}, { download: false }]) {
+      const res = await serveFile(live(pdf), FILE, undefined, options);
+      expect(res.headers.get('content-disposition')).toBe('inline; filename="pensa-mensa-2026-10.pdf"');
+    }
+  });
+
+  it('keeps every answer that is not the file as it was: a 404, not ready and unavailable', async () => {
+    const snapshot = async (res: Response) => ({ status: res.status, headers: [...res.headers], body: await res.text() });
+    for (const read of [() => Promise.resolve({ kind: 'not_found' } as FileRead), () => Promise.resolve({ kind: 'not_ready' } as FileRead), () => Promise.reject(new ApiUnavailable('ReadFile'))]) {
+      expect(await snapshot(await serveFile(live(read), FILE, undefined, { download: true }))).toEqual(await snapshot(await serveFile(live(read), FILE)));
+    }
+  });
+});

@@ -8,6 +8,8 @@
 // gets the members copy), and the PDF itself says private, no-store, which
 // the site policy keeps. A file the reader may not have is the same 404 as a
 // missing one, byte for byte, and not ready is the public's answer too.
+// PDFVIEW: { download: true } (the reader's Download, ?download=1) answers the
+// same file as an attachment under the same name; nothing else changes.
 import type { LiveData } from '../data/live';
 import { ApiUnavailable, type Reader } from './api/client';
 
@@ -27,7 +29,7 @@ function page(status: number, title: string, text: string, extra: Record<string,
 
 const notFound = () => page(404, 'No such file', 'There is no file at this address. It may have been moved or taken down.');
 
-export async function serveFile(live: Pick<LiveData, 'file'> | undefined, id: string | undefined, as?: Reader): Promise<Response> {
+export async function serveFile(live: Pick<LiveData, 'file'> | undefined, id: string | undefined, as?: Reader, { download = false }: { download?: boolean } = {}): Promise<Response> {
   if (live === undefined || id === undefined) return notFound();
   let file;
   try {
@@ -43,7 +45,7 @@ export async function serveFile(live: Pick<LiveData, 'file'> | undefined, id: st
     status: 200,
     headers: {
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `inline; filename="${filename}"`,
+      'Content-Disposition': `${download ? 'attachment' : 'inline'}; filename="${filename}"`,
       'Content-Length': String(file.size),
       'X-Content-Type-Options': 'nosniff',
       ...(as === undefined ? {} : { 'Cache-Control': 'private, no-store' }),
