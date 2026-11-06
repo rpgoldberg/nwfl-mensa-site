@@ -348,7 +348,7 @@ show. The engine request says so per quote (`membersWithhold`, one boolean
 per quote, protocol v3), so no request gains any text: the public's holds
 only the public's quotes, the members' only theirs. The input hash (v3)
 covers which quotes members withhold, so a change to the members' policy
-remakes the public copy; `ENGINE_VERSION` ends in `+labels-1`, so every copy
+remakes the public copy; `ENGINE_VERSION` gained `+labels-1`, so every copy
 labelled `withheld` is made again. The labels change no box: each region,
 and every pixel outside the boxes, is what the engine made before
 (`test/pdf/box-regions.golden.json`, recorded from main at b3668e4).
@@ -698,6 +698,20 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   too, so a `/ToUnicode` that lies to the text layer does not hide them.
   Under "show" this pass runs only when there are quotes, and judges no
   picture (fix round 6b: the public copy is "show");
+- the text the glyph names draw (GLYPHMAP, `src/pdf/glyph-names.ts`), read
+  by the engine before it gives a copy and by the gate: pdf.js's glyphs give
+  a name's letter only in a font that is not embedded and only for a name
+  pdf.js knows, while PDFium (Chrome) draws by the name in every simple font
+  and drops a suffix (`Q.alt`, `a.sc` and `uni0051.alt` draw Q, a and Q). So
+  each copy is also read with PDFium once the `/ToUnicode` is taken out of
+  its fonts, and a quote found there is `withheld`. Left as they are: Type0
+  and Type3 fonts, and a TrueType font with no `/Encoding` (as LibreOffice
+  embeds them), which draws by code through its own program. PDFium reads no
+  text inside a tiling pattern, so a tiling pattern that shows text, itself
+  or through what it draws, or holds content pdf-lib cannot decode, is
+  refused as `rules` under every policy, by the engine too (fix round 2).
+  `ENGINE_VERSION` gained `+glyphs-1`, so every stored copy is made again and
+  passes these checks; the engine's bytes are as they were;
 - the box labels (BOXLABEL, above): exactly `Members Only`, `Mbrs Only` or
   `Private`, one to a box, inside a box drawn before it, in the label
   style; no other glyph drawn over a box. Read with PDFium;
@@ -705,7 +719,8 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   dictionary (BOXLABEL fix round 1, F4);
 - the page tree is one pdf.js and pdf-lib read alike: every node `/Type
   /Pages` with its `/Kids` and their `/Count`, every leaf `/Type /Page`,
-  each once (fix round 4);
+  each once (fix round 4), and every page's `/Contents` a stream or a list
+  of streams, under every policy (GLYPHMAP: a list that held itself passed);
 - no run of an original picture's samples is kept, and no picture has the
   very samples of an original that blurring would change;
 - one reading (`src/pdf/pdf-structure.ts`, fix round 3): pdf-lib keeps the
@@ -728,7 +743,14 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   check stops depends on no stack size.
 
 Its limits, as for any text gate: text written so it does not read as text
-(reversed, encoded, drawn as curves or as a picture); a picture rebuilt from
+(reversed, encoded, drawn as curves or as a picture, or drawn by a font
+program whose own cmap or outlines give a code another letter than its
+name or `/ToUnicode` reads, a symbolic TrueType font's (3,0) cmap among
+them); under a `/ToUnicode` that lies, a Type 3 glyph that draws its letter
+with a font of its own, and a Type0 font's glyph ids (GLYPHMAP fix round 1:
+PDFium reads no Type 3 glyph name and no letter for a glyph id, so the
+glyph-name reading cannot see them; `test/pdf/glyph-names.test.ts` pins both
+as known limits); a picture rebuilt from
 many small tiles or from vector shapes, gradients among them (fix round 5
 refuses only gradients drawn from sampled functions: a photo drawn row by
 row from 4,095 linear pieces passes); a tiny inline picture of the

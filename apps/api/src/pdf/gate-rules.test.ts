@@ -714,8 +714,11 @@ describe('fix round 6: refused by class under "blur" and "hide" (M-6, S1-6), and
       }
       return onSplitPage(['/Fm0 Do'], '/XObject << /Fm0 20 0 R >>', objects);
     };
-    for (const image of ['show', 'hide'] as const) expect(await copyRulesBreak(chain(30), image), `30 deep, ${image}`).toBeNull();
-    expect(await copyRulesBreak(chain(32), 'show')).toBeNull();
+    // The chain's patterns show text with their Type 3 font, which is refused since GLYPHMAP fix round 2 (B1), but
+    // only once the walk has read it all without finding it too deep or a loop: 33 deep is still named as too deep.
+    const tiled = 'a tiling pattern shows text, or draws content that cannot be read';
+    for (const image of ['show', 'hide'] as const) expect(await copyRulesBreak(chain(30), image), `30 deep, ${image}`).toBe(tiled);
+    expect(await copyRulesBreak(chain(32), 'show')).toBe(tiled);
     expect(await copyRulesBreak(chain(33), 'show')).toBe(deep);
     const drawsItself = onSplitPage(['/Fm0 Do'], '/XObject << /Fm0 20 0 R >>', [
       [20, FORM('/Pattern cs /X scn 0 0 1 1 re f', '/Pattern << /X 21 0 R >>')],
@@ -793,5 +796,63 @@ describe('fix round 6b (REDACT-LOOK L10/N8): the glyphs pdf.js draws are matched
     const reply = await gateReply({ copy, original: copy, quotes: [], image: 'show' });
     expect(reply.verdict).toEqual({ pass: true });
     expect(Buffer.from(reply.checked?.pdf ?? []).equals(Buffer.from(await rewrite(copy)))).toBe(true);
+  });
+});
+
+describe('GLYPHMAP fix round 2 (B1): a tiling pattern that shows text is refused under every policy', () => {
+  // PDFium reads no text inside a tiling pattern, so neither the engine nor the glyph-name reading sees what one shows.
+  const TILED = 'a tiling pattern shows text, or draws content that cannot be read';
+  const policies = ['show', 'blur', 'hide'] as const;
+  const tile = (content: string, resources = '/Font << /F1 5 0 R >>'): Buffer => rawStream(`/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100 100] /XStep 100 /YStep 100${resources === '' ? '' : ` /Resources << ${resources} >>`}`, content);
+  const form = (content: string, resources = '/Font << /F1 5 0 R >>'): Buffer => rawStream(`/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << ${resources} >>`, content);
+  const FILLED = '/Pattern cs /P scn 72 400 200 200 re f';
+  const filled = (extra: RawObject[], resources = '/Pattern << /P 20 0 R >>', content = FILLED): Uint8Array => onSplitPage([content], resources, extra);
+  const SHOWN = 'BT /F1 12 Tf 0 10 Td (Ab) Tj ET';
+
+  it("refuses a pattern that shows text with Tj, TJ, ' or \", filled or stroked, held in the page's resources or reached from a form, or drawn by no page, and one whose content cannot be read", async () => {
+    const copies: Array<[string, Uint8Array]> = [
+      ['Tj', filled([[20, tile(SHOWN)]])],
+      ['TJ', filled([[20, tile('BT /F1 12 Tf 0 10 Td [(A) 120 (b)] TJ ET')]])],
+      ["'", filled([[20, tile("BT /F1 12 Tf 14 TL (Ab) ' ET")]])],
+      ['"', filled([[20, tile('BT /F1 12 Tf 1 2 (Ab) " ET')]])],
+      ['stroked with SCN', filled([[20, tile(SHOWN)]], '/Pattern << /P 20 0 R >>', '/Pattern CS /P SCN 72 400 200 200 re S')],
+      ['reached from a form', filled([[21, form(FILLED, '/Pattern << /P 20 0 R >>')], [20, tile(SHOWN)]], '/XObject << /Fm 21 0 R >>', '/Fm Do')],
+      ['drawn by no page', onSplitPage(['0 0 1 1 re f'], '', [[20, tile(SHOWN)]])],
+      ['content that cannot be read (a Flate stream that is not one), drawn by no page', onSplitPage(['0 0 1 1 re f'], '', [[20, rawStream('/PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 100 100] /XStep 100 /YStep 100 /Filter /FlateDecode', 'BT (Ab) Tj ET')]])],
+    ];
+    for (const [name, pdf] of copies) for (const image of policies) expect(await copyRulesBreak(pdf, image), `${name}, ${image}`).toBe(TILED);
+  });
+
+  it('refuses a pattern that shows text through what it draws: a form, a pattern, a soft mask\'s group, a form found in its parent\'s resources, a form whose content cannot be read', async () => {
+    const copies: Array<[string, Uint8Array]> = [
+      ['a form', filled([[20, tile('/Fm Do', '/XObject << /Fm 21 0 R >>')], [21, form(SHOWN)]])],
+      ['a pattern drawing a form', filled([[20, tile('/Pattern cs /Q scn 0 0 10 10 re f', '/Pattern << /Q 21 0 R >>')], [21, tile('/Fm Do', '/XObject << /Fm 22 0 R >>')], [22, form(SHOWN)]])],
+      ['a soft mask\'s group', filled([[20, tile('/GS1 gs 0 0 10 10 re f', '/ExtGState << /GS1 << /SMask << /S /Luminosity /G 21 0 R >> >> >>')], [21, rawStream('/BBox [0 0 10 10] /Group << /S /Transparency >> /Resources << /Font << /F1 5 0 R >> >>', SHOWN)]])],
+      ['a form in its parent\'s resources (no /Resources of its own)', filled([[20, tile('/Fm Do', '')], [21, form(SHOWN)]], '/Pattern << /P 20 0 R >> /XObject << /Fm 21 0 R >>')],
+      ['a form whose content cannot be read', filled([[20, tile('/Fm Do', '/XObject << /Fm 21 0 R >>')], [21, rawStream('/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Filter /FlateDecode', 'BT (Ab) Tj ET')]])],
+    ];
+    for (const [name, pdf] of copies) for (const image of policies) expect(await copyRulesBreak(pdf, image), `${name}, ${image}`).toBe(TILED);
+  });
+
+  it('passes a pattern that draws no text, though "Tj" and "\'" are in its names and comments; a form that shows text outside any pattern; and a page\'s own text', async () => {
+    const copies: Array<[string, Uint8Array]> = [
+      ['paths only', filled([[20, tile('0 0 0 rg 0 0 10 10 re f')]])],
+      ['"Tj" in a name and a comment', filled([[20, tile("% (Ab) Tj ' \"\n/Tj0 gs 0 0 10 10 re f", '/ExtGState << /Tj0 << /CA 1 >> >>')]])],
+      ['a form drawing paths', filled([[20, tile('/Fm Do', '/XObject << /Fm 21 0 R >>')], [21, form('0 0 10 10 re f')]])],
+      ['text in a form on the page', onSplitPage(['/Fm Do'], '/XObject << /Fm 21 0 R >>', [[21, form(SHOWN)]])],
+      ['the page\'s own text', onSplitPage(['BT /F1 12 Tf 72 700 Td (Ab) Tj ET'])],
+    ];
+    for (const [name, pdf] of copies) for (const image of policies) expect(await copyRulesBreak(pdf, image), `${name}, ${image}`).toBeNull();
+  });
+
+  it('refuses it as "rules" in the verdict, with or without quotes (the engine\'s refusal: test/pdf/glyph-names.test.ts); a copy nested past the cap is named so first', async () => {
+    const pdf = filled([[20, tile(SHOWN)]]);
+    for (const image of policies) {
+      for (const quotes of [M1_QUOTES, []]) expect(await gateVerdict({ copy: pdf, original: pdf, quotes, image }), `${image}, ${quotes.length}`).toEqual({ pass: false, code: 'rules' });
+    }
+    expect((await gateReply({ copy: pdf, original: pdf, quotes: [], image: 'show' })).verdict).toEqual({ pass: false, code: 'rules' });
+    // Nesting past the cap is still named first.
+    const deep = filled([[20, tile('/Fm Do', '/XObject << /Fm 21 0 R >>')], ...formChain(40, 21, { last: SHOWN, resources: '/Font << /F1 5 0 R >>' })]);
+    expect(await copyRulesBreak(deep, 'show')).toBe('forms, patterns, Type 3 glyphs or soft masks nest more than 32 deep, or in a loop');
   });
 });

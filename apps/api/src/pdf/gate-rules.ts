@@ -19,6 +19,9 @@
 //      masks drawn more than MAX_NESTING deep, or in a loop, are refused
 //      before pdf.js reads them (fix round 5, S3: forms nested 1,500 deep
 //      ran pdf.js's stack out, and it carried on as if the page ended).
+//      And under every policy, a tiling pattern that shows text, itself or
+//      through what it draws, is refused (GLYPHMAP fix round 2, B1): PDFium
+//      reads no text in one, so the text checks would not see it.
 //   2. Pictures, where the policy changes them ("blur" or "hide"):
 //      - every picture XObject is what the policy draws: under "hide" the
 //        1 x 1 grey fill; under "blur" that fill, or a Flate 8-bit grey or
@@ -110,11 +113,12 @@
 // limits.
 // ============================================================================
 import { PDFArray, type PDFContext, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber, type PDFObject, PDFRawStream, PDFRef, PDFString, decodePDFRawStream } from '@cantoo/pdf-lib';
-import { PDF_WS, contentNames, operandBreak } from './content.js';
+import { PDF_WS, contentNames, operandBreak, showsText } from './content.js';
 import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha256Hex } from './engine-protocol.js';
 import { type PageRef, drawnBreak } from './drawn.js';
 import { checkCopy } from './gate.js';
 import { labelMarks, leakBreak } from './gate-labels.js';
+import { namedBreak } from './glyph-names.js';
 import type { GateJob } from './gate-isolated.js';
 import { linkTextBreak } from './gate-links.js';
 import { type Accepted, type LinkRequest, acceptedLinks } from './link-annots.js';
@@ -235,6 +239,21 @@ function drawnByPolicy(picture: PDFRawStream, image: 'blur' | 'hide'): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Why a page's /Contents is not a stream, a list of streams or absent, or null (GLYPHMAP, BOXLABEL round 5 N5-3: a list
+ * that held itself passed under "show", where the content groups below are not read). A list may hold only references
+ * to streams: not itself, another list, null or a number, which readers skip or read apart.
+ */
+function contentsBreak(doc: PDFDocument): string | null {
+  const { context } = doc;
+  for (const [n, page] of doc.getPages().entries()) {
+    const listed = context.lookup(page.node.get(PDFName.of('Contents')));
+    const streams = listed instanceof PDFArray ? listed.asArray().map((item) => context.lookup(item)) : [listed];
+    if (listed !== undefined && !streams.every((item) => item instanceof PDFRawStream)) return `page ${n + 1}: its /Contents is not a stream or a list of streams`;
+  }
+  return null;
 }
 
 /** Every content stream of the copy, in groups read as one: each page's /Contents (an array is joined, as pdf.js joins it), each form, tiling pattern and Type 3 glyph alone. */
@@ -403,6 +422,15 @@ const NESTING = `forms, patterns, Type 3 glyphs or soft masks nest more than ${M
  */
 export const MAX_DRAWS = 100_000;
 const DRAWS = `forms, patterns, Type 3 glyphs or soft masks are drawn in more than ${MAX_DRAWS} ways`;
+/**
+ * GLYPHMAP fix round 2 (B1): PDFium reads no text inside a tiling pattern, so neither the engine's matching nor the
+ * glyph-name reading (glyph-names.ts) sees what one shows: a run of glyph names drawn in a pattern cell drew the quote
+ * and passed. A tiling pattern that shows text (content.ts showsText), itself or through the forms, patterns, Type 3
+ * glyphs and soft masks it draws, is refused under every policy, by the gate and by the engine (patternTextBreak). So
+ * is one with content there that pdf-lib cannot decode, which is read as text: PDFium reads some streams pdf-lib
+ * does not (a cut-off Flate stream, decoded as far as it goes).
+ */
+export const PATTERN_TEXT = 'a tiling pattern shows text, or draws content that cannot be read';
 /** BOXLABEL fix round 3 (R3-1): a content stream names what no resource list may hold (pdf-structure.ts nameBreak). */
 const NAMES = 'a content stream holds a name that holds "#" once decoded';
 const NAME_TOKEN = new RegExp(`/([^${PDF_WS}()<>\\[\\]{}/%]*)`, 'g');
@@ -417,6 +445,7 @@ interface Drawer {
   content: readonly PDFObject[];
   resources: PDFDict | undefined;
   joined?: boolean;
+  /** A tiling pattern: the only drawer whose resources are merged with its parent's. */
   merged?: boolean;
 }
 
@@ -441,7 +470,9 @@ interface Effective {
  * followed from the names its content holds (every name, a little more than it draws; a page's over its streams
  * joined too, so a name split across two is read) in the resources pdf.js reads it with: its own, or its parent's
  * when it has none; for a tiling pattern, each kind from its own, else from its parent's (pdf.js merges them; fix
- * round 6, S3-6). Anything that cannot be read so is refused.
+ * round 6, S3-6). Anything that cannot be read so is refused. Then, when the walk ends with none of those, why a tiling
+ * pattern shows text (PATTERN_TEXT): any in the copy whose own content does, or one the walk reaches that draws text
+ * itself or in anything it draws.
  */
 function nestingBreak(doc: PDFDocument): string | null {
   const { context } = doc;
@@ -470,12 +501,13 @@ function nestingBreak(doc: PDFDocument): string | null {
     const dicts = KINDS.map((key, k) => resources.lookupMaybe(PDFName.of(key), PDFDict) ?? (merged ? parent?.dicts[k] : undefined));
     return effective(dicts);
   };
-  const used = new Map<PDFObject, { names: Set<string>; kinds: boolean[] }>();
-  const namesOf = (drawer: Drawer): { names: Set<string>; kinds: boolean[] } => {
+  const used = new Map<PDFObject, { names: Set<string>; kinds: boolean[]; shows: boolean }>();
+  const namesOf = (drawer: Drawer): { names: Set<string>; kinds: boolean[]; shows: boolean } => {
     let read = used.get(drawer.node);
     if (read === undefined) {
-      read = { names: new Set(), kinds: KINDS.map(() => false) };
+      read = { names: new Set(), kinds: KINDS.map(() => false), shows: false };
       const texts = drawer.content.map(contentOf).filter((bytes) => bytes !== null);
+      read.shows = texts.length < drawer.content.length;
       for (const bytes of drawer.joined === true && texts.length > 1 ? [...texts, Buffer.concat(texts)] : texts) {
         const text = Buffer.from(bytes).toString('latin1');
         if (contentNames(bytes).some((name) => name.includes('#'))) throw new Error(NAMES);
@@ -483,6 +515,7 @@ function nestingBreak(doc: PDFDocument): string | null {
         KINDS.forEach((key, k) => {
           if (DRAWS_FROM[key].test(text)) (read as { kinds: boolean[] }).kinds[k] = true;
         });
+        read.shows ||= showsText(bytes);
       }
       used.set(drawer.node, read);
     }
@@ -510,20 +543,37 @@ function nestingBreak(doc: PDFDocument): string | null {
     return out;
   };
   // Each drawer's height (itself and the deepest chain under it) with the resources it reads, so one reached many
-  // ways with the same is read once. A loop never ends, so it runs past MAX_NESTING as a deep chain does.
-  const heights = new Map<PDFObject, Map<string, number>>();
+  // ways with the same is read once, and whether it or anything under it shows text. A loop never ends, so it runs past
+  // MAX_NESTING as a deep chain does.
+  interface Height {
+    height: number;
+    shows: boolean;
+  }
+  const heights = new Map<PDFObject, Map<string, Height>>();
   let draws = 0;
-  const height = (drawer: Drawer, parent: Effective | undefined, depth: number): number => {
+  // Every tiling pattern's own content first, drawn or not (B1).
+  const tiled = (stream: PDFRawStream): boolean => {
+    const bytes = contentOf(stream);
+    return bytes === null || showsText(bytes);
+  };
+  let tiledText = [...context.enumerateIndirectObjects()].some(([, object]) => object instanceof PDFRawStream && numberIn(object.dict, 'PatternType') === 1 && tiled(object));
+  const height = (drawer: Drawer, parent: Effective | undefined, depth: number): Height => {
     const reads = ofResources(drawer.resources, parent, drawer.merged === true);
     const key = reads?.key ?? '';
     const known = heights.get(drawer.node)?.get(key);
-    if (depth + (known ?? 1) - 1 > MAX_NESTING) throw new Error(NESTING);
+    if (depth + (known?.height ?? 1) - 1 > MAX_NESTING) throw new Error(NESTING);
     if (known !== undefined) return known;
     if (++draws > MAX_DRAWS) throw new Error(DRAWS);
-    let deepest = 1;
-    for (const child of children(drawer, reads)) deepest = Math.max(deepest, 1 + height(child, reads, depth + 1));
-    heights.set(drawer.node, (heights.get(drawer.node) ?? new Map<string, number>()).set(key, deepest));
-    return deepest;
+    const read: Height = { height: 1, shows: namesOf(drawer).shows };
+    for (const child of children(drawer, reads)) {
+      const below = height(child, reads, depth + 1);
+      read.height = Math.max(read.height, 1 + below.height);
+      read.shows ||= below.shows;
+    }
+    // A tiling pattern that shows text through what it draws (B1).
+    if (drawer.merged === true && read.shows) tiledText = true;
+    heights.set(drawer.node, (heights.get(drawer.node) ?? new Map<string, Height>()).set(key, read));
+    return read;
   };
   try {
     for (const page of doc.getPages()) {
@@ -532,7 +582,7 @@ function nestingBreak(doc: PDFDocument): string | null {
       const top: Drawer = { node: page.node, content: listed instanceof PDFArray ? listed.asArray().map(resolve).filter((part) => part !== undefined) : listed === undefined ? [] : [listed], resources: undefined, joined: true };
       for (const child of children(top, reads)) height(child, reads, 1);
     }
-    return null;
+    return tiledText ? PATTERN_TEXT : null;
   } catch (error) {
     return error instanceof Error && (error.message === DRAWS || error.message === NAMES) ? error.message : NESTING;
   }
@@ -550,7 +600,7 @@ async function readRules(copy: Uint8Array, image: ImageAction, links: LinkReques
     pages: reason === null ? doc.getPages().map((page) => ({ num: page.ref.objectNumber, gen: page.ref.generationNumber })) : [],
   });
   const { context } = doc;
-  const tree = pageTreeBreak(doc);
+  const tree = pageTreeBreak(doc) ?? contentsBreak(doc);
   if (tree !== null) return broken(tree);
   const accepted: Accepted | string = acceptedLinks(doc, links);
   if (typeof accepted === 'string') return broken(`the links: ${accepted}`);
@@ -657,6 +707,15 @@ async function nestedPast(copy: Uint8Array): Promise<string | null> {
 }
 
 /**
+ * Why the engine's copy holds a tiling pattern that shows text (PATTERN_TEXT, GLYPHMAP fix round 2, B1), or null: the
+ * engine's own check of its copy (redact.ts), read as the gate reads it. A copy the walk finds too deep, or cannot
+ * read, is the gate's to refuse ("rules"), as before.
+ */
+export async function patternTextBreak(copy: Uint8Array): Promise<string | null> {
+  return (await nestedPast(copy)) === PATTERN_TEXT ? PATTERN_TEXT : null;
+}
+
+/**
  * The gate's verdict on one copy: nesting past the cap first, before pdf.js reads it, then withheld text (gate.ts),
  * then the rules above and the labels (gate-labels.ts, BOXLABEL), then what pdf.js draws (drawn.ts; under "show" only
  * its glyphs, and only with quotes), then under "blur" and "hide" the original's pictures. No label's own text counts
@@ -671,7 +730,9 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
     const names = await nameBreak(job.copy);
     if ((names !== null && names !== NAMES_UNPARSED) || (await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
     const labels = await labelMarks(job.copy);
-    if ((await leakBreak(job.copy, labels, (bytes) => checkCopy(bytes, job.quotes))) !== null) return { pass: false, code: 'withheld' };
+    // The text layers, then the text the glyph names draw (GLYPHMAP), each with the labels taken out where they can be.
+    const leaks = async (bytes: Uint8Array): Promise<string | null> => (await checkCopy(bytes, job.quotes)) ?? (await namedBreak(bytes, job.quotes));
+    if ((await leakBreak(job.copy, labels, leaks)) !== null) return { pass: false, code: 'withheld' };
     const { broken, pages } = await readRules(job.copy, job.image, job);
     if (broken !== null || typeof labels === 'string') return { pass: false, code: 'rules' };
     // Under "show" only for the quotes (fix round 6b, REDACT-LOOK L10/N8), with no picture judged.
