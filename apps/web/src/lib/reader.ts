@@ -12,6 +12,8 @@ import type { LiveData } from '../data/live';
 import type { FileRead, Reader } from './api/client';
 
 export const PUBLIC_COPY = 'Public copy: some personal details are hidden for privacy. Members can sign in for the full issue.';
+/** A member's view, on an issue the API gave this reader as a public copy alone: its own short line, in its card or row. */
+export const PUBLIC_COPY_ONLY = 'Public copy only';
 export const MEMBERS_COPY = 'Members copy';
 export const NEEDS_SCRIPT = 'Reading the issue on this page needs JavaScript, which is off or blocked. You can still open it in another app, or download it.';
 

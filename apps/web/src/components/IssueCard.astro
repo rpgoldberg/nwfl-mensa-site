@@ -8,15 +8,17 @@
 // that it is the public copy is /news's own, once above the list (CopyNotice), not the card's.
 import { type Issue, issueSummary } from '../data/site-data';
 import { MEMBERS_RULE } from '../lib/document';
-import { readerPath } from '../lib/reader';
+import { PUBLIC_COPY_ONLY, readerPath } from '../lib/reader';
 import Icon from './Icon.astro';
 
 interface Props {
   issue: Issue | undefined;
   /** On Home: the newsletter's own name leads, and the button goes to its page. */
   home?: boolean;
+  /** In a member's view, where this issue has no members copy: it says so, in plain words, as its own line. */
+  publicOnly?: boolean;
 }
-const { issue, home = false } = Astro.props;
+const { issue, home = false, publicOnly = false } = Astro.props;
 const summary = issue ? issueSummary(issue) : '';
 ---
 <section class="card issue" aria-labelledby="issue-title" data-source={issue?.source}>
@@ -39,6 +41,7 @@ const summary = issue ? issueSummary(issue) : '';
         {issue.membersPdf && <a href={issue.membersPdf}>Members PDF file<span class="visually-hidden"> of this issue</span></a>}
       </p>
       {issue.membersPdf && <p class="members-rule">{MEMBERS_RULE}</p>}
+      {publicOnly && <p class="muted">{PUBLIC_COPY_ONLY}</p>}
     </>
   )}
 </section>

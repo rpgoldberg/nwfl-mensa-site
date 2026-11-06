@@ -8,7 +8,7 @@
 // file itself. Once, above the issue list, the notice that these are the public copies (CopyNotice):
 // "sign in" is a link where sign-in works for a signed-out reader (membersSignInLink), and plain
 // words otherwise; a member's view, which has the members copies, shows instead the line not to
-// forward them, by each.
+// forward them, by each; and in it an issue with a public copy only says "Public copy only" in its own row or card.
 // S2: with that line, or the one to sign in again, the page says once which password to use.
 // A14: read with a signed-in reader's token (src/lib/auth/bearer.ts), the page
 // shows what the API sent that reader: a member gets each issue's members copy
@@ -36,7 +36,7 @@ import { membersSignInLink, readerFor, signInLink } from '../lib/auth/bearer';
 import { runtimeDeps } from '../lib/auth/flow';
 import { visibleContent } from '../lib/content';
 import { MEMBERS_RULE } from '../lib/document';
-import { readerPath } from '../lib/reader';
+import { PUBLIC_COPY_ONLY, readerPath } from '../lib/reader';
 import { page } from '../lib/site';
 
 const p = page('/news');
@@ -52,8 +52,11 @@ if (!loaded.ok || news?.itemsUnavailable) markUnavailable(Astro.response);
 const shown = newsIssues(news?.issues ?? [], visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY }));
 const current = currentIssue(shown.issues);
 const past = issuesByYear(shown.issues);
-// Whether any issue listed is offered as its public copy only: then the notice, once, above them all.
-const publicCopies = shown.issues.some((i) => i.pdf && !i.membersPdf);
+// A reader with no members copy on any issue listed gets the notice, once, above them all. One who has a
+// members copy on at least one (a member's view) gets none; an issue there with a public copy only says so itself.
+const noMembersCopy = !shown.issues.some((i) => i.membersPdf);
+const publicCopies = noMembersCopy && shown.issues.some((i) => i.pdf);
+const alone = (i: { pdf?: string; membersPdf?: string }) => !noMembersCopy && !!i.pdf && !i.membersPdf;
 const items = news?.items ?? [];
 ---
 <Base {...p}>
@@ -66,7 +69,7 @@ const items = news?.items ?? [];
     <>
       {shown.sample && siteData.isSample && <SampleNotice />}
       {publicCopies && <CopyNotice signIn={membersSignIn} />}
-      {current && <IssueCard issue={current} />}
+      {current && <IssueCard issue={current} publicOnly={alone(current)} />}
       <section aria-labelledby="past-title">
         <h2 id="past-title">Past issues</h2>
         {past.map(([year, list]) => (
@@ -85,6 +88,7 @@ const items = news?.items ?? [];
                   )}
                   {i.missing ? <span class="muted">No copy known. If you have a paper copy, please tell the Editor.</span>
                     : issueSummary(i) && <span class="muted">{issueSummary(i)}</span>}
+                  {alone(i) && <span class="muted">{PUBLIC_COPY_ONLY}</span>}
                 </li>
               ))}
             </ul>
