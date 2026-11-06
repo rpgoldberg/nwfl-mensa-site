@@ -1,6 +1,6 @@
 // BOXLABEL carries two engine fixes the LINKS L3b challenger found on main (NOTE-1, NOTE-4/T1). Synthetic
 // fixtures only, every name made up. These PDFs are adversarial in shape: run this file only in the capped container.
-import { PDFDocument, PDFName, StandardFonts } from '@cantoo/pdf-lib';
+import { type PDFContext, PDFDict, PDFDocument, PDFName, PDFNull, type PDFObject, StandardFonts } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { gateVerdict } from '../../src/pdf/gate-rules.js';
 import { linkGuardAreas, patternPicturePages } from '../../src/pdf/link-guard.js';
@@ -27,15 +27,82 @@ describe('NOTE-1: an ExtGState /SMask /None is no soft mask', () => {
     await expect(sanitize(await smNone())).resolves.toBeInstanceOf(Uint8Array);
   });
 
-  it('reads /None behind a reference, an ExtGState behind one, and an ExtGState that is no dictionary, as no soft mask', async () => {
+  it('reads /None behind a reference, an ExtGState behind one, and a null one, as no soft mask', async () => {
     const doc = await PDFDocument.create({ updateMetadata: false });
     const ctx = doc.context;
     const none = ctx.register(PDFName.of('None'));
     const page = doc.addPage([612, 792]);
-    // GS2 is no dictionary at all: read as no soft mask either, as PDFium and pdf.js read it.
-    page.node.set(PDFName.of('Resources'), ctx.obj({ ExtGState: { GS1: ctx.register(ctx.obj({ Type: 'ExtGState', SMask: none })), GS2: ctx.register(ctx.obj(7)) } }));
+    page.node.set(PDFName.of('Resources'), ctx.obj({ ExtGState: { GS1: ctx.register(ctx.obj({ Type: 'ExtGState', SMask: none })), GS2: ctx.register(ctx.obj({ Type: 'ExtGState', SMask: PDFNull })), GS3: PDFNull } }));
     page.node.addContentStream(ctx.register(ctx.stream('q /GS1 gs /GS2 gs 0 0 0 rg 100 400 200 200 re f Q')));
     await expect(sanitize(await doc.save({ useObjectStreams: false }), 'blur')).resolves.toBeInstanceOf(Uint8Array);
+  });
+
+  /** A page drawing in graphics state GS1, whose /SMask `mask` makes, beside a GS2 `state` makes (when it makes one). */
+  async function masked(mask: (ctx: PDFContext) => PDFObject, state?: (ctx: PDFContext) => PDFObject): Promise<Uint8Array> {
+    const doc = await PDFDocument.create({ updateMetadata: false });
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const ctx = doc.context;
+    const page = doc.addPage([612, 792]);
+    const states = ctx.obj({ GS1: ctx.register(ctx.obj({ Type: 'ExtGState', SMask: mask(ctx) })) });
+    if (state !== undefined) states.set(PDFName.of('GS2'), state(ctx));
+    page.node.set(PDFName.of('Resources'), ctx.obj({ ExtGState: states }));
+    page.node.addContentStream(ctx.register(ctx.stream(`q /GS1 gs ${state === undefined ? '' : '/GS2 gs '}0 0 0 rg 100 400 200 200 re f Q`)));
+    page.drawText('Our members at the picnic.', { x: 72, y: 380, size: 12, font });
+    return doc.save({ useObjectStreams: false });
+  }
+
+  /** The copy with every ExtGState its page lists changed by `edit`, or its list replaced by what `list` makes. */
+  async function restated(pdf: Uint8Array, edit: (ctx: PDFContext, state: PDFDict, states: PDFDict) => void, list?: (ctx: PDFContext) => PDFObject): Promise<Uint8Array> {
+    const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+    const ctx = doc.context;
+    const resources = doc.getPage(0).node.Resources() as PDFDict;
+    const states = resources.lookup(PDFName.of('ExtGState'), PDFDict);
+    for (const [, state] of states.entries()) edit(ctx, ctx.lookup(state, PDFDict), states);
+    if (list !== undefined) resources.set(PDFName.of('ExtGState'), list(ctx));
+    return doc.save({ useObjectStreams: false });
+  }
+
+  const NOT_A_MASK: ReadonlyArray<[string, (ctx: PDFContext) => PDFObject]> = [
+    ['a stream', (ctx) => ctx.register(ctx.stream('', { Type: 'Mask', S: 'Luminosity' }))],
+    ['an array', (ctx) => ctx.obj(['None'])],
+    ['a number', (ctx) => ctx.obj(7)],
+    ['another name', () => PDFName.of('Luminosity')],
+  ];
+
+  it.each(NOT_A_MASK)('fails closed on a soft mask that is %s, neither /None nor a dictionary (F4): no copy, and the gate refuses one ("rules")', async (_name, mask) => {
+    await expect(sanitize(await masked(mask), 'show')).rejects.toThrow('a soft mask is neither /None nor a dictionary');
+    expect(await redactPdf(await masked(mask), { quotes: [], redactsAny: true })).toEqual({ kind: 'refused', reason: 'a soft mask is neither /None nor a dictionary' });
+    const original = await smNone();
+    for (const image of ['show', 'blur', 'hide'] as const) {
+      const result = await redactPdf(original, { quotes: [], redactsAny: true, image });
+      if (result.kind !== 'redacted') throw new Error(JSON.stringify(result));
+      const bad = await restated(result.pdf, (ctx, state) => state.set(PDFName.of('SMask'), mask(ctx)));
+      expect(await gateVerdict({ copy: bad, original, quotes: [], image }), image).toEqual({ pass: false, code: 'rules' });
+      // /None behind a reference is still no soft mask.
+      const none = await restated(result.pdf, (ctx, state) => state.set(PDFName.of('SMask'), ctx.register(PDFName.of('None'))));
+      expect(await gateVerdict({ copy: none, original, quotes: [], image }), image).toEqual({ pass: true });
+    }
+  });
+
+  it('fails closed on an ExtGState that is not a dictionary, and on an ExtGState list that is not one (F4)', async () => {
+    const number = await masked(() => PDFName.of('None'), (ctx) => ctx.register(ctx.obj(7)));
+    await expect(sanitize(number, 'blur')).rejects.toThrow('an ExtGState is not a dictionary');
+    const original = await smNone();
+    const result = await redactPdf(original, { quotes: [], redactsAny: true });
+    if (result.kind !== 'redacted') throw new Error(JSON.stringify(result));
+    const job = { original, quotes: [], image: 'show' } as const;
+    const stream = await restated(result.pdf, (ctx, _state, states) => states.set(PDFName.of('GS9'), ctx.register(ctx.stream('', { Type: 'ExtGState', SMask: 'None' }))));
+    expect(await gateVerdict({ ...job, copy: stream })).toEqual({ pass: false, code: 'rules' });
+    // An /ExtGState list in the resources of a form the page lists and never draws, where nothing else reads it: a
+    // dictionary passes, a stream does not.
+    const undrawn = async (list: (ctx: PDFContext) => PDFObject): Promise<Uint8Array> => {
+      const doc = await PDFDocument.load(result.pdf, { updateMetadata: false });
+      const form = doc.context.register(doc.context.flateStream('', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 10, 10], Resources: { ExtGState: list(doc.context) } }));
+      doc.getPage(0).node.setXObject(PDFName.of('Fx9'), form);
+      return doc.save({ useObjectStreams: false });
+    };
+    expect(await gateVerdict({ ...job, copy: await undrawn((ctx) => ctx.obj({ GS9: { Type: 'ExtGState' } })) })).toEqual({ pass: true });
+    expect(await gateVerdict({ ...job, copy: await undrawn((ctx) => ctx.register(ctx.stream('', { GS9: ctx.obj({ Type: 'ExtGState' }) }))) })).toEqual({ pass: false, code: 'rules' });
   });
 
   it('still reads a real soft mask behind references: its group is a content stream, so an inline picture in it refuses the copy under "blur"', async () => {

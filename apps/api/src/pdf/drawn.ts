@@ -38,6 +38,13 @@
 // viewer that recovers draws a stand-in font) and a Type 3 glyph it could not
 // read (it keeps an empty glyph in its place). None of these passes as "no
 // picture".
+//
+// BOXLABEL fix round 1 (F1): the box labels' own text is not withheld text
+// when their glyphs are the label. drawnBreak is handed each page's labels
+// (gate-labels.ts, once they pass): a string pdf.js shows whose glyphs
+// (fontChar) and whose text (unicode) both spell one of them, exactly, is
+// read as spaces, once per label. A label whose font draws other glyphs than
+// its codes read as is read as drawn.
 // ============================================================================
 import type { PDFPageProxy } from 'pdfjs-dist/types/src/display/api.js';
 import { type PdfJs, loadPdfJs, watchedReading } from './gate.js';
@@ -73,14 +80,22 @@ export class PageWalk {
   readonly unicode: string[] = [];
   readonly chars: string[] = [];
   private readonly fonts = new Set<string>();
+  /** The page's labels not yet read: each takes out one string drawn as it (F1). */
+  private readonly exempt: string[];
 
-  /** `side`: the largest picture the policy draws, or null when no picture is judged ("show", fix round 6b). */
+  /**
+   * `side`: the largest picture the policy draws, or null when no picture is judged ("show", fix round 6b).
+   * `labels`: the page's box labels, each read as spaces once where its glyphs and its text both spell it.
+   */
   constructor(
     private readonly pdfjs: PdfJs,
     private readonly page: Pick<PDFPageProxy, 'objs' | 'commonObjs'>,
     private readonly side: number | null,
     private readonly settleMs = SETTLE_MS,
-  ) {}
+    labels: readonly string[] = [],
+  ) {
+    this.exempt = [...labels];
+  }
 
   /** An object pdf.js sent for the page (a shading's IR, a font), as its renderer looks it up; undefined if it never comes. */
   private object(id: string): Promise<unknown> {
@@ -165,6 +180,11 @@ export class PageWalk {
       if (typeof u === 'string') unicode += u;
       if (typeof c === 'string') chars += c;
     }
+    const label = this.exempt.findIndex((text) => text === unicode && text === chars);
+    if (label >= 0) {
+      this.exempt.splice(label, 1);
+      unicode = chars = ' '.repeat(unicode.length);
+    }
     this.unicode.push(unicode);
     this.chars.push(chars);
   }
@@ -180,9 +200,16 @@ const named = (ref: PageRef | null | undefined): string => (ref === null || ref 
 /**
  * Why pdf.js would draw a picture `image` forbids in `pdf` (none under "show"), or would draw withheld text, or reads
  * other pages than `pages` (pdf-lib's, in order), or stops before the end of a page, or null. Throws when pdf.js
- * cannot open the copy.
+ * cannot open the copy. `labels`: each page's box labels (0-based), not counted as withheld text where drawn as
+ * themselves (see the header).
  */
-export async function drawnBreak(pdf: Uint8Array, image: ImageAction, quotes: readonly string[], pages: readonly PageRef[]): Promise<DrawnBreak | null> {
+export async function drawnBreak(
+  pdf: Uint8Array,
+  image: ImageAction,
+  quotes: readonly string[],
+  pages: readonly PageRef[],
+  labels: readonly (readonly string[])[] = [],
+): Promise<DrawnBreak | null> {
   const pdfjs = await loadPdfJs();
   // A worker of its own, so the walk hears an operator list that ends in an error (S3).
   return watchedReading(pdf, async (doc, stopped): Promise<DrawnBreak | null> => {
@@ -191,7 +218,7 @@ export async function drawnBreak(pdf: Uint8Array, image: ImageAction, quotes: re
       const page = await doc.getPage(n);
       const tree = pages[n - 1] as PageRef;
       if (page.ref?.num !== tree.num || page.ref.gen !== tree.gen) return { code: 'rules', reason: `page ${n}: pdf.js reads ${named(page.ref)} where pdf-lib reads ${named(tree)}` };
-      const walk = new PageWalk(pdfjs, page, image === 'hide' ? 1 : image === 'blur' ? BLUR_MAX : null);
+      const walk = new PageWalk(pdfjs, page, image === 'hide' ? 1 : image === 'blur' ? BLUR_MAX : null, SETTLE_MS, labels[n - 1]);
       const list = await page.getOperatorList();
       // pdf.js posts an operator list's error before it hands over the list it had, so it is heard by now.
       const found = stopped() ? 'pdf.js stopped before the end of it' : await walk.read(list);

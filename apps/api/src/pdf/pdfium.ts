@@ -377,8 +377,8 @@ export class Page {
    * label in the labels' font and colour; and, for each character of the page's reading (chars(), in its order), the
    * text object it was read from and the place in the drawing order of the page's object that draws it.
    *
-   * A box is a path in the boxes' style: one rectangle, filled even-odd, not stroked, opaque black, drawn at the
-   * identity. A lettering is a text object in the labels' font and colour (white, non-embedded Helvetica), with the
+   * A box is a path in the boxes' style: one rectangle (drawn round and closed, as "re" draws it), filled even-odd,
+   * not stroked, opaque black, drawn at the identity. A lettering is a text object in the labels' font and colour (white, non-embedded Helvetica), with the
    * text the page's reading gives it (no character PDFium makes up), and `styled` when it is in the labels' style
    * besides (glyphs filled, opaque, moved but not scaled or turned, at least MIN_LABEL_PT).
    */
@@ -459,17 +459,33 @@ export class Page {
 /** The smallest label size taken as the labels' style: MIN_LABEL_PT, less what a float written and read again loses. */
 const MIN_LABEL_FLOOR = MIN_LABEL_PT - 1e-4;
 
-/** Whether a path of five segments is the rectangle of its bounds, as "re" draws it: four corners, then closed. */
+/** PDFium's path segment types (fpdf_edit.h FPDF_SEGMENT_*). */
+const FPDF_SEGMENT_LINETO = 0;
+const FPDF_SEGMENT_MOVETO = 2;
+
+/**
+ * Whether a path of five segments is the rectangle of its bounds, as "re" draws it (BOXLABEL fix round 1, F3: four
+ * corners in any order drew two triangles): a move to a corner, then four lines, each along a side, round the four
+ * corners and back to the first, the last closing the path.
+ */
 function rectangle(m: Module, path: number, box: Box, at: number): boolean {
-  const corners = new Set<string>();
+  const corners: string[] = [];
+  let last: readonly [number, number] | null = null;
   for (let i = 0; i < 5; i++) {
     const segment = m.FPDFPath_GetPathSegment(path, i);
     if (segment === 0 || !m.FPDFPathSegment_GetPoint(segment, at, at + 4)) return false;
+    // A move, then four lines; only the last closes the path.
+    if (m.FPDFPathSegment_GetType(segment) !== (i === 0 ? FPDF_SEGMENT_MOVETO : FPDF_SEGMENT_LINETO)) return false;
+    if (Boolean(m.FPDFPathSegment_GetClose(segment)) !== (i === 4)) return false;
     const [x = NaN, y = NaN] = new Float32Array(rt(m).HEAPU8.buffer, at, 2);
     if (!((x === box.left || x === box.right) && (y === box.bottom || y === box.top))) return false;
-    corners.add(`${x},${y}`);
+    // Each line runs along a side: it keeps exactly one of x and y.
+    if (last !== null && (x === last[0]) === (y === last[1])) return false;
+    last = [x, y];
+    corners.push(`${x},${y}`);
   }
-  return corners.size === 4;
+  // Round the four corners, and back to the first.
+  return new Set(corners).size === 4 && corners[4] === corners[0];
 }
 
 /** One object drawn directly on a page, as the label check reads it (Page.labelReading). */

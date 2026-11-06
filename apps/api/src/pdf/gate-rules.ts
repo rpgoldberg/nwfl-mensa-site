@@ -88,7 +88,12 @@
 //      one to a box, inside a box drawn before it, in the label style, and
 //      no other glyph drawn over a box; anything else is "rules". The text
 //      checks (gate.ts, and drawn.ts's glyphs) do not count those labels'
-//      own strings, and nothing more (leakBreak).
+//      own strings, drawn in PDFium's own label font, and nothing more
+//      (leakBreak; the glyphs only where they spell the label, fix round 1).
+//
+//   6. Graphics states (BOXLABEL fix round 1, F4): every ExtGState, and
+//      every /ExtGState list, is a dictionary, and a soft mask is /None or
+//      a dictionary; anything else is "rules", under every policy.
 //
 // Out of scope, as for any text gate: withheld text written so a reader does
 // not see it as text (reversed, encoded, drawn as curves or as a picture), a
@@ -96,7 +101,7 @@
 // many linear pieces among them). README, "The gate sidecar", lists these
 // limits.
 // ============================================================================
-import { PDFArray, type PDFContext, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, type PDFObject, PDFRawStream, PDFRef, PDFString, decodePDFRawStream } from '@cantoo/pdf-lib';
+import { PDFArray, type PDFContext, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber, type PDFObject, PDFRawStream, PDFRef, PDFString, decodePDFRawStream } from '@cantoo/pdf-lib';
 import { PDF_WS, operandBreak } from './content.js';
 import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha256Hex } from './engine-protocol.js';
 import { type PageRef, drawnBreak } from './drawn.js';
@@ -178,6 +183,28 @@ function activeIn(object: PDFObject | undefined, glyphs: PDFObject[], pages: Rea
   if (nameIn(object, 'Subtype') === 'Type3') {
     const procs = object.lookupMaybe(PDFName.of('CharProcs'), PDFDict);
     for (const [, proc] of procs?.entries() ?? []) glyphs.push(proc);
+  }
+  return null;
+}
+
+/**
+ * Why an object holds graphics states the rules cannot read as the sanitizer wrote them (BOXLABEL fix round 1, F4), or
+ * null: an /ExtGState list or an entry in one that is not a dictionary, or a soft mask that is neither /None nor a
+ * dictionary. A reader that takes a stream's dictionary for one would draw a mask the rules never read.
+ */
+function maskBreak(context: PDFContext, object: PDFObject): string | null {
+  const none = (value: PDFObject | undefined): boolean => value === undefined || value === PDFNull;
+  for (const dict of dictsIn(object)) {
+    const states = context.lookup(dict.get(PDFName.of('ExtGState')));
+    if (none(states)) continue;
+    if (!(states instanceof PDFDict)) return 'an /ExtGState list is not a dictionary';
+    for (const [, value] of states.entries()) {
+      const state = context.lookup(value);
+      if (none(state)) continue;
+      if (!(state instanceof PDFDict)) return 'an ExtGState is not a dictionary';
+      const mask = context.lookup(state.get(PDFName.of('SMask')));
+      if (!(none(mask) || mask instanceof PDFDict || (mask instanceof PDFName && mask.decodeText() === 'None'))) return 'a soft mask is neither /None nor a dictionary';
+    }
   }
   return null;
 }
@@ -519,7 +546,7 @@ async function readRules(copy: Uint8Array, image: ImageAction, links: LinkReques
   const glyphs: PDFObject[] = [];
   for (const [ref, object] of context.enumerateIndirectObjects()) {
     if (accepted.annots.has(object)) continue;
-    const found = activeIn(object, glyphs, accepted.pages);
+    const found = activeIn(object, glyphs, accepted.pages) ?? maskBreak(context, object);
     if (found !== null) return broken(`object ${ref.objectNumber}: ${found}`);
   }
   const nesting = nestingBreak(doc);
@@ -618,17 +645,12 @@ async function nestedPast(copy: Uint8Array): Promise<string | null> {
   return nestingBreak(doc);
 }
 
-/** The pages pdf-lib's tree gives a copy, in order (as readRules gives them), for drawn.ts to check pdf.js against. */
-async function pagesOf(pdf: Uint8Array): Promise<PageRef[]> {
-  const doc = await PDFDocument.load(pdf, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
-  return doc.getPages().map((page) => ({ num: page.ref.objectNumber, gen: page.ref.generationNumber }));
-}
-
 /**
  * The gate's verdict on one copy: nesting past the cap first, before pdf.js reads it, then withheld text (gate.ts),
  * then the rules above and the labels (gate-labels.ts, BOXLABEL), then what pdf.js draws (drawn.ts; under "show" only
  * its glyphs, and only with quotes), then under "blur" and "hide" the original's pictures. No label's own text counts
- * as withheld text, when the labels pass (leakBreak): exactly those strings, inside their boxes.
+ * as withheld text, when the labels pass (leakBreak): exactly those strings, drawn as themselves in PDFium's own
+ * label font, inside their boxes.
  * Never throws.
  */
 export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
@@ -640,9 +662,10 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
     if (broken !== null || typeof labels === 'string') return { pass: false, code: 'rules' };
     // Under "show" only for the quotes (fix round 6b, REDACT-LOOK L10/N8), with no picture judged.
     let drawn = job.image === 'show' && job.quotes.length === 0 ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
-    // Glyphs that spell a quote only in the labels: the glyphs read again with the labels' text out, and the rest of the walk with no quotes.
+    // Glyphs that spell a quote only in the labels: when the labels' text can be taken out (gate-labels.ts unlabelled),
+    // the copy's own glyphs read again with only those drawn as the labels out (F1), and the rest of the walk with no quotes.
     if (drawn?.code === 'withheld') {
-      const glyphs = await leakBreak(job.copy, labels, async (bytes) => drawnBreak(bytes, 'show', job.quotes, await pagesOf(bytes)));
+      const glyphs = await leakBreak(job.copy, labels, async (_bytes, out) => drawnBreak(job.copy, 'show', job.quotes, pages, out?.map((page) => page.map((label) => label.text))));
       drawn = glyphs ?? (await drawnBreak(job.copy, job.image, [], pages));
     }
     if (drawn !== null) return { pass: false, code: drawn.code };

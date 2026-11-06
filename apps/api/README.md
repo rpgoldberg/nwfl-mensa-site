@@ -266,7 +266,9 @@ a drawn box, removed ink or the box of any glyph the copy lacks, or, under
 any depth, or in an annotation's appearance. A picture painted by a tiling
 pattern, or drawn in a soft mask's group (an ExtGState's `/SMask`; the name
 `/None`, which InDesign, Illustrator and Acrobat write, is no soft mask, and
-since BOXLABEL's NOTE-1 fix no longer stops the sanitizer), has no
+since BOXLABEL's NOTE-1 fix no longer stops the sanitizer; any other soft
+mask that is not a dictionary, or an ExtGState that is not one, still means
+no copy, and the gate refuses it, `rules`), has no
 place PDFium gives, so under those policies a page whose resources (or its
 forms', patterns', soft masks', Type 3 glyphs' or annotation appearances')
 reach a tiling pattern or a soft mask's group that draws a picture XObject
@@ -329,13 +331,20 @@ The gate takes exactly the three strings, inside boxes, in the label style
 holds it, any other text in the labels' font and colour inside a box (the old
 `withheld` included), a label not upright, filled, opaque and at least 7 pt,
 two labels in one box, or any other glyph drawn over a box refuses the copy
-(`rules`). A glyph under a box is hidden by it and is not refused for being
-there; the leak checks read it as before. No label's own text counts as
-withheld text: a leak check that finds a quote is run once more on the copy
-with exactly those labels' strings turned to spaces, each in the very bytes
-PDFium writes for a label at that label's place, as many as PDFium read and
-no more. So a passage that is itself `Private` gets a copy, and the same word
-anywhere outside a box is still refused.
+(`rules`). A box is one rectangle drawn round its corners and closed, as
+`re` draws it. A glyph under a box is hidden by it and is not refused for
+being there; the leak checks read it as before. No label's own text counts
+as withheld text: a leak check that finds a quote is run once more on the
+copy with exactly those labels' strings turned to spaces, each in the very
+bytes PDFium writes for a label at that label's place, as many as PDFium
+read and no more, and only when the font that label names is exactly
+PDFium's own (non-embedded Helvetica, `/WinAnsiEncoding`, no other key: no
+`/Differences`, `/ToUnicode`, `/Widths` or `/FontDescriptor`) and its
+content stream is plain `/FlateDecode`. The glyph check reruns on the copy
+itself and skips only text whose drawn glyphs and text both spell a label.
+So a passage that is itself `Private` gets a copy, while the same word
+anywhere outside a box, or a label whose font draws other glyphs than its
+codes read as (BOXLABEL fix round 1, F1), is still refused (`withheld`).
 
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 
@@ -652,6 +661,8 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
 - the box labels (BOXLABEL, above): exactly `Members Only`, `Mbrs Only` or
   `Private`, one to a box, inside a box drawn before it, in the label
   style; no other glyph drawn over a box. Read with PDFium;
+- every ExtGState is a dictionary, and its `/SMask` is `/None` or a
+  dictionary (BOXLABEL fix round 1, F4);
 - the page tree is one pdf.js and pdf-lib read alike: every node `/Type
   /Pages` with its `/Kids` and their `/Count`, every leaf `/Type /Page`,
   each once (fix round 4);

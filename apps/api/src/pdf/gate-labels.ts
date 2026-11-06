@@ -3,9 +3,10 @@
 // gate read them. The gate does not trust the engine that drew them.
 //
 // PDFium reads each page's objects (pdfium.ts labelReading). A box is a path
-// in the boxes' style (one rectangle, filled even-odd, not stroked, opaque
-// black, at the identity); a label is a text object that reads exactly as
-// "Members Only", "Mbrs Only" or "Private" in white non-embedded Helvetica.
+// in the boxes' style (one rectangle, drawn round its corners and closed as
+// "re" draws it, filled even-odd, not stroked, opaque black, at the
+// identity); a label is a text object that reads exactly as "Members Only",
+// "Mbrs Only" or "Private" in white non-embedded Helvetica.
 // The copy's labels are refused (labelMarks gives the reason) when:
 //   - a label is drawn in a form XObject, or directly on the page where no
 //     box drawn before it holds it: a label outside a box;
@@ -26,12 +27,23 @@
 // copy with exactly those labels' text taken out (unlabelled): in the page's
 // own content, each label's string in the very bytes PDFium writes for a
 // label at that label's place, as many as PDFium read there and no more, is
-// turned to spaces. Nothing else of the copy changes. A copy whose labels
-// fail, or whose label bytes are not found so, is judged as it is. So the
-// exemption is exactly those strings, inside boxes; a label string drawn
-// anywhere else, or once more than PDFium read labels, is still read.
+// turned to spaces. Nothing else of the copy changes. It is taken out only
+// when the font that op names, in the page's resources, is exactly the one
+// PDFium writes for a label (/Type /Font /Subtype /Type1 /BaseFont /Helvetica
+// /Encoding /WinAnsiEncoding, and no other key: no /Differences, /ToUnicode,
+// /Widths or /FontDescriptor, nothing embedded), so its codes draw the glyphs
+// they read as (BOXLABEL fix round 1, F1: a font's /Differences drew a quote
+// under codes every text layer read as "Private"), and only from a content
+// stream written as PDFium writes one (/Filter /FlateDecode alone, no
+// /DecodeParms; F5). The glyph check (drawn.ts) takes a label out besides
+// only where pdf.js's glyphs and their text both spell it, once per label
+// (F1, defence in depth). A copy whose labels fail, or whose label bytes are
+// not found so, is judged as it is. So the exemption is exactly those
+// strings, drawn as themselves, inside boxes; a label string drawn anywhere
+// else, once more than PDFium read labels, or in any other font, is still
+// read.
 // ============================================================================
-import { PDFArray, PDFDocument, PDFName, type PDFObject, PDFRawStream, PDFRef } from '@cantoo/pdf-lib';
+import { PDFArray, PDFDict, PDFDocument, PDFName, type PDFObject, PDFRawStream, PDFRef } from '@cantoo/pdf-lib';
 import { decodePDFRawStream } from '@cantoo/pdf-lib';
 import { type Label, isLabel } from './labels.js';
 import type { Box, PageChar } from './match.js';
@@ -108,8 +120,8 @@ export async function labelMarks(pdf: Uint8Array): Promise<PlacedLabel[][] | str
   }
 }
 
-/** A label as PDFium writes it (pdfium.ts drawBoxes, then GenerateContent): its place, its font and size, and its text in hex. */
-const LABEL_OP = /q 1 1 1 rg 0 G 1 0 0 1 (-?\d*\.?\d+) (-?\d*\.?\d+) cm BT 1 0 0 1 0 0 Tm \/[!-~]+ \d*\.?\d+ Tf 0 Tr <([0-9A-F]+)> Tj ET Q/g;
+/** A label as PDFium writes it (pdfium.ts drawBoxes, then GenerateContent): its place, its font's name and its size, and its text in hex. */
+const LABEL_OP = /q 1 1 1 rg 0 G 1 0 0 1 (-?\d*\.?\d+) (-?\d*\.?\d+) cm BT 1 0 0 1 0 0 Tm \/([!-~]+) \d*\.?\d+ Tf 0 Tr <([0-9A-F]+)> Tj ET Q/g;
 const hexOf = (text: string): string => Buffer.from(text, 'latin1').toString('hex').toUpperCase();
 
 /** A page's content streams, each by its reference. */
@@ -119,9 +131,35 @@ function contentRefs(doc: PDFDocument, value: PDFObject | undefined): PDFRef[] {
   return value instanceof PDFRef && found instanceof PDFRawStream ? [value] : [];
 }
 
+/** The font PDFium writes for a label, every key and value of it (F1). */
+const LABEL_FONT: ReadonlyArray<[string, string]> = [
+  ['Type', 'Font'],
+  ['Subtype', 'Type1'],
+  ['BaseFont', 'Helvetica'],
+  ['Encoding', 'WinAnsiEncoding'],
+];
+
+/** Whether `name` in these fonts is exactly the font PDFium writes for a label (LABEL_FONT, each value a direct name, and no other key). */
+function labelFont(doc: PDFDocument, fonts: PDFObject | undefined, name: string): boolean {
+  const list = doc.context.lookup(fonts);
+  const font = list instanceof PDFDict ? doc.context.lookup(list.get(PDFName.of(name))) : undefined;
+  if (!(font instanceof PDFDict) || font.keys().length !== LABEL_FONT.length) return false;
+  return LABEL_FONT.every(([key, value]) => {
+    const found = font.get(PDFName.of(key));
+    return found instanceof PDFName && found.decodeText() === value;
+  });
+}
+
+/** Whether a content stream is written as PDFium writes one: /Filter /FlateDecode alone, and no /DecodeParms (F5). */
+function plainFlate(stream: PDFRawStream): boolean {
+  const filter = stream.dict.get(PDFName.of('Filter'));
+  return filter instanceof PDFName && filter.decodeText() === 'FlateDecode' && !stream.dict.has(PDFName.of('DecodeParms'));
+}
+
 /**
  * The copy with exactly these labels' text turned to spaces (see the header), or null when there are none, or one of
- * them is not found in its page's own content, written as PDFium writes a label, at its place.
+ * them is not found in its page's own content, written as PDFium writes a label, at its place, in PDFium's own label
+ * font (F1), in a content stream PDFium would write (F5).
  */
 export async function unlabelled(pdf: Uint8Array, labels: readonly PlacedLabel[][]): Promise<Uint8Array | null> {
   if (labels.every((page) => page.length === 0)) return null;
@@ -130,17 +168,22 @@ export async function unlabelled(pdf: Uint8Array, labels: readonly PlacedLabel[]
   if (pages.length !== labels.length) return null;
   for (const [index, placed] of labels.entries()) {
     if (placed.length === 0) continue;
-    const streams = contentRefs(doc, (pages[index] as (typeof pages)[number]).node.get(PDFName.of('Contents'))).map((ref) => ({
-      ref,
-      text: Buffer.from(decodePDFRawStream(doc.context.lookup(ref) as PDFRawStream).decode()).toString('latin1'),
-      changed: false,
-    }));
+    const page = pages[index] as (typeof pages)[number];
+    // The page's resources as PDFium and pdf.js read them: its own, or the nearest ancestor's.
+    const resources = doc.context.lookup(page.node.getInheritableAttribute(PDFName.of('Resources')));
+    const fonts = resources instanceof PDFDict ? resources.get(PDFName.of('Font')) : undefined;
+    const streams = contentRefs(doc, page.node.get(PDFName.of('Contents'))).map((ref) => {
+      const raw = doc.context.lookup(ref) as PDFRawStream;
+      // Only a stream PDFium would write is read for labels: in any other, none is found.
+      return { ref, text: plainFlate(raw) ? Buffer.from(decodePDFRawStream(raw).decode()).toString('latin1') : '', changed: false };
+    });
     for (const label of placed) {
       const hex = hexOf(label.text);
       let done = false;
       for (const stream of streams) {
         for (const op of stream.text.matchAll(LABEL_OP)) {
-          if (op[3] !== hex || Math.abs(Number(op[1]) - label.x) > SLACK || Math.abs(Number(op[2]) - label.y) > SLACK) continue;
+          if (op[4] !== hex || Math.abs(Number(op[1]) - label.x) > SLACK || Math.abs(Number(op[2]) - label.y) > SLACK) continue;
+          if (!labelFont(doc, fonts, op[3] as string)) return null;
           const at = op.index + op[0].lastIndexOf(`<${hex}>`) + 1;
           stream.text = stream.text.slice(0, at) + '20'.repeat(hex.length / 2) + stream.text.slice(at + hex.length);
           stream.changed = true;
@@ -158,11 +201,17 @@ export async function unlabelled(pdf: Uint8Array, labels: readonly PlacedLabel[]
 
 /**
  * What `check` finds in the copy, not counting its labels' text (see the header): null when it finds nothing, or
- * finds something only in labels that pass (`labels`, from labelMarks). Else what it found in the copy as it is.
+ * finds something only in labels that pass (`labels`, from labelMarks). Else what it found in the copy as it is. The
+ * second run is handed the labels as well, so a check that reads glyphs (drawn.ts) can take out only those whose
+ * glyphs spell them (F1).
  */
-export async function leakBreak<T>(pdf: Uint8Array, labels: PlacedLabel[][] | string, check: (bytes: Uint8Array) => Promise<T | null>): Promise<T | null> {
+export async function leakBreak<T>(
+  pdf: Uint8Array,
+  labels: PlacedLabel[][] | string,
+  check: (bytes: Uint8Array, labels?: readonly PlacedLabel[][]) => Promise<T | null>,
+): Promise<T | null> {
   const found = await check(pdf);
   if (found === null || typeof labels === 'string') return found;
   const masked = await unlabelled(pdf, labels);
-  return masked === null ? found : check(masked);
+  return masked === null ? found : check(masked, labels);
 }
