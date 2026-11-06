@@ -430,3 +430,55 @@ test.describe('the leaving page (LINKS L4)', () => {
     expect(await saved.text()).toContain('Saved. Next time you follow a link to another site, we will take you straight there.');
   });
 });
+
+// PDFVIEW: the reader /read/<id> and the file it draws share one cache rule: public, briefly, for the
+// public copy; private and never stored with a session cookie; never stored for a 404. download=1 changes
+// nothing but the disposition. The CSP is the site's, unchanged: pdf.js needs nothing more.
+test.describe('the reader (PDFVIEW)', () => {
+  const file = `/documents/${LINKS.file}.pdf`;
+  const read = `/read/${LINKS.file}`;
+
+  test('the page and its file are cached alike, for the public and with a session cookie, and download=1 changes only the disposition', async ({ request }) => {
+    for (const cookie of [undefined, `${SESSION_COOKIE}=x`]) {
+      const headers = cookie ? { cookie } : {};
+      const cache = cookie ? 'private, no-store' : 'public, max-age=60, stale-while-revalidate=60';
+      const page = await request.get(read, { headers });
+      const inline = await request.get(file, { headers });
+      const attached = await request.get(`${file}?download=1`, { headers });
+      expect(page.status()).toBe(200);
+      for (const res of [page, inline, attached]) {
+        expectSecurityHeaders(res);
+        expect(res.headers()['cache-control'], res.url()).toBe(cache);
+      }
+      expect(attached.headers()['content-disposition']).toBe(inline.headers()['content-disposition']!.replace(/^inline;/, 'attachment;'));
+      const rest = (res: APIResponse) => Object.entries(res.headers()).filter(([name]) => !['content-disposition', 'date'].includes(name));
+      expect(rest(attached)).toEqual(rest(inline));
+    }
+  });
+
+  test('an id with no file is a 404 never stored, and the query cannot name another file', async ({ request }) => {
+    const missing = await request.get('/read/00000000-0000-4000-8000-0000000000aa');
+    expect(missing.status()).toBe(404);
+    expect(missing.headers()['cache-control']).toBe('no-store');
+    const page = await request.get(`${read}?file=https://example.com/x.pdf&pdf=/documents/00000000-0000-4000-8000-0000000000aa.pdf`);
+    const html = await page.text();
+    expect(html).toContain(`data-pdf="${file}"`);
+    expect(html).not.toContain('example.com');
+    expect(html).not.toContain('00000000-0000-4000-8000-0000000000aa');
+  });
+
+  test('the CSP stays the site\'s: a same-origin worker, no eval, no WebAssembly, no blob:', async ({ request }) => {
+    const csp = parseCsp((await request.get(read)).headers()['content-security-policy']!);
+    expect(csp['script-src']).toEqual(["'self'"]);
+    expect(csp['worker-src']).toEqual(["'self'"]);
+    expect(Object.values(csp).flat().filter((source) => /unsafe-eval|wasm-unsafe-eval|blob:|data:/.test(source))).toEqual([]);
+    const html = await (await request.get(read)).text();
+    for (const asset of [...html.matchAll(/data-(?:pdfjs|worker)="([^"]+)"/g)].map((m) => m[1]!)) {
+      expect(asset).toMatch(/^\/_astro\/pdf(\.worker)?\.min\.[\w-]+\.mjs$/);
+      const res = await request.get(asset);
+      expect(res.status(), asset).toBe(200);
+      expect(res.headers()['content-type'], asset).toMatch(/^(text|application)\/javascript/);
+      expect(res.headers()['cache-control'], asset).toBe('public, max-age=31536000, immutable');
+    }
+  });
+});

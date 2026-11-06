@@ -32,6 +32,8 @@ export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
   '/calendar.ics': () => ['/calendar.ics'],
   '/events.ics': () => ['/events.ics'],
   '/documents/[id].pdf': (c) => (c.fileIds ?? []).map((id) => `/documents/${id}.pdf`),
+  // PDFVIEW: the issue read in the site, for each file id the test knows; the PDF itself is fetched above.
+  '/read/[id]': (c) => (c.fileIds ?? []).map((id) => `/read/${id}`),
   // LINKS L4: the leaving page, for each link id the test knows, and one that is no link.
   '/out/[id]': (c) => ['/out/aaaaaaaaaaaaaaaaaaaaaaaaaa', ...(c.linkIds ?? []).map((id) => `/out/${id}`)],
   '/finances': () => ['/finances'],

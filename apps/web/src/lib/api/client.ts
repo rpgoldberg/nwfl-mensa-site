@@ -167,10 +167,15 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
     }
   };
 
-  /** The bytes after the head, as a stream that fails on a break, or on more or fewer bytes than the head said. */
+  /**
+   * The bytes after the head, as a stream that fails on a break, or on more or fewer bytes than the head said.
+   * A reader that lets it go (PDFVIEW: /read wants the head only) ends it quietly: that is no failure.
+   */
   const fileBody = (messages: AsyncIterator<ReadFileResponse>, size: number, abort: AbortController): ReadableStream<Uint8Array> => {
     let seen = 0;
+    let letGo = false;
     const fail = (controller: ReadableStreamDefaultController<Uint8Array>, code: string) => {
+      if (letGo) return;
       log(JSON.stringify({ level: 'error', msg: 'api stream failed', rpc: 'ReadFile', code }));
       abort.abort();
       controller.error(new ApiUnavailable('ReadFile'));
@@ -196,6 +201,7 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
         controller.enqueue(part.value);
       },
       cancel() {
+        letGo = true;
         abort.abort();
       },
     });

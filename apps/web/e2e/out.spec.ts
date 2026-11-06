@@ -17,7 +17,7 @@ import { LINKS } from './stand-in';
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
 const out = (id: string) => `/out/${id}`;
-const back = (page: number) => `/documents/${LINKS.file}.pdf#page=${page}`;
+const back = (page: number) => `/read/${LINKS.file}#page=${page}`;
 
 async function axe(page: Page): Promise<string[]> {
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -78,7 +78,7 @@ test.describe('the guard (the default)', () => {
     await page.goto(out(LINKS.web.id));
     if (browserName === 'webkit') {
       // WebKit's Tab skips links by default (as Safari does; layout.spec.ts), so check the document order instead.
-      const order = await page.locator('main a[data-out-continue], main a[href^="/documents/"], main input[name="links"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-out-continue') !== null ? 'continue' : el.tagName === 'A' ? 'back' : 'choice'));
+      const order = await page.locator('main a[data-out-continue], main a[href^="/read/"], main input[name="links"]').evaluateAll((els) => els.map((el) => el.getAttribute('data-out-continue') !== null ? 'continue' : el.tagName === 'A' ? 'back' : 'choice'));
       expect(order.slice(0, 3)).toEqual(['continue', 'back', 'choice']);
       return;
     }
@@ -89,7 +89,7 @@ test.describe('the guard (the default)', () => {
       const name = await page.evaluate(() => {
         const el = document.activeElement as HTMLElement | null;
         if (el?.matches('a[data-out-continue]')) return 'continue';
-        if (el?.matches('a[href^="/documents/"]')) return 'back';
+        if (el?.matches('a[href^="/read/"]')) return 'back';
         if (el?.matches('input[name="links"]')) return 'choice';
         return '';
       });

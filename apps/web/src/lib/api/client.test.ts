@@ -333,6 +333,35 @@ describe('grpcReads.readFile', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(sent).toBeLessThan(100);
   });
+
+  // PDFVIEW: /read reads a file's head only and lets its body go unread. That is no failure: nothing is logged.
+  it('logs nothing when the reader lets the body go, read or unread', async () => {
+    const api = await grpcServer((router) =>
+      router.service(ContentService, {
+        async *readFile() {
+          yield head(64 * 1024 * 10);
+          for (let n = 0; n < 10; n++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            yield chunk(new Uint8Array(64 * 1024));
+          }
+        },
+      }),
+    );
+    for (const read of [false, true]) {
+      const { lines, log } = logs();
+      const file = await grpcReads({ baseUrl: api.url, timeoutMs: 5000 }, log).readFile(FILE);
+      if (file.kind !== 'pdf') throw new Error(file.kind);
+      if (read) {
+        const reader = file.body.getReader();
+        await reader.read();
+        await reader.cancel();
+      } else {
+        await file.body.cancel();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(lines, String(read)).toEqual([]);
+    }
+  });
 });
 
 // A14 (S5a): a signed-in reader's token, forwarded on the two news reads only.

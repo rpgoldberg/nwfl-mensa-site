@@ -38,6 +38,7 @@ import { clone, create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
+import { PUBLIC_ISSUE_PDF, membersIssuePdf } from './synthetic-pdf.mjs';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
@@ -282,6 +283,10 @@ const PDF = Buffer.from(
 const PUBLIC_PDFS = new Set(NEWSLETTER.filter((d) => (d.visibility ?? ItemVisibility.PUBLIC) === ItemVisibility.PUBLIC).map((d) => d.publicPdf));
 /** The members copy, told apart from the public one by a comment line: what a member's ReadFile streams. */
 const MEMBERS_PDF = Buffer.concat([Buffer.from('%PDF-1.4\n% members copy\n', 'latin1'), PDF.subarray(9)]);
+// PDFVIEW: the newest issue's copies are made-up PDFs with pages, text and the copies' links
+// (e2e/synthetic-pdf.mjs), for the reader at /read/<id>; every other file stays the blank page.
+const NEWEST = /** @type {(typeof NEWSLETTER)[number]} */ (NEWSLETTER[0]);
+const NEWEST_MEMBERS_PDF = membersIssuePdf('% members copy');
 
 // A14: the newsletter's articles, as in e2e/stand-in.ts (ARTICLES). A public article with a members
 // passage and a members PDF, a members article and an officers article.
@@ -601,7 +606,7 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       const audience = await audienceOf(ctx);
       const members = (audience === 'members' || audience === 'officers') && MEMBERS_PDFS.has(req.fileId);
       if (!issues || (!PUBLIC_PDFS.has(req.fileId) && req.fileId !== ARTICLES.open.publicPdf && !members)) throw new ConnectError('file not found', Code.NotFound);
-      const bytes = members ? MEMBERS_PDF : PDF;
+      const bytes = members ? (req.fileId === NEWEST.membersPdf ? NEWEST_MEMBERS_PDF : MEMBERS_PDF) : req.fileId === NEWEST.publicPdf ? PUBLIC_ISSUE_PDF : PDF;
       // The same title-based name for both copies, as the API builds it.
       yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(bytes.length) } } };
       yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(bytes) } };

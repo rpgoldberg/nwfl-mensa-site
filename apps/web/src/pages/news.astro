@@ -4,8 +4,10 @@
 // issue loader published, each with its public PDF. Until the API has one, and
 // without the API, the bundled sample, which says it is one; its missing issues
 // are listed honestly. Large-type reading views arrive with the archive (MB3).
-// Under each issue with a PDF, a reader who is not signed in is told to sign in for the
-// members copy, where sign-in works (membersSignInLink); a signed-in reader never is.
+// PDFVIEW: each issue opens in the site (/read/<id>), with a small "PDF file" link to the
+// file itself. By each issue's public copy, the notice that it is the public copy (CopyNotice):
+// "sign in" is a link where sign-in works for a signed-out reader (membersSignInLink), and plain
+// words otherwise; a member's view, which has the members copy, shows the line not to forward it.
 // S2: with that line, or the one to sign in again, the page says once which password to use.
 // A14: read with a signed-in reader's token (src/lib/auth/bearer.ts), the page
 // shows what the API sent that reader: a member gets each issue's members copy
@@ -20,7 +22,7 @@
 import { PUBLIC_ONLY } from 'astro:env/server';
 import IssueCard from '../components/IssueCard.astro';
 import ItemFiles from '../components/ItemFiles.astro';
-import MembersSignIn from '../components/MembersSignIn.astro';
+import CopyNotice from '../components/CopyNotice.astro';
 import PasswordNote from '../components/PasswordNote.astro';
 import SampleNotice from '../components/SampleNotice.astro';
 import Unavailable from '../components/Unavailable.astro';
@@ -33,6 +35,7 @@ import { membersSignInLink, readerFor, signInLink } from '../lib/auth/bearer';
 import { runtimeDeps } from '../lib/auth/flow';
 import { visibleContent } from '../lib/content';
 import { MEMBERS_RULE } from '../lib/document';
+import { readerPath } from '../lib/reader';
 import { page } from '../lib/site';
 
 const p = page('/news');
@@ -40,7 +43,7 @@ const live = liveData();
 const auth = runtimeDeps();
 const { reader, lapsed } = readerFor(Astro.locals.session, auth);
 const signIn = signInLink(auth, PUBLIC_ONLY, '/news');
-// A signed-out reader's line about the members copy: the same for all of them, so the public page still caches.
+// Where a signed-out reader's notice says to sign in: the same for all of them, so the public page still caches.
 const membersSignIn = membersSignInLink(Astro.locals.session, auth, PUBLIC_ONLY, '/news');
 const loaded = live ? await attempt(() => live.news(reader, { signIn })) : { ok: true as const, value: undefined };
 const news = loaded.ok ? loaded.value : undefined;
@@ -68,9 +71,15 @@ const items = news?.items ?? [];
             <ul class="issues">
               {list.map((i) => (
                 <li data-source={i.source} class={i.missing ? 'missing' : undefined}>
-                  {i.pdf ? <a href={i.pdf}>{i.label} (PDF)</a> : <span>{i.label}</span>}
-                  {i.membersPdf && <a href={i.membersPdf}>{i.label}, members copy (PDF)</a>}
-                  {i.pdf && membersSignIn && <MembersSignIn href={membersSignIn} />}
+                  {i.pdf ? <a href={readerPath(i.pdf)}>{i.label}</a> : <span>{i.label}</span>}
+                  {i.membersPdf && <a href={readerPath(i.membersPdf)}>{i.label}, members copy</a>}
+                  {i.pdf && (
+                    <span class="pdf-files">
+                      <a href={i.pdf}>PDF file<span class="visually-hidden"> of {i.label}</span></a>
+                      {i.membersPdf && <a href={i.membersPdf}>Members PDF file<span class="visually-hidden"> of {i.label}</span></a>}
+                    </span>
+                  )}
+                  {i.pdf && !i.membersPdf && <CopyNotice signIn={membersSignIn} />}
                   {i.missing ? <span class="muted">No copy known. If you have a paper copy, please tell the Editor.</span>
                     : issueSummary(i) && <span class="muted">{issueSummary(i)}</span>}
                 </li>
