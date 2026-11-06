@@ -100,6 +100,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       GetMyAccount: () => [{}],
       ListSignupRequests: () => [{}],
       ListMembers: () => [{}],
+      ListRejectedSignups: () => [{}],
     },
     'nwfl.mensa.v1.NewsletterService': {
       ListEditions: () => [{}],
@@ -159,6 +160,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     'MembershipService.RemoveMember',
     'MembershipService.ConfirmMember',
     'MembershipService.GrantAffiliate',
+    'MembershipService.ReopenSignup',
     'MembershipVerifierService.ReportVerification',
     'RedactionPolicyService.ProposeRedactionChange',
     'RedactionPolicyService.ApproveRedactionChange',

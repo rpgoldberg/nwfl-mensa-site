@@ -38,6 +38,20 @@
 //                       an invited affiliate, from the verifier's other-group
 //                       date when there is one, else from today on the
 //                       grantor's attestation (the audit action says which)
+//   ListRejectedSignups the Admin and the Membership Officer (REOPEN): the
+//                       rejections whose closed account is still closed,
+//                       newest first, never their own
+//   ReopenSignup        the Admin and the Membership Officer, never on their
+//                       own: the rejected row stays as it was, marked reopened
+//                       by whom and when (0026), and the account the rejection
+//                       closed is deleted, so the person can sign up again.
+//                       Nothing erased comes back. Not rejected, already
+//                       reopened, or an account no longer closed (granted
+//                       meanwhile): FAILED_PRECONDITION, so a double reopen is
+//                       refused, never repeated.
+//
+// A person has one open sign-up at most: the rows not reopened (0026). Every
+// lookup by subject reads only those.
 //
 // No free-text note anywhere (R24), and a membership audit row carries no
 // payload (0009): what happened is in its action and states.
@@ -47,7 +61,7 @@ import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@connectrpc/connect';
 import { recordAudit } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
-import { requireGrantor, requireMembershipApprover, requireUser } from '../auth/roles.js';
+import { requireGrantor, requireMembershipApprover, requireSignupReopener, requireUser } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -59,6 +73,7 @@ import {
   MemberSchema,
   MemberStatus,
   MembershipService,
+  RejectedSignupSchema,
   SignupRequestSchema,
   Verification,
 } from '../gen/nwfl/mensa/v1/membership_pb.js';
@@ -94,6 +109,13 @@ const MAX_DISPLAY_NAME = 120;
 /** The one answer to a sign-up that cannot be taken, whatever the reason (MT-19). */
 const ON_FILE = 'a sign-up is already on file for this account';
 const RECHECK_MONTHS = 12;
+/** REOPEN: the most rejections listed for reopening, newest first. */
+const MAX_REJECTED_LISTED = 50;
+/**
+ * REOPEN: an account the rejection closed and nothing reopened since: removed, never approved,
+ * granted or checked (0026's delete rule). For member_account aliased `a`.
+ */
+const CLOSED_BY_REJECTION = `a.status = 'removed' AND a.verified_on IS NULL AND a.approved_by_sub IS NULL AND a.affiliate_granted_by_sub IS NULL`;
 /** W-SIGNUP D2: an officer invited this person (fc INVITE1's <prefix>invited, renamed by groups.ts). */
 const INVITED_GROUP = 'nwfl-invited';
 
@@ -175,7 +197,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         // First, so an account already on file gets the one answer whatever else is wrong.
         const onFile = async (client: Pick<Db, 'query'>): Promise<void> => {
           const { rows } = await client.query(
-            `SELECT 1 FROM signup_request WHERE sub = $1 UNION ALL SELECT 1 FROM member_account WHERE sub = $1 AND status <> 'pending'`,
+            `SELECT 1 FROM signup_request WHERE sub = $1 AND reopened_at IS NULL UNION ALL SELECT 1 FROM member_account WHERE sub = $1 AND status <> 'pending'`,
             [sub],
           );
           if (rows.length > 0) throw new ConnectError(ON_FILE, Code.AlreadyExists);
@@ -200,7 +222,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           // A sign-up racing this one waits here for it, then gets the same one answer.
           const { rows } = await client.query<{ id: string }>(
             `INSERT INTO signup_request (sub, display_name, email, last_name, membership_number) VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (sub) DO NOTHING RETURNING id`,
+             ON CONFLICT (sub) WHERE reopened_at IS NULL DO NOTHING RETURNING id`,
             [sub, name, email, lastName, number],
           );
           const id = rows[0]?.id;
@@ -303,7 +325,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const { rows } = await db.query<AccountRow & { sub: string; display_name: string | null; email: string | null; recheck_due: boolean }>(
           `SELECT a.sub, s.display_name, s.email, a.status, a.route, a.verified_on::text AS verified_on,
              coalesce(a.verified_on < $1::date - make_interval(months => $2), true) AS recheck_due
-           FROM member_account a LEFT JOIN signup_request s ON s.sub = a.sub
+           FROM member_account a LEFT JOIN signup_request s ON s.sub = a.sub AND s.reopened_at IS NULL
            WHERE a.status IN ('member', 'affiliate', 'lapsed')
              AND (NOT $3 OR coalesce(a.verified_on < $1::date - make_interval(months => $2), true))
            ORDER BY coalesce(s.display_name, ''), a.sub`,
@@ -374,7 +396,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           if (current !== undefined && !['pending', 'lapsed'].includes(current.status)) throw precondition('this account cannot be granted affiliate standing');
           const signup = (
             await client.query<SignupRow>(
-              `SELECT id, sub, decision, verification, verified_on::text AS verified_on FROM signup_request WHERE sub = $1 FOR UPDATE`,
+              `SELECT id, sub, decision, verification, verified_on::text AS verified_on FROM signup_request WHERE sub = $1 AND reopened_at IS NULL FOR UPDATE`,
               [sub],
             )
           ).rows[0];
@@ -399,6 +421,59 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
             toState: 'affiliate',
           });
           return { account: accountMessage(rows[0] as AccountRow) };
+        });
+      },
+
+      listRejectedSignups: async (_request, ctx) => {
+        const caller = callerIn(ctx);
+        requireSignupReopener(caller);
+        const { rows } = await db.query<{ id: string; display_name: string; email: string; verification: string; verified_on: string | null; decided_at: Date }>(
+          `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.decided_at
+           FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub
+           WHERE s.decision = 'rejected' AND s.reopened_at IS NULL AND s.sub <> $1 AND (a.sub IS NULL OR (${CLOSED_BY_REJECTION}))
+           ORDER BY s.decided_at DESC, s.id DESC LIMIT $2`,
+          [caller.subject, MAX_REJECTED_LISTED],
+        );
+        return {
+          requests: rows.map((row) =>
+            create(RejectedSignupSchema, {
+              requestId: row.id,
+              displayName: row.display_name,
+              email: row.email,
+              verification: VERIFICATIONS[row.verification],
+              ...(row.verified_on !== null ? { verifiedOn: protoDate(row.verified_on) } : {}),
+              rejectedAt: timestampFromDate(row.decided_at),
+            }),
+          ),
+        };
+      },
+
+      reopenSignup: async (request, ctx) => {
+        const caller = callerIn(ctx);
+        requireSignupReopener(caller);
+        const id = requestId(request.requestId);
+        return tx(async (client) => {
+          const row = (
+            await client.query<{ sub: string; decision: string; reopened: boolean }>(
+              `SELECT sub, decision, reopened_at IS NOT NULL AS reopened FROM signup_request WHERE id = $1 FOR UPDATE`,
+              [id],
+            )
+          ).rows[0];
+          if (row === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
+          if (row.sub === caller.subject) throw new ConnectError('no one reopens their own sign-up', Code.PermissionDenied);
+          if (row.decision !== 'rejected' || row.reopened) throw precondition('only a rejected sign-up is reopened, and only once');
+          const account = (
+            await client.query<{ closed: boolean }>(`SELECT (${CLOSED_BY_REJECTION}) AS closed FROM member_account a WHERE a.sub = $1 FOR UPDATE`, [row.sub])
+          ).rows[0];
+          if (account !== undefined && !account.closed) throw precondition('this account is no longer closed by the rejection');
+          await client.query(`UPDATE signup_request SET reopened_at = now(), reopened_by_sub = $2 WHERE id = $1`, [id, caller.subject]);
+          await recordAudit(client, caller, { action: 'reopen', subjectKind: 'signup_request', subjectId: id, fromState: 'rejected', toState: 'reopened' });
+          if (account !== undefined) {
+            // The person reads as one who never signed up (GetMyAccount: no account), so the site offers the form again.
+            await client.query(`DELETE FROM member_account WHERE sub = $1`, [row.sub]);
+            await recordAudit(client, caller, { action: 'reopen', subjectKind: 'member_account', subjectId: row.sub, fromState: 'removed' });
+          }
+          return {};
         });
       },
     });

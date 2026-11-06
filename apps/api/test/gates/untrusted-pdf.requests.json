@@ -1377,6 +1377,10 @@
       }
     ]
   },
+  "MembershipService.ListRejectedSignups": {
+    "input": "nwfl.mensa.v1.ListRejectedSignupsRequest",
+    "fields": []
+  },
   "MembershipService.ListSignupRequests": {
     "input": "nwfl.mensa.v1.ListSignupRequestsRequest",
     "fields": []
@@ -1397,6 +1401,17 @@
     "fields": [
       {
         "name": "subject",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.ReopenSignup": {
+    "input": "nwfl.mensa.v1.ReopenSignupRequest",
+    "fields": [
+      {
+        "name": "request_id",
         "number": 1,
         "type": "string",
         "label": "optional"

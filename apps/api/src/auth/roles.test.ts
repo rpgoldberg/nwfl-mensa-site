@@ -13,6 +13,7 @@ import {
   requireOfficer,
   requireOfficerOrAdmin,
   requireScope,
+  requireSignupReopener,
   requireUser,
   rolesOf,
 } from './roles.js';
@@ -136,5 +137,19 @@ describe('requireOfficerOrAdmin (SOLO-APPROVE: reading the approval setting)', (
       expect(() => requireOfficerOrAdmin(caller)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
     }
     expect(() => requireOfficerOrAdmin(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+  });
+});
+
+describe('requireSignupReopener (REOPEN: a mistaken rejection)', () => {
+  const membershipOfficer = user('nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers');
+  it('lets the Admin and the Membership Officer seat through, the seat without the approvers group too', () => {
+    for (const caller of [ross, membershipOfficer, user('nwfl-admin'), user('nwfl-office-membership')]) expect(() => requireSignupReopener(caller)).not.toThrow();
+  });
+
+  it('refuses a membership approver who does not hold the seat, the Webmaster, another seat, a member and a machine', () => {
+    for (const caller of [approver, webmaster, treasurer, member, rvc, agent, user('nwfl-office-membershipx'), user('nwfl-members', 'mensa-nwfl-office-membership')]) {
+      expect(() => requireSignupReopener(caller)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    }
+    expect(() => requireSignupReopener(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
   });
 });
