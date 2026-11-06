@@ -13,6 +13,8 @@ import { FILE_WALK_BUDGET, WALK_BUDGET, patternPicturePages } from '../../src/pd
 
 /** Far more than the walk needs once bounded (milliseconds), far less than the unbounded walk took. */
 const BOUNDED_MS = 3000;
+/** The same for 1,000 pages, a 1 MB file pdf-lib loads first: 1 s here and 3.1 s on a CI runner, against 51 s with no file budget. */
+const BOUNDED_FILE_MS = 15_000;
 
 /** The challenger's lattice: 3n forms, each with only one kind of its own (empty), on one page; `picture` gives the last a tiling pattern that holds a photo. */
 async function lattice(n: number, picture = false): Promise<Uint8Array> {
@@ -151,6 +153,6 @@ describe('D1: the pattern walk is bounded, and fails safe past its budget', () =
   it('walks 1,000 pages that share one dictionary of WALK_BUDGET entries in bounded time, withholding those past the file budget', async () => {
     const { pages, ms } = await timed(await fan(WALK_BUDGET, 1000));
     expect(pages).toEqual(Array.from({ length: 1000 - 16 }, (_, i) => 16 + i));
-    expect(ms).toBeLessThan(BOUNDED_MS);
+    expect(ms).toBeLessThan(BOUNDED_FILE_MS);
   }, 300_000);
 });
