@@ -32,6 +32,8 @@ const REJECTED_IDS = {
   'reopen-phone': 'c1000000-0000-4000-8000-000000000002',
   'reopen-iphone': 'c1000000-0000-4000-8000-000000000003',
 } as const;
+/** A sign-up waiting in the stand-in's queue (api.mjs). */
+const PENDING_ID = 'b1000000-0000-4000-8000-000000000001';
 const rejectedCard = (page: Page, name: string) => page.locator('.rejected-card').filter({ hasText: name });
 
 /** This browser project's own rejected person, so the projects' runs never reopen the same one. */
@@ -84,6 +86,8 @@ test.describe('REOPEN: the rejected sign-ups in the officer area', () => {
     await expect(page.getByRole('heading', { name: 'Rejected sign-ups' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Reopen' })).toHaveCount(0);
     expect(await page.content()).not.toContain(REJECTED.kept.name);
+    // No list was asked for, so none is said to be missing.
+    await expect(page.locator('main')).not.toContainText('cannot be shown');
     const res = await post(page, { decision: 'reopen', request: 'c1000000-0000-4000-8000-000000000004', confirmed: 'yes' });
     expect(res.status()).toBe(409);
     expect(await res.text()).toContain('Nothing was changed: only the Admin or the Membership Officer reopens a sign-up, and never their own.');
@@ -95,6 +99,9 @@ test.describe('REOPEN: the rejected sign-ups in the officer area', () => {
     await page.goto('/officer-area');
     await page.getByRole('link', { name: 'Rejected sign-ups to reopen' }).click();
     await expect(page).toHaveURL(`${SITE_URL}${QUEUE}`);
+    // Its own title and heading, the link's words, not the approvers' 'Sign-ups to approve'.
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rejected sign-ups to reopen');
+    await expect(page).toHaveTitle(/^Rejected sign-ups to reopen \| /);
     await expect(page.locator('.lead')).toHaveText('Sign-ups that were rejected and can be reopened. The membership number and last name they typed are never shown here.');
     await expect(page.locator('.signup-card')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
@@ -116,8 +123,41 @@ test.describe('REOPEN: the rejected sign-ups in the officer area', () => {
     await page.goto(QUEUE);
     await expect(page.getByRole('main').getByRole('link', { name: 'Sign in again' })).toBeVisible();
     await expect(page.locator('main')).not.toContainText('cannot be shown');
-    await expect(page.getByRole('heading', { name: 'Rejected sign-ups' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { level: 2, name: 'Rejected sign-ups', exact: true })).toHaveCount(0);
     expect(await axe(page)).toEqual([]);
+  });
+
+  test('the seat without the approvers group still sees the rejections after a malformed post, which says to send the form again from them', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'seat-only');
+    await page.goto(QUEUE);
+    // A tampered Reopen form, sent through the page as a browser would.
+    const [answer] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'POST' && r.url() === `${SITE_URL}${QUEUE}`),
+      page.evaluate(() => {
+        const form = document.querySelector('.rejected-card form') as HTMLFormElement;
+        (form.querySelector('input[name="request"]') as HTMLInputElement).value = 'not-an-id';
+        form.submit();
+      }),
+    ]);
+    expect(answer.status()).toBe(400);
+    await page.waitForLoadState();
+    await expect(page.getByRole('alert')).toHaveText('Nothing was changed: send the form again from the list below.');
+    await expect(page.getByRole('heading', { level: 2, name: 'Rejected sign-ups', exact: true })).toBeVisible();
+    await expect(rejectedCard(page, REJECTED.kept.name).getByRole('button', { name: 'Reopen' })).toBeVisible();
+    expect(await axe(page)).toEqual([]);
+  });
+
+  test('the seat without the approvers group who posts an approval or a rejection anyway is told only approvers do that, not that it is their own', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'seat-only');
+    for (const form of [{ decision: 'approve', request: PENDING_ID }, { decision: 'reject', request: PENDING_ID, confirmed: 'yes' }]) {
+      const res = await post(page, form);
+      expect(res.status(), form.decision).toBe(409);
+      const text = await res.text();
+      expect(text, form.decision).toContain('Nothing was changed: only the sign-up approvers can approve or reject a sign-up.');
+      expect(text, form.decision).not.toContain('their own sign-up');
+    }
   });
 
   test('cancelling the confirmation changes nothing; a stale reopening says so', async ({ page }) => {

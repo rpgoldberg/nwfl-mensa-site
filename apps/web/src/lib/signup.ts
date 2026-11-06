@@ -154,6 +154,15 @@ export function signUpsLink(session: { groups: readonly string[] } | undefined):
   return isSignupReopener(session) ? 'Rejected sign-ups to reopen' : undefined;
 }
 
+/**
+ * NOTE-1: the sign-ups page's title and heading, by what the person may do there, the same words as
+ * the officer area's link: the Membership Officer's seat without the approvers group sees the
+ * rejections alone.
+ */
+export function signUpsTitle(session: { groups: readonly string[] } | undefined): string {
+  return signUpsLink(session) ?? 'Sign-ups to approve';
+}
+
 export interface DecisionForm {
   decision: 'approve' | 'reject' | 'reopen';
   requestId: string;
@@ -199,6 +208,30 @@ export const REOPEN_REFUSED: Record<'own' | 'closed', string> = {
   own: 'Nothing was changed: only the Admin or the Membership Officer reopens a sign-up, and never their own.',
   closed: 'Nothing was changed: this sign-up can no longer be reopened. The list below is as it is now.',
 };
+
+/** NOTE-1: an approval or rejection the API refused because the person is not an approver at all. */
+export const NOT_AN_APPROVER = 'Nothing was changed: only the sign-up approvers can approve or reject a sign-up.';
+
+/**
+ * The words for a refused decision. The API answers PERMISSION_DENIED both for an approver's own
+ * sign-up and for someone who may not approve at all (the Membership Officer's seat without the
+ * approvers group); the page knows which, so it says the one that fits.
+ */
+export function refusedText(refused: { reason: 'own' | 'closed'; reopen: boolean }, approver: boolean): string {
+  if (refused.reopen) return REOPEN_REFUSED[refused.reason];
+  return refused.reason === 'own' && !approver ? NOT_AN_APPROVER : DECISION_REFUSED[refused.reason];
+}
+
+/**
+ * NOTE-4: the most rejections the API lists for reopening, newest first, with no paging (its
+ * MAX_REJECTED_LISTED, apps/api/src/membership/service.ts). A full list says so, so an older one is
+ * never hidden without a word.
+ */
+export const REJECTED_LISTED_MAX = 50;
+
+export function rejectedShownNote(count: number): string | undefined {
+  return count >= REJECTED_LISTED_MAX ? `Showing the latest ${REJECTED_LISTED_MAX} rejected sign-ups. Any older ones are not shown here.` : undefined;
+}
 
 /**
  * D3: where a sign-in goes first. One of the group's enrolees with no account yet goes to /account,

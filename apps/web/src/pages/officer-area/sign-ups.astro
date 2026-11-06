@@ -15,7 +15,10 @@
 // to those the API would allow (isSignupReopener); the API decides again on every call.
 //
 // The Membership Officer's seat without the approvers group sees the rejections alone: no queue, which
-// the API would not list for them.
+// the API would not list for them, under its own title (signUpsTitle, the officer area's link words).
+// An approve or reject they post anyway is refused in words that fit them (refusedText), and a
+// malformed post still shows the list it points to. The API lists the latest 50 rejections, with no
+// paging; a full list says so (rejectedShownNote), so none is hidden without a word.
 //
 // Not signed in: sign in first. Signed in but neither a membership approver, the Admin nor the
 // Membership Officer: the plain
@@ -31,7 +34,6 @@ import { runtimeDeps } from '../../lib/auth/flow';
 import { readForm } from '../../lib/form';
 import {
   DECISION_REFUSED,
-  REOPEN_REFUSED,
   ROUTE_TEXT,
   type DecisionForm,
   checkText,
@@ -41,6 +43,9 @@ import {
   isMembershipApprover,
   isSignupReopener,
   parseDecisionForm,
+  refusedText,
+  rejectedShownNote,
+  signUpsTitle,
 } from '../../lib/signup';
 import { page } from '../../lib/site';
 
@@ -57,7 +62,7 @@ if (!session) return signInFirst(SIGN_IN);
 const approver = isMembershipApprover(session);
 const reopener = isSignupReopener(session);
 if (!approver && !reopener) return Astro.rewrite('/404');
-const p = page(HERE);
+const p = { ...page(HERE), title: signUpsTitle(session) };
 const api = membershipApi();
 const { reader } = sessionReader(session, runtimeDeps());
 Astro.response.headers.set('Cache-Control', 'private, no-store');
@@ -109,7 +114,7 @@ if (api !== undefined && reader !== undefined) {
     }
   }
   // The queue stands on its own: a list of rejections that cannot be read says so in its place.
-  if (reopener && problem === undefined) {
+  if (reopener && (problem === undefined || problem === 'form')) {
     try {
       rejected = await api.listRejectedSignups(reader);
     } catch (error) {
@@ -135,7 +140,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
     <p class="lead">Sign-ups that were rejected and can be reopened. The membership number and last name they typed are never shown here.</p>
   )}
   {done && <p class="notice" role="status">{doneText(done)}</p>}
-  {refused && <p class="notice" role="alert">{(refused.reopen ? REOPEN_REFUSED : DECISION_REFUSED)[refused.reason]}</p>}
+  {refused && <p class="notice" role="alert">{refusedText(refused, approver)}</p>}
   {problem === 'form' && <p class="notice" role="alert">Nothing was changed: send the form again from the list below.</p>}
   {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then try again.</p>}
   {problem === 'sign-in' && <PasswordNote />}
@@ -216,6 +221,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
     <section aria-labelledby="rejected-title">
       <h2 id="rejected-title">Rejected sign-ups</h2>
       <p>Rejected by mistake? Reopen a sign-up so the person can send the form again. Only the Admin and the Membership Officer see this list.</p>
+      {rejectedShownNote(rejected.length) && <p role="note">{rejectedShownNote(rejected.length)}</p>}
       {rejected.length === 0 ? (
         <p class="card empty">No rejected sign-ups can be reopened.</p>
       ) : (
