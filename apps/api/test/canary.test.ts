@@ -79,6 +79,7 @@ describe.skipIf(!live)('the members-only canary', () => {
       GetMyAccount: () => [{}],
       ListSignupRequests: () => [{}],
       ListMembers: () => [{}, { recheckDueOnly: true }],
+      ListRejectedSignups: () => [{}],
     },
     'nwfl.mensa.v1.NewsletterService': {
       ListEditions: () => [{}],

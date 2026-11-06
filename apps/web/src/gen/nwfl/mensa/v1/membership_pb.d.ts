@@ -99,6 +99,52 @@ export declare type SignupRequest = Message<"nwfl.mensa.v1.SignupRequest"> & {
 export declare const SignupRequestSchema: GenMessage<SignupRequest>;
 
 /**
+ * A rejected sign-up that can still be reopened, as the Admin or the Membership Officer sees it:
+ * never the number or the last name, which the rejection erased.
+ *
+ * @generated from message nwfl.mensa.v1.RejectedSignup
+ */
+export declare type RejectedSignup = Message<"nwfl.mensa.v1.RejectedSignup"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: string display_name = 2;
+   */
+  displayName: string;
+
+  /**
+   * As the member typed it.
+   *
+   * @generated from field: string email = 3;
+   */
+  email: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.Verification verification = 4;
+   */
+  verification: Verification;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.Date verified_on = 5;
+   */
+  verifiedOn?: Date | undefined;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp rejected_at = 6;
+   */
+  rejectedAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.RejectedSignup.
+ * Use `create(RejectedSignupSchema)` to create a new message.
+ */
+export declare const RejectedSignupSchema: GenMessage<RejectedSignup>;
+
+/**
  * An account as the approvers see it, for removal and the yearly re-check.
  *
  * @generated from message nwfl.mensa.v1.Member
@@ -444,6 +490,62 @@ export declare type GrantAffiliateResponse = Message<"nwfl.mensa.v1.GrantAffilia
 export declare const GrantAffiliateResponseSchema: GenMessage<GrantAffiliateResponse>;
 
 /**
+ * @generated from message nwfl.mensa.v1.ListRejectedSignupsRequest
+ */
+export declare type ListRejectedSignupsRequest = Message<"nwfl.mensa.v1.ListRejectedSignupsRequest"> & {
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ListRejectedSignupsRequest.
+ * Use `create(ListRejectedSignupsRequestSchema)` to create a new message.
+ */
+export declare const ListRejectedSignupsRequestSchema: GenMessage<ListRejectedSignupsRequest>;
+
+/**
+ * @generated from message nwfl.mensa.v1.ListRejectedSignupsResponse
+ */
+export declare type ListRejectedSignupsResponse = Message<"nwfl.mensa.v1.ListRejectedSignupsResponse"> & {
+  /**
+   * @generated from field: repeated nwfl.mensa.v1.RejectedSignup requests = 1;
+   */
+  requests: RejectedSignup[];
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ListRejectedSignupsResponse.
+ * Use `create(ListRejectedSignupsResponseSchema)` to create a new message.
+ */
+export declare const ListRejectedSignupsResponseSchema: GenMessage<ListRejectedSignupsResponse>;
+
+/**
+ * @generated from message nwfl.mensa.v1.ReopenSignupRequest
+ */
+export declare type ReopenSignupRequest = Message<"nwfl.mensa.v1.ReopenSignupRequest"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ReopenSignupRequest.
+ * Use `create(ReopenSignupRequestSchema)` to create a new message.
+ */
+export declare const ReopenSignupRequestSchema: GenMessage<ReopenSignupRequest>;
+
+/**
+ * @generated from message nwfl.mensa.v1.ReopenSignupResponse
+ */
+export declare type ReopenSignupResponse = Message<"nwfl.mensa.v1.ReopenSignupResponse"> & {
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ReopenSignupResponse.
+ * Use `create(ReopenSignupResponseSchema)` to create a new message.
+ */
+export declare const ReopenSignupResponseSchema: GenMessage<ReopenSignupResponse>;
+
+/**
  * @generated from enum nwfl.mensa.v1.MemberStatus
  */
 export enum MemberStatus {
@@ -663,6 +765,31 @@ export declare const MembershipService: GenService<{
     methodKind: "unary";
     input: typeof GrantAffiliateRequestSchema;
     output: typeof GrantAffiliateResponseSchema;
+  },
+  /**
+   * REOPEN: the Admin or the Membership Officer only (nwfl-admin, nwfl-office-membership). The
+   * rejected sign-ups that can be reopened (the account the rejection closed is still closed),
+   * newest first, never the caller's own.
+   *
+   * @generated from rpc nwfl.mensa.v1.MembershipService.ListRejectedSignups
+   */
+  listRejectedSignups: {
+    methodKind: "unary";
+    input: typeof ListRejectedSignupsRequestSchema;
+    output: typeof ListRejectedSignupsResponseSchema;
+  },
+  /**
+   * REOPEN: the Admin or the Membership Officer only, never on their own sign-up. Returns the
+   * person to where they can sign up again: the account the rejection closed is gone, and the
+   * rejected sign-up stays, marked reopened by whom and when. Nothing erased comes back. A sign-up
+   * that is not rejected, already reopened, or whose account is no longer closed is refused.
+   *
+   * @generated from rpc nwfl.mensa.v1.MembershipService.ReopenSignup
+   */
+  reopenSignup: {
+    methodKind: "unary";
+    input: typeof ReopenSignupRequestSchema;
+    output: typeof ReopenSignupResponseSchema;
   },
 }>;
 

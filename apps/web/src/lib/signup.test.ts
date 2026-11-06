@@ -10,6 +10,9 @@ import {
   ACCOUNT_PATH,
   CHECK_TEXT,
   DECISION_REFUSED,
+  NOT_AN_APPROVER,
+  REJECTED_LISTED_MAX,
+  REOPEN_REFUSED,
   ROUTE_TEXT,
   REJECTED_CONTACT,
   SIGNUP_REFUSED,
@@ -24,7 +27,12 @@ import {
   formatDay,
   formatMoment,
   isMembershipApprover,
+  isSignupReopener,
+  refusedText,
+  rejectedShownNote,
   parseDecisionForm,
+  signUpsLink,
+  signUpsTitle,
   parseSignupForm,
 } from './signup';
 
@@ -172,6 +180,66 @@ describe('the queue\'s words (D4)', () => {
     expect(doneFromQuery(new URLSearchParams(''))).toBeUndefined();
     expect(doneText('approved')).toBe('Approved. The account now has member access.');
     expect(doneText('rejected')).toBe('Rejected. The sign-up has been removed from the queue.');
+  });
+
+  it('REOPEN: lets only the Admin and the Membership Officer\'s seat reopen, as the API does', () => {
+    expect(isSignupReopener(session(['nwfl-admin']))).toBe(true);
+    expect(isSignupReopener(session(['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers']))).toBe(true);
+    expect(isSignupReopener(session(['nwfl-officers', 'nwfl-office-membership']))).toBe(true);
+    for (const groups of [['nwfl-users', 'nwfl-membership-approvers'], ['nwfl-members', 'nwfl-officers', 'nwfl-webmaster'], ['nwfl-office-treasurer'], ['mensa-nwfl-office-membership'], ['nwfl-office-membershipx']]) {
+      expect(isSignupReopener(session(groups)), groups.join(' ')).toBe(false);
+    }
+    expect(isSignupReopener(undefined)).toBe(false);
+  });
+
+  it('REOPEN: names the officer area\'s link to the sign-ups page by what the person may do there', () => {
+    expect(signUpsLink(session(['nwfl-users', 'nwfl-membership-approvers']))).toBe('Sign-ups to approve');
+    expect(signUpsLink(session(['nwfl-admin']))).toBe('Sign-ups to approve');
+    expect(signUpsLink(session(['nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers']))).toBe('Sign-ups to approve');
+    expect(signUpsLink(session(['nwfl-officers', 'nwfl-office-membership']))).toBe('Rejected sign-ups to reopen');
+    expect(signUpsLink(session(['nwfl-officers', 'nwfl-office-treasurer']))).toBeUndefined();
+    expect(signUpsLink(undefined)).toBeUndefined();
+  });
+
+  it('REOPEN: reads a reopening, applied only once confirmed by the exact word', () => {
+    expect(parseDecisionForm(form({ decision: 'reopen', request: ID }))).toEqual({ ok: true, value: { decision: 'reopen', requestId: ID, confirmed: false } });
+    expect(parseDecisionForm(form({ decision: 'reopen', request: ID, confirmed: 'yes' }))).toEqual({ ok: true, value: { decision: 'reopen', requestId: ID, confirmed: true } });
+    expect(parseDecisionForm(form({ decision: 'reopen', request: ID, confirmed: 'Yes' }))).toEqual({ ok: true, value: { decision: 'reopen', requestId: ID, confirmed: false } });
+    expect(parseDecisionForm(form({ decision: 'reopen', request: 'nope' }))).toEqual({ ok: false });
+    expect(parseDecisionForm(form({ decision: 'Reopen', request: ID }))).toEqual({ ok: false });
+  });
+
+  it('REOPEN: names the outcome, and says each refusal in plain words', () => {
+    expect(doneFromQuery(new URLSearchParams('done=reopened'))).toBe('reopened');
+    expect(doneText('reopened')).toBe('Reopened. The person can now send the sign-up form again from their account page.');
+    expect(Object.keys(REOPEN_REFUSED).sort()).toEqual(['closed', 'own']);
+    expect(REOPEN_REFUSED.own).toBe('Nothing was changed: only the Admin or the Membership Officer reopens a sign-up, and never their own.');
+    expect(REOPEN_REFUSED.closed).toBe('Nothing was changed: this sign-up can no longer be reopened. The list below is as it is now.');
+  });
+
+  it('NOTE-1: tells someone who is not an approver that approving is the approvers\' job, not that the sign-up is their own', () => {
+    expect(NOT_AN_APPROVER).toBe('Nothing was changed: only the sign-up approvers can approve or reject a sign-up.');
+    expect(refusedText({ reason: 'own', reopen: false }, false)).toBe(NOT_AN_APPROVER);
+    expect(refusedText({ reason: 'own', reopen: false }, true)).toBe(DECISION_REFUSED.own);
+    expect(refusedText({ reason: 'closed', reopen: false }, false)).toBe(DECISION_REFUSED.closed);
+    expect(refusedText({ reason: 'closed', reopen: false }, true)).toBe(DECISION_REFUSED.closed);
+    expect(refusedText({ reason: 'own', reopen: true }, false)).toBe(REOPEN_REFUSED.own);
+    expect(refusedText({ reason: 'own', reopen: true }, true)).toBe(REOPEN_REFUSED.own);
+    expect(refusedText({ reason: 'closed', reopen: true }, true)).toBe(REOPEN_REFUSED.closed);
+  });
+
+  it('NOTE-1: names the page by what the person may do there, as the officer area\'s link does', () => {
+    expect(signUpsTitle(session(['nwfl-users', 'nwfl-membership-approvers']))).toBe('Sign-ups to approve');
+    expect(signUpsTitle(session(['nwfl-admin']))).toBe('Sign-ups to approve');
+    expect(signUpsTitle(session(['nwfl-officers', 'nwfl-office-membership']))).toBe('Rejected sign-ups to reopen');
+    expect(signUpsTitle(session(['nwfl-officers', 'nwfl-office-treasurer']))).toBe('Sign-ups to approve');
+  });
+
+  it('NOTE-4: says when the list of rejections is at its cap of 50, so none is hidden without a word', () => {
+    expect(REJECTED_LISTED_MAX).toBe(50);
+    expect(rejectedShownNote(0)).toBeUndefined();
+    expect(rejectedShownNote(49)).toBeUndefined();
+    expect(rejectedShownNote(50)).toBe('Showing the latest 50 rejected sign-ups. Any older ones are not shown here.');
   });
 
   it('says each refusal in plain words', () => {

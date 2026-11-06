@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { newSession } from '../../../server/session.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
-import { AccountRoute, MemberStatus, MembershipService, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, MemberStatus, MembershipService, RejectedSignupSchema, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
 import { DecisionRefused, MembershipSignInAgain, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
@@ -203,6 +203,88 @@ describe('grpcMembership: the approvers\' queue', () => {
       expect((error as DecisionRefused).reason).toBe(reason);
     }
     expect(lines.map((l) => (JSON.parse(l) as { rpc: string; msg: string }).rpc)).toEqual(['ApproveSignup', 'RejectSignup']);
+  });
+});
+
+describe('grpcMembership: reopening a rejection (REOPEN)', () => {
+  const REJECTED = new Date('2026-11-04T16:00:00Z');
+
+  it('lists the rejections by name, with the check, its day and the day of the rejection, never more', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listRejectedSignups: () => ({
+          requests: [
+            create(RejectedSignupSchema, {
+              requestId: ID,
+              displayName: 'Dana Sample',
+              email: 'dana@example.org',
+              verification: Verification.NOT_FOUND,
+              verifiedOn: { year: 2026, month: 11, day: 3 },
+              rejectedAt: timestampFromDate(REJECTED),
+            }),
+            create(RejectedSignupSchema, { requestId: ID, displayName: 'Kai Example', email: 'kai@example.org', verification: Verification.UNCHECKED }),
+          ],
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.listRejectedSignups(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Dana Sample', email: 'dana@example.org', verification: 'not_found', verifiedOn: '2026-11-03', rejectedAt: REJECTED },
+      { requestId: ID, displayName: 'Kai Example', email: 'kai@example.org', verification: 'unchecked' },
+    ]);
+    expect(server.headers[0]?.['authorization']).toBe('Bearer person.tok-en');
+  });
+
+  it('refuses a list it cannot read: an unset check', async () => {
+    const server = await grpcServer((router) => router.service(MembershipService, { listRejectedSignups: () => ({ requests: [{ requestId: ID, verification: Verification.UNSPECIFIED }] }) }));
+    const api = grpcMembership(config(server.url), () => {});
+    await expect(api.listRejectedSignups(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+
+  it('reopens by the request id', async () => {
+    const seen: string[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        reopenSignup: (req) => {
+          seen.push(req.requestId);
+          return {};
+        },
+      }),
+    );
+    await grpcMembership(config(server.url), () => {}).reopenSignup(PERSON, ID);
+    expect(seen).toEqual([ID]);
+  });
+
+  it.each([
+    [Code.PermissionDenied, 'own'],
+    [Code.FailedPrecondition, 'closed'],
+    [Code.NotFound, 'closed'],
+    [Code.InvalidArgument, 'closed'],
+  ] as const)('says a refused reopening (%s) by its kind, %s, logged by call and code', async (code, reason) => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        reopenSignup: () => {
+          throw new ConnectError('no', code);
+        },
+      }),
+    );
+    const lines: string[] = [];
+    const error = await grpcMembership(config(server.url), (line) => lines.push(line)).reopenSignup(PERSON, ID).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DecisionRefused);
+    expect((error as DecisionRefused).reason).toBe(reason);
+    expect(lines.map((l) => (JSON.parse(l) as { rpc: string }).rpc)).toEqual(['ReopenSignup']);
+  });
+
+  it('asks to sign in again on a refused token, and is unavailable when the API is set up wrongly', async () => {
+    const refuse = () => {
+      throw new ConnectError('expired', Code.Unauthenticated);
+    };
+    const server = await grpcServer((router) => router.service(MembershipService, { listRejectedSignups: refuse, reopenSignup: refuse }));
+    const api = grpcMembership(config(server.url), () => {});
+    await expect(api.listRejectedSignups(PERSON)).rejects.toBeInstanceOf(MembershipSignInAgain);
+    await expect(api.reopenSignup(PERSON, ID)).rejects.toBeInstanceOf(MembershipSignInAgain);
+    await expect(unavailableMembership().listRejectedSignups(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(unavailableMembership().reopenSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
   });
 });
 

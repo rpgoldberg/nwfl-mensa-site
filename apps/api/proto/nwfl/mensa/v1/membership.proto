@@ -61,6 +61,18 @@ message SignupRequest {
   AccountRoute route = 7;
 }
 
+// A rejected sign-up that can still be reopened, as the Admin or the Membership Officer sees it:
+// never the number or the last name, which the rejection erased.
+message RejectedSignup {
+  string request_id = 1;
+  string display_name = 2;
+  // As the member typed it.
+  string email = 3;
+  Verification verification = 4;
+  Date verified_on = 5;
+  google.protobuf.Timestamp rejected_at = 6;
+}
+
 // An account as the approvers see it, for removal and the yearly re-check.
 message Member {
   // The Authentik subject.
@@ -110,6 +122,17 @@ service MembershipService {
   // with the verifier's other-group result as its verification when there is
   // one, and the grantor's attestation otherwise.
   rpc GrantAffiliate(GrantAffiliateRequest) returns (GrantAffiliateResponse);
+  // REOPEN: the Admin or the Membership Officer only (nwfl-admin, nwfl-office-membership). The
+  // rejected sign-ups that can be reopened (the account the rejection closed is still closed),
+  // newest first, never the caller's own.
+  rpc ListRejectedSignups(ListRejectedSignupsRequest) returns (ListRejectedSignupsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // REOPEN: the Admin or the Membership Officer only, never on their own sign-up. Returns the
+  // person to where they can sign up again: the account the rejection closed is gone, and the
+  // rejected sign-up stays, marked reopened by whom and when. Nothing erased comes back. A sign-up
+  // that is not rejected, already reopened, or whose account is no longer closed is refused.
+  rpc ReopenSignup(ReopenSignupRequest) returns (ReopenSignupResponse);
 }
 
 message SubmitSignupRequest {
@@ -183,3 +206,15 @@ message GrantAffiliateRequest {
 message GrantAffiliateResponse {
   MemberAccount account = 1;
 }
+
+message ListRejectedSignupsRequest {}
+
+message ListRejectedSignupsResponse {
+  repeated RejectedSignup requests = 1;
+}
+
+message ReopenSignupRequest {
+  string request_id = 1;
+}
+
+message ReopenSignupResponse {}

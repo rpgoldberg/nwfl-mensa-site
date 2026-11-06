@@ -4,7 +4,8 @@
 // fix 1): anyone not signed in is sent to sign in first; anyone else signed in is told it is not
 // theirs (403). Each person sees only the links for what they may do: the approval setting for the
 // Admin alone (whether or not in the officers group: the switch serves them); the sign-ups waiting
-// for approval for the membership approvers and the Admin (W-SIGNUP D4).
+// for approval for the membership approvers and the Admin (W-SIGNUP D4), and the rejections alone for
+// the Membership Officer's seat without the approvers group (REOPEN).
 // SOLO-APPROVE: an officer sees the one-approver note here while the Admin has set a scope to one
 // approver (read from the API with the officer's own token, src/lib/api/officer.ts), and a plain line
 // when it could not be read, with Sign in again and the password note (S2) when the sign-in ran out.
@@ -16,15 +17,16 @@ import Base from '../../layouts/Base.astro';
 import { type Setting, isAdmin, notesFor } from '../../lib/approval-rules';
 import { OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
 import { runtimeDeps } from '../../lib/auth/flow';
-import { isMembershipApprover } from '../../lib/signup';
+import { signUpsLink } from '../../lib/signup';
 import { page } from '../../lib/site';
 
 const session = Astro.locals.session;
 if (!session) return Astro.redirect('/sign-in?return=%2Fofficer-area', 303);
 const admitted = officerAreaFor(session);
 const admin = isAdmin(session);
+const signUps = signUpsLink(session);
 const links = [
-  ...(isMembershipApprover(session) ? [{ href: '/officer-area/sign-ups', text: 'Sign-ups to approve' }] : []),
+  ...(signUps !== undefined ? [{ href: '/officer-area/sign-ups', text: signUps }] : []),
   ...(admin ? [{ href: '/officer-area/approval-rules', text: 'Approval setting' }] : []),
 ];
 if (!admitted) Astro.response.status = 403;

@@ -12,7 +12,9 @@
 //                               switches the approval rule (SOLO-APPROVE)
 //   nwfl-webmaster              Webmaster: approves content
 //   nwfl-officers               every officeholder: reads drafts
-//   nwfl-office-<slug>          holds that seat: writes as that office
+//   nwfl-office-<slug>          holds that seat: writes as that office; the
+//                               Membership Officer's seat (nwfl-office-membership)
+//                               and the Admin alone reopen a rejected sign-up (REOPEN)
 //   nwfl-membership-approvers   approves sign-ups
 //   nwfl-affiliates, nwfl-role-<x>  affiliated officers (the RVC)
 //
@@ -91,6 +93,19 @@ export function requireContentApprover(caller: Caller): void {
 export function requireMembershipApprover(caller: Caller): void {
   const roles = requireUser(caller);
   if (!roles.membershipApprover && !roles.admin) throw denied();
+}
+
+/** The Membership Officer's seat: the office slug its holders' nwfl-office-<slug> group carries. */
+export const MEMBERSHIP_OFFICE = 'membership';
+
+/**
+ * REOPEN: who may reopen a rejected sign-up: the Admin, or the holder of the Membership Officer's
+ * seat. Not every membership approver: approving is a group of its own (nwfl-membership-approvers),
+ * which a person can hold without the seat.
+ */
+export function requireSignupReopener(caller: Caller): void {
+  const roles = requireUser(caller);
+  if (!roles.admin && !roles.offices.includes(MEMBERSHIP_OFFICE)) throw denied();
 }
 
 /** Who may grant affiliate standing (R33): the Admin or the Webmaster. */

@@ -181,6 +181,17 @@ by the handler for a precise answer, and by the database (`0007`).
   up; the freeze moves one to proof and pins the live version of each
   approved newsletter item in it.
 - Officers read drafts, ready items and each item's history.
+- **Reopening a rejected sign-up** (REOPEN, `src/membership/service.ts`): the
+  Admin or the Membership Officer (the `nwfl-office-membership` seat, not
+  every membership approver), never on their own sign-up, lists the
+  rejections that can be reopened and reopens one. The rejected row stays,
+  marked reopened by whom and when; the account the rejection closed is
+  deleted, so the person can sign up again. Nothing erased comes back, and
+  both steps are audited. Not rejected, already reopened, or an account no
+  longer closed is FAILED_PRECONDITION. Authentik is not touched: a rejection
+  changes no group or account there. The list holds the latest 50 rejections,
+  with no paging (`MAX_REJECTED_LISTED`); when it is full the site says
+  "Showing the latest 50", so an older one is never hidden without a word.
 
 ## Seeding the calendar and roster
 
@@ -772,7 +783,14 @@ The rules the database itself enforces:
   officers-only; an edition's hosted PDF is a public file of that edition;
 - a sign-up's membership number and last name are erased when the verifier
   reports and when an officer approves or rejects it; `affiliate` needs a
-  recorded grant.
+  recorded grant;
+- a decided sign-up keeps its decision (0009); only a rejected one can be
+  reopened, by whom and when recorded together, and a reopened row never
+  changes again (0026). A person has one sign-up at most that is not
+  reopened, and an account row is deleted only as a reopening deletes it: a
+  rejection's closed account (removed, never approved, granted or checked).
+  A sign-up row is never deleted: the app role holds no DELETE on it, and a
+  trigger refuses deleting a decided one for every role (0026).
 
 Accepted residual risks, with no code against them:
 
