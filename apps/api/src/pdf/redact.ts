@@ -60,7 +60,9 @@
 //   - the page has text drawn as a clip (render mode 4 to 7): PDFium's rewrite
 //     of the page would end the clip, and what it clipped would flood the page;
 //   - a content stream or a JPEG cannot be read, or a passage is still
-//     readable after (PDFium), or the gate finds one or cannot check a stream.
+//     readable after (PDFium), or the gate finds one or cannot check a stream;
+//   - a tiling pattern shows text (GLYPHMAP fix round 2, B1): PDFium reads no
+//     text in one, so no passage drawn there could be found or boxed.
 //
 // LINKS L3: then each approved link the request gives (by id, page, rect and
 // label, never its target) gets a fresh annotation pointing to the leaving
@@ -80,6 +82,8 @@
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { labelMarks, leakBreak } from './gate-labels.js';
+import { patternTextBreak } from './gate-rules.js';
+import { namedBreak } from './glyph-names.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
 import type { BoxKind } from './labels.js';
 import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-annots.js';
@@ -308,6 +312,11 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
   if (names !== null) return { kind: 'refused', reason: names };
   const labels = await labelMarks(pdf);
   if (typeof labels === 'string') return { kind: 'refused', reason: labels };
-  const left = await leakBreak(pdf, labels, async (bytes) => (await verifyRedacted(bytes, quotes)) ?? (await checkCopy(bytes, quotes)));
-  return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes, kept } : { kind: 'refused', reason: left };
+  // And the text the glyph names draw, as the gate reads it (GLYPHMAP, glyph-names.ts).
+  const left = await leakBreak(pdf, labels, async (bytes) => (await verifyRedacted(bytes, quotes)) ?? (await namedBreak(bytes, quotes)) ?? (await checkCopy(bytes, quotes)));
+  if (left !== null) return { kind: 'refused', reason: left };
+  // Then no tiling pattern shows text: PDFium, which the engine matches with, reads none there (GLYPHMAP fix round 2,
+  // B1), so withheld text there that no reading above found is refused here.
+  const tiled = await patternTextBreak(pdf);
+  return tiled === null ? { kind: 'redacted', pdf, boxes: redacted.boxes, kept } : { kind: 'refused', reason: tiled };
 }

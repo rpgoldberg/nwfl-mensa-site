@@ -369,3 +369,38 @@ export function contentNames(stream: Uint8Array): string[] {
   }
   return names;
 }
+
+/** The bytes of an operator word that make it show text, for some reader: Tj, TJ, ' or " (pdf.js splits "BTTj" at Tj). */
+const SHOWS_TEXT = /Tj|TJ|['"]/;
+
+/**
+ * Whether a content stream shows text (GLYPHMAP fix round 2, B1): an operator word holding Tj, TJ, ' or ", read with
+ * the lexer above, so strings, hex strings, names, comments and an inline picture's data are skipped. A word that holds
+ * one among other bytes counts too, as pdf.js splits it there. A stream that cannot be read on is read up to there.
+ */
+export function showsText(stream: Uint8Array): boolean {
+  const s = Buffer.from(stream).toString('latin1');
+  let i = 0;
+  try {
+    while (i < s.length) {
+      const c = s[i] as string;
+      if (WHITESPACE.has(s.charCodeAt(i)) || c === '[' || c === ']' || c === ')' || c === '>') i += 1;
+      else if (c === '%') {
+        const eol = s.slice(i).search(/[\r\n]/);
+        i = eol < 0 ? s.length : i + eol;
+      } else if (c === '(') i = stringEnd(s, i);
+      else if (s.startsWith('<<', i)) i += 2;
+      else if (c === '<') i = hexEnd(s, i);
+      else if (c === '/') i = regularEnd(s, i + 1);
+      else {
+        const end = Math.max(regularEnd(s, i), i + 1);
+        const word = s.slice(i, end);
+        if (SHOWS_TEXT.test(word)) return true;
+        i = word === 'BI' ? inlineImageEnd(s, end) : end;
+      }
+    }
+  } catch {
+    // Unreadable from here on, as for contentNames: what follows is a string's or a picture's data.
+  }
+  return false;
+}
