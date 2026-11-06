@@ -4,11 +4,12 @@
 // keyed on the identity of every kind's dictionary walks each form again under every parent's
 // combination (36 s, and a V8 heap abort at n = 400, for a 20 KB file at n = 40). The walk now keys
 // kinds by what they hold and follows what a set of resources reaches once; and it reads at most
-// WALK_BUDGET resource entries a page: past them the page counts as reaching a picture (withheld
-// whole), which fails safe. Synthetic PDFs only; made-up content.
+// WALK_BUDGET resource entries a page, and FILE_WALK_BUDGET in all (1,000 pages that share one
+// dictionary of WALK_BUDGET entries took 51 s): past them a page counts as reaching a picture
+// (withheld whole), which fails safe. Synthetic PDFs only; made-up content.
 import { PDFDocument, PDFName, type PDFRef, StandardFonts } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
-import { WALK_BUDGET, patternPicturePages } from '../../src/pdf/link-guard.js';
+import { FILE_WALK_BUDGET, WALK_BUDGET, patternPicturePages } from '../../src/pdf/link-guard.js';
 
 /** Far more than the walk needs once bounded (milliseconds), far less than the unbounded walk took. */
 const BOUNDED_MS = 3000;
@@ -33,12 +34,17 @@ async function lattice(n: number, picture = false): Promise<Uint8Array> {
   return doc.save({ useObjectStreams: false });
 }
 
-/** A page whose XObject dictionary names one empty form `count` times: the walk reads each entry once, and nothing more. */
-async function fan(count: number): Promise<Uint8Array> {
+/**
+ * A page whose XObject dictionary names one empty form `count` times: the walk reads each entry once, and nothing more.
+ * With `pages`, that many pages share the one dictionary, and `bare` pages with no resource after them.
+ */
+async function fan(count: number, pages = 1, bare = 0): Promise<Uint8Array> {
   const doc = await PDFDocument.create({ updateMetadata: false });
   const ctx = doc.context;
   const form = ctx.register(ctx.stream('0 0 1 1 re f', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 1, 1], Resources: {} }));
-  doc.addPage([612, 792]).node.set(PDFName.of('Resources'), ctx.obj({ XObject: Object.fromEntries(Array.from({ length: count }, (_, i) => [`X${i}`, form])) }));
+  const shared = ctx.register(ctx.obj({ XObject: Object.fromEntries(Array.from({ length: count }, (_, i) => [`X${i}`, form])) }));
+  for (let n = 0; n < pages; n++) doc.addPage([612, 792]).node.set(PDFName.of('Resources'), shared);
+  for (let n = 0; n < bare; n++) doc.addPage([612, 792]).node.set(PDFName.of('Resources'), ctx.obj({}));
   return doc.save({ useObjectStreams: false });
 }
 
@@ -133,4 +139,18 @@ describe('D1: the pattern walk is bounded, and fails safe past its budget', () =
     expect(pages).toEqual([0]);
     expect(ms).toBeLessThan(BOUNDED_MS);
   }, 120_000);
+
+  it('reads FILE_WALK_BUDGET entries in all, then withholds each page that needs one more; a page that needs none is read', async () => {
+    const full = FILE_WALK_BUDGET / WALK_BUDGET;
+    expect(full).toBe(16);
+    // Sixteen pages read their WALK_BUDGET each, the file's budget exactly; the next four need one more; the last none.
+    const { pages } = await timed(await fan(WALK_BUDGET, full + 4, 1));
+    expect(pages).toEqual([16, 17, 18, 19]);
+  }, 120_000);
+
+  it('walks 1,000 pages that share one dictionary of WALK_BUDGET entries in bounded time, withholding those past the file budget', async () => {
+    const { pages, ms } = await timed(await fan(WALK_BUDGET, 1000));
+    expect(pages).toEqual(Array.from({ length: 1000 - 16 }, (_, i) => 16 + i));
+    expect(ms).toBeLessThan(BOUNDED_MS);
+  }, 300_000);
 });

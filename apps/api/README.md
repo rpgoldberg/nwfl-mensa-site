@@ -270,11 +270,12 @@ forms', patterns', soft masks', Type 3 glyphs' or annotation appearances')
 reach a tiling pattern or a soft mask's group that draws a picture XObject
 or an inline picture, itself or through forms or patterns, keeps no link at
 all. So does a page whose walk needs more than `WALK_BUDGET` (65,536)
-resource reads, which fails safe. A picture a Type 3 glyph draws outside a
-pattern or a soft mask is not counted. A link is dropped too when its target
-holds a quote the audience withholds (`targetHolds`) or its rect rounds to
-under a hundredth of a point. The gate accepts only that shape and refuses
-the whole copy when
+resource reads, and every page that needs a read once the file has spent
+`FILE_WALK_BUDGET` (16 times that): both fail safe. A picture a Type 3 glyph
+draws outside a pattern or a soft mask is not counted. A link is dropped too
+when its target holds a quote the audience withholds (`targetHolds`) or its
+rect rounds to under a hundredth of a point. The gate accepts only that
+shape and refuses the whole copy when
 pdf.js reads other text under a link than the original's, or a kept link
 meets what the link guard (`src/pdf/link-guard.ts`: PDFium, and pdf-lib for
 the patterns) reads as withheld. A copy refused with its links, or whose

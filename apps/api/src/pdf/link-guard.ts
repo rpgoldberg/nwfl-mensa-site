@@ -29,8 +29,8 @@
 //     the original with pdf-lib; nothing else of a pattern is read (a
 //     shading pattern paints no picture). A picture a Type 3 glyph draws
 //     outside a pattern or a soft mask is not counted here. The walk reads
-//     at most WALK_BUDGET resource entries a page; past them the page counts
-//     as reaching a picture (fix round 3, D1).
+//     at most WALK_BUDGET resource entries a page, and FILE_WALK_BUDGET in
+//     all; past them a page counts as reaching a picture (fix round 3, D1).
 //
 // Blank glyphs and the ones PDFium makes up (spaces and line ends it reads
 // between words) are not text, so they are not counted. A glyph is the
@@ -84,6 +84,13 @@ type Kinds = ReadonlyMap<(typeof KINDS)[number], PDFDict>;
  * included); a page of 200 forms that each read the page's 200-entry dictionary again is read in full.
  */
 export const WALK_BUDGET = 65_536;
+
+/**
+ * How many the walk reads for the whole file (D1): pages that share one costly dictionary are each walked again,
+ * and 1,000 of them at WALK_BUDGET took 51 s. Past it every page that needs one more read counts as reaching a
+ * picture; a page that needs none (no resources, no annotation) is walked in full. Sixteen pages at WALK_BUDGET.
+ */
+export const FILE_WALK_BUDGET = 16 * WALK_BUDGET;
 
 /** Something that draws, with the resources it reads (its own, else its parent's, kind by kind), and whether PDFium lists no object it draws (inside a tiling pattern or a soft mask's group). */
 interface Drawer {
@@ -160,10 +167,11 @@ export async function patternPicturePages(pdf: Uint8Array): Promise<Set<number>>
     }
     return out;
   };
-  /** Whether a page reaches a picture PDFium lists no object of; true too past WALK_BUDGET (D1). */
+  let total = 0;
+  /** Whether a page reaches a picture PDFium lists no object of; true too past WALK_BUDGET, or FILE_WALK_BUDGET (D1). */
   const reaches = (node: PDFPageLeaf): boolean => {
     let read = 0;
-    const spent = (): boolean => ++read > WALK_BUDGET;
+    const spent = (): boolean => ++read > WALK_BUDGET || ++total > FILE_WALK_BUDGET;
     const own = node.Resources();
     const pageKinds = kindsOf(own, new Map());
     const pending: Drawer[] = [{ owner: node, resources: own, contents: [], parent: new Map(), unlisted: false }];
