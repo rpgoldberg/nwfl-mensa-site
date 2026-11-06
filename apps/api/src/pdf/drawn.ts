@@ -43,8 +43,9 @@
 // when their glyphs are the label. drawnBreak is handed each page's labels
 // (gate-labels.ts, once they pass): a string pdf.js shows whose glyphs
 // (fontChar) and whose text (unicode) both spell one of them, exactly, is
-// read as spaces, once per label. A label whose font draws other glyphs than
-// its codes read as is read as drawn.
+// read as spaces, once per label. A run whose glyphs or text do not spell a
+// label gets no such exemption: the copy is then judged by the ordinary
+// checks, as any other text is (round 2, R2-2: they have their own limits).
 // ============================================================================
 import type { PDFPageProxy } from 'pdfjs-dist/types/src/display/api.js';
 import { type PdfJs, loadPdfJs, watchedReading } from './gate.js';

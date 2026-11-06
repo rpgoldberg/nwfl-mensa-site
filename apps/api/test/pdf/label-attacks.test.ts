@@ -6,7 +6,7 @@
 import { type PDFContext, PDFDict, PDFDocument, PDFName, type PDFObject, PDFRawStream, PDFRef, decodePDFRawStream } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { type PageRef, drawnBreak } from '../../src/pdf/drawn.js';
-import { type PlacedLabel, labelMarks, pageLabels, unlabelled } from '../../src/pdf/gate-labels.js';
+import { type PlacedLabel, labelMarks, opFontName, pageLabels, unlabelled } from '../../src/pdf/gate-labels.js';
 import { gateReply, gateVerdict } from '../../src/pdf/gate-rules.js';
 import { BLUR_MAX, type ImageAction } from '../../src/pdf/images.js';
 import type { Box, PageChar } from '../../src/pdf/match.js';
@@ -187,6 +187,62 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
       (doc) => (doc.getPage(0).node.Resources()?.lookup(PDFName.of('Font'), PDFDict) as PDFDict).set(PDFName.of('FXL9'), drawsOther(doc.context, 'Members Only', 'Varvara Lund')),
     );
     expect(await unlabelled(other, marks)).toBeInstanceOf(Uint8Array);
+  });
+
+  // Round 2, R2-1: pdf.js and PDFium decode a name's #XX in either case, pdf-lib's PDFName.of only in upper case. So
+  // "/FX#4a9" in the op names FXJ9 (here a lying font) to the readers, but to pdf-lib a key that holds PDFium's font.
+  const ESCAPES: ReadonlyArray<[string, string]> = [
+    ['a lower-case #XX escape, which pdf-lib reads apart from the readers', 'FX#4a9'],
+    ['an upper-case #XX escape', 'FX#4A9'],
+  ];
+
+  it.each(ESCAPES)('(a) finds no label whose op names its font with %s: PDFium writes FXF<n> (R2-1)', async (_name, escaped) => {
+    const original = await twoMarksFixture();
+    const { pdf } = copyOf(await redactPdf(original, { quotes: ['Quillon'], membersWithhold: [true], redactsAny: true }));
+    const marks = await marksOf(pdf);
+    const bad = await patched(
+      pdf,
+      (content) => content.replace(LABEL_OP, (op, _x, _y, name: string) => op.replace(`/${name} `, `/${escaped} `)),
+      (doc) => {
+        const fonts = doc.getPage(0).node.Resources()?.lookup(PDFName.of('Font'), PDFDict) as PDFDict;
+        fonts.set(PDFName.of('FX#4a9'), doc.context.register(doc.context.obj({ ...PDFIUM_HELVETICA })));
+        fonts.set(PDFName.of('FXJ9'), drawsOther(doc.context, 'Private', 'Quillon'));
+      },
+    );
+    expect(Buffer.from(bad).toString('latin1')).toContain('/FX#234a9');
+    // PDFium still reads the label, in its box; pdf.js draws the quote under it.
+    expect(await labelMarks(bad)).toEqual(marks);
+    expect.soft(await unlabelled(bad, marks)).toBeNull();
+    expect.soft(await verdictOf(bad, original, ['Quillon'])).toEqual({ pass: false, code: 'withheld' });
+    expect.soft((await gateReply({ copy: bad, original, quotes: ['Quillon'], image: 'show' })).verdict).toEqual({ pass: false, code: 'withheld' });
+  });
+
+  it('(a) finds no label whose op has any #XX escape, even one that names PDFium\'s own font (R2-1)', async () => {
+    const { pdf } = await quillon();
+    const marks = await marksOf(pdf);
+    // "/FX#46" is FXF to every reader, and FXF holds PDFium's own font: honest, but not as PDFium writes it.
+    const escaped = await patched(
+      pdf,
+      (content) => content.replace(LABEL_OP, (op, _x, _y, name: string) => op.replace(`/${name} `, '/FX#46 ')),
+      (doc) => (doc.getPage(0).node.Resources()?.lookup(PDFName.of('Font'), PDFDict) as PDFDict).set(PDFName.of('FXF'), doc.context.register(doc.context.obj({ ...PDFIUM_HELVETICA }))),
+    );
+    expect(await labelMarks(escaped)).toEqual(marks);
+    expect(await unlabelled(escaped, marks)).toBeNull();
+    // The same font under a plain name is a label's.
+    const plain = await patched(
+      pdf,
+      (content) => content.replace(LABEL_OP, (op, _x, _y, name: string) => op.replace(`/${name} `, '/FXF ')),
+      (doc) => (doc.getPage(0).node.Resources()?.lookup(PDFName.of('Font'), PDFDict) as PDFDict).set(PDFName.of('FXF'), doc.context.register(doc.context.obj({ ...PDFIUM_HELVETICA }))),
+    );
+    expect(await unlabelled(plain, marks)).toBeInstanceOf(Uint8Array);
+  });
+
+  it('(a) looks a label\'s font up by its name decoded as the parser decodes one, #XX in either case (R2-1)', () => {
+    expect(opFontName('FXF1')).toBe(PDFName.of('FXF1'));
+    expect(opFontName('FX#4a9')).toBe(PDFName.of('FXJ9'));
+    expect(opFontName('FX#4A9')).toBe(PDFName.of('FXJ9'));
+    expect(opFontName('F#2f#2F')).toBe(PDFName.of('F//'));
+    expect(opFontName('F#4')).toBe(PDFName.of('F#4'));
   });
 });
 

@@ -28,7 +28,9 @@
 // own content, each label's string in the very bytes PDFium writes for a
 // label at that label's place, as many as PDFium read there and no more, is
 // turned to spaces. Nothing else of the copy changes. It is taken out only
-// when the font that op names, in the page's resources, is exactly the one
+// when that op names its font in letters and digits, as PDFium does (no #XX
+// escape, which pdf-lib and the readers decode apart: round 2, R2-1), and the
+// font that name finds in the page's resources is exactly the one
 // PDFium writes for a label (/Type /Font /Subtype /Type1 /BaseFont /Helvetica
 // /Encoding /WinAnsiEncoding, and no other key: no /Differences, /ToUnicode,
 // /Widths or /FontDescriptor, nothing embedded), so its codes draw the glyphs
@@ -120,8 +122,12 @@ export async function labelMarks(pdf: Uint8Array): Promise<PlacedLabel[][] | str
   }
 }
 
-/** A label as PDFium writes it (pdfium.ts drawBoxes, then GenerateContent): its place, its font's name and its size, and its text in hex. */
-const LABEL_OP = /q 1 1 1 rg 0 G 1 0 0 1 (-?\d*\.?\d+) (-?\d*\.?\d+) cm BT 1 0 0 1 0 0 Tm \/([!-~]+) \d*\.?\d+ Tf 0 Tr <([0-9A-F]+)> Tj ET Q/g;
+/**
+ * A label as PDFium writes it (pdfium.ts drawBoxes, then GenerateContent): its place, its font's name and its size,
+ * and its text in hex. PDFium names the font FXF<n>, so the name is letters and digits only: an op whose name has a
+ * #XX escape, which the readers and pdf-lib decode apart (round 2, R2-1), is not a label's.
+ */
+const LABEL_OP = /q 1 1 1 rg 0 G 1 0 0 1 (-?\d*\.?\d+) (-?\d*\.?\d+) cm BT 1 0 0 1 0 0 Tm \/([A-Za-z0-9]+) \d*\.?\d+ Tf 0 Tr <([0-9A-F]+)> Tj ET Q/g;
 const hexOf = (text: string): string => Buffer.from(text, 'latin1').toString('hex').toUpperCase();
 
 /** A page's content streams, each by its reference. */
@@ -139,10 +145,19 @@ const LABEL_FONT: ReadonlyArray<[string, string]> = [
   ['Encoding', 'WinAnsiEncoding'],
 ];
 
+/**
+ * A content op's name operand as pdf-lib's parser reads the same name in a dictionary: each #XX decoded in either
+ * case, as pdf.js and PDFium decode it, then PDFName.of. PDFName.of alone decodes only upper-case #XX (R2-1). LABEL_OP
+ * admits no '#', so for a label this changes nothing; it keeps the lookup right if that ever changes.
+ */
+export function opFontName(name: string): PDFName {
+  return PDFName.of(name.replace(/#([0-9A-Fa-f]{2})/g, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16))));
+}
+
 /** Whether `name` in these fonts is exactly the font PDFium writes for a label (LABEL_FONT, each value a direct name, and no other key). */
 function labelFont(doc: PDFDocument, fonts: PDFObject | undefined, name: string): boolean {
   const list = doc.context.lookup(fonts);
-  const font = list instanceof PDFDict ? doc.context.lookup(list.get(PDFName.of(name))) : undefined;
+  const font = list instanceof PDFDict ? doc.context.lookup(list.get(opFontName(name))) : undefined;
   if (!(font instanceof PDFDict) || font.keys().length !== LABEL_FONT.length) return false;
   return LABEL_FONT.every(([key, value]) => {
     const found = font.get(PDFName.of(key));

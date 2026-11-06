@@ -337,14 +337,17 @@ being there; the leak checks read it as before. No label's own text counts
 as withheld text: a leak check that finds a quote is run once more on the
 copy with exactly those labels' strings turned to spaces, each in the very
 bytes PDFium writes for a label at that label's place, as many as PDFium
-read and no more, and only when the font that label names is exactly
-PDFium's own (non-embedded Helvetica, `/WinAnsiEncoding`, no other key: no
+read and no more, and only when the label's op names its font in letters
+and digits, as PDFium does, and that font is exactly PDFium's own
+(non-embedded Helvetica, `/WinAnsiEncoding`, no other key: no
 `/Differences`, `/ToUnicode`, `/Widths` or `/FontDescriptor`) and its
 content stream is plain `/FlateDecode`. The glyph check reruns on the copy
 itself and skips only text whose drawn glyphs and text both spell a label.
 So a passage that is itself `Private` gets a copy, while the same word
-anywhere outside a box, or a label whose font draws other glyphs than its
-codes read as (BOXLABEL fix round 1, F1), is still refused (`withheld`).
+anywhere outside a box is still refused (`withheld`). A label that fails
+these tests, such as one whose font draws other glyphs than its codes read
+as (BOXLABEL fix round 1, F1), loses the exemption, and the copy is judged
+by the ordinary checks.
 
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 
