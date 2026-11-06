@@ -53,6 +53,7 @@
 // textMatches reads a plain string the same ways: the output gate's matcher.
 // ============================================================================
 import { probeFolded, quoteProbe, quoteSpans } from '../redaction/render.js';
+import { isUnreadable } from './unreadable.js';
 
 export interface Box {
   left: number;
@@ -197,6 +198,17 @@ function collapsed(reading: Reading): Reading {
 export function matchedChars(chars: readonly PageChar[], quotes: readonly string[]): Set<number> {
   const out = new Set<number>();
   if (quotes.length === 0) return out;
+  collect(chars, quotes, out);
+  // LIGATURE: a glyph with no text (U+FFFD, private use) may be a ligature of a quote, read so a second time.
+  if (chars.some((c) => isUnreadable(c.text))) {
+    const variants = quotes.flatMap(ligatureVariants);
+    if (variants.length > 0) collect(chars.map((c) => (isUnreadable(c.text) ? { ...c, text: STAND_IN } : c)), variants, out);
+  }
+  return out;
+}
+
+/** Adds the page characters any quote covers, in any reading, to `out`. */
+function collect(chars: readonly PageChar[], quotes: readonly string[], out: Set<number>): void {
   const joined = read(chars, false);
   const readings: Array<[Reading, boolean]> = [
     [joined, true],
@@ -209,6 +221,29 @@ export function matchedChars(chars: readonly PageChar[], quotes: readonly string
       for (let u = start; u < end; u++) for (const i of reading.source[u] as number[]) out.add(i);
     }
   }
+}
+
+/** The ligatures a glyph with no text may stand for in a quote (LIGATURE), longest first. */
+const LIGATURES = ['ffi', 'ffl', 'ff', 'fi', 'fl', 'st', 'ct'];
+/** The letter such a glyph reads as, in a quote's ligature's place too: a letter, so word edges hold, that no folded text is or looks like. */
+const STAND_IN = '\uA7FF';
+/** The most readings of one quote with its ligatures stood in for (a quote with more is still refused by readThrough, unreadable.ts). */
+const MAX_VARIANTS = 64;
+
+/** The quote with one or more of its ligatures, in each way they can be taken, read as STAND_IN. */
+function ligatureVariants(quote: string): string[] {
+  const lower = quote.toLowerCase();
+  const out: string[] = [];
+  const walk = (at: number, built: string, stood: boolean): void => {
+    if (out.length >= MAX_VARIANTS) return;
+    if (at === lower.length) {
+      if (stood) out.push(built);
+      return;
+    }
+    for (const ligature of LIGATURES) if (lower.startsWith(ligature, at)) walk(at + ligature.length, built + STAND_IN, true);
+    walk(at + 1, built + (lower[at] as string), stood);
+  };
+  walk(0, '', false);
   return out;
 }
 

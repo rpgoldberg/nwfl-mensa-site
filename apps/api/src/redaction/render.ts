@@ -270,6 +270,12 @@ export function quoteProbe(quote: string): RegExp | null {
   return words === null ? null : new RegExp(words.join('').split('').map(lookalikes).join('[^\\p{L}\\p{N}]*'), 'v');
 }
 
+/** The quote's folded letters and digits in order, each a test of one folded character with its look-alikes (LIGATURE, unreadable.ts); null when it has none. */
+export function quoteLetters(quote: string): RegExp[] | null {
+  const words = foldedText(quote).match(TOKEN);
+  return words === null ? null : [...words.join('')].map((char) => new RegExp(`^${lookalikes(char)}$`, 'v'));
+}
+
 /** Text folded as fold does, but whole and natively (fast on megabytes), with its spaces taken out: what quoteProbe tests. */
 export function probeFolded(value: string): string {
   let text = value;

@@ -33,6 +33,9 @@
 //     SCAN_SHARE of what it draws: a scan, whose words cannot be found, so
 //     cannot be checked, whenever the audience redacts anything;
 //   - a page has characters with no Unicode value: its text cannot be checked;
+//   - (LIGATURE, unreadable.ts) a glyph read as no text (U+FFFD, private use) is
+//     left in the copy where, read as up to its reach of letters, it could finish
+//     a quote; one that stands for a ligature of a quote is boxed with it;
 //   - a passage has no position, or it or its glyphs' ink lies over a picture
 //     (removing the text would leave the picture's pixels under the box);
 //   - a withheld glyph is still on the page after removal, even one no whole
@@ -85,6 +88,7 @@ import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, h
 import { nameBreak } from './pdf-structure.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
+import { charUnits, readThrough } from './unreadable.js';
 
 export interface RedactRequest {
   /** The marked passages this audience's policy redacts. */
@@ -248,8 +252,13 @@ export async function verifyRedacted(pdf: Uint8Array, quotes: readonly string[])
   if (doc === null) return UNOPENABLE;
   try {
     for (let index = 0; index < doc.pageCount; index++) {
-      const left = doc.page(index, (page) => matchedChars(page.chars().chars, quotes).size);
-      if (left > 0) return `page ${index + 1}: withheld text is still readable after removal`;
+      const left = doc.page(index, (page) => {
+        const { chars } = page.chars();
+        return matchedChars(chars, quotes).size > 0 ? 'readable' : readThrough(charUnits(chars), quotes) ? 'unreadable' : null;
+      });
+      if (left === 'readable') return `page ${index + 1}: withheld text is still readable after removal`;
+      // LIGATURE (unreadable.ts): a glyph with no text left where, read as letters, it could finish a quote.
+      if (left === 'unreadable') return `page ${index + 1} has text that cannot be read where a withheld passage may be`;
     }
     return null;
   } finally {

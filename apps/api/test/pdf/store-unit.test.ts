@@ -26,7 +26,11 @@ describe('ENGINE_VERSION', () => {
   });
 
   it('names the labels\' revision (BOXLABEL), so every copy labelled "withheld" is made again', () => {
-    expect(ENGINE_VERSION).toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1');
+    expect(ENGINE_VERSION.split('+')).toContain('labels-1');
+  });
+
+  it('names the ligatures\' revision (LIGATURE), so a copy that showed a quote drawn with an unreadable glyph is made again', () => {
+    expect(ENGINE_VERSION).toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1+ligature-1');
   });
 });
 

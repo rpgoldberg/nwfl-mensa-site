@@ -52,10 +52,11 @@ type Query = Pick<Db, 'query'>;
 /**
  * The engine libraries and the gate's and the boxes' revisions: a new one changes every key, so every
  * copy is made again (box-exact: REDACT-LOOK's exact-fit boxes; links-1: LINKS L3's link annotations;
- * labels-1: BOXLABEL's "Members Only", "Mbrs Only" and "Private" in place of "withheld").
+ * labels-1: BOXLABEL's "Members Only", "Mbrs Only" and "Private" in place of "withheld"; ligature-1:
+ * LIGATURE's boxes over a quote drawn with a glyph that reads U+FFFD, a copy that showed one before).
  * The ledger reports an older row's engine as changed rather than re-render it (ledger.ts fileVerdict).
  */
-export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1';
+export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1+ligature-1';
 export { DEFAULT_LINK_ORIGIN, linkOrigin };
 /** R11: a PDF original is at most 10 MiB. */
 export const MAX_ORIGINAL_BYTES = 10 * 1024 * 1024;
