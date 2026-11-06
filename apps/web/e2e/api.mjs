@@ -38,7 +38,7 @@ import { clone, create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
-import { PUBLIC_ISSUE_PDF, membersIssuePdf } from './synthetic-pdf.mjs';
+import { LONG_ID, LONG_PAGES, ORIGINAL_ID, ORIGINAL_PDF, PUBLIC_ISSUE_PDF, longPdf, membersIssuePdf } from './synthetic-pdf.mjs';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
@@ -287,6 +287,9 @@ const MEMBERS_PDF = Buffer.concat([Buffer.from('%PDF-1.4\n% members copy\n', 'la
 // (e2e/synthetic-pdf.mjs), for the reader at /read/<id>; every other file stays the blank page.
 const NEWEST = /** @type {(typeof NEWSLETTER)[number]} */ (NEWSLETTER[0]);
 const NEWEST_MEMBERS_PDF = membersIssuePdf('% members copy');
+// PDFVIEW fix 1: an original with outside links of every kind, served to an officer only (B1), and a
+// file of 5000 pages, served to anyone (S1). Neither is listed anywhere; only /read/<id> opens them.
+const LONG_PDF = longPdf(LONG_PAGES);
 
 // A14: the newsletter's articles, as in e2e/stand-in.ts (ARTICLES). A public article with a members
 // passage and a members PDF, a members article and an officers article.
@@ -604,6 +607,12 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     // A public file's bytes, and a members copy for a member; anything else is not found, as the API answers a withheld file.
     readFile: async function* (req, ctx) {
       const audience = await audienceOf(ctx);
+      const extra = issues && req.fileId === LONG_ID ? LONG_PDF : issues && audience === 'officers' && req.fileId === ORIGINAL_ID ? ORIGINAL_PDF : undefined;
+      if (extra) {
+        yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(extra.length) } } };
+        yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(extra) } };
+        return;
+      }
       const members = (audience === 'members' || audience === 'officers') && MEMBERS_PDFS.has(req.fileId);
       if (!issues || (!PUBLIC_PDFS.has(req.fileId) && req.fileId !== ARTICLES.open.publicPdf && !members)) throw new ConnectError('file not found', Code.NotFound);
       const bytes = members ? (req.fileId === NEWEST.membersPdf ? NEWEST_MEMBERS_PDF : MEMBERS_PDF) : req.fileId === NEWEST.publicPdf ? PUBLIC_ISSUE_PDF : PDF;

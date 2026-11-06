@@ -1,5 +1,5 @@
 // PDFVIEW: /read/<id>, an issue read inside the site (src/pages/read/[id].astro,
-// public/scripts/reader.js). The page never chooses a copy: the browser fetches
+// public/scripts/viewer.js). The page never chooses a copy: the browser fetches
 // the same-origin /documents/<id>.pdf with the reader's cookies, and the site
 // serves whatever copy the API gives that reader (src/lib/files.ts). Here the
 // page only learns, from the file's head and never its bytes, whether the

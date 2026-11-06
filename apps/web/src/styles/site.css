@@ -987,7 +987,12 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 
 /* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). The bar is content, so
    it takes the reader's text size and theme; it wraps on a phone, and stays at the top while reading
-   unless, on a narrow phone at the largest sizes, it would take too much of the screen. */
+   only where it leaves room: while it takes at most a third of the window. The script measures it as
+   the reader opens the issue, turns the phone, resizes the window or picks another text size, and
+   otherwise sets .viewer--unpinned, so the bar scrolls away with the page and a page gone to stops at
+   the window's top (--viewer-bar 0). The media query does the same without waiting for the script
+   where, at the two largest text sizes, the bar always takes more than that (measured: at 140 % it is
+   at least 172 px up to 1280 px wide, and 329 px below 812): a narrow window, and a phone held sideways. */
 .viewer-other { margin: var(--space-4) 0; }
 .viewer { margin: var(--space-4) 0; }
 .viewer-bar {
@@ -1003,10 +1008,11 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
   border-radius: var(--radius);
 }
 .viewer-bar[hidden], .viewer-pages[hidden] { display: none; }
-@media (max-width: 599px) {
+@media (max-width: 599px), (max-width: 959px) and (max-height: 499px) {
   html[data-size="140"] .viewer-bar, html[data-size="175"] .viewer-bar { position: static; }
   html[data-size="140"] .viewer-page, html[data-size="175"] .viewer-page { scroll-margin-top: var(--space-2); }
 }
+.viewer--unpinned .viewer-bar { position: static; }
 .viewer-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .viewer-bar .button { padding: 0 var(--space-3); }
 .viewer-bar .button[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); }

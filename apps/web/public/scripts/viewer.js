@@ -9,16 +9,23 @@
 // browser's own). A computer opens at Fit page, a phone at Fit width. Each page is a canvas for the eye
 // (hidden from screen readers), pdf.js's text layer over it for screen readers and selection, and its
 // links (the copy's link annotations, and nothing else from the annotation layer: no forms, no files,
-// no scripts). A link to /out/<id> goes to this site's leaving page in the same tab, whatever origin the
-// copy names; an original's own https or mail link stays as it is; anything else is no link. Pages are
-// drawn only as they come within a screen of the window, one at a time, and let go when they move
-// away, so a long issue does not exhaust a phone. "Loading page N" and the page reached are said
-// politely through the status line. Without this file the page says the reader needs JavaScript and
-// offers Open in another app and Download, which are always there.
+// no scripts). Only two kinds of link are ever made: an /out/<id> goes to this site's leaving page in
+// the same tab, whatever origin the copy names, and a place in the issue goes to its page. Every other
+// address is no link at all: https, http and mail links, and whatever pdf.js makes of a Launch, a GoToR
+// or a script's app.launchURL; an approved copy only ever carries /out links, and an original (as an
+// officer is served it) must not skip the leaving page. Pages are drawn only as they come within a
+// screen of the window, one at a time, and let go when they move away, so a long issue does not exhaust
+// a phone; a file of more than MAX_PAGES is not drawn at all, and the reader says it is too long to show
+// here. The bar stays at the top while reading only while it takes at most a third of the window (a
+// large text size on a phone held sideways would leave no room for the page); otherwise it scrolls away
+// with the page. "Loading page N" and the page reached are said politely through the status line.
+// Without this file the page says the reader needs JavaScript and offers Open in another app and
+// Download, which are always there.
 //
 // pdf.js options: no eval (isEvalSupported false; 6.4.299 has no eval path left, the option is kept for
-// a version that might), no WebAssembly (the CSP has no 'wasm-unsafe-eval'), no XFA forms, errors only
-// in the console. The worker is a same-origin module (CSP worker-src 'self'), so pdf.js needs no blob:.
+// a version that might), no WebAssembly (the CSP has no 'wasm-unsafe-eval'), no XFA forms, no decoded
+// image larger than MAX_IMAGE_PIXELS, errors only in the console. The worker is a same-origin module
+// (CSP worker-src 'self'), so pdf.js needs no blob:.
 
 export const CSS_UNITS = 96 / 72;
 export const ZOOMS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
@@ -33,6 +40,17 @@ const GAP = 16;
 
 export const OPENING = 'Opening the issue';
 export const FAILED = 'The issue could not be shown here. Use Open in another app, or Download.';
+/** The most pages drawn here: each is a box and a watched element, made at once as the file opens. */
+export const MAX_PAGES = 1000;
+export const TOO_LONG = 'This issue is too long to show here. You can open it in another app, or download it.';
+/**
+ * The largest image pdf.js decodes, in pixels; a larger one is left out of the drawing (Open in another
+ * app still shows it). 40 million: a 600 dpi scan of a whole Letter page (5100 x 6600, 33.7 million)
+ * still shows, while one picture costs at most about 160 MB decoded (4 bytes a pixel), which a phone
+ * survives one page at a time. pdf.js's default is no limit, so a crafted 60000 x 60000 image would ask
+ * for some 14 GB and take the tab down.
+ */
+export const MAX_IMAGE_PIXELS = 40_000_000;
 /** @param {number} n */
 export const loading = (n) => `Loading page ${n}`;
 /** @param {number} n */
@@ -40,6 +58,10 @@ const pageFailed = (n) => `Page ${n} could not be shown. Use Open in another app
 
 const FILE = /^\/documents\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.pdf$/;
 const LEAVING = /^\/out\/([a-z2-7]{26})$/;
+/** The only addresses a drawn link may keep: this site's leaving page, or a place in the issue. */
+const KEPT = /^(?:\/out\/[a-z2-7]{26}|#)$/;
+/** On the viewer while its bar is too tall to stay at the top: it scrolls with the page (site.css). */
+export const UNPINNED = 'viewer--unpinned';
 const EPSILON = 1e-6;
 
 /** @param {number} scale */
@@ -112,8 +134,9 @@ export function outputScale(ratio, width, height, max = MAX_PIXELS) {
 }
 
 /**
- * Where a link in the PDF goes from here: this site's leaving page for a copy's /out/<id> on any
- * origin, an https or mail link as it is, and nothing for anything else (a relative URL included).
+ * Where a link in the PDF goes from here: this site's leaving page for an /out/<id> on any origin, and
+ * nowhere for anything else. An https, http or mail link, or the address pdf.js makes of a Launch, a
+ * GoToR or app.launchURL, is no link, so nothing in a PDF reaches another site without the leaving page.
  *
  * @param {string} url
  */
@@ -125,8 +148,7 @@ export function linkHref(url) {
     return undefined;
   }
   const out = LEAVING.exec(parsed.pathname);
-  if (out && (parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.search === '' && parsed.hash === '') return `/out/${out[1]}`;
-  return parsed.protocol === 'https:' || parsed.protocol === 'mailto:' ? parsed.href : undefined;
+  return out && (parsed.protocol === 'https:' || parsed.protocol === 'http:') && parsed.search === '' && parsed.hash === '' ? `/out/${out[1]}` : undefined;
 }
 
 /**
@@ -157,6 +179,7 @@ export function sameOriginPath(url, origin) {
  * @typedef {{ querySelector(selector: string): any, createElement(tag: string): any, activeElement: unknown }} ViewerDocument
  * @typedef {{ devicePixelRatio: number, innerHeight: number, location: { hash: string, origin: string },
  *   matchMedia(query: string): { matches: boolean },
+ *   ResizeObserver?: new (callback: () => void) => { observe(el: any): void },
  *   IntersectionObserver: new (callback: (entries: { target: any, isIntersecting: boolean }[]) => void, options: { rootMargin: string }) => { observe(el: any): void },
  *   requestAnimationFrame(fn: () => void): unknown, scrollBy(x: number, y: number): void,
  *   addEventListener(type: string, listener: (event: Event) => void, options?: AddEventListenerOptions): void }} ViewerWindow
@@ -200,7 +223,17 @@ export async function wireViewer(doc, win, pdfjs) {
   let pdf;
   let size;
   try {
-    pdf = await pdfjs.getDocument({ url, isEvalSupported: false, useWasm: false, enableXfa: false, verbosity: 0 }).promise;
+    // useWasm false: the CSP has no 'wasm-unsafe-eval', so pdf.js uses its JavaScript decoders, and a
+    // page with JPEG 2000 or JBIG2 images may show those images poorly here (Open in another app and
+    // Download still have them as they are).
+    const task = pdfjs.getDocument({ url, isEvalSupported: false, useWasm: false, enableXfa: false, maxImageSize: MAX_IMAGE_PIXELS, verbosity: 0 });
+    pdf = await task.promise;
+    if (pdf.numPages > MAX_PAGES) {
+      // Let the file go: the worker keeps nothing of it.
+      void task.destroy().catch(() => undefined);
+      say(TOO_LONG);
+      return undefined;
+    }
     const first = await pdf.getPage(1);
     const base = first.getViewport({ scale: CSS_UNITS });
     size = { width: base.width, height: base.height };
@@ -221,8 +254,11 @@ export async function wireViewer(doc, win, pdfjs) {
   let current = 1;
   /** Where the reader is: a page, and how far down it the bar's edge is. */
   let anchor = { n: 1, frac: 0 };
-  const barBottom = () => bar.getBoundingClientRect().bottom;
-  const room = () => ({ width: ui['pages'].clientWidth, height: win.innerHeight - bar.offsetHeight - GAP });
+  /** Whether the bar stays at the top: only while it takes at most a third of the window. */
+  let pinned = true;
+  /** The top of what is left to read: under the bar while it shows, else the window's own top. */
+  const barBottom = () => Math.max(0, bar.getBoundingClientRect().bottom);
+  const room = () => ({ width: ui['pages'].clientWidth, height: win.innerHeight - (pinned ? bar.offsetHeight : 0) - GAP });
 
   /** @type {Page[]} */
   const pages = [];
@@ -308,7 +344,6 @@ export async function wireViewer(doc, win, pdfjs) {
       const href = linkHref(target);
       if (href === undefined) return;
       a.href = href;
-      if (!href.startsWith('/')) a.rel = 'noopener noreferrer';
     },
     getDestinationHash: () => '#',
     getAnchorUrl: () => '#',
@@ -362,7 +397,8 @@ export async function wireViewer(doc, win, pdfjs) {
       const byId = new Map(annotations.map((a) => [a.id, a]));
       let k = 0;
       for (const a of linkLayer.querySelectorAll('a')) {
-        if (!a.getAttribute('href') && !a.href) {
+        // However pdf.js came to give it, a link to anywhere but the leaving page or the issue is dropped.
+        if (!KEPT.test(a.getAttribute('href') ?? a.href)) {
           (a.closest('section') ?? a).remove();
           continue;
         }
@@ -387,8 +423,16 @@ export async function wireViewer(doc, win, pdfjs) {
     const shift = box.top + anchor.frac * box.height - barBottom();
     if (anchor.frac > 0 || shift < 0) win.scrollBy(0, shift);
   };
-  /** A page gone to stops below the bar (CSS scroll-margin-top), however many rows the bar wraps to. */
-  const fitBar = () => ui['pages'].style.setProperty('--viewer-bar', `${bar.offsetHeight}px`);
+  /**
+   * The bar stays at the top only while it takes at most a third of the window; a page gone to stops
+   * below it (CSS scroll-margin-top), however many rows it wraps to, or at the window's top once the bar
+   * scrolls with the page.
+   */
+  const fitBar = () => {
+    pinned = bar.offsetHeight <= win.innerHeight / 3;
+    root.classList.toggle(UNPINNED, !pinned);
+    ui['pages'].style.setProperty('--viewer-bar', `${pinned ? bar.offsetHeight : 0}px`);
+  };
 
   /** @param {number} next */
   const rescale = (next) => {
@@ -472,6 +516,8 @@ export async function wireViewer(doc, win, pdfjs) {
     { passive: true },
   );
   win.addEventListener('resize', () => win.requestAnimationFrame(fit));
+  // The bar changes size without the window when the reader picks another text size.
+  if (win.ResizeObserver) new win.ResizeObserver(() => win.requestAnimationFrame(fit)).observe(bar);
   win.addEventListener('hashchange', () => {
     const n = hashPage(win.location.hash, count);
     if (n !== undefined) goTo(n);
@@ -488,8 +534,8 @@ export async function wireViewer(doc, win, pdfjs) {
     },
     { rootMargin: NEAR },
   );
-  scale = fitScale(mode, size, room());
   fitBar();
+  scale = fitScale(mode, size, room());
   for (const page of pages) {
     lay(page);
     observer.observe(page.el);

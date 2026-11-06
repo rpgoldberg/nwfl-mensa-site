@@ -11,6 +11,7 @@ import { setPrefs } from './prefs';
 import { SIGN_IN_OFF_URL, SITE_URL } from './servers';
 import { signIn } from './signin';
 import { LINKS, NEWSLETTER } from './stand-in';
+import { LONG_ID, LONG_PAGES, ORIGINAL_ID, ORIGINAL_OUT, OUTSIDE_LINKS, linkRect } from './synthetic-pdf.mjs';
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
 const [newest, older] = NEWSLETTER.issues;
@@ -288,6 +289,158 @@ test.describe('/read links', () => {
     await links.nth(2).focus();
     await page.keyboard.press('Enter');
     await expect(page.getByLabel('Page', { exact: true })).toHaveValue('3');
+  });
+});
+
+// PDFVIEW fix 1 (B1): the API serves an officer the original, with its own links (apps/api files.ts).
+// None may skip the leaving page: only /out/<id> (this site's, in the same tab) and a place in the issue
+// are ever a link. Every request to any other host is stopped here and counted; none may be made.
+test.describe('/read, an original with outside links', () => {
+  test("no outside link is drawn or followed: only this site's leaving page and a place in the issue are links", async ({ page, context, isMobile }) => {
+    const outside: string[] = [];
+    const popups: string[] = [];
+    const dialogs: string[] = [];
+    await context.route('**/*', (route) => {
+      const host = new URL(route.request().url()).hostname;
+      if (host === 'localhost' || host === '127.0.0.1') return route.continue();
+      outside.push(route.request().url());
+      return route.abort();
+    });
+    page.on('popup', (p) => popups.push(p.url()));
+    page.on('dialog', (d) => {
+      dialogs.push(d.message());
+      void d.dismiss();
+    });
+    await page.goto('/news');
+    await signIn(page, 'officer');
+    const problems = await watch(page);
+    expect((await page.goto(read(ORIGINAL_ID)))?.status()).toBe(200);
+    await expect(drawn(page, 1)).toHaveCount(1);
+    const layer = viewerPage(page, 1).locator('.annotationLayer');
+    await expect(layer.getByRole('link', { name: 'IN-ISSUE' })).toHaveAttribute('href', '#');
+    const hrefs = await layer.locator('a').evaluateAll((as) => as.map((a) => `${a.getAttribute('aria-label')} ${a.getAttribute('href')} ${a.getAttribute('target')}`));
+    expect(hrefs.sort()).toEqual([...ORIGINAL_OUT.map(([name]) => `${name} /out/${LINKS.web.id} null`), 'IN-ISSUE # null'].sort());
+    for (const [name] of OUTSIDE_LINKS) await expect(layer.getByRole('link', { name }), name).toHaveCount(0);
+    // A tap or click where each outside link is in the PDF goes nowhere.
+    const where = viewerPage(page, 1);
+    for (const [k, [name]] of OUTSIDE_LINKS.entries()) {
+      const [x1, y1, x2, y2] = linkRect(k);
+      await where.evaluate((el, y) => window.scrollBy(0, el.getBoundingClientRect().top + (y * el.getBoundingClientRect().height) / 792 - window.innerHeight / 2), 792 - (y1 + y2) / 2);
+      const box = (await where.boundingBox())!;
+      const scale = box.height / 792;
+      const [x, y] = [box.x + ((x1 + x2) / 2) * scale, box.y + (792 - (y1 + y2) / 2) * scale];
+      if (isMobile) await page.touchscreen.tap(x, y);
+      else await page.mouse.click(x, y);
+      await page.waitForTimeout(200);
+      expect(page.url(), name).toBe(`${SITE_URL}${read(ORIGINAL_ID)}`);
+    }
+    expect(outside).toEqual([]);
+    expect(popups).toEqual([]);
+    expect(dialogs).toEqual([]);
+    expect(problems).toEqual([]);
+    // An /out/<id> the original names on another origin is still only this site's leaving page, in this tab.
+    await layer.getByRole('link', { name: 'OUT-EVILOUT' }).click();
+    await expect(page).toHaveURL(`${SITE_URL}/out/${LINKS.web.id}`);
+    expect(context.pages()).toHaveLength(1);
+    expect(outside).toEqual([]);
+  });
+});
+
+// PDFVIEW fix 1 (B2): pinned at the top, the bar of a large text size took the whole of a landscape
+// phone's window. It stays pinned only while it takes at most a third of the window.
+const visibleOfPage = (page: Page, n: number) =>
+  page.evaluate((n) => {
+    const bar = document.querySelector('[data-viewer-bar]')!.getBoundingClientRect();
+    const box = document.querySelector(`#page-${n}`)!.getBoundingClientRect();
+    const covered = bar.bottom > 0 && bar.top < innerHeight ? bar.bottom : 0;
+    return { visible: Math.max(0, Math.min(innerHeight, box.bottom) - Math.max(0, box.top, covered)), height: innerHeight, bar: Math.round(bar.height) };
+  }, n);
+
+for (const [width, height] of [
+  [667, 375],
+  [740, 360],
+] as const) {
+  for (const size of [140, 175]) {
+    test.describe(`/read on a landscape phone, ${width} x ${height}, at ${size} % text`, () => {
+      test.use({ viewport: { width, height } });
+
+      test('after Next page, at least half the window shows the page, and a link reached by the keyboard is not under the bar', async ({ page, context, baseURL }) => {
+        await setPrefs(context, baseURL!, { size });
+        await page.goto(read(PUBLIC_ID));
+        await viewerPage(page, 1).scrollIntoViewIfNeeded();
+        await expect(drawn(page, 1)).toHaveCount(1);
+        await page.getByRole('button', { name: 'Next page' }).click();
+        await expect(page.getByLabel('Page', { exact: true })).toHaveValue('2');
+        await page.waitForTimeout(300);
+        const shown = await visibleOfPage(page, 2);
+        expect(shown.visible, JSON.stringify(shown)).toBeGreaterThanOrEqual(shown.height / 2);
+        await expect(drawn(page, 2)).toHaveCount(1);
+        const link = viewerPage(page, 2).getByRole('link', { name: 'Link to club.example' });
+        await link.focus();
+        const r = await link.evaluate((a) => {
+          const bar = document.querySelector('[data-viewer-bar]')!.getBoundingClientRect();
+          const box = a.getBoundingClientRect();
+          return { top: box.top, bottom: box.bottom, barTop: bar.top, barBottom: bar.bottom, vh: innerHeight };
+        });
+        expect(r.top < r.barBottom && r.bottom > r.barTop, JSON.stringify(r)).toBe(false);
+        expect(r.bottom > 0 && r.top < r.vh, JSON.stringify(r)).toBe(true);
+      });
+    });
+  }
+}
+
+test.describe('/read on a computer', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test('the bar stays at the top while reading, where it takes little of the window', async ({ page }) => {
+    await page.goto(read(PUBLIC_ID));
+    await expect(drawn(page, 1)).toHaveCount(1);
+    await page.getByRole('button', { name: 'Next page' }).click();
+    await expect(page.getByLabel('Page', { exact: true })).toHaveValue('2');
+    const bar = (await page.locator('[data-viewer-bar]').boundingBox())!;
+    expect(bar.y).toBeGreaterThanOrEqual(0);
+    expect(bar.y).toBeLessThan(2);
+    await expect(page.getByRole('button', { name: 'Next page' })).toBeInViewport();
+    const shown = await visibleOfPage(page, 2);
+    expect(shown.visible).toBeGreaterThanOrEqual(shown.height / 2);
+  });
+});
+
+test.describe('/read on a short computer window', () => {
+  test.use({ viewport: { width: 1280, height: 600 } });
+
+  test('the bar lets go of the top as soon as the reader picks a text size that makes it too tall, with no resize', async ({ page }) => {
+    await page.goto(read(PUBLIC_ID));
+    await expect(drawn(page, 1)).toHaveCount(1);
+    const viewer = page.locator('[data-viewer]');
+    await expect(viewer).not.toHaveClass(/viewer--unpinned/);
+    // What the text size panel (public/scripts/size.js) does: the page's own size, at once.
+    await page.evaluate(() => (document.documentElement.dataset['size'] = '175'));
+    await expect(viewer).toHaveClass(/viewer--unpinned/);
+    expect(await page.locator('[data-viewer-bar]').evaluate((el) => getComputedStyle(el).position)).toBe('static');
+    await page.getByRole('button', { name: 'Next page' }).click();
+    const shown = await visibleOfPage(page, 2);
+    expect(shown.visible, JSON.stringify(shown)).toBeGreaterThanOrEqual(shown.height / 2);
+  });
+});
+
+// PDFVIEW fix 1 (S1): past MAX_PAGES the reader draws nothing and says, politely, that the file is too
+// long to show here, leaving Open in another app and Download; a file of 200,000 pages hung the tab.
+test.describe('/read, a very long file', () => {
+  test('says it is too long to show here, and offers Open in another app and Download', async ({ page }) => {
+    test.setTimeout(60_000);
+    const problems = await watch(page);
+    expect((await page.goto(read(LONG_ID)))?.status()).toBe(200);
+    // The words themselves are pinned in test/viewer-script.test.ts (TOO_LONG); MAX_PAGES there is 1000.
+    const status = page.locator('[data-viewer-status]');
+    await expect(status).toHaveText(/^This issue is too long to show here\. You can open it in another app, or download it\.$/, { timeout: 30_000 });
+    await expect(status).toBeVisible();
+    await expect(page.locator('[data-viewer-count]')).not.toHaveText(String(LONG_PAGES));
+    await expect(page.locator('.viewer-page')).toHaveCount(0);
+    await expect(page.locator('[data-viewer-bar]')).toBeHidden();
+    await expect(page.getByRole('link', { name: /^Open in another app/ })).toHaveAttribute('href', `/documents/${LONG_ID}.pdf`);
+    await expect(page.getByRole('link', { name: 'Download' })).toHaveAttribute('href', `/documents/${LONG_ID}.pdf?download=1`);
+    expect(problems).toEqual([]);
   });
 });
 

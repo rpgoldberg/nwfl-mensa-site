@@ -18,7 +18,15 @@ export class FakeEl extends EventTarget {
   readonly dataset: Record<string, string> = {};
   readonly style = new FakeStyle();
   readonly classes = new Set<string>();
-  readonly classList = { add: (...names: string[]) => names.forEach((n) => this.classes.add(n)), contains: (n: string) => this.classes.has(n) };
+  readonly classList = {
+    add: (...names: string[]) => names.forEach((n) => this.classes.add(n)),
+    contains: (n: string) => this.classes.has(n),
+    toggle: (n: string, on: boolean) => {
+      if (on) this.classes.add(n);
+      else this.classes.delete(n);
+      return on;
+    },
+  };
   hidden = false;
   textContent = '';
   value = '';
@@ -142,6 +150,21 @@ export class FakeObserver {
   }
 }
 
+/** The browser's ResizeObserver, driven by hand: `resized()` says each watched element changed size. */
+export class FakeResizeObserver {
+  static last: FakeResizeObserver | undefined;
+  readonly watched: FakeEl[] = [];
+  constructor(readonly callback: () => void) {
+    FakeResizeObserver.last = this;
+  }
+  observe(el: FakeEl) {
+    this.watched.push(el);
+  }
+  resized() {
+    this.callback();
+  }
+}
+
 export class FakeWin extends EventTarget {
   devicePixelRatio = 2;
   innerHeight = 800;
@@ -211,7 +234,14 @@ export function fakePdfjs({ pages = 3, annotations = {} as Record<number, FakeAn
     AnnotationType: { LINK: 2, WIDGET: 20 },
     getDocument: (options: unknown) => {
       opened.push(options);
-      return { promise: fail ? Promise.reject(new Error('Invalid PDF structure')) : Promise.resolve(doc) };
+      // pdf.js 6: the loading task, not the document, is what lets a file go (destroy).
+      return {
+        promise: fail ? Promise.reject(new Error('Invalid PDF structure')) : Promise.resolve(doc),
+        destroy: () => {
+          log.push('destroy');
+          return Promise.resolve();
+        },
+      };
     },
     TextLayer: class {
       constructor(readonly o: { textContentSource: string; container: FakeEl }) {}

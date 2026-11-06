@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   CSS_UNITS,
   FAILED,
+  MAX_IMAGE_PIXELS,
+  MAX_PAGES,
   OPENING,
+  TOO_LONG,
   ZOOMS,
   clampPage,
   fitScale,
@@ -23,7 +26,7 @@ import {
   zoomIn,
   zoomOut,
 } from '../public/scripts/viewer.js';
-import { FakeEl, FakeObserver, FakeWin, fakePdfjs, viewerPage } from './viewer-fakes';
+import { FakeEl, FakeObserver, FakeResizeObserver, FakeWin, fakePdfjs, viewerPage } from './viewer-fakes';
 
 const PAGE = { width: 612 * CSS_UNITS, height: 792 * CSS_UNITS };
 const ID = 'outwebaaaaaaaaaaaaaaaaaaaa';
@@ -101,14 +104,38 @@ describe('the links in a copy', () => {
     expect(linkHref(`http://localhost:8443/out/${ID}`)).toBe(`/out/${ID}`);
   });
 
-  it("keep an original's own https or mail link, and drop anything else", () => {
-    expect(linkHref('https://club.example/picnic')).toBe('https://club.example/picnic');
-    expect(linkHref('mailto:events@example.org')).toBe('mailto:events@example.org');
-    for (const url of ['javascript:alert(1)', 'data:text/html,x', 'http://club.example/', 'ftp://x.example/', 'tel:5551234', 'not a url', `https://nwflmensa.us/out/${ID}?x=1`, `https://nwflmensa.us/out/${ID}#x`, 'https://nwflmensa.us/out/SHORT']) {
-      const href = linkHref(url);
-      if (url.startsWith('https://nwflmensa.us/out/')) expect(href, url).toBe(url);
-      else expect(href, url).toBeUndefined();
-    }
+  // PDFVIEW fix 1 (B1): an original, as an officer is served it, keeps its own links; none of them may
+  // skip the leaving page. Only /out/<id> and a place in the issue are ever a link.
+  it('are no link at all for any other address: https, http, mail, script, data, or what pdf.js makes of Launch, GoToR and app.launchURL', () => {
+    for (const url of [
+      'https://club.example/picnic',
+      'https://evil.example/phish',
+      'mailto:events@example.org',
+      'mailto:x@example.com?subject=hi',
+      'javascript:alert(1)',
+      'data:text/html,x',
+      'http://club.example/',
+      'ftp://x.example/',
+      'tel:5551234',
+      'not a url',
+      '//evil.example/proto',
+      'https://evil.example/launch.exe',
+      'https://evil.example/remote.pdf#[0,{"name":"Fit"}]',
+      'https://xn--nwflmnsa-r1a.us/x',
+      'file:///C:/Windows/System32/cmd.exe',
+      `https://nwflmensa.us/out/${ID}?x=1`,
+      `https://nwflmensa.us/out/${ID}#x`,
+      `https://nwflmensa.us/out/${ID}/x`,
+      'https://nwflmensa.us/out/SHORT',
+      `https://nwflmensa.us/out/${ID.toUpperCase()}`,
+      `blob:https://nwflmensa.us/out/${ID}`,
+    ])
+      expect(linkHref(url), url).toBeUndefined();
+  });
+
+  it("an /out/<id> on another origin, or behind a user name, is still only this site's leaving page", () => {
+    expect(linkHref(`https://evil.example/out/${ID}`)).toBe(`/out/${ID}`);
+    expect(linkHref(`https://nwflmensa.us@example.com/out/${ID}`)).toBe(`/out/${ID}`);
   });
 
   it('are named by what the copy says they are, or by their place', () => {
@@ -166,7 +193,7 @@ describe('wireViewer', () => {
   it('opens the PDF without eval, wasm or XFA, and shows the controls, the page count and one box per page', async () => {
     const { opened, pdfjs, parts, pages } = await open();
     expect(pdfjs.GlobalWorkerOptions.workerSrc).toBe('/_astro/pdf.worker.min.abc.mjs');
-    expect(opened).toEqual([{ url: '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf', isEvalSupported: false, useWasm: false, enableXfa: false, verbosity: 0 }]);
+    expect(opened).toEqual([{ url: '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf', isEvalSupported: false, useWasm: false, enableXfa: false, maxImageSize: MAX_IMAGE_PIXELS, verbosity: 0 }]);
     expect(parts['nojs']!.hidden).toBe(true);
     expect(parts['bar']!.hidden).toBe(false);
     expect(parts['pages']!.hidden).toBe(false);
@@ -287,6 +314,63 @@ describe('wireViewer', () => {
     expect(parts['pages']!.style.props.get('--viewer-bar')).toBe('150px');
   });
 
+  // PDFVIEW fix 1 (B2): pinned at the top, a bar of several rows at a large text size would leave a
+  // landscape phone no room for the issue. It stays pinned only while it takes at most a third of the
+  // window; otherwise it scrolls away with the page, and a page gone to stops at the window's top.
+  it('keeps the bar at the top only while it takes at most a third of the window, and the space under it in step', async () => {
+    const { root, parts } = await open();
+    expect(root.classes.has('viewer--unpinned')).toBe(false);
+    expect(parts['pages']!.style.props.get('--viewer-bar')).toBe('60px');
+    parts['bar']!.rect = { top: 0, height: 300, width: 600 };
+    win.dispatchEvent(new Event('resize'));
+    expect(root.classes.has('viewer--unpinned')).toBe(true);
+    expect(parts['pages']!.style.props.get('--viewer-bar')).toBe('0px');
+    win.innerHeight = 900;
+    win.dispatchEvent(new Event('resize'));
+    expect(root.classes.has('viewer--unpinned')).toBe(false);
+    expect(parts['pages']!.style.props.get('--viewer-bar')).toBe('300px');
+  });
+
+  it('decides as it opens, from the start', async () => {
+    win.innerHeight = 375;
+    const view = viewerPage();
+    view.parts['bar']!.rect = { top: 0, height: 200, width: 600 };
+    await wireViewer(view.doc, win, fakePdfjs().pdfjs);
+    expect(view.root.classes.has('viewer--unpinned')).toBe(true);
+    expect(view.parts['pages']!.style.props.get('--viewer-bar')).toBe('0px');
+  });
+
+  it('with the bar in the flow, Fit page uses the whole window, and the place read is measured from the top of the window', async () => {
+    win.innerHeight = 600;
+    const view = viewerPage();
+    view.parts['bar']!.rect = { top: 0, height: 250, width: 600 };
+    await wireViewer(view.doc, win, fakePdfjs().pdfjs);
+    expect(view.parts['zoom']!.textContent).toBe(percent(fitScale('page', PAGE, { width: 600, height: 600 - 16 })));
+    // The bar has scrolled away above the window: the reading line is a third down the window itself.
+    view.parts['bar']!.rect = { top: -900, height: 250, width: 600 };
+    const pages = view.parts['pages']!.children;
+    pages[0]!.rect = { top: -700, height: 500, width: 600 };
+    pages[1]!.rect = { top: -100, height: 500, width: 600 };
+    pages[2]!.rect = { top: 400, height: 500, width: 600 };
+    win.dispatchEvent(new Event('scroll'));
+    expect(view.parts['page']!.value).toBe('2');
+    // And a new size keeps that place, a fifth of the way down page 2, from the window's top.
+    pages[1]!.rect = { top: -100, height: 400, width: 600 };
+    view.parts['zoom-out']!.click();
+    await flush();
+    expect(win.scrolledBy).toBeCloseTo(-100 + 0.2 * 400);
+  });
+
+  it('decides again when the bar itself changes size, as when the reader picks a larger text size', async () => {
+    const withObserver = win as FakeWin & { ResizeObserver?: typeof FakeResizeObserver };
+    withObserver.ResizeObserver = FakeResizeObserver;
+    const { root, parts } = await open();
+    expect(FakeResizeObserver.last!.watched).toEqual([parts['bar']]);
+    parts['bar']!.rect = { top: 0, height: 400, width: 600 };
+    FakeResizeObserver.last!.resized();
+    expect(root.classes.has('viewer--unpinned')).toBe(true);
+  });
+
   it('a drawing that is no longer wanted is cancelled and drawn again at the new size', async () => {
     const { io, log, parts, pending } = await open({ hold: true });
     io.near(1);
@@ -397,17 +481,24 @@ describe('wireViewer', () => {
         { id: '4R', annotationType: 2, dest: 'third' },
         { id: '5R', annotationType: 20, url: `https://nwflmensa.us/out/${ID}` },
         { id: '6R', annotationType: 2 },
+        // An original's own links, and the URLs pdf.js makes of a Launch, a GoToR and app.launchURL (B1).
+        { id: '7R', annotationType: 2, url: 'https://club.example/picnic' },
+        { id: '8R', annotationType: 2, url: 'https://evil.example/launch.exe' },
+        { id: '9R', annotationType: 2, url: 'https://evil.example/remote.pdf#[0,{"name":"Fit"}]' },
+        { id: '10R', annotationType: 2, url: 'http://evil.example/plain' },
       ],
     };
     const { io, pages } = await open({ annotations });
     io.near(1);
     await flush();
     const links = pages[0]!.querySelectorAll('a');
-    expect(links.map((a) => a.getAttribute('data-element-id'))).toEqual(['1R', '2R', '4R']);
-    expect(links.map((a) => a.href)).toEqual([`/out/${ID}`, 'mailto:events@example.org', '#']);
-    expect(links.map((a) => a.rel)).toEqual(['', 'noopener noreferrer', '']);
-    expect(links.map((a) => a.getAttribute('aria-label'))).toEqual(['Link to club.example', 'Link 2 on page 1', 'Link 3 on page 1']);
-    expect(links[2]!.onclick!()).toBe(false);
+    expect(links.map((a) => a.getAttribute('data-element-id'))).toEqual(['1R', '4R']);
+    expect(links.map((a) => a.href)).toEqual([`/out/${ID}`, '#']);
+    expect(links.map((a) => a.rel)).toEqual(['', '']);
+    expect(links.map((a) => a.getAttribute('aria-label'))).toEqual(['Link to club.example', 'Link 2 on page 1']);
+    // No box is left for a link refused: nothing to tap, nothing for the keyboard to reach.
+    expect(pages[0]!.querySelectorAll('section')).toHaveLength(2);
+    expect(links[1]!.onclick!()).toBe(false);
     await flush();
     expect(pages[2]!.scrolled).toBe(1);
   });
@@ -428,6 +519,34 @@ describe('wireViewer', () => {
     const fit = fitScale('page', PAGE, { width: 600, height: 724 });
     expect(pages[1]!.style.width).toBe(`${792 * CSS_UNITS * fit}px`);
     expect(pages[2]!.style.width).toBe(`${PAGE.width * fit}px`);
+  });
+
+  // PDFVIEW fix 1 (S1): one box and one watched element per page, made at once; a file of 200,000
+  // pages hung the tab. Past MAX_PAGES the reader says so and leaves the other ways to read it.
+  it('a file longer than MAX_PAGES is not drawn: it says, in plain words, that it is too long to show here', async () => {
+    expect(MAX_PAGES).toBe(1000);
+    expect(TOO_LONG).toBe('This issue is too long to show here. You can open it in another app, or download it.');
+    const { parts, pages, viewer, log } = await open({ pages: MAX_PAGES + 1 });
+    expect(viewer).toBeUndefined();
+    expect(parts['status']!.textContent).toBe(TOO_LONG);
+    expect(pages).toHaveLength(0);
+    expect(parts['bar']!.hidden).toBe(true);
+    expect(parts['pages']!.hidden).toBe(true);
+    expect(parts['nojs']!.hidden).toBe(true);
+    // pdf.js lets the file go: nothing of it is kept.
+    expect(log).toEqual(['destroy']);
+  });
+
+  it('a file of exactly MAX_PAGES is drawn', async () => {
+    const { parts, pages, viewer } = await open({ pages: MAX_PAGES });
+    expect(viewer).toBeDefined();
+    expect(parts['count']!.textContent).toBe('1000');
+    expect(pages).toHaveLength(MAX_PAGES);
+  });
+
+  it('bounds each image pdf.js decodes, so one huge picture cannot exhaust a phone, yet a 600 dpi Letter scan still shows', () => {
+    expect(MAX_IMAGE_PIXELS).toBe(40_000_000);
+    expect(5100 * 6600).toBeLessThan(MAX_IMAGE_PIXELS);
   });
 
   it('says so in plain words, and offers the other ways, when the PDF cannot be opened', async () => {
@@ -523,15 +642,20 @@ describe('the edges of wireViewer', () => {
     expect(frames).toHaveLength(1);
   });
 
-  it("names a link pdf.js drew without the copy's id, and drops a refused link that has no section", async () => {
+  it("names a link pdf.js drew without the copy's id, and drops a refused or outside link that has no section", async () => {
     const fake = fakePdfjs({ annotations: { 1: [{ id: '1R', annotationType: 2, url: 'https://club.example/' }] } });
     fake.pdfjs.AnnotationLayer = class {
       constructor(readonly o: { div: FakeEl }) {}
       render() {
         const named = new FakeEl('a');
-        named.setAttribute('href', 'https://club.example/');
+        named.setAttribute('href', `/out/${ID}`);
         const bare = new FakeEl('a');
-        this.o.div.append(named, bare);
+        // However pdf.js came to give it, an address that is not /out/<id> or a place in the issue is dropped.
+        const outside = new FakeEl('a');
+        outside.setAttribute('href', 'https://club.example/');
+        const absolute = new FakeEl('a');
+        absolute.href = `https://site.example/out/${ID}`;
+        this.o.div.append(named, bare, outside, absolute);
         return Promise.resolve();
       }
     } as unknown as typeof fake.pdfjs.AnnotationLayer;
