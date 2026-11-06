@@ -10,6 +10,7 @@ import {
   ACCOUNT_PATH,
   CHECK_TEXT,
   DECISION_REFUSED,
+  REOPEN_REFUSED,
   ROUTE_TEXT,
   REJECTED_CONTACT,
   SIGNUP_REFUSED,
@@ -24,6 +25,7 @@ import {
   formatDay,
   formatMoment,
   isMembershipApprover,
+  isSignupReopener,
   parseDecisionForm,
   parseSignupForm,
 } from './signup';
@@ -172,6 +174,32 @@ describe('the queue\'s words (D4)', () => {
     expect(doneFromQuery(new URLSearchParams(''))).toBeUndefined();
     expect(doneText('approved')).toBe('Approved. The account now has member access.');
     expect(doneText('rejected')).toBe('Rejected. The sign-up has been removed from the queue.');
+  });
+
+  it('REOPEN: lets only the Admin and the Membership Officer\'s seat reopen, as the API does', () => {
+    expect(isSignupReopener(session(['nwfl-admin']))).toBe(true);
+    expect(isSignupReopener(session(['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers']))).toBe(true);
+    expect(isSignupReopener(session(['nwfl-officers', 'nwfl-office-membership']))).toBe(true);
+    for (const groups of [['nwfl-users', 'nwfl-membership-approvers'], ['nwfl-members', 'nwfl-officers', 'nwfl-webmaster'], ['nwfl-office-treasurer'], ['mensa-nwfl-office-membership'], ['nwfl-office-membershipx']]) {
+      expect(isSignupReopener(session(groups)), groups.join(' ')).toBe(false);
+    }
+    expect(isSignupReopener(undefined)).toBe(false);
+  });
+
+  it('REOPEN: reads a reopening, applied only once confirmed by the exact word', () => {
+    expect(parseDecisionForm(form({ decision: 'reopen', request: ID }))).toEqual({ ok: true, value: { decision: 'reopen', requestId: ID, confirmed: false } });
+    expect(parseDecisionForm(form({ decision: 'reopen', request: ID, confirmed: 'yes' }))).toEqual({ ok: true, value: { decision: 'reopen', requestId: ID, confirmed: true } });
+    expect(parseDecisionForm(form({ decision: 'reopen', request: ID, confirmed: 'Yes' }))).toEqual({ ok: true, value: { decision: 'reopen', requestId: ID, confirmed: false } });
+    expect(parseDecisionForm(form({ decision: 'reopen', request: 'nope' }))).toEqual({ ok: false });
+    expect(parseDecisionForm(form({ decision: 'Reopen', request: ID }))).toEqual({ ok: false });
+  });
+
+  it('REOPEN: names the outcome, and says each refusal in plain words', () => {
+    expect(doneFromQuery(new URLSearchParams('done=reopened'))).toBe('reopened');
+    expect(doneText('reopened')).toBe('Reopened. The person can now send the sign-up form again from their account page.');
+    expect(Object.keys(REOPEN_REFUSED).sort()).toEqual(['closed', 'own']);
+    expect(REOPEN_REFUSED.own).toBe('Nothing was changed: only the Admin or the Membership Officer reopens a sign-up, and never their own.');
+    expect(REOPEN_REFUSED.closed).toBe('Nothing was changed: this sign-up can no longer be reopened. The list below is as it is now.');
   });
 
   it('says each refusal in plain words', () => {

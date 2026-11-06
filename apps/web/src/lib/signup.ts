@@ -7,7 +7,9 @@
 // the form; a pending account the waiting line; a rejected sign-up says it was not approved; anyone
 // else their standing. Officers and the Admin need no account (fix 1): no form and no stop after
 // signing in. D4: the queue is for the membership approvers and the Admin only, in plain words,
-// never by colour alone.
+// never by colour alone. REOPEN: the Admin and the Membership Officer also see the rejections that
+// can be reopened, and reopen one after a confirmation step; the person's /account then offers the
+// form again (the API removes the account the rejection closed).
 import type { Session } from '../../server/session.mjs';
 import { isAdmin } from './approval-rules';
 import type { Check, MembershipApi, MyAccount, Route } from './api/membership';
@@ -134,10 +136,18 @@ export function isMembershipApprover(session: { groups: readonly string[] } | un
   return session !== undefined && (session.groups.includes('nwfl-membership-approvers') || session.groups.includes('nwfl-admin'));
 }
 
+/**
+ * REOPEN: the Admin and the Membership Officer's seat (nwfl-office-membership), as the API's
+ * requireSignupReopener: not every membership approver.
+ */
+export function isSignupReopener(session: { groups: readonly string[] } | undefined): boolean {
+  return session !== undefined && (session.groups.includes('nwfl-admin') || session.groups.includes('nwfl-office-membership'));
+}
+
 export interface DecisionForm {
-  decision: 'approve' | 'reject';
+  decision: 'approve' | 'reject' | 'reopen';
   requestId: string;
-  /** A rejection is applied only once confirmed; an approval at once. */
+  /** A rejection or a reopening is applied only once confirmed; an approval at once. */
   confirmed: boolean;
 }
 
@@ -147,25 +157,37 @@ const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 export function parseDecisionForm(field: (name: string) => string | undefined): { ok: true; value: DecisionForm } | { ok: false } {
   const decision = field('decision');
   const requestId = field('request') ?? '';
-  if ((decision !== 'approve' && decision !== 'reject') || !REQUEST_ID.test(requestId)) return { ok: false };
+  if ((decision !== 'approve' && decision !== 'reject' && decision !== 'reopen') || !REQUEST_ID.test(requestId)) return { ok: false };
   return { ok: true, value: { decision, requestId, confirmed: field('confirmed') === 'yes' } };
 }
 
-export type Done = 'approved' | 'rejected';
+export type Done = 'approved' | 'rejected' | 'reopened';
 
-/** The outcome named by the address the queue lands on after a decision (?done=approved|rejected). */
+const DONE_TEXT: Record<Done, string> = {
+  approved: 'Approved. The account now has member access.',
+  rejected: 'Rejected. The sign-up has been removed from the queue.',
+  reopened: 'Reopened. The person can now send the sign-up form again from their account page.',
+};
+
+/** The outcome named by the address the queue lands on after a decision (?done=approved|rejected|reopened). */
 export function doneFromQuery(params: URLSearchParams): Done | undefined {
   const done = params.get('done');
-  return done === 'approved' || done === 'rejected' ? done : undefined;
+  return done === 'approved' || done === 'rejected' || done === 'reopened' ? done : undefined;
 }
 
 export function doneText(done: Done): string {
-  return done === 'approved' ? 'Approved. The account now has member access.' : 'Rejected. The sign-up has been removed from the queue.';
+  return DONE_TEXT[done];
 }
 
 export const DECISION_REFUSED: Record<'own' | 'closed', string> = {
   own: 'Nothing was changed: no one approves or rejects their own sign-up.',
   closed: 'Nothing was changed: this sign-up was already decided, or it cannot be approved as a member. The list below is as it is now.',
+};
+
+/** REOPEN: a reopening the API refused. */
+export const REOPEN_REFUSED: Record<'own' | 'closed', string> = {
+  own: 'Nothing was changed: only the Admin or the Membership Officer reopens a sign-up, and never their own.',
+  closed: 'Nothing was changed: this sign-up can no longer be reopened. The list below is as it is now.',
 };
 
 /**

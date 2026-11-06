@@ -71,6 +71,11 @@ const LOGINS = {
   'turned-down': { id: '00000000-0000-4000-8000-0000000000d5', name: 'Dana Sample', groups: ['nwfl-users'] },
   'lone-approver': { id: '00000000-0000-4000-8000-0000000000d6', name: 'Jordan Placeholder', groups: ['nwfl-users', 'nwfl-membership-approvers'] },
   'lone-webmaster': { id: '00000000-0000-4000-8000-0000000000d7', name: 'Kai Example', groups: ['nwfl-users', 'nwfl-webmaster'] },
+  // REOPEN: rejected sign-ups (the API removed each account with it), one per browser project, which
+  // that project's run reopens (api.mjs REJECTED).
+  'reopen-desktop': { id: '00000000-0000-4000-8000-0000000000e1', name: 'Ari Example', groups: ['nwfl-users'] },
+  'reopen-phone': { id: '00000000-0000-4000-8000-0000000000e2', name: 'Bo Sample', groups: ['nwfl-users'] },
+  'reopen-iphone': { id: '00000000-0000-4000-8000-0000000000e3', name: 'Cam Placeholder', groups: ['nwfl-users'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

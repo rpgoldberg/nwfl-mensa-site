@@ -173,7 +173,7 @@ test.describe('the approvers\' queue (D4)', () => {
 
     await card('Jesse Example').getByRole('button', { name: 'Reject' }).click();
     await expect(page.getByRole('heading', { name: 'Reject this sign-up?' })).toBeVisible();
-    await expect(page.getByText('This cannot be undone.')).toBeVisible();
+    await expect(page.getByText('The erasure cannot be undone. Only the Admin or the Membership Officer can reopen the sign-up, so the person can sign up again.')).toBeVisible();
     expect(await axe(page)).toEqual([]);
     await page.getByRole('button', { name: 'Yes, reject it' }).click();
     await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=rejected`);

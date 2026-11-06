@@ -109,6 +109,18 @@ export const SIGNUP_QUEUE = [
 export const MEMBER_CHECKED_ON = 'October 20, 2026';
 
 /**
+ * REOPEN: the rejections api.mjs lists to the Admin and the Membership Officer (REJECTED there),
+ * newest first. One per browser project, which its own run reopens (the stand-in keeps a reopening
+ * for everyone, as the API does, so the person's /account sees it), and one no test reopens.
+ */
+export const REJECTED = {
+  'reopen-desktop': { name: 'Ari Example', email: 'ari@example.org', check: 'Not found on the membership list (members who opted out or lapsed may not appear), on November 3, 2026', rejected: 'November 4, 2026' },
+  'reopen-phone': { name: 'Bo Sample', email: 'bo@example.org', check: 'Not checked yet', rejected: 'November 4, 2026' },
+  'reopen-iphone': { name: 'Cam Placeholder', email: 'cam@example.org', check: 'Not checked yet', rejected: 'November 4, 2026' },
+  kept: { name: 'Harley Sample', email: 'harley@example.org', check: 'Found as a member of another local group, on November 2, 2026', rejected: 'November 3, 2026' },
+} as const;
+
+/**
  * SOLO-APPROVE: the approval rule as api.mjs answers each officer. The real API holds one setting for
  * everyone; the stand-in keeps one per signed-in subject, so tests in parallel cannot disturb each
  * other: "officer" reads publishing content as set to one approver (by the Admin on November 3, 2026),

@@ -30,6 +30,9 @@
 // sign-up (the number and last name both required, the invited group making the route "invite"), and
 // for the membership approvers and the Admin the queue and its decisions, never their own. Sign-ups
 // and decisions are kept per sign-in (the token's jti), so tests in parallel cannot disturb each other.
+// REOPEN: the Admin and the Membership Officer's seat list the rejections and reopen one, never their
+// own; a reopening is kept for everyone, as in the API, so the rejected person's own sign-in sees its
+// account gone and gets the form again. Each browser project reopens its own person (REJECTED).
 //
 // SILENT_API_PORT is a second listener that accepts connections and never
 // answers: the API that hangs, for the timeout test. NO_ISSUES_API_PORT is a
@@ -504,6 +507,15 @@ const SIGNUP_QUEUE = [
   { requestId: 'b1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000001e3', displayName: 'Harper Placeholder', email: 'harper@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 3 }, createdAt: new Date('2026-11-02T15:00:00Z') },
   { requestId: 'b1000000-0000-4000-8000-000000000004', sub: APPROVER_SUBJECT, displayName: 'Blair Example', email: 'blair@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED, createdAt: new Date('2026-11-03T15:00:00Z') },
 ];
+/** REOPEN: rejected sign-ups, newest first; the first three are reopened by one browser project each (e2e/stand-in.ts REJECTED). */
+const REJECTED = [
+  { requestId: 'c1000000-0000-4000-8000-000000000001', sub: '00000000-0000-4000-8000-0000000000e1', displayName: 'Ari Example', email: 'ari@example.org', verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 3 }, rejectedAt: new Date('2026-11-04T18:00:00Z') },
+  { requestId: 'c1000000-0000-4000-8000-000000000002', sub: '00000000-0000-4000-8000-0000000000e2', displayName: 'Bo Sample', email: 'bo@example.org', verification: Verification.UNCHECKED, rejectedAt: new Date('2026-11-04T17:00:00Z') },
+  { requestId: 'c1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000000e3', displayName: 'Cam Placeholder', email: 'cam@example.org', verification: Verification.UNCHECKED, rejectedAt: new Date('2026-11-04T16:00:00Z') },
+  { requestId: 'c1000000-0000-4000-8000-000000000004', sub: '00000000-0000-4000-8000-0000000001e4', displayName: 'Harley Sample', email: 'harley@example.org', verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 2 }, rejectedAt: new Date('2026-11-03T16:00:00Z') },
+];
+/** @type {Set<string>} REOPEN: the rejections reopened, by request id, for everyone */
+const REOPENED = new Set();
 /** @type {Map<string, number>} a sign-in's own sign-up, by the token's jti: its route */
 const SIGNUPS = new Map();
 /** @type {Map<string, Set<string>>} a sign-in's decisions, by the token's jti */
@@ -544,6 +556,9 @@ function accountOf({ sub, session }) {
   if (MEMBER_SUBJECTS.has(sub)) return { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, verifiedOn: CHECKED };
   if (sub === ENROLEE_PENDING_SUBJECT) return { status: MemberStatus.PENDING, route: AccountRoute.SIGNUP };
   if (sub === TURNED_DOWN_SUBJECT) return { status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP };
+  // REOPEN: rejected and removed until reopened; then no account, as for one who never signed up.
+  const rejected = REJECTED.find((r) => r.sub === sub);
+  if (rejected !== undefined && !REOPENED.has(rejected.requestId)) return { status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP };
   return undefined;
 }
 
@@ -551,6 +566,13 @@ function accountOf({ sub, session }) {
 async function approverOf(ctx) {
   const person = await personOf(ctx);
   if (!person.groups.includes('nwfl-membership-approvers') && !person.groups.includes('nwfl-admin')) throw new ConnectError('not permitted', Code.PermissionDenied);
+  return person;
+}
+
+/** REOPEN: the Admin and the Membership Officer's seat, as requireSignupReopener. @param {import('@connectrpc/connect').HandlerContext} ctx */
+async function reopenerOf(ctx) {
+  const person = await personOf(ctx);
+  if (!person.groups.includes('nwfl-admin') && !person.groups.includes('nwfl-office-membership')) throw new ConnectError('not permitted', Code.PermissionDenied);
   return person;
 }
 
@@ -705,6 +727,29 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     },
     rejectSignup: async (req, ctx) => {
       decide(await approverOf(ctx), req.requestId, false);
+      return {};
+    },
+    listRejectedSignups: async (_req, ctx) => {
+      const { sub } = await reopenerOf(ctx);
+      return {
+        // The subject stays here: the API never sends it.
+        requests: REJECTED.filter((r) => !REOPENED.has(r.requestId) && r.sub !== sub).map((r) => ({
+          requestId: r.requestId,
+          displayName: r.displayName,
+          email: r.email,
+          verification: r.verification,
+          ...(r.verifiedOn ? { verifiedOn: r.verifiedOn } : {}),
+          rejectedAt: timestampFromDate(r.rejectedAt),
+        })),
+      };
+    },
+    reopenSignup: async (req, ctx) => {
+      const person = await reopenerOf(ctx);
+      const rejected = REJECTED.find((r) => r.requestId === req.requestId);
+      if (rejected === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
+      if (rejected.sub === person.sub) throw new ConnectError('no one reopens their own sign-up', Code.PermissionDenied);
+      if (REOPENED.has(rejected.requestId)) throw new ConnectError('only a rejected sign-up is reopened, and only once', Code.FailedPrecondition);
+      REOPENED.add(rejected.requestId);
       return {};
     },
   });

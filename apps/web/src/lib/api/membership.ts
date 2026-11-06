@@ -8,7 +8,9 @@
 // A refused token (UNAUTHENTICATED), or a bearer that is not one b64token, is MembershipSignInAgain.
 // A sign-up the API refuses is SignupRefused by kind (a value it would not take, one already on file,
 // or an account with no name or email); a decision it refuses is DecisionRefused (their own sign-up,
-// or one already decided or gone). Anything else is ApiUnavailable. Each failure is logged by call
+// or one already decided or gone). REOPEN: the Admin and the Membership Officer alone list the
+// rejections and reopen one; a reopening the API refuses is DecisionRefused too (not theirs to
+// reopen, or no longer reopenable). Anything else is ApiUnavailable. Each failure is logged by call
 // and code only: never the API's message, the token, the last name or the membership number (D6).
 import { PUBLIC_ONLY } from 'astro:env/server';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -17,7 +19,7 @@ import { createGrpcTransport } from '@connectrpc/connect-node';
 import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
 import type { Date as ProtoDate } from '../../gen/nwfl/mensa/v1/common_pb.js';
-import { AccountRoute, MemberStatus, MembershipService, type SignupRequest, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, MemberStatus, MembershipService, type RejectedSignup as RejectedSignupMessage, type SignupRequest, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import { EXPIRY_MARGIN_SECONDS } from '../auth/bearer';
 import type { Tokens } from '../auth/oidc';
 import { type ApiConfig, ApiUnavailable, READ_MAX_BYTES, type Reader, apiSetup, sendable } from './client';
@@ -42,6 +44,16 @@ export interface PendingSignup {
   verification: Check;
   verifiedOn?: string;
   createdAt?: Date;
+}
+
+/** REOPEN: a rejected sign-up that can be reopened, as the Admin or the Membership Officer sees it. */
+export interface RejectedSignup {
+  requestId: string;
+  displayName: string;
+  email: string;
+  verification: Check;
+  verifiedOn?: string;
+  rejectedAt?: Date;
 }
 
 /** The person's token was refused, has run out, or is not one to send: sign in again. */
@@ -75,6 +87,9 @@ export interface MembershipApi {
   listSignupRequests(as: Reader): Promise<PendingSignup[]>;
   approveSignup(as: Reader, requestId: string): Promise<void>;
   rejectSignup(as: Reader, requestId: string): Promise<void>;
+  /** REOPEN: the Admin and the Membership Officer only. */
+  listRejectedSignups(as: Reader): Promise<RejectedSignup[]>;
+  reopenSignup(as: Reader, requestId: string): Promise<void>;
 }
 
 const STANDING: Record<Standing, MemberStatus> = {
@@ -126,6 +141,17 @@ function pendingOf(request: SignupRequest): PendingSignup {
     verification: nameOf(CHECK, request.verification),
     ...day(request.verifiedOn),
     ...(request.createdAt ? { createdAt: timestampDate(request.createdAt) } : {}),
+  };
+}
+
+function rejectedOf(request: RejectedSignupMessage): RejectedSignup {
+  return {
+    requestId: request.requestId,
+    displayName: request.displayName,
+    email: request.email,
+    verification: nameOf(CHECK, request.verification),
+    ...day(request.verifiedOn),
+    ...(request.rejectedAt ? { rejectedAt: timestampDate(request.rejectedAt) } : {}),
   };
 }
 
@@ -198,6 +224,16 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
         },
         decisionRefused,
       ),
+    listRejectedSignups: (as) => call('ListRejectedSignups', as, async (headers) => (await membership.listRejectedSignups({}, { headers })).requests.map(rejectedOf)),
+    reopenSignup: (as, requestId) =>
+      call(
+        'ReopenSignup',
+        as,
+        async (headers) => {
+          await membership.reopenSignup({ requestId }, { headers });
+        },
+        decisionRefused,
+      ),
   };
 }
 
@@ -210,6 +246,8 @@ export function unavailableMembership(): MembershipApi {
     listSignupRequests: fail('ListSignupRequests'),
     approveSignup: fail('ApproveSignup'),
     rejectSignup: fail('RejectSignup'),
+    listRejectedSignups: fail('ListRejectedSignups'),
+    reopenSignup: fail('ReopenSignup'),
   };
 }
 

@@ -2,11 +2,17 @@
 // W-SIGNUP D4: the approvers' queue. The pending sign-ups, oldest first, one card each: the name and
 // email from the person's sign-in account, how they came (invited by an officer, or signed up on the
 // site), and the membership check's outcome and day. Never the membership number or the last name:
-// the API never sends them. Approve, or Reject after a confirmation step (a rejection cannot be
-// undone). No one decides their own sign-up: the API refuses it, and the page says so. A sign-up the
+// the API never sends them. Approve, or Reject after a confirmation step (its erasure cannot be
+// undone; only the Admin or the Membership Officer can reopen it, below). No one decides their own sign-up: the API refuses it, and the page says so. A sign-up the
 // check found in another local group is not approved as a member (R33): it has no Approve button,
 // and the API refuses it too. Each decision goes to the API with the approver's own token
 // (src/lib/api/membership.ts), which alone decides who may.
+//
+// REOPEN: the Admin and the Membership Officer (the nwfl-office-membership seat; not every approver)
+// also see the rejected sign-ups that can still be reopened, newest first, each with a Reopen button
+// and a confirmation step, so a mistaken rejection can be fixed. Reopening lets the person send the
+// sign-up form again from /account; nothing erased comes back. The list and the button are shown only
+// to those the API would allow (isSignupReopener); the API decides again on every call.
 //
 // Not signed in: sign in first. Signed in but neither a membership approver nor the Admin: the plain
 // not-found page, as for the approval setting, and it is never linked for them. It works with no
@@ -15,12 +21,13 @@
 import PasswordNote from '../../components/PasswordNote.astro';
 import Unavailable from '../../components/Unavailable.astro';
 import Base from '../../layouts/Base.astro';
-import { DecisionRefused, MembershipSignInAgain, type PendingSignup, membershipApi, sessionReader } from '../../lib/api/membership';
+import { DecisionRefused, MembershipSignInAgain, type PendingSignup, type RejectedSignup, membershipApi, sessionReader } from '../../lib/api/membership';
 import { markUnavailable, signInFirst } from '../../lib/api/page';
 import { runtimeDeps } from '../../lib/auth/flow';
 import { readForm } from '../../lib/form';
 import {
   DECISION_REFUSED,
+  REOPEN_REFUSED,
   ROUTE_TEXT,
   type DecisionForm,
   checkText,
@@ -28,6 +35,7 @@ import {
   doneText,
   formatMoment,
   isMembershipApprover,
+  isSignupReopener,
   parseDecisionForm,
 } from '../../lib/signup';
 import { page } from '../../lib/site';
@@ -49,7 +57,7 @@ const { reader } = sessionReader(session, runtimeDeps());
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 
 let confirming: DecisionForm | undefined;
-let refused: keyof typeof DECISION_REFUSED | undefined;
+let refused: { reason: keyof typeof DECISION_REFUSED; reopen: boolean } | undefined;
 let problem: 'sign-in' | 'unavailable' | 'form' | undefined;
 
 if (Astro.request.method === 'POST') {
@@ -59,7 +67,7 @@ if (Astro.request.method === 'POST') {
   if (!parsed.ok) {
     problem = 'form';
     Astro.response.status = 400;
-  } else if (parsed.value.decision === 'reject' && !parsed.value.confirmed) {
+  } else if (parsed.value.decision !== 'approve' && !parsed.value.confirmed) {
     confirming = parsed.value;
   } else if (api === undefined) {
     problem = 'unavailable';
@@ -69,11 +77,12 @@ if (Astro.request.method === 'POST') {
     try {
       const { decision, requestId } = parsed.value;
       if (decision === 'approve') await api.approveSignup(reader, requestId);
-      else await api.rejectSignup(reader, requestId);
-      return Astro.redirect(`${HERE}?done=${decision === 'approve' ? 'approved' : 'rejected'}`, 303);
+      else if (decision === 'reject') await api.rejectSignup(reader, requestId);
+      else await api.reopenSignup(reader, requestId);
+      return Astro.redirect(`${HERE}?done=${decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'reopened'}`, 303);
     } catch (error) {
       if (error instanceof DecisionRefused) {
-        refused = error.reason;
+        refused = { reason: error.reason, reopen: parsed.value.decision === 'reopen' };
         Astro.response.status = 409;
       } else {
         problem = error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
@@ -83,11 +92,22 @@ if (Astro.request.method === 'POST') {
 }
 
 let requests: PendingSignup[] | undefined;
+let rejected: RejectedSignup[] | undefined;
+const reopener = isSignupReopener(session);
+let rejectedUnavailable = false;
 if (api !== undefined && reader !== undefined) {
   try {
     requests = await api.listSignupRequests(reader);
   } catch (error) {
     problem ??= error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+  }
+  // The queue stands on its own: a list of rejections that cannot be read says so in its place.
+  if (reopener && problem === undefined) {
+    try {
+      rejected = await api.listRejectedSignups(reader);
+    } catch {
+      rejectedUnavailable = true;
+    }
   }
 } else {
   problem ??= api === undefined ? 'unavailable' : 'sign-in';
@@ -95,23 +115,39 @@ if (api !== undefined && reader !== undefined) {
 if (problem === 'unavailable') markUnavailable(Astro.response);
 
 const done = Astro.request.method === 'GET' ? doneFromQuery(Astro.url.searchParams) : undefined;
-const confirmed = confirming === undefined ? undefined : requests?.find((r) => r.requestId === confirming.requestId);
+const confirmed = confirming?.decision === 'reject' ? requests?.find((r) => r.requestId === confirming.requestId) : undefined;
+const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.requestId === confirming.requestId) : undefined;
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
   <p class="lead">People who signed up and are waiting for member access. Approve a sign-up to give the account member access, or reject it. The membership number and last name they typed are never shown here.</p>
   {done && <p class="notice" role="status">{doneText(done)}</p>}
-  {refused && <p class="notice" role="alert">{DECISION_REFUSED[refused]}</p>}
+  {refused && <p class="notice" role="alert">{(refused.reopen ? REOPEN_REFUSED : DECISION_REFUSED)[refused.reason]}</p>}
   {problem === 'form' && <p class="notice" role="alert">Nothing was changed: send the form again from the list below.</p>}
   {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then try again.</p>}
   {problem === 'sign-in' && <PasswordNote />}
   {problem === 'unavailable' && <Unavailable what="The sign-up list" />}
 
-  {confirmed ? (
+  {reopening ? (
+    <section class="card" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Reopen this sign-up?</h2>
+      <p>{reopening.displayName} ({reopening.email}).</p>
+      <p><b>The person will be able to send the sign-up form again from their account page, with their last name and membership number. Nothing that was erased comes back, and the rejection stays in the records.</b></p>
+      <form method="post" action={HERE}>
+        <input type="hidden" name="decision" value="reopen" />
+        <input type="hidden" name="request" value={reopening.requestId} />
+        <input type="hidden" name="confirmed" value="yes" />
+        <div class="btns">
+          <button class="button" type="submit">Yes, reopen it</button>
+          <a class="button button--secondary" href={HERE}>Cancel</a>
+        </div>
+      </form>
+    </section>
+  ) : confirmed ? (
     <section class="card" aria-labelledby="confirm-title">
       <h2 id="confirm-title">Reject this sign-up?</h2>
       <p>{confirmed.displayName} ({confirmed.email}).</p>
-      <p><b>A rejected sign-up is removed from the queue, and its membership number and last name are erased. This cannot be undone.</b></p>
+      <p><b>A rejected sign-up is removed from the queue, and its membership number and last name are erased. The erasure cannot be undone. Only the Admin or the Membership Officer can reopen the sign-up, so the person can sign up again.</b></p>
       <form method="post" action={HERE}>
         <input type="hidden" name="decision" value="reject" />
         <input type="hidden" name="request" value={confirmed.requestId} />
@@ -158,6 +194,37 @@ const confirmed = confirming === undefined ? undefined : requests?.find((r) => r
         ))}
       </>
     )
+  )}
+
+  {!confirmed && !reopening && rejectedUnavailable && (
+    <p class="notice" role="note">The rejected sign-ups cannot be shown just now. Try again in a few minutes.</p>
+  )}
+  {!confirmed && !reopening && rejected !== undefined && (
+    <section aria-labelledby="rejected-title">
+      <h2 id="rejected-title">Rejected sign-ups</h2>
+      <p>Rejected by mistake? Reopen a sign-up so the person can send the form again. Only the Admin and the Membership Officer see this list.</p>
+      {rejected.length === 0 ? (
+        <p class="card empty">No rejected sign-ups can be reopened.</p>
+      ) : (
+        rejected.map((r, i) => (
+          <section class="card rejected-card" aria-labelledby={`rejected-${i}`}>
+            <h3 id={`rejected-${i}`}>{r.displayName}</h3>
+            <dl class="facts">
+              <div><dt>Email</dt><dd>{r.email}</dd></div>
+              <div><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
+              {r.rejectedAt && <div><dt>Rejected on</dt><dd>{formatMoment(r.rejectedAt)}</dd></div>}
+            </dl>
+            <form method="post" action={HERE}>
+              <input type="hidden" name="decision" value="reopen" />
+              <input type="hidden" name="request" value={r.requestId} />
+              <div class="btns">
+                <button class="button button--secondary" type="submit" aria-describedby={`rejected-${i}`}>Reopen</button>
+              </div>
+            </form>
+          </section>
+        ))
+      )}
+    </section>
   )}
   <p><a href="/officer-area">Back to the officer area</a></p>
 </Base>
