@@ -53,6 +53,8 @@ interface Fixture {
   articlePlain: string;
   /** D1: the members article's title and summary, which the public is shown as a teaser. */
   membersTeaser: { title: string; summary: string };
+  /** LINKS L4: three links on the marked PDF, in the copies the worker made; the held one's target holds the phone canary (the stack seeds it into every ready copy, the public's too, so only the read's own check against the marks keeps it from the public); off is turned off once copies held it. */
+  links: { plain: string; held: string; off: string };
 }
 
 interface Fetched {
@@ -140,7 +142,7 @@ function context(f: Fixture) {
   const month = today.slice(0, 7);
   const [y, m] = month.split('-').map(Number) as [number, number];
   const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
-  return { eventIds: [f.ids['games']!, f.ids['potluck']!, f.ids['online']!, `${f.ids['series']}:${today}`], months: [month, next], fileIds: [f.ids['pdf']!] };
+  return { eventIds: [f.ids['games']!, f.ids['potluck']!, f.ids['online']!, `${f.ids['series']}:${today}`], months: [month, next], fileIds: [f.ids['pdf']!], linkIds: [f.links.plain, f.links.held, f.links.off] };
 }
 
 async function get(request: APIRequestContext, url: string): Promise<Fetched> {
@@ -356,6 +358,65 @@ async function signedIn(request: APIRequest, login: 'member' | 'pending' | 'offi
 }
 
 const seen = (html: string, names: readonly string[]) => names.filter((name) => fold(html).includes(fold(fixture.canaries[name]!)));
+
+test('LINKS L4: through the real API, the public is shown a link of the copy it is served, and the 404 for one whose target holds a withheld phone', async () => {
+  const plain = fetched.get(`/out/${fixture.links.plain}`);
+  expect(plain?.status).toBe(200);
+  expect(plain!.body).toContain('<p class="out-host">club.example</p>');
+  expect(plain!.body).toContain('href="https://club.example/receipts" target="_blank" rel="noopener noreferrer" data-out-continue');
+  expect(plain!.body).toContain(`href="/documents/${fixture.ids['pdf']}.pdf#page=1"`);
+  expect(plain!.headers['cache-control']).toBe('private, no-store');
+  expect(plain!.headers['referrer-policy']).toBe('no-referrer');
+  const held = fetched.get(`/out/${fixture.links.held}`);
+  const none = fetched.get('/out/aaaaaaaaaaaaaaaaaaaaaaaaaa');
+  expect([held?.status, none?.status]).toEqual([404, 404]);
+  // The same page as for no link at all, but for its own address.
+  const own = (body: string, id: string) => body.replaceAll(`/out/${id}`, '/out/ID').replaceAll(`%2Fout%2F${id}`, '%2Fout%2FID');
+  expect(own(held!.body, fixture.links.held)).toBe(own(none!.body, 'aaaaaaaaaaaaaaaaaaaaaaaaaa'));
+  expect(fold(held!.body)).not.toContain(fold(fixture.canaries['phone']!));
+});
+
+test('LINKS L4: a member, whose policy shows phones, follows the held link from the members copy (the positive control), never stored', async ({ playwright }) => {
+  const member = await signedIn(playwright.request, 'member');
+  const held = await get(member, `/out/${fixture.links.held}`);
+  expect(held.status).toBe(200);
+  expect(held.body).toContain(`href="https://club.example/call/${fixture.canaries['phone']}"`);
+  expect(held.headers['cache-control']).toBe('private, no-store');
+  await member.dispose();
+});
+
+test('LINKS L4: a signed-in officer, served the original, is shown the public copy\'s link (the site asks again as the public), and the held one is still the 404', async ({ playwright }) => {
+  for (const login of ['officer', 'officer-only'] as const) {
+    const officer = await signedIn(playwright.request, login);
+    const plain = await get(officer, `/out/${fixture.links.plain}`);
+    expect(plain.status, login).toBe(200);
+    expect(plain.body, login).toContain('href="https://club.example/receipts" target="_blank" rel="noopener noreferrer" data-out-continue');
+    expect(plain.headers['cache-control'], login).toBe('private, no-store');
+    const held = await get(officer, `/out/${fixture.links.held}`);
+    expect(held.status, login).toBe(404);
+    expect(fold(held.body), login).not.toContain(fold(fixture.canaries['phone']!));
+    await officer.dispose();
+  }
+});
+
+test('LINKS L4: a link turned off says so, with no URL, to the public and members, whose copies the worker recorded in the ledger, and to an officer', async ({ playwright }) => {
+  const turnedOff = (body: string, who: string) => {
+    expect(body, who).toContain('This link was turned off');
+    expect(body, who).not.toContain('parked.example');
+    expect(body, who).toContain(`href="/documents/${fixture.ids['pdf']}.pdf#page=2"`);
+  };
+  const pub = fetched.get(`/out/${fixture.links.off}`);
+  expect(pub?.status).toBe(200);
+  turnedOff(pub!.body, 'public');
+  for (const login of ['member', 'officer'] as const) {
+    const reader = await signedIn(playwright.request, login);
+    const off = await get(reader, `/out/${fixture.links.off}`);
+    expect(off.status, login).toBe(200);
+    turnedOff(off.body, login);
+    await reader.dispose();
+  }
+});
+
 const stamp = (text: string) => text.replace(/^DTSTAMP:.*$/gm, '');
 
 test("D1: the public's /news, through the real API, lists the members article by title and summary with the members box, and none of its body", async ({ playwright }) => {

@@ -257,8 +257,8 @@ test('every reader control shows a focus ring of at least 3px when reached by ke
     ...(await panel(page).getByRole('button').all()),
     slider(page),
   ];
-  // A−, A+, five themes and the slider (Use this size is hidden with a script).
-  expect(controls.length).toBe(8);
+  // A−, A+, five themes, the three leaving-the-site choices (LINKS L4) and the slider (Use this size is hidden with a script).
+  expect(controls.length).toBe(11);
   for (const control of controls) {
     // Arrive by keyboard: step off the control and back with the Tab key.
     await control.focus();

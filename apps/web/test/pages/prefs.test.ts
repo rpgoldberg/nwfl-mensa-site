@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SIZES, SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
+import { LINKS_COOKIE, SIZES, SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
 import { GET, POST } from '../../src/pages/prefs';
 
 type Ctx = Parameters<typeof POST>[0];
@@ -110,7 +110,7 @@ describe('POST /prefs', () => {
     for (const origin of ['https://nwflorida.us', 'http://localhost:8080']) {
       const res = await post({ theme: 'contrast-white', back: '/' }, { origin });
       const cookies = res.headers.getSetCookie();
-      expect(cookies.length).toBe(2);
+      expect(cookies.length).toBe(3);
       for (const c of cookies) {
         expect(c).toMatch(/^__Host-/);
         expect(c).toMatch(/; Secure$/);
@@ -125,6 +125,22 @@ describe('POST /prefs', () => {
       expect(res.status, JSON.stringify(back)).toBe(303);
       expect(res.headers.get('location')).toBe('/');
     }
+  });
+
+  it("writes the leaving page's next-time choice (LINKS L4) and returns to the leaving page, saved", async () => {
+    const back = '/out/abcdefghijklmnopqrstuvwxyz?saved=1';
+    const res = await post({ links: 'direct', back }, { cookie: `${SIZE_COOKIE}=${SIZES[5]}` });
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe(back);
+    expect(res.headers.getSetCookie()).toEqual([
+      `${SIZE_COOKIE}=${SIZES[5]}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
+      `${THEME_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`,
+      `${LINKS_COOKIE}=direct; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`,
+    ]);
+    const guard = await post({ links: 'guard', back }, { cookie: `${LINKS_COOKIE}=direct` });
+    expect(guard.headers.getSetCookie()).toContain(`${LINKS_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`);
+    const forged = await post({ links: 'https://evil.example/', back }, { cookie: `${LINKS_COOKIE}=countdown` });
+    expect(forged.headers.getSetCookie()).toContain(`${LINKS_COOKIE}=countdown; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`);
   });
 
   it('never redirects off the site', async () => {

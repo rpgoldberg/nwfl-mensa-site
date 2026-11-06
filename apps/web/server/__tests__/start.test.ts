@@ -99,6 +99,33 @@ describe('start: sign-in settings from the environment (W4)', () => {
     expect((await fetch(base)).headers.get('content-security-policy')).toMatch(/form-action 'self'$/);
   });
 
+  // S2: the F-D1 provider for the canary, as I-2 sets it.
+  const canary = {
+    NODE_ENV: 'production',
+    SITE_ORIGIN: 'https://canary.nwflmensa.us',
+    OIDC_ISSUER: 'https://login.nwflmensa.us/application/o/nwfl-site-staging/',
+    OIDC_CLIENT_ID: 'nwfl-site-staging',
+    OIDC_CLIENT_SECRET: 'not-for-any-log-0123456789abcdef',
+    OIDC_REDIRECT_URI: 'https://canary.nwflmensa.us/auth/callback',
+    OIDC_POST_LOGOUT_REDIRECT_URI: 'https://canary.nwflmensa.us/signed-out',
+    SITE_GROUP_PREFIX: 'mensa-nwfl-',
+  };
+
+  it('in production, lets forms lead to the profile’s issuer origin only', async () => {
+    const { base, log } = await boot((_req, res) => res.end('x'), { env: canary });
+    expect((await fetch(base)).headers.get('content-security-policy')).toMatch(/form-action 'self' https:\/\/login\.nwflmensa\.us$/);
+    expect(log.mock.calls.map((c) => String(c[0])).join()).not.toContain('sign-in is off');
+  });
+
+  it('says at start why sign-in is off, naming no value it was given', async () => {
+    const { base, log } = await boot((_req, res) => res.end('x'), { env: { ...canary, SITE_ORIGIN: 'https://canary.nwflorida.us' } });
+    expect((await fetch(base)).headers.get('content-security-policy')).toMatch(/form-action 'self'$/);
+    const lines = log.mock.calls.map((c) => String(c[0]));
+    expect(lines).toContain(JSON.stringify({ level: 'warn', msg: 'sign-in is off', reason: 'SITE_ORIGIN must be one of https://canary.nwflmensa.us, https://nwflmensa.us' }));
+    expect(lines.join()).not.toContain(canary.OIDC_CLIENT_SECRET);
+    expect(lines.join()).not.toContain('canary.nwflorida.us');
+  });
+
   it('logs a malformed session key, and runs with everyone anonymous', async () => {
     const { log } = await boot((_req, res) => res.end('x'), { env: { SESSION_KEY: 'short' } });
     expect(log.mock.calls.map((c) => String(c[0])).join()).toContain('SESSION_KEY must be 32 bytes');

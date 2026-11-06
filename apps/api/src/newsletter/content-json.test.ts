@@ -103,6 +103,12 @@ describe('buildContentJson: PUBLIC', () => {
   const exported = buildContentJson(input('public'));
   const text = JSON.stringify(exported);
 
+  // S2: the export goes out before the public domain is settled (DOMAIN2), so the string names no host.
+  it('says in plain words that the passage is for members, naming no host', () => {
+    expect(PUBLIC_PLACEHOLDER).toBe('Members-only passage. Sign in to read.');
+    expect(text).not.toMatch(/Sign in at /);
+  });
+
   it('replaces each members passage with the fixed string, and nothing of it remains', () => {
     expect(text).not.toContain('4417');
     expect(text).not.toContain('pavilion');

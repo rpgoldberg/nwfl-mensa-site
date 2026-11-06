@@ -2,9 +2,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import { expect, test, type APIResponse } from '@playwright/test';
 import { SESSION_COOKIE, parseCsp, securityHeaders } from '../server/policy.mjs';
-import { SIZES, SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../server/prefs.mjs';
+import { LINKS_COOKIE, SIZES, SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../server/prefs.mjs';
 import { ALL_PAGES, PRERENDERED } from './pages';
-import { BACKEND_URL, IDP_ORIGIN } from './servers';
+import { BACKEND_URL, IDP_ORIGIN, SITE_URL } from './servers';
+import { LINKS } from './stand-in';
 
 // With the test identity provider configured, forms may lead to it (sign-out).
 const SECURITY_HEADERS = securityHeaders({ formAction: [IDP_ORIGIN] });
@@ -138,7 +139,8 @@ test('behind the tunnel, a post from the site itself is accepted and its cookies
   expect(ok.statusCode).toBe(303);
   expect(ok.headers['location']).toBe('/about');
   const cookies = ok.headers['set-cookie'] ?? [];
-  expect(cookies.length).toBe(2);
+  // Size, theme and (LINKS L4) the leaving page's choice.
+  expect(cookies.length).toBe(3);
   for (const c of cookies) expect(c).toMatch(/^__Host-.*; Secure$/);
   const forged = await rawPost({ ...tunnel, origin: 'https://evil.example' }, 'theme=dark&back=%2F');
   expect(forged.statusCode).toBe(403);
@@ -154,7 +156,8 @@ test('MT-30: no response sets a cookie with Domain=, and every cookie is host-on
   });
   expect(res.status()).toBe(303);
   const cookies = res.headersArray().filter((h) => h.name.toLowerCase() === 'set-cookie').map((h) => h.value);
-  expect(cookies.length).toBe(2);
+  // Size, theme and (LINKS L4) the leaving page's choice.
+  expect(cookies.length).toBe(3);
   for (const cookie of cookies) {
     const [pair, ...rest] = cookie.split(';').map((part) => part.trim());
     const attrs = rest.map((a) => a.toLowerCase());
@@ -181,6 +184,47 @@ test('the full build keeps sign-in: it starts at the provider, and the header li
   expect(res.status()).toBe(303);
   expect(res.headers()['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/auth\\?`));
   expect(await (await request.get('/about')).text()).toMatch(/href="\/sign-in\?return=%2Fabout"/);
+});
+
+/** A GET to the server as cloudflared sends it, with the Host the reader asked for. */
+function onHost(path: string, host: string) {
+  return new Promise<{ status: number; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
+    const req = http.request(`${BACKEND_URL}${path}`, { headers: { host, 'x-forwarded-proto': 'https' } });
+    req.on('response', (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode!, headers: res.headers }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// S2: the session cookie is host-only on the callback's origin (in production, the SITE_ORIGIN
+// profile's; here the e2e edge's), so /sign-in on another of our hosts starts there, never stored.
+test('/sign-in on another of our hosts starts on the callback’s origin, with the same return', async () => {
+  for (const host of ['www.nwflmensa.us', 'nwflorida.us', 'canary.nwflorida.us', 'canary.nwflmensa.us']) {
+    const res = await onHost('/sign-in?return=%2Fnews', host);
+    expect(res.status, host).toBe(303);
+    expect(res.headers['location'], host).toBe(`${SITE_URL}/sign-in?return=%2Fnews`);
+    expect(res.headers['cache-control'], host).toBe('private, no-store');
+    expect(res.headers['set-cookie'], host).toBeUndefined();
+  }
+  expect((await onHost('/sign-in?return=%2Fnews&again=1', 'www.nwflmensa.us')).headers['location']).toBe(`${SITE_URL}/sign-in?return=%2Fnews&again=1`);
+});
+
+test('/sign-in on another of our hosts never carries a return off the site', async () => {
+  for (const back of ['%2F%2Fevil.example%2F', 'https%3A%2F%2Fevil.example%2F', '%2F%5Cevil.example', '']) {
+    const res = await onHost(`/sign-in?return=${back}`, 'www.nwflmensa.us');
+    expect(res.status, back).toBe(303);
+    expect(res.headers['location'], back).toBe(`${SITE_URL}/sign-in`);
+  }
+});
+
+test('/sign-in on a host that is not ours starts at the provider outside production, as here; a callback on another host is refused', async () => {
+  const res = await onHost('/sign-in?return=%2Fnews', 'evil.example');
+  expect(res.status).toBe(303);
+  expect(res.headers['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/auth\\?`));
+  expect((await onHost('/auth/callback?code=x&state=y', 'www.nwflmensa.us')).status).toBe(400);
 });
 
 test('the full build shows the submitted content the canary hides (the other half of canary condition 3)', async ({ request }) => {
@@ -248,4 +292,141 @@ test('robots.txt answers for the Host asked for: a forwarded host cannot make th
   for (const spoof of [{ 'X-Forwarded-Host': 'nwflorida.us' }, { 'X-Forwarded-Host': 'nwflorida.us', 'X-Forwarded-Port': '443' }]) {
     expect(await asked('/robots.txt', { Host: 'canary.nwflorida.us', ...spoof })).toBe('User-agent: *\nDisallow: /\n');
   }
+});
+
+// LINKS L4: the leaving page /out/<id>. Never stored (it depends on the reader's cookie and token), no
+// referrer to the site the reader leaves for, not for search engines, the site's CSP unchanged, no
+// inline script; the direct choice is a 303 to the approved URL alone.
+test.describe('the leaving page (LINKS L4)', () => {
+  const out = (id: string) => `/out/${id}`;
+
+  test('shows the approved link, private and never stored, with no referrer, noindex and the CSP unchanged', async ({ request }) => {
+    const about = await request.get('/about');
+    for (const id of [LINKS.web.id, LINKS.mail.id, LINKS.off.id]) {
+      const res = await request.get(out(id));
+      expect(res.status(), id).toBe(200);
+      const headers = res.headers();
+      expect(headers['cache-control'], id).toBe('private, no-store');
+      expect(headers['cdn-cache-control'], id).toBe('no-store');
+      expect(headers['referrer-policy'], id).toBe('no-referrer');
+      expect(headers['content-security-policy'], id).toBe(about.headers()['content-security-policy']);
+      expect(headers['cross-origin-opener-policy'], id).toBe('same-origin');
+      const html = await res.text();
+      expect(html, id).toContain('<meta name="robots" content="noindex">');
+      // Same-origin script files only: no inline script, no handler attribute, no javascript: URL.
+      for (const tag of html.match(/<script\b[^>]*>/g) ?? []) expect(tag, id).toMatch(/ src="\/scripts\/[a-z-]+\.js"/);
+      expect(html, id).not.toMatch(/<script\b[^>]*>[^<]+<\/script>|\son[a-z]+=|javascript:/i);
+    }
+  });
+
+  test('answers every id it has no link for with the same 404, under the same headers', async ({ request }) => {
+    const pages = new Set<string>();
+    for (const id of [LINKS.unknown.id, LINKS.members.id, LINKS.script.id, LINKS.angles.id, LINKS.rtl.id, LINKS.web.id.toUpperCase(), `${LINKS.web.id}a`, LINKS.web.id.slice(1), 'x']) {
+      const res = await request.get(out(id));
+      expect(res.status(), id).toBe(404);
+      expect(res.headers()['cache-control'], id).toBe('private, no-store');
+      expect(res.headers()['referrer-policy'], id).toBe('no-referrer');
+      const html = await res.text();
+      expect(html, id).toContain('This link is not available');
+      for (const leak of ['javascript:', '<script>alert', 'members-night', 'club.example']) expect(html, `${id}: ${leak}`).not.toContain(leak);
+      // The page differs only where it names its own address (the Aa panel's way back, Sign in's return).
+      pages.add(html.replaceAll(`/out/${id}`, '/out/ID').replaceAll(`%2Fout%2F${encodeURIComponent(id)}`, '%2Fout%2FID'));
+    }
+    expect(pages.size).toBe(1);
+  });
+
+  test('a direct choice answers 303 to the approved URL, with no referrer and never stored; a mail link and a turned-off one still show the page', async ({ request }) => {
+    const headers = { cookie: `${LINKS_COOKIE}=direct` };
+    const res = await request.get(out(LINKS.web.id), { headers, maxRedirects: 0 });
+    expect(res.status()).toBe(303);
+    expect(res.headers()['location']).toBe(LINKS.web.url);
+    expect(res.headers()['referrer-policy']).toBe('no-referrer');
+    expect(res.headers()['cache-control']).toBe('private, no-store');
+    for (const id of [LINKS.mail.id, LINKS.off.id]) expect((await request.get(out(id), { headers, maxRedirects: 0 })).status(), id).toBe(200);
+    expect((await request.get(out(LINKS.unknown.id), { headers, maxRedirects: 0 })).status()).toBe(404);
+  });
+
+  test('no query or path variant leads anywhere but the approved URL: there is no open redirect', async ({ request }) => {
+    for (const cookie of ['', `${LINKS_COOKIE}=direct`]) {
+      for (const path of [
+        `${out(LINKS.web.id)}?url=https://evil.example/`,
+        `${out(LINKS.web.id)}?to=//evil.example&next=https%3A%2F%2Fevil.example`,
+        `${out(LINKS.web.id)}?saved=0&url=https://evil.example/`,
+      ]) {
+        const res = await request.get(path, { headers: cookie ? { cookie } : {}, maxRedirects: 0 });
+        const where = res.headers()['location'];
+        if (res.status() === 303) expect(where, path).toBe(LINKS.web.url);
+        else {
+          // The query is only ever echoed as this page's own address (the Aa panel, Sign in), escaped: never a way out.
+          const html = await res.text();
+          expect(html, path).toContain(`href="${LINKS.web.url.replace('&', '&amp;')}" target="_blank" rel="noopener noreferrer" data-out-continue`);
+          expect(html, path).not.toMatch(/(href|action|src)="(https?:)?\/\/evil\.example/);
+        }
+      }
+      for (const path of [`/out/${LINKS.web.id}/..%2F..%2Fevil.example`, `/out/..%2F${LINKS.web.id}`, `/out/https:%2F%2Fevil.example`, '/out/https://evil.example', `/out/${LINKS.web.id}%0d%0aLocation:%20https://evil.example`]) {
+        const res = await request.get(path, { headers: cookie ? { cookie } : {}, maxRedirects: 0 });
+        expect([400, 404], path).toContain(res.status());
+        expect(res.headers()['location'], path).toBeUndefined();
+      }
+    }
+  });
+
+  /** A GET to the server with its path sent as written (no dot segment resolved), as cloudflared would pass it on. */
+  function rawGet(path: string, headers: Record<string, string>): Promise<http.IncomingMessage> {
+    const backend = new URL(BACKEND_URL);
+    return new Promise((resolve, reject) => {
+      const req = http.request({ host: backend.hostname, port: backend.port, path, headers: { 'X-Forwarded-Proto': 'https', ...headers } }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  test('a path variant that serves the leaving page keeps its no-referrer and is never stored, the 303 included', async () => {
+    const id = LINKS.web.id;
+    for (const [cookie, status] of [['', 200], [`${LINKS_COOKIE}=direct`, 303]] as const) {
+      for (const path of [`//out/${id}`, `///out/${id}`, `/./out/${id}`, `/%6Fut/${id}`, `//%6Fut/${id}`]) {
+        const res = await rawGet(path, cookie ? { cookie } : {});
+        expect(res.statusCode, `${cookie} ${path}`).toBe(status);
+        expect(res.headers['referrer-policy'], `${cookie} ${path}`).toBe('no-referrer');
+        expect(res.headers['cache-control'], `${cookie} ${path}`).toBe('private, no-store');
+        if (status === 303) expect(res.headers['location'], path).toBe(LINKS.web.url);
+      }
+    }
+  });
+
+  test("the trailing slash's 301 back to the leaving page is never stored either", async ({ request }) => {
+    for (const cookie of ['', `${LINKS_COOKIE}=direct`]) {
+      const res = await request.get(`${out(LINKS.web.id)}/`, { headers: cookie ? { cookie } : {}, maxRedirects: 0 });
+      expect(res.status(), cookie).toBe(301);
+      expect(res.headers()['location'], cookie).toBe(out(LINKS.web.id));
+      expect(res.headers()['cache-control'], cookie).toBe('private, no-store');
+      expect(res.headers()['cdn-cache-control'], cookie).toBe('no-store');
+      expect(res.headers()['referrer-policy'], cookie).toBe('no-referrer');
+    }
+  });
+
+  test('a forged or unknown links cookie is the guard: the page, never a redirect', async ({ request }) => {
+    for (const value of ['DIRECT', 'redirect', 'https://evil.example/', 'direct,direct', '1']) {
+      const res = await request.get(out(LINKS.web.id), { headers: { cookie: `${LINKS_COOKIE}=${value}` }, maxRedirects: 0 });
+      expect(res.status(), value).toBe(200);
+      expect(await res.text(), value).not.toContain('data-out-countdown');
+    }
+    // The name without its prefix, which a sibling subdomain could set, is never read.
+    expect((await request.get(out(LINKS.web.id), { headers: { cookie: 'nwfl-links=direct' }, maxRedirects: 0 })).status()).toBe(200);
+  });
+
+  test('the Next time choice posts to /prefs, sets the links cookie host-only, and comes back to the page, saved, not redirected', async ({ request, baseURL }) => {
+    const back = `${out(LINKS.web.id)}?saved=1`;
+    const res = await request.post('/prefs', { headers: { Origin: baseURL! }, form: { links: 'direct', back }, maxRedirects: 0 });
+    expect(res.status()).toBe(303);
+    expect(res.headers()['location']).toBe(back);
+    const set = res.headersArray().filter((h) => h.name.toLowerCase() === 'set-cookie').map((h) => h.value);
+    expect(set).toContain(`${LINKS_COOKIE}=direct; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`);
+    const saved = await request.get(back, { headers: { cookie: `${LINKS_COOKIE}=direct` }, maxRedirects: 0 });
+    expect(saved.status()).toBe(200);
+    expect(await saved.text()).toContain('Saved. Next time you follow a link to another site, we will take you straight there.');
+  });
 });

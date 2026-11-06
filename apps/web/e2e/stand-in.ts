@@ -83,6 +83,7 @@ export const ACCOUNTS = {
   admin: '00000000-0000-4000-8000-0000000000ad',
   webmaster: '00000000-0000-4000-8000-0000000000eb',
   'lone-admin': '00000000-0000-4000-8000-0000000000ae',
+  'lapsed-admin': '00000000-0000-4000-8000-0000000000af',
   newcomer: '00000000-0000-4000-8000-0000000000d1',
   invitee: '00000000-0000-4000-8000-0000000000d2',
   approver: '00000000-0000-4000-8000-0000000000d3',
@@ -139,3 +140,24 @@ export const SOURCE_PDFS = [...NEWSLETTER.issues.map((i) => `f3${i.membersPdf.sl
 
 /** The marker line in a members copy's bytes (api.mjs MEMBERS_PDF). */
 export const MEMBERS_PDF_MARK = '% members copy';
+
+/**
+ * LINKS L4: the links the stand-in API resolves (e2e/api.mjs LINKS), all on the newest issue's public PDF,
+ * last checked (or turned off) on November 4, 2026. `members`: for a member only. The last three are what
+ * a buggy API might send, and the site must refuse to render: each is the leaving page's 404.
+ */
+export const LINKS = {
+  web: { id: 'outwebaaaaaaaaaaaaaaaaaaaa', url: 'https://club.example/picnic?day=sat', host: 'club.example', page: 2 },
+  social: { id: 'outsocialaaaaaaaaaaaaaaaaa', url: 'https://www.facebook.com/groups/nwfl-sample', host: 'www.facebook.com', page: 1 },
+  mail: { id: 'outmailaaaaaaaaaaaaaaaaaaa', url: 'mailto:events@example.org', host: 'example.org', page: 1 },
+  off: { id: 'outoffaaaaaaaaaaaaaaaaaaaa', url: 'https://parked.example/', host: 'parked.example', page: 3 },
+  members: { id: 'outmembersaaaaaaaaaaaaaaaa', url: 'https://club.example/members-night', host: 'club.example', page: 1 },
+  long: { id: 'outlongaaaaaaaaaaaaaaaaaaa', host: 'club.example', page: 1 },
+  script: { id: 'outscriptaaaaaaaaaaaaaaaaa' },
+  angles: { id: 'outanglesaaaaaaaaaaaaaaaaa' },
+  rtl: { id: 'outrtlaaaaaaaaaaaaaaaaaaaa' },
+  /** No link at all. */
+  unknown: { id: 'outnoneaaaaaaaaaaaaaaaaaaa' },
+  file: 'f0000000-0000-4000-8000-000000000010',
+  checked: 'November 4, 2026',
+} as const;

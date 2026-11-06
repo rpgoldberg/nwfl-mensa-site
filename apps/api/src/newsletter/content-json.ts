@@ -25,7 +25,7 @@ import { ZONE } from '../events/zone.js';
 
 export const CONTRACT_VERSION = '1';
 export const ORGANIZATION = 'Northwest Florida Mensa';
-export const PUBLIC_PLACEHOLDER = 'Members-only passage. Sign in at nwflorida.us to read.';
+export const PUBLIC_PLACEHOLDER = 'Members-only passage. Sign in to read.';
 export const MEMBERS_EVENT_TITLE = 'Members event, sign in for details';
 export const VACANT = 'Vacant';
 

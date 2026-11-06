@@ -36,6 +36,19 @@ describe('publicOrigin', () => {
     expect(publicOrigin(asked('evil.example'), undefined)).toBe('https://nwflorida.us');
   });
 
+  // S2: Astro's site is fixed at build; the fallback follows the running server's SITE_ORIGIN profile.
+  it('falls back to the SITE_ORIGIN profile, when one is set and valid', () => {
+    const canary = { SITE_ORIGIN: 'https://canary.nwflmensa.us' };
+    expect(publicOrigin(asked('evil.example'), SITE, canary)).toBe('https://canary.nwflmensa.us');
+    expect(publicOrigin(asked(undefined), SITE, canary)).toBe('https://canary.nwflmensa.us');
+    expect(publicOrigin(asked('www.nwflorida.us'), SITE, canary)).toBe('https://www.nwflorida.us');
+    expect(publicOrigin(asked('localhost:8443', 'https://localhost:8443/events'), SITE, canary)).toBe('https://localhost:8443');
+    for (const SITE_ORIGIN of [undefined, '', 'https://evil.example', 'https://canary.nwflmensa.us/']) {
+      expect(publicOrigin(asked('evil.example'), SITE, { SITE_ORIGIN }), String(SITE_ORIGIN)).toBe('https://nwflorida.us');
+    }
+    expect(feedWebcal(asked('evil.example'), SITE, canary)).toBe('webcal://canary.nwflmensa.us/calendar.ics');
+  });
+
   it('lists exactly the hosts the server trusts, each over https', () => {
     expect(PUBLIC_HOSTS.filter((h) => h.hostname !== 'localhost').every((h) => h.protocol === 'https')).toBe(true);
     expect(PUBLIC_HOSTS.map((h) => h.hostname)).toEqual(

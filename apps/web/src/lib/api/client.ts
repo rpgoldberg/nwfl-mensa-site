@@ -6,9 +6,10 @@
 // Every call goes out as the public: no Authorization header, no cookie,
 // nothing about the reader. The API works the audience out from what it gets
 // (no token: anonymous, public; apps/api/src/auth/caller.ts), so the site
-// never claims an audience of its own. Two reads only, ListPublishedItems and
-// ReadFile, may carry a signed-in reader's access token (A14, /news and its
-// PDFs), as "Authorization: Bearer", and only when given a Reader; no other
+// never claims an audience of its own. Three reads only, ListPublishedItems,
+// ReadFile and GetLinkTarget, may carry a signed-in reader's access token (A14,
+// /news and its PDFs; LINKS L4, the links in those PDFs, /out/<id>), as
+// "Authorization: Bearer", and only when given a Reader; no other
 // read takes one, so the calendar, the roster and every feed stay the
 // public's. A token the API refuses (UNAUTHENTICATED) is ApiTokenRefused, for
 // the caller to ask again as the public, never a 503. Never a cookie.
@@ -23,7 +24,8 @@
 // ApiTokenRefused instead (above).
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
-import { type ContentItem, ContentKind, ContentService, type ReadFileResponse } from '../../gen/nwfl/mensa/v1/content_pb.js';
+import { timestampDate } from '@bufbuild/protobuf/wkt';
+import { type ContentItem, ContentKind, ContentService, LinkTargetKind, LinkTargetStatus, type ReadFileResponse } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import { type EventOccurrence, type EventSeries, EventService } from '../../gen/nwfl/mensa/v1/event_pb.js';
 import type { Office } from '../../gen/nwfl/mensa/v1/roster_pb.js';
 
@@ -86,6 +88,17 @@ export const FILE_TIMEOUT_MS = 60_000;
 /** A file as the public may have it: its bytes, still arriving; "not ready"; or not found (missing and withheld alike). */
 export type FileRead = { kind: 'pdf'; filename: string; size: number; body: ReadableStream<Uint8Array> } | { kind: 'not_ready' } | { kind: 'not_found' };
 
+/**
+ * LINKS L4: where a link in a PDF copy leads, as the API answers for the reader now: an active link's
+ * URL, its host in ASCII, whether it is a mail link or a login-walled one, and its file, page and the
+ * date it was last checked; a link turned off, with its date and no URL; or not found (unknown,
+ * another audience's, dropped, held by a mark: the API answers all alike).
+ */
+export type LinkRead =
+  | { kind: 'active'; url: string; host: string; mail: boolean; confirm: boolean; fileId: string; page: number; checkedAt?: Date }
+  | { kind: 'disabled'; fileId: string; page: number; at?: Date }
+  | { kind: 'not_found' };
+
 export class ApiNotFound extends Error {
   constructor(readonly rpc: string) {
     super(`the API has no such thing (${rpc})`);
@@ -124,6 +137,8 @@ export interface ApiReads {
   listPublishedItems(kind: ContentKind, pageSize: number, as?: Reader): Promise<ContentItem[]>;
   /** With a reader, as them (A14); a refused token rejects with ApiTokenRefused. */
   readFile(id: string, as?: Reader): Promise<FileRead>;
+  /** LINKS L4. With a reader, as them; a refused token rejects with ApiTokenRefused. */
+  getLinkTarget(id: string, as?: Reader): Promise<LinkRead>;
 }
 
 const codeName = (code: Code) => Code[code].replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
@@ -212,8 +227,38 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
     }
   };
 
+  const getLinkTarget = async (id: string, as?: Reader): Promise<LinkRead> => {
+    const headers = authorization(as);
+    try {
+      return await call(
+        'GetLinkTarget',
+        async (): Promise<LinkRead> => {
+          const got = await content.getLinkTarget({ linkId: id }, headers ? { headers } : {});
+          if (got.status === LinkTargetStatus.DISABLED) return { kind: 'disabled', fileId: got.fileId, page: got.page, ...(got.statusAt ? { at: timestampDate(got.statusAt) } : {}) };
+          if (got.status !== LinkTargetStatus.ACTIVE || (got.kind !== LinkTargetKind.WEB && got.kind !== LinkTargetKind.MAIL)) return { kind: 'not_found' };
+          return {
+            kind: 'active',
+            url: got.url,
+            host: got.host,
+            mail: got.kind === LinkTargetKind.MAIL,
+            confirm: got.confirm,
+            fileId: got.fileId,
+            page: got.page,
+            ...(got.statusAt ? { checkedAt: timestampDate(got.statusAt) } : {}),
+          };
+        },
+        true,
+        headers !== undefined,
+      );
+    } catch (error) {
+      if (error instanceof ApiNotFound) return { kind: 'not_found' };
+      throw error;
+    }
+  };
+
   return {
     readFile,
+    getLinkTarget,
     listOccurrences: (from, to) =>
       call('ListOccurrences', async () => (await events.listOccurrences({ from: protoDate(from), to: protoDate(to), includeCancelled: true })).occurrences),
     getOccurrence: (id) => call('GetOccurrence', async () => (await events.getOccurrence({ id })).occurrence, true),
@@ -236,5 +281,6 @@ export function unavailableReads(): ApiReads {
     getRoster: fail('GetRoster'),
     listPublishedItems: fail('ListPublishedItems'),
     readFile: fail('ReadFile'),
+    getLinkTarget: fail('GetLinkTarget'),
   };
 }
