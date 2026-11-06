@@ -19,8 +19,9 @@
 //      the copy, however little of it the rect covers, nor, under an image
 //      policy that does not show pictures, any picture PDFium reads in the
 //      original; and no kept link may lie on a page of the original that
-//      reaches a tiling pattern holding a picture (fix round 2, F1: PDFium
-//      gives no place for one, so the whole page counts).
+//      reaches a tiling pattern or a soft mask's group that draws a picture
+//      (fix round 2, F1; fix round 3, N1: PDFium gives no place for one, so
+//      the whole page counts), or whose resources are too many to walk (D1).
 //      The engine drops a link the guard would refuse, so only a subverted or
 //      broken engine meets this.
 //

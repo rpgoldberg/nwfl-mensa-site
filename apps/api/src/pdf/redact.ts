@@ -61,8 +61,9 @@
 // guard reads as withheld: a glyph of the original the copy lacks, and under
 // "blur" or "hide" every picture PDFium reads on every page (drawn on the
 // page, in a form at any depth, or in an annotation's appearance) and (fix
-// round 2, F1) the whole of every page whose resources reach a tiling pattern
-// holding a picture, whose place PDFium does not give (link-guard.ts, the
+// round 2, F1; fix round 3, N1 and D1) the whole of every page whose resources
+// reach a tiling pattern or a soft mask's group that draws a picture, whose
+// place PDFium does not give, or are too many to walk (link-guard.ts, the
 // gate's own check too); the reply names the ids kept. PDFium and the gate read the copy
 // with the annotations in place, so every string they hold is searched for
 // every passage too. With no links, nothing is written and the copy is byte
@@ -73,7 +74,7 @@ import { checkCopy } from './gate.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
 import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-annots.js';
 import { linkGuardAreas } from './link-guard.js';
-import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
+import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, hull, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -112,13 +113,9 @@ export const SCAN_SHARE = 0.8;
 function isScan(page: Page): boolean {
   const clip = (b: Box): Box => ({ left: Math.max(0, b.left), bottom: Math.max(0, b.bottom), right: Math.min(page.width, b.right), top: Math.min(page.height, b.top) });
   const area = (b: Box): number => Math.max(0, b.right - b.left) * Math.max(0, b.top - b.bottom);
-  const drawn = page.bounds().map(clip);
-  const extent = area({
-    left: Math.min(...drawn.map((b) => b.left)),
-    bottom: Math.min(...drawn.map((b) => b.bottom)),
-    right: Math.max(...drawn.map((b) => b.right)),
-    top: Math.max(...drawn.map((b) => b.top)),
-  });
+  // One box at a time: a page can draw millions of objects, too many to spread into one call (fix round 3, N5).
+  const drawn = hull(page.bounds().map(clip));
+  const extent = drawn === null ? 0 : area(drawn);
   const pictures = page.pictures().reduce((sum, picture) => sum + area(clip(picture)), 0);
   return extent > 0 && pictures >= SCAN_SHARE * extent;
 }
