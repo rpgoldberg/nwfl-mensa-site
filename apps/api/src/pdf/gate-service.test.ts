@@ -97,7 +97,7 @@ describe('startGateSidecar', () => {
 
   it('drops a malformed request without a reply and keeps serving', async () => {
     const { socket, logged } = await started();
-    const bad = encodeFrame(GATE_REQUEST_MAGIC, { v: 2, quotes: [], image: 'show', sha256: SHA, originalSha256: sha256Hex(ORIGINAL), copyBytes: 3, links: [], kept: [], env: { PGPASSWORD: 'canary' } }, Buffer.concat([COPY, ORIGINAL]));
+    const bad = encodeFrame(GATE_REQUEST_MAGIC, { v: 3, quotes: [], image: 'show', sha256: SHA, originalSha256: sha256Hex(ORIGINAL), copyBytes: 3, links: [], kept: [], env: { PGPASSWORD: 'canary' } }, Buffer.concat([COPY, ORIGINAL]));
     await expect(ask(socket, bad)).rejects.toThrow();
     expect(logged.join('\n')).toContain('refused a request: ');
     expect(logged.join('\n')).not.toContain('canary');

@@ -200,7 +200,7 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       calls.length = 0;
       expect(await drain(worker, { redact: stub() })).toBe(1);
       // No links attached: each request names none, and the site's origin (LINKS L3).
-      expect(calls).toEqual(expect.arrayContaining([{ quotes: [], redactsAny: true, image: 'blur', origin: 'https://nwflorida.us', links: [] }, { quotes: [], redactsAny: true, image: 'show', origin: 'https://nwflorida.us', links: [] }]));
+      expect(calls).toEqual(expect.arrayContaining([{ quotes: [], redactsAny: true, image: 'blur', origin: 'https://nwflorida.us', links: [], membersWithhold: [] }, { quotes: [], redactsAny: true, image: 'show', origin: 'https://nwflorida.us', links: [], membersWithhold: [] }]));
       expect(calls).toHaveLength(2);
       expect((await copies(file)).length).toBe(2);
     });
@@ -229,7 +229,8 @@ describe.skipIf(!live)('PDF store and regeneration (0015)', () => {
       expect(text(await readPdf(pool, file, 'members'))).toBe('copy:');
       calls.length = 0;
       expect(await drain(worker, { redact: stub() })).toBe(1);
-      expect(calls).toEqual([{ quotes: [PHONE_NAME], redactsAny: true, image: 'blur', origin: 'https://nwflorida.us', links: [] }]);
+      // BOXLABEL: members see phones, so the public's box will say "Members Only".
+      expect(calls).toEqual([{ quotes: [PHONE_NAME], redactsAny: true, image: 'blur', origin: 'https://nwflorida.us', links: [], membersWithhold: [false] }]);
       expect(text(await readPdf(pool, file, 'public'))).toBe(`copy:${PHONE_NAME}`);
       const after = await copies(file);
       expect(after.map((c) => [c.stale, c.status])).toEqual([[false, 'ready'], [true, 'ready'], [false, 'ready']]);

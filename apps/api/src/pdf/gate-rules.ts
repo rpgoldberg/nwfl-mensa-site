@@ -83,6 +83,13 @@
 //      asks for the copy with no links (rerun.ts). With no links kept the
 //      rules are as before.
 //
+//   5. Box labels (BOXLABEL, gate-labels.ts): PDFium reads each page's
+//      boxes and labels. Exactly "Members Only", "Mbrs Only" or "Private",
+//      one to a box, inside a box drawn before it, in the label style, and
+//      no other glyph drawn over a box; anything else is "rules". The text
+//      checks (gate.ts, and drawn.ts's glyphs) do not count those labels'
+//      own strings, and nothing more (leakBreak).
+//
 // Out of scope, as for any text gate: withheld text written so a reader does
 // not see it as text (reversed, encoded, drawn as curves or as a picture), a
 // picture rebuilt from many small tiles or from vector shapes (gradients of
@@ -94,6 +101,7 @@ import { PDF_WS, operandBreak } from './content.js';
 import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha256Hex } from './engine-protocol.js';
 import { type PageRef, drawnBreak } from './drawn.js';
 import { checkCopy } from './gate.js';
+import { labelMarks, leakBreak } from './gate-labels.js';
 import type { GateJob } from './gate-isolated.js';
 import { linkTextBreak } from './gate-links.js';
 import { type Accepted, type LinkRequest, acceptedLinks } from './link-annots.js';
@@ -610,20 +618,33 @@ async function nestedPast(copy: Uint8Array): Promise<string | null> {
   return nestingBreak(doc);
 }
 
+/** The pages pdf-lib's tree gives a copy, in order (as readRules gives them), for drawn.ts to check pdf.js against. */
+async function pagesOf(pdf: Uint8Array): Promise<PageRef[]> {
+  const doc = await PDFDocument.load(pdf, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
+  return doc.getPages().map((page) => ({ num: page.ref.objectNumber, gen: page.ref.generationNumber }));
+}
+
 /**
  * The gate's verdict on one copy: nesting past the cap first, before pdf.js reads it, then withheld text (gate.ts),
- * then the rules above, then what pdf.js draws (drawn.ts; under "show" only its glyphs, and only with quotes), then
- * under "blur" and "hide" the original's pictures.
+ * then the rules above and the labels (gate-labels.ts, BOXLABEL), then what pdf.js draws (drawn.ts; under "show" only
+ * its glyphs, and only with quotes), then under "blur" and "hide" the original's pictures. No label's own text counts
+ * as withheld text, when the labels pass (leakBreak): exactly those strings, inside their boxes.
  * Never throws.
  */
 export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
   try {
     if ((await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
-    if ((await checkCopy(job.copy, job.quotes)) !== null) return { pass: false, code: 'withheld' };
+    const labels = await labelMarks(job.copy);
+    if ((await leakBreak(job.copy, labels, (bytes) => checkCopy(bytes, job.quotes))) !== null) return { pass: false, code: 'withheld' };
     const { broken, pages } = await readRules(job.copy, job.image, job);
-    if (broken !== null) return { pass: false, code: 'rules' };
+    if (broken !== null || typeof labels === 'string') return { pass: false, code: 'rules' };
     // Under "show" only for the quotes (fix round 6b, REDACT-LOOK L10/N8), with no picture judged.
-    const drawn = job.image === 'show' && job.quotes.length === 0 ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
+    let drawn = job.image === 'show' && job.quotes.length === 0 ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
+    // Glyphs that spell a quote only in the labels: the glyphs read again with the labels' text out, and the rest of the walk with no quotes.
+    if (drawn?.code === 'withheld') {
+      const glyphs = await leakBreak(job.copy, labels, async (bytes) => drawnBreak(bytes, 'show', job.quotes, await pagesOf(bytes)));
+      drawn = glyphs ?? (await drawnBreak(job.copy, job.image, [], pages));
+    }
     if (drawn !== null) return { pass: false, code: drawn.code };
     if ((await linkTextBreak(job.copy, job.original, job)) !== null) return { pass: false, code: 'rules' };
     if (job.image !== 'show' && (await keepsPicture(job.copy, await pictureWindows(job.original)))) return { pass: false, code: 'rules' };

@@ -264,15 +264,19 @@ the original's annotations is copied. A link is dropped when its rect meets
 a drawn box, removed ink or the box of any glyph the copy lacks, or, under
 `blur` and `hide`, any picture PDFium reads: drawn on the page, in a form at
 any depth, or in an annotation's appearance. A picture painted by a tiling
-pattern, or drawn in a soft mask's group (an ExtGState's `/SMask`), has no
+pattern, or drawn in a soft mask's group (an ExtGState's `/SMask`; the name
+`/None`, which InDesign, Illustrator and Acrobat write, is no soft mask, and
+since BOXLABEL's NOTE-1 fix no longer stops the sanitizer), has no
 place PDFium gives, so under those policies a page whose resources (or its
 forms', patterns', soft masks', Type 3 glyphs' or annotation appearances')
 reach a tiling pattern or a soft mask's group that draws a picture XObject
 or an inline picture, itself or through forms or patterns, keeps no link at
 all. So does a page whose walk needs more than `WALK_BUDGET` (65,536)
 resource reads, and every page that needs a read once the file has spent
-`FILE_WALK_BUDGET` (16 times that): both fail safe. A picture a Type 3 glyph
-draws outside a pattern or a soft mask is not counted. A link is dropped too
+`FILE_WALK_BUDGET` (16 times that): both fail safe. A Type 3 font's glyphs are
+read as a pattern's are (BOXLABEL, NOTE-4): PDFium lists none of their
+objects, so under those policies a page whose Type 3 glyphs draw a picture
+(their own resources' or, with none of their own, the page's) keeps no link. A link is dropped too
 when its target holds a quote the audience withholds (`targetHolds`) or its
 rect rounds to under a hundredth of a point. The gate accepts only that
 shape and refuses the whole copy when
@@ -290,6 +294,48 @@ boot, and production (`NODE_ENV=production`) refuses `localhost`. `0025`
 records each copy's links with it (`pdf_copy_put`'s seventh argument) and
 lets the worker read the links; at boot the worker queues every file with
 no copy for its current inputs.
+
+### Box labels (BOXLABEL)
+
+Each passage a copy withholds is removed and covered by an opaque black box
+exactly its width, one line tall. A box says, in white Helvetica, who may
+read what it covers:
+
+- in the public copy, a passage members can see: `Members Only` where it
+  fits at a readable size, else `Mbrs Only` (no period), else no label;
+- a passage members cannot see either, in the public copy or in the members
+  copy (and the officers' copy, if one is ever made): `Private` where it
+  fits, else no label.
+
+"Fits" is the readable-size rule: 0.8 of the passage's type size, smaller
+for the box's height or width (a point clear each side), never below 7 pt or
+0.6 of the type size, each string measured from Helvetica's own widths. A box
+too narrow is black alone. The engine decides per box: a box is `Private`
+when any passage glyph in it is matched by a quote members withhold too (or
+when it holds no passage glyph at all), else a members label. For the public,
+a quote is withheld from members when a mark hides the file's item from them,
+or any active mark of that text is in a category the members' policy does not
+show. The engine request says so per quote (`membersWithhold`, one boolean
+per quote, protocol v3), so no request gains any text: the public's holds
+only the public's quotes, the members' only theirs. The input hash (v3)
+covers which quotes members withhold, so a change to the members' policy
+remakes the public copy; `ENGINE_VERSION` ends in `+labels-1`, so every copy
+labelled `withheld` is made again. The labels change no box: each region,
+and every pixel outside the boxes, is what the engine made before
+(`test/pdf/box-regions.golden.json`, recorded from main at b3668e4).
+
+The gate takes exactly the three strings, inside boxes, in the label style
+(`src/pdf/gate-labels.ts`): a label in a form or where no box drawn before it
+holds it, any other text in the labels' font and colour inside a box (the old
+`withheld` included), a label not upright, filled, opaque and at least 7 pt,
+two labels in one box, or any other glyph drawn over a box refuses the copy
+(`rules`). A glyph under a box is hidden by it and is not refused for being
+there; the leak checks read it as before. No label's own text counts as
+withheld text: a leak check that finds a quote is run once more on the copy
+with exactly those labels' strings turned to spaces, each in the very bytes
+PDFium writes for a label at that label's place, as many as PDFium read and
+no more. So a passage that is itself `Private` gets a copy, and the same word
+anywhere outside a box is still refused.
 
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 
@@ -454,7 +500,9 @@ The worker picks the engine with `PDF_ENGINE_SOCKET`:
 - anything else, including a trailing newline: the worker refuses to start.
 
 Each copy uses one connection carrying one length-prefixed frame each way
-(`src/pdf/engine-protocol.ts`). The request carries the original (at most
+(`src/pdf/engine-protocol.ts`, version 3 from BOXLABEL: the request says,
+one boolean per quote, which quotes members withhold too; a frame of version
+1 or 2 is refused). The request carries the original (at most
 10 MiB) and the typed request (header at most 1 MiB). The reply carries the
 copy (at most 20 MiB) and a small typed result. Neither side sends an
 environment, a path or a credential. Each side stops reading at a declared
@@ -601,6 +649,9 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
   too, so a `/ToUnicode` that lies to the text layer does not hide them.
   Under "show" this pass runs only when there are quotes, and judges no
   picture (fix round 6b: the public copy is "show");
+- the box labels (BOXLABEL, above): exactly `Members Only`, `Mbrs Only` or
+  `Private`, one to a box, inside a box drawn before it, in the label
+  style; no other glyph drawn over a box. Read with PDFium;
 - the page tree is one pdf.js and pdf-lib read alike: every node `/Type
   /Pages` with its `/Kids` and their `/Count`, every leaf `/Type /Page`,
   each once (fix round 4);

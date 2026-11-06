@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { type WrappedPdfiumModule, init } from '@embedpdf/pdfium';
+import { type BoxKind, LABEL_EMS, MIN_LABEL_PT, isLabel, labelFor } from './labels.js';
 import type { Box, PageChar, Region, TextObject } from './match.js';
 
 type Module = WrappedPdfiumModule;
@@ -44,24 +45,9 @@ const FPDF_PAGEOBJ_FORM = 5;
 const FPDF_FILLMODE_ALTERNATE = 1;
 /** Text render modes 4 to 7 add the glyphs to the clipping path (PDF 32000-1, 9.3.6). */
 const FPDF_TEXTRENDERMODE_FILL_CLIP = 4;
-/** Helvetica's advance for "withheld", in ems (its AFM widths: w i t h h e l d). */
-const LABEL = 'withheld';
-export const LABEL_EMS = (722 + 222 + 278 + 556 + 556 + 556 + 222 + 556) / 1000;
-/** The smallest label drawn, in points: below it a box has no label (REDACT-LOOK: legible to older readers at 100 %). */
-export const MIN_LABEL_PT = 7;
-/** The space kept clear between the label and each side of its box, in points. */
-const LABEL_PAD = 1;
-
-/**
- * The size of the "withheld" label for a box, or null when it has none: 0.8 of the passage's type
- * size, smaller to fit the box's height and width (a point clear each side), but never below
- * MIN_LABEL_PT or 0.6 of the type size. A box too narrow for a readable label is left without one,
- * as an opaque box alone; the label is never shrunk to fit.
- */
-export function labelSize(region: Region): number | null {
-  const size = Math.min(0.8 * region.fontSize, 0.8 * (region.top - region.bottom), (region.right - region.left - 2 * LABEL_PAD) / LABEL_EMS);
-  return size < Math.max(MIN_LABEL_PT, 0.6 * region.fontSize) ? null : size;
-}
+/** Text render mode 0: the glyphs filled, as the labels are drawn. */
+const FPDF_TEXTRENDERMODE_FILL = 0;
+const FPDF_PAGEOBJ_PATH = 2;
 
 /** A PDF matrix [a b c d e f]: (x, y) goes to (a x + c y + e, b x + d y + f). */
 type Matrix = [number, number, number, number, number, number];
@@ -355,10 +341,11 @@ export class Page {
   }
 
   /**
-   * An opaque box over each region, labelled "withheld" in white, centred, where the label fits
-   * (labelSize). The labels go on after every box, so no box is drawn over another's label.
+   * An opaque box over each region, labelled by its kind (labels.ts labelFor: "Members Only", "Mbrs Only" or
+   * "Private") in white Helvetica, centred, where a label fits. `kinds[i]` is region i's; "private" when absent.
+   * The labels go on after every box, so no box is drawn over another's label.
    */
-  drawBoxes(regions: readonly Region[]): void {
+  drawBoxes(regions: readonly Region[], kinds: readonly BoxKind[] = []): void {
     const m = this.m;
     for (const { left, right, bottom, top } of regions) {
       const box = m.FPDFPageObj_CreateNewRect(left, bottom, right - left, top - bottom);
@@ -366,22 +353,137 @@ export class Page {
       m.FPDFPath_SetDrawMode(box, FPDF_FILLMODE_ALTERNATE, false);
       m.FPDFPage_InsertObject(this.handle, box);
     }
-    for (const region of regions) {
+    regions.forEach((region, i) => {
       const { left, right, bottom, top } = region;
-      const width = right - left;
-      const height = top - bottom;
-      const size = labelSize(region);
-      if (size === null) continue;
+      const found = labelFor(region, kinds[i] ?? 'private');
+      if (found === null) return;
+      const { text: string, size } = found;
       const label = m.FPDFPageObj_NewTextObj(this.doc.handle, 'Helvetica', size);
-      const bytes = (LABEL.length + 1) * 2;
+      const bytes = (string.length + 1) * 2;
       const text = rt(m).wasmExports.malloc(bytes);
-      rt(m).stringToUTF16(LABEL, text, bytes);
+      rt(m).stringToUTF16(string, text, bytes);
       m.FPDFText_SetText(label, text);
       rt(m).wasmExports.free(text);
       m.FPDFPageObj_SetFillColor(label, 255, 255, 255, 255);
-      m.FPDFPageObj_Transform(label, 1, 0, 0, 1, left + (width - LABEL_EMS * size) / 2, bottom + (height - 0.7 * size) / 2);
+      m.FPDFPageObj_Transform(label, 1, 0, 0, 1, left + (right - left - LABEL_EMS[string] * size) / 2, bottom + (top - bottom - 0.7 * size) / 2);
       m.FPDFPage_InsertObject(this.handle, label);
-    }
+    });
     m.FPDFPage_GenerateContent(this.handle);
   }
+
+  /**
+   * What the label check reads of the page (gate-labels.ts): each object drawn directly on the page, in drawing
+   * order, as a box, a lettering or anything else; how many text objects in a form XObject, at any depth, read as a
+   * label in the labels' font and colour; and, for each character of the page's reading (chars(), in its order), the
+   * text object it was read from and the place in the drawing order of the page's object that draws it.
+   *
+   * A box is a path in the boxes' style: one rectangle, filled even-odd, not stroked, opaque black, drawn at the
+   * identity. A lettering is a text object in the labels' font and colour (white, non-embedded Helvetica), with the
+   * text the page's reading gives it (no character PDFium makes up), and `styled` when it is in the labels' style
+   * besides (glyphs filled, opaque, moved but not scaled or turned, at least MIN_LABEL_PT).
+   */
+  labelReading(): LabelReading {
+    const m = this.m;
+    const top: PageMark[] = [];
+    let nested = 0;
+    const text = m.FPDFText_LoadPage(this.handle);
+    // Fill colour (4 u32), FS_MATRIX (6 floats), FS_RECTF (4 floats), a float, two ints, a name, and a point.
+    const at = rt(m).wasmExports.malloc(256);
+    try {
+      const u32 = (offset: number, n: number): number[] => [...new Uint32Array(rt(m).HEAPU8.buffer, at + offset, n)];
+      const f32 = (offset: number, n: number): number[] => [...new Float32Array(rt(m).HEAPU8.buffer, at + offset, n)];
+      const filled = (object: number): number[] => (m.FPDFPageObj_GetFillColor(object, at, at + 4, at + 8, at + 12) ? u32(0, 4) : []);
+      const matrix = (object: number): number[] => (m.FPDFPageObj_GetMatrix(object, at + 16) ? f32(16, 6) : []);
+      const same = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((v, i) => v === b[i]);
+      const bounds = (object: number): Box => {
+        m.FPDFPageObj_GetBounds(object, at + 40, at + 44, at + 48, at + 52);
+        const [left = 0, bottom = 0, right = 0, top = 0] = f32(40, 4);
+        return { left, bottom, right, top };
+      };
+      // Each text object's glyphs as the page's reading gives them (none PDFium makes up, such as the space it reads
+      // after a text object), and each glyph's object.
+      const owners: number[] = [];
+      const written = new Map<number, string>();
+      for (let i = 0; i < m.FPDFText_CountChars(text); i++) {
+        const owner = m.FPDFText_GetTextObject(text, i);
+        owners.push(owner);
+        if (m.FPDFText_IsGenerated(text, i) === 1) continue;
+        const code = m.FPDFText_GetUnicode(text, i);
+        const sofar = written.get(owner) ?? '';
+        if (sofar.length <= 16) written.set(owner, sofar + (code > 0x10ffff ? '\ufffd' : String.fromCodePoint(code)));
+      }
+      /** Whether a text object is in the labels' font and colour: white, non-embedded Helvetica. */
+      const lettered = (object: number): boolean => {
+        if (!same(filled(object), [255, 255, 255, 255])) return false;
+        const font = m.FPDFTextObj_GetFont(object);
+        if (font === 0 || m.FPDFFont_GetIsEmbedded(font) !== 0) return false;
+        const length = m.FPDFFont_GetBaseFontName(font, at + 64, 64);
+        return length === 10 && Buffer.from(rt(m).HEAPU8.subarray(at + 64, at + 73)).toString('latin1') === 'Helvetica';
+      };
+      const fontSize = (object: number): number => (m.FPDFTextObj_GetFontSize(object, at + 56) ? (f32(56, 1)[0] as number) : 0);
+      const isBox = (object: number): boolean => {
+        if (!same(filled(object), [0, 0, 0, 255]) || m.FPDFPageObj_HasTransparency(object) || !same(matrix(object), [1, 0, 0, 1, 0, 0])) return false;
+        if (!m.FPDFPath_GetDrawMode(object, at + 60, at + 64) || !same([...new Int32Array(rt(m).HEAPU8.buffer, at + 60, 2)], [FPDF_FILLMODE_ALTERNATE, 0])) return false;
+        return m.FPDFPath_CountSegments(object) === 5 && rectangle(m, object, bounds(object), at + 128);
+      };
+      // The place in the drawing order of the page's object that draws each text object, in a form at any depth too.
+      const placeOf = new Map<number, number>();
+      const pending: Array<[number, number]> = [];
+      for (let i = 0; i < this.objectCount; i++) {
+        const object = m.FPDFPage_GetObject(this.handle, i);
+        const type = m.FPDFPageObj_GetType(object);
+        placeOf.set(object, i);
+        if (type === FPDF_PAGEOBJ_TEXT && lettered(object)) {
+          const [a, b, c, d, e = 0, f = 0] = matrix(object);
+          const styled = a === 1 && b === 0 && c === 0 && d === 1 && m.FPDFTextObj_GetTextRenderMode(object) === FPDF_TEXTRENDERMODE_FILL && !m.FPDFPageObj_HasTransparency(object) && fontSize(object) >= MIN_LABEL_FLOOR;
+          top.push({ kind: 'lettering', object, text: written.get(object) ?? '', styled, x: e, y: f, bounds: bounds(object) });
+        } else if (type === FPDF_PAGEOBJ_PATH && isBox(object)) top.push({ kind: 'box', object, bounds: bounds(object) });
+        else top.push({ kind: 'other', object });
+        if (type === FPDF_PAGEOBJ_FORM) for (let k = 0; k < m.FPDFFormObj_CountObjects(object); k++) pending.push([m.FPDFFormObj_GetObject(object, k), i]);
+      }
+      for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+        const [object, place] = next;
+        const type = m.FPDFPageObj_GetType(object);
+        placeOf.set(object, place);
+        if (type === FPDF_PAGEOBJ_TEXT && lettered(object) && isLabel(written.get(object) ?? '')) nested += 1;
+        if (type === FPDF_PAGEOBJ_FORM) for (let k = 0; k < m.FPDFFormObj_CountObjects(object); k++) pending.push([m.FPDFFormObj_GetObject(object, k), place]);
+      }
+      return { top, nested, owners, places: owners.map((owner) => placeOf.get(owner) ?? -1) };
+    } finally {
+      rt(m).wasmExports.free(at);
+      m.FPDFText_ClosePage(text);
+    }
+  }
+}
+
+/** The smallest label size taken as the labels' style: MIN_LABEL_PT, less what a float written and read again loses. */
+const MIN_LABEL_FLOOR = MIN_LABEL_PT - 1e-4;
+
+/** Whether a path of five segments is the rectangle of its bounds, as "re" draws it: four corners, then closed. */
+function rectangle(m: Module, path: number, box: Box, at: number): boolean {
+  const corners = new Set<string>();
+  for (let i = 0; i < 5; i++) {
+    const segment = m.FPDFPath_GetPathSegment(path, i);
+    if (segment === 0 || !m.FPDFPathSegment_GetPoint(segment, at, at + 4)) return false;
+    const [x = NaN, y = NaN] = new Float32Array(rt(m).HEAPU8.buffer, at, 2);
+    if (!((x === box.left || x === box.right) && (y === box.bottom || y === box.top))) return false;
+    corners.add(`${x},${y}`);
+  }
+  return corners.size === 4;
+}
+
+/** One object drawn directly on a page, as the label check reads it (Page.labelReading). */
+export type PageMark =
+  | { kind: 'box'; object: number; bounds: Box }
+  | { kind: 'lettering'; object: number; text: string; styled: boolean; x: number; y: number; bounds: Box }
+  | { kind: 'other'; object: number };
+
+export interface LabelReading {
+  top: PageMark[];
+  /** Text objects in a form XObject that read as a label, in the labels' font and colour. */
+  nested: number;
+  /** For each character of the page's reading (Page.chars, in its order), the text object it was read from. */
+  owners: number[];
+  /** For each character, the place in `top` of the object that draws it (-1 when PDFium names none). */
+  places: number[];
 }

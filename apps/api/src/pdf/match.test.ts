@@ -4,7 +4,7 @@
 // hyphen or not, a box). Every name here is made up.
 import { describe, expect, it } from 'vitest';
 import { type Box, type PageChar, type Region, type TextObject, boxesFor, copiesOf, drawnAgain, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, textMatches, unread, wordsOf } from './match.js';
-import { LABEL_EMS, MIN_LABEL_PT, labelSize } from './pdfium.js';
+import { LABEL_EMS, MIN_LABEL_PT, labelSize } from './labels.js';
 
 const SIZE = 12;
 const ADVANCE = 6;
@@ -954,34 +954,35 @@ describe('stillThere: which characters survived a removal', () => {
   });
 });
 
-describe('labelSize: "withheld" only where it fits at a readable size', () => {
+describe('labelSize: a label only where it fits at a readable size (BOXLABEL: "Private" here, each label at its own width)', () => {
   const region = (width: number, height = 14.028, fontSize = 12) => ({ page: 0, left: 100, right: 100 + width, bottom: 700, top: 700 + height, fontSize });
+  const EMS = LABEL_EMS.Private;
 
   it('is 7 pt at the smallest', () => {
     expect(MIN_LABEL_PT).toBe(7);
   });
 
   it('labels "Quillon" at 12 pt at 0.8 of the type size, inside the box with a point to spare each side', () => {
-    const size = labelSize(region(37.344));
+    const size = labelSize(region(37.344), 'Private');
     expect(size).toBeCloseTo(9.6, 6);
-    expect(LABEL_EMS * (size as number) + 2).toBeLessThanOrEqual(37.344);
+    expect(EMS * (size as number) + 2).toBeLessThanOrEqual(37.344);
   });
 
   it('gives "Bo" at 12 pt no label: it would be below the floor', () => {
-    expect(labelSize(region(14.676))).toBeNull();
+    expect(labelSize(region(14.676), 'Private')).toBeNull();
   });
 
   it('shrinks to fit the width down to the floor (0.6 of the type size here), and no further', () => {
-    expect(labelSize(region(32))).toBeCloseTo(30 / LABEL_EMS, 6);
-    expect(labelSize(region(2 + 7.21 * LABEL_EMS))).toBeCloseTo(7.21, 6);
-    expect(labelSize(region(2 + 7.19 * LABEL_EMS))).toBeNull();
+    expect(labelSize(region(28), 'Private')).toBeCloseTo(26 / EMS, 6);
+    expect(labelSize(region(2 + 7.21 * EMS), 'Private')).toBeCloseTo(7.21, 6);
+    expect(labelSize(region(2 + 7.19 * EMS), 'Private')).toBeNull();
   });
 
   it('never labels small type, whose label would be under 7 pt', () => {
-    expect(labelSize(region(200, 9.4, 8))).toBeNull();
+    expect(labelSize(region(200, 9.4, 8), 'Private')).toBeNull();
   });
 
   it('is never more than 0.8 of the box\'s height', () => {
-    expect(labelSize(region(200, 10))).toBeCloseTo(8, 6);
+    expect(labelSize(region(200, 10), 'Private')).toBeCloseTo(8, 6);
   });
 });

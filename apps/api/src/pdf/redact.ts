@@ -15,12 +15,17 @@
 // rest of its word, and any text drawn twice there that PDFium does not read)
 // is removed from the content
 // (PDFium, form XObjects included) and an opaque box is drawn over exactly
-// what was removed, labelled "withheld" where the label fits at a readable
-// size (pdfium.ts labelSize). Then the pages are rebuilt alone
+// what was removed. BOXLABEL (labels.ts): each box is labelled by who may
+// read it, where its label fits at a readable size: "Private" when a passage
+// glyph in it is one members withhold too (the request's membersWithhold;
+// every quote when it names none), or it holds none, else "Members Only",
+// else "Mbrs Only"; a box too narrow has none. Then the pages are rebuilt alone
 // (sanitize.ts): no metadata, outline, attachments, JavaScript, annotations or
 // marked-content text. Last, PDFium reads the copy again, then the output
 // gate (gate.ts) reads it with pdf.js and decodes every object in it: if
-// either finds any passage, there is no copy.
+// either finds any passage, there is no copy. The labels are read first as
+// the gate reads them (gate-labels.ts): any other text in a box, or a label
+// outside one, is no copy, and no label's own text counts as a passage.
 //
 // No copy (the reason is for an officer):
 //   - the file cannot be opened;
@@ -71,7 +76,9 @@
 // is no copy here; the worker then asks for one with no links (rerun.ts).
 // ============================================================================
 import { checkCopy } from './gate.js';
+import { labelMarks, leakBreak } from './gate-labels.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
+import type { BoxKind } from './labels.js';
 import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-annots.js';
 import { linkGuardAreas } from './link-guard.js';
 import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, hull, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
@@ -81,6 +88,11 @@ import { sanitize } from './sanitize.js';
 export interface RedactRequest {
   /** The marked passages this audience's policy redacts. */
   quotes: readonly string[];
+  /**
+   * BOXLABEL: for each quote, whether members withhold it too (store.ts inputsFor): its box is labelled "Private",
+   * else "Members Only". Every quote when absent, so every box "Private". One boolean per quote, so no text.
+   */
+  membersWithhold?: readonly boolean[];
   /** Whether this audience's policy redacts any category: then even an unmarked file is never given as it is. */
   redactsAny: boolean;
   /** This audience's image policy (images.ts); "show" when absent. */
@@ -124,7 +136,7 @@ const isBlank = (c: { text: string }): boolean => /^\s*$/u.test(c.text);
 const overlaps = (a: Box, b: Box): boolean => a.left < b.right && b.left < a.right && a.bottom < b.top && b.bottom < a.top;
 
 /** Why one page cannot be given, or null once its passages are removed and boxed (added to `boxes`). */
-function redactPage(doc: Document, index: number, quotes: readonly string[], boxes: Region[], regenerate: boolean, blocked: PageBox[]): string | null {
+function redactPage(doc: Document, index: number, quotes: readonly string[], privateQuotes: readonly string[], boxes: Region[], regenerate: boolean, blocked: PageBox[]): string | null {
   doc.flatten(index);
   return doc.page(index, (page) => {
     // Inline pictures become picture XObjects, which sanitize can replace.
@@ -180,10 +192,32 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], box
     // The boxes cover exactly what was removed: the passages, any neighbour and any unread text that went with them.
     const removed = new Set([...chars.keys()].filter((i) => !there.has(i)));
     const drawn = boxesFor(chars, withheld, removed, index, meeting(hidden.objects, found.regions));
-    page.drawBoxes(drawn);
+    // BOXLABEL: the glyphs of a passage members withhold too, and their copies; a box holding one says "Private".
+    const privately = matchedChars(chars, privateQuotes);
+    page.drawBoxes(drawn, boxKinds(chars, drawn, withheld, new Set([...privately, ...copiesOf(chars, privately, words)])));
     boxes.push(...drawn);
     blocked.push(...withheldAreas(index, found.regions, drawn, chars, removed));
     return null;
+  });
+}
+
+/**
+ * Each box's kind (BOXLABEL, labels.ts): "members" when a withheld glyph is in it (its centre) and none is one members
+ * withhold too (`private`: those matched by a quote members withhold, and its copies); else "private", for a box that
+ * holds such a glyph, or no withheld glyph at all (only text removed with a passage).
+ */
+export function boxKinds(chars: readonly PageChar[], drawn: readonly Box[], withheld: ReadonlySet<number>, private_: ReadonlySet<number>): BoxKind[] {
+  const centre = (i: number): { x: number; y: number } | null => {
+    const place = chars[i]?.box ?? chars[i]?.ink ?? null;
+    return place === null ? null : { x: (place.left + place.right) / 2, y: (place.bottom + place.top) / 2 };
+  };
+  const inBox = (box: Box, i: number): boolean => {
+    const at = centre(i);
+    return at !== null && at.x >= box.left && at.x <= box.right && at.y >= box.bottom && at.y <= box.top;
+  };
+  return drawn.map((box) => {
+    const held = [...withheld].filter((i) => inBox(box, i));
+    return held.length > 0 && !held.some((i) => private_.has(i)) ? 'members' : 'private';
   });
 }
 
@@ -197,11 +231,11 @@ export function withheldAreas(index: number, regions: readonly Box[], drawn: rea
 }
 
 /** The document with the passages removed from every page, or why there can be no copy. */
-function redactPages(doc: Document, quotes: readonly string[], regenerate: boolean): { pdf: Uint8Array; boxes: Region[]; blocked: PageBox[] } | string {
+function redactPages(doc: Document, quotes: readonly string[], privateQuotes: readonly string[], regenerate: boolean): { pdf: Uint8Array; boxes: Region[]; blocked: PageBox[] } | string {
   const boxes: Region[] = [];
   const blocked: PageBox[] = [];
   for (let index = 0; index < doc.pageCount; index++) {
-    const refused = redactPage(doc, index, quotes, boxes, regenerate, blocked);
+    const refused = redactPage(doc, index, quotes, privateQuotes, boxes, regenerate, blocked);
     if (refused !== null) return refused;
   }
   return { pdf: doc.save(), boxes, blocked };
@@ -226,12 +260,14 @@ export async function verifyRedacted(pdf: Uint8Array, quotes: readonly string[])
 export async function redactPdf(original: Uint8Array, request: RedactRequest, deps: RedactDeps = {}): Promise<RedactResult> {
   const image = request.image ?? 'show';
   const quotes = [...new Set(request.quotes.map((quote) => quote.trim()).filter((quote) => quote !== ''))];
+  // A quote any copy of which members withhold is theirs to withhold too (BOXLABEL): its boxes say "Private".
+  const privateQuotes = [...new Set(request.quotes.flatMap((quote, i) => (request.membersWithhold?.[i] === false ? [] : [quote.trim()])).filter((quote) => quote !== ''))];
   if (quotes.length === 0 && !request.redactsAny && image === 'show') return { kind: 'original' };
   const doc = Document.open(await pdfium(), original);
   if (doc === null) return { kind: 'refused', reason: UNOPENABLE };
   let redacted: { pdf: Uint8Array; boxes: Region[]; blocked: PageBox[] } | string;
   try {
-    redacted = redactPages(doc, quotes, image !== 'show');
+    redacted = redactPages(doc, quotes, privateQuotes, image !== 'show');
   } finally {
     doc.close();
   }
@@ -255,6 +291,10 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
   } catch {
     return { kind: 'refused', reason: LINKS_UNWRITTEN };
   }
-  const left = (await verifyRedacted(pdf, quotes)) ?? (await checkCopy(pdf, quotes));
+  // The labels are read as the gate reads them (gate-labels.ts): any other text in a box, or a label outside one, is no
+  // copy, and no label's own text counts as withheld text.
+  const labels = await labelMarks(pdf);
+  if (typeof labels === 'string') return { kind: 'refused', reason: labels };
+  const left = await leakBreak(pdf, labels, async (bytes) => (await verifyRedacted(bytes, quotes)) ?? (await checkCopy(bytes, quotes)));
   return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes, kept } : { kind: 'refused', reason: left };
 }

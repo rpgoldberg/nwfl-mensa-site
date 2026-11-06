@@ -22,7 +22,11 @@ describe('ENGINE_VERSION', () => {
   });
 
   it('names the links\' revision (LINKS L3), the first bump after the two issues were loaded under box-exact', () => {
-    expect(ENGINE_VERSION).toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1');
+    expect(ENGINE_VERSION.split('+')).toContain('links-1');
+  });
+
+  it('names the labels\' revision (BOXLABEL), so every copy labelled "withheld" is made again', () => {
+    expect(ENGINE_VERSION).toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1');
   });
 });
 
@@ -56,6 +60,20 @@ describe('inputHashV1 (LINKS L3 fix 2, N5): the key of a copy made before links-
   });
 });
 
+describe('inputHash v3 (BOXLABEL): the quotes members withhold too', () => {
+  it('keys the quotes members withhold, canonically: every quote when the request names none', () => {
+    const quotes = ['Bo', ' Quillon Brask ', 'Bo'];
+    const all = inputHash(SHA, { quotes, redactsAny: true });
+    expect(inputHash(SHA, { quotes, redactsAny: true, membersWithhold: [true, true, true] }).equals(all)).toBe(true);
+    const none = inputHash(SHA, { quotes, redactsAny: true, membersWithhold: [false, false, false] });
+    expect(none.equals(all)).toBe(false);
+    // Order and spacing as for the quotes; a quote any of whose copies members withhold is withheld from them.
+    expect(inputHash(SHA, { quotes: ['Quillon Brask', 'Bo'], redactsAny: true, membersWithhold: [false, true] }).equals(inputHash(SHA, { quotes, redactsAny: true, membersWithhold: [true, false, false] }))).toBe(true);
+    expect(inputHash(SHA, { quotes: ['Quillon Brask', 'Bo'], redactsAny: true, membersWithhold: [false, true] }).equals(inputHash(SHA, { quotes, redactsAny: true, membersWithhold: [false, false, true] }))).toBe(true);
+    expect((JSON.parse(canonicalInputs(SHA, { quotes, redactsAny: true, membersWithhold: [false, true, false] }, 'e')) as { membersWithhold: string[] }).membersWithhold).toEqual(['Quillon Brask']);
+  });
+});
+
 describe('inputHash v2 (LINKS L3): the origin and the links that pass', () => {
   const ORIGIN = 'https://nwflorida.us';
   const id = (c: string): string => c.repeat(26);
@@ -66,14 +84,15 @@ describe('inputHash v2 (LINKS L3): the origin and the links that pass', () => {
   const URLS = { [id('a')]: 'mailto:games~@mail.example', [id('b')]: 'https://site.example/p' };
   const request = { quotes: ['Bo'], redactsAny: true, origin: ORIGIN, links: LINKS };
 
-  it('is canonical: version 2, every input by name, the links sorted by id with their urls, rects to hundredths', () => {
+  it('is canonical: version 3, every input by name, the links sorted by id with their urls, rects to hundredths', () => {
     expect(canonicalInputs(SHA, request, 'e', URLS)).toBe(
       JSON.stringify({
-        v: 2,
+        v: 3,
         engine: 'e',
         original: '01'.repeat(32),
         redactsAny: true,
         quotes: ['Bo'],
+        membersWithhold: ['Bo'],
         image: 'show',
         origin: ORIGIN,
         links: [
