@@ -461,10 +461,13 @@ test.describe('the reader (PDFVIEW)', () => {
     expect(missing.status()).toBe(404);
     expect(missing.headers()['cache-control']).toBe('no-store');
     const page = await request.get(`${read}?file=https://example.com/x.pdf&pdf=/documents/00000000-0000-4000-8000-0000000000aa.pdf`);
-    const html = await page.text();
-    expect(html).toContain(`data-pdf="${file}"`);
-    expect(html).not.toContain('example.com');
-    expect(html).not.toContain('00000000-0000-4000-8000-0000000000aa');
+    // The header's Sign in and the Aa panel return to the address as asked (every page does); the reader itself never reads it.
+    const main = /<main[\s\S]*<\/main>/.exec(await page.text())?.[0] ?? '';
+    expect(main).toContain(`data-pdf="${file}"`);
+    expect(main).toContain(`href="${file}" target="_blank"`);
+    expect(main).toContain(`href="${file}?download=1"`);
+    expect(main).not.toContain('example.com');
+    expect(main).not.toContain('00000000-0000-4000-8000-0000000000aa');
   });
 
   test('the CSP stays the site\'s: a same-origin worker, no eval, no WebAssembly, no blob:', async ({ request }) => {

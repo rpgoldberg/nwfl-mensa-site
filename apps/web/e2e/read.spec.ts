@@ -363,6 +363,8 @@ test.describe('/read accessibility', () => {
     const problems = await watch(page);
     await page.goto(read(PUBLIC_ID));
     await expect(page.locator('html')).toHaveAttribute('data-size', '175');
+    // On a phone at this size page 1 starts more than a screen down: it is drawn as it comes near.
+    await viewerPage(page, 1).scrollIntoViewIfNeeded();
     await expect(drawn(page, 1)).toHaveCount(1);
     expect(await axe(page)).toEqual([]);
     expect(problems).toEqual([]);
