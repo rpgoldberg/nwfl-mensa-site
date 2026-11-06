@@ -33,6 +33,9 @@
 //     SCAN_SHARE of what it draws: a scan, whose words cannot be found, so
 //     cannot be checked, whenever the audience redacts anything;
 //   - a page has characters with no Unicode value: its text cannot be checked;
+//   - (LIGATURE, unreadable.ts) a glyph read as no text (U+FFFD, private use) is
+//     left in the copy where, read as up to its reach of letters, it could finish
+//     a quote; one that stands for a ligature of a quote is boxed with it;
 //   - a passage has no position, or it or its glyphs' ink lies over a picture
 //     (removing the text would leave the picture's pixels under the box);
 //   - a withheld glyph is still on the page after removal, even one no whole
@@ -87,6 +90,7 @@ import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-
 import { linkGuardAreas } from './link-guard.js';
 import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, hull, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { nameBreak } from './pdf-structure.js';
+import { UNOPENABLE, pdfiumBreak } from './pdfium-reading.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
 
@@ -120,7 +124,6 @@ export type RedactResult =
   | { kind: 'redacted'; pdf: Uint8Array; boxes: Region[]; kept?: string[]; linksDropped?: string }
   | { kind: 'refused'; reason: string };
 
-const UNOPENABLE = 'the PDF could not be opened';
 /** Why there is no copy when its links cannot be placed: the worker then asks for one with no links (rerun.ts). */
 export const LINKS_UNWRITTEN = 'the links could not be written';
 /** The share of a page's drawn area that pictures may cover before it counts as a scan. */
@@ -247,19 +250,7 @@ function redactPages(doc: Document, quotes: readonly string[], privateQuotes: re
 }
 
 /** Null when no passage can be read in the PDF's text, else why the copy fails. */
-export async function verifyRedacted(pdf: Uint8Array, quotes: readonly string[]): Promise<string | null> {
-  const doc = Document.open(await pdfium(), pdf);
-  if (doc === null) return UNOPENABLE;
-  try {
-    for (let index = 0; index < doc.pageCount; index++) {
-      const left = doc.page(index, (page) => matchedChars(page.chars().chars, quotes).size);
-      if (left > 0) return `page ${index + 1}: withheld text is still readable after removal`;
-    }
-    return null;
-  } finally {
-    doc.close();
-  }
-}
+export const verifyRedacted = pdfiumBreak;
 
 /** This audience's file: the original, a redacted copy, or none, with the reason. */
 export async function redactPdf(original: Uint8Array, request: RedactRequest, deps: RedactDeps = {}): Promise<RedactResult> {

@@ -119,6 +119,7 @@ import { type PageRef, drawnBreak } from './drawn.js';
 import { checkCopy } from './gate.js';
 import { labelMarks, leakBreak } from './gate-labels.js';
 import { namedBreak } from './glyph-names.js';
+import { pdfiumBreak } from './pdfium-reading.js';
 import type { GateJob } from './gate-isolated.js';
 import { linkTextBreak } from './gate-links.js';
 import { type Accepted, type LinkRequest, acceptedLinks } from './link-annots.js';
@@ -730,8 +731,11 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
     const names = await nameBreak(job.copy);
     if ((names !== null && names !== NAMES_UNPARSED) || (await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
     const labels = await labelMarks(job.copy);
-    // The text layers, then the text the glyph names draw (GLYPHMAP), each with the labels taken out where they can be.
-    const leaks = async (bytes: Uint8Array): Promise<string | null> => (await checkCopy(bytes, job.quotes)) ?? (await namedBreak(bytes, job.quotes));
+    // The text layers, then the text the glyph names draw (GLYPHMAP), then PDFium's reading as the engine reads its copy,
+    // where a glyph PDFium has no Unicode for counts as unreadable (LIGATURE fix 1), each with the labels taken out where
+    // they can be.
+    const leaks = async (bytes: Uint8Array): Promise<string | null> =>
+      (await checkCopy(bytes, job.quotes)) ?? (await namedBreak(bytes, job.quotes)) ?? (job.quotes.length === 0 ? null : await pdfiumBreak(bytes, job.quotes));
     if ((await leakBreak(job.copy, labels, leaks)) !== null) return { pass: false, code: 'withheld' };
     const { broken, pages } = await readRules(job.copy, job.image, job);
     if (broken !== null || typeof labels === 'string') return { pass: false, code: 'rules' };

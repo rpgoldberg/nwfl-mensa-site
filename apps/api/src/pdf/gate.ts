@@ -4,7 +4,11 @@
 //
 //   1. Another reader. pdf.js extracts each page's text twice: in the order
 //      it is drawn, and by position (lines by baseline, words left to right,
-//      so pieces drawn out of order read as they show).
+//      so pieces drawn out of order read as they show). A glyph it reads as no
+//      text (U+FFFD, private use, a control) or as a letter that does not fit
+//      its word (Ghostscript's re-distilled ligatures) where, read as up to
+//      three letters, it could finish a quote is no copy either (LIGATURE,
+//      unreadable.ts unreadableAt and readThrough).
 //   2. Every object. Each string and name, in PDFDocEncoding or Latin-1,
 //      UTF-16BE and UTF-16LE, and each stream decoded in full (Flate, LZW,
 //      ASCIIHex, ASCII85, RunLength, any chain of them, PNG predictors).
@@ -35,6 +39,7 @@ import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, type 
 import type { PDFDocumentProxy } from 'pdfjs-dist/types/src/display/api.js';
 import { probeFolded } from '../redaction/render.js';
 import { textMatches } from './match.js';
+import { readThrough, textUnits } from './unreadable.js';
 
 // pdf.js is loaded on the first check, and on load it prints three lines in the image (HARDEN-1):
 //   Warning: Cannot load "@napi-rs/canvas" package: ...
@@ -130,13 +135,18 @@ function byPosition(items: readonly Item[]): string {
 
 type TextContent = Awaited<ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['getTextContent']>>;
 
-/** Whether a quote is in a page's text, in the order it is drawn or by position. */
-function spells(content: TextContent, quotes: readonly string[]): boolean {
+/**
+ * Why page `n` is no copy: a quote in its text, in the order it is drawn or by position, or (LIGATURE, unreadable.ts)
+ * a glyph pdf.js reads as no text (U+FFFD, private use) where, read as up to three letters, it could finish one.
+ */
+function spells(content: TextContent, quotes: readonly string[], n: number): string | null {
   const items = content.items.flatMap((item): Item[] =>
     'str' in item ? [{ str: item.str, x: item.transform[4] as number, y: item.transform[5] as number, width: item.width, height: item.height, eol: item.hasEOL }] : [],
   );
   const drawn = items.map((item) => item.str + (item.eol ? '\n' : ' ')).join('');
-  return textMatches(drawn, quotes) || textMatches(byPosition(items), quotes);
+  const placed = byPosition(items);
+  if (textMatches(drawn, quotes) || textMatches(placed, quotes)) return readable(n);
+  return readThrough(textUnits(drawn), quotes) || readThrough(textUnits(placed), quotes) ? `page ${n}: text another reader cannot read may hold withheld text` : null;
 }
 
 const readable = (n: number): string => `page ${n}: withheld text can still be read by another reader`;
@@ -152,7 +162,10 @@ async function readerFinds(pdf: Uint8Array, quotes: readonly string[]): Promise<
   const task = getDocument({ data: new Uint8Array(pdf), verbosity: 0, disableFontFace: true });
   try {
     const doc = await task.promise;
-    for (let n = 1; n <= doc.numPages; n++) if (spells(await (await doc.getPage(n)).getTextContent(), quotes)) return readable(n);
+    for (let n = 1; n <= doc.numPages; n++) {
+      const found = spells(await (await doc.getPage(n)).getTextContent(), quotes, n);
+      if (found !== null) return found;
+    }
   } finally {
     await task.destroy();
   }
@@ -161,7 +174,8 @@ async function readerFinds(pdf: Uint8Array, quotes: readonly string[]): Promise<
     for (let n = 1; n <= doc.numPages; n++) {
       const content = await (await doc.getPage(n)).getTextContent().catch(() => null);
       if (content === null) return `page ${n}: pdf.js stopped before the end of its text`;
-      if (spells(content, quotes)) return readable(n);
+      const found = spells(content, quotes, n);
+      if (found !== null) return found;
     }
     return null;
   });

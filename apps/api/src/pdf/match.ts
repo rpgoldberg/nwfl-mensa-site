@@ -52,7 +52,8 @@
 //
 // textMatches reads a plain string the same ways: the output gate's matcher.
 // ============================================================================
-import { probeFolded, quoteProbe, quoteSpans } from '../redaction/render.js';
+import { probeFolded, quoteProbe, quoteSpans, standInSpans } from '../redaction/render.js';
+import { unreadableChars } from './unreadable.js';
 
 export interface Box {
   left: number;
@@ -73,6 +74,8 @@ export interface PageChar {
   box: Box | null;
   ink: Box | null;
   fontSize: number;
+  /** PDFium has no Unicode for its glyph (a map error): it gave the glyph's code (LIGATURE fix 1). */
+  unmapped?: boolean;
 }
 
 /**
@@ -197,6 +200,19 @@ function collapsed(reading: Reading): Reading {
 export function matchedChars(chars: readonly PageChar[], quotes: readonly string[]): Set<number> {
   const out = new Set<number>();
   if (quotes.length === 0) return out;
+  collect(chars, quotes, out);
+  // LIGATURE: a glyph with no text (U+FFFD, private use), or not its own (unreadable.ts), may be a ligature of a quote,
+  // read so a second time, as STAND_IN, matched in one pass for each quote with no cap (fix 2, S1: render.ts standInSpans).
+  const unreadable = unreadableChars(chars);
+  if (unreadable.size > 0) {
+    const stood = chars.map((c, i) => (unreadable.has(i) ? { ...c, text: STAND_IN } : c));
+    collect(stood, quotes, out, (text, wholeWords) => standInSpans(text, quotes, LIGATURES, STAND_IN, wholeWords));
+  }
+  return out;
+}
+
+/** Adds the page characters any quote covers, in any reading, to `out`. */
+function collect(chars: readonly PageChar[], quotes: readonly string[], out: Set<number>, spans = (text: string, wholeWords: boolean): Array<[number, number]> => quoteSpans(text, quotes, wholeWords)): void {
   const joined = read(chars, false);
   const readings: Array<[Reading, boolean]> = [
     [joined, true],
@@ -205,12 +221,21 @@ export function matchedChars(chars: readonly PageChar[], quotes: readonly string
     [collapsed(joined), true],
   ];
   for (const [reading, wholeWords] of readings) {
-    for (const [start, end] of quoteSpans(reading.text, quotes, wholeWords)) {
+    for (const [start, end] of spans(reading.text, wholeWords)) {
       for (let u = start; u < end; u++) for (const i of reading.source[u] as number[]) out.add(i);
     }
   }
-  return out;
 }
+
+/**
+ * The ligatures a glyph with no text may stand for in a quote (LIGATURE): the standard ones, those a
+ * TrueType font such as Carlito or Libertine draws (fix 1, F4: ReportLab with HarfBuzz reads ck, ft, ti and tt at
+ * private-use codes), and st, ct and Th. A quote is read folded, so "th" is Th. Left out: the rarer
+ * discretionary ones (ch, sp, Qu, tz); a quote drawn with one is still refused by readThrough (unreadable.ts).
+ */
+const LIGATURES = ['ffi', 'ffl', 'ffj', 'ffb', 'ffh', 'ffk', 'fft', 'tti', 'ff', 'fi', 'fl', 'fj', 'fb', 'fh', 'fk', 'ft', 'tf', 'tt', 'ti', 'st', 'ct', 'ck', 'th'];
+/** The letter such a glyph reads as, in a quote's ligature's place too: a letter, so word edges hold, that no folded text is or looks like. */
+const STAND_IN = '\uA7FF';
 
 /** A long text is read in pieces this long, each overlapping the last by enough to hold any quote. */
 const PIECE = 65_536;

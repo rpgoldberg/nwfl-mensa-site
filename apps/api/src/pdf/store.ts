@@ -52,14 +52,15 @@ type Query = Pick<Db, 'query'>;
 /**
  * Bumped when the engine's output bytes change: its libraries, or a revision of what it writes (box-exact:
  * REDACT-LOOK's exact-fit boxes; links-1: LINKS L3's link annotations; labels-1: BOXLABEL's "Members Only",
- * "Mbrs Only" and "Private" in place of "withheld"), and when a revision of the gate must re-check every stored
- * copy (glyphs-1: GLYPHMAP's glyph-name reading and its refusal of a tiling pattern that shows text; the bytes are
- * as they were). A new one changes every key, so the worker's boot sweep makes every copy again (regenerate.ts),
- * each through the gate (rerun.ts). The gate runs only before pdf_copy_put, and readPdf serves a stored copy as it
- * is, so a gate revision with no bump does not re-check a copy stored before it.
+ * "Mbrs Only" and "Private" in place of "withheld"; ligature-1: LIGATURE's boxes over a quote drawn with a glyph
+ * whose text does not read as its letters, a copy that showed one before), and when a revision of the gate must
+ * re-check every stored copy (glyphs-1: GLYPHMAP's glyph-name reading and its refusal of a tiling pattern that shows
+ * text; the bytes are as they were). A new one changes every key, so the worker's boot sweep makes every copy again
+ * (regenerate.ts), each through the gate (rerun.ts). The gate runs only before pdf_copy_put, and readPdf serves a
+ * stored copy as it is, so a gate revision with no bump does not re-check a copy stored before it.
  * The ledger reports an older row's engine as changed rather than re-render it (ledger.ts fileVerdict).
  */
-export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1+glyphs-1';
+export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1+glyphs-1+ligature-1';
 export { DEFAULT_LINK_ORIGIN, linkOrigin };
 /** R11: a PDF original is at most 10 MiB. */
 export const MAX_ORIGINAL_BYTES = 10 * 1024 * 1024;

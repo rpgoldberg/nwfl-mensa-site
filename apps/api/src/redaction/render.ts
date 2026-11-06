@@ -228,14 +228,19 @@ function ranges(value: string, patterns: readonly RegExp[]): Array<[number, numb
       found.push([unitAt(match.index).start, unitAt(match.index + match[0].length - 1).end]);
     }
   }
+  return merged(found);
+}
+
+/** Spans in order, merged where they touch or overlap. */
+function merged(found: Array<[number, number]>): Array<[number, number]> {
   found.sort((a, b) => a[0] - b[0]);
-  const merged: Array<[number, number]> = [];
+  const out: Array<[number, number]> = [];
   for (const [start, end] of found) {
-    const last = merged.at(-1);
+    const last = out.at(-1);
     if (last !== undefined && start <= last[1]) last[1] = Math.max(last[1], end);
-    else merged.push([start, end]);
+    else out.push([start, end]);
   }
-  return merged;
+  return out;
 }
 
 function withhold(value: string, patterns: readonly RegExp[]): string {
@@ -260,6 +265,97 @@ export const quoteMatches = (quote: string, texts: readonly string[]): boolean =
 export const quoteSpans = (value: string, quotes: readonly string[], wholeWords = true): Array<[number, number]> =>
   ranges(value, quotes.map((quote) => patternOf(quote, wholeWords)));
 
+/** A character of the folded text as the patterns read it (`v`): a letter of a word (LETTER), a digit, one of a SEPARATOR's. */
+const WORD_LETTER = new RegExp(`^${LETTER}$`, 'v');
+const WORD_DIGIT = /^\p{N}$/u;
+const BETWEEN_WORDS = /^[^\p{L}\p{N}\p{M}]$/u;
+
+/** The code points a folded character's lookalikes pattern matches: itself, or each one its class lists. */
+const lookalikeSet = (char: string): ReadonlySet<string> => new Set(lookalikes(char).replace(/^\[(.*)\]$/su, '$1'));
+
+/**
+ * Every match of these quotes in the value where a stand-in letter of the value takes the place of one or more of the
+ * quote's ligatures, each within a word (LIGATURE, PDF text, match.ts): what quoteSpans finds for each reading of a
+ * quote with some of its ligatures as the stand-in (folded, look-alikes, whole words unless not `wholeWords`), with at
+ * least one stand-in in the match. Read in one pass along the value for each quote, no reading listed (LIGATURE fix 2,
+ * S1): a state is how many of the quote's letters are read and whether a stand-in is among them, and holds the earliest
+ * place a match reaching it starts, so the matches ending at one place cover exactly the span from there. The cost is
+ * the value's length times the quote's letters times the ligatures that start at a letter (two lengths at most).
+ */
+export function standInSpans(value: string, quotes: readonly string[], ligatures: readonly string[], standIn: string, wholeWords = true): Array<[number, number]> {
+  const units = fold(value);
+  const texts = units.map((unit) => unit.text);
+  const found: Array<[number, number]> = [];
+  if (!texts.includes(standIn)) return found;
+  const isLetter = texts.map((text) => WORD_LETTER.test(text));
+  const isDigit = texts.map((text) => WORD_DIGIT.test(text));
+  const isBetween = texts.map((text) => BETWEEN_WORDS.test(text));
+  for (const quote of quotes) {
+    const words = foldedText(quote).match(TOKEN);
+    if (words === null) continue;
+    // Each letter's look-alikes; whether a word starts at it after another (a separator may come first); the lengths
+    // of the ligatures that start at it, in its word.
+    const sets: Array<ReadonlySet<string>> = [];
+    const gap: boolean[] = [];
+    const jumps: number[][] = [];
+    for (const word of words) {
+      const letters = [...word];
+      letters.forEach((char, k) => {
+        gap.push(k === 0 && sets.length > 0);
+        sets.push(lookalikeSet(char));
+        const rest = letters.slice(k).join('');
+        jumps.push([...new Set(ligatures.filter((ligature) => rest.startsWith(ligature)).map((ligature) => ligature.length))]);
+      });
+    }
+    if (jumps.every((lengths) => lengths.length === 0)) continue;
+    const m = sets.length;
+    const edge = (word: string): readonly boolean[] | null => (!wholeWords ? null : LETTER_FIRST.test(word) ? isLetter : DIGIT_FIRST.test(word) ? isDigit : null);
+    const before = edge(words[0]);
+    const after = edge(words.at(-1) as string);
+    // A state is s * (m + 1) + j: j letters read, s = 1 once a stand-in is among them. at[state] is the earliest start
+    // of a match in it, or -1; only the states listed in `live` hold one.
+    let at = new Int32Array(2 * (m + 1)).fill(-1);
+    let atNext = new Int32Array(2 * (m + 1)).fill(-1);
+    let live: number[] = [];
+    let liveNext: number[] = [];
+    const reach = (state: number, from: number): void => {
+      const was = atNext[state] as number;
+      if (was === -1) liveNext.push(state);
+      if (was === -1 || from < was) atNext[state] = from;
+    };
+    const first = sets[0] as ReadonlySet<string>;
+    const firstJumps = (jumps[0] as number[]).length > 0;
+    for (let i = 0; i < texts.length; i++) {
+      const text = texts[i] as string;
+      // A match starts here only on a word's edge, and at a character that reads as the quote's first letter or more.
+      if ((before === null || i === 0 || before[i - 1] !== true) && (first.has(text) || (firstJumps && text === standIn))) {
+        at[0] = i;
+        live.push(0);
+      }
+      for (const state of live) {
+        const from = at[state] as number;
+        const s = state > m ? 1 : 0;
+        const j = state - s * (m + 1);
+        if (j === m) continue;
+        if (gap[j] === true && isBetween[i] === true) reach(state, from);
+        if ((sets[j] as ReadonlySet<string>).has(text)) reach(state + 1, from);
+        if (text === standIn) for (const length of jumps[j] as number[]) reach(m + 1 + j + length, from);
+      }
+      const done = atNext[2 * m + 1] as number;
+      if (done !== -1 && (after === null || i + 1 === texts.length || after[i + 1] !== true)) found.push([(units[done] as Unit).start, (units[i] as Unit).end]);
+      for (const state of live) at[state] = -1;
+      const spent = at;
+      at = atNext;
+      atNext = spent;
+      const gone = live;
+      live = liveNext;
+      liveNext = gone;
+      liveNext.length = 0;
+    }
+  }
+  return merged(found);
+}
+
 /**
  * A loose, fast test for a quote (the PDF output gate, R3a): its folded letters in order, each with
  * its look-alikes, anything but a letter or digit between any two. It matches wherever patternOf
@@ -268,6 +364,12 @@ export const quoteSpans = (value: string, quotes: readonly string[], wholeWords 
 export function quoteProbe(quote: string): RegExp | null {
   const words = foldedText(quote).match(TOKEN);
   return words === null ? null : new RegExp(words.join('').split('').map(lookalikes).join('[^\\p{L}\\p{N}]*'), 'v');
+}
+
+/** The quote's folded letters and digits in order, each a test of one folded character with its look-alikes (LIGATURE, unreadable.ts); null when it has none. */
+export function quoteLetters(quote: string): RegExp[] | null {
+  const words = foldedText(quote).match(TOKEN);
+  return words === null ? null : [...words.join('')].map((char) => new RegExp(`^${lookalikes(char)}$`, 'v'));
 }
 
 /** Text folded as fold does, but whole and natively (fast on megabytes), with its spaces taken out: what quoteProbe tests. */
