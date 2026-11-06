@@ -227,6 +227,7 @@ class NameReading extends PDFParser {
  * writes it again (see the header), or null. It fails closed (round 4, B1): a copy whose names cannot all be read is
  * refused, with the first break found before the point it stops if there is one, else NAMES_NESTED (nested past
  * MAX_NAME_NESTING) or NAMES_UNPARSED (pdf-lib's parser cannot read it to the end). Null only for a copy read to the end.
+ * Names inside object streams are not read here; structureBreak refuses every object stream first.
  */
 export async function nameBreak(bytes: Uint8Array): Promise<string | null> {
   const reading = new NameReading(bytes);

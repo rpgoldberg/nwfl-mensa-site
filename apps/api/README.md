@@ -361,12 +361,13 @@ content stream is plain `/FlateDecode`. pdf-lib decodes a name's `#XX`
 escapes twice where pdf.js and PDFium decode once, so before any label is
 read the gate refuses (`rules`), and the engine gives no copy, when a name
 anywhere in the copy still holds `#` once decoded, or a dictionary has a key
-twice (BOXLABEL fix round 3, R3-1), or when its names cannot all be read
-(they nest more than 256 deep, or pdf-lib cannot read them to the end: round
-4, B1). PDFium writes no such name of its own, but it carries one through
-from an original, so the engine refuses an original that holds a name with
-`#` once decoded (its page's font `/F#231`, say). So the font pdf-lib finds
-is the one the readers draw with. The glyph check reruns on the copy
+twice (BOXLABEL fix round 3, R3-1), or when its names nest more than 256
+deep (round 4, B1). Only that nesting is `rules` before any label is read; a
+copy pdf-lib cannot read at all is refused as before (`withheld` when there
+are quotes, otherwise `rules` or `unfinished`). PDFium renames the fonts of a
+page it rewrites; a `#` name it carries through, on a page or object it does
+not rewrite, makes the gate refuse the copy. So the font pdf-lib finds is
+the one the readers draw with. The glyph check reruns on the copy
 itself and skips only text whose drawn glyphs and text both spell a label.
 So a passage that is itself `Private` gets a copy, while the same word
 anywhere outside a box is still refused (`withheld`). A label that fails
