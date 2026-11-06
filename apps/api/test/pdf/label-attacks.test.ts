@@ -237,6 +237,16 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
     expect(await unlabelled(plain, marks)).toBeInstanceOf(Uint8Array);
   });
 
+  it.each([
+    ['no /Font list', (resources: PDFDict) => resources.delete(PDFName.of('Font'))],
+    ['a /Font list that is not a dictionary', (resources: PDFDict) => resources.set(PDFName.of('Font'), PDFName.of('Helvetica'))],
+  ] as const)('(a) takes no label out of a page whose resources have %s', async (_name, change) => {
+    const { pdf } = await quillon();
+    const marks = await marksOf(pdf);
+    const bad = await patched(pdf, (content) => content, (doc) => change(doc.getPage(0).node.Resources() as PDFDict));
+    expect(await unlabelled(bad, marks)).toBeNull();
+  });
+
   it('(a) looks a label\'s font up by its name decoded as the parser decodes one, #XX in either case (R2-1)', () => {
     expect(opFontName('FXF1')).toBe(PDFName.of('FXF1'));
     expect(opFontName('FX#4a9')).toBe(PDFName.of('FXJ9'));
