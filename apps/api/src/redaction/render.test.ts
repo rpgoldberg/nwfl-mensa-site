@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { Block, Inline, Tree } from '../content/tree.js';
 import { LOOKALIKES } from './confusables.js';
 import { cellKey } from './policy.js';
-import { type MarkRow, WITHHELD, lensFor, quoteMatches, subjectKey, venueCategory } from './render.js';
+import { type MarkRow, WITHHELD, lensFor, quoteMatches, standInSpans, subjectKey, venueCategory } from './render.js';
 
 const ITEM = subjectKey('content_item', '00000000-0000-4000-8000-000000000001');
 const OTHER = subjectKey('content_item', '00000000-0000-4000-8000-000000000002');
@@ -321,5 +321,29 @@ describe('the lens: word edges', () => {
   it('still matches numbers as numbers, whole', () => {
     const lens = lensFor('public', POLICY, [span('555-0142')]);
     expect(lens.text('Ring 555-0142 or 5550142, not 85550142', [ITEM])).toBe(`Ring ${WITHHELD} or ${WITHHELD}, not 85550142`);
+  });
+});
+
+describe('standInSpans: a stand-in letter in a quote\'s ligature\'s place, in one pass (LIGATURE fix 2, S1)', () => {
+  const S = '\uA7FF';
+  const LIGS = ['ffl', 'ff', 'fl'];
+  const at = (value: string, quotes: string[], wholeWords = true): string[] => standInSpans(value, quotes, LIGS, S, wholeWords).map(([a, b]) => value.slice(a, b));
+
+  it('keeps word edges, and lets the words run on where it reads without them (a spaced run)', () => {
+    expect(at(`by Ru${S}le today`, ['Ruffle'])).toEqual([`Ru${S}le`]);
+    expect(at(`xRu${S}lex`, ['Ruffle'])).toEqual([]);
+    expect(at(`xRu${S}lex`, ['Ruffle'], false)).toEqual([`Ru${S}le`]);
+  });
+
+  it('needs a stand-in in the match, and finds nothing for a quote with no word or no ligature', () => {
+    expect(at(`Ruffle and Ru${S}le`, ['Ruffle'])).toEqual([`Ru${S}le`]);
+    expect(at(`Ruffle ${S}`, ['Ruffle', '...', 'Moss'])).toEqual([]);
+    expect(at('Ruffle', ['Ruffle'])).toEqual([]);
+  });
+
+  it('reads a CJK word with no edge, digits on a digit edge, and separators between words', () => {
+    expect(at(`x\u6771\u4EACRu${S}le`, ['\u6771\u4EAC Ruffle'])).toEqual([`\u6771\u4EACRu${S}le`]);
+    expect(at(`Ru${S}le 7, Ru${S}le 77`, ['Ruffle 7'])).toEqual([`Ru${S}le 7`]);
+    expect(at(`Ru${S}le -- Moss`, ['Ruffle Moss'])).toEqual([`Ru${S}le -- Moss`]);
   });
 });

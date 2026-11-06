@@ -209,6 +209,17 @@ describe('matchedChars: a ligature glyph with no readable text inside a quote (L
     expect(readThrough(textUnits('by A\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD Moss'), [quote])).toBe(true);
   });
 
+  it('reads a ligature within one word of the quote only: no glyph stands for letters a space parts', () => {
+    const chars = line('by Jef\uFFFDairley and Jeff \uFFFDairley today');
+    expect(matchedChars(chars, ['Jeff Fairley']).size).toBe(0);
+    expect(textOf(chars, matchedChars(chars, ['Jeff Flairley']))).toBe('Jeff \uFFFDairley');
+  });
+
+  it('reads look-alikes through the glyph too: a word wholly in Cyrillic look-alikes (fix 2, S2)', () => {
+    const chars = line('by \u0420\u0430\uFFFD\u0435 today');
+    expect(textOf(chars, matchedChars(chars, ['Paste']))).toBe('\u0420\u0430\uFFFD\u0435');
+  });
+
   it('keeps the strict reading: U+FFFD beside a quote is no letter of its word', () => {
     const chars = line('Amberwick\uFFFD came');
     expect(textOf(chars, matchedChars(chars, ['Amberwick']))).toBe('Amberwick');
