@@ -281,6 +281,21 @@ describe('B1 (round 4): nameBreak fails closed on nesting, whatever the stack', 
     },
     120_000,
   );
+
+  // The challenger's round 5 (S5-1): the same refusal code at any stack size. A bare array 3000 deep holding a name
+  // collision made nameBreak refuse ("rules" at the verdict) while gateReply ran pdf-lib's load first (holdsLinearized),
+  // which ran out of stack there ("unfinished"); the reply asks nameBreak first now.
+  it('refuses a bare array 3000 deep holding a name collision: "rules" at the verdict and the reply, whatever the stack, and nothing stored (S5-1)', async () => {
+    const { original, pdf } = await quillon();
+    const deep = `${'['.repeat(3000)}/Q#2331${']'.repeat(3000)}`;
+    let filler = '';
+    const bad = rawPatch(await edited(pdf, (doc) => void (filler = deepObject(doc, deep))), filler, deep);
+    expect.soft(await nameBreak(bad)).not.toBeNull();
+    expect.soft(await gateVerdict(job(bad, original))).toEqual(RULES);
+    const reply = await gateReply(job(bad, original));
+    expect.soft(reply.verdict).toEqual(RULES);
+    expect(reply.checked).toBeUndefined();
+  }, 120_000);
 });
 
 describe('B1 (round 4): the other reader that recurses fails closed', () => {

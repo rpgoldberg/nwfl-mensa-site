@@ -724,7 +724,8 @@ export async function gateReply(job: GateJob, maxBytes = MAX_OUTPUT_BYTES, write
   try {
     // Refused as it comes, by the verdict on it as handed over (its structure breaks copyRulesBreak).
     if ((await structureBreak(job.copy)) !== null) return { verdict: await gateVerdict(job), sha256 };
-    if ((await holdsLinearized(job.copy)) || (await nameBreak(job.copy)) !== null) return refused('rules');
+    // nameBreak first (S5-1): it reads without recursing past its cap, so the code does not depend on the stack pdf-lib's load has left.
+    if ((await nameBreak(job.copy)) !== null || (await holdsLinearized(job.copy))) return refused('rules');
     pdf = await write(job.copy);
   } catch {
     return refused('unfinished');
