@@ -36,7 +36,7 @@ test.describe('/news with issues published', () => {
     await expect(card.getByRole('link', { name: /^PDF file/ })).toHaveAttribute('href', pdf(current!.publicPdf));
     const others = page.getByRole('region', { name: 'Past issues' });
     await expect(others.getByRole('heading', { level: 3 })).toHaveText(['2026', '2025']);
-    // Each row also holds the notice's "sign in" link and the "PDF file" link (below): count the issues only.
+    // Each row also holds the "PDF file" link (below): count the issues only.
     await expect(others.locator('a[href^="/read/"]')).toHaveText(past.map((i) => i.title));
     for (const issue of past) {
       const row = others.getByRole('listitem').filter({ hasText: issue.title });
@@ -162,25 +162,25 @@ test.describe('/news with no issue published yet', () => {
   });
 });
 
-// Ross, 11-04, then PDFVIEW (11-05): by each issue's public PDF, the notice that it is the public copy,
-// with some personal details hidden, and that members can sign in for the full issue. "sign in" is a link
-// only where sign-in works (the main site), never on Home; elsewhere the notice is the same, in plain text.
+// Ross, 11-04, then PDFVIEW (11-05): the notice that these are the public copies, with some personal
+// details hidden, and that members can sign in for the full issue. Fix 1: once, above the issue list,
+// not by each issue. "sign in" is a link only where sign-in works (the main site), never on Home;
+// elsewhere the notice is the same, in plain text.
 test.describe('/news, the public-copy notice', () => {
-  test('shows once by each issue that has a PDF, with "sign in" a link back to /news', async ({ page }) => {
+  test('shows once, above the issue list, with "sign in" a link back to /news', async ({ page }) => {
     await page.goto('/news');
     const main = page.getByRole('main');
     const lines = main.getByText(PUBLIC_COPY);
-    await expect(lines).toHaveCount(NEWSLETTER.issues.length);
+    await expect(lines).toHaveCount(1);
     const card = page.getByRole('region', { name: current!.title });
-    await expect(card.getByText(PUBLIC_COPY)).toHaveCount(1);
-    const others = page.getByRole('region', { name: 'Past issues' });
-    for (const issue of past) await expect(others.getByRole('listitem').filter({ hasText: issue.title }).getByText(PUBLIC_COPY)).toHaveCount(1);
+    await expect(card.getByText(PUBLIC_COPY)).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Past issues' }).getByText(PUBLIC_COPY)).toHaveCount(0);
+    // Above the current issue, the first of the list.
+    expect((await lines.boundingBox())!.y).toBeLessThan((await card.boundingBox())!.y);
     const links = lines.getByRole('link', { name: 'sign in', exact: true });
-    await expect(links).toHaveCount(NEWSLETTER.issues.length);
-    for (const link of await links.all()) {
-      await expect(link).toHaveAttribute('href', '/sign-in?return=%2Fnews');
-      expect(await link.evaluate((el) => getComputedStyle(el).textDecorationLine)).toContain('underline');
-    }
+    await expect(links).toHaveCount(1);
+    await expect(links).toHaveAttribute('href', '/sign-in?return=%2Fnews');
+    expect(await links.evaluate((el) => getComputedStyle(el).textDecorationLine)).toContain('underline');
     // The old line is gone: the notice replaces it, so nothing repeats.
     await expect(page.getByText('to read the members copy')).toHaveCount(0);
   });
@@ -190,8 +190,8 @@ test.describe('/news, the public-copy notice', () => {
     const second = await request.get('/news');
     expect(first.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
     const lines = (html: string) => html.split(' for the full issue.').length - 1;
-    expect(lines(await first.text())).toBe(NEWSLETTER.issues.length);
-    expect(lines(await second.text())).toBe(NEWSLETTER.issues.length);
+    expect(lines(await first.text())).toBe(1);
+    expect(lines(await second.text())).toBe(1);
   });
 
   test('is in plain text of a readable size and holds at the narrowest phone width', async ({ page }) => {
@@ -213,7 +213,7 @@ test.describe('/news, the public-copy notice', () => {
     expect((await request.get(`${SIGN_IN_OFF_URL}/sign-in`)).status()).toBe(503);
     await page.goto(`${SIGN_IN_OFF_URL}/news`);
     await expect(page.getByRole('region', { name: 'Past issues' }).getByRole('link', { name: past[0]!.title, exact: true })).toBeVisible();
-    await expect(page.getByRole('main').getByText(PUBLIC_COPY)).toHaveCount(NEWSLETTER.issues.length);
+    await expect(page.getByRole('main').getByText(PUBLIC_COPY)).toHaveCount(1);
     await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
   });
 
@@ -221,7 +221,7 @@ test.describe('/news, the public-copy notice', () => {
     test(`axe with the notice, ${scheme} system setting`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: scheme });
       await page.goto('/news');
-      await expect(page.getByRole('main').getByText(PUBLIC_COPY)).toHaveCount(NEWSLETTER.issues.length);
+      await expect(page.getByRole('main').getByText(PUBLIC_COPY)).toHaveCount(1);
       expect(await axe(page)).toEqual([]);
     });
   }

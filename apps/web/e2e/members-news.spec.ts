@@ -206,10 +206,10 @@ test('a pending account gets the public view, a box saying it has no member acce
   const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
   await expect(open).toContainText('Members-only passage. Your account does not have member access yet.');
   await expect(open.getByRole('link', { name: 'Ask for help' })).toHaveAttribute('href', '/help');
-  // Signed in already: the line to sign in is for the signed-out only. PDFVIEW: each public copy still
-  // says it is one, with "sign in" in plain text, since this reader is signed in.
+  // Signed in already: the line to sign in is for the signed-out only. PDFVIEW: the page still says,
+  // once, that these are the public copies, with "sign in" in plain text, since this reader is signed in.
   await expect(page.getByText('to read the members copy')).toHaveCount(0);
-  await expect(page.getByRole('main').getByText(PUBLIC_COPY)).toHaveCount(NEWSLETTER.issues.length);
+  await expect(page.getByRole('main').getByText(PUBLIC_COPY)).toHaveCount(1);
   await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
   const html = await page.content();
   expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, RULE.replace("'", '&#39;'), RULE])).toEqual([]);

@@ -5,9 +5,10 @@
 // without the API, the bundled sample, which says it is one; its missing issues
 // are listed honestly. Large-type reading views arrive with the archive (MB3).
 // PDFVIEW: each issue opens in the site (/read/<id>), with a small "PDF file" link to the
-// file itself. By each issue's public copy, the notice that it is the public copy (CopyNotice):
+// file itself. Once, above the issue list, the notice that these are the public copies (CopyNotice):
 // "sign in" is a link where sign-in works for a signed-out reader (membersSignInLink), and plain
-// words otherwise; a member's view, which has the members copy, shows the line not to forward it.
+// words otherwise; a member's view, which has the members copies, shows instead the line not to
+// forward them, by each.
 // S2: with that line, or the one to sign in again, the page says once which password to use.
 // A14: read with a signed-in reader's token (src/lib/auth/bearer.ts), the page
 // shows what the API sent that reader: a member gets each issue's members copy
@@ -51,6 +52,8 @@ if (!loaded.ok || news?.itemsUnavailable) markUnavailable(Astro.response);
 const shown = newsIssues(news?.issues ?? [], visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY }));
 const current = currentIssue(shown.issues);
 const past = issuesByYear(shown.issues);
+// Whether any issue listed is offered as its public copy only: then the notice, once, above them all.
+const publicCopies = shown.issues.some((i) => i.pdf && !i.membersPdf);
 const items = news?.items ?? [];
 ---
 <Base {...p}>
@@ -62,7 +65,8 @@ const items = news?.items ?? [];
   {!loaded.ok ? <Unavailable what="The list of issues" /> : (
     <>
       {shown.sample && siteData.isSample && <SampleNotice />}
-      {current && <IssueCard issue={current} membersSignIn={membersSignIn} />}
+      {publicCopies && <CopyNotice signIn={membersSignIn} />}
+      {current && <IssueCard issue={current} />}
       <section aria-labelledby="past-title">
         <h2 id="past-title">Past issues</h2>
         {past.map(([year, list]) => (
@@ -79,7 +83,6 @@ const items = news?.items ?? [];
                       {i.membersPdf && <a href={i.membersPdf}>Members PDF file<span class="visually-hidden"> of {i.label}</span></a>}
                     </span>
                   )}
-                  {i.pdf && !i.membersPdf && <CopyNotice signIn={membersSignIn} />}
                   {i.missing ? <span class="muted">No copy known. If you have a paper copy, please tell the Editor.</span>
                     : issueSummary(i) && <span class="muted">{issueSummary(i)}</span>}
                 </li>

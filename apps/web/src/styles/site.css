@@ -771,11 +771,10 @@ main > .cols { max-width: none; }
 /* An issue's PDF: a full-size target, like every other link a reader taps. */
 .issues a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
 
-/* PDFVIEW: which copy an issue is, by its public button and atop /read: body text, "sign in" an ordinary underlined link. */
+/* PDFVIEW: which copy an issue is, atop /read and once above /news's issue list: body text, "sign in" an ordinary underlined link. */
 .copy-notice { margin: 0; flex-basis: 100%; }
-.issue .copy-notice, .issue .pdf-files { grid-column: 1 / -1; }
+.issue .pdf-files { grid-column: 1 / -1; }
 .copy-notice a { font-weight: 700; text-decoration: underline; }
-.issues .copy-notice a { display: inline; min-height: 0; }
 .copy-notice--members { font-weight: 700; }
 main > .copy-notice, main > .members-rule { margin: var(--space-4) 0 0; }
 /* The file itself, beside the reader's button: small in look, a full-size target all the same. */

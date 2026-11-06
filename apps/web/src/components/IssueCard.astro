@@ -4,23 +4,19 @@
 // view of /news to its members copy too, with the line not to forward it (A14).
 // Until the archive is real (MB3, C1) Home's card names no issue and leads to
 // every issue we can share. PDFVIEW: "Read this issue" and "Members copy" open the issue in
-// the site (/read/<id>); a small "PDF file" link beside each keeps the file itself. By the public
-// button, the notice that it is the public copy (CopyNotice), with "sign in" a link where sign-in
-// works (membersSignIn); a member's view has its members copy instead. On /news only.
+// the site (/read/<id>); a small "PDF file" link beside each keeps the file itself. The notice
+// that it is the public copy is /news's own, once above the list (CopyNotice), not the card's.
 import { type Issue, issueSummary } from '../data/site-data';
 import { MEMBERS_RULE } from '../lib/document';
 import { readerPath } from '../lib/reader';
-import CopyNotice from './CopyNotice.astro';
 import Icon from './Icon.astro';
 
 interface Props {
   issue: Issue | undefined;
   /** On Home: the newsletter's own name leads, and the button goes to its page. */
   home?: boolean;
-  /** Where the notice's "sign in" leads, for a reader not signed in (/news, where sign-in works). Never on Home. */
-  membersSignIn?: string | undefined;
 }
-const { issue, home = false, membersSignIn } = Astro.props;
+const { issue, home = false } = Astro.props;
 const summary = issue ? issueSummary(issue) : '';
 ---
 <section class="card issue" aria-labelledby="issue-title" data-source={issue?.source}>
@@ -42,7 +38,7 @@ const summary = issue ? issueSummary(issue) : '';
         <a href={issue.pdf}>PDF file<span class="visually-hidden"> of this issue</span></a>
         {issue.membersPdf && <a href={issue.membersPdf}>Members PDF file<span class="visually-hidden"> of this issue</span></a>}
       </p>
-      {issue.membersPdf ? <p class="members-rule">{MEMBERS_RULE}</p> : <CopyNotice signIn={membersSignIn} />}
+      {issue.membersPdf && <p class="members-rule">{MEMBERS_RULE}</p>}
     </>
   )}
 </section>
