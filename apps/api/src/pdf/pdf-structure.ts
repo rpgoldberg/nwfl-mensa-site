@@ -23,8 +23,23 @@
 //   - an xref entry that does not land on its object's definition, a
 //     definition the xref does not list, an object pdf-lib holds that has no
 //     definition at the top level, and any object or xref stream.
+//
+// BOXLABEL fix round 3 (R3-1): one reading of each name too (nameBreak).
+// pdf-lib's parser decodes a name's #XX escapes twice (in either case, then
+// PDFName.of again in upper case); pdf.js and PDFium decode once. So raw
+// "/FXF#2332" is FXF2 to pdf-lib and FXF#32 to a viewer, and a key pdf-lib
+// reads as FXF#32 comes out of its own writing as "/FXF#2332". A name that
+// still holds '#' once decoded is the only way to either, and PDFium writes
+// none of its own (its names are FXF<n> and the like; one an original holds,
+// it carries through, so the engine refuses that original). So such a name is
+// refused, as is a key written twice in one dictionary, wherever it is: key
+// or value. A copy whose
+// names cannot all be read is refused too (round 4, B1): one pdf-lib's parser
+// cannot read to the end, or whose dictionaries and arrays nest past
+// MAX_NAME_NESTING, a cap set well short of the stack.
 // ============================================================================
-import { PDFDocument, PDFName, PDFRawStream } from '@cantoo/pdf-lib';
+import { type PDFArray, type PDFDict, PDFDocument, PDFName, type PDFObject, PDFParser, PDFRawStream, type PDFRef } from '@cantoo/pdf-lib';
+import { decodedOnce } from './content.js';
 
 /** The highest object number a PDF reader must take (ISO 32000, implementation limits). */
 const MAX_OBJECT = 8_388_607;
@@ -127,4 +142,99 @@ export async function structureBreak(bytes: Uint8Array): Promise<string | null> 
   const { Root, Encrypt, Info, ID } = context.trailerInfo;
   if (Root?.toString() !== table.root || Encrypt !== undefined || Info !== undefined || ID !== undefined) return 'pdf-lib takes another trailer';
   return null;
+}
+
+/** The deepest a copy's dictionaries and arrays may nest, together, for nameBreak to read it (round 4, B1). */
+export const MAX_NAME_NESTING = 256;
+/** nameBreak's reason for a copy nested past MAX_NAME_NESTING, which pdf-lib's own load may still read. */
+export const NAMES_NESTED = 'the names cannot all be read: dictionaries and arrays nest too deep';
+/** nameBreak's reason for a copy pdf-lib's parser cannot read to the end, which pdf-lib's own load cannot read either. */
+export const NAMES_UNPARSED = 'the names cannot all be read';
+
+/**
+ * pdf-lib's own parser, which also notes the first name that still holds '#' once decoded (pdf-lib decodes it again)
+ * and the first key written twice in one dictionary. A name parsed while no value of the innermost dictionary is being
+ * parsed is one of its keys. It stops (throws) past MAX_NAME_NESTING levels of dictionaries and arrays, well before
+ * its own frames could run out of stack: where it stops depends on no stack size.
+ */
+class NameReading extends PDFParser {
+  broken: string | null = null;
+  private readonly source: Uint8Array;
+  private readonly dicts: Array<{ keys: Set<PDFName>; values: number }> = [];
+  private depth = 0;
+
+  constructor(bytes: Uint8Array) {
+    super(bytes, Infinity, true);
+    this.source = bytes;
+  }
+
+  protected override parseName(): PDFName {
+    const start = this.bytes.offset() + 1;
+    const name = super.parseName();
+    const raw = Buffer.from(this.source.buffer, this.source.byteOffset + start, this.bytes.offset() - start).toString('latin1');
+    const dict = this.dicts.at(-1);
+    // The reasons name no name: an engine's reaches an officer, and a name is the original's bytes.
+    if (decodedOnce(raw).includes('#')) this.broken ??= 'a name holds "#" once decoded, so pdf-lib reads it apart from pdf.js and PDFium';
+    else if (dict !== undefined && dict.values === 0) {
+      if (dict.keys.has(name)) this.broken ??= 'a dictionary has a key twice';
+      dict.keys.add(name);
+    }
+    return name;
+  }
+
+  /** `parse` one level deeper; past the cap, a throw (pdf-lib turns it into its own, so the reason is noted first). */
+  private nested<T>(parse: () => T): T {
+    if (this.depth >= MAX_NAME_NESTING) {
+      this.broken ??= NAMES_NESTED;
+      throw new Error(NAMES_NESTED);
+    }
+    this.depth += 1;
+    try {
+      return parse();
+    } finally {
+      this.depth -= 1;
+    }
+  }
+
+  protected override parseArray(ref?: PDFRef): PDFArray {
+    return this.nested(() => super.parseArray(ref));
+  }
+
+  protected override parseDict(ref?: PDFRef): PDFDict {
+    return this.nested(() => {
+      this.dicts.push({ keys: new Set(), values: 0 });
+      try {
+        return super.parseDict(ref);
+      } finally {
+        this.dicts.pop();
+      }
+    });
+  }
+
+  override parseObject(ref?: PDFRef): PDFObject {
+    const dict = this.dicts.at(-1);
+    if (dict !== undefined) dict.values += 1;
+    try {
+      return super.parseObject(ref);
+    } finally {
+      if (dict !== undefined) dict.values -= 1;
+    }
+  }
+}
+
+/**
+ * Why a name in the copy's objects reads one way to pdf-lib and another to pdf.js and PDFium, or could after pdf-lib
+ * writes it again (see the header), or null. It fails closed (round 4, B1): a copy whose names cannot all be read is
+ * refused, with the first break found before the point it stops if there is one, else NAMES_NESTED (nested past
+ * MAX_NAME_NESTING) or NAMES_UNPARSED (pdf-lib's parser cannot read it to the end). Null only for a copy read to the end.
+ * Names inside object streams are not read here; structureBreak refuses every object stream first.
+ */
+export async function nameBreak(bytes: Uint8Array): Promise<string | null> {
+  const reading = new NameReading(bytes);
+  try {
+    await reading.parseDocument();
+  } catch {
+    return reading.broken ?? NAMES_UNPARSED;
+  }
+  return reading.broken;
 }

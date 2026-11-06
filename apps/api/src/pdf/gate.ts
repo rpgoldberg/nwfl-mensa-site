@@ -21,7 +21,9 @@
 // Their dictionaries, and everything else, are searched for every quote.
 //
 // Each text is matched as a page is (match.ts: folded, look-alikes, line
-// breaks, hyphens, letter spacing). Any hit means no copy, with the reason.
+// breaks, hyphens, letter spacing). Any hit means no copy, with the reason,
+// unless it is only in the box labels' own strings (BOXLABEL: gate-labels.ts
+// leakBreak runs this check once more without them).
 //
 // pdf.js carries on past an error (forms nested until its stack gives out),
 // as if the page's text ended there (fix round 6, S3-6: a name 1,500 forms

@@ -62,7 +62,15 @@
 //      - gateReply checks, and hands back, its own writing of the copy: what
 //        pdf-lib read, written again (no object streams, no incremental
 //        update). Only those bytes are stored (rerun.ts): the bytes stored
-//        are the bytes the gate checked.
+//        are the bytes the gate checked;
+//      - each name is read as a viewer reads it (BOXLABEL fix round 3, R3-1):
+//        pdf-lib decodes a name's #XX twice, the viewers once, and its own
+//        writing of a name read as FXF#32 is "/FXF#2332", FXF2 to pdf-lib.
+//        A copy with a name, in its objects (pdf-structure.ts nameBreak) or
+//        in a content stream the rules read (nestingBreak), that still holds
+//        '#' once decoded, or a key twice in one dictionary, is refused as it
+//        comes (gateReply), before anything else in a verdict, and in the
+//        rules.
 //
 //   4. Links (LINKS L3): the one exception to rule 1. The worker tells the
 //      gate the links the engine was given (id, page, rect, label), their
@@ -83,22 +91,35 @@
 //      asks for the copy with no links (rerun.ts). With no links kept the
 //      rules are as before.
 //
+//   5. Box labels (BOXLABEL, gate-labels.ts): PDFium reads each page's
+//      boxes and labels. Exactly "Members Only", "Mbrs Only" or "Private",
+//      one to a box, inside a box drawn before it, in the label style, and
+//      no other glyph drawn over a box; anything else is "rules". The text
+//      checks (gate.ts, and drawn.ts's glyphs) do not count those labels'
+//      own strings, drawn in PDFium's own label font, and nothing more
+//      (leakBreak; the glyphs only where they spell the label, fix round 1).
+//
+//   6. Graphics states (BOXLABEL fix round 1, F4): every ExtGState, and
+//      every /ExtGState list, is a dictionary, and a soft mask is /None or
+//      a dictionary; anything else is "rules", under every policy.
+//
 // Out of scope, as for any text gate: withheld text written so a reader does
 // not see it as text (reversed, encoded, drawn as curves or as a picture), a
 // picture rebuilt from many small tiles or from vector shapes (gradients of
 // many linear pieces among them). README, "The gate sidecar", lists these
 // limits.
 // ============================================================================
-import { PDFArray, type PDFContext, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNumber, type PDFObject, PDFRawStream, PDFRef, PDFString, decodePDFRawStream } from '@cantoo/pdf-lib';
-import { PDF_WS, operandBreak } from './content.js';
+import { PDFArray, type PDFContext, PDFDict, PDFDocument, PDFHexString, PDFName, PDFNull, PDFNumber, type PDFObject, PDFRawStream, PDFRef, PDFString, decodePDFRawStream } from '@cantoo/pdf-lib';
+import { PDF_WS, contentNames, operandBreak } from './content.js';
 import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha256Hex } from './engine-protocol.js';
 import { type PageRef, drawnBreak } from './drawn.js';
 import { checkCopy } from './gate.js';
+import { labelMarks, leakBreak } from './gate-labels.js';
 import type { GateJob } from './gate-isolated.js';
 import { linkTextBreak } from './gate-links.js';
 import { type Accepted, type LinkRequest, acceptedLinks } from './link-annots.js';
 import { BLUR_MAX, FILL_GRAY, type ImageAction, type Pixels, blurred, decodePicture, hasInlinePicture, keepsPicture, pictureWindows } from './images.js';
-import { structureBreak } from './pdf-structure.js';
+import { NAMES_UNPARSED, nameBreak, structureBreak } from './pdf-structure.js';
 
 const FORBIDDEN_KEYS = new Set(['JS', 'JavaScript', 'OpenAction', 'AA', 'URI', 'EmbeddedFile', 'EmbeddedFiles', 'EF', 'XFA', 'AcroForm', 'Annots', 'Linearized']);
 const LINEARIZED = PDFName.of('Linearized');
@@ -170,6 +191,28 @@ function activeIn(object: PDFObject | undefined, glyphs: PDFObject[], pages: Rea
   if (nameIn(object, 'Subtype') === 'Type3') {
     const procs = object.lookupMaybe(PDFName.of('CharProcs'), PDFDict);
     for (const [, proc] of procs?.entries() ?? []) glyphs.push(proc);
+  }
+  return null;
+}
+
+/**
+ * Why an object holds graphics states the rules cannot read as the sanitizer wrote them (BOXLABEL fix round 1, F4), or
+ * null: an /ExtGState list or an entry in one that is not a dictionary, or a soft mask that is neither /None nor a
+ * dictionary. A reader that takes a stream's dictionary for one would draw a mask the rules never read.
+ */
+function maskBreak(context: PDFContext, object: PDFObject): string | null {
+  const none = (value: PDFObject | undefined): boolean => value === undefined || value === PDFNull;
+  for (const dict of dictsIn(object)) {
+    const states = context.lookup(dict.get(PDFName.of('ExtGState')));
+    if (none(states)) continue;
+    if (!(states instanceof PDFDict)) return 'an /ExtGState list is not a dictionary';
+    for (const [, value] of states.entries()) {
+      const state = context.lookup(value);
+      if (none(state)) continue;
+      if (!(state instanceof PDFDict)) return 'an ExtGState is not a dictionary';
+      const mask = context.lookup(state.get(PDFName.of('SMask')));
+      if (!(none(mask) || mask instanceof PDFDict || (mask instanceof PDFName && mask.decodeText() === 'None'))) return 'a soft mask is neither /None nor a dictionary';
+    }
   }
   return null;
 }
@@ -360,6 +403,8 @@ const NESTING = `forms, patterns, Type 3 glyphs or soft masks nest more than ${M
  */
 export const MAX_DRAWS = 100_000;
 const DRAWS = `forms, patterns, Type 3 glyphs or soft masks are drawn in more than ${MAX_DRAWS} ways`;
+/** BOXLABEL fix round 3 (R3-1): a content stream names what no resource list may hold (pdf-structure.ts nameBreak). */
+const NAMES = 'a content stream holds a name that holds "#" once decoded';
 const NAME_TOKEN = new RegExp(`/([^${PDF_WS}()<>\\[\\]{}/%]*)`, 'g');
 
 /**
@@ -433,6 +478,7 @@ function nestingBreak(doc: PDFDocument): string | null {
       const texts = drawer.content.map(contentOf).filter((bytes) => bytes !== null);
       for (const bytes of drawer.joined === true && texts.length > 1 ? [...texts, Buffer.concat(texts)] : texts) {
         const text = Buffer.from(bytes).toString('latin1');
+        if (contentNames(bytes).some((name) => name.includes('#'))) throw new Error(NAMES);
         for (const [, raw] of text.matchAll(NAME_TOKEN)) read.names.add((raw as string).replace(/#([0-9A-Fa-f]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16))));
         KINDS.forEach((key, k) => {
           if (DRAWS_FROM[key].test(text)) (read as { kinds: boolean[] }).kinds[k] = true;
@@ -488,14 +534,14 @@ function nestingBreak(doc: PDFDocument): string | null {
     }
     return null;
   } catch (error) {
-    return error instanceof Error && error.message === DRAWS ? DRAWS : NESTING;
+    return error instanceof Error && (error.message === DRAWS || error.message === NAMES) ? error.message : NESTING;
   }
 }
 
 /** Why the copy breaks the sanitizer's rules or the picture policy's shape (or null), and the pages pdf-lib's tree gives, in order. */
 async function readRules(copy: Uint8Array, image: ImageAction, links: LinkRequest = {}): Promise<{ broken: string | null; pages: PageRef[] }> {
   // One reading first (M1): no encryption, no second trailer, no shadowed object.
-  const structure = await structureBreak(copy);
+  const structure = (await structureBreak(copy)) ?? (await nameBreak(copy));
   if (structure !== null) return { broken: `the structure: ${structure}`, pages: [] };
   const doc = await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: true, throwOnInvalidObject: true });
   // pdf-lib counts pages only through a tree that passed pageTreeBreak (it throws on some others).
@@ -511,7 +557,7 @@ async function readRules(copy: Uint8Array, image: ImageAction, links: LinkReques
   const glyphs: PDFObject[] = [];
   for (const [ref, object] of context.enumerateIndirectObjects()) {
     if (accepted.annots.has(object)) continue;
-    const found = activeIn(object, glyphs, accepted.pages);
+    const found = activeIn(object, glyphs, accepted.pages) ?? maskBreak(context, object);
     if (found !== null) return broken(`object ${ref.objectNumber}: ${found}`);
   }
   const nesting = nestingBreak(doc);
@@ -612,18 +658,30 @@ async function nestedPast(copy: Uint8Array): Promise<string | null> {
 
 /**
  * The gate's verdict on one copy: nesting past the cap first, before pdf.js reads it, then withheld text (gate.ts),
- * then the rules above, then what pdf.js draws (drawn.ts; under "show" only its glyphs, and only with quotes), then
- * under "blur" and "hide" the original's pictures.
+ * then the rules above and the labels (gate-labels.ts, BOXLABEL), then what pdf.js draws (drawn.ts; under "show" only
+ * its glyphs, and only with quotes), then under "blur" and "hide" the original's pictures. No label's own text counts
+ * as withheld text, when the labels pass (leakBreak): exactly those strings, drawn as themselves in PDFium's own
+ * label font, inside their boxes.
  * Never throws.
  */
 export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
   try {
-    if ((await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
-    if ((await checkCopy(job.copy, job.quotes)) !== null) return { pass: false, code: 'withheld' };
+    // A copy pdf-lib cannot parse at all goes on to the checks below, which refuse it as before (withheld when there
+    // are quotes it cannot read it for, else rules: readRules takes nameBreak's reason). Every other break is rules.
+    const names = await nameBreak(job.copy);
+    if ((names !== null && names !== NAMES_UNPARSED) || (await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
+    const labels = await labelMarks(job.copy);
+    if ((await leakBreak(job.copy, labels, (bytes) => checkCopy(bytes, job.quotes))) !== null) return { pass: false, code: 'withheld' };
     const { broken, pages } = await readRules(job.copy, job.image, job);
-    if (broken !== null) return { pass: false, code: 'rules' };
+    if (broken !== null || typeof labels === 'string') return { pass: false, code: 'rules' };
     // Under "show" only for the quotes (fix round 6b, REDACT-LOOK L10/N8), with no picture judged.
-    const drawn = job.image === 'show' && job.quotes.length === 0 ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
+    let drawn = job.image === 'show' && job.quotes.length === 0 ? null : await drawnBreak(job.copy, job.image, job.quotes, pages);
+    // Glyphs that spell a quote only in the labels: when the labels' text can be taken out (gate-labels.ts unlabelled),
+    // the copy's own glyphs read again with only those drawn as the labels out (F1), and the rest of the walk with no quotes.
+    if (drawn?.code === 'withheld') {
+      const glyphs = await leakBreak(job.copy, labels, async (_bytes, out) => drawnBreak(job.copy, 'show', job.quotes, pages, out?.map((page) => page.map((label) => label.text))));
+      drawn = glyphs ?? (await drawnBreak(job.copy, job.image, [], pages));
+    }
     if (drawn !== null) return { pass: false, code: drawn.code };
     if ((await linkTextBreak(job.copy, job.original, job)) !== null) return { pass: false, code: 'rules' };
     if (job.image !== 'show' && (await keepsPicture(job.copy, await pictureWindows(job.original)))) return { pass: false, code: 'rules' };
@@ -666,7 +724,8 @@ export async function gateReply(job: GateJob, maxBytes = MAX_OUTPUT_BYTES, write
   try {
     // Refused as it comes, by the verdict on it as handed over (its structure breaks copyRulesBreak).
     if ((await structureBreak(job.copy)) !== null) return { verdict: await gateVerdict(job), sha256 };
-    if (await holdsLinearized(job.copy)) return refused('rules');
+    // nameBreak first (S5-1): it reads without recursing past its cap, so the code does not depend on the stack pdf-lib's load has left.
+    if ((await nameBreak(job.copy)) !== null || (await holdsLinearized(job.copy))) return refused('rules');
     pdf = await write(job.copy);
   } catch {
     return refused('unfinished');

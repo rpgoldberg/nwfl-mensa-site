@@ -185,7 +185,7 @@ describe('startSidecar', () => {
     expect(await exchange(socket, frame.subarray(0, 20), true)).toEqual(Buffer.alloc(0));
     expect(await exchange(socket, REQUEST_MAGIC)).toEqual(Buffer.alloc(0));
     expect(await exchange(socket, Buffer.concat([frame, Buffer.from('x')]))).toEqual(Buffer.alloc(0));
-    const header = Buffer.from(JSON.stringify({ v: 2, quotes: [], redactsAny: true, links: [], env: { PGPASSWORD: 'canary' } }));
+    const header = Buffer.from(JSON.stringify({ v: 3, quotes: [], redactsAny: true, links: [], membersWithhold: [], env: { PGPASSWORD: 'canary' } }));
     const sizes = Buffer.alloc(8);
     sizes.writeUInt32BE(header.length, 0);
     sizes.writeUInt32BE(1, 4);

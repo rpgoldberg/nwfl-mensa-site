@@ -243,7 +243,7 @@ describe('UNTRUSTED-PDF-GATE: the output gate, re-run outside the engine and the
     const liar = net.createServer((conn) => {
       conn.on('error', () => {});
       const written = Buffer.from('another copy');
-      conn.once('data', () => conn.end(encodeFrame(GATE_REPLY_MAGIC, { v: 2, verdict: 'pass', sha256: sha256Hex(written), checkedSha256: sha256Hex(written) }, written)));
+      conn.once('data', () => conn.end(encodeFrame(GATE_REPLY_MAGIC, { v: 3, verdict: 'pass', sha256: sha256Hex(written), checkedSha256: sha256Hex(written) }, written)));
     });
     await new Promise<void>((resolve) => liar.listen(fake.socket, resolve));
     try {

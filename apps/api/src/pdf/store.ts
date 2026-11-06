@@ -26,6 +26,16 @@
 // and the origin they point to (LINK_ORIGIN). inputHash v2 covers both, each
 // link with its url, so a link turned off, a mark that now holds a target, or
 // a new origin remakes the copy (the worker's boot sweep, regenerate.ts).
+//
+// BOXLABEL: a copy's request also says, for each of its quotes, whether
+// members withhold it too (membersWithhold, one boolean per quote), so the
+// engine labels its box "Private" or "Members Only" (labels.ts). For the
+// public, a quote is withheld from members when members are not given the
+// file at all (hidden), or any active mark of it (its text trimmed) is in a
+// category the members' policy does not show; for members and officers,
+// every quote is. Only booleans: no text of another audience's request is
+// added. inputHash v3 covers the quotes members withhold, so a change to
+// the members' policy remakes the public's copy.
 // ============================================================================
 import { createHash } from 'node:crypto';
 import type { Db } from '../db/pool.js';
@@ -41,10 +51,11 @@ type Query = Pick<Db, 'query'>;
 
 /**
  * The engine libraries and the gate's and the boxes' revisions: a new one changes every key, so every
- * copy is made again (box-exact: REDACT-LOOK's exact-fit boxes; links-1: LINKS L3's link annotations).
+ * copy is made again (box-exact: REDACT-LOOK's exact-fit boxes; links-1: LINKS L3's link annotations;
+ * labels-1: BOXLABEL's "Members Only", "Mbrs Only" and "Private" in place of "withheld").
  * The ledger reports an older row's engine as changed rather than re-render it (ledger.ts fileVerdict).
  */
-export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1';
+export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1';
 export { DEFAULT_LINK_ORIGIN, linkOrigin };
 /** R11: a PDF original is at most 10 MiB. */
 export const MAX_ORIGINAL_BYTES = 10 * 1024 * 1024;
@@ -66,10 +77,13 @@ const RANK: Readonly<Record<string, number>> = { public: 0, members: 1, officers
 /** The key of a copy: the same for the same original, passages (in any order) and engine. */
 const canonicalQuotes = (quotes: readonly string[]): string[] => [...new Set(quotes.map((quote) => quote.trim()).filter((quote) => quote !== ''))].sort();
 
+/** The quotes members withhold too, canonically (BOXLABEL): every quote when the request names none. */
+const membersQuotes = (request: RedactRequest): string[] => canonicalQuotes(request.quotes.filter((_, i) => request.membersWithhold?.[i] !== false));
+
 /**
- * The text a copy's key is the hash of (v 2): the engine, the original's sha256, redactsAny, the quotes, the image
- * action, the origin (LINK_ORIGIN's when the request has none) and the links sorted by id, each with its url
- * (`urls`, by id: the engine is never given it) and its rect to hundredths.
+ * The text a copy's key is the hash of (v 3): the engine, the original's sha256, redactsAny, the quotes, the quotes
+ * members withhold too (BOXLABEL), the image action, the origin (LINK_ORIGIN's when the request has none) and the
+ * links sorted by id, each with its url (`urls`, by id: the engine is never given it) and its rect to hundredths.
  */
 export function canonicalInputs(sha256: Uint8Array, request: RedactRequest, engine = ENGINE_VERSION, urls: Readonly<Record<string, string>> = {}): string {
   const links = [...(request.links ?? [])]
@@ -80,11 +94,12 @@ export function canonicalInputs(sha256: Uint8Array, request: RedactRequest, engi
       return { id: link.id, page: link.page, rect: [...roundRect(link.rect)], url, label: link.label };
     });
   return JSON.stringify({
-    v: 2,
+    v: 3,
     engine,
     original: Buffer.from(sha256).toString('hex'),
     redactsAny: request.redactsAny,
     quotes: canonicalQuotes(request.quotes),
+    membersWithhold: membersQuotes(request),
     image: request.image ?? 'show',
     origin: request.origin ?? linkOrigin(),
     links,
@@ -155,8 +170,21 @@ export async function inputsFor(db: Query, fileId: string, audience: string, asO
   const passing = (await activeLinks(db, fileId, asOf)).filter((link) => wideEnough(link.rect as unknown as Rect) && !targetHolds(link.url, quotes));
   const links: EngineLink[] = passing.map((link) => ({ id: link.id, page: link.page, rect: roundRect(link.rect as unknown as Rect), label: linkLabel(link.host) }));
   const urls = Object.fromEntries(passing.map((link) => [link.id, link.url]));
-  const request: CopyRequest = { quotes, redactsAny: true, image: action('image') as ImageAction, origin, links };
+  const withheld = audience === 'public' ? await membersWithhold(db, asOf, marks.rows) : null;
+  const request: CopyRequest = { quotes, redactsAny: true, image: action('image') as ImageAction, origin, links, membersWithhold: quotes.map((quote) => withheld?.has(quote) ?? true) };
   return { kind: 'copy', hash: inputHash(row.sha256, request, engine, urls), request };
+}
+
+/**
+ * The public's quotes (trimmed) that members withhold too (BOXLABEL), from the members' policy as of `asOf`: every one
+ * when a mark hides the file's item from members, else each with an active mark in a category members do not show.
+ */
+async function membersWithhold(db: Query, asOf: Date | undefined, marks: ReadonlyArray<{ quote: string | null; category: string }>): Promise<Set<string>> {
+  const cells = await policyCells(db, 'members', asOf);
+  const policy = new Map(cells.map((cell) => [cellKey('members', cell.category), cell.action]));
+  const action = (category: string) => resolveAction(policy, 'members', category);
+  const hidden = marks.some((mark) => action(mark.category) === 'hide' || (mark.quote === null && action(mark.category) !== 'show'));
+  return new Set(marks.flatMap((mark) => (mark.quote !== null && (hidden || action(mark.category) !== 'show') ? [mark.quote.trim()] : [])));
 }
 
 /** Stores a PDF file's original. The database checks who may, and that the bytes are the file's. */

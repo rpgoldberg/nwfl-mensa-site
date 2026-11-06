@@ -66,9 +66,10 @@ describe('requests', () => {
   it('round-trip: the original and the typed request, nothing else', async () => {
     const original = Uint8Array.from([37, 80, 68, 70]);
     const frame = await fed([encodeRequest(original, REQUEST)]);
-    expect(decodeRequest(frame)).toEqual({ original, request: { ...REQUEST, links: [] } });
-    const withImage = await fed([encodeRequest(original, { ...REQUEST, image: 'blur' })]);
-    expect(decodeRequest(withImage)).toEqual({ original, request: { ...REQUEST, image: 'blur', links: [] } });
+    // A request that says nothing of what members withhold says they withhold every quote (BOXLABEL: "Private").
+    expect(decodeRequest(frame)).toEqual({ original, request: { ...REQUEST, links: [], membersWithhold: [true] } });
+    const withImage = await fed([encodeRequest(original, { ...REQUEST, image: 'blur', membersWithhold: [false] })]);
+    expect(decodeRequest(withImage)).toEqual({ original, request: { ...REQUEST, image: 'blur', links: [], membersWithhold: [false] } });
   });
 
   it('arrives in any pieces, a byte at a time included', async () => {
@@ -89,31 +90,69 @@ describe('requests', () => {
 
   it('refuses a header that is not exactly the typed request', () => {
     const body = Buffer.from([1]);
+    const good = { v: 3, quotes: [], redactsAny: true, links: [], membersWithhold: [] };
+    expect(decodeRequest({ header: good, body }).request).toEqual({ quotes: [], redactsAny: true, links: [], membersWithhold: [] });
     const bad: unknown[] = [
       null,
       [],
       'text',
       { v: 1, quotes: [], redactsAny: true },
       { v: 1, quotes: [], redactsAny: true, links: [] },
-      { v: 2, quotes: [], redactsAny: true },
-      { v: 2, quotes: [], redactsAny: true, links: [], path: '/x' },
-      { v: 2, quotes: 'abc', redactsAny: true, links: [] },
-      { v: 2, quotes: [1], redactsAny: true, links: [] },
-      { v: 2, quotes: Array.from({ length: MAX_QUOTES + 1 }, () => 'a'), redactsAny: true, links: [] },
-      { v: 2, quotes: ['x'.repeat(MAX_QUOTE_CHARS + 1)], redactsAny: true, links: [] },
-      { v: 2, quotes: [], redactsAny: 1, links: [] },
-      { v: 2, quotes: [], redactsAny: true, image: 'melt', links: [] },
-      { v: 2, quotes: [], links: [] },
+      { v: 2, quotes: [], redactsAny: true, links: [] },
+      { ...good, v: 2 },
+      { v: 3, quotes: [], redactsAny: true, membersWithhold: [] },
+      { v: 3, quotes: [], redactsAny: true, links: [] },
+      { ...good, path: '/x' },
+      { ...good, quotes: 'abc' },
+      { ...good, quotes: [1], membersWithhold: [true] },
+      { ...good, quotes: Array.from({ length: MAX_QUOTES + 1 }, () => 'a'), membersWithhold: Array.from({ length: MAX_QUOTES + 1 }, () => true) },
+      { ...good, quotes: ['x'.repeat(MAX_QUOTE_CHARS + 1)], membersWithhold: [true] },
+      { ...good, redactsAny: 1 },
+      { ...good, image: 'melt' },
+      { v: 3, quotes: [], links: [], membersWithhold: [] },
     ];
     for (const header of bad) expect(() => decodeRequest({ header, body }), JSON.stringify(header)).toThrow(FrameError);
-    expect(() => decodeRequest({ header: { v: 2, quotes: [], redactsAny: true, links: [] }, body: Buffer.alloc(0) })).toThrow('the request carries no original');
+    expect(() => decodeRequest({ header: good, body: Buffer.alloc(0) })).toThrow('the request carries no original');
+  });
+});
+
+describe('requests: what members withhold (v3, BOXLABEL)', () => {
+  const header = (frame: Buffer): Record<string, unknown> => JSON.parse(frame.subarray(PREFIX_BYTES, PREFIX_BYTES + frame.readUInt32BE(4)).toString('utf8')) as Record<string, unknown>;
+  /** Every string a header holds, at any depth. */
+  const strings = (value: unknown): string[] =>
+    typeof value === 'string' ? [value] : Array.isArray(value) ? value.flatMap(strings) : typeof value === 'object' && value !== null ? Object.values(value).flatMap(strings) : [];
+
+  it('is one boolean per quote, so the header holds no text beyond the quotes it already held', async () => {
+    const quotes = ['Kestrel Ambry', '850-555-0142'];
+    const flagged = encodeRequest(Uint8Array.from([1]), { quotes, redactsAny: true, membersWithhold: [false, true] });
+    const plain = encodeRequest(Uint8Array.from([1]), { quotes, redactsAny: true, membersWithhold: [false, false] });
+    expect(header(flagged)).toEqual({ v: PROTOCOL_VERSION, quotes, redactsAny: true, links: [], membersWithhold: [false, true] });
+    expect(PROTOCOL_VERSION).toBe(3);
+    // The flags change no string of the header: the same text whichever quotes members withhold.
+    expect(strings(header(flagged)).sort()).toEqual([...quotes].sort());
+    expect(strings(header(flagged))).toEqual(strings(header(plain)));
+    expect(decodeRequest(await fed([flagged])).request.membersWithhold).toEqual([false, true]);
+  });
+
+  it('refuses flags that are not one boolean per quote, or that carry text', () => {
+    const body = Buffer.from([1]);
+    const base = { v: 3, quotes: ['Kestrel Ambry'], redactsAny: true, links: [] };
+    for (const membersWithhold of [[], [true, false], ['Kestrel Ambry'], [1], [null], 'true', true, { 0: true }]) {
+      expect(() => decodeRequest({ header: { ...base, membersWithhold }, body }), JSON.stringify(membersWithhold)).toThrow('what members withhold is not one boolean per quote');
+    }
+  });
+
+  it('is never built unless it is one boolean per quote', () => {
+    const one = Uint8Array.from([1]);
+    expect(() => encodeRequest(one, { quotes: ['a', 'b'], redactsAny: true, membersWithhold: [true] })).toThrow('what members withhold is not one boolean per quote');
+    expect(() => encodeRequest(one, { quotes: ['a'], redactsAny: true, membersWithhold: ['a' as unknown as boolean] })).toThrow(FrameError);
   });
 });
 
 describe('readFrame', () => {
   it('refuses another magic, and the reply magic where a request belongs', async () => {
     await expect(fed([Buffer.from('GET / HTTP/1.1\r\n\r\n')])).rejects.toThrow('not a frame');
-    await expect(fed([encodeFrame(REPLY_MAGIC, { v: 2, kind: 'original' })])).rejects.toThrow('not a frame');
+    await expect(fed([encodeFrame(REPLY_MAGIC, { v: 3, kind: 'original' })])).rejects.toThrow('not a frame');
   });
 
   it('stops at the declared sizes, before reading on', async () => {
@@ -195,7 +234,7 @@ describe('gate requests and replies (the worker and the gate sidecar)', () => {
   it('round-trip: the copy and the original with their sha256s, the quotes and the image action, nothing else', async () => {
     const frame = encodeGateRequest(GATE);
     expect(frame.subarray(0, 4).equals(GATE_REQUEST_MAGIC)).toBe(true);
-    expect(JSON.parse(frame.subarray(12, 12 + frame.readUInt32BE(4)).toString('utf8'))).toEqual({ v: 2, quotes: ['Kestrel Ambry'], image: 'blur', sha256: SHA, originalSha256: ORIGINAL_SHA, copyBytes: 3, links: [], kept: [] });
+    expect(JSON.parse(frame.subarray(12, 12 + frame.readUInt32BE(4)).toString('utf8'))).toEqual({ v: 3, quotes: ['Kestrel Ambry'], image: 'blur', sha256: SHA, originalSha256: ORIGINAL_SHA, copyBytes: 3, links: [], kept: [] });
     expect(frame.subarray(12 + frame.readUInt32BE(4))).toEqual(Buffer.from([4, 5, 6, 9, 9]));
     expect(decodeGateRequest(await fed([frame], { limits: GATE_LIMITS }))).toEqual({ ...GATE, links: [], kept: [] });
   });
@@ -214,7 +253,7 @@ describe('gate requests and replies (the worker and the gate sidecar)', () => {
 
   it('refuses a request header that is not exactly the typed gate request', () => {
     const body = Buffer.from([4, 5, 6, 9, 9]);
-    const good = { v: 2, quotes: [], image: 'show', sha256: SHA, originalSha256: ORIGINAL_SHA, copyBytes: 3, links: [], kept: [] };
+    const good = { v: 3, quotes: [], image: 'show', sha256: SHA, originalSha256: ORIGINAL_SHA, copyBytes: 3, links: [], kept: [] };
     expect(decodeGateRequest({ header: good, body })).toEqual({ ...GATE, quotes: [], image: 'show', links: [], kept: [] });
     const bad: Array<[unknown, Buffer]> = [
       [null, body],
@@ -262,18 +301,18 @@ describe('gate requests and replies (the worker and the gate sidecar)', () => {
     const bad: Array<[unknown, Buffer]> = [
       [null, none],
       [{ v: 1, verdict: 'pass', sha256: SHA, checkedSha256: SHA }, Buffer.from([1])],
-      [{ v: 2, verdict: 'pass' }, Buffer.from([1])],
-      [{ v: 2, verdict: 'pass', sha256: 'x', checkedSha256: SHA }, Buffer.from([1])],
-      [{ v: 2, verdict: 'pass', sha256: SHA, checkedSha256: 'x' }, Buffer.from([1])],
-      [{ v: 2, verdict: 'pass', sha256: SHA, checkedSha256: SHA, code: 'withheld' }, Buffer.from([1])],
-      [{ v: 2, verdict: 'pass', sha256: SHA }, Buffer.from([1])],
-      [{ v: 2, verdict: 'pass', sha256: SHA, checkedSha256: SHA }, none],
-      [{ v: 2, verdict: 'pass', sha256: SHA, checkedSha256: SHA }, Buffer.alloc(MAX_OUTPUT_BYTES + 1)],
-      [{ v: 2, verdict: 'refused', code: 'rules', sha256: SHA }, Buffer.from([1])],
-      [{ v: 2, verdict: 'refused', sha256: SHA }, none],
-      [{ v: 2, verdict: 'refused', code: 'leaked', sha256: SHA }, none],
-      [{ v: 2, verdict: 'refused', code: 'withheld', sha256: SHA, reason: 'Kestrel' }, none],
-      [{ v: 2, verdict: 'maybe', sha256: SHA }, none],
+      [{ v: 3, verdict: 'pass' }, Buffer.from([1])],
+      [{ v: 3, verdict: 'pass', sha256: 'x', checkedSha256: SHA }, Buffer.from([1])],
+      [{ v: 3, verdict: 'pass', sha256: SHA, checkedSha256: 'x' }, Buffer.from([1])],
+      [{ v: 3, verdict: 'pass', sha256: SHA, checkedSha256: SHA, code: 'withheld' }, Buffer.from([1])],
+      [{ v: 3, verdict: 'pass', sha256: SHA }, Buffer.from([1])],
+      [{ v: 3, verdict: 'pass', sha256: SHA, checkedSha256: SHA }, none],
+      [{ v: 3, verdict: 'pass', sha256: SHA, checkedSha256: SHA }, Buffer.alloc(MAX_OUTPUT_BYTES + 1)],
+      [{ v: 3, verdict: 'refused', code: 'rules', sha256: SHA }, Buffer.from([1])],
+      [{ v: 3, verdict: 'refused', sha256: SHA }, none],
+      [{ v: 3, verdict: 'refused', code: 'leaked', sha256: SHA }, none],
+      [{ v: 3, verdict: 'refused', code: 'withheld', sha256: SHA, reason: 'Kestrel' }, none],
+      [{ v: 3, verdict: 'maybe', sha256: SHA }, none],
     ];
     for (const [header, body] of bad) expect(() => decodeGateReply({ header, body }), JSON.stringify(header)).toThrow(FrameError);
   });
@@ -311,24 +350,24 @@ describe('replies', () => {
       [null, none],
       [{ v: 1, kind: 'original' }, none],
       [{ v: 1, kind: 'redacted' }, one],
-      [{ v: 2, kind: 'redacted' }, one],
-      [{ v: 2, kind: 'leaked' }, none],
-      [{ v: 2, kind: 'original', extra: 1 }, none],
-      [{ v: 2, kind: 'original' }, one],
-      [{ v: 2, kind: 'redacted', kept: [] }, none],
-      [{ v: 2, kind: 'redacted', kept: [], boxes: [] }, one],
-      [{ v: 2, kind: 'refused' }, none],
-      [{ v: 2, kind: 'refused', reason: '' }, none],
-      [{ v: 2, kind: 'refused', reason: 'x'.repeat(MAX_TEXT_CHARS + 1) }, none],
-      [{ v: 2, kind: 'refused', reason: 'no' }, one],
-      [{ v: 2, kind: 'failed', message: 7 }, none],
-      [{ v: 2, kind: 'failed' }, none],
+      [{ v: 3, kind: 'redacted' }, one],
+      [{ v: 3, kind: 'leaked' }, none],
+      [{ v: 3, kind: 'original', extra: 1 }, none],
+      [{ v: 3, kind: 'original' }, one],
+      [{ v: 3, kind: 'redacted', kept: [] }, none],
+      [{ v: 3, kind: 'redacted', kept: [], boxes: [] }, one],
+      [{ v: 3, kind: 'refused' }, none],
+      [{ v: 3, kind: 'refused', reason: '' }, none],
+      [{ v: 3, kind: 'refused', reason: 'x'.repeat(MAX_TEXT_CHARS + 1) }, none],
+      [{ v: 3, kind: 'refused', reason: 'no' }, one],
+      [{ v: 3, kind: 'failed', message: 7 }, none],
+      [{ v: 3, kind: 'failed' }, none],
     ];
     for (const [header, body] of bad) expect(() => decodeReply({ header, body }), JSON.stringify(header)).toThrow(FrameError);
   });
 
   it('has a 12-byte prefix: the magic and two lengths', () => {
-    const frame = encodeFrame(REPLY_MAGIC, { v: 2 }, Uint8Array.from([7]));
+    const frame = encodeFrame(REPLY_MAGIC, { v: 3 }, Uint8Array.from([7]));
     expect(PREFIX_BYTES).toBe(12);
     expect(frame.subarray(0, 4).equals(REPLY_MAGIC)).toBe(true);
     expect(frame.readUInt32BE(4)).toBe(Buffer.byteLength('{"v":2}'));
@@ -344,13 +383,13 @@ describe('protocol v2 (LINKS L3): the links and the origin out, the kept ids bac
   const LINK = (n: number) => ({ id: id(n), page: 2, rect: [72, 700, 200.5, 714] as const, label: 'Link to site.example' });
   const original = Uint8Array.from([37, 80, 68, 70]);
 
-  it('is version 2', () => {
-    expect(PROTOCOL_VERSION).toBe(2);
-    expect(JSON.parse(encodeRequest(original, REQUEST).subarray(12).toString('latin1', 0, encodeRequest(original, REQUEST).readUInt32BE(4)))).toEqual({ v: 2, quotes: ['Kestrel Ambry'], redactsAny: true, links: [] });
+  it('is version 3 since BOXLABEL (version 2 from LINKS L3)', () => {
+    expect(PROTOCOL_VERSION).toBe(3);
+    expect(JSON.parse(encodeRequest(original, REQUEST).subarray(12).toString('latin1', 0, encodeRequest(original, REQUEST).readUInt32BE(4)))).toEqual({ v: 3, quotes: ['Kestrel Ambry'], redactsAny: true, links: [], membersWithhold: [true] });
   });
 
   it('round-trips the links and the origin, and never a target URL', async () => {
-    const request = { ...REQUEST, origin: ORIGIN, links: [LINK(1), LINK(2)] };
+    const request = { ...REQUEST, origin: ORIGIN, links: [LINK(1), LINK(2)], membersWithhold: [false] };
     const frame = encodeRequest(original, request);
     expect(frame.toString('latin1')).not.toContain('site.example/');
     expect(decodeRequest(await fed([frame]))).toEqual({ original, request });
@@ -360,7 +399,7 @@ describe('protocol v2 (LINKS L3): the links and the origin out, the kept ids bac
     /** `origin` null: none given. */
     const refuse = (links: unknown, origin: unknown = ORIGIN): void => {
       expect(() => encodeRequest(original, { ...REQUEST, links: links as never, ...(origin === null ? {} : { origin: origin as string }) }), JSON.stringify(links)?.slice(0, 80)).toThrow(FrameError);
-      expect(() => decodeRequest({ header: { v: 2, quotes: [], redactsAny: true, links, ...(origin === null ? {} : { origin }) }, body: Buffer.from([1]) }), JSON.stringify(links)?.slice(0, 80)).toThrow(FrameError);
+      expect(() => decodeRequest({ header: { v: 3, quotes: [], redactsAny: true, links, ...(origin === null ? {} : { origin }) }, body: Buffer.from([1]) }), JSON.stringify(links)?.slice(0, 80)).toThrow(FrameError);
     };
     refuse(Array.from({ length: MAX_LINKS + 1 }, (_, n) => LINK(n)));
     refuse([LINK(1), LINK(1)]);
@@ -378,7 +417,7 @@ describe('protocol v2 (LINKS L3): the links and the origin out, the kept ids bac
     expect(reply).toEqual({ kind: 'redacted', pdf: Uint8Array.from([9]), boxes: [], kept: [id(2), id(1)] });
     const one = Buffer.from([1]);
     for (const kept of [[id(1), id(1)], ['Quillon Brask'], 'none', [7], Array.from({ length: MAX_LINKS + 1 }, () => id(1))]) {
-      expect(() => decodeReply({ header: { v: 2, kind: 'redacted', kept }, body: one }), JSON.stringify(kept).slice(0, 60)).toThrow(FrameError);
+      expect(() => decodeReply({ header: { v: 3, kind: 'redacted', kept }, body: one }), JSON.stringify(kept).slice(0, 60)).toThrow(FrameError);
     }
     expect(encodeReply({ kind: 'redacted', pdf: Uint8Array.from([9]), boxes: [], kept: ['Quillon Brask'] }).toString('latin1')).not.toContain('Quillon');
   });
@@ -397,7 +436,7 @@ describe('protocol v2 (LINKS L3): the links and the origin out, the kept ids bac
     const frame = encodeGateRequest(gate);
     expect(decodeGateRequest(await fed([frame], { limits: { magic: GATE_REQUEST_MAGIC, maxHeader: MAX_REQUEST_HEADER_BYTES, maxBody: MAX_GATE_BODY_BYTES } }))).toEqual(gate);
     const body = Buffer.from([4, 5, 6, 9, 9]);
-    const header = { v: 2, quotes: [], image: 'show', sha256: gate.sha256, originalSha256: gate.originalSha256, copyBytes: 3, origin: ORIGIN, links: [LINK(1), LINK(2)], kept: [id(2)] };
+    const header = { v: 3, quotes: [], image: 'show', sha256: gate.sha256, originalSha256: gate.originalSha256, copyBytes: 3, origin: ORIGIN, links: [LINK(1), LINK(2)], kept: [id(2)] };
     for (const bad of [{ kept: [id(3)] }, { kept: [id(2), id(2)] }, { kept: 'all' }, { links: [LINK(1), LINK(1)] }, { origin: 'https://evil.example/' }, { origin: undefined }]) {
       expect(() => decodeGateRequest({ header: { ...header, ...bad }, body }), JSON.stringify(bad)).toThrow(FrameError);
       expect(() => encodeGateRequest({ ...gate, ...bad } as never), JSON.stringify(bad)).toThrow(FrameError);

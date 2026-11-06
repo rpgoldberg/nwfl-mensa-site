@@ -331,3 +331,41 @@ export function operandBreak(stream: Uint8Array): string | null {
   }
   return pdfjs.waiting || whole.waiting ? 'a content stream ends with operands no operator takes' : null;
 }
+
+/** A name decoded once, as pdf.js and PDFium decode it (BOXLABEL fix round 3, R3-1): each #XX, in either case. */
+export const decodedOnce = (raw: string): string => raw.replace(/#([0-9A-Fa-f]{2})/g, (_escape, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+
+/**
+ * The names a content stream holds (BOXLABEL fix round 3, R3-1), each decoded once as pdf.js and PDFium decode it
+ * (#XX in either case), read with the lexer above: strings, hex strings and comments are skipped, and an inline
+ * picture from BI to its EI, as operandBreak skips it. A string, hex string or inline picture that does not end runs
+ * to the end of the stream, for a reader as here, so no name is read past its start.
+ */
+export function contentNames(stream: Uint8Array): string[] {
+  const s = Buffer.from(stream).toString('latin1');
+  const names: string[] = [];
+  let i = 0;
+  try {
+    while (i < s.length) {
+      const c = s[i] as string;
+      if (WHITESPACE.has(s.charCodeAt(i)) || c === '[' || c === ']' || c === ')' || c === '>') i += 1;
+      else if (c === '%') {
+        const eol = s.slice(i).search(/[\r\n]/);
+        i = eol < 0 ? s.length : i + eol;
+      } else if (c === '(') i = stringEnd(s, i);
+      else if (s.startsWith('<<', i)) i += 2;
+      else if (c === '<') i = hexEnd(s, i);
+      else if (c === '/') {
+        const end = regularEnd(s, i + 1);
+        names.push(decodedOnce(s.slice(i + 1, end)));
+        i = end;
+      } else {
+        const end = Math.max(regularEnd(s, i), i + 1);
+        i = s.slice(i, end) === 'BI' ? inlineImageEnd(s, end) : end;
+      }
+    }
+  } catch {
+    // Unreadable from here on: what follows is a string's or a picture's data.
+  }
+  return names;
+}

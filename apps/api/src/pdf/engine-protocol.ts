@@ -4,12 +4,13 @@
 // socket-engine.ts) and the output gate (gate-service.ts, socket-gate.ts).
 //
 //   frame   = magic (4) | header length (u32 BE) | body length (u32 BE) | header | body
-//   engine request = "NWQ1", header {v: 2, quotes, redactsAny, image?, origin?, links}, body the original
-//   engine reply   = "NWA1", header {v: 2, kind, kept? | reason? | message?}, body the copy or nothing
-//   gate request   = "NGQ1", header {v: 2, quotes, image, sha256, originalSha256, copyBytes, origin?,
+//   engine request = "NWQ1", header {v: 3, quotes, redactsAny, image?, origin?, links, membersWithhold},
+//                    body the original
+//   engine reply   = "NWA1", header {v: 3, kind, kept? | reason? | message?}, body the copy or nothing
+//   gate request   = "NGQ1", header {v: 3, quotes, image, sha256, originalSha256, copyBytes, origin?,
 //                    links, kept}, body the copy then the original (for its pictures, gate-rules.ts)
-//   gate reply     = "NGA1", header {v: 2, verdict: "refused", code, sha256}, no body; or
-//                    header {v: 2, verdict: "pass", sha256, checkedSha256}, body the bytes the
+//   gate reply     = "NGA1", header {v: 3, verdict: "refused", code, sha256}, no body; or
+//                    header {v: 3, verdict: "pass", sha256, checkedSha256}, body the bytes the
 //                    gate checked: its own writing of the copy, the only bytes that may be stored
 //                    (fix round 3, M1). sha256 names the copy the gate was sent.
 //
@@ -24,8 +25,16 @@
 // id, page, rect and label, never its target, with the origin they point to;
 // the engine's copy names the ids it kept, and the gate is given all three
 // and checks the copy holds exactly those (gate-rules.ts). At most MAX_LINKS
-// links, each id once; a kept id is one the request holds. A frame of
-// version 1 is malformed.
+// links, each id once; a kept id is one the request holds.
+//
+// Version 3 (BOXLABEL): the engine request says, for each quote, whether
+// members withhold it too (membersWithhold, one boolean per quote, in the
+// quotes' order), so the engine labels its boxes "Private" or "Members Only"
+// (labels.ts). Booleans only: the flags add no text to any request, so the
+// public's request holds the public's quotes alone and the members' theirs.
+// The gate is given nothing new: it takes exactly the three labels inside
+// boxes (gate-labels.ts), whichever the engine chose. A frame of version 1 or
+// 2 is malformed.
 // ============================================================================
 import { createHash } from 'node:crypto';
 import type { Duplex, Readable } from 'node:stream';
@@ -58,8 +67,8 @@ export const MAX_GATE_BODY_BYTES = MAX_OUTPUT_BYTES + MAX_INPUT_BYTES;
 export const MAX_GATE_REPLY_HEADER_BYTES = 1024;
 export { MAX_LINKS };
 
-/** The wire's version: 2 from LINKS L3 (the links, the origin and the kept ids). */
-export const PROTOCOL_VERSION = 2;
+/** The wire's version: 2 from LINKS L3 (the links, the origin and the kept ids), 3 from BOXLABEL (what members withhold). */
+export const PROTOCOL_VERSION = 3;
 const VERSION = PROTOCOL_VERSION;
 const IMAGE_ACTIONS: readonly ImageAction[] = ['show', 'blur', 'hide'];
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
@@ -227,6 +236,10 @@ function checkLinks(links: unknown, origin: unknown): void {
   if (broken !== null) throw new FrameError(broken);
 }
 
+const FLAGS = 'what members withhold is not one boolean per quote';
+/** Whether `flags` is one boolean per quote. */
+const validFlags = (flags: unknown, quotes: readonly unknown[]): flags is boolean[] => Array.isArray(flags) && flags.length === quotes.length && flags.every((flag) => typeof flag === 'boolean');
+
 /** Throws a FrameError for quotes over a cap. */
 function checkQuotes(quotes: readonly string[]): void {
   if (quotes.length > MAX_QUOTES) throw new FrameError('too many quotes');
@@ -244,6 +257,9 @@ function requestFrame(magic: Buffer, header: unknown, body: Uint8Array): Buffer 
 export function encodeRequest(original: Uint8Array, request: RedactRequest): Buffer {
   if (original.byteLength === 0 || original.byteLength > MAX_INPUT_BYTES) throw new FrameError('the original is outside the engine input cap');
   checkQuotes(request.quotes);
+  // Every quote when the request names none: every box "Private" (redact.ts).
+  const membersWithhold = request.membersWithhold === undefined ? request.quotes.map(() => true) : [...request.membersWithhold];
+  if (!validFlags(membersWithhold, request.quotes)) throw new FrameError(FLAGS);
   const links = [...(request.links ?? [])];
   checkLinks(links, request.origin);
   const header = {
@@ -253,6 +269,7 @@ export function encodeRequest(original: Uint8Array, request: RedactRequest): Buf
     ...(request.image === undefined ? {} : { image: request.image }),
     ...(request.origin === undefined ? {} : { origin: request.origin }),
     links,
+    membersWithhold,
   };
   return requestFrame(REQUEST_MAGIC, header, original);
 }
@@ -260,9 +277,11 @@ export function encodeRequest(original: Uint8Array, request: RedactRequest): Buf
 /** The sidecar's reading of a request frame: exactly the typed request and an original, or a FrameError. */
 export function decodeRequest(frame: Frame): EngineMessage {
   const { header, body } = frame;
-  if (!isRecord(header) || !hasKeys(header, ['v', 'quotes', 'redactsAny', 'links'], ['image', 'origin'])) throw new FrameError('the request header is not a request');
+  if (!isRecord(header)) throw new FrameError('the request header is not a request');
   if (header['v'] !== VERSION) throw new FrameError('the request is of another version');
+  if (!hasKeys(header, ['v', 'quotes', 'redactsAny', 'links', 'membersWithhold'], ['image', 'origin'])) throw new FrameError('the request header is not a request');
   if (!validQuotes(header['quotes'])) throw new FrameError('the quotes are not a list of text within the caps');
+  if (!validFlags(header['membersWithhold'], header['quotes'])) throw new FrameError(FLAGS);
   if (typeof header['redactsAny'] !== 'boolean') throw new FrameError('redactsAny is not a boolean');
   const image = header['image'];
   if (image !== undefined && !IMAGE_ACTIONS.includes(image as ImageAction)) throw new FrameError('the image action is not one the engine knows');
@@ -275,6 +294,7 @@ export function decodeRequest(frame: Frame): EngineMessage {
     ...(image === undefined ? {} : { image: image as ImageAction }),
     ...(origin === undefined ? {} : { origin }),
     links: header['links'] as EngineLink[],
+    membersWithhold: header['membersWithhold'],
   };
   return { original: new Uint8Array(body.buffer, body.byteOffset, body.byteLength), request };
 }

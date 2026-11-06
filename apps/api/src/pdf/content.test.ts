@@ -2,7 +2,7 @@
 // names) are text a reader copies or reads aloud, outside the glyphs. The
 // redacted copy keeps the tags and drops the properties.
 import { describe, expect, it } from 'vitest';
-import { stripMarkedContentProperties } from './content.js';
+import { contentNames, stripMarkedContentProperties } from './content.js';
 
 const strip = (value: string): string => Buffer.from(stripMarkedContentProperties(Buffer.from(value, 'latin1'))).toString('latin1');
 
@@ -43,5 +43,30 @@ describe('stripMarkedContentProperties', () => {
     expect(() => strip('/P <</Alt <41')).toThrow('marked content that cannot be read');
     expect(() => strip('/P <</Alt (x)')).toThrow('marked content that cannot be read');
     expect(() => strip('BI /W 1 ID \x00')).toThrow('marked content that cannot be read');
+  });
+});
+
+// BOXLABEL fix round 3 (R3-1): the names a content stream holds, as a reader's lexer reads them.
+describe('contentNames', () => {
+  const names = (value: string): string[] => contentNames(Buffer.from(value, 'latin1'));
+
+  it('reads each name once decoded, #XX in either case, as pdf.js and PDFium decode it', () => {
+    expect(names('/FXF1 12 Tf /GS#2331 gs /F#4a#4A Do /a#2 n')).toEqual(['FXF1', 'GS#31', 'FJJ', 'a#2']);
+  });
+
+  it('skips strings, hex strings, comments and an inline picture (its dictionary too, as the operand check skips it), and reads names in arrays and dictionaries', () => {
+    expect(names('(a /b#23c \\) /x) Tj <2F79> Tj % /c#23d\n[/d] TJ /Span <</MCID 0>> BDC BI /W 1 ID /e#23 EI /f')).toEqual(['d', 'Span', 'MCID', 'f']);
+  });
+
+  it('reads no name past a string, hex string or inline picture that does not end: a reader reads the rest as its data', () => {
+    expect(names('/a (b /c')).toEqual(['a']);
+    expect(names('/a <2F /c')).toEqual(['a']);
+    expect(names('/a BI /W 1 ID /c')).toEqual(['a']);
+    expect(names('/a ) /b')).toEqual(['a', 'b']);
+  });
+
+  it('reads every name however deep arrays and dictionaries nest: it keeps no stack (round 4, B1)', () => {
+    const deep = 200_000;
+    expect(names(`${'[<</K '.repeat(deep)}/GS#2331${' >>]'.repeat(deep)} /b`)).toEqual([...Array.from({ length: deep }, () => 'K'), 'GS#31', 'b']);
   });
 });

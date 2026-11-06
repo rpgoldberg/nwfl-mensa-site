@@ -39,7 +39,9 @@ describe('redactPdf: the public copy (every canary marked)', () => {
     const seen = await readBack(copyOf(await redactPdf(await leakFixture(), { quotes: quotes(ALL), redactsAny: true })));
     expect(seen.extracted).toContain('This closing line stays readable.');
     expect(seen.extracted).toContain('Please call');
-    expect(seen.extracted).toContain('withheld');
+    // BOXLABEL: the request names no flags, so every quote is one members withhold too: "Private".
+    expect(seen.extracted).toContain('Private');
+    expect(seen.extracted).not.toContain('withheld');
   });
 
   it('gives the same bytes every time for the same original and marks', async () => {
@@ -96,7 +98,8 @@ describe('redactPdf: exact-fit boxes (REDACT-LOOK: a box shows the passage\'s le
     expect(drawn.filter((w) => w === 37.344)).toHaveLength(1);
     const seen = await readBack(result.pdf);
     expect(leaked('Quillon', seen.extracted, seen.raw)).toBe(false);
-    expect(seen.extracted.match(/withheld/g)).toHaveLength(1);
+    // BOXLABEL: "Quillon" takes "Private" (no flags: members withhold it too); "Bo" is too narrow for any label.
+    expect(seen.extracted.match(/Private/g)).toHaveLength(1);
   });
 });
 

@@ -24,9 +24,11 @@
 // ============================================================================
 import {
   PDFArray,
+  type PDFContext,
   PDFDict,
   PDFDocument,
   PDFName,
+  PDFNull,
   PDFObject,
   PDFRawStream,
   PDFRef,
@@ -52,6 +54,17 @@ function refsOf(doc: PDFDocument, value: PDFObject | undefined): PDFRef[] {
   return target instanceof PDFArray ? refsOf(doc, target) : [value];
 }
 
+/** An ExtGState's soft mask: its dictionary, or undefined for none (no /SMask, null or /None). Throws on anything else (F4). */
+function softMask(context: PDFContext, state: PDFObject): PDFDict | undefined {
+  const found = context.lookup(state);
+  if (found === undefined || found === PDFNull) return undefined;
+  if (!(found instanceof PDFDict)) throw new Error('an ExtGState is not a dictionary');
+  const mask = context.lookup(found.get(PDFName.of('SMask')));
+  if (mask instanceof PDFDict) return mask;
+  if (mask === undefined || mask === PDFNull || (mask instanceof PDFName && mask.decodeText() === 'None')) return undefined;
+  throw new Error('a soft mask is neither /None nor a dictionary');
+}
+
 function contentStreams(doc: PDFDocument): Set<PDFRef> {
   const { context } = doc;
   const out = new Set<PDFRef>();
@@ -61,10 +74,13 @@ function contentStreams(doc: PDFDocument): Set<PDFRef> {
     const dict = context.lookupMaybe(value, PDFDict);
     if (dict === undefined || seen.has(dict)) return;
     seen.add(dict);
-    // A soft mask's group (ExtGState /SMask /G) is a form the page draws too.
+    // A soft mask's group (ExtGState /SMask /G) is a form the page draws too. /SMask may be the name /None, no soft
+    // mask (InDesign, Illustrator and Acrobat write it), behind a reference or not (BOXLABEL, NOTE-1). Anything else
+    // that is not a dictionary, and an ExtGState that is not one, means no copy (BOXLABEL fix round 1, F4): a reader
+    // that takes a stream's dictionary for it would draw a mask this walk never read.
     const states = context.lookupMaybe(dict.get(PDFName.of('ExtGState')), PDFDict);
     for (const [, state] of states?.entries() ?? []) {
-      const mask = context.lookupMaybe(context.lookupMaybe(state, PDFDict)?.get(PDFName.of('SMask')), PDFDict);
+      const mask = softMask(context, state);
       const group = mask?.get(PDFName.of('G'));
       const form = context.lookup(group);
       if (group instanceof PDFRef && form instanceof PDFStream) {

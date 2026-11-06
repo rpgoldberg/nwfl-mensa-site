@@ -9,7 +9,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Box, PageChar, Region, TextObject } from '../../src/pdf/match.js';
 import { matchedChars, regionsFor, stillThere, unread } from '../../src/pdf/match.js';
-import { Document, LABEL_EMS, Page, labelSize, pdfium } from '../../src/pdf/pdfium.js';
+import { LABEL_EMS, labelSize } from '../../src/pdf/labels.js';
+import { Document, Page, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { extractAll, leaked, rawText } from './extract.js';
 import { BLUE, FIT_FIXTURES, type FitFixture, NESTED, NEWSLETTER_QUOTES, RED, REPEATS, askLine, fitPdf, lineRepros, newsletterPage, pictureNearFixture, possessiveShadow, scaledTypeFixture, shadowed, tightParagraph } from './fit-fixtures.js';
@@ -81,7 +82,8 @@ describe('exact fit: the boxes are the passages\' own widths', () => {
     expect(boxes.map((box) => Number((box.right - box.left).toFixed(3)))).toEqual([14.676, 37.344]);
     const drawn = [...rawText(pdf).matchAll(/(-?[\d.]+) (-?[\d.]+) (-?[\d.]+) (-?[\d.]+) re\b/g)].map((m) => Number(Number(m[3]).toFixed(3)));
     expect(drawn.filter((w) => w === 14.676 || w === 37.344).sort()).toEqual([14.676, 37.344]);
-    expect((await extractAll(pdf)).match(/withheld/g)).toHaveLength(1);
+    // BOXLABEL: "Quillon" is withheld from members too (the request names no flags), so "Private"; "Bo" is too narrow for any.
+    expect((await extractAll(pdf)).match(/Private/g)).toHaveLength(1);
   });
 
   it('gives two passages on one line two boxes and keeps the unmarked word between them (challenger r2, F3)', async () => {
@@ -104,7 +106,7 @@ describe('exact fit: the boxes are the passages\' own widths', () => {
   it('labels type set at 1 pt and scaled to 12 pt by its matrix as 12 pt type', async () => {
     const { pdf, boxes } = copyOf(await redactPdf(await scaledTypeFixture(), { quotes: ['Quillon Brask'], redactsAny: true }));
     expect(boxes.map((box) => box.fontSize)).toEqual([12]);
-    expect((await extractAll(pdf)).match(/withheld/g)).toHaveLength(1);
+    expect((await extractAll(pdf)).match(/Private/g)).toHaveLength(1);
   });
 });
 
@@ -392,7 +394,7 @@ describe('text PDFium does not read, by a passage (challenger r2, F2)', () => {
     // 3, F1): the box ends with the full stop (160.04 + 3.892).
     expect([box.left, box.right].map((v) => Number(v.toFixed(2)))).toEqual([47.23, 163.93]);
     expect(box.top).toBeGreaterThanOrEqual((shadow[0] as Box).top);
-    expect((await extractAll(pdf)).split('\n')[0]).toMatch(/^Ask\s+withheld$/);
+    expect((await extractAll(pdf)).split('\n')[0]).toMatch(/^Ask\s+Private$/);
     expect(where(await render(pdf), red)).toEqual([]);
   });
 
@@ -566,19 +568,19 @@ describe('a withheld glyph that survives removal (L3)', () => {
 });
 
 describe('labels (L12)', () => {
-  it('draws "withheld" in white on the black box, wholly inside it, at a readable contrast, where it fits', async () => {
+  it('draws its label ("Private" when members withhold it too, BOXLABEL) in white on the black box, wholly inside it, at a readable contrast, where it fits', async () => {
     const { pdf, boxes } = copyOf(await redactPdf(await twoMarksFixture(), { quotes: ['Quillon'], redactsAny: true }));
     const box = boxes[0] as Region;
-    const size = labelSize(box) as number;
+    const size = labelSize(box, 'Private') as number;
     expect(size).toBeCloseTo(9.6, 6);
     // The label's own glyphs, read back by PDFium, lie inside the box.
     const label = (await pageChars(pdf)).filter((c) => c.ink !== null && overlaps(c.ink, box));
-    expect(label.map((c) => c.text).join('')).toBe('withheld');
+    expect(label.map((c) => c.text).join('')).toBe('Private');
     for (const c of label) {
       const ink = c.ink as Box;
       expect(ink.left >= box.left && ink.right <= box.right && ink.bottom >= box.bottom && ink.top <= box.top, JSON.stringify(ink)).toBe(true);
     }
-    expect(LABEL_EMS * size).toBeLessThanOrEqual(box.right - box.left - 2);
+    expect(LABEL_EMS.Private * size).toBeLessThanOrEqual(box.right - box.left - 2);
     const pixels = inside(await render(pdf), box);
     expect(contrast(pixels)).toBeGreaterThanOrEqual(15);
     expect(pixels.some(([r, g, b]) => r === 255 && g === 255 && b === 255)).toBe(true);
@@ -587,18 +589,18 @@ describe('labels (L12)', () => {
   it('keeps a label bound by the box\'s height wholly inside it (a box under 1 em tall)', async () => {
     // 18 pt tall for 20 pt type: the label is 0.8 x 18 = 14.4 pt, under the 16 pt of the type size.
     const region: Region = { page: 0, left: 50, right: 250, bottom: 50, top: 68, fontSize: 20 };
-    expect(labelSize(region)).toBeCloseTo(14.4, 6);
+    expect(labelSize(region, 'Members Only')).toBeCloseTo(14.4, 6);
     const doc = Document.open(await pdfium(), await fitPdf(''));
     if (doc === null) throw new Error('unopenable');
     let pdf: Uint8Array;
     try {
-      doc.page(0, (page) => page.drawBoxes([region]));
+      doc.page(0, (page) => page.drawBoxes([region], ['members']));
       pdf = doc.save();
     } finally {
       doc.close();
     }
     const label = (await pageChars(pdf)).filter((c) => c.ink !== null);
-    expect(label.map((c) => c.text).join('')).toBe('withheld');
+    expect(label.map((c) => c.text).join('')).toBe('Members Only');
     for (const c of label) {
       const ink = c.ink as Box;
       expect(ink.left >= region.left && ink.right <= region.right && ink.bottom >= region.bottom && ink.top <= region.top, JSON.stringify(ink)).toBe(true);
@@ -607,25 +609,24 @@ describe('labels (L12)', () => {
 
   it('leaves a box too narrow for a readable label without one, all black', async () => {
     const { pdf, boxes } = copyOf(await redactPdf(await twoMarksFixture(), { quotes: ['Bo'], redactsAny: true }));
-    expect(labelSize(boxes[0] as Region)).toBeNull();
-    expect(await extractAll(pdf)).not.toContain('withheld');
+    expect(labelSize(boxes[0] as Region, 'Private')).toBeNull();
+    expect(await extractAll(pdf)).not.toContain('Private');
     const pixels = inside(await render(pdf), boxes[0] as Region);
     expect(pixels.length).toBeGreaterThan(0);
     expect(pixels.every(([r, g, b]) => black(r, g, b))).toBe(true);
   });
 
-  it('refuses a passage that is itself the word "withheld": the label reads as the passage (fail closed, challenger F8)', async () => {
-    expect(await redactPdf(await fitPdf(askLine('(withheld) Tj')), { quotes: ['withheld'], redactsAny: true })).toEqual({
-      kind: 'refused',
-      reason: 'page 1: withheld text is still readable after removal',
-    });
+  it('gives a copy of a passage that is the old label, "withheld" (challenger F8 refused it while it was the label; BOXLABEL)', async () => {
+    const { pdf, boxes } = copyOf(await redactPdf(await fitPdf(askLine('(withheld) Tj')), { quotes: ['withheld'], redactsAny: true }));
+    expect(boxes).toHaveLength(1);
+    expect(await extractAll(pdf)).not.toContain('withheld');
     expect((await redactPdf(await fitPdf(askLine('(Anna Held) Tj')), { quotes: ['Anna Held'], redactsAny: true })).kind).toBe('redacted');
   });
 
   it('adds no text but the label: the copy reads as the original with each passage replaced', async () => {
     const { pdf } = copyOf(await redactPdf(await twoMarksFixture(), { quotes: ['Bo', 'Quillon'], redactsAny: true }));
     const words = ((await extractAll(pdf)).split('\n')[0] as string).split(/\s+/).filter((w) => /^[A-Za-z]+$/.test(w));
-    expect(words.filter((w) => !['Phone', 'now', 'about', 'the', 'picnic', 'and', 'rest'].includes(w))).toEqual(['withheld']);
+    expect(words.filter((w) => !['Phone', 'now', 'about', 'the', 'picnic', 'and', 'rest'].includes(w))).toEqual(['Private']);
   });
 });
 

@@ -1,0 +1,1666 @@
+{
+ "engine": "b3668e4 (main, LINKS L3b merged): pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1, labelled \"withheld\"",
+ "cases": {
+  "two marks": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 110.02799987792969,
+     "right": 124.70399475097656,
+     "bottom": 697.31201171875,
+     "top": 711.3400268554688,
+     "fontSize": 12
+    },
+    {
+     "page": 0,
+     "left": 110.02799987792969,
+     "right": 147.37200927734375,
+     "bottom": 677.31201171875,
+     "top": 691.3400268554688,
+     "fontSize": 12
+    }
+   ],
+   "outside": {
+    "0": "2150ec51380c02960c30fa44ad0460642c35ebbaaff6b6597460c84309c2b1ab"
+   }
+  },
+  "one long name": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 130.48800659179688,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "6a5c0dc5fa6e3e38ce73d476344dfe18aef605021c64a5ef2eafff1b1cc1a612"
+   }
+  },
+  "two lines": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 130.48800659179688,
+     "bottom": 96.86399841308594,
+     "top": 113.22999572753906,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 136.718017578125,
+     "bottom": 36.86399841308594,
+     "top": 53.22999954223633,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "395009931127de3560ce39f3d9d2560f6a7798e4ec984a8cdace71f7805bb8fe"
+   }
+  },
+  "look, public": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 212.06399536132812,
+     "right": 286.7759704589844,
+     "bottom": 123.31199645996094,
+     "top": 137.33999633789062,
+     "fontSize": 12
+    },
+    {
+     "page": 0,
+     "left": 36,
+     "right": 192.08396911621094,
+     "bottom": 103.31199645996094,
+     "top": 117.33999633789062,
+     "fontSize": 12
+    }
+   ],
+   "outside": {
+    "0": "d46d66cd73c2ebc7dbe69e761de46f9231d076b5a7fb10b22958a9d93b697bc1"
+   }
+  },
+  "look, old public": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 36,
+     "right": 103.35600280761719,
+     "bottom": 143.31199645996094,
+     "top": 157.33999633789062,
+     "fontSize": 12
+    },
+    {
+     "page": 0,
+     "left": 225.39598083496094,
+     "right": 302.7599792480469,
+     "bottom": 143.31199645996094,
+     "top": 157.33999633789062,
+     "fontSize": 12
+    },
+    {
+     "page": 0,
+     "left": 124.0320053100586,
+     "right": 195.39599609375,
+     "bottom": 123.31199645996094,
+     "top": 137.33999633789062,
+     "fontSize": 12
+    },
+    {
+     "page": 0,
+     "left": 212.06399536132812,
+     "right": 286.7759704589844,
+     "bottom": 123.31199645996094,
+     "top": 137.33999633789062,
+     "fontSize": 12
+    },
+    {
+     "page": 0,
+     "left": 36,
+     "right": 192.08396911621094,
+     "bottom": 103.31199645996094,
+     "top": 117.33999633789062,
+     "fontSize": 12
+    },
+    {
+     "page": 0,
+     "left": 260.0999755859375,
+     "right": 310.115966796875,
+     "bottom": 103.31199645996094,
+     "top": 117.33999633789062,
+     "fontSize": 12
+    }
+   ],
+   "outside": {
+    "0": "15822628b71a8e51d8a428074a3a9d219f5f92a3f6f83f450b3fe10e8a7ebaa0"
+   }
+  },
+  "newsletter, phone": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 352.6759948730469,
+     "right": 418.04901123046875,
+     "bottom": 645.6480102539062,
+     "top": 657.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "0bac41295c07f2c4a8bb307d1b9c1988ff30c8a52f796212c4b744772d6910be"
+   }
+  },
+  "newsletter, email": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 433.22149658203125,
+     "right": 533.1605224609375,
+     "bottom": 645.6480102539062,
+     "top": 657.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "932be45a88b2c8f54aa5b84d2193233c3d1cdf5eb7fe85830d3b7cf6cd0bacc7"
+   }
+  },
+  "newsletter, phone and email": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 352.6759948730469,
+     "right": 418.04901123046875,
+     "bottom": 645.6480102539062,
+     "top": 657.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 433.22149658203125,
+     "right": 533.1605224609375,
+     "bottom": 645.6480102539062,
+     "top": 657.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "db249a262db2acb1ed8d08379886df85abf4df69fe294b233c1f604528690bfa"
+   }
+  },
+  "newsletter, editor": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 127.02200317382812,
+     "right": 227.677978515625,
+     "bottom": 57.98400115966797,
+     "top": 68.50499725341797,
+     "fontSize": 9
+    },
+    {
+     "page": 0,
+     "left": 232.68197631835938,
+     "right": 288.7159423828125,
+     "bottom": 57.98400115966797,
+     "top": 68.50499725341797,
+     "fontSize": 9
+    }
+   ],
+   "outside": {
+    "0": "745b2687e50203c21a6e3f4a30b92068044886ff967f3443d701560049a25265"
+   }
+  },
+  "newsletter, address": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 507.34100341796875,
+     "right": 519.0169677734375,
+     "bottom": 671.6480102539062,
+     "top": 683.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 320,
+     "right": 377.0255126953125,
+     "bottom": 658.6480102539062,
+     "top": 670.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "04cb02c4663e32b8b88ee25828a503e1b656d6bedc5e6fb67cce100117fb36ce"
+   }
+  },
+  "newsletter, venue": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 427.97149658203125,
+     "right": 519.0169677734375,
+     "bottom": 671.6480102539062,
+     "top": 683.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 320,
+     "right": 377.0255126953125,
+     "bottom": 658.6480102539062,
+     "top": 670.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "7d3c754dcf24656acddf6bd0fecfdc50543a777f28387112eabaf51cd5b3bad7"
+   }
+  },
+  "newsletter, venue, short": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 445.4854736328125,
+     "right": 501.50299072265625,
+     "bottom": 671.6480102539062,
+     "top": 683.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "9a375e50812455f1368771b8348a186655d640c094dd233328829e63399049b9"
+   }
+  },
+  "newsletter, street": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 461.64495849609375,
+     "right": 517.095458984375,
+     "bottom": 626.6480102539062,
+     "top": 638.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 320,
+     "right": 348.0140075683594,
+     "bottom": 613.6480102539062,
+     "top": 625.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "bff862f83416c5601013f37976477629c4573f530be0d13ac349ca0d432c351b"
+   }
+  },
+  "newsletter, name Quillon Brask": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 145.70748901367188,
+     "right": 208.15098571777344,
+     "bottom": 658.6480102539062,
+     "top": 670.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 149.781494140625,
+     "right": 212.22499084472656,
+     "bottom": 463.64801025390625,
+     "top": 475.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 480.9124755859375,
+     "right": 513.5885009765625,
+     "bottom": 658.6480102539062,
+     "top": 670.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 320,
+     "right": 346.8485107421875,
+     "bottom": 645.6480102539062,
+     "top": 657.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 320,
+     "right": 373.52301025390625,
+     "bottom": 419.9840087890625,
+     "top": 430.5050048828125,
+     "fontSize": 9
+    }
+   ],
+   "outside": {
+    "0": "01a5bf23f2497e47c4f7509aae90dcddbc89c3ab326bed25203c26266ccb640a"
+   }
+  },
+  "newsletter, name Ada Marsh": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 231.49249267578125,
+     "right": 250.17198181152344,
+     "bottom": 658.6480102539062,
+     "top": 670.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 50,
+     "right": 79.16899871826172,
+     "bottom": 645.6480102539062,
+     "top": 657.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 50,
+     "right": 100.76750183105469,
+     "bottom": 593.6480102539062,
+     "top": 605.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 68,
+     "right": 118.76750183105469,
+     "bottom": 541.6480102539062,
+     "top": 553.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 50,
+     "right": 100.76750183105469,
+     "bottom": 463.64801025390625,
+     "top": 475.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 393.5299987792969,
+     "right": 437.04498291015625,
+     "bottom": 419.9840087890625,
+     "top": 430.5050048828125,
+     "fontSize": 9
+    }
+   ],
+   "outside": {
+    "0": "579f0b4122cb07c831442922a6d7a84e8458979a167667a38d47774fc345ad4f"
+   }
+  },
+  "newsletter, name Ivo Brumm": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 139.87998962402344,
+     "right": 190.63699340820312,
+     "bottom": 645.6480102539062,
+     "top": 657.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 135.04998779296875,
+     "right": 185.80699157714844,
+     "bottom": 476.64801025390625,
+     "top": 488.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 429.1369934082031,
+     "right": 479.89404296875,
+     "bottom": 613.6480102539062,
+     "top": 625.9224853515625,
+     "fontSize": 10.5
+    },
+    {
+     "page": 0,
+     "left": 78.51200103759766,
+     "right": 122.01800537109375,
+     "bottom": 57.98400115966797,
+     "top": 68.50499725341797,
+     "fontSize": 9
+    },
+    {
+     "page": 0,
+     "left": 127.02200317382812,
+     "right": 169.02499389648438,
+     "bottom": 57.98400115966797,
+     "top": 68.50499725341797,
+     "fontSize": 9
+    }
+   ],
+   "outside": {
+    "0": "0974af1d01479242702b0d213c0a2616b2cdefd21e320b3ba3e42e7934b3f827"
+   }
+  },
+  "newsletter, a new member": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 68,
+     "right": 115.83799743652344,
+     "bottom": 528.6480102539062,
+     "top": 540.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "8c0f9a8c754c05a6de432c9c797b69f7c8f8a00d5d38dbc426190f601d1d8809"
+   }
+  },
+  "newsletter, age": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 215.1334991455078,
+     "right": 253.07000732421875,
+     "bottom": 463.64801025390625,
+     "top": 475.9224853515625,
+     "fontSize": 10.5
+    }
+   ],
+   "outside": {
+    "0": "f50b76beb1a0c0264ddbf930632bd492cf9a8d0b3b832cf98bc8283b16170fc7"
+   }
+  },
+  "L1: accents above the ascent (Å, Ç, ÿ)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 55.01000213623047,
+     "right": 152.02999877929688,
+     "bottom": 55.96799850463867,
+     "top": 77.01000213623047,
+     "fontSize": 18
+    }
+   ],
+   "outside": {
+    "0": "e07791afbbd02fdceed976f5ba21b439fc10f65b3a9a42d08909459c1bb057ee"
+   }
+  },
+  "L1: descenders (g j p q y)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 55.01000213623047,
+     "right": 169.07601928710938,
+     "bottom": 55.96799850463867,
+     "top": 77.01000213623047,
+     "fontSize": 18
+    }
+   ],
+   "outside": {
+    "0": "880a50b8e97d438ad74f7efd98e9c97f4c3c875f53f8bb68f66534a7fec21a9f"
+   }
+  },
+  "L1: italic overhang (Times-Italic f)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 57.157997131347656,
+     "right": 160.60198974609375,
+     "bottom": 54.52199935913086,
+     "top": 79.09600067138672,
+     "fontSize": 22
+    }
+   ],
+   "outside": {
+    "0": "ecf29a80131cd38ce8f5f1c25d32a4baf8a8942ff178b124627f7b355accca3a"
+   }
+  },
+  "L1: a Type 3 glyph whose ink runs past its advance": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 55.01000213623047,
+     "right": 82.01000213623047,
+     "bottom": 54.599998474121094,
+     "top": 81.5999984741211,
+     "fontSize": 18
+    }
+   ],
+   "outside": {
+    "0": "7de3755d330ff82e70a2dd0b69130eaed051cc572b7721756f69b7cda4d0472c"
+   }
+  },
+  "L1: stroked text (Tr 1, 3 pt line)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 58.900001525878906,
+     "right": 177.83999633789062,
+     "bottom": 55.52000045776367,
+     "top": 78.9000015258789,
+     "fontSize": 20
+    }
+   ],
+   "outside": {
+    "0": "2b13ad4d719cf21a916782bc293252c56be525137cdf866c7dc4967c33486cec"
+   }
+  },
+  "L1: filled and stroked text (Tr 2, 3 pt line)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 58.900001525878906,
+     "right": 177.83999633789062,
+     "bottom": 55.52000045776367,
+     "top": 78.9000015258789,
+     "fontSize": 20
+    }
+   ],
+   "outside": {
+    "0": "2b13ad4d719cf21a916782bc293252c56be525137cdf866c7dc4967c33486cec"
+   }
+  },
+  "L1: text rise (Ts 6)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 130.48800659179688,
+     "bottom": 56.86399841308594,
+     "top": 79.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "515f8ea3252b377efb514664d687828392528075f10f48460b6a69f295f0741c"
+   }
+  },
+  "L1: horizontal scaling (Tz 50)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 88.85900115966797,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "1c44ca059bf4c0b1f2d510cb2ce1e3fce3d83094f8434800b12d3af7097f78a9"
+   }
+  },
+  "L1: horizontal scaling (Tz 200)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 43.34000015258789,
+     "right": 186.0679931640625,
+     "bottom": 57.3120002746582,
+     "top": 71.33999633789062,
+     "fontSize": 12
+    }
+   ],
+   "outside": {
+    "0": "ab34f3ba49ca618b0cfd5b87e743dd8b645df7dfe1f080ee9ba34b89c14db323"
+   }
+  },
+  "L1: rotated 30 degrees": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 24.329999923706055,
+     "right": 138.18414306640625,
+     "bottom": 15.083999633789062,
+     "top": 80.37501525878906,
+     "fontSize": 11.999735962408131
+    }
+   ],
+   "outside": {
+    "0": "7cdce18ae8252c638de9b9c61afe1bc0b95a825401ab84801d12b1541175c5f9"
+   }
+  },
+  "L1: rotated 90 degrees": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 188.66000366210938,
+     "right": 202.68800354003906,
+     "bottom": 31.34000015258789,
+     "top": 102.70399475097656,
+     "fontSize": 12
+    }
+   ],
+   "outside": {
+    "0": "bfddadc1c45c93e45a335ad6f61e0abd69514723a8a7728cbf7b5bd1e077466d"
+   }
+  },
+  "L1: skewed (Tm with a shear)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 17.849599838256836,
+     "right": 193.56800842285156,
+     "bottom": 56.41600036621094,
+     "top": 75.12000274658203,
+     "fontSize": 18.659046259769518
+    }
+   ],
+   "outside": {
+    "0": "286883e9d46ed2ed49014c522165fd6312d4bba0999222cba02079e23ca63287"
+   }
+  },
+  "L1: a clipped run (W n)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 55.01000213623047,
+     "right": 162.05599975585938,
+     "bottom": 55.96799850463867,
+     "top": 77.01000213623047,
+     "fontSize": 18
+    }
+   ],
+   "outside": {
+    "0": "0b6853695f52b5e637209f11e2c1276c3ec3e7c98ba6010b255b706c6239495d"
+   }
+  },
+  "L2: drawn twice, 0.3 pt apart": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 130.78799438476562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "a2d3c126335f7d41c6b5e790563d1d4b665a4fccaa5d7e036ee171c822bbd0b4"
+   }
+  },
+  "L2: drawn twice, 1.5 pt apart": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 131.9879913330078,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "f6cf3b179bd2febf9551c1c2e1a1d4138f39cf9fa9b2b391782bc0ea560a37b3"
+   }
+  },
+  "L2: drawn twice, half an em apart": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bf3a5ef2c016f2636b59ece980a88bcebb3f9fa0a2e7dae67b72281ea55690e4"
+   }
+  },
+  "L2: drawn twice, an em apart": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bf3a5ef2c016f2636b59ece980a88bcebb3f9fa0a2e7dae67b72281ea55690e4"
+   }
+  },
+  "L2: drawn twice, three ems apart": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 172.48800659179688,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "fa194a7583c0da7d3238760b5331a8a67c735b0d4b285e49f81b1674e41704db"
+   }
+  },
+  "L2: drawn twice, half a line up": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 130.48800659179688,
+     "bottom": 56.86399841308594,
+     "top": 78.71800231933594,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "65c0d9b545b7a2a35a47c56b79550fa581a0a1713e424e63a96361e5e27169e5"
+   }
+  },
+  "L2: drawn twice, half a line down": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 130.48800659179688,
+     "bottom": 50.82999801635742,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "b5b8485ba49113a7ec2be4f5f69a75d2d2f135844658127048708c9b1a0e74db"
+   }
+  },
+  "L2: fake bold (Tr 2 and a 0.4 pt offset)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 131.13800048828125,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "5052221ab15ba55f98e97358b9470ea4fb13e0beb25e920ab3760a5c3b598096"
+   }
+  },
+  "L2: \"Quillon Brell\" drawn twice, PDFium reading it once (2.2, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 123.95199584960938,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "e05d251e3f3d1bf2703abb144f0695a8c1148ad166dc7688387056d6b43c7e87"
+   }
+  },
+  "L2: \"Quillon Brell\" drawn twice, PDFium reading it once (2.5, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 124.25199890136719,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "395816ada9773bf7f1cb12c3d9a8d6d36038aa7fb86b18b2aa47f8fb91f4423f"
+   }
+  },
+  "L2: \"Quillon Brell\" drawn twice, PDFium reading it once (2.75, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 124.50199890136719,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "8662dff06db795df6721f8eb8a883fcdee069b5e4eeb332fe80687fc623bec20"
+   }
+  },
+  "L2: \"Quillon Brell\" drawn twice, PDFium reading it once (2.5, -2.5)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 124.25199890136719,
+     "bottom": 56.72999954223633,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "d5afc8ecf4e48e93ecb4e2d432cf6974c6efc2bc7ffa0da7734d5ecbfc491fc4"
+   }
+  },
+  "L2: \"Quillon Brask\" drawn twice, PDFium reading it once (6.1, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bf3a5ef2c016f2636b59ece980a88bcebb3f9fa0a2e7dae67b72281ea55690e4"
+   }
+  },
+  "L2: \"Quillon Brask\" drawn twice, PDFium reading it once (6.2, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bf3a5ef2c016f2636b59ece980a88bcebb3f9fa0a2e7dae67b72281ea55690e4"
+   }
+  },
+  "L2: \"Quillon Brask\" drawn twice, PDFium reading it once (6.3, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bf3a5ef2c016f2636b59ece980a88bcebb3f9fa0a2e7dae67b72281ea55690e4"
+   }
+  },
+  "L2: \"Ivo Brumm\" drawn twice, PDFium reading it once (-2.7, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 45.80399703979492,
+     "right": 114.906005859375,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "9f00985813a4f94956db3075a3f69e4a54a245c5aab7d851993cdcd6dde48139"
+   }
+  },
+  "L2: \"Ivo Brumm\" drawn twice, PDFium reading it once (-5, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 20,
+     "right": 114.906005859375,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "8c54ffbcd13d5bde791cd2ab47a2a94734581fd1f5ccb7ef477fb1ae52394e53"
+   }
+  },
+  "L2: \"Ivo Brumm\" drawn twice, PDFium reading it once (-10.4, 0)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 20,
+     "right": 114.906005859375,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "8c54ffbcd13d5bde791cd2ab47a2a94734581fd1f5ccb7ef477fb1ae52394e53"
+   }
+  },
+  "L2: \"Quillon Braskett\" drawn twice, PDFium reading it once (0, -10.5)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 146.0419921875,
+     "bottom": 48.72999954223633,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "ac4c9ae0482e682982a7112cfa603389d6ac6946f8ede22de8ce97d24ec4ebf4"
+   }
+  },
+  "L2: \"Quillon Braskett\" drawn twice, PDFium reading it once (0, -11)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 146.0419921875,
+     "bottom": 48.22999954223633,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "caaa86aa5db3909010f02038cd44f3a11b8d61632a7b21167d30b360f07825d9"
+   }
+  },
+  "L2: \"Quillon Brask\" drawn twice (6.3, 4), with an invisible decoy of glyphs 12": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 77.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "89ddd5af1a854de3dfe6f1827aff8459fe6748964fd6e8412dc65a296dd79651"
+   }
+  },
+  "L2: \"Quillon Brell\" drawn twice (2.2, 0), with an invisible decoy of glyphs 12": {
+   "kind": "refused"
+  },
+  "L2: \"Quillon Brell\" drawn twice (2.5, -2.5), with an invisible decoy of glyphs 12": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 156.14999389648438,
+     "bottom": 54.36399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "74c317047681cd861eee7780e36df385ca10530fffea771a3b61b857901c97c8"
+   }
+  },
+  "L2: \"Quillon Brask\" drawn twice (6.1, 0), with an invisible decoy of glyphs 12": {
+   "kind": "refused"
+  },
+  "L2: \"Ivo Brumm\" drawn twice (-2.7, 0), with an invisible decoy of glyphs 0": {
+   "kind": "refused"
+  },
+  "L2: \"Ivo Brumm\" drawn twice (-10.4, 0), with an invisible decoy of glyphs 0": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 20,
+     "right": 114.906005859375,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "8c54ffbcd13d5bde791cd2ab47a2a94734581fd1f5ccb7ef477fb1ae52394e53"
+   }
+  },
+  "L2: \"Quillon Braskett\" drawn twice (0, -10.5), with an invisible decoy of glyphs 1": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 146.0419921875,
+     "bottom": 48.72999954223633,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "ac4c9ae0482e682982a7112cfa603389d6ac6946f8ede22de8ce97d24ec4ebf4"
+   }
+  },
+  "L2: \"Quillon Braskett\" drawn twice (0, -11), with an invisible decoy of glyphs 1 5 6 7 9 10 11 13": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 146.0419921875,
+     "bottom": 48.22999954223633,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "caaa86aa5db3909010f02038cd44f3a11b8d61632a7b21167d30b360f07825d9"
+   }
+  },
+  "L2: F-A in a form XObject drawn moved": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 36.86399841308594,
+     "top": 57.22999954223633,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "70293f15f3e7cf3848bcc53a77b56d83e8fbaf97a6675912b79f41616c49678e"
+   }
+  },
+  "L2: F-A with the decoy drawn as a clip (Tr 7)": {
+   "kind": "refused"
+  },
+  "L2: \"Quillon Brask\" drawn a word at a time, and again so at (6.4, 0) after it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bf3a5ef2c016f2636b59ece980a88bcebb3f9fa0a2e7dae67b72281ea55690e4"
+   }
+  },
+  "L2: \"Ada Marsh\" drawn a word at a time, and again so at (-8.8, 0) before it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 20,
+     "right": 114.91999816894531,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "16fe7388243da35aab968a43346d33c0a5b0493748f2828ac0341e437ac53c87"
+   }
+  },
+  "L2: \"Quillon Brask\" drawn a word at a time, and again so at (6.3, 4) after it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 77.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "89ddd5af1a854de3dfe6f1827aff8459fe6748964fd6e8412dc65a296dd79651"
+   }
+  },
+  "L2: \"Ivo Brumm\" drawn a word at a time, and again so at (12.8, 1.5) after it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 148.36599731445312,
+     "bottom": 56.86399841308594,
+     "top": 74.72999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "b720ed4cbaf2a32fb2ca39c5c36b9075e9b45f23fff1a53c76bb9486be67823d"
+   }
+  },
+  "L2: \"Ivo Brumm\" drawn a word at a time, and again so at (19, 0) after it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 148.36599731445312,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "0384c002f24452e5fbef4a21cf3fcaa54b3ae187737ab18f7c6292fd6f90842e"
+   }
+  },
+  "L2: \"Quillon Brask\" drawn a word at a time, and again so at (-40, 0) before it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 7.230000019073486,
+     "right": 130.48800659179688,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bd345d4feabf5f2072b1a41b62c2bd644e9e357fdeaa9859d4c7a25a132c8ce5"
+   }
+  },
+  "L2: \"Ada Marsh\" drawn a word at a time, and again so at (-30, 0) after it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 17.229999542236328,
+     "right": 114.91999816894531,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "4f8945116a128844f8de8731fd0d67c5d6b77ae2dfaec665d34b5aa35fec2dd2"
+   }
+  },
+  "L2: \"Quillon Brask\" (a word at a time) drawn again a glyph at a time at (6.4, 0) after it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bf3a5ef2c016f2636b59ece980a88bcebb3f9fa0a2e7dae67b72281ea55690e4"
+   }
+  },
+  "L2: \"Quillon Brask\" (in one Tj) drawn again a glyph at a time at (16, 4) after it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 77.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "89ddd5af1a854de3dfe6f1827aff8459fe6748964fd6e8412dc65a296dd79651"
+   }
+  },
+  "L2: \"Ivo Brumm\" (a word at a time) drawn again a glyph at a time at (11.2, 0) before it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 148.36599731445312,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "0384c002f24452e5fbef4a21cf3fcaa54b3ae187737ab18f7c6292fd6f90842e"
+   }
+  },
+  "L2: \"Ivo Brumm\" (in one Tj) drawn again a glyph at a time at (-3.2, 4) before it": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 20,
+     "right": 47.9219970703125,
+     "bottom": 56.86399841308594,
+     "top": 77.22999572753906,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 114.906005859375,
+     "bottom": 56.86399841308594,
+     "top": 77.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "5398485f0a4e9ea0ce3bd104ef0b31e7c4722ec5af224ca63ec323a322e8b276"
+   }
+  },
+  "L2: \"Quillon Brask\" (in one Tj) drawn again a glyph at a time, 1.6 pt apart, at (6, 0) after it": {
+   "kind": "refused"
+  },
+  "L2: \"Ivo Brumm\" (a word at a time) drawn again a glyph at a time, 1.6 pt apart, at (1.2, 0) after it": {
+   "kind": "refused"
+  },
+  "L2: \"Ivo Brumm\" (in one Tj) drawn again a glyph at a time, 2 pt apart, at (0, 2.5) after it": {
+   "kind": "refused"
+  },
+  "L2: a shadow at (7, 4) in a font that reads every letter as x": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 77.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "89ddd5af1a854de3dfe6f1827aff8459fe6748964fd6e8412dc65a296dd79651"
+   }
+  },
+  "L2: a shadow at (30, 0) in a font that reads every letter as x": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "bf3a5ef2c016f2636b59ece980a88bcebb3f9fa0a2e7dae67b72281ea55690e4"
+   }
+  },
+  "L2: F-A with no decoy two forms deep, rotated, then stretched": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 185.72128295898438,
+     "right": 343.0478515625,
+     "bottom": 89.89344787597656,
+     "top": 180.70559692382812,
+     "fontSize": 9.799784110777022
+    }
+   ],
+   "outside": {
+    "0": "ef741c7ecd534f2a8f1172d1c6c11ad4109a80da6fe14b56e0ea947a0f03a56c"
+   }
+  },
+  "L2: F-A with no decoy two forms deep, stretched, then rotated": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 81.05748748779297,
+     "right": 280.3022766113281,
+     "bottom": 63.44059753417969,
+     "top": 116.76158905029297,
+     "fontSize": 13.500954389805687
+    }
+   ],
+   "outside": {
+    "0": "ea07aa5448a13acf0ce4768f48072bdb220c564b6cb9481b9a40079ea76b020e"
+   }
+  },
+  "L3: a Type 3 glyph drawn 1.5 em from its advance": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 55.01000213623047,
+     "right": 136.010009765625,
+     "bottom": 54.599998474121094,
+     "top": 81.5999984741211,
+     "fontSize": 18
+    }
+   ],
+   "outside": {
+    "0": "1c27353749cd6ab7177f5a7452712f771e171b29df5d1a5a6edb3f53ead82d3d"
+   }
+  },
+  "L3: a glyph pulled out of its place by a TJ": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 44.43000411987305,
+     "right": 75.2300033569336,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "0f7aeb63b303f4fedd7b7062db0e6399c4d030875769cb4759acf6fe4e3160d2"
+   }
+  },
+  "L4: a zero-width combining mark (Type 3, U+0301)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 55.01000213623047,
+     "right": 91.01000213623047,
+     "bottom": 54.599998474121094,
+     "top": 81.5999984741211,
+     "fontSize": 18
+    }
+   ],
+   "outside": {
+    "0": "b31c2eb49a856a6cafddbc0188df23c8d8b814c367ee3522e847d36a547384c6"
+   }
+  },
+  "L5: a ligature, letter spacing, a hyphen at a line end and a split line": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 73.64799499511719,
+     "right": 130.43199157714844,
+     "bottom": 116.51399993896484,
+     "top": 132.2919921875,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 64.36599731445312,
+     "right": 125.93399810791016,
+     "bottom": 96.86399841308594,
+     "top": 113.22999572753906,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 65.90599822998047,
+     "right": 104.01399230957031,
+     "bottom": 76.86399841308594,
+     "top": 93.22999572753906,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 20,
+     "right": 59.676002502441406,
+     "bottom": 60.86399841308594,
+     "top": 77.22999572753906,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 81.4739990234375,
+     "right": 123.4739990234375,
+     "bottom": 40.86399841308594,
+     "top": 57.22999954223633,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 20,
+     "right": 82.24400329589844,
+     "bottom": 24.86400032043457,
+     "top": 41.22999954223633,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "6009f6350844ddfd89950a6297ddcd5a26117da9d3ea494f553b7660651ae067"
+   }
+  },
+  "L6: an invisible copy (Tr 3), a form XObject and ActualText": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 163.93399047851562,
+     "bottom": 106.86399841308594,
+     "top": 123.22999572753906,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 130.48800659179688,
+     "bottom": 66.86399841308594,
+     "top": 83.22999572753906,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 20.68600082397461,
+     "right": 123.85197448730469,
+     "bottom": 26.93400001525879,
+     "top": 40.31800079345703,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "a0b5c8a1e3591bbb20802dfc1a7657340b10d47c509bbc43092d37e3b23808c9"
+   }
+  },
+  "L7: a kerned neighbour (“ tucked over V)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 66.68000030517578,
+     "right": 116.69599914550781,
+     "bottom": 54.624000549316406,
+     "top": 82.68000030517578,
+     "fontSize": 24
+    }
+   ],
+   "outside": {
+    "0": "deb3bd35ce7e60f5806a65c3b39a41e2111a7340a32508a3790ce6a1623ddf1d"
+   }
+  },
+  "L7: an italic f reaching across a tight space": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 95.98400115966797,
+     "right": 202.39999389648438,
+     "bottom": 54.02400207519531,
+     "top": 80.83200073242188,
+     "fontSize": 24
+    }
+   ],
+   "outside": {
+    "0": "8afe8a50ab19b67ad85ae88f880f6ab09cdf082e0d234bc21ba3051dcc47341a"
+   }
+  },
+  "L7: descenders of the line above reaching into the passage (11 pt on 12 pt leading)": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 61.17399978637695,
+     "right": 67.29000091552734,
+     "bottom": 93.59100341796875,
+     "top": 101.91799926757812,
+     "fontSize": 11
+    },
+    {
+     "page": 0,
+     "left": 87.46400451660156,
+     "right": 92.96400451660156,
+     "bottom": 93.65699768066406,
+     "top": 101.75299835205078,
+     "fontSize": 11
+    },
+    {
+     "page": 0,
+     "left": 30,
+     "right": 95.41699981689453,
+     "bottom": 81.53600311279297,
+     "top": 94.39500427246094,
+     "fontSize": 11
+    }
+   ],
+   "outside": {
+    "0": "2d06526691290d62173066b09d944a4c26cfb97a868d3821f67328bcbd7196b5"
+   }
+  },
+  "L7: descenders of the line above reaching into the passage (11 pt on 12 pt leading), a Tj per word": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 61.17399978637695,
+     "right": 67.29000091552734,
+     "bottom": 93.59100341796875,
+     "top": 101.91799926757812,
+     "fontSize": 11
+    },
+    {
+     "page": 0,
+     "left": 87.46399688720703,
+     "right": 92.96399688720703,
+     "bottom": 93.65699768066406,
+     "top": 101.75299835205078,
+     "fontSize": 11
+    },
+    {
+     "page": 0,
+     "left": 30,
+     "right": 95.4169921875,
+     "bottom": 81.53600311279297,
+     "top": 94.39500427246094,
+     "fontSize": 11
+    }
+   ],
+   "outside": {
+    "0": "2d06526691290d62173066b09d944a4c26cfb97a868d3821f67328bcbd7196b5"
+   }
+  },
+  "L7: a Type 3 neighbour whose ink overlaps the passage": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 55.01000213623047,
+     "right": 104.51000213623047,
+     "bottom": 54.599998474121094,
+     "top": 81.5999984741211,
+     "fontSize": 18
+    }
+   ],
+   "outside": {
+    "0": "0f34aeba93da6d501b332c7428c80eabb2e74e660eff3452c77322a2f3166808"
+   }
+  },
+  "L9: an unbalanced /GS0 gs (ca 0.2, Multiply) and q ... cm at the end of the page": {
+   "kind": "redacted",
+   "boxes": [
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 64.35200500488281,
+     "bottom": 56.86399841308594,
+     "top": 73.22999572753906,
+     "fontSize": 14
+    },
+    {
+     "page": 0,
+     "left": 47.230003356933594,
+     "right": 130.48800659179688,
+     "bottom": 96.86399841308594,
+     "top": 113.22999572753906,
+     "fontSize": 14
+    }
+   ],
+   "outside": {
+    "0": "4e34ee701b717a6e8f76adcd0fec4c0dffe1a2636122c899826216528f587f53"
+   }
+  }
+ }
+}
