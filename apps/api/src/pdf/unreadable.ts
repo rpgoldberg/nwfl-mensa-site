@@ -23,15 +23,123 @@
 //      no copy. So a page where unreadable glyphs could spell a quote (small
 //      caps with no Unicode) is refused, and a ligature inside a longer word
 //      ("o\uFFFDce") is not.
+//
+// Fix 1 (F1, F5): a glyph can also read as a code point that is text, but not
+// the glyph's. Ghostscript 10.05.1 re-distilling a WeasyPrint file writes no
+// /ToUnicode entry for some ligatures, and the readers fall back on the glyph's
+// number: Noto Serif's fi reads U+0856 (Mandaic), fl U+0857, ff U+0853, ffl
+// U+0855; Carlito's ti U+08A2 and tt U+08B0 (Arabic); and it writes ffi as "f"
+// and U+00CF (f and i summed). Neither reader flags them. So a letter whose
+// Unicode does not fit its word counts as unreadable too (unreadableAt): one of
+// a script other than its word's (Unicode's Script property; Han, Hiragana,
+// Katakana, Bopomofo and Hangul are one), and a capital outside ASCII just
+// after a small letter (an ASCII one is McDonald's). So is a glyph PDFium has
+// no Unicode for (a map error: the engine refuses such a page already; the
+// gate reads them so too), and a C0 control but tab, line feed, carriage
+// return and PDFium's U+0002 (a crafted map to U+0000). Measured and left:
+// the font's own cmap (Ghostscript writes its TrueType subsets with none, and
+// a post table of format 3, so with no glyph names), and the glyph's advance
+// against the font's for the code point (PDFium's FPDFFont_GetGlyphWidth looks
+// the code point up backwards through the /ToUnicode, and says nothing when
+// that fails; pdf.js gives no width a glyph). Not caught: a ligature read as a
+// small accented Latin letter or a combining mark, a space or its first letter.
 // ============================================================================
 import { probeFolded, quoteLetters } from '../redaction/render.js';
 import type { Box, PageChar } from './match.js';
 
 /** U+FFFD, a private-use code point, a noncharacter at a plane's end of the BMP, or a lone surrogate: no text. */
 const UNREADABLE = /^(?:[\uFFFD\uFFFE\uFFFF\uE000-\uF8FF\u{F0000}-\u{10FFFF}]|[\uD800-\uDFFF])$/u;
+/** The C0 controls a page's text holds as text: tab, line feed, carriage return, and PDFium's U+0002 at a hyphen. */
+const TEXT_CONTROLS = new Set([0x02, 0x09, 0x0a, 0x0d]);
 
-/** Whether a character a reader gives for a glyph is no text at all (LIGATURE). */
-export const isUnreadable = (text: string): boolean => UNREADABLE.test(text);
+/** Whether a character is a C0 control a page's text does not hold (fix 1, F5: a ligature mapped to U+0000). */
+const isControl = (text: string): boolean => text.length === 1 && text.charCodeAt(0) < 0x20 && !TEXT_CONTROLS.has(text.charCodeAt(0));
+
+/** Whether a character a reader gives for a glyph is no text at all (LIGATURE): U+FFFD, private use, a control. */
+export const isUnreadable = (text: string): boolean => isControl(text) || UNREADABLE.test(text);
+
+/** Unicode's scripts, as the Script property names them (node 24); a letter of none of them has a script of its own. */
+const SCRIPT_NAMES =
+  'Latin Greek Cyrillic Arabic Hebrew Armenian Georgian Devanagari Han Hiragana Katakana Bopomofo Hangul Thai Adlam Ahom Anatolian_Hieroglyphs Avestan Balinese Bamum Bassa_Vah Batak Bengali Bhaiksuki Brahmi Braille Buginese Buhid Canadian_Aboriginal Carian Caucasian_Albanian Chakma Cham Cherokee Chorasmian Coptic Cuneiform Cypriot Cypro_Minoan Deseret Dives_Akuru Dogra Duployan Egyptian_Hieroglyphs Elbasan Elymaic Ethiopic Garay Glagolitic Gothic Grantha Gujarati Gunjala_Gondi Gurmukhi Gurung_Khema Hanifi_Rohingya Hanunoo Hatran Imperial_Aramaic Inscriptional_Pahlavi Inscriptional_Parthian Javanese Kaithi Kannada Kawi Kayah_Li Kharoshthi Khitan_Small_Script Khmer Khojki Khudawadi Kirat_Rai Lao Lepcha Limbu Linear_A Linear_B Lisu Lycian Lydian Mahajani Makasar Malayalam Mandaic Manichaean Marchen Masaram_Gondi Medefaidrin Meetei_Mayek Mende_Kikakui Meroitic_Cursive Meroitic_Hieroglyphs Miao Modi Mongolian Mro Multani Myanmar Nabataean Nag_Mundari Nandinagari New_Tai_Lue Newa Nko Nushu Nyiakeng_Puachue_Hmong Ogham Ol_Chiki Ol_Onal Old_Hungarian Old_Italic Old_North_Arabian Old_Permic Old_Persian Old_Sogdian Old_South_Arabian Old_Turkic Old_Uyghur Oriya Osage Osmanya Pahawh_Hmong Palmyrene Pau_Cin_Hau Phags_Pa Phoenician Psalter_Pahlavi Rejang Runic Samaritan Saurashtra Sharada Shavian Siddham SignWriting Sinhala Sogdian Sora_Sompeng Soyombo Sundanese Sunuwar Syloti_Nagri Syriac Tagalog Tagbanwa Tai_Le Tai_Tham Tai_Viet Takri Tamil Tangsa Tangut Telugu Thaana Tibetan Tifinagh Tirhuta Todhri Toto Tulu_Tigalari Ugaritic Vai Vithkuqi Wancho Warang_Citi Yezidi Yi Zanabazar_Square';
+/** The scripts Japanese, Chinese and Korean words mix: one, for this. */
+const EAST_ASIAN = new Set(['Han', 'Hiragana', 'Katakana', 'Bopomofo', 'Hangul']);
+const SCRIPTS = SCRIPT_NAMES.split(' ').map((name) => [EAST_ASIAN.has(name) ? 'East_Asian' : name, new RegExp(`^\\p{Script=${name}}$`, 'u')] as const);
+/** Letters shared by scripts (Common, Inherited): no script of their own, for this. */
+const SHARED = /^[\p{Script=Common}\p{Script=Inherited}]$/u;
+const LETTER = /^\p{L}$/u;
+const MARK = /^\p{M}$/u;
+const CAPITAL = /^[\p{Lu}\p{Lt}]$/u;
+const SMALL = /^\p{Ll}$/u;
+/** Scripts already looked up, by code point; cleared when it holds MAX_SCRIPTS_KNOWN, so a page of every letter cannot grow it. */
+const scriptsKnown = new Map<number, string | null>();
+const MAX_SCRIPTS_KNOWN = 4096;
+
+/** A letter's script, or null when it has none of its own (Common, Inherited). */
+function scriptOf(letter: string): string | null {
+  const cp = letter.codePointAt(0) as number;
+  if (cp < 0x80) return 'Latin';
+  const known = scriptsKnown.get(cp);
+  if (known !== undefined) return known;
+  const script = SHARED.test(letter) ? null : (SCRIPTS.find(([, test]) => test.test(letter))?.[0] ?? `unlisted ${cp}`);
+  if (scriptsKnown.size >= MAX_SCRIPTS_KNOWN) scriptsKnown.clear();
+  scriptsKnown.set(cp, script);
+  return script;
+}
+
+/** Adds to `out` the letters of one word (their indices in `texts`) whose Unicode does not fit it (see the header). */
+function misfits(texts: readonly string[], word: readonly number[], out: Set<number>): void {
+  const scripts = word.map((i) => scriptOf(texts[i] as string));
+  const counts = new Map<string, number>();
+  for (const script of scripts) if (script !== null) counts.set(script, (counts.get(script) ?? 0) + 1);
+  if (counts.size > 1) {
+    const most = Math.max(...counts.values());
+    const ruling = [...counts].filter(([, n]) => n === most);
+    // One script with the most letters rules the word; where two share the most, none does, and every letter is out.
+    const rule = ruling.length === 1 ? (ruling[0] as [string, number])[0] : null;
+    scripts.forEach((script, k) => {
+      if (script !== null && script !== rule) out.add(word[k] as number);
+    });
+  }
+  for (let k = 1; k < word.length; k++) {
+    const letter = texts[word[k] as number] as string;
+    if (letter.codePointAt(0) as number >= 0x80 && CAPITAL.test(letter) && SMALL.test(texts[word[k - 1] as number] as string)) out.add(word[k] as number);
+  }
+}
+
+/** Whether a character is plain ASCII text: a printable one, or a control a page's text holds. */
+const plain = (code: number): boolean => code < 0x80 && (code >= 0x20 || TEXT_CONTROLS.has(code));
+
+/**
+ * The characters, by index, that read as no text or as text that is not their glyph's (see the header): U+FFFD, private
+ * use, a control; and a letter whose Unicode does not fit its word, a run of letters and marks. Empty for plain ASCII.
+ */
+export function unreadableAt(texts: readonly string[]): Set<number> {
+  const out = new Set<number>();
+  if (texts.every((text) => text.length === 1 && plain(text.charCodeAt(0)))) return out;
+  let word: number[] = [];
+  const close = (): void => {
+    if (word.length > 1) misfits(texts, word, out);
+    word = [];
+  };
+  texts.forEach((text, i) => {
+    if (isUnreadable(text)) {
+      out.add(i);
+      close();
+    } else if (LETTER.test(text)) word.push(i);
+    else if (!MARK.test(text)) close();
+  });
+  close();
+  return out;
+}
+
+/** The characters of a page, by index, that read as no text or not as their glyph (unreadableAt), and PDFium's map errors. */
+export function unreadableChars(chars: readonly PageChar[]): Set<number> {
+  const out = unreadableAt(chars.map((c) => c.text));
+  chars.forEach((c, i) => {
+    if (c.unmapped === true) out.add(i);
+  });
+  return out;
+}
 
 /** The most letters any glyph with no text may stand for: the longest ligature, ffi or ffl. */
 export const LIGATURE_REACH = 3;
@@ -50,16 +158,16 @@ function folded(text: string, out: Unit[]): void {
   else out.push(...letters);
 }
 
-const ANY_UNREADABLE = /[\uFFFD\uFFFE\uFFFF\uE000-\uF8FF\u{F0000}-\u{10FFFF}]|[\uD800-\uDFFF]/u;
-
-/** A plain string's units, as the gate reads pdf.js's text: every glyph with no text reaches `reach` letters. None when it has no such glyph. */
+/** A plain string's units, as the gate reads pdf.js's text: every glyph with no text (unreadableAt) reaches `reach` letters. None when it has no such glyph. */
 export function textUnits(text: string, reach = LIGATURE_REACH): Unit[] {
   const out: Unit[] = [];
-  if (!ANY_UNREADABLE.test(text)) return out;
-  for (const ch of text) {
-    if (isUnreadable(ch)) out.push(reach);
+  const chars = [...text];
+  const unreadable = unreadableAt(chars);
+  if (unreadable.size === 0) return out;
+  chars.forEach((ch, i) => {
+    if (unreadable.has(i)) out.push(reach);
     else folded(ch, out);
-  }
+  });
   return out;
 }
 
@@ -76,14 +184,15 @@ export function reachOf(c: PageChar): number {
   return Math.max(LIGATURE_REACH, Math.ceil(along / (REACH_EM * c.fontSize)));
 }
 
-/** A page's units, as PDFium reads it: each glyph with no text reaches as far as reachOf says. None when it has no such glyph. */
+/** A page's units, as PDFium reads it: each glyph with no text (unreadableChars) reaches as far as reachOf says. None when it has no such glyph. */
 export function charUnits(chars: readonly PageChar[]): Unit[] {
   const out: Unit[] = [];
-  if (!chars.some((c) => isUnreadable(c.text))) return out;
-  for (const c of chars) {
-    if (isUnreadable(c.text)) out.push(reachOf(c));
+  const unreadable = unreadableChars(chars);
+  if (unreadable.size === 0) return out;
+  chars.forEach((c, i) => {
+    if (unreadable.has(i)) out.push(reachOf(c));
     else folded(c.text, out);
-  }
+  });
   return out;
 }
 

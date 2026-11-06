@@ -6,6 +6,7 @@ import { PDFDocument, PDFName } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { checkCopy } from '../../src/pdf/gate.js';
 import { gateVerdict } from '../../src/pdf/gate-rules.js';
+import { MAX_READINGS, ligatureReadings } from '../../src/pdf/match.js';
 import { type RedactResult, redactPdf, verifyRedacted } from '../../src/pdf/redact.js';
 import { extractAll } from './extract.js';
 
@@ -100,5 +101,133 @@ describe('LIGATURE: honest copies with no quote there still pass', () => {
     const copy = copyOf(await redactPdf(original, { quotes: ['Bartholomew Quince'], redactsAny: true }));
     expect(copy.boxes).toBe(0);
     expect(await gateVerdict({ copy, original, quotes: ['Bartholomew Quince'], image: 'show' })).toEqual({ pass: true });
+  });
+});
+
+/**
+ * A page in Times whose ToUnicode reads \256 and \257 as Ghostscript re-distils a ligature (LIGATURE fix 1, F1): a
+ * code point that is readable but wrong, U+0856 for fi, f and U+00CF for ffi, U+0000 for a crafted map. Each line is
+ * drawn where it says, in the order given.
+ */
+async function distilled(fi: string, ffi: string, lines: ReadonlyArray<readonly [string, number, number]>): Promise<Uint8Array> {
+  const doc = await PDFDocument.create({ updateMetadata: false });
+  const page = doc.addPage([612, 792]);
+  const { context } = doc;
+  const toUnicode = cmap(`1 beginbfrange <20> <7E> <0020> endbfrange 2 beginbfchar <AE> <${fi}> <AF> <${ffi}> endbfchar`);
+  page.node.setFontDictionary(PDFName.of('F1'), context.register(context.obj({ Type: 'Font', Subtype: 'Type1', BaseFont: 'Times-Roman', ToUnicode: context.register(context.flateStream(toUnicode)) })));
+  page.node.set(PDFName.of('Contents'), context.register(context.flateStream(lines.map(([line, x, y]) => `BT /F1 13 Tf ${x} ${y} Td (${line}) Tj ET`).join('\n'))));
+  return doc.save({ useObjectStreams: false });
+}
+
+/** One line a row, from the top: Ghostscript's fi and ffi (U+0856; f and U+00CF). */
+const gs = (...lines: string[]): Promise<Uint8Array> => distilled('0856', '006600CF', lines.map((line, i) => [line, 72, 720 - 20 * i] as const));
+const GS_BODY = ['Fi\\256 Amberwick kept score; Ti\\257n Ashgrove set grids.', 'Bartolomeo E\\257ngtonshirecastle thanked Hieronymus Wa\\256estaffordshire.', 'Corwin Vellacott led it.'];
+
+describe('LIGATURE fix 1 (F1): a ligature Ghostscript reads as a wrong but readable code point', () => {
+  for (const [quote, left] of [
+    ['Fifi Amberwick', /Amberwick/],
+    ['Tiffin Ashgrove', /Ashgrove/],
+    ['Bartolomeo Effingtonshirecastle', /ngtonshire/],
+    ['Hieronymus Wafflestaffordshire', /estafford/],
+  ] as const) {
+    it(`boxes ${quote}, and the gate passes the copy`, async () => {
+      const original = await gs(...GS_BODY);
+      const copy = copyOf(await redactPdf(original, { quotes: [quote], redactsAny: true }));
+      expect(copy.boxes).toBeGreaterThan(0);
+      const text = await extractAll(copy);
+      expect(text).not.toMatch(left);
+      expect(text).toContain('Corwin Vellacott led it.');
+      expect(await gateVerdict({ copy, original, quotes: [quote], image: 'show' })).toEqual({ pass: true });
+    });
+
+    it(`the gate alone refuses a copy that shows ${quote}`, async () => {
+      const left = await gs(...GS_BODY);
+      expect(await checkCopy(left, [quote])).toBe('page 1: text another reader cannot read may hold withheld text');
+      expect(await gateVerdict({ copy: left, original: left, quotes: [quote], image: 'show' })).toEqual({ pass: false, code: 'withheld' });
+    });
+  }
+
+  it('still gives a copy, unboxed, for a quote not on the page and for no quote', async () => {
+    const original = await gs(...GS_BODY);
+    for (const quotes of [['Bartholomew Quince'], []]) {
+      const copy = copyOf(await redactPdf(original, { quotes, redactsAny: true }));
+      expect(copy.boxes).toBe(0);
+      expect(await gateVerdict({ copy, original, quotes, image: 'show' })).toEqual({ pass: true });
+    }
+  });
+});
+
+describe('LIGATURE fix 1 (F3): the gate reads both of pdf.js\'s orders on its own', () => {
+  it('finds a quote through U+FFFD only by position, when it is drawn out of order (X1)', async () => {
+    const left = await distilled('FFFD', 'FFFD', [
+      ['Amberwick kept score.', 100, 700],
+      ['Fi\\256', 72, 700],
+    ]);
+    expect(await checkCopy(left, ['Fifi Amberwick'])).toBe('page 1: text another reader cannot read may hold withheld text');
+  });
+
+  it('finds a quote through U+FFFD only in the order it is drawn, when another line sits between its words by position (X2)', async () => {
+    const left = await distilled('FFFD', 'FFFD', [
+      ['Fi\\256', 72, 700],
+      ['Amberwick', 72, 680],
+      ['Corwin Vellacott', 300, 700],
+    ]);
+    expect(await checkCopy(left, ['Fifi Amberwick'])).toBe('page 1: text another reader cannot read may hold withheld text');
+  });
+});
+
+describe('LIGATURE fix 1 (F5): a ligature crafted to read U+0000, a space or its first letter', () => {
+  const crafted = (to: string): Promise<Uint8Array> => distilled(to, to, [['The o\\256ce sta\\257 met at Ferncli\\257 Hall.', 72, 720], ['Corwin Vellacott led the quiz.', 72, 700]]);
+
+  it('U+0000: boxes the one-word quote, and the gate alone refuses it', async () => {
+    const original = await crafted('0000');
+    const copy = copyOf(await redactPdf(original, { quotes: ['Ferncliff'], redactsAny: true }));
+    expect(copy.boxes).toBe(1);
+    expect(await extractAll(copy)).not.toMatch(/Ferncli/);
+    expect(await gateVerdict({ copy, original, quotes: ['Ferncliff'], image: 'show' })).toEqual({ pass: true });
+    expect(await gateVerdict({ copy: original, original, quotes: ['Ferncliff'], image: 'show' })).toEqual({ pass: false, code: 'withheld' });
+  });
+
+  it('LIMIT (documented): a one-word quote whose ligature reads as a space or as its first letter is served', async () => {
+    for (const to of ['0020', '0066']) {
+      const original = await crafted(to);
+      const copy = copyOf(await redactPdf(original, { quotes: ['Ferncliff'], redactsAny: true }));
+      expect(copy.boxes, to).toBe(0);
+      expect(await gateVerdict({ copy, original, quotes: ['Ferncliff'], image: 'show' }), to).toEqual({ pass: true });
+    }
+  });
+});
+
+describe('LIGATURE fix 1 (F6): the ligature readings tried on a page are capped', () => {
+  it('refuses a page with an unreadable glyph whose quotes have more readings than MAX_READINGS between them', async () => {
+    const quote = 'Tiffin Shuffleby';
+    const each = (ligatureReadings([quote]) as string[]).length;
+    const quotes = Array.from({ length: Math.ceil(MAX_READINGS / each) + 1 }, (_, i) => `${quote} ${String.fromCharCode(97 + (i % 26))}${i}`);
+    const original = await newsletter(BODY);
+    expect(await redactPdf(original, { quotes, redactsAny: true })).toEqual({ kind: 'refused', reason: 'page 1 has text that cannot be read, and the withheld passages have more ligature readings than are tried' });
+    // The same quotes on a page with no unreadable glyph: no reading is needed, and the copy is given.
+    const plain = await gs('Corwin Vellacott led it.');
+    expect(copyOf(await redactPdf(plain, { quotes, redactsAny: true })).boxes).toBe(0);
+  });
+});
+
+describe('LIGATURE fix 1: glyphs PDFium has no Unicode for, as the gate reads them on its own', () => {
+  /** A line in Times whose letters are drawn at codes of their own (a letter's code plus 0x80) named /zz1, /zz2...: no reader knows those names, and the font has no ToUnicode. */
+  async function unnamed(text: string): Promise<Uint8Array> {
+    const doc = await PDFDocument.create({ updateMetadata: false });
+    const page = doc.addPage([612, 792]);
+    const { context } = doc;
+    const differences = [0xc1, ...Array.from({ length: 26 }, (_, i) => PDFName.of(`zz${i + 1}`)), 0xe1, ...Array.from({ length: 26 }, (_, i) => PDFName.of(`zz${i + 27}`))];
+    page.node.setFontDictionary(PDFName.of('F1'), context.register(context.obj({ Type: 'Font', Subtype: 'Type1', BaseFont: 'Times-Roman', Encoding: { Type: 'Encoding', BaseEncoding: 'WinAnsiEncoding', Differences: differences } })));
+    page.node.set(PDFName.of('Contents'), context.register(context.flateStream(`BT /F1 13 Tf 72 720 Td ${smallCaps(text)} Tj ET\nBT /F1 13 Tf 72 700 Td (Corwin Vellacott led it.) Tj ET`)));
+    return doc.save({ useObjectStreams: false });
+  }
+
+  it('refuses a copy whose quote is drawn in them, where pdf.js reads no quote: PDFium\'s map errors are unreadable', async () => {
+    const left = await unnamed('Fifi Amberwick');
+    expect(await checkCopy(left, [QUOTE])).toBeNull();
+    expect(await gateVerdict({ copy: left, original: left, quotes: [QUOTE], image: 'show' })).toEqual({ pass: false, code: 'withheld' });
+    // With no quote, nothing is withheld: the copy passes.
+    expect(await gateVerdict({ copy: left, original: left, quotes: [], image: 'show' })).toEqual({ pass: true });
   });
 });

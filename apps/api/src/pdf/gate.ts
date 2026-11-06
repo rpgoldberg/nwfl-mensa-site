@@ -5,8 +5,10 @@
 //   1. Another reader. pdf.js extracts each page's text twice: in the order
 //      it is drawn, and by position (lines by baseline, words left to right,
 //      so pieces drawn out of order read as they show). A glyph it reads as no
-//      text (U+FFFD, private use) where, read as up to three letters, it could
-//      finish a quote is no copy either (LIGATURE, unreadable.ts readThrough).
+//      text (U+FFFD, private use, a control) or as a letter that does not fit
+//      its word (Ghostscript's re-distilled ligatures) where, read as up to
+//      three letters, it could finish a quote is no copy either (LIGATURE,
+//      unreadable.ts unreadableAt and readThrough).
 //   2. Every object. Each string and name, in PDFDocEncoding or Latin-1,
 //      UTF-16BE and UTF-16LE, and each stream decoded in full (Flate, LZW,
 //      ASCIIHex, ASCII85, RunLength, any chain of them, PNG predictors).

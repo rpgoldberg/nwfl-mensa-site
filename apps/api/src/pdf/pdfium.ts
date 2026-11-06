@@ -219,7 +219,8 @@ export class Page {
       const count = m.FPDFText_CountChars(text);
       for (let i = 0; i < count; i++) {
         const code = m.FPDFText_GetUnicode(text, i);
-        if (m.FPDFText_HasUnicodeMapError(text, i) === 1) unmapped += 1;
+        const error = m.FPDFText_HasUnicodeMapError(text, i) === 1;
+        if (error) unmapped += 1;
         const placed = m.FPDFText_GetLooseCharBox(text, i, at);
         // FS_RECTF: left, top, right, bottom.
         const [left = NaN, top = NaN, right = NaN, bottom = NaN] = new Float32Array(rt(m).HEAPU8.buffer, at, 4);
@@ -231,6 +232,7 @@ export class Page {
           box,
           ink: this.ink(text, i, at + 16),
           fontSize: m.FPDFText_GetFontSize(text, i) * this.scale(text, i, at + 48),
+          ...(error ? { unmapped: true } : {}),
         });
       }
     } finally {

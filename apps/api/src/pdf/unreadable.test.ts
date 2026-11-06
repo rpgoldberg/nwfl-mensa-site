@@ -1,8 +1,8 @@
 // LIGATURE: a glyph with no readable text (U+FFFD, a private-use code point) where a withheld quote may be.
 // Every name here is made up.
 import { describe, expect, it } from 'vitest';
-import { type PageChar, matchedChars } from './match.js';
-import { charUnits, isUnreadable, readThrough, reachOf, textUnits } from './unreadable.js';
+import { MAX_READINGS, type PageChar, ligatureReadings, matchedChars } from './match.js';
+import { charUnits, isUnreadable, readThrough, reachOf, textUnits, unreadableAt } from './unreadable.js';
 
 const SIZE = 12;
 const ADVANCE = 6;
@@ -30,7 +30,123 @@ describe('isUnreadable: what no reader can turn into text', () => {
   });
 
   it('is not a letter, a ligature with its own code point, a space or punctuation', () => {
-    for (const ch of ['a', 'ﬁ', 'ﬄ', ' ', '-', '\u0002', '\r', '😀']) expect(isUnreadable(ch)).toBe(false);
+    for (const ch of ['a', 'ﬁ', 'ﬄ', ' ', '-', '\u0002', '\r', '\n', '\t', '😀']) expect(isUnreadable(ch)).toBe(false);
+  });
+
+  it('is U+0000 and every other C0 control but tab, line feed, carriage return and PDFium\'s U+0002 (LIGATURE fix 1, F5)', () => {
+    for (let cp = 0; cp < 0x20; cp++) expect(isUnreadable(String.fromCharCode(cp)), cp.toString(16)).toBe(![0x02, 0x09, 0x0a, 0x0d].includes(cp));
+  });
+});
+
+/** The indices unreadableAt gives for a string's characters. */
+const misfits = (text: string): number[] => [...unreadableAt([...text])].sort((a, b) => a - b);
+
+describe('unreadableAt: a letter whose Unicode does not fit its word (LIGATURE fix 1, F1: Ghostscript\'s re-distilled ligatures)', () => {
+  it('flags a letter of another script inside a Latin word: fi U+0856, fl U+0857, ff U+0853, ffl U+0855, ti U+08A2, tt U+08B0', () => {
+    expect(misfits('so Fi\u0856 Amberwick')).toEqual([5]);
+    expect(misfits('Orla Pen\u0857eet')).toEqual([8]);
+    expect(misfits('Ferncli\u0853 Gazette')).toEqual([7]);
+    expect(misfits('Wa\u0855estafford')).toEqual([2]);
+    expect(misfits('\u08A2med rounds')).toEqual([0]);
+    expect(misfits('Pe\u08B0bone')).toEqual([2]);
+  });
+
+  it('flags an accented capital drawn after a small letter (ffi read as f and U+00CF), not an ASCII one', () => {
+    expect(misfits('Tif\u00CFn Ashgrove')).toEqual([3]);
+    expect(misfits('Ef\u00CFngtonshirecastle')).toEqual([2]);
+    for (const text of ['McDonald', 'iPhone', 'DeVries', '\u00CFsland', 'NA\u00CFVE', 'na\u00EFve']) expect(misfits(text), text).toEqual([]);
+  });
+
+  it('flags every letter of a word two scripts share equally, and none of a word in one script', () => {
+    expect(misfits('a\u0856 b')).toEqual([0, 1]);
+    for (const text of ['caf\u00E9 Zo\u00EB \u00C5ngstr\u00F6m', '\u0391\u03B8\u03AE\u03BD\u03B1', '\u041C\u043E\u0441\u043A\u0432\u0430', '\u6771\u4EAC\u30BF\u30EF\u30FC', 'e\u0301t\u00E9', 'H2O \u00B5m']) expect(misfits(text), text).toEqual([]);
+  });
+
+  it('flags U+FFFD, private use and the C0 controls wherever they are, and nothing in plain ASCII', () => {
+    expect(misfits('o\uFFFDce Ferncli\u0000 \uE001')).toEqual([1, 12, 14]);
+    expect(misfits('The office staff, Ferncliff\r\n\tand\u0002more')).toEqual([]);
+  });
+
+  it('looks scripts up afresh once it has looked up more letters than it keeps, and reads them alike', () => {
+    expect(unreadableAt(Array.from({ length: 5000 }, (_, i) => String.fromCodePoint(0x4e00 + i))).size).toBe(0);
+    expect(misfits('so Fi\u0856 Amberwick')).toEqual([5]);
+  });
+
+  it('counts a letter of a script it does not list as a script of its own', () => {
+    expect(misfits('ab\u{10940}c')).toEqual([2]);
+  });
+});
+
+describe('Ghostscript\'s readable but wrong ligature code points: matched and read through (LIGATURE fix 1, F1)', () => {
+  const cases: Array<[string, string, string]> = [
+    ['Fi\u0856 Amberwick', 'Fifi Amberwick', 'Fi\u0856 Amberwick'],
+    ['Orla Pen\u0857eet', 'Orla Penfleet', 'Orla Pen\u0857eet'],
+    ['Tif\u00CFn Ashgrove', 'Tiffin Ashgrove', 'Tif\u00CFn Ashgrove'],
+    ['Ferncli\u0853', 'Ferncliff', 'Ferncli\u0853'],
+    ['Bartolomeo Ef\u00CFngtonshirecastle', 'Bartolomeo Effingtonshirecastle', 'Bartolomeo Ef\u00CFngtonshirecastle'],
+    ['Hieronymus Wa\u0855estaffordshire', 'Hieronymus Wafflestaffordshire', 'Hieronymus Wa\u0855estaffordshire'],
+    ['Fjorda Pe\u08B0bone', 'Fjorda Pettibone', 'Fjorda Pe\u08B0bone'],
+    ['Ernes\u08A2ne Rook', 'Ernestine Rook', 'Ernes\u08A2ne Rook'],
+    ['Ferncli\u0000', 'Ferncliff', 'Ferncli\u0000'],
+  ];
+
+  it('the engine\'s matcher boxes each, the glyph with it', () => {
+    for (const [text, quote, found] of cases) {
+      const chars = line(`and ${text} said`);
+      expect(textOf(chars, matchedChars(chars, [quote])), quote).toBe(found);
+    }
+  });
+
+  it('the gate reads each through the glyph, on its own', () => {
+    for (const [text, quote] of cases) expect(readThrough(textUnits(`and ${text} said`), [quote]), quote).toBe(true);
+  });
+
+  it('reads PDFium\'s glyphs with no Unicode (a map error) as unreadable too', () => {
+    const chars = line('Moira ShuZeby').map((c, i) => (i === 9 ? { ...c, unmapped: true } : c));
+    expect(charUnits(chars)).toContain(3);
+    expect(readThrough(charUnits(chars), ['Moira Shuffleby'])).toBe(true);
+    expect(textOf(chars, matchedChars(chars, ['Moira Shuffleby']))).toBe('Moira ShuZeby');
+  });
+});
+
+describe('ligatureReadings: the ligatures a glyph may stand for, capped per page (LIGATURE fix 1, F4, F6)', () => {
+  it('finds a quote with each ligature a producer draws, ck, ft, tt, ti, fj, Th, ffj, fb, fh, fk, tf, ffb, ffh, ffk, fft, tti among them', () => {
+    const cases: Array<[string, string]> = [
+      ['Amberwi\uE002', 'Amberwick'],
+      ['Lo\uE001on', 'Lofton'],
+      ['Pe\uE003bone', 'Pettibone'],
+      ['Ernes\uE004ne', 'Ernestine'],
+      ['\uE000orda', 'Fjorda'],
+      ['\uE000addeus', 'Thaddeus'],
+      ['Ha\uE000ord', 'Haffjord'],
+      ['O\uE000ury', 'Ofbury'],
+      ['Ra\uE000am', 'Rafham'],
+      ['Ka\uE000a', 'Kafka'],
+      ['Ou\uE000ield', 'Outfield'],
+      ['Mo\uE000ury', 'Moffbury'],
+      ['Ho\uE000am', 'Hoffham'],
+      ['Ka\uE000a', 'Kaffka'],
+      ['Gri\uE000on', 'Griffton'],
+      ['Ma\uE000ng', 'Matting'],
+    ];
+    for (const [text, quote] of cases) {
+      const chars = line(`by ${text} today`);
+      expect(textOf(chars, matchedChars(chars, [quote])), quote).toBe(text);
+    }
+  });
+
+  it('gives every reading of a quote with one ligature or more, none of one with none', () => {
+    expect(ligatureReadings(['Moss'])).toEqual([]);
+    expect(ligatureReadings(['Ruffle'])?.length).toBe(3);
+  });
+
+  it('gives no readings at all when the quotes of a page have more than MAX_READINGS between them, though each has fewer', () => {
+    const quote = 'Tiffin Shuffleby';
+    const each = (ligatureReadings([quote]) as string[]).length;
+    expect(each).toBeLessThan(MAX_READINGS);
+    const quotes = Array.from({ length: Math.ceil(MAX_READINGS / each) + 1 }, (_, i) => `${quote} ${i}`);
+    expect(ligatureReadings(quotes)).toBeNull();
+    expect(ligatureReadings(quotes.slice(0, Math.floor(MAX_READINGS / each)))).not.toBeNull();
   });
 });
 
@@ -137,6 +253,15 @@ describe('reachOf and charUnits: how many letters a glyph of the page may stand 
     expect(reachOf({ ...(c as PageChar), fontSize: 0 })).toBe(Number.POSITIVE_INFINITY);
     expect(reachOf({ ...(c as PageChar), ink: null })).toBe(4);
     expect(reachOf({ ...(c as PageChar), box: null })).toBe(3);
+  });
+
+  it('rounds a glyph\'s reach up off a letter\'s boundary, and reads its ink where it is wider than its advance (F3: X6, X7)', () => {
+    const [c] = line('\uFFFD');
+    const at = (ink: number, box: number): PageChar => ({ ...(c as PageChar), ink: { left: 72, right: 72 + ink, bottom: 701, top: 703 }, box: { left: 72, right: 72 + box, bottom: 700, top: 702 } });
+    // 3.4 letters' width at REACH_EM (0.25 em of 12 pt: 3 pt a letter): four.
+    expect(reachOf(at(10.2, 6))).toBe(4);
+    // Ink 18 pt wide over an advance of 6: six letters, not the advance's three.
+    expect(reachOf(at(18, 6))).toBe(6);
   });
 
   it('a wide unreadable glyph can hide a whole name, a ligature-wide one cannot', () => {

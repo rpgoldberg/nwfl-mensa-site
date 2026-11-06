@@ -88,11 +88,12 @@ import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
 import type { BoxKind } from './labels.js';
 import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-annots.js';
 import { linkGuardAreas } from './link-guard.js';
-import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, hull, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
+import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, hull, ligatureReadings, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { nameBreak } from './pdf-structure.js';
+import { UNOPENABLE, pdfiumBreak } from './pdfium-reading.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
-import { charUnits, readThrough } from './unreadable.js';
+import { unreadableChars } from './unreadable.js';
 
 export interface RedactRequest {
   /** The marked passages this audience's policy redacts. */
@@ -124,7 +125,6 @@ export type RedactResult =
   | { kind: 'redacted'; pdf: Uint8Array; boxes: Region[]; kept?: string[]; linksDropped?: string }
   | { kind: 'refused'; reason: string };
 
-const UNOPENABLE = 'the PDF could not be opened';
 /** Why there is no copy when its links cannot be placed: the worker then asks for one with no links (rerun.ts). */
 export const LINKS_UNWRITTEN = 'the links could not be written';
 /** The share of a page's drawn area that pictures may cover before it counts as a scan. */
@@ -154,6 +154,9 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], pri
     if (chars.length === 0 && page.objectCount > 0) return `page ${index + 1} has no text layer`;
     if (isScan(page)) return `page ${index + 1} is a scan: pictures cover most of it`;
     if (unmapped > 0) return `page ${index + 1} has text that cannot be read`;
+    // LIGATURE fix 1 (F6): a glyph that reads as no text, or not as its own, where the quotes have more ligature
+    // readings than the matcher tries (match.ts MAX_READINGS): the page cannot be boxed with them all.
+    if (quotes.length > 0 && ligatureReadings(quotes) === null && unreadableChars(chars).size > 0) return `page ${index + 1} has text that cannot be read, and the withheld passages have more ligature readings than are tried`;
     // A picture the policy does not show is withheld: no link may sit over it, on a page with no passage too (fix 1, S1).
     if (regenerate) blocked.push(...page.allPictures().map((picture) => ({ ...picture, page: index })));
     // Text drawn twice at nearly one place (a shadow, a fake bold, a decoy) is read once: the copy PDFium
@@ -251,24 +254,7 @@ function redactPages(doc: Document, quotes: readonly string[], privateQuotes: re
 }
 
 /** Null when no passage can be read in the PDF's text, else why the copy fails. */
-export async function verifyRedacted(pdf: Uint8Array, quotes: readonly string[]): Promise<string | null> {
-  const doc = Document.open(await pdfium(), pdf);
-  if (doc === null) return UNOPENABLE;
-  try {
-    for (let index = 0; index < doc.pageCount; index++) {
-      const left = doc.page(index, (page) => {
-        const { chars } = page.chars();
-        return matchedChars(chars, quotes).size > 0 ? 'readable' : readThrough(charUnits(chars), quotes) ? 'unreadable' : null;
-      });
-      if (left === 'readable') return `page ${index + 1}: withheld text is still readable after removal`;
-      // LIGATURE (unreadable.ts): a glyph with no text left where, read as letters, it could finish a quote.
-      if (left === 'unreadable') return `page ${index + 1} has text that cannot be read where a withheld passage may be`;
-    }
-    return null;
-  } finally {
-    doc.close();
-  }
-}
+export const verifyRedacted = pdfiumBreak;
 
 /** This audience's file: the original, a redacted copy, or none, with the reason. */
 export async function redactPdf(original: Uint8Array, request: RedactRequest, deps: RedactDeps = {}): Promise<RedactResult> {
