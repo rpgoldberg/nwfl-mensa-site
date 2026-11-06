@@ -1,0 +1,88 @@
+---
+// PDFVIEW: an issue read inside the site. The copy is whichever /documents/<id>.pdf gives this reader
+// (the browser fetches it with the reader's cookies, src/lib/files.ts): the page says which
+// (src/lib/reader.ts), and is cached as that file is: publicly, briefly, for the public copy, and
+// private, never stored, for a signed-in reader (server/policy.mjs, and here). A file the reader may
+// not have is the same 404 as a missing one. public/scripts/viewer.js draws it with pdf.js's core API
+// (the legacy build, for older phones and tablets); never pdf.js's viewer.html, and never an address
+// from the query. Open in another app hands the same file to the device's own viewer; Download asks
+// for it as an attachment. Without JavaScript the page says the reader needs it, beside those two.
+import pdfjsUrl from 'pdfjs-dist/legacy/build/pdf.min.mjs?url';
+import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
+import { PUBLIC_ONLY } from 'astro:env/server';
+import CopyNotice from '../../components/CopyNotice.astro';
+import Icon from '../../components/Icon.astro';
+import Unavailable from '../../components/Unavailable.astro';
+import { liveData } from '../../data';
+import Base from '../../layouts/Base.astro';
+import { attempt, markUnavailable } from '../../lib/api/page';
+import { membersSignInLink, readerFor } from '../../lib/auth/bearer';
+import { runtimeDeps } from '../../lib/auth/flow';
+import { MEMBERS_RULE } from '../../lib/document';
+import { NOT_READY_TEXT } from '../../lib/files';
+import { NEEDS_SCRIPT, readView } from '../../lib/reader';
+
+export const prerender = false;
+
+const auth = runtimeDeps();
+const { reader } = readerFor(Astro.locals.session, auth);
+const loaded = await attempt(() => readView(liveData(), Astro.params['id'], reader));
+const view = loaded.ok ? loaded.value : undefined;
+if (!loaded.ok) markUnavailable(Astro.response);
+else if (view?.kind === 'not_found') Astro.response.status = 404;
+else if (view?.kind === 'not_ready') {
+  Astro.response.status = 503;
+  Astro.response.headers.set('Retry-After', '60');
+}
+// As the file is served to a signed-in reader: never kept by a shared cache (the site policy keeps it so).
+if (reader !== undefined) Astro.response.headers.set('Cache-Control', 'private, no-store');
+const ok = view?.kind === 'ok' ? view : undefined;
+const signIn = ok ? membersSignInLink(Astro.locals.session, auth, PUBLIC_ONLY, ok.read) : undefined;
+const title = view?.kind === 'not_found' ? 'No such issue' : view?.kind === 'not_ready' ? 'Issue not ready yet' : 'Read the newsletter';
+---
+<Base path={Astro.url.pathname} title={title} description="An issue of Pensa Mensa, the newsletter of Northwest Florida Mensa, read on this site.">
+  <h1>{title}</h1>
+  {!loaded.ok && <Unavailable what="This issue" />}
+  {view?.kind === 'not_found' && (
+    <>
+      <p>There is no issue at this address. It may have been moved or taken down.</p>
+      <p class="btns"><a class="button" href="/news">Go to the News page</a></p>
+    </>
+  )}
+  {view?.kind === 'not_ready' && <p>{NOT_READY_TEXT}</p>}
+  {ok && (
+    <>
+      {ok.copy === 'members' ? <CopyNotice members /> : <CopyNotice signIn={signIn} />}
+      {ok.copy === 'members' && <p class="members-rule">{MEMBERS_RULE}</p>}
+      <p class="btns viewer-other">
+        <a class="button button--secondary" href={ok.pdf} target="_blank" rel="noopener"><Icon name="external" />Open in another app<span class="visually-hidden"> (opens the PDF file in a new tab, or in your PDF app)</span></a>
+        <a class="button button--secondary" href={ok.download}><Icon name="download" />Download</a>
+      </p>
+      <section class="viewer" data-viewer data-pdf={ok.pdf} data-pdfjs={pdfjsUrl} data-worker={workerUrl} aria-labelledby="viewer-title">
+        <h2 id="viewer-title" class="visually-hidden">The issue</h2>
+        <p class="notice" data-viewer-nojs>{NEEDS_SCRIPT}</p>
+        <div class="viewer-bar" data-viewer-bar hidden>
+          <div class="viewer-group" role="group" aria-label="Zoom">
+            <button type="button" class="button button--secondary" data-viewer-zoom-out>Zoom out</button>
+            <output class="viewer-zoom" data-viewer-zoom>100&nbsp;%</output>
+            <button type="button" class="button button--secondary" data-viewer-zoom-in>Zoom in</button>
+            <button type="button" class="button button--secondary" data-viewer-fit-width aria-pressed="false">Fit width</button>
+            <button type="button" class="button button--secondary" data-viewer-fit-page aria-pressed="false">Fit page</button>
+          </div>
+          <div class="viewer-group" role="group" aria-label="Pages">
+            <button type="button" class="button button--secondary" data-viewer-prev><Icon name="back" />Previous page</button>
+            <form class="viewer-goto" data-viewer-goto>
+              <label for="viewer-page">Page</label>
+              <input id="viewer-page" type="number" inputmode="numeric" min="1" value="1" data-viewer-page />
+              <span>of <span data-viewer-count></span></span>
+            </form>
+            <button type="button" class="button button--secondary" data-viewer-next>Next page<Icon name="forward" /></button>
+          </div>
+        </div>
+        <p class="viewer-status" role="status" data-viewer-status></p>
+        <div class="viewer-pages" data-viewer-pages tabindex="0" role="region" aria-label="Pages of the issue" hidden></div>
+      </section>
+      <script is:inline type="module" src="/scripts/viewer.js"></script>
+    </>
+  )}
+</Base>

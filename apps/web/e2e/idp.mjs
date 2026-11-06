@@ -37,6 +37,8 @@ const AUDIENCE = 'nwfl-site';
 const LOGINS = {
   officer: { id: '00000000-0000-4000-8000-0000000000a1', name: 'Alex Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-president'] },
   member: { id: '00000000-0000-4000-8000-0000000000b2', name: 'Jordan Example', groups: ['nwfl-members'] },
+  // PDFVIEW fix 2: a member to whom the API lists two issues as their public copy alone (api.mjs MIXED_PUBLIC_ONLY).
+  mixed: { id: '00000000-0000-4000-8000-0000000000b3', name: 'Ellis Example', groups: ['nwfl-members'] },
   pending: { id: '00000000-0000-4000-8000-0000000000c3', name: 'Casey Placeholder', groups: ['nwfl-pending'] },
   // A long name, for the header's layout on a narrow phone at large text.
   'long-name': { id: '00000000-0000-4000-8000-0000000000d4', name: 'Maximiliana Bartholomew-Fitzgerald Examplesworth', groups: ['nwfl-members', 'nwfl-officers'] },

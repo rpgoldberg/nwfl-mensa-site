@@ -1,0 +1,17 @@
+---
+// PDFVIEW: which copy of an issue this is: at the top of /read, and once above the issue list on /news.
+// The public copy: some personal details are hidden for privacy, and members can sign in for the full
+// issue; "sign in" is an ordinary underlined link only where /sign-in works for this reader (signIn,
+// from membersSignInLink), and plain words otherwise. It replaces the line that sent a signed-out
+// reader to sign in for the members copy, so nothing repeats. A members copy says "Members copy".
+import { MEMBERS_COPY, PUBLIC_COPY } from '../lib/reader';
+
+interface Props {
+  /** Where "sign in" leads, back to this page; none where sign-in is not available to this reader. */
+  signIn?: string | undefined;
+  members?: boolean;
+}
+const { signIn, members = false } = Astro.props;
+const [before, after] = PUBLIC_COPY.split('sign in') as [string, string];
+---
+{members ? <p class="copy-notice copy-notice--members">{MEMBERS_COPY}</p> : <p class="copy-notice">{before}{signIn ? <a href={signIn}>sign in</a> : 'sign in'}{after}</p>}

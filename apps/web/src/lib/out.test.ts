@@ -82,8 +82,8 @@ describe('safeLink: the answer checked again before it is rendered', () => {
 });
 
 describe('backHref', () => {
-  it('is the PDF at the page the link was on', () => {
-    expect(backHref(FILE, 4)).toBe(`/documents/${FILE}.pdf#page=4`);
+  it('is the issue read in the site (PDFVIEW), at the page the link was on', () => {
+    expect(backHref(FILE, 4)).toBe(`/read/${FILE}#page=4`);
   });
 });
 
@@ -110,7 +110,7 @@ describe('outView', () => {
       host: 'club.example',
       mail: false,
       checked: 'November 4, 2026',
-      back: `/documents/${FILE}.pdf#page=2`,
+      back: `/read/${FILE}#page=2`,
       countdown: false,
       mode: 'guard',
     });
@@ -136,7 +136,7 @@ describe('outView', () => {
         mail: true,
         address: 'events@example.org',
         checked: 'November 4, 2026',
-        back: `/documents/${FILE}.pdf#page=1`,
+        back: `/read/${FILE}#page=1`,
         countdown: false,
         mode,
       });
@@ -151,7 +151,7 @@ describe('outView', () => {
   it('says a turned-off link was turned off, with its date and the way back, and no URL', () => {
     for (const mode of ['guard', 'countdown', 'direct'] as const) {
       const view = outView({ kind: 'disabled', fileId: FILE, page: 3, at: AT }, mode);
-      expect(view).toEqual({ kind: 'disabled', date: 'November 4, 2026', back: `/documents/${FILE}.pdf#page=3`, mode });
+      expect(view).toEqual({ kind: 'disabled', date: 'November 4, 2026', back: `/read/${FILE}#page=3`, mode });
     }
   });
 

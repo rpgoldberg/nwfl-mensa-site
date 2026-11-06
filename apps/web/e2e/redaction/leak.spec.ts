@@ -34,6 +34,7 @@ import { expect, test, type APIRequest, type APIRequestContext } from '@playwrig
 import { ContentKind } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { grpcReads } from '../../src/lib/api/client';
 import { PUBLIC_CACHE } from '../../server/policy.mjs';
+import { MEMBERS_COPY, PUBLIC_COPY } from '../../src/lib/reader';
 import { SESSION_COOKIE } from '../../server/policy.mjs';
 import { LIVE, STATIC, crawlSeeds, patternOf } from '../routes';
 import { REDACTION } from './servers';
@@ -325,6 +326,41 @@ test("/news lists the issue with its public PDF, served as a copy, and the membe
   expect(seen).toEqual([]);
 });
 
+// PDFVIEW: /read/<id>, the issue read in the site. The crawl reached it for the seeded PDF and, from
+// /news, for the issue's public copy; every such page carries no canary (the crawl's own check above),
+// says it is the public copy, names only its own same-origin file, and is cached as that file is.
+test('PDFVIEW: every /read page the public reaches is the public copy: no canary, its own file only, cached as the file', () => {
+  const reads = [...fetched.values()].filter((page) => /^\/read\//.test(new URL(page.url, REDACTION.siteUrl).pathname));
+  const ids = reads.map((page) => new URL(page.url, REDACTION.siteUrl).pathname.slice('/read/'.length));
+  expect(ids).toEqual(expect.arrayContaining([fixture.ids['pdf'], fixture.ids['issuePublicPdf']]));
+  const needles = Object.entries(fixture.canaries).map(([name, value]) => [name, fold(value)] as const);
+  for (const [i, page] of reads.entries()) {
+    const id = ids[i]!;
+    expect(page.status, page.url).toBe(200);
+    expect(page.headers['cache-control'], page.url).toBe(PUBLIC_CACHE);
+    expect(page.body, page.url).toContain(PUBLIC_COPY);
+    expect(page.body, page.url).not.toContain(MEMBERS_COPY);
+    expect(page.body, page.url).toContain(`data-pdf="/documents/${id}.pdf"`);
+    expect(page.body, page.url).toContain(`href="/documents/${id}.pdf?download=1"`);
+    expect([...page.body.matchAll(/\/documents\/([0-9a-f-]{36})\.pdf/g)].map((m) => m[1]).filter((other) => other !== id), page.url).toEqual([]);
+    const haystacks = [page.body, ...Object.entries(page.headers).map(([k, v]) => `${k}: ${v}`)].map(fold);
+    expect(needles.filter(([, needle]) => haystacks.some((h) => h.includes(needle))).map(([name]) => name), page.url).toEqual([]);
+  }
+  const download = fetched.get(`/documents/${fixture.ids['pdf']}.pdf`);
+  expect(download?.status).toBe(200);
+});
+
+test('PDFVIEW: download=1 is the same redacted copy as an attachment, cached the same, never the original', async ({ request }) => {
+  const url = `/documents/${fixture.ids['pdf']}.pdf`;
+  const inline = fetched.get(url)!;
+  const attached = await get(request, `${url}?download=1`);
+  expect(attached.status).toBe(200);
+  expect(attached.headers['content-disposition']).toBe(inline.headers['content-disposition']!.replace(/^inline/, 'attachment'));
+  expect(attached.headers['cache-control']).toBe(PUBLIC_CACHE);
+  expect(attached.pdf?.text).toBe(inline.pdf?.text);
+  expect(fold(attached.body)).not.toContain(fold(fixture.canaries['phone']!));
+});
+
 test('sitemap.xml and robots.txt list no API-made URL', () => {
   expect(fetched.get('/sitemap.xml')!.body).not.toMatch(/\/events\/[0-9a-f-]{36}/);
   expect(fetched.get('/robots.txt')!.body).not.toMatch(/\/events\/[0-9a-f-]{36}/);
@@ -364,7 +400,7 @@ test('LINKS L4: through the real API, the public is shown a link of the copy it 
   expect(plain?.status).toBe(200);
   expect(plain!.body).toContain('<p class="out-host">club.example</p>');
   expect(plain!.body).toContain('href="https://club.example/receipts" target="_blank" rel="noopener noreferrer" data-out-continue');
-  expect(plain!.body).toContain(`href="/documents/${fixture.ids['pdf']}.pdf#page=1"`);
+  expect(plain!.body).toContain(`href="/read/${fixture.ids['pdf']}#page=1"`);
   expect(plain!.headers['cache-control']).toBe('private, no-store');
   expect(plain!.headers['referrer-policy']).toBe('no-referrer');
   const held = fetched.get(`/out/${fixture.links.held}`);
@@ -403,7 +439,7 @@ test('LINKS L4: a link turned off says so, with no URL, to the public and member
   const turnedOff = (body: string, who: string) => {
     expect(body, who).toContain('This link was turned off');
     expect(body, who).not.toContain('parked.example');
-    expect(body, who).toContain(`href="/documents/${fixture.ids['pdf']}.pdf#page=2"`);
+    expect(body, who).toContain(`href="/read/${fixture.ids['pdf']}#page=2"`);
   };
   const pub = fetched.get(`/out/${fixture.links.off}`);
   expect(pub?.status).toBe(200);
@@ -449,6 +485,13 @@ test('a member sees the members passage and the members article (the positive co
   expect(pdf.pdf?.text).toContain('the members edition');
   expect(pdf.headers['cache-control']).toBe('private, no-store');
   expect(pdf.headers['cdn-cache-control']).toBe('no-store');
+  // PDFVIEW: the members copy read in the site says so, and is never stored either.
+  const read = await get(member, `/read/${fixture.ids['issueMembersPdf']}`);
+  expect(read.status).toBe(200);
+  expect(read.body).toContain(`<p class="copy-notice copy-notice--members">${MEMBERS_COPY}</p>`);
+  expect(read.body).not.toContain(PUBLIC_COPY.slice(0, 40));
+  expect(read.headers['cache-control']).toBe('private, no-store');
+  expect(read.headers['cdn-cache-control']).toBe('no-store');
   await member.dispose();
 });
 
@@ -488,6 +531,13 @@ test('a pending account (no member standing) sees no members canary and no membe
   const random = await pending.get('/documents/00000000-0000-4000-8000-0000000000aa.pdf');
   expect(withheld.status()).toBe(404);
   expect(await withheld.text()).toBe(await random.text());
+  // PDFVIEW: and read in the site, the same 404 as a random id's, with no members canary.
+  const members = fixture.ids['issueMembersPdf']!;
+  const read = await pending.get(`/read/${members}`);
+  const nowhere = await pending.get('/read/00000000-0000-4000-8000-0000000000aa');
+  expect(read.status()).toBe(404);
+  expect((await read.text()).replaceAll(members, 'ID')).toBe((await nowhere.text()).replaceAll('00000000-0000-4000-8000-0000000000aa', 'ID'));
+  expect(seen(await read.text(), [...MEMBERS_CANARIES, ...OFFICERS_CANARIES])).toEqual([]);
   await pending.dispose();
 });
 

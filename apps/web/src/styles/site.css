@@ -771,11 +771,15 @@ main > .cols { max-width: none; }
 /* An issue's PDF: a full-size target, like every other link a reader taps. */
 .issues a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
 
-/* The line under an issue for a reader not signed in: body text, the link an ordinary underlined one. */
-.members-signin { margin: 0; flex-basis: 100%; }
-.issue .members-signin { grid-column: 1 / -1; }
-.members-signin a { font-weight: 700; text-decoration: underline; }
-.issues .members-signin a { display: inline; min-height: 0; }
+/* PDFVIEW: which copy an issue is, atop /read and once above /news's issue list: body text, "sign in" an ordinary underlined link. */
+.copy-notice { margin: 0; flex-basis: 100%; }
+.issue .pdf-files { grid-column: 1 / -1; }
+.copy-notice a { font-weight: 700; text-decoration: underline; }
+.copy-notice--members { font-weight: 700; }
+main > .copy-notice, main > .members-rule { margin: var(--space-4) 0 0; }
+/* The file itself, beside the reader's button: small in look, a full-size target all the same. */
+.pdf-files { display: flex; flex-wrap: wrap; column-gap: var(--space-4); margin: 0; flex-basis: 100%; }
+.pdf-files a { display: inline-flex; align-items: center; min-height: var(--target); font-size: var(--fs-small); font-weight: 400; }
 
 /* Minutes and finances. */
 .meeting { scroll-margin-top: var(--space-4); }
@@ -980,3 +984,98 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 .out-countdown[hidden] { display: none; }
 .out-count { margin: 0; font-weight: 700; font-size: 1.25rem; }
 .out-stop { min-width: 8rem; }
+
+/* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). The bar is content, so
+   it takes the reader's text size and theme; it wraps on a phone, and stays at the top while reading
+   only where it leaves room: while it takes at most a third of the window. The script measures it as
+   the reader opens the issue, turns the phone, resizes the window or picks another text size, and
+   otherwise sets .viewer--unpinned, so the bar scrolls away with the page and a page gone to stops at
+   the window's top (--viewer-bar 0). The media query does the same without waiting for the script
+   where, at the two largest text sizes, the bar always takes more than that (measured: at 140 % it is
+   at least 172 px up to 1280 px wide, and 329 px below 812): a narrow window, and a phone held sideways. */
+.viewer-other { margin: var(--space-4) 0; }
+.viewer { margin: var(--space-4) 0; }
+.viewer-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2);
+  background: var(--surface);
+  border: var(--border) solid var(--line-soft);
+  border-radius: var(--radius);
+}
+.viewer-bar[hidden], .viewer-pages[hidden] { display: none; }
+@media (max-width: 599px), (max-width: 959px) and (max-height: 499px) {
+  html[data-size="140"] .viewer-bar, html[data-size="175"] .viewer-bar { position: static; }
+  html[data-size="140"] .viewer-page, html[data-size="175"] .viewer-page { scroll-margin-top: var(--space-2); }
+}
+.viewer--unpinned .viewer-bar { position: static; }
+.viewer-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.viewer-bar .button { padding: 0 var(--space-3); }
+.viewer-bar .button[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); }
+.viewer-bar .button[aria-disabled="true"] { border-style: dashed; cursor: default; }
+.viewer-zoom { display: inline-flex; align-items: center; justify-content: center; min-height: var(--target); min-width: 4.5em; font-weight: 700; }
+.viewer-goto { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.viewer-goto input { width: 4.5em; min-height: var(--target); padding: 0 var(--space-2); color: var(--ink); background: var(--surface); border: var(--border) solid var(--line); border-radius: var(--radius); }
+.viewer-status { min-height: 1.6em; margin: var(--space-2) 0; }
+.viewer-pages {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-4);
+  overflow-x: auto;
+  padding: var(--space-2) 0;
+}
+.viewer-pages:focus-visible { outline: var(--focus-width) solid var(--focus); }
+/* A page: white paper whatever the theme; its canvas, text and link layers stacked. pdf.js sizes the
+   layers from --scale-factor (set per page); 1 px rounding as its own viewer uses. */
+.viewer-page {
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  position: relative;
+  justify-self: center;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px var(--line-soft);
+  scroll-margin-top: calc(var(--viewer-bar, 0px) + var(--space-2));
+}
+.viewer-layer, .viewer-layer canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.viewer-layer canvas { display: block; }
+/* pdf.js's text layer, as its own stylesheet sets it: invisible text over the drawing, for screen readers and selection. */
+.viewer .textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.viewer .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text; }
+.viewer .textLayer > :not(.markedContent), .viewer .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.viewer .textLayer .markedContent { display: contents; }
+.viewer .textLayer ::selection { background: rgb(0 0 255 / 0.25); color: transparent; }
+.viewer .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+/* Its links: each a box over the drawn text, with the site's focus ring. */
+.viewer .annotationLayer { position: absolute; top: 0; left: 0; pointer-events: none; transform-origin: 0 0; z-index: 1; }
+.viewer .annotationLayer section { position: absolute; pointer-events: auto; box-sizing: border-box; transform-origin: 0 0; }
+/* At least 24 px each way (WCAG 2.5.8), centred on the link the copy draws, however small the page is shown. */
+.viewer .annotationLayer .linkAnnotation > a { position: absolute; top: 50%; left: 50%; width: max(100%, 24px); height: max(100%, 24px); transform: translate(-50%, -50%); font-size: 1em; }
+.viewer .annotationLayer .linkAnnotation > a:hover { background: rgb(255 255 0 / 0.2); }
+.viewer .annotationLayer .linkAnnotation > a:focus-visible { outline: var(--focus-width) solid var(--focus); outline-offset: 1px; }

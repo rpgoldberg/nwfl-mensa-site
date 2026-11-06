@@ -38,6 +38,7 @@ import { clone, create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
+import { LONG_ID, LONG_PAGES, ORIGINAL_ID, ORIGINAL_PDF, PUBLIC_ISSUE_PDF, longPdf, membersIssuePdf } from './synthetic-pdf.mjs';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
@@ -56,11 +57,11 @@ const noIssuesPort = Number(process.env['NO_ISSUES_API_PORT'] ?? 9093);
 const CANARY = { membersInFull: 'MEMBERS-ONLY CANARY PICNIC', noStatus: 'UNPUBLISHED CANARY' };
 
 // A14: the test identity provider's subjects (e2e/idp.mjs), as in e2e/stand-in.ts (ACCOUNTS).
-const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6', articlesDown: '00000000-0000-4000-8000-0000000000a7', stale: '00000000-0000-4000-8000-0000000000b8', enrolee: '00000000-0000-4000-8000-0000000000c1', lapsedOutsider: '00000000-0000-4000-8000-0000000000c4' };
+const SUBJECT = { member: '00000000-0000-4000-8000-0000000000b2', mixed: '00000000-0000-4000-8000-0000000000b3', refused: '00000000-0000-4000-8000-0000000000e5', lapsed: '00000000-0000-4000-8000-0000000000f6', articlesDown: '00000000-0000-4000-8000-0000000000a7', stale: '00000000-0000-4000-8000-0000000000b8', enrolee: '00000000-0000-4000-8000-0000000000c1', lapsedOutsider: '00000000-0000-4000-8000-0000000000c4' };
 /** Who has member standing (member_account, in the real API): not the pending account, and the officers by their group. */
 // D4: "stale" and "lapsed-outsider" have member standing here but no enrolee group in their claim, so the site never
 // sends their token. AC6 (b): "enrolee" is in nwfl-users alone, with member standing; "enrolee-pending" has none.
-const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.refused, SUBJECT.lapsed, SUBJECT.articlesDown, SUBJECT.stale, SUBJECT.enrolee, SUBJECT.lapsedOutsider]);
+const MEMBER_SUBJECTS = new Set([SUBJECT.member, SUBJECT.mixed, SUBJECT.refused, SUBJECT.lapsed, SUBJECT.articlesDown, SUBJECT.stale, SUBJECT.enrolee, SUBJECT.lapsedOutsider]);
 const idpIssuer = process.env['IDP_ISSUER'];
 const jwks = process.env['IDP_JWKS_URL'] ? createRemoteJWKSet(new URL(process.env['IDP_JWKS_URL'])) : undefined;
 
@@ -282,6 +283,13 @@ const PDF = Buffer.from(
 const PUBLIC_PDFS = new Set(NEWSLETTER.filter((d) => (d.visibility ?? ItemVisibility.PUBLIC) === ItemVisibility.PUBLIC).map((d) => d.publicPdf));
 /** The members copy, told apart from the public one by a comment line: what a member's ReadFile streams. */
 const MEMBERS_PDF = Buffer.concat([Buffer.from('%PDF-1.4\n% members copy\n', 'latin1'), PDF.subarray(9)]);
+// PDFVIEW: the newest issue's copies are made-up PDFs with pages, text and the copies' links
+// (e2e/synthetic-pdf.mjs), for the reader at /read/<id>; every other file stays the blank page.
+const NEWEST = /** @type {(typeof NEWSLETTER)[number]} */ (NEWSLETTER[0]);
+const NEWEST_MEMBERS_PDF = membersIssuePdf('% members copy');
+// PDFVIEW fix 1: an original with outside links of every kind, served to an officer only (B1), and a
+// file of 5000 pages, served to anyone (S1). Neither is listed anywhere; only /read/<id> opens them.
+const LONG_PDF = longPdf(LONG_PAGES);
 
 // A14: the newsletter's articles, as in e2e/stand-in.ts (ARTICLES). A public article with a members
 // passage and a members PDF, a members article and an officers article.
@@ -344,6 +352,15 @@ const PUBLIC_DOCUMENTS = DOCUMENTS.map((d) => {
   if (copy.live) copy.live.files = copy.live.files.filter((f) => f.audience === FileAudience.PUBLIC);
   return copy;
 });
+
+/**
+ * PDFVIEW fix 2: for the "mixed" member only, the newest issue and the oldest are listed as a public copy alone
+ * (their members files left out), the other two keep theirs: a members view with a public copy among them.
+ */
+const MIXED_PUBLIC_ONLY = new Set([NEWSLETTER[0]?.id, NEWSLETTER[3]?.id]);
+const MIXED_DOCUMENTS = DOCUMENTS.map((d) => (MIXED_PUBLIC_ONLY.has(d.id) ? PUBLIC_DOCUMENTS.find((p) => p.id === d.id) ?? d : d));
+/** The subject of each verified call, for the one answer that depends on who the member is. @type {WeakMap<object, string>} */
+const SUBJECT_OF = new WeakMap();
 
 /** @param {string} title @param {string} slug @param {number} order @param {{ name: string, status: TermStatus }[]} holders @param {string} alias */
 const office = (slug, title, order, holders, alias) => ({
@@ -412,6 +429,7 @@ async function audienceOf(ctx, { articles = false } = {}) {
   }
   if (payload.sub === SUBJECT.refused) throw new ConnectError('invalid token', Code.Unauthenticated);
   if (articles && payload.sub === SUBJECT.articlesDown) throw new ConnectError('the articles are down', Code.Unavailable);
+  SUBJECT_OF.set(ctx, String(payload.sub));
   const groups = Array.isArray(payload['groups']) ? payload['groups'] : [];
   if (groups.includes('nwfl-officers')) return 'officers';
   return MEMBER_SUBJECTS.has(String(payload.sub)) ? 'members' : 'public';
@@ -589,7 +607,7 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       const news = (req.kind === ContentKind.DOCUMENT && req.pageSize === 50) || (req.kind === ContentKind.ARTICLE && req.pageSize === 10);
       if (!news) anonymousOnly(ctx);
       const audience = await audienceOf(ctx, { articles: req.kind === ContentKind.ARTICLE });
-      const documents = audience === 'public' ? PUBLIC_DOCUMENTS : DOCUMENTS;
+      const documents = audience === 'public' ? PUBLIC_DOCUMENTS : SUBJECT_OF.get(ctx) === SUBJECT.mixed ? MIXED_DOCUMENTS : DOCUMENTS;
       const items =
         req.kind === ContentKind.DOCUMENT ? (issues ? documents : [])
         : req.kind === ContentKind.ARTICLE ? (issues ? articles(audience) : [])
@@ -599,9 +617,15 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     // A public file's bytes, and a members copy for a member; anything else is not found, as the API answers a withheld file.
     readFile: async function* (req, ctx) {
       const audience = await audienceOf(ctx);
+      const extra = issues && req.fileId === LONG_ID ? LONG_PDF : issues && audience === 'officers' && req.fileId === ORIGINAL_ID ? ORIGINAL_PDF : undefined;
+      if (extra) {
+        yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(extra.length) } } };
+        yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(extra) } };
+        return;
+      }
       const members = (audience === 'members' || audience === 'officers') && MEMBERS_PDFS.has(req.fileId);
       if (!issues || (!PUBLIC_PDFS.has(req.fileId) && req.fileId !== ARTICLES.open.publicPdf && !members)) throw new ConnectError('file not found', Code.NotFound);
-      const bytes = members ? MEMBERS_PDF : PDF;
+      const bytes = members ? (req.fileId === NEWEST.membersPdf ? NEWEST_MEMBERS_PDF : MEMBERS_PDF) : req.fileId === NEWEST.publicPdf ? PUBLIC_ISSUE_PDF : PDF;
       // The same title-based name for both copies, as the API builds it.
       yield { part: { case: /** @type {const} */ ('head'), value: { filename: 'pensa-mensa.pdf', mimeType: 'application/pdf', sizeBytes: BigInt(bytes.length) } } };
       yield { part: { case: /** @type {const} */ ('chunk'), value: new Uint8Array(bytes) } };

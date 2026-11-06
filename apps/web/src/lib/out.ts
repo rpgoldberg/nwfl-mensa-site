@@ -65,9 +65,9 @@ export function safeLink(read: LinkRead): LinkRead {
   return ok ? read : { kind: 'not_found' };
 }
 
-/** Back to the newsletter: the PDF, at the page the link was on. */
+/** Back to the newsletter: the issue read in the site (PDFVIEW, /read/<id>), at the page the link was on. */
 export function backHref(fileId: string, page: number): string {
-  return `/documents/${fileId}.pdf#page=${page}`;
+  return `/read/${fileId}#page=${page}`;
 }
 
 const DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: 'long', day: 'numeric' });

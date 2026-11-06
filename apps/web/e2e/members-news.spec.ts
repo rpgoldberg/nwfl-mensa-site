@@ -22,10 +22,11 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
+import { PUBLIC_COPY } from '../src/lib/reader';
 import { setPrefs } from './prefs';
 import { crawlSeeds } from './routes';
 import { banner, signIn } from './signin';
-import { ARTICLES, BOARD_GAMES, MEMBERS_PDF_MARK, NEWSLETTER, SOURCE_PDFS, centralToday } from './stand-in';
+import { ARTICLES, BOARD_GAMES, MEMBERS_PDF_MARK, MIXED, NEWSLETTER, SOURCE_PDFS, centralToday } from './stand-in';
 
 // As in a11y.spec.ts: WCAG 2.2 A and AA, plus AAA and best practice.
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
@@ -37,6 +38,8 @@ const NO_ACCESS = 'Your account does not have member access yet.';
 
 const [current, ...past] = NEWSLETTER.issues;
 const pdf = (id: string) => `/documents/${id}.pdf`;
+// PDFVIEW: an issue is read in the site, at /read/<id>; a small "PDF file" link keeps each file itself.
+const reader = (id: string) => `/read/${id}`;
 const MEMBERS_IDS = [...NEWSLETTER.issues.map((i) => i.membersPdf), ARTICLES.open.membersPdf];
 /** What only a member may see on /news, and what nobody may. The members articles' titles and summaries are public teasers (D1). */
 const MEMBERS_TEXT = [ARTICLES.open.passage, ARTICLES.members.body, NOT_SHOWN];
@@ -68,20 +71,25 @@ test.describe('/news signed in as a member', () => {
 
   test('the current issue has a second button for the members copy, with the line not to forward it', async ({ page }) => {
     const card = page.getByRole('region', { name: current!.title });
-    await expect(card.getByRole('link', { name: 'Read this issue (PDF)' })).toHaveAttribute('href', pdf(current!.publicPdf));
-    await expect(card.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toHaveAttribute('href', pdf(current!.membersPdf));
+    await expect(card.getByRole('link', { name: 'Read this issue', exact: true })).toHaveAttribute('href', reader(current!.publicPdf));
+    await expect(card.getByRole('link', { name: 'Members copy', exact: true })).toHaveAttribute('href', reader(current!.membersPdf));
     await expect(card.getByText(RULE)).toBeVisible();
+    await expect(card.getByRole('link', { name: /^PDF file/ })).toHaveAttribute('href', pdf(current!.publicPdf));
+    await expect(card.getByRole('link', { name: /^Members PDF file/ })).toHaveAttribute('href', pdf(current!.membersPdf));
     const others = page.getByRole('region', { name: 'Past issues' });
     for (const issue of past) {
       const row = others.getByRole('listitem').filter({ hasText: issue.title });
-      await expect(row.getByRole('link', { name: `${issue.title} (PDF)` })).toHaveAttribute('href', pdf(issue.publicPdf));
-      await expect(row.getByRole('link', { name: `${issue.title}, members copy (PDF)` })).toHaveAttribute('href', pdf(issue.membersPdf));
+      await expect(row.getByRole('link', { name: issue.title, exact: true })).toHaveAttribute('href', reader(issue.publicPdf));
+      await expect(row.getByRole('link', { name: `${issue.title}, members copy`, exact: true })).toHaveAttribute('href', reader(issue.membersPdf));
+      await expect(row.getByRole('link', { name: /^PDF file/ })).toHaveAttribute('href', pdf(issue.publicPdf));
+      await expect(row.getByRole('link', { name: /^Members PDF file/ })).toHaveAttribute('href', pdf(issue.membersPdf));
     }
   });
 
-  test('shows no line to sign in: the members copy is already there', async ({ page }) => {
-    await expect(page.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toBeVisible();
+  test('shows no line to sign in, nor the public-copy notice: the members copy is already there', async ({ page }) => {
+    await expect(page.getByRole('link', { name: 'Members copy', exact: true })).toBeVisible();
     await expect(page.getByText('to read the members copy')).toHaveCount(0);
+    await expect(page.getByText(PUBLIC_COPY)).toHaveCount(0);
     await expect(page.getByRole('main').getByRole('link', { name: 'sign in', exact: true })).toHaveCount(0);
   });
 
@@ -183,10 +191,53 @@ test.describe('/news signed in as a member', () => {
   });
 });
 
+// PDFVIEW fix 2 (decision 4): a signed-in member sees no public-copy notice at the top, even when the API lists an
+// issue or two as a public copy alone; each such issue says so by itself, in its own card or row, in plain text.
+const PUBLIC_ONLY_LINE = 'Public copy only';
+test.describe('/news as a member for whom some issues have no members copy', () => {
+  test('no notice at the top; each public-copy-only issue says "Public copy only" once, in its card or its row, and the rest say nothing', async ({ page }) => {
+    await page.goto('/news');
+    await signIn(page, 'mixed');
+    await expect(page).toHaveURL(/\/news$/);
+    const main = page.getByRole('main');
+    await expect(main.locator('.copy-notice')).toHaveCount(0);
+    await expect(main.getByText(PUBLIC_COPY)).toHaveCount(0);
+    await expect(main.getByText(PUBLIC_ONLY_LINE)).toHaveCount(2);
+    // The card is the newest issue, whose members copy this reader is not offered.
+    const card = page.getByRole('region', { name: MIXED.card.title });
+    await expect(card.getByText(PUBLIC_ONLY_LINE, { exact: true })).toBeVisible();
+    await expect(card.getByRole('link', { name: 'Members copy', exact: true })).toHaveCount(0);
+    await expect(card.getByRole('link', { name: 'Read this issue', exact: true })).toHaveAttribute('href', reader(MIXED.card.publicPdf));
+    // The oldest is a row of the past issues; the two between keep their members copies and say nothing.
+    const rows = page.getByRole('region', { name: 'Past issues' }).getByRole('listitem');
+    const row = rows.filter({ hasText: MIXED.row.title });
+    await expect(row.getByText(PUBLIC_ONLY_LINE, { exact: true })).toBeVisible();
+    await expect(row.getByRole('link', { name: /members copy/i })).toHaveCount(0);
+    for (const issue of past.filter((i) => i !== MIXED.row)) {
+      const other = rows.filter({ hasText: issue.title });
+      await expect(other.getByText(PUBLIC_ONLY_LINE)).toHaveCount(0);
+      await expect(other.getByRole('link', { name: `${issue.title}, members copy` })).toHaveAttribute('href', reader(issue.membersPdf));
+    }
+    // Plain words, at the muted text colour the rows already use: no new colour, and nothing for a screen reader to miss.
+    const line = row.getByText(PUBLIC_ONLY_LINE, { exact: true });
+    await expect(line).toHaveClass(/muted/);
+    expect(await line.evaluate((el) => getComputedStyle(el).color)).toBe(await row.locator('.muted').first().evaluate((el) => getComputedStyle(el).color));
+    expect(await axe(page)).toEqual([]);
+  });
+
+  test('a reader with no members copy on any issue still gets exactly one notice at the top, and no "Public copy only" line', async ({ page }) => {
+    await page.goto('/news');
+    const main = page.getByRole('main');
+    await expect(main.locator('.copy-notice')).toHaveCount(1);
+    await expect(main.getByText(PUBLIC_COPY)).toHaveCount(1);
+    await expect(main.getByText(PUBLIC_ONLY_LINE)).toHaveCount(0);
+  });
+});
+
 test('an officer gets the members view and never an officers article, an officers file or a source file', async ({ page }) => {
   await page.goto('/news');
   await signIn(page, 'officer');
-  await expect(page.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toHaveAttribute('href', pdf(current!.membersPdf));
+  await expect(page.getByRole('link', { name: 'Members copy', exact: true })).toHaveAttribute('href', reader(current!.membersPdf));
   await expect(page.getByText(ARTICLES.open.passage)).toBeVisible();
   expect(noneOf(await page.content(), NEVER)).toEqual([]);
   await expect(page.getByText('to read the members copy')).toHaveCount(0);
@@ -198,8 +249,11 @@ test('a pending account gets the public view, a box saying it has no member acce
   const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
   await expect(open).toContainText('Members-only passage. Your account does not have member access yet.');
   await expect(open.getByRole('link', { name: 'Ask for help' })).toHaveAttribute('href', '/help');
-  // Signed in already: the line to sign in is for the signed-out only.
+  // Signed in already: the line to sign in is for the signed-out only. PDFVIEW: the page still says,
+  // once, that these are the public copies, with "sign in" in plain text, since this reader is signed in.
   await expect(page.getByText('to read the members copy')).toHaveCount(0);
+  await expect(page.getByRole('main').getByText(PUBLIC_COPY)).toHaveCount(1);
+  await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
   const html = await page.content();
   expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, RULE.replace("'", '&#39;'), RULE])).toEqual([]);
   // Its members copy is the same 404 as a random id's.
@@ -247,8 +301,8 @@ test('articles the API cannot give leave the issues listed, members copies too, 
   expect(res?.status()).toBe(503);
   expect(res?.headers()['cache-control']).toContain('no-store');
   const card = page.getByRole('region', { name: current!.title });
-  await expect(card.getByRole('link', { name: 'Read this issue (PDF)' })).toHaveAttribute('href', pdf(current!.publicPdf));
-  await expect(card.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toHaveAttribute('href', pdf(current!.membersPdf));
+  await expect(card.getByRole('link', { name: 'Read this issue', exact: true })).toHaveAttribute('href', reader(current!.publicPdf));
+  await expect(card.getByRole('link', { name: 'Members copy', exact: true })).toHaveAttribute('href', reader(current!.membersPdf));
   await expect(page.getByRole('note').filter({ hasText: 'The list of articles is temporarily unavailable.' })).toBeVisible();
   await expect(page.getByText('The list of issues is temporarily unavailable.')).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'From the newsletter' })).toHaveCount(0);
@@ -333,7 +387,7 @@ test('AC6 b: nwfl-users alone in the claim, with member standing in the records,
   await signIn(page, 'enrolee');
   const res = await page.goto('/news');
   expect(res?.status()).toBe(200);
-  await expect(page.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toHaveAttribute('href', pdf(current!.membersPdf));
+  await expect(page.getByRole('link', { name: 'Members copy', exact: true })).toHaveAttribute('href', reader(current!.membersPdf));
   const open = page.getByRole('article').filter({ hasText: ARTICLES.open.title });
   await expect(open.getByRole('complementary', { name: 'Members only' })).toContainText(ARTICLES.open.passage);
   await expect(page.getByRole('article').filter({ hasText: ARTICLES.members.title })).toContainText(ARTICLES.members.body);
@@ -380,7 +434,7 @@ test.describe('the members view, for every reader', () => {
     test(`axe, ${scheme} system setting`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: scheme });
       await page.goto('/news');
-      await expect(page.getByRole('link', { name: 'Members copy (PDF)', exact: true })).toBeVisible();
+      await expect(page.getByRole('link', { name: 'Members copy', exact: true })).toBeVisible();
       expect(await axe(page)).toEqual([]);
     });
   }
@@ -405,7 +459,9 @@ test.describe('the members view, for every reader', () => {
       const links = page.locator('main a[href^="/documents/"]');
       // Public and members copy of each issue, and both PDFs of the article.
       await expect(links).toHaveCount(NEWSLETTER.issues.length * 2 + 2);
-      for (const link of await links.all()) {
+      const read = page.locator('main a[href^="/read/"]');
+      await expect(read).toHaveCount(NEWSLETTER.issues.length * 2);
+      for (const link of [...(await links.all()), ...(await read.all())]) {
         const box = (await link.boundingBox())!;
         expect(box.height, await link.innerText()).toBeGreaterThanOrEqual(48);
         expect(box.x).toBeGreaterThanOrEqual(0);

@@ -71,6 +71,7 @@ export const NEWSLETTER = {
 export const ACCOUNTS = {
   officer: '00000000-0000-4000-8000-0000000000a1',
   member: '00000000-0000-4000-8000-0000000000b2',
+  mixed: '00000000-0000-4000-8000-0000000000b3',
   pending: '00000000-0000-4000-8000-0000000000c3',
   refused: '00000000-0000-4000-8000-0000000000e5',
   lapsed: '00000000-0000-4000-8000-0000000000f6',
@@ -137,6 +138,13 @@ export const ARTICLES = {
 
 /** A14: the members source files api.mjs lists before each members copy, to anyone but the public (api.mjs sourceOf): never linked. */
 export const SOURCE_PDFS = [...NEWSLETTER.issues.map((i) => `f3${i.membersPdf.slice(2)}`), ARTICLES.open.sourcePdf];
+
+/**
+ * PDFVIEW fix 2: the issues the stand-in API lists as a public copy alone to the "mixed" member (api.mjs
+ * MIXED_PUBLIC_ONLY): the newest, which is the card, and the oldest, which is a row. The other issues
+ * keep their members copies for that member.
+ */
+export const MIXED = { card: NEWSLETTER.issues[0]!, row: NEWSLETTER.issues[3]! };
 
 /** The marker line in a members copy's bytes (api.mjs MEMBERS_PDF). */
 export const MEMBERS_PDF_MARK = '% members copy';
