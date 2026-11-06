@@ -50,9 +50,12 @@ import type { RedactRequest } from './redact.js';
 type Query = Pick<Db, 'query'>;
 
 /**
- * The engine libraries and the gate's and the boxes' revisions: a new one changes every key, so every
- * copy is made again (box-exact: REDACT-LOOK's exact-fit boxes; links-1: LINKS L3's link annotations;
- * labels-1: BOXLABEL's "Members Only", "Mbrs Only" and "Private" in place of "withheld").
+ * Bumped when the engine's output bytes change: its libraries, or a revision of what it writes (box-exact:
+ * REDACT-LOOK's exact-fit boxes; links-1: LINKS L3's link annotations; labels-1: BOXLABEL's "Members Only",
+ * "Mbrs Only" and "Private" in place of "withheld"). A new one changes every key, so the worker's boot sweep
+ * makes every copy again (regenerate.ts). A revision of the gate alone, which leaves the bytes as they were, is
+ * not bumped, and it does not re-check a copy stored before it: the gate runs only before pdf_copy_put
+ * (rerun.ts), and readPdf serves a stored copy as it is.
  * The ledger reports an older row's engine as changed rather than re-render it (ledger.ts fileVerdict).
  */
 export const ENGINE_VERSION = 'pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1';

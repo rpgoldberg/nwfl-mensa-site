@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { type PDFContext, PDFDict, PDFDocument, PDFName, type PDFRawStream, type PDFRef, decodePDFRawStream } from '@cantoo/pdf-lib';
+import { type PDFContext, PDFDict, PDFDocument, PDFName, type PDFRawStream, type PDFRef, PDFString, PDFWriter, decodePDFRawStream } from '@cantoo/pdf-lib';
 
 export const CODES = 'Private';
 export const MEANT = 'Quillon';
@@ -133,15 +133,212 @@ export const hex = (text: string): string => Buffer.from(text, 'latin1').toStrin
 
 /** `pdf` with `font` added to page 1 as /FXA1 and drawn in black at 72 500 by `draw` (a content fragment), after the page's content. */
 export async function withRun(pdf: Uint8Array, spec: FontSpec, draw = `BT /FXA1 24 Tf 72 500 Td <${hex(spec.codes)}> Tj ET`): Promise<Uint8Array> {
+  return withFontRun(pdf, (ctx) => font(ctx, spec), draw);
+}
+
+/**
+ * Where a run's font is held: as its own object (indirect), as a direct dict in page 1's /Resources /Font, or, also
+ * direct, in a page held directly in the page tree's /Kids array, so that only a walk through arrays reaches it.
+ */
+export type Held = 'indirect' | 'direct' | 'in an array';
+
+/** `pdf` with the font `make` gives added to page 1 as /FXA1, held as `held` says, and drawn in black by `draw`. */
+export async function withFontRun(pdf: Uint8Array, make: (ctx: PDFContext) => PDFRef, draw: string, held: Held = 'indirect'): Promise<Uint8Array> {
   const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+  const { context } = doc;
   const page = doc.getPage(0);
   const ref = page.node.get(PDFName.of('Contents')) as PDFRef;
-  const content = Buffer.from(decodePDFRawStream(doc.context.lookup(ref) as PDFRawStream).decode()).toString('latin1');
-  const fonts = page.node.Resources()?.lookup(PDFName.of('Font'), PDFDict) as PDFDict;
-  fonts.set(PDFName.of('FXA1'), font(doc.context, spec));
-  doc.context.assign(ref, doc.context.flateStream(`${content}\nq 0 0 0 rg ${draw} Q`));
+  const content = Buffer.from(decodePDFRawStream(context.lookup(ref) as PDFRawStream).decode()).toString('latin1');
+  const resources = page.node.Resources() as PDFDict;
+  const fonts = resources.lookup(PDFName.of('Font'), PDFDict);
+  const made = make(context);
+  if (held === 'indirect') {
+    fonts.set(PDFName.of('FXA1'), made);
+  } else {
+    // The font, its /Font dict and the page's /Resources all direct objects: none of them is an object of its own.
+    const dict = context.lookup(made, PDFDict);
+    context.delete(made);
+    const direct = fonts.clone();
+    direct.set(PDFName.of('FXA1'), dict);
+    const own = resources.clone();
+    own.set(PDFName.of('Font'), direct);
+    page.node.set(PDFName.of('Resources'), own);
+  }
+  context.assign(ref, context.flateStream(`${content}\nq 0 0 0 rg ${draw} Q`));
+  if (held === 'in an array') {
+    // The page itself a direct dict in /Kids. pdf-lib's save walks the page tree by reference, so its writer is used.
+    const kids = doc.catalog.Pages().Kids();
+    const pageRef = kids.get(0) as PDFRef;
+    kids.set(0, page.node.clone());
+    context.delete(pageRef);
+    return PDFWriter.forContext(context, 50).serializeToBuffer();
+  }
   return doc.save({ useObjectStreams: false });
 }
+
+/**
+ * A Type 3 font for `codes`: each code's glyph is named `names[i]`, as its /Differences say, and is a CharProcs
+ * entry by that name. Each glyph draws `shown(name)` in Helvetica, from the font's own /Resources, or a filled box
+ * when `shown` gives null. The /ToUnicode reads `reads`, letter for letter, when given.
+ */
+export function type3Font(ctx: PDFContext, codes: string, names: readonly string[], shown: (name: string) => string | null, reads?: string): PDFRef {
+  const differences = [...new Map([...codes].map((ch, i) => [ch.charCodeAt(0), names[i] as string]))].sort((a, b) => a[0] - b[0]).flat();
+  const procs = Object.fromEntries(
+    [...new Set(names)].map((name) => {
+      const text = shown(name);
+      const proc = text === null ? '600 0 0 0 500 700 d1 0 0 500 700 re f' : `600 0 d0 BT /H 1000 Tf 0 0 Td <${hex(text)}> Tj ET`;
+      return [name, ctx.register(ctx.flateStream(proc))];
+    }),
+  );
+  return ctx.register(
+    ctx.obj({
+      Type: 'Font',
+      Subtype: 'Type3',
+      FontBBox: [0, -250, 1000, 1000],
+      FontMatrix: [0.001, 0, 0, 0.001, 0, 0],
+      FirstChar: 32,
+      LastChar: 126,
+      Widths: Array.from({ length: 95 }, () => 600),
+      Resources: { Font: { H: ctx.obj({ Type: 'Font', Subtype: 'Type1', BaseFont: 'Helvetica', Encoding: 'WinAnsiEncoding' }) } },
+      CharProcs: procs,
+      Encoding: { Type: 'Encoding', Differences: differences },
+      ...(reads === undefined ? {} : { ToUnicode: toUnicode(ctx, codes, reads) }),
+    }),
+  );
+}
+
+const liberation = (): Buffer => readFileSync(join(fontsDir, 'LiberationSans-Regular.ttf'));
+
+/** The tables of a TrueType font program, by tag. */
+function tables(ttf: Buffer): Map<string, Buffer> {
+  const out = new Map<string, Buffer>();
+  for (let i = 0; i < ttf.readUInt16BE(4); i++) {
+    const at = 12 + i * 16;
+    out.set(ttf.toString('latin1', at, at + 4), ttf.subarray(ttf.readUInt32BE(at + 8), ttf.readUInt32BE(at + 8) + ttf.readUInt32BE(at + 12)));
+  }
+  return out;
+}
+
+/** The glyph id a (3,1) format 4 cmap gives the character `code` (0 when none). */
+function glyphOf(cmap: Buffer, code: number): number {
+  for (let i = 0; i < cmap.readUInt16BE(2); i++) {
+    const at = cmap.readUInt32BE(4 + i * 8 + 4);
+    if (cmap.readUInt16BE(4 + i * 8) !== 3 || cmap.readUInt16BE(4 + i * 8 + 2) !== 1 || cmap.readUInt16BE(at) !== 4) continue;
+    const segs = cmap.readUInt16BE(at + 6) / 2;
+    const ends = at + 14;
+    for (let s = 0; s < segs; s++) {
+      const start = cmap.readUInt16BE(ends + 2 + segs * 2 + s * 2);
+      if (code < start || code > cmap.readUInt16BE(ends + s * 2)) continue;
+      const delta = cmap.readUInt16BE(ends + 2 + segs * 4 + s * 2);
+      const rangeAt = ends + 2 + segs * 6 + s * 2;
+      const range = cmap.readUInt16BE(rangeAt);
+      const glyph = range === 0 ? code : cmap.readUInt16BE(rangeAt + range + (code - start) * 2);
+      return glyph === 0 ? 0 : (glyph + delta) & 0xffff;
+    }
+  }
+  return 0;
+}
+
+/** A cmap of one (3,0) (Microsoft Symbol) format 4 subtable: each character of `map` to its glyph id. */
+function symbolCmap(map: ReadonlyMap<number, number>): Buffer {
+  const codes = [...map.keys()].sort((a, b) => a - b);
+  const segs = codes.length + 1;
+  const sub = Buffer.alloc(16 + segs * 8);
+  sub.writeUInt16BE(4, 0);
+  sub.writeUInt16BE(sub.length, 2);
+  sub.writeUInt16BE(segs * 2, 6);
+  const ends = 14;
+  [...codes, 0xffff].forEach((code, s) => {
+    sub.writeUInt16BE(code, ends + s * 2);
+    sub.writeUInt16BE(code, ends + 2 + segs * 2 + s * 2);
+    sub.writeUInt16BE(code === 0xffff ? 1 : ((map.get(code) as number) - code) & 0xffff, ends + 2 + segs * 4 + s * 2);
+  });
+  const head = Buffer.alloc(12);
+  head.writeUInt16BE(1, 2);
+  head.writeUInt16BE(3, 4);
+  head.writeUInt32BE(12, 8);
+  return Buffer.concat([head, sub]);
+}
+
+/** A TrueType font program from `table`s, each 4-byte aligned (checksums left 0: neither FreeType nor pdf.js reads them). */
+function sfnt(table: ReadonlyMap<string, Buffer>): Buffer {
+  const tags = [...table.keys()].sort();
+  const head = Buffer.alloc(12 + tags.length * 16);
+  head.writeUInt32BE(0x00010000, 0);
+  head.writeUInt16BE(tags.length, 4);
+  const parts: Buffer[] = [head];
+  let offset = head.length;
+  tags.forEach((tag, i) => {
+    const data = table.get(tag) as Buffer;
+    head.write(tag, 12 + i * 16, 'latin1');
+    head.writeUInt32BE(offset, 12 + i * 16 + 8);
+    head.writeUInt32BE(data.length, 12 + i * 16 + 12);
+    const padded = Buffer.concat([data, Buffer.alloc((4 - (data.length % 4)) % 4)]);
+    parts.push(padded);
+    offset += padded.length;
+  });
+  return Buffer.concat(parts);
+}
+
+/**
+ * LiberationSans with its cmap replaced by a single (3,0) subtable, as a symbolic font is built: 0xF000 plus each
+ * code of `codes` to the glyph of the letter of `draws` at the same place. Its glyph names (post) stay.
+ */
+export function symbolProgram(codes: string, draws: string): Buffer {
+  const table = tables(liberation());
+  const cmap = table.get('cmap') as Buffer;
+  table.set('cmap', symbolCmap(new Map([...codes].map((ch, i) => [0xf000 + ch.charCodeAt(0), glyphOf(cmap, (draws[i] as string).charCodeAt(0))]))));
+  return sfnt(table);
+}
+
+/**
+ * An embedded symbolic (Flags 4) TrueType font whose program is `program`: with a /Differences giving each code of
+ * `codes` the name `names[i]` when `names` is given, and no /Encoding at all when it is null; a /ToUnicode reading `reads`.
+ */
+export function symbolTrueType(ctx: PDFContext, program: Buffer, codes: string, names: readonly string[] | null, reads: string): PDFRef {
+  const file = ctx.register(ctx.flateStream(program, { Length1: program.length }));
+  const descriptor = ctx.register(ctx.obj({ Type: 'FontDescriptor', FontName: 'AAAAAD+GlyphmapSym', Flags: 4, FontBBox: [-200, -300, 1200, 1000], ItalicAngle: 0, Ascent: 900, Descent: -210, CapHeight: 720, StemV: 80, FontFile2: file }));
+  const differences = names === null ? [] : [...new Map([...codes].map((ch, i) => [ch.charCodeAt(0), names[i] as string]))].sort((a, b) => a[0] - b[0]).flat();
+  return ctx.register(
+    ctx.obj({
+      Type: 'Font',
+      Subtype: 'TrueType',
+      BaseFont: 'AAAAAD+GlyphmapSym',
+      FontDescriptor: descriptor,
+      ...(names === null ? {} : { Encoding: { Type: 'Encoding', Differences: differences } }),
+      ToUnicode: toUnicode(ctx, codes, reads),
+    }),
+  );
+}
+
+/** The glyph ids LiberationSans draws the letters of `text` with. */
+export function glyphIds(text: string): number[] {
+  const cmap = tables(liberation()).get('cmap') as Buffer;
+  return [...text].map((ch) => glyphOf(cmap, ch.charCodeAt(0)));
+}
+
+/**
+ * A Type0 font, Identity-H, over LiberationSans embedded as a CIDFontType2 with an /Identity CIDToGIDMap: a code is
+ * a glyph id. Its /ToUnicode maps the glyph ids of `draws` to the letters of `reads`, place for place.
+ */
+export function identityType0(ctx: PDFContext, draws: string, reads: string): PDFRef {
+  const ttf = liberation();
+  const file = ctx.register(ctx.flateStream(ttf, { Length1: ttf.length }));
+  const descriptor = ctx.register(ctx.obj({ Type: 'FontDescriptor', FontName: 'AAAAAE+LiberationSans', Flags: 32, FontBBox: [-200, -300, 1200, 1000], ItalicAngle: 0, Ascent: 900, Descent: -210, CapHeight: 720, StemV: 80, FontFile2: file }));
+  const cid = ctx.register(
+    ctx.obj({ Type: 'Font', Subtype: 'CIDFontType2', BaseFont: 'AAAAAE+LiberationSans', CIDSystemInfo: { Registry: PDFString.of('Adobe'), Ordering: PDFString.of('Identity'), Supplement: 0 }, FontDescriptor: descriptor, CIDToGIDMap: 'Identity', DW: 600 }),
+  );
+  const pairs = [...new Map(glyphIds(draws).map((gid, i) => [gid, (reads[i] ?? ' ').charCodeAt(0)]))].map(([gid, t]) => `<${gid.toString(16).toUpperCase().padStart(4, '0')}> <${t.toString(16).toUpperCase().padStart(4, '0')}>`);
+  const cmap = ctx.register(
+    ctx.flateStream(
+      `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Made def /CIDSystemInfo << /Registry (M) /Ordering (M) /Supplement 0 >> def 1 begincodespacerange <0000> <FFFF> endcodespacerange ${pairs.length} beginbfchar ${pairs.join(' ')} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end`,
+    ),
+  );
+  return ctx.register(ctx.obj({ Type: 'Font', Subtype: 'Type0', BaseFont: 'AAAAAE+LiberationSans', Encoding: 'Identity-H', DescendantFonts: [cid], ToUnicode: cmap }));
+}
+
+/** The codes of a Type0 Identity-H run drawing `text` in LiberationSans, as a hex string. */
+export const identityCodes = (text: string): string => glyphIds(text).map((gid) => gid.toString(16).toUpperCase().padStart(4, '0')).join('');
 
 /** `pdf` with page 1's font `name` (in its /Resources) replaced by `spec`'s. */
 export async function withFont(pdf: Uint8Array, name: string, spec: FontSpec): Promise<Uint8Array> {

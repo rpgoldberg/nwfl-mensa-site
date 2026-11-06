@@ -729,7 +729,12 @@ sanitizer's work on the copy (`src/pdf/gate-rules.ts`):
 Its limits, as for any text gate: text written so it does not read as text
 (reversed, encoded, drawn as curves or as a picture, or drawn by a font
 program whose own cmap or outlines give a code another letter than its
-name or `/ToUnicode` reads); a picture rebuilt from
+name or `/ToUnicode` reads, a symbolic TrueType font's (3,0) cmap among
+them); under a `/ToUnicode` that lies, a Type 3 glyph that draws its letter
+with a font of its own, and a Type0 font's glyph ids (GLYPHMAP fix round 1:
+PDFium reads no Type 3 glyph name and no letter for a glyph id, so the
+glyph-name reading cannot see them; `test/pdf/glyph-names.test.ts` pins both
+as known limits); a picture rebuilt from
 many small tiles or from vector shapes, gradients among them (fix round 5
 refuses only gradients drawn from sampled functions: a photo drawn row by
 row from 4,095 linear pieces passes); a tiny inline picture of the
