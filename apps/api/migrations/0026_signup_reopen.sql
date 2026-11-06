@@ -5,7 +5,8 @@
 -- Nothing erased comes back and the history stays: the rejected row keeps its decision, decider,
 -- time and erased inputs (0009), and is marked reopened by whom and when; audit_event gets the
 -- reopening as a row of its own. The account the rejection closed (removed, never approved,
--- granted or checked) is deleted, so the person reads as one who never signed up.
+-- granted or checked) is deleted, so the person reads as one who never signed up. No sign-up row
+-- is ever deleted (5).
 
 -- 1. Who reopened a rejected sign-up, and when: both or neither, and only on a rejection.
 ALTER TABLE signup_request
@@ -57,3 +58,21 @@ $fn$;
 CREATE TRIGGER member_account_delete_only_reopened BEFORE DELETE ON member_account
   FOR EACH ROW EXECUTE FUNCTION member_account_delete_only_reopened();
 REVOKE EXECUTE ON FUNCTION member_account_delete_only_reopened() FROM PUBLIC;
+
+-- 5. A sign-up row is never deleted, so the rejection a reopening rests on (and the account delete
+--    rule above reads) stays. The app role loses the DELETE that 0000's defaults gave it: no code
+--    deletes a sign-up. Defence in depth against a future grant: a trigger refuses deleting a
+--    decided row for every role, the owner included. A pending row stays deletable by the owner.
+REVOKE DELETE ON signup_request FROM nwfl;
+CREATE FUNCTION signup_request_keep_decided() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp AS $fn$
+BEGIN
+  IF OLD.decision <> 'pending' THEN
+    RAISE EXCEPTION 'signup_request % is decided and is kept', OLD.id USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  RETURN OLD;
+END
+$fn$;
+CREATE TRIGGER signup_request_keep_decided BEFORE DELETE ON signup_request
+  FOR EACH ROW EXECUTE FUNCTION signup_request_keep_decided();
+REVOKE EXECUTE ON FUNCTION signup_request_keep_decided() FROM PUBLIC;

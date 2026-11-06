@@ -109,7 +109,12 @@ const MAX_DISPLAY_NAME = 120;
 /** The one answer to a sign-up that cannot be taken, whatever the reason (MT-19). */
 const ON_FILE = 'a sign-up is already on file for this account';
 const RECHECK_MONTHS = 12;
-/** REOPEN: the most rejections listed for reopening, newest first. */
+/**
+ * REOPEN: the most rejections listed for reopening, newest first, with no paging (NOTE-4). Plenty for
+ * this group's size; the site says "Showing the latest 50" when the list is full (apps/web
+ * src/lib/signup.ts REJECTED_LISTED_MAX, kept equal), so an older one is never hidden without a word.
+ * Raise both, or add paging, if the group ever needs more.
+ */
 const MAX_REJECTED_LISTED = 50;
 /**
  * REOPEN: an account the rejection closed and nothing reopened since: removed, never approved,

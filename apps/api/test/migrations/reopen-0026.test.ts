@@ -6,17 +6,22 @@
 //   - A person has at most one sign-up that is not reopened; a reopened one leaves room for one more.
 //   - An account row is deleted only when it is a rejection's closed account (removed, never
 //     approved, granted or checked) whose sign-up was reopened and nothing newer is open.
+//   - A sign-up row is never deleted by the app: it holds no DELETE grant, and a trigger refuses
+//     deleting a decided one even for the owner, so the rejection a reopening rests on stays.
 // Every subject here is made up.
 import type pg from 'pg';
 import pgLib from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { APP, APP_PW, dropDatabase, failure, freshDatabase, live, migrate, sqlstate, urlFor } from '../helpers/pg.js';
+import { APP, APP_PW, dropDatabase, failure, freshDatabase, live, migrate, MIGRATOR, MIGRATOR_PW, sqlstate, urlFor } from '../helpers/pg.js';
 
 const UNIQUE_VIOLATION = '23505';
+const INSUFFICIENT_PRIVILEGE = '42501';
+const NOT_IN_PREREQUISITE_STATE = '55000';
 
 describe.skipIf(!live)('schema after REOPEN (0026)', () => {
   let db: string;
   let app: pg.Client;
+  let owner: pg.Client;
 
   const one = async <T>(text: string, values: unknown[] = []): Promise<T> => (await app.query(text, values)).rows[0] as T;
   const signup = (sub: string): Promise<{ id: string }> =>
@@ -39,10 +44,13 @@ describe.skipIf(!live)('schema after REOPEN (0026)', () => {
     if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
     app = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, db) });
     await app.connect();
+    owner = new pgLib.Client({ connectionString: urlFor(MIGRATOR, MIGRATOR_PW, db) });
+    await owner.connect();
   });
 
   afterAll(async () => {
     await app?.end();
+    await owner?.end();
     if (db !== undefined) await dropDatabase(db);
   });
 
@@ -95,6 +103,37 @@ describe.skipIf(!live)('schema after REOPEN (0026)', () => {
     expect((await app.query(`SELECT 1 FROM signup_request WHERE sub = 'r-again'`)).rows).toHaveLength(2);
   });
 
+  describe('deleting a sign-up row', () => {
+    const kinds = async (prefix: string): Promise<Record<'pending' | 'approved' | 'rejected' | 'reopened', string>> => {
+      const pending = await signup(`${prefix}-pending`);
+      const approved = await signup(`${prefix}-approved`);
+      expect(await decide(approved.id, 'approved')).toBe('ok');
+      const rejected_ = await rejected(`${prefix}-rejected`);
+      const reopened = await rejected(`${prefix}-reopened`);
+      expect(await reopen(reopened)).toBe('ok');
+      return { pending: pending.id, approved: approved.id, rejected: rejected_, reopened };
+    };
+
+    it('refuses every DELETE from the app role at the grant level, so no sign-up is lost', async () => {
+      const ids = await kinds('x-app');
+      expect((await one<{ may: boolean }>(`SELECT has_table_privilege('nwfl', 'signup_request', 'DELETE') AS may`)).may).toBe(false);
+      for (const [kind, id] of Object.entries(ids)) {
+        expect(await sqlstate(app, `DELETE FROM signup_request WHERE id = $1`, [id]), kind).toBe(INSUFFICIENT_PRIVILEGE);
+      }
+      expect((await app.query(`SELECT 1 FROM signup_request WHERE id = ANY($1::uuid[])`, [Object.values(ids)])).rows).toHaveLength(4);
+    });
+
+    it('refuses deleting a decided sign-up even for the owner, by trigger; a pending one only the owner can delete', async () => {
+      const ids = await kinds('x-owner');
+      for (const kind of ['approved', 'rejected', 'reopened'] as const) {
+        expect(await sqlstate(owner, `DELETE FROM signup_request WHERE id = $1`, [ids[kind]]), kind).toBe(NOT_IN_PREREQUISITE_STATE);
+        expect(await failure(owner, `DELETE FROM signup_request WHERE id = $1`, [ids[kind]]), kind).toMatch(/is decided and is kept/);
+      }
+      expect(await sqlstate(owner, `DELETE FROM signup_request WHERE id = $1`, [ids.pending])).toBe('ok');
+      expect((await app.query(`SELECT 1 FROM signup_request WHERE id = ANY($1::uuid[])`, [[ids.approved, ids.rejected, ids.reopened]])).rows).toHaveLength(3);
+    });
+  });
+
   describe('deleting an account row', () => {
     const remove = (sub: string): Promise<string> => failure(app, `DELETE FROM member_account WHERE sub = $1`, [sub]);
 
@@ -119,6 +158,33 @@ describe.skipIf(!live)('schema after REOPEN (0026)', () => {
       expect(await remove('d-member')).toMatch(/only a rejection's closed account/);
       await app.query(`INSERT INTO member_account (sub, status, route) VALUES ('d-pending', 'pending', 'signup')`);
       expect(await remove('d-pending')).toMatch(/only a rejection's closed account/);
+    });
+
+    // Each case breaks exactly one clause of the delete rule, so each clause is shown to hold on its own.
+    it('refuses a removed account that was once checked, even with its sign-up reopened', async () => {
+      const id = await rejected('d-checked');
+      expect(await reopen(id)).toBe('ok');
+      await app.query(`UPDATE member_account SET verified_on = '2026-10-01' WHERE sub = 'd-checked'`);
+      expect(await remove('d-checked')).toMatch(/only a rejection's closed account/);
+    });
+
+    it('refuses a removed account that was once approved, even with its sign-up reopened', async () => {
+      const id = await rejected('d-approved');
+      expect(await reopen(id)).toBe('ok');
+      await app.query(`UPDATE member_account SET approved_by_sub = 'officer-admin', approved_at = now() WHERE sub = 'd-approved'`);
+      expect(await remove('d-approved')).toMatch(/only a rejection's closed account/);
+    });
+
+    it('refuses an account that is not removed, even with its sign-up reopened', async () => {
+      const id = await rejected('d-unremoved');
+      expect(await reopen(id)).toBe('ok');
+      await app.query(`UPDATE member_account SET status = 'pending', removed_at = NULL WHERE sub = 'd-unremoved'`);
+      expect(await remove('d-unremoved')).toMatch(/only a rejection's closed account/);
+    });
+
+    it('refuses a removed account with no sign-up at all', async () => {
+      await app.query(`INSERT INTO member_account (sub, status, route, removed_at) VALUES ('d-nosignup', 'removed', 'signup', now())`);
+      expect(await remove('d-nosignup')).toMatch(/only a rejection's closed account/);
     });
 
     it('refuses once a newer sign-up is open for the person', async () => {

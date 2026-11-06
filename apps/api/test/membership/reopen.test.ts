@@ -85,6 +85,8 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
     await expect(membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, tok('redo-token'))).rejects.toMatchObject({ code: Code.AlreadyExists });
 
     expect(await membership.reopenSignup({ requestId }, APPROVER)).toBeDefined();
+    // Gone from the list at once, before any new sign-up.
+    expect((await membership.listRejectedSignups({}, APPROVER)).requests.map((r) => r.requestId)).not.toContain(requestId);
 
     // The rejected row stays as it was, with who reopened it; its number and last name stay erased.
     expect(await rows('sub-redo')).toEqual([
@@ -145,6 +147,9 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
     for (const [who, code] of refusals) {
       await expect(membership.reopenSignup({ requestId }, who)).rejects.toMatchObject({ code });
       await expect(membership.listRejectedSignups({}, who)).rejects.toMatchObject({ code });
+      // Who may is decided first: an id that is unknown or not an id tells them nothing more.
+      await expect(membership.reopenSignup({ requestId: '00000000-0000-4000-8000-000000000000' }, who)).rejects.toMatchObject({ code });
+      await expect(membership.reopenSignup({ requestId: 'not-an-id' }, who)).rejects.toMatchObject({ code });
     }
     expect((await rows('sub-redo3'))[0]).toMatchObject({ decision: 'rejected', reopened: false });
     expect((await accountOf('sub-redo3'))?.status).toBe('removed');
@@ -153,9 +158,10 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
 
   it('refuses a sign-up that is not rejected, a second reopening, one whose account is no longer closed, and one\'s own', async () => {
     const pending = (await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, tok('redo4-token'))).requestId;
-    await expect(membership.reopenSignup({ requestId: pending }, APPROVER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+    // In the handler's own words: not the closed-account check, which a pending or approved account also fails.
+    await expect(membership.reopenSignup({ requestId: pending }, APPROVER)).rejects.toMatchObject({ code: Code.FailedPrecondition, rawMessage: 'only a rejected sign-up is reopened, and only once' });
     await membership.approveSignup({ requestId: pending }, ADMIN);
-    await expect(membership.reopenSignup({ requestId: pending }, APPROVER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+    await expect(membership.reopenSignup({ requestId: pending }, APPROVER)).rejects.toMatchObject({ code: Code.FailedPrecondition, rawMessage: 'only a rejected sign-up is reopened, and only once' });
 
     // A double reopen is refused, not repeated: the first stands, audited once.
     const rejected = await turnedDown('redo5-token');
@@ -183,6 +189,27 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
     expect((await membership.listRejectedSignups({}, APPROVER)).requests.map((r) => r.requestId)).not.toContain(own);
     expect((await membership.listRejectedSignups({}, ADMIN)).requests.map((r) => r.requestId)).toContain(own);
     await membership.reopenSignup({ requestId: own }, ADMIN);
+  });
+
+  it('neither lists nor reopens a rejection whose removed account was once checked, approved or granted, and keeps that account', async () => {
+    const standing: Array<[string, string]> = [
+      ['sub-kept-checked', `INSERT INTO member_account (sub, status, route, verified_on, removed_at) VALUES ('sub-kept-checked', 'removed', 'signup', '2026-10-01', now())`],
+      ['sub-kept-approved', `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, removed_at) VALUES ('sub-kept-approved', 'removed', 'signup', 'sub-admin', now(), now())`],
+      ['sub-kept-granted', `INSERT INTO member_account (sub, status, route, affiliate_granted_by_sub, affiliate_granted_at, removed_at) VALUES ('sub-kept-granted', 'removed', 'admin_grant', 'sub-admin', now(), now())`],
+    ];
+    for (const [sub, account] of standing) {
+      await api.pool.query(`INSERT INTO signup_request (sub, display_name, email) VALUES ($1, 'Kim Example', 'kim@example.org')`, [sub]);
+      const id = (await rows(sub))[0]?.id as string;
+      await membership.rejectSignup({ requestId: id }, ADMIN);
+      await api.pool.query(account);
+      expect((await membership.listRejectedSignups({}, APPROVER)).requests.map((r) => r.requestId), sub).not.toContain(id);
+      await expect(membership.reopenSignup({ requestId: id }, APPROVER), sub).rejects.toMatchObject({
+        code: Code.FailedPrecondition,
+        rawMessage: 'this account is no longer closed by the rejection',
+      });
+      expect((await accountOf(sub))?.status, sub).toBe('removed');
+      expect((await rows(sub))[0], sub).toMatchObject({ decision: 'rejected', reopened: false });
+    }
   });
 
   it('reopens a rejected sign-up that never had an account row, with nothing to delete', async () => {

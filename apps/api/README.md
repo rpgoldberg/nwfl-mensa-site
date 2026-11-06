@@ -173,7 +173,9 @@ by the handler for a precise answer, and by the database (`0007`).
   deleted, so the person can sign up again. Nothing erased comes back, and
   both steps are audited. Not rejected, already reopened, or an account no
   longer closed is FAILED_PRECONDITION. Authentik is not touched: a rejection
-  changes no group or account there.
+  changes no group or account there. The list holds the latest 50 rejections,
+  with no paging (`MAX_REJECTED_LISTED`); when it is full the site says
+  "Showing the latest 50", so an older one is never hidden without a word.
 
 ## Seeding the calendar and roster
 
@@ -687,6 +689,8 @@ The rules the database itself enforces:
   changes again (0026). A person has one sign-up at most that is not
   reopened, and an account row is deleted only as a reopening deletes it: a
   rejection's closed account (removed, never approved, granted or checked).
+  A sign-up row is never deleted: the app role holds no DELETE on it, and a
+  trigger refuses deleting a decided one for every role (0026).
 
 Accepted residual risks, with no code against them:
 
