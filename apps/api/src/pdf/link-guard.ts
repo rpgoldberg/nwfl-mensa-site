@@ -27,8 +27,9 @@
 //     apply) counts as holding one; what has no resources of its own reads
 //     its parent's, kind by kind, as pdf.js merges them. This is read from
 //     the original with pdf-lib; nothing else of a pattern is read (a
-//     shading pattern paints no picture). A picture a Type 3 glyph draws
-//     outside a pattern or a soft mask is not counted here. The walk reads
+//     shading pattern paints no picture). A Type 3 font's glyphs are walked
+//     as a pattern is (BOXLABEL, NOTE-4/T1): PDFium lists none of their
+//     objects, so a picture they draw has no place either. The walk reads
 //     at most WALK_BUDGET resource entries a page, and FILE_WALK_BUDGET in
 //     all; past them a page counts as reaching a picture (fix round 3, D1).
 //
@@ -222,7 +223,8 @@ export async function patternPicturePages(pdf: Uint8Array): Promise<Set<number>>
       for (const item of entries(kinds.get('Font'))) {
         if (spent()) return true;
         const procs = item instanceof PDFDict ? entries(item.get(PDFName.of('CharProcs'))) : [];
-        if (procs.length > 0) pending.push({ owner: item, resources: (item as PDFDict).get(PDFName.of('Resources')), contents: procs, parent: kinds, unlisted });
+        // A Type 3 glyph's content is listed by PDFium as no object (BOXLABEL, NOTE-4/T1): a picture it draws has no place.
+        if (procs.length > 0) pending.push({ owner: item, resources: (item as PDFDict).get(PDFName.of('Resources')), contents: procs, parent: kinds, unlisted: true });
       }
       // A soft mask's group is drawn where PDFium lists none of its objects, as a tiling pattern is (fix round 3, N1).
       for (const item of entries(kinds.get('ExtGState'))) {

@@ -61,10 +61,13 @@ function contentStreams(doc: PDFDocument): Set<PDFRef> {
     const dict = context.lookupMaybe(value, PDFDict);
     if (dict === undefined || seen.has(dict)) return;
     seen.add(dict);
-    // A soft mask's group (ExtGState /SMask /G) is a form the page draws too.
+    // A soft mask's group (ExtGState /SMask /G) is a form the page draws too. /SMask may be the name /None, no soft
+    // mask (InDesign, Illustrator and Acrobat write it): read without asserting what it is (BOXLABEL, NOTE-1).
     const states = context.lookupMaybe(dict.get(PDFName.of('ExtGState')), PDFDict);
     for (const [, state] of states?.entries() ?? []) {
-      const mask = context.lookupMaybe(context.lookupMaybe(state, PDFDict)?.get(PDFName.of('SMask')), PDFDict);
+      const found = context.lookup(state);
+      const raw = found instanceof PDFDict ? context.lookup(found.get(PDFName.of('SMask'))) : undefined;
+      const mask = raw instanceof PDFDict ? raw : undefined;
       const group = mask?.get(PDFName.of('G'));
       const form = context.lookup(group);
       if (group instanceof PDFRef && form instanceof PDFStream) {
