@@ -514,6 +514,8 @@ const REJECTED = [
   { requestId: 'c1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000000e3', displayName: 'Cam Placeholder', email: 'cam@example.org', verification: Verification.UNCHECKED, rejectedAt: new Date('2026-11-04T16:00:00Z') },
   { requestId: 'c1000000-0000-4000-8000-000000000004', sub: '00000000-0000-4000-8000-0000000001e4', displayName: 'Harley Sample', email: 'harley@example.org', verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 2 }, rejectedAt: new Date('2026-11-03T16:00:00Z') },
 ];
+/** REOPEN: the Membership Officer's seat without the approvers group, whose token the membership calls refuse (e2e/idp.mjs seat-refused). */
+const REFUSED_SEAT_SUBJECT = '00000000-0000-4000-8000-0000000000e7';
 /** @type {Set<string>} REOPEN: the rejections reopened, by request id, for everyone */
 const REOPENED = new Set();
 /** @type {Map<string, number>} a sign-in's own sign-up, by the token's jti: its route */
@@ -539,7 +541,7 @@ async function personOf(ctx) {
   } catch {
     throw new ConnectError('invalid token', Code.Unauthenticated);
   }
-  if (payload.sub === SUBJECT.refused) throw new ConnectError('invalid token', Code.Unauthenticated);
+  if (payload.sub === SUBJECT.refused || payload.sub === REFUSED_SEAT_SUBJECT) throw new ConnectError('invalid token', Code.Unauthenticated);
   const groups = Array.isArray(payload['groups']) ? payload['groups'].map(String) : [];
   return { sub: String(payload.sub), groups, session: String(payload.jti ?? token) };
 }

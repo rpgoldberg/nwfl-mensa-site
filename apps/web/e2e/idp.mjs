@@ -76,6 +76,10 @@ const LOGINS = {
   'reopen-desktop': { id: '00000000-0000-4000-8000-0000000000e1', name: 'Ari Example', groups: ['nwfl-users'] },
   'reopen-phone': { id: '00000000-0000-4000-8000-0000000000e2', name: 'Bo Sample', groups: ['nwfl-users'] },
   'reopen-iphone': { id: '00000000-0000-4000-8000-0000000000e3', name: 'Cam Placeholder', groups: ['nwfl-users'] },
+  // REOPEN: the Membership Officer's seat without the approvers group: reopens, never decides; and the
+  // same seat whose token the stand-in API refuses (api.mjs REFUSED_SEAT_SUBJECT).
+  'seat-only': { id: '00000000-0000-4000-8000-0000000000e6', name: 'Quinn Placeholder', groups: ['nwfl-users', 'nwfl-officers', 'nwfl-office-membership'] },
+  'seat-refused': { id: '00000000-0000-4000-8000-0000000000e7', name: 'Morgan Sample', groups: ['nwfl-users', 'nwfl-officers', 'nwfl-office-membership'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

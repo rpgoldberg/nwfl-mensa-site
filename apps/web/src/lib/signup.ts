@@ -144,6 +144,16 @@ export function isSignupReopener(session: { groups: readonly string[] } | undefi
   return session !== undefined && (session.groups.includes('nwfl-admin') || session.groups.includes('nwfl-office-membership'));
 }
 
+/**
+ * The officer area's link to the sign-ups page, named by what the person may do there: the queue for
+ * the membership approvers and the Admin; for the Membership Officer's seat without the approvers
+ * group (REOPEN), the rejections alone. None for anyone else.
+ */
+export function signUpsLink(session: { groups: readonly string[] } | undefined): string | undefined {
+  if (isMembershipApprover(session)) return 'Sign-ups to approve';
+  return isSignupReopener(session) ? 'Rejected sign-ups to reopen' : undefined;
+}
+
 export interface DecisionForm {
   decision: 'approve' | 'reject' | 'reopen';
   requestId: string;

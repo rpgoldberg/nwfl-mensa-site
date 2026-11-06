@@ -14,7 +14,11 @@
 // sign-up form again from /account; nothing erased comes back. The list and the button are shown only
 // to those the API would allow (isSignupReopener); the API decides again on every call.
 //
-// Not signed in: sign in first. Signed in but neither a membership approver nor the Admin: the plain
+// The Membership Officer's seat without the approvers group sees the rejections alone: no queue, which
+// the API would not list for them.
+//
+// Not signed in: sign in first. Signed in but neither a membership approver, the Admin nor the
+// Membership Officer: the plain
 // not-found page, as for the approval setting, and it is never linked for them. It works with no
 // script: each step is a form post, answered with a page or a 303 back here. Astro's origin check
 // refuses a cross-site post first; the body is capped and must be a form (src/lib/form.ts).
@@ -50,7 +54,9 @@ const MAX_FORM_BYTES = 4 * 1024;
 const session = Astro.locals.session;
 // Never stored by a shared cache (fix 1, src/lib/api/page.ts signInFirst).
 if (!session) return signInFirst(SIGN_IN);
-if (!isMembershipApprover(session)) return Astro.rewrite('/404');
+const approver = isMembershipApprover(session);
+const reopener = isSignupReopener(session);
+if (!approver && !reopener) return Astro.rewrite('/404');
 const p = page(HERE);
 const api = membershipApi();
 const { reader } = sessionReader(session, runtimeDeps());
@@ -93,20 +99,23 @@ if (Astro.request.method === 'POST') {
 
 let requests: PendingSignup[] | undefined;
 let rejected: RejectedSignup[] | undefined;
-const reopener = isSignupReopener(session);
 let rejectedUnavailable = false;
 if (api !== undefined && reader !== undefined) {
-  try {
-    requests = await api.listSignupRequests(reader);
-  } catch (error) {
-    problem ??= error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+  if (approver) {
+    try {
+      requests = await api.listSignupRequests(reader);
+    } catch (error) {
+      problem ??= error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+    }
   }
   // The queue stands on its own: a list of rejections that cannot be read says so in its place.
   if (reopener && problem === undefined) {
     try {
       rejected = await api.listRejectedSignups(reader);
-    } catch {
-      rejectedUnavailable = true;
+    } catch (error) {
+      // A refused token says to sign in again, as for the queue.
+      if (error instanceof MembershipSignInAgain) problem = 'sign-in';
+      else rejectedUnavailable = true;
     }
   }
 } else {
@@ -120,7 +129,11 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
-  <p class="lead">People who signed up and are waiting for member access. Approve a sign-up to give the account member access, or reject it. The membership number and last name they typed are never shown here.</p>
+  {approver ? (
+    <p class="lead">People who signed up and are waiting for member access. Approve a sign-up to give the account member access, or reject it. The membership number and last name they typed are never shown here.</p>
+  ) : (
+    <p class="lead">Sign-ups that were rejected and can be reopened. The membership number and last name they typed are never shown here.</p>
+  )}
   {done && <p class="notice" role="status">{doneText(done)}</p>}
   {refused && <p class="notice" role="alert">{(refused.reopen ? REOPEN_REFUSED : DECISION_REFUSED)[refused.reason]}</p>}
   {problem === 'form' && <p class="notice" role="alert">Nothing was changed: send the form again from the list below.</p>}

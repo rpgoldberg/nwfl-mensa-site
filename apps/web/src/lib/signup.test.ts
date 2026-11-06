@@ -27,6 +27,7 @@ import {
   isMembershipApprover,
   isSignupReopener,
   parseDecisionForm,
+  signUpsLink,
   parseSignupForm,
 } from './signup';
 
@@ -184,6 +185,15 @@ describe('the queue\'s words (D4)', () => {
       expect(isSignupReopener(session(groups)), groups.join(' ')).toBe(false);
     }
     expect(isSignupReopener(undefined)).toBe(false);
+  });
+
+  it('REOPEN: names the officer area\'s link to the sign-ups page by what the person may do there', () => {
+    expect(signUpsLink(session(['nwfl-users', 'nwfl-membership-approvers']))).toBe('Sign-ups to approve');
+    expect(signUpsLink(session(['nwfl-admin']))).toBe('Sign-ups to approve');
+    expect(signUpsLink(session(['nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers']))).toBe('Sign-ups to approve');
+    expect(signUpsLink(session(['nwfl-officers', 'nwfl-office-membership']))).toBe('Rejected sign-ups to reopen');
+    expect(signUpsLink(session(['nwfl-officers', 'nwfl-office-treasurer']))).toBeUndefined();
+    expect(signUpsLink(undefined)).toBeUndefined();
   });
 
   it('REOPEN: reads a reopening, applied only once confirmed by the exact word', () => {

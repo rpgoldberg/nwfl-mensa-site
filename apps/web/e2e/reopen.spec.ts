@@ -89,6 +89,37 @@ test.describe('REOPEN: the rejected sign-ups in the officer area', () => {
     expect(await res.text()).toContain('Nothing was changed: only the Admin or the Membership Officer reopens a sign-up, and never their own.');
   });
 
+  test('the Membership Officer\'s seat without the approvers group finds the page from the officer area, and sees the rejections only', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'seat-only');
+    await page.goto('/officer-area');
+    await page.getByRole('link', { name: 'Rejected sign-ups to reopen' }).click();
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}`);
+    await expect(page.locator('.lead')).toHaveText('Sign-ups that were rejected and can be reopened. The membership number and last name they typed are never shown here.');
+    await expect(page.locator('.signup-card')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    await expect(page.locator('main')).not.toContainText('cannot be shown');
+    const button = rejectedCard(page, REJECTED.kept.name).getByRole('button', { name: 'Reopen' });
+    expect((await button.boundingBox())?.height).toBeGreaterThanOrEqual(48);
+    await button.click();
+    await expect(page.getByRole('heading', { name: 'Reopen this sign-up?' })).toBeVisible();
+    expect(await axe(page)).toEqual([]);
+    await page.getByRole('link', { name: 'Cancel' }).click();
+    await expect(rejectedCard(page, REJECTED.kept.name)).toHaveCount(1);
+    expect(await axe(page)).toEqual([]);
+    await fits(page);
+  });
+
+  test('the seat without the approvers group whose token the API refuses is told to sign in again, not that the list is down', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'seat-refused');
+    await page.goto(QUEUE);
+    await expect(page.getByRole('main').getByRole('link', { name: 'Sign in again' })).toBeVisible();
+    await expect(page.locator('main')).not.toContainText('cannot be shown');
+    await expect(page.getByRole('heading', { name: 'Rejected sign-ups' })).toHaveCount(0);
+    expect(await axe(page)).toEqual([]);
+  });
+
   test('cancelling the confirmation changes nothing; a stale reopening says so', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'approver');
