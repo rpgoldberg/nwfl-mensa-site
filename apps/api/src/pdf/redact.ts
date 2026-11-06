@@ -88,12 +88,11 @@ import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
 import type { BoxKind } from './labels.js';
 import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-annots.js';
 import { linkGuardAreas } from './link-guard.js';
-import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, hull, ligatureReadings, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
+import { type Box, type PageChar, type Region, boxesFor, copiesOf, drawnAgain, hull, loneGlyphs, matchedChars, meeting, notVacated, regionsFor, stillThere, unread, wordsOf } from './match.js';
 import { nameBreak } from './pdf-structure.js';
 import { UNOPENABLE, pdfiumBreak } from './pdfium-reading.js';
 import { Document, type Page, pdfium } from './pdfium.js';
 import { sanitize } from './sanitize.js';
-import { unreadableChars } from './unreadable.js';
 
 export interface RedactRequest {
   /** The marked passages this audience's policy redacts. */
@@ -154,9 +153,6 @@ function redactPage(doc: Document, index: number, quotes: readonly string[], pri
     if (chars.length === 0 && page.objectCount > 0) return `page ${index + 1} has no text layer`;
     if (isScan(page)) return `page ${index + 1} is a scan: pictures cover most of it`;
     if (unmapped > 0) return `page ${index + 1} has text that cannot be read`;
-    // LIGATURE fix 1 (F6): a glyph that reads as no text, or not as its own, where the quotes have more ligature
-    // readings than the matcher tries (match.ts MAX_READINGS): the page cannot be boxed with them all.
-    if (quotes.length > 0 && ligatureReadings(quotes) === null && unreadableChars(chars).size > 0) return `page ${index + 1} has text that cannot be read, and the withheld passages have more ligature readings than are tried`;
     // A picture the policy does not show is withheld: no link may sit over it, on a page with no passage too (fix 1, S1).
     if (regenerate) blocked.push(...page.allPictures().map((picture) => ({ ...picture, page: index })));
     // Text drawn twice at nearly one place (a shadow, a fake bold, a decoy) is read once: the copy PDFium

@@ -1,7 +1,7 @@
 // LIGATURE: a glyph with no readable text (U+FFFD, a private-use code point) where a withheld quote may be.
 // Every name here is made up.
 import { describe, expect, it } from 'vitest';
-import { MAX_READINGS, type PageChar, ligatureReadings, matchedChars } from './match.js';
+import { type PageChar, matchedChars } from './match.js';
 import { charUnits, isUnreadable, readThrough, reachOf, textUnits, unreadableAt } from './unreadable.js';
 
 const SIZE = 12;
@@ -72,6 +72,11 @@ describe('unreadableAt: a letter whose Unicode does not fit its word (LIGATURE f
     expect(misfits('so Fi\u0856 Amberwick')).toEqual([5]);
   });
 
+  it('keeps a combining mark in its word: a misfit after a decomposed accent is flagged (fix 2, N1: V4)', () => {
+    expect(misfits('Re\u0301\u0856')).toEqual([3]);
+    expect(misfits('so Re\u0301\u0856 Amberwick')).toEqual([6]);
+  });
+
   it('counts a letter of a script it does not list as a script of its own', () => {
     expect(misfits('ab\u{10940}c')).toEqual([2]);
   });
@@ -109,7 +114,7 @@ describe('Ghostscript\'s readable but wrong ligature code points: matched and re
   });
 });
 
-describe('ligatureReadings: the ligatures a glyph may stand for, capped per page (LIGATURE fix 1, F4, F6)', () => {
+describe('matchedChars: the ligatures a glyph may stand for, matched in one pass (LIGATURE fix 1, F4; fix 2, S1)', () => {
   it('finds a quote with each ligature a producer draws, ck, ft, tt, ti, fj, Th, ffj, fb, fh, fk, tf, ffb, ffh, ffk, fft, tti among them', () => {
     const cases: Array<[string, string]> = [
       ['Amberwi\uE002', 'Amberwick'],
@@ -135,18 +140,30 @@ describe('ligatureReadings: the ligatures a glyph may stand for, capped per page
     }
   });
 
-  it('gives every reading of a quote with one ligature or more, none of one with none', () => {
-    expect(ligatureReadings(['Moss'])).toEqual([]);
-    expect(ligatureReadings(['Ruffle'])?.length).toBe(3);
+  it('reads a ligature in each way it can be taken: ffl whole, or ff or fl with the other letter as written', () => {
+    for (const text of ['Ru\uFFFDe', 'Ru\uFFFDle', 'Ruf\uFFFDe']) {
+      const chars = line(`by ${text} today`);
+      expect(textOf(chars, matchedChars(chars, ['Ruffle'])), text).toBe(text);
+    }
+    // Each of fft, ff, ft, tt, ti and tti; and two glyphs, fft then ti or ff then tti, two ways to the same letters.
+    for (const text of ['Ha\uFFFDting', 'Ha\uFFFDtting', 'Haf\uFFFDting', 'Haff\uFFFDing', 'Hafft\uFFFDng', 'Haff\uFFFDng', 'Ha\uFFFD\uFFFDng']) {
+      const chars = line(`by ${text} today`);
+      expect(textOf(chars, matchedChars(chars, ['Hafftting'])), text).toBe(text);
+    }
   });
 
-  it('gives no readings at all when the quotes of a page have more than MAX_READINGS between them, though each has fewer', () => {
-    const quote = 'Tiffin Shuffleby';
-    const each = (ligatureReadings([quote]) as string[]).length;
-    expect(each).toBeLessThan(MAX_READINGS);
-    const quotes = Array.from({ length: Math.ceil(MAX_READINGS / each) + 1 }, (_, i) => `${quote} ${i}`);
-    expect(ligatureReadings(quotes)).toBeNull();
-    expect(ligatureReadings(quotes.slice(0, Math.floor(MAX_READINGS / each)))).not.toBeNull();
+  it('finds a passage of a sentence or more through one of its ligatures, beside a far-away one (fix 2, S1)', () => {
+    // 2,047 readings of the quote by its ligatures: matched in one pass, with no cap.
+    const passage = 'The attendees list for the October potluck is withheld from the public edition of this newsletter.';
+    const drawn = passage.replace('list', 'li\uFFFD');
+    const chars = line(`In the o\uFFFDce: ${drawn} Orla Penfleet kept score.`);
+    expect(textOf(chars, matchedChars(chars, ['Orla Penfleet', passage]))).toBe(`${drawn.slice(0, -1)}Orla Penfleet`);
+  });
+
+  it('finds each of many quotes with many ligatures on one page, with no cap on the quotes of a page (fix 2, S1)', () => {
+    const quotes = Array.from({ length: 40 }, (_, i) => `Tiffin Shuffleby ${i}`);
+    const chars = line('the o\uFFFDce: Ti\uFFFDn Shu\uFFFDeby 7 and Tiffin Shu\uFFFDleby 31 and Ti\uFFFDn Shuffleby 39 came');
+    expect(textOf(chars, matchedChars(chars, quotes))).toBe('Ti\uFFFDn Shu\uFFFDeby 7Tiffin Shu\uFFFDleby 31Ti\uFFFDn Shuffleby 39');
   });
 });
 
@@ -185,7 +202,7 @@ describe('matchedChars: a ligature glyph with no readable text inside a quote (L
     }
   });
 
-  it('reads a quote with more ligature readings than it tries as written, and readThrough still finds it', () => {
+  it('reads a quote with many ligatures, written out, as written, and readThrough finds it through the glyphs', () => {
     const quote = 'Affiffiffiffiffiffi Moss';
     const chars = line(`by ${quote} and the o\uFFFDce`);
     expect(textOf(chars, matchedChars(chars, [quote]))).toBe(quote);
@@ -237,6 +254,10 @@ describe('readThrough: whether a quote could be read through a glyph with no rea
 
   it('reads look-alikes as the quote does', () => {
     expect(readThrough(textUnits('F\u0456\uFFFD \u0410mberwick'), ['Fifi Amberwick'])).toBe(true);
+    // A word wholly in Cyrillic look-alikes has no misfit: only the look-alikes read it as the quote (fix 2, S2: X12).
+    expect([...unreadableAt([...'\u0420\u0430\uFFFD\u0435'])]).toEqual([2]);
+    expect(readThrough(textUnits('\u0420\u0430\uFFFD\u0435'), ['Paste'])).toBe(true);
+    expect(readThrough(textUnits('\u0420\u0430\uFFFD\u0435 \u0410\u0441\u0435'), ['Paste Ace'])).toBe(true);
   });
 });
 

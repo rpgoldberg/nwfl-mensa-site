@@ -6,7 +6,6 @@ import { PDFDocument, PDFName } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { checkCopy } from '../../src/pdf/gate.js';
 import { gateVerdict } from '../../src/pdf/gate-rules.js';
-import { MAX_READINGS, ligatureReadings } from '../../src/pdf/match.js';
 import { type RedactResult, redactPdf, verifyRedacted } from '../../src/pdf/redact.js';
 import { extractAll } from './extract.js';
 
@@ -198,16 +197,36 @@ describe('LIGATURE fix 1 (F5): a ligature crafted to read U+0000, a space or its
   });
 });
 
-describe('LIGATURE fix 1 (F6): the ligature readings tried on a page are capped', () => {
-  it('refuses a page with an unreadable glyph whose quotes have more readings than MAX_READINGS between them', async () => {
-    const quote = 'Tiffin Shuffleby';
-    const each = (ligatureReadings([quote]) as string[]).length;
-    const quotes = Array.from({ length: Math.ceil(MAX_READINGS / each) + 1 }, (_, i) => `${quote} ${String.fromCharCode(97 + (i % 26))}${i}`);
+describe('LIGATURE fix 2 (S1): withheld passages on a page with a glyph that reads U+FFFD are matched, with no cap', () => {
+  /** One ordinary sentence: 2,047 ways to read its ligatures, more than fix 1 tried for the whole page. */
+  const PASSAGE = 'The attendees list for the October potluck is withheld from the public edition of this newsletter.';
+
+  it('boxes a name beside a passage not on the page, with one ligature far off, and the gate passes the copy', async () => {
+    const original = await newsletter(['Notes from the o\\256ce of the Puzzle Circle.', '', '', '', '', 'Orla Penfleet kept score at the quiz.', 'Corwin Vellacott led it.']);
+    for (const quotes of [['Orla Penfleet'], ['Orla Penfleet', PASSAGE]]) {
+      const copy = copyOf(await redactPdf(original, { quotes, redactsAny: true, image: 'show' }));
+      expect(copy.boxes, quotes.join(' + ')).toBe(1);
+      expect(await extractAll(copy)).not.toMatch(/Penfleet/);
+      expect(await gateVerdict({ copy, original, quotes, image: 'show' })).toEqual({ pass: true });
+    }
+  });
+
+  it('boxes the passage drawn across two lines with its st ligature reading U+FFFD', async () => {
+    const original = await newsletter(['Notes from the Puzzle Circle.', 'The attendees li\\256 for the October potluck is withheld', 'from the public edition of this newsletter.', 'Corwin Vellacott led it.']);
+    const copy = copyOf(await redactPdf(original, { quotes: [PASSAGE], redactsAny: true, image: 'show' }));
+    expect(copy.boxes).toBe(2);
+    const text = await extractAll(copy);
+    expect(text).not.toMatch(/attendees|potluck|newsletter/);
+    expect(text).toContain('Corwin Vellacott led it.');
+    expect(await gateVerdict({ copy, original, quotes: [PASSAGE], image: 'show' })).toEqual({ pass: true });
+  });
+
+  it('gives a copy for 40 quotes with many ligatures each, where fix 1 refused the page over its cap', async () => {
+    const quotes = Array.from({ length: 40 }, (_, i) => `Tiffin Shuffleby ${String.fromCharCode(97 + (i % 26))}${i}`);
     const original = await newsletter(BODY);
-    expect(await redactPdf(original, { quotes, redactsAny: true })).toEqual({ kind: 'refused', reason: 'page 1 has text that cannot be read, and the withheld passages have more ligature readings than are tried' });
-    // The same quotes on a page with no unreadable glyph: no reading is needed, and the copy is given.
-    const plain = await gs('Corwin Vellacott led it.');
-    expect(copyOf(await redactPdf(plain, { quotes, redactsAny: true })).boxes).toBe(0);
+    const copy = copyOf(await redactPdf(original, { quotes, redactsAny: true }));
+    expect(copy.boxes).toBe(0);
+    expect(await gateVerdict({ copy, original, quotes, image: 'show' })).toEqual({ pass: true });
   });
 });
 

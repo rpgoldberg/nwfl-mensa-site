@@ -52,7 +52,7 @@
 //
 // textMatches reads a plain string the same ways: the output gate's matcher.
 // ============================================================================
-import { probeFolded, quoteProbe, quoteSpans } from '../redaction/render.js';
+import { probeFolded, quoteProbe, quoteSpans, standInSpans } from '../redaction/render.js';
 import { unreadableChars } from './unreadable.js';
 
 export interface Box {
@@ -202,17 +202,17 @@ export function matchedChars(chars: readonly PageChar[], quotes: readonly string
   if (quotes.length === 0) return out;
   collect(chars, quotes, out);
   // LIGATURE: a glyph with no text (U+FFFD, private use), or not its own (unreadable.ts), may be a ligature of a quote,
-  // read so a second time; not when the quotes have more readings than MAX_READINGS (the engine refuses the page).
+  // read so a second time, as STAND_IN, matched in one pass for each quote with no cap (fix 2, S1: render.ts standInSpans).
   const unreadable = unreadableChars(chars);
   if (unreadable.size > 0) {
-    const readings = ligatureReadings(quotes);
-    if (readings !== null && readings.length > 0) collect(chars.map((c, i) => (unreadable.has(i) ? { ...c, text: STAND_IN } : c)), readings, out);
+    const stood = chars.map((c, i) => (unreadable.has(i) ? { ...c, text: STAND_IN } : c));
+    collect(stood, quotes, out, (text, wholeWords) => standInSpans(text, quotes, LIGATURES, STAND_IN, wholeWords));
   }
   return out;
 }
 
 /** Adds the page characters any quote covers, in any reading, to `out`. */
-function collect(chars: readonly PageChar[], quotes: readonly string[], out: Set<number>): void {
+function collect(chars: readonly PageChar[], quotes: readonly string[], out: Set<number>, spans = (text: string, wholeWords: boolean): Array<[number, number]> => quoteSpans(text, quotes, wholeWords)): void {
   const joined = read(chars, false);
   const readings: Array<[Reading, boolean]> = [
     [joined, true],
@@ -221,53 +221,21 @@ function collect(chars: readonly PageChar[], quotes: readonly string[], out: Set
     [collapsed(joined), true],
   ];
   for (const [reading, wholeWords] of readings) {
-    for (const [start, end] of quoteSpans(reading.text, quotes, wholeWords)) {
+    for (const [start, end] of spans(reading.text, wholeWords)) {
       for (let u = start; u < end; u++) for (const i of reading.source[u] as number[]) out.add(i);
     }
   }
 }
 
 /**
- * The ligatures a glyph with no text may stand for in a quote (LIGATURE), longest first: the standard ones, those a
+ * The ligatures a glyph with no text may stand for in a quote (LIGATURE): the standard ones, those a
  * TrueType font such as Carlito or Libertine draws (fix 1, F4: ReportLab with HarfBuzz reads ck, ft, ti and tt at
- * private-use codes), and st, ct and Th. A quote is read in lower case, so "th" is Th. Left out: the rarer
+ * private-use codes), and st, ct and Th. A quote is read folded, so "th" is Th. Left out: the rarer
  * discretionary ones (ch, sp, Qu, tz); a quote drawn with one is still refused by readThrough (unreadable.ts).
  */
 const LIGATURES = ['ffi', 'ffl', 'ffj', 'ffb', 'ffh', 'ffk', 'fft', 'tti', 'ff', 'fi', 'fl', 'fj', 'fb', 'fh', 'fk', 'ft', 'tf', 'tt', 'ti', 'st', 'ct', 'ck', 'th'];
 /** The letter such a glyph reads as, in a quote's ligature's place too: a letter, so word edges hold, that no folded text is or looks like. */
 const STAND_IN = '\uA7FF';
-/**
- * The most readings of a page's quotes with their ligatures stood in for, all of them together (fix 1, F6: a cap per
- * quote let 40 quotes take 2,560, and 8.9 s on a 20,000-character page). The engine refuses a page with a glyph that
- * reads as no text when its quotes have more (redact.ts); the gate's readThrough reads such a page as before.
- */
-export const MAX_READINGS = 512;
-
-/**
- * Each quote with one or more of its ligatures, in each way they can be taken, read as STAND_IN; null when they come to
- * more than MAX_READINGS together.
- */
-export function ligatureReadings(quotes: readonly string[]): string[] | null {
-  const out: string[] = [];
-  let over = false;
-  for (const quote of quotes) {
-    const lower = quote.toLowerCase();
-    const walk = (at: number, built: string, stood: boolean): void => {
-      if (over) return;
-      if (at === lower.length) {
-        if (!stood) return;
-        if (out.length === MAX_READINGS) over = true;
-        else out.push(built);
-        return;
-      }
-      for (const ligature of LIGATURES) if (lower.startsWith(ligature, at)) walk(at + ligature.length, built + STAND_IN, true);
-      walk(at + 1, built + (lower[at] as string), stood);
-    };
-    walk(0, '', false);
-    if (over) return null;
-  }
-  return out;
-}
 
 /** A long text is read in pieces this long, each overlapping the last by enough to hold any quote. */
 const PIECE = 65_536;

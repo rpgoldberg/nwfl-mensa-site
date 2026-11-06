@@ -49,3 +49,17 @@ describe('LIGATURE fix 1: a request with no quote on the Ghostscript files', () 
     expect(await redactPdf(fixture('gs-wp-carlito-std'), { quotes: [], redactsAny: true, image: 'show' })).toEqual({ kind: 'refused', reason: 'page 1 has text that cannot be read' });
   });
 });
+
+describe('LIGATURE fix 2 (S1): gs-wp-noto-std with a name and a passage not on the page', () => {
+  const PASSAGE = 'The attendees list for the October potluck is withheld from the public edition of this newsletter.';
+
+  it('boxes the name as it does alone, and the gate passes the copy', async () => {
+    const original = fixture('gs-wp-noto-std');
+    const quotes = ['Orla Penfleet', PASSAGE];
+    const result = await redactPdf(original, { quotes, redactsAny: true, image: 'show' });
+    if (result.kind !== 'redacted') throw new Error(`expected a copy, got ${JSON.stringify(result)}`);
+    expect(result.boxes.length).toBeGreaterThan(0);
+    expect(await extractAll(result.pdf)).not.toMatch(/Orla Pen/);
+    expect(await gateVerdict({ copy: result.pdf, original, quotes, image: 'show' })).toEqual({ pass: true });
+  });
+});
