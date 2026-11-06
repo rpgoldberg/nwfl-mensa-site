@@ -115,6 +115,7 @@ import { type GateCode, type GateReply, type GateVerdict, MAX_OUTPUT_BYTES, sha2
 import { type PageRef, drawnBreak } from './drawn.js';
 import { checkCopy } from './gate.js';
 import { labelMarks, leakBreak } from './gate-labels.js';
+import { namedBreak } from './glyph-names.js';
 import type { GateJob } from './gate-isolated.js';
 import { linkTextBreak } from './gate-links.js';
 import { type Accepted, type LinkRequest, acceptedLinks } from './link-annots.js';
@@ -238,6 +239,21 @@ function drawnByPolicy(picture: PDFRawStream, image: 'blur' | 'hide'): boolean {
 }
 
 /** Every content stream of the copy, in groups read as one: each page's /Contents (an array is joined, as pdf.js joins it), each form, tiling pattern and Type 3 glyph alone. */
+/**
+ * Why a page's /Contents is not a stream, a list of streams or absent, or null (GLYPHMAP, BOXLABEL round 5 N5-3: a list
+ * that held itself passed under "show", where the content groups below are not read). A list may hold only references
+ * to streams: not itself, another list, null or a number, which readers skip or read apart.
+ */
+function contentsBreak(doc: PDFDocument): string | null {
+  const { context } = doc;
+  for (const [n, page] of doc.getPages().entries()) {
+    const listed = context.lookup(page.node.get(PDFName.of('Contents')));
+    const streams = listed instanceof PDFArray ? listed.asArray().map((item) => context.lookup(item)) : [listed];
+    if (listed !== undefined && !streams.every((item) => item instanceof PDFRawStream)) return `page ${n + 1}: its /Contents is not a stream or a list of streams`;
+  }
+  return null;
+}
+
 function contentGroups(doc: PDFDocument, glyphs: readonly PDFObject[]): PDFObject[][] {
   const { context } = doc;
   const out: PDFObject[][] = [];
@@ -550,7 +566,7 @@ async function readRules(copy: Uint8Array, image: ImageAction, links: LinkReques
     pages: reason === null ? doc.getPages().map((page) => ({ num: page.ref.objectNumber, gen: page.ref.generationNumber })) : [],
   });
   const { context } = doc;
-  const tree = pageTreeBreak(doc);
+  const tree = pageTreeBreak(doc) ?? contentsBreak(doc);
   if (tree !== null) return broken(tree);
   const accepted: Accepted | string = acceptedLinks(doc, links);
   if (typeof accepted === 'string') return broken(`the links: ${accepted}`);
@@ -671,7 +687,9 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
     const names = await nameBreak(job.copy);
     if ((names !== null && names !== NAMES_UNPARSED) || (await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
     const labels = await labelMarks(job.copy);
-    if ((await leakBreak(job.copy, labels, (bytes) => checkCopy(bytes, job.quotes))) !== null) return { pass: false, code: 'withheld' };
+    // The text layers, then the text the glyph names draw (GLYPHMAP), each with the labels taken out where they can be.
+    const leaks = async (bytes: Uint8Array): Promise<string | null> => (await checkCopy(bytes, job.quotes)) ?? (await namedBreak(bytes, job.quotes));
+    if ((await leakBreak(job.copy, labels, leaks)) !== null) return { pass: false, code: 'withheld' };
     const { broken, pages } = await readRules(job.copy, job.image, job);
     if (broken !== null || typeof labels === 'string') return { pass: false, code: 'rules' };
     // Under "show" only for the quotes (fix round 6b, REDACT-LOOK L10/N8), with no picture judged.

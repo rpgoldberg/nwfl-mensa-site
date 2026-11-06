@@ -77,6 +77,7 @@
 // ============================================================================
 import { checkCopy } from './gate.js';
 import { labelMarks, leakBreak } from './gate-labels.js';
+import { namedBreak } from './glyph-names.js';
 import { type ImageAction, keepsPicture, pictureWindows } from './images.js';
 import type { BoxKind } from './labels.js';
 import { type EngineLink, type PageBox, boxOf, meets, placeLinks } from './link-annots.js';
@@ -299,6 +300,7 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
   if (names !== null) return { kind: 'refused', reason: names };
   const labels = await labelMarks(pdf);
   if (typeof labels === 'string') return { kind: 'refused', reason: labels };
-  const left = await leakBreak(pdf, labels, async (bytes) => (await verifyRedacted(bytes, quotes)) ?? (await checkCopy(bytes, quotes)));
+  // And the text the glyph names draw, as the gate reads it (GLYPHMAP, glyph-names.ts).
+  const left = await leakBreak(pdf, labels, async (bytes) => (await verifyRedacted(bytes, quotes)) ?? (await namedBreak(bytes, quotes)) ?? (await checkCopy(bytes, quotes)));
   return left === null ? { kind: 'redacted', pdf, boxes: redacted.boxes, kept } : { kind: 'refused', reason: left };
 }
