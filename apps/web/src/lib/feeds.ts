@@ -24,7 +24,7 @@ const NOT_FOUND = 'We could not find that event.\n';
 const plain = (body: string, status: number) => new Response(body, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
 
 const ics = (body: string, filename: string) =>
-  new Response(body, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `inline; filename="${filename}"` } });
+  new Response(body, { headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `inline; filename="${filename}"`, 'X-Robots-Tag': 'noindex' } });
 
 /** The calendar reads only: a feed can never reach a read that takes a signed-in reader (A14). */
 export async function calendarFeed(live: Pick<LiveData, 'events'> | undefined, { now, origin }: FeedContext): Promise<Response> {

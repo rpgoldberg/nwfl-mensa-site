@@ -14,6 +14,7 @@ describe('the calendar files, with no API', () => {
     const res = (await calendar(ctx('/calendar.ics'))) as Response;
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/calendar; charset=utf-8');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
     expect(await res.text()).not.toContain('BEGIN:VEVENT');
   });
 

@@ -9,10 +9,17 @@ describe('robots.txt', () => {
     );
   });
 
-  it('keeps every other host, the canary included, out of search engines', () => {
-    for (const host of ['canary.nwflorida.us', 'localhost', 'www.nwflorida.us']) {
-      expect(robotsTxt(host), host).toBe('User-agent: *\nDisallow: /\n');
+  it('keeps every other host, the canary included, out of search engines, but lets Google Calendar fetch the feed', () => {
+    for (const host of ['canary.nwflorida.us', 'canary.nwflmensa.us', 'localhost', 'www.nwflorida.us']) {
+      expect(robotsTxt(host), host).toBe('User-agent: *\nAllow: /calendar.ics\nDisallow: /\n');
     }
+  });
+
+  it('does not block the feed on the canonical host', () => {
+    const lines = robotsTxt('nwflorida.us').split('\n');
+    expect(lines).not.toContain('Disallow: /');
+    expect(lines).not.toContain('Disallow: /calendar.ics');
+    expect(lines.filter((l) => l.startsWith('Disallow:')).every((l) => !'/calendar.ics'.startsWith(l.slice('Disallow: '.length)))).toBe(true);
   });
 });
 
