@@ -94,7 +94,7 @@ test('/calendar and /newsletter answer 301 to /events and /news, the query kept;
 });
 
 test('robots.txt keeps this host out of search engines, and indexes the canonical host', async ({ request }) => {
-  expect(await (await request.get('/robots.txt')).text()).toBe('User-agent: *\nDisallow: /\n');
+  expect(await (await request.get('/robots.txt')).text()).toBe('User-agent: *\nAllow: /calendar.ics\nDisallow: /\n');
   const canonical = await new Promise<string>((resolve, reject) => {
     http
       .get(`${BACKEND_URL}/robots.txt`, { headers: { host: 'nwflorida.us', 'x-forwarded-proto': 'https' } }, (res) => {

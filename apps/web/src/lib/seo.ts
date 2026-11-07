@@ -1,12 +1,14 @@
 // robots.txt and sitemap.xml (R16). Only the canonical host is indexed; any
 // other (www before Cloudflare redirects it, the canary, a local run) asks
-// search engines to stay out, so no copy of the site competes with it.
+// search engines to stay out, so no copy of the site competes with it. The
+// calendar feed stays fetchable (Google Calendar refuses a feed robots.txt
+// blocks); the feed itself carries X-Robots-Tag: noindex.
 import { MORE_PAGES } from './site';
 
 export const CANONICAL_HOST = 'nwflorida.us';
 
 export function robotsTxt(host: string): string {
-  if (host !== CANONICAL_HOST) return 'User-agent: *\nDisallow: /\n';
+  if (host !== CANONICAL_HOST) return 'User-agent: *\nAllow: /calendar.ics\nDisallow: /\n';
   return [
     'User-agent: *',
     'Disallow: /prefs',

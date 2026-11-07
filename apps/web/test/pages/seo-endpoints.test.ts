@@ -11,9 +11,9 @@ describe('GET /robots.txt', () => {
     expect(canonical.headers.get('content-type')).toBe('text/plain; charset=utf-8');
     expect(await canonical.text()).toContain('Sitemap: https://nwflorida.us/sitemap.xml');
     const canary = (await robots({ url: new URL('https://canary.nwflorida.us/robots.txt') } as unknown as Ctx)) as Response;
-    expect(await canary.text()).toBe('User-agent: *\nDisallow: /\n');
+    expect(await canary.text()).toBe('User-agent: *\nAllow: /calendar.ics\nDisallow: /\n');
     const newCanary = (await robots({ url: new URL('https://canary.nwflmensa.us/robots.txt') } as unknown as Ctx)) as Response;
-    expect(await newCanary.text()).toBe('User-agent: *\nDisallow: /\n');
+    expect(await newCanary.text()).toBe('User-agent: *\nAllow: /calendar.ics\nDisallow: /\n');
   });
 });
 

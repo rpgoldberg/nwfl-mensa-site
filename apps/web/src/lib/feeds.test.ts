@@ -57,6 +57,7 @@ describe('calendarFeed (/calendar.ics)', () => {
     expect(FEED_PAST_DAYS + FEED_FUTURE_DAYS).toBeLessThanOrEqual(400);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/calendar; charset=utf-8');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
     expect(res.headers.get('content-disposition')).toBe('inline; filename="nwfl-mensa.ics"');
     const text = await res.text();
     expect(text.match(/BEGIN:VEVENT/g)).toHaveLength(2);
@@ -97,6 +98,7 @@ describe('eventFeed (one event as .ics)', () => {
     expect(asked).toEqual([`${SERIES}:2026-11-04`]);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/calendar; charset=utf-8');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
     expect(res.headers.get('content-disposition')).toBe('inline; filename="wednesday-lunchers-caf-night-2026-11-04.ics"');
     const text = await res.text();
     expect(text.match(/BEGIN:VEVENT/g)).toHaveLength(1);
