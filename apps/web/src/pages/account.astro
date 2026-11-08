@@ -26,6 +26,7 @@ import {
   ACCOUNT_PATH,
   MAX_LAST_NAME,
   MAX_NUMBER_DIGITS,
+  MAX_NUMBER_TYPED,
   REJECTED_CONTACT,
   SIGNUP_REFUSED,
   STANDING_TEXT,
@@ -152,7 +153,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
             aria-describedby={describedBy('lastName-hint', errors.lastName && 'lastName-error')}
           />
           <label for="membershipNumber">Mensa membership number</label>
-          <p class="hint" id="membershipNumber-hint">Needed. Digits only, up to {MAX_NUMBER_DIGITS}. It is on your membership card and in your renewal email. It is used only for this check, then erased.</p>
+          <p class="hint" id="membershipNumber-hint">Needed. Up to {MAX_NUMBER_DIGITS} digits; spaces or dashes between them are fine. It is on your membership card and in your renewal email. It is used only for this check, then erased.</p>
           {errors.membershipNumber && <p class="error" id="membershipNumber-error">Problem: {errors.membershipNumber}</p>}
           <input
             type="text"
@@ -160,7 +161,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
             name="membershipNumber"
             inputmode="numeric"
             autocomplete="off"
-            maxlength={MAX_NUMBER_DIGITS}
+            maxlength={MAX_NUMBER_TYPED}
             required
             aria-invalid={errors.membershipNumber ? 'true' : undefined}
             aria-describedby={describedBy('membershipNumber-hint', errors.membershipNumber && 'membershipNumber-error')}

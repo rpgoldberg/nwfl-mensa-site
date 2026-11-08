@@ -8,13 +8,15 @@
 
 import type { GenEnum, GenFile, GenMessage, GenService } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc, serviceDesc } from "@bufbuild/protobuf/codegenv2";
+import type { Timestamp } from "@bufbuild/protobuf/wkt";
+import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file nwfl/mensa/v1/membership_verifier.proto.
  */
 export const file_nwfl_mensa_v1_membership_verifier: GenFile = /*@__PURE__*/
-  fileDesc("Cidud2ZsL21lbnNhL3YxL21lbWJlcnNoaXBfdmVyaWZpZXIucHJvdG8SDW53ZmwubWVuc2EudjEiNAofTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVxdWVzdBIRCglwYWdlX3NpemUYASABKAUiVwogTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVzcG9uc2USMwoHcGVuZGluZxgBIAMoCzIiLm53ZmwubWVuc2EudjEuUGVuZGluZ1ZlcmlmaWNhdGlvbiJXChNQZW5kaW5nVmVyaWZpY2F0aW9uEhIKCnJlcXVlc3RfaWQYASABKAkSGQoRbWVtYmVyc2hpcF9udW1iZXIYAiABKAkSEQoJbGFzdF9uYW1lGAMgASgJImQKGVJlcG9ydFZlcmlmaWNhdGlvblJlcXVlc3QSEgoKcmVxdWVzdF9pZBgBIAEoCRIzCgdvdXRjb21lGAIgASgOMiIubndmbC5tZW5zYS52MS5WZXJpZmljYXRpb25PdXRjb21lIhwKGlJlcG9ydFZlcmlmaWNhdGlvblJlc3BvbnNlKtcBChNWZXJpZmljYXRpb25PdXRjb21lEiQKIFZFUklGSUNBVElPTl9PVVRDT01FX1VOU1BFQ0lGSUVEEAASJwojVkVSSUZJQ0FUSU9OX09VVENPTUVfVkVSSUZJRURfTE9DQUwQARItCilWRVJJRklDQVRJT05fT1VUQ09NRV9WRVJJRklFRF9PVEhFUl9HUk9VUBACEiIKHlZFUklGSUNBVElPTl9PVVRDT01FX05PVF9GT1VORBADEh4KGlZFUklGSUNBVElPTl9PVVRDT01FX0VSUk9SEAQyiQIKGU1lbWJlcnNoaXBWZXJpZmllclNlcnZpY2USgAEKGExpc3RQZW5kaW5nVmVyaWZpY2F0aW9ucxIuLm53ZmwubWVuc2EudjEuTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVxdWVzdBovLm53ZmwubWVuc2EudjEuTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVzcG9uc2UiA5ACARJpChJSZXBvcnRWZXJpZmljYXRpb24SKC5ud2ZsLm1lbnNhLnYxLlJlcG9ydFZlcmlmaWNhdGlvblJlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLlJlcG9ydFZlcmlmaWNhdGlvblJlc3BvbnNlYgZwcm90bzM");
+  fileDesc("Cidud2ZsL21lbnNhL3YxL21lbWJlcnNoaXBfdmVyaWZpZXIucHJvdG8SDW53ZmwubWVuc2EudjEiNAofTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVxdWVzdBIRCglwYWdlX3NpemUYASABKAUiVwogTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVzcG9uc2USMwoHcGVuZGluZxgBIAMoCzIiLm53ZmwubWVuc2EudjEuUGVuZGluZ1ZlcmlmaWNhdGlvbiJmChNQZW5kaW5nVmVyaWZpY2F0aW9uEhIKCnJlcXVlc3RfaWQYASABKAkSGQoRbWVtYmVyc2hpcF9udW1iZXIYAiABKAkSEQoJbGFzdF9uYW1lGAMgASgJEg0KBWVtYWlsGAQgASgJIoQBChlSZXBvcnRWZXJpZmljYXRpb25SZXF1ZXN0EhIKCnJlcXVlc3RfaWQYASABKAkSMwoHb3V0Y29tZRgCIAEoDjIiLm53ZmwubWVuc2EudjEuVmVyaWZpY2F0aW9uT3V0Y29tZRIeChZjb25mbGljdGluZ19yZXF1ZXN0X2lkGAMgASgJIhwKGlJlcG9ydFZlcmlmaWNhdGlvblJlc3BvbnNlIj0KGUxpc3RSZWxlYXNlZENsYWltc1JlcXVlc3QSDQoFYWZ0ZXIYASABKAkSEQoJcGFnZV9zaXplGAIgASgFImEKGkxpc3RSZWxlYXNlZENsYWltc1Jlc3BvbnNlEi4KCHJlbGVhc2VkGAEgAygLMhwubndmbC5tZW5zYS52MS5SZWxlYXNlZENsYWltEhMKC25leHRfY3Vyc29yGAIgASgJIoMBCg1SZWxlYXNlZENsYWltEhIKCnJlcXVlc3RfaWQYASABKAkSLwoLcmVsZWFzZWRfYXQYAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi0KBGtpbmQYAyABKA4yHy5ud2ZsLm1lbnNhLnYxLkNsYWltUmVsZWFzZUtpbmQqqgIKE1ZlcmlmaWNhdGlvbk91dGNvbWUSJAogVkVSSUZJQ0FUSU9OX09VVENPTUVfVU5TUEVDSUZJRUQQABInCiNWRVJJRklDQVRJT05fT1VUQ09NRV9WRVJJRklFRF9MT0NBTBABEi0KKVZFUklGSUNBVElPTl9PVVRDT01FX1ZFUklGSUVEX09USEVSX0dST1VQEAISIgoeVkVSSUZJQ0FUSU9OX09VVENPTUVfTk9UX0ZPVU5EEAMSHgoaVkVSSUZJQ0FUSU9OX09VVENPTUVfRVJST1IQBBInCiNWRVJJRklDQVRJT05fT1VUQ09NRV9FTUFJTF9NSVNNQVRDSBAFEigKJFZFUklGSUNBVElPTl9PVVRDT01FX0RVUExJQ0FURV9DTEFJTRAGKsABChBDbGFpbVJlbGVhc2VLaW5kEiIKHkNMQUlNX1JFTEVBU0VfS0lORF9VTlNQRUNJRklFRBAAEh8KG0NMQUlNX1JFTEVBU0VfS0lORF9SRUpFQ1RFRBABEh8KG0NMQUlNX1JFTEVBU0VfS0lORF9SRU9QRU5FRBACEiYKIkNMQUlNX1JFTEVBU0VfS0lORF9BQ0NPVU5UX0RFTEVURUQQAxIeChpDTEFJTV9SRUxFQVNFX0tJTkRfREVMRVRFRBAEMvkCChlNZW1iZXJzaGlwVmVyaWZpZXJTZXJ2aWNlEoABChhMaXN0UGVuZGluZ1ZlcmlmaWNhdGlvbnMSLi5ud2ZsLm1lbnNhLnYxLkxpc3RQZW5kaW5nVmVyaWZpY2F0aW9uc1JlcXVlc3QaLy5ud2ZsLm1lbnNhLnYxLkxpc3RQZW5kaW5nVmVyaWZpY2F0aW9uc1Jlc3BvbnNlIgOQAgESaQoSUmVwb3J0VmVyaWZpY2F0aW9uEigubndmbC5tZW5zYS52MS5SZXBvcnRWZXJpZmljYXRpb25SZXF1ZXN0GikubndmbC5tZW5zYS52MS5SZXBvcnRWZXJpZmljYXRpb25SZXNwb25zZRJuChJMaXN0UmVsZWFzZWRDbGFpbXMSKC5ud2ZsLm1lbnNhLnYxLkxpc3RSZWxlYXNlZENsYWltc1JlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkxpc3RSZWxlYXNlZENsYWltc1Jlc3BvbnNlIgOQAgFiBnByb3RvMw", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message nwfl.mensa.v1.ListPendingVerificationsRequest
@@ -71,6 +73,14 @@ export type PendingVerification = Message<"nwfl.mensa.v1.PendingVerification"> &
    * @generated from field: string last_name = 3;
    */
   lastName: string;
+
+  /**
+   * VET: the email stored on the sign-up, taken from the verified token. The
+   * verifier compares it with the roster's email on the home box.
+   *
+   * @generated from field: string email = 4;
+   */
+  email: string;
 };
 
 /**
@@ -93,6 +103,15 @@ export type ReportVerificationRequest = Message<"nwfl.mensa.v1.ReportVerificatio
    * @generated from field: nwfl.mensa.v1.VerificationOutcome outcome = 2;
    */
   outcome: VerificationOutcome;
+
+  /**
+   * VET: with DUPLICATE_CLAIM only, and optional there: the earlier sign-up
+   * that holds the claim, by its request id. Empty for none. It must name an
+   * existing sign-up other than this one; any other outcome with it is refused.
+   *
+   * @generated from field: string conflicting_request_id = 3;
+   */
+  conflictingRequestId: string;
 };
 
 /**
@@ -114,6 +133,85 @@ export type ReportVerificationResponse = Message<"nwfl.mensa.v1.ReportVerificati
  */
 export const ReportVerificationResponseSchema: GenMessage<ReportVerificationResponse> = /*@__PURE__*/
   messageDesc(file_nwfl_mensa_v1_membership_verifier, 4);
+
+/**
+ * @generated from message nwfl.mensa.v1.ListReleasedClaimsRequest
+ */
+export type ListReleasedClaimsRequest = Message<"nwfl.mensa.v1.ListReleasedClaimsRequest"> & {
+  /**
+   * The next_cursor of the previous page; empty for the first page.
+   *
+   * @generated from field: string after = 1;
+   */
+  after: string;
+
+  /**
+   * At most 100, the default.
+   *
+   * @generated from field: int32 page_size = 2;
+   */
+  pageSize: number;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ListReleasedClaimsRequest.
+ * Use `create(ListReleasedClaimsRequestSchema)` to create a new message.
+ */
+export const ListReleasedClaimsRequestSchema: GenMessage<ListReleasedClaimsRequest> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_membership_verifier, 5);
+
+/**
+ * @generated from message nwfl.mensa.v1.ListReleasedClaimsResponse
+ */
+export type ListReleasedClaimsResponse = Message<"nwfl.mensa.v1.ListReleasedClaimsResponse"> & {
+  /**
+   * @generated from field: repeated nwfl.mensa.v1.ReleasedClaim released = 1;
+   */
+  released: ReleasedClaim[];
+
+  /**
+   * Pass as `after` for the next page. The same as `after` when nothing new
+   * was released. A cursor once seen never goes back: releases are recorded
+   * append-only, in commit order.
+   *
+   * @generated from field: string next_cursor = 2;
+   */
+  nextCursor: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ListReleasedClaimsResponse.
+ * Use `create(ListReleasedClaimsResponseSchema)` to create a new message.
+ */
+export const ListReleasedClaimsResponseSchema: GenMessage<ListReleasedClaimsResponse> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_membership_verifier, 6);
+
+/**
+ * @generated from message nwfl.mensa.v1.ReleasedClaim
+ */
+export type ReleasedClaim = Message<"nwfl.mensa.v1.ReleasedClaim"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp released_at = 2;
+   */
+  releasedAt?: Timestamp | undefined;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.ClaimReleaseKind kind = 3;
+   */
+  kind: ClaimReleaseKind;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ReleasedClaim.
+ * Use `create(ReleasedClaimSchema)` to create a new message.
+ */
+export const ReleasedClaimSchema: GenMessage<ReleasedClaim> = /*@__PURE__*/
+  messageDesc(file_nwfl_mensa_v1_membership_verifier, 7);
 
 /**
  * @generated from enum nwfl.mensa.v1.VerificationOutcome
@@ -147,6 +245,23 @@ export enum VerificationOutcome {
    * @generated from enum value: VERIFICATION_OUTCOME_ERROR = 4;
    */
   ERROR = 4,
+
+  /**
+   * VET: the number and the last name match a local member; the email does
+   * not. Neither approves nor rejects: an officer confirms with the member
+   * first.
+   *
+   * @generated from enum value: VERIFICATION_OUTCOME_EMAIL_MISMATCH = 5;
+   */
+  EMAIL_MISMATCH = 5,
+
+  /**
+   * VET: the verifier's own ledger says another sign-up already claimed this
+   * number. Neither approves nor rejects: an officer resolves it.
+   *
+   * @generated from enum value: VERIFICATION_OUTCOME_DUPLICATE_CLAIM = 6;
+   */
+  DUPLICATE_CLAIM = 6,
 }
 
 /**
@@ -156,12 +271,57 @@ export const VerificationOutcomeSchema: GenEnum<VerificationOutcome> = /*@__PURE
   enumDesc(file_nwfl_mensa_v1_membership_verifier, 0);
 
 /**
+ * Why a sign-up's claim on a number was released.
+ *
+ * @generated from enum nwfl.mensa.v1.ClaimReleaseKind
+ */
+export enum ClaimReleaseKind {
+  /**
+   * @generated from enum value: CLAIM_RELEASE_KIND_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: CLAIM_RELEASE_KIND_REJECTED = 1;
+   */
+  REJECTED = 1,
+
+  /**
+   * @generated from enum value: CLAIM_RELEASE_KIND_REOPENED = 2;
+   */
+  REOPENED = 2,
+
+  /**
+   * The sign-up's member account was removed or deleted.
+   *
+   * @generated from enum value: CLAIM_RELEASE_KIND_ACCOUNT_DELETED = 3;
+   */
+  ACCOUNT_DELETED = 3,
+
+  /**
+   * VET fix 1: the sign-up itself was deleted after it was reported (only the
+   * database owner can delete one, and only while pending). An unreported
+   * sign-up's deletion is not listed: the verifier never ledgered it.
+   *
+   * @generated from enum value: CLAIM_RELEASE_KIND_DELETED = 4;
+   */
+  DELETED = 4,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.ClaimReleaseKind.
+ */
+export const ClaimReleaseKindSchema: GenEnum<ClaimReleaseKind> = /*@__PURE__*/
+  enumDesc(file_nwfl_mensa_v1_membership_verifier, 1);
+
+/**
  * @generated from service nwfl.mensa.v1.MembershipVerifierService
  */
 export const MembershipVerifierService: GenService<{
   /**
-   * The sign-ups that typed a number and have not been checked yet. This is
-   * the only RPC that returns a membership number.
+   * The sign-ups that typed a number and have not been checked yet, with the
+   * email stored on each (VET). This is the only RPC that returns a
+   * membership number.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipVerifierService.ListPendingVerifications
    */
@@ -175,12 +335,36 @@ export const MembershipVerifierService: GenService<{
    * in the same statement. A local match does not approve the sign-up: an
    * officer still does.
    *
+   * VET fix 1: a report refused with FAILED_PRECONDITION (the sign-up was
+   * decided or checked meanwhile) or NOT_FOUND (no such sign-up) records
+   * nothing here. The verifier must then not write a ledger entry for it, or
+   * must drop the one it wrote: a sign-up rejected before its report is
+   * released before the verifier could see that release, so ListReleasedClaims
+   * would never free that entry.
+   *
    * @generated from rpc nwfl.mensa.v1.MembershipVerifierService.ReportVerification
    */
   reportVerification: {
     methodKind: "unary";
     input: typeof ReportVerificationRequestSchema;
     output: typeof ReportVerificationResponseSchema;
+  },
+  /**
+   * VET: the sign-ups whose claim on a number is released, oldest first, after
+   * a cursor: rejected, reopened, or whose member account was removed or
+   * deleted. The verifier frees those entries in its own ledger. Sign-up ids,
+   * times and kinds only: never a number, a name or an email.
+   *
+   * VET fix 1: it frees only what was reported. A ReportVerification refused
+   * with FAILED_PRECONDITION or NOT_FOUND has no release to come here: the
+   * verifier must not write a ledger entry for it, or must drop it.
+   *
+   * @generated from rpc nwfl.mensa.v1.MembershipVerifierService.ListReleasedClaims
+   */
+  listReleasedClaims: {
+    methodKind: "unary";
+    input: typeof ListReleasedClaimsRequestSchema;
+    output: typeof ListReleasedClaimsResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_nwfl_mensa_v1_membership_verifier, 0);

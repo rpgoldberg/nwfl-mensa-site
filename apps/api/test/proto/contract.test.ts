@@ -135,23 +135,24 @@ describe(`${PKG}: the approval rule (SOLO-APPROVE)`, () => {
 });
 
 describe(`${PKG}: the membership verifier`, () => {
-  it('is its own service with exactly ListPendingVerifications and ReportVerification', () => {
+  it('is its own service with exactly ListPendingVerifications, ReportVerification and ListReleasedClaims', () => {
     expect(service('MembershipVerifierService')?.methods.map((m) => m.name)).toEqual([
       'ListPendingVerifications',
       'ReportVerification',
+      'ListReleasedClaims',
     ]);
   });
 
-  it('lists a pending verification as request id, membership number and last name only, a page at a time', () => {
+  it('lists a pending verification as request id, membership number, last name and the sign-up\'s email only, a page at a time', () => {
     const list = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ListPendingVerifications');
     expect(fieldNames(list?.input)).toEqual(['page_size']);
     const item = list?.output.fields.map(fieldMessage).find((m) => m !== undefined);
-    expect(fieldNames(item)).toEqual(['request_id', 'membership_number', 'last_name']);
+    expect(fieldNames(item)).toEqual(['request_id', 'membership_number', 'last_name', 'email']);
   });
 
-  it('takes back a request id and an outcome, nothing else', () => {
+  it('takes back a request id, an outcome and, for a duplicate claim, the earlier sign-up: nothing else', () => {
     const report = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ReportVerification');
-    expect(fieldNames(report?.input)).toEqual(['request_id', 'outcome']);
+    expect(fieldNames(report?.input)).toEqual(['request_id', 'outcome', 'conflicting_request_id']);
     expect(fieldNames(report?.output)).toEqual([]);
     const outcome = report?.input.fields.map(fieldEnum).find((e) => e !== undefined);
     expect(outcome?.values.map((v) => v.name)).toEqual([
@@ -160,7 +161,45 @@ describe(`${PKG}: the membership verifier`, () => {
       'VERIFICATION_OUTCOME_VERIFIED_OTHER_GROUP',
       'VERIFICATION_OUTCOME_NOT_FOUND',
       'VERIFICATION_OUTCOME_ERROR',
+      'VERIFICATION_OUTCOME_EMAIL_MISMATCH',
+      'VERIFICATION_OUTCOME_DUPLICATE_CLAIM',
     ]);
+  });
+
+  it('VET: lists released claims as sign-up ids, times and kinds after a cursor, never a number, a name or an email', () => {
+    const list = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ListReleasedClaims');
+    expect(list?.idempotency).toBe(Idempotency.NO_SIDE_EFFECTS);
+    expect(fieldNames(list?.input)).toEqual(['after', 'page_size']);
+    expect(fieldNames(list?.output)).toEqual(['released', 'next_cursor']);
+    const item = list?.output.fields.map(fieldMessage).find((m) => m !== undefined);
+    expect(fieldNames(item)).toEqual(['request_id', 'released_at', 'kind']);
+    const kind = item?.fields.map(fieldEnum).find((e) => e !== undefined);
+    expect(kind?.values.map((v) => v.name)).toEqual([
+      'CLAIM_RELEASE_KIND_UNSPECIFIED',
+      'CLAIM_RELEASE_KIND_REJECTED',
+      'CLAIM_RELEASE_KIND_REOPENED',
+      'CLAIM_RELEASE_KIND_ACCOUNT_DELETED',
+      // Fix 1 (N3): a reported pending sign-up the database owner deleted.
+      'CLAIM_RELEASE_KIND_DELETED',
+    ]);
+    const names = list === undefined ? [] : reachableFields(list.output).map((f) => f.name);
+    expect(names.filter((n) => /number|name|email/.test(n))).toEqual([]);
+  });
+
+  it('VET: lets the approver see the two new outcomes and the earlier claim by its display name and date only', () => {
+    const verification = files.flatMap((file) => file.enums).find((e) => e.typeName === `${PKG}.Verification`);
+    expect(verification?.values.map((v) => v.name).slice(-2)).toEqual(['VERIFICATION_EMAIL_MISMATCH', 'VERIFICATION_DUPLICATE_CLAIM']);
+    const request = allMessages().find((m) => m.typeName === `${PKG}.SignupRequest`);
+    const earlier = request?.fields.find((f) => f.name === 'earlier_claim');
+    expect(earlier?.number).toBe(8);
+    // Fix 1 (N2): closed, with no display name, when the earlier sign-up was rejected or reopened.
+    expect(fieldNames(earlier === undefined ? undefined : fieldMessage(earlier))).toEqual(['display_name', 'signed_up_at', 'closed']);
+  });
+
+  it('VET fix 1: an approval of a warning outcome carries the approver\'s confirmation, nothing else new', () => {
+    const approve = service('MembershipService')?.methods.find((m) => m.name === 'ApproveSignup');
+    expect(fieldNames(approve?.input)).toEqual(['request_id', 'confirmed_warning']);
+    expect(approve?.input.fields.find((f) => f.name === 'confirmed_warning')?.fieldKind).toBe('scalar');
   });
 
   it('lets the membership number reach only the pending list (out) and the sign-up call (in)', () => {
@@ -246,9 +285,9 @@ describe(`${PKG}: rules by name as well as by type`, () => {
     expect(offenders).toEqual(['NewsletterService.ExportEdition.audience']);
   });
 
-  it('returns the verifier exactly its pending list of three fields, nothing reachable besides', () => {
+  it('returns the verifier exactly its pending list of four fields (VET: the sign-up\'s email), nothing reachable besides', () => {
     const list = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ListPendingVerifications');
-    expect(list === undefined ? [] : reachableFields(list.output).map((f) => f.name)).toEqual(['pending', 'request_id', 'membership_number', 'last_name']);
+    expect(list === undefined ? [] : reachableFields(list.output).map((f) => f.name)).toEqual(['pending', 'request_id', 'membership_number', 'last_name', 'email']);
   });
 
   it('lets a membership number under any name reach only the pending list (out) and the sign-up call (in)', () => {

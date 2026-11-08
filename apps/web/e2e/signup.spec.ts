@@ -8,7 +8,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { SITE_URL } from './servers';
 import { signIn } from './signin';
-import { MEMBER_CHECKED_ON, SIGNUP_QUEUE } from './stand-in';
+import { MEMBER_CHECKED_ON, SIGNUP_QUEUE, VET_CONFIRMS, VET_WARNINGS } from './stand-in';
 
 const ACCOUNT = '/account';
 const QUEUE = '/officer-area/sign-ups';
@@ -75,6 +75,31 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
     // Pending now, so the rest of the site is theirs to read, unredirected.
     await page.goto('/news');
     await expect(page).toHaveURL(`${SITE_URL}/news`);
+  });
+
+  test('VET fix 1: a number typed with spaces and dashes is taken as its digits, and never given back', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'newcomer');
+    await expect(page.getByText('Up to 12 digits; spaces or dashes between them are fine.')).toBeVisible();
+    await page.getByLabel('Last name').fill('Fakename');
+    // The stand-in API, like the real one, takes digits only: the site sends just those.
+    await page.getByLabel('Mensa membership number').fill('000-012 345');
+    await page.getByRole('button', { name: 'Send my sign-up' }).click();
+    await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}?sent=1`);
+    await expect(page.locator('.lead')).toHaveText(WAITING);
+    expect(await page.content()).not.toMatch(/000-012|012 345|000012345/);
+  });
+
+  test('VET fix 1: a letter among the dashes is still refused, in the same words, and the number is not given back', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'newcomer');
+    await page.getByLabel('Last name').fill('Fakename');
+    await page.getByLabel('Mensa membership number').fill('000-O12-345');
+    await page.getByRole('button', { name: 'Send my sign-up' }).click();
+    await expect(page.getByText('Problem: Enter your membership number using digits only, up to 12 of them.')).toBeVisible();
+    await expect(page.getByLabel('Mensa membership number')).toHaveValue('');
+    expect(await page.content()).not.toMatch(/O12|000-/);
+    expect(await axe(page)).toEqual([]);
   });
 
   test('an invited person gives their number too (D2), and then waits the same way', async ({ page }) => {
@@ -158,6 +183,69 @@ test.describe('the approvers\' queue (D4)', () => {
     expect(await page.content()).not.toMatch(/membership_number|lastName|last_name/);
     expect(await axe(page)).toEqual([]);
     await fits(page);
+  });
+
+  test('VET: an email mismatch and a duplicate claim each say in words what to do before approving, and the Approve button says it too', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'approver');
+    await page.goto(QUEUE);
+    // By the card's own heading, so a warning naming another person never picks the wrong card.
+    const cardOf = (name: string) => page.locator('.signup-card').filter({ has: page.getByRole('heading', { level: 2, name, exact: true }) });
+    for (const [name, warning] of Object.entries(VET_WARNINGS)) {
+      const card = cardOf(name);
+      const note = card.getByRole('note');
+      await expect(note).toHaveText(`Before approving: ${warning}`);
+      await expect(card.getByRole('button', { name: 'Approve' })).toHaveAccessibleDescription(`${name} Before approving: ${warning}`);
+      await expect(card.getByRole('button', { name: 'Reject' })).toHaveCount(1);
+      // Fix 1: a box to tick first, by its own label, worded for the outcome, described by the warning.
+      const box = card.getByRole('checkbox', { name: VET_CONFIRMS[name as keyof typeof VET_CONFIRMS], exact: true });
+      await expect(box).not.toBeChecked();
+      await expect(box).toHaveAttribute('required', '');
+      await expect(box).toHaveAccessibleDescription(`Before approving: ${warning}`);
+    }
+    // No warning and no box on the others: a local match, not found, another group, not checked.
+    for (const s of SIGNUP_QUEUE.filter((q) => !(q.name in VET_WARNINGS))) {
+      await expect(cardOf(s.name).getByRole('note')).toHaveCount(0);
+      await expect(cardOf(s.name).getByRole('checkbox')).toHaveCount(0);
+    }
+    await expect(page.locator('main')).not.toContainText(/membership_number|last_name/);
+    expect(await axe(page)).toEqual([]);
+    await fits(page);
+  });
+
+  test('VET fix 1: a warning outcome is approved only with its box ticked, by the browser and by the API, and says so', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'approver');
+    await page.goto(QUEUE);
+    const cardOf = (name: string) => page.locator('.signup-card').filter({ has: page.getByRole('heading', { level: 2, name, exact: true }) });
+    // Unticked, the browser keeps the form: nothing is sent.
+    const dana = cardOf('Dana Mismatch');
+    await dana.getByRole('button', { name: 'Approve' }).click();
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}`);
+    await expect(page.getByRole('status')).toHaveCount(0);
+    expect(await dana.getByRole('checkbox').evaluate((box: HTMLInputElement) => box.validity.valueMissing)).toBe(true);
+    // Ticked, by its label, it is approved.
+    await dana.getByText(VET_CONFIRMS['Dana Mismatch']).click();
+    await expect(dana.getByRole('checkbox')).toBeChecked();
+    await dana.getByRole('button', { name: 'Approve' }).click();
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=approved`);
+    await expect(cardOf('Dana Mismatch')).toHaveCount(0);
+    // A post without the box (no browser check at all) is refused by the API, and the page says why.
+    const drew = 'b1000000-0000-4000-8000-000000000006';
+    const refused = await post(page, QUEUE, { decision: 'approve', request: drew });
+    expect(refused.status()).toBe(409);
+    expect(await refused.text()).toContain('Nothing was changed: tick the box by the warning to say you confirmed it, then approve.');
+    await page.goto(QUEUE);
+    await expect(cardOf('Drew Secondclaim')).toHaveCount(1);
+    const done = await post(page, QUEUE, { decision: 'approve', request: drew, confirmed: 'yes' });
+    expect(done.status()).toBe(303);
+    expect(done.headers()['location']).toBe(`${QUEUE}?done=approved`);
+    await page.goto(QUEUE);
+    await expect(cardOf('Drew Secondclaim')).toHaveCount(0);
+    // The other outcomes are approved as before, one press, no box.
+    await cardOf('Kendall Sample').getByRole('button', { name: 'Approve' }).click();
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=approved`);
+    expect(await axe(page)).toEqual([]);
   });
 
   test('approving takes one press; rejecting asks first; neither can be done to one\'s own sign-up', async ({ page }) => {

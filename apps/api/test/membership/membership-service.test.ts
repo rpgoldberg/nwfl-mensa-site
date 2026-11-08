@@ -83,6 +83,13 @@ describe.skipIf(!live)('MembershipService', () => {
       expect(await signupRow('sub-joiner2')).toMatchObject({ last_name: LAST, membership_number: '9', decision: 'pending' });
     });
 
+    it('VET fix 1: takes a number typed with spaces and dashes inside it, keeping only the digits', async () => {
+      const { requestId } = await membership.submitSignup({ lastName: LAST, membershipNumber: ' 40-417\u00a0233\u2013 ' }, as('spacer-token'));
+      expect(await signupRow('sub-spacer')).toMatchObject({ id: requestId, membership_number: NUMBER, decision: 'pending' });
+      // Out of the queue the tests below read.
+      await membership.rejectSignup({ requestId }, APPROVER);
+    });
+
     it('W-SIGNUP D2: stores an invited person\'s sign-up with the invite route, still pending, still needing the number', async () => {
       const INVITEE = as('invitee-token');
       await expect(membership.submitSignup({ lastName: LAST }, INVITEE)).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: 'a membership number is needed' });
@@ -110,6 +117,12 @@ describe.skipIf(!live)('MembershipService', () => {
       ['a number with a last name of spaces only', { lastName: '   ', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is needed'],
       ['a number with a letter', { lastName: LAST, membershipNumber: `${NUMBER}x` }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
       ['a number of 13 digits', { lastName: LAST, membershipNumber: '1234567890123' }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
+      // VET fix 1: spaces and dashes are dropped, but a letter is still refused, and the digit rule still holds.
+      ['a number with a letter among dashes', { lastName: LAST, membershipNumber: '404-17x-233' }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
+      ['a number with a letter O for a zero', { lastName: LAST, membershipNumber: '4O417233' }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
+      ['a number of 13 digits with spaces', { lastName: LAST, membershipNumber: '1234 5678 90123' }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
+      ['dashes and spaces with no digit', { lastName: LAST, membershipNumber: '- - -' }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
+      ['a number with a dot', { lastName: LAST, membershipNumber: '404.17233' }, Code.InvalidArgument, 'a membership number is 1 to 12 digits'],
       ['a last name over 80 characters', { lastName: 'L'.repeat(81), membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name is at most 80 characters'],
       // W-SIGNUP fix 1 (NOTE-1): any control character, as the site refuses it; a NUL is refused here, never Internal.
       ['a last name with a NUL', { lastName: 'Exam\u0000ple', membershipNumber: NUMBER }, Code.InvalidArgument, 'a last name has a hidden character'],

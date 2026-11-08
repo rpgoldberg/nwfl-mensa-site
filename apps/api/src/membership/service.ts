@@ -14,7 +14,10 @@
 //   GetMyAccount        the caller's own account
 //   ListSignupRequests  approvers and the Admin: the pending sign-ups with the
 //                       verifier's outcome and date, NEVER the number or the
-//                       last name
+//                       last name. VET: a duplicate claim shows the earlier
+//                       sign-up the verifier named, by display name and date;
+//                       one rejected or reopened since is shown as closed,
+//                       by date alone (fix 1)
 //   ApproveSignup /     approvers and the Admin, never on their own sign-up.
 //   RejectSignup        The decision erases the number and the last name in
 //                       the same statement (0007, 0009). A rejection removes
@@ -22,7 +25,11 @@
 //                       transaction, so GetMyAccount reports it and no second
 //                       sign-up is taken (W-SIGNUP fix 1). An approval makes
 //                       the account a member from the verifier's date for a
-//                       local match, else from today on the approver's word;
+//                       local match, else from today on the approver's word
+//                       (VET: an email mismatch or a duplicate claim is never
+//                       a local match, so it is approved only that way, and
+//                       only with confirmed_warning, which the audit records:
+//                       fix 1);
 //                       an other-group match is never approved as a member
 //                       (R33): it is rejected or granted as an affiliate.
 //   ListMembers         approvers and the Admin: accounts with member-level
@@ -68,6 +75,7 @@ import { type TxClient, inTransaction } from '../db/tx.js';
 import { protoDate, todayIn } from '../events/zone.js';
 import {
   AccountRoute,
+  EarlierClaimSchema,
   type MemberAccount,
   MemberAccountSchema,
   MemberSchema,
@@ -97,10 +105,22 @@ const VERIFICATIONS: Record<string, Verification> = {
   verified_other_group: Verification.VERIFIED_OTHER_GROUP,
   not_found: Verification.NOT_FOUND,
   error: Verification.ERROR,
+  email_mismatch: Verification.EMAIL_MISMATCH,
+  duplicate_claim: Verification.DUPLICATE_CLAIM,
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NUMBER = /^[0-9]{1,12}$/;
+/**
+ * VET fix 1: typing noise in a number, dropped before the digit rule: any space (a no-break space
+ * too) and any dash or minus. Letters and every other character are still refused.
+ */
+const NUMBER_NOISE = /[\p{Zs}\p{Pd}\u2212]/gu;
+/** VET fix 1: the outcomes an approver must confirm before approving, and what to do first. */
+const CONFIRM_FIRST: Partial<Record<string, string>> = {
+  email_mismatch: 'the email differs from the roster: confirm with the member, then approve with confirmed_warning',
+  duplicate_claim: 'another sign-up already claimed this number: resolve the earlier claim, then approve with confirmed_warning',
+};
 const EMAIL = /^[^@\s]+@[^@\s]+$/;
 const MAX_LAST_NAME = 80;
 /** Any control character (a NUL, a line break, an escape code), as the site's sign-up form checks (web src/lib/signup.ts). */
@@ -213,8 +233,9 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         if (name === '' || email === '') throw precondition('add your name and email to your account first');
         if (email.length > 254 || !EMAIL.test(email)) throw precondition('the email on your account is not an address');
         // W-SIGNUP D1: the number and the last name, for every sign-up. Neither is ever echoed.
-        const number = request.membershipNumber.trim();
-        if (number === '') throw invalid('a membership number is needed');
+        const typed = request.membershipNumber.trim();
+        if (typed === '') throw invalid('a membership number is needed');
+        const number = typed.replace(NUMBER_NOISE, '');
         if (!NUMBER.test(number)) throw invalid('a membership number is 1 to 12 digits');
         const lastName = request.lastName.trim();
         if (lastName === '') throw invalid('a last name is needed');
@@ -256,9 +277,15 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           verified_on: string | null;
           created_at: Date;
           route: string;
+          earlier_name: string | null;
+          earlier_at: Date | null;
+          earlier_closed: boolean | null;
         }>(
-          `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.created_at, coalesce(a.route, 'signup') AS route
-           FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub
+          // Fix 1 (N2): a rejected (or reopened) earlier sign-up's name stays with the Admin and the
+          // Membership Officer (ListRejectedSignups): it is never read here.
+          `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.created_at, coalesce(a.route, 'signup') AS route,
+             CASE WHEN c.decision = 'rejected' THEN '' ELSE c.display_name END AS earlier_name, c.created_at AS earlier_at, c.decision = 'rejected' AS earlier_closed
+           FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub LEFT JOIN signup_request c ON c.id = s.conflicting_request_id
            WHERE s.decision = 'pending' ORDER BY s.created_at, s.id`,
         );
         return {
@@ -271,6 +298,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
               ...(row.verified_on !== null ? { verifiedOn: protoDate(row.verified_on) } : {}),
               createdAt: timestampFromDate(row.created_at),
               route: ROUTES[row.route],
+              ...(row.earlier_name !== null ? { earlierClaim: create(EarlierClaimSchema, { displayName: row.earlier_name, signedUpAt: timestampFromDate(row.earlier_at as Date), closed: row.earlier_closed === true }) } : {}),
             }),
           ),
         };
@@ -283,6 +311,8 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         return tx(async (client) => {
           const row = await decidable(client, caller, id);
           if (row.verification === 'verified_other_group') throw precondition('an other-group member is rejected or granted affiliate standing, not approved');
+          const confirmFirst = CONFIRM_FIRST[row.verification];
+          if (confirmFirst !== undefined && !request.confirmedWarning) throw precondition(confirmFirst);
           await decide(client, id, 'approved', caller.subject as string);
           const local = row.verification === 'verified_local' && row.verified_on !== null;
           const { rows } = await client.query<AccountRow>(
@@ -302,6 +332,9 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
             subjectId: row.sub,
             toState: 'member',
           });
+          // Fix 1: approved despite the warning, on the approver's confirmation (no note or payload on a
+          // membership record, 0004/0009: the action says it).
+          if (confirmFirst !== undefined) await recordAudit(client, caller, { action: `approve_confirmed_${row.verification}`, subjectKind: 'signup_request', subjectId: id });
           return { account: accountMessage(account) };
         });
       },

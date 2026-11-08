@@ -8,6 +8,15 @@
 // and the API refuses it too. Each decision goes to the API with the approver's own token
 // (src/lib/api/membership.ts), which alone decides who may.
 //
+// VET: an email that differs from the roster, or a number another account already claimed, never
+// approves by itself. Its card says in words what to do first (checkWarning: confirm with the member
+// through the roster, or wait for an officer, naming the earlier claim), labelled "Before approving"
+// in text, not by colour, and the Approve button is described by it as well as by the name.
+// VET fix 1: approving either one also needs a box ticked next to the warning, labelled for its
+// outcome (confirmText: confirmed with the member, or resolved the earlier claim). The box is the
+// Approve form's own (its form attribute), required, and sent as confirmed_warning; the API refuses
+// the approval without it, and the page then says the box was not ticked (decisionRefusal).
+//
 // REOPEN: the Admin and the Membership Officer (the nwfl-office-membership seat; not every approver)
 // also see the rejected sign-ups that can still be reopened, newest first, each with a Reopen button
 // and a confirmation step, so a mistaken rejection can be fixed. Reopening lets the person send the
@@ -37,6 +46,9 @@ import {
   ROUTE_TEXT,
   type DecisionForm,
   checkText,
+  checkWarning,
+  confirmText,
+  decisionRefusal,
   doneFromQuery,
   doneText,
   formatMoment,
@@ -68,7 +80,8 @@ const { reader } = sessionReader(session, runtimeDeps());
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 
 let confirming: DecisionForm | undefined;
-let refused: { reason: keyof typeof DECISION_REFUSED; reopen: boolean } | undefined;
+/** A decision the API refused, with its form: VET fix 1 tells a missing confirmation from a closed sign-up once the queue is read. */
+let refusedBy: { reason: 'own' | 'closed'; form: DecisionForm } | undefined;
 let problem: 'sign-in' | 'unavailable' | 'form' | undefined;
 
 if (Astro.request.method === 'POST') {
@@ -87,13 +100,13 @@ if (Astro.request.method === 'POST') {
   } else {
     try {
       const { decision, requestId } = parsed.value;
-      if (decision === 'approve') await api.approveSignup(reader, requestId);
+      if (decision === 'approve') await api.approveSignup(reader, requestId, { confirmedWarning: parsed.value.confirmed });
       else if (decision === 'reject') await api.rejectSignup(reader, requestId);
       else await api.reopenSignup(reader, requestId);
       return Astro.redirect(`${HERE}?done=${decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'reopened'}`, 303);
     } catch (error) {
       if (error instanceof DecisionRefused) {
-        refused = { reason: error.reason, reopen: parsed.value.decision === 'reopen' };
+        refusedBy = { reason: error.reason, form: parsed.value };
         Astro.response.status = 409;
       } else {
         problem = error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
@@ -127,6 +140,8 @@ if (api !== undefined && reader !== undefined) {
   problem ??= api === undefined ? 'unavailable' : 'sign-in';
 }
 if (problem === 'unavailable') markUnavailable(Astro.response);
+const refused: { reason: keyof typeof DECISION_REFUSED; reopen: boolean } | undefined =
+  refusedBy && { reason: decisionRefusal(refusedBy.reason, refusedBy.form, requests), reopen: refusedBy.form.decision === 'reopen' };
 
 const done = Astro.request.method === 'GET' ? doneFromQuery(Astro.url.searchParams) : undefined;
 const confirmed = confirming?.decision === 'reject' ? requests?.find((r) => r.requestId === confirming.requestId) : undefined;
@@ -182,7 +197,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
     ) : (
       <>
         <p>{requests.length === 1 ? 'One sign-up is waiting.' : `${requests.length} sign-ups are waiting.`}</p>
-        {requests.map((r, i) => (
+        {requests.map((r, i) => { const warning = checkWarning(r); const confirm = confirmText(r.verification); return (
           <section class="card signup-card" aria-labelledby={`signup-${i}`}>
             <h2 id={`signup-${i}`}>{r.displayName}</h2>
             <dl class="facts">
@@ -194,12 +209,19 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
             {r.verification === 'verified_other_group' && (
               <p>This person is a member of another local group, so the sign-up cannot be approved as a member here. Reject it, or ask the Admin or the Webmaster about affiliate access.</p>
             )}
+            {warning && <p class="notice" role="note" id={`signup-warning-${i}`}><strong>Before approving:</strong> {warning}</p>}
+            {confirm && (
+              <div class="choice confirm-warning">
+                <input type="checkbox" id={`signup-confirm-${i}`} form={`signup-approve-${i}`} name="confirmed" value="yes" required aria-describedby={`signup-warning-${i}`} />
+                <label for={`signup-confirm-${i}`}>{confirm}</label>
+              </div>
+            )}
             <div class="btns">
               {r.verification !== 'verified_other_group' && (
-                <form method="post" action={HERE}>
+                <form method="post" action={HERE} id={`signup-approve-${i}`}>
                   <input type="hidden" name="decision" value="approve" />
                   <input type="hidden" name="request" value={r.requestId} />
-                  <button class="button" type="submit" aria-describedby={`signup-${i}`}>Approve</button>
+                  <button class="button" type="submit" aria-describedby={warning ? `signup-${i} signup-warning-${i}` : `signup-${i}`}>Approve</button>
                 </form>
               )}
               <form method="post" action={HERE}>
@@ -209,7 +231,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
               </form>
             </div>
           </section>
-        ))}
+        ); })}
       </>
     )
   )}

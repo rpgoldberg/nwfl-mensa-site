@@ -150,6 +150,41 @@ describe('grpcMembership: the approvers\' queue', () => {
     expect(server.headers[0]?.['authorization']).toBe('Bearer person.tok-en');
   });
 
+  it('VET: reads the two new outcomes, and a duplicate\'s earlier claim by display name and time', async () => {
+    const EARLIER = new Date('2026-09-15T14:00:00Z');
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: [
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Robin Mismatch', email: 'robin@example.org', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH }),
+            create(SignupRequestSchema, {
+              requestId: ID,
+              displayName: 'Lee Secondclaim',
+              email: 'lee@example.org',
+              route: AccountRoute.SIGNUP,
+              verification: Verification.DUPLICATE_CLAIM,
+              earlierClaim: { displayName: 'Lee Firstclaim', signedUpAt: timestampFromDate(EARLIER) },
+            }),
+            create(SignupRequestSchema, {
+              requestId: ID,
+              displayName: 'Kai Undated',
+              email: 'kai@example.org',
+              route: AccountRoute.SIGNUP,
+              verification: Verification.DUPLICATE_CLAIM,
+              earlierClaim: { displayName: 'Kai Earlier' },
+            }),
+          ],
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.listSignupRequests(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Robin Mismatch', email: 'robin@example.org', route: 'signup', verification: 'email_mismatch' },
+      { requestId: ID, displayName: 'Lee Secondclaim', email: 'lee@example.org', route: 'signup', verification: 'duplicate_claim', earlierClaim: { displayName: 'Lee Firstclaim', signedUpAt: EARLIER } },
+      { requestId: ID, displayName: 'Kai Undated', email: 'kai@example.org', route: 'signup', verification: 'duplicate_claim', earlierClaim: { displayName: 'Kai Earlier' } },
+    ]);
+  });
+
   it('refuses a queue it cannot read: an unset check or route', async () => {
     let request = { requestId: ID, route: AccountRoute.SIGNUP, verification: Verification.UNSPECIFIED };
     const server = await grpcServer((router) => router.service(MembershipService, { listSignupRequests: () => ({ requests: [request] }) }));
@@ -177,6 +212,47 @@ describe('grpcMembership: the approvers\' queue', () => {
     await api.approveSignup(PERSON, ID);
     await api.rejectSignup(PERSON, ID);
     expect(seen).toEqual([`approve ${ID}`, `reject ${ID}`]);
+  });
+
+  it('VET fix 1: sends the approver\'s confirmation of a warning with the approval, and none unless asked', async () => {
+    const seen: boolean[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        approveSignup: (req) => {
+          seen.push(req.confirmedWarning);
+          return { account: { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP } };
+        },
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    await api.approveSignup(PERSON, ID);
+    await api.approveSignup(PERSON, ID, { confirmedWarning: true });
+    await api.approveSignup(PERSON, ID, { confirmedWarning: false });
+    expect(seen).toEqual([false, true, false]);
+  });
+
+  it('VET fix 1: reads an earlier claim since closed as closed, with no name', async () => {
+    const EARLIER = new Date('2026-09-15T14:00:00Z');
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: [
+            create(SignupRequestSchema, {
+              requestId: ID,
+              displayName: 'Sol Afterreopened',
+              email: 'sol@example.org',
+              route: AccountRoute.SIGNUP,
+              verification: Verification.DUPLICATE_CLAIM,
+              earlierClaim: { displayName: '', signedUpAt: timestampFromDate(EARLIER), closed: true },
+            }),
+          ],
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.listSignupRequests(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Sol Afterreopened', email: 'sol@example.org', route: 'signup', verification: 'duplicate_claim', earlierClaim: { displayName: '', signedUpAt: EARLIER, closed: true } },
+    ]);
   });
 
   it.each([
