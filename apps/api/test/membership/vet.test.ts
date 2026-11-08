@@ -30,6 +30,18 @@ const APPROVER = as('approver-token');
 const ADMIN = as('admin-token');
 const UNKNOWN_ID = '6a1f0c8e-0000-4000-8000-000000000000';
 
+/** A standalone member number (not digits inside a hex request id) or the typed last name. */
+const LEAK = /(?<![0-9a-f])700\d{3}(?![0-9a-f])|Vetson/i;
+
+describe('VET: the leak pattern', () => {
+  it('does not match digits inside a request id, and does match a standalone number', () => {
+    expect(LEAK.test('ac700598-1234')).toBe(false);
+    expect(LEAK.test('"id":"ac700598-1234-4000-8000-000000000000"')).toBe(false);
+    expect(LEAK.test(' 700123 ')).toBe(true);
+    expect(LEAK.test('Vetson9')).toBe(true);
+  });
+});
+
 describe.skipIf(!live)('VET: the vetting contract', () => {
   let api: Api;
   let verifier: Client<typeof MembershipVerifierService>;
@@ -307,7 +319,7 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
       expect(timestampDate(second?.earlierClaim?.signedUpAt as NonNullable<NonNullable<typeof second>['createdAt']>)).toEqual(new Date('2026-09-15T14:00:00Z'));
       expect(by('Kai Unnamed')).toMatchObject({ verification: Verification.DUPLICATE_CLAIM });
       expect(by('Kai Unnamed')?.earlierClaim).toBeUndefined();
-      expect(dump(requests)).not.toMatch(/700\d{3}|Vetson/);
+      expect(dump(requests)).not.toMatch(LEAK);
     });
 
     it('names an earlier claim since closed only as closed, with its date: never the name of a rejected or reopened sign-up', async () => {
