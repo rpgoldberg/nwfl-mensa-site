@@ -63,6 +63,15 @@ describe('the Account menu', () => {
     expect(event.defaultPrevented).toBe(true);
   });
 
+  it('Escape closes it when the focus is elsewhere, as after opening it by tap in Safari, which does not focus the button', () => {
+    const { menu, doc, elsewhere } = setup();
+    menu.open = true;
+    const event = send(doc, menu, 'keydown', elsewhere, { key: 'Escape' });
+    expect(menu.open).toBe(false);
+    expect(menu.summary.focused).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it('leaves other keys, and Escape on a closed menu, to the browser', () => {
     const { menu, doc } = setup();
     menu.open = true;

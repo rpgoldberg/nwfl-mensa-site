@@ -928,7 +928,19 @@ main > .calendar { max-width: none; }
   .monthbox { margin-inline: calc(-1 * var(--space-4)); }
   .month caption { padding-inline: var(--space-4); }
 }
-@container calendar (min-width: 64rem) { .calgrid { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); } }
+/* The month, then the subscription card, then the list; from 64rem the list is a column beside the
+   other two. */
+.calgrid .card { margin: 0; }
+@container calendar (min-width: 64rem) {
+  .calgrid {
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas: "month agenda" "subscribe agenda";
+  }
+  .monthbox { grid-area: month; }
+  .calgrid > .card { grid-area: subscribe; }
+  .agenda { grid-area: agenda; }
+}
 .month { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--surface); }
 .month caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); padding-bottom: var(--space-2); }
 .month th { padding: var(--space-1) 0; background: var(--bg); border: var(--border) solid var(--line-soft); font-weight: 700; font-size: var(--fs-small); }
@@ -955,6 +967,16 @@ main > .calendar { max-width: none; }
   .month .titles { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: var(--space-1); }
   .month .titles a { display: block; min-height: 1.5rem; font-weight: 700; }
   .month .titles .x a { color: var(--stop); text-decoration: line-through; }
+}
+/* Windows High Contrast: the system draws over backgrounds and box shadows, so the dots (backgrounds) and
+   today's ring (a shadow) are drawn again in the system's own colours, and the day a grid link went to
+   gets an outline for its bar. */
+@media (forced-colors: active) {
+  .month .dot { background: CanvasText; forced-color-adjust: none; }
+  .month .dot.x { background: Canvas; border-color: CanvasText; }
+  .month td[aria-current="date"] { outline: 3px solid CanvasText; outline-offset: -3px; }
+  .month td[aria-current="date"] .n { border: 2px solid CanvasText; }
+  .ev:target { outline: 3px solid CanvasText; }
 }
 /* The day a grid link went to, in the list. */
 .ev:target { scroll-margin-top: var(--space-4); box-shadow: inset 0.25rem 0 0 var(--accent); padding-left: var(--space-3); }
@@ -1153,6 +1175,15 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 html[data-size="140"] .viewer-goto input { font-size: 20px; }
 html[data-size="175"] .viewer-goto input { font-size: 22px; }
 .viewer-of { grid-area: of; white-space: nowrap; }
+/* The narrowest phones (360 px): seven 48 px targets and the page number do not fit one row with the
+   usual gaps, so the gaps and padding shrink, never the targets, and the bar stays one row at the
+   default text size. At the larger sizes it may take a second row, as above. */
+@media (max-width: 379.98px) {
+  .viewer-bar { gap: 2px; padding: 2px; }
+  .viewer-group { gap: 1px; }
+  .viewer-zoom { min-width: 2.2em; }
+  .viewer-goto { column-gap: 1px; }
+}
 .viewer-status { min-height: 1.6em; margin: var(--space-2) 0; }
 .viewer-pages {
   display: grid;

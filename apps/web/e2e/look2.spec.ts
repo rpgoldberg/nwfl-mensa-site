@@ -134,6 +134,20 @@ test.describe('(A) the Account menu', () => {
     await expect(menu).not.toHaveAttribute('open', '');
   });
 
+  test('opened by a tap that leaves the focus off the button (as Safari does), Escape still closes it and gives the focus back', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'admin');
+    const account = accountButton(page);
+    await account.click();
+    const menu = page.locator('[data-account-menu]');
+    await expect(menu).toHaveAttribute('open', '');
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await expect(account).not.toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(menu).not.toHaveAttribute('open', '');
+    await expect(account).toBeFocused();
+  });
+
   test('Sign out in the menu signs the reader out', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'admin');
@@ -235,6 +249,25 @@ test.describe('(B) the reader on a phone', () => {
     });
   }
 
+  test.describe('at 360 x 780, the narrowest phone', () => {
+    test.use({ viewport: { width: 360, height: 780 } });
+    test('the bar is one row under 90 px at the default text size, each control still 48 px', async ({ page }) => {
+      await page.goto(READ);
+      await expect(page.locator('#page-1 canvas')).toHaveCount(1);
+      const all = controls(page);
+      expect(await rows(all)).toBe(1);
+      for (const c of all) {
+        const b = await box(c);
+        expect(b.height, String(c)).toBeGreaterThanOrEqual(48);
+        expect(b.x).toBeGreaterThanOrEqual(0);
+        expect(b.x + b.width).toBeLessThanOrEqual(360);
+      }
+      for (const button of await page.locator('[data-viewer-bar] button').all()) expect((await box(button)).width).toBeGreaterThanOrEqual(48);
+      expect((await box(page.locator('[data-viewer-bar]'))).height).toBeLessThan(90);
+      expect(await sideways(page)).toBeLessThanOrEqual(0);
+    });
+  });
+
   test('while reading, the bar stays at the top and the page gets at least 70 % of the screen', async ({ page }) => {
     await page.goto(READ);
     await expect(page.locator('#page-1 canvas')).toHaveCount(1);
@@ -321,6 +354,57 @@ test.describe('(C) the month grid', () => {
       expect(await sideways(page)).toBeLessThanOrEqual(0);
     });
   }
+
+  for (const [name, viewport] of [['a phone', PHONE], ['a wide screen', DESKTOP]] as const) {
+    test(`on ${name}: the month links and the grid come above the "Add our calendar to your phone" card`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.goto('/events');
+      const grid = page.locator('table.month');
+      const nav = page.getByRole('navigation', { name: 'Months' });
+      const card = page.locator('#subscribe-title').locator('xpath=..');
+      await expect(card).toBeVisible();
+      const [g, n, c] = [await box(grid), await box(nav), await box(card)];
+      expect(n.y + n.height).toBeLessThanOrEqual(g.y);
+      expect(g.y + g.height).toBeLessThanOrEqual(c.y);
+      // The card is in the grid's column, not pushed below the list (a phone's grid runs edge to edge, the card inside the margin).
+      if (name === 'a wide screen') expect(Math.abs(c.x - g.x)).toBeLessThanOrEqual(2);
+      else expect(c.x).toBeGreaterThanOrEqual(g.x);
+      const list = await box(page.getByRole('heading', { name: 'Coming up', exact: true }));
+      if (name === 'a phone') expect(c.y + c.height).toBeLessThanOrEqual(list.y);
+      expect(await sideways(page)).toBeLessThanOrEqual(0);
+    });
+  }
+
+  test('in forced colours (Windows High Contrast) the dots show and today keeps an outline', async ({ page }) => {
+    await page.setViewportSize(PHONE);
+    await page.emulateMedia({ forcedColors: 'active' });
+    await page.goto('/events');
+    expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches)).toBe(true);
+    const look = await page.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.style.background = 'Canvas';
+      document.body.append(probe);
+      const canvas = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      const filled = [...document.querySelectorAll('.month .dot:not(.x)')].map((d) => getComputedStyle(d).backgroundColor);
+      const open = [...document.querySelectorAll('.month .dot.x')].map((d) => ({ w: getComputedStyle(d).borderTopWidth, c: getComputedStyle(d).borderTopColor, bg: getComputedStyle(d).backgroundColor }));
+      const td = getComputedStyle(document.querySelector('.month td[aria-current="date"]')!);
+      return { canvas, filled, open, outline: td.outlineStyle, outlineWidth: parseFloat(td.outlineWidth) };
+    });
+    expect(look.filled.length).toBeGreaterThan(0);
+    for (const bg of look.filled) {
+      expect(bg).not.toBe('rgba(0, 0, 0, 0)');
+      expect(bg).not.toBe(look.canvas);
+    }
+    // A cancelled event's dot is a ring: filled with the page's colour, edged in the text's.
+    for (const d of look.open) {
+      expect(d.w).not.toBe('0px');
+      expect(d.c).not.toBe('rgba(0, 0, 0, 0)');
+      expect(d.c).not.toBe(d.bg);
+    }
+    expect(look.outline).not.toBe('none');
+    expect(look.outlineWidth).toBeGreaterThanOrEqual(3);
+  });
 
   test('marks today by more than colour: a ring and a filled number, and the word in its name', async ({ page }) => {
     await page.setViewportSize(PHONE);
