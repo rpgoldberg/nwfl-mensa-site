@@ -62,7 +62,7 @@ test('the site keeps nothing in the browser’s storage, even after a member rea
   expect(kept).toEqual({ localStorage: 0, sessionStorage: 0, indexedDB: 0, cacheStorage: 0, serviceWorkers: 0 });
 });
 
-test('Sign out, tapped with JavaScript on, goes on at once: no Clear-Site-Data on the way, the provider’s session ended', async ({ page, isMobile }) => {
+test('Sign out, tapped with JavaScript on, goes on at once: no Clear-Site-Data on the way, the provider’s session ended', async ({ page, isMobile, browserName }) => {
   await page.goto('/news');
   await signIn(page, 'member');
   const cleared: string[] = [];
@@ -70,7 +70,10 @@ test('Sign out, tapped with JavaScript on, goes on at once: no Clear-Site-Data o
     const value = (await r.allHeaders())['clear-site-data'];
     if (value !== undefined) cleared.push(`${r.url()} ${value}`);
   });
-  const signOut = page.waitForResponse((r) => new URL(r.url()).pathname === '/sign-out' && r.request().method() === 'POST');
+  // The request, not its answer: WebKit's tooling never reports the 303 itself. Its process swap on
+  // the cross-site redirect reports the POST as "Frame load interrupted" and the provider's GET as a
+  // fresh request, while the page goes on to the provider as it should.
+  const posted = page.waitForRequest((r) => new URL(r.url()).pathname === '/sign-out' && r.method() === 'POST');
   const endSession = page.waitForRequest((r) => r.url().startsWith(`${IDP_ORIGIN}/session/end?`));
   // W-LOOK2: below 1200 px Sign out is in the Account menu, so a phone taps that open first.
   const account = accountButton(page);
@@ -82,9 +85,17 @@ test('Sign out, tapped with JavaScript on, goes on at once: no Clear-Site-Data o
   const button = (await openAccount(page)).getByRole('button', { name: 'Sign out' });
   if (isMobile) await button.tap();
   else await button.click();
-  const res = await signOut;
-  expect(res.status()).toBe(303);
-  await endSession;
+  const post = await posted;
+  // Only the sign-out's answer sends the reader to end the provider's session with this token.
+  const end = await endSession;
+  expect(new URL(end.url()).searchParams.get('id_token_hint')).toBeTruthy();
+  if (browserName === 'chromium') {
+    // Chromium reports the hop: this very POST answered 303, with no Clear-Site-Data.
+    expect(`${end.redirectedFrom()?.method()} ${end.redirectedFrom()?.url()}`).toBe(`POST ${post.url()}`);
+    const res = await post.response();
+    expect(res?.status()).toBe(303);
+    expect((await res!.allHeaders())['clear-site-data']).toBeUndefined();
+  }
   await expect(page.locator('h1')).toHaveText('Sign out of the provider?');
   await page.getByRole('button', { name: 'Yes, sign me out' }).click();
   await expect(page).toHaveURL(/\/signed-out$/);
