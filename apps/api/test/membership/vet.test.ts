@@ -1,8 +1,8 @@
 // VET (a): sign-up vetting that stops someone using another member's name and number. The verifier
-// (nwfl-verifier, on the home box) matches against the offline roster there; the roster never reaches
-// this API, which sends it only our own sign-up data and records what it reports.
+// is an external membership verification service, called through the MembershipVerifierService
+// contract; this API sends it only our own sign-up data and records what it reports.
 //   - ListPendingVerifications also gives the email stored on the sign-up (from the verified token),
-//     which the verifier compares with the roster's email locally.
+//     for the verifier to confirm.
 //   - Two more outcomes: EMAIL_MISMATCH (number and last name match, the email does not) and
 //     DUPLICATE_CLAIM (the verifier's own ledger says another sign-up claimed the number). Neither
 //     approves or rejects; an approval of either is on the officer's word, as for NOT_FOUND, never
@@ -90,7 +90,7 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
   });
 
   describe('ListPendingVerifications', () => {
-    it('also gives the email stored on the sign-up, for the verifier to compare locally', async () => {
+    it('also gives the email stored on the sign-up, for the verifier to confirm', async () => {
       const s = await signup('Pat Example', new Date('2026-10-01T12:00:00Z'));
       const pending = (await verifier.listPendingVerifications({}, VERIFIER)).pending.find((p) => p.requestId === s.id);
       expect(pending).toEqual(expect.objectContaining({ requestId: s.id, membershipNumber: s.number, lastName: s.last, email: s.email }));
@@ -133,6 +133,164 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
         });
       }
       expect(await row(s.id)).toMatchObject({ verification: 'unchecked', membership_number: s.number, last_name: s.last, conflicting_request_id: null });
+    });
+  });
+
+  // SIGNOUT (C, C2): the verifier may crash right after a report and not know whether it landed, so it
+  // sends the same report again. The decision table on the RPC, one test per row and case.
+  describe('ReportVerification: a retry of the same report (the decision table)', () => {
+    /** Every release of this sign-up after a cursor, as [kind]. */
+    const releasesOf = async (after: string, id: string) => (await releasedAfter(after)).released.filter((r) => r.requestId === id).map((r) => r.kind);
+    const reports = async (id: string) => (await actions(id)).filter((a) => a === 'verification_report').length;
+    const deleteAsOwner = async (id: string) => {
+      const owner = new pgLib.Client({ connectionString: urlFor(MIGRATOR, MIGRATOR_PW, await database()) });
+      await owner.connect();
+      try {
+        await owner.query(`DELETE FROM signup_request WHERE id = $1`, [id]);
+      } finally {
+        await owner.end();
+      }
+    };
+
+    describe('OK: an earlier report landed; the claim is kept', () => {
+      it('while the sign-up still waits: nothing changes, and nothing more is audited', async () => {
+        const s = await signup('Rae Retry');
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+        const before = await api.pool.query(`SELECT * FROM signup_request WHERE id = $1`, [s.id]);
+        await expect(verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER)).resolves.toEqual(expect.anything());
+        expect((await api.pool.query(`SELECT * FROM signup_request WHERE id = $1`, [s.id])).rows).toEqual(before.rows);
+        expect(await reports(s.id)).toBe(1);
+      });
+
+      it('for every outcome, a duplicate claim with the same earlier sign-up or with none', async () => {
+        const earlier = await signup('Ola Firstretry');
+        for (const outcome of [VerificationOutcome.VERIFIED_OTHER_GROUP, VerificationOutcome.NOT_FOUND, VerificationOutcome.ERROR, VerificationOutcome.EMAIL_MISMATCH, VerificationOutcome.DUPLICATE_CLAIM]) {
+          const s = await signup(`Ola Retry ${outcome}`);
+          await verifier.reportVerification({ requestId: s.id, outcome }, VERIFIER);
+          await verifier.reportVerification({ requestId: s.id, outcome }, VERIFIER);
+        }
+        const named = await signup('Ola Namedretry');
+        await verifier.reportVerification({ requestId: named.id, outcome: VerificationOutcome.DUPLICATE_CLAIM, conflictingRequestId: earlier.id }, VERIFIER);
+        await verifier.reportVerification({ requestId: named.id, outcome: VerificationOutcome.DUPLICATE_CLAIM, conflictingRequestId: earlier.id }, VERIFIER);
+        expect(await row(named.id)).toMatchObject({ verification: 'duplicate_claim', conflicting_request_id: earlier.id, decision: 'pending' });
+        expect(await reports(named.id)).toBe(1);
+      });
+
+      it('after a reject: the rejection is the release, listed in ListReleasedClaims', async () => {
+        const { cursor } = await releasedAfter('');
+        const s = await signup('Rex Rejectretry');
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.NOT_FOUND }, VERIFIER);
+        await membership.rejectSignup({ requestId: s.id }, APPROVER);
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.NOT_FOUND }, VERIFIER);
+        expect(await row(s.id)).toMatchObject({ verification: 'not_found', decision: 'rejected' });
+        expect(await releasesOf(cursor, s.id)).toEqual([ClaimReleaseKind.REJECTED]);
+      });
+
+      it('after a reject and a reopening: both are listed', async () => {
+        const { cursor } = await releasedAfter('');
+        const s = await signup('Rio Reopenretry');
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.ERROR }, VERIFIER);
+        await membership.rejectSignup({ requestId: s.id }, APPROVER);
+        await membership.reopenSignup({ requestId: s.id }, ADMIN);
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.ERROR }, VERIFIER);
+        expect(await releasesOf(cursor, s.id)).toEqual([ClaimReleaseKind.REJECTED, ClaimReleaseKind.REOPENED]);
+      });
+
+      it('after an approval: an approval never releases a claim, so nothing is listed', async () => {
+        const { cursor } = await releasedAfter('');
+        const s = await signup('Ash Approveretry');
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+        await membership.approveSignup({ requestId: s.id }, APPROVER);
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+        expect(await row(s.id)).toMatchObject({ verification: 'verified_local', decision: 'approved' });
+        expect(await releasesOf(cursor, s.id)).toEqual([]);
+      });
+
+      it('after an approval and the member’s removal: the removal is listed', async () => {
+        const { cursor } = await releasedAfter('');
+        const s = await signup('Mo Removeretry');
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+        await membership.approveSignup({ requestId: s.id }, APPROVER);
+        await membership.removeMember({ subject: s.sub }, APPROVER);
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+        expect(await releasesOf(cursor, s.id)).toEqual([ClaimReleaseKind.ACCOUNT_DELETED]);
+      });
+    });
+
+    describe('FAILED_PRECONDITION: no earlier report landed and the sign-up is decided, or another outcome was recorded; the claim is dropped', () => {
+      it('the sign-up was rejected before any report: nothing is recorded', async () => {
+        const s = await signup('Rue Rejectedfirst');
+        await membership.rejectSignup({ requestId: s.id }, APPROVER);
+        await expect(verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+        expect(await row(s.id)).toMatchObject({ verification: 'unchecked', decision: 'rejected' });
+        expect(await reports(s.id)).toBe(0);
+      });
+
+      it('the sign-up was approved before any report: nothing is recorded', async () => {
+        const s = await signup('Ali Approvedfirst');
+        await membership.approveSignup({ requestId: s.id }, APPROVER);
+        await expect(verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+        expect(await row(s.id)).toMatchObject({ verification: 'unchecked', decision: 'approved' });
+      });
+
+      it('another outcome, or another earlier sign-up, was recorded: the first report stands', async () => {
+        const earlier = await signup('Ivy Firstother');
+        const other = await signup('Ivy Secondother');
+        const s = await signup('Ivy Changed');
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.DUPLICATE_CLAIM, conflictingRequestId: earlier.id }, VERIFIER);
+        for (const retry of [
+          { outcome: VerificationOutcome.VERIFIED_LOCAL },
+          { outcome: VerificationOutcome.EMAIL_MISMATCH },
+          { outcome: VerificationOutcome.DUPLICATE_CLAIM },
+          { outcome: VerificationOutcome.DUPLICATE_CLAIM, conflictingRequestId: other.id },
+        ]) {
+          await expect(verifier.reportVerification({ requestId: s.id, ...retry }, VERIFIER), JSON.stringify(retry)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+        }
+        const unnamed = await signup('Ivy Unnamed');
+        await verifier.reportVerification({ requestId: unnamed.id, outcome: VerificationOutcome.DUPLICATE_CLAIM }, VERIFIER);
+        await expect(verifier.reportVerification({ requestId: unnamed.id, outcome: VerificationOutcome.DUPLICATE_CLAIM, conflictingRequestId: earlier.id }, VERIFIER)).rejects.toMatchObject({
+          code: Code.FailedPrecondition,
+        });
+        expect(await row(s.id)).toMatchObject({ verification: 'duplicate_claim', conflicting_request_id: earlier.id });
+        expect(await row(unnamed.id)).toMatchObject({ verification: 'duplicate_claim', conflicting_request_id: null });
+        expect(await reports(s.id)).toBe(1);
+      });
+
+      it('another outcome, where neither report names an earlier sign-up: the outcome alone tells them apart', async () => {
+        for (const [first, retry, stored] of [
+          [VerificationOutcome.VERIFIED_LOCAL, VerificationOutcome.NOT_FOUND, 'verified_local'],
+          [VerificationOutcome.EMAIL_MISMATCH, VerificationOutcome.DUPLICATE_CLAIM, 'email_mismatch'],
+        ] as const) {
+          const s = await signup(`Uma ${stored}`);
+          await verifier.reportVerification({ requestId: s.id, outcome: first }, VERIFIER);
+          await expect(verifier.reportVerification({ requestId: s.id, outcome: retry }, VERIFIER), VerificationOutcome[retry]).rejects.toMatchObject({ code: Code.FailedPrecondition });
+          expect(await row(s.id)).toMatchObject({ verification: stored, conflicting_request_id: null });
+          expect(await reports(s.id)).toBe(1);
+        }
+      });
+    });
+
+    describe('NOT_FOUND: the sign-up does not exist; the claim is dropped', () => {
+      it('deleted before any report: NOT_FOUND, and no release is listed', async () => {
+        const { cursor } = await releasedAfter('');
+        const s = await signup('Del Unreported');
+        await deleteAsOwner(s.id);
+        await expect(verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER)).rejects.toMatchObject({ code: Code.NotFound });
+        expect(await releasesOf(cursor, s.id)).toEqual([]);
+      });
+
+      it('deleted after a report: NOT_FOUND too, and the deletion is listed as DELETED', async () => {
+        const { cursor } = await releasedAfter('');
+        const s = await signup('Del Reported');
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+        await deleteAsOwner(s.id);
+        await expect(verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER)).rejects.toMatchObject({ code: Code.NotFound });
+        expect(await releasesOf(cursor, s.id)).toEqual([ClaimReleaseKind.DELETED]);
+      });
+
+      it('never existed', async () => {
+        await expect(verifier.reportVerification({ requestId: UNKNOWN_ID, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER)).rejects.toMatchObject({ code: Code.NotFound });
+      });
     });
   });
 
@@ -180,7 +338,7 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
     });
 
     it.each([
-      ['Robin Mismatch', 'the email differs from the roster: confirm with the member, then approve with confirmed_warning'],
+      ['Robin Mismatch', 'the membership verification service did not confirm the email: confirm with the member, then approve with confirmed_warning'],
       ['Lee Secondclaim', 'another sign-up already claimed this number: resolve the earlier claim, then approve with confirmed_warning'],
     ])('refuses to approve %s unless the approver confirmed the warning, whoever asks, and changes nothing', async (name, message) => {
       const { id, sub } = await byName(name);

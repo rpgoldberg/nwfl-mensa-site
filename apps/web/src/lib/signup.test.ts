@@ -152,9 +152,9 @@ describe('errorSummary (fix 1, NOTE-6: the summary at the top of a form with pro
 });
 
 describe('VET: the queue\'s warnings before approving', () => {
-  it('asks the approver to confirm an email that differs from the roster, through the roster, first', () => {
+  it('asks the approver to confirm with the member, from their own mailbox, when the service did not confirm the email', () => {
     expect(checkWarning({ verification: 'email_mismatch' })).toBe(
-      'The email differs from the roster. Confirm with the member, through the roster’s email or phone from your own mailbox, before approving.',
+      'The membership verification service did not confirm this email. Confirm with the member that this sign-up is theirs, from your own mailbox, before approving.',
     );
   });
 
@@ -215,13 +215,27 @@ describe('the queue\'s words (D4)', () => {
 
   it('says the check\'s outcome in words, with its day when there is one', () => {
     expect(Object.keys(CHECK_TEXT).sort()).toEqual(['duplicate_claim', 'email_mismatch', 'error', 'not_found', 'unchecked', 'verified_local', 'verified_other_group']);
-    expect(CHECK_TEXT.email_mismatch).toBe('Number and last name found on our group’s membership list, but the email differs');
-    expect(CHECK_TEXT.duplicate_claim).toBe('This membership number was already claimed by another account');
+    expect(CHECK_TEXT).toEqual({
+      unchecked: 'Not checked yet',
+      verified_local: 'Confirmed by the membership verification service',
+      verified_other_group: 'Confirmed by the membership verification service as a member of another local group',
+      not_found: 'Not confirmed by the membership verification service',
+      error: 'The membership verification service could not complete the check',
+      email_mismatch: 'Number and last name confirmed by the membership verification service, but the email differs',
+      duplicate_claim: 'This membership number was already claimed by another account',
+    });
     expect(checkText('verified_local', '2026-11-02')).toBe(`${CHECK_TEXT.verified_local}, on November 2, 2026`);
     expect(checkText('unchecked', undefined)).toBe(CHECK_TEXT.unchecked);
     expect(formatDay('2026-01-31')).toBe('January 31, 2026');
     // A sign-up's moment by the Central calendar: 03:00 UTC on November 2 is still November 1 there.
     expect(formatMoment(new Date('2026-11-02T03:00:00Z'))).toBe('November 1, 2026');
+  });
+
+  // SIGNOUT (B): the site names the verifier only as an external membership verification service,
+  // never who runs it, where, or how it checks: no list, roster or directory in what anyone reads.
+  it('never says how the check is made, in any outcome or warning', () => {
+    const words = [...Object.values(CHECK_TEXT), ...(['email_mismatch', 'duplicate_claim'] as const).map((verification) => checkWarning({ verification }) ?? '')];
+    for (const text of words) expect(text).not.toMatch(/\blist\b|roster|directory|home|offline/i);
   });
 
   it('is for the membership approvers and the Admin only', () => {

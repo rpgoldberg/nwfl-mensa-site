@@ -120,9 +120,9 @@ export function authConfig(env) {
   if (allowInsecure && (production || !LOOPBACK.includes(issuer.hostname))) {
     return { enabled: false, reason: 'OIDC_ISSUER must be https (plain http only for a local test provider, outside production)' };
   }
-  // VET: the email by default, so the sign-up stores it from the verified token for the verifier to
-  // compare with the roster. A configured OIDC_SCOPE wins, so it must name email too (fix 1): without
-  // it, sign-in is off, since no sign-up could be taken.
+  // VET: the email by default, so the sign-up stores it from the verified token for the membership
+  // verification service to confirm. A configured OIDC_SCOPE wins, so it must name email too
+  // (fix 1): without it, sign-in is off, since no sign-up could be taken.
   const scope = env['OIDC_SCOPE'] || 'openid profile email';
   const scopes = scope.split(' ');
   if (!scopes.includes('openid')) return { enabled: false, reason: 'OIDC_SCOPE must include openid' };

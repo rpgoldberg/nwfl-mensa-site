@@ -31,7 +31,7 @@ export declare type MemberAccount = Message<"nwfl.mensa.v1.MemberAccount"> & {
   route: AccountRoute;
 
   /**
-   * The last time the account was checked against the roster.
+   * The last time the account's membership was confirmed.
    *
    * @generated from field: nwfl.mensa.v1.Date verified_on = 3;
    */
@@ -742,8 +742,8 @@ export declare const VerificationSchema: GenEnum<Verification>;
 export declare const MembershipService: GenService<{
   /**
    * Called by a signed-in pending user. The number and the last name are
-   * both required, invited or not; the verifier matches them, and an
-   * approver decides. A token with the invited group opens the account with
+   * both required, invited or not; the membership verification service
+   * confirms them, and an approver decides. A token with the invited group opens the account with
    * the invite route.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.SubmitSignup
@@ -813,8 +813,8 @@ export declare const MembershipService: GenService<{
     output: typeof RemoveMemberResponseSchema;
   },
   /**
-   * The yearly re-check: an approver confirms a member against the offline
-   * roster, which dates its verification today (a lapsed account becomes a
+   * The yearly re-check, confirmed by an officer: an approver confirms a
+   * member, which dates its verification today (a lapsed account becomes a
    * member again). No one confirms themselves.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.ConfirmMember

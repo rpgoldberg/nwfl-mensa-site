@@ -321,15 +321,17 @@ describe('completeSignIn: the callback', () => {
 describe('signOut', () => {
   const expired = [`${SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`, `${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`];
 
-  it('expires our own cookies by name, drops the tokens, clears cache and storage, and ends the provider’s session', async () => {
+  it('expires our own cookies by name, drops the tokens, and ends the provider’s session, clearing no site data', async () => {
     const d = deps();
     const session = newSession({ sub: 'u', groups: ['nwfl-members'] }, NOW);
     d.tokens.put(session.sid, { access_token: 'a', id_token: 'id-9' }, session.exp);
     const header = `${sessionSetCookie(session, key, NOW).split(';')[0]}; ${SIZE_COOKIE}=4; ${THEME_COOKIE}=dark`;
     const out = await signOut(d, { cookieHeader: header });
-    // Never "cookies" (nor "*"): it clears the whole registered domain, the
-    // provider's cookies too, and the reader's text size and theme.
-    expect(out.clearSiteData).toBe('"cache", "storage"');
+    // SIGNOUT: no Clear-Site-Data at all. "cookies" would clear the whole registered domain (the
+    // provider's cookies, the reader's text size and theme); "cache" stalled the installed app's
+    // navigation, and nothing members-only is ever stored (every such answer is private, no-store);
+    // "storage" has nothing to clear (the site keeps nothing in the browser's storage).
+    expect(out).not.toHaveProperty('clearSiteData');
     expect(out.cookies).toEqual(expired);
     expect(d.tokens.get(session.sid, NOW)).toBeUndefined();
     expect(d.oidc.endSessionUrl).toHaveBeenCalledWith(cfg, { idToken: 'id-9' });
@@ -351,14 +353,14 @@ describe('signOut', () => {
   it('comes to the signed-out page directly when the provider offers no logout, or cannot be reached', async () => {
     const d = deps();
     vi.mocked(d.oidc.endSessionUrl).mockResolvedValueOnce(undefined);
-    expect(await signOut(d, { cookieHeader: undefined })).toEqual({ location: '/signed-out', cookies: expired, clearSiteData: '"cache", "storage"' });
+    expect(await signOut(d, { cookieHeader: undefined })).toEqual({ location: '/signed-out', cookies: expired });
     vi.mocked(d.oidc.endSessionUrl).mockRejectedValueOnce(new Error('down'));
-    expect(await signOut(d, { cookieHeader: undefined })).toEqual({ location: '/signed-out', cookies: expired, clearSiteData: '"cache", "storage"' });
+    expect(await signOut(d, { cookieHeader: undefined })).toEqual({ location: '/signed-out', cookies: expired });
   });
 
   it('does the same when sign-in is not set up', async () => {
     const out = await signOut(deps({ key: undefined, setup: { enabled: false, reason: 'x' } }), { cookieHeader: undefined });
-    expect(out).toEqual({ location: '/signed-out', cookies: expired, clearSiteData: '"cache", "storage"' });
+    expect(out).toEqual({ location: '/signed-out', cookies: expired });
   });
 });
 

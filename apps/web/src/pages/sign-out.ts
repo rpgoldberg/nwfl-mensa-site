@@ -1,6 +1,6 @@
 // Sign out (W4): a POST only, origin-checked (the server wrapper and Astro).
-// The session and its tokens go, Clear-Site-Data empties the site's cookies and
-// storage, and the reader goes on to end the provider's session as well.
+// The session and its tokens go, and the reader goes on to end the provider's
+// session as well. No Clear-Site-Data (SIGNOUT): see signOut in lib/auth/flow.
 import type { APIRoute } from 'astro';
 import { runtimeDeps, signOut } from '../lib/auth/flow';
 
@@ -8,7 +8,7 @@ export const prerender = false;
 
 export const POST: APIRoute = async ({ request }) => {
   const out = await signOut(runtimeDeps(), { cookieHeader: request.headers.get('cookie') });
-  const headers = new Headers({ Location: out.location, 'Clear-Site-Data': out.clearSiteData });
+  const headers = new Headers({ Location: out.location });
   for (const cookie of out.cookies) headers.append('Set-Cookie', cookie);
   return new Response(null, { status: 303, headers });
 };
