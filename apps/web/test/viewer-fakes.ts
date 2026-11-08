@@ -277,6 +277,9 @@ export function fakePdfjs({ pages = 3, annotations = {} as Record<number, FakeAn
   return { pdfjs, log, pending, opened };
 }
 
+/** The option a select shows: the one whose value is the select's. */
+export const chosen = (select: FakeEl | undefined) => select!.children.find((o) => o.value === select!.value)?.textContent;
+
 /** The page's markup, as src/pages/read/[id].astro writes it. */
 export function viewerPage({ pdf = '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf', worker = '/_astro/pdf.worker.min.abc.mjs', drop = '' } = {}) {
   const body = new FakeEl('body');
@@ -287,15 +290,14 @@ export function viewerPage({ pdf = '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a
   for (const [name, tag] of [
     ['nojs', 'p'],
     ['bar', 'div'],
+    ['js', 'div'],
     ['zoom-out', 'button'],
-    ['zoom', 'output'],
+    ['zoom', 'select'],
     ['zoom-in', 'button'],
-    ['fit', 'button'],
-    ['fit-word', 'span'],
+    ['fit-width', 'button'],
+    ['fit-page', 'button'],
     ['prev', 'button'],
-    ['goto', 'form'],
-    ['page', 'input'],
-    ['count', 'span'],
+    ['page', 'select'],
     ['next', 'button'],
     ['status', 'p'],
     ['pages', 'div'],
@@ -306,7 +308,8 @@ export function viewerPage({ pdf = '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a
     parts[name] = el;
     root.append(el);
   }
-  parts['bar']!.hidden = true;
+  // W-LOOK3: the bar always shows (Download and Open in another app); its controls wait for the script.
+  if (parts['js']) parts['js'].hidden = true;
   parts['pages']!.hidden = true;
   parts['pages']!.rect = { top: 0, height: 0, width: 600 };
   parts['bar']!.rect = { top: 0, height: 60, width: 600 };

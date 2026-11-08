@@ -1,0 +1,22 @@
+---
+// W-LOOK3, after Ross's mockup: which copy /read shows, on one line above the frame. A pill with an icon
+// ("Members copy" or "Public copy"), a thin divider, and one short line: for a members copy, please don't
+// forward it; for the public copy, "Members can sign in for the full issue", where "sign in" is an
+// ordinary underlined link only where /sign-in works for this reader (signIn, from membersSignInLink).
+// /news keeps its own longer line (CopyNotice).
+import { MEMBERS_RULE } from '../lib/document';
+import { MEMBERS_COPY, PUBLIC_TAG, PUBLIC_TAG_NOTE } from '../lib/reader';
+import Icon from './Icon.astro';
+
+interface Props {
+  /** Where "sign in" leads, back to this page; none where sign-in is not available to this reader. */
+  signIn?: string | undefined;
+  members?: boolean;
+}
+const { signIn, members = false } = Astro.props;
+const [before, after] = PUBLIC_TAG_NOTE.split('sign in') as [string, string];
+---
+<p class:list={['copy-tag', { 'copy-tag--members': members }]}>
+  <span class="copy-pill"><Icon name={members ? 'users' : 'newsletter'} />{members ? MEMBERS_COPY : PUBLIC_TAG}</span>
+  <span class="copy-note">{members ? MEMBERS_RULE : <>{before}{signIn ? <a href={signIn}>sign in</a> : 'sign in'}{after}</>}</span>
+</p>

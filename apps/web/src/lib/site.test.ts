@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ABOUT_NAV, MENSA_LINKS, MORE_GROUPS, MORE_PAGES, PRIMARY_NAV, SECTIONS, currentNav, page, sectionFor, trailFor } from './site';
+import { ABOUT_NAV, MENSA_LINKS, MORE_GROUPS, MORE_PAGES, PRIMARY_NAV, SECTIONS, currentNav, page, sectionFor, slimCrumbs, trailFor } from './site';
 
 describe('SECTIONS (R1)', () => {
   it('has the nine public sections, each with a heading and a one-line description', () => {
@@ -181,5 +181,13 @@ describe('MORE_GROUPS', () => {
 
   it('keeps the More page description off the retired line', () => {
     expect(page('/more').description).not.toMatch(/^Every part/);
+  });
+});
+
+// W-LOOK3: where the trail is one step from Home, the Home crumb is the way back: no separate Back link.
+describe('slimCrumbs', () => {
+  it('is the reader, Events and News, and no other page', () => {
+    for (const path of ['/read/f0000000-0000-4000-8000-000000000010', '/events', '/events/', '/news']) expect(slimCrumbs(path), path).toBe(true);
+    for (const path of ['/', '/about', '/events/1b4e28ba-2fa1-11d2-883f-0016d3cca427', '/news/2014-03', '/read', '/reader', '/eventsx']) expect(slimCrumbs(path), path).toBe(false);
   });
 });

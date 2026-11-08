@@ -21,7 +21,7 @@ import Breadcrumbs from '../components/Breadcrumbs.astro';
 import Icon from '../components/Icon.astro';
 import PrimaryNav from '../components/PrimaryNav.astro';
 import ReaderControls from '../components/ReaderControls.astro';
-import { SITE_NAME, trailFor } from '../lib/site';
+import { SITE_NAME, slimCrumbs, trailFor } from '../lib/site';
 
 interface Props {
   path: string;
@@ -84,7 +84,7 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
       <a class="button" href="#reader-toggle">Done</a>
     </section>
     <div class="page">
-      <Breadcrumbs trail={trail} />
+      <Breadcrumbs trail={trail} slim={slimCrumbs(path)} />
       <main id="main" tabindex="-1">
         <slot />
       </main>

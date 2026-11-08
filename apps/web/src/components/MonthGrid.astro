@@ -21,7 +21,8 @@ const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 const DOTS = 3;
 ---
 <table class="month">
-  <caption>{caption}</caption>
+  {/* W-LOOK3: shown in the caption row above (events.astro); here it names the table. */}
+  <caption class="visually-hidden">{caption}</caption>
   <thead>
     <tr>{DAYS.map((d) => <th scope="col"><span class="d2" aria-hidden="true">{d.slice(0, 2)}</span><span class="d3" aria-hidden="true">{d.slice(0, 3)}</span><span class="visually-hidden">{d}</span></th>)}</tr>
   </thead>

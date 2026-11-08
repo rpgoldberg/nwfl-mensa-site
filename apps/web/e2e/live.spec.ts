@@ -2,7 +2,7 @@
 // the calendar's list, month grid and event pages, Home, Officers, Finances.
 import { readFileSync } from 'node:fs';
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { banner, signIn } from './signin';
 import { BOARD_GAMES, CANARIES, EMPTY_MONTH, centralToday, monthAfter, monthLabel } from './stand-in';
 
@@ -80,8 +80,12 @@ test.describe('Events, the calendar', () => {
     expect(text.match(/BEGIN:VEVENT/g)).toHaveLength(1);
   });
 
+  // W-LOOK3: the three ways are in one "Add to your calendar" disclosure, closed at first.
+  const openAdd = (page: Page) => page.locator('details.addcal > summary').click();
+
   test('offers the whole calendar to subscribe to, and to download', async ({ page, baseURL }) => {
     await page.goto('/events');
+    await openAdd(page);
     const host = new URL(baseURL!).host;
     await expect(page.getByRole('link', { name: 'Add our calendar' })).toHaveAttribute('href', `webcal://${host}/calendar.ics`);
     await expect(page.getByRole('link', { name: 'Download the calendar file' })).toHaveAttribute('href', '/calendar.ics');
@@ -89,6 +93,7 @@ test.describe('Events, the calendar', () => {
 
   test('offers Add to Google Calendar, a plain same-tab link to the same feed', async ({ page, baseURL }) => {
     await page.goto('/events');
+    await openAdd(page);
     const host = new URL(baseURL!).host;
     const google = page.getByRole('link', { name: 'Add to Google Calendar', exact: true });
     await expect(google).toBeVisible();
@@ -103,7 +108,7 @@ test.describe('Events, the calendar', () => {
 
   test('tells Apple, Android and download readers apart in a short note', async ({ page }) => {
     await page.goto('/events');
-    const note = page.locator('#subscribe-title').locator('xpath=..').locator('p.muted');
+    const note = page.locator('details.addcal p.muted');
     await expect(note).toContainText('iPhone, iPad and Mac');
     await expect(note).toContainText('ICSx⁵');
     await expect(note).toContainText("won't update");

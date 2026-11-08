@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
-import { PRIMARY_NAV, SITE_NAME, currentNav, trailFor } from '../src/lib/site';
+import { PRIMARY_NAV, SITE_NAME, currentNav, slimCrumbs, trailFor } from '../src/lib/site';
 import { ALL_PAGES, titleOf } from './pages';
 import { setPrefs } from './prefs';
 import { openAccount, signIn } from './signin';
@@ -76,7 +76,7 @@ for (const path of ALL_PAGES) {
       for (const b of boxes) expect(b.y < boxes[0]!.y + boxes[0]!.height && b.y + b.height > boxes[0]!.y).toBe(true);
     });
 
-    test('shows breadcrumbs and a Back link everywhere but Home', async ({ page }) => {
+    test('shows breadcrumbs and a Back link everywhere but Home, and the slim pages', async ({ page }) => {
       await page.goto(path);
       const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
       // Inside the breadcrumb landmark, so no content sits outside a landmark.
@@ -91,6 +91,12 @@ for (const path of ALL_PAGES) {
       await expect(crumbs.getByRole('link', { name: 'Home', exact: true })).toHaveAttribute('href', '/');
       await expect(crumbs.locator('[aria-current="page"]')).toHaveText(titleOf(path));
       const parent = trail.at(-2)!;
+      // W-LOOK3: one step from Home (Events, News), the Home crumb is the way back, with its icon.
+      if (slimCrumbs(path)) {
+        await expect(back).toHaveCount(0);
+        await expect(crumbs.getByRole('link', { name: 'Home', exact: true }).locator('svg:visible')).toHaveCount(1);
+        return;
+      }
       await expect(back).toBeVisible();
       await expect(back).toHaveText(`Back to ${parent.label}`);
       await expect(back).toHaveAttribute('href', parent.href);

@@ -210,6 +210,15 @@ export function trailFor(path: string, title: string): Crumb[] {
   return trail;
 }
 
+const SLIM = /^\/(?:events|news|read\/[^/]+)$/;
+/**
+ * W-LOOK3: a page whose breadcrumb is one slim line, Home (with its icon) and the page, and no separate
+ * Back link: the reader, Events and News, one step from Home, where the Home crumb is the way back.
+ */
+export function slimCrumbs(path: string): boolean {
+  return SLIM.test(normalise(path));
+}
+
 /** A page that must exist; a typo in a page file fails the build, not a reader. */
 export function page(path: string): Page {
   const found = sectionFor(path);

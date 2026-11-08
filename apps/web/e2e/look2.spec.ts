@@ -200,41 +200,34 @@ test.describe('(A) the header on a wide screen', () => {
   });
 });
 
+// W-LOOK3 (Ross's mockup) replaced W-LOOK2's bar: icons alone on a phone, each with a spoken name and a
+// tooltip, 44 px targets (WCAG 2.5.5) for this bar only, one row of at most 52 px; e2e/look3.spec.ts has the rest.
 test.describe('(B) the reader on a phone', () => {
   test.use({ viewport: PHONE });
 
-  const controls = (page: Page) => {
-    const bar = page.locator('[data-viewer-bar]');
-    return [
-      bar.getByRole('button', { name: 'Zoom out' }),
-      bar.locator('[data-viewer-zoom]'),
-      bar.getByRole('button', { name: 'Zoom in' }),
-      bar.getByRole('button', { name: /^Fit / }),
-      bar.getByRole('button', { name: 'Back a page' }),
-      bar.getByLabel('Page', { exact: true }),
-      bar.getByRole('button', { name: 'Next page' }),
-    ];
+  const controls = async (page: Page) => {
+    const out: Locator[] = [];
+    for (const c of await page.locator('[data-viewer-bar]').locator('button, select, a').all()) if (await c.isVisible()) out.push(c);
+    return out;
   };
 
   for (const size of [SIZES[0], SIZES[2], SIZES[3], SIZES[4]]) {
-    test(`at ${size} % the controls are one row, each at least 48 px, every icon with a visible word`, async ({ page, context, baseURL }) => {
+    test(`at ${size} % the controls are one row, each at least 44 px, every one with a spoken name and a tooltip`, async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size });
       await page.goto(READ);
       await expect(page.locator('#page-1 canvas')).toHaveCount(1);
-      const all = controls(page);
+      const all = await controls(page);
       expect(await rows(all)).toBe(1);
       for (const c of all) {
         const b = await box(c);
-        expect(b.height, String(c)).toBeGreaterThanOrEqual(48);
+        const title = (await c.getAttribute('title')) ?? '';
+        expect(title).not.toBe('');
+        await expect(c).toHaveAccessibleName(/\S/);
+        expect(b.height, title).toBeGreaterThanOrEqual(44);
+        expect(b.width, title).toBeGreaterThanOrEqual(44);
         expect(b.x + b.width).toBeLessThanOrEqual(PHONE.width);
       }
-      for (const button of await page.locator('[data-viewer-bar] button').all()) {
-        // One icon showing, and a word beside it.
-        expect(await button.locator('svg:visible').count(), (await button.getAttribute('aria-label')) ?? '').toBe(1);
-        expect((await button.innerText()).trim(), (await button.getAttribute('aria-label')) ?? '').not.toBe('');
-        const b = await box(button);
-        expect(b.width).toBeGreaterThanOrEqual(48);
-      }
+      expect((await box(page.locator('[data-viewer-bar]'))).height).toBeLessThanOrEqual(52);
       expect(await sideways(page)).toBeLessThanOrEqual(0);
     });
   }
@@ -244,7 +237,8 @@ test.describe('(B) the reader on a phone', () => {
       await setPrefs(context, baseURL!, { size });
       await page.goto(READ);
       await expect(page.locator('[data-viewer-bar]')).toBeVisible();
-      expect(await rows(controls(page))).toBeLessThanOrEqual(2);
+      await expect(page.locator('#page-1')).toBeAttached();
+      expect(await rows(await controls(page))).toBeLessThanOrEqual(2);
       expect(await sideways(page)).toBeLessThanOrEqual(0);
     });
   }
@@ -252,19 +246,19 @@ test.describe('(B) the reader on a phone', () => {
   test.describe('at 360 x 780, the narrowest phone', () => {
     test.use({ viewport: { width: 360, height: 780 } });
     test.skip(({ browserName }) => browserName === 'webkit', '360 px is an Android width; no iPhone is that narrow');
-    test('the bar is one row under 90 px at the default text size, each control still 48 px', async ({ page }) => {
+    test('the bar is one row of at most 52 px at the default text size, each control still 44 px', async ({ page }) => {
       await page.goto(READ);
       await expect(page.locator('#page-1 canvas')).toHaveCount(1);
-      const all = controls(page);
+      const all = await controls(page);
       expect(await rows(all)).toBe(1);
       for (const c of all) {
         const b = await box(c);
-        expect(b.height, String(c)).toBeGreaterThanOrEqual(48);
+        expect(b.height, String(c)).toBeGreaterThanOrEqual(44);
+        expect(b.width, String(c)).toBeGreaterThanOrEqual(44);
         expect(b.x).toBeGreaterThanOrEqual(0);
         expect(b.x + b.width).toBeLessThanOrEqual(360);
       }
-      for (const button of await page.locator('[data-viewer-bar] button').all()) expect((await box(button)).width).toBeGreaterThanOrEqual(48);
-      expect((await box(page.locator('[data-viewer-bar]'))).height).toBeLessThan(90);
+      expect((await box(page.locator('[data-viewer-bar]'))).height).toBeLessThanOrEqual(52);
       expect(await sideways(page)).toBeLessThanOrEqual(0);
     });
   });
@@ -282,39 +276,17 @@ test.describe('(B) the reader on a phone', () => {
     expect((bottom - (bar.y + bar.height)) / PHONE.height).toBeGreaterThanOrEqual(0.7);
   });
 
-  test('Open in another app and Download sit below the issue, out of the bar', async ({ page }) => {
+  test('Open in another app and Download are in the bar (W-LOOK3, Ross\'s mockup), as icons with their names', async ({ page }) => {
     await page.goto(READ);
     await expect(page.locator('#page-1 canvas')).toHaveCount(1);
-    const open = page.getByRole('link', { name: /^Open in another app/ });
-    const download = page.getByRole('link', { name: 'Download', exact: true });
+    const bar = page.locator('[data-viewer-bar]');
+    const open = bar.getByRole('link', { name: /^Open in another app/ });
+    const download = bar.getByRole('link', { name: 'Download', exact: true });
     for (const link of [open, download]) {
-      await expect(link).toHaveCount(1);
-      expect(await link.evaluate((el) => !!(document.querySelector('[data-viewer-pages]')!.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
-      await expect(page.locator('[data-viewer-bar]').locator('a')).toHaveCount(0);
+      await expect(link).toBeVisible();
+      await expect(link.locator('svg:visible')).toHaveCount(1);
+      expect((await link.innerText()).trim()).toBe('');
     }
-  });
-
-  test('the one Fit control offers the other fit, and after a zoom the width again', async ({ page }) => {
-    await page.goto(READ);
-    await expect(page.locator('#page-1 canvas')).toHaveCount(1);
-    const zoom = page.locator('[data-viewer-zoom]');
-    const fit = page.locator('[data-viewer-fit]');
-    // A phone opens at the width; the control offers the whole page, which held upright is no smaller.
-    await expect(fit).toHaveAccessibleName('Fit whole page');
-    await expect(fit).toHaveText('Whole');
-    const atWidth = await zoom.textContent();
-    await fit.click();
-    expect(parseInt((await zoom.textContent())!, 10)).toBeLessThanOrEqual(parseInt(atWidth!, 10));
-    await expect(fit).toHaveAccessibleName('Fit width');
-    await expect(fit).toHaveText('Width');
-    await page.getByRole('button', { name: 'Zoom in' }).click();
-    await page.getByRole('button', { name: 'Zoom in' }).click();
-    await expect(zoom).not.toHaveText(atWidth!);
-    // Zoomed, it offers the fit the phone opened at, and takes the reader back there.
-    await expect(fit).toHaveAccessibleName('Fit width');
-    await fit.click();
-    await expect(zoom).toHaveText(atWidth!);
-    await expect(fit).toHaveAccessibleName('Fit whole page');
   });
 });
 
@@ -357,17 +329,17 @@ test.describe('(C) the month grid', () => {
   }
 
   for (const [name, viewport] of [['a phone', PHONE], ['a wide screen', DESKTOP]] as const) {
-    test(`on ${name}: the month links and the grid come above the "Add our calendar to your phone" card`, async ({ page }) => {
+    test(`on ${name}: the month links, in the grid's caption row, and the grid come above the "Add to your calendar" disclosure`, async ({ page }) => {
       await page.setViewportSize(viewport);
       await page.goto('/events');
       const grid = page.locator('table.month');
       const nav = page.getByRole('navigation', { name: 'Months' });
-      const card = page.locator('#subscribe-title').locator('xpath=..');
-      await expect(card).toBeVisible();
-      const [g, n, c] = [await box(grid), await box(nav), await box(card)];
-      expect(n.y + n.height).toBeLessThanOrEqual(g.y);
+      const add = page.locator('details.addcal');
+      await expect(add).toBeVisible();
+      const [g, n, c] = [await box(grid), await box(nav), await box(add)];
+      expect(n.y + n.height).toBeLessThanOrEqual(g.y + 1);
       expect(g.y + g.height).toBeLessThanOrEqual(c.y);
-      // The card is in the grid's column, not pushed below the list (a phone's grid runs edge to edge, the card inside the margin).
+      // In the grid's column, not pushed below the list (a phone's grid runs edge to edge, the disclosure inside the margin).
       if (name === 'a wide screen') expect(Math.abs(c.x - g.x)).toBeLessThanOrEqual(2);
       else expect(c.x).toBeGreaterThanOrEqual(g.x);
       const list = await box(page.getByRole('heading', { name: 'Coming up', exact: true }));

@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FileRead, Reader } from './api/client';
 import { ApiUnavailable } from './api/client';
-import { MEMBERS_COPY, NEEDS_SCRIPT, PUBLIC_COPY, readPaths, readView, readerPath } from './reader';
+import { MEMBERS_COPY, NEEDS_SCRIPT, PUBLIC_COPY, PUBLIC_TAG, PUBLIC_TAG_NOTE, readPaths, readView, readerPath } from './reader';
 
 const FILE = '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7';
 const member: Reader = { bearer: 'member.token' };
@@ -45,6 +45,13 @@ describe('the notices', () => {
     expect(PUBLIC_COPY).toBe('Public copy: some personal details are hidden for privacy. Members can sign in for the full issue.');
     expect(MEMBERS_COPY).toBe('Members copy');
     expect(NEEDS_SCRIPT).toBe('Reading the issue on this page needs JavaScript, which is off or blocked. You can still open it in another app, or download it.');
+  });
+
+  // W-LOOK3, Ross's mockup: on /read the public copy is a pill and one short line beside it.
+  it("on /read, the public copy's pill and its line, which keeps \"sign in\" for the link", () => {
+    expect(PUBLIC_TAG).toBe('Public copy');
+    expect(PUBLIC_TAG_NOTE).toBe('Members can sign in for the full issue');
+    expect(PUBLIC_TAG_NOTE.split('sign in')).toHaveLength(2);
   });
 });
 

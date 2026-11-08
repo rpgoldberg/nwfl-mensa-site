@@ -11,9 +11,7 @@ import {
   OPENING,
   TOO_LONG,
   ZOOMS,
-  FIT,
   clampPage,
-  fitOffer,
   fitScale,
   hashPage,
   linkHref,
@@ -21,14 +19,16 @@ import {
   loading,
   outputScale,
   pageAt,
+  pageLabel,
   percent,
   sameOriginPath,
   boot,
   wireViewer,
   zoomIn,
+  zoomOptions,
   zoomOut,
 } from '../public/scripts/viewer.js';
-import { FakeEl, FakeObserver, FakeResizeObserver, FakeWin, fakePdfjs, viewerPage } from './viewer-fakes';
+import { FakeEl, FakeObserver, FakeResizeObserver, FakeWin, chosen, fakePdfjs, viewerPage } from './viewer-fakes';
 
 const PAGE = { width: 612 * CSS_UNITS, height: 792 * CSS_UNITS };
 const ID = 'outwebaaaaaaaaaaaaaaaaaaaa';
@@ -48,24 +48,34 @@ describe('the zoom steps', () => {
     expect(zoomOut(0.1)).toBe(0.25);
   });
 
+  // W-LOOK3: as Ross's mockup writes it, "100%".
   it('show as a whole percentage', () => {
-    expect(percent(1)).toBe('100\u00a0%');
-    expect(percent(0.7354)).toBe('74\u00a0%');
+    expect(percent(1)).toBe('100%');
+    expect(percent(0.7354)).toBe('74%');
   });
 });
 
-// W-LOOK2: one Fit control, which offers the fit the reader is not in; after a zoom, the one they opened at.
-describe('fitOffer', () => {
-  it('offers the whole page at the width, the width at the whole page, and after a zoom the fit the device opens at', () => {
-    expect(fitOffer('width', 'width')).toBe('page');
-    expect(fitOffer('page', 'page')).toBe('width');
-    expect(fitOffer('custom', 'width')).toBe('width');
-    expect(fitOffer('custom', 'page')).toBe('page');
+// W-LOOK3: the zoom is a select of the steps; a fitted size that is no step is shown in its place among them.
+describe('zoomOptions', () => {
+  it('lists every step, and chooses the one the scale is at', () => {
+    const { options, selected } = zoomOptions(1);
+    expect(options).toEqual(ZOOMS.map((z) => ({ value: String(z), label: percent(z) })));
+    expect(selected).toBe('1');
+    expect(zoomOptions(1.25 + 1e-9).selected).toBe('1.25');
   });
 
-  it('names each fit with a short visible word that its spoken name contains', () => {
-    expect(FIT).toEqual({ page: { word: 'Whole', name: 'Fit whole page' }, width: { word: 'Width', name: 'Fit width' } });
-    for (const { word, name } of Object.values(FIT)) expect(name.toLowerCase()).toContain(word.toLowerCase());
+  it('puts a fitted size that is no step in its place, chosen', () => {
+    const { options, selected } = zoomOptions(1.3712);
+    expect(options.map((o) => o.label)).toEqual(['25%', '50%', '75%', '100%', '125%', '137%', '150%', '200%', '300%', '400%']);
+    expect(selected).toBe('1.3712');
+    expect(zoomOptions(0.1).options[0]).toEqual({ value: '0.1', label: '10%' });
+    expect(zoomOptions(5).options.at(-1)).toEqual({ value: '5', label: '500%' });
+  });
+});
+
+describe('pageLabel', () => {
+  it('reads as the mockup writes it: the page, a slash, and how many', () => {
+    expect(pageLabel(1, 12)).toBe('1 / 12');
   });
 });
 
@@ -193,7 +203,7 @@ describe('wireViewer', () => {
     expect(viewer).toBeUndefined();
     expect(opened).toEqual([]);
     expect(parts['nojs']!.hidden).toBe(false);
-    expect(parts['bar']!.hidden).toBe(true);
+    expect(parts['js']!.hidden).toBe(true);
   });
 
   it('opens nothing but a same-origin /documents/<id>.pdf, with a same-origin worker', async () => {
@@ -203,7 +213,7 @@ describe('wireViewer', () => {
       expect(opened).toEqual([]);
       expect(parts['status']!.textContent).toBe(FAILED);
       expect(parts['nojs']!.hidden).toBe(true);
-      expect(parts['bar']!.hidden).toBe(true);
+      expect(parts['js']!.hidden).toBe(true);
     }
   });
 
@@ -212,35 +222,34 @@ describe('wireViewer', () => {
     expect(pdfjs.GlobalWorkerOptions.workerSrc).toBe('/_astro/pdf.worker.min.abc.mjs');
     expect(opened).toEqual([{ url: '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf', isEvalSupported: false, useWasm: false, enableXfa: false, maxImageSize: MAX_IMAGE_PIXELS, verbosity: 0 }]);
     expect(parts['nojs']!.hidden).toBe(true);
-    expect(parts['bar']!.hidden).toBe(false);
+    expect(parts['js']!.hidden).toBe(false);
     expect(parts['pages']!.hidden).toBe(false);
-    expect(parts['count']!.textContent).toBe('3');
+    // W-LOOK3: the page is a select, "1 / 3" and so on.
+    expect(parts['page']!.children.map((o) => [o.value, o.textContent])).toEqual([
+      ['1', '1 / 3'],
+      ['2', '2 / 3'],
+      ['3', '3 / 3'],
+    ]);
     expect(parts['page']!.value).toBe('1');
-    expect(parts['page']!.getAttribute('max')).toBe('3');
-    // W-LOOK2: the page box is as wide as the longest page number, two digits at least.
-    expect(parts['page']!.style.props.get('--digits')).toBe('2');
+    expect(chosen(parts['page'])).toBe('1 / 3');
     expect(pages.map((p) => p.id)).toEqual(['page-1', 'page-2', 'page-3']);
     expect(pages.map((p) => p.querySelector('h2')?.textContent)).toEqual(['Page 1', 'Page 2', 'Page 3']);
     expect(parts['status']!.textContent).toBe('');
     expect(OPENING).toBe('Opening the issue');
   });
 
-  it('fits the whole page on a computer, and the width on a phone', async () => {
-    const desk = await open();
-    const fit = fitScale('page', PAGE, { width: 600, height: 800 - 60 - 16 });
-    expect(desk.parts['zoom']!.textContent).toBe(percent(fit));
-    // At the whole page, the Fit control offers the width.
-    expect(desk.parts['fit']!.getAttribute('aria-label')).toBe('Fit width');
-    expect(desk.parts['fit']!.dataset['fit']).toBe('width');
-    expect(desk.parts['fit-word']!.textContent).toBe('Width');
-    expect(desk.pages[0]!.style.width).toBe(`${PAGE.width * fit}px`);
-    expect(desk.pages[0]!.style.props.get('--scale-factor')).toBe(String(fit * CSS_UNITS));
-    win.phone = true;
-    const phone = await open();
-    expect(phone.parts['zoom']!.textContent).toBe(percent(600 / PAGE.width));
-    expect(phone.parts['fit']!.getAttribute('aria-label')).toBe('Fit whole page');
-    expect(phone.parts['fit']!.dataset['fit']).toBe('page');
-    expect(phone.parts['fit-word']!.textContent).toBe('Whole');
+  // W-LOOK3 (Ross's mockup): the page fills the frame's width, on a computer as on a phone; Fit width shows pressed.
+  it('opens at Fit width on a computer and a phone alike, with Fit width pressed', async () => {
+    for (const phone of [false, true]) {
+      win.phone = phone;
+      const { parts, pages } = await open();
+      const fit = 600 / PAGE.width;
+      expect(chosen(parts['zoom'])).toBe(percent(fit));
+      expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('true');
+      expect(parts['fit-page']!.getAttribute('aria-pressed')).toBe('false');
+      expect(pages[0]!.style.width).toBe(`${PAGE.width * fit}px`);
+      expect(pages[0]!.style.props.get('--scale-factor')).toBe(String(fit * CSS_UNITS));
+    }
   });
 
   it('draws only the pages that come near, with their text and links, and lets go of those that move away', async () => {
@@ -249,7 +258,7 @@ describe('wireViewer', () => {
     expect((io.options as { rootMargin: string }).rootMargin).toBe('100% 0px');
     io.near(1);
     await flush();
-    const scale = fitScale('page', PAGE, { width: 600, height: 724 }) * CSS_UNITS;
+    const scale = (600 / PAGE.width) * CSS_UNITS;
     expect(log).toEqual([`draw 1 ${Math.floor(612 * scale * 2)}x${Math.floor(792 * scale * 2)} x2`]);
     const layer = pages[0]!.querySelector('[data-viewer-layer]')!;
     expect(layer.children.map((c) => c.tag)).toEqual(['canvas', 'div', 'div']);
@@ -289,26 +298,49 @@ describe('wireViewer', () => {
     io.near(1);
     await flush();
     await press(parts['zoom-in']);
-    const fit = fitScale('page', PAGE, { width: 600, height: 724 });
-    expect(parts['zoom']!.textContent).toBe(percent(zoomIn(fit)));
-    // Zoomed: the Fit control offers the fit the computer opened at, the whole page.
-    expect(parts['fit']!.getAttribute('aria-label')).toBe('Fit whole page');
+    const fit = 600 / PAGE.width;
+    expect(chosen(parts['zoom'])).toBe(percent(zoomIn(fit)));
+    // Zoomed: neither fit is pressed.
+    expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('false');
+    expect(parts['fit-page']!.getAttribute('aria-pressed')).toBe('false');
     expect(pages[1]!.style.width).toBe(`${PAGE.width * zoomIn(fit)}px`);
     expect(log.filter((l) => l.startsWith('draw 1'))).toHaveLength(2);
     for (let i = 0; i < 12; i++) await press(parts['zoom-in']);
-    expect(parts['zoom']!.textContent).toBe(percent(4));
+    expect(chosen(parts['zoom'])).toBe(percent(4));
     expect(parts['zoom-in']!.getAttribute('aria-disabled')).toBe('true');
     expect(parts['zoom-out']!.getAttribute('aria-disabled')).toBe('false');
     for (let i = 0; i < 12; i++) await press(parts['zoom-out']);
-    expect(parts['zoom']!.textContent).toBe(percent(0.25));
+    expect(chosen(parts['zoom'])).toBe(percent(0.25));
     expect(parts['zoom-out']!.getAttribute('aria-disabled')).toBe('true');
-    await press(parts['fit']);
-    expect(parts['zoom']!.textContent).toBe(percent(fit));
-    expect(parts['fit']!.getAttribute('aria-label')).toBe('Fit width');
-    await press(parts['fit']);
-    expect(parts['zoom']!.textContent).toBe(percent(600 / PAGE.width));
-    expect(parts['fit']!.getAttribute('aria-label')).toBe('Fit whole page');
-    expect(parts['fit-word']!.textContent).toBe('Whole');
+    await press(parts['fit-page']);
+    expect(chosen(parts['zoom'])).toBe(percent(fitScale('page', PAGE, { width: 600, height: 724 })));
+    expect(parts['fit-page']!.getAttribute('aria-pressed')).toBe('true');
+    expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('false');
+    await press(parts['fit-width']);
+    expect(chosen(parts['zoom'])).toBe(percent(fit));
+    expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  // W-LOOK3: the zoom select, as Ross's mockup has it, beside the steps.
+  it('zooms to the step chosen in the zoom select, and ignores a value that is no step', async () => {
+    const { parts, pages } = await open();
+    const choose = async (value: string) => {
+      parts['zoom']!.value = value;
+      parts['zoom']!.dispatchEvent(new Event('change'));
+      await flush();
+    };
+    const fitted = parts['zoom']!.value;
+    expect(parts['zoom']!.children.map((o) => o.textContent)).toContain(percent(600 / PAGE.width));
+    await choose('2');
+    expect(chosen(parts['zoom'])).toBe('200%');
+    expect(pages[0]!.style.width).toBe(`${PAGE.width * 2}px`);
+    expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('false');
+    // At a step, no other size is listed.
+    expect(parts['zoom']!.children.map((o) => o.value)).toEqual(ZOOMS.map(String));
+    await choose(fitted);
+    expect(chosen(parts['zoom'])).toBe('200%');
+    await choose('x');
+    expect(chosen(parts['zoom'])).toBe('200%');
   });
 
   it('keeps the place being read when the size changes', async () => {
@@ -328,7 +360,7 @@ describe('wireViewer', () => {
     const { parts, pages } = await open();
     pages[0]!.rect = { top: 500, height: 1000, width: 600 };
     await press(parts['zoom-in']);
-    await press(parts['fit']);
+    await press(parts['fit-page']);
     expect(win.scrolledBy).toBe(0);
   });
 
@@ -371,7 +403,10 @@ describe('wireViewer', () => {
     const view = viewerPage();
     view.parts['bar']!.rect = { top: 0, height: 250, width: 600 };
     await wireViewer(view.doc, win, fakePdfjs().pdfjs);
-    expect(view.parts['zoom']!.textContent).toBe(percent(fitScale('page', PAGE, { width: 600, height: 600 - 16 })));
+    view.parts['fit-page']!.click();
+    // The fake's first page sits at the window's top, under the bar: what the fit scrolled is not this test's.
+    win.scrolledBy = 0;
+    expect(chosen(view.parts['zoom'])).toBe(percent(fitScale('page', PAGE, { width: 600, height: 600 - 16 })));
     // The bar has scrolled away above the window: the reading line is a third down the window itself.
     view.parts['bar']!.rect = { top: -900, height: 250, width: 600 };
     const pages = view.parts['pages']!.children;
@@ -430,18 +465,16 @@ describe('wireViewer', () => {
     expect(parts['page']!.value).toBe('1');
   });
 
-  it('goes to the page typed in the box, the nearest when out of range, and puts back a value that is no page', async () => {
+  it('goes to the page chosen in the page select, the nearest when out of range, and puts back a value that is no page', async () => {
     const { parts, pages } = await open();
-    const go = async (value: string, type = 'submit') => {
+    const go = async (value: string) => {
       parts['page']!.value = value;
-      const event = new Event(type, { cancelable: true });
-      (type === 'submit' ? parts['goto'] : parts['page'])!.dispatchEvent(event);
+      parts['page']!.dispatchEvent(new Event('change'));
       await flush();
-      return event.defaultPrevented;
     };
-    expect(await go('3')).toBe(true);
+    await go('3');
     expect(pages[2]!.scrolled).toBe(1);
-    await go('9', 'change');
+    await go('9');
     expect(pages[2]!.scrolled).toBe(2);
     await go('two');
     expect(parts['page']!.value).toBe('3');
@@ -457,11 +490,11 @@ describe('wireViewer', () => {
     win.dispatchEvent(new Event('scroll'));
     expect(parts['page']!.value).toBe('3');
     expect(parts['prev']!.getAttribute('aria-disabled')).toBe('true');
-    parts['goto']!.dispatchEvent(new Event('submit', { cancelable: true }));
+    parts['page']!.dispatchEvent(new Event('change'));
     expect(pages[2]!.scrolled).toBe(1);
     expect(parts['page']!.value).toBe('3');
     parts['page']!.value = 'x';
-    parts['goto']!.dispatchEvent(new Event('submit', { cancelable: true }));
+    parts['page']!.dispatchEvent(new Event('change'));
     expect(parts['page']!.value).toBe('3');
   });
 
@@ -490,12 +523,12 @@ describe('wireViewer', () => {
     parts['pages']!.rect = { top: 0, height: 0, width: 300 };
     win.innerHeight = 400;
     win.dispatchEvent(new Event('resize'));
-    expect(parts['zoom']!.textContent).toBe(percent(fitScale('page', PAGE, { width: 300, height: 324 })));
+    expect(chosen(parts['zoom'])).toBe(percent(fitScale('width', PAGE, { width: 300, height: 324 })));
     await press(parts['zoom-in']);
-    const chosen = parts['zoom']!.textContent;
+    const picked = chosen(parts['zoom']);
     parts['pages']!.rect = { top: 0, height: 0, width: 900 };
     win.dispatchEvent(new Event('resize'));
-    expect(parts['zoom']!.textContent).toBe(chosen);
+    expect(chosen(parts['zoom'])).toBe(picked);
   });
 
   it("draws the copy's links only: the leaving page in the same tab, named; a link within the issue goes to its page", async () => {
@@ -542,7 +575,7 @@ describe('wireViewer', () => {
     const { io, pages } = await open({ sizes: { 2: [792, 612] } });
     io.near(2);
     await flush();
-    const fit = fitScale('page', PAGE, { width: 600, height: 724 });
+    const fit = 600 / PAGE.width;
     expect(pages[1]!.style.width).toBe(`${792 * CSS_UNITS * fit}px`);
     expect(pages[2]!.style.width).toBe(`${PAGE.width * fit}px`);
   });
@@ -556,7 +589,8 @@ describe('wireViewer', () => {
     expect(viewer).toBeUndefined();
     expect(parts['status']!.textContent).toBe(TOO_LONG);
     expect(pages).toHaveLength(0);
-    expect(parts['bar']!.hidden).toBe(true);
+    expect(parts['page']!.children).toHaveLength(0);
+    expect(parts['js']!.hidden).toBe(true);
     expect(parts['pages']!.hidden).toBe(true);
     expect(parts['nojs']!.hidden).toBe(true);
     // pdf.js lets the file go: nothing of it is kept.
@@ -566,8 +600,8 @@ describe('wireViewer', () => {
   it('a file of exactly MAX_PAGES is drawn', async () => {
     const { parts, pages, viewer } = await open({ pages: MAX_PAGES });
     expect(viewer).toBeDefined();
-    expect(parts['count']!.textContent).toBe('1000');
-    expect(parts['page']!.style.props.get('--digits')).toBe('4');
+    expect(parts['page']!.children).toHaveLength(MAX_PAGES);
+    expect(parts['page']!.children.at(-1)!.textContent).toBe('1000 / 1000');
     expect(pages).toHaveLength(MAX_PAGES);
   });
 
@@ -581,7 +615,7 @@ describe('wireViewer', () => {
     expect(viewer).toBeUndefined();
     expect(parts['status']!.textContent).toBe(FAILED);
     expect(FAILED).toBe('The issue could not be shown here. Use Open in another app, or Download.');
-    expect(parts['bar']!.hidden).toBe(true);
+    expect(parts['js']!.hidden).toBe(true);
     expect(parts['pages']!.hidden).toBe(true);
     expect(parts['nojs']!.hidden).toBe(true);
   });
@@ -650,9 +684,9 @@ describe('the edges of wireViewer', () => {
     pages[0]!.querySelector('a')!.onclick!();
     await flush();
     expect(pages.map((p) => p.scrolled)).toEqual([0, 0, 0]);
-    const before = view.parts['zoom']!.textContent;
+    const before = chosen(view.parts['zoom']);
     win.dispatchEvent(new Event('resize'));
-    expect(view.parts['zoom']!.textContent).toBe(before);
+    expect(chosen(view.parts['zoom'])).toBe(before);
     expect(fake.log.filter((l) => l.startsWith('draw'))).toHaveLength(1);
     pages[0]!.rect = { top: 0, height: 0, width: 600 };
     pages[1]!.rect = { top: 1000, height: 1000, width: 600 };

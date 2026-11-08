@@ -1,8 +1,9 @@
 ---
-// Line icons from the design draft. Decorative: every icon sits beside its word.
+// Line icons from the design draft. Decorative: every icon sits beside its word, or in a control
+// whose spoken name and tooltip give the word (W-LOOK3's reader bar).
 import type { MoreIcon, NavIcon } from '../lib/site';
 
-export type IconName = NavIcon | MoreIcon | 'theme' | 'add-calendar' | 'download' | 'external' | 'pin' | 'lock' | 'back' | 'forward' | 'search' | 'zoom-in' | 'zoom-out' | 'fit-width' | 'fit-page';
+export type IconName = NavIcon | MoreIcon | 'theme' | 'add-calendar' | 'download' | 'external' | 'pin' | 'lock' | 'back' | 'forward' | 'search' | 'zoom-in' | 'zoom-out' | 'zoom-minus' | 'zoom-plus' | 'fit-width' | 'fit-page';
 
 interface Props {
   name: IconName;
@@ -25,6 +26,8 @@ const { name } = Astro.props;
   {name === 'forward' && <path d="m9 5 7 7-7 7" />}
   {name === 'zoom-out' && <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5.5 5.5M7.5 10.5h6" /></>}
   {name === 'zoom-in' && <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5.5 5.5M7.5 10.5h6M10.5 7.5v6" /></>}
+  {name === 'zoom-minus' && <><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /></>}
+  {name === 'zoom-plus' && <><circle cx="12" cy="12" r="9" /><path d="M8 12h8M12 8v8" /></>}
   {name === 'fit-width' && <path d="M3 5v14M21 5v14M6 12h12M9 9l-3 3 3 3M15 9l3 3-3 3" />}
   {name === 'fit-page' && <><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5" /><rect x="8" y="7" width="8" height="10" rx="1" /></>}
   {name === 'info' && <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.01" /></>}

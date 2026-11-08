@@ -1,20 +1,25 @@
 ---
 // Breadcrumbs and a visible Back link on every page but Home: a home-screen
-// app on iOS has no Back button of its own (R27).
+// app on iOS has no Back button of its own (R27). W-LOOK3: on a page one step
+// from Home (slimCrumbs: the reader, Events, News) the trail is one slim line
+// and the Home crumb is the way back, with a home icon (a back chevron on a
+// phone, as Ross's mockup has it), so no separate Back link repeats it.
 import type { Crumb } from '../lib/site';
+import Icon from './Icon.astro';
 
 interface Props {
   trail: Crumb[];
+  slim?: boolean;
 }
-const { trail } = Astro.props;
+const { trail, slim = false } = Astro.props;
 const parent = trail.at(-2);
 const here = trail.at(-1);
 ---
 {parent && here && (
-  <nav class="crumbs" aria-label="Breadcrumb">
-    <a class="back-link" href={parent.href}>Back to {parent.label}</a>
+  <nav class:list={['crumbs', { 'crumbs--slim': slim }]} aria-label="Breadcrumb">
+    {!slim && <a class="back-link" href={parent.href}>Back to {parent.label}</a>}
     <ol>
-      {trail.slice(0, -1).map((c) => <li><a href={c.href}>{c.label}</a></li>)}
+      {trail.slice(0, -1).map((c, i) => <li>{slim && i === 0 ? <a class="crumb-home" href={c.href}><span class="crumb-icon crumb-icon--home"><Icon name="home" /></span><span class="crumb-icon crumb-icon--back"><Icon name="back" /></span>{c.label}</a> : <a href={c.href}>{c.label}</a>}</li>)}
       <li><span aria-current="page">{here.label}</span></li>
     </ol>
   </nav>
