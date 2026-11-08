@@ -1,37 +1,51 @@
 ---
 // The month as a real table (R4): a caption, a header for each day of the
-// week, and each day's events as links. On a phone, or wherever it would be
-// too narrow to read, it is not shown and the list beside it carries the same
-// events (site.css).
-import { type GridDay, formatTime } from '../lib/calendar';
-import { formatDate } from '../data/format';
+// week, and each day's events. W-LOOK2: shown at every width. Where seven
+// columns are narrow (a phone, or a large text size) it is compact: each day
+// with events is one link, its number over a dot for each event (a ring for a
+// cancelled one), to that day's place in the list (calendar.ts dayHref), and
+// named in words ("Wednesday, 11 November, 1 event"). Where there is room the
+// same cells also list the events' times and titles, as before. Today has a
+// ring and a filled number, and says "today" in its name.
+import { type GridDay, dayHref, formatTime, gridDayLabel } from '../lib/calendar';
 
 interface Props {
   caption: string;
   weeks: GridDay[][];
+  /** The days the list on this page holds: a day's link goes there, else to its month. */
+  listed: ReadonlySet<string>;
 }
-const { caption, weeks } = Astro.props;
+const { caption, weeks, listed } = Astro.props;
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+/** At most this many dots in a day; its name says how many. */
+const DOTS = 3;
 ---
 <table class="month">
   <caption>{caption}</caption>
   <thead>
-    <tr>{DAYS.map((d) => <th scope="col"><abbr title={d}>{d.slice(0, 3)}</abbr></th>)}</tr>
+    <tr>{DAYS.map((d) => <th scope="col"><span class="d2" aria-hidden="true">{d.slice(0, 2)}</span><span class="d3" aria-hidden="true">{d.slice(0, 3)}</span><span class="visually-hidden">{d}</span></th>)}</tr>
   </thead>
   <tbody>
     {weeks.map((week) => (
       <tr>
         {week.map((day) => day.inMonth ? (
           <td aria-current={day.today ? 'date' : undefined}>
-            <span class="n"><span aria-hidden="true">{Number(day.date.slice(8))}</span><span class="visually-hidden">{formatDate(day.date)}</span></span>
-            {day.events.length > 0 && (
-              <ul>
-                {day.events.map((e) => (
-                  <li class={e.status === 'cancelled' ? 'x' : undefined} data-source={e.source}>
-                    <a href={e.path}>{e.status === 'cancelled' && 'Cancelled: '}{e.start && `${formatTime(e.start)} `}{e.title}</a>
-                  </li>
-                ))}
-              </ul>
+            {day.events.length > 0 ? (
+              <>
+                <a class="day" href={dayHref(day.date, listed)} aria-label={gridDayLabel(day)}>
+                  <span class="n">{Number(day.date.slice(8))}</span>
+                  <span class="dots" aria-hidden="true">{day.events.slice(0, DOTS).map((e) => <i class={e.status === 'cancelled' ? 'dot x' : 'dot'} />)}</span>
+                </a>
+                <ul class="titles">
+                  {day.events.map((e) => (
+                    <li class={e.status === 'cancelled' ? 'x' : undefined} data-source={e.source}>
+                      <a href={e.path}>{e.status === 'cancelled' && 'Cancelled: '}{e.start && `${formatTime(e.start)} `}{e.title}</a>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <span class="day"><span class="n" aria-hidden="true">{Number(day.date.slice(8))}</span><span class="visually-hidden">{gridDayLabel(day)}</span></span>
             )}
           </td>
         ) : <td class="out" />)}

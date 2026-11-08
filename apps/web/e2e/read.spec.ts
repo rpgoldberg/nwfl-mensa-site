@@ -164,31 +164,31 @@ test.describe('/read, the public copy', () => {
 });
 
 test.describe('/read controls', () => {
-  test('every control works by tap or click: zoom, both fits, next, previous and the page box', async ({ page, isMobile }) => {
+  test('every control works by tap or click: zoom, the fit, next, back and the page box', async ({ page, isMobile }) => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);
     const zoom = page.locator('[data-viewer-zoom]');
     const box = page.getByLabel('Page', { exact: true });
-    const fitWidth = page.getByRole('button', { name: 'Fit width' });
-    const fitPage = page.getByRole('button', { name: 'Fit page' });
-    // A phone opens at Fit width, a computer at Fit page.
-    await expect(isMobile ? fitWidth : fitPage).toHaveAttribute('aria-pressed', 'true');
+    // W-LOOK2: one Fit control. A phone opens at the width, so it offers the whole page; a computer the other way round.
+    const fit = page.locator('[data-viewer-fit]');
+    await expect(fit).toHaveAccessibleName(isMobile ? 'Fit whole page' : 'Fit width');
     const first = await zoom.textContent();
     await press(isMobile, page.getByRole('button', { name: 'Zoom in' }));
     await expect(zoom).not.toHaveText(first!);
-    await expect(fitWidth).toHaveAttribute('aria-pressed', 'false');
-    await expect(fitPage).toHaveAttribute('aria-pressed', 'false');
+    // Zoomed, it offers the fit the device opened at.
+    await expect(fit).toHaveAccessibleName(isMobile ? 'Fit width' : 'Fit whole page');
     await press(isMobile, page.getByRole('button', { name: 'Zoom out' }));
     const out = parseInt((await zoom.textContent())!, 10);
     expect(out).toBeLessThan(parseInt(first!, 10));
-    await press(isMobile, fitWidth);
-    await expect(fitWidth).toHaveAttribute('aria-pressed', 'true');
-    await press(isMobile, fitPage);
-    await expect(fitPage).toHaveAttribute('aria-pressed', 'true');
+    await press(isMobile, fit);
+    await expect(zoom).toHaveText(first!);
+    await expect(fit).toHaveAccessibleName(isMobile ? 'Fit whole page' : 'Fit width');
+    await press(isMobile, fit);
+    await expect(fit).toHaveAccessibleName(isMobile ? 'Fit width' : 'Fit whole page');
     await press(isMobile, page.getByRole('button', { name: 'Next page' }));
     await expect(box).toHaveValue('2');
     await expect(page.locator('[data-viewer-status]')).toHaveText(/Page 2 of 3|Loading page 2|^$/);
-    await press(isMobile, page.getByRole('button', { name: 'Previous page' }));
+    await press(isMobile, page.getByRole('button', { name: 'Back a page' }));
     await expect(box).toHaveValue('1');
     await box.fill('3');
     await box.press('Enter');
@@ -197,13 +197,14 @@ test.describe('/read controls', () => {
     expect(await inked(drawn(page, 3))).toBe(true);
   });
 
-  test('every control works from the keyboard, in order, with the focus shown', async ({ page }) => {
+  test('every control works from the keyboard, in order, with the focus shown', async ({ page, isMobile }) => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);
     const zoom = page.locator('[data-viewer-zoom]');
     const box = page.getByLabel('Page', { exact: true });
-    await page.getByRole('link', { name: 'Download', exact: true }).focus();
-    const order = ['Zoom out', 'Zoom in', 'Fit width', 'Fit page', 'Previous page', 'Page', 'Next page'];
+    // W-LOOK2: Open in another app and Download are below the issue now; the bar comes first.
+    await page.getByRole('button', { name: 'Zoom out' }).focus();
+    const order = ['Zoom in', isMobile ? 'Fit whole page' : 'Fit width', 'Back a page', 'Page', 'Next page', 'Pages of the issue'];
     for (const name of order) {
       await page.keyboard.press('Tab');
       const focused = page.locator(':focus');
@@ -216,9 +217,12 @@ test.describe('/read controls', () => {
     await expect(zoom).not.toHaveText(before!);
     await page.keyboard.press('Space');
     await expect(page.getByRole('button', { name: 'Zoom in' })).toBeFocused();
-    await page.getByRole('button', { name: 'Fit width' }).focus();
+    // Zoomed: Fit offers the device's own fit, and Enter takes the reader back to it.
+    const fit = page.locator('[data-viewer-fit]');
+    await fit.focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(fit).toHaveAccessibleName(isMobile ? 'Fit whole page' : 'Fit width');
+    await expect(fit).toBeFocused();
     await page.getByRole('button', { name: 'Next page' }).focus();
     await page.keyboard.press('Enter');
     await expect(box).toHaveValue('2');
@@ -241,13 +245,14 @@ test.describe('/read controls', () => {
   test('every control is a visible target of at least 48 px', async ({ page }) => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);
-    for (const name of ['Zoom out', 'Zoom in', 'Fit width', 'Fit page', 'Previous page', 'Next page']) {
+    for (const name of ['Zoom out', 'Zoom in', /^Fit /, 'Back a page', 'Next page']) {
       const box = (await page.getByRole('button', { name }).boundingBox())!;
-      expect(box.height, name).toBeGreaterThanOrEqual(48);
-      expect(box.width, name).toBeGreaterThanOrEqual(48);
+      expect(box.height, String(name)).toBeGreaterThanOrEqual(48);
+      expect(box.width, String(name)).toBeGreaterThanOrEqual(48);
     }
     const input = (await page.getByLabel('Page', { exact: true }).boundingBox())!;
     expect(input.height).toBeGreaterThanOrEqual(48);
+    expect(input.width).toBeGreaterThanOrEqual(48);
     const zoom = (await page.locator('[data-viewer-zoom]').boundingBox())!;
     expect(zoom.height).toBeGreaterThanOrEqual(48);
   });
@@ -257,7 +262,8 @@ test.describe('/read controls', () => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);
     const zoomIn = page.getByRole('button', { name: 'Zoom in' });
-    expect(await zoomIn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(1.125 * 16 * 1.4 - 0.5);
+    // W-LOOK2: the bar is sized like the chrome, so it stays one row; its words grow a step at the two largest sizes.
+    expect(await zoomIn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
     const [bar, body] = await page.evaluate(() => [getComputedStyle(document.querySelector('[data-viewer-bar]')!).backgroundColor, getComputedStyle(document.body).backgroundColor]);
     expect(bar).not.toBe('rgb(255, 255, 255)');
     expect(body).toBe('rgb(13, 26, 32)');
@@ -406,8 +412,11 @@ test.describe('/read on a computer', () => {
   });
 });
 
-test.describe('/read on a short computer window', () => {
-  test.use({ viewport: { width: 1280, height: 600 } });
+// W-LOOK2: the bar is sized like the chrome, so a computer's window, or a phone held either way, keeps
+// it pinned at every size; a short phone window (a split screen, 390 x 420) is where the largest size
+// still makes it two rows and too tall.
+test.describe('/read in a short phone window', () => {
+  test.use({ viewport: { width: 390, height: 420 } });
 
   test('the bar lets go of the top as soon as the reader picks a text size that makes it too tall, with no resize', async ({ page }) => {
     await page.goto(read(PUBLIC_ID));
@@ -553,9 +562,9 @@ test.describe('/read accessibility', () => {
       const box = (await viewerPage(page, 1).boundingBox())!;
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(320);
-      for (const name of ['Zoom out', 'Zoom in', 'Fit width', 'Fit page', 'Previous page', 'Next page']) {
+      for (const name of ['Zoom out', 'Zoom in', /^Fit /, 'Back a page', 'Next page']) {
         const b = (await page.getByRole('button', { name }).boundingBox())!;
-        expect(b.x + b.width, name).toBeLessThanOrEqual(320);
+        expect(b.x + b.width, String(name)).toBeLessThanOrEqual(320);
       }
     });
   });

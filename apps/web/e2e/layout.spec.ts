@@ -3,7 +3,7 @@ import { SIZES } from '../server/prefs.mjs';
 import { PRIMARY_NAV, SITE_NAME, currentNav, trailFor } from '../src/lib/site';
 import { ALL_PAGES, titleOf } from './pages';
 import { setPrefs } from './prefs';
-import { signIn } from './signin';
+import { openAccount, signIn } from './signin';
 
 const headingOf = (path: string): string => (path === '/' ? SITE_NAME : titleOf(path));
 
@@ -274,9 +274,11 @@ test.describe('the signed-in header on a wide screen', () => {
   /** Top of each header piece, and whether any two overlap. */
   const pieces = (page: Page) =>
     page.evaluate(() => {
-      const boxes = [...document.querySelectorAll<HTMLElement>('.wordmark, .top-nav .nav-link, .header-tools .hbtn, .account .who')].map((el) => el.getBoundingClientRect());
+      // Only what shows: below 1200 px the account's row is display: none, and the Account button stands for it (W-LOOK2).
+      const shown = (sel: string) => [...document.querySelectorAll<HTMLElement>(sel)].filter((el) => el.getClientRects().length > 0);
+      const boxes = shown('.wordmark, .top-nav .nav-link, .header-tools .hbtn, .account .who').map((el) => el.getBoundingClientRect());
       const overlap = boxes.some((a, i) => boxes.some((b, j) => i < j && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5));
-      const tools = [...document.querySelectorAll<HTMLElement>('.header-tools .hbtn, .account .who')].map((el) => Math.round(el.getBoundingClientRect().top));
+      const tools = shown('.header-tools > .hbtn, .account .who, .account__inline .hbtn, .account__menu > summary').map((el) => Math.round(el.getBoundingClientRect().top));
       return { bar: document.querySelector('.site-header__bar')!.getBoundingClientRect().height, toolRows: new Set(tools).size, overlap };
     });
 
@@ -315,13 +317,18 @@ test.describe('signed in, at 320px wide', () => {
         await page.goto(path);
         const banner = page.getByRole('banner');
         await expect(banner).toContainText('Maximiliana Bartholomew-Fitzgerald Examplesworth');
+        // W-LOOK2: on a phone they are in the Account menu, which must fit the screen too.
+        const menu = await openAccount(page);
+        await expect(menu.locator('.account__who b')).toHaveText('Maximiliana Bartholomew-Fitzgerald Examplesworth');
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         expect(overflow, `${path} at size ${size}`).toBeLessThanOrEqual(0);
-        for (const control of [banner.getByRole('link', { name: 'Your account' }), banner.getByRole('link', { name: 'Officer area' }), banner.getByRole('button', { name: 'Sign out' })]) {
+        for (const control of [menu.getByRole('link', { name: 'Your account' }), menu.getByRole('link', { name: 'Officer area' }), menu.getByRole('button', { name: 'Sign out' })]) {
           await expect(control).toBeVisible();
           const box = (await control.boundingBox())!;
           expect(box.width).toBeGreaterThanOrEqual(48);
           expect(box.height).toBeGreaterThanOrEqual(48);
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(320);
         }
       }
     });

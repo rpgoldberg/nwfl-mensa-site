@@ -25,7 +25,7 @@ import { SIZES } from '../server/prefs.mjs';
 import { PUBLIC_COPY } from '../src/lib/reader';
 import { setPrefs } from './prefs';
 import { crawlSeeds } from './routes';
-import { banner, signIn } from './signin';
+import { signIn, signOutButton } from './signin';
 import { ARTICLES, BOARD_GAMES, MEMBERS_PDF_MARK, MIXED, NEWSLETTER, SOURCE_PDFS, centralToday } from './stand-in';
 
 // As in a11y.spec.ts: WCAG 2.2 A and AA, plus AAA and best practice.
@@ -182,7 +182,7 @@ test.describe('/news signed in as a member', () => {
   });
 
   test('signed out, /news is the public page again', async ({ page }) => {
-    await banner(page).getByRole('button', { name: 'Sign out' }).click();
+    await (await signOutButton(page)).click();
     await page.getByRole('button', { name: 'Yes, sign me out' }).click();
     await expect(page).toHaveURL(/\/signed-out$/);
     const res = await page.goto('/news');

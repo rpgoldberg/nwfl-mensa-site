@@ -7,7 +7,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { SITE_URL } from './servers';
-import { signIn } from './signin';
+import { openAccount, signIn, signOutButton } from './signin';
 import { MEMBER_CHECKED_ON, SIGNUP_QUEUE, VET_CONFIRMS, VET_WARNINGS } from './stand-in';
 
 const ACCOUNT = '/account';
@@ -358,7 +358,7 @@ test.describe('fix 1: officers and the Admin need no member account (SHOULD-2, N
       await page.goto('/news');
       await signIn(page, 'newcomer');
       await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
-      await page.getByRole('banner').getByRole('button', { name: 'Sign out' }).click();
+      await (await signOutButton(page)).click();
       await page.getByRole('button', { name: 'Yes, sign me out' }).click();
       await expect(page).toHaveURL(/\/signed-out$/);
     }
@@ -384,7 +384,7 @@ test.describe('fix 1: the officer area admits each role, with only its own links
     test(`${c.login}: let in, linked from the header, and shown ${c.links.length === 0 ? 'no links' : c.links.join(' and ')}`, async ({ page }) => {
       await page.goto('/');
       await signIn(page, c.login);
-      await page.getByRole('banner').getByRole('link', { name: 'Officer area' }).click();
+      await (await openAccount(page)).getByRole('link', { name: 'Officer area' }).click();
       await expect(page).toHaveURL(`${SITE_URL}/officer-area`);
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
       await expect(page.locator('.lead')).toContainText('Welcome,');
@@ -405,7 +405,7 @@ test.describe('fix 1: the officer area admits each role, with only its own links
     test(`${login}: 403, and no header link`, async ({ page }) => {
       await page.goto('/');
       await signIn(page, login);
-      await expect(page.getByRole('banner').getByRole('link', { name: 'Officer area' })).toHaveCount(0);
+      await expect(page.getByRole('banner').locator('a[href="/officer-area"]')).toHaveCount(0);
       const res = await page.goto('/officer-area');
       expect(res?.status()).toBe(403);
       await expect(page.locator('main .link-list')).toHaveCount(0);
@@ -419,22 +419,22 @@ test.describe('fix 1: Your account in the header (the group\'s enrolees)', () =>
     await signIn(page, 'member');
     for (const path of ['/', '/about', '/news']) {
       await page.goto(path);
-      const link = page.getByRole('banner').getByRole('link', { name: 'Your account' });
+      const link = (await openAccount(page)).getByRole('link', { name: 'Your account' });
       await expect(link).toBeVisible();
       const box = (await link.boundingBox())!;
       expect(box.height).toBeGreaterThanOrEqual(48);
       await fits(page);
     }
-    await page.getByRole('banner').getByRole('link', { name: 'Your account' }).click();
+    await (await openAccount(page)).getByRole('link', { name: 'Your account' }).click();
     await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
     await expect(page.locator('.lead')).toHaveText('Your account has member access.');
   });
 
   test('is not there signed out, nor for a sign-in that is not one of the group\'s', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('banner').getByRole('link', { name: 'Your account' })).toHaveCount(0);
+    await expect(page.getByRole('banner').locator('a[href="/account"]')).toHaveCount(0);
     await signIn(page, 'lone-admin');
-    await expect(page.getByRole('banner').getByRole('link', { name: 'Your account' })).toHaveCount(0);
+    await expect(page.getByRole('banner').locator('a[href="/account"]')).toHaveCount(0);
   });
 });
 

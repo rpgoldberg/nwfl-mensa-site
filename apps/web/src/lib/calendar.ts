@@ -73,9 +73,22 @@ export function todayCentral(now: Date): string {
  */
 export function chipStatus(e: Pick<CalendarEvent, 'date' | 'start' | 'end' | 'status'>, now: Date): EventStatus | 'past' {
   if (e.status !== 'scheduled' && e.status !== 'tentative') return e.status;
+  return hasEnded(e, now) ? 'past' : e.status;
+}
+
+/**
+ * Whether an occurrence is over, by the Central clock: its end has passed, or its start where it has
+ * no end, or its whole day where it has no time. At its end minute it is still on.
+ */
+export function hasEnded(e: Pick<CalendarEvent, 'date' | 'start' | 'end'>, now: Date): boolean {
   const at = e.end ?? { date: e.date, time: e.start ?? '23:59' };
   const here = centralParts(now);
-  return `${at.date} ${at.time}` < `${here.date} ${here.time}` ? 'past' : e.status;
+  return `${at.date} ${at.time}` < `${here.date} ${here.time}`;
+}
+
+/** "Coming up" (W-LOOK2): what has not ended, in the order given; one that ended earlier today leaves it, whatever its status. */
+export function comingUp<T extends Pick<CalendarEvent, 'date' | 'start' | 'end'>>(events: readonly T[], now: Date): T[] {
+  return events.filter((e) => !hasEnded(e, now));
 }
 
 /** The Google Calendar page that subscribes to a webcal:// feed (a plain link, no sign-in of ours). */
@@ -183,6 +196,28 @@ export function monthGrid(month: string, events: readonly CalendarEvent[], today
     );
   }
   return weeks;
+}
+
+
+/** The id of a day's first entry in the list, which the grid's day links to (W-LOOK2). */
+export function dayAnchor(date: string): string {
+  return `day-${date}`;
+}
+
+/** Where a day in the grid goes: its place in the list on this page, or else in its month's list. */
+export function dayHref(date: string, listed: ReadonlySet<string>): string {
+  return listed.has(date) ? `#${dayAnchor(date)}` : `/events?month=${date.slice(0, 7)}#${dayAnchor(date)}`;
+}
+
+/** A day of the grid in words, for its link: "Wednesday, 11 November, today, 1 event". */
+export function gridDayLabel(day: Pick<GridDay, 'date' | 'today' | 'events'>): string {
+  const count = day.events.length;
+  const cancelled = day.events.filter((e) => e.status === 'cancelled').length;
+  const parts = [formatDate(day.date, { year: false })];
+  if (day.today) parts.push('today');
+  parts.push(count === 0 ? 'no events' : `${count} event${count === 1 ? '' : 's'}`);
+  if (cancelled > 0) parts.push(count === 1 ? 'cancelled' : `${cancelled} cancelled`);
+  return parts.join(', ');
 }
 
 /** Events by day, in date order, each day in time order. */

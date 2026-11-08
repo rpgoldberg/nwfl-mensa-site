@@ -7,7 +7,12 @@ import {
   COMING_UP_DAYS,
   centralParts,
   chipStatus,
+  comingUp,
+  dayAnchor,
+  dayHref,
   eventIdFromParam,
+  gridDayLabel,
+  hasEnded,
   eventPath,
   googleCalendarUrl,
   formatTime,
@@ -242,5 +247,59 @@ describe('googleCalendarUrl', () => {
   it('keeps a port in the feed URL', () => {
     const url = googleCalendarUrl('webcal://localhost:4321/calendar.ics');
     expect(new URL(url).searchParams.get('cid')).toBe('webcal://localhost:4321/calendar.ics');
+  });
+});
+
+// W-LOOK2: what has ended leaves "Coming up"; "Past" is only for the month and past views.
+describe('hasEnded and comingUp', () => {
+  // 2026-11-07 is CST (UTC-6): 03:43Z on the 8th is 21:43 Central on the 7th.
+  const evening = new Date('2026-11-08T03:43:00Z');
+  const lunch = event({ id: 'lunch', date: '2026-11-07', start: '11:30', end: { date: '2026-11-07', time: '13:00' } });
+  const late = event({ id: 'late', date: '2026-11-07', start: '21:00', end: { date: '2026-11-07', time: '23:00' } });
+  const tomorrow = event({ id: 'tomorrow', date: '2026-11-08', start: '11:30', end: undefined });
+  const allDay = event({ id: 'all-day', date: '2026-11-07', start: undefined, end: undefined });
+
+  it('says an occurrence has ended by its end, else its start, else its whole day, on the Central clock', () => {
+    expect(hasEnded(lunch, evening)).toBe(true);
+    expect(hasEnded(late, evening)).toBe(false);
+    expect(hasEnded(tomorrow, evening)).toBe(false);
+    expect(hasEnded(allDay, evening)).toBe(false);
+    expect(hasEnded({ ...allDay, date: '2026-11-06' }, evening)).toBe(true);
+    expect(hasEnded(event({ date: '2026-11-07', start: '21:00', end: undefined }), evening)).toBe(true);
+    // At its end minute it is still on.
+    expect(hasEnded(event({ date: '2026-11-07', end: { date: '2026-11-07', time: '21:43' } }), evening)).toBe(false);
+  });
+
+  it('drops from Coming up what ended earlier today, whatever its status, and keeps the order', () => {
+    const cancelled = { ...lunch, id: 'cx', status: 'cancelled' as const };
+    expect(comingUp([lunch, cancelled, late, allDay, tomorrow], evening).map((e) => e.id)).toEqual(['late', 'all-day', 'tomorrow']);
+    expect(comingUp([], evening)).toEqual([]);
+  });
+
+  it('agrees with the chip: nothing left in Coming up reads "Past"', () => {
+    for (const e of comingUp([lunch, late, allDay, tomorrow, event({ date: '2026-11-07', start: '21:00', end: undefined })], evening)) expect(chipStatus(e, evening)).not.toBe('past');
+  });
+});
+
+describe('the compact month grid', () => {
+  const day = (over: Partial<{ date: string; today: boolean; events: CalendarEvent[] }> = {}) => ({ date: '2026-11-11', inMonth: true, today: false, events: [], ...over });
+
+  it('names each day with its weekday, date and how many events, and says which is today', () => {
+    expect(gridDayLabel(day({ events: [event({ date: '2026-11-11' })] }))).toBe('Wednesday, 11 November, 1 event');
+    expect(gridDayLabel(day({ events: [event(), event({ id: 'b' })] }))).toBe('Wednesday, 11 November, 2 events');
+    expect(gridDayLabel(day({ today: true, events: [event()] }))).toBe('Wednesday, 11 November, today, 1 event');
+    expect(gridDayLabel(day())).toBe('Wednesday, 11 November, no events');
+  });
+
+  it('says how many of a day\u2019s events are cancelled', () => {
+    expect(gridDayLabel(day({ events: [event({ status: 'cancelled' })] }))).toBe('Wednesday, 11 November, 1 event, cancelled');
+    expect(gridDayLabel(day({ events: [event(), event({ id: 'b', status: 'cancelled' })] }))).toBe('Wednesday, 11 November, 2 events, 1 cancelled');
+  });
+
+  it('links a day to its place in the list on this page, or to its month where the list does not hold it', () => {
+    expect(dayAnchor('2026-11-11')).toBe('day-2026-11-11');
+    const listed = new Set(['2026-11-11']);
+    expect(dayHref('2026-11-11', listed)).toBe('#day-2026-11-11');
+    expect(dayHref('2026-11-04', listed)).toBe('/events?month=2026-11#day-2026-11-04');
   });
 });

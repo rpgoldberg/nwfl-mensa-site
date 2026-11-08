@@ -1,0 +1,22 @@
+---
+// The "Add our calendar to your phone" card on /events: the subscription links and a note on which to
+// choose. It sits under the month grid, so a phone shows the calendar first (W-LOOK2).
+import Icon from './Icon.astro';
+import { googleCalendarUrl } from '../lib/calendar';
+
+interface Props {
+  /** The webcal:// address of the whole calendar. */
+  feedUrl: string;
+}
+const { feedUrl } = Astro.props;
+---
+<section class="card" aria-labelledby="subscribe-title">
+  <h2 id="subscribe-title">Add our calendar to your phone</h2>
+  <p>Your phone's calendar then shows our public events, and keeps them up to date by itself.</p>
+  <p class="btns">
+    <a class="button" href={feedUrl}><Icon name="add-calendar" />Add our calendar</a>
+    <a class="button" href={googleCalendarUrl(feedUrl)}><Icon name="add-calendar" />Add to Google Calendar</a>
+    <a class="button button--secondary" href="/calendar.ics"><Icon name="download" />Download the calendar file</a>
+  </p>
+  <p class="muted">On an iPhone, iPad and Mac, "Add our calendar" subscribes and keeps itself up to date. On Android or Google Calendar, use "Add to Google Calendar"; Google refreshes it every few hours, and the free app ICSx⁵ also works. "Download the calendar file" copies today's events once and won't update.</p>
+</section>
