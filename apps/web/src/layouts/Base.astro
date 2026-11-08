@@ -4,7 +4,9 @@
 // wide-screen nav, Aa and Sign in (Help is on More); the Aa panel; breadcrumbs
 // and Back; the footer; and the phone's bottom bar. The chrome is in px and one row, so only the content grows with the
 // reader's size (W-LOOK). No script needed: Aa opens its panel as a link
-// target, and the reader's size and theme come from cookies.
+// target, and the reader's size and theme come from cookies. On a phone the
+// header is one row: the monogram, the name, Aa and Sign in, or an Account
+// menu holding the signed-in reader's links (W-LOOK2, server/account.mjs).
 import '@fontsource/atkinson-hyperlegible/400.css';
 import '@fontsource/atkinson-hyperlegible/400-italic.css';
 import '@fontsource/atkinson-hyperlegible/700.css';
@@ -54,6 +56,7 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
     {/* Progressive enhancement only (install button, in-app browser hint); a same-origin file, never inline. */}
     <script is:inline type="module" src="/scripts/install.js"></script>
     <script is:inline type="module" src="/scripts/size.js"></script>
+    <script is:inline type="module" src="/scripts/account-menu.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to main content</a>
@@ -62,7 +65,7 @@ const back = Astro.isPrerendered ? path : `${Astro.url.pathname}${Astro.url.sear
         <a class="wordmark" href="/"><img class="monogram" src="/icons/icon-192.png" alt="" width="40" height="40" /><span class="wordmark__text"><span class="wordmark__place">Northwest Florida</span> <span class="wordmark__name">Mensa</span></span></a>
         <PrimaryNav path={path} variant="top" />
         <div class="header-tools">
-          <a class="hbtn" id="reader-toggle" href="#reader-menu"><Icon name="theme" />Aa<span class="visually-hidden"> Text size and theme</span></a>
+          <a class="hbtn hbtn--stack" id="reader-toggle" href="#reader-menu"><Icon name="theme" /><span class="hbtn__word">Aa<span class="visually-hidden"> Text size and theme</span></span></a>
           {/* One renderer (server/account.mjs): the server wrapper puts the signed-in version on prerendered pages. */}
           <Fragment set:html={accountHtml(Astro.locals.session, { back, signIn: !PUBLIC_ONLY })} />
         </div>

@@ -84,6 +84,7 @@ const ONE_OFF = {
   panamaCity: '6b7c8d9e-afb0-41c2-93e4-f5a6b7c8d9e0',
   membersInFull: '7c8d9eaf-b0c1-42d3-a4f5-a6b7c8d9e0f1',
   noStatus: '8d9eafb0-c1d2-43e4-b5a6-b7c8d9e0f1a2',
+  early: '9eafb0c1-d2e3-44f5-86a7-c8d9e0f1a2b3',
 };
 
 const VENUES = {
@@ -183,6 +184,8 @@ function calendar(from, to) {
     occurrence({ id: ONE_OFF.games, title: 'Board games afternoon', date: addDays(today, 3), start: '14:00', end: '17:00', venue: VENUES.home, area: Area.OKALOOSA, owner: OFFICE.social }),
     occurrence({ id: ONE_OFF.books, title: 'Online book chat', date: addDays(today, 10), start: '19:00', end: '20:00', venue: VENUES.video, area: Area.VIRTUAL, owner: OFFICE.social }),
     occurrence({ id: ONE_OFF.picnic, title: 'Summer picnic planning', date: addDays(today, 20), area: Area.WALTON, status: OccurrenceStatus.TENTATIVE, owner: OFFICE.social }),
+    // W-LOOK2: today, and over in its first minutes: it leaves Coming up, and the month view calls it Past.
+    occurrence({ id: ONE_OFF.early, title: 'Early coffee', date: today, start: '00:00', end: '00:01', venue: VENUES.diner, area: Area.BAY, owner: OFFICE.social }),
     occurrence({ id: ONE_OFF.panamaCity, title: 'Panama City lunch', date: addDays(today, 12), start: '11:30', venue: VENUES.diner, area: Area.BAY, status: OccurrenceStatus.MOVED, statusNote: 'Moved from Saturday to Sunday.', owner: OFFICE.social }),
     // The two canaries.
     occurrence({ id: ONE_OFF.membersInFull, title: CANARY.membersInFull, date: addDays(today, 1), start: '12:00', venue: VENUES.bistro, area: Area.OKALOOSA, visibility: EventVisibility.MEMBERS, owner: OFFICE.social }),

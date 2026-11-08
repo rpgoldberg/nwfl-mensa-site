@@ -2,7 +2,7 @@
 // Line icons from the design draft. Decorative: every icon sits beside its word.
 import type { MoreIcon, NavIcon } from '../lib/site';
 
-export type IconName = NavIcon | MoreIcon | 'theme' | 'add-calendar' | 'download' | 'external' | 'pin' | 'lock' | 'back' | 'forward' | 'search';
+export type IconName = NavIcon | MoreIcon | 'theme' | 'add-calendar' | 'download' | 'external' | 'pin' | 'lock' | 'back' | 'forward' | 'search' | 'zoom-in' | 'zoom-out' | 'fit-width' | 'fit-page';
 
 interface Props {
   name: IconName;
@@ -23,6 +23,10 @@ const { name } = Astro.props;
   {name === 'lock' && <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>}
   {name === 'back' && <path d="M15 5 8 12l7 7" />}
   {name === 'forward' && <path d="m9 5 7 7-7 7" />}
+  {name === 'zoom-out' && <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5.5 5.5M7.5 10.5h6" /></>}
+  {name === 'zoom-in' && <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5.5 5.5M7.5 10.5h6M10.5 7.5v6" /></>}
+  {name === 'fit-width' && <path d="M3 5v14M21 5v14M6 12h12M9 9l-3 3 3 3M15 9l3 3-3 3" />}
+  {name === 'fit-page' && <><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5" /><rect x="8" y="7" width="8" height="10" rx="1" /></>}
   {name === 'info' && <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5v.01" /></>}
   {name === 'users' && <><circle cx="9" cy="8" r="3.2" /><path d="M3 19c.8-3.2 3.2-5 6-5s5.2 1.8 6 5" /><circle cx="17" cy="9" r="2.5" /><path d="M16 14c2.4 0 4.3 1.6 5 4.5" /></>}
   {name === 'scale' && <path d="M12 4v16M7 20h10M5 8h14M5 8l-3 6a3 3 0 0 0 6 0zM19 8l-3 6a3 3 0 0 0 6 0z" />}

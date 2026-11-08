@@ -18,17 +18,20 @@ import { formatDate } from '../data/format';
 import { currentIssue } from '../data/site-data';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
-import { addDays, todayCentral } from '../lib/calendar';
+import { addDays, comingUp, todayCentral } from '../lib/calendar';
 import { visibleContent } from '../lib/content';
 import { MENSA_LINKS, SITE_NAME, page } from '../lib/site';
 
 const p = page('/');
 const live = liveData();
-const today = todayCentral(new Date());
+const now = new Date();
+const today = todayCentral(now);
 const [week, report, announcements] = live
   ? await Promise.all([attempt(() => live.events(today, addDays(today, 6))), attempt(() => live.presidentReport()), attempt(() => live.announcements())])
   : [];
 if ([week, report, announcements].some((loaded) => loaded && !loaded.ok)) markUnavailable(Astro.response);
+// W-LOOK2: what ended earlier today has left "Coming up".
+const coming = week?.ok ? comingUp(week.value, now) : [];
 // The fixture issues are made up: the card names no issue until the archive is real.
 const issue = siteData.isSample ? undefined : currentIssue(visibleContent(await siteData.issues(), { publicOnly: PUBLIC_ONLY }));
 ---
@@ -40,7 +43,7 @@ const issue = siteData.isSample ? undefined : currentIssue(visibleContent(await 
       <section class="card" aria-labelledby="week-title">
         <h2 id="week-title">Coming up</h2>
         {week && !week.ok ? <Unavailable what="This week's calendar" />
-          : week && week.value.length > 0 ? <EventList events={week.value} label="Coming up this week" />
+          : coming.length > 0 ? <EventList events={coming} label="Coming up this week" />
           : <EmptyEvents when="for the next seven days" />}
         <p class="btns"><a class="button button--secondary" href="/events"><Icon name="calendar" />See all events</a></p>
       </section>

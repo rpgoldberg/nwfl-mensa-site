@@ -73,8 +73,8 @@ h3 { font-size: min(var(--fs-h3), 9vw); }
 .site-header { background: var(--surface); font-size: 16px; line-height: 1.25; }
 .site-header__bar {
   display: flex;
-  /* A signed-in officer's name, Officer area and Sign out may take a second
-     row on a phone; a reader who is not signed in always gets one row. */
+  /* One row on a phone, signed in or not (W-LOOK2): the signed-in reader's
+     links are in the Account menu below 1200 px. Wrapping is only a fallback. */
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
@@ -127,9 +127,51 @@ h3 { font-size: min(var(--fs-h3), 9vw); }
 button.hbtn { cursor: pointer; }
 .site-header .hbtn { min-height: 48px; min-width: 48px; padding: 0 12px; border-radius: 8px; font-size: 16px; white-space: nowrap; }
 .site-header .hbtn svg { width: 22px; height: 22px; }
-/* The account area: Sign in, or the reader's name, Officer area and Sign out. */
+/* W-LOOK2: on a phone Aa, Sign in and Account are an icon over a short word,
+   as in the bottom bar, so the header stays one row down to 320 px. */
+.hbtn__word { white-space: nowrap; }
+@media (max-width: 479.98px) {
+  .site-header .hbtn--stack { flex-direction: column; gap: 2px; padding: 4px 8px; font-size: 14px; line-height: 1.15; }
+}
+/* The account area: Sign in; or, signed in, the reader's name, Your account,
+   Officer area and Sign out, in the header's row at 1200 px and wider and in
+   the Account menu below that (W-LOOK2). One of the two is display: none. */
 .account { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .account:empty { display: none; }
+.account__inline { display: none; }
+.account__menu { position: relative; }
+@media (min-width: 1200px) {
+  .account__inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .account__menu { display: none; }
+}
+.account__menu > summary { list-style: none; cursor: pointer; }
+.account__menu > summary::-webkit-details-marker { display: none; }
+.account__menu[open] > summary { background: var(--accent-soft); border-color: var(--accent); }
+/* Over the page, under its button, right-aligned so it never leaves the screen. */
+.account__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 12px;
+  width: max-content;
+  min-width: 240px;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  border: var(--border) solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.3);
+  font-size: 16px;
+  line-height: 1.3;
+}
+.account__who { display: grid; gap: 2px; margin: 0; overflow-wrap: anywhere; }
+.account__who b { font-size: 18px; }
+.account__role { color: var(--muted); }
+.account__items { list-style: none; display: grid; gap: 8px; margin: 0; padding: 0; }
+.account__items .hbtn { width: 100%; justify-content: flex-start; }
 .account .who {
   display: inline-flex;
   align-items: center;
@@ -876,22 +918,46 @@ main > .calendar { max-width: none; }
 .month-nav { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .calgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); align-items: start; }
 .calgrid h2 { margin-top: 0; }
-/* The grid only where seven columns are readable at the reader's size; the
-   list beside it always carries the same events. */
-.monthbox { display: none; }
-@container calendar (min-width: 46rem) { .monthbox { display: block; } }
+/* W-LOOK2: the grid at every width. Compact where seven columns are narrow (a
+   phone, or a large text size): each day with events a link, its number over a
+   dot per event, to its place in the list; on a narrow page it runs edge to
+   edge, so each day is 48 px wide at 360 px. Where there is room, each day also
+   lists its events' times and titles, and from 64rem the list sits beside it. */
+.monthbox { display: block; }
+@container calendar (max-width: 45.99rem) {
+  .monthbox { margin-inline: calc(-1 * var(--space-4)); }
+  .month caption { padding-inline: var(--space-4); }
+}
 @container calendar (min-width: 64rem) { .calgrid { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); } }
 .month { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--surface); }
 .month caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); padding-bottom: var(--space-2); }
-.month th { padding: var(--space-2) 0.125rem; background: var(--bg); border: var(--border) solid var(--line-soft); font-weight: 700; }
-.month abbr { text-decoration: none; }
-.month td { height: 6.75rem; padding: var(--space-1); vertical-align: top; border: var(--border) solid var(--line-soft); font-size: var(--fs-small); line-height: 1.25; overflow-wrap: break-word; }
+.month th { padding: var(--space-1) 0; background: var(--bg); border: var(--border) solid var(--line-soft); font-weight: 700; font-size: var(--fs-small); }
+.month .d3 { display: none; }
+@container calendar (min-width: 30rem) { .month .d2 { display: none; } .month .d3 { display: inline; } }
+.month td { padding: 0; vertical-align: top; border: var(--border) solid var(--line-soft); font-size: var(--fs-small); line-height: 1.25; overflow-wrap: break-word; }
 .month td.out { background: var(--bg); }
+.month .day { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: var(--target); padding: var(--space-1) 0; color: var(--ink); }
+.month a.day { color: var(--accent); text-decoration: none; }
+.month a.day:hover .n { text-decoration: underline; }
+.month a.day:focus-visible { outline-offset: -3px; }
+.month .n { display: inline-flex; align-items: center; justify-content: center; width: 1.9em; max-width: 100%; height: 1.9em; border-radius: 999px; font-weight: 700; }
+.month .dots { display: flex; gap: 3px; }
+.month .dot { display: block; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: currentColor; }
+.month .dot.x { background: transparent; border: 2px solid currentColor; }
+/* Today: a ring round the day and its number filled, not colour alone. */
 .month td[aria-current="date"] { box-shadow: inset 0 0 0 0.1875rem var(--accent); }
-.month .n { display: block; font-weight: 700; }
-.month ul { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: var(--space-1); }
-.month a { display: block; min-height: 1.5rem; font-weight: 700; }
-.month .x a { color: var(--stop); text-decoration: line-through; }
+.month td[aria-current="date"] .n { background: var(--accent); color: var(--on-accent); }
+.month .titles { display: none; }
+@container calendar (min-width: 46rem) {
+  .month td { height: 6.75rem; padding: var(--space-1); }
+  .month .day { align-items: flex-start; }
+  .month .dots { display: none; }
+  .month .titles { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: var(--space-1); }
+  .month .titles a { display: block; min-height: 1.5rem; font-weight: 700; }
+  .month .titles .x a { color: var(--stop); text-decoration: line-through; }
+}
+/* The day a grid link went to, in the list. */
+.ev:target { scroll-margin-top: var(--space-4); box-shadow: inset 0.25rem 0 0 var(--accent); padding-left: var(--space-3); }
 
 dl.facts { display: grid; gap: var(--space-3); }
 dl.facts div { display: grid; gap: 0; }
@@ -989,14 +1055,15 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 .out-count { margin: 0; font-weight: 700; font-size: 1.25rem; }
 .out-stop { min-width: 8rem; }
 
-/* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). The bar is content, so
-   it takes the reader's text size and theme; it wraps on a phone, and stays at the top while reading
-   only where it leaves room: while it takes at most a third of the window. The script measures it as
-   the reader opens the issue, turns the phone, resizes the window or picks another text size, and
-   otherwise sets .viewer--unpinned, so the bar scrolls away with the page and a page gone to stops at
-   the window's top (--viewer-bar 0). The media query does the same without waiting for the script
-   where, at the two largest text sizes, the bar always takes more than that (measured: at 140 % it is
-   at least 172 px up to 1280 px wide, and 329 px below 812): a narrow window, and a phone held sideways. */
+/* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). W-LOOK2: the bar is one
+   compact row, sized like the chrome (px), so the page gets the screen: each control an icon over a
+   short word, 48 px at least; on a phone it runs edge to edge. It grows only at the two largest text
+   sizes, where it may take a second row. It stays at the top while reading only where it leaves room:
+   while it takes at most a third of the window. The script measures it as the reader opens the issue,
+   turns the phone, resizes the window or picks another text size, and otherwise sets
+   .viewer--unpinned, so the bar scrolls away with the page and a page gone to stops at the window's
+   top (--viewer-bar 0). The media query does the same without waiting for the script on a phone held
+   sideways at the two largest sizes. Open in another app and Download are below the issue. */
 .viewer-other { margin: var(--space-4) 0; }
 .viewer { margin: var(--space-4) 0; }
 .viewer-bar {
@@ -1005,25 +1072,87 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
   z-index: 2;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2) var(--space-4);
-  padding: var(--space-2);
+  justify-content: center;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px;
+  font-size: 14px;
+  line-height: 1.2;
   background: var(--surface);
   border: var(--border) solid var(--line-soft);
   border-radius: var(--radius);
 }
+html[data-size="140"] .viewer-bar { font-size: 16px; }
+html[data-size="175"] .viewer-bar { font-size: 18px; }
+@media (max-width: 599.98px) {
+  .viewer-bar { margin-inline: calc(-1 * var(--space-4)); border-inline: 0; border-radius: 0; }
+}
+/* Wider than a phone there is room: the words a step larger, and more space between the groups. */
+@media (min-width: 600px) {
+  .viewer-bar { font-size: 16px; column-gap: 24px; }
+  html[data-size="140"] .viewer-bar { font-size: 18px; }
+  html[data-size="175"] .viewer-bar { font-size: 20px; }
+  .vbtn { padding: 4px 8px; }
+}
 .viewer-bar[hidden], .viewer-pages[hidden] { display: none; }
-@media (max-width: 599px), (max-width: 959px) and (max-height: 499px) {
+@media (max-width: 959px) and (max-height: 499px) {
   html[data-size="140"] .viewer-bar, html[data-size="175"] .viewer-bar { position: static; }
   html[data-size="140"] .viewer-page, html[data-size="175"] .viewer-page { scroll-margin-top: var(--space-2); }
 }
 .viewer--unpinned .viewer-bar { position: static; }
-.viewer-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-.viewer-bar .button { padding: 0 var(--space-3); }
-.viewer-bar .button[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); }
-.viewer-bar .button[aria-disabled="true"] { border-style: dashed; cursor: default; }
-.viewer-zoom { display: inline-flex; align-items: center; justify-content: center; min-height: var(--target); min-width: 4.5em; font-weight: 700; }
-.viewer-goto { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
-.viewer-goto input { width: 4.5em; min-height: var(--target); padding: 0 var(--space-2); color: var(--ink); background: var(--surface); border: var(--border) solid var(--line); border-radius: var(--radius); }
+.viewer-group { display: flex; align-items: stretch; gap: 2px; }
+.vbtn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 4px;
+  color: var(--accent);
+  background: var(--surface);
+  border: var(--border) solid var(--accent);
+  border-radius: var(--radius);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.vbtn svg { width: 24px; height: 24px; flex: none; }
+.vbtn[data-viewer-fit] { padding-inline: 2px; }
+.vbtn__word { white-space: nowrap; }
+.vbtn[aria-disabled="true"] { border-style: dashed; cursor: default; }
+/* The Fit control shows the icon of the fit it offers. */
+.fit-icon { display: none; }
+.vbtn[data-fit="page"] .fit-icon--page, .vbtn[data-fit="width"] .fit-icon--width { display: block; }
+.viewer-zoom { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; min-width: 2.6em; font-weight: 700; white-space: nowrap; }
+/* The page box: the number and "of 12" on top, its word under them, as the buttons have. */
+.viewer-goto {
+  display: grid;
+  grid-template-areas: "box of" "word word";
+  align-items: center;
+  justify-items: center;
+  column-gap: 2px;
+  margin: 0;
+}
+.viewer-goto label { grid-area: word; font-weight: 700; }
+.viewer-goto input {
+  grid-area: box;
+  width: max(48px, calc(var(--digits, 2) * 1ch + 14px));
+  min-height: 48px;
+  padding: 0 4px;
+  font-size: 18px;
+  text-align: center;
+  color: var(--ink);
+  background: var(--surface);
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+  appearance: textfield;
+}
+.viewer-goto input::-webkit-inner-spin-button, .viewer-goto input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+html[data-size="140"] .viewer-goto input { font-size: 20px; }
+html[data-size="175"] .viewer-goto input { font-size: 22px; }
+.viewer-of { grid-area: of; white-space: nowrap; }
 .viewer-status { min-height: 1.6em; margin: var(--space-2) 0; }
 .viewer-pages {
   display: grid;

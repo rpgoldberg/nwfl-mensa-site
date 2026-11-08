@@ -11,7 +11,9 @@ import {
   OPENING,
   TOO_LONG,
   ZOOMS,
+  FIT,
   clampPage,
+  fitOffer,
   fitScale,
   hashPage,
   linkHref,
@@ -49,6 +51,21 @@ describe('the zoom steps', () => {
   it('show as a whole percentage', () => {
     expect(percent(1)).toBe('100\u00a0%');
     expect(percent(0.7354)).toBe('74\u00a0%');
+  });
+});
+
+// W-LOOK2: one Fit control, which offers the fit the reader is not in; after a zoom, the one they opened at.
+describe('fitOffer', () => {
+  it('offers the whole page at the width, the width at the whole page, and after a zoom the fit the device opens at', () => {
+    expect(fitOffer('width', 'width')).toBe('page');
+    expect(fitOffer('page', 'page')).toBe('width');
+    expect(fitOffer('custom', 'width')).toBe('width');
+    expect(fitOffer('custom', 'page')).toBe('page');
+  });
+
+  it('names each fit with a short visible word that its spoken name contains', () => {
+    expect(FIT).toEqual({ page: { word: 'Whole', name: 'Fit whole page' }, width: { word: 'Width', name: 'Fit width' } });
+    for (const { word, name } of Object.values(FIT)) expect(name.toLowerCase()).toContain(word.toLowerCase());
   });
 });
 
@@ -200,6 +217,8 @@ describe('wireViewer', () => {
     expect(parts['count']!.textContent).toBe('3');
     expect(parts['page']!.value).toBe('1');
     expect(parts['page']!.getAttribute('max')).toBe('3');
+    // W-LOOK2: the page box is as wide as the longest page number, two digits at least.
+    expect(parts['page']!.style.props.get('--digits')).toBe('2');
     expect(pages.map((p) => p.id)).toEqual(['page-1', 'page-2', 'page-3']);
     expect(pages.map((p) => p.querySelector('h2')?.textContent)).toEqual(['Page 1', 'Page 2', 'Page 3']);
     expect(parts['status']!.textContent).toBe('');
@@ -210,14 +229,18 @@ describe('wireViewer', () => {
     const desk = await open();
     const fit = fitScale('page', PAGE, { width: 600, height: 800 - 60 - 16 });
     expect(desk.parts['zoom']!.textContent).toBe(percent(fit));
-    expect(desk.parts['fit-page']!.getAttribute('aria-pressed')).toBe('true');
-    expect(desk.parts['fit-width']!.getAttribute('aria-pressed')).toBe('false');
+    // At the whole page, the Fit control offers the width.
+    expect(desk.parts['fit']!.getAttribute('aria-label')).toBe('Fit width');
+    expect(desk.parts['fit']!.dataset['fit']).toBe('width');
+    expect(desk.parts['fit-word']!.textContent).toBe('Width');
     expect(desk.pages[0]!.style.width).toBe(`${PAGE.width * fit}px`);
     expect(desk.pages[0]!.style.props.get('--scale-factor')).toBe(String(fit * CSS_UNITS));
     win.phone = true;
     const phone = await open();
     expect(phone.parts['zoom']!.textContent).toBe(percent(600 / PAGE.width));
-    expect(phone.parts['fit-width']!.getAttribute('aria-pressed')).toBe('true');
+    expect(phone.parts['fit']!.getAttribute('aria-label')).toBe('Fit whole page');
+    expect(phone.parts['fit']!.dataset['fit']).toBe('page');
+    expect(phone.parts['fit-word']!.textContent).toBe('Whole');
   });
 
   it('draws only the pages that come near, with their text and links, and lets go of those that move away', async () => {
@@ -268,7 +291,8 @@ describe('wireViewer', () => {
     await press(parts['zoom-in']);
     const fit = fitScale('page', PAGE, { width: 600, height: 724 });
     expect(parts['zoom']!.textContent).toBe(percent(zoomIn(fit)));
-    expect(parts['fit-page']!.getAttribute('aria-pressed')).toBe('false');
+    // Zoomed: the Fit control offers the fit the computer opened at, the whole page.
+    expect(parts['fit']!.getAttribute('aria-label')).toBe('Fit whole page');
     expect(pages[1]!.style.width).toBe(`${PAGE.width * zoomIn(fit)}px`);
     expect(log.filter((l) => l.startsWith('draw 1'))).toHaveLength(2);
     for (let i = 0; i < 12; i++) await press(parts['zoom-in']);
@@ -278,11 +302,13 @@ describe('wireViewer', () => {
     for (let i = 0; i < 12; i++) await press(parts['zoom-out']);
     expect(parts['zoom']!.textContent).toBe(percent(0.25));
     expect(parts['zoom-out']!.getAttribute('aria-disabled')).toBe('true');
-    await press(parts['fit-width']);
-    expect(parts['zoom']!.textContent).toBe(percent(600 / PAGE.width));
-    expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('true');
-    await press(parts['fit-page']);
+    await press(parts['fit']);
     expect(parts['zoom']!.textContent).toBe(percent(fit));
+    expect(parts['fit']!.getAttribute('aria-label')).toBe('Fit width');
+    await press(parts['fit']);
+    expect(parts['zoom']!.textContent).toBe(percent(600 / PAGE.width));
+    expect(parts['fit']!.getAttribute('aria-label')).toBe('Fit whole page');
+    expect(parts['fit-word']!.textContent).toBe('Whole');
   });
 
   it('keeps the place being read when the size changes', async () => {
@@ -302,7 +328,7 @@ describe('wireViewer', () => {
     const { parts, pages } = await open();
     pages[0]!.rect = { top: 500, height: 1000, width: 600 };
     await press(parts['zoom-in']);
-    await press(parts['fit-width']);
+    await press(parts['fit']);
     expect(win.scrolledBy).toBe(0);
   });
 
@@ -541,6 +567,7 @@ describe('wireViewer', () => {
     const { parts, pages, viewer } = await open({ pages: MAX_PAGES });
     expect(viewer).toBeDefined();
     expect(parts['count']!.textContent).toBe('1000');
+    expect(parts['page']!.style.props.get('--digits')).toBe('4');
     expect(pages).toHaveLength(MAX_PAGES);
   });
 
@@ -624,7 +651,7 @@ describe('the edges of wireViewer', () => {
     await flush();
     expect(pages.map((p) => p.scrolled)).toEqual([0, 0, 0]);
     const before = view.parts['zoom']!.textContent;
-    view.parts['fit-page']!.click();
+    win.dispatchEvent(new Event('resize'));
     expect(view.parts['zoom']!.textContent).toBe(before);
     expect(fake.log.filter((l) => l.startsWith('draw'))).toHaveLength(1);
     pages[0]!.rect = { top: 0, height: 0, width: 600 };

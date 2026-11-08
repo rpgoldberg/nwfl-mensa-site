@@ -3,7 +3,7 @@
 // box, its time and place in words, and its status. Phones get this list; it
 // sits beside the month grid on a wide screen.
 import StatusChip from './StatusChip.astro';
-import { type CalendarEvent, chipStatus, formatTime, placeText } from '../lib/calendar';
+import { type CalendarEvent, chipStatus, dayAnchor, formatTime, placeText } from '../lib/calendar';
 import { formatDate } from '../data/format';
 
 interface Props {
@@ -12,8 +12,10 @@ interface Props {
   label: string;
   /** The level of each event's heading. */
   level?: 2 | 3;
+  /** W-LOOK2: each day's first entry carries the id the month grid's day links to. */
+  anchors?: boolean;
 }
-const { events, label, level = 3 } = Astro.props;
+const { events, label, level = 3, anchors = false } = Astro.props;
 const now = new Date();
 const Heading = `h${level}` as 'h2' | 'h3';
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -24,10 +26,11 @@ const box = (date: string) => {
 };
 ---
 <ul class="evs" aria-label={label}>
-  {events.map((e) => {
+  {events.map((e, i) => {
     const b = box(e.date);
+    const first = anchors && events[i - 1]?.date !== e.date;
     return (
-      <li class={e.status === 'cancelled' ? 'ev cx' : 'ev'} data-source={e.source}>
+      <li class={e.status === 'cancelled' ? 'ev cx' : 'ev'} id={first ? dayAnchor(e.date) : undefined} data-source={e.source}>
         <p class="dt" aria-hidden="true"><span>{b.day}</span> <b>{b.n}</b> <span>{b.month}</span></p>
         <div class="t">
           <Heading><a href={e.path}>{e.title}</a></Heading>

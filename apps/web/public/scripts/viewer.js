@@ -5,8 +5,10 @@
 // reader's cookies, so the copy is whichever the site serves this reader.
 //
 // Accessibility first: every control is a visible button or the page box, 48 px, in the tab order, in
-// the page's own text size and theme; no gesture is needed (pinch and scroll still work, as the
-// browser's own). A computer opens at Fit page, a phone at Fit width. Each page is a canvas for the eye
+// the page's own theme, each icon with its word; no gesture is needed (pinch and scroll still work, as
+// the browser's own). A computer opens at Fit page, a phone at Fit width. W-LOOK2: one compact row, so
+// one Fit control, which offers the fit the reader is not in (after a zoom, the one the device opened
+// at); its word and spoken name say which. Each page is a canvas for the eye
 // (hidden from screen readers), pdf.js's text layer over it for screen readers and selection, and its
 // links (the copy's link annotations, and nothing else from the annotation layer: no forms, no files,
 // no scripts). Only two kinds of link are ever made: an /out/<id> goes to this site's leaving page in
@@ -63,6 +65,21 @@ const KEPT = /^(?:\/out\/[a-z2-7]{26}|#)$/;
 /** On the viewer while its bar is too tall to stay at the top: it scrolls with the page (site.css). */
 export const UNPINNED = 'viewer--unpinned';
 const EPSILON = 1e-6;
+
+/** The Fit control's word, and its spoken name, which contains the word (WCAG 2.5.3), for each fit it offers. */
+export const FIT = { page: { word: 'Whole', name: 'Fit whole page' }, width: { word: 'Width', name: 'Fit width' } };
+
+/**
+ * The fit the Fit control offers: the other fit, or after a zoom the one the device opened at.
+ *
+ * @param {'width' | 'page' | 'custom'} mode
+ * @param {'width' | 'page'} home
+ * @returns {'width' | 'page'}
+ */
+export function fitOffer(mode, home) {
+  if (mode === 'custom') return home;
+  return mode === 'width' ? 'page' : 'width';
+}
 
 /** @param {number} scale */
 export const zoomIn = (scale) => ZOOMS.find((z) => z > scale + EPSILON) ?? /** @type {number} */ (ZOOMS.at(-1));
@@ -203,7 +220,7 @@ export async function wireViewer(doc, win, pdfjs) {
   if (!root) return undefined;
   /** @param {string} name */
   const part = (name) => /** @type {any} */ (root.querySelector(`[data-viewer-${name}]`));
-  const names = ['nojs', 'bar', 'zoom-out', 'zoom', 'zoom-in', 'fit-width', 'fit-page', 'prev', 'goto', 'page', 'count', 'next', 'status', 'pages'];
+  const names = ['nojs', 'bar', 'zoom-out', 'zoom', 'zoom-in', 'fit', 'fit-word', 'prev', 'goto', 'page', 'count', 'next', 'status', 'pages'];
   const ui = Object.fromEntries(names.map((name) => [name, part(name)]));
   if (names.some((name) => !ui[name])) return undefined;
   const origin = win.location.origin;
@@ -247,9 +264,13 @@ export async function wireViewer(doc, win, pdfjs) {
   ui['pages'].hidden = false;
   ui['count'].textContent = String(count);
   ui['page'].setAttribute('max', String(count));
+  // As wide as the longest page number (two digits at least), so the bar keeps to one row on a phone.
+  ui['page'].style.setProperty('--digits', String(Math.max(2, String(count).length)));
 
+  /** @type {'width' | 'page'} */
+  const home = win.matchMedia(PHONE).matches ? 'width' : 'page';
   /** @type {'width' | 'page' | 'custom'} */
-  let mode = win.matchMedia(PHONE).matches ? 'width' : 'page';
+  let mode = home;
   let scale = 1;
   let current = 1;
   /** Where the reader is: a page, and how far down it the bar's edge is. */
@@ -286,8 +307,10 @@ export async function wireViewer(doc, win, pdfjs) {
     ui['zoom'].textContent = percent(scale);
     // Never under the reader's fingers: a number being typed stays until it is entered.
     if (box || doc.activeElement !== ui['page']) ui['page'].value = String(current);
-    ui['fit-width'].setAttribute('aria-pressed', String(mode === 'width'));
-    ui['fit-page'].setAttribute('aria-pressed', String(mode === 'page'));
+    const offer = fitOffer(mode, home);
+    ui['fit'].dataset['fit'] = offer;
+    ui['fit'].setAttribute('aria-label', FIT[offer].name);
+    ui['fit-word'].textContent = FIT[offer].word;
     ui['zoom-out'].setAttribute('aria-disabled', String(scale <= /** @type {number} */ (ZOOMS[0]) + EPSILON));
     ui['zoom-in'].setAttribute('aria-disabled', String(scale >= /** @type {number} */ (ZOOMS.at(-1)) - EPSILON));
     ui['prev'].setAttribute('aria-disabled', String(current <= 1));
@@ -481,12 +504,8 @@ export async function wireViewer(doc, win, pdfjs) {
     mode = 'custom';
     rescale(zoomOut(scale));
   });
-  onPress(ui['fit-width'], () => {
-    mode = 'width';
-    fit();
-  });
-  onPress(ui['fit-page'], () => {
-    mode = 'page';
+  onPress(ui['fit'], () => {
+    mode = fitOffer(mode, home);
     fit();
   });
   onPress(ui['prev'], () => goTo(current - 1));

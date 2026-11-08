@@ -1,7 +1,7 @@
 ---
 // Events, the calendar (R4), on request: public events only. This month as a
 // grid and what is coming up as a list, or one month (?month=YYYY-MM) as both;
-// a phone gets the list. The whole calendar as a subscription, and each
+// a phone gets a compact grid above the list (W-LOOK2). The whole calendar as a subscription, and each
 // event's page. With no API (the canary), or none in the range, it says that
 // no events are listed yet, and who to ask.
 import EmptyEvents from '../components/EmptyEvents.astro';
@@ -12,13 +12,14 @@ import Unavailable from '../components/Unavailable.astro';
 import { liveData } from '../data';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
-import { calendarRange, googleCalendarUrl, monthGrid, monthLabel, shiftMonth, todayCentral } from '../lib/calendar';
+import { calendarRange, comingUp, googleCalendarUrl, monthGrid, monthLabel, shiftMonth, todayCentral } from '../lib/calendar';
 import { feedWebcal } from '../lib/origin';
 import { page } from '../lib/site';
 
 const p = page('/events');
 const live = liveData();
-const today = todayCentral(new Date());
+const now = new Date();
+const today = todayCentral(now);
 const feedUrl = feedWebcal(Astro.request, Astro.site);
 const range = calendarRange(Astro.url.searchParams.get('month'), today);
 if (range === undefined) return Astro.rewrite('/404');
@@ -26,7 +27,9 @@ if (range === undefined) return Astro.rewrite('/404');
 const loaded = live ? await attempt(() => live.events(range.read.from, range.read.to)) : undefined;
 if (loaded && !loaded.ok) markUnavailable(Astro.response);
 const events = loaded?.ok ? loaded.value : [];
-const listed = events.filter((e) => e.date >= range.list.from && e.date <= range.list.to);
+// W-LOOK2: "Coming up" leaves out what ended earlier today; a month's list keeps it, as Past.
+const listed = (range.current ? comingUp(events, now) : events).filter((e) => e.date >= range.list.from && e.date <= range.list.to);
+const listedDays = new Set(listed.map((e) => e.date));
 const label = monthLabel(range.month);
 const [previous, next] = [shiftMonth(range.month, -1), shiftMonth(range.month, 1)];
 const listTitle = range.current ? 'Coming up' : `${label}, as a list`;
@@ -59,11 +62,11 @@ const president = roster?.ok ? roster.value.find((o) => o.slug === 'president' &
           </nav>
           <div class="calgrid">
             <section class="monthbox" aria-label={`${label}, as a grid`}>
-              <MonthGrid caption={label} weeks={monthGrid(range.month, events, today)} />
+              <MonthGrid caption={label} weeks={monthGrid(range.month, events, today)} listed={listedDays} />
             </section>
             <section class="agenda" aria-labelledby="list-title">
               <h2 id="list-title">{listTitle}</h2>
-              {listed.length > 0 ? <EventList events={listed} label={listTitle} /> : <EmptyEvents when={range.current ? 'for the next eight weeks' : `for ${label}`} president={president} />}
+              {listed.length > 0 ? <EventList events={listed} label={listTitle} anchors /> : <EmptyEvents when={range.current ? 'for the next eight weeks' : `for ${label}`} president={president} />}
             </section>
           </div>
         </div>

@@ -23,20 +23,20 @@ test.describe('Events, the calendar', () => {
     await expect(page.getByText(/members event/i)).toHaveCount(0);
   });
 
-  test('shows the month as a real table on a wide screen, and only the list on a phone', async ({ page }) => {
+  // W-LOOK2: the table at every width, compact on a phone (a dot per event), the titles in it on a wide screen.
+  test('shows the month as a real table on every width, with the list; the titles in it on a wide screen', async ({ page }) => {
     await page.goto('/events');
     const month = centralToday().slice(0, 7);
     const grid = page.getByRole('table', { name: monthLabel(month) });
-    if (wide(page.viewportSize()?.width)) {
-      await expect(grid).toBeVisible();
-      await expect(grid.getByRole('columnheader')).toHaveText(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
-      await expect(grid.locator('th[scope="col"]')).toHaveCount(7);
-      await expect(grid.locator('td[aria-current="date"]')).toHaveCount(1);
-      await expect(grid.getByRole('link', { name: /Wednesday Lunchers/ }).first()).toBeVisible();
-    } else {
-      await expect(grid).toBeHidden();
-      await expect(page.getByRole('list', { name: 'Coming up' })).toBeVisible();
-    }
+    await expect(grid).toBeVisible();
+    const heads = grid.getByRole('columnheader');
+    await expect(heads).toHaveCount(7);
+    for (const [i, day] of ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].entries()) await expect(heads.nth(i)).toHaveAccessibleName(day);
+    await expect(grid.locator('td[aria-current="date"]')).toHaveCount(1);
+    await expect(grid.getByRole('link', { name: /^Wednesday, \d{1,2} \w+(, today)?, 1 event$/ }).first()).toBeVisible();
+    if (wide(page.viewportSize()?.width)) await expect(grid.getByRole('link', { name: /Wednesday Lunchers/ }).first()).toBeVisible();
+    else await expect(grid.getByRole('link', { name: /Wednesday Lunchers/ })).toHaveCount(0);
+    await expect(page.getByRole('list', { name: 'Coming up' })).toBeVisible();
   });
 
   test('steps to the next month, and back to this one', async ({ page }) => {

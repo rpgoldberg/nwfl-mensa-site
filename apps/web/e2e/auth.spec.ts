@@ -5,7 +5,7 @@ import { expect, test, type BrowserContext } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
 import { crawlSeeds } from './routes';
 import { IDP_ORIGIN } from './servers';
-import { AT_PROVIDER, banner, signIn } from './signin';
+import { AT_PROVIDER, banner, openAccount, signIn, signOutButton } from './signin';
 import { BOARD_GAMES, centralToday } from './stand-in';
 
 test.use({ javaScriptEnabled: false });
@@ -17,9 +17,9 @@ test('a member signs in from a page, comes back to it, and the header names them
   await signIn(page, 'member');
   await expect(page).toHaveURL(/\/events$/);
   await expect(banner(page)).toContainText('Jordan Example');
-  await expect(banner(page).getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await expect(await signOutButton(page)).toBeVisible();
   await expect(banner(page).getByRole('link', { name: 'Sign in', exact: true })).toHaveCount(0);
-  await expect(banner(page).getByRole('link', { name: 'Officer area' })).toHaveCount(0);
+  await expect(banner(page).locator('a[href="/officer-area"]')).toHaveCount(0);
 
   // A prerendered page shows the same header, and nothing signed in is cached.
   const about = await page.goto('/about');
@@ -47,7 +47,7 @@ test('signed in, every route under src/pages answers private, no-store: nothing 
   expect(wrong).toEqual([]);
   // Still signed in after the crawl, so every request above was a signed-in one.
   await page.goto('/about');
-  await expect(banner(page).getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await expect(await signOutButton(page)).toBeVisible();
 });
 
 test('the sign-in transaction is a host-only cookie that lasts ten minutes, and asks for PKCE, state and nonce', async ({ page, context }) => {
@@ -71,7 +71,7 @@ test('an officer gets the Officer area; a member is told it is not theirs', asyn
   await page.goto('/');
   await signIn(page, 'officer');
   await expect(banner(page)).toContainText('Alex Sample');
-  await banner(page).getByRole('link', { name: 'Officer area' }).click();
+  await (await openAccount(page)).getByRole('link', { name: 'Officer area' }).click();
   await expect(page.locator('h1')).toHaveText('Officer area');
   await expect(page.getByRole('main')).toContainText('Welcome, Alex Sample.');
 
@@ -103,7 +103,7 @@ test('signing out expires the session, ends the provider’s session with its ow
     if (value) cleared.push(value);
   });
   const endSession = page.waitForRequest((r) => r.url().startsWith(`${IDP_ORIGIN}/session/end?`));
-  await banner(page).getByRole('button', { name: 'Sign out' }).click();
+  await (await signOutButton(page)).click();
   const end = await endSession;
   expect(new URL(end.url()).searchParams.get('id_token_hint')).toBeTruthy();
   // The provider got its own session cookie: it asks to end that session (with
@@ -133,7 +133,7 @@ test('a session cookie kept from before sign-out, sent again, reads as nobody', 
   await page.goto('/');
   await signIn(page, 'officer');
   const kept = (await cookie(context, '__Host-nwfl-session'))!;
-  await banner(page).getByRole('button', { name: 'Sign out' }).click();
+  await (await signOutButton(page)).click();
   await page.getByRole('button', { name: 'Yes, sign me out' }).click();
   await expect(page).toHaveURL(/\/signed-out$/);
 
