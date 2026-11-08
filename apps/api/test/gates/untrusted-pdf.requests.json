@@ -1337,6 +1337,12 @@
         "number": 1,
         "type": "string",
         "label": "optional"
+      },
+      {
+        "name": "confirmed_warning",
+        "number": 2,
+        "type": "bool",
+        "label": "optional"
       }
     ]
   },

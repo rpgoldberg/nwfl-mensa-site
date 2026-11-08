@@ -113,6 +113,8 @@ export declare const SignupRequestSchema: GenMessage<SignupRequest>;
  */
 export declare type EarlierClaim = Message<"nwfl.mensa.v1.EarlierClaim"> & {
   /**
+   * Empty when the earlier sign-up is closed (see closed).
+   *
    * @generated from field: string display_name = 1;
    */
   displayName: string;
@@ -121,6 +123,16 @@ export declare type EarlierClaim = Message<"nwfl.mensa.v1.EarlierClaim"> & {
    * @generated from field: google.protobuf.Timestamp signed_up_at = 2;
    */
   signedUpAt?: Timestamp | undefined;
+
+  /**
+   * VET fix 1: the earlier sign-up was rejected (or rejected and reopened)
+   * since. Its name is then not sent: only the Admin and the Membership
+   * Officer see a rejected sign-up's name (ListRejectedSignups). The
+   * approver sees "an earlier claim (since closed)" and its date.
+   *
+   * @generated from field: bool closed = 3;
+   */
+  closed: boolean;
 };
 
 /**
@@ -336,6 +348,15 @@ export declare type ApproveSignupRequest = Message<"nwfl.mensa.v1.ApproveSignupR
    * @generated from field: string request_id = 1;
    */
   requestId: string;
+
+  /**
+   * VET fix 1: the approver confirmed with the member (an email mismatch) or
+   * resolved the earlier claim (a duplicate claim). Needed to approve either;
+   * the audit records it. Ignored for every other outcome.
+   *
+   * @generated from field: bool confirmed_warning = 2;
+   */
+  confirmedWarning: boolean;
 };
 
 /**
@@ -754,7 +775,9 @@ export declare const MembershipService: GenService<{
    * Approves or rejects a pending sign-up, erasing its number and last name.
    * No approver decides their own sign-up. A sign-up the verifier found in
    * another local group is not approved as a member: it is rejected, or the
-   * account is granted affiliate standing.
+   * account is granted affiliate standing. VET fix 1: an email mismatch or a
+   * duplicate claim is approved only with confirmed_warning set; without it,
+   * FAILED_PRECONDITION, and nothing changes.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.ApproveSignup
    */

@@ -72,8 +72,14 @@ message SignupRequest {
 // VET: the earlier sign-up that claimed the same number, as the site already
 // holds it: its display name and when it signed up. Never a number.
 message EarlierClaim {
+  // Empty when the earlier sign-up is closed (see closed).
   string display_name = 1;
   google.protobuf.Timestamp signed_up_at = 2;
+  // VET fix 1: the earlier sign-up was rejected (or rejected and reopened)
+  // since. Its name is then not sent: only the Admin and the Membership
+  // Officer see a rejected sign-up's name (ListRejectedSignups). The
+  // approver sees "an earlier claim (since closed)" and its date.
+  bool closed = 3;
 }
 
 // A rejected sign-up that can still be reopened, as the Admin or the Membership Officer sees it:
@@ -121,7 +127,9 @@ service MembershipService {
   // Approves or rejects a pending sign-up, erasing its number and last name.
   // No approver decides their own sign-up. A sign-up the verifier found in
   // another local group is not approved as a member: it is rejected, or the
-  // account is granted affiliate standing.
+  // account is granted affiliate standing. VET fix 1: an email mismatch or a
+  // duplicate claim is approved only with confirmed_warning set; without it,
+  // FAILED_PRECONDITION, and nothing changes.
   rpc ApproveSignup(ApproveSignupRequest) returns (ApproveSignupResponse);
   rpc RejectSignup(RejectSignupRequest) returns (RejectSignupResponse);
   // Accounts with member-level standing or past it: for removal and the yearly re-check.
@@ -176,6 +184,10 @@ message ListSignupRequestsResponse {
 
 message ApproveSignupRequest {
   string request_id = 1;
+  // VET fix 1: the approver confirmed with the member (an email mismatch) or
+  // resolved the earlier claim (a duplicate claim). Needed to approve either;
+  // the audit records it. Ignored for every other outcome.
+  bool confirmed_warning = 2;
 }
 
 message ApproveSignupResponse {

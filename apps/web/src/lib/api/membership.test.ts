@@ -214,6 +214,47 @@ describe('grpcMembership: the approvers\' queue', () => {
     expect(seen).toEqual([`approve ${ID}`, `reject ${ID}`]);
   });
 
+  it('VET fix 1: sends the approver\'s confirmation of a warning with the approval, and none unless asked', async () => {
+    const seen: boolean[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        approveSignup: (req) => {
+          seen.push(req.confirmedWarning);
+          return { account: { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP } };
+        },
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    await api.approveSignup(PERSON, ID);
+    await api.approveSignup(PERSON, ID, { confirmedWarning: true });
+    await api.approveSignup(PERSON, ID, { confirmedWarning: false });
+    expect(seen).toEqual([false, true, false]);
+  });
+
+  it('VET fix 1: reads an earlier claim since closed as closed, with no name', async () => {
+    const EARLIER = new Date('2026-09-15T14:00:00Z');
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: [
+            create(SignupRequestSchema, {
+              requestId: ID,
+              displayName: 'Sol Afterreopened',
+              email: 'sol@example.org',
+              route: AccountRoute.SIGNUP,
+              verification: Verification.DUPLICATE_CLAIM,
+              earlierClaim: { displayName: '', signedUpAt: timestampFromDate(EARLIER), closed: true },
+            }),
+          ],
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.listSignupRequests(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Sol Afterreopened', email: 'sol@example.org', route: 'signup', verification: 'duplicate_claim', earlierClaim: { displayName: '', signedUpAt: EARLIER, closed: true } },
+    ]);
+  });
+
   it.each([
     [Code.PermissionDenied, 'own'],
     [Code.FailedPrecondition, 'closed'],

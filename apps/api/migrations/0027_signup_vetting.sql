@@ -8,7 +8,9 @@
 --      Neither approves nor rejects; reporting still erases the number and the last name (0005).
 --   2. A duplicate claim may name the earlier sign-up: an existing one, never itself.
 --   3. signup_claim_release: one row per released claim, written by triggers in the same transaction
---      as the rejection, the reopening, or the removal or deletion of an approved sign-up's account.
+--      as the rejection, the reopening, or the removal or deletion of an approved sign-up's account,
+--      or the owner's deletion of a pending sign-up already reported (fix 1, N3: the verifier's ledger
+--      holds a reported claim; an unreported one it never ledgered).
 --      Append-only for every role, the owner included. Its cursor (seq) is taken by one writer at a
 --      time, held to commit, so cursors become visible in order and a reader never misses one.
 --      Sign-up ids, kinds and times only: never a number, a name or an email.
@@ -32,8 +34,10 @@ CREATE SEQUENCE signup_claim_release_seq;
 CREATE TABLE signup_claim_release (
   -- The cursor. Taken by the guard below, after the writers' lock, never by the writer.
   seq         bigint      PRIMARY KEY,
-  request_id  uuid        NOT NULL REFERENCES signup_request (id),
-  kind        text        NOT NULL CHECK (kind IN ('rejected', 'reopened', 'account_deleted')),
+  -- No foreign key: a 'deleted' release outlives its sign-up. The guard holds every other kind to a
+  -- sign-up that exists and is released.
+  request_id  uuid        NOT NULL,
+  kind        text        NOT NULL CHECK (kind IN ('rejected', 'reopened', 'account_deleted', 'deleted')),
   released_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER SEQUENCE signup_claim_release_seq OWNED BY signup_claim_release.seq;
@@ -55,8 +59,11 @@ BEGIN
   IF NOT (CASE NEW.kind
     WHEN 'rejected' THEN EXISTS (SELECT 1 FROM signup_request WHERE id = NEW.request_id AND decision = 'rejected')
     WHEN 'reopened' THEN EXISTS (SELECT 1 FROM signup_request WHERE id = NEW.request_id AND reopened_at IS NOT NULL)
-    ELSE EXISTS (SELECT 1 FROM signup_request s WHERE s.id = NEW.request_id AND s.decision = 'approved'
+    -- Only from the deletion's own trigger (one level down), once the row is gone: never by hand.
+    WHEN 'deleted' THEN pg_trigger_depth() > 1 AND NOT EXISTS (SELECT 1 FROM signup_request WHERE id = NEW.request_id)
+    WHEN 'account_deleted' THEN EXISTS (SELECT 1 FROM signup_request s WHERE s.id = NEW.request_id AND s.decision = 'approved'
                    AND NOT EXISTS (SELECT 1 FROM member_account a WHERE a.sub = s.sub AND a.status <> 'removed'))
+    ELSE false
   END) THEN
     RAISE EXCEPTION 'sign-up % is not released as %', NEW.request_id, NEW.kind USING ERRCODE = '55000';
   END IF;
@@ -88,6 +95,19 @@ $fn$;
 CREATE TRIGGER signup_request_release_claim AFTER UPDATE ON signup_request
   FOR EACH ROW EXECUTE FUNCTION signup_request_release_claim();
 REVOKE EXECUTE ON FUNCTION signup_request_release_claim() FROM PUBLIC;
+
+-- Fix 1 (N3): a pending sign-up the owner deletes (0026 lets only the owner, only while pending),
+-- once the verifier reported it. Unreported, the verifier never ledgered it: nothing to release.
+CREATE FUNCTION signup_request_deleted_release_claim() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $fn$
+BEGIN
+  INSERT INTO signup_claim_release (request_id, kind) VALUES (OLD.id, 'deleted');
+  RETURN NULL;
+END
+$fn$;
+CREATE TRIGGER signup_request_deleted_release_claim AFTER DELETE ON signup_request
+  FOR EACH ROW WHEN (OLD.verification <> 'unchecked') EXECUTE FUNCTION signup_request_deleted_release_claim();
+REVOKE EXECUTE ON FUNCTION signup_request_deleted_release_claim() FROM PUBLIC;
 
 -- An approved sign-up's account removed or deleted. A pending sign-up is released by its rejection,
 -- which RemoveMember and RejectSignup make in the same transaction.

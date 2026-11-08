@@ -956,6 +956,10 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 
 /* W-SIGNUP: the approvers' queue: one card per sign-up, its decisions as plain buttons below. */
 .signup-card form { margin: 0; }
+/* VET fix 1: the box an approver ticks before approving a warning outcome: large, labelled, by the warning. */
+.confirm-warning { display: flex; align-items: center; gap: var(--space-3); min-height: var(--target); margin: var(--space-3) 0; }
+.confirm-warning input { width: 1.5rem; height: 1.5rem; flex: none; margin: 0; }
+.confirm-warning label { font-weight: 700; }
 
 /* W-SIGNUP fix 1: a form's problems, together at the top, each a link to its field; it takes focus. */
 .error-summary {

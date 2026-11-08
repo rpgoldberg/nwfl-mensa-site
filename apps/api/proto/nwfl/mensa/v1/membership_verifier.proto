@@ -17,11 +17,22 @@ service MembershipVerifierService {
   // Records the outcome and the date, and erases the number and the last name
   // in the same statement. A local match does not approve the sign-up: an
   // officer still does.
+  //
+  // VET fix 1: a report refused with FAILED_PRECONDITION (the sign-up was
+  // decided or checked meanwhile) or NOT_FOUND (no such sign-up) records
+  // nothing here. The verifier must then not write a ledger entry for it, or
+  // must drop the one it wrote: a sign-up rejected before its report is
+  // released before the verifier could see that release, so ListReleasedClaims
+  // would never free that entry.
   rpc ReportVerification(ReportVerificationRequest) returns (ReportVerificationResponse);
   // VET: the sign-ups whose claim on a number is released, oldest first, after
   // a cursor: rejected, reopened, or whose member account was removed or
   // deleted. The verifier frees those entries in its own ledger. Sign-up ids,
   // times and kinds only: never a number, a name or an email.
+  //
+  // VET fix 1: it frees only what was reported. A ReportVerification refused
+  // with FAILED_PRECONDITION or NOT_FOUND has no release to come here: the
+  // verifier must not write a ledger entry for it, or must drop it.
   rpc ListReleasedClaims(ListReleasedClaimsRequest) returns (ListReleasedClaimsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
@@ -96,6 +107,10 @@ enum ClaimReleaseKind {
   CLAIM_RELEASE_KIND_REOPENED = 2;
   // The sign-up's member account was removed or deleted.
   CLAIM_RELEASE_KIND_ACCOUNT_DELETED = 3;
+  // VET fix 1: the sign-up itself was deleted after it was reported (only the
+  // database owner can delete one, and only while pending). An unreported
+  // sign-up's deletion is not listed: the verifier never ledgered it.
+  CLAIM_RELEASE_KIND_DELETED = 4;
 }
 
 message ReleasedClaim {

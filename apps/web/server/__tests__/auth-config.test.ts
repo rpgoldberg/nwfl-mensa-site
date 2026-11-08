@@ -86,7 +86,7 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
       clientSecret: SECRET,
       redirectUri: 'https://canary.nwflmensa.us/auth/callback',
       postLogoutRedirectUri: 'https://canary.nwflmensa.us/signed-out',
-      // VET: the email by default, whatever OIDC_SCOPE says or leaves unsaid.
+      // VET: the email by default (fix 1: a configured scope must name it too).
       scope: 'openid profile email',
       allowInsecure: false,
       groupPrefix: 'mensa-nwfl-',
@@ -213,9 +213,16 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
   });
 
   it('asks for openid, and takes another scope from config', () => {
-    const setup = authConfig({ ...canary, OIDC_SCOPE: 'openid profile email' });
-    expect(setup.enabled && setup.config.scope).toBe('openid profile email');
-    expect(authConfig({ ...canary, OIDC_SCOPE: 'profile' }).enabled).toBe(false);
+    // Fix 1 (S3): a scope unlike the default, so the configured one is seen to win.
+    const setup = authConfig({ ...canary, OIDC_SCOPE: 'openid profile email offline_access' });
+    expect(setup.enabled && setup.config.scope).toBe('openid profile email offline_access');
+    expect(authConfig({ ...canary, OIDC_SCOPE: 'profile email' })).toEqual({ enabled: false, reason: 'OIDC_SCOPE must include openid' });
+  });
+
+  it('VET fix 1: turns sign-in off for a configured scope without email, since the sign-up needs it', () => {
+    for (const scope of ['openid profile', 'openid', 'openid profile emails', 'openid profile offline_access']) {
+      expect(authConfig({ ...canary, OIDC_SCOPE: scope }), scope).toEqual({ enabled: false, reason: 'OIDC_SCOPE must include email: the sign-up needs it' });
+    }
   });
 });
 

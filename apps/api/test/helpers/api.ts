@@ -45,6 +45,8 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   // W-SIGNUP fix 1 (SHOULD-1): a sign-up an approver rejects, whose account is then removed.
   'turned-down-token': { client: 'site', subject: 'sub-turned-down', groups: ['nwfl-users'], scopes: [], name: 'Morgan Example', email: 'morgan@example.org' },
   'racer-token': { client: 'site', subject: 'sub-racer', groups: ['nwfl-pending'], scopes: [], name: 'Quinn Example', email: 'quinn@example.org' },
+  // VET fix 1: a sign-up whose number was typed with spaces and dashes.
+  'spacer-token': { client: 'site', subject: 'sub-spacer', groups: ['nwfl-pending'], scopes: [], name: 'Sky Spacer', email: 'sky@example.org' },
   // The Membership Officer: approves sign-ups; also signs up once, to show no one decides their own.
   'approver-token': {
     client: 'site',

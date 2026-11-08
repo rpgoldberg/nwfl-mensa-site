@@ -179,6 +179,8 @@ describe(`${PKG}: the membership verifier`, () => {
       'CLAIM_RELEASE_KIND_REJECTED',
       'CLAIM_RELEASE_KIND_REOPENED',
       'CLAIM_RELEASE_KIND_ACCOUNT_DELETED',
+      // Fix 1 (N3): a reported pending sign-up the database owner deleted.
+      'CLAIM_RELEASE_KIND_DELETED',
     ]);
     const names = list === undefined ? [] : reachableFields(list.output).map((f) => f.name);
     expect(names.filter((n) => /number|name|email/.test(n))).toEqual([]);
@@ -190,7 +192,14 @@ describe(`${PKG}: the membership verifier`, () => {
     const request = allMessages().find((m) => m.typeName === `${PKG}.SignupRequest`);
     const earlier = request?.fields.find((f) => f.name === 'earlier_claim');
     expect(earlier?.number).toBe(8);
-    expect(fieldNames(earlier === undefined ? undefined : fieldMessage(earlier))).toEqual(['display_name', 'signed_up_at']);
+    // Fix 1 (N2): closed, with no display name, when the earlier sign-up was rejected or reopened.
+    expect(fieldNames(earlier === undefined ? undefined : fieldMessage(earlier))).toEqual(['display_name', 'signed_up_at', 'closed']);
+  });
+
+  it('VET fix 1: an approval of a warning outcome carries the approver\'s confirmation, nothing else new', () => {
+    const approve = service('MembershipService')?.methods.find((m) => m.name === 'ApproveSignup');
+    expect(fieldNames(approve?.input)).toEqual(['request_id', 'confirmed_warning']);
+    expect(approve?.input.fields.find((f) => f.name === 'confirmed_warning')?.fieldKind).toBe('scalar');
   });
 
   it('lets the membership number reach only the pending list (out) and the sign-up call (in)', () => {

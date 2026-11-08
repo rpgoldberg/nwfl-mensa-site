@@ -11,14 +11,19 @@
 //     that sign-up's display name and date, which the site already holds.
 //   - ListReleasedClaims: the sign-ups whose claim is released (rejected, reopened, or whose account
 //     was removed or deleted), ids and times only, after a stable cursor, for the verifier only.
+//   - Fix 1: approving either warning outcome needs confirmed_warning, enforced here, and the audit
+//     records that it was confirmed; an earlier claim since closed is named only as closed; a reported
+//     sign-up the owner deletes is released as DELETED; a page is at most 100, the default too; a
+//     poller that follows next_cursor alone misses no release, whatever the writers race.
 // Every value here is made up.
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { type Client, Code } from '@connectrpc/connect';
+import pgLib from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MembershipService, Verification } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { ClaimReleaseKind, MembershipVerifierService, VerificationOutcome } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { type Api, MEMBER, as, dump, startApi } from '../helpers/api.js';
-import { live } from '../helpers/pg.js';
+import { APP, APP_PW, MIGRATOR, MIGRATOR_PW, live, urlFor } from '../helpers/pg.js';
 
 const VERIFIER = as('verifier-token');
 const APPROVER = as('approver-token');
@@ -70,6 +75,9 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
       cursor = page.nextCursor;
     }
   };
+
+  const byName = async (name: string) => (await api.pool.query<{ id: string; sub: string }>(`SELECT id, sub FROM signup_request WHERE display_name = $1`, [name])).rows[0] as { id: string; sub: string };
+  const database = async () => (await api.pool.query<{ d: string }>('SELECT current_database() AS d')).rows[0]?.d as string;
 
   beforeAll(async () => {
     api = await startApi('nwfl_vet');
@@ -137,24 +145,86 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
       const second = by('Lee Secondclaim');
       expect(second?.verification).toBe(Verification.DUPLICATE_CLAIM);
       expect(second?.earlierClaim?.displayName).toBe('Lee Firstclaim');
+      expect(second?.earlierClaim?.closed).toBe(false);
       expect(timestampDate(second?.earlierClaim?.signedUpAt as NonNullable<NonNullable<typeof second>['createdAt']>)).toEqual(new Date('2026-09-15T14:00:00Z'));
       expect(by('Kai Unnamed')).toMatchObject({ verification: Verification.DUPLICATE_CLAIM });
       expect(by('Kai Unnamed')?.earlierClaim).toBeUndefined();
       expect(dump(requests)).not.toMatch(/700\d{3}|Vetson/);
     });
 
+    it('names an earlier claim since closed only as closed, with its date: never the name of a rejected or reopened sign-up', async () => {
+      // Fix 1 (N2): only the Admin and the Membership Officer see rejected sign-ups' names (ListRejectedSignups).
+      const rejected = await signup('Noa Rejectedfirst', new Date('2026-09-01T10:00:00Z'));
+      const reopened = await signup('Ola Reopenedfirst', new Date('2026-09-02T10:00:00Z'));
+      const approved = await signup('Pia Approvedfirst', new Date('2026-09-03T10:00:00Z'));
+      for (const s of [rejected, reopened, approved]) await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+      await membership.rejectSignup({ requestId: rejected.id }, APPROVER);
+      await membership.rejectSignup({ requestId: reopened.id }, APPROVER);
+      await membership.reopenSignup({ requestId: reopened.id }, ADMIN);
+      await membership.approveSignup({ requestId: approved.id }, APPROVER);
+      // Any existing sign-up may still be named.
+      for (const [name, earlier] of [['Rex Afterrejected', rejected], ['Sol Afterreopened', reopened], ['Tam Afterapproved', approved]] as const) {
+        const s = await signup(name);
+        await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.DUPLICATE_CLAIM, conflictingRequestId: earlier.id }, VERIFIER);
+      }
+      const { requests } = await membership.listSignupRequests({}, APPROVER);
+      const claimOf = (name: string) => requests.find((r) => r.displayName === name)?.earlierClaim;
+      const dayOf = (claim: ReturnType<typeof claimOf>) => timestampDate(claim?.signedUpAt as NonNullable<NonNullable<typeof claim>['signedUpAt']>);
+      expect(claimOf('Rex Afterrejected')).toMatchObject({ displayName: '', closed: true });
+      expect(dayOf(claimOf('Rex Afterrejected'))).toEqual(new Date('2026-09-01T10:00:00Z'));
+      expect(claimOf('Sol Afterreopened')).toMatchObject({ displayName: '', closed: true });
+      expect(dayOf(claimOf('Sol Afterreopened'))).toEqual(new Date('2026-09-02T10:00:00Z'));
+      expect(claimOf('Tam Afterapproved')).toMatchObject({ displayName: 'Pia Approvedfirst', closed: false });
+      expect(dayOf(claimOf('Tam Afterapproved'))).toEqual(new Date('2026-09-03T10:00:00Z'));
+      expect(dump(requests)).not.toMatch(/Rejectedfirst|Reopenedfirst/);
+    });
+
+    it.each([
+      ['Robin Mismatch', 'the email differs from the roster: confirm with the member, then approve with confirmed_warning'],
+      ['Lee Secondclaim', 'another sign-up already claimed this number: resolve the earlier claim, then approve with confirmed_warning'],
+    ])('refuses to approve %s unless the approver confirmed the warning, whoever asks, and changes nothing', async (name, message) => {
+      const { id, sub } = await byName(name);
+      const before = await actions(id);
+      for (const [options, confirmedWarning] of [[APPROVER, undefined], [APPROVER, false], [ADMIN, false]] as const) {
+        await expect(membership.approveSignup({ requestId: id, ...(confirmedWarning === undefined ? {} : { confirmedWarning }) }, options)).rejects.toMatchObject({
+          code: Code.FailedPrecondition,
+          rawMessage: message,
+        });
+      }
+      expect(await row(id)).toMatchObject({ decision: 'pending' });
+      expect(await account(sub)).toEqual({ status: 'pending', verified_on: null });
+      expect(await actions(id)).toEqual(before);
+      expect(await actions(sub)).toEqual([]);
+    });
+
     it.each([
       ['Robin Mismatch', 'email_mismatch'],
       ['Lee Secondclaim', 'duplicate_claim'],
-    ])('approves %s (%s) only on the officer’s word, as of today, as for NOT_FOUND: never from the verifier’s date', async (name) => {
-      const { rows } = await api.pool.query<{ id: string; sub: string }>(`SELECT id, sub FROM signup_request WHERE display_name = $1`, [name]);
-      const { id, sub } = rows[0] as { id: string; sub: string };
+    ])('approves %s (%s) once confirmed, only on the officer’s word, as of today, as for NOT_FOUND, and records the confirmation', async (name, verification) => {
+      const { id, sub } = await byName(name);
       // A verifier date unlike today, so a local match's path would show.
       await api.pool.query(`UPDATE signup_request SET verified_on = '2026-10-20' WHERE id = $1`, [id]);
-      const { account: approved } = await membership.approveSignup({ requestId: id }, APPROVER);
+      const { account: approved } = await membership.approveSignup({ requestId: id, confirmedWarning: true }, APPROVER);
       expect(approved?.verifiedOn).toEqual(expect.objectContaining({ year: 2026, month: 10, day: 22 }));
       expect(await account(sub)).toEqual({ status: 'member', verified_on: '2026-10-22' });
       expect(await actions(sub)).toEqual(['approve_attested']);
+      expect((await actions(id)).slice(-2)).toEqual(['approve', `approve_confirmed_${verification}`]);
+    });
+
+    it('approves every other outcome as before, flag or none, and records no confirmation', async () => {
+      const local = await signup('Uma Local');
+      await verifier.reportVerification({ requestId: local.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+      const missing = await signup('Vic Notfound');
+      await verifier.reportVerification({ requestId: missing.id, outcome: VerificationOutcome.NOT_FOUND }, VERIFIER);
+      const unchecked = await signup('Wren Unchecked');
+      await membership.approveSignup({ requestId: local.id, confirmedWarning: true }, APPROVER);
+      await membership.approveSignup({ requestId: missing.id }, APPROVER);
+      await membership.approveSignup({ requestId: unchecked.id, confirmedWarning: false }, APPROVER);
+      for (const s of [local, missing, unchecked]) {
+        expect((await account(s.sub))?.status).toBe('member');
+        expect((await actions(s.id)).at(-1)).toBe('approve');
+      }
+      expect(await actions(local.sub)).toEqual(['approve_verified']);
     });
   });
 
@@ -203,8 +273,82 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
       for (const after of ['x', '-1', '1.5', '01', '1'.repeat(19)]) {
         await expect(verifier.listReleasedClaims({ after }, VERIFIER)).rejects.toMatchObject({ code: Code.InvalidArgument });
       }
-      expect((await verifier.listReleasedClaims({ pageSize: 500 }, VERIFIER)).released.length).toBeLessThanOrEqual(100);
     });
+
+    it('caps a page at 100, the default too, when more than 100 are waiting (fix 1, S2)', async () => {
+      const { cursor } = await releasedAfter('');
+      for (let i = 0; i < 105; i += 1) {
+        const s = await signup(`Pagey ${i}`);
+        await api.pool.query(`UPDATE signup_request SET decision = 'rejected', decided_at = now(), decided_by_sub = 'officer-page', membership_number = NULL, last_name = NULL WHERE id = $1`, [s.id]);
+      }
+      expect((await verifier.listReleasedClaims({ after: cursor, pageSize: 500 }, VERIFIER)).released).toHaveLength(100);
+      expect((await verifier.listReleasedClaims({ after: cursor, pageSize: 0 }, VERIFIER)).released).toHaveLength(100);
+      expect((await verifier.listReleasedClaims({ after: cursor }, VERIFIER)).released).toHaveLength(100);
+      expect((await releasedAfter(cursor)).released).toHaveLength(105);
+    }, 60_000);
+
+    it('lists a reported sign-up the owner deletes as DELETED, and an unreported one not at all (fix 1, N3)', async () => {
+      const { cursor: start } = await releasedAfter('');
+      const reported = await signup('Xan Deleted');
+      await verifier.reportVerification({ requestId: reported.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
+      const unreported = await signup('Yu Deletedunchecked');
+      const owner = new pgLib.Client({ connectionString: urlFor(MIGRATOR, MIGRATOR_PW, await database()) });
+      await owner.connect();
+      try {
+        for (const s of [reported, unreported]) await owner.query(`DELETE FROM signup_request WHERE id = $1`, [s.id]);
+      } finally {
+        await owner.end();
+      }
+      const { released } = await releasedAfter(start);
+      expect(released.map((r) => [r.requestId, r.kind])).toEqual([[reported.id, ClaimReleaseKind.DELETED]]);
+    });
+
+    it('lets a poller that follows next_cursor alone see every committed release once, while 16 writers race (fix 1, S1)', async () => {
+      const WRITERS = 16;
+      const ids: string[] = [];
+      for (let i = 0; i < WRITERS * 3; i += 1) ids.push((await signup(`Racer ${i}`)).id);
+      const { cursor: start } = await releasedAfter('');
+      const name = await database();
+      const clients = await Promise.all(
+        Array.from({ length: WRITERS }, async () => {
+          const c = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, name) });
+          await c.connect();
+          return c;
+        }),
+      );
+      let done = false;
+      const seen: string[] = [];
+      let cursor = start;
+      const follow = async (): Promise<number> => {
+        const page = await verifier.listReleasedClaims({ after: cursor }, VERIFIER);
+        seen.push(...page.released.map((r) => r.requestId));
+        cursor = page.nextCursor;
+        return page.released.length;
+      };
+      const poller = (async () => {
+        while (!done) await follow();
+      })();
+      try {
+        // Each writer rejects three sign-ups, one transaction each, holding each open a random 0-60 ms.
+        await Promise.all(
+          clients.map(async (c, w) => {
+            for (let k = 0; k < 3; k += 1) {
+              await c.query('BEGIN');
+              await c.query(`UPDATE signup_request SET decision = 'rejected', decided_at = now(), decided_by_sub = 'officer-race', membership_number = NULL, last_name = NULL WHERE id = $1`, [ids[w * 3 + k]]);
+              await c.query('SELECT pg_sleep($1)', [Math.random() * 0.06]);
+              await c.query('COMMIT');
+            }
+          }),
+        );
+      } finally {
+        done = true;
+        await poller;
+        await Promise.all(clients.map((c) => c.end()));
+      }
+      while ((await follow()) > 0);
+      expect(seen).toHaveLength(WRITERS * 3);
+      expect(new Set(seen)).toEqual(new Set(ids));
+    }, 60_000);
 
     it('is for the verifier only', async () => {
       await expect(verifier.listReleasedClaims({})).rejects.toMatchObject({ code: Code.Unauthenticated });

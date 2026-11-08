@@ -30,8 +30,11 @@ export type Check = 'unchecked' | 'verified_local' | 'verified_other_group' | 'n
 
 /** VET: the earlier sign-up a duplicate claim names, as the site already holds it: never a number. */
 export interface EarlierClaim {
+  /** Empty when closed. */
   displayName: string;
   signedUpAt?: Date;
+  /** Fix 1 (N2): rejected or reopened since; the API then sends no name. */
+  closed?: true;
 }
 
 /** The person's own account; verifiedOn is the day it was last checked, YYYY-MM-DD. */
@@ -93,7 +96,8 @@ export interface MembershipApi {
   getMyAccount(as: Reader): Promise<MyAccount | undefined>;
   submitSignup(as: Reader, signup: { lastName: string; membershipNumber: string }): Promise<void>;
   listSignupRequests(as: Reader): Promise<PendingSignup[]>;
-  approveSignup(as: Reader, requestId: string): Promise<void>;
+  /** VET fix 1: confirmedWarning, the approver confirmed an email mismatch or resolved a duplicate claim. */
+  approveSignup(as: Reader, requestId: string, options?: { confirmedWarning?: boolean }): Promise<void>;
   rejectSignup(as: Reader, requestId: string): Promise<void>;
   /** REOPEN: the Admin and the Membership Officer only. */
   listRejectedSignups(as: Reader): Promise<RejectedSignup[]>;
@@ -152,7 +156,13 @@ function pendingOf(request: SignupRequest): PendingSignup {
     ...day(request.verifiedOn),
     ...(request.createdAt ? { createdAt: timestampDate(request.createdAt) } : {}),
     ...(request.earlierClaim
-      ? { earlierClaim: { displayName: request.earlierClaim.displayName, ...(request.earlierClaim.signedUpAt ? { signedUpAt: timestampDate(request.earlierClaim.signedUpAt) } : {}) } }
+      ? {
+          earlierClaim: {
+            displayName: request.earlierClaim.displayName,
+            ...(request.earlierClaim.signedUpAt ? { signedUpAt: timestampDate(request.earlierClaim.signedUpAt) } : {}),
+            ...(request.earlierClaim.closed ? { closed: true as const } : {}),
+          },
+        }
       : {}),
   };
 }
@@ -219,12 +229,12 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
         signupRefused,
       ),
     listSignupRequests: (as) => call('ListSignupRequests', as, async (headers) => (await membership.listSignupRequests({}, { headers })).requests.map(pendingOf)),
-    approveSignup: (as, requestId) =>
+    approveSignup: (as, requestId, options) =>
       call(
         'ApproveSignup',
         as,
         async (headers) => {
-          await membership.approveSignup({ requestId }, { headers });
+          await membership.approveSignup({ requestId, confirmedWarning: options?.confirmedWarning === true }, { headers });
         },
         decisionRefused,
       ),

@@ -34,18 +34,25 @@ export type SignupErrors = Partial<Record<keyof SignupForm, string>>;
 export type ParsedSignup = { ok: true; value: SignupForm } | { ok: false; errors: SignupErrors; values: { lastName: string } };
 
 const DIGITS = new RegExp(`^[0-9]{1,${MAX_NUMBER_DIGITS}}$`);
+/**
+ * VET fix 1: typing noise in a number, dropped before the digit rule, as the API drops it: any space
+ * (a no-break space too) and any dash or minus. Letters and every other mark are still refused.
+ */
+const NUMBER_NOISE = /[\p{Zs}\p{Pd}\u2212]/gu;
+/** The most the number's field takes as typed: the digits with a space or a dash between each. */
+export const MAX_NUMBER_TYPED = 2 * MAX_NUMBER_DIGITS;
 /** Any control character (a NUL, a tab, an escape code): no last name holds one. */
 const CONTROL = /\p{Cc}/u;
 
 /** The sign-up form's two fields, checked; each problem is said in words, by field. */
 export function parseSignupForm(field: (name: string) => string | undefined): ParsedSignup {
   const lastName = (field('lastName') ?? '').trim();
-  const membershipNumber = (field('membershipNumber') ?? '').trim();
+  const membershipNumber = (field('membershipNumber') ?? '').trim().replace(NUMBER_NOISE, '');
   const errors: SignupErrors = {};
   if (lastName === '') errors.lastName = 'Enter your last name.';
   else if ([...lastName].length > MAX_LAST_NAME) errors.lastName = `Keep your last name to ${MAX_LAST_NAME} characters or fewer.`;
   else if (CONTROL.test(lastName)) errors.lastName = 'Type your last name again: it has a hidden character that cannot be kept.';
-  if (membershipNumber === '') errors.membershipNumber = 'Enter your membership number.';
+  if ((field('membershipNumber') ?? '').trim() === '') errors.membershipNumber = 'Enter your membership number.';
   else if (!DIGITS.test(membershipNumber)) errors.membershipNumber = `Enter your membership number using digits only, up to ${MAX_NUMBER_DIGITS} of them.`;
   if (Object.keys(errors).length > 0) return { ok: false, errors, values: { lastName } };
   return { ok: true, value: { lastName, membershipNumber } };
@@ -146,8 +153,35 @@ export function checkWarning(signup: Pick<PendingSignup, 'verification' | 'earli
   }
   if (signup.verification !== 'duplicate_claim') return undefined;
   const earlier = signup.earlierClaim;
-  const which = earlier === undefined ? '' : ` (${earlier.displayName}${earlier.signedUpAt === undefined ? '' : `, ${formatMoment(earlier.signedUpAt)}`})`;
+  const when = earlier?.signedUpAt === undefined ? '' : `, ${formatMoment(earlier.signedUpAt)}`;
+  // Fix 1 (N2): a claim since closed is never named.
+  const which = earlier === undefined ? '' : earlier.closed ? `: an earlier claim (since closed)${when}` : ` (${earlier.displayName}${when})`;
   return `Another account already claimed this number${which}. Don’t approve until an officer resolves it.`;
+}
+
+/**
+ * VET fix 1: the label of the box an approver ticks to approve either warning outcome, in words for
+ * each; none for the others. The API refuses the approval without it (confirmed_warning).
+ */
+export function confirmText(verification: Check): string | undefined {
+  if (verification === 'email_mismatch') return 'I confirmed with the member that this sign-up is theirs.';
+  if (verification === 'duplicate_claim') return 'I resolved the earlier claim on this number.';
+  return undefined;
+}
+
+/**
+ * VET fix 1: the API refuses an unconfirmed approval of a warning outcome as it refuses a closed one
+ * (FAILED_PRECONDITION). Told apart by the queue as it is now: still waiting, with its warning, and
+ * the box not ticked, it was the confirmation that was missing.
+ */
+export function decisionRefusal(
+  reason: 'own' | 'closed',
+  form: DecisionForm,
+  queue: ReadonlyArray<Pick<PendingSignup, 'requestId' | 'verification'>> | undefined,
+): 'own' | 'closed' | 'unconfirmed' {
+  if (reason !== 'closed' || form.decision !== 'approve' || form.confirmed) return reason;
+  const waiting = queue?.find((r) => r.requestId === form.requestId);
+  return waiting !== undefined && confirmText(waiting.verification) !== undefined ? 'unconfirmed' : reason;
 }
 
 /** D4: the membership approvers and the Admin, by the internal groups the session carries (server/groups.mjs). */
@@ -185,7 +219,10 @@ export function signUpsTitle(session: { groups: readonly string[] } | undefined)
 export interface DecisionForm {
   decision: 'approve' | 'reject' | 'reopen';
   requestId: string;
-  /** A rejection or a reopening is applied only once confirmed; an approval at once. */
+  /**
+   * A rejection or a reopening is applied only once confirmed; an approval at once. VET fix 1: an
+   * approval of a warning outcome sends it as confirmed_warning (its box), which the API needs.
+   */
   confirmed: boolean;
 }
 
@@ -217,9 +254,10 @@ export function doneText(done: Done): string {
   return DONE_TEXT[done];
 }
 
-export const DECISION_REFUSED: Record<'own' | 'closed', string> = {
+export const DECISION_REFUSED: Record<'own' | 'closed' | 'unconfirmed', string> = {
   own: 'Nothing was changed: no one approves or rejects their own sign-up.',
   closed: 'Nothing was changed: this sign-up was already decided, or it cannot be approved as a member. The list below is as it is now.',
+  unconfirmed: 'Nothing was changed: tick the box by the warning to say you confirmed it, then approve. The list below is as it is now.',
 };
 
 /** REOPEN: a reopening the API refused. */
@@ -236,8 +274,8 @@ export const NOT_AN_APPROVER = 'Nothing was changed: only the sign-up approvers 
  * sign-up and for someone who may not approve at all (the Membership Officer's seat without the
  * approvers group); the page knows which, so it says the one that fits.
  */
-export function refusedText(refused: { reason: 'own' | 'closed'; reopen: boolean }, approver: boolean): string {
-  if (refused.reopen) return REOPEN_REFUSED[refused.reason];
+export function refusedText(refused: { reason: 'own' | 'closed' | 'unconfirmed'; reopen: boolean }, approver: boolean): string {
+  if (refused.reopen) return REOPEN_REFUSED[refused.reason === 'own' ? 'own' : 'closed'];
   return refused.reason === 'own' && !approver ? NOT_AN_APPROVER : DECISION_REFUSED[refused.reason];
 }
 

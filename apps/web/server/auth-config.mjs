@@ -121,9 +121,12 @@ export function authConfig(env) {
     return { enabled: false, reason: 'OIDC_ISSUER must be https (plain http only for a local test provider, outside production)' };
   }
   // VET: the email by default, so the sign-up stores it from the verified token for the verifier to
-  // compare with the roster, whatever OIDC_SCOPE says or leaves unsaid.
+  // compare with the roster. A configured OIDC_SCOPE wins, so it must name email too (fix 1): without
+  // it, sign-in is off, since no sign-up could be taken.
   const scope = env['OIDC_SCOPE'] || 'openid profile email';
-  if (!scope.split(' ').includes('openid')) return { enabled: false, reason: 'OIDC_SCOPE must include openid' };
+  const scopes = scope.split(' ');
+  if (!scopes.includes('openid')) return { enabled: false, reason: 'OIDC_SCOPE must include openid' };
+  if (!scopes.includes('email')) return { enabled: false, reason: 'OIDC_SCOPE must include email: the sign-up needs it' };
   let groupPrefix;
   try {
     groupPrefix = parseGroupPrefix(env['SITE_GROUP_PREFIX']);

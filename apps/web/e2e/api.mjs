@@ -509,6 +509,8 @@ const SIGNUP_QUEUE = [
   // VET: an email that differs from the roster, and a number an earlier sign-up (Jordan Firstclaim, approved, no longer queued) claimed first.
   { requestId: 'b1000000-0000-4000-8000-000000000005', sub: '00000000-0000-4000-8000-0000000001e5', displayName: 'Dana Mismatch', email: 'dana@example.org', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T15:00:00Z') },
   { requestId: 'b1000000-0000-4000-8000-000000000006', sub: '00000000-0000-4000-8000-0000000001e6', displayName: 'Drew Secondclaim', email: 'drew@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T16:00:00Z'), earlierClaim: { displayName: 'Jordan Firstclaim', signedUpAt: new Date('2026-10-28T15:00:00Z') } },
+  // VET fix 1 (N2): a number an earlier sign-up claimed, since rejected: the API sends no name, only that it is closed.
+  { requestId: 'b1000000-0000-4000-8000-000000000007', sub: '00000000-0000-4000-8000-0000000001e7', displayName: 'Eli Thirdclaim', email: 'eli@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 5 }, createdAt: new Date('2026-11-05T15:00:00Z'), earlierClaim: { displayName: '', closed: true, signedUpAt: new Date('2026-10-20T15:00:00Z') } },
 ];
 /** REOPEN: rejected sign-ups, newest first; the first three are reopened by one browser project each (e2e/stand-in.ts REJECTED). */
 const REJECTED = [
@@ -582,13 +584,17 @@ async function reopenerOf(ctx) {
 }
 
 /** A pending sign-up this sign-in may decide, marked decided. @param {{ sub: string, session: string }} person @param {string} id @param {boolean} approve */
-function decide(person, id, approve) {
+function decide(person, id, approve, confirmedWarning = false) {
   const request = SIGNUP_QUEUE.find((r) => r.requestId === id);
   if (request === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
   if (request.sub === person.sub) throw new ConnectError('no one decides their own sign-up', Code.PermissionDenied);
   const decided = DECIDED.get(person.session) ?? new Set();
   if (decided.has(id)) throw new ConnectError('this sign-up is already decided', Code.FailedPrecondition);
   if (approve && request.verification === Verification.VERIFIED_OTHER_GROUP) throw new ConnectError('an other-group member is not approved', Code.FailedPrecondition);
+  // VET fix 1: as the API, an email mismatch or a duplicate claim only with the approver's confirmation.
+  if (approve && !confirmedWarning && (request.verification === Verification.EMAIL_MISMATCH || request.verification === Verification.DUPLICATE_CLAIM)) {
+    throw new ConnectError('confirm the warning, then approve with confirmed_warning', Code.FailedPrecondition);
+  }
   decided.add(id);
   DECIDED.set(person.session, decided);
 }
@@ -723,12 +729,12 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
           verification: r.verification,
           ...(r.verifiedOn ? { verifiedOn: r.verifiedOn } : {}),
           createdAt: timestampFromDate(r.createdAt),
-          ...(r.earlierClaim ? { earlierClaim: { displayName: r.earlierClaim.displayName, signedUpAt: timestampFromDate(r.earlierClaim.signedUpAt) } } : {}),
+          ...(r.earlierClaim ? { earlierClaim: { displayName: r.earlierClaim.displayName, signedUpAt: timestampFromDate(r.earlierClaim.signedUpAt), closed: r.earlierClaim.closed === true } } : {}),
         })),
       };
     },
     approveSignup: async (req, ctx) => {
-      decide(await approverOf(ctx), req.requestId, true);
+      decide(await approverOf(ctx), req.requestId, true, req.confirmedWarning);
       return { account: { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP } };
     },
     rejectSignup: async (req, ctx) => {

@@ -50,6 +50,7 @@ const RELEASE_KINDS: Record<string, ClaimReleaseKind> = {
   rejected: ClaimReleaseKind.REJECTED,
   reopened: ClaimReleaseKind.REOPENED,
   account_deleted: ClaimReleaseKind.ACCOUNT_DELETED,
+  deleted: ClaimReleaseKind.DELETED,
 };
 // What a sign-up the verifier may act on looks like.
 const WAITING = `verification = 'unchecked' AND decision = 'pending' AND membership_number IS NOT NULL`;
@@ -121,13 +122,15 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
         if (request.after !== '' && !CURSOR.test(request.after)) throw new ConnectError('after is not a cursor', Code.InvalidArgument);
         const size = request.pageSize === 0 ? MAX_RELEASED_PAGE : Math.min(request.pageSize, MAX_RELEASED_PAGE);
         return tx(async (client) => {
-          const { rows } = await client.query<{ seq: string; request_id: string; kind: string; released_at: Date }>(
-            `SELECT seq::text AS seq, request_id, kind, released_at FROM signup_claim_release WHERE seq > $1::bigint ORDER BY seq LIMIT $2`,
+          // Fix 1: the text cursor has its own name, so ORDER BY sorts the bigint seq, never its text
+          // ('10' before '9' would page out of order and skip releases).
+          const { rows } = await client.query<{ cursor_text: string; request_id: string; kind: string; released_at: Date }>(
+            `SELECT seq::text AS cursor_text, request_id, kind, released_at FROM signup_claim_release WHERE seq > $1::bigint ORDER BY seq LIMIT $2`,
             [request.after === '' ? '0' : request.after, size],
           );
           return {
             released: rows.map((row) => ({ requestId: row.request_id, kind: RELEASE_KINDS[row.kind], releasedAt: timestampFromDate(row.released_at) })),
-            nextCursor: rows.at(-1)?.seq ?? request.after,
+            nextCursor: rows.at(-1)?.cursor_text ?? request.after,
           };
         });
       },

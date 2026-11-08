@@ -7,6 +7,8 @@
 //     role, the owner included. A row the app writes by hand must be a real release, and takes its
 //     cursor and time from the database, never from the writer. Writers take the cursor in commit
 //     order (one at a time), so a reader that has seen a cursor never later finds a smaller one.
+//   - Fix 1: a reported pending sign-up the owner deletes is released as 'deleted'; an unreported one
+//     is not (the verifier never ledgered it).
 // Every subject here is made up.
 import type pg from 'pg';
 import pgLib from 'pg';
@@ -18,6 +20,15 @@ const FOREIGN_KEY_VIOLATION = '23503';
 const INSUFFICIENT_PRIVILEGE = '42501';
 const NOT_IN_PREREQUISITE_STATE = '55000';
 const LOCK_NOT_AVAILABLE = '55P03';
+
+/** Waits, a little at a time, until the condition holds; fails after five seconds. */
+async function until(condition: () => Promise<boolean>): Promise<void> {
+  for (let tries = 0; tries < 250; tries += 1) {
+    if (await condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('the condition never held');
+}
 
 describe.skipIf(!live)('schema after VET (0027)', () => {
   let db: string;
@@ -159,6 +170,79 @@ describe.skipIf(!live)('schema after VET (0027)', () => {
       expect(await decide(b, 'rejected', app2)).toBe('ok');
       const order = (await app.query<{ request_id: string }>(`SELECT request_id FROM signup_claim_release WHERE request_id IN ($1, $2) ORDER BY seq`, [a, b])).rows.map((r) => r.request_id);
       expect(order).toEqual([a, b]);
+    });
+
+    it('takes the cursor only after the writers’ lock: a waiting writer has not advanced it, and commit order is cursor order', async () => {
+      // Fix 1 (S1): a third session holds the writers' lock. A rejection on a second connection must
+      // wait for it before it takes a cursor; were the cursor taken first, the holder's own release
+      // would commit with a later cursor than the waiter's, and a reader past the holder's would never
+      // see the waiter's.
+      const a = await signup('l-holder');
+      const b = await signup('l-waiter');
+      const holder = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, db) });
+      await holder.connect();
+      try {
+        const sequence = async () => (await owner.query<{ last_value: string; is_called: boolean }>(`SELECT last_value::text, is_called FROM signup_claim_release_seq`)).rows[0];
+        await holder.query(`SELECT pg_advisory_lock('signup_claim_release'::regclass::oid::bigint)`);
+        const before = await sequence();
+        await app2.query(`SET lock_timeout = 0`);
+        const pid = (await app2.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid;
+        const waiting = decide(b, 'rejected', app2);
+        await until(async () => (await owner.query(`SELECT 1 FROM pg_locks WHERE pid = $1 AND locktype = 'advisory' AND NOT granted`, [pid])).rows.length === 1);
+        expect(await sequence()).toEqual(before);
+        // The holder's own release takes the lock it already holds, and commits first.
+        expect(await decide(a, 'rejected', holder)).toBe('ok');
+        expect(await sequence()).not.toEqual(before);
+        await holder.query(`SELECT pg_advisory_unlock('signup_claim_release'::regclass::oid::bigint)`);
+        expect(await waiting).toBe('ok');
+        const order = (await app.query<{ request_id: string }>(`SELECT request_id FROM signup_claim_release WHERE request_id IN ($1, $2) ORDER BY seq`, [a, b])).rows.map((r) => r.request_id);
+        expect(order).toEqual([a, b]);
+      } finally {
+        await holder.end();
+      }
+    });
+
+    it('records a reported pending sign-up the owner deletes as deleted, and an unreported one, never ledgered, not at all', async () => {
+      // Fix 1 (N3): 0026 leaves a pending sign-up deletable by the owner. Once reported, the verifier's
+      // ledger holds its claim, so the deletion releases it; before the report there is nothing to free.
+      const reported = await signup('d-reported');
+      expect(await report(reported, 'verified_local')).toBe('ok');
+      const unreported = await signup('d-unreported');
+      const { max: before } = await one<{ max: string | null }>(`SELECT max(seq)::text AS max FROM signup_claim_release`);
+      expect(await sqlstate(owner, `DELETE FROM signup_request WHERE id = $1`, [reported])).toBe('ok');
+      expect(await sqlstate(owner, `DELETE FROM signup_request WHERE id = $1`, [unreported])).toBe('ok');
+      expect(await releases(reported)).toEqual(['deleted']);
+      expect(await releases(unreported)).toEqual([]);
+      const { count } = await one<{ count: string }>(`SELECT count(*)::text AS count FROM signup_claim_release WHERE seq > $1::bigint`, [before ?? '0']);
+      expect(count).toBe('1');
+      // A deletion rolled back releases nothing.
+      const kept = await signup('d-rolled-back');
+      expect(await report(kept, 'not_found')).toBe('ok');
+      await owner.query('BEGIN');
+      expect(await sqlstate(owner, `DELETE FROM signup_request WHERE id = $1`, [kept])).toBe('ok');
+      await owner.query('ROLLBACK');
+      expect(await releases(kept)).toEqual([]);
+    });
+
+    it('takes a deleted row only from the deletion itself, never by hand, for any role', async () => {
+      const pending = await signup('h-deleted');
+      expect(await report(pending, 'verified_local')).toBe('ok');
+      for (const client of [app, owner]) {
+        expect(await failure(client, `INSERT INTO signup_claim_release (request_id, kind) VALUES ($1, 'deleted')`, [pending])).toMatch(/not released/);
+        expect(await failure(client, `INSERT INTO signup_claim_release (request_id, kind) VALUES ($1, 'deleted')`, ['6a1f0c8e-0000-4000-8000-0000000000de'])).toMatch(/not released/);
+      }
+      // Nor from another trigger for a sign-up still there: the owner's own trigger, one level down too.
+      await owner.query(`CREATE TABLE vet_forge (id uuid)`);
+      await owner.query(`CREATE FUNCTION vet_forge_release() RETURNS trigger LANGUAGE plpgsql AS $fn$
+        BEGIN INSERT INTO signup_claim_release (request_id, kind) VALUES (NEW.id, 'deleted'); RETURN NULL; END $fn$`);
+      await owner.query(`CREATE TRIGGER vet_forge AFTER INSERT ON vet_forge FOR EACH ROW EXECUTE FUNCTION vet_forge_release()`);
+      try {
+        expect(await failure(owner, `INSERT INTO vet_forge (id) VALUES ($1)`, [pending])).toMatch(/not released/);
+      } finally {
+        await owner.query(`DROP TABLE vet_forge`);
+        await owner.query(`DROP FUNCTION vet_forge_release()`);
+      }
+      expect(await releases(pending)).toEqual([]);
     });
 
     it('lets the app read it, and no one write it but through the release rules', async () => {

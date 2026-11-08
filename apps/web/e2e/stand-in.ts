@@ -107,6 +107,7 @@ export const SIGNUP_QUEUE = [
   { name: 'Blair Example', email: 'blair@example.org', route: 'Signed up on the site', check: 'Not checked yet' },
   { name: 'Dana Mismatch', email: 'dana@example.org', route: 'Signed up on the site', check: 'Number and last name found on our group\u2019s membership list, but the email differs, on November 4, 2026' },
   { name: 'Drew Secondclaim', email: 'drew@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 4, 2026' },
+  { name: 'Eli Thirdclaim', email: 'eli@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 5, 2026' },
 ] as const;
 
 /**
@@ -117,6 +118,15 @@ export const SIGNUP_QUEUE = [
 export const VET_WARNINGS = {
   'Dana Mismatch': 'The email differs from the roster. Confirm with the member, through the roster\u2019s email or phone from your own mailbox, before approving.',
   'Drew Secondclaim': 'Another account already claimed this number (Jordan Firstclaim, October 28, 2026). Don\u2019t approve until an officer resolves it.',
+  // Fix 1 (N2): an earlier claim since rejected is named only as closed, with its date.
+  'Eli Thirdclaim': 'Another account already claimed this number: an earlier claim (since closed), October 20, 2026. Don\u2019t approve until an officer resolves it.',
+} as const;
+
+/** VET fix 1: the box by each warning that approving needs ticked, worded for its outcome. */
+export const VET_CONFIRMS = {
+  'Dana Mismatch': 'I confirmed with the member that this sign-up is theirs.',
+  'Drew Secondclaim': 'I resolved the earlier claim on this number.',
+  'Eli Thirdclaim': 'I resolved the earlier claim on this number.',
 } as const;
 export const MEMBER_CHECKED_ON = 'October 20, 2026';
 
