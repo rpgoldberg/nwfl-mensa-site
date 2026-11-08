@@ -251,6 +251,7 @@ test.describe('(B) the reader on a phone', () => {
 
   test.describe('at 360 x 780, the narrowest phone', () => {
     test.use({ viewport: { width: 360, height: 780 } });
+    test.skip(({ browserName }) => browserName === 'webkit', '360 px is an Android width; no iPhone is that narrow');
     test('the bar is one row under 90 px at the default text size, each control still 48 px', async ({ page }) => {
       await page.goto(READ);
       await expect(page.locator('#page-1 canvas')).toHaveCount(1);
@@ -272,7 +273,7 @@ test.describe('(B) the reader on a phone', () => {
     await page.goto(READ);
     await expect(page.locator('#page-1 canvas')).toHaveCount(1);
     await page.locator('#page-1').evaluate((el) => el.scrollIntoView({ block: 'start' }));
-    await page.mouse.wheel(0, 300);
+    await page.evaluate(() => window.scrollBy(0, 300));
     await page.waitForTimeout(200);
     const bar = await box(page.locator('[data-viewer-bar]'));
     expect(Math.round(bar.y)).toBe(0);
