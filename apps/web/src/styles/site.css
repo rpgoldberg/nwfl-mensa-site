@@ -950,12 +950,19 @@ main > .calendar { max-width: none; }
 /* W-LOOK3: the month arrows in the grid's caption row, one slim row on the grid's frame. */
 .monthbox { border: 1px solid var(--line); border-radius: 12px; overflow: clip; background: var(--surface); }
 .month-head { background: var(--surface); border-bottom: 1px solid var(--line-soft); }
-.month-nav { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--space-1); padding: 0 var(--space-1); }
+.month-nav { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-1); padding: 0 var(--space-1); }
+/* A phone: "‹ Oct" and "Dec ›", each link named in full (events.astro); the month between them may
+   wrap, never run into them. */
+.mname--short { display: none; }
+@media (max-width: 599.98px) {
+  .mname--long { display: none; }
+  .mname--short { display: inline; }
+}
 .mnav { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; min-width: 44px; padding: 0 var(--space-2); font-weight: 700; border-radius: 8px; }
 .mnav svg { width: 1.25rem; height: 1.25rem; flex: none; }
 .mnav--prev { justify-self: start; }
 .mnav--next { justify-self: end; }
-.month-title { margin: 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0 var(--space-2); text-align: center; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); }
+.month-title { margin: 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0 var(--space-2); text-align: center; font-family: var(--font-head); font-weight: 600; font-size: min(var(--fs-h3), 6vw); }
 .month-title a { font-family: var(--font-body); font-size: var(--fs-small); font-weight: 700; display: inline-flex; align-items: center; min-height: 44px; }
 /* The subscription, one disclosure under the grid. */
 .addcal { max-width: var(--measure); }

@@ -286,3 +286,40 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
     });
   });
 }
+
+// W-LOOK3 fix (the coordinator's review): at 390 px "November 2026" ran into "December". On a phone the
+// arrows carry short month names ("Oct"), the whole month still in each link's name.
+for (const viewport of [{ width: 360, height: 780 }, PHONE]) {
+  for (const size of [100, 140]) {
+    test.describe(`events caption row at ${viewport.width} x ${viewport.height}, ${size} % text`, () => {
+      test.use({ viewport });
+      test('the arrows and the month never overlap, nothing scrolls sideways, and each arrow keeps its month in its name', async ({ page, context, baseURL }) => {
+        await setPrefs(context, baseURL!, { size });
+        await page.goto('/events');
+        const nav = page.getByRole('navigation', { name: 'Months' });
+        const [prev, next] = [nav.locator('.mnav--prev'), nav.locator('.mnav--next')];
+        const title = page.locator('.month-title > span');
+        const [p, t, n] = [await box(prev), await box(title), await box(next)];
+        expect(p.x + p.width, 'previous ends before the month').toBeLessThanOrEqual(t.x);
+        expect(t.x + t.width, 'the month ends before next').toBeLessThanOrEqual(n.x);
+        for (const b of [p, n]) {
+          expect(b.width).toBeGreaterThanOrEqual(44);
+          expect(b.height).toBeGreaterThanOrEqual(44);
+          expect(b.x).toBeGreaterThanOrEqual(0);
+          expect(b.x + b.width).toBeLessThanOrEqual(viewport.width);
+        }
+        await expect(prev).toHaveAccessibleName(/^[A-Z][a-z]{2} ?, previous month, (January|February|March|April|May|June|July|August|September|October|November|December) \d{4}$/);
+        await expect(next).toHaveAccessibleName(/^[A-Z][a-z]{2} ?, next month, (January|February|March|April|May|June|July|August|September|October|November|December) \d{4}$/);
+        // Short names on a phone: three letters showing.
+        const shown = await prev.evaluate((el) => {
+          let text = '';
+          const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.parentElement!.getBoundingClientRect().width > 1) text += n.textContent;
+          return text.trim();
+        });
+        expect(shown).toMatch(/^[A-Z][a-z]{2}$/);
+        expect(await sideways(page)).toBeLessThanOrEqual(0);
+      });
+    });
+  }
+}
