@@ -1,7 +1,7 @@
 -- 0027_signup_vetting.sql: VET (a). The sign-up vetting that stops someone using another member's
--- name and number. nwfl-verifier, on the home box, matches each sign-up against the offline roster
--- there; the roster never reaches this database. What it reports is stored here, and so is every
--- release of a claim, for it to pull (MembershipVerifierService ListReleasedClaims).
+-- name and number. The verifier is an external membership verification service, called through the
+-- MembershipVerifierService contract. What it reports is stored here, and so is every release of a
+-- claim, for it to pull (MembershipVerifierService ListReleasedClaims).
 --
 --   1. Two more stored outcomes: email_mismatch (number and last name match a local member, the email
 --      does not) and duplicate_claim (the verifier's ledger says another sign-up claimed the number).

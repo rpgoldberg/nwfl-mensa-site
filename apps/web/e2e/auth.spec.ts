@@ -119,10 +119,10 @@ test('signing out expires the session, ends the provider’s session with its ow
   const ours = (await context.cookies()).filter((c) => c.name.startsWith('__Host-'));
   expect(ours.map((c) => `${c.name}=${c.value}`).sort()).toEqual([`__Host-nwfl-size=${SIZES[4]}`, '__Host-nwfl-theme=dark']);
   await expect(banner(page).getByRole('link', { name: 'Sign in', exact: true })).toBeVisible();
-  // Never "cookies" (nor "*"). Chromium reports the header on the redirect;
-  // WebKit's tooling does not, and the API test below covers it there.
-  for (const value of cleared) expect(value).not.toMatch(/"cookies"|"\*"/);
-  if (browserName === 'chromium') expect(cleared).toContain('"cache", "storage"');
+  // SIGNOUT: no Clear-Site-Data on the way at all: never "cookies" (nor "*"), and no longer "cache"
+  // or "storage" (e2e/signout.spec.ts pins why that is safe). Chromium reports the header on the
+  // redirect; WebKit's tooling does not, and test/pages/sign-out.test.ts covers it there.
+  expect(cleared).toEqual([]);
 
   // The provider's session ended: signing in asks who you are again.
   await banner(page).getByRole('link', { name: 'Sign in', exact: true }).click();
@@ -147,14 +147,15 @@ test('a session cookie kept from before sign-out, sent again, reads as nobody', 
   await expect(page).toHaveURL(AT_PROVIDER);
 });
 
-test('sign-out answers a POST only, and only from this site; it clears cache and storage, never cookies', async ({ page, request, baseURL }) => {
+test('sign-out answers a POST only, and only from this site, with a 303 that clears no site data', async ({ page, request, baseURL }) => {
   const get = await page.goto('/sign-out');
   expect(get?.status()).toBe(405);
   const foreign = await request.post('/sign-out', { headers: { Origin: 'https://evil.example' }, maxRedirects: 0 });
   expect(foreign.status()).toBe(403);
   const ours = await request.post('/sign-out', { headers: { Origin: baseURL! }, maxRedirects: 0 });
   expect(ours.status()).toBe(303);
-  expect(ours.headers()['clear-site-data']).toBe('"cache", "storage"');
+  // SIGNOUT: no Clear-Site-Data, so never "cache" (it stalled the installed app's navigation).
+  expect(ours.headers()['clear-site-data']).toBeUndefined();
   expect(ours.headers()['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/session/end\\?`));
   expect(new URL(ours.headers()['location']!).searchParams.get('post_logout_redirect_uri')).toBe(`${baseURL}/signed-out`);
   expect(ours.headersArray().filter((h) => h.name.toLowerCase() === 'set-cookie').map((h) => h.value)).toEqual([

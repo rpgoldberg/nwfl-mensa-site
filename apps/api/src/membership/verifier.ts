@@ -13,6 +13,11 @@
 //                             officer still does (R24). VET: a duplicate claim
 //                             may name the earlier sign-up, which must exist
 //                             and be another; no other outcome may name one.
+//                             SIGNOUT (C): the same report again (outcome
+//                             and earlier sign-up) after it landed is a no-op
+//                             answered OK, decided since or not; another
+//                             outcome stays FAILED_PRECONDITION, and a sign-up
+//                             that is gone NOT_FOUND (the table on the RPC).
 //   ListReleasedClaims        VET: the released claims after a cursor, oldest
 //                             first, a hundred at most: sign-up ids, kinds and
 //                             times only (0027 records them append-only, in
@@ -102,8 +107,15 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
             [request.requestId, outcome, todayIn(deps.now()), conflicting],
           );
           if (rows.length === 0) {
-            const { rows: known } = await client.query(`SELECT 1 FROM signup_request WHERE id = $1`, [request.requestId]);
-            if (known.length === 0) throw new ConnectError('sign-up not found', Code.NotFound);
+            // SIGNOUT (C): a retry of the report that landed (the same outcome and earlier sign-up) is
+            // a no-op, decided since or not; anything else is refused as before.
+            const { rows: known } = await client.query<{ landed: boolean }>(
+              `SELECT verification = $2 AND conflicting_request_id IS NOT DISTINCT FROM $3::uuid AS landed FROM signup_request WHERE id = $1`,
+              [request.requestId, outcome, conflicting],
+            );
+            const found = known[0];
+            if (found === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
+            if (found.landed) return {};
             throw new ConnectError('this sign-up is not waiting for a check', Code.FailedPrecondition);
           }
           await recordAudit(client, caller, {

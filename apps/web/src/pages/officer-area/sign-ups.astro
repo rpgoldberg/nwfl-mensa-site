@@ -8,9 +8,9 @@
 // and the API refuses it too. Each decision goes to the API with the approver's own token
 // (src/lib/api/membership.ts), which alone decides who may.
 //
-// VET: an email that differs from the roster, or a number another account already claimed, never
-// approves by itself. Its card says in words what to do first (checkWarning: confirm with the member
-// through the roster, or wait for an officer, naming the earlier claim), labelled "Before approving"
+// VET: an email the membership verification service did not confirm, or a number another account
+// already claimed, never approves by itself. Its card says in words what to do first (checkWarning:
+// confirm with the member, or wait for an officer, naming the earlier claim), labelled "Before approving"
 // in text, not by colour, and the Approve button is described by it as well as by the name.
 // VET fix 1: approving either one also needs a box ticked next to the warning, labelled for its
 // outcome (confirmText: confirmed with the member, or resolved the earlier claim). The box is the

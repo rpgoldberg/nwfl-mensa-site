@@ -39,7 +39,7 @@
 //   RemoveMember        approvers and the Admin; a sign-up still open for the
 //                       account is rejected with it, erasing its inputs
 //   ConfirmMember       approvers and the Admin, never on themselves: the
-//                       yearly re-check against the offline roster dates a
+//                       yearly re-check, confirmed by an officer, dates a
 //                       member's (or a lapsed account's) verification today
 //   GrantAffiliate      the Admin or the Webmaster: member-level reading for
 //                       an invited affiliate, from the verifier's other-group
@@ -118,7 +118,7 @@ const NUMBER = /^[0-9]{1,12}$/;
 const NUMBER_NOISE = /[\p{Zs}\p{Pd}\u2212]/gu;
 /** VET fix 1: the outcomes an approver must confirm before approving, and what to do first. */
 const CONFIRM_FIRST: Partial<Record<string, string>> = {
-  email_mismatch: 'the email differs from the roster: confirm with the member, then approve with confirmed_warning',
+  email_mismatch: 'the membership verification service did not confirm the email: confirm with the member, then approve with confirmed_warning',
   duplicate_claim: 'another sign-up already claimed this number: resolve the earlier claim, then approve with confirmed_warning',
 };
 const EMAIL = /^[^@\s]+@[^@\s]+$/;

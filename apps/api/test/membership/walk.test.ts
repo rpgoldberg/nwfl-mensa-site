@@ -100,7 +100,7 @@ describe.skipIf(!live)('a member confirmed at the yearly re-check', () => {
     await membership.approveSignup({ requestId }, as('approver-token'));
     expect(await reads()).toBe(true);
 
-    // Month 12: the approver checks the offline roster and confirms.
+    // Month 12: the yearly re-check, confirmed by an officer.
     clock = new Date('2025-10-22T15:00:00Z');
     expect((await membership.confirmMember({ subject: 'sub-joiner' }, as('approver-token'))).account?.verifiedOn).toEqual(expect.objectContaining({ year: 2025, month: 10, day: 22 }));
 

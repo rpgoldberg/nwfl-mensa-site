@@ -48,7 +48,7 @@ enum Verification {
 message MemberAccount {
   MemberStatus status = 1;
   AccountRoute route = 2;
-  // The last time the account was checked against the roster.
+  // The last time the account's membership was confirmed.
   Date verified_on = 3;
 }
 
@@ -113,8 +113,8 @@ message Member {
 // verified token, never from a request field.
 service MembershipService {
   // Called by a signed-in pending user. The number and the last name are
-  // both required, invited or not; the verifier matches them, and an
-  // approver decides. A token with the invited group opens the account with
+  // both required, invited or not; the membership verification service
+  // confirms them, and an approver decides. A token with the invited group opens the account with
   // the invite route.
   rpc SubmitSignup(SubmitSignupRequest) returns (SubmitSignupResponse);
   rpc GetMyAccount(GetMyAccountRequest) returns (GetMyAccountResponse) {
@@ -137,8 +137,8 @@ service MembershipService {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
   rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
-  // The yearly re-check: an approver confirms a member against the offline
-  // roster, which dates its verification today (a lapsed account becomes a
+  // The yearly re-check, confirmed by an officer: an approver confirms a
+  // member, which dates its verification today (a lapsed account becomes a
   // member again). No one confirms themselves.
   rpc ConfirmMember(ConfirmMemberRequest) returns (ConfirmMemberResponse);
   // Admin or Webmaster only. Member-level reading for an invited affiliate,

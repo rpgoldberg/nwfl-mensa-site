@@ -34,15 +34,12 @@ export const REFUSALS: Record<Refusal, string> = {
   failed: 'Something went wrong while signing you in. Please start again, and ask for help if it happens again.',
 };
 
-/** This origin's cache and storage only (R26): never "cookies". */
-export const CLEAR_SITE_DATA = '"cache", "storage"';
-
 export type Outcome =
   /**
    * session: the one a completed sign-in has just opened (W-SIGNUP D3: the callback picks the first stop by it).
    * cache: the response's Cache-Control, when the redirect must never be stored (S2: to the profile's origin).
    */
-  | { kind: 'redirect'; location: string; cookies: string[]; clearSiteData?: string; session?: Session; cache?: string }
+  | { kind: 'redirect'; location: string; cookies: string[]; session?: Session; cache?: string }
   | { kind: 'refused'; reason: Refusal; cookies: string[] }
   | { kind: 'unavailable' };
 
@@ -171,23 +168,25 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
   }
 }
 
-/** Where sign-out sends the reader, with what it clears. */
+/** Where sign-out sends the reader, with the cookies it expires. */
 export interface SignedOut {
   location: string;
   cookies: string[];
-  clearSiteData: string;
 }
 
 /**
- * Sign out: our own cookies expire by name, the tokens go, cache and storage
- * are cleared, and the reader goes on to end the provider's session. Never
- * Clear-Site-Data "cookies": it clears the whole registered domain, the
- * provider's cookies (on the profile's issuer origin, server/auth-config.mjs)
- * and the reader's text size and theme.
+ * Sign out: our own cookies expire by name, the tokens go, and the reader goes
+ * on to end the provider's session. No Clear-Site-Data at all (SIGNOUT):
+ * "cookies" would clear the whole registered domain, the provider's cookies (on
+ * the profile's issuer origin, server/auth-config.mjs) and the reader's text
+ * size and theme; "cache" held the installed app's navigation while the browser
+ * cleared, and there is nothing members-only to clear, as every such answer is
+ * private, no-store (server/policy.mjs); "storage" has nothing to clear, as the
+ * site keeps nothing in the browser's storage. e2e/signout.spec.ts pins both.
  */
 export async function signOut(d: Deps, { cookieHeader }: { cookieHeader: string | null | undefined }): Promise<SignedOut> {
   const now = d.now();
-  const done = { cookies: [clearCookie(SESSION_COOKIE), clearCookie(AUTH_COOKIE)], clearSiteData: CLEAR_SITE_DATA, location: '/signed-out' };
+  const done = { cookies: [clearCookie(SESSION_COOKIE), clearCookie(AUTH_COOKIE)], location: '/signed-out' };
   const session = d.key ? readSession(cookieHeader, d.key, now, d.tokens) : undefined;
   const idToken = session ? d.tokens.take(session.sid, now)?.id_token : undefined;
   if (!d.setup.enabled) return done;

@@ -185,6 +185,38 @@ describe('a handler that marks its response private (A14)', () => {
   });
 });
 
+// SIGNOUT: sign-out clears no cache (Clear-Site-Data "cache" stalled the installed app), which is safe
+// only while no members' copy is ever stored. Each members-only answer is private, no-store, a CDN
+// told so too, whatever its status and whatever its handler set. e2e/signout.spec.ts asks the server.
+describe('every members-only answer is never stored (SIGNOUT)', () => {
+  const MEMBERS_ONLY = [
+    '/read/f1000000-0000-4000-8000-000000000011',
+    '/documents/f1000000-0000-4000-8000-000000000011.pdf',
+    '/account',
+    '/officer-area',
+    '/officer-area/approval-rules',
+    '/officer-area/sign-ups',
+    '/news',
+  ];
+  const signedIn = { cookieHeader: `__Host-nwfl-size=4; ${SESSION_COOKIE}=v1.abc`, setsCookie: false };
+
+  it('to a signed-in reader, at every status, whatever the handler set', () => {
+    for (const path of MEMBERS_ONLY) {
+      for (const status of [200, 303, 403, 404, 503]) {
+        for (const handler of [undefined, 'public, max-age=31536000, immutable', 'no-store', 'private', 'private, no-store']) {
+          const cache = cacheControl({ ...signedIn, path, status, handler });
+          expect(cache, `${path} ${status} ${handler}`).toBe('private, no-store');
+          expect(cdnCacheControl(cache)).toBe('no-store');
+        }
+      }
+    }
+  });
+
+  it('the members copy and its page as the handler marks them, even with no session cookie on the request', () => {
+    for (const path of MEMBERS_ONLY.slice(0, 2)) expect(cacheControl({ path, cookieHeader: undefined, status: 200, setsCookie: false, handler: 'private, no-store' })).toBe('private, no-store');
+  });
+});
+
 describe('cdnCacheControl (D6)', () => {
   it('is no-store whenever the rule is private, and absent otherwise, so an anonymous response keeps its headers', () => {
     expect(cdnCacheControl('private, no-store')).toBe('no-store');

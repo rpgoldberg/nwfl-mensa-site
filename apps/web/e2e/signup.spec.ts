@@ -36,6 +36,9 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
     await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
     await expect(page.getByRole('heading', { level: 1, name: 'Your account' })).toBeVisible();
     await expect(page.locator('.lead')).toContainText('tell us your last name and your Mensa membership number');
+    // SIGNOUT (B): the verifier only as an external service, never how it checks.
+    await expect(page.locator('.lead')).toContainText('An external membership verification service confirms them, then an officer approves your account.');
+    await expect(page.locator('main')).not.toContainText(/membership list|roster/i);
     await expect(page.getByLabel('Last name')).toHaveAttribute('autocomplete', 'family-name');
     await expect(page.getByLabel('Mensa membership number')).toHaveAttribute('inputmode', 'numeric');
     expect(await axe(page)).toEqual([]);
@@ -120,7 +123,7 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
     await expect(page).toHaveURL(`${SITE_URL}/about`);
     await page.goto(ACCOUNT);
     await expect(page.locator('.lead')).toHaveText('Your account has member access.');
-    await expect(page.getByText(`It was last checked against the membership list on ${MEMBER_CHECKED_ON}.`)).toBeVisible();
+    await expect(page.getByText(`It was last confirmed on ${MEMBER_CHECKED_ON}.`)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Send my sign-up' })).toHaveCount(0);
     expect(await axe(page)).toEqual([]);
   });

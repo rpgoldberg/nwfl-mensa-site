@@ -114,11 +114,11 @@ export const ROUTE_TEXT: Record<Route, string> = {
 
 export const CHECK_TEXT: Record<Check, string> = {
   unchecked: 'Not checked yet',
-  verified_local: 'Found on our group’s membership list',
-  verified_other_group: 'Found as a member of another local group',
-  not_found: 'Not found on the membership list (members who opted out or lapsed may not appear)',
-  error: 'The check could not be done',
-  email_mismatch: 'Number and last name found on our group’s membership list, but the email differs',
+  verified_local: 'Confirmed by the membership verification service',
+  verified_other_group: 'Confirmed by the membership verification service as a member of another local group',
+  not_found: 'Not confirmed by the membership verification service',
+  error: 'The membership verification service could not complete the check',
+  email_mismatch: 'Number and last name confirmed by the membership verification service, but the email differs',
   duplicate_claim: 'This membership number was already claimed by another account',
 };
 
@@ -142,14 +142,14 @@ export function checkText(verification: Check, verifiedOn: string | undefined): 
 
 /**
  * VET: what the approver must do before approving, in words, for the two outcomes that never approve
- * by themselves; none for the others. An email that differs from the roster is confirmed with the
- * member through the roster's own email or phone, from the approver's own mailbox (the site never
- * mails a roster address); a duplicate claim waits for an officer, naming the earlier claim by its
- * display name and day when the verifier named it.
+ * by themselves; none for the others. An email the membership verification service did not confirm
+ * is confirmed with the member, from the approver's own mailbox (the site never mails anyone about
+ * it); a duplicate claim waits for an officer, naming the earlier claim by its display name and day
+ * when the verifier named it.
  */
 export function checkWarning(signup: Pick<PendingSignup, 'verification' | 'earlierClaim'>): string | undefined {
   if (signup.verification === 'email_mismatch') {
-    return 'The email differs from the roster. Confirm with the member, through the roster’s email or phone from your own mailbox, before approving.';
+    return 'The membership verification service did not confirm this email. Confirm with the member that this sign-up is theirs, from your own mailbox, before approving.';
   }
   if (signup.verification !== 'duplicate_claim') return undefined;
   const earlier = signup.earlierClaim;

@@ -134,7 +134,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
 
   {view === 'form' && (
     <>
-      <p class="lead">Welcome, {session.name}. To read the members' pages, tell us your last name and your Mensa membership number. An officer checks them against the group's membership list, then approves your account.</p>
+      <p class="lead">Welcome, {session.name}. To read the members' pages, tell us your last name and your Mensa membership number. An external membership verification service confirms them, then an officer approves your account.</p>
       <form method="post" action={HERE} class="rule-form" novalidate>
         <fieldset>
           <legend>Your sign-up</legend>
@@ -176,7 +176,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {view !== undefined && view !== 'form' && (
     <>
       <p class="lead">{STANDING_TEXT[view]}</p>
-      {checked && <p>It was last checked against the membership list on {checked}.</p>}
+      {checked && <p>It was last confirmed on {checked}.</p>}
       {view === 'waiting' && <p>Until then you can read every public page. Member access starts as soon as it is approved.</p>}
       {view === 'rejected' && <p>{contactBefore}<a href="/officers">Membership Officer</a>{contactAfter}</p>}
       {view === 'officer' && <p><a href="/officer-area">Go to the officer area</a></p>}
