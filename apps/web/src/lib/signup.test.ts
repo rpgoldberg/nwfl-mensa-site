@@ -21,6 +21,7 @@ import {
   accountView,
   errorSummary,
   checkText,
+  checkWarning,
   doneFromQuery,
   doneText,
   firstStop,
@@ -133,13 +134,38 @@ describe('errorSummary (fix 1, NOTE-6: the summary at the top of a form with pro
   });
 });
 
+describe('VET: the queue\'s warnings before approving', () => {
+  it('asks the approver to confirm an email that differs from the roster, through the roster, first', () => {
+    expect(checkWarning({ verification: 'email_mismatch' })).toBe(
+      'The email differs from the roster. Confirm with the member, through the roster’s email or phone from your own mailbox, before approving.',
+    );
+  });
+
+  it('names the earlier claim of a duplicate by its display name and day, and says not to approve until an officer resolves it', () => {
+    // 03:00 UTC on September 16 is still September 15 by the Central calendar.
+    expect(checkWarning({ verification: 'duplicate_claim', earlierClaim: { displayName: 'Lee Firstclaim', signedUpAt: new Date('2026-09-16T03:00:00Z') } })).toBe(
+      'Another account already claimed this number (Lee Firstclaim, September 15, 2026). Don’t approve until an officer resolves it.',
+    );
+    expect(checkWarning({ verification: 'duplicate_claim', earlierClaim: { displayName: 'Lee Firstclaim' } })).toBe(
+      'Another account already claimed this number (Lee Firstclaim). Don’t approve until an officer resolves it.',
+    );
+    expect(checkWarning({ verification: 'duplicate_claim' })).toBe('Another account already claimed this number. Don’t approve until an officer resolves it.');
+  });
+
+  it('warns about nothing else', () => {
+    for (const verification of ['unchecked', 'verified_local', 'verified_other_group', 'not_found', 'error'] as const) expect(checkWarning({ verification })).toBeUndefined();
+  });
+});
+
 describe('the queue\'s words (D4)', () => {
   it('names how each person came, never by colour alone', () => {
     expect(ROUTE_TEXT).toEqual({ invite: 'Invited by an officer', signup: 'Signed up on the site', admin_grant: 'Granted by the Admin or the Webmaster' });
   });
 
   it('says the check\'s outcome in words, with its day when there is one', () => {
-    expect(Object.keys(CHECK_TEXT).sort()).toEqual(['error', 'not_found', 'unchecked', 'verified_local', 'verified_other_group']);
+    expect(Object.keys(CHECK_TEXT).sort()).toEqual(['duplicate_claim', 'email_mismatch', 'error', 'not_found', 'unchecked', 'verified_local', 'verified_other_group']);
+    expect(CHECK_TEXT.email_mismatch).toBe('Number and last name found on our group’s membership list, but the email differs');
+    expect(CHECK_TEXT.duplicate_claim).toBe('This membership number was already claimed by another account');
     expect(checkText('verified_local', '2026-11-02')).toBe(`${CHECK_TEXT.verified_local}, on November 2, 2026`);
     expect(checkText('unchecked', undefined)).toBe(CHECK_TEXT.unchecked);
     expect(formatDay('2026-01-31')).toBe('January 31, 2026');

@@ -37,6 +37,12 @@ enum Verification {
   // Never rejects by itself: opted-out and lapsed members may not appear.
   VERIFICATION_NOT_FOUND = 4;
   VERIFICATION_ERROR = 5;
+  // VET: the number and the last name match a local member, the email does
+  // not. Never approves by itself: confirm with the member first.
+  VERIFICATION_EMAIL_MISMATCH = 6;
+  // VET: another sign-up already claimed this number. Never approves by
+  // itself: an officer resolves it first.
+  VERIFICATION_DUPLICATE_CLAIM = 7;
 }
 
 message MemberAccount {
@@ -59,6 +65,15 @@ message SignupRequest {
   google.protobuf.Timestamp created_at = 6;
   // How the account came to be: a sign-up, or an invitation that then signed up.
   AccountRoute route = 7;
+  // VET: for a duplicate claim, the earlier sign-up the verifier named, if any.
+  EarlierClaim earlier_claim = 8;
+}
+
+// VET: the earlier sign-up that claimed the same number, as the site already
+// holds it: its display name and when it signed up. Never a number.
+message EarlierClaim {
+  string display_name = 1;
+  google.protobuf.Timestamp signed_up_at = 2;
 }
 
 // A rejected sign-up that can still be reopened, as the Admin or the Membership Officer sees it:

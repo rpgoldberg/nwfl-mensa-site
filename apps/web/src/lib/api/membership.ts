@@ -26,7 +26,13 @@ import { type ApiConfig, ApiUnavailable, READ_MAX_BYTES, type Reader, apiSetup, 
 
 export type Standing = 'pending' | 'member' | 'affiliate' | 'lapsed' | 'removed';
 export type Route = 'invite' | 'signup' | 'admin_grant';
-export type Check = 'unchecked' | 'verified_local' | 'verified_other_group' | 'not_found' | 'error';
+export type Check = 'unchecked' | 'verified_local' | 'verified_other_group' | 'not_found' | 'error' | 'email_mismatch' | 'duplicate_claim';
+
+/** VET: the earlier sign-up a duplicate claim names, as the site already holds it: never a number. */
+export interface EarlierClaim {
+  displayName: string;
+  signedUpAt?: Date;
+}
 
 /** The person's own account; verifiedOn is the day it was last checked, YYYY-MM-DD. */
 export interface MyAccount {
@@ -44,6 +50,8 @@ export interface PendingSignup {
   verification: Check;
   verifiedOn?: string;
   createdAt?: Date;
+  /** VET: for a duplicate claim, the earlier sign-up the verifier named, if any. */
+  earlierClaim?: EarlierClaim;
 }
 
 /** REOPEN: a rejected sign-up that can be reopened, as the Admin or the Membership Officer sees it. */
@@ -106,6 +114,8 @@ const CHECK: Record<Check, Verification> = {
   verified_other_group: Verification.VERIFIED_OTHER_GROUP,
   not_found: Verification.NOT_FOUND,
   error: Verification.ERROR,
+  email_mismatch: Verification.EMAIL_MISMATCH,
+  duplicate_claim: Verification.DUPLICATE_CLAIM,
 };
 
 /** The name for a wire value; an unset or unknown one is an answer the site cannot read. */
@@ -141,6 +151,9 @@ function pendingOf(request: SignupRequest): PendingSignup {
     verification: nameOf(CHECK, request.verification),
     ...day(request.verifiedOn),
     ...(request.createdAt ? { createdAt: timestampDate(request.createdAt) } : {}),
+    ...(request.earlierClaim
+      ? { earlierClaim: { displayName: request.earlierClaim.displayName, ...(request.earlierClaim.signedUpAt ? { signedUpAt: timestampDate(request.earlierClaim.signedUpAt) } : {}) } }
+      : {}),
   };
 }
 

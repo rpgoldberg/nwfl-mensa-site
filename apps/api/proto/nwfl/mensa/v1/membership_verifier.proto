@@ -5,9 +5,12 @@ syntax = "proto3";
 
 package nwfl.mensa.v1;
 
+import "google/protobuf/timestamp.proto";
+
 service MembershipVerifierService {
-  // The sign-ups that typed a number and have not been checked yet. This is
-  // the only RPC that returns a membership number.
+  // The sign-ups that typed a number and have not been checked yet, with the
+  // email stored on each (VET). This is the only RPC that returns a
+  // membership number.
   rpc ListPendingVerifications(ListPendingVerificationsRequest) returns (ListPendingVerificationsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
@@ -15,6 +18,13 @@ service MembershipVerifierService {
   // in the same statement. A local match does not approve the sign-up: an
   // officer still does.
   rpc ReportVerification(ReportVerificationRequest) returns (ReportVerificationResponse);
+  // VET: the sign-ups whose claim on a number is released, oldest first, after
+  // a cursor: rejected, reopened, or whose member account was removed or
+  // deleted. The verifier frees those entries in its own ledger. Sign-up ids,
+  // times and kinds only: never a number, a name or an email.
+  rpc ListReleasedClaims(ListReleasedClaimsRequest) returns (ListReleasedClaimsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
 message ListPendingVerificationsRequest {
@@ -31,6 +41,9 @@ message PendingVerification {
   string request_id = 1;
   string membership_number = 2;
   string last_name = 3;
+  // VET: the email stored on the sign-up, taken from the verified token. The
+  // verifier compares it with the roster's email on the home box.
+  string email = 4;
 }
 
 enum VerificationOutcome {
@@ -41,11 +54,52 @@ enum VerificationOutcome {
   VERIFICATION_OUTCOME_VERIFIED_OTHER_GROUP = 2;
   VERIFICATION_OUTCOME_NOT_FOUND = 3;
   VERIFICATION_OUTCOME_ERROR = 4;
+  // VET: the number and the last name match a local member; the email does
+  // not. Neither approves nor rejects: an officer confirms with the member
+  // first.
+  VERIFICATION_OUTCOME_EMAIL_MISMATCH = 5;
+  // VET: the verifier's own ledger says another sign-up already claimed this
+  // number. Neither approves nor rejects: an officer resolves it.
+  VERIFICATION_OUTCOME_DUPLICATE_CLAIM = 6;
 }
 
 message ReportVerificationRequest {
   string request_id = 1;
   VerificationOutcome outcome = 2;
+  // VET: with DUPLICATE_CLAIM only, and optional there: the earlier sign-up
+  // that holds the claim, by its request id. Empty for none. It must name an
+  // existing sign-up other than this one; any other outcome with it is refused.
+  string conflicting_request_id = 3;
 }
 
 message ReportVerificationResponse {}
+
+message ListReleasedClaimsRequest {
+  // The next_cursor of the previous page; empty for the first page.
+  string after = 1;
+  // At most 100, the default.
+  int32 page_size = 2;
+}
+
+message ListReleasedClaimsResponse {
+  repeated ReleasedClaim released = 1;
+  // Pass as `after` for the next page. The same as `after` when nothing new
+  // was released. A cursor once seen never goes back: releases are recorded
+  // append-only, in commit order.
+  string next_cursor = 2;
+}
+
+// Why a sign-up's claim on a number was released.
+enum ClaimReleaseKind {
+  CLAIM_RELEASE_KIND_UNSPECIFIED = 0;
+  CLAIM_RELEASE_KIND_REJECTED = 1;
+  CLAIM_RELEASE_KIND_REOPENED = 2;
+  // The sign-up's member account was removed or deleted.
+  CLAIM_RELEASE_KIND_ACCOUNT_DELETED = 3;
+}
+
+message ReleasedClaim {
+  string request_id = 1;
+  google.protobuf.Timestamp released_at = 2;
+  ClaimReleaseKind kind = 3;
+}

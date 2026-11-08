@@ -8,7 +8,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { SITE_URL } from './servers';
 import { signIn } from './signin';
-import { MEMBER_CHECKED_ON, SIGNUP_QUEUE } from './stand-in';
+import { MEMBER_CHECKED_ON, SIGNUP_QUEUE, VET_WARNINGS } from './stand-in';
 
 const ACCOUNT = '/account';
 const QUEUE = '/officer-area/sign-ups';
@@ -156,6 +156,26 @@ test.describe('the approvers\' queue (D4)', () => {
     await expect(other.getByRole('button', { name: 'Reject' })).toHaveCount(1);
     await expect(other).toContainText('cannot be approved as a member here');
     expect(await page.content()).not.toMatch(/membership_number|lastName|last_name/);
+    expect(await axe(page)).toEqual([]);
+    await fits(page);
+  });
+
+  test('VET: an email mismatch and a duplicate claim each say in words what to do before approving, and the Approve button says it too', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'approver');
+    await page.goto(QUEUE);
+    // By the card's own heading, so a warning naming another person never picks the wrong card.
+    const cardOf = (name: string) => page.locator('.signup-card').filter({ has: page.getByRole('heading', { level: 2, name, exact: true }) });
+    for (const [name, warning] of Object.entries(VET_WARNINGS)) {
+      const card = cardOf(name);
+      const note = card.getByRole('note');
+      await expect(note).toHaveText(`Before approving: ${warning}`);
+      await expect(card.getByRole('button', { name: 'Approve' })).toHaveAccessibleDescription(`${name} Before approving: ${warning}`);
+      await expect(card.getByRole('button', { name: 'Reject' })).toHaveCount(1);
+    }
+    // No warning on the others: a local match, not found, another group, not checked.
+    for (const s of SIGNUP_QUEUE.filter((q) => !(q.name in VET_WARNINGS))) await expect(cardOf(s.name).getByRole('note')).toHaveCount(0);
+    await expect(page.locator('main')).not.toContainText(/membership_number|last_name/);
     expect(await axe(page)).toEqual([]);
     await fits(page);
   });

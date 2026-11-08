@@ -14,7 +14,8 @@
 //   GetMyAccount        the caller's own account
 //   ListSignupRequests  approvers and the Admin: the pending sign-ups with the
 //                       verifier's outcome and date, NEVER the number or the
-//                       last name
+//                       last name. VET: a duplicate claim shows the earlier
+//                       sign-up the verifier named, by display name and date
 //   ApproveSignup /     approvers and the Admin, never on their own sign-up.
 //   RejectSignup        The decision erases the number and the last name in
 //                       the same statement (0007, 0009). A rejection removes
@@ -22,7 +23,9 @@
 //                       transaction, so GetMyAccount reports it and no second
 //                       sign-up is taken (W-SIGNUP fix 1). An approval makes
 //                       the account a member from the verifier's date for a
-//                       local match, else from today on the approver's word;
+//                       local match, else from today on the approver's word
+//                       (VET: an email mismatch or a duplicate claim is never
+//                       a local match, so it is approved only that way);
 //                       an other-group match is never approved as a member
 //                       (R33): it is rejected or granted as an affiliate.
 //   ListMembers         approvers and the Admin: accounts with member-level
@@ -68,6 +71,7 @@ import { type TxClient, inTransaction } from '../db/tx.js';
 import { protoDate, todayIn } from '../events/zone.js';
 import {
   AccountRoute,
+  EarlierClaimSchema,
   type MemberAccount,
   MemberAccountSchema,
   MemberSchema,
@@ -97,6 +101,8 @@ const VERIFICATIONS: Record<string, Verification> = {
   verified_other_group: Verification.VERIFIED_OTHER_GROUP,
   not_found: Verification.NOT_FOUND,
   error: Verification.ERROR,
+  email_mismatch: Verification.EMAIL_MISMATCH,
+  duplicate_claim: Verification.DUPLICATE_CLAIM,
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -256,9 +262,12 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           verified_on: string | null;
           created_at: Date;
           route: string;
+          earlier_name: string | null;
+          earlier_at: Date | null;
         }>(
-          `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.created_at, coalesce(a.route, 'signup') AS route
-           FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub
+          `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.created_at, coalesce(a.route, 'signup') AS route,
+             c.display_name AS earlier_name, c.created_at AS earlier_at
+           FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub LEFT JOIN signup_request c ON c.id = s.conflicting_request_id
            WHERE s.decision = 'pending' ORDER BY s.created_at, s.id`,
         );
         return {
@@ -271,6 +280,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
               ...(row.verified_on !== null ? { verifiedOn: protoDate(row.verified_on) } : {}),
               createdAt: timestampFromDate(row.created_at),
               route: ROUTES[row.route],
+              ...(row.earlier_name !== null ? { earlierClaim: create(EarlierClaimSchema, { displayName: row.earlier_name, signedUpAt: timestampFromDate(row.earlier_at as Date) }) } : {}),
             }),
           ),
         };

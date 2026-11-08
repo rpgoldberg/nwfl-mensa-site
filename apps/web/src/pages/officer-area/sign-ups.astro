@@ -8,6 +8,11 @@
 // and the API refuses it too. Each decision goes to the API with the approver's own token
 // (src/lib/api/membership.ts), which alone decides who may.
 //
+// VET: an email that differs from the roster, or a number another account already claimed, never
+// approves by itself. Its card says in words what to do first (checkWarning: confirm with the member
+// through the roster, or wait for an officer, naming the earlier claim), labelled "Before approving"
+// in text, not by colour, and the Approve button is described by it as well as by the name.
+//
 // REOPEN: the Admin and the Membership Officer (the nwfl-office-membership seat; not every approver)
 // also see the rejected sign-ups that can still be reopened, newest first, each with a Reopen button
 // and a confirmation step, so a mistaken rejection can be fixed. Reopening lets the person send the
@@ -37,6 +42,7 @@ import {
   ROUTE_TEXT,
   type DecisionForm,
   checkText,
+  checkWarning,
   doneFromQuery,
   doneText,
   formatMoment,
@@ -182,7 +188,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
     ) : (
       <>
         <p>{requests.length === 1 ? 'One sign-up is waiting.' : `${requests.length} sign-ups are waiting.`}</p>
-        {requests.map((r, i) => (
+        {requests.map((r, i) => { const warning = checkWarning(r); return (
           <section class="card signup-card" aria-labelledby={`signup-${i}`}>
             <h2 id={`signup-${i}`}>{r.displayName}</h2>
             <dl class="facts">
@@ -194,12 +200,13 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
             {r.verification === 'verified_other_group' && (
               <p>This person is a member of another local group, so the sign-up cannot be approved as a member here. Reject it, or ask the Admin or the Webmaster about affiliate access.</p>
             )}
+            {warning && <p class="notice" role="note" id={`signup-warning-${i}`}><strong>Before approving:</strong> {warning}</p>}
             <div class="btns">
               {r.verification !== 'verified_other_group' && (
                 <form method="post" action={HERE}>
                   <input type="hidden" name="decision" value="approve" />
                   <input type="hidden" name="request" value={r.requestId} />
-                  <button class="button" type="submit" aria-describedby={`signup-${i}`}>Approve</button>
+                  <button class="button" type="submit" aria-describedby={warning ? `signup-${i} signup-warning-${i}` : `signup-${i}`}>Approve</button>
                 </form>
               )}
               <form method="post" action={HERE}>
@@ -209,7 +216,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
               </form>
             </div>
           </section>
-        ))}
+        ); })}
       </>
     )
   )}

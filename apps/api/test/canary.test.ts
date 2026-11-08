@@ -90,6 +90,8 @@ describe.skipIf(!live)('the members-only canary', () => {
     },
     'nwfl.mensa.v1.MembershipVerifierService': {
       ListPendingVerifications: () => [{}],
+      // VET: released claims are ids and times only.
+      ListReleasedClaims: () => [{}],
     },
     // SOLO-APPROVE: officers only; they carry no content, so the canary may not appear in them for anyone.
     'nwfl.mensa.v1.ApprovalRuleService': {

@@ -111,6 +111,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     },
     'nwfl.mensa.v1.MembershipVerifierService': {
       ListPendingVerifications: () => [{}],
+      ListReleasedClaims: () => [{}],
     },
     'nwfl.mensa.v1.ApprovalRuleService': {
       GetApprovalRules: () => [{}],

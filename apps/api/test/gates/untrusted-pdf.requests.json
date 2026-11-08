@@ -1446,6 +1446,23 @@
       }
     ]
   },
+  "MembershipVerifierService.ListReleasedClaims": {
+    "input": "nwfl.mensa.v1.ListReleasedClaimsRequest",
+    "fields": [
+      {
+        "name": "after",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "page_size",
+        "number": 2,
+        "type": "int32",
+        "label": "optional"
+      }
+    ]
+  },
   "MembershipVerifierService.ReportVerification": {
     "input": "nwfl.mensa.v1.ReportVerificationRequest",
     "fields": [
@@ -1461,6 +1478,12 @@
         "type": "enum",
         "label": "optional",
         "message": "nwfl.mensa.v1.VerificationOutcome"
+      },
+      {
+        "name": "conflicting_request_id",
+        "number": 3,
+        "type": "string",
+        "label": "optional"
       }
     ]
   },

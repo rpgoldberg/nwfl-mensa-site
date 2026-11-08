@@ -12,7 +12,7 @@
 // form again (the API removes the account the rejection closed).
 import type { Session } from '../../server/session.mjs';
 import { isAdmin } from './approval-rules';
-import type { Check, MembershipApi, MyAccount, Route } from './api/membership';
+import type { Check, MembershipApi, MyAccount, PendingSignup, Route } from './api/membership';
 import { type SessionReaderDeps, sessionReader } from './api/membership';
 import { ZONE } from './calendar';
 
@@ -111,6 +111,8 @@ export const CHECK_TEXT: Record<Check, string> = {
   verified_other_group: 'Found as a member of another local group',
   not_found: 'Not found on the membership list (members who opted out or lapsed may not appear)',
   error: 'The check could not be done',
+  email_mismatch: 'Number and last name found on our group’s membership list, but the email differs',
+  duplicate_claim: 'This membership number was already claimed by another account',
 };
 
 const DAY = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: 'long', day: 'numeric' });
@@ -129,6 +131,23 @@ export function formatMoment(at: Date): string {
 /** The check's outcome, with its day when there is one. */
 export function checkText(verification: Check, verifiedOn: string | undefined): string {
   return verifiedOn === undefined ? CHECK_TEXT[verification] : `${CHECK_TEXT[verification]}, on ${formatDay(verifiedOn)}`;
+}
+
+/**
+ * VET: what the approver must do before approving, in words, for the two outcomes that never approve
+ * by themselves; none for the others. An email that differs from the roster is confirmed with the
+ * member through the roster's own email or phone, from the approver's own mailbox (the site never
+ * mails a roster address); a duplicate claim waits for an officer, naming the earlier claim by its
+ * display name and day when the verifier named it.
+ */
+export function checkWarning(signup: Pick<PendingSignup, 'verification' | 'earlierClaim'>): string | undefined {
+  if (signup.verification === 'email_mismatch') {
+    return 'The email differs from the roster. Confirm with the member, through the roster’s email or phone from your own mailbox, before approving.';
+  }
+  if (signup.verification !== 'duplicate_claim') return undefined;
+  const earlier = signup.earlierClaim;
+  const which = earlier === undefined ? '' : ` (${earlier.displayName}${earlier.signedUpAt === undefined ? '' : `, ${formatMoment(earlier.signedUpAt)}`})`;
+  return `Another account already claimed this number${which}. Don’t approve until an officer resolves it.`;
 }
 
 /** D4: the membership approvers and the Admin, by the internal groups the session carries (server/groups.mjs). */

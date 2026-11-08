@@ -506,6 +506,9 @@ const SIGNUP_QUEUE = [
   { requestId: 'b1000000-0000-4000-8000-000000000002', sub: '00000000-0000-4000-8000-0000000001e2', displayName: 'Kendall Sample', email: 'kendall@example.org', route: AccountRoute.SIGNUP, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T16:00:00Z') },
   { requestId: 'b1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000001e3', displayName: 'Harper Placeholder', email: 'harper@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 3 }, createdAt: new Date('2026-11-02T15:00:00Z') },
   { requestId: 'b1000000-0000-4000-8000-000000000004', sub: APPROVER_SUBJECT, displayName: 'Blair Example', email: 'blair@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED, createdAt: new Date('2026-11-03T15:00:00Z') },
+  // VET: an email that differs from the roster, and a number an earlier sign-up (Jordan Firstclaim, approved, no longer queued) claimed first.
+  { requestId: 'b1000000-0000-4000-8000-000000000005', sub: '00000000-0000-4000-8000-0000000001e5', displayName: 'Dana Mismatch', email: 'dana@example.org', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T15:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000006', sub: '00000000-0000-4000-8000-0000000001e6', displayName: 'Drew Secondclaim', email: 'drew@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T16:00:00Z'), earlierClaim: { displayName: 'Jordan Firstclaim', signedUpAt: new Date('2026-10-28T15:00:00Z') } },
 ];
 /** REOPEN: rejected sign-ups, newest first; the first three are reopened by one browser project each (e2e/stand-in.ts REJECTED). */
 const REJECTED = [
@@ -720,6 +723,7 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
           verification: r.verification,
           ...(r.verifiedOn ? { verifiedOn: r.verifiedOn } : {}),
           createdAt: timestampFromDate(r.createdAt),
+          ...(r.earlierClaim ? { earlierClaim: { displayName: r.earlierClaim.displayName, signedUpAt: timestampFromDate(r.earlierClaim.signedUpAt) } } : {}),
         })),
       };
     },

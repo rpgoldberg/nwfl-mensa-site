@@ -100,7 +100,8 @@ const provider = new Provider(issuer, {
     },
   ],
   pkce: { required: () => true },
-  claims: { openid: ['sub'], profile: ['name', 'groups'] },
+  // VET: the site asks for the email scope by default (server/auth-config.mjs), as Authentik offers it.
+  claims: { openid: ['sub'], profile: ['name', 'groups'], email: ['email', 'email_verified'] },
   conformIdTokenClaims: false,
   cookies: { keys: ['e2e-only-not-a-secret'] },
   features: {
@@ -145,7 +146,7 @@ const provider = new Provider(issuer, {
     const grantId = oidc.result?.consent?.grantId || oidc.session?.grantIdFor(String(oidc.client?.clientId));
     if (grantId) return oidc.provider.Grant.find(grantId);
     const grant = new oidc.provider.Grant({ clientId: String(oidc.client?.clientId), accountId: String(oidc.session?.accountId) });
-    grant.addOIDCScope('openid profile');
+    grant.addOIDCScope('openid profile email');
     grant.addOIDCClaims(['name', 'groups']);
     grant.addResourceScope(RESOURCE, 'site');
     await grant.save();

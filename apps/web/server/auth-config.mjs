@@ -120,7 +120,9 @@ export function authConfig(env) {
   if (allowInsecure && (production || !LOOPBACK.includes(issuer.hostname))) {
     return { enabled: false, reason: 'OIDC_ISSUER must be https (plain http only for a local test provider, outside production)' };
   }
-  const scope = env['OIDC_SCOPE'] || 'openid profile';
+  // VET: the email by default, so the sign-up stores it from the verified token for the verifier to
+  // compare with the roster, whatever OIDC_SCOPE says or leaves unsaid.
+  const scope = env['OIDC_SCOPE'] || 'openid profile email';
   if (!scope.split(' ').includes('openid')) return { enabled: false, reason: 'OIDC_SCOPE must include openid' };
   let groupPrefix;
   try {

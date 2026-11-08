@@ -90,6 +90,13 @@ export declare type SignupRequest = Message<"nwfl.mensa.v1.SignupRequest"> & {
    * @generated from field: nwfl.mensa.v1.AccountRoute route = 7;
    */
   route: AccountRoute;
+
+  /**
+   * VET: for a duplicate claim, the earlier sign-up the verifier named, if any.
+   *
+   * @generated from field: nwfl.mensa.v1.EarlierClaim earlier_claim = 8;
+   */
+  earlierClaim?: EarlierClaim | undefined;
 };
 
 /**
@@ -97,6 +104,30 @@ export declare type SignupRequest = Message<"nwfl.mensa.v1.SignupRequest"> & {
  * Use `create(SignupRequestSchema)` to create a new message.
  */
 export declare const SignupRequestSchema: GenMessage<SignupRequest>;
+
+/**
+ * VET: the earlier sign-up that claimed the same number, as the site already
+ * holds it: its display name and when it signed up. Never a number.
+ *
+ * @generated from message nwfl.mensa.v1.EarlierClaim
+ */
+export declare type EarlierClaim = Message<"nwfl.mensa.v1.EarlierClaim"> & {
+  /**
+   * @generated from field: string display_name = 1;
+   */
+  displayName: string;
+
+  /**
+   * @generated from field: google.protobuf.Timestamp signed_up_at = 2;
+   */
+  signedUpAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.EarlierClaim.
+ * Use `create(EarlierClaimSchema)` to create a new message.
+ */
+export declare const EarlierClaimSchema: GenMessage<EarlierClaim>;
 
 /**
  * A rejected sign-up that can still be reopened, as the Admin or the Membership Officer sees it:
@@ -658,6 +689,22 @@ export enum Verification {
    * @generated from enum value: VERIFICATION_ERROR = 5;
    */
   ERROR = 5,
+
+  /**
+   * VET: the number and the last name match a local member, the email does
+   * not. Never approves by itself: confirm with the member first.
+   *
+   * @generated from enum value: VERIFICATION_EMAIL_MISMATCH = 6;
+   */
+  EMAIL_MISMATCH = 6,
+
+  /**
+   * VET: another sign-up already claimed this number. Never approves by
+   * itself: an officer resolves it first.
+   *
+   * @generated from enum value: VERIFICATION_DUPLICATE_CLAIM = 7;
+   */
+  DUPLICATE_CLAIM = 7,
 }
 
 /**

@@ -86,7 +86,8 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
       clientSecret: SECRET,
       redirectUri: 'https://canary.nwflmensa.us/auth/callback',
       postLogoutRedirectUri: 'https://canary.nwflmensa.us/signed-out',
-      scope: 'openid profile',
+      // VET: the email by default, whatever OIDC_SCOPE says or leaves unsaid.
+      scope: 'openid profile email',
       allowInsecure: false,
       groupPrefix: 'mensa-nwfl-',
       siteOrigin: 'https://canary.nwflmensa.us',
@@ -200,6 +201,14 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
   it('has no default: with any setting missing, sign-in is off and says which', () => {
     for (const name of Object.keys(canary).filter((k) => k !== 'NODE_ENV' && k !== 'SITE_GROUP_PREFIX')) {
       expect(authConfig({ ...canary, [name]: undefined }), name).toEqual({ enabled: false, reason: `${name} is not set` });
+    }
+  });
+
+  it('VET: asks for openid, profile and email by default, set or not, empty or not', () => {
+    expect('OIDC_SCOPE' in canary).toBe(false);
+    for (const unset of [undefined, '']) {
+      const setup = authConfig({ ...canary, OIDC_SCOPE: unset });
+      expect(setup.enabled && setup.config.scope).toBe('openid profile email');
     }
   });
 
