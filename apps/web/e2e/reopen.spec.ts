@@ -51,7 +51,7 @@ async function signedIn(browser: Browser, login: Parameters<typeof signIn>[1]): 
 }
 
 test.describe('REOPEN: the rejected sign-ups in the officer area', () => {
-  test('the Membership Officer sees each rejection in words, with a Reopen button of 48 px, never a number or a last name', async ({ page }) => {
+  test('the Membership Officer sees each rejection in words, with a Reopen button of 48 px, and what they typed (PROFILE-ID)', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'approver');
     await page.goto(QUEUE);
@@ -66,7 +66,9 @@ test.describe('REOPEN: the rejected sign-ups in the officer area', () => {
     const box = await button.boundingBox();
     expect(box?.height).toBeGreaterThanOrEqual(48);
     expect(box?.width).toBeGreaterThanOrEqual(48);
-    expect(await page.content()).not.toMatch(/membership_number|lastName|last_name/);
+    for (const [label, value] of [['First name', REJECTED.kept.first], ['Last name', REJECTED.kept.last], ['Membership number', REJECTED.kept.number]] as const) {
+      await expect(card.locator('div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')).toHaveText(value);
+    }
     expect(await axe(page)).toEqual([]);
     await fits(page);
   });
@@ -102,7 +104,7 @@ test.describe('REOPEN: the rejected sign-ups in the officer area', () => {
     // Its own title and heading, the link's words, not the approvers' 'Sign-ups to approve'.
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Rejected sign-ups to reopen');
     await expect(page).toHaveTitle(/^Rejected sign-ups to reopen \| /);
-    await expect(page.locator('.lead')).toHaveText('Sign-ups that were rejected and can be reopened. The membership number and last name they typed are never shown here.');
+    await expect(page.locator('.lead')).toHaveText('Sign-ups that were rejected and can be reopened.');
     await expect(page.locator('.signup-card')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(0);
     await expect(page.locator('main')).not.toContainText('cannot be shown');
@@ -194,7 +196,8 @@ test.describe('REOPEN: a reopened person signs up again', () => {
     await rejectedCard(officer, person.name).getByRole('button', { name: 'Reopen' }).click();
     await expect(officer.getByRole('heading', { name: 'Reopen this sign-up?' })).toBeVisible();
     await expect(officer.locator('main')).toContainText(`${person.name} (${person.email})`);
-    await expect(officer.locator('main')).toContainText('Nothing that was erased comes back');
+    await expect(officer.locator('main')).toContainText('The person will be able to send the sign-up form again from their account page. The rejection stays in the records.');
+    await expect(officer.locator('main')).not.toContainText(/erase/i);
     const yes = officer.getByRole('button', { name: 'Yes, reopen it' });
     expect((await yes.boundingBox())?.height).toBeGreaterThanOrEqual(48);
     expect(await axe(officer)).toEqual([]);
@@ -208,6 +211,7 @@ test.describe('REOPEN: a reopened person signs up again', () => {
     await expect(own.getByRole('button', { name: 'Send my sign-up' })).toBeVisible();
     await expect(own.locator('main')).not.toContainText('Your sign-up was not approved.');
     expect(await axe(own)).toEqual([]);
+    await own.getByLabel('First name').fill('Ari');
     await own.getByLabel('Last name').fill('Fakename');
     await own.getByLabel('Mensa membership number').fill(FAKE_NUMBER);
     await own.getByRole('button', { name: 'Send my sign-up' }).click();

@@ -6,7 +6,7 @@
 //   - Two more outcomes: EMAIL_MISMATCH (number and last name match, the email does not) and
 //     DUPLICATE_CLAIM (the verifier's own ledger says another sign-up claimed the number). Neither
 //     approves or rejects; an approval of either is on the officer's word, as for NOT_FOUND, never
-//     from the verifier's date. Reporting still erases the number and the last name at once.
+//     from the verifier's date. Reporting keeps the number and the last name (PROFILE-ID, 0028).
 //   - A duplicate claim may name the earlier sign-up (conflicting_request_id); the approver then sees
 //     that sign-up's display name and date, which the site already holds.
 //   - ListReleasedClaims: the sign-ups whose claim is released (rejected, reopened, or whose account
@@ -111,26 +111,26 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
   });
 
   describe('ReportVerification: the two new outcomes', () => {
-    it('records EMAIL_MISMATCH, erasing the number and the last name in the same statement; it neither approves nor rejects', async () => {
+    it('records EMAIL_MISMATCH, keeping the number and the last name (PROFILE-ID); it neither approves nor rejects', async () => {
       const s = await signup('Robin Mismatch');
       await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.EMAIL_MISMATCH }, VERIFIER);
-      expect(await row(s.id)).toEqual({ verification: 'email_mismatch', membership_number: null, last_name: null, conflicting_request_id: null, decision: 'pending' });
+      expect(await row(s.id)).toEqual({ verification: 'email_mismatch', membership_number: s.number, last_name: s.last, conflicting_request_id: null, decision: 'pending' });
       expect(await account(s.sub)).toEqual({ status: 'pending', verified_on: null });
     });
 
-    it('records DUPLICATE_CLAIM with the earlier sign-up it names, erasing the inputs; it neither approves nor rejects', async () => {
+    it('records DUPLICATE_CLAIM with the earlier sign-up it names, keeping the inputs; it neither approves nor rejects', async () => {
       const earlier = await signup('Lee Firstclaim', new Date('2026-09-15T14:00:00Z'));
       await verifier.reportVerification({ requestId: earlier.id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
       const s = await signup('Lee Secondclaim');
       await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.DUPLICATE_CLAIM, conflictingRequestId: earlier.id }, VERIFIER);
-      expect(await row(s.id)).toEqual({ verification: 'duplicate_claim', membership_number: null, last_name: null, conflicting_request_id: earlier.id, decision: 'pending' });
+      expect(await row(s.id)).toEqual({ verification: 'duplicate_claim', membership_number: s.number, last_name: s.last, conflicting_request_id: earlier.id, decision: 'pending' });
       expect(await account(s.sub)).toEqual({ status: 'pending', verified_on: null });
     });
 
     it('records DUPLICATE_CLAIM without an earlier sign-up too', async () => {
       const s = await signup('Kai Unnamed');
       await verifier.reportVerification({ requestId: s.id, outcome: VerificationOutcome.DUPLICATE_CLAIM }, VERIFIER);
-      expect(await row(s.id)).toMatchObject({ verification: 'duplicate_claim', conflicting_request_id: null, membership_number: null });
+      expect(await row(s.id)).toMatchObject({ verification: 'duplicate_claim', conflicting_request_id: null, membership_number: s.number });
     });
 
     it('refuses an earlier sign-up with any other outcome, a malformed one, this one itself or one that does not exist, and changes nothing', async () => {
@@ -307,7 +307,7 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
   });
 
   describe('the approver', () => {
-    it('sees the two outcomes, and the earlier claim by display name and sign-up time only, never a number or a last name', async () => {
+    it('sees the two outcomes, and the earlier claim by display name, sign-up time and what it typed (PROFILE-ID)', async () => {
       const { requests } = await membership.listSignupRequests({}, APPROVER);
       const by = (name: string) => requests.find((r) => r.displayName === name);
       expect(by('Robin Mismatch')).toMatchObject({ verification: Verification.EMAIL_MISMATCH, verifiedOn: { year: 2026, month: 10, day: 22 } });
@@ -319,7 +319,9 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
       expect(timestampDate(second?.earlierClaim?.signedUpAt as NonNullable<NonNullable<typeof second>['createdAt']>)).toEqual(new Date('2026-09-15T14:00:00Z'));
       expect(by('Kai Unnamed')).toMatchObject({ verification: Verification.DUPLICATE_CLAIM });
       expect(by('Kai Unnamed')?.earlierClaim).toBeUndefined();
-      expect(dump(requests)).not.toMatch(LEAK);
+      expect(second?.earlierClaim?.membershipNumber).toMatch(/^700\d{3}$/);
+      expect(second?.earlierClaim?.lastName).toMatch(/^Vetson/);
+      expect(dump(requests)).toMatch(LEAK);
     });
 
     it('names an earlier claim since closed only as closed, with its date: never the name of a rejected or reopened sign-up', async () => {
@@ -340,9 +342,9 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
       const { requests } = await membership.listSignupRequests({}, APPROVER);
       const claimOf = (name: string) => requests.find((r) => r.displayName === name)?.earlierClaim;
       const dayOf = (claim: ReturnType<typeof claimOf>) => timestampDate(claim?.signedUpAt as NonNullable<NonNullable<typeof claim>['signedUpAt']>);
-      expect(claimOf('Rex Afterrejected')).toMatchObject({ displayName: '', closed: true });
+      expect(claimOf('Rex Afterrejected')).toMatchObject({ displayName: '', closed: true, firstName: '', lastName: '', membershipNumber: '' });
       expect(dayOf(claimOf('Rex Afterrejected'))).toEqual(new Date('2026-09-01T10:00:00Z'));
-      expect(claimOf('Sol Afterreopened')).toMatchObject({ displayName: '', closed: true });
+      expect(claimOf('Sol Afterreopened')).toMatchObject({ displayName: '', closed: true, firstName: '', lastName: '', membershipNumber: '' });
       expect(dayOf(claimOf('Sol Afterreopened'))).toEqual(new Date('2026-09-02T10:00:00Z'));
       expect(claimOf('Tam Afterapproved')).toMatchObject({ displayName: 'Pia Approvedfirst', closed: false });
       expect(dayOf(claimOf('Tam Afterapproved'))).toEqual(new Date('2026-09-03T10:00:00Z'));
@@ -449,7 +451,7 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
       const { cursor } = await releasedAfter('');
       for (let i = 0; i < 105; i += 1) {
         const s = await signup(`Pagey ${i}`);
-        await api.pool.query(`UPDATE signup_request SET decision = 'rejected', decided_at = now(), decided_by_sub = 'officer-page', membership_number = NULL, last_name = NULL WHERE id = $1`, [s.id]);
+        await api.pool.query(`UPDATE signup_request SET decision = 'rejected', decided_at = now(), decided_by_sub = 'officer-page' WHERE id = $1`, [s.id]);
       }
       expect((await verifier.listReleasedClaims({ after: cursor, pageSize: 500 }, VERIFIER)).released).toHaveLength(100);
       expect((await verifier.listReleasedClaims({ after: cursor, pageSize: 0 }, VERIFIER)).released).toHaveLength(100);
@@ -504,7 +506,7 @@ describe.skipIf(!live)('VET: the vetting contract', () => {
           clients.map(async (c, w) => {
             for (let k = 0; k < 3; k += 1) {
               await c.query('BEGIN');
-              await c.query(`UPDATE signup_request SET decision = 'rejected', decided_at = now(), decided_by_sub = 'officer-race', membership_number = NULL, last_name = NULL WHERE id = $1`, [ids[w * 3 + k]]);
+              await c.query(`UPDATE signup_request SET decision = 'rejected', decided_at = now(), decided_by_sub = 'officer-race' WHERE id = $1`, [ids[w * 3 + k]]);
               await c.query('SELECT pg_sleep($1)', [Math.random() * 0.06]);
               await c.query('COMMIT');
             }

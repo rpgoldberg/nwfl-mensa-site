@@ -84,6 +84,13 @@ describe('newSession (R10)', () => {
     expect(newSession({ sub: 's' }, NOW).name).toBe('Member');
   });
 
+  it('PROFILE-ID: keeps the given name, short and printable, to prefill the sign-up\'s first name; none without one', () => {
+    expect(newSession({ sub: 's', given_name: ' Jo\u0007rdan ' }, NOW).givenName).toBe('Jordan');
+    expect(newSession({ sub: 's', given_name: 'G'.repeat(200) }, NOW).givenName).toBe('G'.repeat(80));
+    expect(newSession({ sub: 's', given_name: 42 }, NOW).givenName).toBe('');
+    expect(newSession({ sub: 's', name: 'Jordan Example' }, NOW).givenName).toBe('');
+  });
+
   it('refuses a groups claim that is not a list of strings, as the API refuses the token (CF-ISO-0 N3)', () => {
     for (const groups of ['nwfl-officers', { 0: 'nwfl-officers' }, ['nwfl-members', 42], ['nwfl-officers', null]]) {
       expect(() => newSession({ sub: 'u', groups }, NOW), JSON.stringify(groups)).toThrow('malformed groups claim');

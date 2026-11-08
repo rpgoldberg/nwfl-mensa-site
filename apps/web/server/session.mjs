@@ -73,7 +73,10 @@ export function openValue(sealed, key, purpose) {
  * `enrolee` (AC6 b, D4): the claim holds an nwfl enrolee group (groups.mjs ENROLEE_GROUPS); the
  * site sends the token to the API for the members view only then. `member` is the members group alone.
  *
- * @typedef {{ sid: string, sub: string, name: string, groups: string[], member: boolean,
+ * `givenName` (PROFILE-ID): the ID token's given_name, to prefill the sign-up's first name; empty
+ * without one, and absent from a session made before it was kept.
+ *
+ * @typedef {{ sid: string, sub: string, name: string, givenName?: string, groups: string[], member: boolean,
  *   enrolee: boolean, officer: boolean, iat: number, exp: number, sliding: boolean }} Session
  */
 
@@ -105,6 +108,7 @@ export function newSession(claims, now, groupPrefix = DEFAULT_SITE_GROUP_PREFIX)
     sid: randomBytes(18).toString('base64url'),
     sub: String(claims['sub']),
     name: displayName(claims['name']) || displayName(claims['preferred_username']) || 'Member',
+    givenName: displayName(claims['given_name']),
     groups,
     member: groups.includes('nwfl-members'),
     enrolee: groups.some((g) => ENROLEE_GROUPS.includes(g)),

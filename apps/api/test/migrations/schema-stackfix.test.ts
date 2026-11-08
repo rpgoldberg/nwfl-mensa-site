@@ -66,38 +66,36 @@ describe.skipIf(!live)('schema after STACK-FIX', () => {
       await app.query(`INSERT INTO signup_request (sub, display_name, email, last_name, membership_number) VALUES ($1, 'Pat', 'pat@example.org', 'Example', '1234567')`, [sub]);
     };
     const decide = (sub: string, decision: string, by = 'officer-1'): Promise<string> =>
-      failure(app, `UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = $3, membership_number = NULL, last_name = NULL WHERE sub = $1`, [sub, decision, by]);
+      failure(app, `UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = $3 WHERE sub = $1`, [sub, decision, by]);
     const account = (sub: string): Promise<string> =>
       failure(app, `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES ($1, 'member', 'signup', 'officer-1', now(), current_date)`, [sub]);
 
-    it('makes no account a member while its sign-up still holds the number, and does once the decision erased it', async () => {
+    it('makes an account a member with its sign-up still holding the number (PROFILE-ID, 0028: the number is kept)', async () => {
       await signup('s-account');
-      expect(await account('s-account')).toMatch(/decide the sign-up/);
-      await app.query(`INSERT INTO member_account (sub, status, route) VALUES ('s-account', 'pending', 'signup')`);
-      expect(await failure(app, `UPDATE member_account SET status = 'member', approved_by_sub = 'officer-1', approved_at = now(), verified_on = current_date WHERE sub = 's-account'`)).toMatch(
-        /decide the sign-up/,
-      );
-      expect(await decide('s-account', 'approved')).toBe('ok');
-      expect(await failure(app, `UPDATE member_account SET status = 'member', approved_by_sub = 'officer-1', approved_at = now(), verified_on = current_date WHERE sub = 's-account'`)).toBe('ok');
+      expect(await account('s-account')).toBe('ok');
+      await signup('s-account2');
+      await app.query(`INSERT INTO member_account (sub, status, route) VALUES ('s-account2', 'pending', 'signup')`);
+      expect(await decide('s-account2', 'approved')).toBe('ok');
+      expect(await failure(app, `UPDATE member_account SET status = 'member', approved_by_sub = 'officer-1', approved_at = now(), verified_on = current_date WHERE sub = 's-account2'`)).toBe('ok');
+      expect(await one(`SELECT membership_number FROM signup_request WHERE sub = 's-account2'`)).toEqual({ membership_number: '1234567' });
     });
 
     it('keeps a decided sign-up decided: no reopening, no flip, no new decider or time, no number stored again', async () => {
       await signup('s-final');
       expect(await decide('s-final', 'rejected', 'officer-2')).toBe('ok');
       expect(
-        await failure(app, `UPDATE signup_request SET decision = 'pending', decided_at = NULL, decided_by_sub = NULL, membership_number = '7654321', last_name = 'Example' WHERE sub = 's-final'`),
+        await failure(app, `UPDATE signup_request SET decision = 'pending', decided_at = NULL, decided_by_sub = NULL WHERE sub = 's-final'`),
       ).toMatch(/is decided/);
+      expect(await failure(app, `UPDATE signup_request SET membership_number = '7654321' WHERE sub = 's-final'`)).toMatch(/never changed/);
       expect(await failure(app, `UPDATE signup_request SET decision = 'approved' WHERE sub = 's-final'`)).toMatch(/is decided/);
       expect(await failure(app, `UPDATE signup_request SET decided_by_sub = 'officer-3' WHERE sub = 's-final'`)).toMatch(/is decided/);
       expect(await failure(app, `UPDATE signup_request SET decided_at = now() - interval '1 day' WHERE sub = 's-final'`)).toMatch(/is decided/);
       expect(await one(`SELECT decision, decided_by_sub FROM signup_request WHERE sub = 's-final'`)).toEqual({ decision: 'rejected', decided_by_sub: 'officer-2' });
     });
 
-    it('still lets the verifier report on a pending sign-up, erasing the inputs', async () => {
+    it('still lets the verifier report on a pending sign-up, keeping the inputs', async () => {
       await signup('s-pending');
-      expect(
-        await failure(app, `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date, membership_number = NULL, last_name = NULL WHERE sub = 's-pending'`),
-      ).toBe('ok');
+      expect(await failure(app, `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date WHERE sub = 's-pending'`)).toBe('ok');
       expect(await decide('s-pending', 'approved')).toBe('ok');
     });
 
@@ -107,7 +105,7 @@ describe.skipIf(!live)('schema after STACK-FIX', () => {
       ).toMatch(/member_account_verified_on_not_future/);
       await signup('s-future-signup');
       expect(
-        await failure(app, `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date + 1, membership_number = NULL, last_name = NULL WHERE sub = 's-future-signup'`),
+        await failure(app, `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date + 1 WHERE sub = 's-future-signup'`),
       ).toMatch(/signup_request_verified_on_not_future/);
     });
   });

@@ -81,6 +81,8 @@ The API gets the same issuer and prefix (`SITE_OIDC_ISSUER`, `SITE_GROUP_PREFIX`
 
 Sessions and their tokens are held in the server's memory, so **the site runs as one replica until W5a**, which moves them to a shared store behind the API; the server logs `session_store: memory (single replica)` at start. A session is valid only while its record is there: sign-out deletes it, so a copy of the cookie is dead at once, and a restart signs everyone out.
 
+`SITE_ADMIN_CONTACT` (optional) is the Admin role's mailbox, one plain address. The sign-up form's line by the membership number (it can't be changed once sent; contact the site administrator to correct it) links it as a mailto; unset or not one plain address, the line links the officers page instead, never an empty or broken link. The sign-up's first name is prefilled from the ID token's `given_name` when the provider sends one.
+
 The public-only build (`npm run build:public-only`, or the image's `PUBLIC_ONLY=true` build argument) has no sign-in at all: every sign-in route is the 404 page however it is spelled, and the server ignores any `OIDC_*` or `SESSION_KEY` it is given, and logs that it did. The build writes `dist/build.json` so the server knows which build it is.
 
 ## Image

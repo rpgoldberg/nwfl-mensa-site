@@ -33,6 +33,9 @@
 // REOPEN: the Admin and the Membership Officer's seat list the rejections and reopen one, never their
 // own; a reopening is kept for everyone, as in the API, so the rejected person's own sign-in sees its
 // account gone and gets the form again. Each browser project reopens its own person (REJECTED).
+// PROFILE-ID: the queue and the rejections carry what each sign-up typed (names and number), and a
+// duplicate claim what its earlier claim typed (none once closed). The member "Jordan Example" has a
+// profile (MEMBER_PROFILE), changed per sign-in by UpdateMyProfile, which takes the two names only.
 //
 // SILENT_API_PORT is a second listener that accepts connections and never
 // answers: the API that hangs, for the timeout test. NO_ISSUES_API_PORT is a
@@ -505,22 +508,22 @@ const TURNED_DOWN_SUBJECT = '00000000-0000-4000-8000-0000000000d5';
 const APPROVER_SUBJECT = '00000000-0000-4000-8000-0000000000d3';
 const CHECKED = { year: 2026, month: 10, day: 20 };
 const SIGNUP_QUEUE = [
-  { requestId: 'b1000000-0000-4000-8000-000000000001', sub: '00000000-0000-4000-8000-0000000001e1', displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T15:00:00Z') },
-  { requestId: 'b1000000-0000-4000-8000-000000000002', sub: '00000000-0000-4000-8000-0000000001e2', displayName: 'Kendall Sample', email: 'kendall@example.org', route: AccountRoute.SIGNUP, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T16:00:00Z') },
-  { requestId: 'b1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000001e3', displayName: 'Harper Placeholder', email: 'harper@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 3 }, createdAt: new Date('2026-11-02T15:00:00Z') },
-  { requestId: 'b1000000-0000-4000-8000-000000000004', sub: APPROVER_SUBJECT, displayName: 'Blair Example', email: 'blair@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED, createdAt: new Date('2026-11-03T15:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000001', firstName: 'Jesse', lastName: 'Example', membershipNumber: '000011001', sub: '00000000-0000-4000-8000-0000000001e1', displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T15:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000002', firstName: 'Kendall', lastName: 'Sample', membershipNumber: '000011002', sub: '00000000-0000-4000-8000-0000000001e2', displayName: 'Kendall Sample', email: 'kendall@example.org', route: AccountRoute.SIGNUP, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T16:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000003', firstName: 'Harper', lastName: 'Placeholder', membershipNumber: '000011003', sub: '00000000-0000-4000-8000-0000000001e3', displayName: 'Harper Placeholder', email: 'harper@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 3 }, createdAt: new Date('2026-11-02T15:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000004', firstName: 'Blair', lastName: 'Example', membershipNumber: '000011004', sub: APPROVER_SUBJECT, displayName: 'Blair Example', email: 'blair@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED, createdAt: new Date('2026-11-03T15:00:00Z') },
   // VET: an email the membership verification service did not confirm, and a number an earlier sign-up (Jordan Firstclaim, approved, no longer queued) claimed first.
-  { requestId: 'b1000000-0000-4000-8000-000000000005', sub: '00000000-0000-4000-8000-0000000001e5', displayName: 'Dana Mismatch', email: 'dana@example.org', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T15:00:00Z') },
-  { requestId: 'b1000000-0000-4000-8000-000000000006', sub: '00000000-0000-4000-8000-0000000001e6', displayName: 'Drew Secondclaim', email: 'drew@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T16:00:00Z'), earlierClaim: { displayName: 'Jordan Firstclaim', signedUpAt: new Date('2026-10-28T15:00:00Z') } },
+  { requestId: 'b1000000-0000-4000-8000-000000000005', firstName: 'Dana', lastName: 'Mismatch', membershipNumber: '000011005', sub: '00000000-0000-4000-8000-0000000001e5', displayName: 'Dana Mismatch', email: 'dana@example.org', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T15:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000006', firstName: 'Drew', lastName: 'Secondclaim', membershipNumber: '000011006', sub: '00000000-0000-4000-8000-0000000001e6', displayName: 'Drew Secondclaim', email: 'drew@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T16:00:00Z'), earlierClaim: { displayName: 'Jordan Firstclaim', signedUpAt: new Date('2026-10-28T15:00:00Z'), firstName: 'Jordan', lastName: 'Firstclaim', membershipNumber: '000011006' } },
   // VET fix 1 (N2): a number an earlier sign-up claimed, since rejected: the API sends no name, only that it is closed.
-  { requestId: 'b1000000-0000-4000-8000-000000000007', sub: '00000000-0000-4000-8000-0000000001e7', displayName: 'Eli Thirdclaim', email: 'eli@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 5 }, createdAt: new Date('2026-11-05T15:00:00Z'), earlierClaim: { displayName: '', closed: true, signedUpAt: new Date('2026-10-20T15:00:00Z') } },
+  { requestId: 'b1000000-0000-4000-8000-000000000007', firstName: 'Eli', lastName: 'Thirdclaim', membershipNumber: '000011007', sub: '00000000-0000-4000-8000-0000000001e7', displayName: 'Eli Thirdclaim', email: 'eli@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 5 }, createdAt: new Date('2026-11-05T15:00:00Z'), earlierClaim: { displayName: '', closed: true, signedUpAt: new Date('2026-10-20T15:00:00Z') } },
 ];
 /** REOPEN: rejected sign-ups, newest first; the first three are reopened by one browser project each (e2e/stand-in.ts REJECTED). */
 const REJECTED = [
-  { requestId: 'c1000000-0000-4000-8000-000000000001', sub: '00000000-0000-4000-8000-0000000000e1', displayName: 'Ari Example', email: 'ari@example.org', verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 3 }, rejectedAt: new Date('2026-11-04T18:00:00Z') },
-  { requestId: 'c1000000-0000-4000-8000-000000000002', sub: '00000000-0000-4000-8000-0000000000e2', displayName: 'Bo Sample', email: 'bo@example.org', verification: Verification.UNCHECKED, rejectedAt: new Date('2026-11-04T17:00:00Z') },
-  { requestId: 'c1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000000e3', displayName: 'Cam Placeholder', email: 'cam@example.org', verification: Verification.UNCHECKED, rejectedAt: new Date('2026-11-04T16:00:00Z') },
-  { requestId: 'c1000000-0000-4000-8000-000000000004', sub: '00000000-0000-4000-8000-0000000001e4', displayName: 'Harley Sample', email: 'harley@example.org', verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 2 }, rejectedAt: new Date('2026-11-03T16:00:00Z') },
+  { requestId: 'c1000000-0000-4000-8000-000000000001', firstName: 'Ari', lastName: 'Example', membershipNumber: '000022001', sub: '00000000-0000-4000-8000-0000000000e1', displayName: 'Ari Example', email: 'ari@example.org', verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 3 }, rejectedAt: new Date('2026-11-04T18:00:00Z') },
+  { requestId: 'c1000000-0000-4000-8000-000000000002', firstName: 'Bo', lastName: 'Sample', membershipNumber: '000022002', sub: '00000000-0000-4000-8000-0000000000e2', displayName: 'Bo Sample', email: 'bo@example.org', verification: Verification.UNCHECKED, rejectedAt: new Date('2026-11-04T17:00:00Z') },
+  { requestId: 'c1000000-0000-4000-8000-000000000003', firstName: 'Cam', lastName: 'Placeholder', membershipNumber: '000022003', sub: '00000000-0000-4000-8000-0000000000e3', displayName: 'Cam Placeholder', email: 'cam@example.org', verification: Verification.UNCHECKED, rejectedAt: new Date('2026-11-04T16:00:00Z') },
+  { requestId: 'c1000000-0000-4000-8000-000000000004', firstName: 'Harley', lastName: 'Sample', membershipNumber: '000022004', sub: '00000000-0000-4000-8000-0000000001e4', displayName: 'Harley Sample', email: 'harley@example.org', verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 2 }, rejectedAt: new Date('2026-11-03T16:00:00Z') },
 ];
 /** REOPEN: the Membership Officer's seat without the approvers group, whose token the membership calls refuse (e2e/idp.mjs seat-refused). */
 const REFUSED_SEAT_SUBJECT = '00000000-0000-4000-8000-0000000000e7';
@@ -530,6 +533,12 @@ const REOPENED = new Set();
 const SIGNUPS = new Map();
 /** @type {Map<string, Set<string>>} a sign-in's decisions, by the token's jti */
 const DECIDED = new Map();
+/** PROFILE-ID: the member's profile as approved (e2e/stand-in.ts MEMBER_PROFILE); the others have none. */
+const MEMBER_PROFILE = { firstName: 'Jordan', lastName: 'Example', membershipNumber: '000033001' };
+/** @type {Map<string, { firstName: string, lastName: string }>} PROFILE-ID: a sign-in's change of names, by the token's jti */
+const RENAMED = new Map();
+/** As the API's: 1 to 80 characters, no control character. @param {string} name */
+const nameOk = (name) => name !== '' && [...name].length <= 80 && !/\p{Cc}/u.test(name);
 
 /**
  * The signed-in person of a membership RPC, from the verified token, as the API reads it; never a cookie.
@@ -705,8 +714,20 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
   });
   router.service(MembershipService, {
     getMyAccount: async (_req, ctx) => {
-      const account = accountOf(await personOf(ctx));
-      return account === undefined ? {} : { account };
+      const person = await personOf(ctx);
+      const account = accountOf(person);
+      if (account === undefined) return {};
+      return person.sub === SUBJECT.member ? { account, profile: { ...MEMBER_PROFILE, ...RENAMED.get(person.session) } } : { account };
+    },
+    updateMyProfile: async (req, ctx) => {
+      const person = await personOf(ctx);
+      if ((req.$unknown?.length ?? 0) > 0) throw new ConnectError('only the first and last name can be changed', Code.InvalidArgument);
+      const firstName = req.firstName.trim();
+      const lastName = req.lastName.trim();
+      if (!nameOk(firstName) || !nameOk(lastName)) throw new ConnectError('a name is not allowed', Code.InvalidArgument);
+      if (person.sub !== SUBJECT.member) throw new ConnectError('only an approved member has a profile to change', Code.FailedPrecondition);
+      RENAMED.set(person.session, { firstName, lastName });
+      return {};
     },
     submitSignup: async (req, ctx) => {
       const person = await personOf(ctx);
@@ -732,7 +753,21 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
           verification: r.verification,
           ...(r.verifiedOn ? { verifiedOn: r.verifiedOn } : {}),
           createdAt: timestampFromDate(r.createdAt),
-          ...(r.earlierClaim ? { earlierClaim: { displayName: r.earlierClaim.displayName, signedUpAt: timestampFromDate(r.earlierClaim.signedUpAt), closed: r.earlierClaim.closed === true } } : {}),
+          firstName: r.firstName,
+          lastName: r.lastName,
+          membershipNumber: r.membershipNumber,
+          ...(r.earlierClaim
+            ? {
+                earlierClaim: {
+                  displayName: r.earlierClaim.displayName,
+                  signedUpAt: timestampFromDate(r.earlierClaim.signedUpAt),
+                  closed: r.earlierClaim.closed === true,
+                  firstName: r.earlierClaim.firstName ?? '',
+                  lastName: r.earlierClaim.lastName ?? '',
+                  membershipNumber: r.earlierClaim.membershipNumber ?? '',
+                },
+              }
+            : {}),
         })),
       };
     },
@@ -755,6 +790,9 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
           verification: r.verification,
           ...(r.verifiedOn ? { verifiedOn: r.verifiedOn } : {}),
           rejectedAt: timestampFromDate(r.rejectedAt),
+          firstName: r.firstName,
+          lastName: r.lastName,
+          membershipNumber: r.membershipNumber,
         })),
       };
     },

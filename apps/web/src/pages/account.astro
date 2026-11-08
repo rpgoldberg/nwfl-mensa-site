@@ -1,10 +1,11 @@
 ---
 // W-SIGNUP D3: a signed-in person's own account. One of the group's enrolees with no account yet gets
-// plain words and the sign-up form: their last name and Mensa membership number, both required (D1),
-// sent to the API with their own token (src/lib/api/membership.ts), which takes their name and email
+// plain words and the sign-up form: their first name (prefilled from the sign-in's given name), last
+// name and Mensa membership number, all required (D1, PROFILE-ID), sent to the API with their own token (src/lib/api/membership.ts), which takes their name and email
 // from that token. Then: "Your sign-up is waiting for an officer to approve it." A rejected sign-up
 // is told so in plain words, with whom to contact (fix 1). A member (an officer with an account too)
-// sees their standing and the day it was last checked. Officers and the Admin with no account get a
+// sees their standing and the day it was last checked, and (PROFILE-ID) their profile: the two names,
+// labelled, with a Save button, and the membership number shown as text, never as a field. Officers and the Admin with no account get a
 // plain line: the officer area needs none (fix 1). An account that is not the group's (no enrolee
 // group) gets a plain line and no form. The callback sends one of the group's enrolees with no
 // account here after each sign-in until they sign up, officers and the Admin never (src/lib/signup.ts
@@ -14,27 +15,38 @@
 // here, answered with this page or a 303 back here. A form with problems opens with a summary at the
 // top that links to each field; public/scripts/error-summary.js moves focus to it (fix 1). Astro's
 // origin check refuses a cross-site post first; the body is capped and must be a form
-// (src/lib/form.ts). The number is never given back in the page, nor logged (D6).
+// (src/lib/form.ts). The two forms tell themselves apart by a hidden "form" field. A typed number is
+// never given back in the form after a problem, nor logged (D6).
 import PasswordNote from '../components/PasswordNote.astro';
 import Unavailable from '../components/Unavailable.astro';
 import Base from '../layouts/Base.astro';
-import { MembershipSignInAgain, type MyAccount, SignupRefused, membershipApi, sessionReader } from '../lib/api/membership';
+import { MembershipSignInAgain, type MyAccount, ProfileRefused, SignupRefused, membershipApi, sessionReader } from '../lib/api/membership';
 import { markUnavailable, signInFirst } from '../lib/api/page';
 import { runtimeDeps } from '../lib/auth/flow';
 import { readForm } from '../lib/form';
 import {
   ACCOUNT_PATH,
+  MAX_FIRST_NAME,
   MAX_LAST_NAME,
   MAX_NUMBER_DIGITS,
   MAX_NUMBER_TYPED,
+  NUMBER_LOCKED,
+  PROFILE_REFUSED,
+  PROFILE_SAVED,
+  type ProfileErrors,
+  type ProfileForm,
   REJECTED_CONTACT,
   SIGNUP_REFUSED,
   STANDING_TEXT,
   type SignupErrors,
   accountView,
+  adminContactHref,
   errorSummary,
   formatDay,
+  parseProfileForm,
   parseSignupForm,
+  prefillFirstName,
+  profileErrorSummary,
 } from '../lib/signup';
 import { page } from '../lib/site';
 
@@ -42,7 +54,7 @@ export const prerender = false;
 
 const HERE = ACCOUNT_PATH;
 const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
-/** Two short fields: a last name of 80 characters, percent-encoded, fits many times over. */
+/** Three short fields: two names of 80 characters, percent-encoded, fit many times over. */
 const MAX_FORM_BYTES = 4 * 1024;
 
 const session = Astro.locals.session;
@@ -53,8 +65,10 @@ const api = membershipApi();
 const { reader } = sessionReader(session, runtimeDeps());
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 
-let invalid: { errors: SignupErrors; values: { lastName: string } } | undefined;
+let invalid: { errors: SignupErrors; values: { firstName: string; lastName: string } } | undefined;
 let refused: keyof typeof SIGNUP_REFUSED | undefined;
+let profileInvalid: { errors: ProfileErrors; values: ProfileForm } | undefined;
+let profileRefused: keyof typeof PROFILE_REFUSED | undefined;
 let problem: 'sign-in' | 'unavailable' | undefined;
 const posted = Astro.request.method === 'POST';
 
@@ -62,7 +76,30 @@ if (posted) {
   const read = await readForm(Astro.request, MAX_FORM_BYTES);
   if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
   const parsed = parseSignupForm(read.field);
-  if (!session.enrolee) {
+  if (read.field('form') === 'profile') {
+    // PROFILE-ID: an approved member's two names; the API decides whether they have a profile to change.
+    const names = parseProfileForm(read.field);
+    if (!names.ok) {
+      profileInvalid = names;
+      Astro.response.status = 400;
+    } else if (api === undefined) {
+      problem = 'unavailable';
+    } else if (reader === undefined) {
+      problem = 'sign-in';
+    } else {
+      try {
+        await api.updateMyProfile(reader, names.value);
+        return Astro.redirect(`${HERE}?saved=1`, 303);
+      } catch (error) {
+        if (error instanceof ProfileRefused) {
+          profileRefused = error.reason;
+          Astro.response.status = error.reason === 'invalid' ? 400 : 409;
+        } else {
+          problem = error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+        }
+      }
+    }
+  } else if (!session.enrolee) {
     // Not one of the group's accounts: there is no sign-up to send (the page says so below).
     Astro.response.status = 403;
   } else if (!parsed.ok) {
@@ -106,6 +143,12 @@ const sent = !posted && Astro.url.searchParams.get('sent') === '1' && view === '
 const checked = account?.verifiedOn !== undefined && (view === 'member' || view === 'affiliate' || view === 'lapsed') ? formatDay(account.verifiedOn) : undefined;
 const errors = invalid?.errors ?? {};
 const problems = errorSummary(errors);
+// PROFILE-ID: an approved member's profile, with its own problems and its saved line.
+const profile = view === 'member' || view === 'affiliate' || view === 'lapsed' ? account?.profile : undefined;
+const profileErrors = profileInvalid?.errors ?? {};
+const profileProblems = profileErrorSummary(profileErrors);
+const profileSaved = !posted && Astro.url.searchParams.get('saved') === '1' && profile !== undefined;
+const adminHref = adminContactHref(process.env);
 const [contactBefore, contactAfter] = REJECTED_CONTACT.split('Membership Officer');
 const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
 ---
@@ -117,6 +160,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {problem === 'sign-in' && <PasswordNote />}
   {problem === 'unavailable' && <Unavailable what="Your account" />}
   {refused && <p class="notice" role="alert">{SIGNUP_REFUSED[refused]}</p>}
+  {profileRefused && <p class="notice" role="alert">{PROFILE_REFUSED[profileRefused]}</p>}
   {sent && <p class="notice" role="status">Thank you. Your sign-up has been sent.</p>}
 
   {view === 'form' && problems.length > 0 && (
@@ -134,10 +178,25 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
 
   {view === 'form' && (
     <>
-      <p class="lead">Welcome, {session.name}. To read the members' pages, tell us your last name and your Mensa membership number. An external membership verification service confirms them, then an officer approves your account.</p>
+      <p class="lead">Welcome, {session.name}. To read the members' pages, tell us your name and your Mensa membership number. An external membership verification service confirms them, then an officer approves your account.</p>
       <form method="post" action={HERE} class="rule-form" novalidate>
+        <input type="hidden" name="form" value="signup" />
         <fieldset>
           <legend>Your sign-up</legend>
+          <label for="firstName">First name</label>
+          <p class="hint" id="firstName-hint">Needed.</p>
+          {errors.firstName && <p class="error" id="firstName-error">Problem: {errors.firstName}</p>}
+          <input
+            type="text"
+            id="firstName"
+            name="firstName"
+            autocomplete="given-name"
+            maxlength={MAX_FIRST_NAME}
+            required
+            value={invalid?.values.firstName ?? prefillFirstName(session)}
+            aria-invalid={errors.firstName ? 'true' : undefined}
+            aria-describedby={describedBy('firstName-hint', errors.firstName && 'firstName-error')}
+          />
           <label for="lastName">Last name</label>
           <p class="hint" id="lastName-hint">Needed. As it is on your Mensa membership.</p>
           {errors.lastName && <p class="error" id="lastName-error">Problem: {errors.lastName}</p>}
@@ -153,7 +212,8 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
             aria-describedby={describedBy('lastName-hint', errors.lastName && 'lastName-error')}
           />
           <label for="membershipNumber">Mensa membership number</label>
-          <p class="hint" id="membershipNumber-hint">Needed. Up to {MAX_NUMBER_DIGITS} digits; spaces or dashes between them are fine. It is on your membership card and in your renewal email. It is used only for this check, then erased.</p>
+          <p class="hint" id="membershipNumber-hint">Needed. Up to {MAX_NUMBER_DIGITS} digits; spaces or dashes between them are fine. It is on your membership card and in your renewal email.</p>
+          <p class="hint" id="membershipNumber-locked">{NUMBER_LOCKED.before}<a href={adminHref}>{NUMBER_LOCKED.link}</a>{NUMBER_LOCKED.after}</p>
           {errors.membershipNumber && <p class="error" id="membershipNumber-error">Problem: {errors.membershipNumber}</p>}
           <input
             type="text"
@@ -164,7 +224,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
             maxlength={MAX_NUMBER_TYPED}
             required
             aria-invalid={errors.membershipNumber ? 'true' : undefined}
-            aria-describedby={describedBy('membershipNumber-hint', errors.membershipNumber && 'membershipNumber-error')}
+            aria-describedby={describedBy('membershipNumber-hint', 'membershipNumber-locked', errors.membershipNumber && 'membershipNumber-error')}
           />
           <div class="btns"><button class="button" type="submit">Send my sign-up</button></div>
         </fieldset>
@@ -177,6 +237,59 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
     <>
       <p class="lead">{STANDING_TEXT[view]}</p>
       {checked && <p>It was last confirmed on {checked}.</p>}
+      {profile && (
+        <section aria-labelledby="profile-title">
+          <h2 id="profile-title">Your profile</h2>
+          {profileSaved && <p class="notice" role="status">{PROFILE_SAVED}</p>}
+          {profileProblems.length > 0 && (
+            <>
+              <section class="error-summary" aria-labelledby="profile-error-title" tabindex="-1" data-error-summary>
+                <h3 id="profile-error-title">There is a problem with your profile</h3>
+                <ul>
+                  {profileProblems.map((item) => <li><a href={`#${item.field}`}>{item.text}</a></li>)}
+                </ul>
+              </section>
+              <script is:inline type="module" src="/scripts/error-summary.js"></script>
+            </>
+          )}
+          <dl class="facts">
+            <div><dt>Membership number</dt><dd data-membership-number>{profile.membershipNumber === '' ? 'Not on file' : profile.membershipNumber}</dd></div>
+          </dl>
+          <form method="post" action={HERE} class="rule-form" novalidate>
+            <input type="hidden" name="form" value="profile" />
+            <fieldset>
+              <legend>Your name</legend>
+              <label for="profile-firstName">First name</label>
+              {profileErrors.firstName && <p class="error" id="profile-firstName-error">Problem: {profileErrors.firstName}</p>}
+              <input
+                type="text"
+                id="profile-firstName"
+                name="firstName"
+                autocomplete="given-name"
+                maxlength={MAX_FIRST_NAME}
+                required
+                value={profileInvalid?.values.firstName ?? profile.firstName}
+                aria-invalid={profileErrors.firstName ? 'true' : undefined}
+                aria-describedby={describedBy(profileErrors.firstName && 'profile-firstName-error')}
+              />
+              <label for="profile-lastName">Last name</label>
+              {profileErrors.lastName && <p class="error" id="profile-lastName-error">Problem: {profileErrors.lastName}</p>}
+              <input
+                type="text"
+                id="profile-lastName"
+                name="lastName"
+                autocomplete="family-name"
+                maxlength={MAX_LAST_NAME}
+                required
+                value={profileInvalid?.values.lastName ?? profile.lastName}
+                aria-invalid={profileErrors.lastName ? 'true' : undefined}
+                aria-describedby={describedBy(profileErrors.lastName && 'profile-lastName-error')}
+              />
+              <div class="btns"><button class="button" type="submit">Save</button></div>
+            </fieldset>
+          </form>
+        </section>
+      )}
       {view === 'waiting' && <p>Until then you can read every public page. Member access starts as soon as it is approved.</p>}
       {view === 'rejected' && <p>{contactBefore}<a href="/officers">Membership Officer</a>{contactAfter}</p>}
       {view === 'officer' && <p><a href="/officer-area">Go to the officer area</a></p>}

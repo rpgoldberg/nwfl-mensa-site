@@ -1,8 +1,9 @@
 // A5: MembershipService (R24, R33, MT-19). A signed-in person signs up with the
 // name and email their token carries, plus the last name and membership number
 // they type; approvers decide; the Admin or Webmaster grants affiliates. The
-// number and the last name never leave the sign-up row except to the verifier,
-// and every decision erases them in the same statement. Membership audit rows
+// number and the last name stay on the sign-up row through every decision
+// (PROFILE-ID, 0028), and reach only the verifier, the approvers and the owner
+// (test/membership/profile.test.ts). Membership audit rows
 // carry no payload and no note. Every value here is made up.
 import { type Client, Code } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -48,7 +49,7 @@ describe.skipIf(!live)('MembershipService', () => {
     ).rows;
   const report = (id: string, outcome: string): Promise<unknown> =>
     api.pool.query(
-      `UPDATE signup_request SET verification = $2, verified_on = '2026-10-20', membership_number = NULL, last_name = NULL WHERE id = $1`,
+      `UPDATE signup_request SET verification = $2, verified_on = '2026-10-20' WHERE id = $1`,
       [id, outcome],
     );
 
@@ -165,7 +166,7 @@ describe.skipIf(!live)('MembershipService', () => {
   });
 
   describe('ListSignupRequests', () => {
-    it('shows approvers the pending sign-ups, oldest first, with route and verification, never the number or the last name', async () => {
+    it('shows approvers the pending sign-ups, oldest first, with route, verification and what was typed (PROFILE-ID)', async () => {
       const { requests } = await membership.listSignupRequests({}, APPROVER);
       expect(requests.map((r) => [r.displayName, r.email, r.route, r.verification])).toEqual([
         ['Jamie Example', 'jamie@example.org', AccountRoute.SIGNUP, Verification.UNCHECKED],
@@ -173,8 +174,13 @@ describe.skipIf(!live)('MembershipService', () => {
         ['Taylor Example', 'taylor@example.org', AccountRoute.INVITE, Verification.UNCHECKED],
         ['Quinn Example', 'quinn@example.org', AccountRoute.SIGNUP, Verification.UNCHECKED],
       ]);
-      expect(dump(requests)).not.toContain(NUMBER);
-      expect(dump(requests)).not.toContain(LAST);
+      expect(requests.map((r) => [r.lastName, r.membershipNumber])).toEqual([
+        [LAST, NUMBER],
+        [LAST, '9'],
+        [LAST, NUMBER],
+        // The race's own row, written by hand with no typed values.
+        ['', ''],
+      ]);
       expect((await membership.listSignupRequests({}, ADMIN)).requests).toHaveLength(4);
     });
 
@@ -187,14 +193,14 @@ describe.skipIf(!live)('MembershipService', () => {
   });
 
   describe('ApproveSignup and RejectSignup', () => {
-    it('approves a locally verified sign-up: a member from the verifier’s date, with the inputs already erased', async () => {
+    it('approves a locally verified sign-up: a member from the verifier’s date, keeping what was typed', async () => {
       const row = await signupRow('sub-joiner');
       await report(row?.id as string, 'verified_local');
       const listed = (await membership.listSignupRequests({}, APPROVER)).requests.find((r) => r.requestId === row?.id);
       expect(listed).toMatchObject({ verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 10, day: 20 } });
       const { account: approved } = await membership.approveSignup({ requestId: row?.id as string }, APPROVER);
       expect(approved).toMatchObject({ status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP, verifiedOn: { year: 2026, month: 10, day: 20 } });
-      expect(await signupRow('sub-joiner')).toMatchObject({ decision: 'approved', decided_by_sub: 'sub-approver', last_name: null, membership_number: null });
+      expect(await signupRow('sub-joiner')).toMatchObject({ decision: 'approved', decided_by_sub: 'sub-approver', last_name: LAST, membership_number: NUMBER });
       expect(await account('sub-joiner')).toMatchObject({ status: 'member', approved_by_sub: 'sub-approver', verified_on: '2026-10-20' });
       expect((await audits(row?.id as string)).map((a) => [a.action, a.payload, a.note])).toEqual([
         ['signup', {}, null],
@@ -203,12 +209,12 @@ describe.skipIf(!live)('MembershipService', () => {
       expect((await audits('sub-joiner')).map((a) => [a.action, a.subject_kind, a.payload])).toEqual([['approve_verified', 'member_account', {}]]);
     });
 
-    it('approves an unverified sign-up on the officer’s word, as of today, erasing the number in the same statement', async () => {
+    it('approves an unverified sign-up on the officer’s word, as of today, keeping the number', async () => {
       await membership.submitSignup({ lastName: LAST, membershipNumber: '7' }, JOINER3);
       const row = await signupRow('sub-joiner3');
       expect(row?.membership_number).toBe('7');
       await membership.approveSignup({ requestId: row?.id as string }, ADMIN);
-      expect(await signupRow('sub-joiner3')).toMatchObject({ decision: 'approved', membership_number: null, last_name: null });
+      expect(await signupRow('sub-joiner3')).toMatchObject({ decision: 'approved', membership_number: '7', last_name: LAST });
       expect(await account('sub-joiner3')).toMatchObject({ status: 'member', approved_by_sub: 'sub-admin', verified_on: '2026-10-22' });
       expect((await audits('sub-joiner3')).map((a) => a.action)).toEqual(['approve_attested']);
     });
@@ -218,7 +224,7 @@ describe.skipIf(!live)('MembershipService', () => {
       await expect(membership.approveSignup({ requestId }, APPROVER)).rejects.toMatchObject({ code: Code.PermissionDenied, rawMessage: 'no one decides their own sign-up' });
       await expect(membership.rejectSignup({ requestId }, APPROVER)).rejects.toMatchObject({ code: Code.PermissionDenied });
       await membership.rejectSignup({ requestId }, ADMIN);
-      expect(await signupRow('sub-approver')).toMatchObject({ decision: 'rejected', decided_by_sub: 'sub-admin', membership_number: null, last_name: null });
+      expect(await signupRow('sub-approver')).toMatchObject({ decision: 'rejected', decided_by_sub: 'sub-admin', membership_number: NUMBER, last_name: LAST });
       expect(await account('sub-approver')).toMatchObject({ status: 'removed' });
       expect((await audits(requestId)).map((a) => [a.action, a.payload])).toEqual([
         ['signup', {}],
@@ -240,7 +246,7 @@ describe.skipIf(!live)('MembershipService', () => {
       expect(mine).toMatchObject({ status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP });
       // Never approved: no date it was checked, which is how the site tells a rejected sign-up from a removed member.
       expect(mine?.verifiedOn).toBeUndefined();
-      expect(await signupRow('sub-turned-down')).toMatchObject({ decision: 'rejected', decided_by_sub: 'sub-approver', membership_number: null, last_name: null });
+      expect(await signupRow('sub-turned-down')).toMatchObject({ decision: 'rejected', decided_by_sub: 'sub-approver', membership_number: NUMBER, last_name: LAST });
       expect((await audits('sub-turned-down')).map((a) => [a.action, a.subject_kind, a.to_state, a.payload])).toEqual([['reject', 'member_account', 'removed', {}]]);
       await expect(membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, TURNED_DOWN)).rejects.toMatchObject({
         code: Code.AlreadyExists,

@@ -1438,6 +1438,29 @@
         "number": 2,
         "type": "string",
         "label": "optional"
+      },
+      {
+        "name": "first_name",
+        "number": 3,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "MembershipService.UpdateMyProfile": {
+    "input": "nwfl.mensa.v1.UpdateMyProfileRequest",
+    "fields": [
+      {
+        "name": "first_name",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "last_name",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
       }
     ]
   },

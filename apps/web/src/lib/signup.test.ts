@@ -14,11 +14,15 @@ import {
   REJECTED_LISTED_MAX,
   REOPEN_REFUSED,
   ROUTE_TEXT,
+  NUMBER_LOCKED,
+  PROFILE_REFUSED,
+  PROFILE_SAVED,
   REJECTED_CONTACT,
   SIGNUP_REFUSED,
   STANDING_TEXT,
   WAITING,
   accountView,
+  adminContactHref,
   errorSummary,
   checkText,
   checkWarning,
@@ -36,7 +40,11 @@ import {
   parseDecisionForm,
   signUpsLink,
   signUpsTitle,
+  parseProfileForm,
   parseSignupForm,
+  prefillFirstName,
+  profileErrorSummary,
+  typedFacts,
 } from './signup';
 
 const form = (values: Record<string, string>) => (name: string) => values[name];
@@ -46,33 +54,47 @@ const ID = '6a1f0c8e-1b2c-4d3e-8f40-5a6b7c8d9e0f';
 const NOW = 1_800_000_000;
 const session = (groups: string[]) => newSession({ sub: '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b', groups }, NOW - 60);
 
-describe('parseSignupForm (D1: both fields, for everyone)', () => {
+describe('parseSignupForm (D1: both fields, for everyone; PROFILE-ID: and the first name)', () => {
+  /** A form with a first name, as the page prefills it. */
+  const signup = (values: Record<string, string>) => form({ firstName: 'Jordan', ...values });
+
+  it('PROFILE-ID: needs a first name of up to 80 characters with no hidden character, trimmed, and gives it back on a problem', () => {
+    expect(parseSignupForm(form({ firstName: ' Jordan ', lastName: 'Fakename', membershipNumber: '7' }))).toEqual({ ok: true, value: { firstName: 'Jordan', lastName: 'Fakename', membershipNumber: '7' } });
+    expect(parseSignupForm(form({ lastName: 'Fakename', membershipNumber: '7' }))).toEqual({ ok: false, errors: { firstName: 'Enter your first name.' }, values: { firstName: '', lastName: 'Fakename' } });
+    expect(parseSignupForm(form({ firstName: 'F'.repeat(81), lastName: 'Fakename', membershipNumber: '7' }))).toMatchObject({ ok: false, errors: { firstName: 'Keep your first name to 80 characters or fewer.' } });
+    expect(parseSignupForm(form({ firstName: 'Jor\u001bdan', lastName: 'Fakename', membershipNumber: `${FAKE_NUMBER}x` }))).toEqual({
+      ok: false,
+      errors: { firstName: 'Type your first name again: it has a hidden character that cannot be kept.', membershipNumber: 'Enter your membership number using digits only, up to 12 of them.' },
+      values: { firstName: 'Jor\u001bdan', lastName: 'Fakename' },
+    });
+  });
+
   it('takes a last name and a number of digits, trimmed', () => {
-    expect(parseSignupForm(form({ lastName: '  Fakename ', membershipNumber: ` ${FAKE_NUMBER} ` }))).toEqual({ ok: true, value: { lastName: 'Fakename', membershipNumber: FAKE_NUMBER } });
-    expect(parseSignupForm(form({ lastName: 'Ó Fakeáin-Smythe', membershipNumber: '7' }))).toMatchObject({ ok: true });
-    expect(parseSignupForm(form({ lastName: 'L'.repeat(80), membershipNumber: '1'.repeat(12) }))).toMatchObject({ ok: true });
+    expect(parseSignupForm(signup({ lastName: '  Fakename ', membershipNumber: ` ${FAKE_NUMBER} ` }))).toEqual({ ok: true, value: { firstName: 'Jordan', lastName: 'Fakename', membershipNumber: FAKE_NUMBER } });
+    expect(parseSignupForm(signup({ lastName: 'Ó Fakeáin-Smythe', membershipNumber: '7' }))).toMatchObject({ ok: true });
+    expect(parseSignupForm(signup({ lastName: 'L'.repeat(80), membershipNumber: '1'.repeat(12) }))).toMatchObject({ ok: true });
   });
 
   it('VET fix 1: takes a number typed with spaces and dashes inside it, keeping only the digits', () => {
     for (const typed of ['000-012-345', '000 012 345', ' 000 012-345 ', '000\u00a0012\u2013345', '0-0-0-0-1-2-3-4-5']) {
-      expect(parseSignupForm(form({ lastName: 'Fakename', membershipNumber: typed })), typed).toEqual({ ok: true, value: { lastName: 'Fakename', membershipNumber: FAKE_NUMBER } });
+      expect(parseSignupForm(signup({ lastName: 'Fakename', membershipNumber: typed })), typed).toEqual({ ok: true, value: { firstName: 'Jordan', lastName: 'Fakename', membershipNumber: FAKE_NUMBER } });
     }
-    expect(parseSignupForm(form({ lastName: 'Fakename', membershipNumber: '1234-5678-9012' }))).toMatchObject({ ok: true, value: { membershipNumber: '123456789012' } });
+    expect(parseSignupForm(signup({ lastName: 'Fakename', membershipNumber: '1234-5678-9012' }))).toMatchObject({ ok: true, value: { membershipNumber: '123456789012' } });
   });
 
   it('VET fix 1: still refuses a letter, any other mark, more than 12 digits or no digit, never giving the number back', () => {
     for (const typed of ['000-012-34x', '0OO 012 345', '000.012.345', '000/012/345', '1234-5678-90123', '- -', '+000012345']) {
-      const refused = parseSignupForm(form({ lastName: 'Fakename', membershipNumber: typed }));
-      expect(refused, typed).toEqual({ ok: false, errors: { membershipNumber: 'Enter your membership number using digits only, up to 12 of them.' }, values: { lastName: 'Fakename' } });
+      const refused = parseSignupForm(signup({ lastName: 'Fakename', membershipNumber: typed }));
+      expect(refused, typed).toEqual({ ok: false, errors: { membershipNumber: 'Enter your membership number using digits only, up to 12 of them.' }, values: { firstName: 'Jordan', lastName: 'Fakename' } });
       expect(JSON.stringify(refused)).not.toContain('012');
     }
   });
 
   it('says what is missing, by field, and gives back the last name but never the number', () => {
-    expect(parseSignupForm(form({}))).toEqual({ ok: false, errors: { lastName: 'Enter your last name.', membershipNumber: 'Enter your membership number.' }, values: { lastName: '' } });
-    expect(parseSignupForm(form({ lastName: '   ', membershipNumber: '  ' }))).toMatchObject({ ok: false, errors: { lastName: 'Enter your last name.', membershipNumber: 'Enter your membership number.' } });
-    const refused = parseSignupForm(form({ lastName: 'Fakename', membershipNumber: `${FAKE_NUMBER}x` }));
-    expect(refused).toEqual({ ok: false, errors: { membershipNumber: 'Enter your membership number using digits only, up to 12 of them.' }, values: { lastName: 'Fakename' } });
+    expect(parseSignupForm(signup({}))).toEqual({ ok: false, errors: { lastName: 'Enter your last name.', membershipNumber: 'Enter your membership number.' }, values: { firstName: 'Jordan', lastName: '' } });
+    expect(parseSignupForm(signup({ lastName: '   ', membershipNumber: '  ' }))).toMatchObject({ ok: false, errors: { lastName: 'Enter your last name.', membershipNumber: 'Enter your membership number.' } });
+    const refused = parseSignupForm(signup({ lastName: 'Fakename', membershipNumber: `${FAKE_NUMBER}x` }));
+    expect(refused).toEqual({ ok: false, errors: { membershipNumber: 'Enter your membership number using digits only, up to 12 of them.' }, values: { firstName: 'Jordan', lastName: 'Fakename' } });
     expect(JSON.stringify(refused)).not.toContain(FAKE_NUMBER);
   });
 
@@ -83,13 +105,13 @@ describe('parseSignupForm (D1: both fields, for everyone)', () => {
     ['a full-width digit', '０００１'],
     ['a sign', '+12345'],
   ])('refuses a number with %s', (_label, number) => {
-    expect(parseSignupForm(form({ lastName: 'Fakename', membershipNumber: number }))).toMatchObject({ ok: false, errors: { membershipNumber: 'Enter your membership number using digits only, up to 12 of them.' } });
+    expect(parseSignupForm(signup({ lastName: 'Fakename', membershipNumber: number }))).toMatchObject({ ok: false, errors: { membershipNumber: 'Enter your membership number using digits only, up to 12 of them.' } });
   });
 
   it('refuses a last name over 80 characters, counted as letters, or with a hidden character', () => {
-    expect(parseSignupForm(form({ lastName: 'L'.repeat(81), membershipNumber: '7' }))).toMatchObject({ ok: false, errors: { lastName: 'Keep your last name to 80 characters or fewer.' } });
-    expect(parseSignupForm(form({ lastName: '\u{1F600}'.repeat(80), membershipNumber: '7' }))).toMatchObject({ ok: true });
-    expect(parseSignupForm(form({ lastName: 'Fake\u0000name', membershipNumber: '7' }))).toMatchObject({
+    expect(parseSignupForm(signup({ lastName: 'L'.repeat(81), membershipNumber: '7' }))).toMatchObject({ ok: false, errors: { lastName: 'Keep your last name to 80 characters or fewer.' } });
+    expect(parseSignupForm(signup({ lastName: '\u{1F600}'.repeat(80), membershipNumber: '7' }))).toMatchObject({ ok: true });
+    expect(parseSignupForm(signup({ lastName: 'Fake\u0000name', membershipNumber: '7' }))).toMatchObject({
       ok: false,
       errors: { lastName: 'Type your last name again: it has a hidden character that cannot be kept.' },
     });
@@ -399,5 +421,68 @@ describe('firstStop (D3: the callback sends a person with no account to /account
     for (const error of [new ApiUnavailable('GetMyAccount'), new MembershipSignInAgain('GetMyAccount'), new Error('a bug')]) {
       expect(await firstStop(s, '/news', api(() => Promise.reject(error)), deps)).toBe('/news');
     }
+  });
+});
+
+// PROFILE-ID: the member's own profile on /account, and the one line by the number on the sign-up form.
+describe('the profile and the number line (PROFILE-ID)', () => {
+  it('parses a change of profile: both names needed, up to 80 characters each, no hidden character, given back on a problem', () => {
+    expect(parseProfileForm(form({ firstName: ' Jordan ', lastName: ' Fakename ' }))).toEqual({ ok: true, value: { firstName: 'Jordan', lastName: 'Fakename' } });
+    expect(parseProfileForm(form({ membershipNumber: FAKE_NUMBER }))).toEqual({
+      ok: false,
+      errors: { firstName: 'Enter your first name.', lastName: 'Enter your last name.' },
+      values: { firstName: '', lastName: '' },
+    });
+    expect(parseProfileForm(form({ firstName: 'F'.repeat(81), lastName: 'Fake\u0000name' }))).toMatchObject({
+      ok: false,
+      errors: { firstName: 'Keep your first name to 80 characters or fewer.', lastName: 'Type your last name again: it has a hidden character that cannot be kept.' },
+    });
+    // A number posted with it is never read, nor given back.
+    expect(JSON.stringify(parseProfileForm(form({ firstName: 'Jordan', lastName: 'Fakename', membershipNumber: FAKE_NUMBER })))).not.toContain(FAKE_NUMBER);
+  });
+
+  it('summarises each form\'s problems in its own order, the first name first', () => {
+    expect(errorSummary({ membershipNumber: 'n', firstName: 'f', lastName: 'l' }).map((p) => p.field)).toEqual(['firstName', 'lastName', 'membershipNumber']);
+    expect(profileErrorSummary({ lastName: 'l', firstName: 'f' })).toEqual([
+      { field: 'profile-firstName', text: 'f' },
+      { field: 'profile-lastName', text: 'l' },
+    ]);
+  });
+
+  it('links the site administrator from SITE_ADMIN_CONTACT when it is an address, and the officers page otherwise', () => {
+    expect(adminContactHref({ SITE_ADMIN_CONTACT: ' admin@example.org ' })).toBe('mailto:admin@example.org');
+    expect(adminContactHref({ SITE_ADMIN_CONTACT: 'not an address' })).toBe('/officers');
+    expect(adminContactHref({ SITE_ADMIN_CONTACT: 'a@b?subject=x' })).toBe('/officers');
+    expect(adminContactHref({})).toBe('/officers');
+    expect(adminContactHref({ SITE_ADMIN_CONTACT: '' })).toBe('/officers');
+    expect(adminContactHref({ SITE_ADMIN_CONTACT: 'mailto:admin@example.org' })).toBe('/officers');
+  });
+
+  it('says once, by the number, that it cannot be changed after sending except through the site administrator', () => {
+    expect(NUMBER_LOCKED).toEqual({ before: 'Once you send it, your number can’t be changed. If it needs correcting, contact the ', link: 'site administrator', after: '.' });
+    expect(PROFILE_SAVED).toBe('Your profile has been saved.');
+    expect(PROFILE_REFUSED).toEqual({
+      invalid: 'Your profile was not saved. Check your first and last name, and save it again.',
+      not_member: 'Your profile can only be changed once your account has member access.',
+    });
+  });
+
+  it('prefills the first name from the sign-in\'s given name, if there is one', () => {
+    expect(prefillFirstName(newSession({ sub: 's', groups: [], given_name: ' Jordan ' }, NOW))).toBe('Jordan');
+    expect(prefillFirstName(newSession({ sub: 's', groups: [], name: 'Jordan Example' }, NOW))).toBe('');
+    // A session from before the given name was kept.
+    expect(prefillFirstName({})).toBe('');
+  });
+});
+
+describe('typedFacts (PROFILE-ID: what a sign-up typed, as the queue lists it)', () => {
+  it('labels the first name, last name and membership number in that order, leaving out any not held', () => {
+    expect(typedFacts({ membershipNumber: FAKE_NUMBER, lastName: 'Fakename', firstName: 'Jordan' })).toEqual([
+      ['First name', 'Jordan'],
+      ['Last name', 'Fakename'],
+      ['Membership number', FAKE_NUMBER],
+    ]);
+    expect(typedFacts({ lastName: 'Fakename' })).toEqual([['Last name', 'Fakename']]);
+    expect(typedFacts({})).toEqual([]);
   });
 });

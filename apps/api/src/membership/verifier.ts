@@ -5,10 +5,11 @@
 //   ListPendingVerifications  the undecided, unchecked sign-ups that typed a
 //                             number: id, number, last name and the email
 //                             stored on the sign-up (VET), oldest first, ten
-//                             at most. The only read that returns a number;
-//                             each row read is audited, no payload.
-//   ReportVerification        the outcome and today's date, with the number
-//                             and the last name erased in the same statement.
+//                             at most. The verifier's only read that returns
+//                             a number; each row read is audited, no payload.
+//   ReportVerification        the outcome and today's date. What the sign-up
+//                             typed is kept (PROFILE-ID, 0028); the sign-up
+//                             leaves this list, which reads unchecked rows.
 //                             A local match does not approve the sign-up: an
 //                             officer still does (R24). VET: a duplicate claim
 //                             may name the earlier sign-up, which must exist
@@ -102,7 +103,7 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
             if (earlier.length === 0) throw new ConnectError('conflicting_request_id names no sign-up', Code.InvalidArgument);
           }
           const { rows } = await client.query(
-            `UPDATE signup_request SET verification = $2, verified_on = $3, membership_number = NULL, last_name = NULL, conflicting_request_id = $4
+            `UPDATE signup_request SET verification = $2, verified_on = $3, conflicting_request_id = $4
              WHERE id = $1 AND ${WAITING} RETURNING id`,
             [request.requestId, outcome, todayIn(deps.now()), conflicting],
           );

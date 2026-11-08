@@ -1,6 +1,9 @@
 // Member accounts and the sign-up queue (R24, R33). Only what the member typed
 // is stored, plus the account's status; never anything National-sourced. The
-// approval screens have no free-text notes.
+// approval screens have no free-text notes. PROFILE-ID: what the member typed
+// (first name, last name, membership number) is kept on the sign-up, shown to
+// the approvers and the Admin, and once approved is the member's profile: the
+// names editable, the number never.
 syntax = "proto3";
 
 package nwfl.mensa.v1;
@@ -52,9 +55,8 @@ message MemberAccount {
   Date verified_on = 3;
 }
 
-// A pending sign-up as the approver sees it. The membership number and the
-// last name are never shown: only whether and when the number was verified,
-// and with what outcome.
+// A pending sign-up as the approver sees it: what the person typed, and
+// whether and when the number was verified, with what outcome.
 message SignupRequest {
   string request_id = 1;
   string display_name = 2;
@@ -67,10 +69,16 @@ message SignupRequest {
   AccountRoute route = 7;
   // VET: for a duplicate claim, the earlier sign-up the verifier named, if any.
   EarlierClaim earlier_claim = 8;
+  // PROFILE-ID: as the person typed them at sign-up. The first name is empty
+  // for a sign-up sent before it was asked for.
+  string first_name = 9;
+  string last_name = 10;
+  // Digits only.
+  string membership_number = 11;
 }
 
 // VET: the earlier sign-up that claimed the same number, as the site already
-// holds it: its display name and when it signed up. Never a number.
+// holds it: its display name, when it signed up and (PROFILE-ID) what it typed.
 message EarlierClaim {
   // Empty when the earlier sign-up is closed (see closed).
   string display_name = 1;
@@ -80,10 +88,15 @@ message EarlierClaim {
   // Officer see a rejected sign-up's name (ListRejectedSignups). The
   // approver sees "an earlier claim (since closed)" and its date.
   bool closed = 3;
+  // PROFILE-ID: as the earlier sign-up typed them (its profile, if approved
+  // and changed since). Empty when closed, as the display name is.
+  string first_name = 4;
+  string last_name = 5;
+  string membership_number = 6;
 }
 
-// A rejected sign-up that can still be reopened, as the Admin or the Membership Officer sees it:
-// never the number or the last name, which the rejection erased.
+// A rejected sign-up that can still be reopened, as the Admin or the Membership Officer sees it,
+// with what the person typed (PROFILE-ID).
 message RejectedSignup {
   string request_id = 1;
   string display_name = 2;
@@ -92,6 +105,19 @@ message RejectedSignup {
   Verification verification = 4;
   Date verified_on = 5;
   google.protobuf.Timestamp rejected_at = 6;
+  // PROFILE-ID: as the person typed them at sign-up.
+  string first_name = 7;
+  string last_name = 8;
+  string membership_number = 9;
+}
+
+// PROFILE-ID: an approved member's own profile, read by its owner alone. The
+// names are as typed at sign-up until the member changes them; the number is
+// shown, never changed.
+message MemberProfile {
+  string first_name = 1;
+  string last_name = 2;
+  string membership_number = 3;
 }
 
 // An account as the approvers see it, for removal and the yearly re-check.
@@ -120,11 +146,16 @@ service MembershipService {
   rpc GetMyAccount(GetMyAccountRequest) returns (GetMyAccountResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+  // PROFILE-ID: an approved member changes their own first and last name. The
+  // membership number has no field here and no other way in: a request that
+  // carries any other field is INVALID_ARGUMENT, and nothing changes. Anyone
+  // without an approved sign-up: FAILED_PRECONDITION.
+  rpc UpdateMyProfile(UpdateMyProfileRequest) returns (UpdateMyProfileResponse);
   // Approvers only.
   rpc ListSignupRequests(ListSignupRequestsRequest) returns (ListSignupRequestsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
-  // Approves or rejects a pending sign-up, erasing its number and last name.
+  // Approves or rejects a pending sign-up; what it typed is kept (PROFILE-ID).
   // No approver decides their own sign-up. A sign-up the verifier found in
   // another local group is not approved as a member: it is rejected, or the
   // account is granted affiliate standing. VET fix 1: an email mismatch or a
@@ -153,7 +184,7 @@ service MembershipService {
   }
   // REOPEN: the Admin or the Membership Officer only, never on their own sign-up. Returns the
   // person to where they can sign up again: the account the rejection closed is gone, and the
-  // rejected sign-up stays, marked reopened by whom and when. Nothing erased comes back. A sign-up
+  // rejected sign-up stays, marked reopened by whom and when, with what it typed. A sign-up
   // that is not rejected, already reopened, or whose account is no longer closed is refused.
   rpc ReopenSignup(ReopenSignupRequest) returns (ReopenSignupResponse);
 }
@@ -161,9 +192,12 @@ service MembershipService {
 message SubmitSignupRequest {
   // Matched with the number by the verifier.
   string last_name = 1;
-  // Typed by the member from their card or renewal email. Erased as soon as
-  // the verifier reports.
+  // Typed by the member from their card or renewal email. Kept on the sign-up
+  // and the member's profile, never changed (PROFILE-ID).
   string membership_number = 2;
+  // PROFILE-ID: for the approvers and the profile; the verifier never gets it.
+  // Optional here, so a sign-up from a site that does not ask yet is still taken.
+  string first_name = 3;
 }
 
 message SubmitSignupResponse {
@@ -174,7 +208,17 @@ message GetMyAccountRequest {}
 
 message GetMyAccountResponse {
   MemberAccount account = 1;
+  // PROFILE-ID: set for an approved member (member, affiliate or lapsed)
+  // whose sign-up holds it.
+  MemberProfile profile = 2;
 }
+
+message UpdateMyProfileRequest {
+  string first_name = 1;
+  string last_name = 2;
+}
+
+message UpdateMyProfileResponse {}
 
 message ListSignupRequestsRequest {}
 

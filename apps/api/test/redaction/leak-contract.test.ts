@@ -162,6 +162,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     'MembershipService.ConfirmMember',
     'MembershipService.GrantAffiliate',
     'MembershipService.ReopenSignup',
+    // PROFILE-ID: an approved member's own two names; no content, no redacted value.
+    'MembershipService.UpdateMyProfile',
     'MembershipVerifierService.ReportVerification',
     'RedactionPolicyService.ProposeRedactionChange',
     'RedactionPolicyService.ApproveRedactionChange',

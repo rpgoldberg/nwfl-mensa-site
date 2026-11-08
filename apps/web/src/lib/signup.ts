@@ -1,9 +1,12 @@
 // W-SIGNUP: the words and checks of the first-sign-in page (/account) and the approvers' queue
 // (/officer-area/sign-ups), checked here on the server: both pages work with no script.
 //
-// D1: every sign-up gives a last name and a Mensa membership number, invited or not; the API checks
-// them again and refuses anything else. The number is digits only, as the API and the schema take
-// it, and it is never given back in a page or a log line (D6). D3: an enrolee with no account gets
+// D1: every sign-up gives a last name and a Mensa membership number, invited or not, and (PROFILE-ID)
+// a first name, prefilled from the sign-in's given name; the API checks them again and refuses
+// anything else. The number is digits only, as the API and the schema take it, and it is never given
+// back in a form after a problem, nor in a log line (D6). PROFILE-ID: an approved member's /account
+// shows their profile, the two names editable and the number shown only; one line by the sign-up's
+// number field says it cannot be changed once sent, except through the site administrator. D3: an enrolee with no account gets
 // the form; a pending account the waiting line; a rejected sign-up says it was not approved; anyone
 // else their standing. Officers and the Admin need no account (fix 1): no form and no stop after
 // signing in. D4: the queue is for the membership approvers and the Admin only, in plain words,
@@ -12,26 +15,39 @@
 // form again (the API removes the account the rejection closed).
 import type { Session } from '../../server/session.mjs';
 import { isAdmin } from './approval-rules';
-import type { Check, MembershipApi, MyAccount, PendingSignup, Route } from './api/membership';
+import type { Check, MembershipApi, MyAccount, PendingSignup, Route, Typed } from './api/membership';
 import { type SessionReaderDeps, sessionReader } from './api/membership';
 import { ZONE } from './calendar';
 
 export const ACCOUNT_PATH = '/account';
 /** The API's own limits (apps/api/src/membership/service.ts). */
 export const MAX_LAST_NAME = 80;
+/** PROFILE-ID: as the API's (0028). */
+export const MAX_FIRST_NAME = 80;
 export const MAX_NUMBER_DIGITS = 12;
 
 export const WAITING = 'Your sign-up is waiting for an officer to approve it.';
 
 export interface SignupForm {
+  firstName: string;
   lastName: string;
   membershipNumber: string;
 }
 
 export type SignupErrors = Partial<Record<keyof SignupForm, string>>;
 
-/** On a problem, the last name comes back to the form; the number never does (D6). */
-export type ParsedSignup = { ok: true; value: SignupForm } | { ok: false; errors: SignupErrors; values: { lastName: string } };
+/** On a problem, the names come back to the form; the number never does (D6). */
+export type ParsedSignup = { ok: true; value: SignupForm } | { ok: false; errors: SignupErrors; values: { firstName: string; lastName: string } };
+
+/** PROFILE-ID: the member's own two names. */
+export interface ProfileForm {
+  firstName: string;
+  lastName: string;
+}
+
+export type ProfileErrors = Partial<Record<keyof ProfileForm, string>>;
+
+export type ParsedProfile = { ok: true; value: ProfileForm } | { ok: false; errors: ProfileErrors; values: ProfileForm };
 
 const DIGITS = new RegExp(`^[0-9]{1,${MAX_NUMBER_DIGITS}}$`);
 /**
@@ -44,27 +60,92 @@ export const MAX_NUMBER_TYPED = 2 * MAX_NUMBER_DIGITS;
 /** Any control character (a NUL, a tab, an escape code): no last name holds one. */
 const CONTROL = /\p{Cc}/u;
 
-/** The sign-up form's two fields, checked; each problem is said in words, by field. */
+/** A name's problem in words, or none: needed, at most 80 characters, no hidden character. */
+function nameProblem(name: string, which: 'first' | 'last', max: number): string | undefined {
+  if (name === '') return `Enter your ${which} name.`;
+  if ([...name].length > max) return `Keep your ${which} name to ${max} characters or fewer.`;
+  if (CONTROL.test(name)) return `Type your ${which} name again: it has a hidden character that cannot be kept.`;
+  return undefined;
+}
+
+/** The two names of a form, trimmed, with their problems by field. */
+function namesOf(field: (name: string) => string | undefined): { names: ProfileForm; errors: ProfileErrors } {
+  const names = { firstName: (field('firstName') ?? '').trim(), lastName: (field('lastName') ?? '').trim() };
+  const errors: ProfileErrors = {};
+  const first = nameProblem(names.firstName, 'first', MAX_FIRST_NAME);
+  const last = nameProblem(names.lastName, 'last', MAX_LAST_NAME);
+  if (first !== undefined) errors.firstName = first;
+  if (last !== undefined) errors.lastName = last;
+  return { names, errors };
+}
+
+/** The sign-up form's three fields, checked; each problem is said in words, by field. */
 export function parseSignupForm(field: (name: string) => string | undefined): ParsedSignup {
-  const lastName = (field('lastName') ?? '').trim();
+  const { names, errors: nameErrors } = namesOf(field);
   const membershipNumber = (field('membershipNumber') ?? '').trim().replace(NUMBER_NOISE, '');
-  const errors: SignupErrors = {};
-  if (lastName === '') errors.lastName = 'Enter your last name.';
-  else if ([...lastName].length > MAX_LAST_NAME) errors.lastName = `Keep your last name to ${MAX_LAST_NAME} characters or fewer.`;
-  else if (CONTROL.test(lastName)) errors.lastName = 'Type your last name again: it has a hidden character that cannot be kept.';
+  const errors: SignupErrors = { ...nameErrors };
   if ((field('membershipNumber') ?? '').trim() === '') errors.membershipNumber = 'Enter your membership number.';
   else if (!DIGITS.test(membershipNumber)) errors.membershipNumber = `Enter your membership number using digits only, up to ${MAX_NUMBER_DIGITS} of them.`;
-  if (Object.keys(errors).length > 0) return { ok: false, errors, values: { lastName } };
-  return { ok: true, value: { lastName, membershipNumber } };
+  if (Object.keys(errors).length > 0) return { ok: false, errors, values: names };
+  return { ok: true, value: { ...names, membershipNumber } };
+}
+
+/** PROFILE-ID: the profile form's two names, checked as the sign-up's. A number posted with them is never read. */
+export function parseProfileForm(field: (name: string) => string | undefined): ParsedProfile {
+  const { names, errors } = namesOf(field);
+  return Object.keys(errors).length > 0 ? { ok: false, errors, values: names } : { ok: true, value: names };
 }
 
 /** The order of the form's fields, which its error summary follows. */
-const FIELDS: readonly (keyof SignupForm)[] = ['lastName', 'membershipNumber'];
+const FIELDS: readonly (keyof SignupForm)[] = ['firstName', 'lastName', 'membershipNumber'];
 
 /** Fix 1 (NOTE-6): the summary at the top of the form, one entry per problem, each linking to its field. */
 export function errorSummary(errors: SignupErrors): Array<{ field: keyof SignupForm; text: string }> {
   return FIELDS.flatMap((field) => (errors[field] === undefined ? [] : [{ field, text: errors[field] }]));
 }
+
+/** PROFILE-ID: the profile form's summary; its fields' ids carry a "profile-" prefix. */
+export function profileErrorSummary(errors: ProfileErrors): Array<{ field: string; text: string }> {
+  return (['firstName', 'lastName'] as const).flatMap((field) => (errors[field] === undefined ? [] : [{ field: `profile-${field}`, text: errors[field] }]));
+}
+
+/** PROFILE-ID: the sign-up's first name, prefilled from the sign-in's given name when there is one. */
+export function prefillFirstName(session: Pick<Session, 'givenName'>): string {
+  return (session.givenName ?? '').trim();
+}
+
+/** PROFILE-ID: one plain address, as an Admin role mailbox is: no spaces, no query, no second @. */
+const ADDRESS = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
+/**
+ * PROFILE-ID: where to contact the site administrator: a mailto of the Admin role's address from
+ * configuration (SITE_ADMIN_CONTACT), else, unset or not one plain address, the officers page, which
+ * lists every office's contact. Never an empty or a broken link.
+ */
+export function adminContactHref(env: Record<string, string | undefined>): string {
+  const address = (env['SITE_ADMIN_CONTACT'] ?? '').trim();
+  return ADDRESS.test(address) ? `mailto:${address}` : '/officers';
+}
+
+/** PROFILE-ID (Ross): the one line by the number field. The page links the middle words. */
+export const NUMBER_LOCKED = { before: 'Once you send it, your number can’t be changed. If it needs correcting, contact the ', link: 'site administrator', after: '.' } as const;
+
+/** PROFILE-ID: what a sign-up typed, labelled, in the form's order, leaving out any value not held. */
+export function typedFacts(typed: Typed): Array<[string, string]> {
+  const facts: Array<[string, string | undefined]> = [
+    ['First name', typed.firstName],
+    ['Last name', typed.lastName],
+    ['Membership number', typed.membershipNumber],
+  ];
+  return facts.filter((fact): fact is [string, string] => fact[1] !== undefined && fact[1] !== '');
+}
+
+export const PROFILE_SAVED = 'Your profile has been saved.';
+
+export const PROFILE_REFUSED: Record<'invalid' | 'not_member', string> = {
+  invalid: 'Your profile was not saved. Check your first and last name, and save it again.',
+  not_member: 'Your profile can only be changed once your account has member access.',
+};
 
 /** What /account shows. */
 export type AccountView = 'form' | 'waiting' | 'member' | 'affiliate' | 'lapsed' | 'removed' | 'rejected' | 'officer' | 'not-club';
@@ -101,7 +182,7 @@ export const STANDING_TEXT: Record<Exclude<AccountView, 'form'>, string> = {
 export const REJECTED_CONTACT = "If you think this is a mistake, please contact the club's Membership Officer.";
 
 export const SIGNUP_REFUSED: Record<'invalid' | 'on_file' | 'profile', string> = {
-  invalid: 'Your sign-up was not accepted. Check your last name and membership number, and send it again.',
+  invalid: 'Your sign-up was not accepted. Check your names and membership number, and send it again.',
   on_file: 'A sign-up is already on file for this account. An officer will look at it.',
   profile: 'Your sign-in account has no name or email address yet, so the sign-up could not be sent. Please contact an officer for help.',
 };

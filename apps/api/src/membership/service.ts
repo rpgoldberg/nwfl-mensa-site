@@ -5,22 +5,27 @@
 //   SubmitSignup        a signed-in person: name and email from the token,
 //                       last name and number as typed, both required for
 //                       every sign-up, invited or not (W-SIGNUP D1), with
-//                       no control character in the last name. A token
+//                       no control character in the last name; the first
+//                       name as typed, optional (PROFILE-ID). A token
 //                       with the invited group (fc INVITE1) opens the
 //                       account with the invite route; it still waits for
 //                       the verifier or an approver (D2). A repeat, or an
 //                       account already past pending, gets ONE answer
 //                       whatever the reason, so the call tells nothing.
-//   GetMyAccount        the caller's own account
-//   ListSignupRequests  approvers and the Admin: the pending sign-ups with the
-//                       verifier's outcome and date, NEVER the number or the
-//                       last name. VET: a duplicate claim shows the earlier
-//                       sign-up the verifier named, by display name and date;
-//                       one rejected or reopened since is shown as closed,
-//                       by date alone (fix 1)
+//   GetMyAccount        the caller's own account and, for an approved member,
+//                       their profile: the names and the number (PROFILE-ID)
+//   UpdateMyProfile     PROFILE-ID: an approved member changes their first and
+//                       last name; never the number, which no request field
+//                       carries (a request with any other field is refused)
+//   ListSignupRequests  approvers and the Admin: the pending sign-ups with
+//                       what they typed (PROFILE-ID: names and number) and the
+//                       verifier's outcome and date. VET: a duplicate claim
+//                       shows the earlier sign-up the verifier named, by
+//                       display name, date and what it typed; one rejected or
+//                       reopened since is shown as closed, by date alone
+//                       (fix 1)
 //   ApproveSignup /     approvers and the Admin, never on their own sign-up.
-//   RejectSignup        The decision erases the number and the last name in
-//                       the same statement (0007, 0009). A rejection removes
+//   RejectSignup        What the sign-up typed is kept (0028). A rejection removes
 //                       the account still waiting on it, in the same
 //                       transaction, so GetMyAccount reports it and no second
 //                       sign-up is taken (W-SIGNUP fix 1). An approval makes
@@ -37,7 +42,7 @@
 //                       once verified more than 12 months ago (the 13th month
 //                       is grace; after it standing lapses by itself)
 //   RemoveMember        approvers and the Admin; a sign-up still open for the
-//                       account is rejected with it, erasing its inputs
+//                       account is rejected with it
 //   ConfirmMember       approvers and the Admin, never on themselves: the
 //                       yearly re-check, confirmed by an officer, dates a
 //                       member's (or a lapsed account's) verification today
@@ -47,12 +52,12 @@
 //                       grantor's attestation (the audit action says which)
 //   ListRejectedSignups the Admin and the Membership Officer (REOPEN): the
 //                       rejections whose closed account is still closed,
-//                       newest first, never their own
+//                       newest first, never their own, with what they typed
 //   ReopenSignup        the Admin and the Membership Officer, never on their
 //                       own: the rejected row stays as it was, marked reopened
 //                       by whom and when (0026), and the account the rejection
 //                       closed is deleted, so the person can sign up again.
-//                       Nothing erased comes back. Not rejected, already
+//                       Not rejected, already
 //                       reopened, or an account no longer closed (granted
 //                       meanwhile): FAILED_PRECONDITION, so a double reopen is
 //                       refused, never repeated.
@@ -61,7 +66,8 @@
 // lookup by subject reads only those.
 //
 // No free-text note anywhere (R24), and a membership audit row carries no
-// payload (0009): what happened is in its action and states.
+// payload (0009): what happened is in its action and states. The number is
+// never logged and never given back in an error.
 // ============================================================================
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
@@ -78,6 +84,7 @@ import {
   EarlierClaimSchema,
   type MemberAccount,
   MemberAccountSchema,
+  MemberProfileSchema,
   MemberSchema,
   MemberStatus,
   MembershipService,
@@ -122,7 +129,8 @@ const CONFIRM_FIRST: Partial<Record<string, string>> = {
   duplicate_claim: 'another sign-up already claimed this number: resolve the earlier claim, then approve with confirmed_warning',
 };
 const EMAIL = /^[^@\s]+@[^@\s]+$/;
-const MAX_LAST_NAME = 80;
+/** The most characters in a first or a last name (0005, 0028). */
+const MAX_NAME = 80;
 /** Any control character (a NUL, a line break, an escape code), as the site's sign-up form checks (web src/lib/signup.ts). */
 const CONTROL = /\p{Cc}/u;
 const MAX_DISPLAY_NAME = 120;
@@ -150,6 +158,20 @@ interface AccountRow {
   verified_on: string | null;
 }
 
+/** PROFILE-ID: what a sign-up typed, as the approvers and the owner read it. */
+interface TypedRow {
+  first_name: string | null;
+  last_name: string | null;
+  membership_number: string | null;
+}
+
+/** As the wire carries it: empty for a value not held (a first name from before 0028). */
+const typedFields = (row: TypedRow): { firstName: string; lastName: string; membershipNumber: string } => ({
+  firstName: row.first_name ?? '',
+  lastName: row.last_name ?? '',
+  membershipNumber: row.membership_number ?? '',
+});
+
 interface SignupRow {
   id: string;
   sub: string;
@@ -167,6 +189,16 @@ function accountMessage(row: AccountRow): MemberAccount {
     route: ROUTES[row.route],
     ...(row.verified_on !== null ? { verifiedOn: protoDate(row.verified_on) } : {}),
   });
+}
+
+/** A first or last name as typed: trimmed, needed, at most 80 characters, no control character. Never echoed. */
+function nameOf(value: string, which: 'first name' | 'last name'): string {
+  const name = value.trim();
+  if (name === '') throw invalid(`a ${which} is needed`);
+  if ([...name].length > MAX_NAME) throw invalid(`a ${which} is at most ${MAX_NAME} characters`);
+  // As the site refuses it: no name holds a control character, and a NUL would never reach the database.
+  if (CONTROL.test(name)) throw invalid(`a ${which} has a hidden character`);
+  return name;
 }
 
 function requestId(id: string): string {
@@ -206,12 +238,9 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
     return row;
   };
 
-  /** Decides a sign-up, erasing the number and the last name in the same statement. */
+  /** Decides a sign-up. What it typed is kept (0028). */
   const decide = (client: TxClient, id: string, decision: 'approved' | 'rejected', by: string): Promise<unknown> =>
-    client.query(
-      `UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = $3, membership_number = NULL, last_name = NULL WHERE id = $1`,
-      [id, decision, by],
-    );
+    client.query(`UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = $3 WHERE id = $1`, [id, decision, by]);
 
   return (router) => {
     router.service(MembershipService, {
@@ -237,19 +266,17 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         if (typed === '') throw invalid('a membership number is needed');
         const number = typed.replace(NUMBER_NOISE, '');
         if (!NUMBER.test(number)) throw invalid('a membership number is 1 to 12 digits');
-        const lastName = request.lastName.trim();
-        if (lastName === '') throw invalid('a last name is needed');
-        if ([...lastName].length > MAX_LAST_NAME) throw invalid(`a last name is at most ${MAX_LAST_NAME} characters`);
-        // As the site refuses it: no last name holds a control character, and a NUL would never reach the database.
-        if (CONTROL.test(lastName)) throw invalid('a last name has a hidden character');
+        const lastName = nameOf(request.lastName, 'last name');
+        // PROFILE-ID: optional, so a sign-up from a site that does not ask for it yet is still taken.
+        const firstName = request.firstName.trim() === '' ? null : nameOf(request.firstName, 'first name');
         // D2: an officer's invitation (the <prefix>invited group, by its internal name) is the account's route.
         const route = caller.groups.includes(INVITED_GROUP) ? 'invite' : 'signup';
         return tx(async (client) => {
           // A sign-up racing this one waits here for it, then gets the same one answer.
           const { rows } = await client.query<{ id: string }>(
-            `INSERT INTO signup_request (sub, display_name, email, last_name, membership_number) VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO signup_request (sub, display_name, email, first_name, last_name, membership_number) VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (sub) WHERE reopened_at IS NULL DO NOTHING RETURNING id`,
-            [sub, name, email, lastName, number],
+            [sub, name, email, firstName, lastName, number],
           );
           const id = rows[0]?.id;
           if (id === undefined) throw new ConnectError(ON_FILE, Code.AlreadyExists);
@@ -262,29 +289,68 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
       getMyAccount: async (_request, ctx) => {
         const caller = callerIn(ctx);
         requireUser(caller);
-        const { rows } = await db.query<AccountRow>(`SELECT status, route, verified_on::text AS verified_on FROM member_account WHERE sub = $1`, [caller.subject]);
+        // PROFILE-ID: an approved member's profile is their approved sign-up, read by them alone.
+        const { rows } = await db.query<AccountRow & TypedRow & { profile: boolean }>(
+          `SELECT a.status, a.route, a.verified_on::text AS verified_on, s.id IS NOT NULL AS profile, s.first_name, s.last_name, s.membership_number
+           FROM member_account a LEFT JOIN signup_request s
+             ON s.sub = a.sub AND s.reopened_at IS NULL AND s.decision = 'approved' AND a.status IN ('member', 'affiliate', 'lapsed')
+           WHERE a.sub = $1`,
+          [caller.subject],
+        );
         const row = rows[0];
-        return row === undefined ? {} : { account: accountMessage(row) };
+        if (row === undefined) return {};
+        return { account: accountMessage(row), ...(row.profile ? { profile: create(MemberProfileSchema, typedFields(row)) } : {}) };
+      },
+
+      updateMyProfile: async (request, ctx) => {
+        const caller = callerIn(ctx);
+        requireUser(caller);
+        // The number has no field here: a request that carries one, under any field number, changes nothing.
+        if ((request.$unknown?.length ?? 0) > 0) throw invalid('only the first and last name can be changed');
+        const firstName = nameOf(request.firstName, 'first name');
+        const lastName = nameOf(request.lastName, 'last name');
+        return tx(async (client) => {
+          const { rows } = await client.query<{ id: string }>(
+            `UPDATE signup_request s SET first_name = $2, last_name = $3
+             FROM member_account a
+             WHERE s.sub = $1 AND s.reopened_at IS NULL AND s.decision = 'approved' AND a.sub = s.sub AND a.status IN ('member', 'affiliate', 'lapsed')
+             RETURNING s.id`,
+            [caller.subject, firstName, lastName],
+          );
+          const id = rows[0]?.id;
+          if (id === undefined) throw precondition('only an approved member has a profile to change');
+          await recordAudit(client, caller, { action: 'profile_update', subjectKind: 'signup_request', subjectId: id });
+          return {};
+        });
       },
 
       listSignupRequests: async (_request, ctx) => {
         requireMembershipApprover(callerIn(ctx));
-        const { rows } = await db.query<{
-          id: string;
-          display_name: string;
-          email: string;
-          verification: string;
-          verified_on: string | null;
-          created_at: Date;
-          route: string;
-          earlier_name: string | null;
-          earlier_at: Date | null;
-          earlier_closed: boolean | null;
-        }>(
+        const { rows } = await db.query<
+          TypedRow & {
+            id: string;
+            display_name: string;
+            email: string;
+            verification: string;
+            verified_on: string | null;
+            created_at: Date;
+            route: string;
+            earlier_name: string | null;
+            earlier_at: Date | null;
+            earlier_closed: boolean | null;
+            earlier_first: string | null;
+            earlier_last: string | null;
+            earlier_number: string | null;
+          }
+        >(
           // Fix 1 (N2): a rejected (or reopened) earlier sign-up's name stays with the Admin and the
-          // Membership Officer (ListRejectedSignups): it is never read here.
+          // Membership Officer (ListRejectedSignups): it is never read here, nor (PROFILE-ID) what it typed.
           `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.created_at, coalesce(a.route, 'signup') AS route,
-             CASE WHEN c.decision = 'rejected' THEN '' ELSE c.display_name END AS earlier_name, c.created_at AS earlier_at, c.decision = 'rejected' AS earlier_closed
+             s.first_name, s.last_name, s.membership_number,
+             CASE WHEN c.decision = 'rejected' THEN '' ELSE c.display_name END AS earlier_name, c.created_at AS earlier_at, c.decision = 'rejected' AS earlier_closed,
+             CASE WHEN c.decision = 'rejected' THEN NULL ELSE c.first_name END AS earlier_first,
+             CASE WHEN c.decision = 'rejected' THEN NULL ELSE c.last_name END AS earlier_last,
+             CASE WHEN c.decision = 'rejected' THEN NULL ELSE c.membership_number END AS earlier_number
            FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub LEFT JOIN signup_request c ON c.id = s.conflicting_request_id
            WHERE s.decision = 'pending' ORDER BY s.created_at, s.id`,
         );
@@ -298,7 +364,17 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
               ...(row.verified_on !== null ? { verifiedOn: protoDate(row.verified_on) } : {}),
               createdAt: timestampFromDate(row.created_at),
               route: ROUTES[row.route],
-              ...(row.earlier_name !== null ? { earlierClaim: create(EarlierClaimSchema, { displayName: row.earlier_name, signedUpAt: timestampFromDate(row.earlier_at as Date), closed: row.earlier_closed === true }) } : {}),
+              ...typedFields(row),
+              ...(row.earlier_name !== null
+                ? {
+                    earlierClaim: create(EarlierClaimSchema, {
+                      displayName: row.earlier_name,
+                      signedUpAt: timestampFromDate(row.earlier_at as Date),
+                      closed: row.earlier_closed === true,
+                      ...typedFields({ first_name: row.earlier_first, last_name: row.earlier_last, membership_number: row.earlier_number }),
+                    }),
+                  }
+                : {}),
             }),
           ),
         };
@@ -394,7 +470,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           if (row.status === 'removed') throw precondition('this account is already removed');
           await client.query(`UPDATE member_account SET status = 'removed', removed_at = now(), updated_at = now() WHERE sub = $1`, [sub]);
           await recordAudit(client, caller, { action: 'remove', subjectKind: 'member_account', subjectId: sub, fromState: row.status, toState: 'removed' });
-          // A sign-up still open for the account is rejected with it, so its number leaves both queues.
+          // A sign-up still open for the account is rejected with it, so it leaves both queues.
           const open = (await client.query<{ id: string }>(`SELECT id FROM signup_request WHERE sub = $1 AND decision = 'pending' FOR UPDATE`, [sub])).rows[0];
           if (open !== undefined) {
             await decide(client, open.id, 'rejected', caller.subject as string);
@@ -465,8 +541,8 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
       listRejectedSignups: async (_request, ctx) => {
         const caller = callerIn(ctx);
         requireSignupReopener(caller);
-        const { rows } = await db.query<{ id: string; display_name: string; email: string; verification: string; verified_on: string | null; decided_at: Date }>(
-          `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.decided_at
+        const { rows } = await db.query<TypedRow & { id: string; display_name: string; email: string; verification: string; verified_on: string | null; decided_at: Date }>(
+          `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.decided_at, s.first_name, s.last_name, s.membership_number
            FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub
            WHERE s.decision = 'rejected' AND s.reopened_at IS NULL AND s.sub <> $1 AND (a.sub IS NULL OR (${CLOSED_BY_REJECTION}))
            ORDER BY s.decided_at DESC, s.id DESC LIMIT $2`,
@@ -481,6 +557,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
               verification: VERIFICATIONS[row.verification],
               ...(row.verified_on !== null ? { verifiedOn: protoDate(row.verified_on) } : {}),
               rejectedAt: timestampFromDate(row.decided_at),
+              ...typedFields(row),
             }),
           ),
         };
