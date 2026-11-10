@@ -34,7 +34,8 @@ import { expect, test, type APIRequest, type APIRequestContext } from '@playwrig
 import { ContentKind } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { grpcReads } from '../../src/lib/api/client';
 import { PUBLIC_CACHE } from '../../server/policy.mjs';
-import { MEMBERS_COPY, PUBLIC_COPY } from '../../src/lib/reader';
+import { MEMBERS_RULE } from '../../src/lib/document';
+import { MEMBERS_COPY, PUBLIC_COPY, PUBLIC_TAG, PUBLIC_TAG_NOTE } from '../../src/lib/reader';
 import { SESSION_COOKIE } from '../../server/policy.mjs';
 import { LIVE, STATIC, crawlSeeds, patternOf } from '../routes';
 import { REDACTION } from './servers';
@@ -326,6 +327,16 @@ test("/news lists the issue with its public PDF, served as a copy, and the membe
   expect(seen).toEqual([]);
 });
 
+/**
+ * W-LOOK3: the line on /read that says which copy it is (src/components/CopyTag.astro): its classes, and
+ * its words with the tags dropped ("Public copy Members can sign in for the full issue"). None if absent.
+ */
+function copyTag(body: string): { classes: string; text: string } | undefined {
+  const m = /<p class="(copy-tag[^"]*)">([\s\S]*?)<\/p>/.exec(body);
+  const text = m?.[2]!.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().replaceAll('&#39;', "'").replaceAll('&quot;', '"').replaceAll('&amp;', '&');
+  return m ? { classes: m[1]!, text: text! } : undefined;
+}
+
 // PDFVIEW: /read/<id>, the issue read in the site. The crawl reached it for the seeded PDF and, from
 // /news, for the issue's public copy; every such page carries no canary (the crawl's own check above),
 // says it is the public copy, names only its own same-origin file, and is cached as that file is.
@@ -338,8 +349,11 @@ test('PDFVIEW: every /read page the public reaches is the public copy: no canary
     const id = ids[i]!;
     expect(page.status, page.url).toBe(200);
     expect(page.headers['cache-control'], page.url).toBe(PUBLIC_CACHE);
-    expect(page.body, page.url).toContain(PUBLIC_COPY);
+    // W-LOOK3: the public copy's pill and its line, and never the members copy's.
+    expect(copyTag(page.body), page.url).toEqual({ classes: 'copy-tag', text: `${PUBLIC_TAG} ${PUBLIC_TAG_NOTE}` });
     expect(page.body, page.url).not.toContain(MEMBERS_COPY);
+    expect(page.body, page.url).not.toContain('copy-tag--members');
+    expect(page.body, page.url).not.toContain(MEMBERS_RULE.replace("'", '&#39;'));
     expect(page.body, page.url).toContain(`data-pdf="/documents/${id}.pdf"`);
     expect(page.body, page.url).toContain(`href="/documents/${id}.pdf?download=1"`);
     expect([...page.body.matchAll(/\/documents\/([0-9a-f-]{36})\.pdf/g)].map((m) => m[1]).filter((other) => other !== id), page.url).toEqual([]);
@@ -488,7 +502,9 @@ test('a member sees the members passage and the members article (the positive co
   // PDFVIEW: the members copy read in the site says so, and is never stored either.
   const read = await get(member, `/read/${fixture.ids['issueMembersPdf']}`);
   expect(read.status).toBe(200);
-  expect(read.body).toContain(`<p class="copy-notice copy-notice--members">${MEMBERS_COPY}</p>`);
+  // W-LOOK3: the members copy's pill and its line, and never the public copy's.
+  expect(copyTag(read.body)).toEqual({ classes: 'copy-tag copy-tag--members', text: `${MEMBERS_COPY} ${MEMBERS_RULE}` });
+  expect(read.body).not.toContain('class="copy-tag"');
   expect(read.body).not.toContain(PUBLIC_COPY.slice(0, 40));
   expect(read.headers['cache-control']).toBe('private, no-store');
   expect(read.headers['cdn-cache-control']).toBe('no-store');

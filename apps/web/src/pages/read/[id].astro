@@ -6,12 +6,12 @@
 // not have is the same 404 as a missing one. public/scripts/viewer.js draws it with pdf.js's core API
 // (the legacy build, for older phones and tablets); never pdf.js's viewer.html, and never an address
 // from the query. Open in another app hands the same file to the device's own viewer; Download asks
-// for it as an attachment; both sit below the issue (W-LOOK2). Without JavaScript the page says the
-// reader needs it, just above those two.
+// for it as an attachment; both are links in the bar on the frame's top edge (W-LOOK3, Ross's mockup).
+// Without JavaScript the bar keeps those two, and the frame says the reader needs it.
 import pdfjsUrl from 'pdfjs-dist/legacy/build/pdf.min.mjs?url';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import { PUBLIC_ONLY } from 'astro:env/server';
-import CopyNotice from '../../components/CopyNotice.astro';
+import CopyTag from '../../components/CopyTag.astro';
 import Icon from '../../components/Icon.astro';
 import Unavailable from '../../components/Unavailable.astro';
 import { liveData } from '../../data';
@@ -19,7 +19,6 @@ import Base from '../../layouts/Base.astro';
 import { attempt, markUnavailable } from '../../lib/api/page';
 import { membersSignInLink, readerFor } from '../../lib/auth/bearer';
 import { runtimeDeps } from '../../lib/auth/flow';
-import { MEMBERS_RULE } from '../../lib/document';
 import { NOT_READY_TEXT } from '../../lib/files';
 import { NEEDS_SCRIPT, readView } from '../../lib/reader';
 
@@ -53,37 +52,52 @@ const title = view?.kind === 'not_found' ? 'No such issue' : view?.kind === 'not
   {view?.kind === 'not_ready' && <p>{NOT_READY_TEXT}</p>}
   {ok && (
     <>
-      {ok.copy === 'members' ? <CopyNotice members /> : <CopyNotice signIn={signIn} />}
-      {ok.copy === 'members' && <p class="members-rule">{MEMBERS_RULE}</p>}
-      {/* W-LOOK2: one compact row on a phone, each control an icon over its short word; the spoken name
-          holds the word. Open in another app and Download sit below the issue, so the page gets the screen. */}
+      <CopyTag members={ok.copy === 'members'} signIn={signIn} />
+      {/* W-LOOK3, Ross's mockup: ONE rounded thin frame whose top edge is the bar. Download and Open in
+          another app are links, so the bar shows them without the script; the rest waits for it
+          (data-viewer-js). The page and zoom are pickers, a button over a list of buttons, never a native
+          select: WebKit's select breaks the site's CSP (public/scripts/viewer.js). Every control has a spoken name (aria-label, which starts with any word shown) and a
+          tooltip; Fit, Download and Open show their words where there is room, and icons alone on a phone (site.css). */}
       <section class="viewer" data-viewer data-pdf={ok.pdf} data-pdfjs={pdfjsUrl} data-worker={workerUrl} aria-labelledby="viewer-title">
         <h2 id="viewer-title" class="visually-hidden">The issue</h2>
-        <p class="notice" data-viewer-nojs>{NEEDS_SCRIPT}</p>
-        <div class="viewer-bar" data-viewer-bar hidden>
-          <div class="viewer-group" role="group" aria-label="Zoom">
-            <button type="button" class="vbtn" data-viewer-zoom-out aria-label="Zoom out"><Icon name="zoom-out" /><span class="vbtn__word">Out</span></button>
-            <output class="viewer-zoom" data-viewer-zoom>100&nbsp;%</output>
-            <button type="button" class="vbtn" data-viewer-zoom-in aria-label="Zoom in"><Icon name="zoom-in" /><span class="vbtn__word">In</span></button>
-            <button type="button" class="vbtn" data-viewer-fit data-fit="page" aria-label="Fit whole page"><span class="fit-icon fit-icon--page"><Icon name="fit-page" /></span><span class="fit-icon fit-icon--width"><Icon name="fit-width" /></span><span class="vbtn__word" data-viewer-fit-word>Whole</span></button>
+        <div class="viewer-bar" data-viewer-bar>
+          <div class="viewer-group" role="group" aria-label="Pages" data-viewer-js hidden>
+            <button type="button" class="vbtn" data-viewer-prev aria-label="Previous page" title="Previous page"><Icon name="back" /></button>
+            <div class="vpick">
+              <button type="button" class="vpick__btn" id="viewer-page" data-viewer-page aria-controls="viewer-page-list" title="Page">Page</button>
+              <div class="vpick__list" id="viewer-page-list" data-viewer-page-list role="group" aria-label="Choose a page" hidden></div>
+            </div>
+            <button type="button" class="vbtn" data-viewer-next aria-label="Next page" title="Next page"><Icon name="forward" /></button>
           </div>
-          <div class="viewer-group" role="group" aria-label="Pages">
-            <button type="button" class="vbtn" data-viewer-prev aria-label="Back a page"><Icon name="back" /><span class="vbtn__word">Back</span></button>
-            <form class="viewer-goto" data-viewer-goto>
-              <label class="vbtn__word" for="viewer-page">Page</label>
-              <input id="viewer-page" type="number" inputmode="numeric" min="1" value="1" aria-describedby="viewer-of" data-viewer-page />
-              <span class="viewer-of" id="viewer-of">of <span data-viewer-count></span></span>
-            </form>
-            <button type="button" class="vbtn" data-viewer-next aria-label="Next page"><Icon name="forward" /><span class="vbtn__word">Next</span></button>
+          <span class="viewer-sep" aria-hidden="true" data-viewer-js hidden></span>
+          <div class="viewer-group" role="group" aria-label="Zoom" data-viewer-js hidden>
+            <button type="button" class="vbtn vbtn--step" data-viewer-zoom-out aria-label="Zoom out" title="Zoom out"><Icon name="zoom-minus" /></button>
+            <div class="vpick">
+              <button type="button" class="vpick__btn" id="viewer-zoom" data-viewer-zoom aria-controls="viewer-zoom-list" title="Zoom">Zoom</button>
+              <div class="vpick__list" id="viewer-zoom-list" data-viewer-zoom-list role="group" aria-label="Choose a zoom" hidden></div>
+            </div>
+            <button type="button" class="vbtn vbtn--step" data-viewer-zoom-in aria-label="Zoom in" title="Zoom in"><Icon name="zoom-plus" /></button>
+          </div>
+          <span class="viewer-sep" aria-hidden="true" data-viewer-js hidden></span>
+          <div class="viewer-group" role="group" aria-label="Fit" data-viewer-js hidden>
+            <button type="button" class="vbtn vbtn--fit" data-viewer-fit-width aria-pressed="true" aria-label="Fit width" title="Fit width"><Icon name="fit-width" /><span class="vbtn__word">Fit width</span></button>
+            <button type="button" class="vbtn vbtn--fit vbtn--fit-page" data-viewer-fit-page aria-pressed="false" aria-label="Fit page" title="Fit page"><Icon name="fit-page" /><span class="vbtn__word">Fit page</span></button>
+          </div>
+          <span class="viewer-sep" aria-hidden="true" data-viewer-js hidden></span>
+          <div class="viewer-group">
+            <a class="vbtn" href={ok.download} aria-label="Download" title="Download"><Icon name="download" /><span class="vbtn__word">Download</span></a>
+          </div>
+          <span class="viewer-sep" aria-hidden="true"></span>
+          <div class="viewer-group">
+            <a class="vbtn" href={ok.pdf} target="_blank" rel="noopener" aria-label="Open in another app (opens the PDF file in a new tab, or in your PDF app)" title="Open in another app"><Icon name="external" /><span class="vbtn__word">Open in another app</span></a>
           </div>
         </div>
-        <p class="viewer-status" role="status" data-viewer-status></p>
-        <div class="viewer-pages" data-viewer-pages tabindex="0" role="region" aria-label="Pages of the issue" hidden></div>
+        <p class="notice viewer-nojs" data-viewer-nojs>{NEEDS_SCRIPT}</p>
+        <div class="viewer-body">
+          <p class="viewer-status" role="status" data-viewer-status></p>
+          <div class="viewer-pages" data-viewer-pages tabindex="0" role="region" aria-label="Pages of the issue" hidden></div>
+        </div>
       </section>
-      <p class="btns viewer-other">
-        <a class="button button--secondary" href={ok.pdf} target="_blank" rel="noopener"><Icon name="external" />Open in another app<span class="visually-hidden"> (opens the PDF file in a new tab, or in your PDF app)</span></a>
-        <a class="button button--secondary" href={ok.download}><Icon name="download" />Download</a>
-      </p>
       <script is:inline type="module" src="/scripts/viewer.js"></script>
     </>
   )}

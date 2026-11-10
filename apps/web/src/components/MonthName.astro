@@ -1,0 +1,16 @@
+---
+// A month beside the calendar's arrows (W-LOOK3): "October" where there is room, "Oct" on a phone
+// (site.css), the year never shown. The link's name starts with the word shown, then the rest is for the
+// ear only: "October 2026, previous month", or on a phone "Oct, previous month, October 2026" (WCAG 2.5.3).
+import { monthLabel } from '../lib/calendar';
+
+interface Props {
+  /** YYYY-MM */
+  month: string;
+  direction: 'previous' | 'next';
+}
+const { month, direction } = Astro.props;
+const full = monthLabel(month);
+const word = full.replace(/ \d{4}$/, '');
+---
+<span class="mname mname--long">{word}<span class="visually-hidden">{` ${month.slice(0, 4)}, ${direction} month`}</span></span><span class="mname mname--short">{word.slice(0, 3)}<span class="visually-hidden">{`, ${direction} month, ${full}`}</span></span>

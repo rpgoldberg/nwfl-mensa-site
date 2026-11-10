@@ -50,7 +50,7 @@ test('the site keeps nothing in the browser’s storage, even after a member rea
   await page.goto('/news');
   await signIn(page, 'member');
   await page.goto(`/read/${MEMBERS_ID}`);
-  await expect(page.locator('[data-viewer-count]')).toHaveText('2');
+  await expect(page.locator('[data-viewer-page-list] button')).toHaveCount(2);
   await page.goto('/account');
   const kept = await page.evaluate(async () => ({
     localStorage: localStorage.length,

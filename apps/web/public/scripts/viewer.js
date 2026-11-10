@@ -4,11 +4,14 @@
 // query, and nothing but a same-origin path is ever loaded. The browser fetches the file with the
 // reader's cookies, so the copy is whichever the site serves this reader.
 //
-// Accessibility first: every control is a visible button or the page box, 48 px, in the tab order, in
-// the page's own theme, each icon with its word; no gesture is needed (pinch and scroll still work, as
-// the browser's own). A computer opens at Fit page, a phone at Fit width. W-LOOK2: one compact row, so
-// one Fit control, which offers the fit the reader is not in (after a zoom, the one the device opened
-// at); its word and spoken name say which. Each page is a canvas for the eye
+// Accessibility first: every control is a visible button or select, 44 px at least, in the tab order, in
+// the page's own theme, each with a spoken name and a tooltip; no gesture is needed (pinch and scroll
+// still work, as the browser's own). W-LOOK3, after Ross's mockup: one slim row on the frame's top edge,
+// back, a page picker ("1 / 12") and next; zoom out, a zoom picker of the steps and zoom in; Fit width
+// and Fit page, the one in force pressed; then Download and Open in another app, which are plain links
+// and need no script. Every device opens at Fit width, so the page fills the frame. The pickers are a
+// button that opens a list of buttons, never a native select: WebKit raises a style-src-attr violation
+// for a select's own inner style under the site's CSP (no 'unsafe-inline'), and the CSP stays as it is. Each page is a canvas for the eye
 // (hidden from screen readers), pdf.js's text layer over it for screen readers and selection, and its
 // links (the copy's link annotations, and nothing else from the annotation layer: no forms, no files,
 // no scripts). Only two kinds of link are ever made: an /out/<id> goes to this site's leaving page in
@@ -31,8 +34,6 @@
 
 export const CSS_UNITS = 96 / 72;
 export const ZOOMS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
-/** Below the site's nav breakpoint: a phone, which opens at Fit width. */
-export const PHONE = '(max-width: 899px)';
 /** The most pixels one page's canvas may hold (a 4096 x 4096 square): phones refuse more. */
 export const MAX_PIXELS = 16_777_216;
 /** A page within a screen of the window is drawn; one further away is let go. */
@@ -66,27 +67,33 @@ const KEPT = /^(?:\/out\/[a-z2-7]{26}|#)$/;
 export const UNPINNED = 'viewer--unpinned';
 const EPSILON = 1e-6;
 
-/** The Fit control's word, and its spoken name, which contains the word (WCAG 2.5.3), for each fit it offers. */
-export const FIT = { page: { word: 'Whole', name: 'Fit whole page' }, width: { word: 'Width', name: 'Fit width' } };
+/**
+ * The zoom picker's choices: every step, and a fitted size that is no step in its place among them;
+ * and which is chosen.
+ *
+ * @param {number} scale
+ * @returns {{ options: { value: string, label: string }[], selected: string }}
+ */
+export function zoomOptions(scale) {
+  const step = ZOOMS.find((z) => Math.abs(z - scale) < EPSILON);
+  const values = step === undefined ? [...ZOOMS, scale].sort((a, b) => a - b) : ZOOMS;
+  return { options: values.map((z) => ({ value: String(z), label: percent(z) })), selected: String(step ?? scale) };
+}
 
 /**
- * The fit the Fit control offers: the other fit, or after a zoom the one the device opened at.
+ * The page picker's face, as Ross's mockup writes it.
  *
- * @param {'width' | 'page' | 'custom'} mode
- * @param {'width' | 'page'} home
- * @returns {'width' | 'page'}
+ * @param {number} n
+ * @param {number} count
  */
-export function fitOffer(mode, home) {
-  if (mode === 'custom') return home;
-  return mode === 'width' ? 'page' : 'width';
-}
+export const pageLabel = (n, count) => `${n} / ${count}`;
 
 /** @param {number} scale */
 export const zoomIn = (scale) => ZOOMS.find((z) => z > scale + EPSILON) ?? /** @type {number} */ (ZOOMS.at(-1));
 /** @param {number} scale */
 export const zoomOut = (scale) => [...ZOOMS].reverse().find((z) => z < scale - EPSILON) ?? /** @type {number} */ (ZOOMS[0]);
 /** @param {number} scale */
-export const percent = (scale) => `${Math.round(scale * 100)}\u00a0%`;
+export const percent = (scale) => `${Math.round(scale * 100)}%`;
 
 /**
  * The zoom at which a page fits the room: its width, or the whole page; within the zoom steps' ends.
@@ -195,7 +202,6 @@ export function sameOriginPath(url, origin) {
  *
  * @typedef {{ querySelector(selector: string): any, createElement(tag: string): any, activeElement: unknown }} ViewerDocument
  * @typedef {{ devicePixelRatio: number, innerHeight: number, location: { hash: string, origin: string },
- *   matchMedia(query: string): { matches: boolean },
  *   ResizeObserver?: new (callback: () => void) => { observe(el: any): void },
  *   IntersectionObserver: new (callback: (entries: { target: any, isIntersecting: boolean }[]) => void, options: { rootMargin: string }) => { observe(el: any): void },
  *   requestAnimationFrame(fn: () => void): unknown, scrollBy(x: number, y: number): void,
@@ -220,7 +226,7 @@ export async function wireViewer(doc, win, pdfjs) {
   if (!root) return undefined;
   /** @param {string} name */
   const part = (name) => /** @type {any} */ (root.querySelector(`[data-viewer-${name}]`));
-  const names = ['nojs', 'bar', 'zoom-out', 'zoom', 'zoom-in', 'fit', 'fit-word', 'prev', 'goto', 'page', 'count', 'next', 'status', 'pages'];
+  const names = ['nojs', 'bar', 'zoom-out', 'zoom', 'zoom-list', 'zoom-in', 'fit-width', 'fit-page', 'prev', 'page', 'page-list', 'next', 'status', 'pages'];
   const ui = Object.fromEntries(names.map((name) => [name, part(name)]));
   if (names.some((name) => !ui[name])) return undefined;
   const origin = win.location.origin;
@@ -260,17 +266,80 @@ export async function wireViewer(doc, win, pdfjs) {
   }
   const count = /** @type {number} */ (pdf.numPages);
   const bar = ui['bar'];
-  bar.hidden = false;
+  for (const el of /** @type {NodeListOf<HTMLElement>} */ (root.querySelectorAll('[data-viewer-js]'))) el.hidden = false;
   ui['pages'].hidden = false;
-  ui['count'].textContent = String(count);
-  ui['page'].setAttribute('max', String(count));
-  // As wide as the longest page number (two digits at least), so the bar keeps to one row on a phone.
-  ui['page'].style.setProperty('--digits', String(Math.max(2, String(count).length)));
+  /**
+   * A picker: its button opens and closes its list; a choice in the list acts, closes it and gives the
+   * focus back to the button.
+   *
+   * @param {string} name
+   * @param {(value: string) => void} act
+   */
+  const picker = (name, act) => {
+    const button = ui[name];
+    const list = ui[`${name}-list`];
+    /** @param {boolean} open */
+    const set = (open) => {
+      list.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+    };
+    /** @param {string} value @param {string} label */
+    const choice = (value, label) => {
+      const el = doc.createElement('button');
+      el.type = 'button';
+      el.className = 'vpick__choice';
+      el.value = value;
+      el.textContent = label;
+      el.addEventListener('click', () => {
+        set(false);
+        button.focus();
+        act(value);
+      });
+      return el;
+    };
+    /** @param {string} value */
+    const mark = (value) => {
+      for (const el of list.children) el.setAttribute('aria-current', String(el.value === value));
+    };
+    button.addEventListener('click', () => {
+      const open = list.hidden;
+      for (const other of pickers) other.set(false);
+      set(open);
+      if (open) [...list.children].find((el) => el.getAttribute('aria-current') === 'true')?.focus();
+    });
+    set(false);
+    return { button, list, set, choice, mark };
+  };
+  /** @type {ReturnType<typeof picker>[]} */
+  const pickers = [];
+  const pagePick = picker('page', (value) => {
+    const n = clampPage(value, count);
+    if (n !== undefined) goTo(n);
+  });
+  const zoomPick = picker('zoom', (value) => {
+    const chosen = ZOOMS.find((z) => String(z) === value);
+    if (chosen === undefined) return;
+    mode = 'custom';
+    rescale(chosen);
+  });
+  pickers.push(pagePick, zoomPick);
+  ui['page-list'].replaceChildren(...Array.from({ length: count }, (_, i) => pagePick.choice(String(i + 1), `Page ${i + 1}`)));
+  root.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+    if (event.key !== 'Escape') return;
+    for (const p of pickers) {
+      if (p.list.hidden) continue;
+      p.set(false);
+      p.button.focus();
+    }
+  });
+  win.addEventListener('pointerdown', (/** @type {Event} */ event) => {
+    for (const p of pickers) if (!p.list.hidden && event.target !== p.button && !p.list.contains(event.target)) p.set(false);
+  });
 
-  /** @type {'width' | 'page'} */
-  const home = win.matchMedia(PHONE).matches ? 'width' : 'page';
   /** @type {'width' | 'page' | 'custom'} */
-  let mode = home;
+  let mode = 'width';
+  /** The scale the zoom select lists, so its choices are made again only when the scale changes. */
+  let listed = NaN;
   let scale = 1;
   let current = 1;
   /** Where the reader is: a page, and how far down it the bar's edge is. */
@@ -302,15 +371,24 @@ export async function wireViewer(doc, win, pdfjs) {
     byEl.set(el, page);
   }
 
-  /** @param {{ box?: boolean }} [options] box: write the page box even while the reader is in it */
-  const show = ({ box = false } = {}) => {
-    ui['zoom'].textContent = percent(scale);
-    // Never under the reader's fingers: a number being typed stays until it is entered.
-    if (box || doc.activeElement !== ui['page']) ui['page'].value = String(current);
-    const offer = fitOffer(mode, home);
-    ui['fit'].dataset['fit'] = offer;
-    ui['fit'].setAttribute('aria-label', FIT[offer].name);
-    ui['fit-word'].textContent = FIT[offer].word;
+  const show = () => {
+    if (scale !== listed) {
+      listed = scale;
+      const { options, selected } = zoomOptions(scale);
+      ui['zoom-list'].replaceChildren(...options.map((o) => zoomPick.choice(o.value, o.label)));
+      zoomPick.mark(selected);
+      ui['zoom'].value = selected;
+      ui['zoom'].textContent = percent(scale);
+      ui['zoom'].setAttribute('aria-label', `Zoom ${percent(scale)}`);
+    }
+    if (ui['page'].value !== String(current)) {
+      ui['page'].value = String(current);
+      ui['page'].textContent = pageLabel(current, count);
+      ui['page'].setAttribute('aria-label', `Page ${pageLabel(current, count)}`);
+      pagePick.mark(String(current));
+    }
+    ui['fit-width'].setAttribute('aria-pressed', String(mode === 'width'));
+    ui['fit-page'].setAttribute('aria-pressed', String(mode === 'page'));
     ui['zoom-out'].setAttribute('aria-disabled', String(scale <= /** @type {number} */ (ZOOMS[0]) + EPSILON));
     ui['zoom-in'].setAttribute('aria-disabled', String(scale >= /** @type {number} */ (ZOOMS.at(-1)) - EPSILON));
     ui['prev'].setAttribute('aria-disabled', String(current <= 1));
@@ -479,7 +557,7 @@ export async function wireViewer(doc, win, pdfjs) {
     current = n;
     anchor = { n, frac: 0 };
     /** @type {Page} */ (pages[n - 1]).el.scrollIntoView({ block: 'start' });
-    show({ box: true });
+    show();
     say(`Page ${n} of ${count}`);
   };
 
@@ -504,22 +582,18 @@ export async function wireViewer(doc, win, pdfjs) {
     mode = 'custom';
     rescale(zoomOut(scale));
   });
-  onPress(ui['fit'], () => {
-    mode = fitOffer(mode, home);
+  onPress(ui['fit-width'], () => {
+    mode = 'width';
     fit();
   });
+  onPress(ui['fit-page'], () => {
+    mode = 'page';
+    fit();
+  });
+
   onPress(ui['prev'], () => goTo(current - 1));
   onPress(ui['next'], () => goTo(current + 1));
-  const typed = () => {
-    const n = clampPage(ui['page'].value, count);
-    if (n === undefined) show({ box: true });
-    else goTo(n);
-  };
-  ui['goto'].addEventListener('submit', (/** @type {Event} */ event) => {
-    event.preventDefault();
-    typed();
-  });
-  ui['page'].addEventListener('change', typed);
+
 
   let framed = false;
   win.addEventListener(

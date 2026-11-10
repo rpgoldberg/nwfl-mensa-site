@@ -573,6 +573,38 @@ main:focus:not(:focus-visible) { outline: none; }
 .crumbs a { display: inline-flex; align-items: center; min-height: 48px; }
 .crumbs [aria-current="page"] { color: var(--muted); }
 
+/* W-LOOK3: one slim line where the Home crumb is the way back (the reader, Events, News): Home with
+   its icon (a back chevron on a phone, as Ross's mockup has it), and no separate Back link. */
+.crumbs--slim { padding-top: 4px; }
+.crumbs--slim li, .crumbs--slim a { min-height: 44px; }
+.crumb-home { gap: 6px; min-width: 44px; }
+.crumb-icon { display: inline-flex; }
+.crumb-icon svg { width: 20px; height: 20px; }
+.crumb-icon--back { display: none; }
+@media (max-width: 899.98px) {
+  .crumb-icon--home { display: none; }
+  .crumb-icon--back { display: inline-flex; }
+}
+.crumbs--slim + main > h1:first-child { margin-top: var(--space-2); }
+
+/* W-LOOK3: which copy /read shows: a pill with an icon, a thin divider, and one short line. */
+.copy-tag { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: 0; }
+.copy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  color: var(--ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-weight: 700;
+}
+.copy-pill svg { width: 1.25rem; height: 1.25rem; flex: none; }
+.copy-tag--members .copy-pill { background: var(--members-bg); border-color: var(--members); }
+.copy-note { padding-left: var(--space-3); border-left: 1px solid var(--line); }
+.copy-note a { font-weight: 700; }
+
 /* Forms: plain HTML, large and labelled. */
 .search-form { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: end; }
 .search-form label { flex-basis: 100%; font-weight: 700; }
@@ -915,7 +947,38 @@ html[data-size="175"] .size-max-note { display: block; }
 
 main > .calendar { max-width: none; }
 .calendar { container: calendar / inline-size; display: grid; gap: var(--space-4); }
-.month-nav { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+/* W-LOOK3: the month arrows in the grid's caption row, one slim row on the grid's frame. */
+.monthbox { border: 1px solid var(--line); border-radius: 12px; overflow: clip; background: var(--surface); }
+.month-head { background: var(--surface); border-bottom: 1px solid var(--line-soft); }
+.month-nav { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-1); padding: 0 var(--space-1); }
+/* A phone: "‹ Oct" and "Dec ›", each link named in full (events.astro); the month between them may
+   wrap, never run into them. */
+.mname--short { display: none; }
+@media (max-width: 599.98px) {
+  .mname--long { display: none; }
+  .mname--short { display: inline; }
+}
+/* Too narrow even for "Oct" beside the month (a narrow phone at a large text size): the arrows alone,
+   each still named in full; the measure is in the row's own text size, so it follows the reader's. */
+.month-head { container: mhead / inline-size; }
+@container mhead (width < 15em) {
+  .mname--short { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .mnav { justify-content: center; padding: 0; }
+}
+.mnav { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; min-width: 44px; padding: 0 var(--space-2); font-weight: 700; border-radius: 8px; }
+.mnav svg { width: 1.25rem; height: 1.25rem; flex: none; }
+.mnav--prev { justify-self: start; }
+.mnav--next { justify-self: end; }
+.month-title { margin: 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0 var(--space-2); text-align: center; font-family: var(--font-head); font-weight: 600; font-size: min(var(--fs-h3), 6vw); }
+.month-title a { font-family: var(--font-body); font-size: var(--fs-small); font-weight: 700; display: inline-flex; align-items: center; min-height: 44px; }
+/* The subscription, one disclosure under the grid. */
+.addcal { max-width: var(--measure); }
+.addcal > summary { list-style: none; cursor: pointer; }
+.addcal > summary::-webkit-details-marker { display: none; }
+.addcal > summary::after { content: ""; width: 0.5rem; height: 0.5rem; margin: 0 0.25rem 0.25rem 0.5rem; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.addcal[open] > summary::after { transform: rotate(-135deg); margin-bottom: -0.25rem; }
+.addcal__panel { display: grid; gap: var(--space-3); margin-top: var(--space-2); padding: var(--space-4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.addcal__panel > * { margin: 0; }
 .calgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); align-items: start; }
 .calgrid h2 { margin-top: 0; }
 /* W-LOOK2: the grid at every width. Compact where seven columns are narrow (a
@@ -925,12 +988,11 @@ main > .calendar { max-width: none; }
    lists its events' times and titles, and from 64rem the list sits beside it. */
 .monthbox { display: block; }
 @container calendar (max-width: 45.99rem) {
-  .monthbox { margin-inline: calc(-1 * var(--space-4)); }
-  .month caption { padding-inline: var(--space-4); }
+  .monthbox { margin-inline: calc(-1 * var(--space-4)); border-inline: 0; border-radius: 0; }
 }
 /* The month, then the subscription card, then the list; from 64rem the list is a column beside the
    other two. */
-.calgrid .card { margin: 0; }
+.calgrid .addcal { margin: 0; }
 @container calendar (min-width: 64rem) {
   .calgrid {
     grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
@@ -938,11 +1000,10 @@ main > .calendar { max-width: none; }
     grid-template-areas: "month agenda" "subscribe agenda";
   }
   .monthbox { grid-area: month; }
-  .calgrid > .card { grid-area: subscribe; }
+  .calgrid > .addcal { grid-area: subscribe; }
   .agenda { grid-area: agenda; }
 }
 .month { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--surface); }
-.month caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); padding-bottom: var(--space-2); }
 .month th { padding: var(--space-1) 0; background: var(--bg); border: var(--border) solid var(--line-soft); font-weight: 700; font-size: var(--fs-small); }
 .month .d3 { display: none; }
 @container calendar (min-width: 30rem) { .month .d2 { display: none; } .month .d3 { display: inline; } }
@@ -1077,121 +1138,211 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 .out-count { margin: 0; font-weight: 700; font-size: 1.25rem; }
 .out-stop { min-width: 8rem; }
 
-/* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). W-LOOK2: the bar is one
-   compact row, sized like the chrome (px), so the page gets the screen: each control an icon over a
-   short word, 48 px at least; on a phone it runs edge to edge. It grows only at the two largest text
-   sizes, where it may take a second row. It stays at the top while reading only where it leaves room:
-   while it takes at most a third of the window. The script measures it as the reader opens the issue,
-   turns the phone, resizes the window or picks another text size, and otherwise sets
-   .viewer--unpinned, so the bar scrolls away with the page and a page gone to stops at the window's
-   top (--viewer-bar 0). The media query does the same without waiting for the script on a phone held
-   sideways at the two largest sizes. Open in another app and Download are below the issue. */
-.viewer-other { margin: var(--space-4) 0; }
-.viewer { margin: var(--space-4) 0; }
+/* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). W-LOOK3, after Ross's
+   mockup: ONE rounded, thin-bordered frame whose top edge is the bar, a single slim row sized like the
+   chrome (px): back, the page picker and next; zoom out, the zoom picker and zoom in; Fit width and Fit
+   page, the one in force pressed; Download; Open in another app. Every target is 44 px at least (WCAG
+   2.5.5), drawn small inside it. The words beside Fit, Download and Open show where the frame has room
+   for them; elsewhere the icons stand alone, with their spoken names and tooltips. Where even the icons
+   do not fit one row (a phone), zoom out and in go, as the zoom picker does both, and below 400 px Fit
+   page, which on a phone held upright is the same size as Fit width (the width is what limits it). Only at the two largest text sizes may the
+   bar take a second row. It stays at the top while reading only while it takes at most a third of the
+   window; otherwise the script sets .viewer--unpinned and it scrolls away with the page (--viewer-bar 0).
+   The page fills the frame's width at Fit width, the default, straight under the bar. */
+main > .viewer { max-width: none; }
+.viewer {
+  container: vbar / inline-size;
+  margin: var(--space-3) 0 var(--space-4);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+/* A phone: the frame nearly edge to edge, so the row fits. */
+@media (max-width: 599.98px) {
+  .viewer { margin-inline: calc(4px - var(--space-4)); }
+}
 .viewer-bar {
   position: sticky;
   top: 0;
   z-index: 2;
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
-  align-items: stretch;
-  gap: 4px;
-  padding: 4px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 2px;
+  padding: 2px 4px;
   font-size: 14px;
   line-height: 1.2;
   background: var(--surface);
-  border: var(--border) solid var(--line-soft);
-  border-radius: var(--radius);
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: 11px 11px 0 0;
 }
 html[data-size="140"] .viewer-bar { font-size: 16px; }
 html[data-size="175"] .viewer-bar { font-size: 18px; }
-@media (max-width: 599.98px) {
-  .viewer-bar { margin-inline: calc(-1 * var(--space-4)); border-inline: 0; border-radius: 0; }
-}
-/* Wider than a phone there is room: the words a step larger, and more space between the groups. */
 @media (min-width: 600px) {
-  .viewer-bar { font-size: 16px; column-gap: 24px; }
-  html[data-size="140"] .viewer-bar { font-size: 18px; }
-  html[data-size="175"] .viewer-bar { font-size: 20px; }
-  .vbtn { padding: 4px 8px; }
+  .viewer-bar { font-size: 15px; padding-inline: 8px; }
+  html[data-size="140"] .viewer-bar { font-size: 17px; }
+  html[data-size="175"] .viewer-bar { font-size: 19px; }
 }
-.viewer-bar[hidden], .viewer-pages[hidden] { display: none; }
 @media (max-width: 959px) and (max-height: 499px) {
   html[data-size="140"] .viewer-bar, html[data-size="175"] .viewer-bar { position: static; }
-  html[data-size="140"] .viewer-page, html[data-size="175"] .viewer-page { scroll-margin-top: var(--space-2); }
+  html[data-size="140"] .viewer-page, html[data-size="175"] .viewer-page { scroll-margin-top: 0; }
 }
-.viewer--unpinned .viewer-bar { position: static; }
-.viewer-group { display: flex; align-items: stretch; gap: 2px; }
+.viewer--unpinned .viewer-bar { position: static; border-radius: 11px 11px 0 0; }
+.viewer-bar [hidden] { display: none; }
+.viewer-group { display: flex; align-items: center; gap: 2px; }
+.viewer-sep { flex: none; width: 1px; height: 24px; background: var(--line); }
 .vbtn {
   display: inline-flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  min-width: 48px;
-  min-height: 48px;
-  padding: 4px;
-  color: var(--accent);
-  background: var(--surface);
-  border: var(--border) solid var(--accent);
-  border-radius: var(--radius);
+  gap: 6px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
   font: inherit;
   font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
 }
-.vbtn svg { width: 24px; height: 24px; flex: none; }
-.vbtn[data-viewer-fit] { padding-inline: 2px; }
-.vbtn__word { white-space: nowrap; }
-.vbtn[aria-disabled="true"] { border-style: dashed; cursor: default; }
-/* The Fit control shows the icon of the fit it offers. */
-.fit-icon { display: none; }
-.vbtn[data-fit="page"] .fit-icon--page, .vbtn[data-fit="width"] .fit-icon--width { display: block; }
-.viewer-zoom { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; min-width: 2.6em; font-weight: 700; white-space: nowrap; }
-/* The page box: the number and "of 12" on top, its word under them, as the buttons have. */
-.viewer-goto {
-  display: grid;
-  grid-template-areas: "box of" "word word";
-  align-items: center;
-  justify-items: center;
-  column-gap: 2px;
-  margin: 0;
-}
-.viewer-goto label { grid-area: word; font-weight: 700; }
-.viewer-goto input {
-  grid-area: box;
-  width: max(48px, calc(var(--digits, 2) * 1ch + 14px));
-  min-height: 48px;
-  padding: 0 4px;
-  font-size: 18px;
-  text-align: center;
+.vbtn svg { width: 22px; height: 22px; flex: none; }
+.vbtn:hover { background: var(--accent-soft); }
+.vbtn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.vbtn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.vbtn[aria-disabled="true"]:hover { background: transparent; }
+.vbtn__word { display: none; }
+/* The page and zoom pickers, drawn as the mockup's dropdowns: a button with a chevron over a list of
+   buttons (never a native select, which WebKit cannot draw under the site's CSP). */
+.vpick { position: relative; display: inline-flex; }
+.vpick__btn {
+  position: relative;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 20px 0 6px;
   color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.vpick__btn:hover { background: var(--accent-soft); }
+#viewer-page { background: var(--bg); }
+.vpick__btn::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -5px;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.vpick__btn[aria-expanded="true"]::after { transform: rotate(-135deg); margin-top: -1px; }
+.vpick__list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 3;
+  display: grid;
+  min-width: max(100%, 7.5em);
+  max-height: min(60vh, 22rem);
+  overflow-y: auto;
+  padding: 4px;
   background: var(--surface);
-  border: var(--border) solid var(--line);
-  border-radius: var(--radius);
-  appearance: textfield;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
 }
-.viewer-goto input::-webkit-inner-spin-button, .viewer-goto input::-webkit-outer-spin-button { appearance: none; margin: 0; }
-html[data-size="140"] .viewer-goto input { font-size: 20px; }
-html[data-size="175"] .viewer-goto input { font-size: 22px; }
-.viewer-of { grid-area: of; white-space: nowrap; }
-/* The narrowest phones (360 px): seven 48 px targets and the page number do not fit one row with the
-   usual gaps, so the gaps and padding shrink, never the targets, and the bar stays one row at the
-   default text size. At the larger sizes it may take a second row, as above. */
-@media (max-width: 379.98px) {
-  .viewer-bar { gap: 2px; padding: 2px; }
-  .viewer-group { gap: 1px; }
-  .viewer-zoom { min-width: 2.2em; }
-  .viewer-goto { column-gap: 1px; }
+.vpick__list[hidden] { display: none; }
+.vpick__choice {
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.viewer-status { min-height: 1.6em; margin: var(--space-2) 0; }
+.vpick__choice:hover { background: var(--accent-soft); }
+.vpick__choice[aria-current="true"] { background: var(--accent); color: var(--on-accent); }
+@media (forced-colors: active) {
+  .vpick__choice[aria-current="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
+/* Room for the words (Ross's mockup, a computer): beside Fit, Download and Open. */
+@container vbar (width >= 900px) {
+  .vbtn__word { display: inline; }
+  .vbtn--fit, .viewer-group > a.vbtn { padding: 0 10px; }
+}
+@container vbar (width >= 900px) and (width < 1000px) {
+  html[data-size="140"] .vbtn__word, html[data-size="175"] .vbtn__word { display: none; }
+  html[data-size="140"] .vbtn--fit, html[data-size="140"] .viewer-group > a.vbtn, html[data-size="175"] .vbtn--fit, html[data-size="175"] .viewer-group > a.vbtn { padding: 0; }
+}
+@container vbar (width >= 1000px) and (width < 1100px) {
+  html[data-size="175"] .vbtn__word { display: none; }
+  html[data-size="175"] .vbtn--fit, html[data-size="175"] .viewer-group > a.vbtn { padding: 0; }
+}
+/* A phone: zoom out and in go (the zoom picker does both); on the narrowest, Fit page too. */
+@container vbar (width < 470px) {
+  .vbtn--step { display: none; }
+  .viewer-bar { gap: 0; padding-inline: 2px; }
+  .viewer-group { gap: 0; }
+}
+@container vbar (width < 400px) {
+  .vbtn--fit-page { display: none; }
+}
+/* The narrowest phones (360 px): the pickers a step smaller and the dividers gone, never the targets. */
+@container vbar (width < 372px) {
+  .viewer-sep { display: none; }
+  .vpick__btn { font-size: 13px; padding: 0 15px 0 4px; }
+  .vpick__btn::after { right: 5px; }
+  /* At the two largest sizes the pickers keep the reader's size, and the bar may take a second row. */
+  html[data-size="140"] .vpick__btn, html[data-size="175"] .vpick__btn { font-size: inherit; }
+}
+@media (forced-colors: active) {
+  .vbtn[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .viewer-sep { background: CanvasText; }
+}
+.viewer-nojs { margin: var(--space-3); }
+.viewer-nojs[hidden] { display: none; }
+.viewer-body { position: relative; }
+.viewer-status { margin: 0; padding: var(--space-2) var(--space-3); }
+.viewer-status:empty { padding: 0; }
+/* While the pages show, a word such as "Loading page 1" floats over them, so nothing moves. */
+.viewer-body:has(> .viewer-pages:not([hidden])) > .viewer-status {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+  padding: 0;
+}
+.viewer-body:has(> .viewer-pages:not([hidden])) > .viewer-status:not(:empty) {
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
 .viewer-pages {
   display: grid;
   justify-items: center;
-  gap: var(--space-4);
+  gap: 8px;
   overflow-x: auto;
-  padding: var(--space-2) 0;
+  border-radius: 0 0 11px 11px;
 }
+.viewer-pages[hidden] { display: none; }
 .viewer-pages:focus-visible { outline: var(--focus-width) solid var(--focus); }
 /* A page: white paper whatever the theme; its canvas, text and link layers stacked. pdf.js sizes the
    layers from --scale-factor (set per page); 1 px rounding as its own viewer uses. */
@@ -1204,7 +1355,7 @@ html[data-size="175"] .viewer-goto input { font-size: 22px; }
   justify-self: center;
   background: #ffffff;
   box-shadow: 0 0 0 1px var(--line-soft);
-  scroll-margin-top: calc(var(--viewer-bar, 0px) + var(--space-2));
+  scroll-margin-top: var(--viewer-bar, 0px);
 }
 .viewer-layer, .viewer-layer canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .viewer-layer canvas { display: block; }

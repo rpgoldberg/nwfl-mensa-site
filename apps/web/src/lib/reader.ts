@@ -15,6 +15,9 @@ export const PUBLIC_COPY = 'Public copy: some personal details are hidden for pr
 /** A member's view, on an issue the API gave this reader as a public copy alone: its own short line, in its card or row. */
 export const PUBLIC_COPY_ONLY = 'Public copy only';
 export const MEMBERS_COPY = 'Members copy';
+/** W-LOOK3: on /read, the public copy's pill, and the short line beside it ("sign in" its link where sign-in works). */
+export const PUBLIC_TAG = 'Public copy';
+export const PUBLIC_TAG_NOTE = 'Members can sign in for the full issue';
 export const NEEDS_SCRIPT = 'Reading the issue on this page needs JavaScript, which is off or blocked. You can still open it in another app, or download it.';
 
 const FILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

@@ -2,12 +2,14 @@
 // Events, the calendar (R4), on request: public events only. This month as a
 // grid and what is coming up as a list, or one month (?month=YYYY-MM) as both;
 // the grid, then the subscription card, then the list (W-LOOK2: a phone sees the calendar first), and
+// W-LOOK3: the month arrows sit in the grid's caption row, and the subscription is one disclosure; and
 // each event's page. With no API (the canary), or none in the range, it says that no events are
 // listed yet, and who to ask.
 import EmptyEvents from '../components/EmptyEvents.astro';
 import EventList from '../components/EventList.astro';
 import Icon from '../components/Icon.astro';
 import MonthGrid from '../components/MonthGrid.astro';
+import MonthName from '../components/MonthName.astro';
 import SubscribeCard from '../components/SubscribeCard.astro';
 import Unavailable from '../components/Unavailable.astro';
 import { liveData } from '../data';
@@ -40,19 +42,22 @@ const president = roster?.ok ? roster.value.find((o) => o.slug === 'president' &
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
-  <p class="lead">{p.description}</p>
+  <p class="lead">{p.description} All times are Central.</p>
   {live ? (
     <>
-      <p>All times are Central. Choose an event for the place and who to ask.</p>
       {loaded && !loaded.ok ? <><SubscribeCard feedUrl={feedUrl} /><Unavailable what="The calendar" /></> : (
         <div class="calendar">
-          <nav class="month-nav" aria-label="Months">
-            <a class="hbtn" href={`/events?month=${previous}`}><Icon name="back" />{monthLabel(previous)}</a>
-            {!range.current && <a class="hbtn" href="/events">This month</a>}
-            <a class="hbtn" href={`/events?month=${next}`}>{monthLabel(next)}<Icon name="forward" /></a>
-          </nav>
           <div class="calgrid">
             <section class="monthbox" aria-label={`${label}, as a grid`}>
+              {/* The grid's caption row: "‹ October" | the month | "December ›". The table's own caption
+                  names it for a screen reader, so the month here is for the eye only. */}
+              <div class="month-head">
+                <nav class="month-nav" aria-label="Months">
+                  <a class="mnav mnav--prev" href={`/events?month=${previous}`}><Icon name="back" /><MonthName month={previous} direction="previous" /></a>
+                  <p class="month-title"><span aria-hidden="true">{label}</span>{!range.current && <a href="/events">This month</a>}</p>
+                  <a class="mnav mnav--next" href={`/events?month=${next}`}><MonthName month={next} direction="next" /><Icon name="forward" /></a>
+                </nav>
+              </div>
               <MonthGrid caption={label} weeks={monthGrid(range.month, events, today)} listed={listedDays} />
             </section>
             <SubscribeCard feedUrl={feedUrl} />
