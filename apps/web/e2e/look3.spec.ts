@@ -289,8 +289,10 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
 
 // W-LOOK3 fix (the coordinator's review): at 390 px "November 2026" ran into "December". On a phone the
 // arrows carry short month names ("Oct"), the whole month still in each link's name.
-for (const viewport of [{ width: 360, height: 780 }, PHONE]) {
-  for (const size of [100, 140]) {
+// The challenger's review: at 360 px and 175 % text the short names still met the month, so where the
+// row is too narrow for them the arrows stand alone, each still named in full.
+for (const viewport of [{ width: 320, height: 640 }, { width: 360, height: 780 }, PHONE]) {
+  for (const size of [100, 140, 175]) {
     test.describe(`events caption row at ${viewport.width} x ${viewport.height}, ${size} % text`, () => {
       test.use({ viewport });
       test('the arrows and the month never overlap, nothing scrolls sideways, and each arrow keeps its month in its name', async ({ page, context, baseURL }) => {
@@ -317,7 +319,9 @@ for (const viewport of [{ width: 360, height: 780 }, PHONE]) {
           for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.parentElement!.getBoundingClientRect().width > 1) text += n.textContent;
           return text.trim();
         });
-        expect(shown).toMatch(/^[A-Z][a-z]{2}$/);
+        // Three letters, or the arrow alone where even those do not fit.
+        expect(shown).toMatch(/^([A-Z][a-z]{2})?$/);
+        if (size === 100) expect(shown).not.toBe('');
         expect(await sideways(page)).toBeLessThanOrEqual(0);
       });
     });
