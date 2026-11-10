@@ -28,7 +28,7 @@ import {
   zoomOptions,
   zoomOut,
 } from '../public/scripts/viewer.js';
-import { FakeEl, FakeObserver, FakeResizeObserver, FakeWin, chosen, fakePdfjs, viewerPage } from './viewer-fakes';
+import { FakeEl, FakeObserver, FakeResizeObserver, FakeWin, chosen, fakePdfjs, pick, viewerPage } from './viewer-fakes';
 
 const PAGE = { width: 612 * CSS_UNITS, height: 792 * CSS_UNITS };
 const ID = 'outwebaaaaaaaaaaaaaaaaaaaa';
@@ -224,14 +224,18 @@ describe('wireViewer', () => {
     expect(parts['nojs']!.hidden).toBe(true);
     expect(parts['js']!.hidden).toBe(false);
     expect(parts['pages']!.hidden).toBe(false);
-    // W-LOOK3: the page is a select, "1 / 3" and so on.
-    expect(parts['page']!.children.map((o) => [o.value, o.textContent])).toEqual([
-      ['1', '1 / 3'],
-      ['2', '2 / 3'],
-      ['3', '3 / 3'],
+    // W-LOOK3: the page is a picker, "1 / 3", whose list holds a button for each page.
+    expect(parts['page-list']!.children.map((o) => [o.value, o.textContent])).toEqual([
+      ['1', 'Page 1'],
+      ['2', 'Page 2'],
+      ['3', 'Page 3'],
     ]);
+    expect(parts['page-list']!.children.map((o) => o.getAttribute('aria-current'))).toEqual(['true', 'false', 'false']);
     expect(parts['page']!.value).toBe('1');
     expect(chosen(parts['page'])).toBe('1 / 3');
+    // Its spoken name begins with its word and holds what it shows.
+    expect(parts['page']!.getAttribute('aria-label')).toBe('Page 1 / 3');
+    expect(parts['zoom']!.getAttribute('aria-label')).toBe(`Zoom ${chosen(parts['zoom'])}`);
     expect(pages.map((p) => p.id)).toEqual(['page-1', 'page-2', 'page-3']);
     expect(pages.map((p) => p.querySelector('h2')?.textContent)).toEqual(['Page 1', 'Page 2', 'Page 3']);
     expect(parts['status']!.textContent).toBe('');
@@ -322,25 +326,29 @@ describe('wireViewer', () => {
   });
 
   // W-LOOK3: the zoom select, as Ross's mockup has it, beside the steps.
-  it('zooms to the step chosen in the zoom select, and ignores a value that is no step', async () => {
+  it('zooms to the step chosen in the zoom picker, and a choice of the size it is at changes nothing', async () => {
     const { parts, pages } = await open();
     const choose = async (value: string) => {
-      parts['zoom']!.value = value;
-      parts['zoom']!.dispatchEvent(new Event('change'));
+      parts['zoom']!.click();
+      pick(parts['zoom-list'], value);
       await flush();
     };
     const fitted = parts['zoom']!.value;
-    expect(parts['zoom']!.children.map((o) => o.textContent)).toContain(percent(600 / PAGE.width));
+    expect(parts['zoom-list']!.children.map((o) => o.textContent)).toContain(percent(600 / PAGE.width));
     await choose('2');
     expect(chosen(parts['zoom'])).toBe('200%');
+    expect(parts['zoom-list']!.hidden).toBe(true);
+    expect(parts['zoom']!.focused).toBe(true);
     expect(pages[0]!.style.width).toBe(`${PAGE.width * 2}px`);
     expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('false');
-    // At a step, no other size is listed.
-    expect(parts['zoom']!.children.map((o) => o.value)).toEqual(ZOOMS.map(String));
+    // At a step, no other size is listed, and the step it is at is marked.
+    expect(parts['zoom-list']!.children.map((o) => o.value)).toEqual(ZOOMS.map(String));
+    expect(parts['zoom-list']!.children.filter((o) => o.getAttribute('aria-current') === 'true').map((o) => o.value)).toEqual(['2']);
+    await press(parts['fit-width']);
+    expect(parts['zoom']!.value).toBe(fitted);
     await choose(fitted);
-    expect(chosen(parts['zoom'])).toBe('200%');
-    await choose('x');
-    expect(chosen(parts['zoom'])).toBe('200%');
+    expect(parts['zoom']!.value).toBe(fitted);
+    expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('keeps the place being read when the size changes', async () => {
@@ -465,37 +473,56 @@ describe('wireViewer', () => {
     expect(parts['page']!.value).toBe('1');
   });
 
-  it('goes to the page chosen in the page select, the nearest when out of range, and puts back a value that is no page', async () => {
+  it('goes to the page chosen in the page picker, and marks it', async () => {
     const { parts, pages } = await open();
-    const go = async (value: string) => {
-      parts['page']!.value = value;
-      parts['page']!.dispatchEvent(new Event('change'));
-      await flush();
-    };
-    await go('3');
+    parts['page']!.click();
+    pick(parts['page-list'], '3');
+    await flush();
     expect(pages[2]!.scrolled).toBe(1);
-    await go('9');
-    expect(pages[2]!.scrolled).toBe(2);
-    await go('two');
     expect(parts['page']!.value).toBe('3');
+    expect(chosen(parts['page'])).toBe('3 / 3');
+    expect(parts['page-list']!.children.map((o) => o.getAttribute('aria-current'))).toEqual(['false', 'false', 'true']);
   });
 
-  it('never overwrites a page number the reader is typing, and goes there once it is entered', async () => {
-    const { doc, pages, parts } = await open();
-    doc.activeElement = parts['page']!;
-    parts['page']!.value = '3';
-    pages[0]!.rect = { top: 100, height: 1000, width: 600 };
-    pages[1]!.rect = { top: 1100, height: 1000, width: 600 };
-    pages[2]!.rect = { top: 2100, height: 1000, width: 600 };
-    win.dispatchEvent(new Event('scroll'));
-    expect(parts['page']!.value).toBe('3');
-    expect(parts['prev']!.getAttribute('aria-disabled')).toBe('true');
-    parts['page']!.dispatchEvent(new Event('change'));
-    expect(pages[2]!.scrolled).toBe(1);
-    expect(parts['page']!.value).toBe('3');
-    parts['page']!.value = 'x';
-    parts['page']!.dispatchEvent(new Event('change'));
-    expect(parts['page']!.value).toBe('3');
+  // W-LOOK3: WebKit raises a style-src-attr violation for any native select under the site's CSP, so the
+  // page and zoom are pickers: a button that opens a list of buttons, closed by Escape or a press elsewhere.
+  it('a picker opens on a press with the focus on its marked choice, and closes by Escape, a press elsewhere, or the other picker', async () => {
+    const { root, parts } = await open();
+    const [button, list] = [parts['page']!, parts['page-list']!];
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    button.click();
+    expect(list.hidden).toBe(false);
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    expect(list.children[0]!.focused).toBe(true);
+    button.focused = false;
+    root.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
+    expect(list.hidden).toBe(true);
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(button.focused).toBe(true);
+    // Another key, or Escape with nothing open, changes nothing.
+    root.dispatchEvent(Object.assign(new Event('keydown'), { key: 'a' }));
+    root.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
+    expect(list.hidden).toBe(true);
+    button.click();
+    // A press inside the list, or on its button, leaves it to its own handlers; anywhere else closes it.
+    const pointer = (target: FakeEl | undefined) => {
+      const event = new Event('pointerdown');
+      Object.defineProperty(event, 'target', { value: target });
+      win.dispatchEvent(event);
+    };
+    pointer(list.children[1]);
+    pointer(button);
+    expect(list.hidden).toBe(false);
+    pointer(parts['pages']);
+    expect(list.hidden).toBe(true);
+    // A second press closes it; opening one picker closes the other.
+    button.click();
+    button.click();
+    expect(list.hidden).toBe(true);
+    button.click();
+    parts['zoom']!.click();
+    expect(list.hidden).toBe(true);
+    expect(parts['zoom-list']!.hidden).toBe(false);
   });
 
   it('follows the page being read as the reader scrolls', async () => {
@@ -589,7 +616,7 @@ describe('wireViewer', () => {
     expect(viewer).toBeUndefined();
     expect(parts['status']!.textContent).toBe(TOO_LONG);
     expect(pages).toHaveLength(0);
-    expect(parts['page']!.children).toHaveLength(0);
+    expect(parts['page-list']!.children).toHaveLength(0);
     expect(parts['js']!.hidden).toBe(true);
     expect(parts['pages']!.hidden).toBe(true);
     expect(parts['nojs']!.hidden).toBe(true);
@@ -600,8 +627,8 @@ describe('wireViewer', () => {
   it('a file of exactly MAX_PAGES is drawn', async () => {
     const { parts, pages, viewer } = await open({ pages: MAX_PAGES });
     expect(viewer).toBeDefined();
-    expect(parts['page']!.children).toHaveLength(MAX_PAGES);
-    expect(parts['page']!.children.at(-1)!.textContent).toBe('1000 / 1000');
+    expect(parts['page-list']!.children).toHaveLength(MAX_PAGES);
+    expect(parts['page-list']!.children.at(-1)!.textContent).toBe('Page 1000');
     expect(pages).toHaveLength(MAX_PAGES);
   });
 

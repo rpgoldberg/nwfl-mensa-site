@@ -75,6 +75,9 @@ export class FakeEl extends EventTarget {
   removeAttribute(name: string) {
     this.attrs.delete(name);
   }
+  contains(other: unknown): boolean {
+    return other === this || [...this.all()].includes(other as FakeEl);
+  }
   *all(): Generator<FakeEl> {
     for (const kid of this.children) {
       yield kid;
@@ -277,8 +280,10 @@ export function fakePdfjs({ pages = 3, annotations = {} as Record<number, FakeAn
   return { pdfjs, log, pending, opened };
 }
 
-/** The option a select shows: the one whose value is the select's. */
-export const chosen = (select: FakeEl | undefined) => select!.children.find((o) => o.value === select!.value)?.textContent;
+/** What a picker's button shows (W-LOOK3: the page and zoom pickers). */
+export const chosen = (button: FakeEl | undefined) => button!.textContent;
+/** Presses the choice of this value in a picker's list. */
+export const pick = (list: FakeEl | undefined, value: string) => list!.children.find((o) => o.value === value)!.click();
 
 /** The page's markup, as src/pages/read/[id].astro writes it. */
 export function viewerPage({ pdf = '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf', worker = '/_astro/pdf.worker.min.abc.mjs', drop = '' } = {}) {
@@ -292,12 +297,14 @@ export function viewerPage({ pdf = '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a
     ['bar', 'div'],
     ['js', 'div'],
     ['zoom-out', 'button'],
-    ['zoom', 'select'],
+    ['zoom', 'button'],
+    ['zoom-list', 'div'],
     ['zoom-in', 'button'],
     ['fit-width', 'button'],
     ['fit-page', 'button'],
     ['prev', 'button'],
-    ['page', 'select'],
+    ['page', 'button'],
+    ['page-list', 'div'],
     ['next', 'button'],
     ['status', 'p'],
     ['pages', 'div'],
@@ -311,6 +318,8 @@ export function viewerPage({ pdf = '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a
   // W-LOOK3: the bar always shows (Download and Open in another app); its controls wait for the script.
   if (parts['js']) parts['js'].hidden = true;
   parts['pages']!.hidden = true;
+  if (parts['page-list']) parts['page-list'].hidden = true;
+  if (parts['zoom-list']) parts['zoom-list'].hidden = true;
   parts['pages']!.rect = { top: 0, height: 0, width: 600 };
   parts['bar']!.rect = { top: 0, height: 60, width: 600 };
   body.append(root);

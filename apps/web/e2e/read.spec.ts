@@ -55,8 +55,14 @@ const inked = (canvas: Locator) =>
  * each is at least 24 px each way, as the reader makes it (the zoom buttons make it larger still).
  */
 async function axe(page: Page): Promise<string[]> {
-  // The first page's links in the middle of the screen, clear of the sticky bar and the phone's bottom bar.
-  await page.evaluate(() => document.querySelector('#page-1 .annotationLayer a')?.scrollIntoView({ block: 'center' }));
+  // The first page's links in the middle of the screen, clear of the sticky bar and the phone's bottom bar;
+  // with no issue drawn, the end of the page, where the bottom bar is back in its own space (as
+  // e2e/a11y.spec.ts and e2e/look2.spec.ts do: mid-page it overlays the footer's links).
+  await page.evaluate(() => {
+    const link = document.querySelector('#page-1 .annotationLayer a');
+    if (link) link.scrollIntoView({ block: 'center' });
+    else window.scrollTo(0, document.documentElement.scrollHeight);
+  });
   const result = await new AxeBuilder({ page }).withTags(TAGS).analyze();
   const out: string[] = [];
   for (const v of result.violations) {
@@ -78,8 +84,17 @@ async function barControls(page: Page): Promise<Locator[]> {
   for (const c of await page.locator('[data-viewer-bar]').locator('button, select, a').all()) if (await c.isVisible()) out.push(c);
   return out;
 }
-/** The zoom the select shows. */
-const zoomShown = (page: Page) => page.locator('[data-viewer-zoom] option:checked').textContent();
+/** W-LOOK3: the page and zoom pickers (a button over a list of buttons; WebKit's select breaks the CSP). */
+const pagePicker = (page: Page) => page.locator('[data-viewer-page]');
+const zoomShown = (page: Page) => page.locator('[data-viewer-zoom]').textContent();
+async function pickPage(page: Page, n: number) {
+  await pagePicker(page).click();
+  await page.locator('[data-viewer-page-list]').getByRole('button', { name: `Page ${n}`, exact: true }).click();
+}
+async function pickZoom(page: Page, label: string) {
+  await page.locator('[data-viewer-zoom]').click();
+  await page.locator('[data-viewer-zoom-list]').getByRole('button', { name: label, exact: true }).click();
+}
 /** W-LOOK3: the public copy's pill and its line, on /read. */
 const publicTag = (page: Page) => page.locator('.copy-tag').filter({ hasText: PUBLIC_TAG }).filter({ hasText: PUBLIC_TAG_NOTE });
 const sideways = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -94,8 +109,9 @@ test.describe('/read, the public copy', () => {
     await expect(drawn(page, 1)).toHaveCount(1);
     expect(await inked(drawn(page, 1))).toBe(true);
     await expect(viewerPage(page, 1).locator('.textLayer')).toContainText('Public copy, page 1');
-    await expect(page.getByLabel('Page', { exact: true })).toHaveValue('1');
-    await expect(page.getByLabel('Page', { exact: true }).locator('option')).toHaveCount(3);
+    await expect(pagePicker(page)).toHaveAttribute('value', '1');
+    await expect(page.locator('[data-viewer-page-list] button')).toHaveCount(3);
+    await expect(pagePicker(page)).toHaveText('1 / 3');
     await expect(page.getByText(NEEDS_SCRIPT)).toBeHidden();
     expect(await page.evaluate(() => (window as unknown as { __said: string[] }).__said)).toContain('Loading page 1');
     await expect(page.locator('[data-viewer-status]')).toHaveAttribute('role', 'status');
@@ -169,7 +185,7 @@ test.describe('/read, the public copy', () => {
 
   test('opens at the page in #page=N, as the leaving page links back', async ({ page }) => {
     await page.goto(`${read(PUBLIC_ID)}#page=3`);
-    await expect(page.getByLabel('Page', { exact: true })).toHaveValue('3');
+    await expect(pagePicker(page)).toHaveAttribute('value', '3');
     await expect(drawn(page, 3)).toHaveCount(1);
   });
 });
@@ -178,13 +194,12 @@ test.describe('/read controls', () => {
   test('every control works by tap or click: zoom, the fits, next, back and the page select', async ({ page, isMobile }) => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);
-    const zoom = page.getByRole('combobox', { name: 'Zoom' });
-    const box = page.getByLabel('Page', { exact: true });
+    const box = pagePicker(page);
     // W-LOOK3: Fit width, pressed, is where every device opens.
     const width = page.locator('[data-viewer-fit-width]');
     await expect(width).toHaveAttribute('aria-pressed', 'true');
     const first = await zoomShown(page);
-    await zoom.selectOption('2');
+    await pickZoom(page, '200%');
     expect(await zoomShown(page)).toBe('200%');
     await expect(width).toHaveAttribute('aria-pressed', 'false');
     for (const name of ['Zoom in', 'Zoom out']) {
@@ -204,12 +219,12 @@ test.describe('/read controls', () => {
       await expect(width).toHaveAttribute('aria-pressed', 'false');
     }
     await press(isMobile, page.getByRole('button', { name: 'Next page' }));
-    await expect(box).toHaveValue('2');
+    await expect(box).toHaveAttribute('value', '2');
     await expect(page.locator('[data-viewer-status]')).toHaveText(/Page 2 of 3|Loading page 2|^$/);
     await press(isMobile, page.getByRole('button', { name: 'Previous page' }));
-    await expect(box).toHaveValue('1');
-    await box.selectOption('3');
-    await expect(box).toHaveValue('3');
+    await expect(box).toHaveAttribute('value', '1');
+    await pickPage(page, 3);
+    await expect(box).toHaveAttribute('value', '3');
     await expect(drawn(page, 3)).toHaveCount(1);
     expect(await inked(drawn(page, 3))).toBe(true);
   });
@@ -217,7 +232,7 @@ test.describe('/read controls', () => {
   test('every control works from the keyboard, in order, with the focus shown', async ({ page }) => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);
-    const box = page.getByLabel('Page', { exact: true });
+    const box = pagePicker(page);
     // W-LOOK3: the bar, in order, then the pages; Download and Open in another app are in the bar.
     const controls = await barControls(page);
     const names = await Promise.all(controls.map((c) => c.evaluate((el) => el.getAttribute('aria-label') ?? (el.id ? document.querySelector(`label[for="${el.id}"]`)!.textContent : ''))));
@@ -229,7 +244,7 @@ test.describe('/read controls', () => {
       expect(await focused.evaluate((el) => getComputedStyle(el).outlineStyle), name!).not.toBe('none');
     }
     const fit = page.locator('[data-viewer-fit-width]');
-    await page.getByRole('combobox', { name: 'Zoom' }).selectOption('2');
+    await pickZoom(page, '200%');
     await fit.focus();
     await page.keyboard.press('Enter');
     await expect(fit).toHaveAttribute('aria-pressed', 'true');
@@ -238,16 +253,29 @@ test.describe('/read controls', () => {
     await expect(fit).toBeFocused();
     await page.getByRole('button', { name: 'Next page' }).focus();
     await page.keyboard.press('Enter');
-    await expect(box).toHaveValue('2');
+    await expect(box).toHaveAttribute('value', '2');
     await page.keyboard.press('Enter');
-    await expect(box).toHaveValue('3');
+    await expect(box).toHaveAttribute('value', '3');
     // At the last page Next stays in place, still focused, and says it cannot go on.
     await page.keyboard.press('Enter');
     await expect(page.getByRole('button', { name: 'Next page' })).toBeFocused();
     await expect(page.getByRole('button', { name: 'Next page' })).toHaveAttribute('aria-disabled', 'true');
+    // The page picker by keyboard: Enter opens it on the page being read, Shift+Tab reaches page 1, Enter goes there.
     await box.focus();
-    await box.selectOption('1');
-    await expect(box).toHaveValue('1');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('[data-viewer-page-list]').getByRole('button', { name: 'Page 3', exact: true })).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Enter');
+    await expect(box).toHaveAttribute('value', '1');
+    await expect(box).toBeFocused();
+    await expect(page.locator('[data-viewer-page-list]')).toBeHidden();
+    // Escape closes it, with the focus back on its button.
+    await page.keyboard.press('Enter');
+    await expect(page.locator('[data-viewer-page-list]')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-viewer-page-list]')).toBeHidden();
+    await expect(box).toBeFocused();
   });
 
   // W-LOOK3: 44 px, WCAG 2.5.5's AAA size, for this bar (Ross's mockup); 48 elsewhere on the site.
@@ -289,7 +317,7 @@ test.describe('/read links', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('You are leaving the Northwest Florida Mensa site');
     await page.getByRole('link', { name: 'Back to the newsletter' }).click();
     await expect(page).toHaveURL(`${SITE_URL}${read(LINKS.file)}#page=${LINKS.web.page}`);
-    await expect(page.getByLabel('Page', { exact: true })).toHaveValue(String(LINKS.web.page));
+    await expect(pagePicker(page)).toHaveAttribute('value', String(LINKS.web.page));
   });
 
   test('a link within the issue goes to its page, and links are reached by the keyboard', async ({ page }) => {
@@ -301,7 +329,7 @@ test.describe('/read links', () => {
     await expect(links.nth(1)).toHaveAccessibleName('Link to example.org');
     await links.nth(2).focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByLabel('Page', { exact: true })).toHaveValue('3');
+    await expect(pagePicker(page)).toHaveAttribute('value', '3');
   });
 });
 
@@ -383,7 +411,7 @@ for (const [width, height] of [
         await viewerPage(page, 1).scrollIntoViewIfNeeded();
         await expect(drawn(page, 1)).toHaveCount(1);
         await page.getByRole('button', { name: 'Next page' }).click();
-        await expect(page.getByLabel('Page', { exact: true })).toHaveValue('2');
+        await expect(pagePicker(page)).toHaveAttribute('value', '2');
         await page.waitForTimeout(300);
         const shown = await visibleOfPage(page, 2);
         expect(shown.visible, JSON.stringify(shown)).toBeGreaterThanOrEqual(shown.height / 2);
@@ -409,7 +437,7 @@ test.describe('/read on a computer', () => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);
     await page.getByRole('button', { name: 'Next page' }).click();
-    await expect(page.getByLabel('Page', { exact: true })).toHaveValue('2');
+    await expect(pagePicker(page)).toHaveAttribute('value', '2');
     const bar = (await page.locator('[data-viewer-bar]').boundingBox())!;
     expect(bar.y).toBeGreaterThanOrEqual(0);
     expect(bar.y).toBeLessThan(2);
@@ -421,9 +449,10 @@ test.describe('/read on a computer', () => {
 
 // W-LOOK2: the bar is sized like the chrome, so a computer's window, or a phone held either way, keeps
 // it pinned at every size; a short phone window (a split screen) is where the largest size still makes
-// it two rows and too tall. W-LOOK3's slimmer bar needs a shorter window for that: 360 x 200.
+// it two rows and too tall. W-LOOK3's slimmer bar needs a narrower, shorter window for that: 340 x 200,
+// one row at the default size and two at the largest.
 test.describe('/read in a short phone window', () => {
-  test.use({ viewport: { width: 360, height: 200 } });
+  test.use({ viewport: { width: 340, height: 200 } });
 
   test('the bar lets go of the top as soon as the reader picks a text size that makes it too tall, with no resize', async ({ page }) => {
     await page.goto(read(PUBLIC_ID));
@@ -451,7 +480,7 @@ test.describe('/read, a very long file', () => {
     const status = page.locator('[data-viewer-status]');
     await expect(status).toHaveText(/^This issue is too long to show here\. You can open it in another app, or download it\.$/, { timeout: 30_000 });
     await expect(status).toBeVisible();
-    await expect(page.getByLabel('Page', { exact: true }).locator('option')).not.toHaveCount(LONG_PAGES);
+    await expect(page.locator('[data-viewer-page-list] button')).not.toHaveCount(LONG_PAGES);
     await expect(page.locator('.viewer-page')).toHaveCount(0);
     // W-LOOK3: the bar keeps its two links, and none of the controls that need the issue drawn.
     await expect(page.locator('[data-viewer-bar]').getByRole('button')).toHaveCount(0);
@@ -472,7 +501,7 @@ test.describe('/read, the members copy', () => {
     await expect(page.getByText(MEMBERS_COPY, { exact: true })).toBeVisible();
     await expect(page.getByText(PUBLIC_COPY)).toHaveCount(0);
     await expect(viewerPage(page, 1).locator('.textLayer')).toContainText('Members copy, page 1');
-    await expect(page.getByLabel('Page', { exact: true }).locator('option')).toHaveCount(2);
+    await expect(page.locator('[data-viewer-page-list] button')).toHaveCount(2);
     expect(await inked(drawn(page, 1))).toBe(true);
     const file = await page.request.get(`/documents/${MEMBERS_ID}.pdf`);
     expect(file.headers()['cache-control']).toBe('private, no-store');

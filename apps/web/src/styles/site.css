@@ -1140,11 +1140,11 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 
 /* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). W-LOOK3, after Ross's
    mockup: ONE rounded, thin-bordered frame whose top edge is the bar, a single slim row sized like the
-   chrome (px): back, the page select and next; zoom out, the zoom select and zoom in; Fit width and Fit
+   chrome (px): back, the page picker and next; zoom out, the zoom picker and zoom in; Fit width and Fit
    page, the one in force pressed; Download; Open in another app. Every target is 44 px at least (WCAG
    2.5.5), drawn small inside it. The words beside Fit, Download and Open show where the frame has room
    for them; elsewhere the icons stand alone, with their spoken names and tooltips. Where even the icons
-   do not fit one row (a phone), zoom out and in go, as the zoom select does both, and below 400 px Fit
+   do not fit one row (a phone), zoom out and in go, as the zoom picker does both, and below 400 px Fit
    page, which on a phone held upright is the same size as Fit width (the width is what limits it). Only at the two largest text sizes may the
    bar take a second row. It stays at the top while reading only while it takes at most a third of the
    window; otherwise the script sets .viewer--unpinned and it scrolls away with the page (--viewer-bar 0).
@@ -1216,12 +1216,13 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .vbtn[aria-disabled="true"] { opacity: 0.45; cursor: default; }
 .vbtn[aria-disabled="true"]:hover { background: transparent; }
 .vbtn__word { display: none; }
-/* The page and zoom selects: the browser's own list, drawn as the mockup has them, with a chevron. */
-.vsel { position: relative; display: inline-flex; }
-.vsel select {
+/* The page and zoom pickers, drawn as the mockup's dropdowns: a button with a chevron over a list of
+   buttons (never a native select, which WebKit cannot draw under the site's CSP). */
+.vpick { position: relative; display: inline-flex; }
+.vpick__btn {
+  position: relative;
   min-width: 44px;
   min-height: 44px;
-  height: 44px;
   padding: 0 20px 0 6px;
   color: var(--ink);
   background: transparent;
@@ -1229,12 +1230,12 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   border-radius: 8px;
   font: inherit;
   font-weight: 700;
-  appearance: none;
+  white-space: nowrap;
   cursor: pointer;
 }
-.vsel select:hover { background: var(--accent-soft); }
+.vpick__btn:hover { background: var(--accent-soft); }
 #viewer-page { background: var(--bg); }
-.vsel::after {
+.vpick__btn::after {
   content: "";
   position: absolute;
   right: 8px;
@@ -1245,9 +1246,42 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   border: solid currentColor;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
-  pointer-events: none;
 }
-.vsel select option { color: var(--ink); background: var(--surface); }
+.vpick__btn[aria-expanded="true"]::after { transform: rotate(-135deg); margin-top: -1px; }
+.vpick__list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 3;
+  display: grid;
+  min-width: max(100%, 7.5em);
+  max-height: min(60vh, 22rem);
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+}
+.vpick__list[hidden] { display: none; }
+.vpick__choice {
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.vpick__choice:hover { background: var(--accent-soft); }
+.vpick__choice[aria-current="true"] { background: var(--accent); color: var(--on-accent); }
+@media (forced-colors: active) {
+  .vpick__choice[aria-current="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 /* Room for the words (Ross's mockup, a computer): beside Fit, Download and Open. */
 @container vbar (width >= 900px) {
   .vbtn__word { display: inline; }
@@ -1261,7 +1295,7 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   html[data-size="175"] .vbtn__word { display: none; }
   html[data-size="175"] .vbtn--fit, html[data-size="175"] .viewer-group > a.vbtn { padding: 0; }
 }
-/* A phone: zoom out and in go (the zoom select does both); on the narrowest, Fit page too. */
+/* A phone: zoom out and in go (the zoom picker does both); on the narrowest, Fit page too. */
 @container vbar (width < 470px) {
   .vbtn--step { display: none; }
   .viewer-bar { gap: 0; padding-inline: 2px; }
@@ -1270,13 +1304,13 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 @container vbar (width < 400px) {
   .vbtn--fit-page { display: none; }
 }
-/* The narrowest phones (360 px): the selects a step smaller and the dividers gone, never the targets. */
+/* The narrowest phones (360 px): the pickers a step smaller and the dividers gone, never the targets. */
 @container vbar (width < 372px) {
   .viewer-sep { display: none; }
-  .vsel select { font-size: 13px; padding: 0 15px 0 4px; }
-  .vsel::after { right: 5px; }
-  /* At the two largest sizes the selects keep the reader's size, and the bar may take a second row. */
-  html[data-size="140"] .vsel select, html[data-size="175"] .vsel select { font-size: inherit; }
+  .vpick__btn { font-size: 13px; padding: 0 15px 0 4px; }
+  .vpick__btn::after { right: 5px; }
+  /* At the two largest sizes the pickers keep the reader's size, and the bar may take a second row. */
+  html[data-size="140"] .vpick__btn, html[data-size="175"] .vpick__btn { font-size: inherit; }
 }
 @media (forced-colors: active) {
   .vbtn[aria-pressed="true"] { outline: 2px solid Highlight; outline-offset: -2px; }

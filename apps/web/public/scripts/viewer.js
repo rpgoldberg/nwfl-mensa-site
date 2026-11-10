@@ -7,9 +7,11 @@
 // Accessibility first: every control is a visible button or select, 44 px at least, in the tab order, in
 // the page's own theme, each with a spoken name and a tooltip; no gesture is needed (pinch and scroll
 // still work, as the browser's own). W-LOOK3, after Ross's mockup: one slim row on the frame's top edge,
-// back, a page select ("1 / 12") and next; zoom out, a zoom select of the steps and zoom in; Fit width
+// back, a page picker ("1 / 12") and next; zoom out, a zoom picker of the steps and zoom in; Fit width
 // and Fit page, the one in force pressed; then Download and Open in another app, which are plain links
-// and need no script. Every device opens at Fit width, so the page fills the frame. Each page is a canvas for the eye
+// and need no script. Every device opens at Fit width, so the page fills the frame. The pickers are a
+// button that opens a list of buttons, never a native select: WebKit raises a style-src-attr violation
+// for a select's own inner style under the site's CSP (no 'unsafe-inline'), and the CSP stays as it is. Each page is a canvas for the eye
 // (hidden from screen readers), pdf.js's text layer over it for screen readers and selection, and its
 // links (the copy's link annotations, and nothing else from the annotation layer: no forms, no files,
 // no scripts). Only two kinds of link are ever made: an /out/<id> goes to this site's leaving page in
@@ -66,7 +68,7 @@ export const UNPINNED = 'viewer--unpinned';
 const EPSILON = 1e-6;
 
 /**
- * The zoom select's choices: every step, and a fitted size that is no step in its place among them;
+ * The zoom picker's choices: every step, and a fitted size that is no step in its place among them;
  * and which is chosen.
  *
  * @param {number} scale
@@ -79,7 +81,7 @@ export function zoomOptions(scale) {
 }
 
 /**
- * A page in the page select, as Ross's mockup writes it.
+ * The page picker's face, as Ross's mockup writes it.
  *
  * @param {number} n
  * @param {number} count
@@ -224,7 +226,7 @@ export async function wireViewer(doc, win, pdfjs) {
   if (!root) return undefined;
   /** @param {string} name */
   const part = (name) => /** @type {any} */ (root.querySelector(`[data-viewer-${name}]`));
-  const names = ['nojs', 'bar', 'zoom-out', 'zoom', 'zoom-in', 'fit-width', 'fit-page', 'prev', 'page', 'next', 'status', 'pages'];
+  const names = ['nojs', 'bar', 'zoom-out', 'zoom', 'zoom-list', 'zoom-in', 'fit-width', 'fit-page', 'prev', 'page', 'page-list', 'next', 'status', 'pages'];
   const ui = Object.fromEntries(names.map((name) => [name, part(name)]));
   if (names.some((name) => !ui[name])) return undefined;
   const origin = win.location.origin;
@@ -266,14 +268,73 @@ export async function wireViewer(doc, win, pdfjs) {
   const bar = ui['bar'];
   for (const el of /** @type {NodeListOf<HTMLElement>} */ (root.querySelectorAll('[data-viewer-js]'))) el.hidden = false;
   ui['pages'].hidden = false;
-  /** @param {string} value @param {string} label */
-  const option = (value, label) => {
-    const el = doc.createElement('option');
-    el.value = value;
-    el.textContent = label;
-    return el;
+  /**
+   * A picker: its button opens and closes its list; a choice in the list acts, closes it and gives the
+   * focus back to the button.
+   *
+   * @param {string} name
+   * @param {(value: string) => void} act
+   */
+  const picker = (name, act) => {
+    const button = ui[name];
+    const list = ui[`${name}-list`];
+    /** @param {boolean} open */
+    const set = (open) => {
+      list.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+    };
+    /** @param {string} value @param {string} label */
+    const choice = (value, label) => {
+      const el = doc.createElement('button');
+      el.type = 'button';
+      el.className = 'vpick__choice';
+      el.value = value;
+      el.textContent = label;
+      el.addEventListener('click', () => {
+        set(false);
+        button.focus();
+        act(value);
+      });
+      return el;
+    };
+    /** @param {string} value */
+    const mark = (value) => {
+      for (const el of list.children) el.setAttribute('aria-current', String(el.value === value));
+    };
+    button.addEventListener('click', () => {
+      const open = list.hidden;
+      for (const other of pickers) other.set(false);
+      set(open);
+      if (open) [...list.children].find((el) => el.getAttribute('aria-current') === 'true')?.focus();
+    });
+    set(false);
+    return { button, list, set, choice, mark };
   };
-  ui['page'].replaceChildren(...Array.from({ length: count }, (_, i) => option(String(i + 1), pageLabel(i + 1, count))));
+  /** @type {ReturnType<typeof picker>[]} */
+  const pickers = [];
+  const pagePick = picker('page', (value) => {
+    const n = clampPage(value, count);
+    if (n !== undefined) goTo(n);
+  });
+  const zoomPick = picker('zoom', (value) => {
+    const chosen = ZOOMS.find((z) => String(z) === value);
+    if (chosen === undefined) return;
+    mode = 'custom';
+    rescale(chosen);
+  });
+  pickers.push(pagePick, zoomPick);
+  ui['page-list'].replaceChildren(...Array.from({ length: count }, (_, i) => pagePick.choice(String(i + 1), `Page ${i + 1}`)));
+  root.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+    if (event.key !== 'Escape') return;
+    for (const p of pickers) {
+      if (p.list.hidden) continue;
+      p.set(false);
+      p.button.focus();
+    }
+  });
+  win.addEventListener('pointerdown', (/** @type {Event} */ event) => {
+    for (const p of pickers) if (!p.list.hidden && event.target !== p.button && !p.list.contains(event.target)) p.set(false);
+  });
 
   /** @type {'width' | 'page' | 'custom'} */
   let mode = 'width';
@@ -310,16 +371,22 @@ export async function wireViewer(doc, win, pdfjs) {
     byEl.set(el, page);
   }
 
-  /** @param {{ box?: boolean }} [options] box: write the page box even while the reader is in it */
-  const show = ({ box = false } = {}) => {
+  const show = () => {
     if (scale !== listed) {
       listed = scale;
       const { options, selected } = zoomOptions(scale);
-      ui['zoom'].replaceChildren(...options.map((o) => option(o.value, o.label)));
+      ui['zoom-list'].replaceChildren(...options.map((o) => zoomPick.choice(o.value, o.label)));
+      zoomPick.mark(selected);
       ui['zoom'].value = selected;
+      ui['zoom'].textContent = percent(scale);
+      ui['zoom'].setAttribute('aria-label', `Zoom ${percent(scale)}`);
     }
-    // Never under the reader's fingers: a page being chosen stays until it is chosen.
-    if (box || doc.activeElement !== ui['page']) ui['page'].value = String(current);
+    if (ui['page'].value !== String(current)) {
+      ui['page'].value = String(current);
+      ui['page'].textContent = pageLabel(current, count);
+      ui['page'].setAttribute('aria-label', `Page ${pageLabel(current, count)}`);
+      pagePick.mark(String(current));
+    }
     ui['fit-width'].setAttribute('aria-pressed', String(mode === 'width'));
     ui['fit-page'].setAttribute('aria-pressed', String(mode === 'page'));
     ui['zoom-out'].setAttribute('aria-disabled', String(scale <= /** @type {number} */ (ZOOMS[0]) + EPSILON));
@@ -490,7 +557,7 @@ export async function wireViewer(doc, win, pdfjs) {
     current = n;
     anchor = { n, frac: 0 };
     /** @type {Page} */ (pages[n - 1]).el.scrollIntoView({ block: 'start' });
-    show({ box: true });
+    show();
     say(`Page ${n} of ${count}`);
   };
 
@@ -523,22 +590,10 @@ export async function wireViewer(doc, win, pdfjs) {
     mode = 'page';
     fit();
   });
-  ui['zoom'].addEventListener('change', () => {
-    const chosen = ZOOMS.find((z) => String(z) === ui['zoom'].value);
-    if (chosen === undefined) {
-      ui['zoom'].value = zoomOptions(scale).selected;
-      return;
-    }
-    mode = 'custom';
-    rescale(chosen);
-  });
+
   onPress(ui['prev'], () => goTo(current - 1));
   onPress(ui['next'], () => goTo(current + 1));
-  ui['page'].addEventListener('change', () => {
-    const n = clampPage(ui['page'].value, count);
-    if (n === undefined) show({ box: true });
-    else goTo(n);
-  });
+
 
   let framed = false;
   win.addEventListener(

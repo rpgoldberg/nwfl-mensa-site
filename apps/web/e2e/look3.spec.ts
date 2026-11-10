@@ -126,8 +126,8 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
         await expect(button).toHaveAttribute('title', label);
         await expect(button).toBeVisible({ visible: name === 'a computer' || !['Fit page', 'Zoom out', 'Zoom in'].includes(label) });
       }
-      await expect(bar(page).getByLabel('Page', { exact: true })).toHaveValue('1');
-      await expect(bar(page).getByRole('combobox', { name: 'Zoom', exact: true })).toBeVisible();
+      await expect(bar(page).getByRole('button', { name: 'Page 1 / 3', exact: true })).toBeVisible();
+      await expect(bar(page).getByRole('button', { name: /^Zoom \d+%$/ })).toBeVisible();
       const download = bar(page).getByRole('link', { name: 'Download', exact: true });
       const other = bar(page).getByRole('link', { name: /^Open in another app/ });
       await expect(download).toHaveAttribute('href', `${PUBLIC_READ.replace('/read/', '/documents/')}.pdf?download=1`);
@@ -143,16 +143,21 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
       }
     });
 
-    test('the page select goes to a page, and the zoom select to a step', async ({ page }) => {
+    test('the page picker goes to a page, and the zoom picker to a step', async ({ page }) => {
       await opened(page);
-      const select = bar(page).getByLabel('Page', { exact: true });
-      await expect(select.locator('option')).toHaveText(['1 / 3', '2 / 3', '3 / 3']);
-      await select.selectOption('3');
+      const picker = bar(page).locator('[data-viewer-page]');
+      await expect(picker).toHaveText('1 / 3');
+      await picker.click();
+      const list = bar(page).locator('[data-viewer-page-list]');
+      await expect(list.getByRole('button')).toHaveText(['Page 1', 'Page 2', 'Page 3']);
+      await list.getByRole('button', { name: 'Page 3', exact: true }).click();
+      await expect(list).toBeHidden();
       await expect(page.locator('#page-3 canvas')).toHaveCount(1);
       await expect(page.locator('#page-3')).toBeInViewport();
-      const zoom = bar(page).getByRole('combobox', { name: 'Zoom', exact: true });
-      await zoom.selectOption('2');
-      await expect(zoom.locator('option:checked')).toHaveText('200%');
+      const zoom = bar(page).locator('[data-viewer-zoom]');
+      await zoom.click();
+      await bar(page).locator('[data-viewer-zoom-list]').getByRole('button', { name: '200%', exact: true }).click();
+      await expect(zoom).toHaveText('200%');
       await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute('aria-pressed', 'false');
       await page.getByRole('button', { name: 'Fit width' }).click();
       await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute('aria-pressed', 'true');
@@ -220,6 +225,18 @@ test.describe('the reader at 360 px, the narrowest common phone', () => {
   });
 });
 
+// W-LOOK3 fix: WebKit raises a style-src-attr violation for a native select under the site's CSP (no
+// 'unsafe-inline'), which Chromium does not; so the reader must hold none, wherever it is run.
+test('the reader holds no native select, which WebKit cannot draw under the site\'s CSP', async ({ page }) => {
+  await opened(page);
+  await expect(page.locator('select')).toHaveCount(0);
+  // An open picker stays inside the screen.
+  await page.locator('[data-viewer-zoom]').click();
+  const list = await box(page.locator('[data-viewer-zoom-list]'));
+  expect(list.x).toBeGreaterThanOrEqual(0);
+  expect(list.x + list.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+});
+
 test.describe('the reader without JavaScript', () => {
   test.use({ javaScriptEnabled: false });
   test('the bar keeps Download and Open in another app, and shows no control that needs the script', async ({ page }) => {
@@ -228,7 +245,7 @@ test.describe('the reader without JavaScript', () => {
     await expect(bar(page).getByRole('link', { name: 'Download', exact: true })).toBeVisible();
     await expect(bar(page).getByRole('link', { name: /^Open in another app/ })).toBeVisible();
     await expect(bar(page).getByRole('button')).toHaveCount(0);
-    await expect(bar(page).getByRole('combobox')).toHaveCount(0);
+    for (const picker of await bar(page).locator('[data-viewer-page], [data-viewer-zoom]').all()) await expect(picker).toBeHidden();
   });
 });
 
