@@ -8,7 +8,9 @@ import {
   FAILED,
   MAX_IMAGE_PIXELS,
   MAX_PAGES,
+  MAX_PIXELS,
   OPENING,
+  TONED_PIXELS,
   TOO_LONG,
   ZOOMS,
   clampPage,
@@ -487,12 +489,40 @@ describe('wireViewer', () => {
     box.focus();
     expect(box.selected).toBe(false);
     box.dispatchEvent(new Event('focus'));
-    // A press in the box chooses what is there, so typing replaces it.
+    // The page shown is chosen, and the first thing typed replaces it, wherever the caret is: WebKit puts
+    // its caret at the start after a tap, so "2" typed over "1" would be "21".
     expect(box.selected).toBe(true);
+    /** The browser's input event, after it has changed the box to `value`. */
+    const input = (value: string, inputType: string, data: string | null) => {
+      box.value = value;
+      box.dispatchEvent(Object.assign(new Event('input'), { inputType, data }));
+    };
+    input('21', 'insertText', '2');
+    expect(box.value).toBe('2');
+    input('23', 'insertText', '3');
+    expect(box.value).toBe('23');
+    // What the browser could not say it typed (a paste) is kept as it is.
+    box.dispatchEvent(new Event('focus'));
+    input('112', 'insertFromPaste', null);
+    expect(box.value).toBe('112');
+    // A deletion, or a move of the caret, first, and it is edited as usual.
+    box.dispatchEvent(new Event('focus'));
+    input('', 'deleteContentBackward', null);
+    input('2', 'insertText', '2');
+    input('12', 'insertText', '1');
+    expect(box.value).toBe('12');
+    box.dispatchEvent(new Event('focus'));
+    key('ArrowLeft');
+    input('312', 'insertText', '3');
+    expect(box.value).toBe('312');
     box.value = '3';
     expect(key('Enter').defaultPrevented).toBe(true);
     expect(pages[2]!.scrolled).toBe(1);
     expect(parts['status']!.textContent).toBe('Page 3 of 3');
+    // After a page is gone to, what is typed next replaces it again.
+    input('32', 'insertText', '2');
+    expect(box.value).toBe('2');
+    box.value = '3';
     // What the box shows is not changed under the reader's fingers while they type.
     box.value = '2';
     parts['next']!.click();
@@ -882,6 +912,24 @@ describe('READER2', () => {
       menu['tone']!.click();
       expect(root.classes.has('viewer--light-pages')).toBe(false);
       expect(parts['tone']!.getAttribute('aria-pressed')).toBe('false');
+    });
+
+    // A recoloured page (a CSS filter or blend) costs the browser a second buffer as large as its canvas;
+    // WebKit ran out of memory with both at full size, so such a page is drawn at half the pixels.
+    it('draws a recoloured page at no more than TONED_PIXELS, and a page as printed at up to MAX_PIXELS', async () => {
+      expect(TONED_PIXELS).toBe(MAX_PIXELS / 2);
+      const area = (el: FakeEl) => el.width * el.height;
+      for (const [theme, light, max] of [['dark', false, TONED_PIXELS], ['contrast-white', false, TONED_PIXELS], ['light', false, MAX_PIXELS], ['dark', true, MAX_PIXELS]] as const) {
+        win.devicePixelRatio = 3;
+        const { io, pages, parts } = await open({}, (view) => view.doc.documentElement.setAttribute('data-theme', theme));
+        if (light) parts['tone']!.click();
+        for (let i = 0; i < 9; i++) parts['zoom-in']!.click();
+        io.near(1);
+        await flush();
+        const sheet = pages[0]!.querySelector('canvas')!;
+        expect(area(sheet), `${theme} ${light}`).toBeLessThanOrEqual(max);
+        expect(area(sheet), `${theme} ${light}`).toBeGreaterThan(max * 0.98);
+      }
     });
 
     it('draws each page as printed, asks pdf.js where its pictures are, and lays each picture over the drawing unrecoloured', async () => {

@@ -35,6 +35,11 @@ describe('photoBoxes', () => {
     expect(photoBoxes(turned, 100, 100)).toEqual([{ x: 0, y: 0, w: 100, h: 100 }]);
   });
 
+  it('keeps to the whole pixels inside a picture, so no edge pixel of paper is left unrecoloured', () => {
+    // 10.4 to 59.6 across, 20.5 to 70.5 down: pixels 11 to 59 and 21 to 70.
+    expect(photoBoxes([0.104, 0.205, 0.104, 0.705, 0.596, 0.205], 100, 100)).toEqual([{ x: 11, y: 21, w: 48, h: 49 }]);
+  });
+
   it('leaves out a picture of less than two pixels either way, and none is no box', () => {
     expect(photoBoxes([0, 0, 0, 0.001, 0.5, 0], 1000, 1000)).toEqual([]);
     expect(photoBoxes(undefined, 1000, 1000)).toEqual([]);

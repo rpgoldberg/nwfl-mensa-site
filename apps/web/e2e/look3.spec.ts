@@ -181,9 +181,8 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
 
     test('at the largest text size the bar takes at most two rows, and nothing scrolls sideways', async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size: SIZES.at(-1)! });
-      // READER2: once wired, as the More menu then takes what has no room.
-      await page.goto(PUBLIC_READ);
-      await expect(page.locator('[data-viewer].viewer--js')).toHaveCount(1);
+      // Once wired and drawn (as the 140 % test waits), so no control is shown or hidden under the count.
+      await opened(page);
       expect(await rows(await visibleControls(page))).toBeLessThanOrEqual(2);
       expect(await sideways(page)).toBeLessThanOrEqual(0);
     });

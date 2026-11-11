@@ -1537,7 +1537,7 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   border-top: 1px solid var(--line-soft);
 }
 .viewer-find__box {
-  flex: 1 1 7em;
+  flex: 1 1 4.5em;
   box-sizing: border-box;
   min-width: 0;
   min-height: 44px;
@@ -1558,7 +1558,9 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
    first (Ross's order: page controls, then search, then Fit, then zoom, then Download and Open; Light pages
    with these last). Only once the script has wired it (viewer--js): without it the bar keeps its links. */
 .vmore { display: none; }
-.vmore__list { left: auto; right: 0; min-width: 15em; }
+/* Anchored to the bar's right edge, not to its button, so it stays in the frame wherever the button is. */
+.vpick.vmore { position: static; }
+.vmore__list { top: 100%; left: auto; right: 4px; min-width: min(15em, calc(100% - 8px)); }
 .vmore__item { display: none; }
 .vpick__choice.vmore__item { align-items: center; gap: 10px; text-decoration: none; }
 .vmore__item svg { width: 22px; height: 22px; flex: none; }
@@ -1607,6 +1609,9 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .viewer[data-tone="dark"]:not(.viewer--light-pages) .viewer-page { background: #0f0f0f; }
 .viewer[data-tone="dark"]:not(.viewer--light-pages) .viewer-sheet:not(.viewer-sheet--picture) { filter: invert(0.94) hue-rotate(180deg); }
 .viewer[data-tone="tint"]:not(.viewer--light-pages) .viewer-page { background: var(--bg); }
+/* The blend kept to the page's own layer, the theme's paper its backdrop: WebKit otherwise blends against
+   a buffer of the whole document, and ran out of memory on a large screen. */
+.viewer[data-tone="tint"]:not(.viewer--light-pages) .viewer-layer { isolation: isolate; background: var(--bg); }
 .viewer[data-tone="tint"]:not(.viewer--light-pages) .viewer-sheet:not(.viewer-sheet--picture) { mix-blend-mode: multiply; }
 
 /* What moves into the More menu as the bar narrows (thresholds measured at 100 % text, px chrome). */

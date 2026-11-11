@@ -35,6 +35,8 @@ export async function barControls(page: Page): Promise<Locator[]> {
   for (const c of await bar(page).locator('button, select, a, input').all()) {
     if (!(await c.isVisible())) continue;
     if (await c.evaluate((el) => !!el.closest('.vpick__list, .viewer-find'))) continue;
+    // One hidden between the two looks (the script wiring the bar) has no box: it is not shown.
+    if ((await c.boundingBox()) === null) continue;
     out.push(c);
   }
   return out;

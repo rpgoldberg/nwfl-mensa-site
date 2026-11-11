@@ -32,7 +32,8 @@ export function pageTone(theme, prefersDark, prefersMore) {
 
 /**
  * pdf.js's picture corners (for each picture three points, top left, bottom left and top right, as
- * fractions of the canvas) as whole-pixel boxes on the canvas, held to it; any under two pixels is left out.
+ * fractions of the canvas) as boxes of the whole pixels inside them, held to the canvas; any under two
+ * pixels is left out.
  *
  * @param {ArrayLike<number> | undefined | null} coords
  * @param {number} width the canvas's pixels
@@ -49,10 +50,11 @@ export function photoBoxes(coords, width, height) {
     const [x0, y0, x1, y1, x2, y2] = [at(0), at(1), at(2), at(3), at(4), at(5)];
     const xs = [x0, x1, x2, x1 + x2 - x0].map((x) => Math.min(Math.max(x * width, 0), width));
     const ys = [y0, y1, y2, y1 + y2 - y0].map((y) => Math.min(Math.max(y * height, 0), height));
-    const x = Math.floor(Math.min(...xs));
-    const y = Math.floor(Math.min(...ys));
-    const w = Math.ceil(Math.max(...xs)) - x;
-    const h = Math.ceil(Math.max(...ys)) - y;
+    // The whole pixels inside the picture: an edge pixel half paper would show as a pale line unrecoloured.
+    const x = Math.max(0, Math.ceil(Math.min(...xs) - 1e-6));
+    const y = Math.max(0, Math.ceil(Math.min(...ys) - 1e-6));
+    const w = Math.floor(Math.max(...xs) + 1e-6) - x;
+    const h = Math.floor(Math.max(...ys) + 1e-6) - y;
     if (w >= 2 && h >= 2) out.push({ x, y, w, h });
   }
   return out;

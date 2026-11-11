@@ -51,6 +51,12 @@ export const CSS_UNITS = 96 / 72;
 export const ZOOMS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 /** The most pixels one page's canvas may hold (a 4096 x 4096 square): phones refuse more. */
 export const MAX_PIXELS = 16_777_216;
+/**
+ * The most a recoloured page's canvas may hold (DARKPDF): the CSS filter or blend that recolours it costs
+ * the browser a second buffer of the same size, and WebKit ran out of memory with both at MAX_PIXELS.
+ * A phone's page is far below either.
+ */
+export const TONED_PIXELS = MAX_PIXELS / 2;
 /** A page within a screen of the window is drawn; one further away is let go. */
 export const NEAR = '100% 0px';
 /** Space kept below the bar when a whole page is fitted. */
@@ -539,7 +545,8 @@ export async function wireViewer(doc, win, pdfjs) {
         lay(page);
       }
       const viewport = proxy.getViewport({ scale: at * CSS_UNITS });
-      const ratio = outputScale(win.devicePixelRatio, viewport.width, viewport.height);
+      const toned = root.dataset['tone'] !== 'light' && !root.classList.contains(LIGHT_PAGES);
+      const ratio = outputScale(win.devicePixelRatio, viewport.width, viewport.height, toned ? TONED_PIXELS : MAX_PIXELS);
       const canvas = doc.createElement('canvas');
       canvas.width = Math.floor(viewport.width * ratio);
       canvas.height = Math.floor(viewport.height * ratio);
@@ -852,11 +859,23 @@ export async function wireViewer(doc, win, pdfjs) {
     goTo(n);
     pageBox.value = String(n);
   };
-  pageBox.addEventListener('focus', () => pageBox.select());
+  // The first thing typed replaces the page shown, wherever the caret was (WebKit puts it at the start
+  // after a tap, so a "2" typed over "1" would be "21"); a deletion or a move of the caret first edits it.
+  let fresh = false;
+  pageBox.addEventListener('focus', () => {
+    fresh = true;
+    pageBox.select();
+  });
+  pageBox.addEventListener('input', (/** @type {InputEvent} */ event) => {
+    if (fresh && event.inputType === 'insertText' && event.data) pageBox.value = event.data;
+    fresh = false;
+  });
   pageBox.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+    if (/^(Arrow|Home|End)/.test(event.key)) fresh = false;
     if (event.key !== 'Enter') return;
     event.preventDefault();
     commit();
+    fresh = true;
   });
   pageBox.addEventListener('change', () => {
     if (pageBox.value.trim() !== String(current)) commit();
