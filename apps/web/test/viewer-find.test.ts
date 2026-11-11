@@ -41,6 +41,19 @@ describe('indexText', () => {
   });
 });
 
+describe('characters outside the basic plane (S5)', () => {
+  it('an emoji before a match shifts nothing: "picnic" paints exactly "Picnic", and "saturday" its own word', () => {
+    const its = items(['\u{1F4C5}\u{1F4C5}\u{1F4C5} Dates', true], 'Picnic Saturday');
+    const index = indexText(its);
+    expect(index.item).toHaveLength(index.text.length);
+    const range = (q: string) => rangesOf(index, findIn(index, q)[0]!, q.length);
+    const str = (r: { item: number; from: number; to: number }) => its[r.item]!.str.slice(r.from, r.to);
+    expect(range('picnic').map(str)).toEqual(['Picnic']);
+    expect(range('saturday').map(str)).toEqual(['Saturday']);
+    expect(range('\u{1F4C5} dates').map(str)).toEqual(['\u{1F4C5} Dates']);
+  });
+});
+
 describe('findIn', () => {
   it('finds every place, one after another and never overlapping; nothing for an empty query', () => {
     const index = indexText(items('aaa ', 'banana'));

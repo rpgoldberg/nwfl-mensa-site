@@ -16,10 +16,12 @@ const SPACE = /\s/;
 export const queryOf = (raw) => raw.trim().replace(/\s+/g, ' ').toLowerCase();
 
 /** @typedef {{ str: string, hasEOL?: boolean }} TextItem */
-/** @typedef {{ text: string, item: number[], at: number[] }} TextIndex */
+/** @typedef {{ text: string, item: number[], at: number[], end: number[] }} TextIndex */
 
 /**
- * A page's text, folded, with each character's item and place (-1 for the space a line's end adds).
+ * A page's text, folded, with each UTF-16 unit's item and the span of that item's string it came from
+ * (at to end; -1 for the space a line's end adds). Counted in UTF-16 units throughout, as strings are, so
+ * a character outside the basic plane (an emoji, two units) shifts no match after it.
  *
  * @param {TextItem[]} items
  * @returns {TextIndex}
@@ -30,26 +32,34 @@ export function indexText(items) {
   const item = [];
   /** @type {number[]} */
   const at = [];
-  /** @param {string} c @param {number} i @param {number} k */
-  const put = (c, i, k) => {
-    text += c;
-    item.push(i);
-    at.push(k);
+  /** @type {number[]} */
+  const end = [];
+  /** @param {string} out @param {number} i @param {number} k @param {number} e */
+  const put = (out, i, k, e) => {
+    text += out;
+    for (let u = 0; u < out.length; u++) {
+      item.push(i);
+      at.push(k);
+      end.push(e);
+    }
   };
   const spaced = () => text === '' || text.endsWith(' ');
   items.forEach(({ str, hasEOL }, i) => {
-    [...str].forEach((c, k) => {
+    let k = 0;
+    for (const c of str) {
+      const e = k + c.length;
       if (SPACE.test(c)) {
-        if (!spaced()) put(' ', i, k);
-        return;
+        if (!spaced()) put(' ', i, k, e);
+      } else {
+        const lower = c.toLowerCase();
+        // A letter whose lower case is longer (İ) is kept as it is.
+        put(lower.length === c.length ? lower : c, i, k, e);
       }
-      const lower = c.toLowerCase();
-      // A letter whose lower case is longer (İ) is kept as it is, so every character keeps its place.
-      put(lower.length === c.length ? lower : c, i, k);
-    });
-    if (hasEOL && !spaced()) put(' ', -1, -1);
+      k = e;
+    }
+    if (hasEOL && !spaced()) put(' ', -1, -1, -1);
   });
-  return { text, item, at };
+  return { text, item, at, end };
 }
 
 /**
@@ -93,10 +103,11 @@ export function rangesOf(index, start, length) {
   for (let c = start; c < start + length; c++) {
     const item = /** @type {number} */ (index.item[c]);
     const at = /** @type {number} */ (index.at[c]);
+    const end = /** @type {number} */ (index.end[c]);
     if (item === -1) continue;
     const last = out.at(-1);
-    if (last && last.item === item) last.to = at + 1;
-    else out.push({ item, from: at, to: at + 1 });
+    if (last && last.item === item) last.to = end;
+    else out.push({ item, from: at, to: end });
   }
   return out;
 }
