@@ -15,7 +15,8 @@ const literal = (text) => `(${text.replace(/[\\()]/g, (c) => `\\${c}`)})`;
  * A picture (READER2): a block of red over a block of blue, `rect` [x, y, width, height] in points;
  * `pictures` draws the same picture again at each rect, one straight after another.
  * @typedef {[number, number, number, number]} Rect
- * @typedef {{ lines: string[], fill: [number, number, number], links?: Link[], picture?: Rect, pictures?: Rect[] }} SyntheticPage
+ * `size` is the page's [width, height] in points (612 x 792 if not given).
+ * @typedef {{ lines: string[], fill: [number, number, number], links?: Link[], picture?: Rect, pictures?: Rect[], size?: [number, number] }} SyntheticPage
  */
 
 /** The picture's pixels: 16 x 16, the top half pure red, the bottom half pure blue (RGB, 8 bits). */
@@ -42,7 +43,7 @@ export function syntheticPdf({ pages, comment = '' }) {
     const first = ref + 2 + (rects.length > 0 ? 1 : 0);
     const annots = links.map((_, k) => `${first + k} 0 R`).join(' ');
     const pictures = rects.length > 0 ? ` /XObject << /Im1 ${ref + 2} 0 R >>` : '';
-    add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >>${pictures} >> /Contents ${ref + 1} 0 R${annots ? ` /Annots [${annots}]` : ''} >>`);
+    add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${page.size?.[0] ?? 612} ${page.size?.[1] ?? 792}] /Resources << /Font << /F1 3 0 R >>${pictures} >> /Contents ${ref + 1} 0 R${annots ? ` /Annots [${annots}]` : ''} >>`);
     const [r, g, b] = page.fill;
     const text = page.lines.map((line, k) => `${k === 0 ? '72 700 Td' : '0 -40 Td'} ${literal(line)} Tj`).join('\n');
     // Each link underlined, as a reader sees a link.
@@ -207,4 +208,17 @@ export const PICTURE_PDF = syntheticPdf({
 export const REPEAT_ID = 'f7000000-0000-4000-8000-000000007000';
 export const REPEAT_PDF = syntheticPdf({
   pages: [{ lines: ['Four photos in a row'], fill: [0.85, 0.93, 0.95], pictures: [0, 1, 2, 3].map((k) => /** @type {Rect} */ ([72 + k * 120, 300, 100, 100])) }],
+});
+
+/**
+ * READER2: a portrait page, then a landscape spread twice as wide, served to anyone and listed nowhere.
+ * Laid out as the spread is drawn, the pages grow wider than the frame: the foot scrollbar and the hand
+ * tool come with it.
+ */
+export const SPREAD_ID = 'f8000000-0000-4000-8000-000000008000';
+export const SPREAD_PDF = syntheticPdf({
+  pages: [
+    { lines: ['A portrait page'], fill: [0.85, 0.93, 0.95] },
+    { lines: ['A landscape spread, twice as wide as the page before'], fill: [0.93, 0.9, 0.97], size: [1584, 612] },
+  ],
 });
