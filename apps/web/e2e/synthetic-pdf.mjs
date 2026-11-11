@@ -219,6 +219,6 @@ export const SPREAD_ID = 'f8000000-0000-4000-8000-000000008000';
 export const SPREAD_PDF = syntheticPdf({
   pages: [
     { lines: ['A portrait page'], fill: [0.85, 0.93, 0.95] },
-    { lines: ['A landscape spread, twice as wide as the page before'], fill: [0.93, 0.9, 0.97], size: [1584, 612] },
+    { lines: ['A landscape spread, twice as wide as the page before'], fill: [0.93, 0.9, 0.97], size: [1584, 792] },
   ],
 });
