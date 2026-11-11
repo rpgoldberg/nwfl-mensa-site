@@ -48,11 +48,11 @@ describe.skipIf(!live)('schema after VET (0027)', () => {
   const report = (id: string, verification: string, conflicting: string | null = null, client: pg.Client = app): Promise<string> =>
     sqlstate(
       client,
-      `UPDATE signup_request SET verification = $2, verified_on = current_date, membership_number = NULL, last_name = NULL, conflicting_request_id = $3 WHERE id = $1`,
+      `UPDATE signup_request SET verification = $2, verified_on = current_date, conflicting_request_id = $3 WHERE id = $1`,
       [id, verification, conflicting],
     );
   const decide = (id: string, decision: 'approved' | 'rejected', client: pg.Client = app): Promise<string> =>
-    sqlstate(client, `UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = 'officer-1', membership_number = NULL, last_name = NULL WHERE id = $1`, [id, decision]);
+    sqlstate(client, `UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = 'officer-1' WHERE id = $1`, [id, decision]);
   const releases = async (id: string): Promise<string[]> =>
     (await app.query<{ kind: string }>(`SELECT kind FROM signup_claim_release WHERE request_id = $1 ORDER BY seq`, [id])).rows.map((r) => r.kind);
 
@@ -76,12 +76,12 @@ describe.skipIf(!live)('schema after VET (0027)', () => {
   });
 
   describe('the stored check', () => {
-    it('takes email_mismatch and duplicate_claim, still erasing the inputs, and still refuses an unknown outcome', async () => {
+    it('takes email_mismatch and duplicate_claim, keeping the inputs (0028), and still refuses an unknown outcome', async () => {
       expect(await report(await signup('c-mismatch'), 'email_mismatch')).toBe('ok');
       expect(await report(await signup('c-duplicate'), 'duplicate_claim')).toBe('ok');
       expect(await report(await signup('c-unknown'), 'verified_maybe')).toBe(CHECK_VIOLATION);
       const keep = await signup('c-keep');
-      expect(await sqlstate(app, `UPDATE signup_request SET verification = 'email_mismatch', verified_on = current_date WHERE id = $1`, [keep])).toBe(CHECK_VIOLATION);
+      expect(await sqlstate(app, `UPDATE signup_request SET verification = 'email_mismatch', verified_on = current_date WHERE id = $1`, [keep])).toBe('ok');
     });
 
     it('names an earlier sign-up only on a duplicate claim, never itself, and only one that exists', async () => {

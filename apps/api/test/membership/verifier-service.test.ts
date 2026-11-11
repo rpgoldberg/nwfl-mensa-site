@@ -1,7 +1,7 @@
 // A5: MembershipVerifierService (R33). Only the verifier client gets in. It
 // reads the pending, unchecked sign-ups that typed a number, oldest first, ten
 // at most; it reports an outcome, which records the outcome and the date and
-// erases the number and the last name in the same statement. A local match
+// keeps the number and the last name (PROFILE-ID, 0028). A local match
 // does not approve: an officer still does (R24). Every value here is made up.
 import { type Client, Code } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -75,10 +75,10 @@ describe.skipIf(!live)('MembershipVerifierService', () => {
   });
 
   describe('ReportVerification', () => {
-    it('records the outcome and the date and erases the number and the last name, and the sign-up leaves the list', async () => {
+    it('records the outcome and the date, keeps the number and the last name (PROFILE-ID), and the sign-up leaves the list', async () => {
       const id = ids[0] as string;
       await verifier.reportVerification({ requestId: id, outcome: VerificationOutcome.VERIFIED_LOCAL }, VERIFIER);
-      expect(await row(id)).toEqual({ verification: 'verified_local', verified_on: '2026-10-22', membership_number: null, last_name: null, decision: 'pending' });
+      expect(await row(id)).toEqual({ verification: 'verified_local', verified_on: '2026-10-22', membership_number: '500100', last_name: 'Example0', decision: 'pending' });
       expect((await verifier.listPendingVerifications({}, VERIFIER)).pending.map((p) => p.requestId)).toEqual(ids.slice(1, 11));
       const { rows } = await api.pool.query<{ action: string; to_state: string; payload: unknown; actor_sub: string }>(
         `SELECT action, to_state, payload, actor_sub FROM audit_event WHERE subject_id = $1 AND action = 'verification_report'`,
@@ -98,10 +98,10 @@ describe.skipIf(!live)('MembershipVerifierService', () => {
       [VerificationOutcome.VERIFIED_OTHER_GROUP, 'verified_other_group'],
       [VerificationOutcome.NOT_FOUND, 'not_found'],
       [VerificationOutcome.ERROR, 'error'],
-    ])('records outcome %i as %s, erasing the inputs', async (outcome, stored) => {
+    ])('records outcome %i as %s, keeping the inputs', async (outcome, stored) => {
       const id = ids[outcome] as string;
       await verifier.reportVerification({ requestId: id, outcome }, VERIFIER);
-      expect(await row(id)).toMatchObject({ verification: stored, membership_number: null, last_name: null });
+      expect(await row(id)).toMatchObject({ verification: stored, membership_number: String(500100 + outcome), last_name: `Example${outcome}` });
     });
 
     it('reports a sign-up once, and refuses no outcome, an unknown id and a malformed one', async () => {

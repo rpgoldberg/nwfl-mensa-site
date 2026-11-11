@@ -1,7 +1,7 @@
 // REOPEN (0026): the database's side of reopening a rejected sign-up, exercised as the
 // APPLICATION role.
 //   - Only a rejected sign-up is reopened, with who and when recorded together; its decision,
-//     decider, time and erased inputs stay as they were (0009).
+//     decider, time and typed inputs stay as they were (0009; kept since 0028).
 //   - A reopened sign-up never changes again: not reopened twice, not un-reopened, not edited.
 //   - A person has at most one sign-up that is not reopened; a reopened one leaves room for one more.
 //   - An account row is deleted only when it is a rejection's closed account (removed, never
@@ -27,7 +27,7 @@ describe.skipIf(!live)('schema after REOPEN (0026)', () => {
   const signup = (sub: string): Promise<{ id: string }> =>
     one(`INSERT INTO signup_request (sub, display_name, email, last_name, membership_number) VALUES ($1, 'Pat Example', 'pat@example.org', 'Example', '1234567') RETURNING id`, [sub]);
   const decide = (id: string, decision: 'approved' | 'rejected'): Promise<string> =>
-    failure(app, `UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = 'officer-1', membership_number = NULL, last_name = NULL WHERE id = $1`, [id, decision]);
+    failure(app, `UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = 'officer-1' WHERE id = $1`, [id, decision]);
   const reopen = (id: string, by = 'officer-mo'): Promise<string> => failure(app, `UPDATE signup_request SET reopened_at = now(), reopened_by_sub = $2 WHERE id = $1`, [id, by]);
   /** A sign-up rejected with its waiting account removed, as RejectSignup leaves it. */
   const rejected = async (sub: string): Promise<string> => {
@@ -54,7 +54,7 @@ describe.skipIf(!live)('schema after REOPEN (0026)', () => {
     if (db !== undefined) await dropDatabase(db);
   });
 
-  it('reopens a rejected sign-up, keeping its decision, decider, time and erased inputs', async () => {
+  it('reopens a rejected sign-up, keeping its decision, decider, time and inputs (kept since 0028)', async () => {
     const id = await rejected('r-ok');
     const before = await one<{ decided_at: Date }>(`SELECT decided_at FROM signup_request WHERE id = $1`, [id]);
     expect(await reopen(id)).toBe('ok');
@@ -62,8 +62,8 @@ describe.skipIf(!live)('schema after REOPEN (0026)', () => {
       decision: 'rejected',
       decided_by_sub: 'officer-1',
       decided_at: before.decided_at,
-      membership_number: null,
-      last_name: null,
+      membership_number: '1234567',
+      last_name: 'Example',
       reopened_by_sub: 'officer-mo',
       reopened: true,
     });

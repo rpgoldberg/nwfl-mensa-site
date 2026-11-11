@@ -47,6 +47,8 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'racer-token': { client: 'site', subject: 'sub-racer', groups: ['nwfl-pending'], scopes: [], name: 'Quinn Example', email: 'quinn@example.org' },
   // VET fix 1: a sign-up whose number was typed with spaces and dashes.
   'spacer-token': { client: 'site', subject: 'sub-spacer', groups: ['nwfl-pending'], scopes: [], name: 'Sky Spacer', email: 'sky@example.org' },
+  // PROFILE-ID: a person whose sign-up is refused for a mistyped number, so no error is seen to give it back.
+  'typo-token': { client: 'site', subject: 'sub-typo', groups: ['nwfl-pending'], scopes: [], name: 'Lee Typo', email: 'lee@example.org' },
   // The Membership Officer: approves sign-ups; also signs up once, to show no one decides their own.
   'approver-token': {
     client: 'site',

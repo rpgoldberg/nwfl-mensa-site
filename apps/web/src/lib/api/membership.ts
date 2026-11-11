@@ -10,8 +10,11 @@
 // or an account with no name or email); a decision it refuses is DecisionRefused (their own sign-up,
 // or one already decided or gone). REOPEN: the Admin and the Membership Officer alone list the
 // rejections and reopen one; a reopening the API refuses is DecisionRefused too (not theirs to
-// reopen, or no longer reopenable). Anything else is ApiUnavailable. Each failure is logged by call
-// and code only: never the API's message, the token, the last name or the membership number (D6).
+// reopen, or no longer reopenable). PROFILE-ID: the approvers' queue and rejections carry what each
+// sign-up typed (names and number), and an approved member's own account carries their profile; the
+// member changes the two names (a change the API refuses is ProfileRefused), never the number.
+// Anything else is ApiUnavailable. Each failure is logged by call and code only: never the API's
+// message, the token, a name or the membership number (D6).
 import { PUBLIC_ONLY } from 'astro:env/server';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
@@ -19,7 +22,15 @@ import { createGrpcTransport } from '@connectrpc/connect-node';
 import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
 import type { Date as ProtoDate } from '../../gen/nwfl/mensa/v1/common_pb.js';
-import { AccountRoute, MemberStatus, MembershipService, type RejectedSignup as RejectedSignupMessage, type SignupRequest, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
+import {
+  AccountRoute,
+  type EarlierClaim as EarlierClaimMessage,
+  MemberStatus,
+  MembershipService,
+  type RejectedSignup as RejectedSignupMessage,
+  type SignupRequest,
+  Verification,
+} from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import { EXPIRY_MARGIN_SECONDS } from '../auth/bearer';
 import type { Tokens } from '../auth/oidc';
 import { type ApiConfig, ApiUnavailable, READ_MAX_BYTES, type Reader, apiSetup, sendable } from './client';
@@ -28,8 +39,15 @@ export type Standing = 'pending' | 'member' | 'affiliate' | 'lapsed' | 'removed'
 export type Route = 'invite' | 'signup' | 'admin_grant';
 export type Check = 'unchecked' | 'verified_local' | 'verified_other_group' | 'not_found' | 'error' | 'email_mismatch' | 'duplicate_claim';
 
-/** VET: the earlier sign-up a duplicate claim names, as the site already holds it: never a number. */
-export interface EarlierClaim {
+/** PROFILE-ID: what a sign-up typed, as the API sends it to the approvers; a value not held is left out. */
+export interface Typed {
+  firstName?: string;
+  lastName?: string;
+  membershipNumber?: string;
+}
+
+/** VET: the earlier sign-up a duplicate claim names, as the site already holds it, with what it typed (PROFILE-ID). */
+export interface EarlierClaim extends Typed {
   /** Empty when closed. */
   displayName: string;
   signedUpAt?: Date;
@@ -37,15 +55,24 @@ export interface EarlierClaim {
   closed?: true;
 }
 
+/** PROFILE-ID: an approved member's own names and number. */
+export interface Profile {
+  firstName: string;
+  lastName: string;
+  membershipNumber: string;
+}
+
 /** The person's own account; verifiedOn is the day it was last checked, YYYY-MM-DD. */
 export interface MyAccount {
   status: Standing;
   route: Route;
   verifiedOn?: string;
+  /** PROFILE-ID: for an approved member. */
+  profile?: Profile;
 }
 
-/** A pending sign-up as an approver sees it: never the number or the last name (the API never sends them). */
-export interface PendingSignup {
+/** A pending sign-up as an approver sees it, with what it typed (PROFILE-ID). */
+export interface PendingSignup extends Typed {
   requestId: string;
   displayName: string;
   email: string;
@@ -58,7 +85,7 @@ export interface PendingSignup {
 }
 
 /** REOPEN: a rejected sign-up that can be reopened, as the Admin or the Membership Officer sees it. */
-export interface RejectedSignup {
+export interface RejectedSignup extends Typed {
   requestId: string;
   displayName: string;
   email: string;
@@ -83,6 +110,14 @@ export class SignupRefused extends Error {
   }
 }
 
+/** PROFILE-ID. invalid: a name the API would not take; not_member: no approved sign-up to change. */
+export class ProfileRefused extends Error {
+  constructor(readonly reason: 'invalid' | 'not_member') {
+    super(`the profile change was refused (${reason})`);
+    this.name = 'ProfileRefused';
+  }
+}
+
 /** own: the approver's own sign-up; closed: decided already, gone, or not one the API can find. */
 export class DecisionRefused extends Error {
   constructor(readonly reason: 'own' | 'closed') {
@@ -94,7 +129,9 @@ export class DecisionRefused extends Error {
 export interface MembershipApi {
   /** Undefined: the person has no account yet. */
   getMyAccount(as: Reader): Promise<MyAccount | undefined>;
-  submitSignup(as: Reader, signup: { lastName: string; membershipNumber: string }): Promise<void>;
+  submitSignup(as: Reader, signup: { firstName: string; lastName: string; membershipNumber: string }): Promise<void>;
+  /** PROFILE-ID: an approved member's two names; never the number. */
+  updateMyProfile(as: Reader, names: { firstName: string; lastName: string }): Promise<void>;
   listSignupRequests(as: Reader): Promise<PendingSignup[]>;
   /** VET fix 1: confirmedWarning, the approver confirmed an email mismatch or resolved a duplicate claim. */
   approveSignup(as: Reader, requestId: string, options?: { confirmedWarning?: boolean }): Promise<void>;
@@ -139,12 +176,25 @@ const SIGNUP_REFUSALS: Partial<Record<Code, SignupRefused['reason']>> = {
   [Code.AlreadyExists]: 'on_file',
   [Code.FailedPrecondition]: 'profile',
 };
+const PROFILE_REFUSALS: Partial<Record<Code, ProfileRefused['reason']>> = {
+  [Code.InvalidArgument]: 'invalid',
+  [Code.FailedPrecondition]: 'not_member',
+};
 const DECISION_REFUSALS: Partial<Record<Code, DecisionRefused['reason']>> = {
   [Code.PermissionDenied]: 'own',
   [Code.FailedPrecondition]: 'closed',
   [Code.NotFound]: 'closed',
   [Code.InvalidArgument]: 'closed',
 };
+
+/** What was typed, leaving out each value not held. */
+function typedOf(message: Pick<EarlierClaimMessage, 'firstName' | 'lastName' | 'membershipNumber'>): Typed {
+  return {
+    ...(message.firstName !== '' ? { firstName: message.firstName } : {}),
+    ...(message.lastName !== '' ? { lastName: message.lastName } : {}),
+    ...(message.membershipNumber !== '' ? { membershipNumber: message.membershipNumber } : {}),
+  };
+}
 
 function pendingOf(request: SignupRequest): PendingSignup {
   return {
@@ -153,6 +203,7 @@ function pendingOf(request: SignupRequest): PendingSignup {
     email: request.email,
     route: nameOf(ROUTE, request.route),
     verification: nameOf(CHECK, request.verification),
+    ...typedOf(request),
     ...day(request.verifiedOn),
     ...(request.createdAt ? { createdAt: timestampDate(request.createdAt) } : {}),
     ...(request.earlierClaim
@@ -161,6 +212,7 @@ function pendingOf(request: SignupRequest): PendingSignup {
             displayName: request.earlierClaim.displayName,
             ...(request.earlierClaim.signedUpAt ? { signedUpAt: timestampDate(request.earlierClaim.signedUpAt) } : {}),
             ...(request.earlierClaim.closed ? { closed: true as const } : {}),
+            ...typedOf(request.earlierClaim),
           },
         }
       : {}),
@@ -173,10 +225,13 @@ function rejectedOf(request: RejectedSignupMessage): RejectedSignup {
     displayName: request.displayName,
     email: request.email,
     verification: nameOf(CHECK, request.verification),
+    ...typedOf(request),
     ...day(request.verifiedOn),
     ...(request.rejectedAt ? { rejectedAt: timestampDate(request.rejectedAt) } : {}),
   };
 }
+
+const REFUSED_MSG: Record<string, string> = { SubmitSignup: 'api refused the sign-up', UpdateMyProfile: 'api refused the profile change' };
 
 export function grpcMembership(config: ApiConfig, log: (line: string) => void): MembershipApi {
   const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES });
@@ -196,7 +251,7 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
       }
       const said = refused?.(code);
       if (said !== undefined) {
-        log(JSON.stringify({ level: 'warn', msg: rpc === 'SubmitSignup' ? 'api refused the sign-up' : 'api refused the decision', rpc, code: codeName(code) }));
+        log(JSON.stringify({ level: 'warn', msg: REFUSED_MSG[rpc] ?? 'api refused the decision', rpc, code: codeName(code) }));
         throw said;
       }
       log(JSON.stringify({ level: 'error', msg: 'api call failed', rpc, code: codeName(code) }));
@@ -208,6 +263,10 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
     const reason = SIGNUP_REFUSALS[code];
     return reason === undefined ? undefined : new SignupRefused(reason);
   };
+  const profileRefused = (code: Code) => {
+    const reason = PROFILE_REFUSALS[code];
+    return reason === undefined ? undefined : new ProfileRefused(reason);
+  };
   const decisionRefused = (code: Code) => {
     const reason = DECISION_REFUSALS[code];
     return reason === undefined ? undefined : new DecisionRefused(reason);
@@ -216,15 +275,30 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
   return {
     getMyAccount: (as) =>
       call('GetMyAccount', as, async (headers) => {
-        const { account } = await membership.getMyAccount({}, { headers });
-        return account === undefined ? undefined : { status: nameOf(STANDING, account.status), route: nameOf(ROUTE, account.route), ...day(account.verifiedOn) };
+        const { account, profile } = await membership.getMyAccount({}, { headers });
+        if (account === undefined) return undefined;
+        return {
+          status: nameOf(STANDING, account.status),
+          route: nameOf(ROUTE, account.route),
+          ...day(account.verifiedOn),
+          ...(profile ? { profile: { firstName: profile.firstName, lastName: profile.lastName, membershipNumber: profile.membershipNumber } } : {}),
+        };
       }),
+    updateMyProfile: (as, names) =>
+      call(
+        'UpdateMyProfile',
+        as,
+        async (headers) => {
+          await membership.updateMyProfile({ firstName: names.firstName, lastName: names.lastName }, { headers });
+        },
+        profileRefused,
+      ),
     submitSignup: (as, signup) =>
       call(
         'SubmitSignup',
         as,
         async (headers) => {
-          await membership.submitSignup({ lastName: signup.lastName, membershipNumber: signup.membershipNumber }, { headers });
+          await membership.submitSignup({ firstName: signup.firstName, lastName: signup.lastName, membershipNumber: signup.membershipNumber }, { headers });
         },
         signupRefused,
       ),
@@ -266,6 +340,7 @@ export function unavailableMembership(): MembershipApi {
   return {
     getMyAccount: fail('GetMyAccount'),
     submitSignup: fail('SubmitSignup'),
+    updateMyProfile: fail('UpdateMyProfile'),
     listSignupRequests: fail('ListSignupRequests'),
     approveSignup: fail('ApproveSignup'),
     rejectSignup: fail('RejectSignup'),

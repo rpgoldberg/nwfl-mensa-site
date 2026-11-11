@@ -7,6 +7,7 @@ import { APP, APP_PW, dropDatabase, failure, freshDatabase, live, migrate, MIGRA
 import pgLib from 'pg';
 
 const CHECK_VIOLATION = '23514';
+const NOT_IN_PREREQUISITE_STATE = '55000';
 const FK_VIOLATION = '23503';
 const INSUFFICIENT_PRIVILEGE = '42501';
 const HASH = Buffer.alloc(32, 7);
@@ -111,7 +112,7 @@ describe.skipIf(!live)('schema', () => {
     });
   });
 
-  describe('signup_request: the membership number lives only until the verifier reports (R33)', () => {
+  describe('signup_request: the membership number is kept through the verifier\'s report (R33; PROFILE-ID, 0028 reverses the erasure)', () => {
     const insert = (values: { number?: string | null; verification?: string; verifiedOn?: string | null; lastName?: string | null }): Promise<string> =>
       sqlstate(
         app,
@@ -125,43 +126,32 @@ describe.skipIf(!live)('schema', () => {
       expect(await insert({ number: null, lastName: null })).toBe('ok');
     });
 
-    it('refuses a number on a row whose verification is not unchecked', async () => {
+    it('keeps a number on a row whose verification is reported', async () => {
       for (const verification of ['verified_local', 'verified_other_group', 'not_found', 'error']) {
-        expect(await insert({ number: '1234567', verification, verifiedOn: '2026-10-22' }), verification).toBe(CHECK_VIOLATION);
+        expect(await insert({ number: '1234567', verification, verifiedOn: '2026-10-22' }), verification).toBe('ok');
         expect(await insert({ number: null, lastName: null, verification, verifiedOn: '2026-10-22' }), verification).toBe('ok');
       }
     });
 
-    it('states the erasure rule as its own CHECK, not only as a consequence of the last-name rules', async () => {
-      // The last-name constraints imply it today; this one must hold even if they change.
+    it('no longer holds the erasure rule', async () => {
       const row = await one<{ def: string } | undefined>(
         app,
         `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'signup_request_number_erased_once_checked'`,
       );
-      expect(row?.def).toBe(`CHECK (((membership_number IS NULL) OR (verification = 'unchecked'::text)))`);
+      expect(row).toBeUndefined();
     });
 
-    it('lets the report land only by erasing the number and the last name in the same update', async () => {
+    it('lets the report land keeping the number and the last name, and never by erasing them', async () => {
       const { id } = await one<{ id: string }>(
         app,
         `INSERT INTO signup_request (sub, display_name, last_name, email, membership_number)
          VALUES ('sub-report', 'Pat', 'Example', 'pat@example.org', '7654321') RETURNING id`,
       );
-      expect(await sqlstate(app, `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date WHERE id = $1`, [id])).toBe(CHECK_VIOLATION);
       expect(
-        await sqlstate(
-          app,
-          `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date, membership_number = NULL WHERE id = $1`,
-          [id],
-        ),
-      ).toBe(CHECK_VIOLATION);
-      expect(
-        await sqlstate(
-          app,
-          `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date, membership_number = NULL, last_name = NULL WHERE id = $1`,
-          [id],
-        ),
-      ).toBe('ok');
+        await sqlstate(app, `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date, membership_number = NULL, last_name = NULL WHERE id = $1`, [id]),
+      ).toBe(NOT_IN_PREREQUISITE_STATE);
+      expect(await sqlstate(app, `UPDATE signup_request SET verification = 'verified_local', verified_on = current_date WHERE id = $1`, [id])).toBe('ok');
+      expect(await one(app, `SELECT membership_number, last_name FROM signup_request WHERE id = $1`, [id])).toEqual({ membership_number: '7654321', last_name: 'Example' });
     });
 
     it('keeps verified_on set exactly when a verification has been reported', async () => {

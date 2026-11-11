@@ -1,6 +1,6 @@
 // A2-FIX: the challenger's findings on the schema, each pinned by a test.
 // The workflow moves only along its allowed transitions, everything a decision
-// rests on is frozen, history is append-only, and membership inputs are erased
+// rests on is frozen, history is append-only, and membership inputs are erased (until 0028, PROFILE-ID, keeps them)
 // on every decision. Exercised as the APPLICATION role unless the owner is the
 // point of the test.
 import type pg from 'pg';
@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { APP, APP_PW, dropDatabase, failure, freshDatabase, live, migrate, MIGRATOR, MIGRATOR_PW, sqlstate, urlFor } from '../helpers/pg.js';
 
 const CHECK_VIOLATION = '23514';
+const NOT_IN_PREREQUISITE_STATE = '55000';
 const FK_VIOLATION = '23503';
 const UNIQUE_VIOLATION = '23505';
 const INSUFFICIENT_PRIVILEGE = '42501';
@@ -363,7 +364,7 @@ describe.skipIf(!live)('schema after A2-FIX', () => {
     });
   });
 
-  describe('sign-up inputs are erased on every decision (R33)', () => {
+  describe('sign-up inputs are kept on every decision (R33; PROFILE-ID, 0028 reverses the erasure)', () => {
     const insert = (sub: string): Promise<{ id: string }> =>
       one<{ id: string }>(app, `INSERT INTO signup_request (sub, display_name, last_name, email, membership_number) VALUES ($1, 'Pat', 'Example', 'pat@example.org', '7654321') RETURNING id`, [sub]);
     const decide = (id: string, decision: string, erase: boolean): Promise<string> =>
@@ -373,20 +374,18 @@ describe.skipIf(!live)('schema after A2-FIX', () => {
         [id, decision],
       );
 
-    it.each(['approved', 'rejected'])('refuses an officer decision (%s) that keeps the number or the last name', async (decision) => {
+    it.each(['approved', 'rejected'])('takes an officer decision (%s) that keeps the number and the last name, and refuses one that erases them', async (decision) => {
       const { id } = await insert(`decided-${decision}`);
-      expect(await decide(id, decision, false)).toBe(CHECK_VIOLATION);
-      expect(await sqlstate(app, `UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = 's', membership_number = NULL WHERE id = $1`, [id, decision])).toBe(
-        CHECK_VIOLATION,
-      );
-      expect(await decide(id, decision, true)).toBe('ok');
+      expect(await decide(id, decision, true)).toBe(NOT_IN_PREREQUISITE_STATE);
+      expect(await decide(id, decision, false)).toBe('ok');
+      expect(await one(app, `SELECT membership_number, last_name FROM signup_request WHERE id = $1`, [id])).toEqual({ membership_number: '7654321', last_name: 'Example' });
     });
 
     it('records who decided and when exactly when a decision is made, from a known list', async () => {
       const { id } = await insert('decided-fields');
-      expect(await sqlstate(app, `UPDATE signup_request SET decision = 'approved', membership_number = NULL, last_name = NULL WHERE id = $1`, [id])).toBe(CHECK_VIOLATION);
+      expect(await sqlstate(app, `UPDATE signup_request SET decision = 'approved' WHERE id = $1`, [id])).toBe(CHECK_VIOLATION);
       expect(await sqlstate(app, `UPDATE signup_request SET decided_at = now() WHERE id = $1`, [id])).toBe(CHECK_VIOLATION);
-      expect(await decide(id, 'maybe', true)).toBe(CHECK_VIOLATION);
+      expect(await decide(id, 'maybe', false)).toBe(CHECK_VIOLATION);
     });
   });
 });

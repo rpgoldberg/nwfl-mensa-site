@@ -24,7 +24,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Audience } from '../src/gen/nwfl/mensa/v1/common_pb.js';
 import { ContentService } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
-import { MembershipService } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { MarkSubjectKind } from '../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { SERVED_SERVICES } from '../src/grpc/routes.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from './helpers/api.js';
@@ -36,7 +35,7 @@ import { extractAll } from './pdf/extract.js';
 import { linesPdf } from './pdf/fixtures.js';
 
 const TOKEN = `canary${randomBytes(8).toString('hex')}`;
-// What a member typed at sign-up for the verifier: shown to the verifier and to no one else.
+// What a member typed at sign-up: shown to the verifier and the approvers (PROFILE-ID), to no one else.
 const NUMBER = String(randomInt(100_000_000_000, 999_999_999_999));
 const LAST_NAME = `Canary${randomBytes(4).toString('hex')}`;
 // LINKS L4: a link on the members PDF, in its members copy, whose target holds the token.
@@ -121,9 +120,12 @@ describe.skipIf(!live)('the members-only canary', () => {
   }
 
   /** Every read, every request: the responses and the error messages, as text. */
-  async function sweep(options: { headers?: Record<string, string> }): Promise<{ text: string; calls: number }> {
+  async function sweep(options: { headers?: Record<string, string> }): Promise<{ text: string; calls: number; carriers: (marker: string) => string[] }> {
     const parts: string[] = [];
+    // PROFILE-ID: which reads answered with a marker, by name.
+    const answers: Array<[string, string]> = [];
     for (const method of readMethods()) {
+      const before = parts.length;
       const client = api.client(method.parent) as unknown as Record<string, (request: unknown, options: unknown) => Promise<unknown>>;
       const call = client[method.localName] as (request: unknown, options: unknown) => Promise<unknown>;
       for (const request of reads[method.parent.typeName]?.[method.name]?.() ?? []) {
@@ -136,8 +138,13 @@ describe.skipIf(!live)('the members-only canary', () => {
           parts.push(connectError.message, dump(connectError.details), dump(connectError.metadata));
         }
       }
+      answers.push([`${method.parent.name}.${method.name}`, parts.slice(before).join('\n')]);
     }
-    return { text: parts.join('\n'), calls: parts.length };
+    return {
+      text: parts.join('\n'),
+      calls: parts.length,
+      carriers: (marker) => answers.filter(([, answer]) => answer.includes(marker)).map(([name]) => name),
+    };
   }
 
   beforeAll(async () => {
@@ -250,33 +257,36 @@ describe.skipIf(!live)('the members-only canary', () => {
     });
   });
 
-  describe('the membership number and last name (R33)', () => {
-    const anyone: Array<[string, { headers?: Record<string, string> }]> = [
+  // PROFILE-ID: kept on the sign-up and shown to the approvers and the Admin (the queue) and the owner
+  // (their own account, once approved); to no one else, in no read and no error.
+  describe('the membership number and last name (R33, PROFILE-ID)', () => {
+    const others: Array<[string, { headers?: Record<string, string> }]> = [
       ['the public', {}],
       ['a member', MEMBER],
       ['an officer', OFFICER],
-      ['the Membership Officer', as('approver-token')],
-      ['the Admin', as('admin-token')],
       ['the Webmaster', as('webmaster-token')],
       ['the newsletter agent', as('agent-token')],
     ];
 
-    it.each(anyone)('never reach %s, in any read or error', async (_who, options) => {
+    it.each(others)('never reach %s, in any read or error', async (_who, options) => {
       const { text: everything } = await sweep(options);
       expect(everything.includes(NUMBER)).toBe(false);
       expect(everything.includes(LAST_NAME)).toBe(false);
+    });
+
+    it.each([
+      ['the Membership Officer', as('approver-token')],
+      ['the Admin', as('admin-token')],
+    ])('reach %s through the approvers\' queue alone', async (_who, options) => {
+      const { carriers } = await sweep(options);
+      expect(carriers(NUMBER)).toEqual(['MembershipService.ListSignupRequests']);
+      expect(carriers(LAST_NAME)).toEqual(['MembershipService.ListSignupRequests']);
     });
 
     it('reach the verifier, through its one read: the positive control', async () => {
       const { text: everything } = await sweep(as('verifier-token'));
       expect(everything).toContain(NUMBER);
       expect(everything).toContain(LAST_NAME);
-    });
-
-    it('leave the approver’s view of the same sign-up with its name only: the row is reached, the inputs are not', async () => {
-      const listed = dump(await api.client(MembershipService).listSignupRequests({}, as('approver-token')));
-      expect(listed).toContain('Canary Signup');
-      expect(listed).not.toContain(NUMBER);
     });
   });
 

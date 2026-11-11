@@ -101,13 +101,13 @@ export const ACCOUNTS = {
  * The member accounts were last checked on October 20, 2026.
  */
 export const SIGNUP_QUEUE = [
-  { name: 'Jesse Example', email: 'jesse@example.org', route: 'Invited by an officer', check: 'Confirmed by the membership verification service, on November 2, 2026' },
-  { name: 'Kendall Sample', email: 'kendall@example.org', route: 'Signed up on the site', check: 'Not confirmed by the membership verification service, on November 2, 2026' },
-  { name: 'Harper Placeholder', email: 'harper@example.org', route: 'Signed up on the site', check: 'Confirmed by the membership verification service as a member of another local group, on November 3, 2026' },
-  { name: 'Blair Example', email: 'blair@example.org', route: 'Signed up on the site', check: 'Not checked yet' },
-  { name: 'Dana Mismatch', email: 'dana@example.org', route: 'Signed up on the site', check: 'Number and last name confirmed by the membership verification service, but the email differs, on November 4, 2026' },
-  { name: 'Drew Secondclaim', email: 'drew@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 4, 2026' },
-  { name: 'Eli Thirdclaim', email: 'eli@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 5, 2026' },
+  { name: 'Jesse Example', first: 'Jesse', last: 'Example', number: '000011001', email: 'jesse@example.org', route: 'Invited by an officer', check: 'Confirmed by the membership verification service, on November 2, 2026' },
+  { name: 'Kendall Sample', first: 'Kendall', last: 'Sample', number: '000011002', email: 'kendall@example.org', route: 'Signed up on the site', check: 'Not confirmed by the membership verification service, on November 2, 2026' },
+  { name: 'Harper Placeholder', first: 'Harper', last: 'Placeholder', number: '000011003', email: 'harper@example.org', route: 'Signed up on the site', check: 'Confirmed by the membership verification service as a member of another local group, on November 3, 2026' },
+  { name: 'Blair Example', first: 'Blair', last: 'Example', number: '000011004', email: 'blair@example.org', route: 'Signed up on the site', check: 'Not checked yet' },
+  { name: 'Dana Mismatch', first: 'Dana', last: 'Mismatch', number: '000011005', email: 'dana@example.org', route: 'Signed up on the site', check: 'Number and last name confirmed by the membership verification service, but the email differs, on November 4, 2026' },
+  { name: 'Drew Secondclaim', first: 'Drew', last: 'Secondclaim', number: '000011006', email: 'drew@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 4, 2026' },
+  { name: 'Eli Thirdclaim', first: 'Eli', last: 'Thirdclaim', number: '000011007', email: 'eli@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 5, 2026' },
 ] as const;
 
 /**
@@ -130,17 +130,28 @@ export const VET_CONFIRMS = {
 } as const;
 export const MEMBER_CHECKED_ON = 'October 20, 2026';
 
+
+
 /**
  * REOPEN: the rejections api.mjs lists to the Admin and the Membership Officer (REJECTED there),
  * newest first. One per browser project, which its own run reopens (the stand-in keeps a reopening
  * for everyone, as the API does, so the person's /account sees it), and one no test reopens.
  */
 export const REJECTED = {
-  'reopen-desktop': { name: 'Ari Example', email: 'ari@example.org', check: 'Not confirmed by the membership verification service, on November 3, 2026', rejected: 'November 4, 2026' },
-  'reopen-phone': { name: 'Bo Sample', email: 'bo@example.org', check: 'Not checked yet', rejected: 'November 4, 2026' },
-  'reopen-iphone': { name: 'Cam Placeholder', email: 'cam@example.org', check: 'Not checked yet', rejected: 'November 4, 2026' },
-  kept: { name: 'Harley Sample', email: 'harley@example.org', check: 'Confirmed by the membership verification service as a member of another local group, on November 2, 2026', rejected: 'November 3, 2026' },
+  'reopen-desktop': { name: 'Ari Example', first: 'Ari', last: 'Example', number: '000022001', email: 'ari@example.org', check: 'Not confirmed by the membership verification service, on November 3, 2026', rejected: 'November 4, 2026' },
+  'reopen-phone': { name: 'Bo Sample', first: 'Bo', last: 'Sample', number: '000022002', email: 'bo@example.org', check: 'Not checked yet', rejected: 'November 4, 2026' },
+  'reopen-iphone': { name: 'Cam Placeholder', first: 'Cam', last: 'Placeholder', number: '000022003', email: 'cam@example.org', check: 'Not checked yet', rejected: 'November 4, 2026' },
+  kept: { name: 'Harley Sample', first: 'Harley', last: 'Sample', number: '000022004', email: 'harley@example.org', check: 'Confirmed by the membership verification service as a member of another local group, on November 2, 2026', rejected: 'November 3, 2026' },
 } as const;
+
+/** PROFILE-ID: what the duplicate claim's earlier claim typed (api.mjs), shown beside it; none for a claim since closed. */
+export const EARLIER_CLAIM = { 'Drew Secondclaim': { name: 'Jordan Firstclaim', first: 'Jordan', last: 'Firstclaim', number: '000011006' } } as const;
+
+/** PROFILE-ID: the member "member" login's profile as approved (api.mjs MEMBER_PROFILE); no other member has one. */
+export const MEMBER_PROFILE = { first: 'Jordan', last: 'Example', number: '000033001' } as const;
+
+/** PROFILE-ID: every membership number the stand-in holds, none of which another member may ever see. */
+export const ALL_NUMBERS = [...SIGNUP_QUEUE.map((s) => s.number), ...Object.values(REJECTED).map((r) => r.number), MEMBER_PROFILE.number];
 
 /**
  * SOLO-APPROVE: the approval rule as api.mjs answers each officer. The real API holds one setting for

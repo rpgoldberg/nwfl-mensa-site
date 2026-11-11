@@ -7,7 +7,7 @@ import { type Client, Code } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
 import { MemberStatus, MembershipService, Verification } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
-import { type Api, MEMBER, OFFICER, PEOPLE, as, dump, startApi } from '../helpers/api.js';
+import { type Api, MEMBER, OFFICER, PEOPLE, as, startApi } from '../helpers/api.js';
 import { live } from '../helpers/pg.js';
 
 /** The shared people, plus a membership approver without the seat and the seat without the approvers group. */
@@ -88,9 +88,9 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
     // Gone from the list at once, before any new sign-up.
     expect((await membership.listRejectedSignups({}, APPROVER)).requests.map((r) => r.requestId)).not.toContain(requestId);
 
-    // The rejected row stays as it was, with who reopened it; its number and last name stay erased.
+    // The rejected row stays as it was, with who reopened it, and what it typed (PROFILE-ID).
     expect(await rows('sub-redo')).toEqual([
-      { id: requestId, decision: 'rejected', decided_by_sub: 'sub-admin', last_name: null, membership_number: null, reopened_by_sub: 'sub-approver', reopened: true },
+      { id: requestId, decision: 'rejected', decided_by_sub: 'sub-admin', last_name: LAST, membership_number: NUMBER, reopened_by_sub: 'sub-approver', reopened: true },
     ]);
     // The closed account is gone, so the person is where they were before signing up.
     expect(await accountOf('sub-redo')).toBeUndefined();
@@ -110,7 +110,7 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
     expect(again.requestId).not.toBe(requestId);
     expect((await membership.getMyAccount({}, tok('redo-token'))).account?.status).toBe(MemberStatus.PENDING);
     expect((await rows('sub-redo')).map((r) => [r.id, r.decision, r.reopened, r.membership_number])).toEqual([
-      [requestId, 'rejected', true, null],
+      [requestId, 'rejected', true, NUMBER],
       [again.requestId, 'pending', false, NUMBER],
     ]);
     const queue = (await membership.listSignupRequests({}, APPROVER)).requests.map((r) => r.requestId);
@@ -229,10 +229,10 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
   });
 
   describe('ListRejectedSignups', () => {
-    it('lists the rejections that can be reopened, newest first, with the check and the day, never the number or the last name', async () => {
+    it('lists the rejections that can be reopened, newest first, with the check, the day and what was typed (PROFILE-ID)', async () => {
       const older = await turnedDown('joiner-token');
       const { requestId: newer } = await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, as('joiner2-token'));
-      await api.pool.query(`UPDATE signup_request SET verification = 'not_found', verified_on = '2026-10-20', membership_number = NULL, last_name = NULL WHERE id = $1`, [newer]);
+      await api.pool.query(`UPDATE signup_request SET verification = 'not_found', verified_on = '2026-10-20' WHERE id = $1`, [newer]);
       await membership.rejectSignup({ requestId: newer }, APPROVER);
       const listed = await membership.listRejectedSignups({}, APPROVER);
       const mine = listed.requests.filter((r) => [older, newer].includes(r.requestId));
@@ -241,9 +241,7 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
       expect(mine[0]?.rejectedAt).toBeDefined();
       expect(mine[1]).toMatchObject({ displayName: 'Jamie Example', verification: Verification.UNCHECKED });
       expect(mine[1]?.verifiedOn).toBeUndefined();
-      const text = dump(listed);
-      expect(text).not.toContain(NUMBER);
-      expect(text).not.toContain(LAST);
+      for (const r of mine) expect(r).toMatchObject({ lastName: LAST, membershipNumber: NUMBER, firstName: '' });
     });
 
     it('leaves out a reopened sign-up, a pending or approved one, and one whose account is no longer closed', async () => {
@@ -268,7 +266,7 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
 
     it('grants affiliate standing on the open sign-up, never the reopened one', async () => {
       const again = await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, tok('redo5-token'));
-      await api.pool.query(`UPDATE signup_request SET verification = 'verified_other_group', verified_on = '2026-10-21', membership_number = NULL, last_name = NULL WHERE id = $1`, [again.requestId]);
+      await api.pool.query(`UPDATE signup_request SET verification = 'verified_other_group', verified_on = '2026-10-21' WHERE id = $1`, [again.requestId]);
       const { account } = await membership.grantAffiliate({ subject: 'sub-redo5' }, ADMIN);
       expect(account).toMatchObject({ status: MemberStatus.AFFILIATE, verifiedOn: { year: 2026, month: 10, day: 21 } });
       expect((await rows('sub-redo5')).map((r) => [r.decision, r.reopened])).toEqual([

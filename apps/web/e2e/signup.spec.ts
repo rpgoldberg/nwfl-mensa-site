@@ -1,6 +1,7 @@
 // W-SIGNUP part 1, through the browser: the first stop after signing in, the sign-up
-// form on /account (last name and membership number, both required, for everyone, invited or not), a
-// member's standing, and the approvers' queue in the officer area, with axe on each state; and the
+// form on /account (first name, prefilled from the sign-in's given name, last name and membership
+// number, all required, for everyone, invited or not), a member's standing and (PROFILE-ID) profile,
+// and the approvers' queue, with what each sign-up typed, in the officer area, with axe on each state; and the
 // same sign-up and decisions with no script at all (the pages have none). The
 // stand-in API keeps sign-ups and decisions per sign-in (e2e/api.mjs), so the two browsers' runs
 // cannot disturb each other. Every number here is obviously fake.
@@ -8,7 +9,8 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { SITE_URL } from './servers';
 import { openAccount, signIn, signOutButton } from './signin';
-import { MEMBER_CHECKED_ON, SIGNUP_QUEUE, VET_CONFIRMS, VET_WARNINGS } from './stand-in';
+import { ALL_PAGES } from './pages';
+import { ALL_NUMBERS, EARLIER_CLAIM, MEMBER_CHECKED_ON, MEMBER_PROFILE, SIGNUP_QUEUE, VET_CONFIRMS, VET_WARNINGS } from './stand-in';
 
 const ACCOUNT = '/account';
 const QUEUE = '/officer-area/sign-ups';
@@ -35,19 +37,34 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
     await signIn(page, 'newcomer');
     await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
     await expect(page.getByRole('heading', { level: 1, name: 'Your account' })).toBeVisible();
-    await expect(page.locator('.lead')).toContainText('tell us your last name and your Mensa membership number');
+    await expect(page.locator('.lead')).toContainText('tell us your name and your Mensa membership number');
     // SIGNOUT (B): the verifier only as an external service, never how it checks.
     await expect(page.locator('.lead')).toContainText('An external membership verification service confirms them, then an officer approves your account.');
     await expect(page.locator('main')).not.toContainText(/membership list|roster/i);
+    // PROFILE-ID: the first name, prefilled from the sign-in's given name, and editable.
+    await expect(page.getByLabel('First name')).toHaveValue('Sky');
+    await expect(page.getByLabel('First name')).toHaveAttribute('autocomplete', 'given-name');
     await expect(page.getByLabel('Last name')).toHaveAttribute('autocomplete', 'family-name');
     await expect(page.getByLabel('Mensa membership number')).toHaveAttribute('inputmode', 'numeric');
+    // PROFILE-ID (Ross): one line by the number, read with it. With no SITE_ADMIN_CONTACT set (as here),
+    // its link is the officers page, never an empty or a mailto link.
+    const locked = 'Once you send it, your number can’t be changed. If it needs correcting, contact the site administrator.';
+    await expect(page.locator('#membershipNumber-locked')).toHaveText(locked);
+    await expect(page.getByRole('link', { name: 'site administrator' })).toHaveAttribute('href', '/officers');
+    await expect(page.getByLabel('Mensa membership number')).toHaveAccessibleDescription(new RegExp(`${locked.replace(/[.?]/g, '\\$&')}$`));
+    await expect(page.locator('main')).not.toContainText(/erase|never shown|not kept/i);
     expect(await axe(page)).toEqual([]);
     await fits(page);
   });
 
-  test('both fields are required, each problem is said by its field, and the number is never given back', async ({ page }) => {
+  test('every field is required, each problem is said by its field, and the number is never given back', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'newcomer');
+    await page.getByLabel('First name').fill('');
+    await page.getByRole('button', { name: 'Send my sign-up' }).click();
+    await expect(page.getByText('Problem: Enter your first name.')).toBeVisible();
+    await expect(page.getByLabel('First name')).toHaveAttribute('aria-invalid', 'true');
+    await page.getByLabel('First name').fill('Sky');
     await page.getByRole('button', { name: 'Send my sign-up' }).click();
     await expect(page.getByText('Problem: Enter your last name.')).toBeVisible();
     await expect(page.getByText('Problem: Enter your membership number.')).toBeVisible();
@@ -109,6 +126,7 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
     await page.goto('/about');
     await signIn(page, 'invitee');
     await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
+    await page.getByLabel('First name').fill('Taylor');
     await page.getByLabel('Last name').fill('Fakename');
     await page.getByRole('button', { name: 'Send my sign-up' }).click();
     await expect(page.getByText('Problem: Enter your membership number.')).toBeVisible();
@@ -163,7 +181,7 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
 });
 
 test.describe('the approvers\' queue (D4)', () => {
-  test('an approver finds it in the officer area and sees each sign-up in words, never a number or a last name', async ({ page }) => {
+  test('an approver finds it in the officer area and sees each sign-up in words, with what it typed (PROFILE-ID)', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'approver');
     await page.goto('/officer-area');
@@ -177,13 +195,32 @@ test.describe('the approvers\' queue (D4)', () => {
       await expect(card).toContainText(s.email);
       await expect(card).toContainText(s.route);
       await expect(card).toContainText(s.check);
+      for (const [label, value] of [['First name', s.first], ['Last name', s.last], ['Membership number', s.number]] as const) {
+        await expect(card.locator('dl.facts').first().locator('div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')).toHaveText(value);
+      }
     }
+    await expect(page.locator('.lead')).toHaveText('People who signed up and are waiting for member access. Approve a sign-up to give the account member access, or reject it.');
+    await expect(page.locator('main')).not.toContainText(/erase|never shown/i);
     // Found in another local group: no Approve, only Reject, and words saying why.
     const other = cards.filter({ hasText: 'Harper Placeholder' });
     await expect(other.getByRole('button', { name: 'Approve' })).toHaveCount(0);
     await expect(other.getByRole('button', { name: 'Reject' })).toHaveCount(1);
     await expect(other).toContainText('cannot be approved as a member here');
-    expect(await page.content()).not.toMatch(/membership_number|lastName|last_name/);
+    expect(await axe(page)).toEqual([]);
+    await fits(page);
+  });
+
+  test('PROFILE-ID: a duplicate claim shows what the earlier claim typed beside its own; a claim since closed shows none', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'approver');
+    await page.goto(QUEUE);
+    const cardOf = (name: string) => page.locator('.signup-card').filter({ has: page.getByRole('heading', { level: 2, name, exact: true }) });
+    const earlier = EARLIER_CLAIM['Drew Secondclaim'];
+    const section = cardOf('Drew Secondclaim').getByRole('region', { name: `The earlier claim (${earlier.name})` });
+    for (const [label, value] of [['First name', earlier.first], ['Last name', earlier.last], ['Membership number', earlier.number]] as const) {
+      await expect(section.locator('div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')).toHaveText(value);
+    }
+    await expect(cardOf('Eli Thirdclaim').locator('.earlier-claim')).toHaveCount(0);
     expect(await axe(page)).toEqual([]);
     await fits(page);
   });
@@ -211,7 +248,6 @@ test.describe('the approvers\' queue (D4)', () => {
       await expect(cardOf(s.name).getByRole('note')).toHaveCount(0);
       await expect(cardOf(s.name).getByRole('checkbox')).toHaveCount(0);
     }
-    await expect(page.locator('main')).not.toContainText(/membership_number|last_name/);
     expect(await axe(page)).toEqual([]);
     await fits(page);
   });
@@ -264,7 +300,7 @@ test.describe('the approvers\' queue (D4)', () => {
 
     await card('Jesse Example').getByRole('button', { name: 'Reject' }).click();
     await expect(page.getByRole('heading', { name: 'Reject this sign-up?' })).toBeVisible();
-    await expect(page.getByText('The erasure cannot be undone. Only the Admin or the Membership Officer can reopen the sign-up, so the person can sign up again.')).toBeVisible();
+    await expect(page.getByText('A rejected sign-up is removed from the queue. Only the Admin or the Membership Officer can reopen it, so the person can sign up again.')).toBeVisible();
     expect(await axe(page)).toEqual([]);
     await page.getByRole('button', { name: 'Yes, reject it' }).click();
     await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=rejected`);
@@ -335,7 +371,7 @@ test.describe('fix 1: a rejected sign-up (SHOULD-1)', () => {
   test('cannot sign up again: a posted sign-up gets the on-file answer', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'turned-down');
-    const res = await post(page, ACCOUNT, { lastName: 'Fakename', membershipNumber: FAKE_NUMBER });
+    const res = await post(page, ACCOUNT, { firstName: 'Morgan', lastName: 'Fakename', membershipNumber: FAKE_NUMBER });
     expect(res.status()).toBe(409);
     expect(await res.text()).toContain('A sign-up is already on file for this account.');
   });
@@ -502,5 +538,108 @@ test.describe('with no script at all', () => {
     await page.getByRole('button', { name: 'Yes, reject it' }).click();
     await expect(page.getByRole('status')).toHaveText('Rejected. The sign-up has been removed from the queue.');
     await expect(page.locator('.signup-card')).toHaveCount(SIGNUP_QUEUE.length - 2);
+  });
+});
+
+// PROFILE-ID: an approved member's profile on /account: the two names, labelled, with a Save button of
+// 48 px, and the membership number shown as text, never as a field, with no explanation.
+test.describe('the member\'s profile (PROFILE-ID)', () => {
+  const numberShown = (page: Page) => page.locator('dl.facts div').filter({ has: page.getByText('Membership number', { exact: true }) }).locator('dd');
+
+  test('shows the names to change and the number to read, and saves new names', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'member');
+    await page.goto(ACCOUNT);
+    const profile = page.getByRole('region', { name: 'Your profile' });
+    await expect(profile.getByLabel('First name')).toHaveValue(MEMBER_PROFILE.first);
+    await expect(profile.getByLabel('Last name')).toHaveValue(MEMBER_PROFILE.last);
+    await expect(numberShown(page)).toHaveText(MEMBER_PROFILE.number);
+    // Read-only: no field anywhere holds it or takes it.
+    await expect(page.locator(`input[value="${MEMBER_PROFILE.number}"], input[name="membershipNumber"]`)).toHaveCount(0);
+    await expect(profile).not.toContainText(/erase|can’t be changed|cannot be changed|visible|approver/i);
+    const save = profile.getByRole('button', { name: 'Save' });
+    const box = await save.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(48);
+    expect(await axe(page)).toEqual([]);
+    await fits(page);
+
+    await profile.getByLabel('First name').fill('Jordana');
+    await profile.getByLabel('Last name').fill('Example-Smith');
+    await save.click();
+    await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}?saved=1`);
+    await expect(page.getByRole('status')).toHaveText('Your profile has been saved.');
+    await expect(page.getByRole('region', { name: 'Your profile' }).getByLabel('First name')).toHaveValue('Jordana');
+    await expect(page.getByRole('region', { name: 'Your profile' }).getByLabel('Last name')).toHaveValue('Example-Smith');
+    await expect(numberShown(page)).toHaveText(MEMBER_PROFILE.number);
+  });
+
+  test('says each problem by its field, and a number posted with the names changes nothing', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'member');
+    await page.goto(ACCOUNT);
+    const profile = page.getByRole('region', { name: 'Your profile' });
+    await profile.getByLabel('First name').fill('');
+    await profile.getByRole('button', { name: 'Save' }).click();
+    await expect(page.locator('[data-error-summary]').getByRole('link')).toHaveText(['Enter your first name.']);
+    await expect(page.locator('[data-error-summary]').getByRole('link')).toHaveAttribute('href', '#profile-firstName');
+    await expect(profile.getByLabel('First name')).toHaveAttribute('aria-invalid', 'true');
+    expect(await axe(page)).toEqual([]);
+    const forged = await post(page, ACCOUNT, { form: 'profile', firstName: 'Jordan', lastName: 'Example', membershipNumber: '999999999' });
+    expect(forged.status()).toBe(303);
+    await page.goto(ACCOUNT);
+    await expect(numberShown(page)).toHaveText(MEMBER_PROFILE.number);
+    expect(await page.content()).not.toContain('999999999');
+  });
+
+  test('a member with no profile gets no profile section, and a change they post is refused in words', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'mixed');
+    await page.goto(ACCOUNT);
+    await expect(page.locator('.lead')).toHaveText('Your account has member access.');
+    await expect(page.getByRole('region', { name: 'Your profile' })).toHaveCount(0);
+    const res = await post(page, ACCOUNT, { form: 'profile', firstName: 'Ellis', lastName: 'Example' });
+    expect(res.status()).toBe(409);
+    expect(await res.text()).toContain('Your profile can only be changed once your account has member access.');
+  });
+});
+
+// PROFILE-ID, item 8: a number is shown only to its owner (/account) and to the approvers and the Admin
+// (the queue). Another member walks every page they can read and finds none.
+test.describe('no membership number for another member (PROFILE-ID)', () => {
+  test('walks every member-facing page, and /account, as another member and finds no number', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'mixed');
+    for (const path of [...ALL_PAGES, ACCOUNT]) {
+      await page.goto(path);
+      const html = await page.content();
+      for (const number of ALL_NUMBERS) expect(html, `${path} shows ${number}`).not.toContain(number);
+    }
+    expect((await page.goto(QUEUE))?.status()).toBe(404);
+  });
+
+  test('the owner sees their own number on /account alone', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'member');
+    for (const path of ALL_PAGES) {
+      await page.goto(path);
+      expect(await page.content(), path).not.toContain(MEMBER_PROFILE.number);
+    }
+    await page.goto(ACCOUNT);
+    expect(await page.content()).toContain(MEMBER_PROFILE.number);
+  });
+});
+
+test.describe('the profile with no script at all', () => {
+  test.use({ javaScriptEnabled: false });
+
+  test('a member saves new names by a plain form post', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'member');
+    await page.goto(ACCOUNT);
+    const profile = page.getByRole('region', { name: 'Your profile' });
+    await profile.getByLabel('Last name').fill('Examplesson');
+    await profile.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('status')).toHaveText('Your profile has been saved.');
+    await expect(page.getByRole('region', { name: 'Your profile' }).getByLabel('Last name')).toHaveValue('Examplesson');
   });
 });

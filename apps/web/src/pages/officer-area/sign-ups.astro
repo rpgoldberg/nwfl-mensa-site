@@ -1,9 +1,11 @@
 ---
 // W-SIGNUP D4: the approvers' queue. The pending sign-ups, oldest first, one card each: the name and
-// email from the person's sign-in account, how they came (invited by an officer, or signed up on the
-// site), and the membership check's outcome and day. Never the membership number or the last name:
-// the API never sends them. Approve, or Reject after a confirmation step (its erasure cannot be
-// undone; only the Admin or the Membership Officer can reopen it, below). No one decides their own sign-up: the API refuses it, and the page says so. A sign-up the
+// email from the person's sign-in account, what they typed (PROFILE-ID: first name, last name and
+// membership number), how they came (invited by an officer, or signed up on the site), and the
+// membership check's outcome and day. A duplicate claim also shows what the earlier claim typed, so the
+// approver can compare (none for a claim since closed, VET fix 1). Approve, or Reject after a
+// confirmation step (only the Admin or the Membership Officer can reopen it, below). No one decides
+// their own sign-up: the API refuses it, and the page says so. A sign-up the
 // check found in another local group is not approved as a member (R33): it has no Approve button,
 // and the API refuses it too. Each decision goes to the API with the approver's own token
 // (src/lib/api/membership.ts), which alone decides who may.
@@ -19,8 +21,8 @@
 //
 // REOPEN: the Admin and the Membership Officer (the nwfl-office-membership seat; not every approver)
 // also see the rejected sign-ups that can still be reopened, newest first, each with a Reopen button
-// and a confirmation step, so a mistaken rejection can be fixed. Reopening lets the person send the
-// sign-up form again from /account; nothing erased comes back. The list and the button are shown only
+// and a confirmation step, so a mistaken rejection can be fixed, each with what the person typed.
+// Reopening lets the person send the sign-up form again from /account. The list and the button are shown only
 // to those the API would allow (isSignupReopener); the API decides again on every call.
 //
 // The Membership Officer's seat without the approvers group sees the rejections alone: no queue, which
@@ -58,6 +60,7 @@ import {
   refusedText,
   rejectedShownNote,
   signUpsTitle,
+  typedFacts,
 } from '../../lib/signup';
 import { page } from '../../lib/site';
 
@@ -150,9 +153,9 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
 <Base {...p}>
   <h1>{p.title}</h1>
   {approver ? (
-    <p class="lead">People who signed up and are waiting for member access. Approve a sign-up to give the account member access, or reject it. The membership number and last name they typed are never shown here.</p>
+    <p class="lead">People who signed up and are waiting for member access. Approve a sign-up to give the account member access, or reject it.</p>
   ) : (
-    <p class="lead">Sign-ups that were rejected and can be reopened. The membership number and last name they typed are never shown here.</p>
+    <p class="lead">Sign-ups that were rejected and can be reopened.</p>
   )}
   {done && <p class="notice" role="status">{doneText(done)}</p>}
   {refused && <p class="notice" role="alert">{refusedText(refused, approver)}</p>}
@@ -165,7 +168,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
     <section class="card" aria-labelledby="confirm-title">
       <h2 id="confirm-title">Reopen this sign-up?</h2>
       <p>{reopening.displayName} ({reopening.email}).</p>
-      <p><b>The person will be able to send the sign-up form again from their account page, with their last name and membership number. Nothing that was erased comes back, and the rejection stays in the records.</b></p>
+      <p><b>The person will be able to send the sign-up form again from their account page. The rejection stays in the records.</b></p>
       <form method="post" action={HERE}>
         <input type="hidden" name="decision" value="reopen" />
         <input type="hidden" name="request" value={reopening.requestId} />
@@ -180,7 +183,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
     <section class="card" aria-labelledby="confirm-title">
       <h2 id="confirm-title">Reject this sign-up?</h2>
       <p>{confirmed.displayName} ({confirmed.email}).</p>
-      <p><b>A rejected sign-up is removed from the queue, and its membership number and last name are erased. The erasure cannot be undone. Only the Admin or the Membership Officer can reopen the sign-up, so the person can sign up again.</b></p>
+      <p><b>A rejected sign-up is removed from the queue. Only the Admin or the Membership Officer can reopen it, so the person can sign up again.</b></p>
       <form method="post" action={HERE}>
         <input type="hidden" name="decision" value="reject" />
         <input type="hidden" name="request" value={confirmed.requestId} />
@@ -202,6 +205,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
             <h2 id={`signup-${i}`}>{r.displayName}</h2>
             <dl class="facts">
               <div><dt>Email</dt><dd>{r.email}</dd></div>
+              {typedFacts(r).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
               <div><dt>How they came</dt><dd>{ROUTE_TEXT[r.route]}</dd></div>
               <div><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
               {r.createdAt && <div><dt>Signed up</dt><dd>{formatMoment(r.createdAt)}</dd></div>}
@@ -210,6 +214,14 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
               <p>This person is a member of another local group, so the sign-up cannot be approved as a member here. Reject it, or ask the Admin or the Webmaster about affiliate access.</p>
             )}
             {warning && <p class="notice" role="note" id={`signup-warning-${i}`}><strong>Before approving:</strong> {warning}</p>}
+            {r.earlierClaim && !r.earlierClaim.closed && typedFacts(r.earlierClaim).length > 0 && (
+              <section class="earlier-claim" aria-labelledby={`signup-earlier-${i}`}>
+                <h3 id={`signup-earlier-${i}`}>The earlier claim{r.earlierClaim.displayName ? ` (${r.earlierClaim.displayName})` : ''}</h3>
+                <dl class="facts">
+                  {typedFacts(r.earlierClaim).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
+                </dl>
+              </section>
+            )}
             {confirm && (
               <div class="choice confirm-warning">
                 <input type="checkbox" id={`signup-confirm-${i}`} form={`signup-approve-${i}`} name="confirmed" value="yes" required aria-describedby={`signup-warning-${i}`} />
@@ -252,6 +264,7 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
             <h3 id={`rejected-${i}`}>{r.displayName}</h3>
             <dl class="facts">
               <div><dt>Email</dt><dd>{r.email}</dd></div>
+              {typedFacts(r).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
               <div><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
               {r.rejectedAt && <div><dt>Rejected on</dt><dd>{formatMoment(r.rejectedAt)}</dd></div>}
             </dl>

@@ -32,7 +32,7 @@ const AUDIENCE = 'nwfl-site';
 /**
  * By the login typed at the sign-in form. Each id is the subject, a UUID as Authentik's user_uuid mode
  * makes it (the API refuses any other). Kept in step with e2e/stand-in.ts (ACCOUNTS).
- * @type {Record<string, { id: string, name: string, groups: string[], tokenSeconds?: number }>}
+ * @type {Record<string, { id: string, name: string, givenName?: string, groups: string[], tokenSeconds?: number }>}
  */
 const LOGINS = {
   officer: { id: '00000000-0000-4000-8000-0000000000a1', name: 'Alex Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-president'] },
@@ -63,7 +63,8 @@ const LOGINS = {
   'lapsed-admin': { id: '00000000-0000-4000-8000-0000000000af', name: 'Hollis Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-admin'], tokenSeconds: 20 },
   // W-SIGNUP: an enrolee with no account yet; one an officer invited (fc INVITE1's groups); and the
   // Membership Officer, a membership approver, who also has a sign-up of their own in the queue.
-  newcomer: { id: '00000000-0000-4000-8000-0000000000d1', name: 'Sky Sample', groups: ['nwfl-users'] },
+  // PROFILE-ID: a given name, which the sign-up's first name is prefilled from.
+  newcomer: { id: '00000000-0000-4000-8000-0000000000d1', name: 'Sky Sample', givenName: 'Sky', groups: ['nwfl-users'] },
   invitee: { id: '00000000-0000-4000-8000-0000000000d2', name: 'Taylor Example', groups: ['nwfl-users', 'nwfl-members', 'nwfl-invited'] },
   approver: { id: '00000000-0000-4000-8000-0000000000d3', name: 'Blair Example', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers'] },
   // W-SIGNUP fix 1: an enrolee whose sign-up an approver rejected (the API removed the account with it);
@@ -101,7 +102,7 @@ const provider = new Provider(issuer, {
   ],
   pkce: { required: () => true },
   // VET: the site asks for the email scope by default (server/auth-config.mjs), as Authentik offers it.
-  claims: { openid: ['sub'], profile: ['name', 'groups'], email: ['email', 'email_verified'] },
+  claims: { openid: ['sub'], profile: ['name', 'given_name', 'groups'], email: ['email', 'email_verified'] },
   conformIdTokenClaims: false,
   cookies: { keys: ['e2e-only-not-a-secret'] },
   features: {
@@ -137,7 +138,7 @@ const provider = new Provider(issuer, {
   /** @param {unknown} _ctx @param {string} id */
   async findAccount(_ctx, id) {
     const account = BY_ID.get(id);
-    const claims = account ? { name: account.name, groups: account.groups } : { name: id, groups: [] };
+    const claims = account ? { name: account.name, ...(account.givenName ? { given_name: account.givenName } : {}), groups: account.groups } : { name: id, groups: [] };
     return { accountId: id, claims: async () => ({ sub: id, ...claims }) };
   },
   /** @param {import('oidc-provider').KoaContextWithOIDC} ctx */

@@ -39,11 +39,11 @@ describe.skipIf(!live)('a sign-up from submission to lapse', () => {
     expect((await membership.getMyAccount({}, JOINER)).account?.status).toBe(MemberStatus.PENDING);
     expect(await reads()).toBe(false);
 
-    // 2. The verifier finds a local match; the number and last name are gone.
+    // 2. The verifier finds a local match; the number and last name are kept (PROFILE-ID).
     expect((await verifier.listPendingVerifications({}, as('verifier-token'))).pending.map((p) => p.requestId)).toEqual([requestId]);
     await verifier.reportVerification({ requestId, outcome: VerificationOutcome.VERIFIED_LOCAL }, as('verifier-token'));
     const { rows } = await api.pool.query(`SELECT membership_number, last_name FROM signup_request WHERE id = $1`, [requestId]);
-    expect(rows).toEqual([{ membership_number: null, last_name: null }]);
+    expect(rows).toEqual([{ membership_number: '40417233', last_name: 'Examplesson' }]);
 
     // 3. Not a member yet: an officer still decides, seeing the outcome.
     expect(await reads()).toBe(false);

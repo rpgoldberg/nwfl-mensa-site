@@ -9,8 +9,9 @@
 //   - no RPC takes an audience from the caller, except ExportEdition, and no
 //     read RPC takes a visibility filter either (P17: the audience comes from
 //     the verified token);
-//   - the membership number reaches only the verifier's pending list (out) and
-//     the sign-up call (in);
+//   - the membership number reaches only the verifier's pending list (out),
+//     the sign-up call (in), the approvers' queue and rejections (out) and the
+//     owner's own account (out); PROFILE-ID: nothing takes it back in to change it;
 //   - nothing National-sourced has a field: no phone, birthday or home address,
 //     and no free-text notes on membership records.
 import type { DescEnum, DescField, DescFile, DescMessage, DescMethod, DescService } from '@bufbuild/protobuf';
@@ -186,14 +187,36 @@ describe(`${PKG}: the membership verifier`, () => {
     expect(names.filter((n) => /number|name|email/.test(n))).toEqual([]);
   });
 
-  it('VET: lets the approver see the two new outcomes and the earlier claim by its display name and date only', () => {
+  it('VET: lets the approver see the two new outcomes and the earlier claim by its display name, date and typed values', () => {
     const verification = files.flatMap((file) => file.enums).find((e) => e.typeName === `${PKG}.Verification`);
     expect(verification?.values.map((v) => v.name).slice(-2)).toEqual(['VERIFICATION_EMAIL_MISMATCH', 'VERIFICATION_DUPLICATE_CLAIM']);
     const request = allMessages().find((m) => m.typeName === `${PKG}.SignupRequest`);
     const earlier = request?.fields.find((f) => f.name === 'earlier_claim');
     expect(earlier?.number).toBe(8);
     // Fix 1 (N2): closed, with no display name, when the earlier sign-up was rejected or reopened.
-    expect(fieldNames(earlier === undefined ? undefined : fieldMessage(earlier))).toEqual(['display_name', 'signed_up_at', 'closed']);
+    // PROFILE-ID: and the names and number it typed, so the approver can compare.
+    expect(fieldNames(earlier === undefined ? undefined : fieldMessage(earlier))).toEqual(['display_name', 'signed_up_at', 'closed', 'first_name', 'last_name', 'membership_number']);
+  });
+
+  it('PROFILE-ID: shows the approvers what each sign-up typed, pending or rejected', () => {
+    const message = (name: string) => allMessages().find((m) => m.typeName === `${PKG}.${name}`);
+    expect(fieldNames(message('SignupRequest')).slice(-3)).toEqual(['first_name', 'last_name', 'membership_number']);
+    expect(fieldNames(message('RejectedSignup')).slice(-3)).toEqual(['first_name', 'last_name', 'membership_number']);
+    expect(fieldNames(message('SubmitSignupRequest'))).toEqual(['last_name', 'membership_number', 'first_name']);
+  });
+
+  it('PROFILE-ID: gives the owner a profile to read, and a change that takes the two names and nothing else', () => {
+    const membership = service('MembershipService');
+    const mine = membership?.methods.find((m) => m.name === 'GetMyAccount');
+    const profile = mine?.output.fields.find((f) => f.name === 'profile');
+    expect(fieldNames(profile === undefined ? undefined : fieldMessage(profile))).toEqual(['first_name', 'last_name', 'membership_number']);
+    const update = membership?.methods.find((m) => m.name === 'UpdateMyProfile');
+    expect(update?.idempotency).not.toBe(Idempotency.NO_SIDE_EFFECTS);
+    expect(fieldNames(update?.input)).toEqual(['first_name', 'last_name']);
+    expect(fieldNames(update?.output)).toEqual([]);
+    // The account the approvers' calls return carries no profile: only GetMyAccount does.
+    expect(fieldNames(allMessages().find((m) => m.typeName === `${PKG}.MemberAccount`))).toEqual(['status', 'route', 'verified_on']);
+    expect(fieldNames(allMessages().find((m) => m.typeName === `${PKG}.Member`))).not.toContain('membership_number');
   });
 
   it('VET fix 1: an approval of a warning outcome carries the approver\'s confirmation, nothing else new', () => {
@@ -202,26 +225,34 @@ describe(`${PKG}: the membership verifier`, () => {
     expect(approve?.input.fields.find((f) => f.name === 'confirmed_warning')?.fieldKind).toBe('scalar');
   });
 
-  it('lets the membership number reach only the pending list (out) and the sign-up call (in)', () => {
-    const carriers = methods().flatMap((m) => [
-      ...(reachableFields(m.input).some((f) => f.name === 'membership_number') ? [`${rpc(m)} in`] : []),
-      ...(reachableFields(m.output).some((f) => f.name === 'membership_number') ? [`${rpc(m)} out`] : []),
-    ]);
-    expect(carriers.sort()).toEqual([
-      'MembershipService.SubmitSignup in',
-      'MembershipVerifierService.ListPendingVerifications out',
-    ]);
+  // PROFILE-ID: the owner (GetMyAccount) and the approvers (the queue and the rejections) see it too.
+  const NUMBER_CARRIERS = [
+    'MembershipService.GetMyAccount out',
+    'MembershipService.ListRejectedSignups out',
+    'MembershipService.ListSignupRequests out',
+    'MembershipService.SubmitSignup in',
+    'MembershipVerifierService.ListPendingVerifications out',
+  ];
+  const carriersOf = (name: string): string[] =>
+    methods()
+      .flatMap((m) => [
+        ...(reachableFields(m.input).some((f) => f.name === name) ? [`${rpc(m)} in`] : []),
+        ...(reachableFields(m.output).some((f) => f.name === name) ? [`${rpc(m)} out`] : []),
+      ])
+      .sort();
+
+  it('lets the membership number reach only the pending list, the sign-up call, the owner and the approvers\' two lists', () => {
+    expect(carriersOf('membership_number')).toEqual(NUMBER_CARRIERS);
   });
 
-  it('lets the last name reach only the same two places', () => {
-    const carriers = methods().flatMap((m) => [
-      ...(reachableFields(m.input).some((f) => f.name === 'last_name') ? [`${rpc(m)} in`] : []),
-      ...(reachableFields(m.output).some((f) => f.name === 'last_name') ? [`${rpc(m)} out`] : []),
-    ]);
-    expect(carriers.sort()).toEqual([
-      'MembershipService.SubmitSignup in',
-      'MembershipVerifierService.ListPendingVerifications out',
-    ]);
+  it('lets the last name reach the same places, and the owner\'s change of name (in)', () => {
+    expect(carriersOf('last_name')).toEqual([...NUMBER_CARRIERS, 'MembershipService.UpdateMyProfile in'].sort());
+  });
+
+  it('PROFILE-ID: lets the first name reach the same places but the verifier\'s', () => {
+    expect(carriersOf('first_name')).toEqual(
+      [...NUMBER_CARRIERS.filter((c) => !c.startsWith('MembershipVerifierService')), 'MembershipService.UpdateMyProfile in'].sort(),
+    );
   });
 });
 
@@ -290,11 +321,17 @@ describe(`${PKG}: rules by name as well as by type`, () => {
     expect(list === undefined ? [] : reachableFields(list.output).map((f) => f.name)).toEqual(['pending', 'request_id', 'membership_number', 'last_name', 'email']);
   });
 
-  it('lets a membership number under any name reach only the pending list (out) and the sign-up call (in)', () => {
+  it('lets a membership number under any name reach only the places it is shown (PROFILE-ID), and never in to change it', () => {
     const carriers = methods().flatMap((m) => [
       ...(reachableFields(m.input).some((f) => NUMBER_LIKE.test(f.name)) ? [`${rpc(m)} in`] : []),
       ...(reachableFields(m.output).some((f) => NUMBER_LIKE.test(f.name)) ? [`${rpc(m)} out`] : []),
     ]);
-    expect(carriers.sort()).toEqual(['MembershipService.SubmitSignup in', 'MembershipVerifierService.ListPendingVerifications out']);
+    expect(carriers.sort()).toEqual([
+      'MembershipService.GetMyAccount out',
+      'MembershipService.ListRejectedSignups out',
+      'MembershipService.ListSignupRequests out',
+      'MembershipService.SubmitSignup in',
+      'MembershipVerifierService.ListPendingVerifications out',
+    ]);
   });
 });

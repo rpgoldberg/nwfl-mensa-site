@@ -112,8 +112,10 @@ the rules a handler cannot be trusted to keep:
 
 - no RPC takes an audience from the caller except `ExportEdition`, and no
   read RPC takes a visibility filter;
-- the membership number reaches only `ListPendingVerifications` (out) and
-  `SubmitSignup` (in);
+- the membership number reaches only `ListPendingVerifications` (out),
+  `SubmitSignup` (in), the approvers' `ListSignupRequests` and
+  `ListRejectedSignups` (out) and the owner's `GetMyAccount` (out); no request
+  takes it in to change it (`UpdateMyProfile` takes the two names only);
 - no message has a phone, birthday or home-address field, and the membership
   messages have no free-text note.
 
@@ -186,7 +188,7 @@ by the handler for a precise answer, and by the database (`0007`).
   every membership approver), never on their own sign-up, lists the
   rejections that can be reopened and reopens one. The rejected row stays,
   marked reopened by whom and when; the account the rejection closed is
-  deleted, so the person can sign up again. Nothing erased comes back, and
+  deleted, so the person can sign up again, and
   both steps are audited. Not rejected, already reopened, or an account no
   longer closed is FAILED_PRECONDITION. Authentik is not touched: a rejection
   changes no group or account there. The list holds the latest 50 rejections,
@@ -803,9 +805,10 @@ The rules the database itself enforces:
   version is never deleted;
 - a member's home has no street address, city or link; a `.docx` is
   officers-only; an edition's hosted PDF is a public file of that edition;
-- a sign-up's membership number and last name are erased when the verifier
-  reports and when an officer approves or rejects it; `affiliate` needs a
-  recorded grant;
+- a sign-up keeps the first name, last name and membership number it typed in
+  every state (0028); the number never changes once stored, for any role, and
+  the names change only on an approved sign-up, the member's profile;
+  `affiliate` needs a recorded grant;
 - a decided sign-up keeps its decision (0009); only a rejected one can be
   reopened, by whom and when recorded together, and a reopened row never
   changes again (0026). A person has one sign-up at most that is not
@@ -818,8 +821,8 @@ Accepted residual risks, with no code against them:
 
 - The schema owner can disable a trigger or drop a constraint. The migrator
   role runs migrations only; the service never connects as it.
-- An erased membership number still exists in Postgres WAL and in backups
-  until they age out; pg-nwfl's backup retention bounds how long.
+- A deleted sign-up's membership number still exists in Postgres WAL and in
+  backups until they age out; pg-nwfl's backup retention bounds how long.
 - Free-text fields (an event's detail, a send-back note) could hold someone's
   contact details if an officer types them. The approval screens for members
   have no notes field at all.

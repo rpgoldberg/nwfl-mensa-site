@@ -15,7 +15,7 @@ import { TokenStore } from '../../../server/token-store.mjs';
 import { AccountRoute, MemberStatus, MembershipService, RejectedSignupSchema, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
-import { DecisionRefused, MembershipSignInAgain, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
+import { DecisionRefused, MembershipSignInAgain, ProfileRefused, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -94,7 +94,7 @@ describe('grpcMembership: the person\'s own account', () => {
     );
     const lines: string[] = [];
     const api = grpcMembership(config(server.url), (line) => lines.push(line));
-    await api.submitSignup(PERSON, { lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER });
+    await api.submitSignup(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER });
     expect(seen).toEqual([{ lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER }]);
     expect(server.headers[0]?.['authorization']).toBe('Bearer person.tok-en');
     expect(lines).toEqual([]);
@@ -114,7 +114,7 @@ describe('grpcMembership: the person\'s own account', () => {
     );
     const lines: string[] = [];
     const api = grpcMembership(config(server.url), (line) => lines.push(line));
-    const error = await api.submitSignup(PERSON, { lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER }).catch((e: unknown) => e);
+    const error = await api.submitSignup(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(SignupRefused);
     expect((error as SignupRefused).reason).toBe(reason);
     expect(lines.map((l) => JSON.parse(l) as unknown)).toEqual([{ level: 'warn', msg: 'api refused the sign-up', rpc: 'SubmitSignup', code: logged }]);
@@ -375,7 +375,7 @@ describe('grpcMembership: failures', () => {
     const lines: string[] = [];
     const api = grpcMembership(config(server.url), (line) => lines.push(line));
     await expect(api.getMyAccount(PERSON)).rejects.toBeInstanceOf(MembershipSignInAgain);
-    await expect(api.submitSignup(PERSON, { lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER })).rejects.toBeInstanceOf(MembershipSignInAgain);
+    await expect(api.submitSignup(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER })).rejects.toBeInstanceOf(MembershipSignInAgain);
     await expect(api.listSignupRequests(PERSON)).rejects.toBeInstanceOf(MembershipSignInAgain);
     await expect(api.approveSignup(PERSON, ID)).rejects.toBeInstanceOf(MembershipSignInAgain);
     await expect(api.rejectSignup(PERSON, ID)).rejects.toBeInstanceOf(MembershipSignInAgain);
@@ -406,7 +406,7 @@ describe('grpcMembership: failures', () => {
     const api = grpcMembership(config(server.url), (line) => lines.push(line));
     await expect(api.getMyAccount(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.listSignupRequests(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
-    await expect(api.submitSignup(PERSON, { lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.submitSignup(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER })).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.approveSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
     expect(lines.map((l) => JSON.parse(l) as unknown)).toEqual([
       { level: 'error', msg: 'api call failed', rpc: 'GetMyAccount', code: 'unavailable' },
@@ -426,7 +426,7 @@ describe('grpcMembership: failures', () => {
   it('is unavailable everywhere when the API is set up wrongly', async () => {
     const api = unavailableMembership();
     await expect(api.getMyAccount(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
-    await expect(api.submitSignup(PERSON, { lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.submitSignup(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER })).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.listSignupRequests(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.approveSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.rejectSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
@@ -484,5 +484,134 @@ describe('sessionReader', () => {
     expect(sessionReader(soon.session, soon.deps)).toEqual({ reader: undefined, lapsed: true });
     const ended = signedIn(['nwfl-users'], { access_token: 'tok.en', expires_at: NOW + 3600 });
     expect(sessionReader({ ...ended.session, exp: NOW }, ended.deps)).toEqual({ reader: undefined, lapsed: true });
+  });
+});
+
+// PROFILE-ID: what a sign-up typed reaches the approvers' queue and rejections, and an approved
+// member's own account as their profile. The member changes the two names, never the number. No log
+// line ever holds the number or a name.
+describe('grpcMembership: what was typed, and the member\'s profile (PROFILE-ID)', () => {
+  it('reads an approved member\'s profile with the account, and none when the API sends none', async () => {
+    let profile: object | undefined = { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER };
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        getMyAccount: () => ({ account: { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP }, ...(profile ? { profile } : {}) }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.getMyAccount(PERSON)).toEqual({ status: 'member', route: 'signup', profile: { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER } });
+    profile = undefined;
+    expect(await api.getMyAccount(PERSON)).toEqual({ status: 'member', route: 'signup' });
+  });
+
+  it('reads what each pending sign-up and its earlier claim typed, and what each rejection typed', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: [
+            create(SignupRequestSchema, {
+              requestId: ID,
+              displayName: 'Drew Secondclaim',
+              email: 'drew@example.org',
+              route: AccountRoute.SIGNUP,
+              verification: Verification.DUPLICATE_CLAIM,
+              firstName: 'Drew',
+              lastName: FAKE_LAST,
+              membershipNumber: FAKE_NUMBER,
+              earlierClaim: { displayName: 'Jordan Firstclaim', firstName: 'Jordan', lastName: 'Firstclaim', membershipNumber: FAKE_NUMBER },
+            }),
+          ],
+        }),
+        listRejectedSignups: () => ({
+          requests: [create(RejectedSignupSchema, { requestId: ID, displayName: 'Kai Example', email: 'kai@example.org', verification: Verification.UNCHECKED, lastName: 'Example', membershipNumber: '42' })],
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.listSignupRequests(PERSON)).toEqual([
+      {
+        requestId: ID,
+        displayName: 'Drew Secondclaim',
+        email: 'drew@example.org',
+        route: 'signup',
+        verification: 'duplicate_claim',
+        firstName: 'Drew',
+        lastName: FAKE_LAST,
+        membershipNumber: FAKE_NUMBER,
+        earlierClaim: { displayName: 'Jordan Firstclaim', firstName: 'Jordan', lastName: 'Firstclaim', membershipNumber: FAKE_NUMBER },
+      },
+    ]);
+    expect(await api.listRejectedSignups(PERSON)).toEqual([{ requestId: ID, displayName: 'Kai Example', email: 'kai@example.org', verification: 'unchecked', lastName: 'Example', membershipNumber: '42' }]);
+  });
+
+  it('sends the first name with the sign-up', async () => {
+    const seen: unknown[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        submitSignup: (req) => {
+          seen.push({ firstName: req.firstName, lastName: req.lastName, membershipNumber: req.membershipNumber });
+          return { requestId: ID };
+        },
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    await api.submitSignup(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER });
+    expect(seen).toEqual([{ firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER }]);
+  });
+
+  it('sends a change of profile as the two names alone, with the person\'s bearer', async () => {
+    const seen: unknown[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        updateMyProfile: (req) => {
+          seen.push({ firstName: req.firstName, lastName: req.lastName, unknown: req.$unknown ?? [] });
+          return {};
+        },
+      }),
+    );
+    const lines: string[] = [];
+    const api = grpcMembership(config(server.url), (line) => lines.push(line));
+    await api.updateMyProfile(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST });
+    expect(seen).toEqual([{ firstName: 'Jordan', lastName: FAKE_LAST, unknown: [] }]);
+    expect(server.headers[0]?.['authorization']).toBe('Bearer person.tok-en');
+    expect(lines).toEqual([]);
+  });
+
+  it.each([
+    [Code.InvalidArgument, 'invalid', 'invalid_argument'],
+    [Code.FailedPrecondition, 'not_member', 'failed_precondition'],
+  ] as const)('says a refused change (%s) by its kind, %s, and logs the call and code only', async (code, reason, logged) => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        updateMyProfile: () => {
+          throw new ConnectError(`refused ${FAKE_NUMBER} ${FAKE_LAST}`, code);
+        },
+      }),
+    );
+    const lines: string[] = [];
+    const api = grpcMembership(config(server.url), (line) => lines.push(line));
+    const error = await api.updateMyProfile(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ProfileRefused);
+    expect((error as ProfileRefused).reason).toBe(reason);
+    expect(lines.map((l) => JSON.parse(l) as unknown)).toEqual([{ level: 'warn', msg: 'api refused the profile change', rpc: 'UpdateMyProfile', code: logged }]);
+    expect(`${lines.join('\n')} ${String(error)}`).not.toMatch(new RegExp(`${FAKE_NUMBER}|${FAKE_LAST}|Jordan|tok-en`));
+  });
+
+  it('asks to sign in again on a refused token, is unavailable on anything else, and never logs the number from an API message', async () => {
+    let code = Code.Unauthenticated;
+    const fail = () => {
+      throw new ConnectError(`no account for ${FAKE_NUMBER}`, code);
+    };
+    const server = await grpcServer((router) => router.service(MembershipService, { updateMyProfile: fail, getMyAccount: fail, listSignupRequests: fail }));
+    const lines: string[] = [];
+    const api = grpcMembership(config(server.url), (line) => lines.push(line));
+    await expect(api.updateMyProfile(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST })).rejects.toBeInstanceOf(MembershipSignInAgain);
+    code = Code.Internal;
+    await expect(api.updateMyProfile(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.getMyAccount(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.listSignupRequests(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+    expect(lines).toHaveLength(4);
+    expect(lines.join('\n')).not.toMatch(new RegExp(`${FAKE_NUMBER}|${FAKE_LAST}|Jordan`));
+    await expect(unavailableMembership().updateMyProfile(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST })).rejects.toBeInstanceOf(ApiUnavailable);
   });
 });

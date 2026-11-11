@@ -321,8 +321,8 @@ export const ClaimReleaseKindSchema: GenEnum<ClaimReleaseKind> = /*@__PURE__*/
 export const MembershipVerifierService: GenService<{
   /**
    * The sign-ups that typed a number and have not been checked yet, with the
-   * email stored on each (VET). This is the only RPC that returns a
-   * membership number.
+   * email stored on each (VET). This is the only RPC of this service that
+   * returns a membership number.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipVerifierService.ListPendingVerifications
    */
@@ -332,8 +332,8 @@ export const MembershipVerifierService: GenService<{
     output: typeof ListPendingVerificationsResponseSchema;
   },
   /**
-   * Records the outcome and the date, and erases the number and the last name
-   * in the same statement. A local match does not approve the sign-up: an
+   * Records the outcome and the date; the sign-up then leaves the pending
+   * list. A local match does not approve the sign-up: an
    * officer still does.
    *
    * VET fix 1: a report refused with FAILED_PRECONDITION or NOT_FOUND records
