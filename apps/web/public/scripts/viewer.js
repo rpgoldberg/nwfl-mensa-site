@@ -4,14 +4,24 @@
 // query, and nothing but a same-origin path is ever loaded. The browser fetches the file with the
 // reader's cookies, so the copy is whichever the site serves this reader.
 //
-// Accessibility first: every control is a visible button or select, 44 px at least, in the tab order, in
-// the page's own theme, each with a spoken name and a tooltip; no gesture is needed (pinch and scroll
-// still work, as the browser's own). W-LOOK3, after Ross's mockup: one slim row on the frame's top edge,
-// back, a page picker ("1 / 12") and next; zoom out, a zoom picker of the steps and zoom in; Fit width
-// and Fit page, the one in force pressed; then Download and Open in another app, which are plain links
-// and need no script. Every device opens at Fit width, so the page fills the frame. The pickers are a
-// button that opens a list of buttons, never a native select: WebKit raises a style-src-attr violation
-// for a select's own inner style under the site's CSP (no 'unsafe-inline'), and the CSP stays as it is. Each page is a canvas for the eye
+// Accessibility first: every control is a visible button, link or text box, 44 px at least, in the tab
+// order, in the page's own theme, each with a spoken name and a tooltip; no gesture is needed (pinch and
+// scroll still work, as the browser's own). W-LOOK3, after Ross's mockup: one slim row on the frame's top
+// edge. READER2: first, back, the page number in a box ("3 of 12": type one, then Enter, or just leave the
+// box, as an iPhone's number pad has no Enter) and next and last; search; zoom out, a zoom picker of the
+// steps and zoom in, and on a computer a hand tool; Fit width and Fit page, the one in force pressed;
+// Light pages where the theme recolours them; then Download and Open in another app, plain links that
+// need no script. Where a phone has no room, the later of these move, in that order, into a More menu
+// (site.css), which holds a copy of each. Every device opens at Fit width, so the page fills the frame.
+// The zoom picker is a button that opens a list of buttons, never a native select: WebKit raises a
+// style-src-attr violation for a select's own inner style under the site's CSP (no 'unsafe-inline'),
+// and the CSP stays as it is. Search (public/scripts/viewer-find.js) reads only the text of the file
+// shown, the copy this reader is served, and marks its matches in the text layer. The pages follow the
+// site's theme (public/scripts/viewer-tone.js): data-tone on the viewer, kept in step live; pictures are
+// laid over the drawing unrecoloured. Zoomed wider than the frame, the pages scroll sideways: a
+// scrollbar kept at the foot of the window, Shift and the wheel, a trackpad, the keyboard on the focused
+// pages, and the hand tool (a drag with the mouse; a press without a drag still follows a link, and text
+// can be selected again once it is off). Each page is a canvas for the eye
 // (hidden from screen readers), pdf.js's text layer over it for screen readers and selection, and its
 // links (the copy's link annotations, and nothing else from the annotation layer: no forms, no files,
 // no scripts). Only two kinds of link are ever made: an /out/<id> goes to this site's leaving page in
@@ -27,15 +37,26 @@
 // Without this file the page says the reader needs JavaScript and offers Open in another app and
 // Download, which are always there.
 //
+// The window, not the frame, scrolls up and down, so the bar can stay at the top while reading.
+//
 // pdf.js options: no eval (isEvalSupported false; 6.4.299 has no eval path left, the option is kept for
 // a version that might), no WebAssembly (the CSP has no 'wasm-unsafe-eval'), no XFA forms, no decoded
 // image larger than MAX_IMAGE_PIXELS, errors only in the console. The worker is a same-origin module
 // (CSP worker-src 'self'), so pdf.js needs no blob:.
 
+import { NO_TEXT, findIn, hasText, indexText, matchLabel, paintHits, queryOf, rangesOf } from './viewer-find.js';
+import { addPhotos, pageTone, photoBoxes } from './viewer-tone.js';
+
 export const CSS_UNITS = 96 / 72;
 export const ZOOMS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
 /** The most pixels one page's canvas may hold (a 4096 x 4096 square): phones refuse more. */
 export const MAX_PIXELS = 16_777_216;
+/**
+ * The most a recoloured page's canvas may hold (DARKPDF): the CSS filter or blend that recolours it costs
+ * the browser a second buffer of the same size, and WebKit ran out of memory with both at MAX_PIXELS.
+ * A phone's page is far below either.
+ */
+export const TONED_PIXELS = MAX_PIXELS / 2;
 /** A page within a screen of the window is drawn; one further away is let go. */
 export const NEAR = '100% 0px';
 /** Space kept below the bar when a whole page is fitted. */
@@ -65,6 +86,25 @@ const LEAVING = /^\/out\/([a-z2-7]{26})$/;
 const KEPT = /^(?:\/out\/[a-z2-7]{26}|#)$/;
 /** On the viewer while its bar is too tall to stay at the top: it scrolls with the page (site.css). */
 export const UNPINNED = 'viewer--unpinned';
+/** On the viewer once the script has wired it. */
+export const JS = 'viewer--js';
+/** On the viewer while the pages are wider than the frame, and while the hand tool is on and dragging. */
+export const WIDE = 'viewer--wide';
+export const HAND = 'viewer--hand';
+export const DRAGGING = 'viewer--dragging';
+/** On the viewer while Light pages shows the pages as printed whatever the theme. */
+export const LIGHT_PAGES = 'viewer--light-pages';
+/**
+ * The bar's groups (data-ov) that move into the More menu when its controls would not sit on one row, the
+ * first first: Light pages, then Download and Open, then zoom, then Fit, then search (Ross's order, from
+ * its end). Each moved has viewer--shed-<group> on the viewer, and the More button shows with MORE.
+ */
+export const SHED = /** @type {const} */ (['tone', 'file', 'zoom', 'fit', 'find']);
+export const MORE = 'viewer--more';
+/** How far a press must move to be a drag, not a click, in CSS px. */
+const DRAG = 4;
+/** Pixels in a line of a wheel that counts in lines (deltaMode 1). */
+const LINE = 40;
 const EPSILON = 1e-6;
 
 /**
@@ -81,12 +121,19 @@ export function zoomOptions(scale) {
 }
 
 /**
- * The page picker's face, as Ross's mockup writes it.
+ * A page typed in the page box: a whole number from 1 to the last page; anything else is none.
  *
- * @param {number} n
+ * @param {string} value
  * @param {number} count
  */
-export const pageLabel = (n, count) => `${n} / ${count}`;
+export function pageInput(value, count) {
+  const text = value.trim();
+  if (!/^[0-9]+$/.test(text)) return undefined;
+  const n = Number(text);
+  return n >= 1 && n <= count ? n : undefined;
+}
+/** @param {number} count */
+export const noPage = (count) => `Type a page number from 1 to ${count}.`;
 
 /** @param {number} scale */
 export const zoomIn = (scale) => ZOOMS.find((z) => z > scale + EPSILON) ?? /** @type {number} */ (ZOOMS.at(-1));
@@ -200,9 +247,11 @@ export function sameOriginPath(url, origin) {
 /**
  * What the viewer uses of the page and the window (a browser's document and window, or stand-ins).
  *
- * @typedef {{ querySelector(selector: string): any, createElement(tag: string): any, activeElement: unknown }} ViewerDocument
+ * @typedef {{ querySelector(selector: string): any, createElement(tag: string): any, activeElement: any, documentElement: any }} ViewerDocument
  * @typedef {{ devicePixelRatio: number, innerHeight: number, location: { hash: string, origin: string },
  *   ResizeObserver?: new (callback: () => void) => { observe(el: any): void },
+ *   MutationObserver?: (new (callback: () => void) => { observe(el: any, options: object): void }) | undefined,
+ *   matchMedia(query: string): { matches: boolean, addEventListener(type: string, listener: () => void): void },
  *   IntersectionObserver: new (callback: (entries: { target: any, isIntersecting: boolean }[]) => void, options: { rootMargin: string }) => { observe(el: any): void },
  *   requestAnimationFrame(fn: () => void): unknown, scrollBy(x: number, y: number): void,
  *   addEventListener(type: string, listener: (event: Event) => void, options?: AddEventListenerOptions): void }} ViewerWindow
@@ -210,7 +259,8 @@ export function sameOriginPath(url, origin) {
 
 /**
  * @typedef {{ n: number, el: HTMLElement, layer: HTMLElement, size: { width: number, height: number } | undefined,
- *   proxy: any, near: boolean, state: 'idle' | 'queued' | 'drawing' | 'drawn', task: any, token: object | undefined }} Page
+ *   proxy: any, near: boolean, state: 'idle' | 'queued' | 'drawing' | 'drawn', task: any, token: object | undefined,
+ *   find: { divs: any[], strs: string[], painted: Set<number> } | undefined, images?: number | undefined }} Page
  */
 
 /**
@@ -226,7 +276,10 @@ export async function wireViewer(doc, win, pdfjs) {
   if (!root) return undefined;
   /** @param {string} name */
   const part = (name) => /** @type {any} */ (root.querySelector(`[data-viewer-${name}]`));
-  const names = ['nojs', 'bar', 'zoom-out', 'zoom', 'zoom-list', 'zoom-in', 'fit-width', 'fit-page', 'prev', 'page', 'page-list', 'next', 'status', 'pages'];
+  const names = [
+    'nojs', 'bar', 'zoom-out', 'zoom', 'zoom-list', 'zoom-in', 'hand', 'fit-width', 'fit-page', 'tone', 'first', 'prev', 'page', 'count', 'next', 'last',
+    'find', 'find-bar', 'find-input', 'find-count', 'find-note', 'find-prev', 'find-next', 'find-close', 'more', 'more-list', 'zoom-now', 'status', 'pages', 'pan', 'pan-track',
+  ];
   const ui = Object.fromEntries(names.map((name) => [name, part(name)]));
   if (names.some((name) => !ui[name])) return undefined;
   const origin = win.location.origin;
@@ -266,8 +319,19 @@ export async function wireViewer(doc, win, pdfjs) {
   }
   const count = /** @type {number} */ (pdf.numPages);
   const bar = ui['bar'];
+  const pagesEl = ui['pages'];
   for (const el of /** @type {NodeListOf<HTMLElement>} */ (root.querySelectorAll('[data-viewer-js]'))) el.hidden = false;
-  ui['pages'].hidden = false;
+  pagesEl.hidden = false;
+  // What moves into the More menu on a narrow bar moves only once the menu works (site.css).
+  root.classList.toggle(JS, true);
+  /** The More menu's copy of each control, by what it does (data-viewer-act). */
+  const menuItems = /** @type {any[]} */ ([...root.querySelectorAll('[data-viewer-act]')]);
+  /** A control on the bar and its copy in the More menu. @param {string} act */
+  const copies = (act) => [ui[act], ...menuItems.filter((el) => el.getAttribute('data-viewer-act') === act)];
+  /** @param {string} act @param {string} name @param {string} value */
+  const setAll = (act, name, value) => {
+    for (const el of copies(act)) el.setAttribute(name, value);
+  };
   /**
    * A picker: its button opens and closes its list; a choice in the list acts, closes it and gives the
    * focus back to the button.
@@ -305,32 +369,43 @@ export async function wireViewer(doc, win, pdfjs) {
       const open = list.hidden;
       for (const other of pickers) other.set(false);
       set(open);
-      if (open) [...list.children].find((el) => el.getAttribute('aria-current') === 'true')?.focus();
+      if (!open) return;
+      // The marked choice, else the first that can take the focus (an item the bar shows is not in the menu).
+      const marked = [...list.children].find((el) => el.getAttribute('aria-current') === 'true');
+      for (const el of marked ? [marked] : [...list.children]) {
+        el.focus();
+        if (doc.activeElement === el) break;
+      }
     });
     set(false);
     return { button, list, set, choice, mark };
   };
   /** @type {ReturnType<typeof picker>[]} */
   const pickers = [];
-  const pagePick = picker('page', (value) => {
-    const n = clampPage(value, count);
-    if (n !== undefined) goTo(n);
-  });
   const zoomPick = picker('zoom', (value) => {
     const chosen = ZOOMS.find((z) => String(z) === value);
     if (chosen === undefined) return;
     mode = 'custom';
     rescale(chosen);
   });
-  pickers.push(pagePick, zoomPick);
-  ui['page-list'].replaceChildren(...Array.from({ length: count }, (_, i) => pagePick.choice(String(i + 1), `Page ${i + 1}`)));
+  const morePick = picker('more', () => undefined);
+  pickers.push(zoomPick, morePick);
+  // Download and Open in another app, in the More menu: the menu closes as they go.
+  for (const a of ui['more-list'].querySelectorAll('a')) a.addEventListener('click', () => morePick.set(false));
+  ui['count'].textContent = String(count);
+  // The box as wide as the last page's number (site.css).
+  ui['page'].style.setProperty('--digits', String(String(count).length));
+  ui['page'].setAttribute('aria-label', `Page number, 1 to ${count}`);
   root.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
     if (event.key !== 'Escape') return;
+    let closed = false;
     for (const p of pickers) {
       if (p.list.hidden) continue;
       p.set(false);
       p.button.focus();
+      closed = true;
     }
+    if (!closed && finding) closeFind();
   });
   win.addEventListener('pointerdown', (/** @type {Event} */ event) => {
     for (const p of pickers) if (!p.list.hidden && event.target !== p.button && !p.list.contains(event.target)) p.set(false);
@@ -348,7 +423,7 @@ export async function wireViewer(doc, win, pdfjs) {
   let pinned = true;
   /** The top of what is left to read: under the bar while it shows, else the window's own top. */
   const barBottom = () => Math.max(0, bar.getBoundingClientRect().bottom);
-  const room = () => ({ width: ui['pages'].clientWidth, height: win.innerHeight - (pinned ? bar.offsetHeight : 0) - GAP });
+  const room = () => ({ width: pagesEl.clientWidth, height: win.innerHeight - (pinned ? bar.offsetHeight : 0) - GAP });
 
   /** @type {Page[]} */
   const pages = [];
@@ -364,9 +439,9 @@ export async function wireViewer(doc, win, pdfjs) {
     layer.className = 'viewer-layer';
     layer.setAttribute('data-viewer-layer', '');
     el.append(heading, layer);
-    ui['pages'].append(el);
+    pagesEl.append(el);
     /** @type {Page} */
-    const page = { n, el, layer, size: n === 1 ? size : undefined, proxy: undefined, near: false, state: 'idle', task: undefined, token: undefined };
+    const page = { n, el, layer, size: n === 1 ? size : undefined, proxy: undefined, near: false, state: 'idle', task: undefined, token: undefined, find: undefined };
     pages.push(page);
     byEl.set(el, page);
   }
@@ -380,19 +455,17 @@ export async function wireViewer(doc, win, pdfjs) {
       ui['zoom'].value = selected;
       ui['zoom'].textContent = percent(scale);
       ui['zoom'].setAttribute('aria-label', `Zoom ${percent(scale)}`);
+      ui['zoom-now'].textContent = `Zoom ${percent(scale)}`;
     }
-    if (ui['page'].value !== String(current)) {
-      ui['page'].value = String(current);
-      ui['page'].textContent = pageLabel(current, count);
-      ui['page'].setAttribute('aria-label', `Page ${pageLabel(current, count)}`);
-      pagePick.mark(String(current));
-    }
-    ui['fit-width'].setAttribute('aria-pressed', String(mode === 'width'));
-    ui['fit-page'].setAttribute('aria-pressed', String(mode === 'page'));
-    ui['zoom-out'].setAttribute('aria-disabled', String(scale <= /** @type {number} */ (ZOOMS[0]) + EPSILON));
-    ui['zoom-in'].setAttribute('aria-disabled', String(scale >= /** @type {number} */ (ZOOMS.at(-1)) - EPSILON));
-    ui['prev'].setAttribute('aria-disabled', String(current <= 1));
-    ui['next'].setAttribute('aria-disabled', String(current >= count));
+    // Never under the reader's fingers while they type a page.
+    if (doc.activeElement !== ui['page']) ui['page'].value = String(current);
+    setAll('fit-width', 'aria-pressed', String(mode === 'width'));
+    setAll('fit-page', 'aria-pressed', String(mode === 'page'));
+    setAll('zoom-out', 'aria-disabled', String(scale <= /** @type {number} */ (ZOOMS[0]) + EPSILON));
+    setAll('zoom-in', 'aria-disabled', String(scale >= /** @type {number} */ (ZOOMS.at(-1)) - EPSILON));
+    for (const name of ['first', 'prev']) ui[name].setAttribute('aria-disabled', String(current <= 1));
+    for (const name of ['next', 'last']) ui[name].setAttribute('aria-disabled', String(current >= count));
+    if (finding) note();
   };
 
   /** @param {Page} page */
@@ -410,6 +483,7 @@ export async function wireViewer(doc, win, pdfjs) {
     page.task = undefined;
     if (page.state === 'drawn') page.proxy.cleanup();
     page.layer.replaceChildren();
+    page.find = undefined;
     page.state = 'idle';
   };
 
@@ -476,20 +550,44 @@ export async function wireViewer(doc, win, pdfjs) {
         const base = proxy.getViewport({ scale: CSS_UNITS });
         page.size = { width: base.width, height: base.height };
         lay(page);
+        // A page of its own size (a landscape spread) can make the pages wider than the frame.
+        sizePan();
+      }
+      // pdf.js records a picture only where it draws one image once: one drawn three times or more in a row
+      // (as one paintImageXObjectRepeat) or many small inline ones (paintInlineImageXObjectGroup) are not.
+      // Its drawing list, as getOperatorList gives it, is never merged that way: a page drawing more
+      // pictures than were recorded is shown as printed, never with negatives. Read once per page, in
+      // every tone, as the tone can change without a redraw (a failure counts as such a page); before the
+      // first drawing, so the pictures decoded for it are let go at once rather than kept twice.
+      if (page.images === undefined) {
+        const images = await proxy.getOperatorList().then(
+          (/** @type {{ fnArray: number[] }} */ list) => list.fnArray.filter((fn) => fn === pdfjs.OPS.paintImageXObject || fn === pdfjs.OPS.paintInlineImageXObject).length,
+          () => Infinity,
+        );
+        page.images = images;
+        if (images > 0) proxy.cleanup();
+        if (stale()) return;
       }
       const viewport = proxy.getViewport({ scale: at * CSS_UNITS });
-      const ratio = outputScale(win.devicePixelRatio, viewport.width, viewport.height);
+      const toned = root.dataset['tone'] !== 'light' && !root.classList.contains(LIGHT_PAGES);
+      const ratio = outputScale(win.devicePixelRatio, viewport.width, viewport.height, toned ? TONED_PIXELS : MAX_PIXELS);
       const canvas = doc.createElement('canvas');
       canvas.width = Math.floor(viewport.width * ratio);
       canvas.height = Math.floor(viewport.height * ratio);
       canvas.setAttribute('aria-hidden', 'true');
-      page.task = proxy.render({ canvas, canvasContext: canvas.getContext('2d'), viewport, ...(ratio === 1 ? {} : { transform: [ratio, 0, 0, ratio, 0, 0] }) });
+      // Drawn as printed; pdf.js records where its pictures are, so a recoloured page leaves them be.
+      page.task = proxy.render({ canvas, canvasContext: canvas.getContext('2d'), viewport, recordImages: true, ...(ratio === 1 ? {} : { transform: [ratio, 0, 0, ratio, 0, 0] }) });
       await page.task.promise;
       page.task = undefined;
       if (stale()) return;
+      const coords = proxy.imageCoordinates;
+      const unrecorded = /** @type {number} */ (page.images) > (coords?.length ?? 0) / 6;
+      const { picture, photos } = unrecorded ? { picture: true, photos: [] } : addPhotos(doc, canvas, photoBoxes(coords, canvas.width, canvas.height));
+      canvas.className = picture ? 'viewer-sheet viewer-sheet--picture' : 'viewer-sheet';
       const text = doc.createElement('div');
       text.className = 'textLayer';
-      await new pdfjs.TextLayer({ textContentSource: proxy.streamTextContent({ includeMarkedContent: true, disableNormalization: true }), container: text, viewport }).render();
+      const textLayer = new pdfjs.TextLayer({ textContentSource: proxy.streamTextContent({ includeMarkedContent: true, disableNormalization: true }), container: text, viewport });
+      await textLayer.render();
       const annotations = /** @type {any[]} */ (await proxy.getAnnotations({ intent: 'display' })).filter((a) => a.annotationType === pdfjs.AnnotationType.LINK && (a.url || a.dest));
       const linkLayer = doc.createElement('div');
       linkLayer.className = 'annotationLayer';
@@ -506,8 +604,15 @@ export async function wireViewer(doc, win, pdfjs) {
         a.setAttribute('aria-label', linkName(byId.get(a.getAttribute('data-element-id')) ?? {}, page.n, ++k));
       }
       if (stale()) return;
-      page.layer.replaceChildren(canvas, text, linkLayer);
+      page.layer.replaceChildren(canvas, ...photos, text, linkLayer);
       page.state = 'drawn';
+      // The text layer's spans, one for each text item, as search reads them (viewer-find.js).
+      page.find = { divs: textLayer.textDivs, strs: textLayer.textContentItemsStr, painted: new Set() };
+      const mark = paint(page);
+      if (pending === page.n) {
+        pending = undefined;
+        mark?.scrollIntoView({ block: 'center', inline: 'center' });
+      }
       if (ui['status'].textContent === loading(page.n)) say('');
     } catch (error) {
       if (stale()) return;
@@ -529,11 +634,122 @@ export async function wireViewer(doc, win, pdfjs) {
    * below it (CSS scroll-margin-top), however many rows it wraps to, or at the window's top once the bar
    * scrolls with the page.
    */
+  /**
+   * The fewest groups moved into More that leave the bar's controls on one row, by measure (the bar's
+   * width, the reader's text size, the page count's digits, the theme), never a fixed width. From the
+   * groups moved now, more go while the row wraps, then any comes back that fits again, so a control
+   * that stays on the bar is never hidden on the way (and keeps the focus).
+   */
+  let shed = 0;
+  const shedBar = () => {
+    const tone = root.dataset['tone'];
+    // Light pages shows only where the theme recolours the pages (site.css).
+    const groups = SHED.filter((g) => g !== 'tone' || tone === 'dark' || tone === 'tint');
+    /** @param {number} k */
+    const set = (k) => {
+      shed = k;
+      for (const g of SHED) root.classList.toggle(`viewer--shed-${g}`, groups.indexOf(g) > -1 && groups.indexOf(g) < k);
+      root.classList.toggle(MORE, k > 0);
+    };
+    const oneRow = () => {
+      const shown = /** @type {HTMLElement[]} */ ([...bar.children]).filter((el) => el !== ui['find-bar'] && el.getClientRects().length > 0);
+      const first = shown[0];
+      return !first || shown.every((el) => el.offsetTop < first.offsetTop + first.offsetHeight);
+    };
+    let k = Math.min(shed, groups.length);
+    set(k);
+    while (k < groups.length && !oneRow()) set(++k);
+    while (k > 0) {
+      set(k - 1);
+      if (!oneRow()) {
+        set(k);
+        break;
+      }
+      k--;
+    }
+  };
   const fitBar = () => {
+    shedBar();
     pinned = bar.offsetHeight <= win.innerHeight / 3;
     root.classList.toggle(UNPINNED, !pinned);
-    ui['pages'].style.setProperty('--viewer-bar', `${pinned ? bar.offsetHeight : 0}px`);
+    pagesEl.style.setProperty('--viewer-bar', `${pinned ? bar.offsetHeight : 0}px`);
   };
+
+  // Sideways: the pages' own scroll, with a copy of its scrollbar kept at the foot of the window (site.css),
+  // as wide as the pages and in step with them both ways, so a computer always shows one.
+  let wide = false;
+  const sizePan = () => {
+    wide = pagesEl.scrollWidth > pagesEl.clientWidth + 1;
+    root.classList.toggle(WIDE, wide);
+    ui['pan'].hidden = !wide;
+    ui['pan-track'].style.width = `${pagesEl.scrollWidth}px`;
+    ui['pan'].scrollLeft = pagesEl.scrollLeft;
+  };
+  // Each side's scroll event comes a frame after the other side set it: one that only echoes the value
+  // written to it is let be, else during a drag (of the pages, or of the scrollbar) it would pull the
+  // other back to where it was.
+  let echo = NaN;
+  let fromPan = NaN;
+  ui['pan'].addEventListener('scroll', () => {
+    if (Math.abs(ui['pan'].scrollLeft - echo) < 1) return;
+    echo = NaN;
+    if (pagesEl.scrollLeft === ui['pan'].scrollLeft) return;
+    fromPan = ui['pan'].scrollLeft;
+    pagesEl.scrollLeft = ui['pan'].scrollLeft;
+  }, { passive: true });
+  pagesEl.addEventListener('scroll', () => {
+    if (Math.abs(pagesEl.scrollLeft - fromPan) < 1) return;
+    fromPan = NaN;
+    if (ui['pan'].scrollLeft === pagesEl.scrollLeft) return;
+    echo = pagesEl.scrollLeft;
+    ui['pan'].scrollLeft = pagesEl.scrollLeft;
+  }, { passive: true });
+  // Shift and the wheel, where the browser has not made it sideways already (it then gives deltaX).
+  pagesEl.addEventListener('wheel', (/** @type {WheelEvent} */ event) => {
+    if (!wide || !event.shiftKey || event.deltaX !== 0 || event.deltaY === 0) return;
+    pagesEl.scrollLeft += event.deltaY * (event.deltaMode === 1 ? LINE : 1);
+    event.preventDefault();
+  }, { passive: false });
+  // The hand tool: a drag with the mouse moves the pages both ways. Only a press that moves is a drag:
+  // the pointer is captured once it has, so a press without a drag still follows a link.
+  let hand = false;
+  /** @type {{ x: number, y: number, moved: boolean } | undefined} */
+  let drag;
+  let swallow = false;
+  pagesEl.addEventListener('pointerdown', (/** @type {PointerEvent} */ event) => {
+    if (!hand || !wide || event.button !== 0 || event.pointerType !== 'mouse') return;
+    drag = { x: event.clientX, y: event.clientY, moved: false };
+  });
+  pagesEl.addEventListener('pointermove', (/** @type {PointerEvent} */ event) => {
+    if (!drag) return;
+    if (!drag.moved) {
+      if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < DRAG) return;
+      drag.moved = true;
+      pagesEl.setPointerCapture(event.pointerId);
+      root.classList.toggle(DRAGGING, true);
+    }
+    pagesEl.scrollLeft -= event.clientX - drag.x;
+    win.scrollBy(0, drag.y - event.clientY);
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+  });
+  const endDrag = () => {
+    swallow = drag?.moved ?? false;
+    drag = undefined;
+    root.classList.toggle(DRAGGING, false);
+  };
+  pagesEl.addEventListener('pointerup', endDrag);
+  pagesEl.addEventListener('pointercancel', endDrag);
+  // The click that ends a drag follows no link.
+  pagesEl.addEventListener('click', (/** @type {Event} */ event) => {
+    if (!swallow) return;
+    swallow = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }, { capture: true });
+  pagesEl.addEventListener('dragstart', (/** @type {Event} */ event) => {
+    if (hand) event.preventDefault();
+  });
 
   /** @param {number} next */
   const rescale = (next) => {
@@ -543,6 +759,7 @@ export async function wireViewer(doc, win, pdfjs) {
       release(page);
       lay(page);
     }
+    sizePan();
     show();
     restore();
     for (const page of pages) queue(page);
@@ -550,14 +767,19 @@ export async function wireViewer(doc, win, pdfjs) {
   const fit = () => {
     fitBar();
     if (mode !== 'custom') rescale(fitScale(mode, size, room()));
+    sizePan();
   };
 
-  /** @param {number} n */
-  const goTo = (n) => {
+  /** Scrolls a page to the top of what is left to read. @param {number} n */
+  const reach = (n) => {
     current = n;
     anchor = { n, frac: 0 };
     /** @type {Page} */ (pages[n - 1]).el.scrollIntoView({ block: 'start' });
     show();
+  };
+  /** @param {number} n */
+  const goTo = (n) => {
+    reach(n);
     say(`Page ${n} of ${count}`);
   };
 
@@ -569,31 +791,242 @@ export async function wireViewer(doc, win, pdfjs) {
     show();
   };
 
+  // Search within the issue (viewer-find.js): the text of every page of this file, read once.
+  let finding = false;
+  /** @type {{ items: { str: string, hasEOL?: boolean }[], index: ReturnType<typeof indexText> }[] | undefined} */
+  let texts;
+  /** @type {Promise<NonNullable<typeof texts>> | undefined} */
+  let reading;
+  /** @type {{ n: number, start: number, length: number }[]} */
+  let matches = [];
+  let hit = -1;
+  /** The page whose current match waits for it to be drawn, to scroll to. @type {number | undefined} */
+  let pending;
+  /** Where the focus goes back when search closes. @type {any} */
+  let opener;
+  let asked = 0;
+  const readTexts = () =>
+    (reading ??= (async () => {
+      const out = [];
+      for (const page of pages) {
+        let items = [];
+        try {
+          page.proxy ??= await pdf.getPage(page.n);
+          const content = await page.proxy.getTextContent({ includeMarkedContent: true, disableNormalization: true });
+          // As pdf.js's text layer makes its spans: one for each item that has text, in order.
+          items = content.items.filter((/** @type {{ str?: string }} */ item) => item.str !== undefined);
+        } catch {
+          // A page whose text cannot be read has none to search.
+        }
+        out.push({ items, index: indexText(items) });
+      }
+      texts = out;
+      return out;
+    })());
+  const note = () => {
+    const t = texts?.[current - 1];
+    ui['find-note'].textContent = t && !hasText(t.items) ? NO_TEXT : '';
+  };
+  /** @param {Page} page */
+  const paint = (page) => {
+    if (!page.find || !texts) return undefined;
+    const index = /** @type {NonNullable<typeof texts>[number]} */ (texts[page.n - 1]).index;
+    const hits = matches.flatMap((m, i) => (m.n === page.n ? [{ ranges: rangesOf(index, m.start, m.length), current: i === hit }] : []));
+    return paintHits(doc, page.find, hits);
+  };
+  /** Shows the current match: painted and scrolled to where its page is drawn, else once it is. */
+  const reveal = () => {
+    ui['find-count'].textContent = queryOf(ui['find-input'].value) === '' ? '' : matchLabel(hit + 1, matches.length);
+    let mark;
+    for (const page of pages) {
+      const m = paint(page);
+      if (matches[hit]?.n === page.n) mark = m;
+    }
+    const m = matches[hit];
+    if (!m) return;
+    if (mark) {
+      pending = undefined;
+      current = m.n;
+      mark.scrollIntoView({ block: 'center', inline: 'center' });
+      show();
+    } else {
+      pending = m.n;
+      reach(m.n);
+    }
+  };
+  const search = async () => {
+    const ask = ++asked;
+    const list = await readTexts();
+    if (ask !== asked || !finding) return;
+    const query = queryOf(ui['find-input'].value);
+    matches = [];
+    list.forEach((t, i) => {
+      for (const start of findIn(t.index, query)) matches.push({ n: i + 1, start, length: query.length });
+    });
+    const after = matches.findIndex((m) => m.n >= current);
+    hit = matches.length === 0 ? -1 : Math.max(after, 0);
+    note();
+    reveal();
+  };
+  /** @param {number} step */
+  const step = (step) => {
+    if (matches.length === 0) return;
+    hit = (hit + step + matches.length) % matches.length;
+    reveal();
+  };
+  /** @param {any} from where the focus goes back to */
+  const openFind = (from) => {
+    opener = from;
+    finding = true;
+    ui['find-bar'].hidden = false;
+    setAll('find', 'aria-expanded', 'true');
+    ui['find-input'].focus();
+    void search();
+  };
+  const closeFind = () => {
+    finding = false;
+    ui['find-bar'].hidden = true;
+    setAll('find', 'aria-expanded', 'false');
+    matches = [];
+    hit = -1;
+    pending = undefined;
+    for (const page of pages) paint(page);
+    opener?.focus?.();
+  };
+  ui['find-input'].addEventListener('input', () => void search());
+  ui['find-input'].addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    step(event.shiftKey ? -1 : 1);
+  });
+  ui['find-next'].addEventListener('click', () => step(1));
+  ui['find-prev'].addEventListener('click', () => step(-1));
+  ui['find-close'].addEventListener('click', closeFind);
+  // "/" opens search, as on many sites; Ctrl+F stays the browser's own. Never from a field, or with a modifier.
+  win.addEventListener('keydown', (/** @type {Event} */ e) => {
+    const event = /** @type {KeyboardEvent} */ (e);
+    const target = /** @type {any} */ (event.target);
+    if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey || finding) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName ?? '') || target?.isContentEditable) return;
+    event.preventDefault();
+    openFind(doc.activeElement);
+  });
+
+  // The page box: Enter (a phone's Go), or leaving the box changed, goes to the page typed.
+  const pageBox = ui['page'];
+  const commit = () => {
+    const n = pageInput(pageBox.value, count);
+    if (n === undefined) {
+      pageBox.setAttribute('aria-invalid', 'true');
+      pageBox.value = String(current);
+      say(noPage(count));
+      return;
+    }
+    pageBox.removeAttribute('aria-invalid');
+    goTo(n);
+    pageBox.value = String(n);
+  };
+  // The first thing typed replaces the page shown, wherever the caret was (WebKit puts it at the start
+  // after a tap, so a "2" typed over "1" would be "21"); a deletion or a move of the caret first edits it.
+  let fresh = false;
+  pageBox.addEventListener('focus', () => {
+    fresh = true;
+    pageBox.select();
+  });
+  pageBox.addEventListener('input', (/** @type {InputEvent} */ event) => {
+    if (fresh && event.inputType === 'insertText' && event.data) pageBox.value = event.data;
+    fresh = false;
+  });
+  pageBox.addEventListener('keydown', (/** @type {KeyboardEvent} */ event) => {
+    if (/^(Arrow|Home|End)/.test(event.key)) fresh = false;
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    commit();
+    fresh = true;
+  });
+  pageBox.addEventListener('change', () => {
+    if (pageBox.value.trim() !== String(current)) commit();
+  });
+
+  /** What each control does, on the bar and in the More menu alike. @type {Record<string, () => void>} */
+  const acts = {
+    'zoom-in': () => {
+      mode = 'custom';
+      rescale(zoomIn(scale));
+    },
+    'zoom-out': () => {
+      mode = 'custom';
+      rescale(zoomOut(scale));
+    },
+    'fit-width': () => {
+      mode = 'width';
+      fit();
+    },
+    'fit-page': () => {
+      mode = 'page';
+      fit();
+    },
+    tone: () => {
+      const on = !root.classList.contains(LIGHT_PAGES);
+      root.classList.toggle(LIGHT_PAGES, on);
+      setAll('tone', 'aria-pressed', String(on));
+    },
+  };
+  for (const [act, run] of Object.entries(acts)) {
+    for (const el of copies(act)) {
+      el.addEventListener('click', () => {
+        if (el.getAttribute('aria-disabled') === 'true') return;
+        if (el !== ui[act]) {
+          morePick.set(false);
+          ui['more'].focus();
+        }
+        run();
+      });
+    }
+  }
+  for (const el of copies('find')) {
+    el.addEventListener('click', () => {
+      if (el === ui['find']) {
+        if (finding) closeFind();
+        else openFind(el);
+        return;
+      }
+      morePick.set(false);
+      openFind(ui['more']);
+    });
+  }
+  setAll('find', 'aria-expanded', 'false');
+  setAll('tone', 'aria-pressed', 'false');
+  ui['hand'].setAttribute('aria-pressed', 'false');
+  ui['hand'].addEventListener('click', () => {
+    hand = !hand;
+    root.classList.toggle(HAND, hand);
+    ui['hand'].setAttribute('aria-pressed', String(hand));
+  });
+
   /** @param {HTMLElement} button @param {() => void} act */
   const onPress = (button, act) =>
     button.addEventListener('click', () => {
       if (button.getAttribute('aria-disabled') !== 'true') act();
     });
-  onPress(ui['zoom-in'], () => {
-    mode = 'custom';
-    rescale(zoomIn(scale));
-  });
-  onPress(ui['zoom-out'], () => {
-    mode = 'custom';
-    rescale(zoomOut(scale));
-  });
-  onPress(ui['fit-width'], () => {
-    mode = 'width';
-    fit();
-  });
-  onPress(ui['fit-page'], () => {
-    mode = 'page';
-    fit();
-  });
-
+  onPress(ui['first'], () => goTo(1));
   onPress(ui['prev'], () => goTo(current - 1));
   onPress(ui['next'], () => goTo(current + 1));
+  onPress(ui['last'], () => goTo(count));
 
+  // The pages follow the theme (viewer-tone.js): the reader's in Aa (html data-theme), else the device's.
+  const html = doc.documentElement;
+  const dark = win.matchMedia('(prefers-color-scheme: dark)');
+  const more = win.matchMedia('(prefers-contrast: more)');
+  const tone = () => {
+    root.dataset['tone'] = pageTone(html.getAttribute('data-theme'), dark.matches, more.matches);
+    // Light pages comes and goes with it: the bar is fitted again.
+    fitBar();
+  };
+  dark.addEventListener('change', tone);
+  more.addEventListener('change', tone);
+  if (win.MutationObserver) new win.MutationObserver(tone).observe(html, { attributes: true, attributeFilter: ['data-theme'] });
+  tone();
 
   let framed = false;
   win.addEventListener(
@@ -633,6 +1066,7 @@ export async function wireViewer(doc, win, pdfjs) {
     lay(page);
     observer.observe(page.el);
   }
+  sizePan();
   show();
   say('');
   const start = hashPage(win.location.hash, count);

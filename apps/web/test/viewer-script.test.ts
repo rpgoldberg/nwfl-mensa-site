@@ -8,7 +8,9 @@ import {
   FAILED,
   MAX_IMAGE_PIXELS,
   MAX_PAGES,
+  MAX_PIXELS,
   OPENING,
+  TONED_PIXELS,
   TOO_LONG,
   ZOOMS,
   clampPage,
@@ -18,8 +20,9 @@ import {
   linkName,
   loading,
   outputScale,
+  noPage,
   pageAt,
-  pageLabel,
+  pageInput,
   percent,
   sameOriginPath,
   boot,
@@ -28,7 +31,8 @@ import {
   zoomOptions,
   zoomOut,
 } from '../public/scripts/viewer.js';
-import { FakeEl, FakeObserver, FakeResizeObserver, FakeWin, chosen, fakePdfjs, pick, viewerPage } from './viewer-fakes';
+import { NO_TEXT } from '../public/scripts/viewer-find.js';
+import { FakeEl, FakeMutationObserver, FakeObserver, FakeResizeObserver, FakeWin, chosen, fakePdfjs, pick, viewerPage } from './viewer-fakes';
 
 const PAGE = { width: 612 * CSS_UNITS, height: 792 * CSS_UNITS };
 const ID = 'outwebaaaaaaaaaaaaaaaaaaaa';
@@ -73,9 +77,13 @@ describe('zoomOptions', () => {
   });
 });
 
-describe('pageLabel', () => {
-  it('reads as the mockup writes it: the page, a slash, and how many', () => {
-    expect(pageLabel(1, 12)).toBe('1 / 12');
+describe('pageInput', () => {
+  it('is a page of the issue typed as a whole number, 1 to the last; anything else is none', () => {
+    expect(pageInput('3', 12)).toBe(3);
+    expect(pageInput(' 12 ', 12)).toBe(12);
+    expect(pageInput('1', 12)).toBe(1);
+    for (const typed of ['0', '13', '-1', '2.5', 'x', '', '1e1', '٣']) expect(pageInput(typed, 12), typed).toBeUndefined();
+    expect(noPage(12)).toBe('Type a page number from 1 to 12.');
   });
 });
 
@@ -208,33 +216,29 @@ describe('wireViewer', () => {
 
   it('opens nothing but a same-origin /documents/<id>.pdf, with a same-origin worker', async () => {
     for (const page of [{ pdf: 'https://evil.example/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf' }, { pdf: '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf?file=x' }, { pdf: '/documents/../x.pdf' }, { worker: 'https://cdn.example/pdf.worker.mjs' }]) {
-      const { opened, parts, viewer } = await open({}, page);
+      const { opened, parts, viewer, root } = await open({}, page);
       expect(viewer, JSON.stringify(page)).toBeUndefined();
       expect(opened).toEqual([]);
       expect(parts['status']!.textContent).toBe(FAILED);
+      expect(root.classes.has('viewer--js')).toBe(false);
       expect(parts['nojs']!.hidden).toBe(true);
       expect(parts['js']!.hidden).toBe(true);
     }
   });
 
   it('opens the PDF without eval, wasm or XFA, and shows the controls, the page count and one box per page', async () => {
-    const { opened, pdfjs, parts, pages } = await open();
+    const { opened, pdfjs, parts, pages, root } = await open();
     expect(pdfjs.GlobalWorkerOptions.workerSrc).toBe('/_astro/pdf.worker.min.abc.mjs');
     expect(opened).toEqual([{ url: '/documents/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7.pdf', isEvalSupported: false, useWasm: false, enableXfa: false, maxImageSize: MAX_IMAGE_PIXELS, verbosity: 0 }]);
     expect(parts['nojs']!.hidden).toBe(true);
     expect(parts['js']!.hidden).toBe(false);
     expect(parts['pages']!.hidden).toBe(false);
-    // W-LOOK3: the page is a picker, "1 / 3", whose list holds a button for each page.
-    expect(parts['page-list']!.children.map((o) => [o.value, o.textContent])).toEqual([
-      ['1', 'Page 1'],
-      ['2', 'Page 2'],
-      ['3', 'Page 3'],
-    ]);
-    expect(parts['page-list']!.children.map((o) => o.getAttribute('aria-current'))).toEqual(['true', 'false', 'false']);
+    // READER2: the page is a box to type in, "1", then "of 3"; its spoken name says what to type.
     expect(parts['page']!.value).toBe('1');
-    expect(chosen(parts['page'])).toBe('1 / 3');
-    // Its spoken name begins with its word and holds what it shows.
-    expect(parts['page']!.getAttribute('aria-label')).toBe('Page 1 / 3');
+    expect(parts['count']!.textContent).toBe('3');
+    expect(parts['page']!.style.props.get('--digits')).toBe('1');
+    expect(root.classes.has('viewer--js')).toBe(true);
+    expect(parts['page']!.getAttribute('aria-label')).toBe('Page number, 1 to 3');
     expect(parts['zoom']!.getAttribute('aria-label')).toBe(`Zoom ${chosen(parts['zoom'])}`);
     expect(pages.map((p) => p.id)).toEqual(['page-1', 'page-2', 'page-3']);
     expect(pages.map((p) => p.querySelector('h2')?.textContent)).toEqual(['Page 1', 'Page 2', 'Page 3']);
@@ -473,27 +477,105 @@ describe('wireViewer', () => {
     expect(parts['page']!.value).toBe('1');
   });
 
-  it('goes to the page chosen in the page picker, and marks it', async () => {
+  // READER2: |<< < [n] of N > >>|, the page typed and Enter (a phone's Go), or the box left (iOS's number pad has no Enter).
+  it('goes to the page typed in the box on Enter, or when the box is left; says so, and never leaves a wrong one', async () => {
     const { parts, pages } = await open();
-    parts['page']!.click();
-    pick(parts['page-list'], '3');
-    await flush();
+    const box = parts['page']!;
+    const key = (k: string, more: object = {}) => {
+      const event = Object.assign(new Event('keydown', { cancelable: true }), { key: k, ...more });
+      box.dispatchEvent(event);
+      return event;
+    };
+    box.focus();
+    expect(box.selected).toBe(false);
+    box.dispatchEvent(new Event('focus'));
+    // The page shown is chosen, and the first thing typed replaces it, wherever the caret is: WebKit puts
+    // its caret at the start after a tap, so "2" typed over "1" would be "21".
+    expect(box.selected).toBe(true);
+    /** The browser's input event, after it has changed the box to `value`. */
+    const input = (value: string, inputType: string, data: string | null) => {
+      box.value = value;
+      box.dispatchEvent(Object.assign(new Event('input'), { inputType, data }));
+    };
+    input('21', 'insertText', '2');
+    expect(box.value).toBe('2');
+    input('23', 'insertText', '3');
+    expect(box.value).toBe('23');
+    // What the browser could not say it typed (a paste) is kept as it is.
+    box.dispatchEvent(new Event('focus'));
+    input('112', 'insertFromPaste', null);
+    expect(box.value).toBe('112');
+    // A deletion, or a move of the caret, first, and it is edited as usual.
+    box.dispatchEvent(new Event('focus'));
+    input('', 'deleteContentBackward', null);
+    input('2', 'insertText', '2');
+    input('12', 'insertText', '1');
+    expect(box.value).toBe('12');
+    box.dispatchEvent(new Event('focus'));
+    key('ArrowLeft');
+    input('312', 'insertText', '3');
+    expect(box.value).toBe('312');
+    box.value = '3';
+    expect(key('Enter').defaultPrevented).toBe(true);
+    expect(pages[2]!.scrolled).toBe(1);
+    expect(parts['status']!.textContent).toBe('Page 3 of 3');
+    // After a page is gone to, what is typed next replaces it again.
+    input('32', 'insertText', '2');
+    expect(box.value).toBe('2');
+    box.value = '3';
+    // What the box shows is not changed under the reader's fingers while they type.
+    box.value = '2';
+    parts['next']!.click();
+    expect(box.value).toBe('2');
+    box.blur();
+    // Left with a page typed, it goes there; left as it was, nothing more happens.
+    box.dispatchEvent(new Event('change'));
+    expect(pages[1]!.scrolled).toBe(1);
+    expect(box.value).toBe('2');
+    box.dispatchEvent(new Event('change'));
+    expect(pages[1]!.scrolled).toBe(1);
+    // A page that is not in the issue: said plainly, the box marked, then given back the page being read.
+    box.focus();
+    for (const typed of ['9', '0', 'two']) {
+      box.value = typed;
+      key('Enter');
+      expect(parts['status']!.textContent).toBe(noPage(3));
+      expect(box.getAttribute('aria-invalid')).toBe('true');
+      expect(box.value).toBe('2');
+    }
+    box.value = '1';
+    box.dispatchEvent(new Event('change'));
+    expect(pages[0]!.scrolled).toBe(1);
+    expect(box.hasAttribute('aria-invalid')).toBe(false);
+    // Another key is the box's own.
+    expect(key('5').defaultPrevented).toBe(false);
+  });
+
+  it('goes to the first and last page, each turned off where it would change nothing', async () => {
+    const { parts, pages } = await open();
+    expect(parts['first']!.getAttribute('aria-disabled')).toBe('true');
+    expect(parts['last']!.getAttribute('aria-disabled')).toBe('false');
+    await press(parts['last']);
     expect(pages[2]!.scrolled).toBe(1);
     expect(parts['page']!.value).toBe('3');
-    expect(chosen(parts['page'])).toBe('3 / 3');
-    expect(parts['page-list']!.children.map((o) => o.getAttribute('aria-current'))).toEqual(['false', 'false', 'true']);
+    expect(parts['last']!.getAttribute('aria-disabled')).toBe('true');
+    await press(parts['last']);
+    expect(pages[2]!.scrolled).toBe(1);
+    await press(parts['first']);
+    expect(pages[0]!.scrolled).toBe(1);
+    expect(parts['first']!.getAttribute('aria-disabled')).toBe('true');
   });
 
   // W-LOOK3: WebKit raises a style-src-attr violation for any native select under the site's CSP, so the
   // page and zoom are pickers: a button that opens a list of buttons, closed by Escape or a press elsewhere.
   it('a picker opens on a press with the focus on its marked choice, and closes by Escape, a press elsewhere, or the other picker', async () => {
     const { root, parts } = await open();
-    const [button, list] = [parts['page']!, parts['page-list']!];
+    const [button, list] = [parts['zoom']!, parts['zoom-list']!];
     expect(button.getAttribute('aria-expanded')).toBe('false');
     button.click();
     expect(list.hidden).toBe(false);
     expect(button.getAttribute('aria-expanded')).toBe('true');
-    expect(list.children[0]!.focused).toBe(true);
+    expect(list.children.find((o) => o.getAttribute('aria-current') === 'true')!.focused).toBe(true);
     button.focused = false;
     root.dispatchEvent(Object.assign(new Event('keydown'), { key: 'Escape' }));
     expect(list.hidden).toBe(true);
@@ -520,9 +602,9 @@ describe('wireViewer', () => {
     button.click();
     expect(list.hidden).toBe(true);
     button.click();
-    parts['zoom']!.click();
+    parts['more']!.click();
     expect(list.hidden).toBe(true);
-    expect(parts['zoom-list']!.hidden).toBe(false);
+    expect(parts['more-list']!.hidden).toBe(false);
   });
 
   it('follows the page being read as the reader scrolls', async () => {
@@ -616,7 +698,7 @@ describe('wireViewer', () => {
     expect(viewer).toBeUndefined();
     expect(parts['status']!.textContent).toBe(TOO_LONG);
     expect(pages).toHaveLength(0);
-    expect(parts['page-list']!.children).toHaveLength(0);
+    expect(parts['count']!.textContent).toBe('');
     expect(parts['js']!.hidden).toBe(true);
     expect(parts['pages']!.hidden).toBe(true);
     expect(parts['nojs']!.hidden).toBe(true);
@@ -627,8 +709,8 @@ describe('wireViewer', () => {
   it('a file of exactly MAX_PAGES is drawn', async () => {
     const { parts, pages, viewer } = await open({ pages: MAX_PAGES });
     expect(viewer).toBeDefined();
-    expect(parts['page-list']!.children).toHaveLength(MAX_PAGES);
-    expect(parts['page-list']!.children.at(-1)!.textContent).toBe('Page 1000');
+    expect(parts['count']!.textContent).toBe('1000');
+    expect(parts['page']!.style.props.get('--digits')).toBe('4');
     expect(pages).toHaveLength(MAX_PAGES);
   });
 
@@ -767,6 +849,567 @@ describe('the edges of wireViewer', () => {
     FakeObserver.last!.near(1);
     await flush();
     expect(view.parts['status']!.textContent).toBe('');
+  });
+});
+
+describe('READER2', () => {
+  let win: FakeWin;
+  beforeEach(() => {
+    win = new FakeWin();
+    FakeObserver.last = undefined;
+    FakeMutationObserver.last = undefined;
+  });
+  async function open(options: Parameters<typeof fakePdfjs>[0] = {}, setup: (view: ReturnType<typeof viewerPage>) => void = () => {}) {
+    const fake = fakePdfjs(options);
+    const view = viewerPage();
+    setup(view);
+    const viewer = await wireViewer(view.doc, win, fake.pdfjs);
+    const pages = view.parts['pages']!.children;
+    return { ...fake, ...view, viewer, pages, io: FakeObserver.last! };
+  }
+  const key = (target: EventTarget, k: string, more: object = {}) => {
+    const event = Object.assign(new Event('keydown', { cancelable: true }), { key: k, ...more });
+    target.dispatchEvent(event);
+    return event;
+  };
+  const DARK = '(prefers-color-scheme: dark)';
+  const MORE = '(prefers-contrast: more)';
+
+  describe('DARKPDF: the pages follow the theme', () => {
+    it("takes the tone from the reader's theme, else the device's, and follows either as it changes, with nothing redrawn", async () => {
+      const { root, doc, log } = await open({}, (view) => view.doc.documentElement.setAttribute('data-theme', 'dark'));
+      expect(root.dataset['tone']).toBe('dark');
+      const watch = FakeMutationObserver.last!.watched[0]!;
+      expect(watch.el).toBe(doc.documentElement);
+      expect(watch.options).toEqual({ attributes: true, attributeFilter: ['data-theme'] });
+      doc.documentElement.setAttribute('data-theme', 'contrast-yellow');
+      FakeMutationObserver.last!.changed();
+      expect(root.dataset['tone']).toBe('tint');
+      doc.documentElement.removeAttribute('data-theme');
+      FakeMutationObserver.last!.changed();
+      expect(root.dataset['tone']).toBe('light');
+      win.setMedia(DARK, true);
+      expect(root.dataset['tone']).toBe('dark');
+      win.setMedia(MORE, true);
+      expect(root.dataset['tone']).toBe('tint');
+      expect(log.filter((l) => l.startsWith('draw'))).toEqual([]);
+    });
+
+    it('without MutationObserver it still takes the tone as it opens', async () => {
+      win.MutationObserver = undefined;
+      win.setMedia(DARK, true);
+      const { root } = await open();
+      expect(root.dataset['tone']).toBe('dark');
+    });
+
+    it('Light pages shows the pages as printed, pressed, on the bar and in the More menu alike', async () => {
+      const { root, parts, menu } = await open();
+      expect(parts['tone']!.getAttribute('aria-pressed')).toBe('false');
+      parts['tone']!.click();
+      expect(root.classes.has('viewer--light-pages')).toBe(true);
+      expect(parts['tone']!.getAttribute('aria-pressed')).toBe('true');
+      expect(menu['tone']!.getAttribute('aria-pressed')).toBe('true');
+      menu['tone']!.click();
+      expect(root.classes.has('viewer--light-pages')).toBe(false);
+      expect(parts['tone']!.getAttribute('aria-pressed')).toBe('false');
+    });
+
+    // A recoloured page (a CSS filter or blend) costs the browser a second buffer as large as its canvas;
+    // WebKit ran out of memory with both at full size, so such a page is drawn at half the pixels.
+    it('draws a recoloured page at no more than TONED_PIXELS, and a page as printed at up to MAX_PIXELS', async () => {
+      expect(TONED_PIXELS).toBe(MAX_PIXELS / 2);
+      const area = (el: FakeEl) => el.width * el.height;
+      for (const [theme, light, max] of [['dark', false, TONED_PIXELS], ['contrast-white', false, TONED_PIXELS], ['light', false, MAX_PIXELS], ['dark', true, MAX_PIXELS]] as const) {
+        win.devicePixelRatio = 3;
+        const { io, pages, parts } = await open({}, (view) => view.doc.documentElement.setAttribute('data-theme', theme));
+        if (light) parts['tone']!.click();
+        for (let i = 0; i < 9; i++) parts['zoom-in']!.click();
+        io.near(1);
+        await flush();
+        const sheet = pages[0]!.querySelector('canvas')!;
+        expect(area(sheet), `${theme} ${light}`).toBeLessThanOrEqual(max);
+        expect(area(sheet), `${theme} ${light}`).toBeGreaterThan(max * 0.98);
+      }
+    });
+
+    // pdf.js records a picture only where it draws one image once: one image drawn three times or more in
+    // a row (paintImageXObjectRepeat) or many small inline images (paintInlineImageXObjectGroup) are not.
+    // The drawing list getOperatorList gives is never merged so, and shows how many were drawn: a page
+    // drawing more than were recorded is shown as printed, never with its photos as negatives (S1).
+    it('a page drawing more pictures than pdf.js recorded is shown as printed; its drawing list is read once', async () => {
+      const box = [0.1, 0.2, 0.1, 0.5, 0.6, 0.2];
+      const { io, pages, lists, parts } = await open({ pages: 4, images: { 1: box, 2: box, 3: box, 4: box }, ops: { 1: [85, 1, 85, 85, 85], 2: Array.from({ length: 12 }, () => 86), 3: [85, 1], 4: 'fail' } });
+      io.near(1, 2, 3, 4);
+      await flush();
+      await flush();
+      const sheet = (n: number) => pages[n]!.querySelector('[data-viewer-layer]')!.children[0]!;
+      const photos = (n: number) => pages[n]!.querySelectorAll('canvas').filter((el) => el.classes.has('viewer-photo'));
+      expect([0, 1, 2, 3].map((n) => sheet(n).classes.has('viewer-sheet--picture'))).toEqual([true, true, false, true]);
+      expect([0, 1, 2, 3].map((n) => photos(n).length)).toEqual([0, 0, 1, 0]);
+      // Drawn again at another size, its list is not read again.
+      parts['zoom-in']!.click();
+      await flush();
+      expect(lists).toEqual([1, 2, 3, 4]);
+      expect(sheet(0).classes.has('viewer-sheet--picture')).toBe(true);
+    });
+
+    it('reads the drawing list before the first drawing, letting go of the pictures decoded for it; a page left meanwhile is not drawn', async () => {
+      const { io, log, lists, heldLists } = await open({ images: { 1: [0.1, 0.2, 0.1, 0.5, 0.6, 0.2] }, ops: { 3: 'hold' } });
+      io.near(1, 2);
+      await flush();
+      // Page 1 has a picture: let go before it is drawn. Page 2 has none, so nothing to let go.
+      expect(log.slice(0, 2)).toEqual(['cleanup 1', expect.stringMatching(/^draw 1 /)]);
+      expect(log.filter((l) => l === 'cleanup 2')).toEqual([]);
+      io.near(3);
+      await flush();
+      expect(lists).toEqual([1, 2, 3]);
+      io.near();
+      heldLists[0]!();
+      await flush();
+      expect(log.filter((l) => l.startsWith('draw 3'))).toEqual([]);
+    });
+
+    it('draws each page as printed, asks pdf.js where its pictures are, and lays each picture over the drawing unrecoloured', async () => {
+      const { io, pages, renders } = await open({ images: { 1: [0.1, 0.2, 0.1, 0.5, 0.6, 0.2], 2: [0, 0, 0, 1, 1, 0] } });
+      io.near(1, 2, 3);
+      await flush();
+      expect(renders.map((r) => r['recordImages'])).toEqual([true, true, true]);
+      expect(renders.every((r) => r['pageColors'] === undefined)).toBe(true);
+      const layer = (n: number) => pages[n]!.querySelector('[data-viewer-layer]')!.children;
+      const [sheet, photo] = layer(0);
+      expect(sheet!.classes.has('viewer-sheet')).toBe(true);
+      expect(sheet!.classes.has('viewer-sheet--picture')).toBe(false);
+      expect(photo!.classes.has('viewer-photo')).toBe(true);
+      expect(photo!.drawn[0]![0]).toBe(sheet);
+      // A page that is one picture (a scan) stays as printed, with no copy; a page with none has none.
+      expect(layer(1)[0]!.classes.has('viewer-sheet--picture')).toBe(true);
+      expect(layer(1).filter((el) => el.classes.has('viewer-photo'))).toEqual([]);
+      expect(layer(2).filter((el) => el.classes.has('viewer-photo'))).toEqual([]);
+    });
+  });
+
+  describe('search within the issue', () => {
+    const TEXTS = {
+      1: [{ str: 'Pensa Mensa', hasEOL: true }, { str: 'The picnic' }],
+      2: [],
+      3: [{ str: 'Picnic on Saturday.', hasEOL: true }, { str: 'Bring a picnic' }],
+    };
+    const typed = async (parts: Record<string, FakeEl>, text: string) => {
+      parts['find-input']!.value = text;
+      parts['find-input']!.dispatchEvent(new Event('input'));
+      await flush();
+    };
+
+    it('the magnifier opens the search row, focused; a query finds every match in the served file only, says which of how many, and goes to the first', async () => {
+      const { parts, pages, io, log } = await open({ texts: TEXTS });
+      expect(parts['find']!.getAttribute('aria-expanded')).toBe('false');
+      parts['find']!.click();
+      await flush();
+      expect(parts['find-bar']!.hidden).toBe(false);
+      expect(parts['find']!.getAttribute('aria-expanded')).toBe('true');
+      expect(parts['find-input']!.focused).toBe(true);
+      // The text of every page, read once, from the file the viewer opened.
+      expect(log.filter((l) => l.startsWith('text'))).toEqual([1, 2, 3].map((n) => `text ${n} {"includeMarkedContent":true,"disableNormalization":true}`));
+      await typed(parts, '  PICNIC ');
+      expect(parts['find-count']!.textContent).toBe('1 of 3');
+      expect(pages[0]!.scrolled).toBe(1);
+      // Painted where the page is drawn, the current match apart, and scrolled to.
+      io.near(1);
+      await flush();
+      const hits = pages[0]!.querySelectorAll('mark').filter((el) => el.classes.has('viewer-hit'));
+      expect(hits.map((h) => [h.textContent, h.classes.has('viewer-hit--current')])).toEqual([['picnic', true]]);
+      expect(hits[0]!.scrolledInto).toEqual([{ block: 'center', inline: 'center' }]);
+      // Next and previous, round the ends; Enter and Shift+Enter in the field do the same.
+      parts['find-next']!.click();
+      expect(parts['find-count']!.textContent).toBe('2 of 3');
+      expect(pages[2]!.scrolled).toBe(1);
+      key(parts['find-input']!, 'Enter');
+      expect(parts['find-count']!.textContent).toBe('3 of 3');
+      key(parts['find-input']!, 'Enter');
+      expect(parts['find-count']!.textContent).toBe('1 of 3');
+      const again = pages[0]!.querySelectorAll('mark').filter((el) => el.classes.has('viewer-hit--current'));
+      expect(again[0]!.scrolledInto).toEqual([{ block: 'center', inline: 'center' }]);
+      key(parts['find-input']!, 'Enter', { shiftKey: true });
+      expect(parts['find-count']!.textContent).toBe('3 of 3');
+      parts['find-prev']!.click();
+      expect(parts['find-count']!.textContent).toBe('2 of 3');
+      // Another key is the field's own.
+      expect(key(parts['find-input']!, 'a').defaultPrevented).toBe(false);
+    });
+
+    it('starts from the page being read, says when nothing matches, and an empty query clears it', async () => {
+      const { parts, io, pages } = await open({ texts: TEXTS });
+      parts['next']!.click();
+      parts['next']!.click();
+      io.near(3);
+      await flush();
+      parts['find']!.click();
+      await typed(parts, 'picnic');
+      expect(parts['find-count']!.textContent).toBe('2 of 3');
+      const painted = () => pages[2]!.querySelectorAll('mark').filter((el) => el.classes.has('viewer-hit')).map((h) => h.textContent);
+      expect(painted()).toEqual(['Picnic', 'picnic']);
+      await typed(parts, 'members only canary');
+      expect(parts['find-count']!.textContent).toBe('No matches');
+      expect(painted()).toEqual([]);
+      parts['find-next']!.click();
+      parts['find-prev']!.click();
+      expect(parts['find-count']!.textContent).toBe('No matches');
+      await typed(parts, '   ');
+      expect(parts['find-count']!.textContent).toBe('');
+    });
+
+    it('says when the page being read has no searchable text (a scanned page), and a page whose text cannot be read is one', async () => {
+      const { parts } = await open({ texts: { ...TEXTS, 3: 'fail' } });
+      parts['find']!.click();
+      await flush();
+      expect(parts['find-note']!.textContent).toBe('');
+      parts['next']!.click();
+      expect(parts['find-note']!.textContent).toBe(NO_TEXT);
+      parts['next']!.click();
+      expect(parts['find-note']!.textContent).toBe(NO_TEXT);
+      await typed(parts, 'picnic');
+      expect(parts['find-count']!.textContent).toBe('1 of 1');
+    });
+
+    it('Escape closes it, takes the marks away and gives the focus back; "/" opens it, but never from a field or with a modifier', async () => {
+      const { root, doc, parts, io, pages } = await open({ texts: TEXTS });
+      io.near(1);
+      await flush();
+      parts['find']!.focus();
+      parts['find']!.click();
+      await typed(parts, 'picnic');
+      key(root, 'Escape');
+      expect(parts['find-bar']!.hidden).toBe(true);
+      expect(parts['find']!.getAttribute('aria-expanded')).toBe('false');
+      expect(parts['find']!.focused).toBe(true);
+      expect(pages[0]!.querySelectorAll('mark').filter((el) => el.classes.has('viewer-hit'))).toEqual([]);
+      // Escape again changes nothing.
+      key(root, 'Escape');
+      expect(parts['find-bar']!.hidden).toBe(true);
+      for (const [target, more] of [
+        [parts['page']!, {}],
+        [Object.assign(new FakeEl('div'), { isContentEditable: true }), {}],
+        [doc.body, { ctrlKey: true }],
+        [doc.body, { metaKey: true }],
+        [doc.body, { altKey: true }],
+      ] as const) {
+        const event = Object.assign(new Event('keydown', { cancelable: true }), { key: '/', ...more });
+        Object.defineProperty(event, 'target', { value: target });
+        win.dispatchEvent(event);
+        expect(parts['find-bar']!.hidden).toBe(true);
+      }
+      const slash = Object.assign(new Event('keydown', { cancelable: true }), { key: '/' });
+      Object.defineProperty(slash, 'target', { value: doc.body });
+      win.dispatchEvent(slash);
+      await flush();
+      expect(slash.defaultPrevented).toBe(true);
+      expect(parts['find-bar']!.hidden).toBe(false);
+      expect(parts['find-input']!.focused).toBe(true);
+      // Its query is kept: open again, its matches are found again.
+      expect(parts['find-count']!.textContent).toBe('1 of 3');
+      parts['find-close']!.click();
+      expect(parts['find-bar']!.hidden).toBe(true);
+      // The magnifier closes it as well as opening it.
+      parts['find']!.click();
+      await flush();
+      parts['find']!.click();
+      expect(parts['find-bar']!.hidden).toBe(true);
+      // A "/" from no element at all (the window) opens it too.
+      win.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: '/' }));
+      expect(parts['find-bar']!.hidden).toBe(false);
+    });
+
+    it('from the More menu, the menu closes and the focus comes back to its button', async () => {
+      const { parts, menu } = await open({ texts: TEXTS });
+      parts['more']!.click();
+      menu['find']!.click();
+      await flush();
+      expect(parts['more-list']!.hidden).toBe(true);
+      expect(parts['find-bar']!.hidden).toBe(false);
+      parts['find-close']!.click();
+      expect(parts['more']!.focused).toBe(true);
+    });
+
+    it('a query typed while the text is still being read waits for it, and only the last query counts', async () => {
+      const { parts } = await open({ texts: TEXTS });
+      parts['find']!.click();
+      parts['find-input']!.value = 'pensa';
+      parts['find-input']!.dispatchEvent(new Event('input'));
+      parts['find-input']!.value = 'saturday';
+      parts['find-input']!.dispatchEvent(new Event('input'));
+      await flush();
+      expect(parts['find-count']!.textContent).toBe('1 of 1');
+    });
+
+    it('a match on a page let go is painted again when it is drawn again', async () => {
+      const { parts, io, pages } = await open({ texts: TEXTS });
+      parts['find']!.click();
+      await typed(parts, 'pensa');
+      io.near(1);
+      await flush();
+      io.near(3);
+      await flush();
+      io.near(1);
+      await flush();
+      expect(pages[0]!.querySelectorAll('mark').filter((el) => el.classes.has('viewer-hit')).map((h) => h.textContent)).toEqual(['Pensa']);
+    });
+  });
+
+  describe('panning sideways, zoomed wider than the frame', () => {
+    const wide = async () => {
+      const view = await open();
+      view.parts['pages']!.scrollWidth = 1800;
+      view.parts['zoom-in']!.click();
+      await flush();
+      return view;
+    };
+
+    it('shows a scrollbar kept at the foot of the window, as wide as the pages, in step with them both ways', async () => {
+      const { root, parts } = await open();
+      parts['pages']!.scrollWidth = 600;
+      win.dispatchEvent(new Event('resize'));
+      expect(parts['pan']!.hidden).toBe(true);
+      expect(root.classes.has('viewer--wide')).toBe(false);
+      parts['pages']!.scrollWidth = 1800;
+      parts['zoom-in']!.click();
+      expect(parts['pan']!.hidden).toBe(false);
+      expect(root.classes.has('viewer--wide')).toBe(true);
+      expect(parts['pan-track']!.style.width).toBe('1800px');
+      parts['pan']!.scrollLeft = 300;
+      parts['pan']!.dispatchEvent(new Event('scroll'));
+      expect(parts['pages']!.scrollLeft).toBe(300);
+      parts['pages']!.scrollLeft = 120;
+      parts['pages']!.dispatchEvent(new Event('scroll'));
+      expect(parts['pan']!.scrollLeft).toBe(120);
+      // In step already: nothing is set.
+      parts['pan']!.dispatchEvent(new Event('scroll'));
+      parts['pages']!.dispatchEvent(new Event('scroll'));
+      expect([parts['pan']!.scrollLeft, parts['pages']!.scrollLeft]).toEqual([120, 120]);
+      // The scrollbar's own echo of a value the pages gave it, arriving after the pages moved on (a drag),
+      // never pulls them back.
+      parts['pages']!.scrollLeft = 150;
+      parts['pan']!.dispatchEvent(new Event('scroll'));
+      expect(parts['pages']!.scrollLeft).toBe(150);
+      parts['pages']!.dispatchEvent(new Event('scroll'));
+      expect(parts['pan']!.scrollLeft).toBe(150);
+      // The reader's own move of the scrollbar still moves the pages; once in step, nothing more is set.
+      parts['pan']!.scrollLeft = 40;
+      parts['pan']!.dispatchEvent(new Event('scroll'));
+      expect(parts['pages']!.scrollLeft).toBe(40);
+      parts['pan']!.dispatchEvent(new Event('scroll'));
+      expect(parts['pages']!.scrollLeft).toBe(40);
+    });
+
+    it('a page wider than the first (a landscape spread), once drawn, brings the scrollbar and the hand tool (S2)', async () => {
+      const { root, parts, io } = await open({ sizes: { 2: [1584, 612] } });
+      parts['pages']!.scrollWidth = 600;
+      win.dispatchEvent(new Event('resize'));
+      expect(root.classes.has('viewer--wide')).toBe(false);
+      // Laid out at its own size as it is drawn, the pages grow wider than the frame.
+      parts['pages']!.scrollWidth = 1584;
+      io.near(2);
+      await flush();
+      expect(root.classes.has('viewer--wide')).toBe(true);
+      expect(parts['pan']!.hidden).toBe(false);
+      expect(parts['pan-track']!.style.width).toBe('1584px');
+    });
+
+    it("the pages' own echo of a move of the scrollbar, arriving after the scrollbar moved on, never pulls it back (S3)", async () => {
+      const { parts } = await wide();
+      for (let x = 24; x <= 600; x += 24) {
+        parts['pan']!.scrollLeft = x;
+        parts['pan']!.dispatchEvent(new Event('scroll'));
+        // The pages' scroll event for the last value comes a frame late, after the next move of the bar.
+        parts['pan']!.scrollLeft = x + 24;
+        parts['pages']!.dispatchEvent(new Event('scroll'));
+        expect(parts['pan']!.scrollLeft, String(x)).toBe(x + 24);
+        parts['pan']!.scrollLeft = x;
+      }
+      expect(parts['pages']!.scrollLeft).toBe(600);
+      // A move of the pages themselves (the wheel) still moves the bar.
+      parts['pages']!.scrollLeft = 30;
+      parts['pages']!.dispatchEvent(new Event('scroll'));
+      expect(parts['pan']!.scrollLeft).toBe(30);
+    });
+
+    it('Shift and the wheel pan sideways where the browser does not, in lines or pixels; a sideways wheel is left to the browser', async () => {
+      const { parts } = await wide();
+      const wheel = (more: object) => {
+        const event = Object.assign(new Event('wheel', { cancelable: true }), { deltaX: 0, deltaY: 0, deltaMode: 0, shiftKey: false, ...more });
+        parts['pages']!.dispatchEvent(event);
+        return event;
+      };
+      expect(wheel({ shiftKey: true, deltaY: 100 }).defaultPrevented).toBe(true);
+      expect(parts['pages']!.scrollLeft).toBe(100);
+      wheel({ shiftKey: true, deltaY: 2, deltaMode: 1 });
+      expect(parts['pages']!.scrollLeft).toBe(180);
+      for (const more of [{ deltaY: 100 }, { shiftKey: true, deltaX: 50, deltaY: 50 }, { shiftKey: true }]) expect(wheel(more).defaultPrevented).toBe(false);
+      expect(parts['pages']!.scrollLeft).toBe(180);
+    });
+
+    it('the hand tool drags the pages both ways with a mouse; a press without a drag still follows a link', async () => {
+      const { root, parts } = await wide();
+      const pointer = (type: string, x: number, y: number, more: object = {}) => {
+        const event = Object.assign(new Event(type, { cancelable: true }), { clientX: x, clientY: y, button: 0, pointerType: 'mouse', pointerId: 7, ...more });
+        parts['pages']!.dispatchEvent(event);
+        return event;
+      };
+      const click = () => {
+        const event = new Event('click', { cancelable: true });
+        parts['pages']!.dispatchEvent(event);
+        return event;
+      };
+      // Off: a press and a move are the browser's (selecting text).
+      pointer('pointerdown', 100, 100);
+      pointer('pointermove', 50, 50);
+      expect(parts['pages']!.scrollLeft).toBe(0);
+      parts['hand']!.click();
+      // What the zoom scrolled to keep the place is not this test's.
+      win.scrolledBy = 0;
+      expect(parts['hand']!.getAttribute('aria-pressed')).toBe('true');
+      expect(root.classes.has('viewer--hand')).toBe(true);
+      pointer('pointerdown', 100, 100);
+      pointer('pointermove', 102, 101);
+      expect(parts['pages']!.captured).toEqual([]);
+      pointer('pointerup', 102, 101);
+      expect(click().defaultPrevented).toBe(false);
+      pointer('pointerdown', 100, 100);
+      pointer('pointermove', 60, 70);
+      expect(parts['pages']!.captured).toEqual([7]);
+      expect(root.classes.has('viewer--dragging')).toBe(true);
+      pointer('pointermove', 40, 80);
+      expect(parts['pages']!.scrollLeft).toBe(60);
+      expect(win.scrolledBy).toBe(20);
+      pointer('pointerup', 40, 80);
+      expect(root.classes.has('viewer--dragging')).toBe(false);
+      // The click that ends a drag follows nothing; the next one does.
+      expect(click().defaultPrevented).toBe(true);
+      expect(click().defaultPrevented).toBe(false);
+      // A touch, a pen, another button, or a move with no press: the browser's own.
+      pointer('pointerdown', 100, 100, { pointerType: 'touch' });
+      pointer('pointerdown', 100, 100, { button: 2 });
+      pointer('pointermove', 0, 0);
+      pointer('pointercancel', 0, 0);
+      expect(parts['pages']!.scrollLeft).toBe(60);
+      // A link is never dragged away while the hand is on.
+      const drag = new Event('dragstart', { cancelable: true });
+      parts['pages']!.dispatchEvent(drag);
+      expect(drag.defaultPrevented).toBe(true);
+      parts['hand']!.click();
+      const plain = new Event('dragstart', { cancelable: true });
+      parts['pages']!.dispatchEvent(plain);
+      expect(plain.defaultPrevented).toBe(false);
+    });
+  });
+
+  // S7: a group moves into More only when the bar's controls would not sit on one row, by measure, the
+  // later ones first (Light pages, then Download and Open, then zoom, then Fit, then search).
+  describe('what moves into the More menu, by measure', () => {
+    /** The bar's controls, laid out in a row of `room` px and wrapping, each group as wide as given. */
+    function bar(view: ReturnType<typeof viewerPage>, state: { room: number }) {
+      const { root, parts } = view;
+      const widths: [string, number][] = [['pages', 200], ['find', 44], ['zoom', 150], ['fit', 100], ['tone', 50], ['file', 50], ['file', 50], ['more', 44]];
+      const els = widths.map(([g, w]) => {
+        const el = new FakeEl('div');
+        if (g === 'more') el.className = 'vmore';
+        else if (g !== 'pages') el.setAttribute('data-ov', g);
+        el.rect = { top: 0, height: 40, width: w };
+        parts['bar']!.append(el);
+        return { el, g, w };
+      });
+      const shown = (g: string) =>
+        g === 'more' ? root.classes.has('viewer--more')
+        : g === 'tone' ? ['dark', 'tint'].includes(root.dataset['tone'] ?? '') && !root.classes.has('viewer--shed-tone')
+        : !root.classes.has(`viewer--shed-${g}`);
+      for (const { el, g } of els)
+        el.layout = {
+          shown: () => shown(g),
+          top: () => {
+            let x = 0;
+            for (const o of els) {
+              if (!shown(o.g)) continue;
+              x += o.w;
+              if (o.el === el) return Math.floor((x - 1) / state.room) * 44;
+            }
+            return 0;
+          },
+        };
+    }
+    const shed = (root: FakeEl) => ['tone', 'file', 'zoom', 'fit', 'find'].filter((g) => root.classes.has(`viewer--shed-${g}`));
+
+    it('keeps Download and Open on the bar whenever they fit, moving the fewest groups, in order, as the bar narrows and widens', async () => {
+      const state = { room: 1000 };
+      const { root, doc } = await open({}, (view) => {
+        view.doc.documentElement.setAttribute('data-theme', 'dark');
+        bar(view, state);
+      });
+      const at = (room: number) => {
+        state.room = room;
+        win.dispatchEvent(new Event('resize'));
+        return [shed(root), root.classes.has('viewer--more')];
+      };
+      expect([shed(root), root.classes.has('viewer--more')]).toEqual([[], false]);
+      // 644 px of controls: all fit at 644; at 640 only Light pages goes (and More comes); Download and Open stay.
+      expect(at(644)).toEqual([[], false]);
+      expect(at(640)).toEqual([['tone'], true]);
+      expect(at(600)).toEqual([['tone', 'file'], true]);
+      expect(at(400)).toEqual([['tone', 'file', 'zoom'], true]);
+      expect(at(300)).toEqual([['tone', 'file', 'zoom', 'fit'], true]);
+      expect(at(250)).toEqual([['tone', 'file', 'zoom', 'fit', 'find'], true]);
+      expect(at(100)).toEqual([['tone', 'file', 'zoom', 'fit', 'find'], true]);
+      expect(at(640)).toEqual([['tone'], true]);
+      expect(at(1000)).toEqual([[], false]);
+      // A light theme has no Light pages: at 600 everything else fits, with no More.
+      at(600);
+      doc.documentElement.setAttribute('data-theme', 'light');
+      FakeMutationObserver.last!.changed();
+      expect([shed(root), root.classes.has('viewer--more')]).toEqual([[], false]);
+      doc.documentElement.setAttribute('data-theme', 'dark');
+      FakeMutationObserver.last!.changed();
+      expect(shed(root)).toEqual(['tone', 'file']);
+    });
+  });
+
+  describe('the More menu, on the narrowest screens', () => {
+    it("opens on a press with the focus on its first item; each item does what the bar's own does, then the menu closes", async () => {
+      const { parts, menu } = await open();
+      // An item the bar shows itself is not in the menu, and takes no focus: the next one does.
+      menu['find']!.focusable = false;
+      parts['more']!.click();
+      expect(parts['more-list']!.hidden).toBe(false);
+      expect(menu['find']!.focused).toBe(false);
+      expect(menu['zoom-out']!.focused).toBe(true);
+      parts['more']!.click();
+      menu['find']!.focusable = true;
+      parts['more']!.click();
+      expect(menu['find']!.focused).toBe(true);
+      const before = parts['zoom-now']!.textContent;
+      expect(before).toMatch(/^Zoom \d+%$/);
+      menu['zoom-in']!.click();
+      expect(parts['more-list']!.hidden).toBe(true);
+      expect(parts['more']!.focused).toBe(true);
+      expect(parts['zoom-now']!.textContent).not.toBe(before);
+      expect(menu['fit-width']!.getAttribute('aria-pressed')).toBe('false');
+      menu['fit-page']!.click();
+      expect(menu['fit-page']!.getAttribute('aria-pressed')).toBe('true');
+      expect(parts['fit-page']!.getAttribute('aria-pressed')).toBe('true');
+      menu['zoom-out']!.click();
+      menu['fit-width']!.click();
+      expect(menu['fit-width']!.getAttribute('aria-pressed')).toBe('true');
+      // A press that is not on an item (between them) leaves it open.
+      parts['more']!.click();
+      parts['more-list']!.dispatchEvent(new Event('click'));
+      expect(parts['more-list']!.hidden).toBe(false);
+    });
+
+    it('a turned-off item does nothing', async () => {
+      const { parts, menu } = await open();
+      for (let i = 0; i < 12; i++) parts['zoom-in']!.click();
+      expect(menu['zoom-in']!.getAttribute('aria-disabled')).toBe('true');
+      const now = parts['zoom-now']!.textContent;
+      menu['zoom-in']!.click();
+      expect(parts['zoom-now']!.textContent).toBe(now);
+    });
   });
 });
 

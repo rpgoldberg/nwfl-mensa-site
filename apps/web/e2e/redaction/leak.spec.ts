@@ -375,6 +375,32 @@ test('PDFVIEW: download=1 is the same redacted copy as an attachment, cached the
   expect(fold(attached.body)).not.toContain(fold(fixture.canaries['phone']!));
 });
 
+// READER2: search within the issue reads only the copy the reader is served, in the browser. On the public
+// copy of the marked PDF the withheld phone canary is never found, nor the members copy's own words on the
+// issue's public copy; each copy's own plain line is (the positive control, so the search ran at all).
+test('READER2: in-issue search on the public copy finds its own words and never a withheld canary', async ({ page }) => {
+  const cases: [string, string, string[]][] = [
+    [fixture.ids['pdf']!, fixture.pdfPlain, [fixture.canaries['phone']!]],
+    [fixture.ids['issuePublicPdf']!, fixture.issue.plain, ['the members edition']],
+  ];
+  for (const [id, plain, withheld] of cases) {
+    await page.goto(`/read/${id}`);
+    await expect(page.locator('#page-1 canvas.viewer-sheet')).toHaveCount(1);
+    await page.locator('[data-viewer-find]').click();
+    const box = page.getByRole('textbox', { name: 'Search this issue' });
+    const count = page.locator('[data-viewer-find-count]');
+    await box.fill(plain);
+    await expect(count, id).toHaveText(/^1 of \d+$/);
+    for (const word of withheld) {
+      await box.fill(word);
+      await expect(count, `${id}: ${word}`).toHaveText('No matches');
+      await expect(page.locator('mark.viewer-hit')).toHaveCount(0);
+    }
+    const text = fold((await page.locator('.textLayer').allTextContents()).join(' '));
+    for (const word of withheld) expect(text, id).not.toContain(fold(word));
+  }
+});
+
 test('sitemap.xml and robots.txt list no API-made URL', () => {
   expect(fetched.get('/sitemap.xml')!.body).not.toMatch(/\/events\/[0-9a-f-]{36}/);
   expect(fetched.get('/robots.txt')!.body).not.toMatch(/\/events\/[0-9a-f-]{36}/);
