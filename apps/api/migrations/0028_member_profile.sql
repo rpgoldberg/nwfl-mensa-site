@@ -4,7 +4,9 @@
 -- member's profile. This reverses the erasure of 0005, 0007 and 0009 (R33, A5): the membership
 -- number, the last name and (new) the first name stay on the sign-up row in every state, pending,
 -- checked, approved, rejected and reopened. They are self-typed, never National-sourced. The approved
--- sign-up IS the member's profile: there is no copy anywhere else, so deleting a sign-up deletes them.
+-- sign-up IS the member's profile: there is no copy anywhere else. Only a PENDING sign-up can be
+-- deleted, by the owner role (0026), and that deletes what it typed with it; a decided sign-up cannot be
+-- deleted, so the number and the names otherwise stay on the sign-up record.
 --
 --   1. The three erasure rules go, and so does the trigger that held an account back from member
 --      until its sign-up was erased.
