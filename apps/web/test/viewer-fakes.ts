@@ -130,6 +130,14 @@ export class FakeEl extends EventTarget {
   get offsetHeight() {
     return this.rect.height;
   }
+  /** A layout a test gives a bar control: whether it is shown, and its top (the row it sits on). */
+  layout: { shown: () => boolean; top: () => number } | undefined;
+  getClientRects() {
+    return this.layout && !this.layout.shown() ? [] : [this.getBoundingClientRect()];
+  }
+  get offsetTop() {
+    return this.layout?.top() ?? 0;
+  }
   scrollIntoView(options?: unknown) {
     this.scrolled++;
     this.scrolledInto.push(options);

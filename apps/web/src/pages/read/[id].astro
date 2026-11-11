@@ -59,9 +59,9 @@ const title = view?.kind === 'not_found' ? 'No such issue' : view?.kind === 'not
           zoom (a picker, never a native select: WebKit's select breaks the site's CSP), Fit, Light pages
           where the theme recolours the pages, Download and Open. Every control has a spoken name
           (aria-label, which starts with any word shown) and a tooltip. Where a phone has no room, the later
-          groups (data-ov) move into the More menu, which holds a copy of each (data-ov-item, data-viewer-act;
-          site.css shows the one that fits), in this order: Download and Open and Light pages, then zoom,
-          then Fit, then search. Page controls always stay on the bar. */}
+          groups (data-ov) move into the More menu, which holds a copy of each (data-ov-item, data-viewer-act).
+          The script measures the bar and moves only what would not fit on one row, in this order: Light
+          pages, then Download and Open, then zoom, then Fit, then search. Page controls always stay. */}
       <section class="viewer" data-viewer data-pdf={ok.pdf} data-pdfjs={pdfjsUrl} data-worker={workerUrl} aria-labelledby="viewer-title">
         <h2 id="viewer-title" class="visually-hidden">The issue</h2>
         <div class="viewer-bar" data-viewer-bar>

@@ -1,6 +1,6 @@
 // READER2: the reader's bar, as the e2e specs reach it. The bar holds |<< < [n] of N > >>|, search, zoom,
 // Fit, Light pages (where the theme recolours the pages), Download and Open in another app; on a narrow
-// bar the later groups move into the More menu, which holds a copy of each (site.css). A test that
+// bar the later groups move into the More menu, which holds a copy of each (the script measures). A test that
 // presses a control presses whichever copy shows, as a reader would.
 import { expect, type Locator, type Page } from '@playwright/test';
 

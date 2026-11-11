@@ -137,6 +137,46 @@ test.describe('page controls: |<< < [n] of N > >>|', () => {
     });
   }
 
+  // S7: a group moves into More only when the bar would not fit it on one row, by measure: Download and
+  // Open stay on the bar wherever they fit (a tablet held upright, 768 or 820 px, at the default size).
+  test('Download and Open stay on the bar wherever they fit; More holds exactly what the bar has no room for, at every width and size', async ({ page, context, baseURL, isMobile }) => {
+    test.skip(isMobile, 'widths up to a computer');
+    for (const size of [100, 175]) {
+      await setPrefs(context, baseURL!, { theme: 'dark', size });
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await opened(page);
+      for (const width of [1280, 1024, 820, 768, 700, 600, 480, 390, 300]) {
+        await page.setViewportSize({ width, height: 800 });
+        await expect.poll(async () => rows(await barControls(page)), String(width)).toBe(1);
+        expect(await sideways(page)).toBeLessThanOrEqual(0);
+        const shed = (await viewer(page).getAttribute('class'))!.split(' ').filter((c) => c.startsWith('viewer--shed-')).map((c) => c.slice(13));
+        if (width >= 1024 || (width >= 768 && size === 100)) expect(shed, `${width} at ${size} %`).toEqual([]);
+        // In order: Light pages first, then Download and Open, then zoom, then Fit, then search.
+        expect(['tone', 'file', 'zoom', 'fit', 'find'].slice(0, shed.length), String(width)).toEqual(shed);
+        for (const act of ['download', 'open'] as const) await expect(onBar(page, act)).toBeVisible({ visible: !shed.includes('file') });
+        await expect(more(page)).toBeVisible({ visible: shed.length > 0 });
+        if (shed.length === 0) continue;
+        await more(page).click();
+        const groups = await moreList(page).locator('.vmore__item:visible').evaluateAll((els) => [...new Set(els.map((el) => el.getAttribute('data-ov-item')))]);
+        expect(groups.sort(), String(width)).toEqual([...shed].sort());
+        await page.keyboard.press('Escape');
+      }
+    }
+  });
+
+  test('a control on the bar keeps the focus while the window narrows, so long as it still fits', async ({ page, isMobile }) => {
+    test.skip(isMobile, 'a window a computer resizes');
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await opened(page);
+    const download = onBar(page, 'download');
+    await download.focus();
+    for (const width of [1200, 1100, 1024, 900]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.waitForTimeout(100);
+      await expect(download).toBeFocused();
+    }
+  });
+
   test('at the largest text size on the narrowest screen, at most two rows, and nothing scrolls sideways', async ({ page, context, baseURL }) => {
     await page.setViewportSize({ width: 300, height: 700 });
     await setPrefs(context, baseURL!, { size: SIZES.at(-1)! });

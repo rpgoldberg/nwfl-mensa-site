@@ -94,6 +94,13 @@ export const HAND = 'viewer--hand';
 export const DRAGGING = 'viewer--dragging';
 /** On the viewer while Light pages shows the pages as printed whatever the theme. */
 export const LIGHT_PAGES = 'viewer--light-pages';
+/**
+ * The bar's groups (data-ov) that move into the More menu when its controls would not sit on one row, the
+ * first first: Light pages, then Download and Open, then zoom, then Fit, then search (Ross's order, from
+ * its end). Each moved has viewer--shed-<group> on the viewer, and the More button shows with MORE.
+ */
+export const SHED = /** @type {const} */ (['tone', 'file', 'zoom', 'fit', 'find']);
+export const MORE = 'viewer--more';
 /** How far a press must move to be a drag, not a click, in CSS px. */
 const DRAG = 4;
 /** Pixels in a line of a wheel that counts in lines (deltaMode 1). */
@@ -553,11 +560,12 @@ export async function wireViewer(doc, win, pdfjs) {
       // every tone, as the tone can change without a redraw (a failure counts as such a page); before the
       // first drawing, so the pictures decoded for it are let go at once rather than kept twice.
       if (page.images === undefined) {
-        page.images = await proxy.getOperatorList().then(
+        const images = await proxy.getOperatorList().then(
           (/** @type {{ fnArray: number[] }} */ list) => list.fnArray.filter((fn) => fn === pdfjs.OPS.paintImageXObject || fn === pdfjs.OPS.paintInlineImageXObject).length,
           () => Infinity,
         );
-        if (page.images > 0) proxy.cleanup();
+        page.images = images;
+        if (images > 0) proxy.cleanup();
         if (stale()) return;
       }
       const viewport = proxy.getViewport({ scale: at * CSS_UNITS });
@@ -626,7 +634,42 @@ export async function wireViewer(doc, win, pdfjs) {
    * below it (CSS scroll-margin-top), however many rows it wraps to, or at the window's top once the bar
    * scrolls with the page.
    */
+  /**
+   * The fewest groups moved into More that leave the bar's controls on one row, by measure (the bar's
+   * width, the reader's text size, the page count's digits, the theme), never a fixed width. From the
+   * groups moved now, more go while the row wraps, then any comes back that fits again, so a control
+   * that stays on the bar is never hidden on the way (and keeps the focus).
+   */
+  let shed = 0;
+  const shedBar = () => {
+    const tone = root.dataset['tone'];
+    // Light pages shows only where the theme recolours the pages (site.css).
+    const groups = SHED.filter((g) => g !== 'tone' || tone === 'dark' || tone === 'tint');
+    /** @param {number} k */
+    const set = (k) => {
+      shed = k;
+      for (const g of SHED) root.classList.toggle(`viewer--shed-${g}`, groups.indexOf(g) > -1 && groups.indexOf(g) < k);
+      root.classList.toggle(MORE, k > 0);
+    };
+    const oneRow = () => {
+      const shown = /** @type {HTMLElement[]} */ ([...bar.children]).filter((el) => el !== ui['find-bar'] && el.getClientRects().length > 0);
+      const first = shown[0];
+      return !first || shown.every((el) => el.offsetTop < first.offsetTop + first.offsetHeight);
+    };
+    let k = Math.min(shed, groups.length);
+    set(k);
+    while (k < groups.length && !oneRow()) set(++k);
+    while (k > 0) {
+      set(k - 1);
+      if (!oneRow()) {
+        set(k);
+        break;
+      }
+      k--;
+    }
+  };
   const fitBar = () => {
+    shedBar();
     pinned = bar.offsetHeight <= win.innerHeight / 3;
     root.classList.toggle(UNPINNED, !pinned);
     pagesEl.style.setProperty('--viewer-bar', `${pinned ? bar.offsetHeight : 0}px`);
@@ -977,6 +1020,8 @@ export async function wireViewer(doc, win, pdfjs) {
   const more = win.matchMedia('(prefers-contrast: more)');
   const tone = () => {
     root.dataset['tone'] = pageTone(html.getAttribute('data-theme'), dark.matches, more.matches);
+    // Light pages comes and goes with it: the bar is fitted again.
+    fitBar();
   };
   dark.addEventListener('change', tone);
   more.addEventListener('change', tone);

@@ -446,19 +446,35 @@ test.describe('/read on a computer', () => {
 });
 
 // W-LOOK2: the bar is sized like the chrome, so a computer's window, or a phone held either way, keeps
-// it pinned at every size; a short phone window (a split screen) is where the largest size still makes
-// it two rows and too tall. W-LOOK3's slimmer bar needs a narrower, shorter window for that: 340 x 200,
-// one row at the default size and two at the largest.
+// it pinned at every size. READER2 (S7): what would not fit on one row moves into More, by measure, so a
+// larger text size no longer wraps the bar: at 340 x 200 search goes into More at the largest size, at
+// once, and the bar stays one row and pinned. Only a window so short that one row is more than a third
+// of it (a split screen, 340 x 140) lets go of the top.
 test.describe('/read in a short phone window', () => {
   test.use({ viewport: { width: 340, height: 200 } });
 
-  test('the bar lets go of the top as soon as the reader picks a text size that makes it too tall, with no resize', async ({ page }) => {
+  test('a larger text size, with no resize, moves what no longer fits into More; the bar stays one row and pinned', async ({ page }) => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);
     const viewer = page.locator('[data-viewer]');
-    await expect(viewer).not.toHaveClass(/viewer--unpinned/);
+    await expect(viewer).not.toHaveClass(/viewer--shed-find/);
     // What the text size panel (public/scripts/size.js) does: the page's own size, at once.
     await page.evaluate(() => (document.documentElement.dataset['size'] = '175'));
+    await expect(viewer).toHaveClass(/viewer--shed-find/);
+    await expect(viewer).not.toHaveClass(/viewer--unpinned/);
+    const bar = page.locator('[data-viewer-bar]');
+    expect(await bar.evaluate((el) => (el as HTMLElement).offsetHeight)).toBeLessThan(60);
+  });
+});
+
+test.describe('/read in a split-screen window', () => {
+  test.use({ viewport: { width: 340, height: 140 } });
+
+  test('the bar lets go of the top where one row is more than a third of the window', async ({ page }) => {
+    await page.goto(read(PUBLIC_ID));
+    await page.locator('#page-1').scrollIntoViewIfNeeded();
+    await expect(drawn(page, 1)).toHaveCount(1);
+    const viewer = page.locator('[data-viewer]');
     await expect(viewer).toHaveClass(/viewer--unpinned/);
     expect(await page.locator('[data-viewer-bar]').evaluate((el) => getComputedStyle(el).position)).toBe('static');
     await page.getByRole('button', { name: 'Next page' }).click();

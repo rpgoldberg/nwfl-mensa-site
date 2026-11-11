@@ -1302,6 +1302,74 @@ describe('READER2', () => {
     });
   });
 
+  // S7: a group moves into More only when the bar's controls would not sit on one row, by measure, the
+  // later ones first (Light pages, then Download and Open, then zoom, then Fit, then search).
+  describe('what moves into the More menu, by measure', () => {
+    /** The bar's controls, laid out in a row of `room` px and wrapping, each group as wide as given. */
+    function bar(view: ReturnType<typeof viewerPage>, state: { room: number }) {
+      const { root, parts } = view;
+      const widths: [string, number][] = [['pages', 200], ['find', 44], ['zoom', 150], ['fit', 100], ['tone', 50], ['file', 50], ['file', 50], ['more', 44]];
+      const els = widths.map(([g, w]) => {
+        const el = new FakeEl('div');
+        if (g === 'more') el.className = 'vmore';
+        else if (g !== 'pages') el.setAttribute('data-ov', g);
+        el.rect = { top: 0, height: 40, width: w };
+        parts['bar']!.append(el);
+        return { el, g, w };
+      });
+      const shown = (g: string) =>
+        g === 'more' ? root.classes.has('viewer--more')
+        : g === 'tone' ? ['dark', 'tint'].includes(root.dataset['tone'] ?? '') && !root.classes.has('viewer--shed-tone')
+        : !root.classes.has(`viewer--shed-${g}`);
+      for (const { el, g } of els)
+        el.layout = {
+          shown: () => shown(g),
+          top: () => {
+            let x = 0;
+            for (const o of els) {
+              if (!shown(o.g)) continue;
+              x += o.w;
+              if (o.el === el) return Math.floor((x - 1) / state.room) * 44;
+            }
+            return 0;
+          },
+        };
+    }
+    const shed = (root: FakeEl) => ['tone', 'file', 'zoom', 'fit', 'find'].filter((g) => root.classes.has(`viewer--shed-${g}`));
+
+    it('keeps Download and Open on the bar whenever they fit, moving the fewest groups, in order, as the bar narrows and widens', async () => {
+      const state = { room: 1000 };
+      const { root, doc } = await open({}, (view) => {
+        view.doc.documentElement.setAttribute('data-theme', 'dark');
+        bar(view, state);
+      });
+      const at = (room: number) => {
+        state.room = room;
+        win.dispatchEvent(new Event('resize'));
+        return [shed(root), root.classes.has('viewer--more')];
+      };
+      expect([shed(root), root.classes.has('viewer--more')]).toEqual([[], false]);
+      // 644 px of controls: all fit at 644; at 640 only Light pages goes (and More comes); Download and Open stay.
+      expect(at(644)).toEqual([[], false]);
+      expect(at(640)).toEqual([['tone'], true]);
+      expect(at(600)).toEqual([['tone', 'file'], true]);
+      expect(at(400)).toEqual([['tone', 'file', 'zoom'], true]);
+      expect(at(300)).toEqual([['tone', 'file', 'zoom', 'fit'], true]);
+      expect(at(250)).toEqual([['tone', 'file', 'zoom', 'fit', 'find'], true]);
+      expect(at(100)).toEqual([['tone', 'file', 'zoom', 'fit', 'find'], true]);
+      expect(at(640)).toEqual([['tone'], true]);
+      expect(at(1000)).toEqual([[], false]);
+      // A light theme has no Light pages: at 600 everything else fits, with no More.
+      at(600);
+      doc.documentElement.setAttribute('data-theme', 'light');
+      FakeMutationObserver.last!.changed();
+      expect([shed(root), root.classes.has('viewer--more')]).toEqual([[], false]);
+      doc.documentElement.setAttribute('data-theme', 'dark');
+      FakeMutationObserver.last!.changed();
+      expect(shed(root)).toEqual(['tone', 'file']);
+    });
+  });
+
   describe('the More menu, on the narrowest screens', () => {
     it("opens on a press with the focus on its first item; each item does what the bar's own does, then the menu closes", async () => {
       const { parts, menu } = await open();

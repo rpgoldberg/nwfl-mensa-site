@@ -1394,14 +1394,12 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   .viewer--wide .vbtn--fit .vbtn__word { display: none; }
   .viewer--wide .viewer-group .vbtn--fit { padding: 0; }
 }
-/* A phone: zoom out and in go (the zoom picker does both); on the narrowest, Fit page too. */
+/* A phone: zoom out and in go (the zoom picker does both). Fit page stays with Fit width, on the bar or
+   in More as the script measures (S7). */
 @container vbar (width < 470px) {
   .vbtn--step { display: none; }
   .viewer-bar { gap: 0; padding-inline: 2px; }
   .viewer-group { gap: 0; }
-}
-@container vbar (width < 450px) {
-  .vbtn--fit-page { display: none; }
 }
 /* The narrowest phones (360 px): the pickers a step smaller and the dividers gone, never the targets. */
 @container vbar (width < 372px) {
@@ -1621,28 +1619,21 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .viewer[data-tone="tint"]:not(.viewer--light-pages) .viewer-layer { isolation: isolate; background: var(--bg); }
 .viewer[data-tone="tint"]:not(.viewer--light-pages) .viewer-sheet:not(.viewer-sheet--picture) { mix-blend-mode: multiply; }
 
-/* What moves into the More menu as the bar narrows (thresholds measured at 100 % text, px chrome). */
-@container vbar (width < 800px) {
-  .viewer--js .vmore { display: inline-flex; }
-  .viewer--js :is([data-ov="file"], [data-ov="tone"]) { display: none; }
-  .viewer--js .vmore__item:is([data-ov-item="file"], [data-ov-item="tone"]) { display: flex; }
-}
-@container vbar (width < 680px) {
-  .viewer--js [data-ov="zoom"] { display: none; }
-  .viewer--js .vmore__item[data-ov-item="zoom"] { display: flex; }
-}
+/* What moves into the More menu: the script measures the bar and moves the fewest groups that leave its
+   controls on one row (viewer.js shedBar), so Download and Open stay wherever they fit. */
+.viewer--js.viewer--more .vmore { display: inline-flex; }
+.viewer--js.viewer--shed-tone [data-ov="tone"], .viewer--js.viewer--shed-file [data-ov="file"], .viewer--js.viewer--shed-zoom [data-ov="zoom"],
+.viewer--js.viewer--shed-fit [data-ov="fit"], .viewer--js.viewer--shed-find [data-ov="find"] { display: none; }
+.viewer--js.viewer--shed-tone .vmore__item[data-ov-item="tone"], .viewer--js.viewer--shed-file .vmore__item[data-ov-item="file"],
+.viewer--js.viewer--shed-zoom .vmore__item[data-ov-item="zoom"], .viewer--js.viewer--shed-fit .vmore__item[data-ov-item="fit"],
+.viewer--js.viewer--shed-find .vmore__item[data-ov-item="find"] { display: flex; }
+/* The narrowest phones: the page box's caption tighter, then "/" for "of". */
 @container vbar (width < 410px) {
-  .viewer--js [data-ov="fit"] { display: none; }
-  .viewer--js .vmore__item[data-ov-item="fit"] { display: flex; }
   .vpage { gap: 2px; padding-inline: 0; }
 }
 @container vbar (width < 345px) {
   .vpage__word { display: none; }
   .vpage__slash { display: inline; }
-}
-@container vbar (width < 330px) {
-  .viewer--js [data-ov="find"] { display: none; }
-  .viewer--js .vmore__item[data-ov-item="find"] { display: flex; }
 }
 /* Light pages only where the theme recolours the pages. */
 .viewer.viewer--js:not([data-tone="dark"]):not([data-tone="tint"]) :is([data-ov="tone"], [data-ov-item="tone"]) { display: none; }
