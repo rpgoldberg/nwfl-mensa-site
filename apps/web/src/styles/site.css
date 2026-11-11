@@ -1284,6 +1284,8 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .viewer-bar [hidden] { display: none; }
 .viewer-group { display: flex; align-items: center; gap: 2px; }
 .viewer-sep { flex: none; width: 1px; height: 24px; background: var(--line); }
+/* Without the script the bar has Download and Open alone: no divider before the first. */
+.viewer:not(.viewer--js) .viewer-sep--js { display: none; }
 .vbtn {
   display: inline-flex;
   align-items: center;
@@ -1326,7 +1328,6 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   cursor: pointer;
 }
 .vpick__btn:hover { background: var(--accent-soft); }
-#viewer-page { background: var(--bg); }
 .vpick__btn::after {
   content: "";
   position: absolute;
@@ -1374,18 +1375,24 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 @media (forced-colors: active) {
   .vpick__choice[aria-current="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
 }
-/* Room for the words (Ross's mockup, a computer): beside Fit, Download and Open. */
-@container vbar (width >= 900px) {
+/* Room for the words (Ross's mockup, a computer): beside Fit, Download and Open. READER2: the page box,
+   first, last and search take more of the row, so the words need a wider frame (measured at each size). */
+@container vbar (width >= 1110px) {
   .vbtn__word { display: inline; }
   .vbtn--fit, .viewer-group > a.vbtn { padding: 0 10px; }
 }
-@container vbar (width >= 900px) and (width < 1000px) {
+@container vbar (width >= 1110px) and (width < 1160px) {
   html[data-size="140"] .vbtn__word, html[data-size="175"] .vbtn__word { display: none; }
   html[data-size="140"] .vbtn--fit, html[data-size="140"] .viewer-group > a.vbtn, html[data-size="175"] .vbtn--fit, html[data-size="175"] .viewer-group > a.vbtn { padding: 0; }
 }
-@container vbar (width >= 1000px) and (width < 1100px) {
+@container vbar (width >= 1160px) and (width < 1210px) {
   html[data-size="175"] .vbtn__word { display: none; }
   html[data-size="175"] .vbtn--fit, html[data-size="175"] .viewer-group > a.vbtn { padding: 0; }
+}
+/* Zoomed wider than the frame on a computer, Fit gives its words to the hand tool. */
+@media (hover: hover) and (pointer: fine) {
+  .viewer--wide .vbtn--fit .vbtn__word { display: none; }
+  .viewer--wide .viewer-group .vbtn--fit { padding: 0; }
 }
 /* A phone: zoom out and in go (the zoom picker does both); on the narrowest, Fit page too. */
 @container vbar (width < 470px) {
@@ -1393,7 +1400,7 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   .viewer-bar { gap: 0; padding-inline: 2px; }
   .viewer-group { gap: 0; }
 }
-@container vbar (width < 400px) {
+@container vbar (width < 450px) {
   .vbtn--fit-page { display: none; }
 }
 /* The narrowest phones (360 px): the pickers a step smaller and the dividers gone, never the targets. */
@@ -1427,9 +1434,11 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   border: 1px solid var(--line);
   border-radius: 8px;
 }
+/* READER2: zoomed wider than the frame, the pages scroll sideways, from their left edge to their right (a
+   page is centred by its margins, which never go below nothing, so none of it is cut off on the left). */
 .viewer-pages {
   display: grid;
-  justify-items: center;
+  justify-items: start;
   gap: 8px;
   overflow-x: auto;
   border-radius: 0 0 11px 11px;
@@ -1444,7 +1453,7 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   --user-unit: 1;
   --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
   position: relative;
-  justify-self: center;
+  margin-inline: auto;
   background: #ffffff;
   box-shadow: 0 0 0 1px var(--line-soft);
   scroll-margin-top: var(--viewer-bar, 0px);
@@ -1478,6 +1487,14 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 }
 .viewer .textLayer .markedContent { display: contents; }
 .viewer .textLayer ::selection { background: rgb(0 0 255 / 0.25); color: transparent; }
+/* READER2: search's matches, marked in the text layer over the drawing (viewer-find.js); the current one
+   stronger, with an outline, so it is told apart by more than colour. */
+.viewer .textLayer mark.viewer-hit { margin: -1px; padding: 1px; color: transparent; background: rgb(255 210 0 / 0.5); border-radius: 3px; }
+.viewer .textLayer mark.viewer-hit--current { background: rgb(255 120 0 / 0.55); outline: 2px solid #b3470b; outline-offset: 1px; }
+@media (forced-colors: active) {
+  .viewer .textLayer mark.viewer-hit { forced-color-adjust: none; background: Highlight; opacity: 0.4; }
+  .viewer .textLayer mark.viewer-hit--current { outline-color: CanvasText; opacity: 0.6; }
+}
 .viewer .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
 /* Its links: each a box over the drawn text, with the site's focus ring. */
 .viewer .annotationLayer { position: absolute; top: 0; left: 0; pointer-events: none; transform-origin: 0 0; z-index: 1; }
@@ -1486,3 +1503,134 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .viewer .annotationLayer .linkAnnotation > a { position: absolute; top: 50%; left: 50%; width: max(100%, 24px); height: max(100%, 24px); transform: translate(-50%, -50%); font-size: 1em; }
 .viewer .annotationLayer .linkAnnotation > a:hover { background: rgb(255 255 0 / 0.2); }
 .viewer .annotationLayer .linkAnnotation > a:focus-visible { outline: var(--focus-width) solid var(--focus); outline-offset: 1px; }
+
+/* READER2: the page box, "3 of 12", the page typed in a plain text box (never a select, which WebKit cannot
+   draw under the site's CSP): 44 px, as wide as the last page's number (--digits, set by the script), and
+   16 px at least, so a phone does not zoom in on it. On the narrowest bar "of" gives way to "/". */
+.vpage { display: inline-flex; align-items: center; gap: 4px; padding-inline: 2px; font-weight: 700; white-space: nowrap; }
+.vpage__box {
+  box-sizing: border-box;
+  width: calc((var(--digits, 2) + 1) * 1ch + 12px);
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 4px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: max(16px, 1em);
+  font-weight: 700;
+  text-align: center;
+}
+.vpage__box[aria-invalid="true"] { border: 2px solid var(--stop); }
+.vpage__slash { display: none; }
+
+/* Search: a row under the bar's own, in the sticky bar, so it stays in view while reading. */
+.viewer-find {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  padding: 4px 0 2px;
+  border-top: 1px solid var(--line-soft);
+}
+.viewer-find__box {
+  flex: 1 1 7em;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: max(16px, 1em);
+}
+.viewer-find__box::placeholder { color: var(--muted); opacity: 1; }
+.viewer-find__count { margin: 0; padding-inline: 4px; font-weight: 700; white-space: nowrap; }
+.viewer-find__note { flex: 1 0 100%; margin: 0; padding: 2px 4px 4px; }
+.viewer-find__note:empty { display: none; }
+
+/* The More menu: on a narrow bar it holds a copy of each control the bar has no room for, the later ones
+   first (Ross's order: page controls, then search, then Fit, then zoom, then Download and Open; Light pages
+   with these last). Only once the script has wired it (viewer--js): without it the bar keeps its links. */
+.vmore { display: none; }
+.vmore__list { left: auto; right: 0; min-width: 15em; }
+.vmore__item { display: none; }
+.vpick__choice.vmore__item { align-items: center; gap: 10px; text-decoration: none; }
+.vmore__item svg { width: 22px; height: 22px; flex: none; }
+.vmore__now { margin: 0; padding: 8px 12px 2px; font-weight: 700; color: var(--muted); }
+.vpick__choice[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+
+/* The hand tool, on a computer, while the pages are wider than the frame: a drag moves them. Text is not
+   selected while it is on; links still follow a press without a drag. */
+.vbtn--hand { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .viewer--wide .vbtn--hand { display: inline-flex; }
+}
+.viewer--hand.viewer--wide .viewer-pages { cursor: grab; }
+.viewer--hand.viewer--wide .viewer-pages .textLayer :is(span, br) { cursor: inherit; user-select: none; }
+.viewer--dragging .viewer-pages, .viewer--dragging .viewer-pages * { cursor: grabbing; }
+
+/* Zoomed wider than the frame on a computer: a copy of the pages' scrollbar at the foot of the window
+   (above the phone's bottom bar where it shows), in step with them; theirs is then not drawn twice. A
+   touch screen pans with the finger, and keeps the browser's own. */
+.viewer-pan {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  background: var(--surface);
+  border-top: 1px solid var(--line-soft);
+}
+.viewer-pan__track { height: 1px; }
+@media (max-width: 899.98px) and (min-height: 480px) {
+  .viewer-pan { bottom: var(--dock-height, 72px); }
+}
+@media (hover: none), (pointer: coarse) {
+  .viewer-pan { display: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .viewer--wide .viewer-pages { scrollbar-width: none; }
+  .viewer--wide .viewer-pages::-webkit-scrollbar { display: none; }
+}
+
+/* DARKPDF: the pages follow the theme (viewer-tone.js sets data-tone): dark recolours the drawing, light
+   text on a dark page; high contrast tints the paper to the theme's own; light shows it as printed.
+   Pictures (.viewer-photo, copied out of the drawing) and a page that is one picture are never
+   recoloured. Light pages (viewer--light-pages) shows every page as printed. */
+.viewer-layer canvas.viewer-photo { inset: auto; display: block; }
+.viewer[data-tone="dark"]:not(.viewer--light-pages) .viewer-page { background: #0f0f0f; }
+.viewer[data-tone="dark"]:not(.viewer--light-pages) .viewer-sheet:not(.viewer-sheet--picture) { filter: invert(0.94) hue-rotate(180deg); }
+.viewer[data-tone="tint"]:not(.viewer--light-pages) .viewer-page { background: var(--bg); }
+.viewer[data-tone="tint"]:not(.viewer--light-pages) .viewer-sheet:not(.viewer-sheet--picture) { mix-blend-mode: multiply; }
+
+/* What moves into the More menu as the bar narrows (thresholds measured at 100 % text, px chrome). */
+@container vbar (width < 800px) {
+  .viewer--js .vmore { display: inline-flex; }
+  .viewer--js :is([data-ov="file"], [data-ov="tone"]) { display: none; }
+  .viewer--js .vmore__item:is([data-ov-item="file"], [data-ov-item="tone"]) { display: flex; }
+}
+@container vbar (width < 680px) {
+  .viewer--js [data-ov="zoom"] { display: none; }
+  .viewer--js .vmore__item[data-ov-item="zoom"] { display: flex; }
+}
+@container vbar (width < 410px) {
+  .viewer--js [data-ov="fit"] { display: none; }
+  .viewer--js .vmore__item[data-ov-item="fit"] { display: flex; }
+  .vpage { gap: 2px; padding-inline: 0; }
+}
+@container vbar (width < 345px) {
+  .vpage__word { display: none; }
+  .vpage__slash { display: inline; }
+}
+@container vbar (width < 330px) {
+  .viewer--js [data-ov="find"] { display: none; }
+  .viewer--js .vmore__item[data-ov-item="find"] { display: flex; }
+}
+/* Light pages only where the theme recolours the pages. */
+.viewer.viewer--js:not([data-tone="dark"]):not([data-tone="tint"]) :is([data-ov="tone"], [data-ov-item="tone"]) { display: none; }

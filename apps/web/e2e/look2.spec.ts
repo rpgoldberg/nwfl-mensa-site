@@ -7,6 +7,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
 import { setPrefs } from './prefs';
+import { control } from './viewer-bar';
 import { accountButton, banner, openAccount, signIn } from './signin';
 import { NEWSLETTER } from './stand-in';
 
@@ -275,16 +276,18 @@ test.describe('(B) the reader on a phone', () => {
     expect((bottom - (bar.y + bar.height)) / PHONE.height).toBeGreaterThanOrEqual(0.7);
   });
 
-  test('Open in another app and Download are in the bar (W-LOOK3, Ross\'s mockup), as icons with their names', async ({ page }) => {
+  // READER2: the page controls and search take the phone's row (Ross's order); Open in another app and
+  // Download move into the More menu, each with its icon and its word.
+  test('Open in another app and Download are in the More menu on a phone, each with its icon and its name', async ({ page }) => {
     await page.goto(READ);
     await expect(page.locator('#page-1 canvas')).toHaveCount(1);
-    const bar = page.locator('[data-viewer-bar]');
-    const open = bar.getByRole('link', { name: /^Open in another app/ });
-    const download = bar.getByRole('link', { name: 'Download', exact: true });
-    for (const link of [open, download]) {
+    for (const act of ['open', 'download'] as const) {
+      const link = await control(page, act);
       await expect(link).toBeVisible();
+      await expect(link).toHaveAccessibleName(act === 'open' ? /^Open in another app/ : 'Download');
       await expect(link.locator('svg:visible')).toHaveCount(1);
-      expect((await link.innerText()).trim()).toBe('');
+      expect((await link.innerText()).trim()).toBe(act === 'open' ? 'Open in another app' : 'Download');
+      await page.keyboard.press('Escape');
     }
   });
 });

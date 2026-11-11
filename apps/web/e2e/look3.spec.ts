@@ -13,6 +13,7 @@ import { MEMBERS_COPY, PUBLIC_TAG, PUBLIC_TAG_NOTE } from '../src/lib/reader';
 import { setPrefs } from './prefs';
 import { signIn } from './signin';
 import { NEWSLETTER } from './stand-in';
+import { barControls, control, moreList, onBar, pageBox, pickZoom, typePage } from './viewer-bar';
 
 const PUBLIC_READ = `/read/${NEWSLETTER.issues[0]!.publicPdf}`;
 const MEMBERS_READ = `/read/${NEWSLETTER.issues[0]!.membersPdf}`;
@@ -36,12 +37,8 @@ async function rows(locators: Locator[]): Promise<number> {
   return count;
 }
 const bar = (page: Page) => page.locator('[data-viewer-bar]');
-/** Every control the bar shows: its buttons, its two selects and its two links. */
-async function visibleControls(page: Page): Promise<Locator[]> {
-  const out: Locator[] = [];
-  for (const c of await bar(page).locator('button, select, a').all()) if (await c.isVisible()) out.push(c);
-  return out;
-}
+/** Every control the bar shows: its buttons, its links and (READER2) the page box. */
+const visibleControls = barControls;
 async function opened(page: Page, path = PUBLIC_READ) {
   await page.goto(path);
   await expect(page.locator('#page-1 canvas')).toHaveCount(1);
@@ -103,7 +100,7 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
       const first = await box(page.locator('#page-1'));
       expect(Math.abs(first.width - pages.width)).toBeLessThanOrEqual(2);
       expect(first.y - (b.y + b.height)).toBeLessThanOrEqual(1);
-      await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute('aria-pressed', 'true');
+      await expect(onBar(page, 'fit-width')).toHaveAttribute('aria-pressed', 'true');
       await expect(page.locator('[data-viewer-fit-page]')).toHaveAttribute('aria-pressed', 'false');
       expect(await sideways(page)).toBeLessThanOrEqual(0);
     });
@@ -111,8 +108,8 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
     test('every control in the bar is a 44 px target with a spoken name and a tooltip, Download and Open among them', async ({ page }) => {
       await opened(page);
       const controls = await visibleControls(page);
-      // A phone: zoom out and in give way to the zoom select, and Fit page (upright, the same as Fit width).
-      expect(controls.length).toBe(name === 'a computer' ? 10 : 7);
+      // READER2: a computer shows them all; a phone the page controls, search and More, which holds the rest.
+      expect(controls.length).toBe(name === 'a computer' ? 13 : 7);
       for (const c of controls) {
         const b = await box(c);
         const label = (await c.getAttribute('title')) ?? '';
@@ -121,53 +118,57 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
         expect(b.height, label).toBeGreaterThanOrEqual(44);
         expect(b.x + b.width, label).toBeLessThanOrEqual(viewport.width);
       }
-      for (const label of ['Previous page', 'Next page', 'Fit width', 'Fit page', 'Zoom out', 'Zoom in']) {
-        const button = bar(page).locator(`button[aria-label="${label}"]`);
+      for (const label of ['First page', 'Previous page', 'Next page', 'Last page', 'Fit width', 'Fit page', 'Zoom out', 'Zoom in']) {
+        const button = bar(page).locator(`.viewer-group button[aria-label="${label}"]`);
         await expect(button).toHaveAttribute('title', label);
-        await expect(button).toBeVisible({ visible: name === 'a computer' || !['Fit page', 'Zoom out', 'Zoom in'].includes(label) });
+        await expect(button).toBeVisible({ visible: name === 'a computer' || !['Fit width', 'Fit page', 'Zoom out', 'Zoom in'].includes(label) });
       }
-      await expect(bar(page).getByRole('button', { name: 'Page 1 / 3', exact: true })).toBeVisible();
-      await expect(bar(page).getByRole('button', { name: /^Zoom \d+%$/ })).toBeVisible();
-      const download = bar(page).getByRole('link', { name: 'Download', exact: true });
-      const other = bar(page).getByRole('link', { name: /^Open in another app/ });
+      await expect(bar(page).getByRole('textbox', { name: 'Page number, 1 to 3', exact: true })).toBeVisible();
+      await expect(bar(page).getByRole('button', { name: 'Search this issue', exact: true })).toBeVisible();
+      await expect(bar(page).getByRole('button', { name: /^Zoom \d+%$/ })).toBeVisible({ visible: name === 'a computer' });
+      const download = onBar(page, 'download');
+      const other = onBar(page, 'open');
       await expect(download).toHaveAttribute('href', `${PUBLIC_READ.replace('/read/', '/documents/')}.pdf?download=1`);
       await expect(other).toHaveAttribute('href', `${PUBLIC_READ.replace('/read/', '/documents/')}.pdf`);
       await expect(other).toHaveAttribute('title', 'Open in another app');
       // Words beside Fit, Download and Open on a computer; icons only on a phone (Ross's mockup).
       for (const word of ['Fit width', 'Fit page', 'Download', 'Open in another app']) {
-        const visible = await bar(page).getByText(word, { exact: true }).isVisible();
+        const visible = await bar(page).locator('.viewer-group').getByText(word, { exact: true }).isVisible();
         expect(visible, word).toBe(name === 'a computer');
       }
-      for (const label of ['Previous page', 'Next page']) {
+      for (const label of ['First page', 'Previous page', 'Next page', 'Last page']) {
         expect((await bar(page).getByRole('button', { name: label }).innerText()).trim()).toBe('');
+      }
+      // On a phone, Download and Open in another app are in the More menu, with their names.
+      if (name === 'a phone') {
+        for (const act of ['download', 'open'] as const) {
+          const copy = await control(page, act);
+          await expect(copy).toHaveAccessibleName(act === 'download' ? 'Download' : /^Open in another app/);
+          expect((await copy.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        }
       }
     });
 
-    test('the page picker goes to a page, and the zoom picker to a step', async ({ page }) => {
+    test('the page box goes to a page, and the zoom picker to a step', async ({ page }) => {
       await opened(page);
-      const picker = bar(page).locator('[data-viewer-page]');
-      await expect(picker).toHaveText('1 / 3');
-      await picker.click();
-      const list = bar(page).locator('[data-viewer-page-list]');
-      await expect(list.getByRole('button')).toHaveText(['Page 1', 'Page 2', 'Page 3']);
-      await list.getByRole('button', { name: 'Page 3', exact: true }).click();
-      await expect(list).toBeHidden();
+      await expect(pageBox(page)).toHaveValue('1');
+      await expect(bar(page).locator('[data-viewer-count]')).toHaveText('3');
+      await expect(bar(page).locator('.vpage__word')).toBeVisible();
+      await typePage(page, 3);
       await expect(page.locator('#page-3 canvas')).toHaveCount(1);
       await expect(page.locator('#page-3')).toBeInViewport();
-      const zoom = bar(page).locator('[data-viewer-zoom]');
-      await zoom.click();
-      await bar(page).locator('[data-viewer-zoom-list]').getByRole('button', { name: '200%', exact: true }).click();
-      await expect(zoom).toHaveText('200%');
-      await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute('aria-pressed', 'false');
-      await page.getByRole('button', { name: 'Fit width' }).click();
-      await expect(page.getByRole('button', { name: 'Fit width' })).toHaveAttribute('aria-pressed', 'true');
+      await pickZoom(page, '200%');
+      await expect(bar(page).locator('[data-viewer-zoom]')).toHaveText('200%');
+      await expect(onBar(page, 'fit-width')).toHaveAttribute('aria-pressed', 'false');
+      await (await control(page, 'fit-width')).click();
+      await expect(onBar(page, 'fit-width')).toHaveAttribute('aria-pressed', 'true');
     });
 
     test('every control shows its focus when reached by the keyboard', async ({ page }) => {
       await opened(page);
       await bar(page).locator('button, select, a').first().focus();
       const seen = new Set<string>();
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 16; i++) {
         const focused = page.locator(':focus');
         if (!(await focused.evaluate((el) => !!el.closest('[data-viewer-bar]')))) break;
         const name = (await focused.getAttribute('title')) ?? '';
@@ -175,13 +176,14 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
         expect(await focused.evaluate((el) => getComputedStyle(el).outlineStyle), name).not.toBe('none');
         await page.keyboard.press('Tab');
       }
-      expect(seen.size).toBe(name === 'a computer' ? 10 : 7);
+      expect(seen.size).toBe(name === 'a computer' ? 13 : 7);
     });
 
     test('at the largest text size the bar takes at most two rows, and nothing scrolls sideways', async ({ page, context, baseURL }) => {
       await setPrefs(context, baseURL!, { size: SIZES.at(-1)! });
+      // READER2: once wired, as the More menu then takes what has no room.
       await page.goto(PUBLIC_READ);
-      await expect(bar(page)).toBeVisible();
+      await expect(page.locator('[data-viewer].viewer--js')).toHaveCount(1);
       expect(await rows(await visibleControls(page))).toBeLessThanOrEqual(2);
       expect(await sideways(page)).toBeLessThanOrEqual(0);
     });
@@ -230,9 +232,11 @@ test.describe('the reader at 360 px, the narrowest common phone', () => {
 test('the reader holds no native select, which WebKit cannot draw under the site\'s CSP', async ({ page }) => {
   await opened(page);
   await expect(page.locator('select')).toHaveCount(0);
-  // An open picker stays inside the screen.
-  await page.locator('[data-viewer-zoom]').click();
-  const list = await box(page.locator('[data-viewer-zoom-list]'));
+  // An open picker, or on a phone the More menu, stays inside the screen.
+  const zoom = page.locator('[data-viewer-zoom]');
+  if (await zoom.isVisible()) await zoom.click();
+  else await page.locator('[data-viewer-more]').click();
+  const list = await box((await zoom.isVisible()) ? page.locator('[data-viewer-zoom-list]') : moreList(page));
   expect(list.x).toBeGreaterThanOrEqual(0);
   expect(list.x + list.width).toBeLessThanOrEqual(page.viewportSize()!.width);
 });

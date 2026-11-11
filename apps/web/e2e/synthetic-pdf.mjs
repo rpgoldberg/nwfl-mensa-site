@@ -12,8 +12,12 @@ const literal = (text) => `(${text.replace(/[\\()]/g, (c) => `\\${c}`)})`;
  * A link: a URI action (uri), a link to another page (toPage), or any other action as the PDF writes it
  * (action, e.g. "<< /S /Launch /F (...) >>"), for the hostile original below.
  * @typedef {{ rect: [number, number, number, number], uri?: string, toPage?: number, action?: string, contents?: string }} Link
- * @typedef {{ lines: string[], fill: [number, number, number], links?: Link[] }} SyntheticPage
+ * A picture (READER2): a block of red over a block of blue, `rect` [x, y, width, height] in points.
+ * @typedef {{ lines: string[], fill: [number, number, number], links?: Link[], picture?: [number, number, number, number] }} SyntheticPage
  */
+
+/** The picture's pixels: 16 x 16, the top half pure red, the bottom half pure blue (RGB, 8 bits). */
+const PICTURE = Buffer.from(Array.from({ length: 16 * 16 }, (_, i) => (i < 128 ? [255, 0, 0] : [0, 0, 255])).flat()).toString('latin1');
 
 /**
  * @param {{ pages: SyntheticPage[], comment?: string }} spec
@@ -23,22 +27,26 @@ export function syntheticPdf({ pages, comment = '' }) {
   /** @type {string[]} */
   const objects = [];
   const add = (/** @type {string} */ body) => objects.push(body);
-  // 1 catalog, 2 page tree, 3 font; then each page: its page object, its content, its links.
-  const pageRefs = pages.map((_, i) => 4 + pages.slice(0, i).reduce((n, p) => n + 2 + (p.links?.length ?? 0), 0));
+  // 1 catalog, 2 page tree, 3 font; then each page: its page object, its content, its picture, its links.
+  const pageRefs = pages.map((_, i) => 4 + pages.slice(0, i).reduce((n, p) => n + 2 + (p.picture ? 1 : 0) + (p.links?.length ?? 0), 0));
   add('<< /Type /Catalog /Pages 2 0 R >>');
   add(`<< /Type /Pages /Kids [${pageRefs.map((r) => `${r} 0 R`).join(' ')}] /Count ${pages.length} >>`);
   add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
   pages.forEach((page, i) => {
     const ref = /** @type {number} */ (pageRefs[i]);
     const links = page.links ?? [];
-    const annots = links.map((_, k) => `${ref + 2 + k} 0 R`).join(' ');
-    add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${ref + 1} 0 R${annots ? ` /Annots [${annots}]` : ''} >>`);
+    const first = ref + 2 + (page.picture ? 1 : 0);
+    const annots = links.map((_, k) => `${first + k} 0 R`).join(' ');
+    const pictures = page.picture ? ` /XObject << /Im1 ${ref + 2} 0 R >>` : '';
+    add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >>${pictures} >> /Contents ${ref + 1} 0 R${annots ? ` /Annots [${annots}]` : ''} >>`);
     const [r, g, b] = page.fill;
     const text = page.lines.map((line, k) => `${k === 0 ? '72 700 Td' : '0 -40 Td'} ${literal(line)} Tj`).join('\n');
     // Each link underlined, as a reader sees a link.
     const boxes = links.map(({ rect: [x1, y1, x2] }) => `${x1} ${y1 + 4} ${x2 - x1} 2 re`).join('\n');
-    const stream = `q ${r} ${g} ${b} rg 36 560 540 200 re f Q\nq 0 0 0.6 rg ${boxes ? `${boxes}\nf` : ''} Q\nBT /F1 28 Tf 0 0 0 rg\n${text}\nET\n`;
+    const picture = page.picture ? `q ${page.picture[2]} 0 0 ${page.picture[3]} ${page.picture[0]} ${page.picture[1]} cm /Im1 Do Q\n` : '';
+    const stream = `q ${r} ${g} ${b} rg 36 560 540 200 re f Q\n${picture}q 0 0 0.6 rg ${boxes ? `${boxes}\nf` : ''} Q\nBT /F1 28 Tf 0 0 0 rg\n${text}\nET\n`;
     add(`<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}endstream`);
+    if (page.picture) add(`<< /Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${PICTURE.length} >>\nstream\n${PICTURE}\nendstream`);
     for (const link of links) {
       const action =
         link.action !== undefined ? `/A ${link.action}` : link.uri !== undefined ? `/A << /S /URI /URI ${literal(link.uri)} >>` : `/Dest [${pageRefs[/** @type {number} */ (link.toPage)]} 0 R /Fit]`;
@@ -173,3 +181,16 @@ export function longPdf(count) {
   out += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return Buffer.from(out, 'latin1');
 }
+
+/**
+ * READER2: an issue with pictures, served to anyone (as the long file is) and listed nowhere. Page 1 has
+ * text and a photo (red over blue), so dark pages can be seen to recolour the page and leave the photo;
+ * page 2 is a scan, one picture over the whole page and no text, for search's "No searchable text".
+ */
+export const PICTURE_ID = 'f6000000-0000-4000-8000-000000006000';
+export const PICTURE_PDF = syntheticPdf({
+  pages: [
+    { lines: ['A page with a photo', 'The photo keeps its colours'], fill: [0.85, 0.93, 0.95], picture: [72, 160, 300, 300] },
+    { lines: [], fill: [1, 1, 1], picture: [0, 0, 612, 792] },
+  ],
+});
