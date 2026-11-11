@@ -945,102 +945,194 @@ html[data-size="175"] .size-max-note { display: block; }
   .dt b { font-size: 1.25rem; }
 }
 
+/* EVENTS2 (Ross's concept, 11-10): /events. One toolbar, the day tiles (the list's ribbon, the week's
+   strip), the month grid, the event cards, "Add our calendar" and the icon legend. Events-scoped:
+   only /events uses these classes. Cover screen first (344 px), then 320 px, a tablet, a desktop. */
 main > .calendar { max-width: none; }
 .calendar { container: calendar / inline-size; display: grid; gap: var(--space-4); }
-/* W-LOOK3: the month arrows in the grid's caption row, one slim row on the grid's frame. */
-.monthbox { border: 1px solid var(--line); border-radius: 12px; overflow: clip; background: var(--surface); }
-.month-head { background: var(--surface); border-bottom: 1px solid var(--line-soft); }
-.month-nav { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-1); padding: 0 var(--space-1); }
-/* A phone: "‹ Oct" and "Dec ›", each link named in full (events.astro); the month between them may
-   wrap, never run into them. */
-.mname--short { display: none; }
-@media (max-width: 599.98px) {
-  .mname--long { display: none; }
-  .mname--short { display: inline; }
-}
-/* Too narrow even for "Oct" beside the month (a narrow phone at a large text size): the arrows alone,
-   each still named in full; the measure is in the row's own text size, so it follows the reader's. */
-.month-head { container: mhead / inline-size; }
-@container mhead (width < 15em) {
-  .mname--short { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  .mnav { justify-content: center; padding: 0; }
-}
-.mnav { display: inline-flex; align-items: center; gap: 2px; min-height: 44px; min-width: 44px; padding: 0 var(--space-2); font-weight: 700; border-radius: 8px; }
-.mnav svg { width: 1.25rem; height: 1.25rem; flex: none; }
-.mnav--prev { justify-self: start; }
-.mnav--next { justify-self: end; }
-.month-title { margin: 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0 var(--space-2); text-align: center; font-family: var(--font-head); font-weight: 600; font-size: min(var(--fs-h3), 6vw); }
-.month-title a { font-family: var(--font-body); font-size: var(--fs-small); font-weight: 700; display: inline-flex; align-items: center; min-height: 44px; }
-/* The subscription, one disclosure under the grid. */
-.addcal { max-width: var(--measure); }
-.addcal > summary { list-style: none; cursor: pointer; }
-.addcal > summary::-webkit-details-marker { display: none; }
-.addcal > summary::after { content: ""; width: 0.5rem; height: 0.5rem; margin: 0 0.25rem 0.25rem 0.5rem; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg); }
-.addcal[open] > summary::after { transform: rotate(-135deg); margin-bottom: -0.25rem; }
-.addcal__panel { display: grid; gap: var(--space-3); margin-top: var(--space-2); padding: var(--space-4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.addcal__panel > * { margin: 0; }
-.calgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-5); align-items: start; }
-.calgrid h2 { margin-top: 0; }
-/* W-LOOK2: the grid at every width. Compact where seven columns are narrow (a
-   phone, or a large text size): each day with events a link, its number over a
-   dot per event, to its place in the list; on a narrow page it runs edge to
-   edge, so each day is 48 px wide at 360 px. Where there is room, each day also
-   lists its events' times and titles, and from 64rem the list sits beside it. */
-.monthbox { display: block; }
+.calendar > * { min-width: 0; }
+
+/* The toolbar: "‹ period ›" and List | Week | Month on one row where they fit; two rows only when
+   they cannot (large text, or a long week such as "Nov 29 – Dec 5" on the narrowest phone). */
+.caltool { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1); font-size: var(--fs-small); }
+/* A phone: into the page's margin, so a cover screen (344 px) keeps it to one row. */
 @container calendar (max-width: 45.99rem) {
-  .monthbox { margin-inline: calc(-1 * var(--space-4)); border-inline: 0; border-radius: 0; }
+  .caltool { margin-inline: calc(-1 * var(--space-2)); }
 }
-/* The month, then the subscription card, then the list; from 64rem the list is a column beside the
-   other two. */
-.calgrid .addcal { margin: 0; }
-@container calendar (min-width: 64rem) {
-  .calgrid {
-    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
-    grid-template-rows: auto 1fr;
-    grid-template-areas: "month agenda" "subscribe agenda";
-  }
-  .monthbox { grid-area: month; }
-  .calgrid > .addcal { grid-area: subscribe; }
-  .agenda { grid-area: agenda; }
+.calstep, .calviews { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.calstep__arrow { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 11px; color: var(--ink); }
+.calstep__arrow svg { width: 1.25rem; height: 1.25rem; }
+.calstep__label { display: flex; align-items: center; justify-content: center; margin: 0; padding: 0 1px; font-family: var(--font-head); font-weight: 600; white-space: nowrap; }
+.calstep__short { display: none; }
+@container calendar (width < 30rem) {
+  .calstep__long { display: none; }
+  .calstep__short { display: inline; }
 }
+.calviews__v { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 0.25em; color: var(--ink); font-weight: 700; text-decoration: none; }
+.calviews__v + .calviews__v { border-left: 1px solid var(--line); }
+.calviews__v:first-child { border-radius: 11px 0 0 11px; }
+.calviews__v:last-child { border-radius: 0 11px 11px 0; }
+.calviews__v:hover { text-decoration: underline; }
+/* The current view: filled, and named so (aria-current), not colour alone. */
+.calviews__v[aria-current] { background: var(--accent); color: var(--on-accent); }
+
+/* Day tiles: the weekday, the date, the indicator. Today has a ring; the selected day is filled. */
+.tiles { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-2); }
+.tiles > li { display: flex; }
+/* The list's ribbon scrolls; it never squeezes. Room round it for the focus ring. */
+.tiles--ribbon { overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding: 4px; margin: -4px; scrollbar-width: thin; }
+.tiles--ribbon > li { flex: none; scroll-snap-align: start; }
+.tiles__month { align-items: center; padding: 0 2px; color: var(--muted); font-weight: 700; font-size: var(--fs-small); }
+/* The week: all seven, into the page's margin on a phone so each stays 44 px wide; edge to edge at 320 px. */
+.tiles--week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; container: week / inline-size; }
+@container calendar (max-width: 45.99rem) {
+  .tiles--week { margin-inline: calc(-1 * var(--space-2)); }
+}
+@container calendar (max-width: 19rem) {
+  .tiles--week { margin-inline: calc(-1 * var(--space-4)); }
+}
+.tile { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 3.25rem; min-height: 44px; padding: var(--space-1) 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); text-decoration: none; font-size: var(--fs-small); line-height: 1.2; }
+.tiles--week .tile { min-width: 0; }
+.tile__face { display: flex; flex-direction: column; align-items: center; }
+.tile__n { font-family: var(--font-head); font-weight: 700; font-size: 1.125em; }
+a.tile:hover .tile__n { text-decoration: underline; }
+a.tile:focus-visible { outline-offset: 2px; }
+.tile--empty { color: var(--muted); border-color: var(--line-soft); background: transparent; }
+.tile--today { box-shadow: inset 0 0 0 2px var(--accent); }
+.tile[aria-current="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: none; }
+.tile--today[aria-current="true"] { box-shadow: inset 0 0 0 2px var(--on-accent); }
+/* Seven tiles too narrow for "Wed" at the reader's size (a narrow phone at a large text size): the
+   weekday a size smaller, never cut. */
+@container week (width < 17em) {
+  .tile__wd { font-size: 0.75em; }
+}
+
+/* The one indicator: an icon per event, two at most, then "+N". */
+.ind { display: inline-flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px; max-width: 100%; }
+.ind .evicon { width: 1.125em; height: 1.125em; }
+/* Drawn by CSS: the tile's or day's name already says how many (WCAG 2.5.3 matches the name to the words shown). */
+.ind__more { font-weight: 700; line-height: 1; }
+.ind__more::after { content: attr(data-more); }
+.evicon { flex: none; }
+.evicon__x { stroke-width: 2.5; }
+
+/* The month grid (R4, W-LOOK2): compact where seven columns are narrow, edge to edge on a phone. */
 .month { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--surface); }
+@container calendar (max-width: 45.99rem) {
+  .month { width: calc(100% + 2 * var(--space-4)); margin-inline: calc(-1 * var(--space-4)); }
+}
 .month th { padding: var(--space-1) 0; background: var(--bg); border: var(--border) solid var(--line-soft); font-weight: 700; font-size: var(--fs-small); }
 .month .d3 { display: none; }
 @container calendar (min-width: 30rem) { .month .d2 { display: none; } .month .d3 { display: inline; } }
 .month td { padding: 0; vertical-align: top; border: var(--border) solid var(--line-soft); font-size: var(--fs-small); line-height: 1.25; overflow-wrap: break-word; }
+/* Seven columns on the narrowest phone: thin rules, so each day stays a 44 px target. */
+@container calendar (max-width: 22rem) {
+  .month th, .month td { border-width: 1px; }
+}
 .month td.out { background: var(--bg); }
 .month .day { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: var(--target); padding: var(--space-1) 0; color: var(--ink); }
 .month a.day { color: var(--accent); text-decoration: none; }
 .month a.day:hover .n { text-decoration: underline; }
 .month a.day:focus-visible { outline-offset: -3px; }
 .month .n { display: inline-flex; align-items: center; justify-content: center; width: 1.9em; max-width: 100%; height: 1.9em; border-radius: 999px; font-weight: 700; }
-.month .dots { display: flex; gap: 3px; }
-.month .dot { display: block; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: currentColor; }
-.month .dot.x { background: transparent; border: 2px solid currentColor; }
-/* Today: a ring round the day and its number filled, not colour alone. */
+/* Today: a ring round the day and its number filled; the selected day: the whole cell filled. */
 .month td[aria-current="date"] { box-shadow: inset 0 0 0 0.1875rem var(--accent); }
 .month td[aria-current="date"] .n { background: var(--accent); color: var(--on-accent); }
+.month a.day[aria-current="true"] { background: var(--accent); color: var(--on-accent); }
+.month td[aria-current="date"] a.day[aria-current="true"] .n { background: var(--on-accent); color: var(--accent); }
 .month .titles { display: none; }
 @container calendar (min-width: 46rem) {
   .month td { height: 6.75rem; padding: var(--space-1); }
-  .month .day { align-items: flex-start; }
-  .month .dots { display: none; }
+  .month .day { align-items: flex-start; flex-direction: row; flex-wrap: wrap; border-radius: 6px; }
+  .month .day .ind { display: none; }
   .month .titles { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: var(--space-1); }
-  .month .titles a { display: block; min-height: 1.5rem; font-weight: 700; }
+  .month .titles a { display: flex; gap: 0.25em; align-items: flex-start; min-height: 44px; font-weight: 700; }
+  .month .titles .evicon { width: 1.125em; height: 1.125em; margin-top: 0.1em; }
   .month .titles .x a { color: var(--stop); text-decoration: line-through; }
+  /* Where the cells list titles, the selected day is the whole cell tinted, its number filled. */
+  .month td:has(> a.day[aria-current="true"]) { background: var(--accent-soft); }
+  .month td:has(> a.day[aria-current="true"]) .titles li:not(.x) a { color: var(--ink); }
+  .month a.day[aria-current="true"] { background: none; color: var(--accent); }
+  .month a.day[aria-current="true"] .n { background: var(--accent); color: var(--on-accent); }
 }
-/* Windows High Contrast: the system draws over backgrounds and box shadows, so the dots (backgrounds) and
-   today's ring (a shadow) are drawn again in the system's own colours, and the day a grid link went to
-   gets an outline for its bar. */
+
+/* The listings: a heading with "Central Time" beside it, then the cards. */
+.agenda { display: grid; gap: var(--space-3); }
+.agenda__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 var(--space-3); }
+.agenda__head h2 { margin: 0; font-size: var(--fs-h3); }
+.tz { margin: 0; color: var(--muted); font-size: var(--fs-small); }
+.daypanel { display: grid; gap: var(--space-3); scroll-margin-top: var(--space-4); }
+.daypanel[hidden] { display: none; }
+.agenda .empty { margin: 0; }
+
+/* An event card: the date, the type icon, the words, the chevron; the title's link covers the card. */
+.ecards { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); container: ecards / inline-size; }
+.ecard { position: relative; display: grid; grid-template-columns: 3.5rem auto minmax(0, 1fr) auto; gap: var(--space-2); align-items: start; padding: var(--space-3) var(--space-2) var(--space-3) var(--space-3); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); scroll-margin-top: var(--space-4); }
+.ecard > .evicon { width: 1.75rem; height: 1.75rem; margin-top: 0.125rem; color: var(--accent); }
+.ecard__t { display: grid; gap: 2px; min-width: 0; }
+.ecard__t > * { margin: 0; }
+.ecard h3 { font-size: min(1.25rem, 9vw); }
+.ecard__link { color: var(--ink); text-decoration: none; }
+.ecard__link::after { content: ""; position: absolute; inset: 0; border-radius: 12px; }
+.ecard__link:focus-visible { outline: none; }
+.ecard__link:focus-visible::after { outline: var(--focus-width) solid var(--focus); outline-offset: 2px; }
+.ecard:hover .ecard__link { text-decoration: underline; }
+.ecard__chev { align-self: center; display: flex; color: var(--muted); }
+.ecard__chev svg { width: 1.25rem; height: 1.25rem; }
+.ecard--x .ecard__link { color: var(--muted); }
+/* The selected day's events: a bar at the edge, as well as its tile. */
+.ecard.is-sel { border-color: var(--accent); box-shadow: inset 0.3125rem 0 0 var(--accent); }
+/* Too narrow for the date beside the words: it goes above them, on one line. */
+@container ecards (width < 17rem) {
+  .ecard { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .ecard .dt { grid-column: 1 / -1; justify-self: start; display: flex; align-items: baseline; gap: var(--space-2); padding: 0 var(--space-2); }
+  .ecard .dt b { font-size: 1.25rem; }
+}
+/* An unfolded phone, a tablet: the cards two abreast. */
+@container calendar (min-width: 46rem) {
+  .ecards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* "Add our calendar": one compact disclosure beneath the listings. */
+.addcal { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.addcal__sum { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-3); font-weight: 700; color: var(--ink); cursor: pointer; list-style: none; border-radius: 11px; }
+.addcal__sum::-webkit-details-marker { display: none; }
+.addcal__sum svg { width: 1.5rem; height: 1.5rem; flex: none; color: var(--accent); }
+.addcal__sum span { flex: 1; }
+.addcal__sum::after { content: ""; flex: none; width: 0.5rem; height: 0.5rem; margin: 0 0.25rem 0.25rem; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.addcal[open] > .addcal__sum::after { transform: rotate(-135deg); margin-bottom: -0.25rem; }
+.addcal__panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); }
+.addcal__panel > * { margin: 0; }
+.addcal__addr { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+.addcal__addr label { font-weight: 700; }
+.addcal__copy { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.addcal__copy input { flex: 1 1 12rem; min-width: 0; min-height: 44px; padding: 0 var(--space-2); color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); font-size: var(--input-fs); }
+.addcal__copy .button { padding: 0 var(--space-3); }
+.addcal__status { margin: 0; font-weight: 700; }
+.addcal__status:empty { display: none; }
+.addcal__way a { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 44px; font-weight: 700; }
+.addcal__way svg { width: 1.25rem; height: 1.25rem; flex: none; }
+.addcal__way[hidden] { display: none; }
+.addcal__android { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.addcal__android > * { margin: 0; }
+.addcal__android h3 { font-size: var(--fs-body); }
+.addcal__android ol { padding-left: 1.5em; display: grid; gap: var(--space-1); }
+.addcal__android a { display: inline-flex; align-items: center; min-height: 44px; }
+.kbd { font-weight: 700; }
+
+/* What the icons mean: always on show, in words. */
+.legend-kinds ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); font-size: var(--fs-small); color: var(--muted); }
+.legend-kinds li { display: inline-flex; align-items: center; gap: var(--space-1); }
+.legend-kinds .evicon { width: 1.25rem; height: 1.25rem; color: var(--accent); }
+
+/* Windows High Contrast: the system draws over backgrounds and box shadows, so today, the selected day
+   and the current view get outlines in the system's colours. */
 @media (forced-colors: active) {
-  .month .dot { background: CanvasText; forced-color-adjust: none; }
-  .month .dot.x { background: Canvas; border-color: CanvasText; }
-  .month td[aria-current="date"] { outline: 3px solid CanvasText; outline-offset: -3px; }
+  .month td[aria-current="date"], .tile--today { outline: 3px solid CanvasText; outline-offset: -3px; }
   .month td[aria-current="date"] .n { border: 2px solid CanvasText; }
-  .ev:target { outline: 3px solid CanvasText; }
+  .month a.day[aria-current="true"], .tile[aria-current="true"], .calviews__v[aria-current] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .ecard.is-sel, .ecard:target { outline: 3px solid CanvasText; }
 }
-/* The day a grid link went to, in the list. */
-.ev:target { scroll-margin-top: var(--space-4); box-shadow: inset 0.25rem 0 0 var(--accent); padding-left: var(--space-3); }
 
 dl.facts { display: grid; gap: var(--space-3); }
 dl.facts div { display: grid; gap: 0; }

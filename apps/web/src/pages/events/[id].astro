@@ -1,6 +1,6 @@
 ---
 // One public event (R4), on request: when and where in words, who to ask by
-// role address, Add to my calendar, and what the labels mean. A members event,
+// role address, Add to my calendar (its .ics) and Add to Google Calendar, and what the labels mean. A members event,
 // or one that is not there, is the 404 page.
 import Address from '../../components/Address.astro';
 import Icon from '../../components/Icon.astro';
@@ -10,6 +10,8 @@ import { liveData } from '../../data';
 import Base from '../../layouts/Base.astro';
 import { attempt, markUnavailable } from '../../lib/api/page';
 import { chipStatus, eventIdFromParam, whenText } from '../../lib/calendar';
+import { googleEventUrl } from '../../lib/event-views';
+import { publicOrigin } from '../../lib/origin';
 
 const id = eventIdFromParam(Astro.params['id']);
 const live = liveData();
@@ -44,6 +46,8 @@ const paragraphs = (text: string) => text.split(/\n\s*\n/).map((t) => t.trim()).
       </dl>
       <p class="btns">
         <a class="button" href={`${event.path}.ics`}><Icon name="add-calendar" />Add to my calendar</a>
+        {/* EVENTS2: on an Android phone, where a calendar cannot be subscribed to, this one event still can be added. */}
+        {event.status !== 'cancelled' && <a class="button button--secondary" href={googleEventUrl(event, publicOrigin(Astro.request, Astro.site))}><Icon name="add-calendar" />Add to Google Calendar</a>}
         {venue?.url && <a class="button button--secondary" href={venue.url}><Icon name={venue.kind === 'virtual' ? 'external' : 'pin'} />{venue.kind === 'virtual' ? 'Join online' : 'Website or map'}</a>}
         {event.url && <a class="button button--secondary" href={event.url}><Icon name="external" />More about this event</a>}
       </p>

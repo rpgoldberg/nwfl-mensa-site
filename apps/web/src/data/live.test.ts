@@ -6,6 +6,7 @@ import {
   Area,
   EventOccurrenceSchema,
   type EventOccurrence,
+  EventCategory,
   EventSeriesSchema,
   EventVisibility,
   OccurrenceStatus,
@@ -160,6 +161,60 @@ describe('liveData.events', () => {
 
   it('passes an unavailable API on to the page', async () => {
     await expect(liveData(reads({ listOccurrences: () => Promise.reject(new ApiUnavailable('ListOccurrences')) })).events('2026-11-01', '2026-11-30')).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+
+  // EVENTS2: the type icon comes from the series' category, read alongside, and only when asked.
+  describe('with categories', () => {
+    const HAPPY = '1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5';
+    const BLANK = '2d3e4f5a-6b7c-4d8e-9fa0-b1c2d3e4f5a6';
+    const listed = () =>
+      Promise.resolve([
+        occurrence(),
+        occurrence({ id: `${HAPPY}:2026-11-13`, seriesId: HAPPY, title: 'Happy Hour' }),
+        occurrence({ id: `${BLANK}:2026-11-14`, seriesId: BLANK, title: 'Lunch at the pier' }),
+        occurrence({ id: ONE_OFF, seriesId: '', title: 'Panama City lunch' }),
+        occurrence({ id: `${ONE_OFF}:x`, seriesId: 'a-series-not-listed', title: 'Dinner somewhere' }),
+      ]);
+    const series = () =>
+      Promise.resolve([
+        create(EventSeriesSchema, { id: SERIES, category: EventCategory.LUNCH }),
+        create(EventSeriesSchema, { id: HAPPY, category: EventCategory.HAPPY_HOUR }),
+        create(EventSeriesSchema, { id: BLANK, category: EventCategory.UNSPECIFIED }),
+      ]);
+
+    it("gives each event its series' category; a one-off, an unspecified category or an unlisted series none, whatever the title says", async () => {
+      const events = await liveData(reads({ listOccurrences: listed, listSeries: series })).events('2026-11-01', '2026-11-30', { categories: true });
+      expect(events.map((e) => e.category)).toEqual(['lunch', 'happy_hour', undefined, undefined, undefined]);
+    });
+
+    it('maps every category the API has', async () => {
+      const all = Object.values(EventCategory).filter((v): v is EventCategory => typeof v === 'number' && v !== EventCategory.UNSPECIFIED);
+      const events = await liveData(
+        reads({
+          listOccurrences: () => Promise.resolve(all.map((c) => occurrence({ id: `s${c}`, seriesId: `s${c}` }))),
+          listSeries: () => Promise.resolve(all.map((c) => create(EventSeriesSchema, { id: `s${c}`, category: c }))),
+        }),
+      ).events('2026-11-01', '2026-11-30', { categories: true });
+      expect(events.map((e) => e.category)).toEqual(['lunch', 'dinner', 'happy_hour', 'excomm', 'picnic', 'party', 'regional', 'national', 'virtual', 'other']);
+    });
+
+    it('never asks for the series unless asked, and lists the events with no icons when only the series cannot be read', async () => {
+      let askedSeries = 0;
+      const count = () => {
+        askedSeries += 1;
+        return series();
+      };
+      const plain = await liveData(reads({ listOccurrences: listed, listSeries: count })).events('2026-11-01', '2026-11-30');
+      expect(askedSeries).toBe(0);
+      expect(plain.every((e) => e.category === undefined)).toBe(true);
+      const down = await liveData(reads({ listOccurrences: listed, listSeries: () => Promise.reject(new ApiUnavailable('ListSeries')) })).events('2026-11-01', '2026-11-30', { categories: true });
+      expect(down.map((e) => e.title)).toHaveLength(5);
+      expect(down.every((e) => e.category === undefined)).toBe(true);
+    });
+
+    it('passes any other failure of the series read on', async () => {
+      await expect(liveData(reads({ listOccurrences: listed, listSeries: () => Promise.reject(new Error('boom')) })).events('2026-11-01', '2026-11-30', { categories: true })).rejects.toThrow('boom');
+    });
   });
 });
 

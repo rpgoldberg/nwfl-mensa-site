@@ -610,3 +610,82 @@ describe('createSiteServer', () => {
     expectSecurityHeaders(res);
   });
 });
+
+// fc CALFEED / EVENTS2: one line per fetch of the calendar feed, so Google's fetches can be seen at the
+// origin: the path, the status, the bytes sent and the User-Agent. Never the address it came from.
+describe('the calendar feed log', () => {
+  const feed = (body: string) => (_req: http.IncomingMessage, res: http.ServerResponse) => {
+    res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8' });
+    res.write(body.slice(0, 5));
+    res.end(Buffer.from(body.slice(5)));
+  };
+  const lines = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>);
+
+  it('logs a fetch of /calendar.ics or /events.ics, with the query, as one JSON line: path, status, bytes and UA, and no address', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const base = await serve(feed('BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n'));
+    const ua = 'Google-Calendar-Importer';
+    await (await fetch(`${base}/calendar.ics?v=2`, { headers: { 'User-Agent': ua, 'X-Forwarded-For': '203.0.113.9', 'CF-Connecting-IP': '203.0.113.9' } })).text();
+    await (await fetch(`${base}/events.ics`, { method: 'HEAD', headers: { 'User-Agent': ua } })).text();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(lines(log)).toEqual([
+      { level: 'info', msg: 'calendar feed', path: '/calendar.ics', status: 200, bytes: 32, ua },
+      { level: 'info', msg: 'calendar feed', path: '/events.ics', status: 200, bytes: 0, ua },
+    ]);
+    const all = log.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(all).not.toMatch(/203\.0\.113|127\.0\.0\.1|v=2/);
+    log.mockRestore();
+  });
+
+  it('counts the bytes however the body is written: a string in an encoding, then an end with only a callback, or none', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const base = await serve((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8' });
+      res.write('\u00e9\u00e9', 'latin1');
+      res.write('\u00e9');
+      if (req.url?.includes('bare')) res.end();
+      else res.end(() => {});
+    });
+    await (await fetch(`${base}/calendar.ics`)).arrayBuffer();
+    await (await fetch(`${base}/calendar.ics?bare`)).arrayBuffer();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(lines(log).map((l) => l['bytes'])).toEqual([4, 4]);
+    log.mockRestore();
+  });
+
+  it('logs nothing for any other path, an event file or a page', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const base = await serve(feed('x'.repeat(10)));
+    for (const path of ['/events', '/events/abc.ics', '/calendar.ics/x', '/', '/calendar.icsx']) await (await fetch(`${base}${path}`)).text();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  it('keeps a hostile User-Agent to one bounded line, and says so when there is none', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const base = await serve((_req, res) => {
+      res.statusCode = 503;
+      res.end('down');
+    });
+    await new Promise<void>((resolve, reject) => {
+      const req = http.request(`${base}/calendar.ics`, { headers: { 'User-Agent': `evil\u00e9${'a'.repeat(400)}` } }, (res) => res.resume().on('end', resolve));
+      req.on('error', reject);
+      req.end();
+    });
+    await new Promise<void>((resolve, reject) => {
+      const req = http.request(`${base}/calendar.ics`, (res) => res.resume().on('end', resolve));
+      req.removeHeader('user-agent');
+      req.on('error', reject);
+      req.end();
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    const [hostile, none] = lines(log);
+    expect(hostile).toMatchObject({ path: '/calendar.ics', status: 503, bytes: 4 });
+    expect(String(hostile!['ua'])).toMatch(/^evil\?a+$/);
+    expect(String(hostile!['ua']).length).toBe(200);
+    expect(none).toMatchObject({ status: 503, ua: '' });
+    for (const call of log.mock.calls) expect(String(call[0])).not.toMatch(/[\r\n]/);
+    log.mockRestore();
+  });
+});

@@ -3,15 +3,11 @@ import {
   type CalendarEvent,
   addDays,
   agendaDays,
-  calendarRange,
-  COMING_UP_DAYS,
   centralParts,
   chipStatus,
   comingUp,
   dayAnchor,
-  dayHref,
   eventIdFromParam,
-  gridDayLabel,
   hasEnded,
   eventPath,
   googleCalendarUrl,
@@ -116,32 +112,6 @@ describe('months', () => {
     expect(weeks[0]![0]).toMatchObject({ date: '2026-09-27', inMonth: false });
     expect(weeks[0]![4]).toMatchObject({ date: '2026-10-01', inMonth: true });
     expect(weeks.at(-1)!.at(-1)).toMatchObject({ date: '2026-10-31', inMonth: true });
-  });
-});
-
-describe('calendarRange', () => {
-  it('shows this month in the grid and what is coming up in the list, read in one call', () => {
-    expect(COMING_UP_DAYS).toBe(56);
-    expect(calendarRange(null, '2026-10-23')).toEqual({
-      month: '2026-10',
-      current: true,
-      list: { from: '2026-10-23', to: '2026-12-18' },
-      read: { from: '2026-10-01', to: '2026-12-18' },
-    });
-  });
-
-  it('shows a chosen month whole, in the grid and the list', () => {
-    expect(calendarRange('2027-02', '2026-10-23')).toEqual({
-      month: '2027-02',
-      current: false,
-      list: { from: '2027-02-01', to: '2027-02-28' },
-      read: { from: '2027-02-01', to: '2027-02-28' },
-    });
-  });
-
-  it('refuses a month it cannot read', () => {
-    expect(calendarRange('2026-13', '2026-10-23')).toBeUndefined();
-    expect(calendarRange('', '2026-10-23')).toBeUndefined();
   });
 });
 
@@ -281,25 +251,6 @@ describe('hasEnded and comingUp', () => {
   });
 });
 
-describe('the compact month grid', () => {
-  const day = (over: Partial<{ date: string; today: boolean; events: CalendarEvent[] }> = {}) => ({ date: '2026-11-11', inMonth: true, today: false, events: [], ...over });
-
-  it('names each day with its weekday, date and how many events, and says which is today', () => {
-    expect(gridDayLabel(day({ events: [event({ date: '2026-11-11' })] }))).toBe('Wednesday, 11 November, 1 event');
-    expect(gridDayLabel(day({ events: [event(), event({ id: 'b' })] }))).toBe('Wednesday, 11 November, 2 events');
-    expect(gridDayLabel(day({ today: true, events: [event()] }))).toBe('Wednesday, 11 November, today, 1 event');
-    expect(gridDayLabel(day())).toBe('Wednesday, 11 November, no events');
-  });
-
-  it('says how many of a day\u2019s events are cancelled', () => {
-    expect(gridDayLabel(day({ events: [event({ status: 'cancelled' })] }))).toBe('Wednesday, 11 November, 1 event, cancelled');
-    expect(gridDayLabel(day({ events: [event(), event({ id: 'b', status: 'cancelled' })] }))).toBe('Wednesday, 11 November, 2 events, 1 cancelled');
-  });
-
-  it('links a day to its place in the list on this page, or to its month where the list does not hold it', () => {
-    expect(dayAnchor('2026-11-11')).toBe('day-2026-11-11');
-    const listed = new Set(['2026-11-11']);
-    expect(dayHref('2026-11-11', listed)).toBe('#day-2026-11-11');
-    expect(dayHref('2026-11-04', listed)).toBe('/events?month=2026-11#day-2026-11-04');
-  });
+describe('dayAnchor', () => {
+  it("is the id a day's tile links to", () => expect(dayAnchor('2026-11-11')).toBe('day-2026-11-11'));
 });

@@ -9,6 +9,9 @@ export const ZONE = 'America/Chicago';
 
 export type EventStatus = 'scheduled' | 'tentative' | 'cancelled' | 'moved';
 
+/** A series' category (event.proto EventCategory), as the API gave it; none for a one-off or an unspecified one. */
+export type EventCategoryName = 'lunch' | 'dinner' | 'happy_hour' | 'excomm' | 'picnic' | 'party' | 'regional' | 'national' | 'virtual' | 'other';
+
 export interface CalendarVenue {
   kind: 'business' | 'home' | 'virtual';
   name: string;
@@ -44,6 +47,8 @@ export interface CalendarEvent {
   seriesId: string;
   ownerOfficeId: string;
   source: ContentSource;
+  /** EVENTS2: its series' category, for the type icon; undefined when the API gives none (never guessed). */
+  category?: EventCategoryName | undefined;
 }
 
 const PARTS = new Intl.DateTimeFormat('en-US', {
@@ -148,31 +153,6 @@ export function monthRange(month: string): { from: string; to: string } {
 /** How far ahead "Coming up" looks. */
 export const COMING_UP_DAYS = 56;
 
-export interface CalendarRange {
-  /** The month in the grid. */
-  month: string;
-  /** No month was chosen: this month, and what is coming up. */
-  current: boolean;
-  /** The days the list covers. */
-  list: { from: string; to: string };
-  /** The one read that covers both. */
-  read: { from: string; to: string };
-}
-
-/** What /calendar shows: this month and what is coming up, or the month asked for (?month=YYYY-MM); undefined for a month it cannot read. */
-export function calendarRange(monthParam: string | null, today: string): CalendarRange | undefined {
-  if (monthParam === null) {
-    const month = today.slice(0, 7);
-    const { from, to } = monthRange(month);
-    const list = { from: today, to: addDays(today, COMING_UP_DAYS) };
-    return { month, current: true, list, read: { from, to: list.to > to ? list.to : to } };
-  }
-  const month = parseMonth(monthParam);
-  if (month === undefined) return undefined;
-  const range = monthRange(month);
-  return { month, current: false, list: range, read: range };
-}
-
 export interface GridDay {
   date: string;
   inMonth: boolean;
@@ -202,22 +182,6 @@ export function monthGrid(month: string, events: readonly CalendarEvent[], today
 /** The id of a day's first entry in the list, which the grid's day links to (W-LOOK2). */
 export function dayAnchor(date: string): string {
   return `day-${date}`;
-}
-
-/** Where a day in the grid goes: its place in the list on this page, or else in its month's list. */
-export function dayHref(date: string, listed: ReadonlySet<string>): string {
-  return listed.has(date) ? `#${dayAnchor(date)}` : `/events?month=${date.slice(0, 7)}#${dayAnchor(date)}`;
-}
-
-/** A day of the grid in words, for its link: "Wednesday, 11 November, today, 1 event". */
-export function gridDayLabel(day: Pick<GridDay, 'date' | 'today' | 'events'>): string {
-  const count = day.events.length;
-  const cancelled = day.events.filter((e) => e.status === 'cancelled').length;
-  const parts = [formatDate(day.date, { year: false })];
-  if (day.today) parts.push('today');
-  parts.push(count === 0 ? 'no events' : `${count} event${count === 1 ? '' : 's'}`);
-  if (cancelled > 0) parts.push(count === 1 ? 'cancelled' : `${cancelled} cancelled`);
-  return parts.join(', ');
 }
 
 /** Events by day, in date order, each day in time order. */
@@ -255,9 +219,14 @@ export function placeText(event: Pick<CalendarEvent, 'venue' | 'area'>): string 
   return [venue.name, venue.address, venue.city].filter(Boolean).join(', ');
 }
 
+/** An event's notes for a calendar app: its status note, detail, link, and its page here. */
+export function eventDescription(event: CalendarEvent, origin: string): string {
+  return [event.statusNote, event.detail, event.url && `More: ${event.url}`, `On our calendar: ${origin}${event.path}`].filter(Boolean).join('\n');
+}
+
 export function toIcsEvent(event: CalendarEvent, origin: string): IcsEvent {
   const page = `${origin}${event.path}`;
-  const description = [event.statusNote, event.detail, event.url && `More: ${event.url}`, `On our calendar: ${page}`].filter(Boolean).join('\n');
+  const description = eventDescription(event, origin);
   return {
     uid: `${event.id}@nwflorida.us`,
     start: { date: event.date, time: event.start },
