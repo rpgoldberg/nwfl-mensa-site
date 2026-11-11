@@ -4,6 +4,7 @@
 // configured site. These talk to the server directly to choose the Host.
 import http from 'node:http';
 import { expect, test } from '@playwright/test';
+import { FEED_VERSION } from '../src/lib/event-views';
 import { BACKEND_URL } from './servers';
 
 function asked(path: string, headers: Record<string, string>): Promise<string> {
@@ -21,7 +22,8 @@ function asked(path: string, headers: Record<string, string>): Promise<string> {
 
 const hrefs = (html: string): string[] => [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]!);
 const feeds = (html: string) => hrefs(html).filter((h) => h.includes('calendar.ics'));
-const webcal = (host: string) => `webcal://${host}/calendar.ics`;
+// EVENTS2: the published address carries the feed version.
+const webcal = (host: string) => `webcal://${host}/calendar.ics?v=${FEED_VERSION}`;
 const google = (host: string) => `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(webcal(host))}`;
 
 test.describe('Events calendar buttons', () => {

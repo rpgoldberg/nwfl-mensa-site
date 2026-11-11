@@ -1,0 +1,11 @@
+---
+// EVENTS2: what the type icons mean, in words, always on show (accessibility first).
+import EventIcon from './EventIcon.astro';
+import { KINDS, KIND_LABELS } from '../lib/event-views';
+---
+<div class="legend-kinds">
+  <h2 class="visually-hidden" id="kinds-title">What the icons mean</h2>
+  <ul aria-labelledby="kinds-title">
+    {KINDS.map((k) => <li><EventIcon kind={k} /><span>{KIND_LABELS[k]}</span></li>)}
+  </ul>
+</div>

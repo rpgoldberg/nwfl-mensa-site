@@ -1,21 +1,26 @@
 ---
-// Events, the calendar (R4), on request: public events only. This month as a
-// grid and what is coming up as a list, or one month (?month=YYYY-MM) as both;
-// the grid, then the subscription card, then the list (W-LOOK2: a phone sees the calendar first), and
-// W-LOOK3: the month arrows sit in the grid's caption row, and the subscription is one disclosure; and
-// each event's page. With no API (the canary), or none in the range, it says that no events are
-// listed yet, and who to ask.
+// Events, the calendar (R4), on request: public events only. EVENTS2 (Ross's concept, 11-10): one
+// toolbar ("‹ period ›" and List | Week | Month), then the view, then its events as cards, the type
+// legend and "Add our calendar" beneath. The view and the selected date live in the URL
+// (?view=week&d=2026-11-11; the old ?month=YYYY-MM is that month's grid), so it works with no script
+// and with Back; public/scripts/events.js only selects a day in place, swipes the week, copies the
+// feed address and puts the Android steps first. List: the days with events in a scrolling ribbon,
+// from today for eight weeks; Week: all seven days; Month: the grid, and the selected day's events
+// right below it. With no API (the canary), or none in the range, it says that no events are listed
+// yet, and who to ask.
+import CalToolbar from '../components/CalToolbar.astro';
+import DayTile from '../components/DayTile.astro';
 import EmptyEvents from '../components/EmptyEvents.astro';
-import EventList from '../components/EventList.astro';
-import Icon from '../components/Icon.astro';
+import EventCards from '../components/EventCards.astro';
+import KindLegend from '../components/KindLegend.astro';
 import MonthGrid from '../components/MonthGrid.astro';
-import MonthName from '../components/MonthName.astro';
 import SubscribeCard from '../components/SubscribeCard.astro';
 import Unavailable from '../components/Unavailable.astro';
 import { liveData } from '../data';
 import Base from '../layouts/Base.astro';
 import { attempt, markUnavailable } from '../lib/api/page';
-import { calendarRange, comingUp, monthGrid, monthLabel, shiftMonth, todayCentral } from '../lib/calendar';
+import { agendaDays, comingUp, dayAnchor, monthGrid, todayCentral } from '../lib/calendar';
+import { calHref, calPeriod, feedLinks, parseCalState, ribbonDays, shortDay, weekDays } from '../lib/event-views';
 import { feedWebcal } from '../lib/origin';
 import { page } from '../lib/site';
 
@@ -23,51 +28,91 @@ const p = page('/events');
 const live = liveData();
 const now = new Date();
 const today = todayCentral(now);
-const feedUrl = feedWebcal(Astro.request, Astro.site);
-const range = calendarRange(Astro.url.searchParams.get('month'), today);
-if (range === undefined) return Astro.rewrite('/404');
+const state = parseCalState(Astro.url.searchParams, today);
+if (state === undefined) return Astro.rewrite('/404');
+const period = calPeriod(state, today);
+const { view, date: selected } = state;
+const links = feedLinks(feedWebcal(Astro.request, Astro.site));
 
-const loaded = live ? await attempt(() => live.events(range.read.from, range.read.to)) : undefined;
+const loaded = live ? await attempt(() => live.events(period.read.from, period.read.to, { categories: true })) : undefined;
 if (loaded && !loaded.ok) markUnavailable(Astro.response);
 const events = loaded?.ok ? loaded.value : [];
-// W-LOOK2: "Coming up" leaves out what ended earlier today; a month's list keeps it, as Past.
-const listed = (range.current ? comingUp(events, now) : events).filter((e) => e.date >= range.list.from && e.date <= range.list.to);
-const listedDays = new Set(listed.map((e) => e.date));
-const label = monthLabel(range.month);
-const [previous, next] = [shiftMonth(range.month, -1), shiftMonth(range.month, 1)];
-const listTitle = range.current ? 'Coming up' : `${label}, as a list`;
+// The list from today leaves out what ended earlier today (W-LOOK2); a week or a month keeps it, as Past.
+const shown = agendaDays((period.upcoming ? comingUp(events, now) : events).filter((e) => e.date >= period.from && e.date <= period.to)).flatMap((d) => d.events);
+const days = agendaDays(shown);
+const ribbon = view === 'list' ? ribbonDays(shown, today, selected) : [];
+const week = view === 'week' ? weekDays(period.from, shown, today, selected) : [];
+const title = view === 'list' ? (period.upcoming ? 'Upcoming events' : `Events in ${period.spoken}`) : view === 'week' ? (period.thisPeriod ? `This week (${period.label})` : `Week of ${period.label}`) : shortDay(selected);
 // Nothing to list: who to ask. The roster read failing only drops the address.
-const roster = live && loaded?.ok && listed.length === 0 ? await attempt(() => live.offices()) : undefined;
+const roster = live && loaded?.ok && shown.length === 0 ? await attempt(() => live.offices()) : undefined;
 const president = roster?.ok ? roster.value.find((o) => o.slug === 'president' && o.aliasVerified)?.alias : undefined;
+const emptyWhen = period.upcoming ? 'for the next eight weeks' : `for ${period.spoken}`;
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
-  <p class="lead">{p.description} All times are Central.</p>
   {live ? (
-    <>
-      {loaded && !loaded.ok ? <><SubscribeCard feedUrl={feedUrl} /><Unavailable what="The calendar" /></> : (
-        <div class="calendar">
-          <div class="calgrid">
-            <section class="monthbox" aria-label={`${label}, as a grid`}>
-              {/* The grid's caption row: "‹ October" | the month | "December ›". The table's own caption
-                  names it for a screen reader, so the month here is for the eye only. */}
-              <div class="month-head">
-                <nav class="month-nav" aria-label="Months">
-                  <a class="mnav mnav--prev" href={`/events?month=${previous}`}><Icon name="back" /><MonthName month={previous} direction="previous" /></a>
-                  <p class="month-title"><span aria-hidden="true">{label}</span>{!range.current && <a href="/events">This month</a>}</p>
-                  <a class="mnav mnav--next" href={`/events?month=${next}`}><MonthName month={next} direction="next" /><Icon name="forward" /></a>
-                </nav>
-              </div>
-              <MonthGrid caption={label} weeks={monthGrid(range.month, events, today)} listed={listedDays} />
-            </section>
-            <SubscribeCard feedUrl={feedUrl} />
-            <section class="agenda" aria-labelledby="list-title">
-              <h2 id="list-title">{listTitle}</h2>
-              {listed.length > 0 ? <EventList events={listed} label={listTitle} anchors /> : <EmptyEvents when={range.current ? 'for the next eight weeks' : `for ${label}`} president={president} />}
-            </section>
-          </div>
-        </div>
-      )}
-    </>
+    loaded && !loaded.ok ? (
+      <div class="calendar" data-cal={view}>
+        <CalToolbar period={period} today={today} />
+        <Unavailable what="The calendar" />
+        <SubscribeCard links={links} />
+      </div>
+    ) : (
+      <div class="calendar" data-cal={view}>
+        <CalToolbar period={period} today={today} />
+        {view === 'list' && ribbon.length > 0 && (
+          <ol class="tiles tiles--ribbon" aria-label="Days with events">
+            {ribbon.map((tile, i) => (
+              <>
+                {i > 0 && tile.month !== ribbon[i - 1]!.month && <li class="tiles__month" aria-hidden="true">{tile.month}</li>}
+                <li><DayTile tile={tile} href={calHref('list', tile.date, today, `#${dayAnchor(tile.date)}`)} /></li>
+              </>
+            ))}
+          </ol>
+        )}
+        {view === 'week' && (
+          <ol class="tiles tiles--week" aria-label={`The days of ${period.spoken}`} data-swipe>
+            {week.map((tile) => <li><DayTile tile={tile} href={calHref('week', tile.date, today, `#${dayAnchor(tile.date)}`)} /></li>)}
+          </ol>
+        )}
+        {view === 'month' && <MonthGrid caption={period.label} weeks={monthGrid(period.from.slice(0, 7), shown, today)} selected={selected} today={today} />}
+        {view === 'month' ? (
+          <section class="agenda" aria-label="The selected day">
+            {shown.length === 0 ? (
+              <EmptyEvents when={emptyWhen} president={president} />
+            ) : (
+              <>
+                {!days.some((d) => d.date === selected) && (
+                  <div class="daypanel" id={dayAnchor(selected)} data-panel={selected}>
+                    <div class="agenda__head"><h2>{shortDay(selected)}</h2><p class="tz">Central Time</p></div>
+                    <p class="card empty">No events on this day. The days with an icon have events.</p>
+                  </div>
+                )}
+                {days.map((d) => (
+                  <div class="daypanel" id={dayAnchor(d.date)} data-panel={d.date} hidden={d.date !== selected}>
+                    <div class="agenda__head"><h2>{shortDay(d.date)}</h2><p class="tz">Central Time</p></div>
+                    <EventCards events={d.events} label={`Events on ${shortDay(d.date)}`} />
+                  </div>
+                ))}
+              </>
+            )}
+          </section>
+        ) : (
+          <section class="agenda" aria-labelledby="list-title">
+            <div class="agenda__head"><h2 id="list-title">{title}</h2><p class="tz">Central Time</p></div>
+            {shown.length > 0 ? (
+              <>
+                <EventCards events={shown} label={title} selected={selected} anchors />
+                {view === 'week' && <p class="card empty">No other events this week.</p>}
+              </>
+            ) : <EmptyEvents when={emptyWhen} president={president} />}
+          </section>
+        )}
+        <p class="visually-hidden" role="status" data-cal-status></p>
+        <SubscribeCard links={links} />
+        <KindLegend />
+      </div>
+    )
   ) : <EmptyEvents />}
+  <script is:inline type="module" src="/scripts/events.js"></script>
 </Base>

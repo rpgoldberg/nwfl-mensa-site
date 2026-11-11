@@ -205,6 +205,42 @@ function errorName(err) {
   return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name) ? err.name : 'Error';
 }
 
+/** The calendar feed's two paths (fc CALFEED): /calendar.ics, and /events.ics, the same feed. */
+const FEED_PATHS = new Set(['/calendar.ics', '/events.ics']);
+const UA_MAX = 200;
+
+/**
+ * fc CALFEED: one line per fetch of the calendar feed, so a calendar service's fetches can be seen at
+ * the origin: the path (never the query), the status, the body's bytes and the User-Agent, cut to one
+ * bounded printable line. Never the address it came from.
+ *
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {string} path
+ */
+function logFeedFetch(req, res, path) {
+  let bytes = 0;
+  /** @param {unknown} chunk @param {unknown} [encoding] */
+  const count = (chunk, encoding) => {
+    if (typeof chunk === 'string') bytes += Buffer.byteLength(chunk, typeof encoding === 'string' ? /** @type {BufferEncoding} */ (encoding) : 'utf8');
+    else if (chunk instanceof Uint8Array) bytes += chunk.byteLength;
+  };
+  const write = res.write;
+  const end = res.end;
+  /** @type {any} */ (res).write = function (/** @type {unknown[]} */ ...args) {
+    count(args[0], args[1]);
+    return write.apply(this, /** @type {any} */ (args));
+  };
+  /** @type {any} */ (res).end = function (/** @type {unknown[]} */ ...args) {
+    if (typeof args[0] !== 'function') count(args[0], args[1]);
+    return end.apply(this, /** @type {any} */ (args));
+  };
+  res.once('close', () => {
+    const ua = String(req.headers['user-agent'] ?? '').replace(/[^\x20-\x7e]/g, '?').slice(0, UA_MAX);
+    console.log(JSON.stringify({ level: 'info', msg: 'calendar feed', path, status: res.statusCode, bytes: req.method === 'HEAD' ? 0 : bytes, ua }));
+  });
+}
+
 /**
  * Wrap a request handler so every response carries the site policy, answer
  * old URLs (R16) and the site's own renamed pages, serve the prerendered pages, and answer the health probe
@@ -228,6 +264,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       // The cache rule reads the raw path: only a plain /_astro/ name is immutable.
       applyPolicy(req, res, raw, headers, path);
     });
+    if (path !== undefined && FEED_PATHS.has(path)) logFeedFetch(req, res, path);
     if (path === undefined) {
       res.statusCode = 400;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');

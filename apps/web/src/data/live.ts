@@ -25,10 +25,10 @@
 // another's page.
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility, type StoredFile } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { Area, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
+import { Area, EventCategory, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
 import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type FileRead, type LinkRead, type Reader, sendable } from '../lib/api/client';
-import { type CalendarEvent, type CalendarVenue, type EventStatus, centralParts, eventPath } from '../lib/calendar';
+import { type CalendarEvent, type CalendarVenue, type EventCategoryName, type EventStatus, centralParts, eventPath } from '../lib/calendar';
 import { type View, documentHtml, hasMembers, hasRedacted, withheldHtml } from '../lib/document';
 import { LINK_ID } from '../lib/out';
 import { type Issue, type Office, newestFirst } from './site-data';
@@ -92,7 +92,8 @@ export interface EventDetails {
 }
 
 export interface LiveData {
-  events(from: string, to: string): Promise<CalendarEvent[]>;
+  /** `categories` (EVENTS2): give each event its series' category too, for /events' type icons. */
+  events(from: string, to: string, options?: { categories?: boolean }): Promise<CalendarEvent[]>;
   /** undefined: no such public event. */
   event(id: string): Promise<EventDetails | undefined>;
   offices(): Promise<Office[]>;
@@ -129,6 +130,20 @@ const STATUSES: Partial<Record<OccurrenceStatus, EventStatus>> = {
   [OccurrenceStatus.TENTATIVE]: 'tentative',
   [OccurrenceStatus.CANCELLED]: 'cancelled',
   [OccurrenceStatus.MOVED]: 'moved',
+};
+
+/** The series categories (event.proto); UNSPECIFIED, or anything new, is no category: never guessed. */
+const CATEGORIES: Partial<Record<EventCategory, EventCategoryName>> = {
+  [EventCategory.LUNCH]: 'lunch',
+  [EventCategory.DINNER]: 'dinner',
+  [EventCategory.HAPPY_HOUR]: 'happy_hour',
+  [EventCategory.EXCOMM]: 'excomm',
+  [EventCategory.PICNIC]: 'picnic',
+  [EventCategory.PARTY]: 'party',
+  [EventCategory.REGIONAL]: 'regional',
+  [EventCategory.NATIONAL]: 'national',
+  [EventCategory.VIRTUAL]: 'virtual',
+  [EventCategory.OTHER]: 'other',
 };
 
 /** A public event the API sent in full, with a status and a date: the only kind any page or feed shows. */
@@ -305,7 +320,24 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
   const newsLists = (as: Reader | undefined) => Promise.all([reads.listPublishedItems(ContentKind.DOCUMENT, ISSUES_PAGE, as), articles(as)]);
 
   return {
-    events: async (from, to) => (await reads.listOccurrences(from, to)).filter(isPublicEvent).map(toEvent),
+    events: async (from, to, { categories = false } = {}) => {
+      // The series only for their categories, read alongside; the events never wait on them failing.
+      const [occurrences, series] = await Promise.all([
+        reads.listOccurrences(from, to),
+        categories
+          ? reads.listSeries().catch((error: unknown) => {
+              if (error instanceof ApiUnavailable) return [];
+              throw error;
+            })
+          : [],
+      ]);
+      const category = new Map(series.map((s) => [s.id, CATEGORIES[s.category]]));
+      return occurrences.filter(isPublicEvent).map((o) => {
+        const event = toEvent(o);
+        const named = o.seriesId ? category.get(o.seriesId) : undefined;
+        return named === undefined ? event : { ...event, category: named };
+      });
+    },
 
     event: async (id) => {
       let found: EventOccurrence | undefined;

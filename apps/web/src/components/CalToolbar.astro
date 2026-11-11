@@ -1,0 +1,25 @@
+---
+// EVENTS2: the one toolbar (Ross's concept): "‹ period ›" and the List | Week | Month switch, on one
+// row where it fits (a phone's cover screen included), wrapping to two only when the text is large.
+// Links, so it works with no script and with Back; each keeps the selected date.
+import Icon from './Icon.astro';
+import { CAL_VIEWS, type CalPeriod, VIEW_LABELS, calHref, calPeriod } from '../lib/event-views';
+
+interface Props {
+  period: CalPeriod;
+  today: string;
+}
+const { period, today } = Astro.props;
+const unit = period.view === 'week' ? 'week' : 'month';
+const step = (date: string) => calPeriod({ view: period.view, date }, today).spoken;
+---
+<div class="caltool">
+  <nav class="calstep" aria-label="Dates">
+    <a class="calstep__arrow" href={calHref(period.view, period.prev, today)} data-step="prev" aria-label={`Previous ${unit}: ${step(period.prev)}`}><Icon name="back" /></a>
+    <p class="calstep__label"><span class="calstep__long" aria-hidden="true">{period.label}</span><span class="calstep__short" aria-hidden="true">{period.short}</span><span class="visually-hidden">Showing {period.spoken}</span></p>
+    <a class="calstep__arrow" href={calHref(period.view, period.next, today)} data-step="next" aria-label={`Next ${unit}: ${step(period.next)}`}><Icon name="forward" /></a>
+  </nav>
+  <nav class="calviews" aria-label="Calendar view">
+    {CAL_VIEWS.map((v) => <a class="calviews__v" href={calHref(v, period.date, today)} data-view={v} aria-current={v === period.view ? 'page' : undefined}>{VIEW_LABELS[v]}</a>)}
+  </nav>
+</div>

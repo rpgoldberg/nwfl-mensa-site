@@ -1,0 +1,27 @@
+---
+// EVENTS2: one day as a tile, in the list's ribbon and the week's strip alike: the weekday, the date
+// and the indicator. A day with events is a link to its events on this page (the URL keeps the view
+// and the date); an empty one (the week only) is a plain tile. Today has a ring, the selected day a
+// fill, and both are said in words.
+import DayIndicator from './DayIndicator.astro';
+import { type DayTile as Tile, dayIndicator, tileLabel } from '../lib/event-views';
+
+interface Props {
+  tile: Tile;
+  href: string;
+}
+const { tile, href } = Astro.props;
+const label = tileLabel(tile);
+const look = ['tile', { 'tile--today': tile.today, 'tile--empty': tile.events.length === 0 }];
+---
+{tile.events.length > 0 ? (
+  <a class:list={look} href={href} data-day={tile.date} aria-label={label} aria-current={tile.selected ? 'true' : undefined}>
+    <span class="tile__face" aria-hidden="true"><span class="tile__wd">{tile.weekday}</span> <span class="tile__n">{tile.day}</span></span>
+    <DayIndicator indicator={dayIndicator(tile.events)} />
+  </a>
+) : (
+  <span class:list={look} data-empty-day={tile.date} aria-current={tile.selected ? 'true' : undefined}>
+    <span class="tile__face" aria-hidden="true"><span class="tile__wd">{tile.weekday}</span> <span class="tile__n">{tile.day}</span></span>
+    <span class="visually-hidden">{label}</span>
+  </span>
+)}

@@ -1,0 +1,50 @@
+---
+// EVENTS2: the events under the calendar, as the concept's cards: a date block, the type icon (named),
+// the title (a link that covers the card), "11:30 am · the place", the town, the status in words, and
+// a chevron. Each day's first card carries the id the day tiles link to (calendar.ts dayAnchor), and
+// the selected day's cards are marked (a bar, not colour alone). The time and place are Central.
+import EventIcon from './EventIcon.astro';
+import Icon from './Icon.astro';
+import StatusChip from './StatusChip.astro';
+import { type CalendarEvent, chipStatus, dayAnchor, formatTime } from '../lib/calendar';
+import { cardPlace, eventKind } from '../lib/event-views';
+import { formatDate } from '../data/format';
+
+interface Props {
+  events: CalendarEvent[];
+  /** The accessible name of the list. */
+  label: string;
+  /** The selected day: its cards are marked. */
+  selected?: string | undefined;
+  /** Each day's first card carries its anchor (the list and the week; the month's day panel has its own). */
+  anchors?: boolean;
+}
+const { events, label, selected, anchors = false } = Astro.props;
+const now = new Date();
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const box = (date: string) => {
+  const d = new Date(`${date}T00:00:00Z`);
+  return { day: DAYS[d.getUTCDay()], n: d.getUTCDate(), month: MONTHS[d.getUTCMonth()] };
+};
+---
+<ul class="ecards" aria-label={label}>
+  {events.map((e, i) => {
+    const b = box(e.date);
+    const where = cardPlace(e);
+    const first = anchors && events[i - 1]?.date !== e.date;
+    return (
+      <li class:list={['ecard', { 'ecard--x': e.status === 'cancelled', 'is-sel': e.date === selected }]} id={first ? dayAnchor(e.date) : undefined} data-card-day={e.date} data-source={e.source}>
+        <p class="dt" aria-hidden="true"><span>{b.day}</span> <b>{b.n}</b> <span>{b.month}</span></p>
+        <EventIcon kind={eventKind(e)} cancelled={e.status === 'cancelled'} named />
+        <div class="ecard__t">
+          <h3><a class="ecard__link" href={e.path}>{e.title}</a></h3>
+          <p><span class="visually-hidden">{formatDate(e.date)}, </span>{e.start ? formatTime(e.start) : 'Time to be decided'} · {where.place}</p>
+          {where.town && <p class="muted">{where.town}</p>}
+          <StatusChip status={chipStatus(e, now)} note={e.statusNote} />
+        </div>
+        <span class="ecard__chev" aria-hidden="true"><Icon name="forward" /></span>
+      </li>
+    );
+  })}
+</ul>

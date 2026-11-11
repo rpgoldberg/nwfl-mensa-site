@@ -1,27 +1,27 @@
 ---
-// The month as a real table (R4): a caption, a header for each day of the
-// week, and each day's events. W-LOOK2: shown at every width. Where seven
-// columns are narrow (a phone, or a large text size) it is compact: each day
-// with events is one link, its number over a dot for each event (a ring for a
-// cancelled one), to that day's place in the list (calendar.ts dayHref), and
-// named in words ("Wednesday, 11 November, 1 event"). Where there is room the
-// same cells also list the events' times and titles, as before. Today has a
-// ring and a filled number, and says "today" in its name.
-import { type GridDay, dayHref, formatTime, gridDayLabel } from '../lib/calendar';
+// The month as a real table (R4): a caption, a header for each day of the week, and each day's
+// events. EVENTS2 (Ross's concept): each day with events is a link that selects it, its events shown
+// right below the grid (the URL keeps the month view and the date), with the type icons (two at most,
+// then "+N"; DayIndicator) in place of W-LOOK2's dots, and named in words ("Wednesday, 11 November,
+// 1 event: Lunch or meal"). Where there is room the cells also list the events' times and titles.
+// Today has a ring and a filled number, and says "today" in its name; the selected day is filled.
+import DayIndicator from './DayIndicator.astro';
+import EventIcon from './EventIcon.astro';
+import { type GridDay, dayAnchor, formatTime } from '../lib/calendar';
+import { calHref, dayIndicator, dayLabel, eventKind } from '../lib/event-views';
 
 interface Props {
   caption: string;
   weeks: GridDay[][];
-  /** The days the list on this page holds: a day's link goes there, else to its month. */
-  listed: ReadonlySet<string>;
+  /** The selected date. */
+  selected: string;
+  today: string;
 }
-const { caption, weeks, listed } = Astro.props;
+const { caption, weeks, selected, today } = Astro.props;
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-/** At most this many dots in a day; its name says how many. */
-const DOTS = 3;
 ---
 <table class="month">
-  {/* W-LOOK3: shown in the caption row above (events.astro); here it names the table. */}
+  {/* The stepper above shows the month; here it names the table. */}
   <caption class="visually-hidden">{caption}</caption>
   <thead>
     <tr>{DAYS.map((d) => <th scope="col"><span class="d2" aria-hidden="true">{d.slice(0, 2)}</span><span class="d3" aria-hidden="true">{d.slice(0, 3)}</span><span class="visually-hidden">{d}</span></th>)}</tr>
@@ -33,20 +33,20 @@ const DOTS = 3;
           <td aria-current={day.today ? 'date' : undefined}>
             {day.events.length > 0 ? (
               <>
-                <a class="day" href={dayHref(day.date, listed)} aria-label={gridDayLabel(day)}>
+                <a class="day" href={calHref('month', day.date, today, `#${dayAnchor(day.date)}`)} data-day={day.date} aria-label={dayLabel(day)} aria-current={day.date === selected ? 'true' : undefined}>
                   <span class="n">{Number(day.date.slice(8))}</span>
-                  <span class="dots" aria-hidden="true">{day.events.slice(0, DOTS).map((e) => <i class={e.status === 'cancelled' ? 'dot x' : 'dot'} />)}</span>
+                  <DayIndicator indicator={dayIndicator(day.events)} />
                 </a>
                 <ul class="titles">
                   {day.events.map((e) => (
                     <li class={e.status === 'cancelled' ? 'x' : undefined} data-source={e.source}>
-                      <a href={e.path}>{e.status === 'cancelled' && 'Cancelled: '}{e.start && `${formatTime(e.start)} `}{e.title}</a>
+                      <a href={e.path}><EventIcon kind={eventKind(e)} cancelled={e.status === 'cancelled'} />{e.status === 'cancelled' && 'Cancelled: '}{e.start && `${formatTime(e.start)} `}{e.title}</a>
                     </li>
                   ))}
                 </ul>
               </>
             ) : (
-              <span class="day"><span class="n" aria-hidden="true">{Number(day.date.slice(8))}</span><span class="visually-hidden">{gridDayLabel(day)}</span></span>
+              <span class="day"><span class="n" aria-hidden="true">{Number(day.date.slice(8))}</span><span class="visually-hidden">{dayLabel(day)}</span></span>
             )}
           </td>
         ) : <td class="out" />)}

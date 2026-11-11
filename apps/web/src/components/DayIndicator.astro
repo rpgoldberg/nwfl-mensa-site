@@ -1,0 +1,18 @@
+---
+// EVENTS2: the one event indicator, in a day tile and a grid day alike: an icon per event, two at
+// most, then "+N" (lib/event-views.ts dayIndicator). Decorative: the tile's or day's name says the
+// same in words (dayLabel).
+import EventIcon from './EventIcon.astro';
+import { type DayIndicator as Indicator } from '../lib/event-views';
+
+interface Props {
+  indicator: Indicator;
+}
+const { indicator } = Astro.props;
+---
+{(indicator.icons.length > 0) && (
+  <span class="ind" aria-hidden="true">
+    {indicator.icons.map((i) => <EventIcon kind={i.kind} cancelled={i.cancelled} />)}
+    {indicator.more > 0 && <span class="ind__more" data-more={`+${indicator.more}`} />}
+  </span>
+)}

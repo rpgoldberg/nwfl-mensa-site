@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { banner, signIn } from './signin';
+import { FEED_VERSION } from '../src/lib/event-views';
 import { BOARD_GAMES, CANARIES, EMPTY_MONTH, centralToday, monthAfter, monthLabel } from './stand-in';
 
 const wide = (width: number | undefined) => (width ?? 0) >= 900;
@@ -11,11 +12,13 @@ const wide = (width: number | undefined) => (width ?? 0) >= 900;
 test.describe('Events, the calendar', () => {
   test('lists what is coming up, each with its time, place and status; a cancelled event stays, marked so', async ({ page }) => {
     await page.goto('/events');
-    const list = page.getByRole('list', { name: 'Coming up' });
+    const list = page.getByRole('list', { name: 'Upcoming events' });
     await expect(list.getByRole('listitem').first()).toBeVisible();
     // Today's lunch reads "Past" once its start time has gone by: check the next one.
     const lunch = list.getByRole('listitem').filter({ hasText: 'Wednesday Lunchers' }).filter({ hasNotText: 'Past' }).first();
-    await expect(lunch).toContainText('11:30 am · Sample Bistro, 100 Example Way, Destin');
+    // EVENTS2: the concept's card, the place then its town.
+    await expect(lunch).toContainText('11:30 am · Sample Bistro');
+    await expect(lunch).toContainText('Destin');
     await expect(lunch).toContainText('Scheduled');
     await expect(list.getByRole('listitem').filter({ hasText: 'Cancelled' }).first()).toContainText('The restaurant is closed for a private party.');
     await expect(list.getByRole('listitem').filter({ hasText: 'Summer picnic planning' })).toContainText('Time to be decided');
@@ -23,9 +26,9 @@ test.describe('Events, the calendar', () => {
     await expect(page.getByText(/members event/i)).toHaveCount(0);
   });
 
-  // W-LOOK2: the table at every width, compact on a phone (a dot per event), the titles in it on a wide screen.
-  test('shows the month as a real table on every width, with the list; the titles in it on a wide screen', async ({ page }) => {
-    await page.goto('/events');
+  // W-LOOK2: the table at every width, compact on a phone, the titles in it on a wide screen; EVENTS2: the Month view.
+  test('shows the month as a real table on every width; the titles in it on a wide screen', async ({ page }) => {
+    await page.goto('/events?view=month');
     const month = centralToday().slice(0, 7);
     const grid = page.getByRole('table', { name: monthLabel(month) });
     await expect(grid).toBeVisible();
@@ -33,25 +36,24 @@ test.describe('Events, the calendar', () => {
     await expect(heads).toHaveCount(7);
     for (const [i, day] of ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].entries()) await expect(heads.nth(i)).toHaveAccessibleName(day);
     await expect(grid.locator('td[aria-current="date"]')).toHaveCount(1);
-    await expect(grid.getByRole('link', { name: /^Wednesday, \d{1,2} \w+(, today)?, 1 event$/ }).first()).toBeVisible();
+    await expect(grid.getByRole('link', { name: /^Wednesday, \d{1,2} \w+(, today)?, 1 event(, cancelled)?: Lunch or meal$/ }).first()).toBeVisible();
     if (wide(page.viewportSize()?.width)) await expect(grid.getByRole('link', { name: /Wednesday Lunchers/ }).first()).toBeVisible();
     else await expect(grid.getByRole('link', { name: /Wednesday Lunchers/ })).toHaveCount(0);
-    await expect(page.getByRole('list', { name: 'Coming up' })).toBeVisible();
   });
 
   test('steps to the next month, and back to this one', async ({ page }) => {
-    await page.goto('/events');
+    await page.goto('/events?view=month');
     const next = monthAfter(centralToday().slice(0, 7));
-    await page.getByRole('navigation', { name: 'Months' }).getByRole('link', { name: monthLabel(next) }).click();
-    await expect(page).toHaveURL(new RegExp(`/events\\?month=${next}$`));
-    await expect(page.getByRole('heading', { level: 2, name: `${monthLabel(next)}, as a list` })).toBeVisible();
-    await page.getByRole('link', { name: 'This month' }).click();
-    await expect(page.getByRole('heading', { level: 2, name: 'Coming up' })).toBeVisible();
+    await page.getByRole('navigation', { name: 'Dates' }).getByRole('link', { name: `Next month: ${monthLabel(next)}` }).click();
+    await expect(page).toHaveURL(new RegExp(`/events\\?view=month&d=${next}-\\d{2}$`));
+    await expect(page.getByRole('table', { name: monthLabel(next) })).toBeVisible();
+    await page.getByRole('navigation', { name: 'Dates' }).getByRole('link', { name: /^Previous month: / }).click();
+    await expect(page).toHaveURL(new RegExp(`/events\\?view=month&d=${centralToday()}$`));
   });
 
   test("opens an event: when and where in words, a member's home by its area, who to ask, and the labels explained", async ({ page }) => {
     await page.goto('/events');
-    await page.getByRole('list', { name: 'Coming up' }).getByRole('link', { name: 'Board games afternoon' }).click();
+    await page.getByRole('list', { name: 'Upcoming events' }).getByRole('link', { name: 'Board games afternoon' }).click();
     await expect(page).toHaveURL(new RegExp(`/events/${BOARD_GAMES}$`));
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Board games afternoon');
     const facts = page.locator('dl.facts');
@@ -80,39 +82,37 @@ test.describe('Events, the calendar', () => {
     expect(text.match(/BEGIN:VEVENT/g)).toHaveLength(1);
   });
 
-  // W-LOOK3: the three ways are in one "Add to your calendar" disclosure, closed at first.
+  // EVENTS2: "Add our calendar", one disclosure closed at first, every address with the feed version.
   const openAdd = (page: Page) => page.locator('details.addcal > summary').click();
+  const feed = (host: string) => `webcal://${host}/calendar.ics?v=${FEED_VERSION}`;
 
   test('offers the whole calendar to subscribe to, and to download', async ({ page, baseURL }) => {
     await page.goto('/events');
     await openAdd(page);
     const host = new URL(baseURL!).host;
-    await expect(page.getByRole('link', { name: 'Add our calendar' })).toHaveAttribute('href', `webcal://${host}/calendar.ics`);
+    await expect(page.getByRole('link', { name: 'Open in a calendar app (Android: ICSx⁵)' })).toHaveAttribute('href', feed(host));
     await expect(page.getByRole('link', { name: 'Download the calendar file' })).toHaveAttribute('href', '/calendar.ics');
   });
 
-  test('offers Add to Google Calendar, a plain same-tab link to the same feed', async ({ page, baseURL }) => {
+  test('offers Google Calendar on a computer, a plain same-tab link to the same feed', async ({ page, baseURL }) => {
     await page.goto('/events');
     await openAdd(page);
     const host = new URL(baseURL!).host;
-    const google = page.getByRole('link', { name: 'Add to Google Calendar', exact: true });
-    await expect(google).toBeVisible();
+    // Hidden where the browser says Android (the Pixel 7 project): public/scripts/events.js puts the Android steps first.
+    const google = page.locator('details.addcal [data-not-android] a');
+    await expect(google).toHaveText('Google Calendar on a computer');
     await expect(google).not.toHaveAttribute('target', /.+/);
-    const href = (await google.getAttribute('href'))!;
-    const url = new URL(href);
+    const url = new URL((await google.getAttribute('href'))!);
     expect(`${url.origin}${url.pathname}`).toBe('https://calendar.google.com/calendar/render');
-    expect(href).toBe(`https://calendar.google.com/calendar/render?cid=${encodeURIComponent(`webcal://${host}/calendar.ics`)}`);
-    expect(url.searchParams.get('cid')).toBe(`webcal://${host}/calendar.ics`);
-    await expect(page.getByRole('link', { name: 'Add our calendar', exact: true })).toHaveAttribute('href', `webcal://${host}/calendar.ics`);
+    expect(url.searchParams.get('cid')).toBe(feed(host));
   });
 
-  test('tells Apple, Android and download readers apart in a short note', async ({ page }) => {
+  test('tells Apple and download readers apart in a short note', async ({ page }) => {
     await page.goto('/events');
     const note = page.locator('details.addcal p.muted');
-    await expect(note).toContainText('iPhone, iPad and Mac');
-    await expect(note).toContainText('ICSx⁵');
+    await expect(note).toContainText('iPhone, iPad or Mac');
     await expect(note).toContainText("won't update");
-    await expect(note).not.toContainText('Other calendars');
+    await expect(page.locator('details.addcal')).toContainText('ICSx⁵');
   });
 
   test('says when a month has no events, and asks the reader to write to the President at the verified address', async ({ page }) => {
@@ -136,7 +136,7 @@ test.describe('Events, the calendar', () => {
     await expect(banner(page)).toContainText('Alex Sample');
     const res = await page.goto('/events');
     expect(res?.status()).toBe(200);
-    await expect(page.getByRole('list', { name: 'Coming up' }).getByRole('listitem').first()).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Upcoming events' }).getByRole('listitem').first()).toBeVisible();
     for (const canary of Object.values(CANARIES)) await expect(page.getByText(canary.title)).toHaveCount(0);
   });
 });

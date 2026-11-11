@@ -52,7 +52,7 @@ import net from 'node:net';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility, LinkTargetKind, LinkTargetStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { AccountRoute, MemberStatus, MembershipService, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
-import { Area, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
+import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
 
 const port = Number(process.env['API_PORT'] ?? 9091);
@@ -631,8 +631,8 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       anonymousOnly(ctx);
       return {
         series: [
-          { id: SERIES.lunch, slug: 'wednesday-lunchers', title: 'Wednesday Lunchers', cadenceLabel: 'Every Wednesday', description: 'Lunch and conversation, every week. Everyone is welcome.', hostOfficeId: OFFICE.president, visibility: EventVisibility.PUBLIC, active: true },
-          { id: SERIES.happyHour, slug: 'happy-hour', title: 'Happy Hour', cadenceLabel: 'Second Friday of each month', description: 'A different place each time.', hostOfficeId: OFFICE.social, visibility: EventVisibility.PUBLIC, active: true },
+          { id: SERIES.lunch, slug: 'wednesday-lunchers', title: 'Wednesday Lunchers', category: EventCategory.LUNCH, cadenceLabel: 'Every Wednesday', description: 'Lunch and conversation, every week. Everyone is welcome.', hostOfficeId: OFFICE.president, visibility: EventVisibility.PUBLIC, active: true },
+          { id: SERIES.happyHour, slug: 'happy-hour', title: 'Happy Hour', category: EventCategory.HAPPY_HOUR, cadenceLabel: 'Second Friday of each month', description: 'A different place each time.', hostOfficeId: OFFICE.social, visibility: EventVisibility.PUBLIC, active: true },
         ],
       };
     },
