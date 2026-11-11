@@ -2,18 +2,27 @@
 // gives for the one file the reader is showing, the copy the site serves this reader: the public copy's
 // text is the redacted file's, so a search there can never surface what the redaction took out. Nothing
 // is sent anywhere. A page's text items (as pdf.js's getTextContent gives them, the same ones its text
-// layer draws, one span each) are joined, folded to lower case with every run of space as one, and each
+// layer draws, one span each) are joined, folded (see fold) with every run of space as one, and each
 // character keeps its item and its place in it, so a match can be painted in the text layer's spans.
 
 export const NO_TEXT = 'No searchable text on this page';
 const SPACE = /\s/;
 
 /**
- * What was typed, as the page text is folded: lower case, trimmed, every run of space one space.
+ * One character as search compares it: a compatibility form split into what it stands for (the printed fi
+ * ligature into f and i, a no-break space into a space), lower case, accents and other marks dropped (so
+ * zoe finds Zoë, and İzmir finds itself). For matching only: what is painted is the page's own text.
+ *
+ * @param {string} c
+ */
+const fold = (c) => c.normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '');
+
+/**
+ * What was typed, folded as the page text is, character by character: trimmed, every run of space one space.
  *
  * @param {string} raw
  */
-export const queryOf = (raw) => raw.trim().replace(/\s+/g, ' ').toLowerCase();
+export const queryOf = (raw) => [...raw].map(fold).join('').replace(/\s+/g, ' ').trim();
 
 /** @typedef {{ str: string, hasEOL?: boolean }} TextItem */
 /** @typedef {{ text: string, item: number[], at: number[], end: number[] }} TextIndex */
@@ -48,12 +57,12 @@ export function indexText(items) {
     let k = 0;
     for (const c of str) {
       const e = k + c.length;
-      if (SPACE.test(c)) {
+      const f = fold(c);
+      if (SPACE.test(f)) {
         if (!spaced()) put(' ', i, k, e);
       } else {
-        const lower = c.toLowerCase();
-        // A letter whose lower case is longer (İ) is kept as it is.
-        put(lower.length === c.length ? lower : c, i, k, e);
+        // A mark alone folds to nothing; a ligature to its letters, each painting the whole ligature.
+        put(f, i, k, e);
       }
       k = e;
     }

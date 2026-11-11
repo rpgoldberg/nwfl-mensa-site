@@ -27,9 +27,9 @@ describe('indexText', () => {
     expect([index.item[13], index.at[13]]).toEqual([1, 8]);
   });
 
-  it('starts with no space, never doubles one across items, and keeps a letter whose lower case is longer', () => {
-    const index = indexText(items(' ', ['  ', true], 'İx', [' ', true], 'y'));
-    expect(index.text).toBe('İx y');
+  it('starts with no space, and never doubles one across items', () => {
+    const index = indexText(items(' ', ['  ', true], 'Ax', [' ', true], 'y'));
+    expect(index.text).toBe('ax y');
     expect(index.item).toEqual([2, 2, 3, 4]);
   });
 
@@ -38,6 +38,31 @@ describe('indexText', () => {
     expect(hasText([])).toBe(false);
     expect(hasText(items(' ', ['', true]))).toBe(false);
     expect(hasText(items(' ', 'a'))).toBe(true);
+  });
+});
+
+describe('printed forms a reader types plainly (S4)', () => {
+  const its = items('Please \uFB01nd the \uFB01rst entry', 'Zo\u00EB and \u0130zmir\u00A0too');
+  const index = indexText(its);
+  const painted = (q: string) => {
+    const at = findIn(index, queryOf(q));
+    return at.map((s) => rangesOf(index, s, queryOf(q).length).map((r) => its[r.item]!.str.slice(r.from, r.to)).join('|'));
+  };
+
+  it('a ligature is found by its letters, and painted whole', () => {
+    expect(painted('find')).toEqual(['\uFB01nd']);
+    expect(painted('first')).toEqual(['\uFB01rst']);
+    // Typed as the ligature too; a match starting inside it paints the whole ligature.
+    expect(painted('\uFB01nd')).toEqual(['\uFB01nd']);
+    expect(painted('ind')).toEqual(['\uFB01nd']);
+  });
+
+  it('accents and a dotted capital I fold away, either side; a no-break space is a space', () => {
+    expect(painted('zoe')).toEqual(['Zo\u00EB']);
+    expect(painted('ZOË')).toEqual(['Zo\u00EB']);
+    expect(painted('izmir')).toEqual(['\u0130zmir']);
+    expect(painted('\u0130zmir too')).toEqual(['\u0130zmir\u00A0too']);
+    expect(queryOf(' Zo\u0065\u0308 ')).toBe('zoe');
   });
 });
 
