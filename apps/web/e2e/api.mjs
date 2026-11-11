@@ -44,7 +44,7 @@ import { clone, create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
-import { LONG_ID, LONG_PAGES, ORIGINAL_ID, ORIGINAL_PDF, PICTURE_ID, PICTURE_PDF, PUBLIC_ISSUE_PDF, longPdf, membersIssuePdf } from './synthetic-pdf.mjs';
+import { LONG_ID, LONG_PAGES, ORIGINAL_ID, ORIGINAL_PDF, PICTURE_ID, PICTURE_PDF, PUBLIC_ISSUE_PDF, REPEAT_ID, REPEAT_PDF, longPdf, membersIssuePdf } from './synthetic-pdf.mjs';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
@@ -665,6 +665,7 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       const extra =
         issues && req.fileId === LONG_ID ? LONG_PDF
         : issues && req.fileId === PICTURE_ID ? PICTURE_PDF
+        : issues && req.fileId === REPEAT_ID ? REPEAT_PDF
         : issues && audience === 'officers' && req.fileId === ORIGINAL_ID ? ORIGINAL_PDF
         : undefined;
       if (extra) {

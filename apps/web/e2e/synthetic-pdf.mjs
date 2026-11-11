@@ -12,8 +12,10 @@ const literal = (text) => `(${text.replace(/[\\()]/g, (c) => `\\${c}`)})`;
  * A link: a URI action (uri), a link to another page (toPage), or any other action as the PDF writes it
  * (action, e.g. "<< /S /Launch /F (...) >>"), for the hostile original below.
  * @typedef {{ rect: [number, number, number, number], uri?: string, toPage?: number, action?: string, contents?: string }} Link
- * A picture (READER2): a block of red over a block of blue, `rect` [x, y, width, height] in points.
- * @typedef {{ lines: string[], fill: [number, number, number], links?: Link[], picture?: [number, number, number, number] }} SyntheticPage
+ * A picture (READER2): a block of red over a block of blue, `rect` [x, y, width, height] in points;
+ * `pictures` draws the same picture again at each rect, one straight after another.
+ * @typedef {[number, number, number, number]} Rect
+ * @typedef {{ lines: string[], fill: [number, number, number], links?: Link[], picture?: Rect, pictures?: Rect[] }} SyntheticPage
  */
 
 /** The picture's pixels: 16 x 16, the top half pure red, the bottom half pure blue (RGB, 8 bits). */
@@ -28,25 +30,27 @@ export function syntheticPdf({ pages, comment = '' }) {
   const objects = [];
   const add = (/** @type {string} */ body) => objects.push(body);
   // 1 catalog, 2 page tree, 3 font; then each page: its page object, its content, its picture, its links.
-  const pageRefs = pages.map((_, i) => 4 + pages.slice(0, i).reduce((n, p) => n + 2 + (p.picture ? 1 : 0) + (p.links?.length ?? 0), 0));
+  const rectsOf = (/** @type {SyntheticPage} */ p) => [...(p.picture ? [p.picture] : []), ...(p.pictures ?? [])];
+  const pageRefs = pages.map((_, i) => 4 + pages.slice(0, i).reduce((n, p) => n + 2 + (rectsOf(p).length > 0 ? 1 : 0) + (p.links?.length ?? 0), 0));
   add('<< /Type /Catalog /Pages 2 0 R >>');
   add(`<< /Type /Pages /Kids [${pageRefs.map((r) => `${r} 0 R`).join(' ')}] /Count ${pages.length} >>`);
   add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
   pages.forEach((page, i) => {
     const ref = /** @type {number} */ (pageRefs[i]);
     const links = page.links ?? [];
-    const first = ref + 2 + (page.picture ? 1 : 0);
+    const rects = rectsOf(page);
+    const first = ref + 2 + (rects.length > 0 ? 1 : 0);
     const annots = links.map((_, k) => `${first + k} 0 R`).join(' ');
-    const pictures = page.picture ? ` /XObject << /Im1 ${ref + 2} 0 R >>` : '';
+    const pictures = rects.length > 0 ? ` /XObject << /Im1 ${ref + 2} 0 R >>` : '';
     add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >>${pictures} >> /Contents ${ref + 1} 0 R${annots ? ` /Annots [${annots}]` : ''} >>`);
     const [r, g, b] = page.fill;
     const text = page.lines.map((line, k) => `${k === 0 ? '72 700 Td' : '0 -40 Td'} ${literal(line)} Tj`).join('\n');
     // Each link underlined, as a reader sees a link.
     const boxes = links.map(({ rect: [x1, y1, x2] }) => `${x1} ${y1 + 4} ${x2 - x1} 2 re`).join('\n');
-    const picture = page.picture ? `q ${page.picture[2]} 0 0 ${page.picture[3]} ${page.picture[0]} ${page.picture[1]} cm /Im1 Do Q\n` : '';
+    const picture = rects.map(([x, y, w, h]) => `q ${w} 0 0 ${h} ${x} ${y} cm /Im1 Do Q\n`).join('');
     const stream = `q ${r} ${g} ${b} rg 36 560 540 200 re f Q\n${picture}q 0 0 0.6 rg ${boxes ? `${boxes}\nf` : ''} Q\nBT /F1 28 Tf 0 0 0 rg\n${text}\nET\n`;
     add(`<< /Length ${Buffer.byteLength(stream, 'latin1')} >>\nstream\n${stream}endstream`);
-    if (page.picture) add(`<< /Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${PICTURE.length} >>\nstream\n${PICTURE}\nendstream`);
+    if (rects.length > 0) add(`<< /Type /XObject /Subtype /Image /Width 16 /Height 16 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length ${PICTURE.length} >>\nstream\n${PICTURE}\nendstream`);
     for (const link of links) {
       const action =
         link.action !== undefined ? `/A ${link.action}` : link.uri !== undefined ? `/A << /S /URI /URI ${literal(link.uri)} >>` : `/Dest [${pageRefs[/** @type {number} */ (link.toPage)]} 0 R /Fit]`;
@@ -193,4 +197,14 @@ export const PICTURE_PDF = syntheticPdf({
     { lines: ['A page with a photo', 'The photo keeps its colours'], fill: [0.85, 0.93, 0.95], picture: [72, 160, 300, 300] },
     { lines: [], fill: [1, 1, 1], picture: [0, 0, 612, 792] },
   ],
+});
+
+/**
+ * READER2: one photo drawn four times in a row, served to anyone and listed nowhere. pdf.js draws three or
+ * more of one image in a row as one repeat, whose pictures it does not record: the page is shown as
+ * printed, so the photos are never negatives.
+ */
+export const REPEAT_ID = 'f7000000-0000-4000-8000-000000007000';
+export const REPEAT_PDF = syntheticPdf({
+  pages: [{ lines: ['Four photos in a row'], fill: [0.85, 0.93, 0.95], pictures: [0, 1, 2, 3].map((k) => /** @type {Rect} */ ([72 + k * 120, 300, 100, 100])) }],
 });

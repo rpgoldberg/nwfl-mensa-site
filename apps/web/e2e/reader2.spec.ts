@@ -16,7 +16,7 @@ import { noPage } from '../public/scripts/viewer.js';
 import { SIZES } from '../server/prefs.mjs';
 import { setPrefs } from './prefs';
 import { NEWSLETTER } from './stand-in';
-import { PICTURE_ID } from './synthetic-pdf.mjs';
+import { PICTURE_ID, REPEAT_ID } from './synthetic-pdf.mjs';
 import { barControls, control, more, moreList, onBar, pageBox, pickZoom } from './viewer-bar';
 
 const READ = `/read/${NEWSLETTER.issues[0]!.publicPdf}`;
@@ -254,6 +254,19 @@ test.describe('DARKPDF: the pages follow the theme', () => {
     await expect(viewer(page)).toHaveClass(/viewer--light-pages/);
     const printed = await seen(page);
     expect(Math.min(...printed(...PAPER)), 'the paper is white again').toBeGreaterThan(235);
+  });
+
+  test('one photo drawn four times in a row (which pdf.js does not record) is never a negative: the page shows as printed (S1)', async ({ page, context, baseURL }) => {
+    await setPrefs(context, baseURL!, { theme: 'dark' });
+    await opened(page, `/read/${REPEAT_ID}`);
+    await expect(viewer(page)).toHaveAttribute('data-tone', 'dark');
+    await expect(page.locator('#page-1 canvas.viewer-sheet--picture')).toHaveCount(1);
+    const dark = await seen(page);
+    // Each photo's red half, on page 1 of REPEAT_PDF (100 pt squares from x = 72 every 120 pt, y 300 to 400).
+    for (const k of [0, 1, 2, 3]) {
+      const [r, g, b] = dark((122 + k * 120) / 612, 417 / 792);
+      expect([r > 200, g < 60, b < 60], `photo ${k + 1} stays red: ${[r, g, b]}`).toEqual([true, true, true]);
+    }
   });
 
   test('light shows the page as printed, with no Light pages control', async ({ page, context, baseURL }) => {

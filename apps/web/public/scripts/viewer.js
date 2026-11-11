@@ -253,7 +253,7 @@ export function sameOriginPath(url, origin) {
 /**
  * @typedef {{ n: number, el: HTMLElement, layer: HTMLElement, size: { width: number, height: number } | undefined,
  *   proxy: any, near: boolean, state: 'idle' | 'queued' | 'drawing' | 'drawn', task: any, token: object | undefined,
- *   find: { divs: any[], strs: string[], painted: Set<number> } | undefined }} Page
+ *   find: { divs: any[], strs: string[], painted: Set<number> } | undefined, images?: number | undefined }} Page
  */
 
 /**
@@ -546,6 +546,20 @@ export async function wireViewer(doc, win, pdfjs) {
         // A page of its own size (a landscape spread) can make the pages wider than the frame.
         sizePan();
       }
+      // pdf.js records a picture only where it draws one image once: one drawn three times or more in a row
+      // (as one paintImageXObjectRepeat) or many small inline ones (paintInlineImageXObjectGroup) are not.
+      // Its drawing list, as getOperatorList gives it, is never merged that way: a page drawing more
+      // pictures than were recorded is shown as printed, never with negatives. Read once per page, in
+      // every tone, as the tone can change without a redraw (a failure counts as such a page); before the
+      // first drawing, so the pictures decoded for it are let go at once rather than kept twice.
+      if (page.images === undefined) {
+        page.images = await proxy.getOperatorList().then(
+          (/** @type {{ fnArray: number[] }} */ list) => list.fnArray.filter((fn) => fn === pdfjs.OPS.paintImageXObject || fn === pdfjs.OPS.paintInlineImageXObject).length,
+          () => Infinity,
+        );
+        if (page.images > 0) proxy.cleanup();
+        if (stale()) return;
+      }
       const viewport = proxy.getViewport({ scale: at * CSS_UNITS });
       const toned = root.dataset['tone'] !== 'light' && !root.classList.contains(LIGHT_PAGES);
       const ratio = outputScale(win.devicePixelRatio, viewport.width, viewport.height, toned ? TONED_PIXELS : MAX_PIXELS);
@@ -558,7 +572,9 @@ export async function wireViewer(doc, win, pdfjs) {
       await page.task.promise;
       page.task = undefined;
       if (stale()) return;
-      const { picture, photos } = addPhotos(doc, canvas, photoBoxes(proxy.imageCoordinates, canvas.width, canvas.height));
+      const coords = proxy.imageCoordinates;
+      const unrecorded = /** @type {number} */ (page.images) > (coords?.length ?? 0) / 6;
+      const { picture, photos } = unrecorded ? { picture: true, photos: [] } : addPhotos(doc, canvas, photoBoxes(coords, canvas.width, canvas.height));
       canvas.className = picture ? 'viewer-sheet viewer-sheet--picture' : 'viewer-sheet';
       const text = doc.createElement('div');
       text.className = 'textLayer';

@@ -932,6 +932,43 @@ describe('READER2', () => {
       }
     });
 
+    // pdf.js records a picture only where it draws one image once: one image drawn three times or more in
+    // a row (paintImageXObjectRepeat) or many small inline images (paintInlineImageXObjectGroup) are not.
+    // The drawing list getOperatorList gives is never merged so, and shows how many were drawn: a page
+    // drawing more than were recorded is shown as printed, never with its photos as negatives (S1).
+    it('a page drawing more pictures than pdf.js recorded is shown as printed; its drawing list is read once', async () => {
+      const box = [0.1, 0.2, 0.1, 0.5, 0.6, 0.2];
+      const { io, pages, lists, parts } = await open({ pages: 4, images: { 1: box, 2: box, 3: box, 4: box }, ops: { 1: [85, 1, 85, 85, 85], 2: Array.from({ length: 12 }, () => 86), 3: [85, 1], 4: 'fail' } });
+      io.near(1, 2, 3, 4);
+      await flush();
+      await flush();
+      const sheet = (n: number) => pages[n]!.querySelector('[data-viewer-layer]')!.children[0]!;
+      const photos = (n: number) => pages[n]!.querySelectorAll('canvas').filter((el) => el.classes.has('viewer-photo'));
+      expect([0, 1, 2, 3].map((n) => sheet(n).classes.has('viewer-sheet--picture'))).toEqual([true, true, false, true]);
+      expect([0, 1, 2, 3].map((n) => photos(n).length)).toEqual([0, 0, 1, 0]);
+      // Drawn again at another size, its list is not read again.
+      parts['zoom-in']!.click();
+      await flush();
+      expect(lists).toEqual([1, 2, 3, 4]);
+      expect(sheet(0).classes.has('viewer-sheet--picture')).toBe(true);
+    });
+
+    it('reads the drawing list before the first drawing, letting go of the pictures decoded for it; a page left meanwhile is not drawn', async () => {
+      const { io, log, lists, heldLists } = await open({ images: { 1: [0.1, 0.2, 0.1, 0.5, 0.6, 0.2] }, ops: { 3: 'hold' } });
+      io.near(1, 2);
+      await flush();
+      // Page 1 has a picture: let go before it is drawn. Page 2 has none, so nothing to let go.
+      expect(log.slice(0, 2)).toEqual(['cleanup 1', expect.stringMatching(/^draw 1 /)]);
+      expect(log.filter((l) => l === 'cleanup 2')).toEqual([]);
+      io.near(3);
+      await flush();
+      expect(lists).toEqual([1, 2, 3]);
+      io.near();
+      heldLists[0]!();
+      await flush();
+      expect(log.filter((l) => l.startsWith('draw 3'))).toEqual([]);
+    });
+
     it('draws each page as printed, asks pdf.js where its pictures are, and lays each picture over the drawing unrecoloured', async () => {
       const { io, pages, renders } = await open({ images: { 1: [0.1, 0.2, 0.1, 0.5, 0.6, 0.2], 2: [0, 0, 0, 1, 1, 0] } });
       io.near(1, 2, 3);

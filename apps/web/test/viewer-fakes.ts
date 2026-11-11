@@ -287,9 +287,14 @@ export function fakePdfjs({
   sizes = {} as Record<number, [number, number]>,
   texts = {} as Record<number, { str: string; hasEOL?: boolean }[] | 'fail'>,
   images = {} as Record<number, number[]>,
+  ops = {} as Record<number, number[] | 'fail' | 'hold'>,
 } = {}) {
   const log: string[] = [];
   const renders: Record<string, unknown>[] = [];
+  /** Pages whose drawing list was read, in order. */
+  const lists: number[] = [];
+  /** Drawing lists held back (ops 'hold'): each lets its list go, with no pictures. */
+  const heldLists: (() => void)[] = [];
   const itemsOf = (n: number) => {
     const t = texts[n];
     return t === 'fail' ? [] : (t ?? [{ str: `text of ${n}`, hasEOL: false }]);
@@ -301,6 +306,14 @@ export function fakePdfjs({
       const [w, h] = sizes[n] ?? [612, 792];
       const viewport = { width: w * scale, height: h * scale, scale, clone: () => viewport };
       return viewport;
+    },
+    getOperatorList: () => {
+      lists.push(n);
+      const o = ops[n];
+      // By default, one image drawn for each picture recorded.
+      const drawn = o ?? Array.from({ length: (images[n]?.length ?? 0) / 6 }, () => 85);
+      if (drawn === 'hold') return new Promise((resolve) => heldLists.push(() => resolve({ fnArray: [], argsArray: [] })));
+      return drawn === 'fail' ? Promise.reject(new Error('no list')) : Promise.resolve({ fnArray: drawn, argsArray: [] });
     },
     get imageCoordinates() {
       return images[n] === undefined ? undefined : new Float32Array(images[n]);
@@ -339,6 +352,7 @@ export function fakePdfjs({
   const pdfjs = {
     GlobalWorkerOptions: { workerSrc: '' },
     AnnotationType: { LINK: 2, WIDGET: 20 },
+    OPS: { paintImageXObject: 85, paintInlineImageXObject: 86, paintInlineImageXObjectGroup: 87, paintImageXObjectRepeat: 88 },
     getDocument: (options: unknown) => {
       opened.push(options);
       // pdf.js 6: the loading task, not the document, is what lets a file go (destroy).
@@ -388,7 +402,7 @@ export function fakePdfjs({
       }
     },
   };
-  return { pdfjs, log, pending, opened, renders };
+  return { pdfjs, log, pending, opened, renders, lists, heldLists };
 }
 
 /** What a picker's button shows (W-LOOK3: the page and zoom pickers). */
