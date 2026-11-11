@@ -172,7 +172,50 @@ test.describe('page controls: |<< < [n] of N > >>|', () => {
   });
 });
 
+/** WCAG relative luminance of an sRGB pixel, and the contrast of two. */
+const luminance = ([r, g, b]: number[]) => {
+  const f = (c: number) => ((c /= 255) <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * f(r!) + 0.7152 * f(g!) + 0.0722 * f(b!);
+};
+const contrastOf = (a: number[], b: number[]) => {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+  return (x! + 0.05) / (y! + 0.05);
+};
+/** The contrast of the text inside a box on the screen: its commonest colour (the ground) against the one farthest from it (the glyphs' core). */
+async function textContrast(page: Page, l: Locator): Promise<number> {
+  await l.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
+  await page.waitForTimeout(150);
+  const b = await box(l);
+  const png = await page.screenshot({ clip: { x: b.x + 3, y: b.y + 3, width: b.width - 6, height: b.height - 6 } });
+  const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const px: number[][] = [];
+  for (let i = 0; i < data.length; i += info.channels) px.push([data[i]!, data[i + 1]!, data[i + 2]!]);
+  const counts = new Map<string, number>();
+  for (const p of px) counts.set(p.join(), (counts.get(p.join()) ?? 0) + 1);
+  const ground = [...counts.entries()].sort((p, q) => q[1] - p[1])[0]![0].split(',').map(Number);
+  const glyph = px.reduce((far, p) => (Math.abs(luminance(p) - luminance(ground)) > Math.abs(luminance(far) - luminance(ground)) ? p : far), ground);
+  return Math.round(contrastOf(ground, glyph) * 100) / 100;
+}
+
 test.describe('search within the issue', () => {
+  // S6: the text under a match, the current one and the others, keeps 4.5:1 in every theme.
+  for (const theme of ['light', 'dark', 'contrast-yellow', 'contrast-white'] as const) {
+    test(`text under a match keeps 4.5:1 or more, current and others (${theme})`, async ({ page, context, baseURL }) => {
+      await setPrefs(context, baseURL!, { theme });
+      await opened(page);
+      await pickZoom(page, '200%');
+      await (await control(page, 'find')).click();
+      await findBox(page).fill('public');
+      await expect(findCount(page)).toHaveText(/^1 of /);
+      const current = page.locator('#page-1 mark.viewer-hit--current');
+      expect.soft(await textContrast(page, current), 'current match').toBeGreaterThanOrEqual(4.5);
+      await findBox(page).fill('o');
+      await expect(findCount(page)).toHaveText(/^1 of /);
+      const other = page.locator('#page-1 mark.viewer-hit:not(.viewer-hit--current)').nth(1);
+      expect(await textContrast(page, other), 'another match').toBeGreaterThanOrEqual(4.5);
+    });
+  }
+
   test('finds each match in the copy served, says which of how many, marks it and goes to it; Escape closes and takes the marks away', async ({ page }) => {
     await opened(page);
     const opener = await control(page, 'find');
