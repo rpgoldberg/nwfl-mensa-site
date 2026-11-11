@@ -143,14 +143,22 @@ export function calPeriod({ view, date }: CalState, today: string): CalPeriod {
       thisPeriod: month === today.slice(0, 7),
     };
   }
-  // The list: what is coming up, eight weeks from today across months, for any date in this month
-  // or in those weeks; any other date, its month. Back from the upcoming list is last month; on is
-  // the day after its eight weeks, so no day is skipped and no step lands on the same list.
+  // The list: what is coming up, eight weeks from today across months, for today or any date in those
+  // weeks. A past day of this month (the challenger: switching to List must keep your place) lists the
+  // month from its first day through the same eight weeks, past events kept; back from the upcoming list
+  // goes there. Any other date, its month. On is the day after the eight weeks, so no day is skipped.
   const end = addDays(today, COMING_UP_DAYS);
-  if (month === today.slice(0, 7) || (date >= today && date <= end)) {
+  const thisMonth = today.slice(0, 7);
+  const first = `${thisMonth}-01`;
+  const lastMonth = `${shiftMonth(thisMonth, -1)}-01`;
+  if (date >= today && date <= end) {
     const t = parts(today);
-    const label = monthShort(today.slice(0, 7));
-    return { view, date, from: today, to: end, read: { from: today, to: end }, label, short: label, spoken: `upcoming, from ${t.d} ${MONTHS[t.m]} ${t.y}`, prev: `${shiftMonth(today.slice(0, 7), -1)}-01`, next: addDays(end, 1), upcoming: true, thisPeriod: true };
+    const label = monthShort(thisMonth);
+    return { view, date, from: today, to: end, read: { from: today, to: end }, label, short: label, spoken: `upcoming, from ${t.d} ${MONTHS[t.m]} ${t.y}`, prev: today === first ? lastMonth : first, next: addDays(end, 1), upcoming: true, thisPeriod: true };
+  }
+  if (month === thisMonth) {
+    const label = monthShort(thisMonth);
+    return { view, date, from: first, to: end, read: { from: first, to: end }, label, short: label, spoken: `from 1 ${monthWords(thisMonth)}`, prev: lastMonth, next: addDays(end, 1), upcoming: false, thisPeriod: true };
   }
   const { from, to } = monthRange(month);
   const label = monthShort(month);

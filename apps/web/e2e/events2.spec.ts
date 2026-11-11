@@ -52,6 +52,21 @@ function sameMonthWeekDate(): string {
     if (sunday.slice(0, 7) === addDays(sunday, 6).slice(0, 7)) return d;
   }
 }
+/** The first Wednesday (Wednesday Lunchers, every week) at least `days` from today. */
+function wednesdayFrom(days: number): string {
+  for (let d = addDays(centralToday(), days); ; d = addDays(d, 1)) if (new Date(`${d}T00:00:00Z`).getUTCDay() === 3) return d;
+}
+/** A Wednesday earlier this month, if there is one. */
+function pastWednesdayThisMonth(): string | undefined {
+  const today = centralToday();
+  for (let d = addDays(today, -1); d.slice(0, 7) === today.slice(0, 7); d = addDays(d, -1)) if (new Date(`${d}T00:00:00Z`).getUTCDay() === 3) return d;
+  return undefined;
+}
+/** The tile sits inside the ribbon's visible part. */
+async function tileShown(page: Page, date: string): Promise<boolean> {
+  const [r, t] = [await box(page.locator('.tiles--ribbon')), await box(page.locator(`.tiles--ribbon a[data-day="${date}"]`))];
+  return t.x >= r.x - 1 && t.x + t.width <= r.x + r.width + 1;
+}
 const toolbar = (page: Page) => ({ step: page.getByRole('navigation', { name: 'Dates' }), views: page.getByRole('navigation', { name: 'Calendar view' }) });
 
 test.describe('one toolbar', () => {
@@ -89,12 +104,13 @@ test.describe('one toolbar', () => {
     await toolbar(page).views.getByRole('link', { name: 'Month' }).click();
     await expect(page).toHaveURL(new RegExp(`/events\\?view=month&d=${date}$`));
     await expect(page.getByRole('heading', { level: 2, name: shortDay(date) })).toBeVisible();
+    // List and Week also go to the day's events (#day-<date>), so the place is kept on screen too (tests below).
     await toolbar(page).views.getByRole('link', { name: 'List' }).click();
-    await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${date}$`));
+    await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${date}#day-${date}$`));
     await toolbar(page).views.getByRole('link', { name: 'Week' }).click();
-    await expect(page).toHaveURL(new RegExp(`/events\\?view=week&d=${date}$`));
+    await expect(page).toHaveURL(new RegExp(`/events\\?view=week&d=${date}#day-${date}$`));
     await page.goBack();
-    await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${date}$`));
+    await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${date}#day-${date}$`));
   });
 
   for (const viewport of [NARROW, COVER]) {
@@ -435,4 +451,103 @@ test('at 390 px the list, week and month all fit', async ({ page }) => {
     await page.goto(path);
     expect(await sideways(page), path).toBeLessThanOrEqual(0);
   }
+});
+
+// The challenger's FIX-FIRST (b2acad0): switching to List lost your place; a past day of this month was
+// not in List at all; the open disclosure scrolled sideways at large text; two targets under 44 px; and
+// the home page's half of W-LOOK2 (D) had gone.
+for (const js of [true, false]) {
+  test.describe(`switching views keeps your place, ${js ? 'with' : 'without'} the script`, () => {
+    test.use({ javaScriptEnabled: js, viewport: COVER });
+
+    test("Week to List to Week: the selected day's events are on screen each time, and its tile", async ({ page }) => {
+      const date = wednesdayFrom(36);
+      await page.goto(`/events?view=week&d=${date}`);
+      await toolbar(page).views.getByRole('link', { name: 'List' }).click();
+      await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${date}#day-${date}$`));
+      await expect(page.locator(`#day-${date}`)).toBeInViewport();
+      await expect(page.locator(`#day-${date}`)).toHaveClass(/is-sel/);
+      await expect(page.locator(`.tiles--ribbon a[data-day="${date}"]`)).toHaveAttribute('aria-current', 'true');
+      if (js) expect(await tileShown(page, date)).toBe(true);
+      await toolbar(page).views.getByRole('link', { name: 'Week' }).click();
+      await expect(page).toHaveURL(new RegExp(`/events\\?view=week&d=${date}#day-${date}$`));
+      await expect(page.locator(`#day-${date}`)).toBeInViewport();
+    });
+
+    test("Month to List for a past day of this month: that day's events are listed, as Past, and on screen", async ({ page }) => {
+      const date = pastWednesdayThisMonth();
+      test.skip(date === undefined, 'No Wednesday earlier this month yet');
+      await page.goto(`/events?view=month&d=${date}`);
+      await toolbar(page).views.getByRole('link', { name: 'List' }).click();
+      const card = page.locator(`#day-${date}`);
+      await expect(card).toBeInViewport();
+      await expect(card).toContainText('Wednesday Lunchers');
+      await expect(card.getByText('Past', { exact: true })).toBeVisible();
+      if (js) expect(await tileShown(page, date!)).toBe(true);
+    });
+
+    test('a selected day in place, then a switch, keeps it too', async ({ page }) => {
+      test.skip(!js, 'Selecting in place needs the script; without it the tile is a link, as above');
+      await page.goto('/events');
+      const tile = page.locator('.tiles--ribbon a.tile').nth(5);
+      const date = (await tile.getAttribute('data-day'))!;
+      await tile.click();
+      await toolbar(page).views.getByRole('link', { name: 'Week' }).click();
+      await expect(page).toHaveURL(new RegExp(`/events\\?view=week&d=${date}#day-${date}$`));
+      await expect(page.locator(`#day-${date}`)).toBeInViewport();
+    });
+  });
+}
+
+test('the earlier days of this month are a step back from the upcoming list', async ({ page }) => {
+  const today = centralToday();
+  test.skip(today.endsWith('-01'), 'Today is the first: back is last month');
+  await page.goto('/events');
+  await toolbar(page).step.getByRole('link', { name: /^Previous month: / }).click();
+  await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${today.slice(0, 7)}-01$`));
+  await expect(page.getByRole('heading', { level: 2, name: /^Events from 1 \w+ \d{4}$/ })).toBeVisible();
+  const past = pastWednesdayThisMonth();
+  if (past) await expect(page.locator(`.tiles--ribbon a[data-day="${past}"]`)).toHaveCount(1);
+  await expect(page.locator(`.tiles--ribbon a[data-day="${wednesdayFrom(1)}"]`)).toHaveCount(1);
+});
+
+for (const viewport of [NARROW, COVER, PHONE]) {
+  test(`at ${viewport.width} px and the largest text size, "Add our calendar" open never scrolls sideways`, async ({ page, context, baseURL }) => {
+    await setPrefs(context, baseURL!, { size: SIZES[6] });
+    await page.setViewportSize(viewport);
+    for (const path of ['/events', '/events?view=week', '/events?view=month']) {
+      await page.goto(path);
+      await page.locator('details.addcal > summary').click();
+      await expect(page.getByRole('textbox', { name: 'Calendar address (for calendar apps)' })).toBeVisible();
+      expect(await sideways(page), path).toBeLessThanOrEqual(0);
+      const panel = await box(page.locator('[data-addcal-panel]'));
+      expect(panel.x + panel.width, path).toBeLessThanOrEqual(viewport.width);
+    }
+  });
+}
+
+test('every target in the disclosure and the month cells is 44 px tall: the titles at 1280, Download the calendar file', async ({ page }) => {
+  await page.setViewportSize(DESKTOP);
+  await page.goto('/events?view=month');
+  const titles = page.locator('table.month .titles a');
+  expect(await titles.count()).toBeGreaterThan(2);
+  for (const t of await titles.all()) expect((await box(t)).height).toBeGreaterThanOrEqual(44);
+  await page.locator('details.addcal > summary').click();
+  for (const link of await page.locator('[data-addcal-panel] a:visible').all()) expect((await box(link)).height, (await link.textContent()) ?? '').toBeGreaterThanOrEqual(44);
+});
+
+test("Home's \"Coming up this week\" leaves out what ended earlier today, and never says \"Past\" (W-LOOK2 (D))", async ({ page }) => {
+  test.skip(centralParts(new Date()).time <= '00:01', 'The first minutes of the day in Central: Early coffee has not ended yet');
+  await page.goto('/');
+  const coming = page.getByRole('list', { name: 'Coming up this week', exact: true });
+  await expect(coming.getByRole('listitem').first()).toBeVisible();
+  await expect(coming).not.toContainText('Early coffee');
+  await expect(coming.getByText('Past', { exact: true })).toHaveCount(0);
+});
+
+test('a month with no events keeps its headings in order, and axe finds nothing (the challenger: heading-order)', async ({ page }) => {
+  await page.goto('/events?view=month&d=2019-06-15');
+  await expect(page.getByRole('heading', { level: 2, name: 'Sat, Jun 15' })).toBeVisible();
+  await page.locator('details.addcal > summary').click();
+  expect(await axe(page)).toEqual([]);
 });

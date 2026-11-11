@@ -1,8 +1,11 @@
 ---
 // EVENTS2: the one toolbar (Ross's concept): "‹ period ›" and the List | Week | Month switch, on one
 // row where it fits (a phone's cover screen included), wrapping to two only when the text is large.
-// Links, so it works with no script and with Back; each keeps the selected date.
+// Links, so it works with no script and with Back; each keeps the selected date. List and Week also go
+// to that day's events (#day-<date>, a no-op when it has none): switching keeps your place (the
+// challenger). Not Month, whose grid comes before the day's events and should stay in view.
 import Icon from './Icon.astro';
+import { dayAnchor } from '../lib/calendar';
 import { CAL_VIEWS, type CalPeriod, VIEW_LABELS, calHref, calPeriod } from '../lib/event-views';
 
 interface Props {
@@ -20,6 +23,6 @@ const step = (date: string) => calPeriod({ view: period.view, date }, today).spo
     <a class="calstep__arrow" href={calHref(period.view, period.next, today)} data-step="next" aria-label={`Next ${unit}: ${step(period.next)}`}><Icon name="forward" /></a>
   </nav>
   <nav class="calviews" aria-label="Calendar view">
-    {CAL_VIEWS.map((v) => <a class="calviews__v" href={calHref(v, period.date, today)} data-view={v} aria-current={v === period.view ? 'page' : undefined}>{VIEW_LABELS[v]}</a>)}
+    {CAL_VIEWS.map((v) => <a class="calviews__v" href={calHref(v, period.date, today, v === 'month' ? '' : `#${dayAnchor(period.date)}`)} data-view={v} aria-current={v === period.view ? 'page' : undefined}>{VIEW_LABELS[v]}</a>)}
   </nav>
 </div>

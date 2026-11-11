@@ -110,14 +110,28 @@ describe('calPeriod: what each view covers, its label, and the dates either side
     expect(calPeriod({ view: 'month', date: '2026-12-25' }, TODAY).prev).toBe(TODAY);
     expect(calPeriod({ view: 'month', date: TODAY }, TODAY)).toMatchObject({ thisPeriod: true, upcoming: false });
   });
-  it('list: from today for eight weeks, spanning months, for any date in this month or those weeks', () => {
-    for (const date of [TODAY, '2026-11-02', '2026-12-20', '2027-01-05']) {
+  it('list: from today for eight weeks, spanning months, for today or any date in those weeks', () => {
+    for (const date of [TODAY, '2026-12-20', '2027-01-05']) {
       const p = calPeriod({ view: 'list', date }, TODAY);
       expect(p, date).toMatchObject({ from: TODAY, to: '2027-01-05', label: 'Nov 2026', short: 'Nov 2026', spoken: 'upcoming, from 10 November 2026', upcoming: true, thisPeriod: true });
     }
     const p = calPeriod({ view: 'list', date: TODAY }, TODAY);
-    // Back: the month before this one. On: the day after the eight weeks, so no day is skipped.
-    expect([p.prev, p.next]).toEqual(['2026-10-01', '2027-01-06']);
+    // Back: this month's earlier days. On: the day after the eight weeks, so no day is skipped.
+    expect([p.prev, p.next]).toEqual(['2026-11-01', '2027-01-06']);
+  });
+  // The challenger (FIX-FIRST 2): a past day of this month must stay in the list, so switching to List keeps your place.
+  it('list: a past day of this month lists the whole month from its first day on, through the same eight weeks, past events kept', () => {
+    for (const date of ['2026-11-01', '2026-11-05', '2026-11-09']) {
+      const p = calPeriod({ view: 'list', date }, TODAY);
+      expect(p, date).toMatchObject({ from: '2026-11-01', to: '2027-01-05', label: 'Nov 2026', spoken: 'from 1 November 2026', prev: '2026-10-01', next: '2027-01-06', upcoming: false, thisPeriod: true });
+    }
+    // Back from the upcoming list goes there, and on from last month comes back to it.
+    expect(calPeriod({ view: 'list', date: calPeriod({ view: 'list', date: TODAY }, TODAY).prev }, TODAY).from).toBe('2026-11-01');
+    expect(calPeriod({ view: 'list', date: '2026-10-01' }, TODAY).next).toBe('2026-11-01');
+  });
+  it('list: on the first of the month, back from the upcoming list is last month', () => {
+    expect(calPeriod({ view: 'list', date: '2026-12-01' }, '2026-12-01').prev).toBe('2026-11-01');
+    expect(calPeriod({ view: 'list', date: '2026-11-15' }, '2026-12-01')).toMatchObject({ from: '2026-11-01', to: '2026-11-30', upcoming: false });
   });
   it('list: any other date shows its month; the month either side from its first day, back to the upcoming list', () => {
     const jan = calPeriod({ view: 'list', date: '2027-01-06' }, TODAY);
@@ -125,7 +139,6 @@ describe('calPeriod: what each view covers, its label, and the dates either side
     expect(calPeriod({ view: 'list', date: jan.prev }, TODAY).upcoming).toBe(true);
     const oct = calPeriod({ view: 'list', date: '2026-10-01' }, TODAY);
     expect(oct).toMatchObject({ from: '2026-10-01', to: '2026-10-31', next: '2026-11-01', upcoming: false });
-    expect(calPeriod({ view: 'list', date: oct.next }, TODAY).upcoming).toBe(true);
   });
 });
 

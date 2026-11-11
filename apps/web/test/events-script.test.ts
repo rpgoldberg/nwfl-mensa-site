@@ -43,6 +43,26 @@ class El extends EventTarget {
   }
 }
 
+/** The list's ribbon: it scrolls sideways; its selected tile is somewhere along it. */
+class Ribbon extends El {
+  scrollLeft = 0;
+  constructor(
+    readonly clientWidth: number,
+    readonly left: number,
+    readonly selectedTile: { left: number; width: number } | null,
+  ) {
+    super();
+  }
+  getBoundingClientRect() {
+    return { left: this.left - 0, width: this.clientWidth };
+  }
+  querySelector(sel: string) {
+    if (sel !== 'a[aria-current="true"]' || !this.selectedTile) return null;
+    const tile = this.selectedTile;
+    return { getBoundingClientRect: () => ({ left: tile.left - this.scrollLeft, width: tile.width }) };
+  }
+}
+
 interface Page {
   root?: El | null;
   days?: El[];
@@ -51,6 +71,7 @@ interface Page {
   views?: El[];
   steps?: El[];
   strip?: El | null;
+  ribbon?: Ribbon | null;
   status?: El | null;
   copy?: El[];
   ids?: Record<string, El>;
@@ -62,7 +83,7 @@ interface Page {
 function setup(page: Page, opts: { ua?: string; reduce?: boolean; clipboard?: (text: string) => Promise<void> } = {}) {
   const doc = {
     querySelector: (sel: string) =>
-      ({ '[data-cal]': page.root ?? null, '[data-swipe]': page.strip ?? null, '[data-cal-status]': page.status ?? null, '[data-addcal-panel]': page.panel ?? null, '[data-android]': page.android ?? null })[sel] ?? null,
+      ({ '[data-cal]': page.root ?? null, '[data-swipe]': page.strip ?? null, '[data-cal-status]': page.status ?? null, '[data-addcal-panel]': page.panel ?? null, '[data-android]': page.android ?? null, '.tiles--ribbon': page.ribbon ?? null })[sel] ?? null,
     querySelectorAll: (sel: string) =>
       ({ 'a[data-day]': page.days, '[data-card-day]': page.cards, '[data-panel]': page.panels, 'a[data-view]': page.views, 'a[data-step]': page.steps, '[data-copy]': page.copy, '[data-not-android]': page.notAndroid })[sel] ?? [],
     getElementById: (id: string) => page.ids?.[id] ?? null,
@@ -94,7 +115,7 @@ describe('selecting a day in place', () => {
     const days = [new El({ href: '/events?view=list&d=2026-11-11#day-2026-11-11', 'data-day': '2026-11-11', 'aria-label': 'Wednesday, 11 November, 1 event: Lunch or meal', 'aria-current': 'true' }), new El({ href: '/events?view=list&d=2026-11-13#day-2026-11-13', 'data-day': '2026-11-13', 'aria-label': 'Friday, 13 November, 1 event: Happy hour or social' })];
     const cards = [new El({ 'data-card-day': '2026-11-11' }), new El({ 'data-card-day': '2026-11-13' }), new El({ 'data-card-day': '2026-11-13' })];
     cards[0]!.classes.add('is-sel');
-    const views = [new El({ href: '/events', 'data-view': 'list' }), new El({ href: '/events?view=week&d=2026-11-11', 'data-view': 'week' })];
+    const views = [new El({ href: '/events#day-2026-11-11', 'data-view': 'list' }), new El({ href: '/events?view=week&d=2026-11-11#day-2026-11-11', 'data-view': 'week' }), new El({ href: '/events?view=month&d=2026-11-11', 'data-view': 'month' })];
     const status = new El();
     const target = cards[1]!;
     return { root: new El({ 'data-cal': 'list' }), days, cards, views, status, ids: { 'day-2026-11-13': target } };
@@ -109,7 +130,7 @@ describe('selecting a day in place', () => {
     expect(page.cards.map((c) => c.classes.has('is-sel'))).toEqual([false, true, true]);
     expect(page.ids['day-2026-11-13']!.scrolled).toEqual([{ block: 'start', behavior: 'smooth' }]);
     expect(replaced).toEqual(['/events?view=list&d=2026-11-13']);
-    expect(page.views.map((v) => v.getAttribute('href'))).toEqual(['/events?d=2026-11-13', '/events?view=week&d=2026-11-13']);
+    expect(page.views.map((v) => v.getAttribute('href'))).toEqual(['/events?d=2026-11-13#day-2026-11-13', '/events?view=week&d=2026-11-13#day-2026-11-13', '/events?view=month&d=2026-11-13']);
     expect(page.status.textContent).toBe('Friday, 13 November, 1 event: Happy hour or social');
   });
 
@@ -241,5 +262,20 @@ describe('on Android', () => {
     expect(p.panel.kids).toEqual([]);
     expect(p.notAndroid[0]!.hidden).toBe(false);
     setup({ panel: null, android: null }, { ua: 'Android' });
+  });
+});
+
+// The challenger (FIX-FIRST 2): arriving at a date, the ribbon shows its tile, centred, without moving the page.
+describe('the selected day in the ribbon, on arrival', () => {
+  it('scrolls the ribbon sideways to centre the selected tile', () => {
+    const ribbon = new Ribbon(300, 16, { left: 916, width: 52 });
+    setup({ root: new El({ 'data-cal': 'list' }), ribbon });
+    expect(ribbon.scrollLeft).toBe(900 - 150 + 26);
+  });
+  it('leaves it alone with no selected tile, or no ribbon', () => {
+    const ribbon = new Ribbon(300, 16, null);
+    setup({ root: new El({ 'data-cal': 'list' }), ribbon });
+    expect(ribbon.scrollLeft).toBe(0);
+    setup({ root: new El({ 'data-cal': 'week' }), ribbon: null });
   });
 });

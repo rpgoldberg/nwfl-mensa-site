@@ -1046,7 +1046,7 @@ a.tile:focus-visible { outline-offset: 2px; }
   .month .day { align-items: flex-start; flex-direction: row; flex-wrap: wrap; border-radius: 6px; }
   .month .day .ind { display: none; }
   .month .titles { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: grid; gap: var(--space-1); }
-  .month .titles a { display: flex; gap: 0.25em; align-items: flex-start; min-height: 1.5rem; font-weight: 700; }
+  .month .titles a { display: flex; gap: 0.25em; align-items: flex-start; min-height: 44px; font-weight: 700; }
   .month .titles .evicon { width: 1.125em; height: 1.125em; margin-top: 0.1em; }
   .month .titles .x a { color: var(--stop); text-decoration: line-through; }
   /* Where the cells list titles, the selected day is the whole cell tinted, its number filled. */
@@ -1101,9 +1101,9 @@ a.tile:focus-visible { outline-offset: 2px; }
 .addcal__sum span { flex: 1; }
 .addcal__sum::after { content: ""; flex: none; width: 0.5rem; height: 0.5rem; margin: 0 0.25rem 0.25rem; border: solid currentColor; border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .addcal[open] > .addcal__sum::after { transform: rotate(-135deg); margin-bottom: -0.25rem; }
-.addcal__panel { display: grid; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); }
+.addcal__panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); }
 .addcal__panel > * { margin: 0; }
-.addcal__addr { display: grid; gap: var(--space-1); }
+.addcal__addr { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
 .addcal__addr label { font-weight: 700; }
 .addcal__copy { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .addcal__copy input { flex: 1 1 12rem; min-width: 0; min-height: 44px; padding: 0 var(--space-2); color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); font-size: var(--input-fs); }

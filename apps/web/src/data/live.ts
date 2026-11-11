@@ -321,7 +321,8 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
 
   return {
     events: async (from, to, { categories = false } = {}) => {
-      // The series only for their categories, read alongside; the events never wait on them failing.
+      // The series only for their categories, read alongside: unreadable, the events still list, with no icons
+      // (a slow read still waits, up to the API timeout).
       const [occurrences, series] = await Promise.all([
         reads.listOccurrences(from, to),
         categories

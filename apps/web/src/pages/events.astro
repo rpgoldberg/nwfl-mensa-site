@@ -42,11 +42,11 @@ const shown = agendaDays((period.upcoming ? comingUp(events, now) : events).filt
 const days = agendaDays(shown);
 const ribbon = view === 'list' ? ribbonDays(shown, today, selected) : [];
 const week = view === 'week' ? weekDays(period.from, shown, today, selected) : [];
-const title = view === 'list' ? (period.upcoming ? 'Upcoming events' : `Events in ${period.spoken}`) : view === 'week' ? (period.thisPeriod ? `This week (${period.label})` : `Week of ${period.label}`) : shortDay(selected);
+const title = view === 'list' ? (period.upcoming ? 'Upcoming events' : period.thisPeriod ? `Events ${period.spoken}` : `Events in ${period.spoken}`) : view === 'week' ? (period.thisPeriod ? `This week (${period.label})` : `Week of ${period.label}`) : shortDay(selected);
 // Nothing to list: who to ask. The roster read failing only drops the address.
 const roster = live && loaded?.ok && shown.length === 0 ? await attempt(() => live.offices()) : undefined;
 const president = roster?.ok ? roster.value.find((o) => o.slug === 'president' && o.aliasVerified)?.alias : undefined;
-const emptyWhen = period.upcoming ? 'for the next eight weeks' : `for ${period.spoken}`;
+const emptyWhen = period.upcoming ? 'for the next eight weeks' : view === 'list' && period.thisPeriod ? `${period.spoken} on` : `for ${period.spoken}`;
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
@@ -79,7 +79,10 @@ const emptyWhen = period.upcoming ? 'for the next eight weeks' : `for ${period.s
         {view === 'month' ? (
           <section class="agenda" aria-label="The selected day">
             {shown.length === 0 ? (
-              <EmptyEvents when={emptyWhen} president={president} />
+              <div class="daypanel" id={dayAnchor(selected)} data-panel={selected}>
+                <div class="agenda__head"><h2>{shortDay(selected)}</h2><p class="tz">Central Time</p></div>
+                <EmptyEvents when={emptyWhen} president={president} />
+              </div>
             ) : (
               <>
                 {!days.some((d) => d.date === selected) && (

@@ -1,5 +1,7 @@
 // Progressive enhancement for /events (EVENTS2). Every link on the page works without this file: a
 // day tile or grid day is a link to the same view at that date. It only adds:
+//   - on arrival, the list's ribbon scrolled sideways to its selected day (the page itself is left
+//     where the URL's #day- anchor put it);
 //   - selecting a day in place: its tile marked, its events marked (list, week) or its day panel
 //     shown (month), scrolled to, the URL and the view links keeping the date, and the day said once
 //     to a screen reader;
@@ -30,6 +32,7 @@ export function wireEvents(win, doc) {
  * @param {string | null} view
  */
 function wireDays(win, doc, view) {
+  revealSelected(doc);
   const days = /** @type {HTMLAnchorElement[]} */ ([...doc.querySelectorAll('a[data-day]')]);
   const status = doc.querySelector('[data-cal-status]');
   const behavior = win.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
@@ -49,7 +52,8 @@ function wireDays(win, doc, view) {
     for (const other of doc.querySelectorAll('a[data-view]')) {
       const to = new URL(/** @type {HTMLAnchorElement} */ (other).href);
       to.searchParams.set('d', String(date));
-      other.setAttribute('href', `${to.pathname}${to.search}`);
+      // List and Week go on to the day's events; Month has no anchor, so its grid stays in view.
+      other.setAttribute('href', `${to.pathname}${to.search}${to.hash ? `#day-${date}` : ''}`);
     }
     if (status) status.textContent = link.getAttribute('aria-label') ?? '';
   };
@@ -84,6 +88,19 @@ function wireDays(win, doc, view) {
     const to = steps.find((s) => s.getAttribute('data-step') === (dx < 0 ? 'next' : 'prev'));
     if (to) win.location.assign(to.href);
   });
+}
+
+/**
+ * The ribbon shows its selected tile, centred: its own scroll only, so the page stays where it is.
+ *
+ * @param {Pick<Document, 'querySelector'>} doc
+ */
+function revealSelected(doc) {
+  const ribbon = doc.querySelector('.tiles--ribbon');
+  const tile = ribbon?.querySelector('a[aria-current="true"]');
+  if (!ribbon || !tile) return;
+  const [r, t] = [ribbon.getBoundingClientRect(), tile.getBoundingClientRect()];
+  ribbon.scrollLeft += t.left - r.left - (ribbon.clientWidth - t.width) / 2;
 }
 
 /**
