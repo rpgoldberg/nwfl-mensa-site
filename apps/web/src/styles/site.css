@@ -1487,14 +1487,13 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .viewer .textLayer ::selection { background: rgb(0 0 255 / 0.25); color: transparent; }
 /* READER2: search's matches, marked in the text layer over the drawing (viewer-find.js); the current one
    stronger, with an outline, so it is told apart by more than colour. The text under a mark keeps 4.5:1
-   or more (S6). On a light or tinted page the text layer multiplies onto the drawing, so dark text stays
-   dark on the mark's colour; on a dark page (light text) the marks are a thin wash. */
-.viewer .textLayer mark.viewer-hit { margin: -1px; padding: 1px; color: transparent; background: rgb(255 210 0 / 0.5); border-radius: 3px; }
-.viewer .textLayer mark.viewer-hit--current { background: rgb(255 120 0 / 0.55); outline: 2px solid #b3470b; outline-offset: 1px; }
+   or more (S6): a light wash over the glyphs, each mark underlined so it is still easy to see. (No blend
+   mode: WebKit blends against a buffer of the whole document, and runs out of memory zoomed in.) */
+.viewer .textLayer mark.viewer-hit { margin: -1px; padding: 1px; color: transparent; background: rgb(255 210 0 / 0.2); box-shadow: inset 0 -2px 0 #b3470b; border-radius: 3px; }
+.viewer .textLayer mark.viewer-hit--current { background: rgb(255 120 0 / 0.35); outline: 2px solid #b3470b; outline-offset: 1px; }
 @media not (forced-colors: active) {
-  .viewer:is(:not([data-tone="dark"]), .viewer--light-pages) .textLayer { mix-blend-mode: multiply; }
-  .viewer[data-tone="dark"]:not(.viewer--light-pages) .textLayer mark.viewer-hit { background: rgb(255 210 0 / 0.3); }
-  .viewer[data-tone="dark"]:not(.viewer--light-pages) .textLayer mark.viewer-hit--current { background: rgb(255 120 0 / 0.35); outline-color: #ff9a3c; }
+  .viewer[data-tone="dark"]:not(.viewer--light-pages) .textLayer mark.viewer-hit { background: rgb(255 210 0 / 0.15); box-shadow: inset 0 -2px 0 #ffcc33; }
+  .viewer[data-tone="dark"]:not(.viewer--light-pages) .textLayer mark.viewer-hit--current { background: rgb(255 120 0 / 0.25); outline-color: #ff9a3c; }
 }
 @media (forced-colors: active) {
   .viewer .textLayer mark.viewer-hit { forced-color-adjust: none; background: Highlight; opacity: 0.4; }
