@@ -543,6 +543,8 @@ export async function wireViewer(doc, win, pdfjs) {
         const base = proxy.getViewport({ scale: CSS_UNITS });
         page.size = { width: base.width, height: base.height };
         lay(page);
+        // A page of its own size (a landscape spread) can make the pages wider than the frame.
+        sizePan();
       }
       const viewport = proxy.getViewport({ scale: at * CSS_UNITS });
       const toned = root.dataset['tone'] !== 'light' && !root.classList.contains(LIGHT_PAGES);
@@ -624,15 +626,21 @@ export async function wireViewer(doc, win, pdfjs) {
     ui['pan-track'].style.width = `${pagesEl.scrollWidth}px`;
     ui['pan'].scrollLeft = pagesEl.scrollLeft;
   };
-  // The scrollbar's scroll event comes a frame later: one that only echoes what the pages gave it is let
-  // be, else during a drag it would pull the pages back to where they were.
+  // Each side's scroll event comes a frame after the other side set it: one that only echoes the value
+  // written to it is let be, else during a drag (of the pages, or of the scrollbar) it would pull the
+  // other back to where it was.
   let echo = NaN;
+  let fromPan = NaN;
   ui['pan'].addEventListener('scroll', () => {
     if (Math.abs(ui['pan'].scrollLeft - echo) < 1) return;
     echo = NaN;
-    if (pagesEl.scrollLeft !== ui['pan'].scrollLeft) pagesEl.scrollLeft = ui['pan'].scrollLeft;
+    if (pagesEl.scrollLeft === ui['pan'].scrollLeft) return;
+    fromPan = ui['pan'].scrollLeft;
+    pagesEl.scrollLeft = ui['pan'].scrollLeft;
   }, { passive: true });
   pagesEl.addEventListener('scroll', () => {
+    if (Math.abs(pagesEl.scrollLeft - fromPan) < 1) return;
+    fromPan = NaN;
     if (ui['pan'].scrollLeft === pagesEl.scrollLeft) return;
     echo = pagesEl.scrollLeft;
     ui['pan'].scrollLeft = pagesEl.scrollLeft;

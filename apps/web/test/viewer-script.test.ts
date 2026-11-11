@@ -1163,6 +1163,38 @@ describe('READER2', () => {
       expect(parts['pages']!.scrollLeft).toBe(40);
     });
 
+    it('a page wider than the first (a landscape spread), once drawn, brings the scrollbar and the hand tool (S2)', async () => {
+      const { root, parts, io } = await open({ sizes: { 2: [1584, 612] } });
+      parts['pages']!.scrollWidth = 600;
+      win.dispatchEvent(new Event('resize'));
+      expect(root.classes.has('viewer--wide')).toBe(false);
+      // Laid out at its own size as it is drawn, the pages grow wider than the frame.
+      parts['pages']!.scrollWidth = 1584;
+      io.near(2);
+      await flush();
+      expect(root.classes.has('viewer--wide')).toBe(true);
+      expect(parts['pan']!.hidden).toBe(false);
+      expect(parts['pan-track']!.style.width).toBe('1584px');
+    });
+
+    it("the pages' own echo of a move of the scrollbar, arriving after the scrollbar moved on, never pulls it back (S3)", async () => {
+      const { parts } = await wide();
+      for (let x = 24; x <= 600; x += 24) {
+        parts['pan']!.scrollLeft = x;
+        parts['pan']!.dispatchEvent(new Event('scroll'));
+        // The pages' scroll event for the last value comes a frame late, after the next move of the bar.
+        parts['pan']!.scrollLeft = x + 24;
+        parts['pages']!.dispatchEvent(new Event('scroll'));
+        expect(parts['pan']!.scrollLeft, String(x)).toBe(x + 24);
+        parts['pan']!.scrollLeft = x;
+      }
+      expect(parts['pages']!.scrollLeft).toBe(600);
+      // A move of the pages themselves (the wheel) still moves the bar.
+      parts['pages']!.scrollLeft = 30;
+      parts['pages']!.dispatchEvent(new Event('scroll'));
+      expect(parts['pan']!.scrollLeft).toBe(30);
+    });
+
     it('Shift and the wheel pan sideways where the browser does not, in lines or pixels; a sideways wheel is left to the browser', async () => {
       const { parts } = await wide();
       const wheel = (more: object) => {
