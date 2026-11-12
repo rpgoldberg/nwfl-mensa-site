@@ -94,7 +94,8 @@ async function look(page: Page, wholePage = true): Promise<Look> {
     }
     // Never clipped, never sideways scroll, 44 px targets.
     if (wholePage && document.documentElement.scrollWidth > vw) problems.push(`page scrolls sideways ${document.documentElement.scrollWidth - vw} px`);
-    for (const part of [...document.querySelectorAll('.calhead, .calhead *, .tiles--week, .month, .month__cap, .agenda__head')].filter(shown)) {
+    // What is drawn (a visually hidden name, clipped to nothing, is not: WebKit places a hidden caption off to the side).
+    for (const part of [...document.querySelectorAll('.calhead, .calhead *, .tiles--week, .month, .month__cap, .agenda__head')].filter((el) => shown(el) && getComputedStyle(el).clipPath === 'none')) {
       if (r(part).right > vw + 0.5 || r(part).left < -0.5) problems.push(`past the screen's edge: ${part.className || part.tagName}`);
     }
     for (const t of [...document.querySelectorAll('.caltool a, .caltool summary')].filter(shown)) {
