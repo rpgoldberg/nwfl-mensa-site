@@ -316,4 +316,71 @@ describe.skipIf(!live)('event writes', () => {
       ).rejects.toMatchObject({ code: Code.InvalidArgument });
     });
   });
+
+  // EDITOR A3a: the strict URL rule at save (src/links/rule.ts). A bad URL refuses the whole save with
+  // a reason in plain words for each; nothing is written or audited. Rows already stored are not
+  // checked until they are saved again: then the same URL is refused, and the row stays as it was.
+  describe('strict URLs at save', () => {
+    const venueCount = async (): Promise<number> => Number((await api.pool.query<{ n: string }>(`SELECT count(*) AS n FROM venue`)).rows[0]?.n);
+    const auditCount = async (): Promise<number> => Number((await api.pool.query<{ n: string }>(`SELECT count(*) AS n FROM audit_event`)).rows[0]?.n);
+
+    it("refuses a venue's url that is not a plain public https address, with the reason, and writes nothing", async () => {
+      const venue = create(VenueSchema, { kind: VenueKind.BUSINESS, name: 'Example Diner', businessAddress: '2 Example Way', area: Area.BAY });
+      const [venues, audited] = [await venueCount(), await auditCount()];
+      await expect(events.saveVenue({ venue: { ...venue, url: 'http://example.org/diner' } }, OFFICER)).rejects.toMatchObject({
+        code: Code.InvalidArgument,
+        rawMessage: 'url: the address "http://example.org/diner" must start with https://, not http://',
+      });
+      await expect(events.saveVenue({ venue: { ...venue, url: 'https://user:pw@example.org/' } }, OFFICER)).rejects.toMatchObject({ rawMessage: /^url: .*user name or password/ });
+      await expect(events.saveVenue({ venue: { ...venue, url: 'https://192.0.2.7/' } }, OFFICER)).rejects.toMatchObject({ rawMessage: /^url: .*IP address/ });
+      await expect(events.saveVenue({ venue: { ...venue, url: 'https://example.org:8443/' } }, OFFICER)).rejects.toMatchObject({ rawMessage: /^url: .*port/ });
+      await expect(events.saveVenue({ venue: { ...venue, url: 'mailto:host@example.org' } }, OFFICER)).rejects.toMatchObject({ rawMessage: /^url: .*email address/ });
+      expect([await venueCount(), await auditCount()]).toEqual([venues, audited]);
+      const saved = (await events.saveVenue({ venue: { ...venue, url: '  https://example.org/diner  ' } }, OFFICER)).venue;
+      expect(saved?.url).toBe('https://example.org/diner');
+      expect((await events.saveVenue({ venue: { ...must(saved), url: '' } }, OFFICER)).venue?.url).toBe('');
+    });
+
+    it("refuses an occurrence's url and every bad URL in its detail, each with its line, after checking the office", async () => {
+      const picnic = create(EventOccurrenceSchema, {
+        title: 'Spring Picnic',
+        startsAt: timestampFromDate(new Date('2026-11-21T17:00:00Z')),
+        visibility: EventVisibility.PUBLIC,
+        ownerOfficeId: offices['treasurer'] as string,
+        url: 'https://example.org:8080/picnic',
+        detail: 'Bring a chair.\nMap: http://example.org/map\nTickets at https://example.org/t, or www.example.net/t.',
+      });
+      const audited = await auditCount();
+      await expect(events.saveOccurrence({ occurrence: picnic }, PUB)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(events.saveOccurrence({ occurrence: picnic }, TREASURER)).rejects.toMatchObject({
+        code: Code.InvalidArgument,
+        rawMessage:
+          'url: the address "https://example.org:8080/picnic" names a port (a colon and a number after the site name), which is not allowed; ' +
+          'detail line 2: the address "http://example.org/map" must start with https://, not http://; ' +
+          'detail line 3: the address "www.example.net/t" must be written in full, starting with https://',
+      });
+      expect(await auditCount()).toBe(audited);
+      const saved = (await events.saveOccurrence({ occurrence: { ...picnic, url: 'https://example.org/picnic', detail: 'Bring a chair.\nMap: https://example.org/map' } }, TREASURER)).occurrence;
+      expect(saved).toMatchObject({ url: 'https://example.org/picnic', detail: 'Bring a chair.\nMap: https://example.org/map' });
+      await expect(events.saveOccurrence({ occurrence: { ...must(saved), url: 'mailto:treasurer@example.org' } }, TREASURER)).rejects.toMatchObject({ rawMessage: /^url: .*email address/ });
+    });
+
+    it('leaves a stored event with a bad URL on the calendar, and refuses that URL on its next save until it is fixed', async () => {
+      const id = await insertId(
+        api.pool,
+        `INSERT INTO event_occurrence (title, starts_at, visibility, owner_office_id, url, detail) VALUES ('Old Social', '2026-11-28T23:00:00Z', 'public', $1, 'https://192.0.2.9/social', 'See http://example.org/old') RETURNING id`,
+        [offices['treasurer']],
+      );
+      const shown = (await events.listOccurrences(NOVEMBER)).occurrences.find((o) => o.id === id);
+      expect(shown).toMatchObject({ url: 'https://192.0.2.9/social', detail: 'See http://example.org/old' });
+      await expect(events.saveOccurrence({ occurrence: { ...must(shown), status: OccurrenceStatus.CANCELLED } }, TREASURER)).rejects.toMatchObject({
+        code: Code.InvalidArgument,
+        rawMessage:
+          'url: the address "https://192.0.2.9/social" uses a number (an IP address) instead of a site name; detail line 1: the address "http://example.org/old" must start with https://, not http://',
+      });
+      expect((await api.pool.query(`SELECT status, url FROM event_occurrence WHERE id = $1`, [id])).rows[0]).toEqual({ status: 'scheduled', url: 'https://192.0.2.9/social' });
+      const fixed = (await events.saveOccurrence({ occurrence: { ...must(shown), status: OccurrenceStatus.CANCELLED, url: '', detail: 'See https://example.org/old' } }, TREASURER)).occurrence;
+      expect(fixed).toMatchObject({ status: OccurrenceStatus.CANCELLED, url: '', detail: 'See https://example.org/old' });
+    });
+  });
 });

@@ -261,6 +261,20 @@ describe.skipIf(!live)('the publishing workflow', () => {
       await expect(content.markReady({ itemId: item.id }, PUB)).rejects.toMatchObject({ code: Code.FailedPrecondition });
     });
 
+    it('saves a draft with a bad URL, names each one with its line, and refuses Submit until it is fixed (A3a)', async () => {
+      const item = await create();
+      const saved = await save(item.id, 'Our report.\nSee [the map](http://example.org/map) and https://192.0.2.4/x\n\nTickets: www.example.net/t');
+      expect(saved.problems.map((p) => ({ line: p.line, message: p.message }))).toEqual([
+        { line: 2, message: 'the link "http://example.org/map" must start with https://, not http://' },
+        { line: 2, message: 'the address "https://192.0.2.4/x" uses a number (an IP address) instead of a site name' },
+        { line: 4, message: 'the address "www.example.net/t" must be written in full, starting with https://' },
+      ]);
+      expect((await content.getWorkingItem({ itemId: item.id }, PUB)).item?.working?.bodyMarkup).toContain('http://example.org/map');
+      await expect(content.markReady({ itemId: item.id }, PUB)).rejects.toMatchObject({ code: Code.FailedPrecondition, rawMessage: 'the markup has 3 problem(s); fix them first' });
+      expect((await save(item.id, 'Our report.\nSee [the map](https://example.org/map) and https://example.org/x\n\nTickets: https://www.example.net/t')).problems).toEqual([]);
+      await ready(item.id);
+    });
+
     it('keeps an officers-only item out of the newsletter and email', async () => {
       const item = await create();
       await save(item.id, 'Bank signatories.', PUB, { visibility: ItemVisibility.OFFICERS });

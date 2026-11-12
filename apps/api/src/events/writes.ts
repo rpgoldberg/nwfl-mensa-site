@@ -9,6 +9,11 @@
 //                 office; the Admin for any. A date of a series is changed by
 //                 writing a stored occurrence over it (a cancellation, a move).
 // A new venue or series starts active.
+//
+// URLs (EDITOR A3a): a venue's or an occurrence's url, and every bare URL in an
+// occurrence's detail, must pass the strict URL rule (links/rule.ts), or the
+// save is refused with a reason for each. Rows already stored are not checked
+// until they are saved again.
 // ============================================================================
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type HandlerContext, type ServiceImpl } from '@connectrpc/connect';
@@ -16,6 +21,7 @@ import { recordAudit } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
 import { requireOffice, requireOfficer, requireUser } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
+import { textUrlProblems, urlMessage, urlProblem } from '../links/rule.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import {
@@ -92,6 +98,15 @@ function required<E extends number>(map: Map<E, string>, value: E, field: string
   return name;
 }
 
+/** Refuses a url that is not a plain public https page, and any bad bare URL in a detail, naming each (EDITOR A3a). */
+function checkUrls(url: string | null, detail = ''): void {
+  const problems: string[] = [];
+  const problem = url === null ? null : urlProblem(url, { mail: false });
+  if (problem !== null) problems.push(`url: ${urlMessage('the address', url as string, problem)}`);
+  for (const found of textUrlProblems(detail)) problems.push(`detail line ${found.line}: ${found.message}`);
+  if (problems.length > 0) throw invalid(problems.join('; '));
+}
+
 function idOrNull(value: string, field: string): string | null {
   if (value === '') return null;
   if (!ID.test(value)) throw invalid(`${field} is not an id`);
@@ -149,6 +164,7 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
         orNull(venue.url),
         orNull(venue.accessibilityNote),
       ];
+      checkUrls(values[6] as string | null);
       return tx(async (client) => {
         const id = idOrNull(venue.id, 'id');
         const { rows } =
@@ -290,6 +306,7 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
         if (startsAt === null) throw invalid('starts_at is required');
         const visibility = VISIBILITY_NAMES.get(occurrence.visibility) ?? series?.visibility ?? existing?.visibility;
         if (visibility === undefined) throw invalid('visibility is required');
+        checkUrls(orNull(occurrence.url), occurrence.detail);
         const values = [
           series?.id ?? null,
           series !== undefined ? orNull(occurrence.title) : occurrence.title.trim() === '' ? null : occurrence.title.trim(),
