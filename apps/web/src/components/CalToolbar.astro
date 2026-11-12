@@ -1,6 +1,9 @@
 ---
 // EVENTS2: the one toolbar (Ross's concept): "‹ period ›" and the List | Week | Month switch, on one
-// row where it fits (a phone's cover screen included), wrapping to two only when the text is large.
+// row. EV1 (Ross, 11-12): one row always, so the period comes in four lengths and the toolbar's width
+// picks one (site.css): "Nov 29 – Dec 5", "Nov 29–Dec 5", "11/29–12/5", then "11/29" over "–12/5".
+// A screen reader always hears it in full. Only large text on a narrow phone still takes two rows, and
+// there the period, on a row of its own, reads "Nov 29–Dec 5".
 // Links, so it works with no script and with Back; each keeps the selected date. List and Week also go
 // to that day's events (#day-<date>, a no-op when it has none): switching keeps your place (the
 // challenger). Not Month, whose grid comes before the day's events and should stay in view.
@@ -19,7 +22,7 @@ const step = (date: string) => calPeriod({ view: period.view, date }, today).spo
 <div class="caltool">
   <nav class="calstep" aria-label="Dates">
     <a class="calstep__arrow" href={calHref(period.view, period.prev, today)} data-step="prev" aria-label={`Previous ${unit}: ${step(period.prev)}`}><Icon name="back" /></a>
-    <p class="calstep__label"><span class="calstep__long" aria-hidden="true">{period.label}</span><span class="calstep__short" aria-hidden="true">{period.short}</span><span class="visually-hidden">Showing {period.spoken}</span></p>
+    <p class="calstep__label"><span class="calstep__w calstep__w--label" aria-hidden="true">{period.label}</span><span class="calstep__w calstep__w--short" aria-hidden="true">{period.short}</span><span class="calstep__w calstep__w--tiny" aria-hidden="true">{period.tiny}</span><span class="calstep__w calstep__w--stack" aria-hidden="true"><span>{period.stack[0]}</span><span>{period.stack[1]}</span></span><span class="visually-hidden">Showing {period.spoken}</span></p>
     <a class="calstep__arrow" href={calHref(period.view, period.next, today)} data-step="next" aria-label={`Next ${unit}: ${step(period.next)}`}><Icon name="forward" /></a>
   </nav>
   <nav class="calviews" aria-label="Calendar view">

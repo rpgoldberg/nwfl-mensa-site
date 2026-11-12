@@ -93,6 +93,9 @@ export interface CalPeriod {
   /** The stepper's words: "Nov 8 – 14", "November 2026"; `short` where room is tight. */
   label: string;
   short: string;
+  /** EV1: shorter still, as the toolbar narrows: in numbers ("11/29–12/5", "Nov ’26"), then on two lines. */
+  tiny: string;
+  stack: readonly [string, string];
   /** The period in words, for a screen reader and the arrows' names. */
   spoken: string;
   /** The dates the arrows go to. */
@@ -106,6 +109,11 @@ export interface CalPeriod {
 
 const monthWords = (month: string) => `${MONTHS[Number(month.slice(5)) - 1]} ${month.slice(0, 4)}`;
 const monthShort = (month: string) => `${MON[Number(month.slice(5)) - 1]} ${month.slice(0, 4)}`;
+/** A month's tiny words: "Nov ’26", and stacked "Nov" over "2026". */
+function monthTiny(month: string): Pick<CalPeriod, 'tiny' | 'stack'> {
+  const mon = MON[Number(month.slice(5)) - 1]!;
+  return { tiny: `${mon} ’${month.slice(2, 4)}`, stack: [mon, month.slice(0, 4)] };
+}
 
 /** The same day in another month, cut to its length; today, in this month. */
 function sameDayIn(month: string, day: number, today: string): string {
@@ -121,9 +129,12 @@ export function calPeriod({ view, date }: CalState, today: string): CalPeriod {
     const to = addDays(from, 6);
     const [a, b] = [parts(from), parts(to)];
     const label = a.m === b.m ? `${MON[a.m]} ${a.d} – ${b.d}` : `${MON[a.m]} ${a.d} – ${MON[b.m]} ${b.d}`;
+    // In numbers, the second month only when the week crosses into it: "11/8–14", "12/27–1/2".
+    const last = a.m === b.m ? `${b.d}` : `${b.m + 1}/${b.d}`;
+    const stack = [`${a.m + 1}/${a.d}`, `–${last}`] as const;
     const spoken =
       a.y !== b.y ? `the week of ${a.d} ${MONTHS[a.m]} ${a.y} to ${b.d} ${MONTHS[b.m]} ${b.y}` : a.m === b.m ? `the week of ${a.d} to ${b.d} ${MONTHS[b.m]} ${b.y}` : `the week of ${a.d} ${MONTHS[a.m]} to ${b.d} ${MONTHS[b.m]} ${b.y}`;
-    return { view, date, from, to, read: { from, to }, label, short: label.replace(' – ', '–'), spoken, prev: addDays(date, -7), next: addDays(date, 7), upcoming: false, thisPeriod: today >= from && today <= to };
+    return { view, date, from, to, read: { from, to }, label, short: label.replace(' – ', '–'), tiny: stack.join(''), stack, spoken, prev: addDays(date, -7), next: addDays(date, 7), upcoming: false, thisPeriod: today >= from && today <= to };
   }
   if (view === 'month') {
     const { from, to } = monthRange(month);
@@ -136,6 +147,7 @@ export function calPeriod({ view, date }: CalState, today: string): CalPeriod {
       read: { from, to },
       label: monthWords(month),
       short: monthShort(month),
+      ...monthTiny(month),
       spoken: monthWords(month),
       prev: sameDayIn(shiftMonth(month, -1), day, today),
       next: sameDayIn(shiftMonth(month, 1), day, today),
@@ -154,15 +166,15 @@ export function calPeriod({ view, date }: CalState, today: string): CalPeriod {
   if (date >= today && date <= end) {
     const t = parts(today);
     const label = monthShort(thisMonth);
-    return { view, date, from: today, to: end, read: { from: today, to: end }, label, short: label, spoken: `upcoming, from ${t.d} ${MONTHS[t.m]} ${t.y}`, prev: today === first ? lastMonth : first, next: addDays(end, 1), upcoming: true, thisPeriod: true };
+    return { view, date, from: today, to: end, read: { from: today, to: end }, label, short: label, ...monthTiny(thisMonth), spoken: `upcoming, from ${t.d} ${MONTHS[t.m]} ${t.y}`, prev: today === first ? lastMonth : first, next: addDays(end, 1), upcoming: true, thisPeriod: true };
   }
   if (month === thisMonth) {
     const label = monthShort(thisMonth);
-    return { view, date, from: first, to: end, read: { from: first, to: end }, label, short: label, spoken: `from 1 ${monthWords(thisMonth)}`, prev: lastMonth, next: addDays(end, 1), upcoming: false, thisPeriod: true };
+    return { view, date, from: first, to: end, read: { from: first, to: end }, label, short: label, ...monthTiny(thisMonth), spoken: `from 1 ${monthWords(thisMonth)}`, prev: lastMonth, next: addDays(end, 1), upcoming: false, thisPeriod: true };
   }
   const { from, to } = monthRange(month);
   const label = monthShort(month);
-  return { view, date, from, to, read: { from, to }, label, short: label, spoken: monthWords(month), prev: `${shiftMonth(month, -1)}-01`, next: `${shiftMonth(month, 1)}-01`, upcoming: false, thisPeriod: false };
+  return { view, date, from, to, read: { from, to }, label, short: label, ...monthTiny(month), spoken: monthWords(month), prev: `${shiftMonth(month, -1)}-01`, next: `${shiftMonth(month, 1)}-01`, upcoming: false, thisPeriod: false };
 }
 
 /** One day as a tile in the list's ribbon or the week's strip. */

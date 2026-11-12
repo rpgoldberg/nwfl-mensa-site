@@ -142,6 +142,48 @@ describe('calPeriod: what each view covers, its label, and the dates either side
   });
 });
 
+// EV1 (Ross, 11-12): the toolbar stays on one row, so the period's words get shorter as room runs out:
+// label, then short, then tiny (numbers), then stack (two short lines). Spoken never shortens.
+describe('calPeriod: the shorter words for a narrow toolbar', () => {
+  it('week in one month: "11/8–14", stacked "11/8" over "–14"', () => {
+    expect(calPeriod({ view: 'week', date: '2026-11-11' }, TODAY)).toMatchObject({ tiny: '11/8–14', stack: ['11/8', '–14'], spoken: 'the week of 8 to 14 November 2026' });
+  });
+  it('week across months: "11/29–12/5", stacked "11/29" over "–12/5"', () => {
+    expect(calPeriod({ view: 'week', date: '2026-12-01' }, TODAY)).toMatchObject({ tiny: '11/29–12/5', stack: ['11/29', '–12/5'], spoken: 'the week of 29 November to 5 December 2026' });
+  });
+  it('week across years: "12/27–1/2", the years left to the spoken name', () => {
+    expect(calPeriod({ view: 'week', date: '2026-12-27' }, TODAY)).toMatchObject({ tiny: '12/27–1/2', stack: ['12/27', '–1/2'], spoken: 'the week of 27 December 2026 to 2 January 2027' });
+    expect(calPeriod({ view: 'week', date: '2027-12-31' }, TODAY)).toMatchObject({ label: 'Dec 26 – Jan 1', tiny: '12/26–1/1', stack: ['12/26', '–1/1'] });
+  });
+  it('month: "Jan ’27", stacked "Jan" over "2027"; the full name still spoken', () => {
+    expect(calPeriod({ view: 'month', date: '2027-01-31' }, TODAY)).toMatchObject({ label: 'January 2027', short: 'Jan 2027', tiny: 'Jan ’27', stack: ['Jan', '2027'], spoken: 'January 2027' });
+    expect(calPeriod({ view: 'month', date: '2026-09-30' }, TODAY)).toMatchObject({ label: 'September 2026', tiny: 'Sep ’26', stack: ['Sep', '2026'] });
+  });
+  it('list: every kind of list (upcoming, this month from its first day, another month) shortens its month alike', () => {
+    for (const date of [TODAY, '2026-11-01'])
+      expect(calPeriod({ view: 'list', date }, TODAY), date).toMatchObject({ label: 'Nov 2026', short: 'Nov 2026', tiny: 'Nov ’26', stack: ['Nov', '2026'] });
+    expect(calPeriod({ view: 'list', date: '2027-03-06' }, TODAY)).toMatchObject({ label: 'Mar 2027', tiny: 'Mar ’27', stack: ['Mar', '2027'] });
+  });
+  it('a two-digit year stays two digits: 2100 is "’00", 2009 "’09"', () => {
+    expect(calPeriod({ view: 'month', date: '2100-01-15' }, TODAY).tiny).toBe('Jan ’00');
+    expect(calPeriod({ view: 'list', date: '2009-05-15' }, TODAY).tiny).toBe('May ’09');
+  });
+  it('is DST-safe: the weeks the clocks change, in any time zone the server runs in', () => {
+    const zone = process.env['TZ'];
+    try {
+      for (const tz of ['America/Chicago', 'Pacific/Auckland', 'UTC']) {
+        process.env['TZ'] = tz;
+        expect(calPeriod({ view: 'week', date: '2026-03-08' }, TODAY), tz).toMatchObject({ from: '2026-03-08', label: 'Mar 8 – 14', tiny: '3/8–14', stack: ['3/8', '–14'] });
+        expect(calPeriod({ view: 'week', date: '2026-11-07' }, TODAY), tz).toMatchObject({ from: '2026-11-01', label: 'Nov 1 – 7', tiny: '11/1–7', stack: ['11/1', '–7'] });
+        expect(calPeriod({ view: 'month', date: '2026-03-31' }, TODAY), tz).toMatchObject({ tiny: 'Mar ’26', stack: ['Mar', '2026'] });
+      }
+    } finally {
+      if (zone === undefined) delete process.env['TZ'];
+      else process.env['TZ'] = zone;
+    }
+  });
+});
+
 describe('the day tiles: the list ribbon holds only days with events; the week holds all seven', () => {
   const events = [
     event({ id: 'a', date: '2026-11-11', category: 'lunch' }),
