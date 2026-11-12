@@ -99,7 +99,7 @@ test.describe('one toolbar', () => {
   test('names the current view and the period in words, and the arrows by where they go', async ({ page }) => {
     await page.goto('/events?view=week&d=2026-11-11');
     const { step, views } = toolbar(page);
-    await expect(views.getByRole('link', { name: 'Week' })).toHaveAttribute('aria-current', 'page');
+    await expect(await viewLink(page, 'Week')).toHaveAttribute('aria-current', 'page');
     await expect(views.locator('[aria-current]')).toHaveCount(1);
     await expect(step).toContainText('Showing the week of 8 to 14 November 2026');
     await expect(step.getByRole('link', { name: 'Previous week: the week of 1 to 7 November 2026' })).toHaveAttribute('href', '/events?view=week&d=2026-11-04');
@@ -205,12 +205,15 @@ test.describe('Week: all seven days', () => {
     expect(names).toEqual(Array.from({ length: 7 }, (_, i) => addDays(sunday, i)));
     expect(await strip.locator('.tile--empty').count()).toBeGreaterThan(0);
     await expect(strip.locator('.tile--empty').first()).toContainText(/no events/);
-    await expect(page.getByRole('heading', { level: 2, name: /^This week \(/ })).toBeVisible();
+    // EV1 round 3: the heading line under the days is the bare range ("Nov 8 – 14").
+    await expect(page.getByRole('heading', { level: 2, name: /^[A-Z][a-z]{2} \d{1,2} – ([A-Z][a-z]{2} )?\d{1,2}$/ })).toBeVisible();
+    await expect(page.getByRole('list', { name: /^This week \(/ })).toBeVisible();
     await expect(page.getByText('No other events this week.')).toBeVisible();
     for (const tile of await strip.locator('.tile').all()) expect((await box(tile)).width).toBeGreaterThanOrEqual(44);
     await toolbar(page).step.getByRole('link', { name: /^Next week/ }).click();
     await expect(page).toHaveURL(new RegExp(`/events\\?view=week&d=${addDays(today, 7)}$`));
-    await expect(page.getByRole('heading', { level: 2, name: /^Week of / })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: /^[A-Z][a-z]{2} \d{1,2} – ([A-Z][a-z]{2} )?\d{1,2}$/ })).toBeVisible();
+    await expect(page.getByRole('list', { name: /^Week of / })).toBeVisible();
     expect(await sideways(page)).toBeLessThanOrEqual(0);
   });
 

@@ -954,12 +954,24 @@ main > .calendar { max-width: none; }
 
 /* "Events" and the toolbar share the heading's line where they fit; otherwise the toolbar takes the next. */
 .calhead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
-.calhead h1 { margin: 0; }
+/* EV1 round 3: one header row. Beside the compact controls "Events" gives up its extra size as room runs
+   out, never below the body text, so the two keep one line: its width is 3.4 em ("Events", measured),
+   the compact controls' 96 px + 3.94 rem + the chevron (the arrows 88, the gaps and borders 8; "Month"
+   3 rem plus the picker's padding and gap), the gap 0.5 rem. */
+.calhead h1 { margin: 0; font-size: clamp(var(--fs-body), calc((100cqi - 0.5rem - 96px - 3.938rem - min(1rem, 18px)) / 3.4), min(var(--fs-h1), 10.5vw)); }
+/* Not even then: the controls take the next line, under "Events" at its left, and "Events" its own size
+   (and never under the body text's). */
+@container calendar (width < calc(3.4 * 1.125rem + 0.5rem + 96px + 3.938rem + min(1rem, 18px))) {
+  .calhead h1 { font-size: max(var(--fs-body), min(var(--fs-h1), 10.5vw)); }
+  .calhead .caltool { margin-left: 0; }
+}
 /* The toolbar. EV1 round 2 (Ross, 11-12): it changes with its room, chosen by the calendar's width
    (a container), never the device or the text size, and it never squeezes the words. Where they fit
    one row: "‹ Nov 29 – Dec 5 ›" (or "‹ Nov 29–Dec 5 ›") and List | Week | Month. Where they do not:
    ‹ Week ▾ ›, the switch folded into one picker of the same links and the range out of the toolbar,
-   said by the heading under the day cells (a month's name by its grid's caption). The thresholds are
+   said by the heading under the day cells (a month's name by its grid's caption). Round 3: the full
+   toolbar only where it fits beside "Events" (3.4 em of the heading's own size), else the compact one
+   beside it. The thresholds are
    the widths of the longest period at each length, in rem (the most each takes at any of the seven
    sizes, measured): the label 8.25 ("September 2028"), short 7.13 ("May 30–Jun 5"); List, Week, Month
    1.81, 2.67, 3 plus their padding; the gap 0.25 and 0.0625 to spare. In px: the arrows 88, the
@@ -978,7 +990,7 @@ main > .calendar { max-width: none; }
 .calviews__v:hover { text-decoration: underline; }
 /* The current view: filled, and named so (aria-current), not colour alone. */
 .calviews__v[aria-current] { background: var(--accent); color: var(--on-accent); }
-@container calendar (width < calc(98px + max(44px, 2.313rem) + max(44px, 3.167rem) + max(44px, 3.5rem) + 8.563rem)) {
+@container calendar (width < calc(3.4 * min(2.25rem, 10.5vw) + 0.5rem + 98px + max(44px, 2.313rem) + max(44px, 3.167rem) + max(44px, 3.5rem) + 8.563rem)) {
   .calstep__w--label { display: none; }
   .calstep__w--short { display: inline; }
 }
@@ -1000,13 +1012,13 @@ main > .calendar { max-width: none; }
 /* The month's name names the grid; shown (under it) only where the toolbar is compact. */
 .month__cap { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Compact: ‹ Week ▾ ›, three buttons; the range is spoken still ("Showing …"), not shown. */
-@container calendar (width < calc(98px + max(44px, 2.313rem) + max(44px, 3.167rem) + max(44px, 3.5rem) + 7.438rem)) {
+@container calendar (width < calc(3.4 * min(2.25rem, 10.5vw) + 0.5rem + 98px + max(44px, 2.313rem) + max(44px, 3.167rem) + max(44px, 3.5rem) + 7.438rem)) {
   .calviews, .calstep__w { display: none; }
   .calstep { align-items: flex-start; gap: 2px; border: 0; background: none; }
   .calstep__label { display: contents; }
   .calstep__arrow { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
   .calpick { display: block; }
-  .month__cap { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; white-space: normal; caption-side: bottom; padding: var(--space-2) min(var(--space-4), 16px) 0; text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); }
+  .month__cap { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; white-space: normal; caption-side: bottom; padding: var(--space-2) min(var(--space-4), 16px) 0; text-align: left; }
 }
 
 /* Day tiles: the weekday, the date, the indicator. Today has a ring; the selected day is filled. */
@@ -1106,6 +1118,8 @@ a.tile:focus-visible { outline-offset: 2px; }
 .agenda { display: grid; gap: var(--space-3); }
 .agenda__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 var(--space-3); }
 .agenda__head h2 { margin: 0; font-size: var(--fs-h3); }
+/* EV1 round 3: the range under the cells reads as a line of text, not a big heading; Central Time beside it. */
+.agenda__head .agenda__range { font-family: var(--font-body); font-size: var(--fs-body); font-weight: 400; line-height: var(--lh-body); }
 .tz { margin: 0; color: var(--muted); font-size: var(--fs-small); }
 .daypanel { display: grid; gap: var(--space-3); scroll-margin-top: var(--space-4); }
 .daypanel[hidden] { display: none; }

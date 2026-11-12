@@ -80,7 +80,10 @@ async function look(page: Page, wholePage = true): Promise<Look> {
       }
       if (![...document.querySelectorAll('.agenda__head .tz')].some(shown)) problems.push('no Central Time');
     }
-    // "Events" and the controls on one line whenever they fit.
+    // Round 3: one header row. "Events" and the controls share a line whenever they fit together, the
+    // heading's extra size given up first (never below the body text); the full switch only beside it.
+    // Wrapped, the controls sit under "Events", at its left.
+    const body = parseFloat(getComputedStyle(document.body).fontSize);
     const h1 = document.querySelector('.calendar h1');
     const tool = document.querySelector('.caltool');
     if (!h1 || !tool) problems.push('no heading or toolbar in the calendar');
@@ -88,10 +91,42 @@ async function look(page: Page, wholePage = true): Promise<Look> {
       const parts = [...tool.children].filter(shown).map(r);
       const width = parts.reduce((s, b) => s + b.width, 0) + 4 * (parts.length - 1);
       const head = r(h1.parentElement!);
-      const fits = r(h1).width + width + 16 <= head.width;
+      const h1px = parseFloat(getComputedStyle(h1).fontSize);
+      if (h1px < body - 0.1) problems.push(`"Events" (${h1px} px) under the body text (${body} px)`);
+      const atBody = (r(h1).width * body) / h1px;
+      // The gap, and 12 px the layout keeps to spare (it reckons "Events" at its widest, 3.4 em).
+      const fits = atBody + width + parseFloat(getComputedStyle(h1.parentElement!).columnGap) + 12 <= head.width;
       const sameLine = r(tool).top < r(h1).bottom - 1;
-      if (mode === 'compact' && fits && !sameLine) problems.push(`Events and the controls fit one line (${Math.round(r(h1).width + width + 16)} of ${Math.round(head.width)} px) but wrap`);
+      if (mode === 'full' && !sameLine) problems.push('the full toolbar on a row of its own, not beside "Events"');
+      if (mode === 'compact' && fits && !sameLine) problems.push(`Events and the controls fit one line (${Math.round(atBody + width)} of ${Math.round(head.width)} px) but wrap`);
+      if (!sameLine && Math.abs(r(tool).left - head.left) > 1) problems.push('wrapped controls not at the left under "Events"');
     }
+    // Round 3: the heading line under the cells, at the body text's size and weight: the bare range
+    // (week), the list's words, the month's name; Central Time beside it where it fits.
+    const lines = (el: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return new Set([...range.getClientRects()].filter((b) => b.width > 0).map((b) => Math.round(b.top))).size;
+    };
+    const asBody = (el: Element, what: string) => {
+      const cs = getComputedStyle(el);
+      if (Math.abs(parseFloat(cs.fontSize) - body) > 0.5 || Number(cs.fontWeight) > 400) problems.push(`${what} not body text (${cs.fontSize} ${cs.fontWeight})`);
+    };
+    const title = document.querySelector('#list-title');
+    if (title && shown(title)) {
+      asBody(title, 'the heading line');
+      const words = (title.textContent ?? '').trim();
+      if (view === 'week') {
+        if (!/^[A-Z][a-z]{2} \d{1,2} – ([A-Z][a-z]{2} )?\d{1,2}$/.test(words)) problems.push(`the week's heading is not the bare range: "${words}"`);
+        // One line up to 175 %; at 200 % a 300 px screen has less room than the longest range needs.
+        if (wholePage && lines(title) > 1) problems.push(`the range takes ${lines(title)} lines`);
+      }
+      const tz = title.parentElement!.querySelector('.tz')!;
+      const room = r(title.parentElement!).width;
+      if (r(title).width + r(tz).width + parseFloat(getComputedStyle(title.parentElement!).columnGap) + 1 <= room && Math.abs(r(tz).top - r(title).top) > r(title).height / 2) problems.push('Central Time below the range though it fits beside it');
+    }
+    const cap = document.querySelector('.month caption');
+    if (cap && shown(cap) && getComputedStyle(cap).clipPath === 'none') asBody(cap, "the month's name");
     // Never clipped, never sideways scroll, 44 px targets.
     if (wholePage && document.documentElement.scrollWidth > vw) problems.push(`page scrolls sideways ${document.documentElement.scrollWidth - vw} px`);
     // What is drawn (a visually hidden name, clipped to nothing, is not: WebKit places a hidden caption off to the side).
@@ -153,6 +188,43 @@ test('at 100 % on a desktop the full toolbar: "‹ Nov 29 – Dec 5 ›" and Lis
   await expect(page.getByRole('navigation', { name: 'Calendar view' }).getByRole('link')).toHaveText(['List', 'Week', 'Month']);
   const [h1, tool] = [(await page.locator('.calendar h1').boundingBox())!, (await page.locator('.caltool').boundingBox())!];
   expect(tool.y).toBeLessThan(h1.y + h1.height);
+});
+
+// Round 3: the header row and the heading line, where Ross's concept shows them.
+for (const [width, size] of [[300, 100], [344, 100], [412, 100], [412, 175]] as const) {
+  test(`at ${width} px and ${size} %: "Events ‹ Week ▾ ›" on one line`, async ({ page, context, baseURL }) => {
+    await useText(context, baseURL!, size);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/events?view=week&d=2026-11-29');
+    expect(await look(page)).toEqual({ mode: 'compact', problems: [] });
+    const [h1, tool] = [(await page.locator('.calendar h1').boundingBox())!, (await page.locator('.caltool').boundingBox())!];
+    expect(tool.y).toBeLessThan(h1.y + h1.height);
+  });
+}
+
+test('where "Events" and the controls cannot share a line (300 px, 175 %), the controls go under it, at its left', async ({ page, context, baseURL }) => {
+  await useText(context, baseURL!, 175);
+  await page.setViewportSize({ width: 300, height: 900 });
+  await page.goto('/events?view=week&d=2026-11-29');
+  expect(await look(page)).toEqual({ mode: 'compact', problems: [] });
+  const [h1, tool] = [(await page.locator('.calendar h1').boundingBox())!, (await page.locator('.caltool').boundingBox())!];
+  expect(tool.y).toBeGreaterThanOrEqual(h1.y + h1.height - 1);
+  expect(Math.abs(tool.x - h1.x)).toBeLessThanOrEqual(1);
+});
+
+test('the heading line is the bare range in body text, Central Time beside it; one line at 175 % on a cover screen', async ({ page, context, baseURL }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/events?view=week&d=2026-11-29');
+  await expect(page.locator('#list-title')).toHaveText('Nov 29 – Dec 5');
+  expect((await look(page)).problems).toEqual([]);
+  await useText(context, baseURL!, 175);
+  await page.setViewportSize({ width: 300, height: 900 });
+  await page.goto('/events?view=week&d=2026-11-29');
+  await expect(page.locator('#list-title')).toHaveText('Nov 29 – Dec 5');
+  expect((await look(page)).problems).toEqual([]);
+  // The section is still named by it, and the spoken range stays in full in the toolbar.
+  await expect(page.getByRole('region', { name: 'Nov 29 – Dec 5' })).toHaveCount(1);
+  await expect(page.getByRole('navigation', { name: 'Dates' })).toContainText('Showing the week of 29 November to 5 December 2026');
 });
 
 test.describe('the compact toolbar on a 344 px cover screen', () => {

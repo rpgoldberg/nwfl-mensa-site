@@ -43,7 +43,10 @@ const shown = agendaDays((period.upcoming ? comingUp(events, now) : events).filt
 const days = agendaDays(shown);
 const ribbon = view === 'list' ? ribbonDays(shown, today, selected) : [];
 const week = view === 'week' ? weekDays(period.from, shown, today, selected) : [];
-const title = view === 'list' ? (period.upcoming ? 'Upcoming events' : period.thisPeriod ? `Events ${period.spoken}` : `Events in ${period.spoken}`) : view === 'week' ? (period.thisPeriod ? `This week (${period.label})` : `Week of ${period.label}`) : shortDay(selected);
+// EV1 round 3 (Ross's concept): under the cells, the heading line is the bare range ("Nov 29 – Dec 5"), or
+// the list's words, in body text; the cards keep the fuller name.
+const title = view === 'list' ? (period.upcoming ? 'Upcoming events' : period.thisPeriod ? `Events ${period.spoken}` : `Events in ${period.spoken}`) : view === 'week' ? period.label : shortDay(selected);
+const cardsLabel = view === 'week' ? (period.thisPeriod ? `This week (${period.label})` : `Week of ${period.label}`) : title;
 // Nothing to list: who to ask. The roster read failing only drops the address.
 const roster = live && loaded?.ok && shown.length === 0 ? await attempt(() => live.offices()) : undefined;
 const president = roster?.ok ? roster.value.find((o) => o.slug === 'president' && o.aliasVerified)?.alias : undefined;
@@ -102,10 +105,10 @@ const emptyWhen = period.upcoming ? 'for the next eight weeks' : view === 'list'
           </section>
         ) : (
           <section class="agenda" aria-labelledby="list-title">
-            <div class="agenda__head"><h2 id="list-title">{title}</h2><p class="tz">Central Time</p></div>
+            <div class="agenda__head"><h2 id="list-title" class="agenda__range">{title}</h2><p class="tz">Central Time</p></div>
             {shown.length > 0 ? (
               <>
-                <EventCards events={shown} label={title} selected={selected} anchors />
+                <EventCards events={shown} label={cardsLabel} selected={selected} anchors />
                 {view === 'week' && <p class="card empty">No other events this week.</p>}
               </>
             ) : <EmptyEvents when={emptyWhen} president={president} />}
