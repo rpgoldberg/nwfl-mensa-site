@@ -78,7 +78,8 @@ export const URL_IN_TEXT = /(?:https?:\/\/|www\.)[^\s<>"'`]+/giu;
 
 /**
  * Past this a found URL is far over the limit whatever punctuation trails it, so it is not trimmed
- * (trimTrailing counts brackets for each character it takes off: quadratic on a hostile run of them).
+ * (trimTrailing once recounted brackets for each character it took off; it is linear now, and this
+ * stays so that what is reported does not change).
  */
 const TRIM_MAX = MAX_URL_LENGTH + 16;
 

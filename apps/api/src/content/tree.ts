@@ -49,7 +49,7 @@ export interface Tree {
 }
 
 const REDACTED: Redacted = { type: 'redacted' };
-const MAX_DEPTH = 24;
+export const MAX_DEPTH = 24;
 const MAX_TEXT = 100_000;
 const SAFE_HREF = /^(https:\/\/|mailto:)[^\s]+$/;
 const FILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
