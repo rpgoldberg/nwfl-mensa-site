@@ -105,6 +105,45 @@ describe('parseDraft', () => {
     if (read.ok) expect(parseDraft(read.field).ok).toBe(true);
   });
 
+  describe('a body with many line breaks, which a browser posts as CRLF', () => {
+    const BREAKS = 8000;
+    /** A body with BREAKS line breaks, `posted` bytes long as a browser posts it (each break CRLF). */
+    const body = (posted: number) => `${'x\r\n'.repeat(BREAKS)}${'y'.repeat(posted - 3 * BREAKS)}`;
+    /** The fullest edit form, with `markup` as the browser sends it, posted as bytes (as from a socket). */
+    const post = async (markup: string) => {
+      const form = new FormData();
+      form.set('title', 'é'.repeat(200));
+      form.set('summary', 'é'.repeat(300));
+      form.set('visibility', 'officers');
+      form.set('markup', markup);
+      form.set('hash', 'a'.repeat(64));
+      const encoded = new Response(form);
+      const bytes = new Uint8Array(await encoded.arrayBuffer());
+      return readForm(new Request('https://localhost/x', { method: 'POST', body: bytes, headers: { 'content-type': encoded.headers.get('content-type') as string } }), EDIT_FORM_LIMIT);
+    };
+
+    it('takes the largest body the cap allows, and it fits the form cap', async () => {
+      const read = await post(body(MARKUP_MAX_BYTES));
+      expect(read.ok).toBe(true);
+      if (read.ok) expect(parseDraft(read.field)).toMatchObject({ ok: true, value: { markup: body(MARKUP_MAX_BYTES).replace(/\r\n/g, '\n') } });
+    });
+
+    it('refuses a body just over the cap in words, keeping the text: it still fits the form cap, never a 413', async () => {
+      const over = body(MARKUP_MAX_BYTES + 1000);
+      const read = await post(over);
+      expect(read.ok).toBe(true);
+      if (read.ok) expect(parseDraft(read.field)).toMatchObject({ ok: false, errors: { markup: expect.stringContaining('The text is too long') }, values: { markup: over } });
+    });
+
+    it('counts each break as the two bytes it is posted as: a body of 48 KiB once its breaks are single is over', async () => {
+      const full = body(MARKUP_MAX_BYTES + BREAKS);
+      // Posted, it is past the form cap: had the cap let it through, the officer's text would be lost to a 413.
+      expect(await post(full)).toEqual({ ok: false, status: 413 });
+      expect(new TextEncoder().encode(full.replace(/\r\n/g, '\n')).byteLength).toBe(MARKUP_MAX_BYTES);
+      expect(parseDraft(fields({ title: 'T', visibility: 'public', markup: full }))).toMatchObject({ ok: false, errors: { markup: expect.stringContaining('The text is too long') } });
+    });
+  });
+
   it('would not fit as a URL-encoded post: the edit form must post multipart', async () => {
     const body = new URLSearchParams({ title: 'T', visibility: 'public', markup: '€'.repeat(Math.floor(MARKUP_MAX_BYTES / 3)) });
     const request = new Request('https://localhost/x', { method: 'POST', body, headers: { 'content-type': 'application/x-www-form-urlencoded' } });

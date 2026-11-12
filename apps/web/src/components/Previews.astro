@@ -4,7 +4,9 @@
 // each a frame headed in words, with the item written by the same markup as Home and /news
 // (ItemArticle). An audience the API gave no body will not see the item, and the frame says so in
 // words. The public's view of a members item is what /news shows the public: its title and summary
-// with the box alone. Side by side at 1100 px and up is the page's to lay out.
+// with the box alone. A body set but empty is a draft with no text yet (E1 previews a fresh draft's empty
+// tree as set): the frame shows the title and summary, and says in words that there is no text.
+// Side by side at 1100 px and up is the page's to lay out.
 import type { KindName, Preview, VisibilityName } from '../lib/api/editor';
 import { documentHtml, withheldHtml } from '../lib/document';
 import ItemArticle from './ItemArticle.astro';
@@ -29,6 +31,7 @@ const frames = [
     heading: 'What the public sees',
     unseen: `The public will not see this item.${why}`,
     bodyHtml: preview.publicBody === undefined ? undefined : teaser ? withheldHtml() : documentHtml(preview.publicBody, { view: 'public' }),
+    empty: preview.publicBody?.blocks.length === 0,
     teaser,
   },
   {
@@ -36,6 +39,7 @@ const frames = [
     heading: 'What members see',
     unseen: `Members will not see this item.${why}`,
     bodyHtml: preview.membersBody === undefined ? undefined : documentHtml(preview.membersBody, { view: 'members' }),
+    empty: preview.membersBody?.blocks.length === 0,
     teaser: false,
   },
 ];
@@ -45,7 +49,10 @@ const frames = [
     <section class="card" aria-labelledby={f.id}>
       <Heading id={f.id}>{f.heading}</Heading>
       {f.bodyHtml === undefined ? <p>{f.unseen}</p> : (
-        <ItemArticle layout={layout} title={preview.title} summary={preview.summary} bodyHtml={f.bodyHtml} files={[]} membersOnly={visibility === 'members'} teaser={f.teaser} />
+        <>
+          <ItemArticle layout={layout} title={preview.title} summary={preview.summary} bodyHtml={f.bodyHtml} files={[]} membersOnly={visibility === 'members'} teaser={f.teaser} />
+          {f.empty && <p>There is no text yet: readers will see the title and summary only.</p>}
+        </>
       )}
     </section>
   ))}

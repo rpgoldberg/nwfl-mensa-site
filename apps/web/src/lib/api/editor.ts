@@ -13,7 +13,8 @@
 //   FAILED_PRECONDITION  EditorRefused, with the API's words: a step the item is not ready for
 //   INVALID_ARGUMENT     EditorRefused too: a value the API refused (the forms check first)
 //   PERMISSION_DENIED    NotAllowed
-//   ALREADY_EXISTS       SlugTaken: CreateItem tries the next slug (src/lib/editor/slug.ts)
+//   ALREADY_EXISTS       SlugTaken on CreateItem: it tries the next slug (src/lib/editor/slug.ts);
+//                        Duplicate on any other call (a series slug, a series date, a venue)
 //   NOT_FOUND            ApiNotFound, as for the public reads; also an item id that is not one, never sent
 //   anything else        ApiUnavailable
 // Each is logged by call and code only: never the API's message, the token or what was typed.
@@ -63,6 +64,14 @@ export class SlugTaken extends Error {
   constructor(readonly rpc: string) {
     super(`the slug is taken (${rpc})`);
     this.name = 'SlugTaken';
+  }
+}
+
+/** Something with the same unique key exists already: a series slug, a series date, a venue (not CreateItem's slug, which is SlugTaken). */
+export class Duplicate extends Error {
+  constructor(readonly rpc: string) {
+    super(`it exists already (${rpc})`);
+    this.name = 'Duplicate';
   }
 }
 
@@ -271,8 +280,9 @@ function present<T>(value: T | undefined, what: string): T {
 
 /** The API's words as a page may show them: one line of plain text, capped. */
 function plainReason(message: string): string {
-  const line = message.replace(/[\p{Cc}\p{Cf}]+/gu, ' ').replace(/\s+/g, ' ').trim();
-  return line.length > REASON_MAX ? `${line.slice(0, REASON_MAX - 1).trimEnd()}…` : line;
+  // By code points, so a cut never splits a character written as two UTF-16 units.
+  const line = [...message.replace(/[\p{Cc}\p{Cf}]+/gu, ' ').replace(/\s+/g, ' ').trim()];
+  return line.length > REASON_MAX ? `${line.slice(0, REASON_MAX - 1).join('').trimEnd()}…` : line.join('');
 }
 
 const codeName = (code: Code) => Code[code].replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
@@ -308,7 +318,8 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
         case Code.PermissionDenied:
           throw new NotAllowed(rpc);
         case Code.AlreadyExists:
-          throw new SlugTaken(rpc);
+          // CreateItem's one unique key is the slug, which createWithSlug tries again; elsewhere it is no slug.
+          throw rpc === 'CreateItem' ? new SlugTaken(rpc) : new Duplicate(rpc);
         case Code.NotFound:
           throw new ApiNotFound(rpc);
         default:

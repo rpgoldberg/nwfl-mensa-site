@@ -25,6 +25,7 @@ import { EventOccurrenceSchema, EventSeriesSchema, EventService, OccurrenceStatu
 import type { Tokens } from '../auth/oidc';
 import { ApiNotFound, ApiUnavailable } from './client';
 import {
+  Duplicate,
   EditorRefused,
   NotAllowed,
   SignInAgain,
@@ -392,7 +393,8 @@ const MAPPING: [Code, string, abstract new (...args: never[]) => Error][] = [
   [Code.FailedPrecondition, 'failed_precondition', EditorRefused],
   [Code.InvalidArgument, 'invalid_argument', EditorRefused],
   [Code.PermissionDenied, 'permission_denied', NotAllowed],
-  [Code.AlreadyExists, 'already_exists', SlugTaken],
+  // SlugTaken for CreateItem alone (below): the slug is the only thing it can collide on.
+  [Code.AlreadyExists, 'already_exists', Duplicate],
   [Code.NotFound, 'not_found', ApiNotFound],
   [Code.Internal, 'internal', ApiUnavailable],
   [Code.Unavailable, 'unavailable', ApiUnavailable],
@@ -409,11 +411,37 @@ describe('grpcEditor: every refusal, on every call, as one thing a page can act 
         () => undefined,
         (e: unknown) => e,
       );
-      expect(error, rpc).toBeInstanceOf(kind);
+      expect(error, rpc).toBeInstanceOf(code === Code.AlreadyExists && rpc === 'CreateItem' ? SlugTaken : kind);
       expect((error as { rpc: string }).rpc, rpc).toBe(rpc);
     }
     expect(lines.map((l) => JSON.parse(l) as { rpc: string; code: string }).map((l) => [l.rpc, l.code])).toEqual(Object.keys(CALLS).map((rpc) => [rpc, name]));
     expect(lines.join('\n')).not.toMatch(/SECRET|tok-en/);
+  });
+
+  it('takes ALREADY_EXISTS as a taken slug on CreateItem only: a series slug or a date already held is a duplicate', async () => {
+    const server = await refusingServer(Code.AlreadyExists);
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    expect(await CALLS['CreateItem']!(api).catch((e: unknown) => e)).toBeInstanceOf(SlugTaken);
+    for (const rpc of ['SaveSeries', 'SaveOccurrence', 'SaveVenue']) {
+      const error = await CALLS[rpc]!(api).catch((e: unknown) => e);
+      expect(error, rpc).toBeInstanceOf(Duplicate);
+      expect(error, rpc).not.toBeInstanceOf(SlugTaken);
+    }
+  });
+
+  it('cuts the API\'s words by whole characters, never through one written as two UTF-16 units', async () => {
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        withdraw: () => {
+          throw new ConnectError('😀'.repeat(400), Code.FailedPrecondition);
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    const error = (await api.withdraw(OFFICER, ITEM_ID).catch((e: unknown) => e)) as EditorRefused;
+    expect(error.reason).toBe(`${'😀'.repeat(299)}…`);
+    expect(error.reason).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect([...error.reason]).toHaveLength(300);
   });
 
   it("gives the API's own words for a step the item is not ready for, or a value it refused, plainly and capped", async () => {
@@ -552,5 +580,26 @@ describe('editorReader', () => {
       const { session, deps } = signedIn(groups);
       expect(editorReader(session, deps), groups.join()).toEqual({ reader: undefined, lapsed: false });
     }
+  });
+
+  it('gives nothing to a near-miss name that the session keeps, so it reaches the gate', () => {
+    for (const group of ['nwfl-webmasters', 'nwfl-officer', 'nwfl-officers-old', 'nwfl-admins', 'nwfl-admin-x', 'nwfl-web']) {
+      const { session, deps } = signedIn([group]);
+      expect(session.groups, group).toEqual([group]);
+      expect(editorReader(session, deps), group).toEqual({ reader: undefined, lapsed: false });
+    }
+  });
+
+  it("gives each session its own token, never another's", () => {
+    const store = new TokenStore<Tokens>();
+    const writer = newSession({ sub: '00000000-0000-4000-8000-0000000000a1', groups: ['nwfl-officers'] }, NOW - 60);
+    const approver = newSession({ sub: '00000000-0000-4000-8000-0000000000eb', groups: ['nwfl-webmaster'] }, NOW - 60);
+    store.put(writer.sid, { access_token: 'writer.tok', expires_at: NOW + 3600 }, writer.exp);
+    store.put(approver.sid, { access_token: 'approver.tok', expires_at: NOW + 3600 }, approver.exp);
+    const deps = { tokens: store, now: () => NOW };
+    expect(editorReader(writer, deps).reader).toEqual({ bearer: 'writer.tok' });
+    expect(editorReader(approver, deps).reader).toEqual({ bearer: 'approver.tok' });
+    const stranger = newSession({ sub: '00000000-0000-4000-8000-0000000000ad', groups: ['nwfl-admin'] }, NOW - 60);
+    expect(editorReader(stranger, deps)).toEqual({ reader: undefined, lapsed: true });
   });
 });

@@ -58,6 +58,17 @@ describe('Previews', () => {
     expect(frame(hidden, 'What the public sees')).toContain('<p>The public will not see this item.</p>');
   });
 
+  it('says in words when a body is set but empty (a new draft with no text yet), under the title and summary', async () => {
+    const html = await render({ preview: preview({ publicBody: doc(), membersBody: doc() }), kind: 'announcement', visibility: 'public' });
+    for (const heading of ['What the public sees', 'What members see']) {
+      const f = frame(html, heading);
+      expect(f, heading).toContain('<h3>Lunch &lt;moves&gt;</h3>');
+      expect(f, heading).toContain('<p>There is no text yet: readers will see the title and summary only.</p>');
+    }
+    const some = await render({ preview: preview({ publicBody: doc(para('x')), membersBody: doc(para('x')) }), kind: 'announcement', visibility: 'public' });
+    expect(some).not.toContain('There is no text yet');
+  });
+
   it('shows the public a members item as /news does: title and summary, with the box alone', async () => {
     const html = await render({ preview: preview({ publicBody: doc(REDACTED), membersBody: doc(para('Members text.')) }), kind: 'article', visibility: 'members' });
     const pub = frame(html, 'What the public sees');

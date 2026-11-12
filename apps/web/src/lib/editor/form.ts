@@ -3,12 +3,12 @@
 // error keyed by its field (for the list at the top, each linking to its field), and what was typed is
 // handed back so the page can show it again. The API checks everything again.
 //
-// The text box holds at most 48 KiB, so the whole edit form fits EDIT_FORM_LIMIT, under Astro's 64 KiB
+// The text box holds at most 48 KiB as posted (each line break CRLF), so the whole edit form fits EDIT_FORM_LIMIT, under Astro's 64 KiB
 // body cap (astro.config.mjs), when posted as multipart/form-data. URL-encoded, the same text can
 // swell threefold: the edit form must post multipart (readForm in src/lib/form.ts reads both).
 import type { EditorItem, KindName, Problem, Targets, VisibilityName } from '../api/editor';
 
-/** The most of the text box, in UTF-8 bytes. */
+/** The most of the text box, in UTF-8 bytes as a browser posts it: each line break is CRLF, two bytes. */
 export const MARKUP_MAX_BYTES = 48 * 1024;
 /** readForm's cap for the edit form: the fullest form, posted as multipart, fits; under Astro's 64 KiB. */
 export const EDIT_FORM_LIMIT = 56 * 1024;
@@ -84,7 +84,8 @@ export function parseDraft(field: Field): Parsed<Draft, { title: string; summary
   if (visibility === undefined) errors['visibility'] = 'Choose who can read it.';
   const markup = values.markup.replace(/\r\n?/g, '\n');
   if (posted === undefined) errors['markup'] = 'The text did not reach us. Nothing was saved: please press Save draft again.';
-  else if (new TextEncoder().encode(markup).byteLength > MARKUP_MAX_BYTES) {
+  // Each break counts twice: a browser posts it as CRLF, so the cap holds for the body as it arrives.
+  else if (new TextEncoder().encode(markup).byteLength + (markup.match(/\n/g)?.length ?? 0) > MARKUP_MAX_BYTES) {
     errors['markup'] = 'The text is too long: at most 48 KiB (about 49,000 letters). Shorten it, or split it into two items.';
   }
   return result(errors, { title, summary, visibility: visibility as VisibilityName, markup }, values);
