@@ -1196,7 +1196,35 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 .rule-form [aria-invalid="true"] { border-color: var(--warn); border-width: 0.1875rem; }
 
 /* W-SIGNUP: the approvers' queue: one card per sign-up, its decisions as plain buttons below. */
-.signup-card form { margin: 0; }
+.signup-card form, .rejected-card form { margin: 0; }
+/* QUEUE-C: compact cards. The name with its email right under it; then the details as label and value
+   pairs (dl.facts--grid): as many to a row as fit at 8.5rem each, never more than four, so two on a
+   phone and one at the largest text on a 320 px screen. A value wraps, even inside a long email, and
+   is never cut short. The membership check's sentence runs across the card. The cards are set closer
+   than the site's other cards (Ross: less wasted height), their type at full size. */
+.signup-card, .rejected-card { gap: var(--space-2); margin: var(--space-3) 0; padding: var(--space-3); }
+.signup-who { display: grid; gap: 0; }
+.signup-who > * { margin: 0; }
+.signup-who p { overflow-wrap: anywhere; line-height: 1.4; }
+/* Short labels and values, not running text: set a little closer than a paragraph. */
+dl.facts--grid {
+  --pair-gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(max(min(100%, 8.5rem), calc((100% - 3 * var(--pair-gap)) / 4)), 1fr));
+  gap: var(--space-2) var(--pair-gap);
+  margin: 0;
+  line-height: 1.4;
+}
+dl.facts--grid div { min-width: 0; align-content: start; }
+/* The label at the site's small size, bold, above its value at body size. */
+dl.facts--grid dt { font-size: var(--fs-small); line-height: 1.3; }
+dl.facts--grid dd { overflow-wrap: anywhere; }
+dl.facts--grid .facts__wide { grid-column: 1 / -1; }
+/* The earlier claim, set off by a rule at its side, its pairs in the same grid. */
+.earlier-claim { display: grid; gap: var(--space-2); padding-left: var(--space-3); border-left: 0.25rem solid var(--line); }
+.earlier-claim > * { margin: 0; }
+/* The box to tick, then Approve and Reject, on one row where they fit; the buttons go below when not. */
+.signup-decide { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-4); }
+.signup-decide .confirm-warning { flex: 1 1 18rem; min-width: 0; margin: 0; }
 /* VET fix 1: the box an approver ticks before approving a warning outcome: large, labelled, by the warning. */
 .confirm-warning { display: flex; align-items: center; gap: var(--space-3); min-height: var(--target); margin: var(--space-3) 0; }
 .confirm-warning input { width: 1.5rem; height: 1.5rem; flex: none; margin: 0; }

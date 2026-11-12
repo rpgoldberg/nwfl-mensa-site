@@ -15,7 +15,7 @@
 // form again (the API removes the account the rejection closed).
 import type { Session } from '../../server/session.mjs';
 import { isAdmin } from './approval-rules';
-import type { Check, MembershipApi, MyAccount, PendingSignup, Route, Typed } from './api/membership';
+import type { Check, MembershipApi, MyAccount, PendingSignup, RejectedSignup, Route, Typed } from './api/membership';
 import { type SessionReaderDeps, sessionReader } from './api/membership';
 import { ZONE } from './calendar';
 
@@ -138,6 +138,24 @@ export function typedFacts(typed: Typed): Array<[string, string]> {
     ['Membership number', typed.membershipNumber],
   ];
   return facts.filter((fact): fact is [string, string] => fact[1] !== undefined && fact[1] !== '');
+}
+
+/**
+ * QUEUE-C: a pending sign-up's label and value pairs for its card's grid, in reading order: what it
+ * typed, how the person came, and the day they signed up when the API sent it. The membership check
+ * follows as its own pair across the card (checkText), so its sentence is never squeezed into a cell.
+ */
+export function pendingFacts(signup: Pick<PendingSignup, 'firstName' | 'lastName' | 'membershipNumber' | 'route' | 'createdAt'>): Array<[string, string]> {
+  const facts: Array<[string, string]> = [...typedFacts(signup), ['How they came', ROUTE_TEXT[signup.route]]];
+  if (signup.createdAt) facts.push(['Signed up', formatMoment(signup.createdAt)]);
+  return facts;
+}
+
+/** QUEUE-C: a rejected sign-up's pairs, in reading order: what it typed, then the day it was rejected when the API sent it. */
+export function rejectedFacts(signup: Pick<RejectedSignup, 'firstName' | 'lastName' | 'membershipNumber' | 'rejectedAt'>): Array<[string, string]> {
+  const facts = typedFacts(signup);
+  if (signup.rejectedAt) facts.push(['Rejected on', formatMoment(signup.rejectedAt)]);
+  return facts;
 }
 
 export const PROFILE_SAVED = 'Your profile has been saved.';

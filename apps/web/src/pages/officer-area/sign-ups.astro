@@ -31,6 +31,11 @@
 // malformed post still shows the list it points to. The API lists the latest 50 rejections, with no
 // paging; a full list says so (rejectedShownNote), so none is hidden without a word.
 //
+// QUEUE-C: each card is compact, the same words on a shorter page: the name with the email under it,
+// then the details as label and value pairs (dl, dt and dd) in a grid (pendingFacts, rejectedFacts), two
+// to a row on a phone, up to four on a desktop; the membership check's sentence across the card; the
+// warnings whole; the box to tick and the buttons on one row where they fit (src/styles/site.css).
+//
 // Not signed in: sign in first. Signed in but neither a membership approver, the Admin nor the
 // Membership Officer: the plain
 // not-found page, as for the approval setting, and it is never linked for them. It works with no
@@ -45,7 +50,6 @@ import { runtimeDeps } from '../../lib/auth/flow';
 import { readForm } from '../../lib/form';
 import {
   DECISION_REFUSED,
-  ROUTE_TEXT,
   type DecisionForm,
   checkText,
   checkWarning,
@@ -53,11 +57,12 @@ import {
   decisionRefusal,
   doneFromQuery,
   doneText,
-  formatMoment,
   isMembershipApprover,
   isSignupReopener,
   parseDecisionForm,
+  pendingFacts,
   refusedText,
+  rejectedFacts,
   rejectedShownNote,
   signUpsTitle,
   typedFacts,
@@ -202,13 +207,13 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
         <p>{requests.length === 1 ? 'One sign-up is waiting.' : `${requests.length} sign-ups are waiting.`}</p>
         {requests.map((r, i) => { const warning = checkWarning(r); const confirm = confirmText(r.verification); return (
           <section class="card signup-card" aria-labelledby={`signup-${i}`}>
-            <h2 id={`signup-${i}`}>{r.displayName}</h2>
-            <dl class="facts">
-              <div><dt>Email</dt><dd>{r.email}</dd></div>
-              {typedFacts(r).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
-              <div><dt>How they came</dt><dd>{ROUTE_TEXT[r.route]}</dd></div>
-              <div><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
-              {r.createdAt && <div><dt>Signed up</dt><dd>{formatMoment(r.createdAt)}</dd></div>}
+            <div class="signup-who">
+              <h2 id={`signup-${i}`}>{r.displayName}</h2>
+              <p>{r.email}</p>
+            </div>
+            <dl class="facts facts--grid">
+              {pendingFacts(r).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
+              <div class="facts__wide"><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
             </dl>
             {r.verification === 'verified_other_group' && (
               <p>This person is a member of another local group, so the sign-up cannot be approved as a member here. Reject it, or ask the Admin or the Webmaster about affiliate access.</p>
@@ -217,30 +222,32 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
             {r.earlierClaim && !r.earlierClaim.closed && typedFacts(r.earlierClaim).length > 0 && (
               <section class="earlier-claim" aria-labelledby={`signup-earlier-${i}`}>
                 <h3 id={`signup-earlier-${i}`}>The earlier claim{r.earlierClaim.displayName ? ` (${r.earlierClaim.displayName})` : ''}</h3>
-                <dl class="facts">
+                <dl class="facts facts--grid">
                   {typedFacts(r.earlierClaim).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
                 </dl>
               </section>
             )}
-            {confirm && (
-              <div class="choice confirm-warning">
-                <input type="checkbox" id={`signup-confirm-${i}`} form={`signup-approve-${i}`} name="confirmed" value="yes" required aria-describedby={`signup-warning-${i}`} />
-                <label for={`signup-confirm-${i}`}>{confirm}</label>
-              </div>
-            )}
-            <div class="btns">
-              {r.verification !== 'verified_other_group' && (
-                <form method="post" action={HERE} id={`signup-approve-${i}`}>
-                  <input type="hidden" name="decision" value="approve" />
-                  <input type="hidden" name="request" value={r.requestId} />
-                  <button class="button" type="submit" aria-describedby={warning ? `signup-${i} signup-warning-${i}` : `signup-${i}`}>Approve</button>
-                </form>
+            <div class="signup-decide">
+              {confirm && (
+                <div class="choice confirm-warning">
+                  <input type="checkbox" id={`signup-confirm-${i}`} form={`signup-approve-${i}`} name="confirmed" value="yes" required aria-describedby={`signup-warning-${i}`} />
+                  <label for={`signup-confirm-${i}`}>{confirm}</label>
+                </div>
               )}
-              <form method="post" action={HERE}>
-                <input type="hidden" name="decision" value="reject" />
-                <input type="hidden" name="request" value={r.requestId} />
-                <button class="button button--secondary" type="submit" aria-describedby={`signup-${i}`}>Reject</button>
-              </form>
+              <div class="btns">
+                {r.verification !== 'verified_other_group' && (
+                  <form method="post" action={HERE} id={`signup-approve-${i}`}>
+                    <input type="hidden" name="decision" value="approve" />
+                    <input type="hidden" name="request" value={r.requestId} />
+                    <button class="button" type="submit" aria-describedby={warning ? `signup-${i} signup-warning-${i}` : `signup-${i}`}>Approve</button>
+                  </form>
+                )}
+                <form method="post" action={HERE}>
+                  <input type="hidden" name="decision" value="reject" />
+                  <input type="hidden" name="request" value={r.requestId} />
+                  <button class="button button--secondary" type="submit" aria-describedby={`signup-${i}`}>Reject</button>
+                </form>
+              </div>
             </div>
           </section>
         ); })}
@@ -261,12 +268,13 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
       ) : (
         rejected.map((r, i) => (
           <section class="card rejected-card" aria-labelledby={`rejected-${i}`}>
-            <h3 id={`rejected-${i}`}>{r.displayName}</h3>
-            <dl class="facts">
-              <div><dt>Email</dt><dd>{r.email}</dd></div>
-              {typedFacts(r).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
-              <div><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
-              {r.rejectedAt && <div><dt>Rejected on</dt><dd>{formatMoment(r.rejectedAt)}</dd></div>}
+            <div class="signup-who">
+              <h3 id={`rejected-${i}`}>{r.displayName}</h3>
+              <p>{r.email}</p>
+            </div>
+            <dl class="facts facts--grid">
+              {rejectedFacts(r).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
+              <div class="facts__wide"><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
             </dl>
             <form method="post" action={HERE}>
               <input type="hidden" name="decision" value="reopen" />
