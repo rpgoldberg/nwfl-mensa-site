@@ -93,6 +93,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       ListWorkingItems: () => [{}, { states: [] }],
       GetWorkingItem: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
       ListItemHistory: () => [{ itemId: ids['public'] }],
+      PreviewWorkingItem: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
       ReadFile: () => [{ fileId: ids['publicFile'] }, { fileId: ids['wholeFile'] }],
       GetLinkTarget: () => [{ linkId: LINK.plain }, { linkId: LINK.phone }, { linkId: LINK.name }],
     },

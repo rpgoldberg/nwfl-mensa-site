@@ -40,7 +40,8 @@ export interface Roles {
 const suffixes = (groups: readonly string[], prefix: string): string[] =>
   groups.filter((group) => group.startsWith(prefix) && group.length > prefix.length).map((group) => group.slice(prefix.length));
 
-export function rolesOf(caller: Caller): Roles {
+/** Only the groups are read, so an audit row's recorded groups give the roles of that time (content/actor-label.ts). */
+export function rolesOf(caller: Pick<Caller, 'groups'>): Roles {
   const { groups } = caller;
   return {
     admin: groups.includes('nwfl-admin'),
@@ -72,6 +73,15 @@ export function requireOffice(caller: Caller, officeSlug: string): { onBehalfOf:
 
 export function requireOfficer(caller: Caller): void {
   if (!requireUser(caller).officer) throw denied();
+}
+
+/**
+ * Who reads working items (EDITOR E1): the queue, an item, its history and its preview. An officer,
+ * or an approver without the officers group: the Admin or the Webmaster, who approve what they read.
+ */
+export function requireEditorReader(caller: Caller): void {
+  const roles = requireUser(caller);
+  if (!roles.officer && !roles.admin && !roles.webmaster) throw denied();
 }
 
 /** An officer, or the Admin without the officers group (SOLO-APPROVE: who reads the approval setting). */

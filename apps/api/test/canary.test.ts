@@ -71,6 +71,7 @@ describe.skipIf(!live)('the members-only canary', () => {
       ListWorkingItems: () => [{}],
       GetWorkingItem: () => [{ itemId: ids['publicItem'] }],
       ListItemHistory: () => [{ itemId: ids['publicItem'] }],
+      PreviewWorkingItem: () => [{ itemId: ids['publicItem'] }],
       ReadFile: () => [{ fileId: ids['pdf'] }],
       GetLinkTarget: () => [{ linkId: LINK_ID }],
     },
@@ -288,6 +289,15 @@ describe.skipIf(!live)('the members-only canary', () => {
       expect(everything).toContain(NUMBER);
       expect(everything).toContain(LAST_NAME);
     });
+  });
+
+  // EDITOR E1: the preview is the public's body as the public will get it, so it holds no members passage.
+  it('keeps the token out of the preview\'s public body and shows it in its members body, to an officer', async () => {
+    const preview = await api.client(ContentService).previewWorkingItem({ itemId: ids['publicItem'] as string }, OFFICER);
+    expect(dump(preview.publicBody)).toContain('Meet at ');
+    expect(dump(preview.publicBody)).not.toContain(TOKEN);
+    expect(dump(preview.membersBody)).toContain(`Span ${TOKEN}`);
+    expect(dump(preview.membersBody)).toContain(`Block ${TOKEN}`);
   });
 
   it('keeps the token out of the public search index and in the members index', async () => {
