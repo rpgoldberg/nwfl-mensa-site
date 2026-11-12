@@ -42,8 +42,10 @@ import {
   signUpsTitle,
   parseProfileForm,
   parseSignupForm,
+  pendingFacts,
   prefillFirstName,
   profileErrorSummary,
+  rejectedFacts,
   typedFacts,
 } from './signup';
 
@@ -484,5 +486,46 @@ describe('typedFacts (PROFILE-ID: what a sign-up typed, as the queue lists it)',
     ]);
     expect(typedFacts({ lastName: 'Fakename' })).toEqual([['Last name', 'Fakename']]);
     expect(typedFacts({})).toEqual([]);
+  });
+});
+
+describe('pendingFacts and rejectedFacts (QUEUE-C: the label and value pairs of a card\'s grid)', () => {
+  // 03:00 UTC on November 2 is still November 1 by the Central calendar, as formatMoment reads it.
+  const AT = new Date('2026-11-02T03:00:00Z');
+  const typed = { firstName: 'Jordan', lastName: 'Fakename', membershipNumber: FAKE_NUMBER };
+
+  it('lists a pending sign-up\'s typed details, how they came, then the day they signed up, in reading order', () => {
+    expect(pendingFacts({ ...typed, route: 'invite', createdAt: AT })).toEqual([
+      ['First name', 'Jordan'],
+      ['Last name', 'Fakename'],
+      ['Membership number', FAKE_NUMBER],
+      ['How they came', 'Invited by an officer'],
+      ['Signed up', 'November 1, 2026'],
+    ]);
+  });
+
+  it('leaves out a day the API did not send, and any typed detail not held', () => {
+    expect(pendingFacts({ lastName: 'Fakename', route: 'signup' })).toEqual([
+      ['Last name', 'Fakename'],
+      ['How they came', 'Signed up on the site'],
+    ]);
+  });
+
+  it('lists a rejected sign-up\'s typed details, then the day it was rejected', () => {
+    expect(rejectedFacts({ ...typed, rejectedAt: AT })).toEqual([
+      ['First name', 'Jordan'],
+      ['Last name', 'Fakename'],
+      ['Membership number', FAKE_NUMBER],
+      ['Rejected on', 'November 1, 2026'],
+    ]);
+    expect(rejectedFacts({})).toEqual([]);
+  });
+
+  it('never shortens a value: each is given whole, however long', () => {
+    const long = 'A'.repeat(80);
+    expect(pendingFacts({ firstName: long, route: 'admin_grant' })).toEqual([
+      ['First name', long],
+      ['How they came', 'Granted by the Admin or the Webmaster'],
+    ]);
   });
 });
