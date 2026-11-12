@@ -528,6 +528,31 @@ export declare type ContentVersion = Message<"nwfl.mensa.v1.ContentVersion"> & {
    * @generated from field: repeated nwfl.mensa.v1.StoredFile files = 17;
    */
   files: StoredFile[];
+
+  /**
+   * Set when the caller's lens withholds anything from this version: then
+   * body_markup is empty and content_hash is unset. An edit form must not be
+   * filled from it, as saving the empty markup would wipe the body.
+   *
+   * @generated from field: bool body_markup_withheld = 18;
+   */
+  bodyMarkupWithheld: boolean;
+
+  /**
+   * The latest send-back note since the version was last marked ready,
+   * through the caller's lens; empty once it is ready again. Officer reads.
+   *
+   * @generated from field: string send_back_note = 19;
+   */
+  sendBackNote: string;
+
+  /**
+   * Whether the caller edited this version, so that approving it needs the
+   * one-approver rule or the Admin's break-glass. Officer reads.
+   *
+   * @generated from field: bool caller_edited = 20;
+   */
+  callerEdited: boolean;
 };
 
 /**
@@ -1299,6 +1324,70 @@ export declare type ListItemHistoryResponse = Message<"nwfl.mensa.v1.ListItemHis
 export declare const ListItemHistoryResponseSchema: GenMessage<ListItemHistoryResponse>;
 
 /**
+ * @generated from message nwfl.mensa.v1.PreviewWorkingItemRequest
+ */
+export declare type PreviewWorkingItemRequest = Message<"nwfl.mensa.v1.PreviewWorkingItemRequest"> & {
+  /**
+   * @generated from field: string item_id = 1;
+   */
+  itemId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.PreviewWorkingItemRequest.
+ * Use `create(PreviewWorkingItemRequestSchema)` to create a new message.
+ */
+export declare const PreviewWorkingItemRequestSchema: GenMessage<PreviewWorkingItemRequest>;
+
+/**
+ * @generated from message nwfl.mensa.v1.PreviewWorkingItemResponse
+ */
+export declare type PreviewWorkingItemResponse = Message<"nwfl.mensa.v1.PreviewWorkingItemResponse"> & {
+  /**
+   * As the public will see them; a title and summary are always public.
+   *
+   * @generated from field: string title = 1;
+   */
+  title: string;
+
+  /**
+   * @generated from field: string summary = 2;
+   */
+  summary: string;
+
+  /**
+   * What an anonymous read will give: a members item's is one placeholder.
+   * Unset when the public will not see the item (an officers item, or one
+   * its lens hides).
+   *
+   * @generated from field: nwfl.mensa.v1.Document public_body = 3;
+   */
+  publicBody?: Document | undefined;
+
+  /**
+   * What a member's read will give, members passages kept. Unset when
+   * members will not see the item. Never wider than the caller's own lens.
+   *
+   * @generated from field: nwfl.mensa.v1.Document members_body = 4;
+   */
+  membersBody?: Document | undefined;
+
+  /**
+   * What the markup parser refuses; the version cannot be marked ready until
+   * they are fixed.
+   *
+   * @generated from field: repeated nwfl.mensa.v1.MarkupProblem problems = 5;
+   */
+  problems: MarkupProblem[];
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.PreviewWorkingItemResponse.
+ * Use `create(PreviewWorkingItemResponseSchema)` to create a new message.
+ */
+export declare const PreviewWorkingItemResponseSchema: GenMessage<PreviewWorkingItemResponse>;
+
+/**
  * @generated from message nwfl.mensa.v1.HistoryEntry
  */
 export declare type HistoryEntry = Message<"nwfl.mensa.v1.HistoryEntry"> & {
@@ -1316,7 +1405,8 @@ export declare type HistoryEntry = Message<"nwfl.mensa.v1.HistoryEntry"> & {
   action: string;
 
   /**
-   * The Authentik subject; the web resolves it to a name for officers.
+   * The Authentik subject. The web shows actor_label, adding "(you)" when
+   * this is the signed-in subject; it keeps no subject-to-name store.
    *
    * @generated from field: string actor_subject = 3;
    */
@@ -1353,6 +1443,16 @@ export declare type HistoryEntry = Message<"nwfl.mensa.v1.HistoryEntry"> & {
    * @generated from field: string note = 9;
    */
   note: string;
+
+  /**
+   * Who acted, by role at the time, from the groups and office the audit row
+   * recorded: the office acted for ("Publications Officer"), "Admin",
+   * "Webmaster", "Officer", or a machine ("Newsletter agent", "System").
+   * Never a person's name.
+   *
+   * @generated from field: string actor_label = 10;
+   */
+  actorLabel: string;
 };
 
 /**
@@ -2013,6 +2113,18 @@ export declare const ContentService: GenService<{
     methodKind: "unary";
     input: typeof ListItemHistoryRequestSchema;
     output: typeof ListItemHistoryResponseSchema;
+  },
+  /**
+   * The working version (the live one when there is none) as the public and
+   * members will get it once approved, by the same derivation and lens as
+   * approval and the published reads. Officers, the Admin and the Webmaster.
+   *
+   * @generated from rpc nwfl.mensa.v1.ContentService.PreviewWorkingItem
+   */
+  previewWorkingItem: {
+    methodKind: "unary";
+    input: typeof PreviewWorkingItemRequestSchema;
+    output: typeof PreviewWorkingItemResponseSchema;
   },
   /**
    * Edition setup and the freeze for print (the Editor or the Admin).

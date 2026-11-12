@@ -186,6 +186,16 @@ message ContentVersion {
   google.protobuf.Timestamp ready_at = 15;
   google.protobuf.Timestamp approved_at = 16;
   repeated StoredFile files = 17;
+  // Set when the caller's lens withholds anything from this version: then
+  // body_markup is empty and content_hash is unset. An edit form must not be
+  // filled from it, as saving the empty markup would wipe the body.
+  bool body_markup_withheld = 18;
+  // The latest send-back note since the version was last marked ready,
+  // through the caller's lens; empty once it is ready again. Officer reads.
+  string send_back_note = 19;
+  // Whether the caller edited this version, so that approving it needs the
+  // one-approver rule or the Admin's break-glass. Officer reads.
+  bool caller_edited = 20;
 }
 
 message ContentItem {
@@ -246,6 +256,12 @@ service ContentService {
   rpc SaveOfficeTerm(SaveOfficeTermRequest) returns (SaveOfficeTermResponse);
   // An item's history: every audited step, for officers (R25).
   rpc ListItemHistory(ListItemHistoryRequest) returns (ListItemHistoryResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // The working version (the live one when there is none) as the public and
+  // members will get it once approved, by the same derivation and lens as
+  // approval and the published reads. Officers, the Admin and the Webmaster.
+  rpc PreviewWorkingItem(PreviewWorkingItemRequest) returns (PreviewWorkingItemResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
   // Edition setup and the freeze for print (the Editor or the Admin).
@@ -439,12 +455,33 @@ message ListItemHistoryResponse {
   repeated HistoryEntry entries = 1;
 }
 
+message PreviewWorkingItemRequest {
+  string item_id = 1;
+}
+
+message PreviewWorkingItemResponse {
+  // As the public will see them; a title and summary are always public.
+  string title = 1;
+  string summary = 2;
+  // What an anonymous read will give: a members item's is one placeholder.
+  // Unset when the public will not see the item (an officers item, or one
+  // its lens hides).
+  Document public_body = 3;
+  // What a member's read will give, members passages kept. Unset when
+  // members will not see the item. Never wider than the caller's own lens.
+  Document members_body = 4;
+  // What the markup parser refuses; the version cannot be marked ready until
+  // they are fixed.
+  repeated MarkupProblem problems = 5;
+}
+
 message HistoryEntry {
   google.protobuf.Timestamp at = 1;
   // create, save, ready, send_back, approve, approve_self, withdraw, restore,
   // targets_changed, edition_changed.
   string action = 2;
-  // The Authentik subject; the web resolves it to a name for officers.
+  // The Authentik subject. The web shows actor_label, adding "(you)" when
+  // this is the signed-in subject; it keeps no subject-to-name store.
   string actor_subject = 3;
   string acting_office_id = 4;
   int32 version_number = 5;
@@ -453,6 +490,11 @@ message HistoryEntry {
   string to_state = 8;
   // A send-back note or a break-glass reason.
   string note = 9;
+  // Who acted, by role at the time, from the groups and office the audit row
+  // recorded: the office acted for ("Publications Officer"), "Admin",
+  // "Webmaster", "Officer", or a machine ("Newsletter agent", "System").
+  // Never a person's name.
+  string actor_label = 10;
 }
 
 message SaveEditionRequest {
