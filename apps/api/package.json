@@ -35,7 +35,8 @@
     "jose": "6.2.13",
     "jpeg-js": "0.4.4",
     "pdfjs-dist": "6.4.299",
-    "pg": "8.23.1"
+    "pg": "8.23.1",
+    "tldts": "7.4.24"
   },
   "devDependencies": {
     "@bufbuild/buf": "1.75.0",

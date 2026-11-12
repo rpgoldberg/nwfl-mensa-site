@@ -5,10 +5,30 @@ name: api
 on:
   push:
     branches: ['**']
-    paths: ['apps/api/**', '.github/workflows/api.yml']
+    # The linkcheck files the API copies or checks against (test/links/shared.test.ts).
+    paths:
+      - 'apps/api/**'
+      - '.github/workflows/api.yml'
+      - 'apps/linkcheck/src/urls.ts'
+      - 'apps/linkcheck/src/extract.ts'
+      - 'apps/linkcheck/test/urls.test.ts'
+      - 'apps/linkcheck/test/url-rules.test.ts'
+      - 'apps/linkcheck/test/fixtures/url-rules.json'
+      - 'apps/linkcheck/package.json'
+      - 'apps/linkcheck/package-lock.json'
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['apps/api/**', '.github/workflows/api.yml']
+    # The linkcheck files the API copies or checks against (test/links/shared.test.ts).
+    paths:
+      - 'apps/api/**'
+      - '.github/workflows/api.yml'
+      - 'apps/linkcheck/src/urls.ts'
+      - 'apps/linkcheck/src/extract.ts'
+      - 'apps/linkcheck/test/urls.test.ts'
+      - 'apps/linkcheck/test/url-rules.test.ts'
+      - 'apps/linkcheck/test/fixtures/url-rules.json'
+      - 'apps/linkcheck/package.json'
+      - 'apps/linkcheck/package-lock.json'
 
 permissions:
   contents: read

@@ -1,0 +1,202 @@
+[
+  {
+    "in": " https://example.org/",
+    "answer": "not-plain"
+  },
+  {
+    "in": "/relative/path",
+    "answer": "malformed"
+  },
+  {
+    "in": "HTTP://example.org/",
+    "answer": "http"
+  },
+  {
+    "in": "HTTPS://example.org/",
+    "answer": "not-plain"
+  },
+  {
+    "in": "Mailto:editor@example.org",
+    "answer": "not-plain"
+  },
+  {
+    "in": "data:text/html,x",
+    "answer": "scheme"
+  },
+  {
+    "in": "example.org",
+    "answer": "malformed"
+  },
+  {
+    "in": "file:///etc/passwd",
+    "answer": "scheme"
+  },
+  {
+    "in": "ftp://example.org/",
+    "answer": "scheme"
+  },
+  {
+    "in": "http://0x7f.1/",
+    "answer": "ip-literal"
+  },
+  {
+    "in": "http://exa mple.org/",
+    "answer": "malformed"
+  },
+  {
+    "in": "http://example.org./",
+    "answer": "http"
+  },
+  {
+    "in": "http://example.org/x",
+    "answer": "http"
+  },
+  {
+    "in": "http://example.org:80/",
+    "answer": "port"
+  },
+  {
+    "in": "https://",
+    "answer": "malformed"
+  },
+  {
+    "in": "https://-example.org/",
+    "answer": "host-name"
+  },
+  {
+    "in": "https://192.0.2.10/",
+    "answer": "ip-literal"
+  },
+  {
+    "in": "https://2130706433/",
+    "answer": "ip-literal"
+  },
+  {
+    "in": "https://@example.org/",
+    "answer": "credentials"
+  },
+  {
+    "in": "https://Example.ORG./a",
+    "answer": "ok"
+  },
+  {
+    "in": "https://[2001:db8::1]/",
+    "answer": "ip-literal"
+  },
+  {
+    "in": "https://a..example.org/",
+    "answer": "malformed"
+  },
+  {
+    "in": "https://a.b/",
+    "answer": "host-name"
+  },
+  {
+    "in": "https://b\u00fccher.example/",
+    "answer": "ok"
+  },
+  {
+    "in": "https://exa_mple.org/",
+    "answer": "host-name"
+  },
+  {
+    "in": "https://example.org",
+    "answer": "ok"
+  },
+  {
+    "in": "https://example.org/\u0000",
+    "answer": "control"
+  },
+  {
+    "in": "https://example.org/a b",
+    "answer": "not-plain"
+  },
+  {
+    "in": "https://example.org/a/b?q=1#top",
+    "answer": "ok"
+  },
+  {
+    "in": "https://example.org/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "answer": "too-long"
+  },
+  {
+    "in": "https://example.org/\u200b",
+    "answer": "control"
+  },
+  {
+    "in": "https://example.org:/x",
+    "answer": "port"
+  },
+  {
+    "in": "https://example.org:443/",
+    "answer": "port"
+  },
+  {
+    "in": "https://example.org:8443/",
+    "answer": "port"
+  },
+  {
+    "in": "https://exa\u202emple.org/",
+    "answer": "control"
+  },
+  {
+    "in": "https://intranet/",
+    "answer": "local-name"
+  },
+  {
+    "in": "https://localhost/",
+    "answer": "local-name"
+  },
+  {
+    "in": "https://sub.example.co.uk/path_(x)",
+    "answer": "ok"
+  },
+  {
+    "in": "https://user:pw@example.org/",
+    "answer": "credentials"
+  },
+  {
+    "in": "https://user@example.org/",
+    "answer": "credentials"
+  },
+  {
+    "in": "https://www.example.org/events?id=7",
+    "answer": "ok"
+  },
+  {
+    "in": "https:/example.org/",
+    "answer": "not-plain"
+  },
+  {
+    "in": "https:\\\\example.org/",
+    "answer": "not-plain"
+  },
+  {
+    "in": "https:example.org/x",
+    "answer": "not-plain"
+  },
+  {
+    "in": "javascript:alert(1)",
+    "answer": "scheme"
+  },
+  {
+    "in": "mailto:editor@example.org",
+    "answer": "ok"
+  },
+  {
+    "in": "mailto:editor@example.org?subject=Hi",
+    "answer": "ok"
+  },
+  {
+    "in": "mailto:no-at-sign",
+    "answer": "malformed"
+  },
+  {
+    "in": "tel:5550100",
+    "answer": "scheme"
+  },
+  {
+    "in": "www.example.org/x",
+    "answer": "http"
+  }
+]
