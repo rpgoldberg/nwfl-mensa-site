@@ -1,9 +1,14 @@
 ---
-// EVENTS2: the one toolbar (Ross's concept): "‹ period ›" and the List | Week | Month switch, on one
-// row where it fits (a phone's cover screen included), wrapping to two only when the text is large.
-// Links, so it works with no script and with Back; each keeps the selected date. List and Week also go
-// to that day's events (#day-<date>, a no-op when it has none): switching keeps your place (the
-// challenger). Not Month, whose grid comes before the day's events and should stay in view.
+// EVENTS2: the one toolbar (Ross's concept): "‹ period ›" and the List | Week | Month switch.
+// EV1 round 2 (Ross, 11-12): it changes with its room instead of squeezing words (site.css). Where the
+// period and the full switch fit one row, that is the toolbar. Where they do not, the switch gives way
+// to one view picker ("Week ▾") between ‹ and ›, and the range leaves the toolbar: the heading under
+// the day cells says it (the month's name under its grid). A screen reader always hears it in full.
+// Both are here; the calendar's width shows one. Links, so it works with no script and with Back;
+// the picker is a disclosure of the same links (CSP rules out a select that navigates). Each keeps
+// the selected date. List and Week also go to that day's events (#day-<date>, a no-op when it has
+// none): switching keeps your place (the challenger). Not Month, whose grid comes before the day's
+// events and should stay in view.
 import Icon from './Icon.astro';
 import { dayAnchor } from '../lib/calendar';
 import { CAL_VIEWS, type CalPeriod, VIEW_LABELS, calHref, calPeriod } from '../lib/event-views';
@@ -15,14 +20,23 @@ interface Props {
 const { period, today } = Astro.props;
 const unit = period.view === 'week' ? 'week' : 'month';
 const step = (date: string) => calPeriod({ view: period.view, date }, today).spoken;
+const views = CAL_VIEWS.map((v) => ({ v, href: calHref(v, period.date, today, v === 'month' ? '' : `#${dayAnchor(period.date)}`), current: v === period.view ? ('page' as const) : undefined }));
 ---
 <div class="caltool">
   <nav class="calstep" aria-label="Dates">
     <a class="calstep__arrow" href={calHref(period.view, period.prev, today)} data-step="prev" aria-label={`Previous ${unit}: ${step(period.prev)}`}><Icon name="back" /></a>
-    <p class="calstep__label"><span class="calstep__long" aria-hidden="true">{period.label}</span><span class="calstep__short" aria-hidden="true">{period.short}</span><span class="visually-hidden">Showing {period.spoken}</span></p>
+    <p class="calstep__label"><span class="calstep__w calstep__w--label" aria-hidden="true">{period.label}</span><span class="calstep__w calstep__w--short" aria-hidden="true">{period.short}</span><span class="visually-hidden">Showing {period.spoken}</span></p>
+    <nav class="calpick" aria-label="Calendar view">
+      <details data-calpick>
+        <summary><span class="visually-hidden">View: </span><span class="calpick__names">{views.map(({ v, current }) => <span class="calpick__name" data-now={current ? '' : undefined} aria-hidden={current ? undefined : 'true'}>{VIEW_LABELS[v]}</span>)}</span><Icon name="down" /></summary>
+        <ul class="calpick__menu">
+          {views.map(({ v, href, current }) => <li><a class="calpick__opt" href={href} data-view={v} aria-current={current}>{VIEW_LABELS[v]}</a></li>)}
+        </ul>
+      </details>
+    </nav>
     <a class="calstep__arrow" href={calHref(period.view, period.next, today)} data-step="next" aria-label={`Next ${unit}: ${step(period.next)}`}><Icon name="forward" /></a>
   </nav>
   <nav class="calviews" aria-label="Calendar view">
-    {CAL_VIEWS.map((v) => <a class="calviews__v" href={calHref(v, period.date, today, v === 'month' ? '' : `#${dayAnchor(period.date)}`)} data-view={v} aria-current={v === period.view ? 'page' : undefined}>{VIEW_LABELS[v]}</a>)}
+    {views.map(({ v, href, current }) => <a class="calviews__v" href={href} data-view={v} aria-current={current}>{VIEW_LABELS[v]}</a>)}
   </nav>
 </div>

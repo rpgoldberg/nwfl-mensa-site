@@ -21,8 +21,9 @@ const { caption, weeks, selected, today } = Astro.props;
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 ---
 <table class="month">
-  {/* The stepper above shows the month; here it names the table. */}
-  <caption class="visually-hidden">{caption}</caption>
+  {/* It names the table. The stepper above shows the month where it has room; where it is compact
+      (EV1), this caption shows it, under the grid (site.css). */}
+  <caption class="month__cap">{caption}</caption>
   <thead>
     <tr>{DAYS.map((d) => <th scope="col"><span class="d2" aria-hidden="true">{d.slice(0, 2)}</span><span class="d3" aria-hidden="true">{d.slice(0, 3)}</span><span class="visually-hidden">{d}</span></th>)}</tr>
   </thead>

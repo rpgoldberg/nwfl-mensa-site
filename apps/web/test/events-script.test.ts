@@ -78,16 +78,17 @@ interface Page {
   panel?: El | null;
   android?: El | null;
   notAndroid?: El[];
+  picker?: Picker | null;
 }
 
 function setup(page: Page, opts: { ua?: string; reduce?: boolean; clipboard?: (text: string) => Promise<void> } = {}) {
-  const doc = {
+  const doc = Object.assign(new EventTarget(), {
     querySelector: (sel: string) =>
-      ({ '[data-cal]': page.root ?? null, '[data-swipe]': page.strip ?? null, '[data-cal-status]': page.status ?? null, '[data-addcal-panel]': page.panel ?? null, '[data-android]': page.android ?? null, '.tiles--ribbon': page.ribbon ?? null })[sel] ?? null,
+      ({ '[data-calpick]': page.picker ?? null, '[data-cal]': page.root ?? null, '[data-swipe]': page.strip ?? null, '[data-cal-status]': page.status ?? null, '[data-addcal-panel]': page.panel ?? null, '[data-android]': page.android ?? null, '.tiles--ribbon': page.ribbon ?? null })[sel] ?? null,
     querySelectorAll: (sel: string) =>
       ({ 'a[data-day]': page.days, '[data-card-day]': page.cards, '[data-panel]': page.panels, 'a[data-view]': page.views, 'a[data-step]': page.steps, '[data-copy]': page.copy, '[data-not-android]': page.notAndroid })[sel] ?? [],
     getElementById: (id: string) => page.ids?.[id] ?? null,
-  };
+  });
   const replaced: string[] = [];
   const assigned: string[] = [];
   const clipboard = opts.clipboard ?? (() => Promise.resolve());
@@ -98,8 +99,27 @@ function setup(page: Page, opts: { ua?: string; reduce?: boolean; clipboard?: (t
     location: { assign: (url: string) => assigned.push(url) },
   };
   wireEvents(win as never, doc as never);
-  return { win, replaced, assigned };
+  return { win, doc, replaced, assigned };
 }
+
+/** The view picker: a <details> with its button (the summary) and its links inside. */
+class Picker extends El {
+  open = false;
+  readonly summary = Object.assign(new El(), { focused: false, focus() { this.focused = true; } });
+  readonly link = new El();
+  contains(node: unknown) {
+    return node === this || node === this.summary || node === this.link;
+  }
+  querySelector(sel: string) {
+    return sel === 'summary' ? this.summary : null;
+  }
+}
+/** An event on the document, as if it came from `target` and bubbled up. */
+const fromTarget = (type: string, target: unknown, init: Record<string, unknown> = {}) => {
+  const event = Object.assign(new Event(type), init);
+  Object.defineProperty(event, 'target', { value: target });
+  return event;
+};
 
 type ClickInit = { button?: number; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean };
 /** Node has no MouseEvent: a click is an Event with the fields the script reads. */
@@ -277,5 +297,45 @@ describe('the selected day in the ribbon, on arrival', () => {
     setup({ root: new El({ 'data-cal': 'list' }), ribbon });
     expect(ribbon.scrollLeft).toBe(0);
     setup({ root: new El({ 'data-cal': 'week' }), ribbon: null });
+  });
+});
+
+// EV1 round 2: the compact toolbar's view picker is a <details> (it opens and works with no script);
+// with it, it closes the ways a menu does.
+describe('the view picker', () => {
+  it('closes on Escape and puts focus back on its button', () => {
+    const picker = new Picker();
+    const { doc } = setup({ picker });
+    picker.open = true;
+    doc.dispatchEvent(fromTarget('keydown', picker.link, { key: 'Escape' }));
+    expect(picker.open).toBe(false);
+    expect(picker.summary.focused).toBe(true);
+  });
+  it('ignores other keys, and Escape while it is closed', () => {
+    const picker = new Picker();
+    const { doc } = setup({ picker });
+    picker.open = true;
+    doc.dispatchEvent(fromTarget('keydown', picker.link, { key: 'Enter' }));
+    expect(picker.open).toBe(true);
+    picker.open = false;
+    doc.dispatchEvent(fromTarget('keydown', doc, { key: 'Escape' }));
+    expect(picker.summary.focused).toBe(false);
+  });
+  it('closes on a tap outside it, and not on one inside it', () => {
+    const picker = new Picker();
+    const { doc } = setup({ picker });
+    picker.open = true;
+    doc.dispatchEvent(fromTarget('click', picker.link));
+    doc.dispatchEvent(fromTarget('click', picker.summary));
+    expect(picker.open).toBe(true);
+    doc.dispatchEvent(fromTarget('click', new El()));
+    expect(picker.open).toBe(false);
+    // Closed, a tap anywhere leaves it so.
+    doc.dispatchEvent(fromTarget('click', new El()));
+    expect(picker.open).toBe(false);
+  });
+  it('does nothing on a page without one', () => {
+    const { doc } = setup({ picker: null });
+    expect(() => doc.dispatchEvent(fromTarget('keydown', doc, { key: 'Escape' }))).not.toThrow();
   });
 });

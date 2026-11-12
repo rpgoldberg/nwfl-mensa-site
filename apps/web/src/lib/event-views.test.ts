@@ -142,6 +142,31 @@ describe('calPeriod: what each view covers, its label, and the dates either side
   });
 });
 
+// EV1: the range in words at every crossing (month, year) and in the weeks the clocks change, in any
+// time zone the server runs in; the spoken name always in full.
+describe('calPeriod: the range across months, years and the clock changes', () => {
+  it('a week across years, and the next year\'s', () => {
+    expect(calPeriod({ view: 'week', date: '2026-12-27' }, TODAY)).toMatchObject({ label: 'Dec 27 – Jan 2', short: 'Dec 27–Jan 2', spoken: 'the week of 27 December 2026 to 2 January 2027' });
+    expect(calPeriod({ view: 'week', date: '2027-12-31' }, TODAY)).toMatchObject({ label: 'Dec 26 – Jan 1', short: 'Dec 26–Jan 1', spoken: 'the week of 26 December 2027 to 1 January 2028' });
+  });
+  it('the longest month name, in full and short', () => {
+    expect(calPeriod({ view: 'month', date: '2026-09-30' }, TODAY)).toMatchObject({ label: 'September 2026', short: 'Sep 2026', spoken: 'September 2026' });
+  });
+  it('is DST-safe: the weeks the clocks change, in any time zone the server runs in', () => {
+    const zone = process.env['TZ'];
+    try {
+      for (const tz of ['America/Chicago', 'Pacific/Auckland', 'UTC']) {
+        process.env['TZ'] = tz;
+        expect(calPeriod({ view: 'week', date: '2026-03-08' }, TODAY), tz).toMatchObject({ from: '2026-03-08', to: '2026-03-14', label: 'Mar 8 – 14', short: 'Mar 8–14' });
+        expect(calPeriod({ view: 'week', date: '2026-11-07' }, TODAY), tz).toMatchObject({ from: '2026-11-01', to: '2026-11-07', label: 'Nov 1 – 7', short: 'Nov 1–7' });
+      }
+    } finally {
+      if (zone === undefined) delete process.env['TZ'];
+      else process.env['TZ'] = zone;
+    }
+  });
+});
+
 describe('the day tiles: the list ribbon holds only days with events; the week holds all seven', () => {
   const events = [
     event({ id: 'a', date: '2026-11-11', category: 'lunch' }),

@@ -1,6 +1,7 @@
 ---
 // Events, the calendar (R4), on request: public events only. EVENTS2 (Ross's concept, 11-10): one
-// toolbar ("‹ period ›" and List | Week | Month), then the view, then its events as cards, the type
+// toolbar ("‹ period ›" and List | Week | Month; EV1: on the heading's line where it fits, and compact
+// where room is short), then the view, then its events as cards, the type
 // legend and "Add our calendar" beneath. The view and the selected date live in the URL
 // (?view=week&d=2026-11-11; the old ?month=YYYY-MM is that month's grid), so it works with no script
 // and with Back; public/scripts/events.js only selects a day in place, swipes the week, copies the
@@ -42,24 +43,26 @@ const shown = agendaDays((period.upcoming ? comingUp(events, now) : events).filt
 const days = agendaDays(shown);
 const ribbon = view === 'list' ? ribbonDays(shown, today, selected) : [];
 const week = view === 'week' ? weekDays(period.from, shown, today, selected) : [];
-const title = view === 'list' ? (period.upcoming ? 'Upcoming events' : period.thisPeriod ? `Events ${period.spoken}` : `Events in ${period.spoken}`) : view === 'week' ? (period.thisPeriod ? `This week (${period.label})` : `Week of ${period.label}`) : shortDay(selected);
+// EV1 round 3 (Ross's concept): under the cells, the heading line is the bare range ("Nov 29 – Dec 5"), or
+// the list's words, in body text; the cards keep the fuller name.
+const title = view === 'list' ? (period.upcoming ? 'Upcoming events' : period.thisPeriod ? `Events ${period.spoken}` : `Events in ${period.spoken}`) : view === 'week' ? period.label : shortDay(selected);
+const cardsLabel = view === 'week' ? (period.thisPeriod ? `This week (${period.label})` : `Week of ${period.label}`) : title;
 // Nothing to list: who to ask. The roster read failing only drops the address.
 const roster = live && loaded?.ok && shown.length === 0 ? await attempt(() => live.offices()) : undefined;
 const president = roster?.ok ? roster.value.find((o) => o.slug === 'president' && o.aliasVerified)?.alias : undefined;
 const emptyWhen = period.upcoming ? 'for the next eight weeks' : view === 'list' && period.thisPeriod ? `${period.spoken} on` : `for ${period.spoken}`;
 ---
 <Base {...p}>
-  <h1>{p.title}</h1>
   {live ? (
     loaded && !loaded.ok ? (
       <div class="calendar" data-cal={view}>
-        <CalToolbar period={period} today={today} />
+        <div class="calhead"><h1>{p.title}</h1><CalToolbar period={period} today={today} /></div>
         <Unavailable what="The calendar" />
         <SubscribeCard links={links} />
       </div>
     ) : (
       <div class="calendar" data-cal={view}>
-        <CalToolbar period={period} today={today} />
+        <div class="calhead"><h1>{p.title}</h1><CalToolbar period={period} today={today} /></div>
         {view === 'list' && ribbon.length > 0 && (
           <ol class="tiles tiles--ribbon" aria-label="Days with events">
             {ribbon.map((tile, i) => (
@@ -102,10 +105,10 @@ const emptyWhen = period.upcoming ? 'for the next eight weeks' : view === 'list'
           </section>
         ) : (
           <section class="agenda" aria-labelledby="list-title">
-            <div class="agenda__head"><h2 id="list-title">{title}</h2><p class="tz">Central Time</p></div>
+            <div class="agenda__head"><h2 id="list-title" class="agenda__range">{title}</h2><p class="tz">Central Time</p></div>
             {shown.length > 0 ? (
               <>
-                <EventCards events={shown} label={title} selected={selected} anchors />
+                <EventCards events={shown} label={cardsLabel} selected={selected} anchors />
                 {view === 'week' && <p class="card empty">No other events this week.</p>}
               </>
             ) : <EmptyEvents when={emptyWhen} president={president} />}
@@ -116,6 +119,11 @@ const emptyWhen = period.upcoming ? 'for the next eight weeks' : view === 'list'
         <KindLegend />
       </div>
     )
-  ) : <EmptyEvents />}
+  ) : (
+    <>
+      <h1>{p.title}</h1>
+      <EmptyEvents />
+    </>
+  )}
   <script is:inline type="module" src="/scripts/events.js"></script>
 </Base>

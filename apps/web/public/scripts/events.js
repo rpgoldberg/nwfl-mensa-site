@@ -7,7 +7,9 @@
 //     to a screen reader;
 //   - a horizontal swipe on the week strip, to the previous or next week (the arrows stay);
 //   - Copy beside the feed address;
-//   - on Android, the Android steps first in "Add our calendar", and no computer-only Google link.
+//   - on Android, the Android steps first in "Add our calendar", and no computer-only Google link;
+//   - EV1: the compact toolbar's view picker (a <details>, working with no script) closed on Escape,
+//     its button focused again, and on a tap or click anywhere outside it.
 // Loaded as a same-origin module (CSP script-src 'self'); no inline script.
 
 /** An Android browser. Chrome's Desktop site mode says Linux instead, and gets the computer's order. */
@@ -17,11 +19,12 @@ const SWIPE = 60;
 
 /**
  * @param {Window} win
- * @param {Pick<Document, 'querySelector' | 'querySelectorAll' | 'getElementById'>} doc
+ * @param {Pick<Document, 'querySelector' | 'querySelectorAll' | 'getElementById' | 'addEventListener'>} doc
  */
 export function wireEvents(win, doc) {
   const root = doc.querySelector('[data-cal]');
   if (root) wireDays(win, doc, root.getAttribute('data-cal'));
+  wirePicker(doc);
   wireCopy(win, doc);
   if (ANDROID.test(win.navigator.userAgent)) androidFirst(doc);
 }
@@ -126,6 +129,24 @@ function wireCopy(win, doc) {
       );
     });
   }
+}
+
+/**
+ * The view picker opens and works as a plain disclosure; this only closes it the ways a menu closes.
+ *
+ * @param {Pick<Document, 'querySelector' | 'addEventListener'>} doc
+ */
+function wirePicker(doc) {
+  const picker = /** @type {HTMLDetailsElement | null} */ (doc.querySelector('[data-calpick]'));
+  if (!picker) return;
+  doc.addEventListener('keydown', (event) => {
+    if (!picker.open || /** @type {KeyboardEvent} */ (event).key !== 'Escape') return;
+    picker.open = false;
+    /** @type {HTMLElement | null} */ (picker.querySelector('summary'))?.focus();
+  });
+  doc.addEventListener('click', (event) => {
+    if (picker.open && !picker.contains(/** @type {Node | null} */ (event.target))) picker.open = false;
+  });
 }
 
 /** @param {Pick<Document, 'querySelector' | 'querySelectorAll'>} doc */
