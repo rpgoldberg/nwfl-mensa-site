@@ -37,6 +37,9 @@
 // duplicate claim what its earlier claim typed (none once closed). The member "Jordan Example" has a
 // profile (MEMBER_PROFILE), changed per sign-in by UpdateMyProfile, which takes the two names only.
 //
+// EDITOR E2: the publishing workflow (ContentService CreateItem to PreviewWorkingItem) is a model with
+// state (e2e/workflow.mjs) that takes the verified token's groups as the API does; see WORKFLOW below.
+//
 // SILENT_API_PORT is a second listener that accepts connections and never
 // answers: the API that hangs, for the timeout test. NO_ISSUES_API_PORT is a
 // third, the same API with no issue of the newsletter published yet.
@@ -54,6 +57,7 @@ import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole,
 import { AccountRoute, MemberStatus, MembershipService, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
+import { createWorkflow } from './workflow.mjs';
 
 const port = Number(process.env['API_PORT'] ?? 9091);
 const silentPort = Number(process.env['SILENT_API_PORT'] ?? 9092);
@@ -476,12 +480,12 @@ function rulesFor(sub) {
 const approvalSetting = (scope, setting) => ({ scope, rule: setting.rule, ...(setting.setAt ? { setAt: timestampFromDate(setting.setAt) } : {}), revision: setting.revision });
 
 /**
- * The signed-in caller of the officer area's RPCs, from the verified token, as the API reads it; never a cookie.
- * An officer or the Admin; for `read`, the member too (the buggy answer above).
- * @param {import('@connectrpc/connect').HandlerContext} ctx @param {{ read?: boolean }} [options]
+ * The signed-in caller, from the verified token, as the API reads it; never a cookie. No token, a bad
+ * one or the "refused" account is UNAUTHENTICATED.
+ * @param {import('@connectrpc/connect').HandlerContext} ctx
  * @returns {Promise<{ sub: string, groups: string[] }>}
  */
-async function officerOf(ctx, { read = false } = {}) {
+async function verifiedCaller(ctx) {
   if (ctx.requestHeader.has('cookie')) throw new ConnectError('the site must never send a cookie', Code.PermissionDenied);
   const header = ctx.requestHeader.get('authorization');
   if (header === null) throw new ConnectError('sign in first', Code.Unauthenticated);
@@ -496,10 +500,34 @@ async function officerOf(ctx, { read = false } = {}) {
   }
   if (payload.sub === SUBJECT.refused) throw new ConnectError('invalid token', Code.Unauthenticated);
   const groups = Array.isArray(payload['groups']) ? payload['groups'].map(String) : [];
-  const leaky = read && payload.sub === SUBJECT.member;
-  if (!groups.includes('nwfl-officers') && !groups.includes('nwfl-admin') && !leaky) throw new ConnectError('not permitted', Code.PermissionDenied);
   return { sub: String(payload.sub), groups };
 }
+
+/**
+ * The signed-in caller of the officer area's RPCs, from the verified token, as the API reads it; never a cookie.
+ * An officer or the Admin; for `read`, the member too (the buggy answer above).
+ * @param {import('@connectrpc/connect').HandlerContext} ctx @param {{ read?: boolean }} [options]
+ * @returns {Promise<{ sub: string, groups: string[] }>}
+ */
+async function officerOf(ctx, { read = false } = {}) {
+  const { sub, groups } = await verifiedCaller(ctx);
+  const leaky = read && sub === SUBJECT.member;
+  if (!groups.includes('nwfl-officers') && !groups.includes('nwfl-admin') && !leaky) throw new ConnectError('not permitted', Code.PermissionDenied);
+  return { sub, groups };
+}
+
+// EDITOR E2: the publishing workflow (e2e/workflow.mjs), one for the run, shared by every caller as the
+// API's is (a writer and an approver are two people). Who may do what is the model's to decide, from the
+// verified token's groups; the content approval rule is each Admin's own (rulesFor above). The seeds
+// (e2e/stand-in.ts WORKFLOW) are for reading: a test that changes an item creates its own. Nothing here
+// reaches the public reads: an item approved here is not listed on Home or /news.
+const WORKFLOW = createWorkflow({
+  offices: ROSTER.map((o) => ({ id: o.id, slug: o.slug, title: o.title })),
+  ruleFor: (sub) => (/** @type {{ rule: number }} */ (rulesFor(sub).get(ApprovalScope.CONTENT)).rule === ApprovalRule.ONE_APPROVER ? 'one_approver' : 'two_person'),
+});
+WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000001', slug: 'seeded-withheld', kind: 'article', officeId: OFFICE.president, state: 'draft', title: 'Seeded: part held back', markup: 'Open words and :members[HELD BACK CANARY]', withheld: true });
+WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000002', slug: 'seeded-waiting', kind: 'announcement', officeId: OFFICE.social, state: 'ready', title: 'Seeded: waiting for approval', summary: 'Bring a chair', markup: 'At the park.\n\n::: members\nThe gate code is 1234.\n:::' });
+WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000003', slug: 'seeded-published', kind: 'president_report', officeId: OFFICE.president, state: 'published', title: 'Seeded: published', markup: 'Thank you all.' });
 
 // W-SIGNUP: as in e2e/stand-in.ts (ACCOUNTS, SIGNUP_QUEUE). Every member account was last checked on October 20, 2026.
 const ENROLEE_PENDING_SUBJECT = '00000000-0000-4000-8000-0000000000c2';
@@ -642,6 +670,8 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     },
   });
   router.service(ContentService, {
+    // EDITOR E2: the publishing workflow, as the verified caller.
+    ...WORKFLOW.handlers(verifiedCaller),
     getRoster: (_req, ctx) => {
       anonymousOnly(ctx);
       return { offices: ROSTER };

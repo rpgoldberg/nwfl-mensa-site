@@ -1,0 +1,56 @@
+---
+// One published item, as Home and /news write it out (EDITOR E2): the President's report on Home
+// ('report': the "From the President" line, a level 2 title, the summary as the lead), an announcement
+// on Home ('announcement': a level 3 title), and a newsletter article on /news ('article': a level 3
+// title, the members line on a members item a reader may read, and the date it was published). The
+// officers' previews (Previews.astro) use the same markup, so an officer sees what readers will.
+// `labelId`: the id of the report's first line, which Home's section is labelled by.
+// Kept byte for byte as the pages write it today (test/components/item-article.test.ts).
+import type { FileLink } from '../data/live';
+import { formatDate } from '../data/format';
+import { MEMBERS_RULE } from '../lib/document';
+import ItemFiles from './ItemFiles.astro';
+
+interface Props {
+  layout: 'report' | 'announcement' | 'article';
+  title: string;
+  summary: string;
+  /** Rendered and escaped by documentHtml (src/lib/document.ts), for set:html. */
+  bodyHtml: string;
+  files: readonly FileLink[];
+  /** The Central date it was published, YYYY-MM-DD. */
+  publishedOn?: string | undefined;
+  source?: string | undefined;
+  labelId?: string | undefined;
+  /** An article: a members item. */
+  membersOnly?: boolean | undefined;
+  /** An article: a members item the reader may not read, by title and summary only. */
+  teaser?: boolean | undefined;
+}
+const { layout, title, summary, bodyHtml, files, publishedOn, source, labelId, membersOnly = false, teaser = false } = Astro.props;
+---
+{layout === 'report' ? (
+  <article class="item" data-source={source}>
+    <p class="eyebrow" id={labelId}>From the President{publishedOn && <> · {formatDate(publishedOn)}</>}</p>
+    <h2>{title}</h2>
+    {summary && <p class="lead">{summary}</p>}
+    <div class="prose" set:html={bodyHtml} />
+    <ItemFiles files={files} />
+  </article>
+) : layout === 'announcement' ? (
+  <article class="item" data-source={source}>
+    <h3>{title}</h3>
+    {summary && <p>{summary}</p>}
+    <div class="prose" set:html={bodyHtml} />
+    <ItemFiles files={files} />
+  </article>
+) : (
+  <article class="item" data-source={source}>
+    <h3>{title}</h3>
+    {membersOnly && !teaser && <p class="members-rule">{MEMBERS_RULE}</p>}
+    {publishedOn && <p class="muted">{formatDate(publishedOn)}</p>}
+    {summary && <p>{summary}</p>}
+    <div class="prose" set:html={bodyHtml} />
+    <ItemFiles files={files} />
+  </article>
+)}

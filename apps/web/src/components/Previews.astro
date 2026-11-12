@@ -1,0 +1,59 @@
+---
+// EDITOR E2: an item as each audience will see it once approved (S5, S7), from PreviewWorkingItem: the
+// API's own filter and lens, never one of the site's. "What the public sees", then "What members see",
+// each a frame headed in words, with the item written by the same markup as Home and /news
+// (ItemArticle). An audience the API gave no body will not see the item, and the frame says so in
+// words. The public's view of a members item is what /news shows the public: its title and summary
+// with the box alone. A body set but empty is a draft with no text yet (E1 previews a fresh draft's empty
+// tree as set): the frame shows the title and summary, and says in words that there is no text.
+// Side by side at 1100 px and up is the page's to lay out.
+import type { KindName, Preview, VisibilityName } from '../lib/api/editor';
+import { documentHtml, withheldHtml } from '../lib/document';
+import ItemArticle from './ItemArticle.astro';
+
+interface Props {
+  preview: Preview;
+  kind: KindName;
+  visibility: VisibilityName;
+  /** The frames' ids are `<idPrefix>-public` and `<idPrefix>-members`. */
+  idPrefix?: string;
+  headingLevel?: 2 | 3;
+}
+const { preview, kind, visibility, idPrefix = 'preview', headingLevel = 2 } = Astro.props;
+const layout = kind === 'president_report' ? 'report' : kind === 'article' ? 'article' : 'announcement';
+const why = visibility === 'officers' ? ' It is for officers only.' : '';
+// A members item's public body is the one placeholder: /news shows it as the box alone.
+const teaser = preview.publicBody?.blocks.length === 1 && preview.publicBody.blocks[0]?.kind.case === 'redacted';
+const Heading = headingLevel === 3 ? 'h3' : 'h2';
+const frames = [
+  {
+    id: `${idPrefix}-public`,
+    heading: 'What the public sees',
+    unseen: `The public will not see this item.${why}`,
+    bodyHtml: preview.publicBody === undefined ? undefined : teaser ? withheldHtml() : documentHtml(preview.publicBody, { view: 'public' }),
+    empty: preview.publicBody?.blocks.length === 0,
+    teaser,
+  },
+  {
+    id: `${idPrefix}-members`,
+    heading: 'What members see',
+    unseen: `Members will not see this item.${why}`,
+    bodyHtml: preview.membersBody === undefined ? undefined : documentHtml(preview.membersBody, { view: 'members' }),
+    empty: preview.membersBody?.blocks.length === 0,
+    teaser: false,
+  },
+];
+---
+<div class="previews cols">
+  {frames.map((f) => (
+    <section class="card" aria-labelledby={f.id}>
+      <Heading id={f.id}>{f.heading}</Heading>
+      {f.bodyHtml === undefined ? <p>{f.unseen}</p> : (
+        <>
+          <ItemArticle layout={layout} title={preview.title} summary={preview.summary} bodyHtml={f.bodyHtml} files={[]} membersOnly={visibility === 'members'} teaser={f.teaser} />
+          {f.empty && <p>There is no text yet: readers will see the title and summary only.</p>}
+        </>
+      )}
+    </section>
+  ))}
+</div>
