@@ -43,12 +43,18 @@ describe.skipIf(!live)('schema after A2-FIX', () => {
     return { itemId: item, id };
   };
   const toReady = (id: string): Promise<unknown> => app.query(`UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [id, HASH]);
-  const toApproved = (id: string): Promise<unknown> =>
+  /** Approved (cleared), not yet published (0029, EDITOR A1). */
+  const toCleared = (id: string): Promise<unknown> =>
     app.query(
-      `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
+      `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
          public_ast = '{"blocks": []}' WHERE id = $1`,
       [id],
     );
+  /** Approved, then published: two steps since 0029. */
+  const toApproved = async (id: string): Promise<void> => {
+    await toCleared(id);
+    await app.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [id]);
+  };
   const setStatus = (id: string, status: string): Promise<string> => failure(app, `UPDATE content_version SET status = $2 WHERE id = $1`, [id, status]);
 
   beforeAll(async () => {
@@ -164,7 +170,10 @@ describe.skipIf(!live)('schema after A2-FIX', () => {
       expect(await sqlstate(app, `UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, id])).toBe(FK_VIOLATION);
       await toReady(id);
       expect(await sqlstate(app, `UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, id])).toBe(FK_VIOLATION);
-      await toApproved(id);
+      // Approved but not yet published (cleared) is not live either (EDITOR A1).
+      await toCleared(id);
+      expect(await sqlstate(app, `UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, id])).toBe(FK_VIOLATION);
+      await app.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [id]);
       expect(await sqlstate(app, `UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, id])).toBe('ok');
       expect(await sqlstate(app, `UPDATE content_version SET status = 'superseded' WHERE id = $1`, [id])).toBe(FK_VIOLATION);
       // The revision path, in one transaction as approval runs it (0009 checks at commit that
@@ -251,7 +260,7 @@ describe.skipIf(!live)('schema after A2-FIX', () => {
       const { id } = await newVersion();
       await toReady(id);
       const approve = (ast: string): Promise<string> =>
-        sqlstate(app, `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = $2::jsonb WHERE id = $1`, [id, ast]);
+        sqlstate(app, `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = $2::jsonb WHERE id = $1`, [id, ast]);
       for (const ast of ['null', '"x"', '[]']) expect(await approve(ast), ast).toBe(CHECK_VIOLATION);
       const draft = (await newVersion()).id;
       for (const body of ['null', '"x"', '[]']) expect(await sqlstate(app, `UPDATE content_version SET body_ast = $2::jsonb WHERE id = $1`, [draft, body]), body).toBe(CHECK_VIOLATION);
@@ -261,7 +270,7 @@ describe.skipIf(!live)('schema after A2-FIX', () => {
       const { id } = await newVersion();
       await toReady(id);
       expect(
-        await sqlstate(app, `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'w', public_ast = '{"blocks": []}' WHERE id = $1`, [id]),
+        await sqlstate(app, `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'w', public_ast = '{"blocks": []}' WHERE id = $1`, [id]),
       ).toBe(CHECK_VIOLATION);
     });
   });

@@ -1,6 +1,7 @@
 // Publishing a content item the way approval will (A4b): a numbered version,
 // ready with its hash, approved with the derived public tree and both search
-// indexes, then made the item's live version. Used to seed read tests.
+// indexes, published (EDITOR A1, 0029), then made the item's live version. Used
+// to seed read tests.
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
 import { deriveForApproval } from '../../src/content/tree.js';
@@ -54,11 +55,13 @@ export async function publishItem(pool: pg.Pool, options: PublishOptions): Promi
   }
   const hash = createHash('sha256').update(JSON.stringify(options.body)).digest();
   await pool.query(`UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [versionId, hash]);
+  // Approved (cleared), then published (0029): two steps, as the API takes them.
   await pool.query(
-    `UPDATE content_version SET status = 'approved', approved_at = $2, approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
+    `UPDATE content_version SET status = 'cleared', approved_at = $2, approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
        public_ast = $3, search_public = to_tsvector('english', $4), search_members = to_tsvector('english', $5) WHERE id = $1`,
     [versionId, options.approvedAt ?? '2026-10-01T12:00:00Z', JSON.stringify(options.publicAst ?? derived.publicAst), derived.publicText, derived.membersText],
   );
+  await pool.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [versionId]);
   await pool.query(`UPDATE content_item SET state = 'ready' WHERE id = $1`, [itemId]);
   await pool.query(`UPDATE content_item SET state = 'published', live_version_id = $2 WHERE id = $1`, [itemId, versionId]);
   return { itemId, versionId };

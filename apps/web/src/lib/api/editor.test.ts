@@ -319,6 +319,20 @@ describe('grpcEditor: each call, with the officer\'s bearer, read into the edito
     expect((await api.getWorkingItem(OFFICER, ITEM_ID)).working).toMatchObject({ markup: '', markupWithheld: true, sendBackNote: 'Shorter, please.', printAsIs: true, onBehalfOf: 'A guest writer', approvedAt: READY_AT, status: 'draft' });
   });
 
+  it('reads a version approved and waiting to be published (EDITOR A1: CLEARED) as cleared, not as an answer it cannot read', async () => {
+    const waiting = create(ContentItemSchema, {
+      id: ITEM_ID,
+      slug: '',
+      kind: ContentKind.ARTICLE,
+      officeId: OFFICE_ID,
+      state: ItemState.READY,
+      working: { id: 'v1', number: 1, status: VersionStatus.CLEARED, title: 'T', visibility: ItemVisibility.PUBLIC, approvedAt: timestampFromDate(READY_AT) },
+    });
+    const server = await grpcServer((router) => router.service(ContentService, { getWorkingItem: () => ({ item: waiting }) }));
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    expect((await api.getWorkingItem(OFFICER, ITEM_ID)).working).toMatchObject({ status: 'cleared', approvedAt: READY_AT });
+  });
+
   it('saves an event date, a series and a venue, live on save; switching on or off only when asked', async () => {
     const seen: unknown[] = [];
     const occurrence = create(EventOccurrenceSchema, { id: 'series:2026-11-18', title: 'Lunch', status: OccurrenceStatus.CANCELLED, statusNote: 'Thanksgiving week' });

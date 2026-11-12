@@ -67,6 +67,11 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
   const save = (itemId: string, bodyMarkup: string, options = PUB, visibility: Visibility = 'public') =>
     content.saveDraft({ itemId, title: 'Fall picnic', summary: 'Saturday at noon', visibility: VISIBILITY[visibility], bodyMarkup }, options);
   const ready = async (itemId: string, options = PUB): Promise<Uint8Array> => (await content.markReady({ itemId }, options)).item?.working?.contentHash ?? new Uint8Array();
+  /** EDITOR A1: approval by `approver`, then publication by the Webmaster. */
+  const approvePublish = async (request: { itemId: string; contentHash: Uint8Array }, approver = WEBMASTER) => {
+    await content.approve(request, approver);
+    return content.publish(request, WEBMASTER);
+  };
   const draft = async (markup = 'Noon at the pier.', visibility: Visibility = 'public'): Promise<string> => {
     const item = await create();
     await save(item.id, markup, PUB, visibility);
@@ -122,7 +127,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
 
     it('carries over to the live version for its editors, and a new revision starts with only its own editor', async () => {
       const itemId = await draft();
-      const approved = (await content.approve({ itemId, contentHash: await ready(itemId) }, WEBMASTER)).item;
+      const approved = (await approvePublish({ itemId, contentHash: await ready(itemId) })).item;
       expect(approved?.live?.callerEdited).toBe(false);
       expect((await content.getWorkingItem({ itemId }, PUB)).item?.live?.callerEdited).toBe(true);
       const revision = await save(itemId, 'Noon at the pier, then lunch.', ADMIN);
@@ -148,7 +153,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
       await content.sendBack({ itemId, note: 'Add the parking.' }, ADMIN);
       expect((await working(itemId))?.sendBackNote).toBe('Add the parking.');
       const hash = await ready(itemId);
-      const approved = (await content.approve({ itemId, contentHash: hash }, WEBMASTER)).item;
+      const approved = (await approvePublish({ itemId, contentHash: hash })).item;
       expect(approved?.live?.sendBackNote).toBe('');
     });
 
@@ -206,7 +211,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
         .item as ContentItem;
       await save(item.id, 'A guest column.');
       const hash = await ready(item.id);
-      await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      await approvePublish({ itemId: item.id, contentHash: hash });
       await save(item.id, 'A guest column, revised.');
       await setPublic(RedactionCategory.MEMBER_NAME, RedactionAction.REDACT);
       try {
@@ -236,7 +241,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
 
     it('refuses the same caller a new revision of a published item whose live version is withheld, creating none', async () => {
       const itemId = await draft(`Call ${PHONE} for rides.`);
-      await content.approve({ itemId, contentHash: await ready(itemId) }, WEBMASTER);
+      await approvePublish({ itemId, contentHash: await ready(itemId) });
       await mark(itemId, PHONE, RedactionCategory.MEMBER_PHONE);
       await expect(save(itemId, '', LONE_ADMIN)).rejects.toMatchObject({ code: Code.FailedPrecondition });
       const { rows } = await api.pool.query<{ n: number }>(`SELECT n FROM content_version WHERE item_id = $1 ORDER BY n`, [itemId]);
@@ -253,6 +258,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
       await save(item.id, 'Noon at the pier, 1 pm.', PUB);
       const hash = await ready(item.id, PUB);
       await content.approve({ itemId: item.id, contentHash: hash }, ADMIN);
+      await content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       await content.withdraw({ itemId: item.id }, PUB);
       const entries = (await content.listItemHistory({ itemId: item.id }, OFFICER)).entries;
       expect(entries.map((entry) => [entry.action, entry.actorLabel])).toEqual([
@@ -263,6 +269,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
         ['save', 'Publications Officer'],
         ['ready', 'Publications Officer'],
         ['approve', 'Admin'],
+        ['publish', 'Webmaster'],
         ['withdraw', 'Publications Officer'],
       ]);
       // The subject stays for "(you)"; the label never repeats it.
@@ -347,7 +354,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
     it('previews the live version when there is no working one, and refuses a bad or unknown id', async () => {
       const itemId = await draft('Live text :members[members text].');
       const hash = await ready(itemId);
-      await content.approve({ itemId, contentHash: hash }, WEBMASTER);
+      await approvePublish({ itemId, contentHash: hash });
       const preview = await content.previewWorkingItem({ itemId }, PUB);
       expect(preview.publicBody).toEqual((await content.getPublishedItem({ slug: itemId })).item?.live?.body);
       expect(preview.membersBody).toEqual((await content.getPublishedItem({ slug: itemId }, MEMBER)).item?.live?.body);
@@ -366,7 +373,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
 
     it('previews the working revision of a published item, not its live text', async () => {
       const itemId = await draft('Live wording.');
-      await content.approve({ itemId, contentHash: await ready(itemId) }, WEBMASTER);
+      await approvePublish({ itemId, contentHash: await ready(itemId) });
       await content.saveDraft({ itemId, title: 'Fall picnic, moved', summary: 'Sunday at noon', visibility: ItemVisibility.PUBLIC, bodyMarkup: 'Draft wording.' }, PUB);
       const preview = await content.previewWorkingItem({ itemId }, PUB);
       expect(preview).toMatchObject({ title: 'Fall picnic, moved', summary: 'Sunday at noon' });
@@ -383,7 +390,7 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
         await mark(item.id, PHONE, RedactionCategory.MEMBER_PHONE, MarkField.SUMMARY);
         const preview = await content.previewWorkingItem({ itemId: item.id }, PUB);
         expect(preview).toMatchObject({ title: `Picnic with ${WITHHELD}`, summary: `Call ${WITHHELD}` });
-        await content.approve({ itemId: item.id, contentHash: await ready(item.id) }, WEBMASTER);
+        await approvePublish({ itemId: item.id, contentHash: await ready(item.id) });
         const published = (await content.getPublishedItem({ slug: item.id })).item?.live;
         expect([preview.title, preview.summary]).toEqual([published?.title, published?.summary]);
       } finally {

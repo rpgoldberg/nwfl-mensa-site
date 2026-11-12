@@ -50,6 +50,11 @@ const fakeVerifier: TokenVerifier = {
     if (token === 'officer-token') return Promise.resolve({ client: 'site', subject: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'], scopes: [] });
     if (token === 'agent-token') return Promise.resolve({ client: 'agent', subject: 'svc-nwfl-newsletter', groups: [], scopes: ['newsletter.read'] });
     if (token === 'verifier-token') return Promise.resolve({ client: 'verifier', subject: 'svc-nwfl-verifier', groups: [], scopes: ['membership.verify'] });
+    // EDITOR A1: a token naming a system subject, as the issue loader writes (load.ts LOADER).
+    if (token === 'system-site-token') return Promise.resolve({ client: 'site', subject: 'system:issue-loader', groups: ['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster'], scopes: [] });
+    if (token === 'system-agent-token') return Promise.resolve({ client: 'agent', subject: 'system:issue-loader', groups: [], scopes: ['newsletter.read'] });
+    if (token === 'system-other-token') return Promise.resolve({ client: 'site', subject: 'system:anything', groups: ['nwfl-officers'], scopes: [] });
+    if (token === 'systemish-token') return Promise.resolve({ client: 'site', subject: 'System:issue-loader', groups: ['nwfl-officers'], scopes: [] });
     return Promise.reject(new ConnectError('kid unknown: details an attacker should not see', Code.PermissionDenied));
   },
 };
@@ -144,6 +149,13 @@ describe('authInterceptor: who is calling', () => {
       await expect(api.events({ authorization: header })).rejects.toMatchObject({ code: Code.Unauthenticated });
     },
   );
+
+  it('refuses a token whose subject is a system subject (the issue loader writes as one), for every kind of client', async () => {
+    for (const token of ['system-site-token', 'system-other-token', 'systemish-token']) {
+      await expect(api.events(bearer(token)), token).rejects.toMatchObject({ code: Code.Unauthenticated, rawMessage: 'invalid token' });
+    }
+    await expect(api.newsletter(bearer('system-agent-token'))).rejects.toMatchObject({ code: Code.Unauthenticated });
+  });
 
   it('ignores every other header: no request header can choose the audience', async () => {
     expect(await api.events({ 'x-audience': 'members', 'x-nwfl-groups': 'nwfl-officers', 'l5d-client-id': WEB })).toEqual(ANONYMOUS);

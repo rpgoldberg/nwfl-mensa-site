@@ -34,6 +34,10 @@ enum VersionStatus {
   VERSION_STATUS_APPROVED = 3;
   VERSION_STATUS_SUPERSEDED = 4;
   VERSION_STATUS_DISCARDED = 5;
+  // Approved by a reviewer, not yet published: "Approved, ready to publish".
+  // Publish makes it APPROVED (live); an edit, a send-back or a withdraw of
+  // the item returns it to DRAFT and the approval no longer counts.
+  VERSION_STATUS_CLEARED = 6;
 }
 
 // The whole-item floor. Passages inside a public item can still be members-only.
@@ -196,6 +200,20 @@ message ContentVersion {
   // Whether the caller edited this version, so that approving it needs the
   // one-approver rule or the Admin's break-glass. Officer reads.
   bool caller_edited = 20;
+  // When it was published (made live), and so set only once it has been.
+  google.protobuf.Timestamp published_at = 21;
+  // Whether the caller may approve it as it stands, without break-glass: a
+  // reviewer who did not edit it, or a publisher who did while one approver
+  // is enough. The Admin's break-glass is offered on caller_edited. Officer reads.
+  bool caller_may_approve = 22;
+  // Whether the caller may publish it as it stands: a publisher, the version
+  // approved (CLEARED), and not by the caller's own exception. Officer reads.
+  bool caller_may_publish = 23;
+  // Who approved it, in words ("Treasurer", "Admin"); empty until approved.
+  string approved_as_label = 24;
+  // Approved by the approver's own exception (break-glass or one approver),
+  // so someone else must publish it.
+  bool approval_kind_self = 25;
 }
 
 message ContentItem {
@@ -250,6 +268,8 @@ service ContentService {
   rpc MarkReady(MarkReadyRequest) returns (MarkReadyResponse);
   rpc SendBack(SendBackRequest) returns (SendBackResponse);
   rpc Approve(ApproveRequest) returns (ApproveResponse);
+  // The Webmaster, or the Admin as backup: an approved (CLEARED) version goes live.
+  rpc Publish(PublishRequest) returns (PublishResponse);
   rpc Withdraw(WithdrawRequest) returns (WithdrawResponse);
   rpc Restore(RestoreRequest) returns (RestoreResponse);
   // The roster is live on save (R2).
@@ -333,10 +353,12 @@ message ListPublishedEditionsResponse {
 }
 
 message ListWorkingItemsRequest {
-  // Empty means draft and ready.
+  // Empty means draft and ready. Read only when version_statuses is empty.
   repeated ItemState states = 1;
   string office_id = 2;
   string edition_id = 3;
+  // The working version's status: DRAFT, READY or CLEARED; empty means all three.
+  repeated VersionStatus version_statuses = 4;
 }
 
 message ListWorkingItemsResponse {
@@ -399,6 +421,9 @@ message SendBackRequest {
   string item_id = 1;
   // Required; the author sees it.
   string note = 2;
+  // The office the caller acts for: one they hold. Empty means their one
+  // office if they hold exactly one, else none.
+  string acting_as_office_id = 3;
 }
 
 message SendBackResponse {
@@ -416,9 +441,24 @@ message ApproveRequest {
   // Admin only: approve a version the caller edited. Needs a reason.
   bool break_glass = 5;
   string break_glass_reason = 6;
+  // The office the caller approves for: one they hold. Empty means their one
+  // office if they hold exactly one, else none.
+  string acting_as_office_id = 7;
 }
 
 message ApproveResponse {
+  ContentItem item = 1;
+}
+
+message PublishRequest {
+  string item_id = 1;
+  // The hash the publisher saw. A version changed since then is not published.
+  bytes content_hash = 2;
+  // Required to put back on the website an item that was taken down.
+  bool republish_withdrawn = 3;
+}
+
+message PublishResponse {
   ContentItem item = 1;
 }
 

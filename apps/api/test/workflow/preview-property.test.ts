@@ -138,6 +138,7 @@ describe.skipIf(!live)(`EDITOR E1: the preview equals the published reads (seed 
     const preview = await content.previewWorkingItem({ itemId }, PUB);
     const hash = (await content.markReady({ itemId }, PUB)).item?.working?.contentHash as Uint8Array;
     await content.approve({ itemId, contentHash: hash }, WEBMASTER);
+    await content.publish({ itemId, contentHash: hash }, WEBMASTER);
 
     expect(preview.publicBody, `public, ${drawn.visibility}: ${drawn.markup}`).toEqual(await published(itemId, {}));
     expect(preview.membersBody, `members, ${drawn.visibility}: ${drawn.markup}`).toEqual(await published(itemId, MEMBER));

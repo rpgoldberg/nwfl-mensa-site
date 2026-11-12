@@ -6,13 +6,14 @@ import { ANONYMOUS, type Caller } from './caller.js';
 import { internalGroups } from './groups.js';
 import {
   requireAdmin,
-  requireContentApprover,
   requireEditorReader,
   requireGrantor,
   requireMembershipApprover,
   requireOffice,
   requireOfficer,
   requireOfficerOrAdmin,
+  requirePublisher,
+  requireReviewer,
   requireScope,
   requireSignupReopener,
   requireUser,
@@ -78,10 +79,23 @@ describe('requireOffice: the own-office rule', () => {
 });
 
 describe('approvers and grants', () => {
-  it('makes the Admin and the Webmaster the content approvers (P15)', () => {
-    expect(() => requireContentApprover(ross)).not.toThrow();
-    expect(() => requireContentApprover(webmaster)).not.toThrow();
-    expect(() => requireContentApprover(treasurer)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+  it('makes every officer, the Admin and the Webmaster a content reviewer, and nobody else (EDITOR A1)', () => {
+    for (const reviewer of [ross, webmaster, treasurer, user('nwfl-officers'), user('nwfl-admin'), user('nwfl-webmaster')]) {
+      expect(() => requireReviewer(reviewer)).not.toThrow();
+    }
+    expect(requireReviewer(treasurer)).toMatchObject({ officer: true, offices: ['treasurer'] });
+    for (const other of [approver, rvc, member, user('nwfl-office-treasurer'), user('nwfl-affiliates', 'nwfl-office-treasurer')]) {
+      expect(() => requireReviewer(other)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    }
+  });
+
+  it('makes the Webmaster, and the Admin as backup, the publishers, and no other officer (EDITOR A1)', () => {
+    expect(requirePublisher(webmaster)).toMatchObject({ webmaster: true });
+    expect(requirePublisher(ross)).toMatchObject({ admin: true, webmaster: false });
+    expect(() => requirePublisher(user('nwfl-webmaster'))).not.toThrow();
+    for (const other of [treasurer, approver, rvc, member, user('nwfl-officers', 'nwfl-office-webmaster')]) {
+      expect(() => requirePublisher(other)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    }
   });
 
   it('makes nwfl-membership-approvers, or the Admin while the seat is vacant, the membership approvers', () => {
@@ -94,6 +108,10 @@ describe('approvers and grants', () => {
     expect(() => requireGrantor(ross)).not.toThrow();
     expect(() => requireGrantor(webmaster)).not.toThrow();
     expect(() => requireGrantor(approver)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    // Its own rule (EDITOR A1): a reviewer who is neither is not a grantor.
+    expect(() => requireGrantor(treasurer)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    expect(() => requireGrantor(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+    expect(() => requireGrantor(agent)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
   });
 
   it('lets every officer read drafts, and nobody else', () => {
@@ -106,7 +124,10 @@ describe('who may hold a role at all', () => {
   it('asks the anonymous caller to sign in, and refuses machine callers', () => {
     expect(() => requireUser(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
     expect(() => requireUser(agent)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
-    expect(() => requireContentApprover(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+    expect(() => requireReviewer(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+    expect(() => requirePublisher(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+    expect(() => requireReviewer(agent)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    expect(() => requirePublisher(agent)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
     expect(() => requireOffice(agent, 'treasurer')).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
   });
 

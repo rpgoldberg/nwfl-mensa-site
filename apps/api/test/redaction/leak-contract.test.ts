@@ -151,6 +151,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     'ContentService.MarkReady',
     'ContentService.SendBack',
     'ContentService.Approve',
+    // EDITOR A1: the second step; its answer is the officer read Approve gives, through the caller's lens.
+    'ContentService.Publish',
     'ContentService.Withdraw',
     'ContentService.Restore',
     'ContentService.SaveOfficeTerm',

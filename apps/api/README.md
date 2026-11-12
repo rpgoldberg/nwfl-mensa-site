@@ -170,12 +170,20 @@ by the handler for a precise answer, and by the database (`0007`).
   for any office, audited as such). Markup is parsed on save
   (`src/content/markup.ts`); a version with problems cannot be marked ready.
   "Mark ready" records the content hash (`src/content/hash.ts`), with website
-  and newsletter on and email off by default. An approver (Admin or Webmaster)
-  approves only with the hash they saw, never a version they edited, except
-  the Admin's break-glass with a written reason (`approve_self` in the
-  history). Approval derives the public tree and both search indexes, then
-  repoints the live version before superseding the old one. Withdraw is 410
-  at once; restore makes a draft that stays withdrawn until approved.
+  and newsletter on and email off by default. Approving and publishing are two
+  steps (EDITOR A1, `0029`). A reviewer (any officer, the Admin or the
+  Webmaster) approves only with the hash they saw, never a version they
+  edited, except the Admin's break-glass with a written reason (`approve_self`
+  in the history) or, under one approver, a publisher's own edit; and records
+  the office they act for, one they hold. Approval derives the public tree and
+  both search indexes and makes the version "approved, ready to publish"
+  (`cleared`); nothing goes live. The Webmaster, or the Admin as backup,
+  publishes it with the hash they saw: never their own break-glass or
+  one-approver approval, and a taken-down item only when told to put it back.
+  Publishing repoints the live version before superseding the old one. An
+  edit, a send-back or a withdraw voids an approval waiting to be published.
+  Withdraw is 410 at once; restore makes a draft that stays withdrawn until
+  published.
 - **Events** (`src/events/writes.ts`): live on save. Venues by any officer,
   series by their host office, a one-off event by its owning office, and the
   Admin for any.
@@ -212,8 +220,11 @@ row in `audit_event`, and prints counts only.
 One issue becomes one public DOCUMENT item, `Pensa Mensa, October-November
 2026` with `Volume 30, Number 5` as its summary (slug `pensa-mensa-2026-10`),
 holding a public PDF and a members PDF. The public is told "not found" for
-the members file. The writer and approver is `system:issue-loader`, with a
-self_breakglass reason that names the approval tag and both hashes.
+the members file. The writer, approver and publisher is `system:issue-loader`,
+with a self_breakglass reason that names the approval tag and both hashes; it
+approves and publishes in its one transaction, the only way `0029` lets an
+approver publish their own break-glass approval. No token may carry a
+`system:` subject.
 
 The bundle is JSON: `format` (`nwfl-issue/1`), `issue` (`period` YYYY-MM,
 `volume`, `number`), `office` (a slug), `approval` (`reference` such as
@@ -411,7 +422,8 @@ when:
   `pdf_original` to a role other than `nwfl`, adds a member to `nwfl`, or
   changes an owner;
 - an RPC's request message carries a `bytes` field, even nested
-  (`ApproveRequest.content_hash`, a hash, is the one frozen exemption);
+  (`ApproveRequest.content_hash` and `PublishRequest.content_hash`, hashes,
+  are the frozen exemptions);
 - an RPC's request tree differs from `test/gates/untrusted-pdf.requests.json`.
   Review the change against the gate, then refresh the file in the same PR
   with `UPDATE_REQUEST_SNAPSHOT=1`.
@@ -795,10 +807,14 @@ tables.
 The rules the database itself enforces:
 
 - the publishing workflow moves only along its transitions (a version:
-  draft, ready, approved, superseded or discarded; an item: draft, ready,
-  published, withdrawn), everything starts as a draft, a version's authored
-  content freezes at ready and everything freezes once it is decided, and an
-  item's live version is always an approved one;
+  draft, ready, cleared (approved, not yet published), approved (published),
+  superseded or discarded, never ready straight to approved; an item: draft,
+  ready, published, withdrawn), everything starts as a draft, a version's
+  authored content freezes at ready and everything freezes once it is
+  approved, but for a cleared version going back to draft without its
+  approval, and an item's live version is always a published one; an editor
+  of a version approves it only by break-glass or under one approver, and a
+  version so approved is published by someone else (`0029`);
 - `audit_event` is append-only by grant and by trigger, the database numbers
   and times each event, and its payload never holds a membership number or a
   last name under any spelling; `content_version_editor` is append-only and a

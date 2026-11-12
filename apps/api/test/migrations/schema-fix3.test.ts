@@ -30,10 +30,12 @@ describe.skipIf(!live)('schema after API-FIX3', () => {
     ).id;
   const approve = async (id: string): Promise<void> => {
     await app.query(`UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [id, HASH]);
+    // Approved, then published: two steps since 0029 (EDITOR A1).
     await app.query(
-      `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`,
+      `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`,
       [id],
     );
+    await app.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'w' WHERE id = $1`, [id]);
   };
   const file = async (versionId: string, key: string, audience: string): Promise<string> =>
     (

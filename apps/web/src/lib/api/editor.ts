@@ -91,7 +91,8 @@ export class EditorRefused extends Error {
 
 export type KindName = 'article' | 'president_report' | 'announcement' | 'minutes' | 'treasurer_summary' | 'document' | 'page';
 export type StateName = 'draft' | 'ready' | 'published' | 'withdrawn';
-export type VersionStatusName = 'draft' | 'ready' | 'approved' | 'superseded' | 'discarded';
+/** cleared (EDITOR A1): approved by a reviewer, waiting to be published; approved: published (live). */
+export type VersionStatusName = 'draft' | 'ready' | 'cleared' | 'approved' | 'superseded' | 'discarded';
 export type VisibilityName = 'public' | 'members' | 'officers';
 
 export interface Targets {
@@ -207,6 +208,7 @@ const STATES: Record<StateName, ItemState> = { draft: ItemState.DRAFT, ready: It
 const STATUSES: Record<VersionStatusName, VersionStatus> = {
   draft: VersionStatus.DRAFT,
   ready: VersionStatus.READY,
+  cleared: VersionStatus.CLEARED,
   approved: VersionStatus.APPROVED,
   superseded: VersionStatus.SUPERSEDED,
   discarded: VersionStatus.DISCARDED,

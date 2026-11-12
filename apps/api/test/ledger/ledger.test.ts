@@ -36,6 +36,7 @@ import { APP, APP_PW, live, sqlstate, url, urlFor } from '../helpers/pg.js';
 
 const PUB = as('pub-token');
 const WEBMASTER = as('webmaster-token');
+const TREASURER = as('treasurer-token');
 const ADMIN = as('admin-token');
 const PHONE = '850-555-0199';
 const NAME = 'Quillon Brask';
@@ -236,12 +237,13 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
     let itemId: string;
     let versionId: string;
 
-    /** An item published through the workflow, so the approval writes its rows. */
+    /** An item published through the workflow, so the publication writes its rows (approved by the Treasurer, published by the Webmaster). */
     const publish = async (slug: string, body: string): Promise<{ itemId: string; versionId: string }> => {
       const item = (await content.createItem({ kind: ContentKind.ARTICLE, officeId: office, slug, title: 'Ledger picnic' }, PUB)).item!;
       await content.saveDraft({ itemId: item.id, title: 'Ledger picnic', bodyMarkup: body }, PUB);
       const hash = (await content.markReady({ itemId: item.id, targets: { website: true, newsletter: false, email: false } }, PUB)).item?.working?.contentHash as Uint8Array;
-      const live = (await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER)).item?.live?.id as string;
+      await content.approve({ itemId: item.id, contentHash: hash }, TREASURER);
+      const live = (await content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER)).item?.live?.id as string;
       return { itemId: item.id, versionId: live };
     };
     /** sha256 of the exact item the read path gives this caller. */
@@ -391,7 +393,8 @@ describe.skipIf(!live)('the publication ledger (0016)', () => {
       const tx = await api.pool.connect();
       try {
         await tx.query('BEGIN');
-        await tx.query(`UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal', public_ast = '{"blocks":[]}' WHERE id = $1`, [v2]);
+        await tx.query(`UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal', public_ast = '{"blocks":[]}' WHERE id = $1`, [v2]);
+        await tx.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [v2]);
         await tx.query(`UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [secret.itemId, v2]);
         await tx.query(`UPDATE content_version SET status = 'superseded' WHERE id = $1`, [secret.versionId]);
         await tx.query('COMMIT');

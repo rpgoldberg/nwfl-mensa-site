@@ -270,6 +270,7 @@ describe.skipIf(!live)('approved links, through the loader and the links command
         const content = api.client(ContentService);
         const hash = (await content.markReady({ itemId: two.itemId, targets: { website: true, newsletter: false, email: false } }, ADMIN)).item?.working?.contentHash as Uint8Array;
         await content.approve({ itemId: two.itemId, contentHash: hash }, WEBMASTER);
+        await content.publish({ itemId: two.itemId, contentHash: hash }, WEBMASTER);
         await refused(linksFor(approved), /^pensa-mensa-2024-07 was edited or withdrawn after loading/);
 
         const withdrawn = await issue('2024-08');

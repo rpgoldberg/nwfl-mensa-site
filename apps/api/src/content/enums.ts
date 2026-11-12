@@ -23,6 +23,7 @@ export const STATES: Record<string, ItemState> = {
 export const VERSION_STATUSES: Record<string, VersionStatus> = {
   draft: VersionStatus.DRAFT,
   ready: VersionStatus.READY,
+  cleared: VersionStatus.CLEARED,
   approved: VersionStatus.APPROVED,
   superseded: VersionStatus.SUPERSEDED,
   discarded: VersionStatus.DISCARDED,

@@ -3,7 +3,9 @@
 // version is refused, and only the Admin breaks glass. Under one-approver the Admin or the Webmaster
 // may approve their own edit, recorded as a single-approver approval; who may approve at all does not
 // widen. Every approval records the rule it was made under, and the rule is read again when the
-// approval lands, so a flip in between decides it. Every person here is made up.
+// approval lands, so a flip in between decides it. Every person here is made up. EDITOR A1: approval
+// now makes a version cleared ("approved, ready to publish"), self-approval under one-approver is for
+// the publishers only (the Admin, the Webmaster), and someone else publishes a self-approved version.
 import pg from 'pg';
 import { type Client, Code } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -44,7 +46,8 @@ describe.skipIf(!live)('content approval under the approval rule', () => {
   const recorded = async (itemId: string): Promise<Recorded> =>
     (
       await api.pool.query<Recorded>(
-        `SELECT v.approval_kind, v.approval_rule, v.approved_by_sub, v.approval_reason FROM content_item i JOIN content_version v ON v.id = i.live_version_id WHERE i.id = $1`,
+        `SELECT v.approval_kind, v.approval_rule, v.approved_by_sub, v.approval_reason FROM content_item i
+         JOIN content_version v ON v.id = coalesce(i.working_version_id, i.live_version_id) WHERE i.id = $1`,
         [itemId],
       )
     ).rows[0]!;
@@ -97,11 +100,16 @@ describe.skipIf(!live)('content approval under the approval rule', () => {
 
     it('lets the Webmaster approve their own edit, recorded as a single-approver approval', async () => {
       const { item, hash } = await readyItem(WEBMASTER, 'webmaster');
-      expect((await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER)).item?.state).toBe(ItemState.PUBLISHED);
+      const approved = (await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER)).item;
+      expect(approved?.state).toBe(ItemState.READY);
+      expect(approved?.working?.status).toBe(VersionStatus.CLEARED);
       expect(await recorded(item.id)).toEqual({ approval_kind: 'self_single', approval_rule: 'one_approver', approved_by_sub: 'sub-webmaster', approval_reason: null });
       expect(await lastAudit(item.id)).toMatchObject({ action: 'approve_single', payload: { approval_rule: 'one_approver' } });
+      // Someone else publishes it (EDITOR A1): the Admin, as backup.
+      await expect(content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      expect((await content.publish({ itemId: item.id, contentHash: hash }, ADMIN)).item?.state).toBe(ItemState.PUBLISHED);
       const history = (await content.listItemHistory({ itemId: item.id }, OFFICER)).entries;
-      expect(history.map((e) => e.action)).toEqual(['create', 'save', 'ready', 'approve_single']);
+      expect(history.map((e) => e.action)).toEqual(['create', 'save', 'ready', 'approve_single', 'publish']);
     });
 
     it('still refuses the Webmaster\'s break-glass, which stays the Admin\'s alone', async () => {
@@ -133,10 +141,19 @@ describe.skipIf(!live)('content approval under the approval rule', () => {
       expect(await lastAudit(item.id)).toMatchObject({ action: 'approve', payload: { approval_rule: 'one_approver' } });
     });
 
-    it('does not let any other officer approve', async () => {
+    it('does not let an officer who is not a publisher approve their own edit (EDITOR A1, S3)', async () => {
       const { item, hash } = await readyItem(PUB);
-      for (const who of [TREASURER, PUB, OFFICER]) await expect(content.approve({ itemId: item.id, contentHash: hash }, who)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(content.approve({ itemId: item.id, contentHash: hash }, PUB)).rejects.toMatchObject({
+        code: Code.PermissionDenied,
+        rawMessage: 'you edited this version; a second officer must approve it',
+      });
+      const own = await readyItem(TREASURER, 'treasurer');
+      await expect(content.approve({ itemId: own.item.id, contentHash: own.hash }, TREASURER)).rejects.toMatchObject({ code: Code.PermissionDenied });
       expect(await workingStatus(item.id)).toBe(VersionStatus.READY);
+      expect(await workingStatus(own.item.id)).toBe(VersionStatus.READY);
+      // Another officer may: any officer reviews.
+      await content.approve({ itemId: item.id, contentHash: hash }, OFFICER);
+      expect(await recorded(item.id)).toMatchObject({ approval_kind: 'normal', approval_rule: 'one_approver', approved_by_sub: 'sub-officer' });
     });
 
     it('refuses an approval sent again once the version is approved, as before', async () => {

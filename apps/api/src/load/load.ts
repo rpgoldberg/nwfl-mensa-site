@@ -72,7 +72,7 @@ import { recordAudit } from '../audit/audit.js';
 import type { Caller } from '../auth/caller.js';
 import { canonicalJson } from '../content/hash.js';
 import { readRule } from '../approval/service.js';
-import { type VersionRow, addEditor, applyApproval, readyVersion } from '../content/workflow.js';
+import { type VersionRow, addEditor, approveVersion, publishVersion, readyVersion } from '../content/workflow.js';
 import { type Db, type Env, createPool } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import { MAX_ORIGINAL_BYTES, inputsFor, storeOriginal } from '../pdf/store.js';
@@ -281,7 +281,7 @@ async function unchanged(client: TxClient, bundle: Bundle, slug: string, existin
   return { status: 'unchanged', itemId: existing.id, publicFileId: publicFile.id, membersFileId: membersFile.id, marks: marks.length };
 }
 
-/** A first run: the item, its version, both files and their originals, the marks, the check against the approval, ready, approved. */
+/** A first run: the item, its version, both files and their originals, the marks, the check against the approval, ready, approved, published. */
 async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<typeof issueContract>): Promise<LoadResult> {
   const office = (await client.query<{ id: string }>(`SELECT id FROM office WHERE slug = $1`, [bundle.office])).rows[0];
   if (office === undefined) throw new LoadError(`unknown office '${bundle.office}'`);
@@ -344,7 +344,10 @@ async function loadIssue(client: TxClient, bundle: Bundle, contract: ReturnType<
   const reason = approvalReason(bundle.approval);
   // The rule in force, recorded with the approval; the loader breaks glass under either (SOLO-APPROVE).
   const rule = await readRule(client, 'content');
-  await applyApproval(client, LOADER_CALLER, { id: itemId, live_version_id: null }, version, { kind: 'self_breakglass', reason, rule });
+  // Approve, then publish, in this one transaction: the only way 0029 lets an approver publish their own
+  // break-glass approval (approved_at = published_at, both now()), and only as the loader.
+  const cleared = await approveVersion(client, LOADER_CALLER, version, { kind: 'self_breakglass', reason, rule, actingOfficeId: null });
+  await publishVersion(client, LOADER_CALLER, { id: itemId, live_version_id: null, state: 'ready' }, cleared, { backup: false });
   return { status: 'loaded', itemId, publicFileId: ids.public, membersFileId: ids.members, marks: bundle.marks.length };
 }
 

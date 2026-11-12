@@ -12,6 +12,9 @@
 //               members receive).
 //     verifier  the membership verifier (audience public).
 //   anything else                -> UNAUTHENTICATED, never a quiet downgrade
+//   a subject starting system:   -> UNAUTHENTICATED: the database trusts the issue
+//                                   loader's subject (system:issue-loader, 0029), and
+//                                   no token may carry it (EDITOR A1)
 //
 // Then each service admits one kind of caller (the design notes, A3):
 //   NewsletterService          the agent only
@@ -99,6 +102,9 @@ export const rejectAllTokens: TokenVerifier = {
 
 export const noStanding: MemberStanding = { isMember: () => Promise.resolve(false) };
 
+/** The prefix of the subjects the API writes as itself (load.ts LOADER); never a token's. */
+export const SYSTEM_SUBJECT = 'system:';
+
 const CALLER = createContextKey<Caller | undefined>(undefined, { description: 'the verified caller' });
 
 // RFC 6750 b64token, exactly one, after a case-insensitive "Bearer".
@@ -124,6 +130,8 @@ async function establish(header: string | null, verifier: TokenVerifier, standin
     // The verifier's reason (a kid, an issuer, a clock) stays on this side.
     throw new ConnectError('invalid token', Code.Unauthenticated);
   }
+  // Compared without case: no variant of a system subject reads as a person.
+  if (verified.subject.toLowerCase().startsWith(SYSTEM_SUBJECT)) throw new ConnectError('invalid token', Code.Unauthenticated);
   const scopes = [...verified.scopes];
   if (verified.client === 'agent') return { kind: 'agent', subject: verified.subject, groups: [], scopes, audience: 'members' };
   if (verified.client === 'verifier') return { kind: 'verifier', subject: verified.subject, groups: [], scopes, audience: 'public' };

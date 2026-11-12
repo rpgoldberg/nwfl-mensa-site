@@ -46,7 +46,8 @@ describe.skipIf(!live)('editions and the freeze', () => {
     const itemId = item?.id as string;
     await content.saveDraft({ itemId, title: 'Item', bodyMarkup: `Text ${n}.` }, PUB);
     const hash = (await content.markReady({ itemId, editionId, targets: { website: true, newsletter, email: false } }, PUB)).item?.working?.contentHash as Uint8Array;
-    const live = (await content.approve({ itemId, contentHash: hash }, WEBMASTER)).item?.live?.id as string;
+    await content.approve({ itemId, contentHash: hash }, WEBMASTER);
+    const live = (await content.publish({ itemId, contentHash: hash }, WEBMASTER)).item?.live?.id as string;
     return { id: itemId, version: live };
   };
 
@@ -103,7 +104,8 @@ describe.skipIf(!live)('editions and the freeze', () => {
     // A revision approved after the freeze does not change the printed issue.
     await content.saveDraft({ itemId: a.id, title: 'Item', bodyMarkup: 'Revised after print.' }, PUB);
     const hash = (await content.markReady({ itemId: a.id }, PUB)).item?.working?.contentHash as Uint8Array;
-    const revised = (await content.approve({ itemId: a.id, contentHash: hash }, WEBMASTER)).item?.live?.id;
+    await content.approve({ itemId: a.id, contentHash: hash }, WEBMASTER);
+    const revised = (await content.publish({ itemId: a.id, contentHash: hash }, WEBMASTER)).item?.live?.id;
     expect(revised).not.toBe(a.version);
     const pinned = await api.pool.query<{ version_id: string }>(`SELECT version_id FROM edition_item WHERE edition_id = $1 AND item_id = $2`, [target, a.id]);
     expect(pinned.rows[0]?.version_id).toBe(a.version);
