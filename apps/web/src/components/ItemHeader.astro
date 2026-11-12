@@ -1,0 +1,27 @@
+---
+// EDITOR E2: the head of an item's page in the officer editor (S4 edit, S7 review): what it is and the
+// office it is posted as, its title, and its status in words beside the chip (never colour alone). When
+// the item was sent back, the approver's note in a box; a ready version marked "print as is" says that
+// it can no longer be edited.
+import type { EditorItem } from '../lib/api/editor';
+import { editFormFor } from '../lib/editor/form';
+import { KIND_WORDS, statusOf } from '../lib/editor/status';
+
+interface Props {
+  item: EditorItem;
+  /** The office it is posted as, in words. */
+  officeName: string;
+}
+const { item, officeName } = Astro.props;
+const version = item.working ?? item.live;
+const status = statusOf(item);
+const note = status.key === 'sent_back' ? item.working?.sendBackNote ?? '' : '';
+const form = editFormFor(item);
+---
+<header class="item-header">
+  <p class="eyebrow">{KIND_WORDS[item.kind]} · {officeName}</p>
+  <h1>{version?.title ?? ''}</h1>
+  <p class="status"><span class={`chip ${status.tone}`}>{status.label}</span></p>
+  {note && <div class="notice" role="note"><p><strong>The approver's note:</strong></p><blockquote><p>{note}</p></blockquote></div>}
+  {!form.ok && form.reason === 'print_as_is' && <p class="notice">{form.message}</p>}
+</header>

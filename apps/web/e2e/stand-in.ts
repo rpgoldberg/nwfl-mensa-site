@@ -167,6 +167,19 @@ export const APPROVAL = {
 };
 
 /**
+ * EDITOR E2: the publishing workflow's seeds (api.mjs WORKFLOW.seed, e2e/workflow.mjs), for reading only:
+ * a test that changes an item creates its own, with its own title. "withheld" is a draft whose markup the
+ * officers' lens holds back (body_markup_withheld): the edit form must refuse it, and the canary must
+ * never show. "waiting" is ready, with a members block the public preview must not show. "published" is
+ * live, with no change waiting. None of them is listed on Home or /news.
+ */
+export const WORKFLOW = {
+  withheld: { id: 'c0e20000-0000-4000-8000-000000000001', title: 'Seeded: part held back', canary: 'HELD BACK CANARY', officeId: '11111111-1111-4111-8111-111111111111' },
+  waiting: { id: 'c0e20000-0000-4000-8000-000000000002', title: 'Seeded: waiting for approval', membersPassage: 'The gate code is 1234.', officeId: '22222222-2222-4222-8222-222222222222' },
+  published: { id: 'c0e20000-0000-4000-8000-000000000003', title: 'Seeded: published', officeId: '11111111-1111-4111-8111-111111111111' },
+} as const;
+
+/**
  * A14: the newsletter's articles (api.mjs ARTICLES). The public article carries a members passage and a
  * members PDF; the members and officers articles are listed for the public too, in full, as a buggy API
  * might. A member sees the passage, the members article and the members PDF; nobody sees the officers

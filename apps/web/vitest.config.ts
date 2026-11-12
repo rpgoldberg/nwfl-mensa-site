@@ -1,10 +1,16 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  // Astro's virtual modules do not exist outside its build; unit tests see a full build.
-  resolve: { alias: { 'astro:env/server': new URL('./test/stubs/astro-env-server.ts', import.meta.url).pathname } },
   test: {
-    include: ['server/**/*.test.{ts,mjs}', 'src/**/*.test.ts', 'test/**/*.test.ts'],
+    projects: [
+      {
+        // Astro's virtual modules do not exist outside its build; unit tests see a full build.
+        resolve: { alias: { 'astro:env/server': new URL('./test/stubs/astro-env-server.ts', import.meta.url).pathname } },
+        test: { name: 'unit', include: ['server/**/*.test.{ts,mjs}', 'src/**/*.test.ts', 'test/**/*.test.ts'], exclude: ['test/components/**'] },
+      },
+      // EDITOR E2: .astro components, rendered by Astro's container in Astro's own Vite setup.
+      './vitest.components.config.ts',
+    ],
     coverage: {
       provider: 'v8',
       include: ['server/**/*.mjs', 'src/lib/**/*.ts', 'src/data/**/*.ts', 'src/middleware.ts', 'src/pages/**/*.ts', 'public/scripts/**/*.js'],
