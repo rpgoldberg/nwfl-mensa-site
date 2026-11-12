@@ -300,6 +300,20 @@ describe.skipIf(!live)('the members-only canary', () => {
     expect(dump(preview.membersBody)).toContain(`Block ${TOKEN}`);
   });
 
+  // EDITOR E1: the Admin and the Webmaster without the officers group read at the public's audience. As approvers
+  // they read the working tree with its members passages (GetWorkingItem, and the preview's members body); no
+  // other read gives them the token, and the preview's public body never does.
+  it.each([
+    ['the Admin without the officers group', as('lone-admin-token')],
+    ['the Webmaster without the officers group', as('lone-webmaster-token')],
+  ])('gives %s the token through the approvers\' working reads only, never in the preview\'s public body', async (_who, who) => {
+    const { carriers } = await sweep(who);
+    expect(carriers(TOKEN)).toEqual(['ContentService.GetWorkingItem', 'ContentService.PreviewWorkingItem']);
+    const preview = await api.client(ContentService).previewWorkingItem({ itemId: ids['publicItem'] as string }, who);
+    expect(dump(preview.publicBody)).toContain('Meet at ');
+    expect(dump(preview.publicBody)).not.toContain(TOKEN);
+  });
+
   it('keeps the token out of the public search index and in the members index', async () => {
     const { rows } = await api.pool.query<{ in_public: boolean; in_members: boolean }>(
       `SELECT bool_or(search_public @@ plainto_tsquery('english', $1)) AS in_public,

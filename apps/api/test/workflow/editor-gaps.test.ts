@@ -169,6 +169,15 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
         await setPublic(RedactionCategory.MEMBER_NAME, RedactionAction.SHOW);
       }
     });
+    it('stays gone once the version is ready again, even when the author then edits it back to draft', async () => {
+      const itemId = await draft();
+      await ready(itemId);
+      await content.sendBack({ itemId, note: 'A stale note.' }, WEBMASTER);
+      await ready(itemId);
+      // Editing a READY version returns it to draft with a save row and no send-back: the old note must not return.
+      await save(itemId, 'Noon at the pier, 2 pm.');
+      expect((await working(itemId))?.sendBackNote).toBe('');
+    });
   });
 
   describe('3. body_markup_withheld: the data-loss guard', () => {
@@ -209,6 +218,29 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
       } finally {
         await setPublic(RedactionCategory.MEMBER_NAME, RedactionAction.SHOW);
       }
+    });
+
+    it('refuses SaveDraft to a caller whose lens withholds part of the item, and keeps the body', async () => {
+      const itemId = await draft(`Call ${PHONE} for rides.`);
+      await mark(itemId, PHONE, RedactionCategory.MEMBER_PHONE);
+      const form = await working(itemId, LONE_ADMIN);
+      expect(form).toMatchObject({ bodyMarkupWithheld: true, bodyMarkup: '' });
+      // Saving that form back would wipe the body: refused, and nothing is written.
+      await expect(save(itemId, form?.bodyMarkup ?? '', LONE_ADMIN)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+      expect((await working(itemId, PUB))?.bodyMarkup).toBe(`Call ${PHONE} for rides.`);
+      expect((await content.listItemHistory({ itemId }, PUB)).entries.map((entry) => entry.action)).toEqual(['create', 'save']);
+      // An officer whose lens withholds nothing still saves the same item.
+      const saved = await save(itemId, `Call ${PHONE} for rides, or text.`, PUB);
+      expect(saved.item?.working).toMatchObject({ bodyMarkupWithheld: false, bodyMarkup: `Call ${PHONE} for rides, or text.` });
+    });
+
+    it('refuses the same caller a new revision of a published item whose live version is withheld, creating none', async () => {
+      const itemId = await draft(`Call ${PHONE} for rides.`);
+      await content.approve({ itemId, contentHash: await ready(itemId) }, WEBMASTER);
+      await mark(itemId, PHONE, RedactionCategory.MEMBER_PHONE);
+      await expect(save(itemId, '', LONE_ADMIN)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+      const { rows } = await api.pool.query<{ n: number }>(`SELECT n FROM content_version WHERE item_id = $1 ORDER BY n`, [itemId]);
+      expect(rows.map((row) => row.n)).toEqual([1]);
     });
   });
 
@@ -330,6 +362,33 @@ describe.skipIf(!live)('EDITOR E1: the API the officers\' editor needs', () => {
       await content.previewWorkingItem({ itemId }, PUB);
       expect(await count()).toBe(before);
       expect((await working(itemId))?.status).toBe(VersionStatus.DRAFT);
+    });
+
+    it('previews the working revision of a published item, not its live text', async () => {
+      const itemId = await draft('Live wording.');
+      await content.approve({ itemId, contentHash: await ready(itemId) }, WEBMASTER);
+      await content.saveDraft({ itemId, title: 'Fall picnic, moved', summary: 'Sunday at noon', visibility: ItemVisibility.PUBLIC, bodyMarkup: 'Draft wording.' }, PUB);
+      const preview = await content.previewWorkingItem({ itemId }, PUB);
+      expect(preview).toMatchObject({ title: 'Fall picnic, moved', summary: 'Sunday at noon' });
+      expect(dump(preview.publicBody)).toContain('Draft wording.');
+      expect(dump(preview)).not.toContain('Live wording.');
+    });
+
+    it('gives the title and summary as the public will get them: through the public lens', async () => {
+      await setPublic(RedactionCategory.MEMBER_NAME, RedactionAction.REDACT);
+      try {
+        const item = await create();
+        await content.saveDraft({ itemId: item.id, title: `Picnic with ${NAME}`, summary: `Call ${PHONE}`, visibility: ItemVisibility.PUBLIC, bodyMarkup: 'Plain body.' }, PUB);
+        await mark(item.id, NAME, RedactionCategory.MEMBER_NAME, MarkField.TITLE);
+        await mark(item.id, PHONE, RedactionCategory.MEMBER_PHONE, MarkField.SUMMARY);
+        const preview = await content.previewWorkingItem({ itemId: item.id }, PUB);
+        expect(preview).toMatchObject({ title: `Picnic with ${WITHHELD}`, summary: `Call ${WITHHELD}` });
+        await content.approve({ itemId: item.id, contentHash: await ready(item.id) }, WEBMASTER);
+        const published = (await content.getPublishedItem({ slug: item.id })).item?.live;
+        expect([preview.title, preview.summary]).toEqual([published?.title, published?.summary]);
+      } finally {
+        await setPublic(RedactionCategory.MEMBER_NAME, RedactionAction.SHOW);
+      }
     });
   });
 });

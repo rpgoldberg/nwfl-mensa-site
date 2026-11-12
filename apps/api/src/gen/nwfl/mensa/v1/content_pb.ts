@@ -553,7 +553,7 @@ export type ContentVersion = Message<"nwfl.mensa.v1.ContentVersion"> & {
   /**
    * Set when the caller's lens withholds anything from this version: then
    * body_markup is empty and content_hash is unset. An edit form must not be
-   * filled from it, as saving the empty markup would wipe the body.
+   * filled from it; SaveDraft refuses such a caller (FAILED_PRECONDITION).
    *
    * @generated from field: bool body_markup_withheld = 18;
    */
@@ -1422,7 +1422,9 @@ export type PreviewWorkingItemResponse = Message<"nwfl.mensa.v1.PreviewWorkingIt
 
   /**
    * What a member's read will give, members passages kept. Unset when
-   * members will not see the item. Never wider than the caller's own lens.
+   * members will not see the item. Capped at the caller's audience by rank:
+   * a caller reading at the public's audience gets it through the public's
+   * lens. The cap is by rank, not by policy cell.
    *
    * @generated from field: nwfl.mensa.v1.Document members_body = 4;
    */
@@ -1503,9 +1505,10 @@ export type HistoryEntry = Message<"nwfl.mensa.v1.HistoryEntry"> & {
 
   /**
    * Who acted, by role at the time, from the groups and office the audit row
-   * recorded: the office acted for ("Publications Officer"), "Admin",
-   * "Webmaster", "Officer", or a machine ("Newsletter agent", "System").
-   * Never a person's name.
+   * recorded: an office's title ("Publications Officer"), "Admin",
+   * "Webmaster", "Officer", "Someone" (a signed-in person with no role), or a
+   * machine ("Newsletter agent", "Membership verifier", "System"). The title
+   * is the office's current one. Never a person's name.
    *
    * @generated from field: string actor_label = 10;
    */
@@ -2191,9 +2194,10 @@ export const ContentService: GenService<{
     output: typeof ListItemHistoryResponseSchema;
   },
   /**
-   * The working version (the live one when there is none) as the public and
-   * members will get it once approved, by the same derivation and lens as
-   * approval and the published reads. Officers, the Admin and the Webmaster.
+   * The working version (the live one when there is none, a withdrawn item
+   * included) as the public and members will get it once approved, by the
+   * same derivation and lens as approval and the published reads. Officers,
+   * the Admin and the Webmaster.
    *
    * @generated from rpc nwfl.mensa.v1.ContentService.PreviewWorkingItem
    */

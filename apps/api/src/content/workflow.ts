@@ -124,10 +124,11 @@ function requireId(value: string, field: string): string {
   return value;
 }
 
-async function loadItem(client: TxClient, itemId: string): Promise<ItemRow> {
+/** `lock: false` for a read that must not wait on (or hold up) a writer: the preview. */
+async function loadItem(client: TxClient, itemId: string, lock = true): Promise<ItemRow> {
   const { rows } = await client.query<ItemRow>(
     `SELECT i.id, i.slug, i.kind, i.office_id, o.slug AS office_slug, i.state, i.live_version_id, i.working_version_id, i.withdrawn_at
-     FROM content_item i JOIN office o ON o.id = i.office_id WHERE i.id = $1 FOR UPDATE OF i`,
+     FROM content_item i JOIN office o ON o.id = i.office_id WHERE i.id = $1${lock ? ' FOR UPDATE OF i' : ''}`,
     [requireId(itemId, 'item_id')],
   );
   const row = rows[0];
@@ -155,8 +156,8 @@ function publicLine(value: string): string {
   return value;
 }
 
-async function loadVersion(client: TxClient, versionId: string): Promise<VersionRow> {
-  const { rows } = await client.query<VersionRow>(`SELECT * FROM content_version WHERE id = $1 FOR UPDATE`, [versionId]);
+async function loadVersion(client: TxClient, versionId: string, lock = true): Promise<VersionRow> {
+  const { rows } = await client.query<VersionRow>(`SELECT * FROM content_version WHERE id = $1${lock ? ' FOR UPDATE' : ''}`, [versionId]);
   return rows[0] as VersionRow;
 }
 
@@ -282,6 +283,16 @@ async function newVersion(client: TxClient, item: ItemRow, from: VersionRow, cal
 }
 
 /**
+ * Whether the lens withholds anything of this version from its audience: a mark on the item that
+ * changes what it sees, or an on-behalf-of name it does not show. Then the markup and the hash are
+ * not given (versionMessage), and the caller may not save the item (SaveDraft), as a form filled
+ * from the withheld read would wipe the body.
+ */
+function withholds(lens: Lens, row: Pick<VersionRow, 'item_id' | 'on_behalf_of'>): boolean {
+  return lens.affected([subjectKey('content_item', row.item_id)]) || (row.on_behalf_of !== null && lens.action('member_name') !== 'show');
+}
+
+/**
  * The latest send-back note on a version since it was last marked ready (EDITOR E1). Only a draft can
  * carry one: a send-back returns the version to draft, and marking it ready again clears it.
  */
@@ -303,7 +314,7 @@ async function sendBackNote(client: TxClient, row: VersionRow): Promise<string> 
  */
 async function versionMessage(client: TxClient, row: VersionRow, lens: Lens, subject: string) {
   const subjects = [subjectKey('content_item', row.item_id)];
-  const withheld = lens.affected(subjects) || (row.on_behalf_of !== null && lens.action('member_name') !== 'show');
+  const withheld = withholds(lens, row);
   const edited = await client.query(`SELECT 1 FROM content_version_editor WHERE version_id = $1 AND subject = $2`, [row.id, subject]);
   const { rows: files } = await client.query<{ id: string; filename: string; mime_type: string; size_bytes: string; sha256: Buffer; audience: string; role: string; public_copy_of: string | null }>(
     `SELECT id, filename, mime_type, size_bytes::text AS size_bytes, sha256, audience, role, public_copy_of FROM stored_file WHERE version_id = $1 ORDER BY filename, id`,
@@ -389,9 +400,13 @@ const RANK: Record<Audience, number> = { public: 0, members: 1, officers: 2 };
  * PreviewWorkingItem (EDITOR E1): a version as each audience will get it once approved, by the same
  * steps approval and the published reads take: deriveForApproval's public tree, then bodyFor and the
  * audience's lens. A body is unset when that audience will not see the item at all (an officers item,
- * or one its lens hides). Each audience is capped at the caller's own: a caller who reads below the
- * members (the Admin without the officers group, not a member) gets the members body through their
- * own lens, never a wider one. NOT_FOUND when the caller's own lens hides the item, as GetWorkingItem.
+ * or one its lens hides). Each audience is capped at the caller's audience by rank (public, members,
+ * officers): a caller who reads below the members (the Admin without the officers group, not a member)
+ * gets the members body through the public's lens. The cap is by rank, not by cell: where the policy
+ * withholds more from officers than from members, an officer's members body shows what members will
+ * see, which their own read withholds. NOT_FOUND when the caller's own lens hides the item, as
+ * GetWorkingItem. A withdrawn item with no working version previews its last live version, which a
+ * restore would bring back as the new draft.
  */
 async function previewOf(client: TxClient, own: Audience, itemId: string, version: VersionRow): Promise<PreviewWorkingItemResponse> {
   const subjects = [subjectKey('content_item', itemId)];
@@ -476,10 +491,12 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
       return tx(async (client) => {
         const item = await loadItemAs(client, caller, request.itemId);
         requireOffice(caller, item.office_slug);
-        let version =
-          item.working_version_id !== null
-            ? await loadVersion(client, item.working_version_id)
-            : await newVersion(client, item, await loadVersion(client, item.live_version_id as string), caller);
+        // The data-loss guard (EDITOR E1): a caller who reads this item with anything withheld got no
+        // markup, so their save would overwrite the body with what they could not see.
+        const base = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string);
+        const lens = await loadLens(client, caller.audience, { items: [item.id], versions: [base.id] });
+        if (withholds(lens, base)) throw precondition('part of this item is withheld from you; an officer who can see all of it must edit it');
+        let version = item.working_version_id !== null ? base : await newVersion(client, item, base, caller);
         const from = version.status;
         if (version.status === 'ready') {
           if (version.print_as_is) throw precondition('a print-as-is version can be approved or sent back, never edited');
@@ -760,8 +777,9 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
       const caller = callerIn(ctx);
       requireEditorReader(caller);
       return tx(async (client) => {
-        const item = await loadItem(client, request.itemId);
-        const version = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string);
+        // No row locks: a read must not hold up a writer.
+        const item = await loadItem(client, request.itemId, false);
+        const version = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string, false);
         return previewOf(client, caller.audience, item.id, version);
       });
     },
