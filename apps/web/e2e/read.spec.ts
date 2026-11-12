@@ -4,7 +4,7 @@
 // page, and offers Open in another app and Download; without JavaScript it says the reader needs it.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { PUBLIC_CACHE } from '../server/policy.mjs';
+import { PRIVATE_CACHE } from '../server/policy.mjs';
 import { SIZES } from '../server/prefs.mjs';
 import { MEMBERS_COPY, NEEDS_SCRIPT, PUBLIC_COPY, PUBLIC_TAG, PUBLIC_TAG_NOTE } from '../src/lib/reader';
 import { setPrefs } from './prefs';
@@ -140,13 +140,13 @@ test.describe('/read, the public copy', () => {
     await expect(page.locator('main a[href^="/sign-in"]')).toHaveCount(0);
   });
 
-  test('is publicly cached as the public copy is, the same for every reader not signed in', async ({ request }) => {
+  test('is cached as the public copy is, by the browser only, the same for every reader not signed in', async ({ request }) => {
     const first = await request.get(read(PUBLIC_ID));
     const second = await request.get(read(PUBLIC_ID));
     const file = await request.get(`/documents/${PUBLIC_ID}.pdf`);
     expect(first.status()).toBe(200);
-    expect(first.headers()['cache-control']).toBe(PUBLIC_CACHE);
-    expect(file.headers()['cache-control']).toBe(PUBLIC_CACHE);
+    expect(first.headers()['cache-control']).toBe(PRIVATE_CACHE);
+    expect(file.headers()['cache-control']).toBe(PRIVATE_CACHE);
     expect(await first.text()).toBe(await second.text());
   });
 

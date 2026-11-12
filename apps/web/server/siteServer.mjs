@@ -118,7 +118,8 @@ function applyPolicy(req, res, path, headers, decoded) {
   const cdn = cdnCacheControl(cache);
   if (cdn) res.setHeader('CDN-Cache-Control', cdn);
   // A page differs by cookie (session, reader settings), so a cache keyed on
-  // the URL alone must not hand one reader's copy to another.
+  // the URL alone must not hand one reader's copy to another. Browsers honour
+  // Vary; many CDNs do not, so a page is private too (CACHEPREF, policy.mjs).
   if (!cache.endsWith('immutable')) res.setHeader('Vary', 'Cookie');
 }
 

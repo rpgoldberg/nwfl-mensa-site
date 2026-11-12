@@ -185,10 +185,10 @@ test.describe('/news, the public-copy notice', () => {
     await expect(page.getByText('to read the members copy')).toHaveCount(0);
   });
 
-  test('is the same for every signed-out reader, and the page stays publicly cached', async ({ request }) => {
+  test('is the same for every signed-out reader, and the page is kept by no shared cache', async ({ request }) => {
     const first = await request.get('/news');
     const second = await request.get('/news');
-    expect(first.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(first.headers()['cache-control']).toBe('private, max-age=60, stale-while-revalidate=60');
     const lines = (html: string) => html.split(' for the full issue.').length - 1;
     expect(lines(await first.text())).toBe(1);
     expect(lines(await second.text())).toBe(1);

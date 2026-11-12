@@ -125,11 +125,32 @@ export function isHostOnlyCookie(setCookie) {
  */
 const HASHED_ASSET = /^\/_astro\/[\w.-]+$/;
 
-/** An anonymous page: shared caches keep it a minute, and may serve it a minute stale while they fetch a fresh copy. */
+/** What no cookie changes: shared caches keep it a minute, and may serve it a minute stale while they fetch a fresh copy. */
 export const PUBLIC_CACHE = 'public, max-age=60, stale-while-revalidate=60';
 
 /**
- * The Cache-Control for one response. Anonymous pages are public, briefly; a
+ * CACHEPREF: anything else, every page included, kept as long but by the reader's own browser only.
+ * A page's bytes differ by cookie (the reader's theme and size, their account area), and Cloudflare
+ * and many CDNs ignore Vary: Cookie: a shared copy, even the one sent with no cookie, would reach a
+ * reader whose cookie asks for another. A browser honours Vary, so a new setting fetches afresh.
+ */
+export const PRIVATE_CACHE = 'private, max-age=60, stale-while-revalidate=60';
+
+/**
+ * CACHEPREF: the responses no cookie changes, by the raw path, plain names only. The calendar feeds,
+ * robots.txt (by host) and the sitemap read none (policy.test.ts checks their source), and nor do
+ * the files in public/. A path missing here is private: slower at the edge, never wrong.
+ */
+const SHARED = [
+  /^\/(calendar|events)\.ics$/,
+  /^\/events\/[\w-]+\.ics$/,
+  /^\/(robots\.txt|sitemap\.xml|manifest\.webmanifest)$/,
+  /^\/(fonts|icons|licences|scripts)\/[\w-][\w.-]*$/,
+];
+
+/**
+ * The Cache-Control for one response. What no cookie changes is public,
+ * briefly; anything else, every page, is private, as briefly (CACHEPREF); a
  * request with the session cookie, or a response that sets any cookie, is never
  * stored (R26); an error, the reader's or the server's, and the health probe
  * are never stored, so a page that is back a moment later is not kept missing.
@@ -147,7 +168,7 @@ export function cacheControl(r) {
   if (r.setsCookie || handlerPrivate || hasCookie(r.cookieHeader, SESSION_COOKIE) || isLeavingPage(r.path, ...(r.served ?? []))) return 'private, no-store';
   if (r.status >= 400 || r.path === '/healthz') return 'no-store';
   if (HASHED_ASSET.test(r.path) && r.status === 200) return 'public, max-age=31536000, immutable';
-  return PUBLIC_CACHE;
+  return SHARED.some((shared) => shared.test(r.path)) ? PUBLIC_CACHE : PRIVATE_CACHE;
 }
 
 /**

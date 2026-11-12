@@ -1,4 +1,8 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
 import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, cdnCacheControl, hasCookie, isHostOnlyCookie, parseCsp, referrerPolicy, securityHeaders } from '../policy.mjs';
 
 describe('security headers', () => {
@@ -100,18 +104,60 @@ describe('hasCookie', () => {
   });
 });
 
+const UUID = 'f1000000-0000-4000-8000-000000000010';
+/** CACHEPREF: what a shared cache may keep; nothing on it reads a cookie. */
+const SHARED = ['/calendar.ics', '/events.ics', `/events/${UUID}.ics`, '/robots.txt', '/sitemap.xml', '/manifest.webmanifest', '/fonts/OFL-Lexend.txt', '/icons/icon-192.png', '/licences/pdfjs-LICENSE.txt', '/scripts/size.js'];
+
 describe('cacheControl (R26)', () => {
   const anon = { path: '/', cookieHeader: undefined, status: 200, setsCookie: false };
   const PUBLIC = 'public, max-age=60, stale-while-revalidate=60';
+  const PRIVATE = 'private, max-age=60, stale-while-revalidate=60';
 
-  it('lets anyone cache an anonymous page for 60 seconds, and serve it a minute stale while it fetches a fresh copy', () => {
-    expect(cacheControl(anon)).toBe(PUBLIC);
-    expect(cacheControl({ ...anon, path: '/about', cookieHeader: 'other=1' })).toBe(PUBLIC);
-    expect(cacheControl({ ...anon, path: '/calendar.ics' })).toBe(PUBLIC);
+  it("keeps a page in the reader's own browser only, for 60 seconds, cookie or not: its bytes differ by cookie (CACHEPREF)", () => {
+    for (const cookieHeader of [undefined, `${THEME_COOKIE}=dark`, `${SIZE_COOKIE}=175`, 'other=1']) {
+      for (const path of ['/', '/about', '/news', '/events', `/events/${UUID}`, `/read/${UUID}`, '/officers', '/search']) {
+        const cache = cacheControl({ ...anon, path, cookieHeader });
+        expect(cache, `${path} ${cookieHeader}`).toBe(PRIVATE);
+        // D6: a CDN is told too, so a zone rule that overrides Cache-Control still keeps no copy.
+        expect(cdnCacheControl(cache), path).toBe('no-store');
+      }
+    }
+  });
+
+  it("keeps a public file private too: the API serves a member a different copy under the same URL (CACHEPREF)", () => {
+    expect(cacheControl({ ...anon, path: `/documents/${UUID}.pdf` })).toBe(PRIVATE);
+  });
+
+  it('lets a shared cache keep only what no cookie changes: the feeds, robots.txt, the sitemap and the files in public/', () => {
+    for (const cookieHeader of [undefined, `${THEME_COOKIE}=dark`]) {
+      for (const path of SHARED) expect(cacheControl({ ...anon, path, cookieHeader }), `${path} ${cookieHeader}`).toBe(PUBLIC);
+    }
+  });
+
+  it('shares nothing that only looks like one of them: a page, a folder, a deeper or an encoded path', () => {
+    for (const path of ['/calendar.ics/x', '/calendar', '/events/x/y.ics', `/events/${UUID}`, '/scripts/', '/scripts/a/b.js', '/scripts/..%2fabout', '/icons', '/fonts/%2e%2e', '/robots.txt/', '/sitemap.xml.html', '/x/manifest.webmanifest']) {
+      expect(cacheControl({ ...anon, path }), path).toBe(PRIVATE);
+    }
+  });
+
+  it('shares every file in public/ (served as it is, to every reader)', () => {
+    const root = fileURLToPath(new URL('../../public', import.meta.url));
+    const files = readdirSync(root, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => `/${relative(root, join(e.parentPath, e.name)).split(sep).join('/')}`);
+    expect(files.length).toBeGreaterThan(10);
+    for (const path of files) expect(cacheControl({ ...anon, path }), path).toBe(PUBLIC);
+  });
+
+  it('shares an endpoint only if its source reads no cookie, session or reader', () => {
+    for (const route of ['calendar.ics.ts', 'events.ics.ts', 'events/[id].ics.ts', 'robots.txt.ts', 'sitemap.xml.ts']) {
+      // The code, not its comments: a comment may say who the feed is for.
+      const source = readFileSync(fileURLToPath(new URL(`../../src/pages/${route}`, import.meta.url)), 'utf8').replace(/\/\/.*$/gm, '');
+      expect(source, route).toMatch(/export const GET/);
+      expect(source, route).not.toMatch(/cookie|session|locals|prefs|reader/i);
+    }
   });
 
   it('caches a redirect like a page: it is not an error', () => {
-    for (const status of [301, 302, 303, 307, 308]) expect(cacheControl({ ...anon, status }), String(status)).toBe(PUBLIC);
+    for (const status of [301, 302, 303, 307, 308]) expect(cacheControl({ ...anon, status }), String(status)).toBe(PRIVATE);
   });
 
   it('never stores a response to a request that carries the session cookie', () => {
@@ -133,7 +179,7 @@ describe('cacheControl (R26)', () => {
   it('caches only a plain file name under /_astro/ for a year, never an encoded path out of it', () => {
     // The static handler decodes %2f, so /_astro/..%2fabout would be the About page.
     for (const path of ['/_astro/..%2fabout', '/_astro/..%2fabout.html', '/_astro/%2e%2e%2fjoin.html', '/_astro/x/y.css', '/_astro/']) {
-      expect(cacheControl({ ...anon, path }), path).toBe(PUBLIC);
+      expect(cacheControl({ ...anon, path }), path).toBe(PRIVATE);
     }
     expect(cacheControl({ ...anon, path: '/_astro/Base.5t8Gl8HW.css' })).toBe('public, max-age=31536000, immutable');
   });
@@ -164,7 +210,7 @@ describe('the leaving page is never stored (LINKS L4)', () => {
   it('by the path the handler serves, when the raw one hides it', () => {
     expect(cacheControl({ ...anon, path: '/%6Fut/x/', served: ['/out/x/'], status: 301 })).toBe('private, no-store');
     expect(cacheControl({ ...anon, path: '/x/', served: [undefined, '//out/x/'], status: 301 })).toBe('private, no-store');
-    expect(cacheControl({ ...anon, path: '/outings', served: ['/outings', undefined], status: 200 })).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(cacheControl({ ...anon, path: '/outings', served: ['/outings', undefined], status: 200 })).toBe('private, max-age=60, stale-while-revalidate=60');
   });
 });
 
@@ -178,10 +224,11 @@ describe('a handler that marks its response private (A14)', () => {
   });
 
   it('never lets a handler loosen the rule: anything else it set is overridden as before', () => {
-    expect(cacheControl({ ...anon, handler: 'public, max-age=99999' })).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(cacheControl({ ...anon, handler: 'public, max-age=99999' })).toBe('private, max-age=60, stale-while-revalidate=60');
+    expect(cacheControl({ ...anon, path: '/calendar.ics', handler: 'public, max-age=99999' })).toBe('public, max-age=60, stale-while-revalidate=60');
     expect(cacheControl({ ...anon, handler: 'public, max-age=99999', cookieHeader: `${SESSION_COOKIE}=abc` })).toBe('private, no-store');
     expect(cacheControl({ ...anon, handler: 'no-store', status: 404 })).toBe('no-store');
-    expect(cacheControl({ ...anon, handler: undefined })).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(cacheControl({ ...anon, handler: undefined })).toBe('private, max-age=60, stale-while-revalidate=60');
   });
 });
 
@@ -220,6 +267,7 @@ describe('every members-only answer is never stored (SIGNOUT)', () => {
 describe('cdnCacheControl (D6)', () => {
   it('is no-store whenever the rule is private, and absent otherwise, so an anonymous response keeps its headers', () => {
     expect(cdnCacheControl('private, no-store')).toBe('no-store');
+    expect(cdnCacheControl('private, max-age=60, stale-while-revalidate=60')).toBe('no-store');
     for (const rule of ['public, max-age=60, stale-while-revalidate=60', 'no-store', 'public, max-age=31536000, immutable']) expect(cdnCacheControl(rule), rule).toBeUndefined();
   });
 });

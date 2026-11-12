@@ -15,12 +15,13 @@ function expectSecurityHeaders(res: APIResponse): void {
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) expect(headers[name.toLowerCase()], name).toBe(value);
 }
 
-test('every page, prerendered or not, carries the security headers and the anonymous cache rule', async ({ request }) => {
+test('every page, prerendered or not, carries the security headers and the anonymous cache rule: private, as its bytes differ by cookie (CACHEPREF)', async ({ request }) => {
   for (const path of ALL_PAGES) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(200);
     expectSecurityHeaders(res);
-    expect(res.headers()['cache-control'], path).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(res.headers()['cache-control'], path).toBe('private, max-age=60, stale-while-revalidate=60');
+    expect(res.headers()['cdn-cache-control'], path).toBe('no-store');
     expect(res.headers()['vary'], path).toBe('Cookie');
   }
 });
@@ -49,7 +50,8 @@ test("a prerendered page differs from the built file only in the reader's html t
   const res = await request.get('/about', { headers: { cookie: `${SIZE_COOKIE}=5; ${THEME_COOKIE}=contrast` } });
   expect(built).toContain(sizeSlider(SIZES[3]));
   expect(await res.text()).toBe(built.replace(/<html[^>]*>/, `<html lang="en" data-size="${SIZES[6]}" data-theme="contrast-white">`).replace(sizeSlider(SIZES[3]), sizeSlider(SIZES[6])));
-  expect(res.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
+  expect(res.headers()['cache-control']).toBe('private, max-age=60, stale-while-revalidate=60');
+  expect(res.headers()['cdn-cache-control']).toBe('no-store');
   expect(res.headers()['vary']).toBe('Cookie');
 });
 
@@ -441,7 +443,7 @@ test.describe('the reader (PDFVIEW)', () => {
   test('the page and its file are cached alike, for the public and with a session cookie, and download=1 changes only the disposition', async ({ request }) => {
     for (const cookie of [undefined, `${SESSION_COOKIE}=x`]) {
       const headers = cookie ? { cookie } : {};
-      const cache = cookie ? 'private, no-store' : 'public, max-age=60, stale-while-revalidate=60';
+      const cache = cookie ? 'private, no-store' : 'private, max-age=60, stale-while-revalidate=60';
       const page = await request.get(read, { headers });
       const inline = await request.get(file, { headers });
       const attached = await request.get(`${file}?download=1`, { headers });

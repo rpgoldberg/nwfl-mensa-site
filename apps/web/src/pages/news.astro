@@ -44,7 +44,7 @@ const live = liveData();
 const auth = runtimeDeps();
 const { reader, lapsed } = readerFor(Astro.locals.session, auth);
 const signIn = signInLink(auth, PUBLIC_ONLY, '/news');
-// Where a signed-out reader's notice says to sign in: the same for all of them, so the public page still caches.
+// Where a signed-out reader's notice says to sign in: the same for all of them.
 const membersSignIn = membersSignInLink(Astro.locals.session, auth, PUBLIC_ONLY, '/news');
 const loaded = live ? await attempt(() => live.news(reader, { signIn })) : { ok: true as const, value: undefined };
 const news = loaded.ok ? loaded.value : undefined;

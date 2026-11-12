@@ -39,7 +39,7 @@ describe('withSitePolicy', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/html');
     expectSecurityHeaders(res);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(res.headers.get('cache-control')).toBe('private, max-age=60, stale-while-revalidate=60');
     expect(res.headers.get('vary')).toBe('Cookie');
   });
 
@@ -95,15 +95,17 @@ describe('withSitePolicy', () => {
   });
 
   // A14 (D6): Cloudflare ignores Vary: Cookie, and a zone rule may override Cache-Control; CDN-Cache-Control says no too.
-  it('tells a CDN not to store a private response, and says nothing extra on an anonymous one', async () => {
+  it('tells a CDN not to store a private response, a page with no cookie too, and says nothing extra on a shared one', async () => {
     const base = await serve((_req, res) => res.end('page'));
     const signedIn = await fetch(`${base}/news`, { headers: { cookie: `${SESSION_COOKIE}=abc` } });
     expect(signedIn.headers.get('cdn-cache-control')).toBe('no-store');
     expect(signedIn.headers.get('vary')).toBe('Cookie');
-    const anonymous = await fetch(`${base}/news`);
-    expect(anonymous.headers.get('cdn-cache-control')).toBeNull();
-    const missing = await fetch(`${base}/news`, { headers: { cookie: 'other=1' } });
-    expect(missing.headers.get('cdn-cache-control')).toBeNull();
+    // CACHEPREF: a page is private with or without a cookie.
+    expect((await fetch(`${base}/news`)).headers.get('cdn-cache-control')).toBe('no-store');
+    const feed = await fetch(`${base}/calendar.ics`);
+    expect(feed.headers.get('cdn-cache-control')).toBeNull();
+    const other = await fetch(`${base}/calendar.ics`, { headers: { cookie: 'other=1' } });
+    expect(other.headers.get('cdn-cache-control')).toBeNull();
   });
 
   it("keeps a handler's private response private, with no cookie at all (a members copy)", async () => {
@@ -376,7 +378,7 @@ describe('prerendered pages', () => {
     expect(body).toBe(html.replace('data-size="100"', 'data-size="175" data-theme="dark"').replace(sizeSlider(100), sizeSlider(175)));
     expect(Number(res.headers.get('content-length'))).toBe(Buffer.byteLength(body));
     expectSecurityHeaders(res);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(res.headers.get('cache-control')).toBe('private, max-age=60, stale-while-revalidate=60');
     expect(res.headers.get('vary')).toBe('Cookie');
   });
 
@@ -436,7 +438,7 @@ describe('a path the handler would read differently', () => {
   it('caches for a year only on the raw path: an encoded letter in an asset name is not immutable', async () => {
     const base = await serve((_req, res) => res.end('body{}'));
     const res = await fetch(`${base}/_astro/%42ase.5t8Gl8HW.css`);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(res.headers.get('cache-control')).toBe('private, max-age=60, stale-while-revalidate=60');
   });
 
   it('finds a prerendered page by its decoded path', async () => {
@@ -494,7 +496,7 @@ describe('renamed pages (W-LOOK)', () => {
       expect(res.status, from).toBe(301);
       expect(res.headers.get('location'), from).toBe(to);
       expectSecurityHeaders(res);
-      expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
+      expect(res.headers.get('cache-control')).toBe('private, max-age=60, stale-while-revalidate=60');
     }
   });
 
@@ -522,7 +524,7 @@ describe('old URLs (R16)', () => {
     expect(res.status).toBe(301);
     expect(res.headers.get('location')).toBe('/join');
     expectSecurityHeaders(res);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(res.headers.get('cache-control')).toBe('private, max-age=60, stale-while-revalidate=60');
   });
 
   it("answers a retired URL with 410 and the site's own gone page", async () => {
@@ -687,5 +689,60 @@ describe('the calendar feed log', () => {
     expect(none).toMatchObject({ status: 503, ua: '' });
     for (const call of log.mock.calls) expect(String(call[0])).not.toMatch(/[\r\n]/);
     log.mockRestore();
+  });
+});
+
+// CACHEPREF: a page's bytes differ by cookie (the reader's theme and size, their account area), and
+// Cloudflare and many CDNs ignore Vary: Cookie. So no shared cache may keep any page, the one sent
+// with no cookie included: kept, it would go to a reader whose cookie asks for another.
+describe('no shared cache keeps a page (CACHEPREF)', () => {
+  const PRIVATE = 'private, max-age=60, stale-while-revalidate=60';
+  const PUBLIC = 'public, max-age=60, stale-while-revalidate=60';
+  const html = `<!DOCTYPE html><html lang="en" data-size="100"><body>About ${sizeSlider(100)}</body></html>`;
+
+  function expectPrivate(res: Response, what: string): void {
+    expect(res.headers.get('cache-control'), what).toBe(PRIVATE);
+    expect(res.headers.get('cdn-cache-control'), what).toBe('no-store');
+    expect(res.headers.get('vary'), what).toBe('Cookie');
+  }
+
+  it('a prerendered page, dark or with no cookie at all: the bytes differ, and neither is shared', async () => {
+    const base = await serve(() => {
+      throw new Error('the handler must not see a prerendered page');
+    }, new Map([['/about', html]]));
+    const dark = await fetch(`${base}/about`, { headers: { cookie: `${THEME_COOKIE}=dark` } });
+    const plain = await fetch(`${base}/about`);
+    const [darkBody, plainBody] = [await dark.text(), await plain.text()];
+    expect(darkBody).toContain('data-theme="dark"');
+    expect(darkBody).not.toBe(plainBody);
+    expectPrivate(dark, 'dark');
+    expectPrivate(plain, 'no cookie');
+  });
+
+  it('a page rendered on request, as the layout reads the same cookies there', async () => {
+    const base = await serve((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<html data-theme="${/dark/.test(String(req.headers.cookie)) ? 'dark' : 'light'}"></html>`);
+    });
+    for (const cookie of [`${THEME_COOKIE}=dark`, undefined]) {
+      for (const path of ['/', '/news', '/events', '/read/f1000000-0000-4000-8000-000000000010', '/documents/f1000000-0000-4000-8000-000000000010.pdf']) {
+        expectPrivate(await fetch(`${base}${path}`, cookie ? { headers: { cookie } } : {}), `${path} ${cookie}`);
+      }
+    }
+  });
+
+  it('the calendar feed, which reads no cookie, stays shared, with or without one', async () => {
+    const base = await serve((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/calendar; charset=utf-8' });
+      res.end('BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n');
+    });
+    for (const cookie of [`${THEME_COOKIE}=dark`, undefined]) {
+      for (const path of ['/calendar.ics', '/events.ics', '/events/f1000000-0000-4000-8000-000000000010.ics']) {
+        const res = await fetch(`${base}${path}`, cookie ? { headers: { cookie } } : {});
+        expect(res.headers.get('cache-control'), `${path} ${cookie}`).toBe(PUBLIC);
+        expect(res.headers.get('cdn-cache-control'), path).toBeNull();
+        expect(res.headers.get('vary'), path).toBe('Cookie');
+      }
+    }
   });
 });

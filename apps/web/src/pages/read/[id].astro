@@ -1,8 +1,8 @@
 ---
 // PDFVIEW: an issue read inside the site. The copy is whichever /documents/<id>.pdf gives this reader
 // (the browser fetches it with the reader's cookies, src/lib/files.ts): the page says which
-// (src/lib/reader.ts), and is cached as that file is: publicly, briefly, for the public copy, and
-// private, never stored, for a signed-in reader (server/policy.mjs, and here). A file the reader may
+// (src/lib/reader.ts), and is cached as that file is: by the reader's browser only, briefly, for the
+// public copy, and never stored for a signed-in reader (server/policy.mjs, and here). A file the reader may
 // not have is the same 404 as a missing one. public/scripts/viewer.js draws it with pdf.js's core API
 // (the legacy build, for older phones and tablets); never pdf.js's viewer.html, and never an address
 // from the query. Open in another app hands the same file to the device's own viewer; Download asks

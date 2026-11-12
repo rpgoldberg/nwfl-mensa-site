@@ -33,7 +33,7 @@ import { inflateSync } from 'node:zlib';
 import { expect, test, type APIRequest, type APIRequestContext } from '@playwright/test';
 import { ContentKind } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { grpcReads } from '../../src/lib/api/client';
-import { PUBLIC_CACHE } from '../../server/policy.mjs';
+import { PRIVATE_CACHE } from '../../server/policy.mjs';
 import { MEMBERS_RULE } from '../../src/lib/document';
 import { MEMBERS_COPY, PUBLIC_COPY, PUBLIC_TAG, PUBLIC_TAG_NOTE } from '../../src/lib/reader';
 import { SESSION_COOKIE } from '../../server/policy.mjs';
@@ -296,7 +296,7 @@ test('the PDF is linked where its item renders, and served as the redacted copy:
   expect(pdf!.contentType).toBe('application/pdf');
   expect(pdf!.headers['content-disposition']).toMatch(/^inline; filename="[a-z0-9-]+\.pdf"$/);
   expect(pdf!.headers['content-disposition']).toContain('withheld');
-  expect(pdf!.headers['cache-control']).toBe(PUBLIC_CACHE);
+  expect(pdf!.headers['cache-control']).toBe(PRIVATE_CACHE);
   // The positive control: the copy was read, and it is not the original.
   expect(pdf!.pdf?.text).toContain(fixture.pdfPlain);
   expect(pdf!.pdf?.inflated).toBeGreaterThan(0);
@@ -348,7 +348,7 @@ test('PDFVIEW: every /read page the public reaches is the public copy: no canary
   for (const [i, page] of reads.entries()) {
     const id = ids[i]!;
     expect(page.status, page.url).toBe(200);
-    expect(page.headers['cache-control'], page.url).toBe(PUBLIC_CACHE);
+    expect(page.headers['cache-control'], page.url).toBe(PRIVATE_CACHE);
     // W-LOOK3: the public copy's pill and its line, and never the members copy's.
     expect(copyTag(page.body), page.url).toEqual({ classes: 'copy-tag', text: `${PUBLIC_TAG} ${PUBLIC_TAG_NOTE}` });
     expect(page.body, page.url).not.toContain(MEMBERS_COPY);
@@ -370,7 +370,7 @@ test('PDFVIEW: download=1 is the same redacted copy as an attachment, cached the
   const attached = await get(request, `${url}?download=1`);
   expect(attached.status).toBe(200);
   expect(attached.headers['content-disposition']).toBe(inline.headers['content-disposition']!.replace(/^inline/, 'attachment'));
-  expect(attached.headers['cache-control']).toBe(PUBLIC_CACHE);
+  expect(attached.headers['cache-control']).toBe(PRIVATE_CACHE);
   expect(attached.pdf?.text).toBe(inline.pdf?.text);
   expect(fold(attached.body)).not.toContain(fold(fixture.canaries['phone']!));
 });
@@ -504,7 +504,7 @@ test("D1: the public's /news, through the real API, lists the members article by
   expect(news.body).toContain('Members only, <a href="/sign-in?return=%2Fnews&amp;again=1">sign in</a> to read.');
   expect(seen(news.body, [...MEMBERS_CANARIES, ...OFFICERS_CANARIES])).toEqual([]);
   expect(news.body).not.toContain(fixture.ids['issueMembersPdf']);
-  expect(news.headers['cache-control']).toBe(PUBLIC_CACHE);
+  expect(news.headers['cache-control']).toBe(PRIVATE_CACHE);
   await anonymous.dispose();
 });
 
