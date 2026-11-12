@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "pdfjs-dist": "6.4.299",
-    "tldts": "7.4.19"
+    "tldts": "7.4.24"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

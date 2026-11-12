@@ -5,7 +5,8 @@
 //   # Heading / ## Heading          two levels only
 //   **bold**  *italic*  _italic_    emphasis opens before a non-space and
 //                                   closes after one, so "2 * 3" stays text
-//   [text](https://...)             links: https: and mailto: only
+//   [text](https://...)             links: https: and mailto: only, by the
+//                                   strict URL rule (links/rule.ts)
 //   - item / * item / 1. item       one-paragraph list items
 //   > quoted line                   a block quote
 //   ![alt text](file:<uuid>)        an uploaded image, alt text required
@@ -15,11 +16,14 @@
 //
 // Anything else is plain text: raw HTML is never markup. Something the
 // allow-list refuses is reported as a problem, and a version with problems
-// cannot be marked ready. A members marker that is never closed is a problem
+// cannot be marked ready. So is a bare URL in the text that the strict URL
+// rule refuses (an http:// one, say): it stays text, and is reported on its
+// own line. A members marker that is never closed is a problem
 // AND fails closed: the rest of that paragraph (an inline span) or of the
 // document (a block) becomes members-only, so a draft preview never shows it
 // to the public by accident.
 // ============================================================================
+import { type UrlProblem, urlMessage, urlProblem, urlsInText } from '../links/rule.js';
 import type { Block, Inline, Tree } from './tree.js';
 
 export interface MarkupProblem {
@@ -33,29 +37,79 @@ export interface ParsedMarkup {
 }
 
 const FILE_REF = /^file:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
-const SAFE_HREF = /^(https:\/\/|mailto:)\S+$/;
 
 interface Style {
   bold: boolean;
   italic: boolean;
 }
 
+/** Where a source line starts in the text an InlineParser reads (a paragraph's lines are joined with a space). */
+interface LineStart {
+  offset: number;
+  number: number;
+}
+
 class InlineParser {
   private i = 0;
+  private readonly line: number;
+  /** The refused URLs by where they start, so a stretch the parser reads twice reports each once. */
+  private readonly urlProblems = new Map<number, MarkupProblem>();
+  /** The runs of text kept so far, by where each starts, with where each character came from. */
+  private readonly runs = new Map<number, { text: string; at: number[] }>();
+  /** Each link target's check, by where it starts: the same text whenever the parser reads it again. */
+  private readonly hrefs = new Map<number, UrlProblem | null>();
 
   constructor(
     private readonly s: string,
-    private readonly line: number,
+    private readonly starts: LineStart[],
     private readonly problems: MarkupProblem[],
-  ) {}
+  ) {
+    this.line = (starts[0] as LineStart).number;
+  }
+
+  private lineAt(offset: number): number {
+    let line = this.line;
+    for (const start of this.starts) if (start.offset <= offset) line = start.number;
+    return line;
+  }
+
+  private reportUrl(offset: number, message: string): void {
+    this.urlProblems.set(offset, { line: this.lineAt(offset), message });
+  }
+
+  /** Going back to `start` to read it again: what was found from there on is found again, or not. */
+  private rewind(start: number): void {
+    this.i = start;
+    for (const offset of this.urlProblems.keys()) if (offset >= start) this.urlProblems.delete(offset);
+    for (const offset of this.runs.keys()) if (offset >= start) this.runs.delete(offset);
+  }
+
+  /**
+   * The refused URLs, in the order they appear: the links' targets, and the bare URLs in the runs of
+   * text the parse kept, each run scanned once, after the parse (never again on a re-read).
+   */
+  urlProblemsFound(): MarkupProblem[] {
+    for (const { text, at } of this.runs.values()) {
+      for (const { url, index } of urlsInText(text)) {
+        const problem = urlProblem(url);
+        if (problem !== null) this.reportUrl(at[index] as number, urlMessage('the address', url, problem));
+      }
+    }
+    return [...this.urlProblems].sort(([a], [b]) => a - b).map(([, problem]) => problem);
+  }
 
   /** Parse until `closer` (or the end); returns the nodes and whether the closer was found. */
   parse(style: Style, closer?: string): { nodes: Inline[]; closed: boolean } {
     const nodes: Inline[] = [];
     let text = '';
+    let at: number[] = [];
     const flush = (): void => {
-      if (text !== '') nodes.push({ type: 'text', text, bold: style.bold, italic: style.italic });
+      if (text !== '') {
+        nodes.push({ type: 'text', text, bold: style.bold, italic: style.italic });
+        this.runs.set(at[0] as number, { text, at });
+      }
       text = '';
+      at = [];
     };
     const { s } = this;
     while (this.i < s.length) {
@@ -67,6 +121,7 @@ class InlineParser {
       const c = s[this.i] as string;
       if (c === '\\' && this.i + 1 < s.length) {
         text += s[this.i + 1];
+        at.push(this.i + 1);
         this.i += 2;
         continue;
       }
@@ -97,9 +152,10 @@ class InlineParser {
           nodes.push(...inner.nodes);
           continue;
         }
-        this.i = start;
+        this.rewind(start);
       }
       text += c;
+      at.push(this.i);
       this.i += 1;
     }
     flush();
@@ -140,13 +196,17 @@ class InlineParser {
       const end = this.s.indexOf(')', this.i + 1);
       const href = end === -1 ? '' : this.s.slice(this.i + 1, end);
       if (end !== -1 && !/\s/.test(href)) {
+        const target = this.i + 1;
+        const cached = this.hrefs.get(target);
+        const problem = cached !== undefined ? cached : urlProblem(href);
+        this.hrefs.set(target, problem);
+        if (problem !== null) this.reportUrl(this.i + 1, urlMessage('the link', href, problem));
         this.i = end + 1;
-        if (SAFE_HREF.test(href)) return { type: 'link', href, children: label.nodes };
-        this.problems.push({ line: this.line, message: 'links must be https: or mailto:' });
+        if (problem === null) return { type: 'link', href, children: label.nodes };
         return { type: 'text', text: this.s.slice(start, this.i), bold: style.bold, italic: style.italic };
       }
     }
-    this.i = start;
+    this.rewind(start);
     return undefined;
   }
 }
@@ -169,9 +229,10 @@ function merge(nodes: Inline[]): Inline[] {
   return out;
 }
 
-function inlines(text: string, line: number, problems: MarkupProblem[]): Inline[] {
-  const parser = new InlineParser(text, line, problems);
+function inlines(text: string, line: number, problems: MarkupProblem[], starts: LineStart[] = [{ offset: 0, number: line }]): Inline[] {
+  const parser = new InlineParser(text, starts, problems);
   const result = parser.parse({ bold: false, italic: false });
+  problems.push(...parser.urlProblemsFound());
   // An unclosed span is reported by the parser; its contents are already a members node.
   return merge(result.nodes);
 }
@@ -255,14 +316,18 @@ function parseBlocks(lines: Line[], problems: MarkupProblem[], inMembers: boolea
     }
     // A paragraph: this line and the following plain lines, joined with a space.
     const paragraph: string[] = [trimmed];
+    const starts: LineStart[] = [{ offset: 0, number }];
+    let offset = trimmed.length + 1;
     i += 1;
     while (i < lines.length) {
       const next = (lines[i] as Line).text.trim();
       if (next === '' || next.startsWith('#') || next.startsWith('>') || next.startsWith(':::') || LIST_ITEM.test(next) || /^!\[/.test(next)) break;
       paragraph.push(next);
+      starts.push({ offset, number: (lines[i] as Line).number });
+      offset += next.length + 1;
       i += 1;
     }
-    blocks.push({ type: 'paragraph', children: inlines(paragraph.join(' '), number, problems) });
+    blocks.push({ type: 'paragraph', children: inlines(paragraph.join(' '), number, problems, starts) });
   }
   return { blocks, rest: [], closed: false };
 }

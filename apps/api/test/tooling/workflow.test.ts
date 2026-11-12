@@ -1,12 +1,13 @@
 // The API's CI: .github/workflows/api.yml at the repository root, the only
-// place GitHub reads workflows from. It runs when apps/api or the workflow
-// itself changes, inside apps/api. The secret scan, MT-06 and the made-up
+// place GitHub reads workflows from. It runs when apps/api, the workflow
+// itself, or a linkcheck file the API copies changes, inside apps/api. The secret scan, MT-06 and the made-up
 // people guard run once for the whole repository (secrets.yml).
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: REPO, encoding: 'utf8' }).trim();
@@ -22,10 +23,20 @@ function job(name: string): string {
 }
 
 describe('api workflow', () => {
-  it('runs only for changes to the API or to itself', () => {
-    const triggers = ci.slice(0, ci.search(/^permissions:/m));
+  it('runs only for changes to the API, to itself, or to the linkcheck files the API copies (EDITOR A3a)', () => {
+    const on = (parse(ci) as { on: Record<string, { paths?: unknown }> }).on;
     for (const event of ['push', 'pull_request']) {
-      expect(triggers).toMatch(new RegExp(`^  ${event}:\\n(?:    .*\\n)*?    paths: \\['apps/api/\\*\\*', '\\.github/workflows/api\\.yml'\\]$`, 'm'));
+      expect(on[event]?.paths, event).toEqual([
+        'apps/api/**',
+        '.github/workflows/api.yml',
+        'apps/linkcheck/src/urls.ts',
+        'apps/linkcheck/src/extract.ts',
+        'apps/linkcheck/test/urls.test.ts',
+        'apps/linkcheck/test/url-rules.test.ts',
+        'apps/linkcheck/test/fixtures/url-rules.json',
+        'apps/linkcheck/package.json',
+        'apps/linkcheck/package-lock.json',
+      ]);
     }
   });
 
