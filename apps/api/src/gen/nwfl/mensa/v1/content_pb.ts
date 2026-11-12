@@ -577,6 +577,9 @@ export type ContentVersion = Message<"nwfl.mensa.v1.ContentVersion"> & {
 
   /**
    * When it was published (made live), and so set only once it has been.
+   * Officer reads always carry it. Public reads carry it only where it is not
+   * also approved_at: there, approved_at is the publication time (every
+   * version from before 0029, and every loaded issue).
    *
    * @generated from field: google.protobuf.Timestamp published_at = 21;
    */

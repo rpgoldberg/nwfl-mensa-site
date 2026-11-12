@@ -54,7 +54,7 @@ const withheld = (date: string) =>
     detailsWithheld: true,
   });
 
-const item = (slug: string, over: { visibility?: ItemVisibility; kind?: ContentKind; approvedAt?: Date } = {}): ContentItem =>
+const item = (slug: string, over: { visibility?: ItemVisibility; kind?: ContentKind; approvedAt?: Date; publishedAt?: Date } = {}): ContentItem =>
   create(ContentItemSchema, {
     id: slug,
     slug,
@@ -64,6 +64,7 @@ const item = (slug: string, over: { visibility?: ItemVisibility; kind?: ContentK
       summary: `Summary of ${slug}`,
       visibility: over.visibility ?? ItemVisibility.PUBLIC,
       approvedAt: timestampFromDate(over.approvedAt ?? new Date('2026-09-20T03:00:00Z')),
+      ...(over.publishedAt === undefined ? {} : { publishedAt: timestampFromDate(over.publishedAt) }),
       body: { blocks: [{ kind: { case: 'paragraph', value: { inlines: [{ kind: { case: 'text', value: { text: `Body of ${slug} & more` } } }] } } }, { kind: { case: 'redacted', value: {} } }] },
     },
   });
@@ -322,6 +323,23 @@ describe('liveData items', () => {
     expect((await live.presidentReport())?.slug).toBe('october');
     expect((await live.announcements()).map((a) => a.slug)).toEqual(['dues', 'picnic']);
     expect(await liveData(reads()).presidentReport()).toBeUndefined();
+  });
+
+  it('dates a piece by its publication when the API gives one, else by its approval, which was its publication (EDITOR A1)', async () => {
+    const summaries = await liveData(
+      reads({
+        listPublishedItems: () =>
+          Promise.resolve([
+            // Approved on a Monday evening Central, published on the Wednesday.
+            item('later', { approvedAt: new Date('2026-11-17T03:00:00Z'), publishedAt: new Date('2026-11-18T16:00:00Z') }),
+            item('loaded', { approvedAt: new Date('2026-11-17T03:00:00Z') }),
+          ]),
+      }),
+    ).treasurerSummaries();
+    expect(summaries.map((summary) => [summary.slug, summary.publishedOn])).toEqual([
+      ['later', '2026-11-18'],
+      ['loaded', '2026-11-16'],
+    ]);
   });
 
   it('leaves the date out when an item has none, and gives an empty body as nothing', async () => {

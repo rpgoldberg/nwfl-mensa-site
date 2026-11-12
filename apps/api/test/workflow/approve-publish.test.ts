@@ -67,6 +67,14 @@ describe.skipIf(!live)('EDITOR A1: approve, then publish', () => {
         [itemId],
       )
     ).rows[0] as Row;
+  /** Whether the working version's search indexes are empty: a voided approval leaves no searchable text behind (challenger M19). */
+  const searchGone = async (itemId: string): Promise<boolean> =>
+    (
+      await api.pool.query<{ gone: boolean }>(
+        `SELECT v.search_public IS NULL AND v.search_members IS NULL AS gone FROM content_item i JOIN content_version v ON v.id = i.working_version_id WHERE i.id = $1`,
+        [itemId],
+      )
+    ).rows[0]?.gone as boolean;
   type Audit = { action: string; acting_office_id: string | null; from_state: string | null; to_state: string | null; payload: Record<string, unknown>; note: string | null };
   const audits = async (itemId: string): Promise<Audit[]> =>
     (await api.pool.query<Audit>(`SELECT action, acting_office_id, from_state, to_state, payload, note FROM audit_event WHERE item_id = $1 ORDER BY id`, [itemId])).rows;
@@ -341,6 +349,7 @@ describe.skipIf(!live)('EDITOR A1: approve, then publish', () => {
       const { itemId } = await clearedItem();
       await content.saveDraft({ itemId, title: 'Fall picnic', summary: 'Saturday', visibility: ItemVisibility.PUBLIC, bodyMarkup: 'Bring a blanket.' }, PUB);
       expect(await versionRow(itemId)).toMatchObject({ status: 'draft', approved_by_sub: null, approval_kind: null, approval_rule: null, public_ast: null });
+      expect(await searchGone(itemId)).toBe(true);
       const rows = await audits(itemId);
       expect(rows.at(-2)).toMatchObject({ action: 'approval_voided', acting_office_id: offices['publications'], from_state: 'cleared', to_state: 'draft', payload: { cause: 'edit' } });
       expect(rows.at(-1)).toMatchObject({ action: 'save', from_state: 'cleared', to_state: 'draft' });
@@ -360,8 +369,10 @@ describe.skipIf(!live)('EDITOR A1: approve, then publish', () => {
 
     it('lets any reviewer send it back, with the approval gone', async () => {
       const { itemId } = await clearedItem();
+      expect(await searchGone(itemId)).toBe(false);
       await content.sendBack({ itemId, note: 'One more look.' }, OFFICER);
       expect(await versionRow(itemId)).toMatchObject({ status: 'draft', approved_by_sub: null, approval_rule: null });
+      expect(await searchGone(itemId)).toBe(true);
       expect(await lastAudit(itemId)).toMatchObject({ action: 'send_back', from_state: 'cleared', to_state: 'draft' });
       expect((await working(itemId)).working?.sendBackNote).toBe('One more look.');
       await expect(content.sendBack({ itemId, note: 'Again.' }, OFFICER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
@@ -373,6 +384,7 @@ describe.skipIf(!live)('EDITOR A1: approve, then publish', () => {
       await content.approve({ itemId, contentHash: hash }, OFFICER);
       await content.withdraw({ itemId }, WEBMASTER);
       expect(await versionRow(itemId)).toMatchObject({ status: 'draft', approved_by_sub: null });
+      expect(await searchGone(itemId)).toBe(true);
       const rows = await audits(itemId);
       expect(rows.at(-2)).toMatchObject({ action: 'withdraw' });
       // The Webmaster holds the Webmaster's office, not the item's, so no office is recorded.
@@ -395,6 +407,78 @@ describe.skipIf(!live)('EDITOR A1: approve, then publish', () => {
       await content.withdraw({ itemId }, PUB);
       expect(await versionRow(itemId)).toMatchObject({ status: 'ready' });
       expect((await audits(itemId)).map((row) => row.action)).not.toContain('approval_voided');
+    });
+  });
+
+  describe('the public read: dated and ordered by publication (challenger SHOULD-1)', () => {
+    /** Two items: the first approved first and published last. */
+    const crossed = async (): Promise<{ first: string; second: string }> => {
+      const first = await readyItem(TREASURER, 'treasurer');
+      const second = await readyItem(TREASURER, 'treasurer');
+      await content.approve({ itemId: first.itemId, contentHash: first.hash }, OFFICER);
+      await content.approve({ itemId: second.itemId, contentHash: second.hash }, OFFICER);
+      await content.publish({ itemId: second.itemId, contentHash: second.hash }, WEBMASTER);
+      await content.publish({ itemId: first.itemId, contentHash: first.hash }, WEBMASTER);
+      return { first: first.itemId, second: second.itemId };
+    };
+    const times = async (itemId: string): Promise<{ slug: string; approved_at: Date; published_at: Date }> =>
+      (
+        await api.pool.query<{ slug: string; approved_at: Date; published_at: Date }>(
+          `SELECT i.slug, v.approved_at, v.published_at FROM content_item i JOIN content_version v ON v.id = i.live_version_id WHERE i.id = $1`,
+          [itemId],
+        )
+      ).rows[0] as { slug: string; approved_at: Date; published_at: Date };
+    const ms = (at: { seconds: bigint; nanos: number } | undefined): number => Number(at?.seconds) * 1000 + Math.floor((at?.nanos ?? 0) / 1e6);
+
+    it('lists the piece published last first, whatever order they were approved in, and pages the same way', async () => {
+      const { first, second } = await crossed();
+      const officeId = offices['treasurer'] as string;
+      const listed = (await content.listPublishedItems({ officeId, pageSize: 50 })).items.map((item) => item.id);
+      expect(listed.indexOf(first)).toBeLessThan(listed.indexOf(second));
+      expect(listed.indexOf(second)).toBeGreaterThanOrEqual(0);
+      // One per page: the token carries the publication time, so the next page starts after the item shown.
+      const ids: string[] = [];
+      let pageToken = '';
+      do {
+        const page = await content.listPublishedItems({ officeId, pageSize: 1, pageToken });
+        ids.push(...page.items.map((item) => item.id));
+        pageToken = page.nextPageToken;
+      } while (pageToken !== '');
+      expect(ids).toEqual(listed);
+    });
+
+    it('gives the public the publication time when it differs from the approval time, for members too', async () => {
+      const { first } = await crossed();
+      const { slug, approved_at, published_at } = await times(first);
+      expect(published_at.getTime()).toBeGreaterThan(approved_at.getTime());
+      for (const who of [{}, as('member-token')]) {
+        const live = (await content.getPublishedItem({ slug }, who)).item?.live;
+        expect(ms(live?.publishedAt)).toBe(published_at.getTime());
+        expect(ms(live?.approvedAt)).toBe(approved_at.getTime());
+      }
+    });
+
+    it('leaves the publication time out where it is the approval time: every row before 0029, and the loader\'s issues', async () => {
+      // As 0029's backfill and the issue loader leave a row: approved and published at one time, in one transaction.
+      const { itemId } = await readyItem(TREASURER, 'treasurer');
+      const versionId = (await api.pool.query<{ id: string }>(`SELECT working_version_id AS id FROM content_item WHERE id = $1`, [itemId])).rows[0]?.id as string;
+      const client = await api.pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-officer', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`,
+          [versionId],
+        );
+        await client.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [versionId]);
+        await client.query(`UPDATE content_item SET state = 'published', live_version_id = $2, working_version_id = NULL WHERE id = $1`, [itemId, versionId]);
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+      const { slug, approved_at } = await times(itemId);
+      const live = (await content.getPublishedItem({ slug })).item?.live;
+      expect(live?.publishedAt).toBeUndefined();
+      expect(ms(live?.approvedAt)).toBe(approved_at.getTime());
     });
   });
 
