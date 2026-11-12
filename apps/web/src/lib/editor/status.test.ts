@@ -29,6 +29,8 @@ const WORKING: Record<string, EditorVersion | undefined> = {
   draft: version({ status: 'draft' }),
   'sent back': version({ status: 'draft', sendBackNote: 'Please add the time.' }),
   ready: version({ status: 'ready' }),
+  // EDITOR E3 (A1's split, behind the stand-in until A1 merges): approved by a reviewer, not yet published.
+  cleared: version({ status: 'cleared' }),
 };
 
 const item = (state: StateName, working: EditorVersion | undefined, withdrawnAt?: Date): EditorItem => ({
@@ -51,18 +53,22 @@ const TABLE: [StateName, string, string, string][] = [
   ['draft', 'draft', 'Draft – only officers can see it', 'past'],
   ['draft', 'sent back', 'Sent back – please read the note', 'stop'],
   ['draft', 'ready', 'Draft – only officers can see it', 'past'],
+  ['draft', 'cleared', 'Draft – only officers can see it', 'past'],
   ['ready', 'none', 'Waiting for approval', 'warn'],
   ['ready', 'draft', 'Waiting for approval', 'warn'],
   ['ready', 'sent back', 'Waiting for approval', 'warn'],
   ['ready', 'ready', 'Waiting for approval', 'warn'],
+  ['ready', 'cleared', 'Approved, ready to publish', 'ok'],
   ['published', 'none', 'Published', 'ok'],
   ['published', 'draft', 'Published', 'ok'],
   ['published', 'sent back', 'Sent back – please read the note', 'stop'],
   ['published', 'ready', 'Published – a change is waiting for approval', 'warn'],
+  ['published', 'cleared', 'Published – an approved change is waiting to be published', 'ok'],
   ['withdrawn', 'none', 'Taken down on November 11, 2026', 'stop'],
   ['withdrawn', 'draft', 'Taken down on November 11, 2026', 'stop'],
   ['withdrawn', 'sent back', 'Taken down on November 11, 2026', 'stop'],
   ['withdrawn', 'ready', 'Taken down on November 11, 2026', 'stop'],
+  ['withdrawn', 'cleared', 'Taken down on November 11, 2026', 'stop'],
 ];
 
 describe('statusOf', () => {
@@ -81,13 +87,15 @@ describe('statusOf', () => {
 
   it('names each status by a key the pages can test, and uses only the words of the list', () => {
     const keys = new Set(TABLE.map(([s, w]) => statusOf(item(s, WORKING[w], TAKEN_DOWN)).key));
-    expect([...keys].sort()).toEqual(['draft', 'published', 'published_change_waiting', 'ready', 'sent_back', 'taken_down']);
+    expect([...keys].sort()).toEqual(['cleared', 'draft', 'published', 'published_change_cleared', 'published_change_waiting', 'ready', 'sent_back', 'taken_down']);
     expect(STATUS_WORDS).toEqual({
       draft: 'Draft – only officers can see it',
       ready: 'Waiting for approval',
+      cleared: 'Approved, ready to publish',
       sent_back: 'Sent back – please read the note',
       published: 'Published',
       published_change_waiting: 'Published – a change is waiting for approval',
+      published_change_cleared: 'Published – an approved change is waiting to be published',
       taken_down: 'Taken down',
     });
   });

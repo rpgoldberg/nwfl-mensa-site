@@ -1,0 +1,316 @@
+---
+// EDITOR E3, S4: the edit page. The item's head (what it is, the office, the title, its status in words
+// with the chip, and the approver's note when sent back); then the form, posted as multipart (the text
+// box holds up to 48 KiB: URL-encoded it could overflow Astro's 64 KiB cap): Save draft, full width, at
+// the top and the bottom; the title and the summary, both always public; who can read it; the text box
+// with the roster warning (R13) above it, the toolbar (shown by script; without it, the "How to format"
+// box, which is always there), and the length in words and newsletter pages. The markup problems the API
+// found are listed at the top, line by line, each a link to the text box. "Your sign-in lasts until..."
+// from the token's expiry (SPEC-v3 3.1). A President's report lists the office's events beside it.
+// Saved: 303 back here with "Saved."; public/scripts/editor.js then drops the tab's unsent copy.
+//
+// A save posted after the sign-in ran out keeps the text: whether the session is gone (a site restart)
+// or only its token, the page comes back with what was posted and "Your sign-in timed out. Your text
+// is still here." With no session, the text comes from the post alone and nothing is read from the API.
+//
+// Not signed in (a GET): sign in first. Not an officer, the Admin or the Webmaster, an id that is not
+// one, no such item, or an item of an office the person does not hold (the Admin holds every office):
+// the plain not-found page, and nothing is saved. Astro's origin check refuses a cross-site post first.
+import ItemHeader from '../../../components/ItemHeader.astro';
+import PasswordNote from '../../../components/PasswordNote.astro';
+import StatusChip from '../../../components/StatusChip.astro';
+import Unavailable from '../../../components/Unavailable.astro';
+import Base from '../../../layouts/Base.astro';
+import { ApiNotFound } from '../../../lib/api/client';
+import { EditorRefused, type EditorItem, NotAllowed, type OfficeEvent, type Problem, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
+import { markUnavailable, signInFirst } from '../../../lib/api/page';
+import { runtimeDeps } from '../../../lib/auth/flow';
+import { addDays, todayCentral, whenText } from '../../../lib/calendar';
+import { EDIT_FORM_LIMIT, SUMMARY_MAX, TITLE_MAX, editFormFor, parseDraft } from '../../../lib/editor/form';
+import { EDIT_LINKS, type KeptDraft, ROSTER_WARNING, type RosterOffice, draftKey, keptText, lengthText, mayWriteFor, postingOffices, signInLine } from '../../../lib/editor/writer';
+import { readForm } from '../../../lib/form';
+
+export const prerender = false;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** The office's events listed beside a President's report: the next 60 days. */
+const EVENT_DAYS = 60;
+const FIELD_ORDER = ['title', 'summary', 'visibility', 'markup'] as const;
+const VISIBILITY_WORDS = [
+  { value: 'public', label: 'Everyone' },
+  { value: 'members', label: 'Members only' },
+  { value: 'officers', label: 'Officers only' },
+] as const;
+const MARKS = [
+  { mark: 'bold', label: 'Bold' },
+  { mark: 'italic', label: 'Italic' },
+  { mark: 'link', label: 'Link' },
+  { mark: 'list', label: 'List' },
+  { mark: 'heading', label: 'Heading' },
+  { mark: 'members', label: 'Members only' },
+] as const;
+const HOW_TO = [
+  { what: 'Bold', example: '**words**' },
+  { what: 'Slanted (italic)', example: '*words*' },
+  { what: 'A link', example: '[words to click](https://example.org/page)' },
+  { what: 'A list', example: '- at the start of each line' },
+  { what: 'A numbered list', example: '1. at the start of each line' },
+  { what: 'A heading', example: '## at the start of a line' },
+  { what: 'A quote', example: '> at the start of a line' },
+  { what: 'Members only, inside a line', example: ':members[words only members see]' },
+  { what: 'Members only, whole lines', example: '::: members on a line of its own, then the lines, then ::: on a line of its own' },
+];
+
+const id = Astro.params.id ?? '';
+const HERE = EDIT_LINKS.edit(id);
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+const session = Astro.locals.session;
+// A save posted with no session: its text, from the post alone, before anything is read. (Astro.rewrite
+// cannot follow a post whose body has been read: past that point, a missing item is the gone view.)
+if (!UUID.test(id)) return Astro.rewrite('/404');
+const kept = !session && Astro.request.method === 'POST' ? await keptText(Astro.request) : undefined;
+if (!session && kept === undefined) return signInFirst(SIGN_IN);
+if (kept !== undefined && !kept.ok) return new Response(kept.status === 413 ? 'Too large.' : 'Send the form.', { status: kept.status, headers: kept.status === 413 ? { Connection: 'close' } : {} });
+if (session && !editorAdmits(session)) return Astro.rewrite('/404');
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+type View = 'edit' | 'kept' | 'sign-in' | 'cannot-edit' | 'unavailable' | 'gone';
+let view: View = 'edit';
+let item: EditorItem | undefined;
+let values: KeptDraft = { title: '', summary: '', visibility: 'public', markup: '' };
+let errors: Partial<Record<string, string>> = {};
+let notice: { kind: 'refused' | 'not-allowed' | 'unavailable'; text: string } | undefined;
+let problems: Problem[] = [];
+let events: OfficeEvent[] | undefined;
+let cannotEdit = '';
+let roster: RosterOffice[] | undefined;
+const deps = runtimeDeps();
+
+if (kept?.ok) {
+  view = 'kept';
+  values = kept.values;
+} else if (session) {
+  const api = editorApi();
+  const { reader } = editorReader(session, deps);
+  /** The post's text, when the save cannot be made: kept on the page. */
+  const keepPosted = async (): Promise<Response | undefined> => {
+    const posted = await keptText(Astro.request);
+    if (!posted.ok) return new Response(posted.status === 413 ? 'Too large.' : 'Send the form.', { status: posted.status, headers: posted.status === 413 ? { Connection: 'close' } : {} });
+    view = 'kept';
+    values = posted.values;
+    return undefined;
+  };
+  if (api === undefined) view = 'unavailable';
+  else if (reader === undefined) {
+    if (Astro.request.method === 'POST') {
+      const refusal = await keepPosted();
+      if (refusal) return refusal;
+    } else view = 'sign-in';
+  } else {
+    try {
+      [roster, item] = await Promise.all([api.offices(), api.getWorkingItem(reader, id)]);
+    } catch (error) {
+      if (error instanceof ApiNotFound) return Astro.rewrite('/404');
+      if (error instanceof SignInAgain) {
+        if (Astro.request.method === 'POST') {
+          const refusal = await keepPosted();
+          if (refusal) return refusal;
+        } else view = 'sign-in';
+      } else view = 'unavailable';
+    }
+    if (item !== undefined && roster !== undefined) {
+      if (!mayWriteFor(postingOffices(session.groups, roster), item)) return Astro.rewrite('/404');
+      const form = editFormFor(item);
+      if (!form.ok) {
+        view = 'cannot-edit';
+        // The item's head says it already for a version marked "print as is".
+        cannotEdit = form.reason === 'print_as_is' ? '' : form.message;
+        if (Astro.request.method === 'POST') Astro.response.status = 409;
+      } else if (Astro.request.method === 'POST') {
+        const read = await readForm(Astro.request, EDIT_FORM_LIMIT);
+        if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+        const parsed = parseDraft(read.field);
+        if (!parsed.ok) {
+          errors = parsed.errors;
+          values = parsed.values;
+          Astro.response.status = 400;
+        } else {
+          values = parsed.value;
+          try {
+            await api.saveDraft(reader, { itemId: id, ...parsed.value });
+            return Astro.redirect(`${HERE}?saved=1`, 303);
+          } catch (error) {
+            if (error instanceof ApiNotFound) {
+              view = 'gone';
+              Astro.response.status = 404;
+            } else if (error instanceof SignInAgain) view = 'kept';
+            else if (error instanceof NotAllowed) {
+              notice = { kind: 'not-allowed', text: 'Nothing was saved: you cannot change this item. Ask the Webmaster or the Admin.' };
+              Astro.response.status = 403;
+            } else if (error instanceof EditorRefused) {
+              notice = { kind: 'refused', text: `Nothing was saved: ${error.reason}` };
+              Astro.response.status = 400;
+            } else {
+              notice = { kind: 'unavailable', text: 'Nothing was saved: the site could not reach its records just now. Your text is still here: try Save draft again in a few minutes.' };
+              markUnavailable(Astro.response);
+            }
+          }
+        }
+      } else {
+        values = form.values;
+        // The problems the API finds in what is saved; the page stands without them.
+        problems = await api.previewWorkingItem(reader, id).then(
+          (preview) => preview.problems,
+          () => [],
+        );
+      }
+      if (view === 'edit' && item.kind === 'president_report') {
+        const today = todayCentral(new Date());
+        events = await api.officeEvents(item.officeId, today, addDays(today, EVENT_DAYS)).catch(() => undefined);
+      }
+    }
+  }
+}
+if (view === 'unavailable') markUnavailable(Astro.response);
+
+const saved = view === 'edit' && Astro.request.method === 'GET' && Astro.url.searchParams.get('saved') === '1';
+const officeName = roster?.find((o) => o.id === item?.officeId)?.title ?? '';
+const tokens = session ? deps.tokens.get(session.sid, deps.now()) : undefined;
+const line = view === 'edit' ? signInLine(tokens?.expires_at, deps.now()) : undefined;
+const working = item?.working;
+const listed = FIELD_ORDER.filter((field) => errors[field] !== undefined).map((field) => ({ field: field === 'visibility' ? 'visibility-public' : field, text: errors[field] as string }));
+const problemList = problems.map((p) => ({ line: p.line, text: p.line > 0 ? `Line ${p.line}: ${p.message}` : `${p.message.charAt(0).toUpperCase()}${p.message.slice(1)}` }));
+const showForm = view === 'edit' || view === 'kept';
+const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
+const pageTitle = view === 'gone' ? 'Page not found' : (item?.working?.title ?? item?.live?.title ?? (values.title.trim() || 'Your text'));
+---
+<Base path={HERE} title={pageTitle} description="Write and save a piece for the website and the newsletter.">
+  {view === 'gone'
+    ? <><h1>Page not found</h1><p class="lead">This item is no longer there. Nothing was saved.</p></>
+    : item && view !== 'kept' ? <ItemHeader item={item} officeName={officeName} /> : <h1>{pageTitle}</h1>}
+  {saved && <p class="notice" role="status">Saved. Only officers can see this version until it is approved.</p>}
+  {view === 'kept' && (
+    <>
+      <p class="notice" role="alert">
+        Your sign-in timed out. Your text is still here. Use 'Sign in again' (opens a new tab), then come back to this tab and press Save draft.
+        <a href={`${SIGN_IN}&again=1`} target="_blank" rel="noopener">Sign in again (opens a new tab)</a>
+      </p>
+      <PasswordNote />
+    </>
+  )}
+  {view === 'sign-in' && (
+    <>
+      <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>.</p>
+      <PasswordNote />
+    </>
+  )}
+  {view === 'unavailable' && <Unavailable what="This item" />}
+  {view === 'cannot-edit' && cannotEdit && <p class="notice" role="note">{cannotEdit}</p>}
+  {notice && <p class="notice" role="alert">{notice.text}</p>}
+  {view === 'edit' && working?.status === 'ready' && <p class="notice" role="note">It is waiting for approval. If you save a change, it goes back to being a draft: send it for approval again after.</p>}
+  {view === 'edit' && working?.status === 'cleared' && <p class="notice" role="note">It is approved. If you save a change, it needs approving again.</p>}
+
+  {listed.length > 0 && (
+    <>
+      <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+        <h2 id="error-summary-title">There is a problem with what you wrote</h2>
+        <ul>
+          {listed.map((entry) => <li><a href={`#${entry.field}`}>{entry.text}</a></li>)}
+        </ul>
+      </section>
+      <script is:inline type="module" src="/scripts/error-summary.js"></script>
+    </>
+  )}
+  {view === 'edit' && problemList.length > 0 && (
+    <section class="error-summary problems" aria-labelledby="problems-title">
+      <h2 id="problems-title">Fix these before you send it for approval</h2>
+      <p>Your draft is saved. These lines need changing before it can be approved:</p>
+      <ul>
+        {problemList.map((p) => <li><a href="#markup" data-line={p.line > 0 ? String(p.line) : undefined}>{p.text}</a></li>)}
+      </ul>
+    </section>
+  )}
+
+  {line && <p class="sign-in-line" data-sign-in data-expires={String(line.expiresAt)} data-soon={line.soonText} data-state={line.soon ? 'soon' : undefined}>{line.text}</p>}
+
+  {showForm && (
+    <>
+      <section class="notice restore" aria-labelledby="restore-title" data-restore hidden>
+        <h2 id="restore-title">Text you had not saved</h2>
+        <p>This tab still holds text you typed here and did not save. It may be newer than what is saved.</p>
+        <div class="btns">
+          <button class="button" type="button" data-restore-yes>Put back my unsaved text</button>
+          <button class="button button--secondary" type="button" data-restore-no>Forget that text</button>
+        </div>
+      </section>
+      <form method="post" action={HERE} enctype="multipart/form-data" class="rule-form editor-form" novalidate data-editor data-draft-key={draftKey(id)} data-saved={saved ? 'yes' : undefined}>
+        <div class="btns"><button class="button button--wide" type="submit">Save draft</button></div>
+        <div class="field">
+          <label for="title">Title</label>
+          <p class="hint" id="title-hint">Titles are always public. Up to {TITLE_MAX} letters.</p>
+          {errors['title'] && <p class="error" id="title-error">Problem: {errors['title']}</p>}
+          <input type="text" id="title" name="title" maxlength={TITLE_MAX} required value={values.title} aria-invalid={errors['title'] ? 'true' : undefined} aria-describedby={describedBy('title-hint', errors['title'] && 'title-error')} />
+        </div>
+        <div class="field">
+          <label for="summary">Summary</label>
+          <p class="hint" id="summary-hint">Optional. One line, always public.</p>
+          {errors['summary'] && <p class="error" id="summary-error">Problem: {errors['summary']}</p>}
+          <input type="text" id="summary" name="summary" maxlength={SUMMARY_MAX} value={values.summary} aria-invalid={errors['summary'] ? 'true' : undefined} aria-describedby={describedBy('summary-hint', errors['summary'] && 'summary-error')} />
+        </div>
+        <fieldset aria-describedby={describedBy(errors['visibility'] && 'visibility-error')}>
+          <legend>Who can read it</legend>
+          {errors['visibility'] && <p class="error" id="visibility-error">Problem: {errors['visibility']}</p>}
+          {VISIBILITY_WORDS.map((v) => (
+            <div class="choice">
+              <input type="radio" id={`visibility-${v.value}`} name="visibility" value={v.value} checked={values.visibility === v.value} />
+              <label for={`visibility-${v.value}`}>{v.label}</label>
+            </div>
+          ))}
+        </fieldset>
+        <div class="field">
+          <label for="markup">The text</label>
+          <p class="roster-warning" id="roster-warning"><strong>{ROSTER_WARNING}</strong></p>
+          {errors['markup'] && <p class="error" id="markup-error">Problem: {errors['markup']}</p>}
+          <div class="toolbar" role="group" aria-label="Format the selected text" data-toolbar hidden>
+            {MARKS.map((m) => <button class="button button--secondary" type="button" data-mark={m.mark}>{m.label}</button>)}
+          </div>
+          <textarea id="markup" name="markup" rows="18" class="markup-box" aria-invalid={errors['markup'] ? 'true' : undefined} aria-describedby={describedBy('roster-warning', 'markup-length', errors['markup'] && 'markup-error')}>{values.markup}</textarea>
+          <p class="hint" id="markup-length" data-length>{lengthText(values.markup)}</p>
+        </div>
+        <section class="how-to-format" aria-labelledby="how-to-title">
+          <h2 id="how-to-title">How to format</h2>
+          <p>Type these marks around your words, or select the words and use the buttons above the text box.</p>
+          <dl>
+            {HOW_TO.map((h) => <div><dt>{h.what}</dt><dd><code>{h.example}</code></dd></div>)}
+          </dl>
+        </section>
+        <div class="btns"><button class="button button--wide" type="submit">Save draft</button></div>
+      </form>
+      <script is:inline type="module" src="/scripts/editor.js"></script>
+    </>
+  )}
+
+  {view === 'edit' && item?.kind === 'president_report' && (
+    <section class="card report-events" aria-labelledby="events-title">
+      <h2 id="events-title">Events in this report</h2>
+      <p>Your office's events in the next {EVENT_DAYS} days. An event is on the calendar as soon as it is saved.</p>
+      {events === undefined
+        ? <p>The calendar could not be read just now.</p>
+        : events.length === 0
+          ? <p>None on the calendar yet.</p>
+          : (
+            <ul class="report-events__list">
+              {events.map((e) => (
+                <li><p><b>{e.title}</b>: {whenText({ date: e.date, start: e.start, end: e.end })}.</p><StatusChip status={e.status} note={e.statusNote} /></li>
+              ))}
+            </ul>
+          )}
+      <p><a href="/events">See the calendar</a></p>
+    </section>
+  )}
+
+  <div class="btns writer-links">
+    {(view === 'edit' || view === 'cannot-edit') && <a class="button button--secondary" href={EDIT_LINKS.preview(id)}>Preview and send</a>}
+    <a class="button button--secondary" href={EDIT_LINKS.list}>Back to Our news</a>
+  </div>
+</Base>

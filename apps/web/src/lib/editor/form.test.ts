@@ -255,6 +255,9 @@ describe('editFormFor: the withheld guard', () => {
       message: 'This version is marked "print as is": it can be approved or sent back, but no longer edited.',
     });
     expect(editFormFor(item({ working: version({ status: 'draft', printAsIs: true }) })).ok).toBe(true);
+    // EDITOR E3: approved and waiting to be published (A1's cleared), it is no more editable than when ready.
+    expect(editFormFor(item({ state: 'ready', working: version({ status: 'cleared', printAsIs: true }) }))).toMatchObject({ ok: false, reason: 'print_as_is' });
+    expect(editFormFor(item({ state: 'ready', working: version({ status: 'cleared' }) })).ok).toBe(true);
     expect(editFormFor(item({}))).toEqual({ ok: false, reason: 'nothing', message: 'There is nothing to edit in this item.' });
   });
 });

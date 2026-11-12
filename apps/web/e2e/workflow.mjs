@@ -7,6 +7,12 @@
 // will get it. Its markup is a small part of the API's (headings, lists, links, :members[..] and
 // ::: members blocks) with the API's problem words, enough to tell the audiences apart.
 //
+// EDITOR E3: two things the API on main does not do yet, kept here behind the stand-in until they land:
+// A3a's strict URL words at save (its markup does: apps/api/src/links/rule.ts, a part of it here), and
+// A1's version approved but not yet published (cleared, VERSION_STATUS_CLEARED = 6, sent by number until
+// A1's proto lands): a seed can be cleared, the list holds it with drafts and ready ones, and an edit
+// takes it back to a draft with an approval_voided step first.
+//
 // Items are shared by everyone, as in the API (a writer and an approver are two people). The seeded
 // items (SEEDED) are for reading: a test that changes an item creates its own, with a title of its
 // own, so tests in parallel never disturb each other.
@@ -18,7 +24,7 @@ import { ContentKind, ItemState, ItemVisibility, VersionStatus } from '../src/ge
 /** @typedef {{ id: string, slug: string, title: string }} Office */
 /** @typedef {{ website: boolean, newsletter: boolean, email: boolean }} Targets */
 /**
- * @typedef {{ id: string, number: number, status: 'draft' | 'ready' | 'approved' | 'superseded', title: string, summary: string,
+ * @typedef {{ id: string, number: number, status: 'draft' | 'ready' | 'cleared' | 'approved' | 'superseded', title: string, summary: string,
  *   visibility: 'public' | 'members' | 'officers', markup: string, targets: Targets, editionId: string, printAsIs: boolean,
  *   onBehalfOf: string, readyAt?: Date, approvedAt?: Date, hash?: Uint8Array, editors: Set<string>, sendBackNote: string }} Version
  */
@@ -54,7 +60,9 @@ const STATE_IN = new Map([
   [ItemState.DRAFT, 'draft'],
   [ItemState.READY, 'ready'],
 ]);
-const STATUS_OUT = { draft: VersionStatus.DRAFT, ready: VersionStatus.READY, approved: VersionStatus.APPROVED, superseded: VersionStatus.SUPERSEDED };
+/** A1's VERSION_STATUS_CLEARED, by number until its proto lands. */
+const CLEARED = /** @type {VersionStatus} */ (6);
+const STATUS_OUT = { draft: VersionStatus.DRAFT, ready: VersionStatus.READY, cleared: CLEARED, approved: VersionStatus.APPROVED, superseded: VersionStatus.SUPERSEDED };
 
 const invalid = (/** @type {string} */ message) => new ConnectError(message, Code.InvalidArgument);
 const precondition = (/** @type {string} */ message) => new ConnectError(message, Code.FailedPrecondition);
@@ -63,6 +71,26 @@ const denied = () => new ConnectError('not permitted', Code.PermissionDenied);
 // ---------------------------------------------------------------------------------------------
 // Markup: a small part of the API's (apps/api/src/content/markup.ts), with its problem words.
 // ---------------------------------------------------------------------------------------------
+
+// A3a's strict URL rule (apps/api/src/links/rule.ts), the part the editor's tests need, in its words.
+const REASONS = {
+  http: 'must start with https://, not http://',
+  www: 'must be written in full, starting with https://',
+  plain: 'must be written plainly: https:// or mailto: in lower case, and no spaces',
+  scheme: 'is not a web address starting with https:// or an email address starting with mailto:',
+};
+
+/** Why a URL may not be saved, or undefined. @param {string} url */
+function urlReason(url) {
+  if (/^http:\/\//i.test(url)) return REASONS.http;
+  if (/^www\./i.test(url)) return REASONS.www;
+  if (/^(https:\/\/|mailto:)\S+$/.test(url)) return undefined;
+  if (/^(https:\/\/|mailto:)/i.test(url)) return REASONS.plain;
+  return REASONS.scheme;
+}
+
+/** The bare URLs in a run of text (linkcheck's pattern), each without the sentence punctuation after it. @param {string} run */
+const bareUrls = (run) => [...run.matchAll(/(?:https?:\/\/|www\.)[^\s<>"'`]+/giu)].map((m) => m[0].replace(/[.,;:!?)]+$/, ''));
 
 const text = (/** @type {string} */ t, bold = false) => ({ kind: { case: /** @type {const} */ ('text'), value: { text: t, bold, italic: false } } });
 const REDACTED_INLINE = { kind: { case: /** @type {const} */ ('redacted'), value: {} } };
@@ -73,15 +101,24 @@ function inlines(/** @type {string} */ line, /** @type {number} */ number, /** @
   /** @type {any[]} */
   const out = [];
   const pattern = /\*\*([^*]+)\*\*|\[([^\]]*)\]\(([^)\s]*)\)|:members\[([^\]]*)(\]?)/g;
+  /** Text as it is kept, with a problem for each bad bare URL in it. @param {string} run */
+  const plain = (run) => {
+    for (const url of bareUrls(run)) {
+      const reason = urlReason(url);
+      if (reason) problems.push({ line: number, message: `the address "${url}" ${reason}` });
+    }
+    return text(run);
+  };
   let at = 0;
   for (const m of line.matchAll(pattern)) {
-    if (m.index > at) out.push(text(line.slice(at, m.index)));
+    if (m.index > at) out.push(plain(line.slice(at, m.index)));
     if (m[1] !== undefined) out.push(text(m[1], true));
     else if (m[2] !== undefined) {
       const href = m[3] ?? '';
-      if (/^(https:\/\/|mailto:)\S+$/.test(href)) out.push({ kind: { case: 'link', value: { href, inlines: [text(m[2])] } } });
+      const reason = urlReason(href);
+      if (reason === undefined) out.push({ kind: { case: 'link', value: { href, inlines: [text(m[2])] } } });
       else {
-        problems.push({ line: number, message: 'links must be https: or mailto:' });
+        problems.push({ line: number, message: `the link "${href}" ${reason}` });
         out.push(text(m[2]));
       }
     } else {
@@ -90,7 +127,7 @@ function inlines(/** @type {string} */ line, /** @type {number} */ number, /** @
     }
     at = m.index + m[0].length;
   }
-  if (at < line.length) out.push(text(line.slice(at)));
+  if (at < line.length) out.push(plain(line.slice(at)));
   return out;
 }
 
@@ -297,7 +334,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
   /**
    * Adds an item straight into a state, for the seeds (no history check, no caller).
    * @param {{ id?: string, slug: string, kind: string, officeId: string, state: Item['state'], title: string, summary?: string,
-   *   visibility?: Version['visibility'], markup?: string, withheld?: boolean, working?: boolean, sendBackNote?: string, editors?: string[] }} seed
+   *   visibility?: Version['visibility'], markup?: string, withheld?: boolean, working?: boolean, sendBackNote?: string, editors?: string[],
+   *   cleared?: boolean }} seed
    */
   const seed = (seed) => {
     const at = now();
@@ -305,7 +343,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     const version = {
       id: randomUUID(),
       number: 1,
-      status: seed.state === 'published' || seed.state === 'withdrawn' ? 'approved' : seed.state === 'ready' ? 'ready' : 'draft',
+      status: seed.state === 'published' || seed.state === 'withdrawn' ? 'approved' : seed.state === 'ready' ? (seed.cleared ? 'cleared' : 'ready') : 'draft',
       title: seed.title,
       summary: seed.summary ?? '',
       visibility: seed.visibility ?? 'public',
@@ -318,7 +356,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       sendBackNote: seed.sendBackNote ?? '',
     };
     if (version.status !== 'draft') version.hash = hashOf(version, version.targets, '');
-    if (version.status === 'ready') version.readyAt = at;
+    if (version.status === 'ready' || version.status === 'cleared') version.readyAt = at;
     if (version.status === 'approved') version.approvedAt = at;
     /** @type {Item} */
     const item = { id: seed.id ?? randomUUID(), slug: seed.slug, kind: seed.kind, officeId: seed.officeId, state: seed.state, updatedAt: at, withheld: seed.withheld ?? false, history: [] };
@@ -375,8 +413,10 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       requireOffice(caller, item);
       const version = item.working ?? newVersion(item);
       const from = version.status;
-      if (version.status === 'ready') {
+      if (version.status === 'ready' || version.status === 'cleared') {
         if (version.printAsIs) throw precondition('a print-as-is version can be approved or sent back, never edited');
+        // A1: an edit after approval voids it, and says so in the history first.
+        if (version.status === 'cleared') record(item, caller, { action: 'approval_voided', versionNumber: version.number, fromState: 'cleared', toState: 'draft' });
         version.status = 'draft';
         delete version.hash;
         if (item.state === 'ready') item.state = 'draft';
@@ -480,7 +520,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const caller = await callerOf(ctx);
       requireReader(caller);
       /** @type {string[]} */
-      const states = req.states.length === 0 ? ['draft', 'ready'] : req.states.map((/** @type {number} */ s) => STATE_IN.get(s)).filter(Boolean);
+      // A1: empty means draft, ready and cleared.
+      const states = req.states.length === 0 ? ['draft', 'ready', 'cleared'] : req.states.map((/** @type {number} */ s) => STATE_IN.get(s)).filter(Boolean);
       const listed = [...items.values()]
         .filter((i) => i.working !== undefined && states.includes(i.working.status) && (req.officeId === '' || i.officeId === req.officeId) && (req.editionId === '' || i.working.editionId === req.editionId))
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || a.id.localeCompare(b.id));

@@ -1,0 +1,144 @@
+---
+// EDITOR E3, S3: a new item. "What is it?" (Announcement, News article or President's report, as radio
+// buttons); "Posting as" only for someone who may post as more than one office (the Admin sees every
+// office, marked "for the office"); the title, always public; then Create draft, which makes the item
+// with a slug from its title (src/lib/editor/slug.ts) and goes to its edit page (303). A form with
+// problems comes back with them listed at the top, each a link to its field, and what was typed kept.
+//
+// Not signed in: sign in first. Not an officer, the Admin or the Webmaster: the plain not-found page.
+// Holding no office: a plain line, 403. Astro's origin check refuses a cross-site post first.
+import PasswordNote from '../../../components/PasswordNote.astro';
+import Unavailable from '../../../components/Unavailable.astro';
+import Base from '../../../layouts/Base.astro';
+import { EditorRefused, NotAllowed, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
+import { markUnavailable, signInFirst } from '../../../lib/api/page';
+import { runtimeDeps } from '../../../lib/auth/flow';
+import { DAY_ONE_KINDS, TITLE_MAX, parseNewItem } from '../../../lib/editor/form';
+import { createWithSlug } from '../../../lib/editor/slug';
+import { KIND_WORDS } from '../../../lib/editor/status';
+import { EDIT_LINKS, type PostingOffice, officeName, postingOffices } from '../../../lib/editor/writer';
+import { readForm } from '../../../lib/form';
+import { page } from '../../../lib/site';
+
+export const prerender = false;
+
+const HERE = EDIT_LINKS.create;
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+/** Three short fields. */
+const MAX_FORM_BYTES = 8 * 1024;
+const FIELD_ORDER = ['kind', 'office', 'title'] as const;
+
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (!editorAdmits(session)) return Astro.rewrite('/404');
+const p = page(HERE);
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+const api = editorApi();
+const { reader } = editorReader(session, runtimeDeps());
+let problem: 'sign-in' | 'unavailable' | 'not-allowed' | undefined;
+let refused: string | undefined;
+let offices: PostingOffice[] = [];
+if (api === undefined) problem = 'unavailable';
+else {
+  try {
+    offices = postingOffices(session.groups, await api.offices());
+  } catch {
+    problem = 'unavailable';
+  }
+}
+
+let errors: Partial<Record<string, string>> = {};
+let values = { kind: '', office: '', title: '' };
+if (Astro.request.method === 'POST' && problem === undefined && offices.length > 0) {
+  const read = await readForm(Astro.request, MAX_FORM_BYTES);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const parsed = parseNewItem(read.field, offices);
+  if (!parsed.ok) {
+    errors = parsed.errors;
+    values = parsed.values;
+    Astro.response.status = 400;
+  } else if (api === undefined || reader === undefined) {
+    values = { kind: parsed.value.kind, office: parsed.value.officeId, title: parsed.value.title };
+    problem = 'sign-in';
+  } else {
+    const { kind, officeId, title } = parsed.value;
+    try {
+      const item = await createWithSlug(title, (slug) => api.createItem(reader, { kind, officeId, slug, title }));
+      return Astro.redirect(EDIT_LINKS.edit(item.id), 303);
+    } catch (error) {
+      values = { kind, office: officeId, title };
+      if (error instanceof SignInAgain) problem = 'sign-in';
+      else if (error instanceof NotAllowed) problem = 'not-allowed';
+      else if (error instanceof EditorRefused) refused = error.reason;
+      else problem = 'unavailable';
+    }
+  }
+}
+if (problem === 'unavailable') markUnavailable(Astro.response);
+else if (problem === undefined && offices.length === 0) Astro.response.status = 403;
+else if (problem === 'not-allowed') Astro.response.status = 403;
+else if (refused !== undefined) Astro.response.status = 400;
+
+const listed = FIELD_ORDER.filter((field) => errors[field] !== undefined).map((field) => ({ field: field === 'kind' ? `kind-${DAY_ONE_KINDS[0]}` : field === 'office' ? `office-${offices[0]?.id}` : field, text: errors[field] as string }));
+const chosenOffice = offices.length === 1 ? offices[0] : offices.find((o) => o.id === values.office);
+const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  {problem === 'sign-in' && <p class="notice" role="alert">Your sign-in has run out. Nothing was made yet. <a href={`${SIGN_IN}&again=1`} target="_blank" rel="noopener">Sign in again (opens a new tab)</a>, then come back to this tab and press Create draft.</p>}
+  {problem === 'sign-in' && <PasswordNote />}
+  {problem === 'unavailable' && <Unavailable what="Writing news" />}
+  {problem === 'not-allowed' && <p class="notice" role="alert">You cannot post as that office. Choose one of yours.</p>}
+  {refused !== undefined && <p class="notice" role="alert">It was not made: {refused}</p>}
+  {problem !== 'unavailable' && offices.length === 0 && (
+    <p class="lead">You hold no office that writes news, so there is nothing here for you to write. If you think you should, ask the Webmaster.</p>
+  )}
+  {listed.length > 0 && (
+    <>
+      <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+        <h2 id="error-summary-title">There is a problem with what you wrote</h2>
+        <ul>
+          {listed.map((item) => <li><a href={`#${item.field}`}>{item.text}</a></li>)}
+        </ul>
+      </section>
+      <script is:inline type="module" src="/scripts/error-summary.js"></script>
+    </>
+  )}
+  {offices.length > 0 && (
+    <form method="post" action={HERE} class="rule-form editor-form" novalidate>
+      <fieldset aria-describedby={describedBy(errors['kind'] && 'kind-error')}>
+        <legend>What is it?</legend>
+        {errors['kind'] && <p class="error" id="kind-error">Problem: {errors['kind']}</p>}
+        {DAY_ONE_KINDS.map((kind) => (
+          <div class="choice">
+            <input type="radio" id={`kind-${kind}`} name="kind" value={kind} checked={values.kind === kind} />
+            <label for={`kind-${kind}`}>{KIND_WORDS[kind]}</label>
+          </div>
+        ))}
+      </fieldset>
+      {offices.length > 1
+        ? (
+          <fieldset aria-describedby={describedBy(errors['office'] && 'office-error')}>
+            <legend>Posting as</legend>
+            {errors['office'] && <p class="error" id="office-error">Problem: {errors['office']}</p>}
+            {offices.map((office) => (
+              <div class="choice">
+                <input type="radio" id={`office-${office.id}`} name="office" value={office.id} checked={chosenOffice?.id === office.id} />
+                <label for={`office-${office.id}`}>{officeName(office)}</label>
+              </div>
+            ))}
+          </fieldset>
+        )
+        : <p>Posting as {offices[0] && officeName(offices[0])}.</p>}
+      <div class="field">
+        <label for="title">Title</label>
+        <p class="hint" id="title-hint">Titles are always public. Up to {TITLE_MAX} letters.</p>
+        {errors['title'] && <p class="error" id="title-error">Problem: {errors['title']}</p>}
+        <input type="text" id="title" name="title" maxlength={TITLE_MAX} required value={values.title} aria-invalid={errors['title'] ? 'true' : undefined} aria-describedby={describedBy('title-hint', errors['title'] && 'title-error')} />
+      </div>
+      <div class="btns"><button class="button button--wide" type="submit">Create draft</button></div>
+    </form>
+  )}
+  <p><a href={EDIT_LINKS.list}>Back to Our news</a></p>
+</Base>

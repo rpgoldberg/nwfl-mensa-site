@@ -107,9 +107,9 @@ export default defineConfig({
   ],
   projects: [
     // Headers and cache rules: plain HTTP, no browser needed.
-    { name: 'http', testMatch: /(headers|redirects|feeds)\.spec\.ts/ },
-    { name: 'chromium-desktop', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
-    { name: 'chromium-phone', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['Pixel 7'] } },
-    { name: 'webkit-iphone', testIgnore: [/(headers|redirects|feeds)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['iPhone 17'] } },
+    { name: 'http', testMatch: /(headers|redirects|feeds|editor-http)\.spec\.ts/ },
+    { name: 'chromium-desktop', testIgnore: [/(headers|redirects|feeds|editor-http)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
+    { name: 'chromium-phone', testIgnore: [/(headers|redirects|feeds|editor-http)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['Pixel 7'] } },
+    { name: 'webkit-iphone', testIgnore: [/(headers|redirects|feeds|editor-http)\.spec\.ts/, /(public-only|redaction)\//], use: { ...devices['iPhone 17'] } },
   ],
 });

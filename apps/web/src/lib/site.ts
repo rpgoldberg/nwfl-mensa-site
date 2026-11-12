@@ -133,6 +133,9 @@ const PAGES: readonly Page[] = [
   { path: '/officer-area', title: 'Officer area', description: 'Where officers write reports and approve what goes on the site.' },
   // SOLO-APPROVE: the Admin's alone; never linked for anyone else (robots.txt keeps /officer-area out of search).
   { path: '/officer-area/approval-rules', title: 'Approval setting', description: 'Whether a second person must approve before something is published.' },
+  // EDITOR E3: the writer screens, for the officers, the Admin and the Webmaster (robots.txt keeps /officer-area out of search).
+  { path: '/officer-area/news', title: 'Our news', description: "News, announcements and reports your office is writing, and where each one stands." },
+  { path: '/officer-area/news/new', title: 'Write something new', description: 'Start a new announcement, news article or President\u2019s report.' },
   // W-SIGNUP D4: the membership approvers' and the Admin's alone; never linked for anyone else.
   { path: '/officer-area/sign-ups', title: 'Sign-ups to approve', description: 'New sign-ups waiting for an officer to approve or reject them.' },
   // W-SIGNUP D3: a signed-in person's own account: their sign-up, or their standing (robots.txt keeps it out of search).

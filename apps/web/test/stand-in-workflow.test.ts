@@ -123,7 +123,7 @@ describe('the stand-in workflow: writing', () => {
     const item = await create('officer', 'With a bad link');
     const saved = await save('officer', item, 'See [the club](http://club.example).\n### Too deep', 'members');
     expect(saved.problems).toEqual([
-      { line: 1, message: 'links must be https: or mailto:' },
+      { line: 1, message: 'the link "http://club.example" must start with https://, not http://' },
       { line: 2, message: 'only two heading levels (# and ##)' },
     ]);
     expect(saved.item.working).toMatchObject({ visibility: 'members', summary: 'A summary', markup: 'See [the club](http://club.example).\n### Too deep' });
@@ -354,7 +354,40 @@ describe('parseMarkup (the stand-in\'s part of the API\'s markup)', () => {
     expect(parseMarkup('a :members[open\n:::\n[x](javascript:alert(1))').problems).toEqual([
       { line: 1, message: 'unclosed :members[' },
       { line: 2, message: 'closing ::: without an opening ::: members' },
-      { line: 3, message: 'links must be https: or mailto:' },
+      { line: 3, message: 'the link "javascript:alert(1" is not a web address starting with https:// or an email address starting with mailto:' },
     ]);
+  });
+
+  // EDITOR E3: A3a's strict URL rule at save (apps/api/src/links/rule.ts), in its words, for the URL problems
+  // the edit page lists line by line: a link's address, and a bare address in the text.
+  it("names a bad address in a link or in the text, in A3a's words, on its own line", () => {
+    expect(parseMarkup('Fine [a](https://a.example) and mailto in [b](mailto:b@example.org).\nSee http://club.example/picnic, then www.club.example.\n[c](https://c.example) and https://ok.example/path.').problems).toEqual([
+      { line: 2, message: 'the address "http://club.example/picnic" must start with https://, not http://' },
+      { line: 2, message: 'the address "www.club.example" must be written in full, starting with https://' },
+    ]);
+    expect(parseMarkup('- [x](HTTPS://X.example)\n# A heading with http://h.example').problems).toEqual([
+      { line: 1, message: 'the link "HTTPS://X.example" must be written plainly: https:// or mailto: in lower case, and no spaces' },
+      { line: 2, message: 'the address "http://h.example" must start with https://, not http://' },
+    ]);
+  });
+});
+
+describe('the stand-in workflow: approved, ready to publish (A1, until its proto lands)', () => {
+  it('seeds a cleared version, lists it with drafts and ready ones, and reads it as "Approved, ready to publish"', async () => {
+    const cleared = model.seed({ slug: 'seed-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
+    const read = await api.getWorkingItem(as('officer'), cleared.id);
+    expect(read).toMatchObject({ state: 'ready', working: { status: 'cleared' } });
+    expect(read.working?.contentHash).toHaveLength(32);
+    expect(statusOf(read).label).toBe('Approved, ready to publish');
+    expect((await api.listWorkingItems(as('officer'))).map((i) => i.id)).toContain(cleared.id);
+    expect((await api.listWorkingItems(as('officer'), { states: ['draft'] })).map((i) => i.id)).not.toContain(cleared.id);
+  });
+
+  it('takes an edit of a cleared version back to a draft: the approval no longer counts', async () => {
+    const cleared = model.seed({ slug: 'seed-cleared-edit', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
+    const { item } = await api.saveDraft(as('officer'), { itemId: cleared.id, title: 'Cleared', summary: '', visibility: 'public', markup: 'Changed.' });
+    expect(item).toMatchObject({ state: 'draft', working: { status: 'draft' } });
+    expect(item.working?.contentHash).toHaveLength(0);
+    expect((await api.listItemHistory(as('officer'), cleared.id)).map((h) => h.action)).toEqual(['approval_voided', 'save']);
   });
 });

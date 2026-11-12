@@ -1,0 +1,162 @@
+---
+// EDITOR E3, S5: preview and send. "What the public sees", then "What members see", each a frame headed
+// in words, from the API's own filter (PreviewWorkingItem, E2's Previews.astro). Under them, for a draft:
+// "Show on": Website (ticked) and "Also in the newsletter" (ticked; never for an officers-only item),
+// which goes in the next issue being put together (an edition picker comes with A2's ListOpenEditions;
+// until then no edition is sent, and the Newsletter Editor places it); then Send for approval, which marks
+// it ready (MarkReady) and goes back to Our news (303). While the text has problems, they are listed and
+// there is nothing to send: a post is refused before the API is asked (409). An item already sent, or
+// approved, says so; a version marked "print as is" says it can no longer be edited.
+//
+// Not signed in: sign in first. Not an officer, the Admin or the Webmaster, an id that is not one, no
+// such item, or an item of an office the person does not hold: the plain not-found page.
+import ItemHeader from '../../../../components/ItemHeader.astro';
+import PasswordNote from '../../../../components/PasswordNote.astro';
+import Previews from '../../../../components/Previews.astro';
+import Unavailable from '../../../../components/Unavailable.astro';
+import Base from '../../../../layouts/Base.astro';
+import { ApiNotFound } from '../../../../lib/api/client';
+import { EditorRefused, type EditorItem, NotAllowed, type Preview, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../../lib/api/editor';
+import { markUnavailable, signInFirst } from '../../../../lib/api/page';
+import { runtimeDeps } from '../../../../lib/auth/flow';
+import { editFormFor, parseSubmit, problemLines } from '../../../../lib/editor/form';
+import { EDIT_LINKS, type RosterOffice, mayWriteFor, postingOffices, submitTargets } from '../../../../lib/editor/writer';
+import { readForm } from '../../../../lib/form';
+
+export const prerender = false;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** Two ticks and an edition id. */
+const MAX_FORM_BYTES = 4 * 1024;
+
+const id = Astro.params.id ?? '';
+const HERE = EDIT_LINKS.preview(id);
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (!editorAdmits(session) || !UUID.test(id)) return Astro.rewrite('/404');
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+const api = editorApi();
+const { reader } = editorReader(session, runtimeDeps());
+let problem: 'sign-in' | 'unavailable' | undefined;
+let item: EditorItem | undefined;
+let preview: Preview | undefined;
+let roster: RosterOffice[] = [];
+let errors: Partial<Record<string, string>> = {};
+let refused: string | undefined;
+let gone = false;
+if (api === undefined) problem = 'unavailable';
+else if (reader === undefined) problem = 'sign-in';
+else {
+  try {
+    [roster, item, preview] = await Promise.all([api.offices(), api.getWorkingItem(reader, id), api.previewWorkingItem(reader, id)]);
+  } catch (error) {
+    if (error instanceof ApiNotFound) return Astro.rewrite('/404');
+    problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+  }
+  if (item !== undefined && !mayWriteFor(postingOffices(session.groups, roster), item)) return Astro.rewrite('/404');
+}
+
+const working = item?.working;
+const draft = working?.status === 'draft';
+const blocked = (preview?.problems.length ?? 0) > 0;
+const newsletter = working !== undefined && submitTargets(working.visibility).newsletter;
+
+if (Astro.request.method === 'POST' && item !== undefined && api !== undefined && reader !== undefined) {
+  const read = await readForm(Astro.request, MAX_FORM_BYTES);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  if (!draft || blocked) {
+    // Nothing to send, or not until the problems are fixed: the API is not asked.
+    Astro.response.status = 409;
+  } else {
+    const parsed = parseSubmit(read.field);
+    if (!parsed.ok) {
+      errors = parsed.errors;
+      Astro.response.status = 400;
+    } else {
+      const targets = { ...parsed.value.targets, newsletter: newsletter && parsed.value.targets.newsletter };
+      try {
+        await api.markReady(reader, { itemId: id, targets, editionId: parsed.value.editionId });
+        return Astro.redirect(`${EDIT_LINKS.list}?sent=1`, 303);
+      } catch (error) {
+        // The body is read: Astro.rewrite cannot follow this post, so the page says it in place.
+        if (error instanceof ApiNotFound) {
+          gone = true;
+          Astro.response.status = 404;
+        } else if (error instanceof SignInAgain) problem = 'sign-in';
+        else if (error instanceof NotAllowed) {
+          refused = 'you cannot send this item. Ask the Webmaster or the Admin.';
+          Astro.response.status = 403;
+        } else if (error instanceof EditorRefused) {
+          refused = error.reason;
+          Astro.response.status = 400;
+        } else problem = 'unavailable';
+      }
+    }
+  }
+}
+if (problem === 'unavailable') markUnavailable(Astro.response);
+
+const officeName = roster.find((o) => o.id === item?.officeId)?.title ?? '';
+const printAsIs = item !== undefined && !editFormFor(item).ok && working?.printAsIs === true;
+const title = working?.title ?? item?.live?.title ?? 'Preview';
+---
+<Base path={HERE} title={`Preview: ${title}`} description="See it as the public and members will, then send it for approval.">
+  {gone && <><h1>Page not found</h1><p class="lead">This item is no longer there. Nothing was sent.</p></>}
+  {!gone && (item ? <ItemHeader item={item} officeName={officeName} /> : <h1>Preview</h1>)}
+  {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>.</p>}
+  {problem === 'sign-in' && <PasswordNote />}
+  {problem === 'unavailable' && <Unavailable what="The preview" />}
+  {refused !== undefined && <p class="notice" role="alert">It was not sent: {refused}</p>}
+  {errors['targets'] && (
+    <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+      <h2 id="error-summary-title">There is a problem</h2>
+      <ul><li><a href="#website">{errors['targets']}</a></li></ul>
+    </section>
+  )}
+  {!gone && item && preview && working && (
+    <>
+      {blocked && (
+        <section class="error-summary problems" aria-labelledby="problems-title">
+          <h2 id="problems-title">Fix these before you send it for approval</h2>
+          <ul>
+            {problemLines(preview.problems).map((text) => <li><a href={`${EDIT_LINKS.edit(id)}#markup`}>{text}</a></li>)}
+          </ul>
+        </section>
+      )}
+      <Previews preview={preview} kind={item.kind} visibility={working.visibility} />
+      {printAsIs && <p class="notice" role="note">This version is marked "print as is": it goes in the newsletter exactly as it is, and can no longer be edited.</p>}
+      {working.status === 'ready' && <p class="notice" role="note">It has been sent for approval. Another officer will approve it or send it back with a note.</p>}
+      {working.status === 'cleared' && <p class="notice" role="note">It is approved, and waits for the Webmaster to publish it.</p>}
+      {draft && !blocked && (
+        <form method="post" action={HERE} class="rule-form editor-form" novalidate>
+          <fieldset aria-describedby={errors['targets'] ? 'targets-error' : undefined}>
+            <legend>Show on</legend>
+            {errors['targets'] && <p class="error" id="targets-error">Problem: {errors['targets']}</p>}
+            <div class="choice">
+              <input type="checkbox" id="website" name="website" value="yes" checked />
+              <label for="website">Website</label>
+            </div>
+            {newsletter
+              ? (
+                <>
+                  <div class="choice">
+                    <input type="checkbox" id="newsletter" name="newsletter" value="yes" checked aria-describedby="newsletter-hint" />
+                    <label for="newsletter">Also in the newsletter</label>
+                  </div>
+                  <p class="hint" id="newsletter-hint">It goes in the next issue that is still being put together. The Newsletter Editor places it.</p>
+                </>
+              )
+              : <p class="hint">Officers-only items are not printed in the newsletter.</p>}
+          </fieldset>
+          <div class="btns"><button class="button button--wide" type="submit">Send for approval</button></div>
+        </form>
+      )}
+    </>
+  )}
+  <div class="btns writer-links">
+    <a class="button button--secondary" href={EDIT_LINKS.edit(id)}>Back to editing</a>
+    <a class="button button--secondary" href={EDIT_LINKS.list}>Back to Our news</a>
+  </div>
+</Base>

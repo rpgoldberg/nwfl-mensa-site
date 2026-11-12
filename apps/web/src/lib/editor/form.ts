@@ -148,14 +148,14 @@ export type EditForm = { ok: true; values: Draft } | { ok: false; reason: 'withh
 
 /**
  * What the edit form opens with: the working version, else the live one. Never a version whose markup the
- * officer's lens withholds (the markup arrives empty, and saving it would wipe the body), nor a ready one
- * marked "print as is" (the API refuses the edit).
+ * officer's lens withholds (the markup arrives empty, and saving it would wipe the body), nor one marked
+ * "print as is" once it is ready or approved (A1's cleared): the API refuses the edit.
  */
 export function editFormFor(item: EditorItem): EditForm {
   const version = item.working ?? item.live;
   if (version === undefined) return { ok: false, reason: 'nothing', message: 'There is nothing to edit in this item.' };
   if (version.markupWithheld) return { ok: false, reason: 'withheld', message: 'Part of this item is held back from you, so it cannot be edited here. Ask the Webmaster or the Admin.' };
-  if (version.printAsIs && version.status === 'ready') {
+  if (version.printAsIs && (version.status === 'ready' || version.status === 'cleared')) {
     return { ok: false, reason: 'print_as_is', message: 'This version is marked "print as is": it can be approved or sent back, but no longer edited.' };
   }
   return { ok: true, values: { title: version.title, summary: version.summary, visibility: version.visibility, markup: version.markup } };

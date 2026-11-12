@@ -2,6 +2,8 @@
 // shown in (StatusChip.astro's: ok, warn, stop, past). The words always go with the chip: never colour alone.
 // The item's state decides first; then, for a draft or a published item, its working version: ready
 // (a change waiting), or a draft with the approver's note (sent back).
+// EDITOR E3: A1's split adds a version approved but not yet published (cleared): a never-published item
+// stays ready while its version is cleared, and a published one keeps its state until Publish runs.
 import type { EditorItem, KindName } from '../api/editor';
 import { formatSetDate } from '../approval-rules';
 
@@ -16,7 +18,7 @@ export const KIND_WORDS: Record<KindName, string> = {
   page: 'Page',
 };
 
-export type StatusKey = 'draft' | 'ready' | 'sent_back' | 'published' | 'published_change_waiting' | 'taken_down';
+export type StatusKey = 'draft' | 'ready' | 'cleared' | 'sent_back' | 'published' | 'published_change_waiting' | 'published_change_cleared' | 'taken_down';
 export type StatusTone = 'ok' | 'warn' | 'stop' | 'past';
 
 export interface Status {
@@ -28,13 +30,24 @@ export interface Status {
 export const STATUS_WORDS: Record<StatusKey, string> = {
   draft: 'Draft – only officers can see it',
   ready: 'Waiting for approval',
+  cleared: 'Approved, ready to publish',
   sent_back: 'Sent back – please read the note',
   published: 'Published',
   published_change_waiting: 'Published – a change is waiting for approval',
+  published_change_cleared: 'Published – an approved change is waiting to be published',
   taken_down: 'Taken down',
 };
 
-const TONES: Record<StatusKey, StatusTone> = { draft: 'past', ready: 'warn', sent_back: 'stop', published: 'ok', published_change_waiting: 'warn', taken_down: 'stop' };
+const TONES: Record<StatusKey, StatusTone> = {
+  draft: 'past',
+  ready: 'warn',
+  cleared: 'ok',
+  sent_back: 'stop',
+  published: 'ok',
+  published_change_waiting: 'warn',
+  published_change_cleared: 'ok',
+  taken_down: 'stop',
+};
 
 const status = (key: StatusKey, label = STATUS_WORDS[key]): Status => ({ key, label, tone: TONES[key] });
 
@@ -47,9 +60,10 @@ export function statusOf(item: EditorItem): Status {
       return status('taken_down', item.withdrawnAt === undefined ? STATUS_WORDS.taken_down : `${STATUS_WORDS.taken_down} on ${formatSetDate(item.withdrawnAt)}`);
     case 'published':
       if (working?.status === 'ready') return status('published_change_waiting');
+      if (working?.status === 'cleared') return status('published_change_cleared');
       return status(sentBack ? 'sent_back' : 'published');
     case 'ready':
-      return status('ready');
+      return status(working?.status === 'cleared' ? 'cleared' : 'ready');
     case 'draft':
       return status(sentBack ? 'sent_back' : 'draft');
   }

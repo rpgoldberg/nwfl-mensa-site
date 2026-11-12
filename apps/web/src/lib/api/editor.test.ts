@@ -3,7 +3,7 @@
 // bearer and nothing else; each answer is read into the editor's own shape; and each refusal becomes
 // the one thing a page can act on: sign in again, the version changed, not allowed, the slug is taken,
 // the API's words for a step the item is not ready for, not found, or unavailable.
-import { create } from '@bufbuild/protobuf';
+import { clone, create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
@@ -31,6 +31,7 @@ import {
   SignInAgain,
   SlugTaken,
   VersionChanged,
+  editorAdmits,
   editorApi,
   editorFromEnv,
   editorReader,
@@ -615,5 +616,105 @@ describe('editorReader', () => {
     expect(editorReader(approver, deps).reader).toEqual({ bearer: 'approver.tok' });
     const stranger = newSession({ sub: '00000000-0000-4000-8000-0000000000ad', groups: ['nwfl-admin'] }, NOW - 60);
     expect(editorReader(stranger, deps)).toEqual({ reader: undefined, lapsed: true });
+  });
+});
+
+// EDITOR E3: the two public reads the writer screens need beside the workflow, sent as the public
+// (no bearer, no cookie): the roster, for the office ids an item is posted as, and the office's
+// upcoming events, for the President's report's events box. And A1's approved-not-published status,
+// which the stand-in sends until A1's proto lands.
+describe('grpcEditor: the public reads beside the workflow (E3)', () => {
+  const at = (iso: string) => timestampFromDate(new Date(iso));
+
+  it('reads the roster as the public: each active office by id, slug and title, in roster order', async () => {
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        getRoster: () => ({
+          offices: [
+            { id: OFFICE_ID, slug: 'president', title: 'President', sortOrder: 1, active: true, roleAlias: 'president@nwflorida.us' },
+            { id: '22222222-2222-4222-8222-222222222222', slug: 'social', title: 'Social Chair', sortOrder: 7, active: true },
+            { id: '33333333-3333-4333-8333-333333333333', slug: 'retired', title: 'Retired Office', sortOrder: 9, active: false },
+          ],
+        }),
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    expect(await api.offices()).toEqual([
+      { id: OFFICE_ID, slug: 'president', title: 'President' },
+      { id: '22222222-2222-4222-8222-222222222222', slug: 'social', title: 'Social Chair' },
+    ]);
+    expect(server.headers[0]?.['authorization']).toBeUndefined();
+    expect(server.headers[0]?.['cookie']).toBeUndefined();
+  });
+
+  it("reads an office's events as the public: its one-offs, and its series' dates by the series' host", async () => {
+    const SERIES_ID = '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20';
+    const OTHER = '22222222-2222-4222-8222-222222222222';
+    const seen: unknown[] = [];
+    const server = await grpcServer((router) =>
+      router.service(EventService, {
+        listOccurrences: (req) => {
+          const day = (d: { year: number; month: number; day: number } | undefined) => d && { year: d.year, month: d.month, day: d.day };
+          seen.push({ from: day(req.from), to: day(req.to), includeCancelled: req.includeCancelled });
+          return {
+            occurrences: [
+              { id: `${SERIES_ID}:2026-11-18`, seriesId: SERIES_ID, title: 'Wednesday Lunchers', startsAt: at('2026-11-18T17:30:00Z'), endsAt: at('2026-11-18T19:00:00Z'), status: OccurrenceStatus.SCHEDULED, localDate: { year: 2026, month: 11, day: 18 } },
+              { id: 'a0000000-0000-4000-8000-000000000001', title: 'Board games', status: OccurrenceStatus.CANCELLED, statusNote: 'Snow', localDate: { year: 2026, month: 11, day: 20 }, ownerOfficeId: OFFICE_ID },
+              { id: 'a0000000-0000-4000-8000-000000000002', title: 'Happy hour', status: OccurrenceStatus.TENTATIVE, startsAt: at('2026-11-21T23:00:00Z'), localDate: { year: 2026, month: 11, day: 21 }, ownerOfficeId: OTHER },
+              { id: 'a0000000-0000-4000-8000-000000000003', title: 'Unknown status', status: OccurrenceStatus.UNSPECIFIED, localDate: { year: 2026, month: 11, day: 22 }, ownerOfficeId: OFFICE_ID },
+            ],
+          };
+        },
+        listSeries: () => ({ series: [{ id: SERIES_ID, slug: 'lunch', title: 'Wednesday Lunchers', hostOfficeId: OFFICE_ID, active: true }] }),
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    expect(await api.officeEvents(OFFICE_ID, '2026-11-17', '2027-01-15')).toEqual([
+      { id: `${SERIES_ID}:2026-11-18`, title: 'Wednesday Lunchers', date: '2026-11-18', start: '11:30', end: { date: '2026-11-18', time: '13:00' }, status: 'scheduled', statusNote: '' },
+      { id: 'a0000000-0000-4000-8000-000000000001', title: 'Board games', date: '2026-11-20', status: 'cancelled', statusNote: 'Snow' },
+    ]);
+    expect(seen).toEqual([{ from: { year: 2026, month: 11, day: 17 }, to: { year: 2027, month: 1, day: 15 }, includeCancelled: true }]);
+    for (const h of server.headers) {
+      expect(h['authorization']).toBeUndefined();
+      expect(h['cookie']).toBeUndefined();
+    }
+  });
+
+  it('is unavailable when a public read fails, whatever the code, logged by call and code only', async () => {
+    for (const code of [Code.NotFound, Code.PermissionDenied, Code.Unavailable]) {
+      const refuse = () => {
+        throw new ConnectError('SECRET-MESSAGE', code);
+      };
+      const server = await grpcServer((router) => {
+        router.service(ContentService, { getRoster: refuse });
+        router.service(EventService, { listOccurrences: refuse, listSeries: refuse });
+      });
+      const lines: string[] = [];
+      const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, (line) => lines.push(line));
+      await expect(api.offices()).rejects.toMatchObject({ name: 'ApiUnavailable', rpc: 'GetRoster' });
+      await expect(api.officeEvents(OFFICE_ID, '2026-11-17', '2026-12-17')).rejects.toMatchObject({ name: 'ApiUnavailable' });
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+      expect(lines.join('\n')).not.toContain('SECRET');
+    }
+    const api = unavailableEditor();
+    await expect(api.offices()).rejects.toMatchObject({ name: 'ApiUnavailable', rpc: 'GetRoster' });
+    await expect(api.officeEvents(OFFICE_ID, '2026-11-17', '2026-12-17')).rejects.toMatchObject({ name: 'ApiUnavailable', rpc: 'ListOccurrences' });
+  });
+
+  it("reads A1's approved-not-published status (6, VERSION_STATUS_CLEARED) as cleared", async () => {
+    const cleared = clone(ContentItemSchema, ITEM);
+    cleared.state = ItemState.READY;
+    cleared.working!.status = 6 as VersionStatus;
+    const server = await grpcServer((router) => router.service(ContentService, { getWorkingItem: () => ({ item: cleared }) }));
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    expect((await api.getWorkingItem(OFFICER, ITEM_ID)).working?.status).toBe('cleared');
+  });
+});
+
+describe('editorAdmits (E3)', () => {
+  it('admits an officer, the Admin and the Webmaster, and nobody else', () => {
+    for (const groups of [['nwfl-officers'], ['nwfl-admin'], ['nwfl-webmaster'], ['nwfl-members', 'nwfl-office-president', 'nwfl-officers']]) expect(editorAdmits({ groups }), groups.join()).toBe(true);
+    for (const groups of [[], ['nwfl-members'], ['nwfl-office-president'], ['nwfl-membership-approvers'], ['nwfl-officers-x']]) expect(editorAdmits({ groups }), groups.join()).toBe(false);
+    expect(editorAdmits(undefined)).toBe(false);
   });
 });
