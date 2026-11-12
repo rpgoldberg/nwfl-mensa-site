@@ -7,6 +7,7 @@ import { internalGroups } from './groups.js';
 import {
   requireAdmin,
   requireContentApprover,
+  requireEditorReader,
   requireGrantor,
   requireMembershipApprover,
   requireOffice,
@@ -137,6 +138,16 @@ describe('requireOfficerOrAdmin (SOLO-APPROVE: reading the approval setting)', (
       expect(() => requireOfficerOrAdmin(caller)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
     }
     expect(() => requireOfficerOrAdmin(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+  });
+});
+
+describe('requireEditorReader (EDITOR E1: the queue, an item, its history and its preview)', () => {
+  it('lets officers, the Admin and the Webmaster through, each approver without the officers group too, and no one else', () => {
+    for (const caller of [ross, webmaster, treasurer, user('nwfl-officers'), user('nwfl-admin'), user('nwfl-webmaster')]) expect(() => requireEditorReader(caller)).not.toThrow();
+    for (const caller of [member, approver, rvc, agent, user('nwfl-office-publications'), user('nwfl-members', 'mensa-nwfl-admin')]) {
+      expect(() => requireEditorReader(caller)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    }
+    expect(() => requireEditorReader(ANONYMOUS)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
   });
 });
 

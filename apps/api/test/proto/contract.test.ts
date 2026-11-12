@@ -104,9 +104,10 @@ describe(`${PKG}: services`, () => {
     for (const m of methods()) expect(m.methodKind, rpc(m)).toBe(rpc(m) === 'ContentService.ReadFile' ? 'server_streaming' : 'unary');
   });
 
-  it('marks every List/Get/Export/Read RPC as a read (NO_SIDE_EFFECTS), and nothing else', () => {
+  // EDITOR E1: Preview names a read too (ContentService.PreviewWorkingItem).
+  it('marks every List/Get/Export/Read/Preview RPC as a read (NO_SIDE_EFFECTS), and nothing else', () => {
     for (const m of methods()) {
-      const isRead = /^(List|Get|Export|Read)/.test(m.name);
+      const isRead = /^(List|Get|Export|Read|Preview)/.test(m.name);
       expect(m.idempotency === Idempotency.NO_SIDE_EFFECTS, rpc(m)).toBe(isRead);
     }
   });

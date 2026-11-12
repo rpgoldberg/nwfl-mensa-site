@@ -93,6 +93,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       ListWorkingItems: () => [{}, { states: [] }],
       GetWorkingItem: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
       ListItemHistory: () => [{ itemId: ids['public'] }],
+      PreviewWorkingItem: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
       ReadFile: () => [{ fileId: ids['publicFile'] }, { fileId: ids['wholeFile'] }],
       GetLinkTarget: () => [{ linkId: LINK.plain }, { linkId: LINK.phone }, { linkId: LINK.name }],
     },
@@ -421,6 +422,17 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     const responses = await sweep(OFFICER);
     expect(Object.keys(found(responses, C)).sort()).toEqual(Object.keys(C).sort());
     expect(found(await sweep(OFFICER, 'nwfl.mensa.v1.EventService'), { host: ids['host'] as string })).not.toEqual({});
+  });
+
+  // EDITOR E1: the Admin and the Webmaster without the officers group read through the public's lens, and reach
+  // GetWorkingItem, PreviewWorkingItem and the send-back note: nothing the public's lens withholds may reach them.
+  it.each([
+    ['the Admin without the officers group', as('lone-admin-token')],
+    ['the Webmaster without the officers group', as('lone-webmaster-token')],
+  ])('gives %s (the public\'s audience) no canary, in any read RPC or error', async (_who, who) => {
+    const responses = await sweep(who);
+    expect(responses.get('ContentService.PreviewWorkingItem')?.length).toBeGreaterThan(0);
+    expect(found(responses, C)).toEqual({});
   });
 
   it('gives the newsletter agent (members) no member’s address, and the members canaries', async () => {

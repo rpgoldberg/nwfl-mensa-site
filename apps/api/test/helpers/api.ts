@@ -67,6 +67,8 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'stray-admin-token': { client: 'site', subject: 'sub-stray', groups: ['nwfl-members', 'nwfl-officers', 'mensa-nwfl-admin', 'admin'], scopes: [] },
   // SOLO-APPROVE: the Admin's group alone, without the officers group.
   'lone-admin-token': { client: 'site', subject: 'sub-lone-admin', groups: ['nwfl-admin'], scopes: [] },
+  // EDITOR E1: the Webmaster's group alone, without the officers group.
+  'lone-webmaster-token': { client: 'site', subject: 'sub-lone-webmaster', groups: ['nwfl-webmaster'], scopes: [] },
 };
 
 export const fakeVerifier: TokenVerifier = {

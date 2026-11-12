@@ -330,6 +330,17 @@
       }
     ]
   },
+  "ContentService.PreviewWorkingItem": {
+    "input": "nwfl.mensa.v1.PreviewWorkingItemRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
   "ContentService.ReadFile": {
     "input": "nwfl.mensa.v1.ReadFileRequest",
     "fields": [

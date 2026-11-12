@@ -22,6 +22,10 @@
 //   withdraw    the item's office or an approver; 410 to the public at once
 //   restore     the item's office; a new draft that stays withdrawn until
 //               approved
+// The officer reads (the queue, an item, its history, its preview) are for an
+// officer, the Admin or the Webmaster (EDITOR E1). The preview is the working
+// version as the public and members will get it: approval's derivation, then
+// the published read's body decision and lens, for each audience.
 // The database enforces the transitions as well (0007); these checks give the
 // caller a precise answer first.
 // ============================================================================
@@ -29,8 +33,8 @@ import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type HandlerContext, type ServiceImpl } from '@connectrpc/connect';
 import { recordAudit } from '../audit/audit.js';
-import { type Caller, callerOf } from '../auth/caller.js';
-import { requireContentApprover, requireOffice, requireOfficer, requireUser, rolesOf } from '../auth/roles.js';
+import { type Audience, type Caller, callerOf } from '../auth/caller.js';
+import { requireContentApprover, requireEditorReader, requireOffice, requireUser, rolesOf } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -39,7 +43,10 @@ import {
   type ContentItem,
   type ContentService,
   ContentVersionSchema,
+  type Document,
   HistoryEntrySchema,
+  type PreviewWorkingItemResponse,
+  PreviewWorkingItemResponseSchema,
   StoredFileSchema,
   type Targets as ProtoTargets,
 } from '../gen/nwfl/mensa/v1/content_pb.js';
@@ -52,6 +59,9 @@ import { loadLens } from '../redaction/lens.js';
 import { recordItems } from '../ledger/ledger.js';
 import { type Rule, readRule } from '../approval/service.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
+import { actorLabel } from './actor-label.js';
+// A cycle (service.ts mounts these handlers), safe: bodyFor is read at call time, never at load.
+import { bodyFor } from './service.js';
 
 export interface WorkflowDeps {
   db: Db;
@@ -114,10 +124,11 @@ function requireId(value: string, field: string): string {
   return value;
 }
 
-async function loadItem(client: TxClient, itemId: string): Promise<ItemRow> {
+/** `lock: false` for a read that must not wait on (or hold up) a writer: the preview. */
+async function loadItem(client: TxClient, itemId: string, lock = true): Promise<ItemRow> {
   const { rows } = await client.query<ItemRow>(
     `SELECT i.id, i.slug, i.kind, i.office_id, o.slug AS office_slug, i.state, i.live_version_id, i.working_version_id, i.withdrawn_at
-     FROM content_item i JOIN office o ON o.id = i.office_id WHERE i.id = $1 FOR UPDATE OF i`,
+     FROM content_item i JOIN office o ON o.id = i.office_id WHERE i.id = $1${lock ? ' FOR UPDATE OF i' : ''}`,
     [requireId(itemId, 'item_id')],
   );
   const row = rows[0];
@@ -145,8 +156,8 @@ function publicLine(value: string): string {
   return value;
 }
 
-async function loadVersion(client: TxClient, versionId: string): Promise<VersionRow> {
-  const { rows } = await client.query<VersionRow>(`SELECT * FROM content_version WHERE id = $1 FOR UPDATE`, [versionId]);
+async function loadVersion(client: TxClient, versionId: string, lock = true): Promise<VersionRow> {
+  const { rows } = await client.query<VersionRow>(`SELECT * FROM content_version WHERE id = $1${lock ? ' FOR UPDATE' : ''}`, [versionId]);
   return rows[0] as VersionRow;
 }
 
@@ -271,10 +282,40 @@ async function newVersion(client: TxClient, item: ItemRow, from: VersionRow, cal
   return version;
 }
 
-/** A version as the lens's audience may see it: its text through the lens, its hash only where nothing was withheld. */
-async function versionMessage(client: TxClient, row: VersionRow, lens: Lens) {
+/**
+ * Whether the lens withholds anything of this version from its audience: a mark on the item that
+ * changes what it sees, or an on-behalf-of name it does not show. Then the markup and the hash are
+ * not given (versionMessage), and the caller may not save the item (SaveDraft), as a form filled
+ * from the withheld read would wipe the body.
+ */
+function withholds(lens: Lens, row: Pick<VersionRow, 'item_id' | 'on_behalf_of'>): boolean {
+  return lens.affected([subjectKey('content_item', row.item_id)]) || (row.on_behalf_of !== null && lens.action('member_name') !== 'show');
+}
+
+/**
+ * The latest send-back note on a version since it was last marked ready (EDITOR E1). Only a draft can
+ * carry one: a send-back returns the version to draft, and marking it ready again clears it.
+ */
+async function sendBackNote(client: TxClient, row: VersionRow): Promise<string> {
+  if (row.status !== 'draft') return '';
+  const { rows } = await client.query<{ action: string; note: string }>(
+    `SELECT action, coalesce(note, '') AS note FROM audit_event
+     WHERE subject_kind = 'content_version' AND subject_id = $1 AND action IN ('ready', 'send_back')
+     ORDER BY id DESC LIMIT 1`,
+    [row.id],
+  );
+  return rows[0]?.action === 'send_back' ? rows[0].note : '';
+}
+
+/**
+ * A version as the lens's audience may see it: its text through the lens, its markup and hash only
+ * where nothing was withheld (body_markup_withheld says so, so an edit form is never filled from the
+ * empty markup), and whether `subject` edited it.
+ */
+async function versionMessage(client: TxClient, row: VersionRow, lens: Lens, subject: string) {
   const subjects = [subjectKey('content_item', row.item_id)];
-  const withheld = lens.affected(subjects) || (row.on_behalf_of !== null && lens.action('member_name') !== 'show');
+  const withheld = withholds(lens, row);
+  const edited = await client.query(`SELECT 1 FROM content_version_editor WHERE version_id = $1 AND subject = $2`, [row.id, subject]);
   const { rows: files } = await client.query<{ id: string; filename: string; mime_type: string; size_bytes: string; sha256: Buffer; audience: string; role: string; public_copy_of: string | null }>(
     `SELECT id, filename, mime_type, size_bytes::text AS size_bytes, sha256, audience, role, public_copy_of FROM stored_file WHERE version_id = $1 ORDER BY filename, id`,
     [row.id],
@@ -291,7 +332,10 @@ async function versionMessage(client: TxClient, row: VersionRow, lens: Lens) {
     // The markup can split a marked name with its own syntax (Jo**hn**), so it is left out
     // whenever anything is withheld from this audience.
     bodyMarkup: withheld ? '' : row.body_src,
+    bodyMarkupWithheld: withheld,
     ...(row.content_hash !== null && !withheld ? { contentHash: row.content_hash } : {}),
+    sendBackNote: lens.text(await sendBackNote(client, row), subjects),
+    callerEdited: edited.rows.length > 0,
     targets: { website: row.target_website, newsletter: row.target_newsletter, email: row.target_email },
     editionId: row.edition_id ?? '',
     printAsIs: row.print_as_is,
@@ -318,7 +362,7 @@ async function versionMessage(client: TxClient, row: VersionRow, lens: Lens) {
  * the lens for the caller's audience. A version the lens drops (a passage mark it no longer carries)
  * is left out; undefined when the lens hides the item, or both versions.
  */
-async function officerItem(client: TxClient, itemId: string, audience: string): Promise<ContentItem | undefined> {
+async function officerItem(client: TxClient, itemId: string, caller: Caller): Promise<ContentItem | undefined> {
   const { rows } = await client.query<ItemRow>(
     `SELECT i.id, i.slug, i.kind, i.office_id, '' AS office_slug, i.state, i.live_version_id, i.working_version_id, i.withdrawn_at
      FROM content_item i WHERE i.id = $1`,
@@ -326,7 +370,7 @@ async function officerItem(client: TxClient, itemId: string, audience: string): 
   );
   const item = rows[0] as ItemRow;
   const ids = [item.live_version_id, item.working_version_id].filter((id) => id !== null);
-  const lens = await loadLens(client, audience, { items: [item.id], versions: ids });
+  const lens = await loadLens(client, caller.audience, { items: [item.id], versions: ids });
   const shown = async (id: string | null): Promise<VersionRow | undefined> => {
     if (id === null) return undefined;
     const version = await loadVersion(client, id);
@@ -335,8 +379,9 @@ async function officerItem(client: TxClient, itemId: string, audience: string): 
   const liveRow = await shown(item.live_version_id);
   const workingRow = await shown(item.working_version_id);
   if (liveRow === undefined && workingRow === undefined && ids.length > 0) return undefined;
-  const live = liveRow === undefined ? undefined : await versionMessage(client, liveRow, lens);
-  const working = workingRow === undefined ? undefined : await versionMessage(client, workingRow, lens);
+  const subject = caller.subject as string; // officer reads and writes are for a signed-in person
+  const live = liveRow === undefined ? undefined : await versionMessage(client, liveRow, lens, subject);
+  const working = workingRow === undefined ? undefined : await versionMessage(client, workingRow, lens, subject);
   return create(ContentItemSchema, {
     id: item.id,
     slug: slugFor(item, lens),
@@ -346,6 +391,51 @@ async function officerItem(client: TxClient, itemId: string, audience: string): 
     ...(live !== undefined ? { live } : {}),
     ...(working !== undefined ? { working } : {}),
     ...(item.withdrawn_at !== null ? { withdrawnAt: timestampFromDate(item.withdrawn_at) } : {}),
+  });
+}
+
+const RANK: Record<Audience, number> = { public: 0, members: 1, officers: 2 };
+
+/**
+ * PreviewWorkingItem (EDITOR E1): a version as each audience will get it once approved, by the same
+ * steps approval and the published reads take: deriveForApproval's public tree, then bodyFor and the
+ * audience's lens. A body is unset when that audience will not see the item at all (an officers item,
+ * or one its lens hides). Each audience is capped at the caller's audience by rank (public, members,
+ * officers): a caller who reads below the members (the Admin without the officers group, not a member)
+ * gets the members body through the public's lens. The cap is by rank, not by cell: where the policy
+ * withholds more from officers than from members, an officer's members body shows what members will
+ * see, which their own read withholds. NOT_FOUND when the caller's own lens hides the item, as
+ * GetWorkingItem. A withdrawn item with no working version previews its last live version, which a
+ * restore would bring back as the new draft.
+ */
+async function previewOf(client: TxClient, own: Audience, itemId: string, version: VersionRow): Promise<PreviewWorkingItemResponse> {
+  const subjects = [subjectKey('content_item', itemId)];
+  const lenses = new Map<Audience, Lens>();
+  const lensFor = async (audience: Audience): Promise<Lens> => {
+    const capped = RANK[own] < RANK[audience] ? own : audience;
+    const known = lenses.get(capped);
+    if (known !== undefined) return known;
+    const lens = await loadLens(client, capped, { items: [itemId], versions: [version.id] });
+    lenses.set(capped, lens);
+    return lens;
+  };
+  const shown = (lens: Lens): boolean => !itemHidden({ id: itemId, on_behalf_of: version.on_behalf_of }, version.id, lens);
+  if (!shown(await lensFor(own))) throw notFound();
+  const derived = deriveForApproval({ title: version.title, summary: version.summary, visibility: version.visibility, body: version.body_ast });
+  const body = async (audience: Audience, stored: unknown): Promise<Document | undefined> => {
+    const lens = await lensFor(audience);
+    if (version.visibility === 'officers' || !shown(lens)) return undefined;
+    return toProtoDocument(lens.tree(bodyFor(audience, version.visibility, stored), subjects));
+  };
+  const publicLens = await lensFor('public');
+  const publicBody = await body('public', derived.publicAst);
+  const membersBody = await body('members', version.body_ast);
+  return create(PreviewWorkingItemResponseSchema, {
+    title: publicLens.text(version.title, subjects),
+    summary: publicLens.text(version.summary ?? '', subjects),
+    ...(publicBody !== undefined ? { publicBody } : {}),
+    ...(membersBody !== undefined ? { membersBody } : {}),
+    problems: parseMarkup(version.body_src).problems,
   });
 }
 
@@ -392,7 +482,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           actingOfficeId: request.officeId,
           payload: onBehalfOf ? { for_office: true } : {},
         });
-        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
+        return { item: await officerItem(client, item.id, caller) };
       });
     },
 
@@ -401,10 +491,12 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
       return tx(async (client) => {
         const item = await loadItemAs(client, caller, request.itemId);
         requireOffice(caller, item.office_slug);
-        let version =
-          item.working_version_id !== null
-            ? await loadVersion(client, item.working_version_id)
-            : await newVersion(client, item, await loadVersion(client, item.live_version_id as string), caller);
+        // The data-loss guard (EDITOR E1): a caller who reads this item with anything withheld got no
+        // markup, so their save would overwrite the body with what they could not see.
+        const base = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string);
+        const lens = await loadLens(client, caller.audience, { items: [item.id], versions: [base.id] });
+        if (withholds(lens, base)) throw precondition('part of this item is withheld from you; an officer who can see all of it must edit it');
+        let version = item.working_version_id !== null ? base : await newVersion(client, item, base, caller);
         const from = version.status;
         if (version.status === 'ready') {
           if (version.print_as_is) throw precondition('a print-as-is version can be approved or sent back, never edited');
@@ -435,7 +527,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'draft',
           actingOfficeId: item.office_id,
         });
-        return { item: await officerItem(client, item.id, callerIn(ctx).audience), problems };
+        return { item: await officerItem(client, item.id, caller), problems };
       });
     },
 
@@ -465,7 +557,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'ready',
           actingOfficeId: item.office_id,
         });
-        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
+        return { item: await officerItem(client, item.id, caller) };
       });
     },
 
@@ -490,7 +582,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'draft',
           note,
         });
-        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
+        return { item: await officerItem(client, item.id, caller) };
       });
     },
 
@@ -555,7 +647,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         }
 
         await applyApproval(client, caller, item, version, { kind, reason, rule });
-        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
+        return { item: await officerItem(client, item.id, caller) };
       });
     },
 
@@ -571,7 +663,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         await client.query(`UPDATE edition_item SET taken_down_at = now() WHERE item_id = $1 AND taken_down_at IS NULL`, [item.id]);
         await recordAudit(client, caller, { action: 'withdraw', subjectKind: 'content_item', subjectId: item.id, itemId: item.id, fromState: 'published', toState: 'withdrawn' });
         await recordItems(client, [item.id]);
-        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
+        return { item: await officerItem(client, item.id, caller) };
       });
     },
 
@@ -593,12 +685,13 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           toState: 'draft',
           actingOfficeId: item.office_id,
         });
-        return { item: await officerItem(client, item.id, callerIn(ctx).audience) };
+        return { item: await officerItem(client, item.id, caller) };
       });
     },
 
     listWorkingItems: async (request, ctx) => {
-      requireOfficer(callerIn(ctx));
+      const caller = callerIn(ctx);
+      requireEditorReader(caller);
       const statuses = request.states.length === 0 ? ['draft', 'ready'] : request.states.map((state) => STATE_NAMES.get(state)).filter((s) => s === 'draft' || s === 'ready');
       if (request.officeId !== '') requireId(request.officeId, 'office_id');
       if (request.editionId !== '') requireId(request.editionId, 'edition_id');
@@ -610,9 +703,8 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           [statuses, request.officeId === '' ? null : request.officeId, request.editionId === '' ? null : request.editionId],
         );
         const items: ContentItem[] = [];
-        const audience = callerIn(ctx).audience;
         for (const row of rows) {
-          const item = await officerItem(client, row.id, audience);
+          const item = await officerItem(client, row.id, caller);
           if (item !== undefined) items.push(item);
         }
         return { items };
@@ -620,33 +712,41 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
     },
 
     getWorkingItem: async (request, ctx) => {
-      requireOfficer(callerIn(ctx));
+      const caller = callerIn(ctx);
+      requireEditorReader(caller);
       return tx(async (client) => {
         const item = await loadItem(client, request.itemId);
-        const view = await officerItem(client, item.id, callerIn(ctx).audience);
+        const view = await officerItem(client, item.id, caller);
         if (view === undefined) throw notFound();
         return { item: view };
       });
     },
 
     listItemHistory: async (request, ctx) => {
-      requireOfficer(callerIn(ctx));
+      const caller = callerIn(ctx);
+      requireEditorReader(caller);
       return tx(async (client) => {
         const item = await loadItem(client, request.itemId);
-        const lens = await loadLens(client, callerIn(ctx).audience, { items: [item.id] });
+        const lens = await loadLens(client, caller.audience, { items: [item.id] });
+        const office = (await client.query<{ slug: string; title: string }>(`SELECT slug, title FROM office WHERE id = $1`, [item.office_id])).rows[0] as { slug: string; title: string };
         const { rows } = await client.query<{
           at: Date;
           action: string;
+          actor_kind: string;
           actor_sub: string | null;
+          actor_groups: string[];
           acting_office_id: string | null;
+          acting_slug: string | null;
+          acting_title: string | null;
           n: number | null;
           content_hash: Buffer | null;
           from_state: string | null;
           to_state: string | null;
           note: string | null;
         }>(
-          `SELECT a.at, a.action, a.actor_sub, a.acting_office_id, v.n, a.content_hash, a.from_state, a.to_state, a.note
-           FROM audit_event a LEFT JOIN content_version v ON v.id = a.version_id
+          `SELECT a.at, a.action, a.actor_kind, a.actor_sub, a.actor_groups, a.acting_office_id, o.slug AS acting_slug, o.title AS acting_title,
+             v.n, a.content_hash, a.from_state, a.to_state, a.note
+           FROM audit_event a LEFT JOIN content_version v ON v.id = a.version_id LEFT JOIN office o ON o.id = a.acting_office_id
            WHERE a.item_id = $1 ORDER BY a.id`,
           [item.id],
         );
@@ -656,6 +756,10 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
               at: timestampFromDate(row.at),
               action: row.action,
               actorSubject: row.actor_sub ?? '',
+              actorLabel: actorLabel(
+                { kind: row.actor_kind, groups: row.actor_groups, actingOffice: row.acting_slug === null ? null : { slug: row.acting_slug, title: row.acting_title as string } },
+                office,
+              ),
               actingOfficeId: row.acting_office_id ?? '',
               versionNumber: row.n ?? 0,
               // A hash covers what was withheld: given only where nothing is.
@@ -666,6 +770,17 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
             }),
           ),
         };
+      });
+    },
+
+    previewWorkingItem: async (request, ctx) => {
+      const caller = callerIn(ctx);
+      requireEditorReader(caller);
+      return tx(async (client) => {
+        // No row locks: a read must not hold up a writer.
+        const item = await loadItem(client, request.itemId, false);
+        const version = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string, false);
+        return previewOf(client, caller.audience, item.id, version);
       });
     },
   };
