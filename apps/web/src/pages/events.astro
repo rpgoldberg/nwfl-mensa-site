@@ -1,6 +1,7 @@
 ---
 // Events, the calendar (R4), on request: public events only. EVENTS2 (Ross's concept, 11-10): one
-// toolbar ("‹ period ›" and List | Week | Month), then the view, then its events as cards, the type
+// toolbar ("‹ period ›" and List | Week | Month; EV1: on the heading's line where it fits, and compact
+// where room is short), then the view, then its events as cards, the type
 // legend and "Add our calendar" beneath. The view and the selected date live in the URL
 // (?view=week&d=2026-11-11; the old ?month=YYYY-MM is that month's grid), so it works with no script
 // and with Back; public/scripts/events.js only selects a day in place, swipes the week, copies the
@@ -49,17 +50,16 @@ const president = roster?.ok ? roster.value.find((o) => o.slug === 'president' &
 const emptyWhen = period.upcoming ? 'for the next eight weeks' : view === 'list' && period.thisPeriod ? `${period.spoken} on` : `for ${period.spoken}`;
 ---
 <Base {...p}>
-  <h1>{p.title}</h1>
   {live ? (
     loaded && !loaded.ok ? (
       <div class="calendar" data-cal={view}>
-        <CalToolbar period={period} today={today} />
+        <div class="calhead"><h1>{p.title}</h1><CalToolbar period={period} today={today} /></div>
         <Unavailable what="The calendar" />
         <SubscribeCard links={links} />
       </div>
     ) : (
       <div class="calendar" data-cal={view}>
-        <CalToolbar period={period} today={today} />
+        <div class="calhead"><h1>{p.title}</h1><CalToolbar period={period} today={today} /></div>
         {view === 'list' && ribbon.length > 0 && (
           <ol class="tiles tiles--ribbon" aria-label="Days with events">
             {ribbon.map((tile, i) => (
@@ -116,6 +116,11 @@ const emptyWhen = period.upcoming ? 'for the next eight weeks' : view === 'list'
         <KindLegend />
       </div>
     )
-  ) : <EmptyEvents />}
+  ) : (
+    <>
+      <h1>{p.title}</h1>
+      <EmptyEvents />
+    </>
+  )}
   <script is:inline type="module" src="/scripts/events.js"></script>
 </Base>

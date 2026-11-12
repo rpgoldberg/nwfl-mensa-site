@@ -68,19 +68,27 @@ async function tileShown(page: Page, date: string): Promise<boolean> {
   return t.x >= r.x - 1 && t.x + t.width <= r.x + r.width + 1;
 }
 const toolbar = (page: Page) => ({ step: page.getByRole('navigation', { name: 'Dates' }), views: page.getByRole('navigation', { name: 'Calendar view' }) });
+/** A view's link: the switch's where it shows; where the toolbar is compact (EV1), the picker's, opened. */
+async function viewLink(page: Page, name: string): Promise<Locator> {
+  const picker = page.locator('.calpick summary');
+  if ((await picker.isVisible()) && (await page.locator('.calpick details').getAttribute('open')) === null) await picker.click();
+  return toolbar(page).views.getByRole('link', { name });
+}
 
 test.describe('one toolbar', () => {
-  test('on a Fold cover screen (344 px) the period stepper and List | Week | Month share one row, each target 44 px', async ({ page }) => {
+  // EV1 round 2: where the period and the full switch cannot share a row (a cover screen), the toolbar is
+  // compact: ‹ View ▾ ›, beside "Events" (ev1-toolbar.spec.ts holds every size and width to it).
+  test('on a Fold cover screen (344 px) the toolbar is ‹ View ▾ ›, beside "Events", each target 44 px', async ({ page }) => {
     await page.setViewportSize(COVER);
-    for (const path of ['/events', '/events?view=month', `/events?view=week&d=${sameMonthWeekDate()}`]) {
+    for (const [path, view] of [['/events', 'List'], ['/events?view=month', 'Month'], [`/events?view=week&d=${sameMonthWeekDate()}`, 'Week']] as const) {
       await page.goto(path);
       const { step, views } = toolbar(page);
       await expect(step).toHaveCount(1);
       await expect(views).toHaveCount(1);
-      expect(await rows([step, views]), path).toBe(1);
-      await expect(views.getByRole('link')).toHaveText(['List', 'Week', 'Month']);
-      for (const link of [...(await step.getByRole('link').all()), ...(await views.getByRole('link').all())]) {
-        const b = await box(link);
+      await expect(views.locator('summary')).toHaveAccessibleName(`View: ${view}`);
+      expect(await rows([page.locator('.calhead h1'), step]), path).toBe(1);
+      for (const target of [...(await step.getByRole('link').all()), views.locator('summary')]) {
+        const b = await box(target);
         expect(b.width, path).toBeGreaterThanOrEqual(44);
         expect(b.height, path).toBeGreaterThanOrEqual(44);
       }
@@ -101,13 +109,13 @@ test.describe('one toolbar', () => {
   test('switching views keeps the date, both ways', async ({ page }) => {
     const date = addDays(centralToday(), 8);
     await page.goto(`/events?view=week&d=${date}`);
-    await toolbar(page).views.getByRole('link', { name: 'Month' }).click();
+    await (await viewLink(page, 'Month')).click();
     await expect(page).toHaveURL(new RegExp(`/events\\?view=month&d=${date}$`));
     await expect(page.getByRole('heading', { level: 2, name: shortDay(date) })).toBeVisible();
     // List and Week also go to the day's events (#day-<date>), so the place is kept on screen too (tests below).
-    await toolbar(page).views.getByRole('link', { name: 'List' }).click();
+    await (await viewLink(page, 'List')).click();
     await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${date}#day-${date}$`));
-    await toolbar(page).views.getByRole('link', { name: 'Week' }).click();
+    await (await viewLink(page, 'Week')).click();
     await expect(page).toHaveURL(new RegExp(`/events\\?view=week&d=${date}#day-${date}$`));
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${date}#day-${date}$`));
@@ -120,7 +128,7 @@ test.describe('one toolbar', () => {
       for (const path of ['/events', '/events?view=week', '/events?view=month']) {
         await page.goto(path);
         expect(await sideways(page), path).toBeLessThanOrEqual(0);
-        for (const target of await page.locator('.caltool a, .tiles--week .tile, .month a.day').all()) {
+        for (const target of await page.locator('.caltool a:visible, .caltool summary:visible, .tiles--week .tile, .month a.day').all()) {
           const b = await box(target);
           expect(b.width, path).toBeGreaterThanOrEqual(44);
           expect(b.height, path).toBeGreaterThanOrEqual(44);
@@ -166,7 +174,7 @@ test.describe('List: the ribbon of days with events', () => {
     await expect(day.first()).toHaveClass(/is-sel/);
     await expect(day.first()).toBeInViewport();
     await expect(cards).toHaveCount(before);
-    await expect(toolbar(page).views.getByRole('link', { name: 'Month' })).toHaveAttribute('href', `/events?view=month&d=${date}`);
+    await expect(await viewLink(page, 'Month')).toHaveAttribute('href', `/events?view=month&d=${date}`);
     await expect(page.locator('[data-cal-status]')).toHaveText(DAY_NAME);
   });
 
@@ -463,13 +471,13 @@ for (const js of [true, false]) {
     test("Week to List to Week: the selected day's events are on screen each time, and its tile", async ({ page }) => {
       const date = wednesdayFrom(36);
       await page.goto(`/events?view=week&d=${date}`);
-      await toolbar(page).views.getByRole('link', { name: 'List' }).click();
+      await (await viewLink(page, 'List')).click();
       await expect(page).toHaveURL(new RegExp(`/events\\?view=list&d=${date}#day-${date}$`));
       await expect(page.locator(`#day-${date}`)).toBeInViewport();
       await expect(page.locator(`#day-${date}`)).toHaveClass(/is-sel/);
       await expect(page.locator(`.tiles--ribbon a[data-day="${date}"]`)).toHaveAttribute('aria-current', 'true');
       if (js) expect(await tileShown(page, date)).toBe(true);
-      await toolbar(page).views.getByRole('link', { name: 'Week' }).click();
+      await (await viewLink(page, 'Week')).click();
       await expect(page).toHaveURL(new RegExp(`/events\\?view=week&d=${date}#day-${date}$`));
       await expect(page.locator(`#day-${date}`)).toBeInViewport();
     });
@@ -478,7 +486,7 @@ for (const js of [true, false]) {
       const date = pastWednesdayThisMonth();
       test.skip(date === undefined, 'No Wednesday earlier this month yet');
       await page.goto(`/events?view=month&d=${date}`);
-      await toolbar(page).views.getByRole('link', { name: 'List' }).click();
+      await (await viewLink(page, 'List')).click();
       const card = page.locator(`#day-${date}`);
       await expect(card).toBeInViewport();
       await expect(card).toContainText('Wednesday Lunchers');
@@ -492,7 +500,7 @@ for (const js of [true, false]) {
       const tile = page.locator('.tiles--ribbon a.tile').nth(5);
       const date = (await tile.getAttribute('data-day'))!;
       await tile.click();
-      await toolbar(page).views.getByRole('link', { name: 'Week' }).click();
+      await (await viewLink(page, 'Week')).click();
       await expect(page).toHaveURL(new RegExp(`/events\\?view=week&d=${date}#day-${date}$`));
       await expect(page.locator(`#day-${date}`)).toBeInViewport();
     });

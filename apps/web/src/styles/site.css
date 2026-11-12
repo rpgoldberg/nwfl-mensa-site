@@ -952,19 +952,19 @@ main > .calendar { max-width: none; }
 .calendar { container: calendar / inline-size; display: grid; gap: var(--space-4); }
 .calendar > * { min-width: 0; }
 
-/* The toolbar: "‹ period ›" and List | Week | Month on one row. EV1 (Ross, 11-12): one row always,
-   so the period's words shorten as the toolbar narrows, by its own width (a container), never the
-   device: "Nov 29 – Dec 5", "Nov 29–Dec 5", "11/29–12/5", then "11/29" over "–12/5" (months:
-   "September 2026", "Sep 2026", "Sep ’26", "Sep" over "2026"). Each step is taken where the longest
-   period of that length (measured, in em of the toolbar's text) no longer fits beside the 44 px arrows
-   and the three views, so the thresholds grow with the text size. Two rows only where even the
-   stacked words cannot fit (large text on a narrow phone), and then the period, on its own row,
-   reads in the short words again. */
-.caltool { container: caltool / inline-size; display: flex; flex-wrap: wrap; align-items: stretch; justify-content: space-between; gap: var(--space-1); font-size: var(--fs-small); }
-/* A phone: into the page's margin, to 4 px from the screen's edge, so a 300 px cover screen keeps it to one row. */
-@container calendar (max-width: 45.99rem) {
-  .caltool { margin-inline: calc(4px - var(--space-4)); }
-}
+/* "Events" and the toolbar share the heading's line where they fit; otherwise the toolbar takes the next. */
+.calhead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.calhead h1 { margin: 0; }
+/* The toolbar. EV1 round 2 (Ross, 11-12): it changes with its room, chosen by the calendar's width
+   (a container), never the device or the text size, and it never squeezes the words. Where they fit
+   one row: "‹ Nov 29 – Dec 5 ›" (or "‹ Nov 29–Dec 5 ›") and List | Week | Month. Where they do not:
+   ‹ Week ▾ ›, the switch folded into one picker of the same links and the range out of the toolbar,
+   said by the heading under the day cells (a month's name by its grid's caption). The thresholds are
+   the widths of the longest period at each length, in rem (the most each takes at any of the seven
+   sizes, measured): the label 8.25 ("September 2028"), short 7.13 ("May 30–Jun 5"); List, Week, Month
+   1.81, 2.67, 3 plus their padding; the gap 0.25 and 0.0625 to spare. In px: the arrows 88, the
+   borders 8, the label's padding 2. Wrapping is the fallback only: nothing is ever cut. */
+.caltool { display: flex; flex-wrap: wrap; align-items: stretch; gap: var(--space-1); margin-left: auto; font-size: var(--fs-small); }
 .calstep, .calviews { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .calstep__arrow { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; border-radius: 11px; color: var(--ink); }
 .calstep__arrow svg { width: 1.25rem; height: 1.25rem; }
@@ -972,40 +972,42 @@ main > .calendar { max-width: none; }
 .calstep__w { display: none; }
 .calstep__w--label { display: inline; }
 .calviews__v { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 0.25em; color: var(--ink); font-weight: 700; text-decoration: none; }
-/* The widths, in em of the toolbar's text, the most each takes at any of the seven sizes (measured;
-   whole-pixel text makes it vary): the longest label 8.25 ("September 2028"), short 7.13 ("May
-   30–Jun 5"), tiny 5.88 ("11/29–12/5"); List, Week, Month 1.81, 2.67, 3 plus their padding; the gap
-   0.25 and 0.0625 to spare. In px: the arrows 88, the borders 8, the label's padding 2. */
-@container caltool (width < calc(98px + max(44px, 2.313em) + max(44px, 3.167em) + max(44px, 3.5em) + 8.563em)) {
-  .calstep__w--label { display: none; }
-  .calstep__w--short { display: inline; }
-}
-/* Tiny: the views' padding tightens too (0.125em), and stays so below. */
-@container caltool (width < calc(98px + max(44px, 2.313em) + max(44px, 3.167em) + max(44px, 3.5em) + 7.438em)) {
-  .calstep__w--short { display: none; }
-  .calstep__w--tiny { display: inline; }
-  .calviews__v { padding: 0 0.125em; }
-}
-/* Stacked: two short lines, still within the 44 px row at 100 %. */
-@container caltool (width < calc(98px + max(44px, 2.063em) + max(44px, 2.917em) + max(44px, 3.25em) + 6.188em)) {
-  .calstep__w--tiny { display: none; }
-  .calstep__w--stack { display: flex; flex-direction: column; align-items: center; line-height: 1.1; }
-}
-/* Where even the stacked words cannot fit, the row wraps whatever the words: the period has a row of
-   its own, so it reads "Nov 29–Dec 5" again, and the views get their padding back. This one is held to
-   the widths at 90 % and up (stacked 2.9 em, Week 2.57, Month 2.96; no pixel to spare), so a 300 px
-   cover screen at 100 % keeps one row: below 90 % the 44 px minimums, not the words, set the width. */
-@container caltool (width < calc(96px + max(44px, 2.063em) + max(44px, 2.821em) + max(44px, 3.214em) + 3.215em)) {
-  .calstep__w--stack { display: none; }
-  .calstep__w--short { display: inline; }
-  .calviews__v { padding: 0 0.25em; }
-}
 .calviews__v + .calviews__v { border-left: 1px solid var(--line); }
 .calviews__v:first-child { border-radius: 11px 0 0 11px; }
 .calviews__v:last-child { border-radius: 0 11px 11px 0; }
 .calviews__v:hover { text-decoration: underline; }
 /* The current view: filled, and named so (aria-current), not colour alone. */
 .calviews__v[aria-current] { background: var(--accent); color: var(--on-accent); }
+@container calendar (width < calc(98px + max(44px, 2.313rem) + max(44px, 3.167rem) + max(44px, 3.5rem) + 8.563rem)) {
+  .calstep__w--label { display: none; }
+  .calstep__w--short { display: inline; }
+}
+/* The picker: a disclosure of the three views as links (no script needed; events.js only closes it on
+   Escape or a tap elsewhere). As wide as "Month ▾" in every view, so it never moves. Its list opens in
+   the page's flow, pushing the days down, so it never covers a day or a heading. */
+.calpick { display: none; }
+.calpick summary { display: flex; align-items: center; gap: 0.25em; min-width: 44px; min-height: 44px; padding: 0 0.25em 0 0.375em; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font-weight: 700; line-height: 1.2; list-style: none; cursor: pointer; }
+.calpick summary::-webkit-details-marker { display: none; }
+.calpick summary svg { flex: none; width: min(1em, 18px); height: min(1em, 18px); }
+.calpick details[open] summary svg { transform: rotate(180deg); }
+.calpick__names { display: grid; }
+.calpick__name { grid-area: 1 / 1; visibility: hidden; }
+.calpick__name[data-now] { visibility: visible; }
+.calpick__menu { margin: 4px 0 0; padding: 4px 0; list-style: none; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.calpick__opt { display: flex; align-items: center; min-height: 44px; padding: 0 0.5em; color: var(--ink); font-weight: 700; text-decoration: none; }
+.calpick__opt:hover { text-decoration: underline; }
+.calpick__opt[aria-current] { background: var(--accent); color: var(--on-accent); }
+/* The month's name names the grid; shown (under it) only where the toolbar is compact. */
+.month__cap { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Compact: ‹ Week ▾ ›, three buttons; the range is spoken still ("Showing …"), not shown. */
+@container calendar (width < calc(98px + max(44px, 2.313rem) + max(44px, 3.167rem) + max(44px, 3.5rem) + 7.438rem)) {
+  .calviews, .calstep__w { display: none; }
+  .calstep { align-items: flex-start; gap: 2px; border: 0; background: none; }
+  .calstep__label { display: contents; }
+  .calstep__arrow { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  .calpick { display: block; }
+  .month__cap { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip-path: none; white-space: normal; caption-side: bottom; padding: var(--space-2) min(var(--space-4), 16px) 0; text-align: left; font-family: var(--font-head); font-weight: 600; font-size: var(--fs-h3); }
+}
 
 /* Day tiles: the weekday, the date, the indicator. Today has a ring; the selected day is filled. */
 .tiles { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-2); }
@@ -1020,7 +1022,7 @@ main > .calendar { max-width: none; }
   .tiles--week { margin-inline: calc(-1 * var(--space-2)); }
 }
 @container calendar (max-width: 19rem) {
-  .tiles--week { margin-inline: calc(-1 * var(--space-4)); }
+  .tiles--week { margin-inline: calc(-1 * var(--space-4)); gap: 1px; }
 }
 .tile { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 3.25rem; min-height: 44px; padding: var(--space-1) 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); text-decoration: none; font-size: var(--fs-small); line-height: 1.2; }
 .tiles--week .tile { min-width: 0; }
@@ -1036,6 +1038,19 @@ a.tile:focus-visible { outline-offset: 2px; }
    weekday a size smaller, never cut. */
 @container week (width < 17em) {
   .tile__wd { font-size: 0.75em; }
+}
+/* EV1: narrower still (a cover screen at the largest sizes). First the tile's side padding goes and the
+   date takes the text's own size (from its larger one), so "Wed" a size smaller (1.45 rem) still fits;
+   then, only where even that cannot (a browser's text at 200 % on a 300 px screen), the weekday takes
+   two letters ("We"). Weekday, date and icons always show whole; a tile grows down, never sideways. */
+.tile__wd2 { display: none; }
+@container week (width < calc(7 * (1.453rem + 6px) + 12px)) {
+  .tiles--week .tile { padding-inline: 0; }
+  .tiles--week .tile__n { font-size: 1em; }
+}
+@container week (width < calc(7 * (1.453rem + 2px) + 12px)) {
+  .tile__wd3 { display: none; }
+  .tile__wd2 { display: inline; }
 }
 
 /* The one indicator: an icon per event, two at most, then "+N". */
@@ -1161,7 +1176,7 @@ a.tile:focus-visible { outline-offset: 2px; }
 @media (forced-colors: active) {
   .month td[aria-current="date"], .tile--today { outline: 3px solid CanvasText; outline-offset: -3px; }
   .month td[aria-current="date"] .n { border: 2px solid CanvasText; }
-  .month a.day[aria-current="true"], .tile[aria-current="true"], .calviews__v[aria-current] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .month a.day[aria-current="true"], .tile[aria-current="true"], .calviews__v[aria-current], .calpick__opt[aria-current] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .ecard.is-sel, .ecard:target { outline: 3px solid CanvasText; }
 }
 

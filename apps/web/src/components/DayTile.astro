@@ -2,7 +2,8 @@
 // EVENTS2: one day as a tile, in the list's ribbon and the week's strip alike: the weekday, the date
 // and the indicator. A day with events is a link to its events on this page (the URL keeps the view
 // and the date); an empty one (the week only) is a plain tile. Today has a ring, the selected day a
-// fill, and both are said in words.
+// fill, and both are said in words. EV1: where seven are narrow for the reader's text, the weekday
+// takes two letters ("We") where even a size smaller cannot fit, never cut (site.css).
 import DayIndicator from './DayIndicator.astro';
 import { type DayTile as Tile, dayIndicator, tileLabel } from '../lib/event-views';
 
@@ -16,12 +17,12 @@ const look = ['tile', { 'tile--today': tile.today, 'tile--empty': tile.events.le
 ---
 {tile.events.length > 0 ? (
   <a class:list={look} href={href} data-day={tile.date} aria-label={label} aria-current={tile.selected ? 'true' : undefined}>
-    <span class="tile__face" aria-hidden="true"><span class="tile__wd">{tile.weekday}</span> <span class="tile__n">{tile.day}</span></span>
+    <span class="tile__face" aria-hidden="true"><span class="tile__wd"><span class="tile__wd3">{tile.weekday}</span><span class="tile__wd2">{tile.weekday.slice(0, 2)}</span></span> <span class="tile__n">{tile.day}</span></span>
     <DayIndicator indicator={dayIndicator(tile.events)} />
   </a>
 ) : (
   <span class:list={look} data-empty-day={tile.date} aria-current={tile.selected ? 'true' : undefined}>
-    <span class="tile__face" aria-hidden="true"><span class="tile__wd">{tile.weekday}</span> <span class="tile__n">{tile.day}</span></span>
+    <span class="tile__face" aria-hidden="true"><span class="tile__wd"><span class="tile__wd3">{tile.weekday}</span><span class="tile__wd2">{tile.weekday.slice(0, 2)}</span></span> <span class="tile__n">{tile.day}</span></span>
     <span class="visually-hidden">{label}</span>
   </span>
 )}
