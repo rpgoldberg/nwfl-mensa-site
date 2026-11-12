@@ -2,8 +2,9 @@
 // have it (the API picks the redacted copy, or the original when nothing is
 // withheld). Inline, under the name the API built from the redacted title,
 // kept only when it is plain ASCII; otherwise the file's id. The cache rule is
-// the site's (server/policy.mjs): public briefly when anonymous, private and
-// never stored with a session cookie, never stored for a 404 or a 503.
+// the site's (server/policy.mjs): the reader's browser only, briefly, when
+// anonymous (CACHEPREF: a member gets another copy at the same URL), never
+// stored with a session cookie, never stored for a 404 or a 503.
 // A14: with a signed-in reader, the file is read with their token (a member
 // gets the members copy), and the PDF itself says private, no-store, which
 // the site policy keeps. A file the reader may not have is the same 404 as a

@@ -322,13 +322,13 @@ async function teasers(page: Page, box: string, link: { name: string; href: stri
   }
 }
 
-test('anonymous: each members article by title and summary, with a box and a real sign-in link (D1); the page is the same for every anonymous reader, and public', async ({ page, playwright, baseURL }) => {
+test('anonymous: each members article by title and summary, with a box and a real sign-in link (D1); the page is the same for every anonymous reader, and no shared cache keeps it', async ({ page, playwright, baseURL }) => {
   const res = await page.goto('/news');
   await teasers(page, TEASER_BOX, { name: 'sign in', href: '/sign-in?return=%2Fnews&again=1' });
   const html = await res!.text();
   expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, RULE.replace("'", '&#39;'), RULE])).toEqual([]);
-  expect(res?.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
-  expect(res?.headers()['cdn-cache-control']).toBeUndefined();
+  expect(res?.headers()['cache-control']).toBe('private, max-age=60, stale-while-revalidate=60');
+  expect(res?.headers()['cdn-cache-control']).toBe('no-store');
   const others = await Promise.all([0, 1].map(async () => {
     const ctx = await playwright.request.newContext({ baseURL: baseURL!, ignoreHTTPSErrors: true });
     const got = await newsHtml(ctx);
@@ -337,7 +337,7 @@ test('anonymous: each members article by title and summary, with a box and a rea
   }));
   for (const other of others) {
     expect(other.html).toBe(html);
-    expect(other.headers['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
+    expect(other.headers['cache-control']).toBe('private, max-age=60, stale-while-revalidate=60');
   }
   // The sign-in link looks like a link (underlined, bold), in text large enough to read.
   const link = page.getByRole('article').filter({ hasText: ARTICLES.members.title }).getByRole('link', { name: 'sign in', exact: true });
@@ -420,8 +420,8 @@ test('anonymous: the public article with its passage hidden behind a sign-in lin
   await expect(open.getByRole('link', { name: 'sign in' })).toHaveAttribute('href', '/sign-in?return=%2Fnews&again=1');
   await expect(open.getByRole('link', { name: /\(PDF\)$/ })).toHaveAttribute('href', pdf(ARTICLES.open.publicPdf));
   for (const html of [await res!.text(), await page.content()]) expect(noneOf(html, [...MEMBERS_IDS, ...MEMBERS_TEXT, ...NEVER, RULE])).toEqual([]);
-  expect(res?.headers()['cache-control']).toBe('public, max-age=60, stale-while-revalidate=60');
-  expect(res?.headers()['cdn-cache-control']).toBeUndefined();
+  expect(res?.headers()['cache-control']).toBe('private, max-age=60, stale-while-revalidate=60');
+  expect(res?.headers()['cdn-cache-control']).toBe('no-store');
 });
 
 test.describe('the members view, for every reader', () => {

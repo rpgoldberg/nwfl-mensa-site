@@ -61,7 +61,7 @@ function signInOffered({ setup, key }: SignInSetup, publicOnly: boolean): boolea
  * The line on /news that sends a reader who is not signed in to the members copy: where "sign in"
  * leads, back to `back`. None for anyone signed in (a member already has the copy, an officer too, and
  * any other account has its own box) and wherever /sign-in is not available. It depends on the
- * session alone, so it is the same for every signed-out reader and the anonymous page stays cacheable.
+ * session alone, so it is the same for every signed-out reader.
  */
 export function membersSignInLink(session: Session | undefined, auth: SignInSetup, publicOnly: boolean, back: string): string | undefined {
   return session === undefined && signInOffered(auth, publicOnly) ? `/sign-in?return=${encodeURIComponent(back)}` : undefined;

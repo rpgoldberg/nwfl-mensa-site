@@ -8,6 +8,7 @@ import { DOWN_URL } from './servers';
 import { BOARD_GAMES, CANARIES, MEMBERS_SERIES, centralToday, monthAfter, nextSunday } from './stand-in';
 
 const PUBLIC_CACHE = 'public, max-age=60, stale-while-revalidate=60';
+const PRIVATE_CACHE = 'private, max-age=60, stale-while-revalidate=60';
 const octets = (line: string) => Buffer.byteLength(line, 'utf8');
 const unfold = (text: string) => text.replace(/\r\n /g, '');
 
@@ -100,12 +101,12 @@ test('a members event or one with no status never appears, in any view or feed, 
   }
 });
 
-test('cache by audience: public pages briefly and stale-while-revalidate, a session never, an error never', async ({ request }) => {
+test('cache by audience: feeds public and pages private (CACHEPREF), briefly and stale-while-revalidate, a session never, an error never', async ({ request }) => {
   const live = ['/', '/events', '/officers', '/finances', '/calendar.ics', '/events.ics', `/events/${BOARD_GAMES}`, `/events/${BOARD_GAMES}.ics`];
   for (const path of live) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(200);
-    expect(res.headers()['cache-control'], path).toBe(PUBLIC_CACHE);
+    expect(res.headers()['cache-control'], path).toBe(path.endsWith('.ics') ? PUBLIC_CACHE : PRIVATE_CACHE);
     expect(res.headers()['vary'], path).toBe('Cookie');
     const signedIn = await request.get(path, { headers: { cookie: `${SESSION_COOKIE}=x` } });
     expect(signedIn.headers()['cache-control'], path).toBe('private, no-store');
