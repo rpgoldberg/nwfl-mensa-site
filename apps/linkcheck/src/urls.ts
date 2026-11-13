@@ -222,15 +222,40 @@ export const isLoginWalled = (given: string): boolean => {
 /** The registrable domain by the Public Suffix List, private suffixes included (one.github.io is its own); else the host. */
 export const registrableDomain = (host: string): string => getDomain(host, { allowPrivateDomains: true }) ?? host;
 
-/** A URL found in text without its trailing sentence punctuation (a closing bracket only when unbalanced). */
+/** The sentence punctuation a URL found in text sheds from its end: . , ; : ! ? ' " */
+const SENTENCE_END = new Set([0x2e, 0x2c, 0x3b, 0x3a, 0x21, 0x3f, 0x27, 0x22]);
+
+/**
+ * A URL found in text without its trailing sentence punctuation (a closing bracket only when unbalanced).
+ * The brackets are counted once and the end trimmed in one pass (MARKUP-DOS): counting them again for
+ * each character taken off was quadratic on a hostile run of them.
+ */
 export function trimTrailing(url: string): string {
-  let out = url;
-  for (;;) {
-    const last = out.at(-1);
-    if (last === undefined) return out;
-    if (/[.,;:!?'"]/.test(last)) out = out.slice(0, -1);
-    else if (last === ')' && (out.match(/\(/g) ?? []).length < (out.match(/\)/g) ?? []).length) out = out.slice(0, -1);
-    else if (last === ']' && (out.match(/\[/g) ?? []).length < (out.match(/\]/g) ?? []).length) out = out.slice(0, -1);
-    else return out;
+  let open = 0;
+  let close = 0;
+  let openSquare = 0;
+  let closeSquare = 0;
+  for (let i = 0; i < url.length; i += 1) {
+    const code = url.charCodeAt(i);
+    if (code === 0x28) open += 1;
+    else if (code === 0x29) close += 1;
+    else if (code === 0x5b) openSquare += 1;
+    else if (code === 0x5d) closeSquare += 1;
   }
+  let end = url.length;
+  while (end > 0) {
+    const last = url.charCodeAt(end - 1);
+    if (SENTENCE_END.has(last)) {
+      end -= 1;
+    } else if (last === 0x29 && open < close) {
+      close -= 1;
+      end -= 1;
+    } else if (last === 0x5d && openSquare < closeSquare) {
+      closeSquare -= 1;
+      end -= 1;
+    } else {
+      break;
+    }
+  }
+  return url.slice(0, end);
 }

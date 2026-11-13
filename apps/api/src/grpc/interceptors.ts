@@ -67,6 +67,21 @@ export function traceServerInterceptor(): Interceptor {
   };
 }
 
+/**
+ * The most of a status message a caller is sent, in characters (MARKUP-DOS round 3). A reason can
+ * echo what the caller wrote (a malformed recurrence, a list of refused URLs); percent-encoded into
+ * grpc-message, a long one overflowed the HTTP/2 frame and the caller got an internal error instead.
+ * 1,000 characters is at most 12 KB encoded, inside the 16 KB frame.
+ */
+export const MESSAGE_MAX = 1_000;
+
+/** The error with its message cut to MESSAGE_MAX characters (whole characters, never half a pair), or as it is. */
+export function clipped(error: ConnectError): ConnectError {
+  const characters = [...error.rawMessage];
+  if (characters.length <= MESSAGE_MAX) return error;
+  return new ConnectError(`${characters.slice(0, MESSAGE_MAX - 1).join('')}…`, error.code, error.metadata, undefined, error);
+}
+
 export function accessLogInterceptor(logger: StructuredLogger): Interceptor {
   return (next) => async (req) => {
     const started = performance.now();
@@ -82,7 +97,7 @@ export function accessLogInterceptor(logger: StructuredLogger): Interceptor {
     } catch (error) {
       if (error instanceof ConnectError) {
         logger.info({ rpc, code: codeName(error.code), duration_ms: duration(), request_id: requestId }, 'rpc');
-        throw error;
+        throw clipped(error);
       }
       const name = error instanceof Error ? error.name : typeof error;
       logger.error({ rpc, code: codeName(Code.Internal), error: name, duration_ms: duration(), request_id: requestId }, 'rpc');

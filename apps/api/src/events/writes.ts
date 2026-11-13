@@ -21,6 +21,7 @@ import { recordAudit } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
 import { requireOffice, requireOfficer, requireUser } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
+import { refuseLongText } from '../grpc/text-limit.js';
 import { textUrlProblems, urlMessage, urlProblem } from '../links/rule.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -154,6 +155,7 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
       requireOfficer(caller);
       const venue = request.venue;
       if (venue === undefined) throw invalid('venue is required');
+      refuseLongText({ name: venue.name, business_address: venue.businessAddress, city: venue.city, url: venue.url, accessibility_note: venue.accessibilityNote });
       const values = [
         required(KIND_NAMES, venue.kind, 'kind'),
         venue.name.trim(),
@@ -191,6 +193,7 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
       requireUser(caller);
       const series = request.series;
       if (series === undefined) throw invalid('series is required');
+      refuseLongText({ slug: series.slug, title: series.title, recurrence: series.recurrence, cadence_label: series.cadenceLabel, description: series.description });
       try {
         parseRule(series.recurrence);
       } catch (error) {
@@ -256,6 +259,7 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
       requireUser(caller);
       const occurrence = request.occurrence;
       if (occurrence === undefined) throw invalid('occurrence is required');
+      refuseLongText({ title: occurrence.title, status_note: occurrence.statusNote, detail: occurrence.detail, url: occurrence.url });
       const match = occurrence.id === '' ? null : OCCURRENCE_ID.exec(occurrence.id);
       if (occurrence.id !== '' && match === null) throw invalid('malformed occurrence id');
       return tx(async (client) => {

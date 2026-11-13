@@ -47,6 +47,7 @@ import { recordAudit } from '../audit/audit.js';
 import { type Audience, type Caller, callerOf } from '../auth/caller.js';
 import { type Roles, requireEditorReader, requireOffice, requirePublisher, requireReviewer, requireUser, rolesOf } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
+import { refuseLongText } from '../grpc/text-limit.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import {
@@ -63,7 +64,7 @@ import {
 } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { FILE_AUDIENCES, FILE_ROLES, ITEM_VISIBILITIES, KINDS, KIND_NAMES, STATES, VERSION_STATUSES, namesOf } from './enums.js';
 import { contentHash } from './hash.js';
-import { parseMarkup } from './markup.js';
+import { NESTED_TOO_DEEPLY, parseMarkup } from './markup.js';
 import { deriveForApproval, normalizeTree, referencedFiles, toProtoDocument } from './tree.js';
 import { bylineFor, itemHidden, slugFor } from './redact.js';
 import { loadLens } from '../redaction/lens.js';
@@ -599,6 +600,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
     createItem: async (request, ctx) => {
       const caller = callerIn(ctx);
       requireUser(caller);
+      refuseLongText({ slug: request.slug, title: request.title });
       const kind = KIND_NAMES.get(request.kind);
       if (kind === undefined) throw invalid('kind is required');
       const title = publicLine(request.title.trim());
@@ -634,6 +636,9 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
 
     saveDraft: async (request, ctx) => {
       const caller = callerIn(ctx);
+      requireUser(caller);
+      // Before anything is parsed or stored (MARKUP-DOS round 2).
+      refuseLongText({ title: request.title, summary: request.summary, body_markup: request.bodyMarkup });
       return tx(async (client) => {
         const item = await loadItemAs(client, caller, request.itemId);
         requireOffice(caller, item.office_slug);
@@ -656,6 +661,9 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         publicLine(request.summary);
         const visibility = VISIBILITY_NAMES.get(request.visibility) ?? version.visibility;
         const { tree, problems } = parseMarkup(request.bodyMarkup);
+        // Nested deeper than the stored tree keeps: preview and publication would drop part of it (and far
+        // deeper, storing it overflows the stack). Refused, not saved with a problem, so what saves shows.
+        if (problems.some((problem) => problem.message === NESTED_TOO_DEEPLY)) throw invalid(NESTED_TOO_DEEPLY);
         version = (
           await client.query<VersionRow>(
             `UPDATE content_version SET title = $2, summary = $3, visibility = $4, body_src = $5, body_ast = $6,

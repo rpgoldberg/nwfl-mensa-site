@@ -32,7 +32,7 @@
 //     finished by then has its stream cancelled, freeing what was buffered;
 //   - MAX_SESSION_MEMORY_MB for HTTP/2 session buffers.
 // Worst case held in request buffers: (MAX_ACTIVE_STREAMS + MAX_EDGE_STREAMS)
-// x READ_MAX_BYTES, the same 128 MiB as before the edge budget was split off.
+// x READ_MAX_BYTES, 8 MiB (128 MiB while the limit was 4 MiB).
 //
 // EARLY ERRORS: a call refused before the interceptors run (a bad envelope,
 // the size cap, a bad header, a receive deadline) still gets one access-log
@@ -53,10 +53,15 @@ export const GRPC_PROTOCOLS = { grpc: true, grpcWeb: false, connect: false } as 
 export const ACCEPTED_CONTENT_TYPES: ReadonlySet<string> = new Set(['application/grpc', 'application/grpc+proto']);
 
 /**
- * Largest inbound message: the gRPC default. Every RPC today carries small
- * messages; uploads (R11, PW6) will stream rather than raise this.
+ * Largest inbound message: 256 KiB (MARKUP-DOS round 2; it was the gRPC
+ * default, 4 MiB). The largest message the site sends is SaveDraft from the
+ * edit form, at most EDIT_FORM_LIMIT (56 KiB) as posted, with markup capped
+ * at 48 KiB (grpc/text-limit.ts); no RPC takes a bulk payload (the issue
+ * loaders read stdin, and uploads, R11 and PW6, will stream). 256 KiB is
+ * over four times that, so no real call meets it, and a multi-megabyte
+ * message is refused on its envelope before any handler sees it.
  */
-export const READ_MAX_BYTES = 4 * 1024 * 1024;
+export const READ_MAX_BYTES = 256 * 1024;
 export const MAX_ACTIVE_STREAMS = 24;
 export const MAX_EDGE_STREAMS_PER_CLIENT = 4;
 /** The agent's and the verifier's budgets together. */
