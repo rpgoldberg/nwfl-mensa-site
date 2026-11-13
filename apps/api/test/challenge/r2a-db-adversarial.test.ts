@@ -84,7 +84,9 @@ describe.skipIf(!live)('R2a challenge: 0014 as nwfl', () => {
   it('D6 history: an approved version cannot be rewritten by the app role', async () => {
     const v = (await app.query<{ id: string }>(`INSERT INTO content_version (item_id, n, title, visibility, body_ast, created_by_sub, acting_office_id) VALUES ($1, 1, 'T John Smith', 'public', '{"blocks":[]}', 'a', (SELECT office_id FROM content_item WHERE id = $1)) RETURNING id`, [item])).rows[0]!.id;
     await app.query(`UPDATE content_version SET status='ready', content_hash=decode(repeat('00',32),'hex'), ready_at=now() WHERE id=$1`, [v]);
-    await app.query(`UPDATE content_version SET status='approved', approved_at=now(), approved_by_sub='w', approval_kind='normal', public_ast='{"blocks":[]}' WHERE id=$1`, [v]);
+    // Approved, then published: two steps since 0029 (EDITOR A1).
+    await app.query(`UPDATE content_version SET status='cleared', approved_at=now(), approved_by_sub='w', approval_kind='normal', public_ast='{"blocks":[]}' WHERE id=$1`, [v]);
+    await app.query(`UPDATE content_version SET status='approved', published_at=now(), published_by_sub='w' WHERE id=$1`, [v]);
     const c = await app.connect();
     try {
       expect(await sqlstate(c as never, `UPDATE content_version SET title='T J. Sm­ith' WHERE id=$1`, [v])).not.toBe('ok');

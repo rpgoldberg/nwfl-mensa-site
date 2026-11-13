@@ -53,6 +53,8 @@ const PUT_GRANTEES = new Set(['nwfl']);
 /** Bytes fields a request may carry, by full name, and why none can hold a PDF. Frozen. */
 const REQUEST_BYTES_EXEMPT: ReadonlyMap<string, string> = new Map([
   ['nwfl.mensa.v1.ApproveRequest.content_hash', 'the sha256 the approver saw; the handler compares it with the stored hash (content/workflow.ts)'],
+  // EDITOR A1: the same 32-byte check at the second step.
+  ['nwfl.mensa.v1.PublishRequest.content_hash', 'the sha256 the publisher saw; the handler compares it with the stored hash (content/workflow.ts)'],
 ]);
 /** The two tests that lift the gate, pinned HERE (not in untrusted.ts), each with the title one real test must start with. */
 export const LIFT_TESTS = [

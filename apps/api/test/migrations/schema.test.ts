@@ -319,26 +319,29 @@ describe.skipIf(!live)('schema', () => {
       expect(await sqlstate(app, `UPDATE content_version SET title = 'Changed' WHERE id = $1`, [versionId])).toBe('ok');
     });
 
-    it('approves only with an approver, a time and a public tree, then freezes everything', async () => {
+    it('approves only with an approver, a time and a public tree, publishes only with a publisher, then freezes everything', async () => {
       const itemId = await item('approve-rule', officeId);
       const versionId = await version(itemId, officeId);
       await app.query(`UPDATE content_version SET status = 'ready', content_hash = $2 WHERE id = $1`, [versionId, HASH]);
-      expect(await sqlstate(app, `UPDATE content_version SET status = 'approved' WHERE id = $1`, [versionId])).toBe(CHECK_VIOLATION);
+      // EDITOR A1 (0029): approval makes it cleared; publication makes it approved (live).
+      expect(await sqlstate(app, `UPDATE content_version SET status = 'cleared' WHERE id = $1`, [versionId])).toBe(CHECK_VIOLATION);
       expect(
         await sqlstate(
           app,
-          `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal' WHERE id = $1`,
+          `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal' WHERE id = $1`,
           [versionId],
         ),
       ).toBe(CHECK_VIOLATION);
       expect(
         await sqlstate(
           app,
-          `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
+          `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
              public_ast = '{"blocks": []}' WHERE id = $1`,
           [versionId],
         ),
       ).toBe('ok');
+      expect(await sqlstate(app, `UPDATE content_version SET status = 'approved' WHERE id = $1`, [versionId])).toBe(CHECK_VIOLATION);
+      expect(await sqlstate(app, `UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [versionId])).toBe('ok');
       expect(await failure(app, `UPDATE content_version SET target_email = true WHERE id = $1`, [versionId])).toMatch(/frozen/);
       expect(await failure(app, `UPDATE content_version SET public_ast = '{"blocks": [1]}' WHERE id = $1`, [versionId])).toMatch(/frozen/);
       expect(await sqlstate(app, `UPDATE content_version SET status = 'superseded' WHERE id = $1`, [versionId])).toBe('ok');
@@ -351,7 +354,7 @@ describe.skipIf(!live)('schema', () => {
       const approve = (reason: string | null): Promise<string> =>
         sqlstate(
           app,
-          `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-admin',
+          `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-admin',
              approval_kind = 'self_breakglass', approval_reason = $2, public_ast = '{"blocks": []}' WHERE id = $1`,
           [versionId, reason],
         );
@@ -371,9 +374,12 @@ describe.skipIf(!live)('schema', () => {
       const live = await version(a, officeId);
       await app.query(`UPDATE content_version SET status = 'ready', content_hash = $2 WHERE id = $1`, [live, HASH]);
       await app.query(
-        `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`,
+        `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`,
         [live],
       );
+      // Not live while only approved (cleared): the live pointer needs a published version (0007, 0029).
+      expect(await sqlstate(app, `UPDATE content_item SET state = 'published', live_version_id = $2 WHERE id = $1`, [a, live])).toBe(FK_VIOLATION);
+      await app.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-w' WHERE id = $1`, [live]);
       expect(await sqlstate(app, `UPDATE content_item SET state = 'published', live_version_id = $2 WHERE id = $1`, [a, live])).toBe('ok');
       expect(await sqlstate(app, `UPDATE content_item SET state = 'withdrawn' WHERE id = $1`, [a])).toBe(CHECK_VIOLATION);
       expect(await sqlstate(app, `UPDATE content_item SET state = 'withdrawn', withdrawn_at = now() WHERE id = $1`, [a])).toBe('ok');

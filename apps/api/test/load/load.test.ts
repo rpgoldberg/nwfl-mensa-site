@@ -136,6 +136,31 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       expect(row.content_hash?.length).toBe(32);
     });
 
+    it('runs on the 0029 schema: approves, then publishes as the loader, both in its one transaction (EDITOR A1)', async () => {
+      const loaded = await loading;
+      // 0029's columns are there (the app role cannot read the migration ledger).
+      const applied = await api.pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'content_version' AND column_name IN ('published_at', 'published_by_sub')`);
+      expect(applied.rowCount).toBe(2);
+      const row = (
+        await api.pool.query<{ status: string; approved_by_sub: string; published_by_sub: string; same_time: boolean; approval_rule: string }>(
+          `SELECT status, approved_by_sub, published_by_sub, approved_at = published_at AS same_time, approval_rule FROM content_version
+           WHERE id = (SELECT live_version_id FROM content_item WHERE id = $1)`,
+          [loaded.itemId],
+        )
+      ).rows[0];
+      expect(row).toEqual({ status: 'approved', approved_by_sub: LOADER, published_by_sub: LOADER, same_time: true, approval_rule: 'two_person' });
+      const steps = (
+        await api.pool.query<{ action: string; from_state: string; to_state: string; payload: Record<string, unknown> }>(
+          `SELECT action, from_state, to_state, payload FROM audit_event WHERE item_id = $1 AND action IN ('approve_self', 'publish') ORDER BY id`,
+          [loaded.itemId],
+        )
+      ).rows;
+      expect(steps).toEqual([
+        { action: 'approve_self', from_state: 'ready', to_state: 'cleared', payload: { approval_rule: 'two_person' } },
+        { action: 'publish', from_state: 'cleared', to_state: 'approved', payload: { backup: false } },
+      ]);
+    });
+
     it('holds two PDFs on that one version, public and members, stored by the loader, with random ids', async () => {
       const loaded = await loading;
       const files = (
@@ -198,6 +223,7 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
         ...MARKS.map(() => 'redaction_mark_add'),
         'ready',
         'approve_self',
+        'publish',
       ]);
       expect(rows.every((row) => row.actor_groups.length === 0)).toBe(true);
       expect(new Set(rows.filter((row) => !row.action.startsWith('pdf_') && !row.action.startsWith('redaction_')).map((row) => row.actor_kind))).toEqual(new Set(['system']));
@@ -454,6 +480,7 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       const content = api.client(ContentService);
       const hash = (await content.markReady({ itemId: first.itemId, targets: { website: true, newsletter: false, email: false } }, ADMIN)).item?.working?.contentHash as Uint8Array;
       await content.approve({ itemId: first.itemId, contentHash: hash }, WEBMASTER);
+      await content.publish({ itemId: first.itemId, contentHash: hash }, WEBMASTER);
       const live = await api.pool.query<{ created_by_sub: string }>(`SELECT v.created_by_sub FROM content_item i JOIN content_version v ON v.id = i.live_version_id WHERE i.id = $1`, [first.itemId]);
       expect(live.rows[0]?.created_by_sub).toBe('sub-admin');
       expect(await rerun('2025-05')).toBe('LoadError: pensa-mensa-2025-05 was edited after loading: the loader never revises an issue');

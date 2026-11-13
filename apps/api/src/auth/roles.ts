@@ -6,12 +6,14 @@
 // <prefix><role> to nwfl-<role> (groups.ts), so with mensa-nwfl- a
 // mensa-nwfl-officers group arrives here as nwfl-officers.
 //
-//   nwfl-admin                  Admin: approves content; acts for any office,
+//   nwfl-admin                  Admin: reviews content and publishes it as the
+//                               Webmaster's backup; acts for any office,
 //                               recorded as on behalf of it; approves members
 //                               while the Membership seat is vacant; alone
 //                               switches the approval rule (SOLO-APPROVE)
-//   nwfl-webmaster              Webmaster: approves content
-//   nwfl-officers               every officeholder: reads drafts
+//   nwfl-webmaster              Webmaster: reviews content and publishes it
+//   nwfl-officers               every officeholder: reads drafts, and reviews
+//                               (approves or sends back) content (EDITOR A1)
 //   nwfl-office-<slug>          holds that seat: writes as that office; the
 //                               Membership Officer's seat (nwfl-office-membership)
 //                               and the Admin alone reopen a rejected sign-up (REOPEN)
@@ -95,9 +97,22 @@ export function requireAdmin(caller: Caller): void {
   if (!requireUser(caller).admin) throw denied();
 }
 
-export function requireContentApprover(caller: Caller): void {
+/**
+ * EDITOR A1: who reviews content, approving it (not publishing it) or sending it back: every officer,
+ * the Admin and the Webmaster, the readers of working items (requireEditorReader). Not an affiliate.
+ * Whether this reviewer edited the version is the workflow's check, not this one.
+ */
+export function requireReviewer(caller: Caller): Roles {
+  const roles = requireUser(caller);
+  if (!roles.officer && !roles.admin && !roles.webmaster) throw denied();
+  return roles;
+}
+
+/** EDITOR A1: who publishes approved content: the Webmaster, or the Admin as backup. */
+export function requirePublisher(caller: Caller): Roles {
   const roles = requireUser(caller);
   if (!roles.admin && !roles.webmaster) throw denied();
+  return roles;
 }
 
 export function requireMembershipApprover(caller: Caller): void {
@@ -118,9 +133,10 @@ export function requireSignupReopener(caller: Caller): void {
   if (!roles.admin && !roles.offices.includes(MEMBERSHIP_OFFICE)) throw denied();
 }
 
-/** Who may grant affiliate standing (R33): the Admin or the Webmaster. */
+/** Who may grant affiliate standing (R33): the Admin or the Webmaster. Its own rule: who publishes may change, who grants does not. */
 export function requireGrantor(caller: Caller): void {
-  requireContentApprover(caller);
+  const roles = requireUser(caller);
+  if (!roles.admin && !roles.webmaster) throw denied();
 }
 
 /** A machine client's scope, beyond the one its client config already requires. */

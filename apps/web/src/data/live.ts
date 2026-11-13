@@ -23,7 +23,7 @@
 // answer, never item by item. A refused token is asked again once as the
 // public. Nothing is kept between calls: one reader's answer never reaches
 // another's page.
-import { timestampDate } from '@bufbuild/protobuf/wkt';
+import { type Timestamp, timestampDate } from '@bufbuild/protobuf/wkt';
 import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility, type StoredFile } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { Area, EventCategory, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
@@ -199,6 +199,8 @@ function toEvent(o: EventOccurrence): CalendarEvent {
   };
 }
 
+const publishedOn = (at: Timestamp | undefined): string | undefined => (at === undefined ? undefined : centralParts(timestampDate(at)).date);
+
 /** `withheld`: a members item the reader may not read, shown by title and summary only (a teaser, D1): the box, never its body or files. */
 function itemView(item: ContentItem, render: { view?: View; signIn?: string | undefined; withheld?: boolean } = {}): ItemView {
   const live = item.live!;
@@ -209,7 +211,8 @@ function itemView(item: ContentItem, render: { view?: View; signIn?: string | un
     title: live.title,
     summary: live.summary,
     bodyHtml: render.withheld ? withheldHtml(render) : documentHtml(live.body, render),
-    publishedOn: live.approvedAt === undefined ? undefined : centralParts(timestampDate(live.approvedAt)).date,
+    // EDITOR A1: the publication time; the API leaves it out where the approval time is also the publication time.
+    publishedOn: publishedOn(live.publishedAt ?? live.approvedAt),
     source: 'submitted',
     files: render.withheld ? [] : render.view === 'members' ? [...publicPdfs(live.files), ...membersPdfs(live.files)] : publicPdfs(live.files),
   };

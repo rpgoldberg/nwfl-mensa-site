@@ -254,8 +254,9 @@ ${(i.files ?? [])
   )
   .join('\n')}
 UPDATE content_version SET status = 'ready', content_hash = sha256(convert_to(${q(JSON.stringify(body))}, 'UTF8')), ready_at = now() WHERE id = ${q(v)};
-UPDATE content_version SET status = 'approved', approved_at = now() - interval '${i.daysAgo} days', approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
+UPDATE content_version SET status = 'cleared', approved_at = now() - interval '${i.daysAgo} days', approved_by_sub = 'sub-webmaster', approval_kind = 'normal',
   public_ast = ${j(publicBody)}, search_public = to_tsvector('english', ${q(i.title)}), search_members = to_tsvector('english', ${q(i.title)}) WHERE id = ${q(v)};
+UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = ${q(v)};
 UPDATE content_item SET state = 'ready' WHERE id = ${q(i.id)};
 UPDATE content_item SET state = 'published', live_version_id = ${q(v)} WHERE id = ${q(i.id)};`;
 }

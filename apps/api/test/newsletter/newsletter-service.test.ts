@@ -44,7 +44,8 @@ describe.skipIf(!live)('NewsletterService', () => {
     await content.saveDraft({ itemId, title, summary: extra.summary ?? '', bodyMarkup: markup, visibility: extra.visibility ?? ItemVisibility.PUBLIC }, PUB);
     const hash = (await content.markReady({ itemId, editionId: extra.edition ?? editionId, targets: { website: true, newsletter: extra.newsletter ?? true, email: false } }, PUB)).item
       ?.working?.contentHash as Uint8Array;
-    const version = (await content.approve({ itemId, contentHash: hash }, WEBMASTER)).item?.live?.id as string;
+    await content.approve({ itemId, contentHash: hash }, WEBMASTER);
+    const version = (await content.publish({ itemId, contentHash: hash }, WEBMASTER)).item?.live?.id as string;
     items[slug] = { id: itemId, version };
   };
 
@@ -246,6 +247,7 @@ describe.skipIf(!live)('NewsletterService', () => {
       await content.saveDraft({ itemId: item.id, title: 'presidents report', bodyMarkup: 'A revision after print.' }, PUB);
       const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      await content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       const listed = (await newsletter.listEditionItems({ editionId }, AGENT)).items;
       expect(listed.find((i) => i.itemId === item.id)?.versionId).toBe(item.version);
       expect(JSON.stringify(await exportOf(Audience.MEMBERS))).not.toContain('A revision after print.');
@@ -257,10 +259,11 @@ describe.skipIf(!live)('NewsletterService', () => {
       await content.withdraw({ itemId: item.id }, PUB);
       expect(await listed()).not.toContain(item.version);
       expect(JSON.stringify(await exportOf(Audience.MEMBERS))).not.toContain('made-up novel');
-      // Restore opens a draft; approving it publishes the item again, but not in the printed issue.
+      // Restore opens a draft; approving and publishing it puts the item back, but not in the printed issue.
       await content.restore({ itemId: item.id }, PUB);
       const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      await content.publish({ itemId: item.id, contentHash: hash, republishWithdrawn: true }, WEBMASTER);
       expect(await listed()).not.toContain(item.version);
       expect(JSON.stringify(await exportOf(Audience.MEMBERS))).not.toContain('made-up novel');
       expect(JSON.stringify(await exportOf(Audience.PUBLIC))).not.toContain('made-up novel');
@@ -271,6 +274,7 @@ describe.skipIf(!live)('NewsletterService', () => {
       await content.saveDraft({ itemId: item.id, title: 'puzzle corner', bodyMarkup: 'Now for members.', visibility: ItemVisibility.MEMBERS }, PUB);
       const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      await content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       const pub = await exportOf(Audience.PUBLIC);
       expect(JSON.stringify(pub)).not.toContain('puzzle corner');
       expect(JSON.stringify(pub)).not.toContain('Which number comes next');
@@ -282,6 +286,7 @@ describe.skipIf(!live)('NewsletterService', () => {
       await content.saveDraft({ itemId: item.id, title: 'book club', bodyMarkup: 'Officers only now.', visibility: ItemVisibility.OFFICERS }, PUB);
       const hash = (await content.markReady({ itemId: item.id, targets: { website: true, newsletter: false, email: false } }, PUB)).item?.working?.contentHash as Uint8Array;
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      await content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       for (const audience of [Audience.PUBLIC, Audience.MEMBERS]) expect(JSON.stringify(await exportOf(audience))).not.toContain('made-up memoir');
       expect((await newsletter.listEditionItems({ editionId }, AGENT)).items.map((i) => i.itemId)).not.toContain(item.id);
     });

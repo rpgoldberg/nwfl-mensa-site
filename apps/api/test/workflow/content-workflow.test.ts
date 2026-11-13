@@ -54,11 +54,17 @@ describe.skipIf(!live)('the publishing workflow', () => {
     ((await content.markReady({ itemId, ...extra }, options)).item?.working?.contentHash ?? new Uint8Array());
   const history = async (itemId: string): Promise<string[]> => (await content.listItemHistory({ itemId }, PUB)).entries.map((e) => e.action);
   /** A published item, written by the Publications Officer and approved by the Webmaster. */
+  /** EDITOR A1: approval, then publication by the Webmaster, with the hash the approval left (a target or edition change makes a new one). */
+  const approvePublish = async (request: Parameters<typeof content.approve>[0], approver = WEBMASTER) => {
+    const approved = (await content.approve(request, approver)).item as ContentItem;
+    expect(approved.working?.status).toBe(VersionStatus.CLEARED);
+    return content.publish({ itemId: approved.id, contentHash: approved.working?.contentHash as Uint8Array, republishWithdrawn: true }, WEBMASTER);
+  };
   const published = async (markup = 'Open text :members[the gate code 4417].'): Promise<ContentItem> => {
     const item = await create();
     await save(item.id, markup);
     const hash = await ready(item.id);
-    return (await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER)).item as ContentItem;
+    return (await approvePublish({ itemId: item.id, contentHash: hash })).item as ContentItem;
   };
 
   describe('the path to published', () => {
@@ -77,7 +83,7 @@ describe.skipIf(!live)('the publishing workflow', () => {
       expect(readied.item).toMatchObject({ state: ItemState.READY });
       expect(readied.item?.working).toMatchObject({ status: VersionStatus.READY, targets: { website: true, newsletter: true, email: false } });
 
-      const approved = (await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER)).item;
+      const approved = (await approvePublish({ itemId: item.id, contentHash: hash }, WEBMASTER)).item;
       expect(approved).toMatchObject({ state: ItemState.PUBLISHED });
       expect(approved?.working).toBeUndefined();
       expect(approved?.live).toMatchObject({ status: VersionStatus.APPROVED, number: 1 });
@@ -86,7 +92,7 @@ describe.skipIf(!live)('the publishing workflow', () => {
       expect(publicView).toContain('At the park');
       expect(publicView).not.toContain('4417');
       expect(dump((await content.getPublishedItem({ slug: item.slug }, MEMBER)).item)).toContain('4417');
-      expect(await history(item.id)).toEqual(['create', 'save', 'ready', 'approve']);
+      expect(await history(item.id)).toEqual(['create', 'save', 'ready', 'approve', 'publish']);
     });
 
     it('builds both search indexes at approval, the public one without members text', async () => {
@@ -108,7 +114,7 @@ describe.skipIf(!live)('the publishing workflow', () => {
       expect(revision.item?.working).toMatchObject({ number: 2, status: VersionStatus.DRAFT });
       expect(dump((await content.getPublishedItem({ slug: item.slug })).item)).toContain('First version.');
       const hash = await ready(item.id);
-      const approved = (await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER)).item;
+      const approved = (await approvePublish({ itemId: item.id, contentHash: hash }, WEBMASTER)).item;
       expect(approved?.live).toMatchObject({ number: 2 });
       expect(dump((await content.getPublishedItem({ slug: item.slug })).item)).toContain('Second version.');
       const { rows } = await api.pool.query<{ n: number; status: string }>(`SELECT n, status FROM content_version WHERE item_id = $1 ORDER BY n`, [item.id]);
@@ -127,7 +133,7 @@ describe.skipIf(!live)('the publishing workflow', () => {
         [IMAGE, version, Buffer.alloc(32, 4)],
       );
       const hash = await ready(item.id);
-      await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      await approvePublish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       const { rows } = await api.pool.query<{ audience: string }>(`SELECT audience FROM stored_file WHERE id = $1`, [IMAGE]);
       expect(rows[0]?.audience).toBe('members');
     });
@@ -151,7 +157,7 @@ describe.skipIf(!live)('the publishing workflow', () => {
       const hash = await ready(item.id, ADMIN);
       await expect(content.approve({ itemId: item.id, contentHash: hash }, ADMIN)).rejects.toMatchObject({ code: Code.PermissionDenied });
       // The other approver signs it off.
-      expect((await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER)).item?.state).toBe(ItemState.PUBLISHED);
+      expect((await approvePublish({ itemId: item.id, contentHash: hash }, WEBMASTER)).item?.state).toBe(ItemState.PUBLISHED);
     });
 
     it('lets only the Admin break glass, with a written reason, logged as approve_self', async () => {
@@ -168,10 +174,12 @@ describe.skipIf(!live)('the publishing workflow', () => {
       await expect(content.approve({ itemId: item.id, contentHash: hash, breakGlass: true, breakGlassReason: '  ' }, ADMIN)).rejects.toMatchObject({
         code: Code.InvalidArgument,
       });
-      const approved = await content.approve({ itemId: item.id, contentHash: hash, breakGlass: true, breakGlassReason: 'Webmaster away until Monday' }, ADMIN);
+      const approved = await approvePublish({ itemId: item.id, contentHash: hash, breakGlass: true, breakGlassReason: 'Webmaster away until Monday' }, ADMIN);
       expect(approved.item?.state).toBe(ItemState.PUBLISHED);
       const entries = (await content.listItemHistory({ itemId: item.id }, WEBMASTER)).entries;
-      expect(entries.at(-1)).toMatchObject({ action: 'approve_self', actorSubject: 'sub-admin', note: 'Webmaster away until Monday' });
+      expect(entries.at(-2)).toMatchObject({ action: 'approve_self', actorSubject: 'sub-admin', note: 'Webmaster away until Monday' });
+      // EDITOR A1: the Admin's own break-glass approval is published by someone else.
+      expect(entries.at(-1)).toMatchObject({ action: 'publish', actorSubject: 'sub-webmaster' });
       const { rows } = await api.pool.query<{ approval_kind: string; approval_reason: string }>(`SELECT approval_kind, approval_reason FROM content_version WHERE id = $1`, [
         approved.item?.live?.id,
       ]);
@@ -182,31 +190,33 @@ describe.skipIf(!live)('the publishing workflow', () => {
       const item = await create();
       await save(item.id, 'Targets.');
       const hash = await ready(item.id);
-      const approved = await content.approve({ itemId: item.id, contentHash: hash, targets: { website: true, newsletter: true, email: true }, editionId }, WEBMASTER);
+      const approved = await approvePublish({ itemId: item.id, contentHash: hash, targets: { website: true, newsletter: true, email: true }, editionId }, WEBMASTER);
       expect(approved.item?.live).toMatchObject({ targets: { website: true, newsletter: true, email: true }, editionId });
-      expect(await history(item.id)).toEqual(['create', 'save', 'ready', 'targets_changed', 'edition_changed', 'approve']);
+      expect(await history(item.id)).toEqual(['create', 'save', 'ready', 'targets_changed', 'edition_changed', 'approve', 'publish']);
     });
 
     it('logs only what the approver changed: the edition alone, or the targets alone', async () => {
       const editionOnly = await create();
       await save(editionOnly.id, 'Edition only.');
       const first = await ready(editionOnly.id);
-      await content.approve({ itemId: editionOnly.id, contentHash: first, editionId }, WEBMASTER);
-      expect(await history(editionOnly.id)).toEqual(['create', 'save', 'ready', 'edition_changed', 'approve']);
+      await approvePublish({ itemId: editionOnly.id, contentHash: first, editionId }, WEBMASTER);
+      expect(await history(editionOnly.id)).toEqual(['create', 'save', 'ready', 'edition_changed', 'approve', 'publish']);
       const targetsOnly = await create();
       await save(targetsOnly.id, 'Targets only.');
       const second = await ready(targetsOnly.id);
-      await content.approve({ itemId: targetsOnly.id, contentHash: second, targets: { website: true, newsletter: false, email: false } }, WEBMASTER);
-      expect(await history(targetsOnly.id)).toEqual(['create', 'save', 'ready', 'targets_changed', 'approve']);
+      await approvePublish({ itemId: targetsOnly.id, contentHash: second, targets: { website: true, newsletter: false, email: false } }, WEBMASTER);
+      expect(await history(targetsOnly.id)).toEqual(['create', 'save', 'ready', 'targets_changed', 'approve', 'publish']);
     });
 
-    it('approves only a ready version, and only for an approver', async () => {
+    it('approves only a ready version, and only for a reviewer: an officer, the Admin or the Webmaster (EDITOR A1)', async () => {
       const item = await create();
       await expect(content.approve({ itemId: item.id, contentHash: new Uint8Array(32) }, WEBMASTER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
       await save(item.id, 'Text.');
       const hash = await ready(item.id);
-      await expect(content.approve({ itemId: item.id, contentHash: hash }, TREASURER)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(content.approve({ itemId: item.id, contentHash: hash }, MEMBER)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(content.approve({ itemId: item.id, contentHash: hash }, as('affiliate-token'))).rejects.toMatchObject({ code: Code.PermissionDenied });
       await expect(content.approve({ itemId: item.id, contentHash: hash })).rejects.toMatchObject({ code: Code.Unauthenticated });
+      expect((await content.approve({ itemId: item.id, contentHash: hash }, TREASURER)).item?.working?.status).toBe(VersionStatus.CLEARED);
     });
   });
 
@@ -327,7 +337,8 @@ describe.skipIf(!live)('the publishing workflow', () => {
       await expect(content.sendBack({ itemId: item.id, note: 'Fix it.' }, WEBMASTER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
       await ready(item.id);
       await expect(content.sendBack({ itemId: item.id, note: '   ' }, WEBMASTER)).rejects.toMatchObject({ code: Code.InvalidArgument });
-      await expect(content.sendBack({ itemId: item.id, note: 'Fix it.' }, PUB)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      // EDITOR A1: any reviewer sends back, the item's own office too; a member does not.
+      await expect(content.sendBack({ itemId: item.id, note: 'Fix it.' }, MEMBER)).rejects.toMatchObject({ code: Code.PermissionDenied });
       const sent = await content.sendBack({ itemId: item.id, note: 'The time is wrong.' }, WEBMASTER);
       expect(sent.item).toMatchObject({ state: ItemState.DRAFT });
       const entries = (await content.listItemHistory({ itemId: item.id }, PUB)).entries;
@@ -356,7 +367,7 @@ describe.skipIf(!live)('the publishing workflow', () => {
       await expect(content.withdraw({ itemId: draft.id }, PUB)).rejects.toMatchObject({ code: Code.FailedPrecondition });
     });
 
-    it('restores a withdrawn item as a new draft that stays withdrawn until approved', async () => {
+    it('restores a withdrawn item as a new draft that stays withdrawn until published', async () => {
       const item = await published('Original.');
       await expect(content.restore({ itemId: item.id }, PUB)).rejects.toMatchObject({ code: Code.FailedPrecondition });
       await content.withdraw({ itemId: item.id }, PUB);
@@ -366,10 +377,10 @@ describe.skipIf(!live)('the publishing workflow', () => {
       await expect(content.restore({ itemId: item.id }, PUB)).rejects.toMatchObject({ code: Code.FailedPrecondition });
       expect((await content.getPublishedItem({ slug: item.slug })).item?.state).toBe(ItemState.WITHDRAWN);
       const hash = await ready(item.id);
-      const approved = await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
+      const approved = await approvePublish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       expect(approved.item).toMatchObject({ state: ItemState.PUBLISHED, live: { number: 2 } });
       expect(approved.item?.withdrawnAt).toBeUndefined();
-      expect(await history(item.id)).toEqual(['create', 'save', 'ready', 'approve', 'withdraw', 'restore', 'ready', 'approve']);
+      expect(await history(item.id)).toEqual(['create', 'save', 'ready', 'approve', 'publish', 'withdraw', 'restore', 'ready', 'approve', 'publish']);
     });
   });
 
@@ -398,7 +409,9 @@ describe.skipIf(!live)('the publishing workflow', () => {
         ['create', 1, offices['publications']],
         ['save', 1, offices['publications']],
         ['ready', 1, offices['publications']],
-        ['approve', 1, ''],
+        // EDITOR A1: the Webmaster approves for the one office they hold, and publishes for none.
+        ['approve', 1, offices['webmaster']],
+        ['publish', 1, ''],
       ]);
       expect(entries[2]?.contentHash).toHaveLength(32);
     });
@@ -438,7 +451,7 @@ describe.skipIf(!live)('the publishing workflow', () => {
         rawMessage: 'March 2027 is already frozen for print: pick an open edition, then approve',
       });
       // Choosing an open edition at approval is the way through.
-      expect((await content.approve({ itemId: item.id, contentHash: hash, editionId }, WEBMASTER)).item?.state).toBe(ItemState.PUBLISHED);
+      expect((await approvePublish({ itemId: item.id, contentHash: hash, editionId }, WEBMASTER)).item?.state).toBe(ItemState.PUBLISHED);
     });
 
     it('refuses members markers in a title or a summary, which are always public', async () => {

@@ -111,6 +111,12 @@
         "number": 6,
         "type": "string",
         "label": "optional"
+      },
+      {
+        "name": "acting_as_office_id",
+        "number": 7,
+        "type": "string",
+        "label": "optional"
       }
     ]
   },
@@ -277,6 +283,13 @@
         "number": 3,
         "type": "string",
         "label": "optional"
+      },
+      {
+        "name": "version_statuses",
+        "number": 4,
+        "type": "enum",
+        "label": "repeated",
+        "message": "nwfl.mensa.v1.VersionStatus"
       }
     ]
   },
@@ -337,6 +350,29 @@
         "name": "item_id",
         "number": 1,
         "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.Publish": {
+    "input": "nwfl.mensa.v1.PublishRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "content_hash",
+        "number": 2,
+        "type": "bytes",
+        "label": "optional"
+      },
+      {
+        "name": "republish_withdrawn",
+        "number": 3,
+        "type": "bool",
         "label": "optional"
       }
     ]
@@ -733,6 +769,12 @@
       {
         "name": "note",
         "number": 2,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "acting_as_office_id",
+        "number": 3,
         "type": "string",
         "label": "optional"
       }

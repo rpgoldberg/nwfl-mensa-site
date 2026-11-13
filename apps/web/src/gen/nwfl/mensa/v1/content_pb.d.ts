@@ -553,6 +553,48 @@ export declare type ContentVersion = Message<"nwfl.mensa.v1.ContentVersion"> & {
    * @generated from field: bool caller_edited = 20;
    */
   callerEdited: boolean;
+
+  /**
+   * When it was published (made live), and so set only once it has been.
+   * Officer reads always carry it. Public reads carry it only where it is not
+   * also approved_at: there, approved_at is the publication time (every
+   * version from before 0029, and every loaded issue).
+   *
+   * @generated from field: google.protobuf.Timestamp published_at = 21;
+   */
+  publishedAt?: Timestamp | undefined;
+
+  /**
+   * Whether the caller may approve it as it stands, without break-glass: a
+   * reviewer who did not edit it, or a publisher who did while one approver
+   * is enough. The Admin's break-glass is offered on caller_edited. Officer reads.
+   *
+   * @generated from field: bool caller_may_approve = 22;
+   */
+  callerMayApprove: boolean;
+
+  /**
+   * Whether the caller may publish it as it stands: a publisher, the version
+   * approved (CLEARED), and not by the caller's own exception. Officer reads.
+   *
+   * @generated from field: bool caller_may_publish = 23;
+   */
+  callerMayPublish: boolean;
+
+  /**
+   * Who approved it, in words ("Treasurer", "Admin"); empty until approved.
+   *
+   * @generated from field: string approved_as_label = 24;
+   */
+  approvedAsLabel: string;
+
+  /**
+   * Approved by the approver's own exception (break-glass or one approver),
+   * so someone else must publish it.
+   *
+   * @generated from field: bool approval_kind_self = 25;
+   */
+  approvalKindSelf: boolean;
 };
 
 /**
@@ -834,7 +876,7 @@ export declare const ListPublishedEditionsResponseSchema: GenMessage<ListPublish
  */
 export declare type ListWorkingItemsRequest = Message<"nwfl.mensa.v1.ListWorkingItemsRequest"> & {
   /**
-   * Empty means draft and ready.
+   * Empty means draft and ready. Read only when version_statuses is empty.
    *
    * @generated from field: repeated nwfl.mensa.v1.ItemState states = 1;
    */
@@ -849,6 +891,13 @@ export declare type ListWorkingItemsRequest = Message<"nwfl.mensa.v1.ListWorking
    * @generated from field: string edition_id = 3;
    */
   editionId: string;
+
+  /**
+   * The working version's status: DRAFT, READY or CLEARED; empty means all three.
+   *
+   * @generated from field: repeated nwfl.mensa.v1.VersionStatus version_statuses = 4;
+   */
+  versionStatuses: VersionStatus[];
 };
 
 /**
@@ -1102,6 +1151,14 @@ export declare type SendBackRequest = Message<"nwfl.mensa.v1.SendBackRequest"> &
    * @generated from field: string note = 2;
    */
   note: string;
+
+  /**
+   * The office the caller acts for: one they hold. Empty means their one
+   * office if they hold exactly one, else none.
+   *
+   * @generated from field: string acting_as_office_id = 3;
+   */
+  actingAsOfficeId: string;
 };
 
 /**
@@ -1167,6 +1224,14 @@ export declare type ApproveRequest = Message<"nwfl.mensa.v1.ApproveRequest"> & {
    * @generated from field: string break_glass_reason = 6;
    */
   breakGlassReason: string;
+
+  /**
+   * The office the caller approves for: one they hold. Empty means their one
+   * office if they hold exactly one, else none.
+   *
+   * @generated from field: string acting_as_office_id = 7;
+   */
+  actingAsOfficeId: string;
 };
 
 /**
@@ -1190,6 +1255,52 @@ export declare type ApproveResponse = Message<"nwfl.mensa.v1.ApproveResponse"> &
  * Use `create(ApproveResponseSchema)` to create a new message.
  */
 export declare const ApproveResponseSchema: GenMessage<ApproveResponse>;
+
+/**
+ * @generated from message nwfl.mensa.v1.PublishRequest
+ */
+export declare type PublishRequest = Message<"nwfl.mensa.v1.PublishRequest"> & {
+  /**
+   * @generated from field: string item_id = 1;
+   */
+  itemId: string;
+
+  /**
+   * The hash the publisher saw. A version changed since then is not published.
+   *
+   * @generated from field: bytes content_hash = 2;
+   */
+  contentHash: Uint8Array;
+
+  /**
+   * Required to put back on the website an item that was taken down.
+   *
+   * @generated from field: bool republish_withdrawn = 3;
+   */
+  republishWithdrawn: boolean;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.PublishRequest.
+ * Use `create(PublishRequestSchema)` to create a new message.
+ */
+export declare const PublishRequestSchema: GenMessage<PublishRequest>;
+
+/**
+ * @generated from message nwfl.mensa.v1.PublishResponse
+ */
+export declare type PublishResponse = Message<"nwfl.mensa.v1.PublishResponse"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.ContentItem item = 1;
+   */
+  item?: ContentItem | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.PublishResponse.
+ * Use `create(PublishResponseSchema)` to create a new message.
+ */
+export declare const PublishResponseSchema: GenMessage<PublishResponse>;
 
 /**
  * @generated from message nwfl.mensa.v1.WithdrawRequest
@@ -1825,6 +1936,15 @@ export enum VersionStatus {
    * @generated from enum value: VERSION_STATUS_DISCARDED = 5;
    */
   DISCARDED = 5,
+
+  /**
+   * Approved by a reviewer, not yet published: "Approved, ready to publish".
+   * Publish makes it APPROVED (live); an edit, a send-back or a withdraw of
+   * the item returns it to DRAFT and the approval no longer counts.
+   *
+   * @generated from enum value: VERSION_STATUS_CLEARED = 6;
+   */
+  CLEARED = 6,
 }
 
 /**
@@ -2080,6 +2200,16 @@ export declare const ContentService: GenService<{
     methodKind: "unary";
     input: typeof ApproveRequestSchema;
     output: typeof ApproveResponseSchema;
+  },
+  /**
+   * The Webmaster, or the Admin as backup: an approved (CLEARED) version goes live.
+   *
+   * @generated from rpc nwfl.mensa.v1.ContentService.Publish
+   */
+  publish: {
+    methodKind: "unary";
+    input: typeof PublishRequestSchema;
+    output: typeof PublishResponseSchema;
   },
   /**
    * @generated from rpc nwfl.mensa.v1.ContentService.Withdraw

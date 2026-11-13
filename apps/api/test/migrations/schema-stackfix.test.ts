@@ -123,10 +123,12 @@ describe.skipIf(!live)('schema after STACK-FIX', () => {
       ).id;
     const approve = async (id: string): Promise<void> => {
       await app.query(`UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [id, HASH]);
+      // Approved, then published: two steps since 0029 (EDITOR A1).
       await app.query(
-        `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`,
+        `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`,
         [id],
       );
+      await app.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [id]);
     };
     const inOne = async (statements: Array<[string, unknown[]]>): Promise<string> => {
       await app.query('BEGIN');
@@ -154,7 +156,8 @@ describe.skipIf(!live)('schema after STACK-FIX', () => {
       await app.query(`UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [v2, HASH]);
       expect(
         await inOne([
-          [`UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`, [v2]],
+          [`UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`, [v2]],
+          [`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'w' WHERE id = $1`, [v2]],
           [`UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, v2]],
           [`UPDATE content_version SET status = 'superseded' WHERE id = $1`, [v1]],
         ]),
@@ -166,15 +169,12 @@ describe.skipIf(!live)('schema after STACK-FIX', () => {
       const v2 = await newVersion(itemId);
       // Approved but never made live: the commit is refused.
       expect(await failure(app, `UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [v2, HASH])).toBe('ok');
-      expect(
-        await failure(app, `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`, [
-          v2,
-        ]),
-      ).toMatch(/live version .* is not its newest approved version/);
-      // The roll-back the challenger did: both approved, live moved to v2, then back to v1.
+      expect(await failure(app, `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`, [v2])).toBe('ok');
+      expect(await failure(app, `UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'w' WHERE id = $1`, [v2])).toMatch(/live version .* is not its newest approved version/);
+      // The roll-back the challenger did: both approved, live moved to v2, then back to v1 (v2 is still cleared).
       expect(
         await inOne([
-          [`UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', public_ast = '{"blocks": []}' WHERE id = $1`, [v2]],
+          [`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'w' WHERE id = $1`, [v2]],
           [`UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, v2]],
           [`UPDATE content_item SET live_version_id = $2 WHERE id = $1`, [itemId, v1]],
         ]),

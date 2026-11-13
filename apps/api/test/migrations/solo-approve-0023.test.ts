@@ -58,10 +58,11 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
     await app.query(`UPDATE content_version SET status = 'ready', content_hash = $2, ready_at = now() WHERE id = $1`, [id, HASH]);
     return { itemId, id };
   };
+  // Since 0029 (EDITOR A1) approval makes a version cleared, and the four-eyes guard fires there.
   const approve = (id: string, by: string, kind: string, rule: string | null, reason: string | null = null, client = app): Promise<string> =>
     sqlstate(
       client,
-      `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = $2, approval_kind = $3, approval_reason = $4, approval_rule = $5,
+      `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = $2, approval_kind = $3, approval_reason = $4, approval_rule = $5,
          public_ast = '{"blocks": []}' WHERE id = $1`,
       [id, by, kind, reason, rule],
     );
@@ -427,7 +428,7 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
 
     it('refuses an approval that names a rule other than the one in force', async () => {
       const v = await readyVersion();
-      expect(await failure(app, `UPDATE content_version SET status = 'approved', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', approval_rule = 'one_approver', public_ast = '{"blocks": []}' WHERE id = $1`, [v.id])).toMatch(
+      expect(await failure(app, `UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'w', approval_kind = 'normal', approval_rule = 'one_approver', public_ast = '{"blocks": []}' WHERE id = $1`, [v.id])).toMatch(
         /approval rule/,
       );
       expect(await approve(v.id, 'sub-webmaster', 'normal', 'one_approver')).toBe(STATE);
@@ -455,7 +456,7 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
       await reset();
     });
 
-    it('holds a rule only on an approved or superseded version, and self_single only with one_approver', async () => {
+    it('holds a rule only on an approved (cleared since 0029), published or superseded version, and self_single only with one_approver', async () => {
       const v = await readyVersion();
       expect(await sqlstate(app, `UPDATE content_version SET approval_rule = 'two_person' WHERE id = $1`, [v.id])).toBe(CHECK);
       const draft = await one<{ id: string }>(
@@ -464,7 +465,8 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
         [v.itemId, officeId],
       );
       expect(await sqlstate(app, `UPDATE content_version SET approval_rule = 'one_approver' WHERE id = $1`, [draft.id])).toBe(CHECK);
-      expect(await sqlstate(app, `UPDATE content_version SET approval_kind = 'self_single' WHERE id = $1`, [draft.id])).toBe('ok');
+      // Since 0029 a draft carries no approval at all (content_version_unapproved_carries_no_approval).
+      expect(await sqlstate(app, `UPDATE content_version SET approval_kind = 'self_single' WHERE id = $1`, [draft.id])).toBe(CHECK);
       expect(await sqlstate(app, `UPDATE content_version SET approval_kind = 'self_none' WHERE id = $1`, [draft.id])).toBe(CHECK);
     });
 
@@ -478,8 +480,12 @@ describe.skipIf(!live)('0023: SOLO-APPROVE', () => {
     });
 
     it('replaces the freeze with 0007\'s body plus the rule, keeping the pinned search_path', async () => {
-      const { src, config } = await one<{ src: string; config: string[] }>(owner, `SELECT prosrc AS src, proconfig AS config FROM pg_proc WHERE proname = 'content_version_freeze'`);
+      // 0029 (EDITOR A1) replaced the freeze again, so 0023's own body is read from its file; the search_path stays pinned.
+      const { config } = await one<{ config: string[] }>(owner, `SELECT proconfig AS config FROM pg_proc WHERE proname = 'content_version_freeze'`);
       expect(config).toEqual(['search_path=pg_catalog, public, pg_temp']);
+      const own = readFileSync(path.join(MIGRATIONS, '0023_solo_approve.sql'), 'utf8');
+      const src = /CREATE OR REPLACE FUNCTION content_version_freeze\(\) RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS \$fn\$([\s\S]*?)\$fn\$/.exec(own)?.[1] as string;
+      expect(src).toBeDefined();
       const file = readFileSync(path.join(MIGRATIONS, '0007_a2_fix.sql'), 'utf8');
       const body = /CREATE OR REPLACE FUNCTION content_version_freeze\(\) RETURNS trigger LANGUAGE plpgsql AS \$fn\$([\s\S]*?)\$fn\$/.exec(file)?.[1];
       const squash = (s: string): string => s.replace(/\s+/g, ' ').trim();

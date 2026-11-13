@@ -84,8 +84,10 @@ export interface ItemRow {
   on_behalf_of: string | null;
   ready_at: Date | null;
   approved_at: Date;
-  /** approved_at to the microsecond, for the page token: a JS Date keeps milliseconds only. */
-  approved_key: string;
+  /** When it went live (0029): set on every published or superseded version, equal to approved_at on those from before 0029. */
+  published_at: Date;
+  /** published_at to the microsecond, for the page token: a JS Date keeps milliseconds only. */
+  published_key: string;
 }
 
 interface FileRow {
@@ -112,8 +114,8 @@ export function itemQuery(audience: Audience, versions: 'live' | 'any' = 'live')
     select: `SELECT i.id, i.slug, i.kind, i.office_id, i.state, i.withdrawn_at,
        v.id AS version_id, v.n, v.status, v.title, v.summary, v.visibility, ${body} AS body, v.content_hash,
        v.target_website, v.target_newsletter, v.target_email, v.edition_id, v.print_as_is, v.on_behalf_of,
-       v.ready_at, v.approved_at,
-       to_char(v.approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS approved_key
+       v.ready_at, v.approved_at, v.published_at,
+       to_char(v.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS published_key
      FROM content_item i JOIN content_version v ON ${versions === 'live' ? 'v.id = i.live_version_id' : 'v.item_id = i.id'}`,
     visible: audience === 'officers' ? 'true' : `v.visibility <> 'officers'`,
   };
@@ -165,6 +167,10 @@ function itemMessage(row: ItemRow, audience: Audience, files: FileRow[], lens: L
       onBehalfOf: bylineFor(row.on_behalf_of, subjects, lens),
       ...(row.ready_at !== null ? { readyAt: timestampFromDate(row.ready_at) } : {}),
       approvedAt: timestampFromDate(row.approved_at),
+      // EDITOR A1: when the version went live, sent only where it is not also the approval time. Every version from
+      // before 0029 (backfilled equal) and every loaded issue (approved and published in one transaction) is dated by
+      // approvedAt, as before, so their ledger rows (a hash over this message) still re-render byte for byte.
+      ...(row.published_at.getTime() !== row.approved_at.getTime() ? { publishedAt: timestampFromDate(row.published_at) } : {}),
       files: files
         .filter((file) => file.version_id === row.version_id)
         .map((file) =>
@@ -303,8 +309,8 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
              WHERE i.state = 'published' AND ${query.visible}
                AND ($1::text IS NULL OR i.kind = $1)
                AND ($2::uuid IS NULL OR i.office_id = $2)
-               AND ($3::timestamptz IS NULL OR (v.approved_at, i.id) < ($3, $4::uuid))
-             ORDER BY v.approved_at DESC, i.id DESC
+               AND ($3::timestamptz IS NULL OR (v.published_at, i.id) < ($3, $4::uuid))
+             ORDER BY v.published_at DESC, i.id DESC
              LIMIT $5`,
             [KIND_NAMES.get(request.kind) ?? null, request.officeId === '' ? null : request.officeId, cursor?.[0] ?? null, cursor?.[1] ?? null, size + 1],
           );
@@ -316,14 +322,14 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
           }
           const last = rows.at(-1);
           if (rows.length <= size || kept.length > size || last === undefined) break;
-          cursor = [last.approved_key, last.id];
+          cursor = [last.published_key, last.id];
         }
         const page = kept.slice(0, size);
         const last = page.at(-1);
         const files = await filesFor(db, page, audience);
         return {
           items: page.map((row) => itemMessage(row, audience, files, lenses.get(row.id) as Lens)),
-          nextPageToken: kept.length > size && last !== undefined ? encodeToken('items', [last.approved_key, last.id]) : '',
+          nextPageToken: kept.length > size && last !== undefined ? encodeToken('items', [last.published_key, last.id]) : '',
         };
       },
 
