@@ -520,7 +520,7 @@ html { scroll-padding-bottom: 72px; }
   .top-nav .nav-list { grid-template-columns: repeat(4, auto); gap: 2px; }
   .top-nav .nav-link { padding: 0 14px; border-radius: 8px; }
   .top-nav .nav-label { font-size: 17px; }
-  /* The current tab: the accent bar on top and bottom alike (Ross, 2026-10-23). */
+  /* The current tab: the accent bar on top and bottom alike (the editor, 2026-10-23). */
   .top-nav .nav-link[aria-current="page"] { box-shadow: inset 0 4px 0 var(--accent), inset 0 -4px 0 var(--accent); }
   .site-header__bar { gap: 8px 16px; padding: 10px 16px; }
   .wordmark { margin-right: 0; }
@@ -574,7 +574,7 @@ main:focus:not(:focus-visible) { outline: none; }
 .crumbs [aria-current="page"] { color: var(--muted); }
 
 /* W-LOOK3: one slim line where the Home crumb is the way back (the reader, Events, News): Home with
-   its icon (a back chevron on a phone, as Ross's mockup has it), and no separate Back link. */
+   its icon (a back chevron on a phone, as the editor's mockup has it), and no separate Back link. */
 .crumbs--slim { padding-top: 4px; }
 .crumbs--slim li, .crumbs--slim a { min-height: 44px; }
 .crumb-home { gap: 6px; min-width: 44px; }
@@ -945,7 +945,7 @@ html[data-size="175"] .size-max-note { display: block; }
   .dt b { font-size: 1.25rem; }
 }
 
-/* EVENTS2 (Ross's concept, 11-10): /events. One toolbar, the day tiles (the list's ribbon, the week's
+/* EVENTS2 (the editor's concept, 11-10): /events. One toolbar, the day tiles (the list's ribbon, the week's
    strip), the month grid, the event cards, "Add our calendar" and the icon legend. Events-scoped:
    only /events uses these classes. Cover screen first (344 px), then 320 px, a tablet, a desktop. */
 main > .calendar { max-width: none; }
@@ -965,7 +965,7 @@ main > .calendar { max-width: none; }
   .calhead h1 { font-size: max(var(--fs-body), min(var(--fs-h1), 10.5vw)); }
   .calhead .caltool { margin-left: 0; }
 }
-/* The toolbar. EV1 round 2 (Ross, 11-12): it changes with its room, chosen by the calendar's width
+/* The toolbar. EV1 round 2 (the editor, 11-12): it changes with its room, chosen by the calendar's width
    (a container), never the device or the text size, and it never squeezes the words. Where they fit
    one row: "‹ Nov 29 – Dec 5 ›" (or "‹ Nov 29–Dec 5 ›") and List | Week | Month. Where they do not:
    ‹ Week ▾ ›, the switch folded into one picker of the same links and the range out of the toolbar,
@@ -1261,7 +1261,7 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
    pairs (dl.facts--grid): as many to a row as fit at 8.5rem each, never more than four, so two on a
    phone and one at the largest text on a 320 px screen. A value wraps, even inside a long email, and
    is never cut short. The membership check's sentence runs across the card. The cards are set closer
-   than the site's other cards (Ross: less wasted height), their type at full size. */
+   than the site's other cards (the editor: less wasted height), their type at full size. */
 .signup-card, .rejected-card { gap: var(--space-2); margin: var(--space-3) 0; padding: var(--space-3); }
 .signup-who { display: grid; gap: 0; }
 .signup-who > * { margin: 0; }
@@ -1318,7 +1318,7 @@ dl.facts--grid .facts__wide { grid-column: 1 / -1; }
 .out-count { margin: 0; font-weight: 700; font-size: 1.25rem; }
 .out-stop { min-width: 8rem; }
 
-/* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). W-LOOK3, after Ross's
+/* PDFVIEW: the issue read in the site (/read/<id>, public/scripts/viewer.js). W-LOOK3, after the editor's
    mockup: ONE rounded, thin-bordered frame whose top edge is the bar, a single slim row sized like the
    chrome (px): back, the page picker and next; zoom out, the zoom picker and zoom in; Fit width and Fit
    page, the one in force pressed; Download; Open in another app. Every target is 44 px at least (WCAG
@@ -1463,7 +1463,7 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 @media (forced-colors: active) {
   .vpick__choice[aria-current="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
 }
-/* Room for the words (Ross's mockup, a computer): beside Fit, Download and Open. READER2: the page box,
+/* Room for the words (the editor's mockup, a computer): beside Fit, Download and Open. READER2: the page box,
    first, last and search take more of the row, so the words need a wider frame (measured at each size). */
 @container vbar (width >= 1110px) {
   .vbtn__word { display: inline; }
@@ -1647,7 +1647,7 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .viewer-find__note:empty { display: none; }
 
 /* The More menu: on a narrow bar it holds a copy of each control the bar has no room for, the later ones
-   first (Ross's order: page controls, then search, then Fit, then zoom, then Download and Open; Light pages
+   first (the editor's order: page controls, then search, then Fit, then zoom, then Download and Open; Light pages
    with these last). Only once the script has wired it (viewer--js): without it the bar keeps its links. */
 .vmore { display: none; }
 /* Anchored to the bar's right edge, not to its button, so it stays in the frame wherever the button is. */

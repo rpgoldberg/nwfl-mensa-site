@@ -162,7 +162,7 @@ test.describe('/news with no issue published yet', () => {
   });
 });
 
-// Ross, 11-04, then PDFVIEW (11-05): the notice that these are the public copies, with some personal
+// The editor, 11-04, then PDFVIEW (11-05): the notice that these are the public copies, with some personal
 // details hidden, and that members can sign in for the full issue. Fix 1: once, above the issue list,
 // not by each issue. "sign in" is a link only where sign-in works (the main site), never on Home;
 // elsewhere the notice is the same, in plain text.

@@ -47,7 +47,7 @@ describe('the notices', () => {
     expect(NEEDS_SCRIPT).toBe('Reading the issue on this page needs JavaScript, which is off or blocked. You can still open it in another app, or download it.');
   });
 
-  // W-LOOK3, Ross's mockup: on /read the public copy is a pill and one short line beside it.
+  // W-LOOK3, the editor's mockup: on /read the public copy is a pill and one short line beside it.
   it("on /read, the public copy's pill and its line, which keeps \"sign in\" for the link", () => {
     expect(PUBLIC_TAG).toBe('Public copy');
     expect(PUBLIC_TAG_NOTE).toBe('Members can sign in for the full issue');

@@ -85,7 +85,7 @@ export type OutView =
       mail: boolean;
       /** A mail link's address. */
       address?: string;
-      /** A login-walled site's name (or its host), for a link Ross confirmed by hand. */
+      /** A login-walled site's name (or its host), for a link the editor confirmed by hand. */
       loginWalled?: string;
       checked: string | undefined;
       back: string;

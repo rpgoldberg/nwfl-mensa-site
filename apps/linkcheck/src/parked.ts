@@ -1,11 +1,11 @@
 // ============================================================================
-// Parked or for-sale domains (SPEC D4), from several signals; any one means drop, and Ross confirms:
+// Parked or for-sale domains (SPEC D4), from several signals; any one means drop, and the editor confirms:
 //   - parking-ns     the domain's nameservers are a parking provider's;
 //   - marketplace    the final page is on a domain marketplace;
 //   - for-sale-text  the page's visible text says the domain is for sale or parked;
 //   - parking-feed   a near-empty page that only loads a parking ad feed.
 // The page is read as text only (tags, scripts, styles and comments stripped by a linear scan), never run.
-// The lists are a starting set, meant to grow as Ross's answers show what they miss.
+// The lists are a starting set, meant to grow as the editor's answers show what they miss.
 // ============================================================================
 import { hostIsUnder } from './urls.js';
 

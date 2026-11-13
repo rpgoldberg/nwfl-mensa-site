@@ -494,7 +494,7 @@ export async function scaledTypeFixture(): Promise<Uint8Array> {
   return fitPdf(`BT /F1 1 Tf 12 0 0 12 20 60 Tm ${BLUE} (Please call ) Tj ${RED} (Quillon Brask) Tj ${BLUE} ( today.) Tj ET`);
 }
 
-/** The page the orchestrator shows Ross: a short notice with names, a phone number and an address. */
+/** The page the orchestrator shows the editor: a short notice with names, a phone number and an address. */
 export async function lookFixture(): Promise<Uint8Array> {
   const doc = await PDFDocument.create({ updateMetadata: false });
   const page = doc.addPage([432, 216]);

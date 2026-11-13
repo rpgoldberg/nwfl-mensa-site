@@ -270,7 +270,7 @@ describe.skipIf(!live)('ContentService.GetLinkTarget', () => {
       });
     });
 
-    it('says when Ross confirmed a login-walled link by hand', async () => {
+    it('says when the editor confirmed a login-walled link by hand', async () => {
       expect(await ask(LINKS.social)).toMatchObject({ status: LinkTargetStatus.ACTIVE, host: 'www.social.example', confirm: true });
     });
 

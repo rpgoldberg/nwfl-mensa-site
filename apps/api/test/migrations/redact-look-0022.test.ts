@@ -1,5 +1,5 @@
 // REDACT-LOOK: 0022 moves the public's member_name and image cells to "show"
-// on Ross's 11-02 decision, through the same change history the narrow path
+// on the editor's 11-02 decision, through the same change history the narrow path
 // writes (0012, 0013), so the as-of policy (lens.ts policyCells) and the
 // publication ledger still read the past right. Each case gets a database
 // migrated up to just before 0022, is set up as the case needs, then gets
@@ -93,7 +93,7 @@ async function item(db: Db, slug: string): Promise<string> {
 const wholeItemMark = (db: Db, subject: string, category: string) =>
   db.app.query(`SELECT redaction_mark_add('content_item', $1, NULL, NULL, $2, $3, $4, NULL)`, [subject, category, OFFICER.sub, OFFICER.groups]);
 
-describe.skipIf(!live)('0022: the public copy shows member names and pictures (Ross, 11-02)', () => {
+describe.skipIf(!live)('0022: the public copy shows member names and pictures (the editor, 11-02)', () => {
   describe('on a database with the 0012 defaults', () => {
     let db: Db;
     let before: Date;
@@ -145,7 +145,7 @@ describe.skipIf(!live)('0022: the public copy shows member names and pictures (R
       ]);
     });
 
-    it('records exactly two applied changes, proposed by the migration and approved on Ross\'s decision, decided and approved at one stamp', async () => {
+    it('records exactly two applied changes, proposed by the migration and approved on the editor\'s decision, decided and approved at one stamp', async () => {
       const { rows } = await db.owner.query<{ category: string; from_action: string; to_action: string; proposed_by_sub: string; approved_by_sub: string; same: boolean }>(
         `SELECT category, from_action, to_action, proposed_by_sub, approved_by_sub, decided_at = approved_at AS same
            FROM redaction_change WHERE status = 'applied' ORDER BY category`,
@@ -270,7 +270,7 @@ describe.skipIf(!live)('0022: the public copy shows member names and pictures (R
     });
   });
 
-  describe('refuses, applying nothing, so Ross decides', () => {
+  describe('refuses, applying nothing, so the editor decides', () => {
     let db: Db | undefined;
     afterAll(() => close(db));
 

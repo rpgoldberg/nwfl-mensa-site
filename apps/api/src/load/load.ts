@@ -139,7 +139,7 @@ export function issueContract(issue: Issue): { slug: string; title: string; summ
   };
 }
 
-/** The marks' hash, as Ross approves it at H7: SHA-256 of the canonical JSON of the marks, sorted by category, then quote. */
+/** The marks' hash, as the editor approves it at H7: SHA-256 of the canonical JSON of the marks, sorted by category, then quote. */
 export function marksSha256(marks: readonly Mark[]): string {
   const sorted = marks
     .map((mark) => ({ category: mark.category, quote: mark.quote }))

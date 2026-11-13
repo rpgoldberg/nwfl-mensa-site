@@ -273,7 +273,7 @@ describe.skipIf(!live)('the issue loader, on the database', () => {
       expect(sha256(bytes).equals(sha256(members))).toBe(false);
       const text = await extractAll(bytes);
       expect(text).toContain(KEPT);
-      // Ross, 11-02: the public sees member names; phones, addresses and e-mails stay withheld.
+      // The editor, 11-02: the public sees member names; phones, addresses and e-mails stay withheld.
       expect(text).toContain(NAME);
       for (const quote of [PHONE, ADDRESS, EMAIL]) expect(text).not.toContain(quote);
       expect(text).not.toContain(MEMBERS_ONLY);

@@ -6,7 +6,7 @@
 //
 // Accessibility first: every control is a visible button, link or text box, 44 px at least, in the tab
 // order, in the page's own theme, each with a spoken name and a tooltip; no gesture is needed (pinch and
-// scroll still work, as the browser's own). W-LOOK3, after Ross's mockup: one slim row on the frame's top
+// scroll still work, as the browser's own). W-LOOK3, after the editor's mockup: one slim row on the frame's top
 // edge. READER2: first, back, the page number in a box ("3 of 12": type one, then Enter, or just leave the
 // box, as an iPhone's number pad has no Enter) and next and last; search; zoom out, a zoom picker of the
 // steps and zoom in, and on a computer a hand tool; Fit width and Fit page, the one in force pressed;
@@ -96,7 +96,7 @@ export const DRAGGING = 'viewer--dragging';
 export const LIGHT_PAGES = 'viewer--light-pages';
 /**
  * The bar's groups (data-ov) that move into the More menu when its controls would not sit on one row, the
- * first first: Light pages, then Download and Open, then zoom, then Fit, then search (Ross's order, from
+ * first first: Light pages, then Download and Open, then zoom, then Fit, then search (the editor's order, from
  * its end). Each moved has viewer--shed-<group> on the viewer, and the More button shows with MORE.
  */
 export const SHED = /** @type {const} */ (['tone', 'file', 'zoom', 'fit', 'find']);

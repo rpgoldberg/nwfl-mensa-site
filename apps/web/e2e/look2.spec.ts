@@ -1,4 +1,4 @@
-// W-LOOK2: Ross's review on his Android phone, as the installed app, signed in as an admin (2026-11-07).
+// W-LOOK2: the editor's review on an Android phone, as the installed app, signed in as an admin (2026-11-07).
 // (A) the header took three rows; (B) the reader's controls took half the screen; (C) a phone had no
 // month calendar; (D) "Coming up" listed today's finished event as "Past". Phone width here is 390 x 844
 // in both projects; the wide screen is 1280. axe checks /, /events, /news and /read/<id> signed out and
@@ -200,7 +200,7 @@ test.describe('(A) the header on a wide screen', () => {
   });
 });
 
-// W-LOOK3 (Ross's mockup) replaced W-LOOK2's bar: icons alone on a phone, each with a spoken name and a
+// W-LOOK3 (the editor's mockup) replaced W-LOOK2's bar: icons alone on a phone, each with a spoken name and a
 // tooltip, 44 px targets (WCAG 2.5.5) for this bar only, one row of at most 52 px; e2e/look3.spec.ts has the rest.
 test.describe('(B) the reader on a phone', () => {
   test.use({ viewport: PHONE });
@@ -276,7 +276,7 @@ test.describe('(B) the reader on a phone', () => {
     expect((bottom - (bar.y + bar.height)) / PHONE.height).toBeGreaterThanOrEqual(0.7);
   });
 
-  // READER2: the page controls and search take the phone's row (Ross's order); Open in another app and
+  // READER2: the page controls and search take the phone's row (the editor's order); Open in another app and
   // Download move into the More menu, each with its icon and its word.
   test('Open in another app and Download are in the More menu on a phone, each with its icon and its name', async ({ page }) => {
     await page.goto(READ);
@@ -294,7 +294,7 @@ test.describe('(B) the reader on a phone', () => {
 
 // (C) and (D), the month grid and Coming up: EVENTS2 replaced the page; e2e/events2.spec.ts carries them over.
 
-test.describe('axe on the pages Ross reviewed', () => {
+test.describe('axe on the pages the editor reviewed', () => {
   for (const [name, viewport] of [['phone', PHONE], ['wide', DESKTOP]] as const) {
     for (const theme of ['light', 'dark', 'contrast-yellow'] as const) {
       test(`${name}, ${theme}: signed out, then signed in with the Account menu open`, async ({ page, context, baseURL }) => {

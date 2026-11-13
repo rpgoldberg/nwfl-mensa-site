@@ -1,5 +1,5 @@
 // ============================================================================
-// BOXLABEL (Ross, 11-05): what each redaction box says, replacing "withheld".
+// BOXLABEL (the editor, 11-05): what each redaction box says, replacing "withheld".
 //
 //   in the public copy, text members can see   "Members Only" where it fits
 //                                              at a readable size, else

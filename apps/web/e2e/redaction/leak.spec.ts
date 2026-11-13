@@ -5,7 +5,7 @@
 // policy-redacted fields (a private venue's name and link, a member's home); a
 // whole-item mark; an item the public policy hides; and an accented name in an
 // item's slug, which the API must replace by the item's id. REDACT-LOOK (0022,
-// Ross's 11-02 decision): the public is shown members' names, so the canaries
+// The editor's 11-02 decision): the public is shown members' names, so the canaries
 // are marked as phones, addresses and e-mails, which it still has withheld,
 // and a marked name and a marked on-behalf-of byline must now reach it.
 //

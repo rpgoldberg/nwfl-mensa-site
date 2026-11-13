@@ -1,4 +1,4 @@
-// PROFILE-ID (Ross, 11-08): what a person typed at sign-up (first name, last name, membership number) is
+// PROFILE-ID (the editor, 11-08): what a person typed at sign-up (first name, last name, membership number) is
 // kept on the one sign-up row in every state, shown to the approvers and the Admin in the queue and the
 // rejections so they can judge it, and, once approved, is the member's profile: the names editable by
 // the member, the number never. It reverses A5's erasure. Walked here: every write that ends the wait

@@ -143,4 +143,45 @@ describe('gitleaks', () => {
       expect(log.out).not.toMatch(/Add config/);
     });
   });
+
+  describe('the hook in a linked worktree', () => {
+    let base: string;
+    let tree: string;
+    let canRun = false;
+
+    beforeAll(async () => {
+      canRun = await dockerUp();
+      base = mkdtempSync(path.join(os.tmpdir(), 'nwfl-gitleaks-wt-'));
+      const main = path.join(base, 'main');
+      tree = path.join(base, 'tree');
+      mkdirSync(main);
+      for (const args of [
+        ['init', '-q', '-b', 'main'],
+        ['config', 'user.name', 'Test Author'],
+        ['config', 'user.email', 'author@example.org'],
+        ['config', 'commit.gpgsign', 'false'],
+        ['config', 'core.hooksPath', HOOKS],
+        ['commit', '-q', '--allow-empty', '-m', 'Start'],
+        ['worktree', 'add', '-q', '-b', 'side', tree],
+      ]) {
+        await run('git', args, main);
+      }
+    });
+
+    afterAll(() => {
+      rmSync(base, { recursive: true, force: true });
+    });
+
+    it('scans the staged change and refuses a token', async ({ skip }) => {
+      if (!canRun) skip();
+      const token = `gh${'p_'}${randomBytes(27).toString('base64').replace(/[^A-Za-z0-9]/g, 'x').slice(0, 36)}`;
+      writeFileSync(path.join(tree, 'config.env'), `GITHUB_TOKEN=${token}\n`);
+      await run('git', ['add', 'config.env'], tree);
+      const commit = await run('git', ['commit', '-q', '-m', 'Add config'], tree);
+      expect(commit.out).not.toMatch(/not a git repository/);
+      expect(commit.code).not.toBe(0);
+      expect(commit.out).toMatch(/leaks found: [1-9]/);
+      expect(commit.out).not.toContain(token);
+    });
+  });
 });

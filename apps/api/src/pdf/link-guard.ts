@@ -11,7 +11,7 @@
 //   - under an image policy that does not show pictures ("blur", "hide"),
 //     every picture the original draws, on every page, on the page or in a
 //     form XObject at any depth, with its annotations drawn in as the engine
-//     draws them (Ross's rule: a link over anything withheld is removed);
+//     draws them (the editor's rule: a link over anything withheld is removed);
 //   - under those policies too (fix round 2, F1), the WHOLE of every page
 //     whose resources reach a tiling pattern that holds a picture: a picture
 //     XObject, or an inline picture in its content, in the pattern itself or

@@ -88,7 +88,7 @@ export interface MoreGroup {
   rows: readonly MoreRow[];
 }
 
-/** The More page: three groups of rows (Ross approved, 2026-10-24). Every page in MORE_PAGES is a row. */
+/** The More page: three groups of rows (the editor approved, 2026-10-24). Every page in MORE_PAGES is a row. */
 export const MORE_GROUPS: readonly MoreGroup[] = [
   {
     id: 'club',

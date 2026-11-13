@@ -4,7 +4,7 @@
 //
 // For each Link annotation with a URL: its 1-based page, its rect clamped to the page's crop box and
 // rounded to 0.01, the URL, and the text drawn under it (whole text items that meet the rect, for
-// Ross's sheet only; never written to links.json). Also the plain-text URLs no link carries.
+// The editor's sheet only; never written to links.json). Also the plain-text URLs no link carries.
 //
 // Fail closed, and bounded:
 //   - a file over 10 MiB, not a PDF, unreadable, over 500 pages, with more than 500 links or more than

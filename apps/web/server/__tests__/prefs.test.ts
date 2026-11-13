@@ -70,7 +70,7 @@ describe('readPrefs', () => {
     for (const size of SIZES) expect(readPrefs(`${SIZE_COOKIE}=${size}`).size).toBe(size);
   });
 
-  it("maps the old five-step sizes to the new steps: 1 is 100 %, 2 is 115 %, 3 is 140 %, 4 and 5 are 175 % (Ross's map)", () => {
+  it("maps the old five-step sizes to the new steps: 1 is 100 %, 2 is 115 %, 3 is 140 %, 4 and 5 are 175 % (the editor's map)", () => {
     for (const [old, now] of [['1', SIZES[3]], ['2', SIZES[4]], ['3', SIZES[5]], ['4', SIZES[6]], ['5', SIZES[6]]] as const) {
       expect(readPrefs(`${SIZE_COOKIE}=${old}`).size, `old size ${old}`).toBe(now);
     }
@@ -112,7 +112,7 @@ describe('readPrefs', () => {
 
 describe('SIZES and THEMES', () => {
   it('are the seven sizes, 100 % the fourth, and the four themes in menu order', () => {
-    // Ross's list (2026-10-23, 12:0xC); every other test reads SIZES.
+    // The editor's list (2026-10-23, 12:0xC); every other test reads SIZES.
     expect(SIZES).toEqual([75, 80, 90, 100, 115, 140, 175]);
     expect(SIZES.indexOf(DEFAULT_PREFS.size)).toBe(3);
     expect(THEMES).toEqual(['light', 'dark', 'contrast-yellow', 'contrast-white']);

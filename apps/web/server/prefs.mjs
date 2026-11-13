@@ -23,7 +23,7 @@ export const LINKS_COOKIE = '__Host-nwfl-links';
 /** @typedef {{ size: Size, theme: Theme | undefined, links?: Exclude<LinkMode, 'guard'> | undefined }} Prefs */
 
 /**
- * The seven text sizes in percent, the slider's notches 0 to 6 (Ross, 2026-10-23).
+ * The seven text sizes in percent, the slider's notches 0 to 6 (the editor, 2026-10-23).
  * The one list: the code and the tests read it, and test/size-css.test.ts
  * checks the stylesheets' size rules against it.
  */

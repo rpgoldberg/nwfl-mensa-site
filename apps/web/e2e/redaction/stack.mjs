@@ -18,7 +18,7 @@
 // must see none of them, a member the first two, and /news shows nobody the
 // officers article.
 //
-// REDACT-LOOK (0022, Ross's 11-02 decision): the public is shown members'
+// REDACT-LOOK (0022, the editor's 11-02 decision): the public is shown members'
 // names, and still has their phones, addresses and e-mails withheld. So every
 // canary is marked in one of those categories, and S holds what the public must
 // now be shown: a marked member's name on a page and in the PDF, and a marked
@@ -140,7 +140,7 @@ const C = {
   officersBody: canary('officersbody'),
 };
 
-// What the public is shown since 0022 (Ross, 11-02): each marked member_name. The positive control of SPEC L11.
+// What the public is shown since 0022 (the editor, 11-02): each marked member_name. The positive control of SPEC L11.
 const S = {
   // On the home page, in an announcement's body.
   name: canary('shownname'),

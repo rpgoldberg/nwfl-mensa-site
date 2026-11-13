@@ -1,7 +1,7 @@
 // ============================================================================
 // UNTRUSTED-PDF-GATE (NEEDS.md): whether an untrusted PDF may reach the parser.
 //
-// Today the only PDFs parsed are the issue loader's (load/load.ts), which Ross
+// Today the only PDFs parsed are the issue loader's (load/load.ts), which the editor
 // runs by hand. An officer upload (R3d), the archive importer (ARCH-1) or any new
 // RPC or tool that stores an original waits until BOTH hold:
 //   1. the engine runs as a sidecar in the worker pod: its own uid, no env

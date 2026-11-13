@@ -20,7 +20,7 @@
 // Every character a match covers in any reading is withheld. Then each line's
 // withheld characters become a region: exactly their glyphs' extent (the union
 // of their loose boxes), one line tall, never widened and never run on into the
-// margin (REDACT-LOOK, Ross 11-02: a box's width shows the passage's length,
+// margin (REDACT-LOOK, the editor 11-02: a box's width shows the passage's length,
 // which is accepted, because content is never reflowed). PDFium removes every
 // glyph whose tight box a region overlaps, so an unmarked neighbour whose ink
 // reaches into a region (a kerned A, an italic f) goes too: the region is

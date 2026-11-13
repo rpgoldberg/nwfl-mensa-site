@@ -5,7 +5,7 @@
 # stay private (0700):
 #   extract  --network none, --memory=1g: the only container that sees a PDF, mounted read-only;
 #   check    --dns 1.1.1.1, --memory=512m: a network, but no PDF (only the extract files);
-#   list     --network none: Ross's answers in, links.json out.
+#   list     --network none: the editor's answers in, links.json out.
 #
 #   linkcheck.sh check <image> <issue-date YYYY-MM-DD> <public.pdf> <members.pdf> <out-dir>
 #   linkcheck.sh list <image> <out-dir> [<answers.json>]

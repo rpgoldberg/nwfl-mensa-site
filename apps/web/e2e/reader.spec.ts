@@ -70,7 +70,7 @@ test.describe('with JavaScript off', () => {
     });
   }
 
-  test('offers the five themes in the menu order Ross chose', async ({ page }) => {
+  test('offers the five themes in the menu order the editor chose', async ({ page }) => {
     await page.goto('/about#reader-menu');
     await expect(panel(page).locator('.theme-btn')).toHaveText([
       /^Match my current device/,
@@ -174,7 +174,7 @@ const notches = (page: Page) =>
       }),
     );
 
-// Ross's thinning, densest first: all seven, then 75/90/115/175, 75/100/175 and 75/175.
+// The editor's thinning, densest first: all seven, then 75/90/115/175, 75/100/175 and 75/175.
 const PATTERNS = [[0, 1, 2, 3, 4, 5, 6], [0, 2, 4, 6], [0, 3, 6], [0, 6]].map((notches) => notches.map((k) => String(SIZES[k])));
 
 for (const width of [320, 360, 412, 1280]) {
@@ -299,7 +299,7 @@ const pinned = (page: Page) =>
 test.describe('on a phone (412 x 915)', () => {
   test.use({ viewport: { width: 412, height: 915 } });
 
-  // Ross, 10-24: no reading bar. Every page keeps the main navigation; text size and theme live in the Aa panel only.
+  // The editor, 10-24: no reading bar. Every page keeps the main navigation; text size and theme live in the Aa panel only.
   for (const path of ['/about', '/governance']) {
     test(`${path} shows the bottom nav on screen and no size or theme buttons outside the Aa panel`, async ({ page }) => {
       await page.goto(path);

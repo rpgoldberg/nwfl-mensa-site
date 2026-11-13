@@ -1,4 +1,4 @@
-// REDACT-LOOK: exact-fit boxes (Ross, 11-02). Each box covers exactly the
+// REDACT-LOOK: exact-fit boxes (the editor, 11-02). Each box covers exactly the
 // marked glyphs' extent, one line tall; the glyphs are still removed from the
 // content, and the copy is checked by its rendered pixels: no pixel of marked
 // (red) text is left, and every unmarked (blue) pixel that went missing lies

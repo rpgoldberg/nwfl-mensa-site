@@ -1,4 +1,4 @@
-// public/scripts/viewer-tone.js (DARKPDF, Ross's decision (a)): the pages follow the site's theme. Dark
+// public/scripts/viewer-tone.js (DARKPDF, the editor's decision (a)): the pages follow the site's theme. Dark
 // recolours the drawing (light text on a dark page) while every picture keeps its own colours, so a photo
 // never shows as a negative; high contrast tints the paper to the theme's; light shows the page as printed.
 // pdf.js 6.4.299's pageColors would grey every picture too (its filter covers the whole canvas), so the

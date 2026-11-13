@@ -1,4 +1,4 @@
-// W-LOOK3: Ross's mockup of the reader (2026-11-08): a slim breadcrumb, a pill tag for the copy, and the
+// W-LOOK3: the editor's mockup of the reader (2026-11-08): a slim breadcrumb, a pill tag for the copy, and the
 // issue in ONE rounded, thin frame whose top edge is the toolbar: back, a page select and next; zoom out,
 // a zoom select and zoom in; Fit width (pressed, the default) and Fit page; Download; Open in another app.
 // The words show beside Fit, Download and Open on a computer; a phone shows icons only, each with its
@@ -131,7 +131,7 @@ for (const [name, viewport] of [['a computer', DESKTOP], ['a phone', PHONE]] as 
       await expect(download).toHaveAttribute('href', `${PUBLIC_READ.replace('/read/', '/documents/')}.pdf?download=1`);
       await expect(other).toHaveAttribute('href', `${PUBLIC_READ.replace('/read/', '/documents/')}.pdf`);
       await expect(other).toHaveAttribute('title', 'Open in another app');
-      // Words beside Fit, Download and Open on a computer; icons only on a phone (Ross's mockup).
+      // Words beside Fit, Download and Open on a computer; icons only on a phone (the editor's mockup).
       for (const word of ['Fit width', 'Fit page', 'Download', 'Open in another app']) {
         const visible = await bar(page).locator('.viewer-group').getByText(word, { exact: true }).isVisible();
         expect(visible, word).toBe(name === 'a computer');
@@ -252,5 +252,5 @@ test.describe('the reader without JavaScript', () => {
   });
 });
 
-// The events caption row and "Add to your calendar": EVENTS2 replaced them (Ross's concept, 11-10); e2e/events2.spec.ts
+// The events caption row and "Add to your calendar": EVENTS2 replaced them (the editor's concept, 11-10); e2e/events2.spec.ts
 // checks the one toolbar and "Add our calendar" at 320, 344 and 390 px and the largest text size.

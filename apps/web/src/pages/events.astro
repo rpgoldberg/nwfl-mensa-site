@@ -1,5 +1,5 @@
 ---
-// Events, the calendar (R4), on request: public events only. EVENTS2 (Ross's concept, 11-10): one
+// Events, the calendar (R4), on request: public events only. EVENTS2 (the editor's concept, 11-10): one
 // toolbar ("‹ period ›" and List | Week | Month; EV1: on the heading's line where it fits, and compact
 // where room is short), then the view, then its events as cards, the type
 // legend and "Add our calendar" beneath. The view and the selected date live in the URL
@@ -43,7 +43,7 @@ const shown = agendaDays((period.upcoming ? comingUp(events, now) : events).filt
 const days = agendaDays(shown);
 const ribbon = view === 'list' ? ribbonDays(shown, today, selected) : [];
 const week = view === 'week' ? weekDays(period.from, shown, today, selected) : [];
-// EV1 round 3 (Ross's concept): under the cells, the heading line is the bare range ("Nov 29 – Dec 5"), or
+// EV1 round 3 (the editor's concept): under the cells, the heading line is the bare range ("Nov 29 – Dec 5"), or
 // the list's words, in body text; the cards keep the fuller name.
 const title = view === 'list' ? (period.upcoming ? 'Upcoming events' : period.thisPeriod ? `Events ${period.spoken}` : `Events in ${period.spoken}`) : view === 'week' ? period.label : shortDay(selected);
 const cardsLabel = view === 'week' ? (period.thisPeriod ? `This week (${period.label})` : `Week of ${period.label}`) : title;

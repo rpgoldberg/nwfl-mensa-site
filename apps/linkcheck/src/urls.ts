@@ -23,7 +23,7 @@
 //     paths cannot be told apart from the rest from here, so the whole tree is left alone), and the
 //     registrable domains named myfigurecollection, suruga-ya, hobby-genki and vndb under any public
 //     suffix. A link there gets "not checked: officer review" with no network request of any kind;
-//   - the login-walled hosts: DNS only, never fetched; Ross confirms each link himself.
+//   - the login-walled hosts: DNS only, never fetched; the editor confirms each link.
 // ============================================================================
 import { isIP } from 'node:net';
 import { getDomain, parse } from 'tldts';
@@ -197,7 +197,7 @@ export function isNoFetch(given: string): boolean {
   return name !== null && NO_FETCH_NAMES.has(name);
 }
 
-/** Login-walled hosts (SPEC D4): resolved, never fetched; each link needs Ross's own yes. */
+/** Login-walled hosts (SPEC D4): resolved, never fetched; each link needs the editor's own yes. */
 export const LOGIN_WALLED: readonly string[] = [
   'facebook.com',
   'fb.com',

@@ -127,7 +127,7 @@ export function adminContactHref(env: Record<string, string | undefined>): strin
   return ADDRESS.test(address) ? `mailto:${address}` : '/officers';
 }
 
-/** PROFILE-ID (Ross): the one line by the number field. The page links the middle words. */
+/** PROFILE-ID (the editor): the one line by the number field. The page links the middle words. */
 export const NUMBER_LOCKED = { before: 'Once you send it, your number can’t be changed. If it needs correcting, contact the ', link: 'site administrator', after: '.' } as const;
 
 /** PROFILE-ID: what a sign-up typed, labelled, in the form's order, leaving out any value not held. */

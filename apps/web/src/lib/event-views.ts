@@ -1,4 +1,4 @@
-// EVENTS2 (Ross's concept, 11-10): the one model behind /events' three views. The view and the
+// EVENTS2 (the editor's concept, 11-10): the one model behind /events' three views. The view and the
 // date live in the URL (?view=week&d=2026-11-11), so the page works with no script and Back; the
 // views differ only in the dates they cover and how they draw them. Each event's type icon comes
 // from its series' category alone: an event the API does not classify is a plain "Event", never a
@@ -15,7 +15,7 @@ export interface CalState {
   date: string;
 }
 
-/** The type icons (Ross's mapping, SPEC-ross.md): four kinds, and the plain one. */
+/** The type icons (the editor's mapping, SPEC-ross.md): four kinds, and the plain one. */
 export type EventKind = 'meal' | 'social' | 'gathering' | 'meeting' | 'event';
 export const KIND_LABELS: Record<EventKind, string> = {
   meal: 'Lunch or meal',
@@ -184,7 +184,7 @@ export function dayTile(date: string, events: readonly CalendarEvent[], today: s
   return { date, weekday: DAYS[p.wd]!, day: p.d, month: MON[p.m]!, events: [...events].sort(byTime), today: date === today, selected: date === selected };
 }
 
-/** The list's ribbon (Ross): only the dates that have events, each once, in order, across months. */
+/** The list's ribbon (the editor): only the dates that have events, each once, in order, across months. */
 export function ribbonDays(events: readonly CalendarEvent[], today: string, selected: string): DayTile[] {
   const dates = [...new Set(events.map((e) => e.date))].sort();
   return dates.map((date) => dayTile(date, events.filter((e) => e.date === date), today, selected));

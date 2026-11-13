@@ -1,4 +1,4 @@
-// EV1 round 2 (Ross, 11-12): the events toolbar adapts to its room instead of squeezing words. Where the
+// EV1 round 2 (the editor, 11-12): the events toolbar adapts to its room instead of squeezing words. Where the
 // period and the full List | Week | Month switch fit one row, that is the toolbar. Where they do not,
 // one "Week ▾" view picker (a disclosure of real links: no script needed, Back works) sits between
 // ‹ and ›, the range leaves the toolbar for the heading line under the day cells ("Nov 29 – Dec 5",
@@ -190,7 +190,7 @@ test('at 100 % on a desktop the full toolbar: "‹ Nov 29 – Dec 5 ›" and Lis
   expect(tool.y).toBeLessThan(h1.y + h1.height);
 });
 
-// Round 3: the header row and the heading line, where Ross's concept shows them.
+// Round 3: the header row and the heading line, where the editor's concept shows them.
 for (const [width, size] of [[300, 100], [344, 100], [412, 100], [412, 175]] as const) {
   test(`at ${width} px and ${size} %: "Events ‹ Week ▾ ›" on one line`, async ({ page, context, baseURL }) => {
     await useText(context, baseURL!, size);

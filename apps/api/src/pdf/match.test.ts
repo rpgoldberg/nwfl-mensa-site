@@ -171,7 +171,7 @@ const withChar = (chars: PageChar[], index: number, change: { box?: Partial<Box>
     return { ...c, box, ink };
   });
 
-describe('regionsFor: exact fit (REDACT-LOOK, Ross 11-02)', () => {
+describe('regionsFor: exact fit (REDACT-LOOK, the editor 11-02)', () => {
   it('boxes a passage at exactly its marked glyphs\' extent, one line tall', () => {
     const chars = page(['Call Bo today, and the rest of a long line of text']);
     expect(regionsFor(chars, matchedChars(chars, ['Bo']))).toEqual({

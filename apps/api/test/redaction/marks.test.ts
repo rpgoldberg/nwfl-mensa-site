@@ -79,7 +79,7 @@ describe.skipIf(!live)('redaction marks', () => {
   beforeAll(async () => {
     api = await startApi('nwfl_marks');
     marks = api.client(RedactionPolicyService);
-    // 0022 shows member names to the public by default (Ross, 11-02). These tests use member_name as a
+    // 0022 shows member names to the public by default (the editor, 11-02). These tests use member_name as a
     // category an audience redacts, so the public's cell is tightened back to redact (applied at once).
     await marks.proposeRedactionChange({ audience: RedactionAudience.PUBLIC, category: Category.MEMBER_NAME, action: RedactionAction.REDACT }, OFFICER);
     office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
