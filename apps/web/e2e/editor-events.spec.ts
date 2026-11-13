@@ -113,6 +113,24 @@ test.describe('the event screens, signed in', () => {
     }
   });
 
+  test('the officer area links to Our events for those it lets in, and not for a Webmaster it would turn away', async ({ page, browser }) => {
+    await signedIn(page, 'officer');
+    await page.goto('/officer-area');
+    await page.getByRole('link', { name: 'Our events', exact: true }).click();
+    await expect(page).toHaveURL(/\/officer-area\/events$/);
+    await expect(page.getByRole('heading', { level: 1, name: 'Our events' })).toBeVisible();
+    const lone = await browser.newContext({ baseURL: SITE_URL, ignoreHTTPSErrors: true });
+    try {
+      const w = await lone.newPage();
+      await signedIn(w, 'lone-webmaster');
+      await w.goto('/officer-area');
+      await expect(w.getByRole('link', { name: 'Write news', exact: true })).toBeVisible();
+      await expect(w.getByRole('link', { name: 'Our events', exact: true })).toHaveCount(0);
+    } finally {
+      await lone.close();
+    }
+  });
+
   test("a series date's first change to \"Decided later\" has no venue, in one save", async ({ page, browser }, info) => {
     // Three weeks past this project's cancelled lunch: a date no other test changes.
     const date = wednesday(EVENT_EDITS.lunchWeeks[info.project.name]! + 3);

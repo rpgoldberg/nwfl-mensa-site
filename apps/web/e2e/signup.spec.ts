@@ -411,14 +411,15 @@ test.describe('fix 1: officers and the Admin need no member account (SHOULD-2, N
 test.describe('fix 1: the officer area admits each role, with only its own links', () => {
   const links = (page: Page) => page.locator('main .link-list a');
   // EDITOR E3: "Write news" for everyone the editor admits (an officer, the Admin, the Webmaster).
+  // EDITOR E6: "Our events" for whom the events pages admit (an officer or the Admin): not a lone Webmaster.
   const cases = [
     { login: 'lone-approver', links: ['Sign-ups to approve'] },
     { login: 'lone-webmaster', links: ['Write news'] },
-    { login: 'lone-admin', links: ['Write news', 'Sign-ups to approve', 'Approval setting'] },
-    { login: 'admin', links: ['Write news', 'Sign-ups to approve', 'Approval setting'] },
-    { login: 'approver', links: ['Write news', 'Sign-ups to approve'] },
-    { login: 'officer', links: ['Write news'] },
-    { login: 'webmaster', links: ['Write news'] },
+    { login: 'lone-admin', links: ['Write news', 'Our events', 'Sign-ups to approve', 'Approval setting'] },
+    { login: 'admin', links: ['Write news', 'Our events', 'Sign-ups to approve', 'Approval setting'] },
+    { login: 'approver', links: ['Write news', 'Our events', 'Sign-ups to approve'] },
+    { login: 'officer', links: ['Write news', 'Our events'] },
+    { login: 'webmaster', links: ['Write news', 'Our events'] },
   ] as const;
   for (const c of cases) {
     test(`${c.login}: let in, linked from the header, and shown ${c.links.join(' and ')}`, async ({ page }) => {

@@ -144,8 +144,8 @@ export const ROSTER_WARNING = "Never paste birthday, new-member or Mensaversary 
 /** The tab's unsent copy of an item (sessionStorage, never localStorage): public/scripts/editor.js keeps it. */
 export const draftKey = (itemId: string): string => `nwfl-draft:${itemId}`;
 
-/** S1's "Our events": E6's events pages, once they land (E6 sets it to '/officer-area/events'); until then not linked. */
-export const OUR_EVENTS: string | undefined = undefined;
+/** S1's "Our events": E6's events pages (src/lib/editor/events.ts EVENTS_PATH), linked for whom they admit (mayUseEvents). */
+export const OUR_EVENTS: string | undefined = '/officer-area/events';
 
 export const EDIT_LINKS = {
   list: '/officer-area/news',
