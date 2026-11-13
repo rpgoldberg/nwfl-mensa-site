@@ -165,6 +165,8 @@ export async function officeEvents(
   if (to > furthest) to = furthest;
   if (to < today) return [];
   const entries = await calendarSource(client, deps.logger).calendar(today, to);
+  // Cancelled ones included: the site reads the calendar with them (web lib/api/client.ts, includeCancelled), and an
+  // event's page and its calendar file still give their links and detail (web pages/events/[id].astro, lib/calendar.ts).
   return entries.filter((entry) => (entry.series?.host_office_id ?? entry.ownerOfficeId) === officeId);
 }
 

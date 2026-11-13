@@ -113,6 +113,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ['secretary', 'Secretary'],
       ['social', 'Social Chair'],
       ['outings', 'Outings Chair'],
+      ['library', 'Librarian'],
     ]) {
       offices[slug as string] = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ($1, $2, 'appointed') RETURNING id`, [slug, title]);
     }
@@ -446,6 +447,21 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(approved.item?.working?.status).toBe(VersionStatus.CLEARED);
     });
 
+    it("keeps a cancelled event's links in the list and the gate: its page and calendar.ics still show them", async () => {
+      await api.pool.query(
+        `INSERT INTO event_occurrence (title, starts_at, url, detail, visibility, owner_office_id, status, status_note) VALUES ('Book swap', '2026-11-18T23:00:00Z', 'https://www.facebook.com/events/90210', 'Map: https://maps.example.org/library', 'public', $1, 'cancelled', 'Snow')`,
+        [offices['library']],
+      );
+      const { itemId, hash } = await piece('Nothing this month.', { writer: ADMIN, office: 'library' });
+      expect((await links(itemId)).links.map((link) => [link.url, link.where])).toEqual([
+        ['https://maps.example.org/library', 'event: Book swap'],
+        ['https://www.facebook.com/events/90210', 'event: Book swap'],
+      ]);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link needs a sign-in/);
+      await confirm(itemId, [{ url: 'https://www.facebook.com/events/90210', yes: true }]);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
     it("holds the office's event links too: the President's report waits for a yes on the event's Facebook page", async () => {
       const { itemId, hash } = await piece('The calendar is below.', { writer: ADMIN, office: 'president' });
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link needs a sign-in/);
@@ -516,6 +532,21 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
         `a reviewer answered no for the link "https://example.org/fine" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved. ${OFFICERS_ONLY}`,
       );
       expect(both).not.toContain(PHONE);
+    });
+
+    it('names a blocker the caller sees and adds the officers-only sentence for a hidden sign-in link that only lacks a yes', async () => {
+      const marks = api.client(RedactionPolicyService);
+      const hiddenPhone = '850-555-0143';
+      const { itemId, hash } = await piece(`Ring https://www.facebook.com/groups/ring-${hiddenPhone} or see https://example.org/visible.`);
+      await marks.addRedactionMark({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: itemId, field: MarkField.BODY, quote: hiddenPhone, category: RedactionCategory.MEMBER_PHONE }, OFFICER);
+      await confirm(itemId, [{ url: 'https://example.org/visible', yes: false }], OFFICER);
+      const said = await messageOf(content.approve({ itemId, contentHash: hash }, LONE_ADMIN));
+      expect(said).toBe(
+        `a reviewer answered no for the link "https://example.org/visible" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved. ${OFFICERS_ONLY}`,
+      );
+      expect(said).not.toContain(hiddenPhone);
+      // An officer sees both: the no is named, and nothing is hidden from them.
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).not.toContain(OFFICERS_ONLY);
     });
 
     it("never names or counts a members event's links to a reader at the public's audience", async () => {
