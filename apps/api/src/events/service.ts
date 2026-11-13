@@ -301,7 +301,7 @@ export function generatedEntry(series: SeriesRow, date: string, venues: Map<stri
 }
 
 /** The calendar's data access: venues, series, stored occurrences and the expansion. */
-export function calendarSource(db: Db, logger: StructuredLogger) {
+export function calendarSource(db: Pick<Db, 'query'>, logger: StructuredLogger) {
   const loadVenues = async (): Promise<Map<string, VenueRow>> => {
     const { rows } = await db.query<VenueRow>(
       'SELECT id, kind, name, business_address, city, area, host_office_id, url, accessibility_note, active FROM venue',
