@@ -99,6 +99,9 @@ jobs:
         working-directory: apps/api
       - run: sh ../api/scripts/test-db.sh start >> "$GITHUB_ENV"
       - run: npm run e2e:redaction
+      # EDITOR E7a: the officers' editor on the same real stack: write, save, send, approve, publish,
+      # and the attacks on it.
+      - run: npm run e2e:editor-real
       - if: always() && env.NWFL_TEST_PG_CONTAINER != ''
         run: sh ../api/scripts/test-db.sh stop "$NWFL_TEST_PG_CONTAINER"
       # The canary: the same site built with sign-in off.
