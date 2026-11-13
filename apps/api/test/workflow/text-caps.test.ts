@@ -127,6 +127,14 @@ describe.skipIf(!live)('long text and deep markup over gRPC', () => {
         await expect(content.saveDraft({ itemId: id, title: 't', summary: '', visibility: ItemVisibility.PUBLIC, bodyMarkup: markup })).rejects.toMatchObject({ code: Code.Unauthenticated });
       }
     });
+
+    it('answers an anonymous CreateItem Unauthenticated, whatever the size (round 4)', async () => {
+      for (const extra of [{}, { slug: OVER }, { title: OVER }]) {
+        await expect(
+          content.createItem({ kind: ContentKind.ARTICLE, officeId: offices['publications'] as string, slug: 'anon-item', title: 'Fall picnic', ...extra }),
+        ).rejects.toMatchObject({ code: Code.Unauthenticated });
+      }
+    });
   });
 
   it('refuses CreateItem with a title or slug over 48 KiB', async () => {

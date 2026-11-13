@@ -73,6 +73,8 @@ const INLINE_48K: [string, string][] = [
   ['kept links among failed brackets (the old rewind shape)', fill('[a](https://a.example) [w] w ')],
   ['refused links', fill('[a](http://a.example) ')],
   ['bare refused URLs', fill('https://x ')],
+  // The challenger's costliest URL shape: every " www.[" is a bare URL the strict rule reads (R3-N1).
+  ['" www.[" (one URL check each)', fill(' www.[')],
   ['URLs with 2,030 trailing ")"', fill(`https://a.example/${')'.repeat(2030)} `)],
   ['overlapping link targets', `[a${']('.repeat(Math.floor((CAP - 3) / 2))})`],
   ['a members span over unbalanced https targets (each one checked)', fill(`${'[](https://a.example/['.repeat(90)}) `, ':members[')],
@@ -225,6 +227,20 @@ describe(`nesting depth: nothing deeper than the stored tree keeps (tree.ts MAX_
   it('does not count a refused link: its label is not in the tree', () => {
     const src = `${'['.repeat(30)}a${'](http://x.example)'.repeat(30)}`;
     expect(deep(src)).toEqual([]);
+  });
+
+  it('reports the first line that goes too deep, whichever place is reached last', () => {
+    // Blocks are read top-down, but a members span's nodes are added after the quote below it is not: both orders.
+    expect(deep(['>'.repeat(30) + ' x', '', '>'.repeat(30) + ' y'].join('\n'))).toEqual([{ line: 1, ...DEEP }]);
+    expect(deep([spans(30), '', '>'.repeat(30) + ' y'].join('\n'))).toEqual([{ line: 1, ...DEEP }]);
+    expect(deep(['Intro.', '', '>'.repeat(30) + ' y', '', spans(30)].join('\n'))).toEqual([{ line: 3, ...DEEP }]);
+  });
+
+  it('reports an inline that goes too deep at its own line, not its paragraph\'s first', () => {
+    expect(deep(`intro\nmore\n${links(24)}`)).toEqual([{ line: 3, ...DEEP }]);
+    expect(deep(`intro\n${'['.repeat(12)}a\n${'['.repeat(12)}b${'](https://x.example)'.repeat(24)}`)).toEqual([{ line: 3, ...DEEP }]);
+    expect(deep(`intro\nmore\n${links(24)}\n\n${'>'.repeat(30)} x`)).toEqual([{ line: 3, ...DEEP }]);
+    expect(deep(`- one\n- two\n- ${spans(22)}`)).toEqual([{ line: 3, ...DEEP }]);
   });
 
   it('reports it once for a document nested too deeply in several places', () => {

@@ -101,8 +101,8 @@ const INLINE = [
   '*', '**', '_', '[', ']', '(', ')', ':members[', '\\', ' ', 'a', 'https://x.example', 'mailto:m', 'http://h', '](', '\t', '\u2028', '`', ':', '![',
   // The strict URL rule (EDITOR A3a): hosts with and without a dot, www., user info, a port, an IP,
   // a hidden character, mail, and the sentence punctuation a bare URL sheds.
-  'http://a.example/p', 'www.a.example', 'https://u:p@a.example', 'https://a.example:8443/', 'https://192.0.2.1/', 'https://intranet/',
-  'mailto:e@a.example', 'https://a.example/x\u200by', ').', '",', ']', 'HTTPS://A.example',
+  'http://a.example/p', 'www.a.example', 'https://u:p@example.org', 'https://a.example:8443/', 'https://192.0.2.1/', 'https://intranet/',
+  'mailto:e@example.org', 'https://a.example/x\u200by', ').', '",', ']', 'HTTPS://A.example',
 ];
 const BLOCK = ['\n', '\n\n', '\r\n', '\r', '# ', '## ', '### ', '- ', '* ', '1. ', '> ', '>> ', '::: members\n', ':::\n', ' :::  members \n', `![alt](file:${FILE})`, `![](file:${FILE})`, '  ', '#', '-'];
 
@@ -178,7 +178,7 @@ describe('the linear parser matches the frozen old parser', () => {
 
   it('on 2,500 longer seeded paragraphs heavy in brackets, members spans and links', () => {
     const next = random(0x5b5d);
-    const tokens = ['[', ']', ':members[', '\\[', '\\]', 'a', ' ', '](https://x.example)', '](http://h.example)', '(', ')', '*', '_', '**', '[a](mailto:m@a.example)', 'http://b.example ', '\n'];
+    const tokens = ['[', ']', ':members[', '\\[', '\\]', 'a', ' ', '](https://x.example)', '](http://h.example)', '(', ')', '*', '_', '**', '[a](mailto:m@example.org)', 'http://b.example ', '\n'];
     const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0 };
     for (let n = 0; n < 2_500; n += 1) {
       const count = 40 + Math.floor(next() * 80);

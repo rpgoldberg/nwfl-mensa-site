@@ -530,13 +530,14 @@ class InlineParser {
     let current = style;
     let text = '';
     let at: number[] = [];
-    const add = (node: Inline): void => {
-      if (depth > MAX_DEPTH) this.nestedTooDeeply(this.line);
+    // `from` is where the node starts in the source: a node too deep is reported at its own line.
+    const add = (node: Inline, from: number): void => {
+      if (depth > MAX_DEPTH) this.nestedTooDeeply(lineOf(this.starts, from));
       nodes.push(node);
     };
     const flush = (): void => {
       if (text !== '') {
-        add({ type: 'text', text, bold: current.bold, italic: current.italic });
+        add({ type: 'text', text, bold: current.bold, italic: current.italic }, at[0]!);
         this.runs.push({ text, at });
       }
       text = '';
@@ -563,7 +564,7 @@ class InlineParser {
         flush();
         this.cursor += MEMBERS_MARK.length;
         const children = (yield this.bracketed(current, depth + 1)) as Inline[];
-        add({ type: 'members', children });
+        add({ type: 'members', children }, i);
       } else if (what === LINK) {
         // A kept link is a node; a refused one is its source text, reported. Its label is read either
         // way, as the old parser read it: the URLs in it are checked, and a link inside it too.
@@ -576,10 +577,10 @@ class InlineParser {
         this.cursor = end;
         flush();
         if (problem === null) {
-          add({ type: 'link', href, children: label.nodes });
+          add({ type: 'link', href, children: label.nodes }, i);
         } else {
           this.reportUrl(target, urlMessage('the link', href, problem));
-          add({ type: 'text', text: s.slice(i, end), bold: current.bold, italic: current.italic });
+          add({ type: 'text', text: s.slice(i, end), bold: current.bold, italic: current.italic }, i);
         }
       } else if (what === EMPHASIS) {
         const marker = this.markerAt(i);
