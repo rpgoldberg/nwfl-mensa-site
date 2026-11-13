@@ -4,7 +4,7 @@ import { ApiNotFound } from '../../src/lib/api/client';
 import { DraftChanged, EditorRefused, NotAllowed, SignInAgain } from '../../src/lib/api/editor';
 
 const state = vi.hoisted(() => ({
-  api: undefined as undefined | { saveDraft: ReturnType<typeof vi.fn> },
+  api: undefined as undefined | { saveDraft: ReturnType<typeof vi.fn>; offices: ReturnType<typeof vi.fn>; getWorkingItem: ReturnType<typeof vi.fn> },
   reader: { bearer: 'tok' } as undefined | { bearer: string },
 }));
 
@@ -23,6 +23,8 @@ const { GET, POST } = await import('../../src/pages/officer-area/news/[id]/autos
 type Ctx = Parameters<typeof POST>[0];
 const ID = 'c0e20000-0000-4000-8000-0000000000a1';
 const OFFICER = { groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-president'] };
+const PRESIDENT = { id: 'c0e20000-0000-4000-8000-0000000000f1', slug: 'president', title: 'President' };
+const SOCIAL = { id: 'c0e20000-0000-4000-8000-0000000000f2', slug: 'social', title: 'Social Chair' };
 const FORM = { title: 'Fall picnic', summary: '', visibility: 'public', markup: 'Noon.', base: '1794528300.123456000' };
 
 function post(fields: Record<string, string> = FORM, opts: { id?: string; session?: unknown; type?: string; length?: string } = {}) {
@@ -33,7 +35,11 @@ function post(fields: Record<string, string> = FORM, opts: { id?: string; sessio
 }
 
 beforeEach(() => {
-  state.api = { saveDraft: vi.fn(async () => ({ item: { working: { base: '1794528360.000000000' } }, problems: [] })) };
+  state.api = {
+    saveDraft: vi.fn(async () => ({ item: { working: { base: '1794528360.000000000' } }, problems: [] })),
+    offices: vi.fn(async () => [PRESIDENT, SOCIAL]),
+    getWorkingItem: vi.fn(async () => ({ id: ID, officeId: PRESIDENT.id })),
+  };
   state.reader = { bearer: 'tok' };
 });
 
@@ -95,6 +101,40 @@ describe('POST /officer-area/news/[id]/autosave', () => {
     expect(res.status).toBe(status);
     expect(await res.json()).toEqual(body);
     expect(res.headers.get('cache-control')).toBe('private, no-store');
+  });
+});
+
+describe('the office check, as the edit page makes it (E7A-FIX, the E7a check\'s N2)', () => {
+  it('answers 404 for another office\'s item, after reading it, before any save', async () => {
+    state.api!.getWorkingItem.mockResolvedValueOnce({ id: ID, officeId: SOCIAL.id });
+    const res = await post();
+    expect(res.status).toBe(404);
+    expect(state.api?.getWorkingItem).toHaveBeenCalledWith(state.reader, ID);
+    expect(state.api?.saveDraft).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 to someone who holds no office (the Webmaster), before any call to the API', async () => {
+    const res = await post(FORM, { session: { groups: ['nwfl-members', 'nwfl-webmaster'] } });
+    expect(res.status).toBe(404);
+    expect(state.api?.offices).not.toHaveBeenCalled();
+    expect(state.api?.getWorkingItem).not.toHaveBeenCalled();
+    expect(state.api?.saveDraft).not.toHaveBeenCalled();
+  });
+
+  it('lets the Admin save for any office', async () => {
+    state.api!.getWorkingItem.mockResolvedValueOnce({ id: ID, officeId: SOCIAL.id });
+    expect((await post(FORM, { session: { groups: ['nwfl-members', 'nwfl-admin'] } })).status).toBe(200);
+    expect(state.api?.saveDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['no such item', new ApiNotFound('GetWorkingItem'), 404],
+    ['the sign-in ran out', new SignInAgain('GetWorkingItem'), 401],
+    ['the API not there', new Error('down'), 503],
+  ])('answers when reading the item finds %s, saving nothing', async (_what, error, status) => {
+    state.api!.getWorkingItem.mockRejectedValueOnce(error);
+    expect((await post()).status).toBe(status);
+    expect(state.api?.saveDraft).not.toHaveBeenCalled();
   });
 });
 
