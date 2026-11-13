@@ -15,6 +15,7 @@ export interface HistorySentence {
 const DOING: Record<string, string> = {
   create: 'started it as a draft',
   save: 'saved a draft',
+  autosave: 'saved a draft automatically',
   ready: 'sent it for approval',
   send_back: 'sent it back',
   approve: 'approved it',

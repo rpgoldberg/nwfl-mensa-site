@@ -40,9 +40,26 @@ describe('the route registry (e2e/routes.ts)', () => {
     for (const route of Object.keys(OFFICER)) {
       const source = readFileSync(path.join(PAGES, byRoute.get(route)!), 'utf8');
       expect(source, route).not.toMatch(/\bliveData\b/);
-      expect(source, route).toMatch(/lib\/api\/(officer|membership)/);
-      expect(source, route).toMatch(/if \(!session\) return (Astro\.redirect|signInFirst)\(/);
+      expect(source, route).toMatch(/lib\/api\/(officer|membership|editor)/);
+      // EDITOR E3: the edit page alone keeps the text of a save posted after the session ended (below).
+      if (route === '/officer-area/news/[id]') expect(source, route).toMatch(/if \(!session && kept === undefined\) return (Astro\.redirect|signInFirst)\(/);
+      // Round 2: the auto-save endpoint answers a script, so no session is a plain 401, never a page.
+      else if (route === '/officer-area/news/[id]/autosave') expect(source, route).toMatch(/if \(!session\) return answer\(401, /);
+      else expect(source, route).toMatch(/if \(!session\) return (Astro\.redirect|signInFirst)\(/);
     }
+  });
+
+  it("keeps a session-less save's text on the edit page from the post alone, reading nothing from the API (EDITOR E3)", () => {
+    const source = readFileSync(path.join(PAGES, byRoute.get('/officer-area/news/[id]')!), 'utf8');
+    // Only a post, only with no session, and only from what was posted: before any API call is made.
+    expect(source).toMatch(/const kept = !session && Astro\.request\.method === 'POST' \? await keptText\(Astro\.request\) : undefined;/);
+    expect(source.indexOf('const kept =')).toBeLessThan(source.indexOf('editorApi()'));
+  });
+
+  it('lists the writer screens as OFFICER routes (EDITOR E3)', () => {
+    expect(Object.keys(OFFICER)).toEqual(
+      expect.arrayContaining(['/officer-area/news', '/officer-area/news/new', '/officer-area/news/[id]', '/officer-area/news/[id]/preview', '/officer-area/news/[id]/autosave']),
+    );
   });
 
   it('lists as SIGNED_IN only pages that read the API with the person\'s own token, and send the public to sign in (W-SIGNUP)', () => {

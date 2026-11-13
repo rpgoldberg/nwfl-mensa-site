@@ -10,13 +10,17 @@
 // approver (read from the API with the officer's own token, src/lib/api/officer.ts), and a plain line
 // when it could not be read, with Sign in again and the password note (S2) when the sign-in ran out.
 // Nothing here reaches a member who is none of these, or the public.
+// EDITOR E3 (S1): "Write news" for everyone the editor admits (an officer, the Admin, the Webmaster).
+// "Our events" joins it with E6's pages (writer.ts OUR_EVENTS), so it never leads to a missing page.
 import { officerAreaFor } from '../../../server/account.mjs';
 import OneApproverNote from '../../components/OneApproverNote.astro';
 import PasswordNote from '../../components/PasswordNote.astro';
 import Base from '../../layouts/Base.astro';
 import { type Setting, isAdmin, notesFor } from '../../lib/approval-rules';
+import { editorAdmits } from '../../lib/api/editor';
 import { OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
 import { runtimeDeps } from '../../lib/auth/flow';
+import { EDIT_LINKS, OUR_EVENTS } from '../../lib/editor/writer';
 import { signUpsLink } from '../../lib/signup';
 import { page } from '../../lib/site';
 
@@ -26,6 +30,8 @@ const admitted = officerAreaFor(session);
 const admin = isAdmin(session);
 const signUps = signUpsLink(session);
 const links = [
+  ...(editorAdmits(session) ? [{ href: EDIT_LINKS.list, text: 'Write news' }] : []),
+  ...(editorAdmits(session) && OUR_EVENTS !== undefined ? [{ href: OUR_EVENTS, text: 'Our events' }] : []),
   ...(signUps !== undefined ? [{ href: '/officer-area/sign-ups', text: signUps }] : []),
   ...(admin ? [{ href: '/officer-area/approval-rules', text: 'Approval setting' }] : []),
 ];
@@ -51,7 +57,7 @@ if (session.officer) {
   if (settings === undefined && (lapsed || refused)) signIn = '/sign-in?return=%2Fofficer-area&again=1';
 }
 const lead = session.officer
-  ? 'Writing reports, the approval queue and events come here in the next update.'
+  ? 'Write news for your office here. The approval queue and events come in the next update.'
   : admin
     ? 'As the Admin, you can change the approval setting here.'
     : links.length === 0

@@ -7,6 +7,13 @@
 // will get it. Its markup is a small part of the API's (headings, lists, links, :members[..] and
 // ::: members blocks) with the API's problem words, enough to tell the audiences apart.
 //
+// EDITOR E3: A3a's strict URL words at save, which the API on main does not do yet (its markup does:
+// apps/api/src/links/rule.ts, a part of it here); and A1's version approved but not yet published
+// (VERSION_STATUS_CLEARED): a seed can be cleared, the list holds it with drafts and ready ones (or
+// lists by version_statuses), and an edit takes it back to a draft with an approval_voided step first.
+// Not modelled yet: A1's two-step approval. Approve here still publishes at once, as E2 had it; no
+// screen of E3 approves, and the Publish RPC has no web client yet.
+//
 // Items are shared by everyone, as in the API (a writer and an approver are two people). The seeded
 // items (SEEDED) are for reading: a test that changes an item creates its own, with a title of its
 // own, so tests in parallel never disturb each other.
@@ -18,9 +25,9 @@ import { ContentKind, ItemState, ItemVisibility, VersionStatus } from '../src/ge
 /** @typedef {{ id: string, slug: string, title: string }} Office */
 /** @typedef {{ website: boolean, newsletter: boolean, email: boolean }} Targets */
 /**
- * @typedef {{ id: string, number: number, status: 'draft' | 'ready' | 'approved' | 'superseded', title: string, summary: string,
+ * @typedef {{ id: string, number: number, status: 'draft' | 'ready' | 'cleared' | 'approved' | 'superseded', title: string, summary: string,
  *   visibility: 'public' | 'members' | 'officers', markup: string, targets: Targets, editionId: string, printAsIs: boolean,
- *   onBehalfOf: string, readyAt?: Date, approvedAt?: Date, hash?: Uint8Array, editors: Set<string>, sendBackNote: string }} Version
+ *   onBehalfOf: string, readyAt?: Date, approvedAt?: Date, hash?: Uint8Array, editors: Set<string>, sendBackNote: string, updatedAt?: Date }} Version
  */
 /**
  * @typedef {{ id: string, slug: string, kind: string, officeId: string, state: 'draft' | 'ready' | 'published' | 'withdrawn',
@@ -53,16 +60,48 @@ const STATE_OUT = { draft: ItemState.DRAFT, ready: ItemState.READY, published: I
 const STATE_IN = new Map([
   [ItemState.DRAFT, 'draft'],
   [ItemState.READY, 'ready'],
+  [ItemState.PUBLISHED, 'published'],
+  [ItemState.WITHDRAWN, 'withdrawn'],
 ]);
-const STATUS_OUT = { draft: VersionStatus.DRAFT, ready: VersionStatus.READY, approved: VersionStatus.APPROVED, superseded: VersionStatus.SUPERSEDED };
+const STATUS_OUT = { draft: VersionStatus.DRAFT, ready: VersionStatus.READY, cleared: VersionStatus.CLEARED, approved: VersionStatus.APPROVED, superseded: VersionStatus.SUPERSEDED };
+/** A1's version_statuses: the working version's status, of those the list holds. */
+const STATUS_IN = new Map([
+  [VersionStatus.DRAFT, 'draft'],
+  [VersionStatus.READY, 'ready'],
+  [VersionStatus.CLEARED, 'cleared'],
+]);
 
 const invalid = (/** @type {string} */ message) => new ConnectError(message, Code.InvalidArgument);
 const precondition = (/** @type {string} */ message) => new ConnectError(message, Code.FailedPrecondition);
+/** The API's words for a save from a base someone else has changed since (E3 round 2). */
+const STALE_BASE = 'This draft was changed by someone else since you opened it';
+/** A Timestamp in milliseconds: the stand-in keeps no finer time. @param {{ seconds: bigint, nanos: number }} at */
+const msOf = (at) => Number(at.seconds) * 1000 + Math.floor(at.nanos / 1_000_000);
 const denied = () => new ConnectError('not permitted', Code.PermissionDenied);
 
 // ---------------------------------------------------------------------------------------------
 // Markup: a small part of the API's (apps/api/src/content/markup.ts), with its problem words.
 // ---------------------------------------------------------------------------------------------
+
+// A3a's strict URL rule (apps/api/src/links/rule.ts), the part the editor's tests need, in its words.
+const REASONS = {
+  http: 'must start with https://, not http://',
+  www: 'must be written in full, starting with https://',
+  plain: 'must be written plainly: https:// or mailto: in lower case, and no spaces',
+  scheme: 'is not a web address starting with https:// or an email address starting with mailto:',
+};
+
+/** Why a URL may not be saved, or undefined. @param {string} url */
+function urlReason(url) {
+  if (/^http:\/\//i.test(url)) return REASONS.http;
+  if (/^www\./i.test(url)) return REASONS.www;
+  if (/^(https:\/\/|mailto:)\S+$/.test(url)) return undefined;
+  if (/^(https:\/\/|mailto:)/i.test(url)) return REASONS.plain;
+  return REASONS.scheme;
+}
+
+/** The bare URLs in a run of text (linkcheck's pattern), each without the sentence punctuation after it. @param {string} run */
+const bareUrls = (run) => [...run.matchAll(/(?:https?:\/\/|www\.)[^\s<>"'`]+/giu)].map((m) => m[0].replace(/[.,;:!?)]+$/, ''));
 
 const text = (/** @type {string} */ t, bold = false) => ({ kind: { case: /** @type {const} */ ('text'), value: { text: t, bold, italic: false } } });
 const REDACTED_INLINE = { kind: { case: /** @type {const} */ ('redacted'), value: {} } };
@@ -73,15 +112,24 @@ function inlines(/** @type {string} */ line, /** @type {number} */ number, /** @
   /** @type {any[]} */
   const out = [];
   const pattern = /\*\*([^*]+)\*\*|\[([^\]]*)\]\(([^)\s]*)\)|:members\[([^\]]*)(\]?)/g;
+  /** Text as it is kept, with a problem for each bad bare URL in it. @param {string} run */
+  const plain = (run) => {
+    for (const url of bareUrls(run)) {
+      const reason = urlReason(url);
+      if (reason) problems.push({ line: number, message: `the address "${url}" ${reason}` });
+    }
+    return text(run);
+  };
   let at = 0;
   for (const m of line.matchAll(pattern)) {
-    if (m.index > at) out.push(text(line.slice(at, m.index)));
+    if (m.index > at) out.push(plain(line.slice(at, m.index)));
     if (m[1] !== undefined) out.push(text(m[1], true));
     else if (m[2] !== undefined) {
       const href = m[3] ?? '';
-      if (/^(https:\/\/|mailto:)\S+$/.test(href)) out.push({ kind: { case: 'link', value: { href, inlines: [text(m[2])] } } });
+      const reason = urlReason(href);
+      if (reason === undefined) out.push({ kind: { case: 'link', value: { href, inlines: [text(m[2])] } } });
       else {
-        problems.push({ line: number, message: 'links must be https: or mailto:' });
+        problems.push({ line: number, message: `the link "${href}" ${reason}` });
         out.push(text(m[2]));
       }
     } else {
@@ -90,7 +138,7 @@ function inlines(/** @type {string} */ line, /** @type {number} */ number, /** @
     }
     at = m.index + m[0].length;
   }
-  if (at < line.length) out.push(text(line.slice(at)));
+  if (at < line.length) out.push(plain(line.slice(at)));
   return out;
 }
 
@@ -231,8 +279,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
   };
 
   /** @param {Item} item @param {Caller} caller @param {Partial<Entry> & { action: string }} entry @param {boolean} [approving] */
-  const record = (item, caller, entry, approving = false) => {
-    const at = now();
+  const record = (item, caller, entry, approving = false, at = now()) => {
     item.updatedAt = at;
     item.history.push({ at, actorSubject: caller.sub, actorLabel: labelOf(caller, item, approving), actingOfficeId: item.officeId, versionNumber: 0, fromState: '', toState: '', note: '', ...entry });
   };
@@ -262,6 +309,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
           bodyMarkupWithheld: withheld,
           sendBackNote: v.sendBackNote,
           callerEdited: v.editors.has(caller.sub),
+          // E3 round 2: the base a form sends back.
+          ...(v.updatedAt ? { updatedAt: timestamp(v.updatedAt) } : {}),
         });
 
   /** @param {Item} item @param {Caller} caller */
@@ -274,6 +323,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     ...(item.live ? { live: versionMessage(item.live, caller, item.withheld) } : {}),
     ...(item.working ? { working: versionMessage(item.working, caller, item.withheld) } : {}),
     ...(item.withdrawnAt ? { withdrawnAt: timestamp(item.withdrawnAt) } : {}),
+    // E3 fix 1: when it last changed.
+    lastChangedAt: timestamp(item.updatedAt),
   });
 
   /** @param {string} title */
@@ -297,7 +348,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
   /**
    * Adds an item straight into a state, for the seeds (no history check, no caller).
    * @param {{ id?: string, slug: string, kind: string, officeId: string, state: Item['state'], title: string, summary?: string,
-   *   visibility?: Version['visibility'], markup?: string, withheld?: boolean, working?: boolean, sendBackNote?: string, editors?: string[] }} seed
+   *   visibility?: Version['visibility'], markup?: string, withheld?: boolean, working?: boolean, sendBackNote?: string, editors?: string[],
+   *   cleared?: boolean, change?: 'draft' | 'ready' }} seed
    */
   const seed = (seed) => {
     const at = now();
@@ -305,7 +357,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     const version = {
       id: randomUUID(),
       number: 1,
-      status: seed.state === 'published' || seed.state === 'withdrawn' ? 'approved' : seed.state === 'ready' ? 'ready' : 'draft',
+      status: seed.state === 'published' || seed.state === 'withdrawn' ? 'approved' : seed.state === 'ready' ? (seed.cleared ? 'cleared' : 'ready') : 'draft',
       title: seed.title,
       summary: seed.summary ?? '',
       visibility: seed.visibility ?? 'public',
@@ -316,14 +368,21 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       onBehalfOf: '',
       editors: new Set(seed.editors ?? []),
       sendBackNote: seed.sendBackNote ?? '',
+      updatedAt: at,
     };
     if (version.status !== 'draft') version.hash = hashOf(version, version.targets, '');
-    if (version.status === 'ready') version.readyAt = at;
+    if (version.status === 'ready' || version.status === 'cleared') version.readyAt = at;
     if (version.status === 'approved') version.approvedAt = at;
     /** @type {Item} */
     const item = { id: seed.id ?? randomUUID(), slug: seed.slug, kind: seed.kind, officeId: seed.officeId, state: seed.state, updatedAt: at, withheld: seed.withheld ?? false, history: [] };
     if (version.status === 'approved') item.live = version;
     else item.working = version;
+    // E3 fix 1: a published item with a change being written (a draft) or waiting for approval.
+    if (seed.change && item.live) {
+      const change = newVersion(item);
+      change.title = `${seed.title}, changed`;
+      if (seed.change === 'ready') Object.assign(change, { status: 'ready', readyAt: at, hash: hashOf(change, change.targets, '') });
+    }
     if (seed.state === 'withdrawn') item.withdrawnAt = at;
     items.set(item.id, item);
     return item;
@@ -363,6 +422,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
         onBehalfOf: req.onBehalfOf.trim(),
         editors: new Set([caller.sub]),
         sendBackNote: '',
+        updatedAt: item.updatedAt,
       };
       items.set(item.id, item);
       record(item, caller, { action: 'create', versionNumber: 1, toState: 'draft' });
@@ -373,10 +433,22 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const caller = await callerOf(ctx);
       const item = load(req.itemId);
       requireOffice(caller, item);
+      // E3 round 2: a save from a base someone else has changed since writes nothing; an automatic save saves a draft only.
+      const opened = /** @type {Version} */ (item.working ?? item.live);
+      if (req.auto && item.working?.status !== 'draft') throw precondition('an automatic save only saves a draft');
+      // One that carries exactly what is saved overwrites nobody: no conflict, nothing written, as in the API.
+      if (req.baseUpdatedAt && msOf(req.baseUpdatedAt) !== opened.updatedAt?.getTime()) {
+        const carriesSaved =
+          opened.title === req.title.trim() && opened.summary === req.summary.trim() && opened.visibility === (VISIBILITY.get(req.visibility) ?? opened.visibility) && opened.markup === req.bodyMarkup;
+        if (!carriesSaved) throw precondition(STALE_BASE);
+        return { item: itemMessage(item, caller), problems: parseMarkup(opened.markup).problems };
+      }
       const version = item.working ?? newVersion(item);
       const from = version.status;
-      if (version.status === 'ready') {
+      if (version.status === 'ready' || version.status === 'cleared') {
         if (version.printAsIs) throw precondition('a print-as-is version can be approved or sent back, never edited');
+        // A1: an edit after approval voids it, and says so in the history first.
+        if (version.status === 'cleared') record(item, caller, { action: 'approval_voided', versionNumber: version.number, fromState: 'cleared', toState: 'draft' });
         version.status = 'draft';
         delete version.hash;
         if (item.state === 'ready') item.state = 'draft';
@@ -390,7 +462,15 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       version.markup = req.bodyMarkup;
       if (version.visibility === 'officers') version.targets = { ...version.targets, newsletter: false, email: false };
       version.editors.add(caller.sub);
-      record(item, caller, { action: 'save', versionNumber: version.number, fromState: from, toState: 'draft' });
+      // Never the same time twice, so a base always tells two saves apart.
+      const at = new Date(Math.max(now().getTime(), (version.updatedAt?.getTime() ?? 0) + 1));
+      version.updatedAt = at;
+      // Consecutive automatic saves by one person on one version within 10 minutes are one step, as in the API.
+      const last = item.history.at(-1);
+      const repeat =
+        req.auto && last?.action === 'autosave' && last.actorSubject === caller.sub && last.versionNumber === version.number && version.updatedAt.getTime() - last.at.getTime() < 10 * 60_000;
+      if (repeat) item.updatedAt = at;
+      else record(item, caller, { action: req.auto ? 'autosave' : 'save', versionNumber: version.number, fromState: from, toState: 'draft' }, false, at);
       return { item: itemMessage(item, caller), problems: parseMarkup(version.markup).problems };
     },
 
@@ -480,9 +560,21 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const caller = await callerOf(ctx);
       requireReader(caller);
       /** @type {string[]} */
-      const states = req.states.length === 0 ? ['draft', 'ready'] : req.states.map((/** @type {number} */ s) => STATE_IN.get(s)).filter(Boolean);
+      // A1: version_statuses names the working version's status; else states names draft and ready; else all
+      // three (draft, ready, cleared). E3 fix 1: published and withdrawn in states name the item's state,
+      // read only when version_statuses is empty.
+      const named = req.states.map((/** @type {number} */ s) => STATE_IN.get(s));
+      const byVersion = (req.versionStatuses ?? []).length > 0;
+      const states = byVersion
+        ? req.versionStatuses.map((/** @type {number} */ s) => STATUS_IN.get(s)).filter(Boolean)
+        : req.states.length === 0
+          ? ['draft', 'ready', 'cleared']
+          : named.filter((s) => s === 'draft' || s === 'ready');
+      /** @type {string[]} */
+      const itemStates = byVersion ? [] : named.filter((s) => s === 'published' || s === 'withdrawn');
+      const byStatus = (/** @type {Item} */ i) => i.working !== undefined && states.includes(i.working.status);
       const listed = [...items.values()]
-        .filter((i) => i.working !== undefined && states.includes(i.working.status) && (req.officeId === '' || i.officeId === req.officeId) && (req.editionId === '' || i.working.editionId === req.editionId))
+        .filter((i) => (byStatus(i) || itemStates.includes(i.state)) && (req.officeId === '' || i.officeId === req.officeId) && (req.editionId === '' || (byStatus(i) ? i.working?.editionId : i.live?.editionId) === req.editionId))
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || a.id.localeCompare(b.id));
       return { items: listed.map((i) => itemMessage(i, caller)) };
     },

@@ -410,17 +410,18 @@ test.describe('fix 1: officers and the Admin need no member account (SHOULD-2, N
 
 test.describe('fix 1: the officer area admits each role, with only its own links', () => {
   const links = (page: Page) => page.locator('main .link-list a');
+  // EDITOR E3: "Write news" for everyone the editor admits (an officer, the Admin, the Webmaster).
   const cases = [
     { login: 'lone-approver', links: ['Sign-ups to approve'] },
-    { login: 'lone-webmaster', links: [] },
-    { login: 'lone-admin', links: ['Sign-ups to approve', 'Approval setting'] },
-    { login: 'admin', links: ['Sign-ups to approve', 'Approval setting'] },
-    { login: 'approver', links: ['Sign-ups to approve'] },
-    { login: 'officer', links: [] },
-    { login: 'webmaster', links: [] },
+    { login: 'lone-webmaster', links: ['Write news'] },
+    { login: 'lone-admin', links: ['Write news', 'Sign-ups to approve', 'Approval setting'] },
+    { login: 'admin', links: ['Write news', 'Sign-ups to approve', 'Approval setting'] },
+    { login: 'approver', links: ['Write news', 'Sign-ups to approve'] },
+    { login: 'officer', links: ['Write news'] },
+    { login: 'webmaster', links: ['Write news'] },
   ] as const;
   for (const c of cases) {
-    test(`${c.login}: let in, linked from the header, and shown ${c.links.length === 0 ? 'no links' : c.links.join(' and ')}`, async ({ page }) => {
+    test(`${c.login}: let in, linked from the header, and shown ${c.links.join(' and ')}`, async ({ page }) => {
       await page.goto('/');
       await signIn(page, c.login);
       await (await openAccount(page)).getByRole('link', { name: 'Officer area' }).click();

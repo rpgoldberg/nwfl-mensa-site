@@ -1724,3 +1724,71 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 }
 /* Light pages only where the theme recolours the pages. */
 .viewer.viewer--js:not([data-tone="dark"]):not([data-tone="tint"]) :is([data-ov="tone"], [data-ov-item="tone"]) { display: none; }
+
+/* EDITOR E3: the officers' writer screens (S2-S5). Large and plain: labels above the fields, 18 px text
+   in the text box (in the page's own proportional face), buttons 48 px tall with words on them, one
+   column on a phone, the two previews side by side from 1100 px. */
+.button--wide { width: 100%; }
+.writer-start { margin: var(--space-4) 0; }
+.writer-list { list-style: none; padding: 0; margin: var(--space-4) 0; display: grid; gap: var(--space-3); }
+.writer-card { margin: 0; }
+.writer-card h2 { overflow-wrap: anywhere; }
+.writer-links { margin: var(--space-4) 0; }
+.editor-form { max-width: 48rem; }
+.editor-form .field { display: grid; gap: var(--space-2); min-width: 0; }
+.editor-form input[type="checkbox"] { width: 1.5rem; height: 1.5rem; flex: none; margin: 0; }
+.editor-form .markup-box {
+  min-height: calc(15 * 1.5em);
+  font-family: inherit;
+  font-size: max(1.125rem, 18px);
+  line-height: 1.5;
+  resize: vertical;
+}
+.roster-warning { margin: 0; padding: var(--space-2) var(--space-3); border-left: 0.375rem solid var(--stop); background: var(--stop-bg); color: var(--ink); }
+.toolbar { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.toolbar[hidden], .restore[hidden] { display: none; }
+.toolbar .button { padding: 0 var(--space-3); }
+.how-to-format { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border: var(--border) solid var(--line); border-radius: var(--radius); }
+.how-to-format h2 { margin: 0; font-size: 1.25rem; }
+.how-to-format p { margin: 0; }
+.how-to-format dl { display: grid; gap: var(--space-2); margin: 0; }
+.how-to-format dl div { display: grid; gap: 0; min-width: 0; }
+.how-to-format dt { font-weight: 700; }
+.how-to-format dd { margin: 0; overflow-wrap: anywhere; }
+.how-to-format code { font-size: 1rem; }
+.sign-in-line { margin: var(--space-3) 0; font-weight: 700; }
+.sign-in-line[data-state="soon"] { padding: var(--space-2) var(--space-3); border: var(--border) solid var(--warn); border-left-width: 0.375rem; border-radius: var(--radius); background: var(--warn-bg); }
+.restore .btns { margin-top: var(--space-2); }
+.problems li a { overflow-wrap: anywhere; }
+.report-events__list { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-3); }
+.report-events__list p { margin: 0; }
+@container page (min-width: 68.75rem) { .previews.cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.editor-form input[type="text"] { max-width: none; }
+/* A status in words can be long ("Published – an approved change is waiting to be published"): it wraps
+   inside its chip, which keeps its outline and rounds less, rather than run off a narrow screen. */
+.writer-card .chip, .item-header .chip { white-space: normal; border-radius: var(--radius); overflow-wrap: anywhere; }
+.editor-form .choice label { min-width: 0; overflow-wrap: anywhere; }
+/* A long address in a preview's text wraps, rather than push the frame past a narrow screen. */
+.previews .prose { overflow-wrap: anywhere; }
+/* EDITOR E3 fix 1: "Our news" is a table where the list is wide enough (Title, Office, Status, Last change,
+   Open), measured on the list's own width in rem, so large text gets the cards instead; a card each below. */
+.writer-items { container: writer / inline-size; max-width: none; }
+.writer-table { display: none; width: 100%; border-collapse: collapse; margin: var(--space-3) 0; }
+.writer-table caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: 1.25rem; padding-bottom: var(--space-2); }
+.writer-table th, .writer-table td { padding: var(--space-2) var(--space-3); border-bottom: var(--border) solid var(--line); text-align: left; vertical-align: top; overflow-wrap: break-word; }
+.writer-table tbody th { overflow-wrap: anywhere; }
+.writer-table thead th { font-size: var(--fs-small); color: var(--muted); }
+.writer-table tbody th { font-weight: 700; }
+.writer-table .chip { white-space: normal; border-radius: var(--radius); }
+.writer-table td:last-child { width: 1%; white-space: nowrap; }
+@container writer (min-width: 44rem) {
+  .writer-table { display: table; }
+  .writer-list { display: none; }
+}
+/* The time stays on one line in the table; the caption says the order there. */
+.writer-table td[data-last-change] { white-space: nowrap; }
+@container writer (min-width: 44rem) { .writer-order { display: none; } }
+/* Round 2: the auto-save's status line and conflict note, just above the text box. */
+.autosave-status { margin: var(--space-2) 0; font-weight: 600; }
+.autosave-conflict { margin: var(--space-2) 0; }
+.autosave-status[hidden], [data-autosave-conflict][hidden] { display: none; }

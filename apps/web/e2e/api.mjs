@@ -528,6 +528,11 @@ const WORKFLOW = createWorkflow({
 WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000001', slug: 'seeded-withheld', kind: 'article', officeId: OFFICE.president, state: 'draft', title: 'Seeded: part held back', markup: 'Open words and :members[HELD BACK CANARY]', withheld: true });
 WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000002', slug: 'seeded-waiting', kind: 'announcement', officeId: OFFICE.social, state: 'ready', title: 'Seeded: waiting for approval', summary: 'Bring a chair', markup: 'At the park.\n\n::: members\nThe gate code is 1234.\n:::' });
 WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000003', slug: 'seeded-published', kind: 'president_report', officeId: OFFICE.president, state: 'published', title: 'Seeded: published', markup: 'Thank you all.' });
+// EDITOR E3: approved, waiting to be published (A1's VERSION_STATUS_CLEARED).
+WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000004', slug: 'seeded-cleared', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: approved, ready to publish', markup: 'See you there.', cleared: true });
+// EDITOR E3 fix 1: the President's published item with a change waiting, and one taken down, for "Our news".
+WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000005', slug: 'seeded-changing', kind: 'president_report', officeId: OFFICE.president, state: 'published', title: 'Seeded: published, change waiting', markup: 'Our fall so far.', change: 'ready' });
+WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000006', slug: 'seeded-taken-down', kind: 'announcement', officeId: OFFICE.president, state: 'withdrawn', title: 'Seeded: taken down', markup: 'Gone.' });
 
 // W-SIGNUP: as in e2e/stand-in.ts (ACCOUNTS, SIGNUP_QUEUE). Every member account was last checked on October 20, 2026.
 const ENROLEE_PENDING_SUBJECT = '00000000-0000-4000-8000-0000000000c2';

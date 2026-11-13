@@ -9,9 +9,9 @@ import http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkflow, parseMarkup } from '../e2e/workflow.mjs';
-import { ContentService } from '../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentService, ItemState, VersionStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { ApiNotFound } from '../src/lib/api/client';
-import { EditorRefused, type EditorApi, type EditorItem, NotAllowed, SlugTaken, VersionChanged, grpcEditor } from '../src/lib/api/editor';
+import { DraftChanged, EditorRefused, type EditorApi, type EditorItem, NotAllowed, SlugTaken, VersionChanged, grpcEditor } from '../src/lib/api/editor';
 import { editFormFor } from '../src/lib/editor/form';
 import { historySentences } from '../src/lib/editor/history';
 import { createWithSlug } from '../src/lib/editor/slug';
@@ -123,7 +123,7 @@ describe('the stand-in workflow: writing', () => {
     const item = await create('officer', 'With a bad link');
     const saved = await save('officer', item, 'See [the club](http://club.example).\n### Too deep', 'members');
     expect(saved.problems).toEqual([
-      { line: 1, message: 'links must be https: or mailto:' },
+      { line: 1, message: 'the link "http://club.example" must start with https://, not http://' },
       { line: 2, message: 'only two heading levels (# and ##)' },
     ]);
     expect(saved.item.working).toMatchObject({ visibility: 'members', summary: 'A summary', markup: 'See [the club](http://club.example).\n### Too deep' });
@@ -354,7 +354,128 @@ describe('parseMarkup (the stand-in\'s part of the API\'s markup)', () => {
     expect(parseMarkup('a :members[open\n:::\n[x](javascript:alert(1))').problems).toEqual([
       { line: 1, message: 'unclosed :members[' },
       { line: 2, message: 'closing ::: without an opening ::: members' },
-      { line: 3, message: 'links must be https: or mailto:' },
+      { line: 3, message: 'the link "javascript:alert(1" is not a web address starting with https:// or an email address starting with mailto:' },
     ]);
+  });
+
+  // EDITOR E3: A3a's strict URL rule at save (apps/api/src/links/rule.ts), in its words, for the URL problems
+  // the edit page lists line by line: a link's address, and a bare address in the text.
+  it("names a bad address in a link or in the text, in A3a's words, on its own line", () => {
+    expect(parseMarkup('Fine [a](https://a.example) and mailto in [b](mailto:b@example.org).\nSee http://club.example/picnic, then www.club.example.\n[c](https://c.example) and https://ok.example/path.').problems).toEqual([
+      { line: 2, message: 'the address "http://club.example/picnic" must start with https://, not http://' },
+      { line: 2, message: 'the address "www.club.example" must be written in full, starting with https://' },
+    ]);
+    expect(parseMarkup('- [x](HTTPS://X.example)\n# A heading with http://h.example').problems).toEqual([
+      { line: 1, message: 'the link "HTTPS://X.example" must be written plainly: https:// or mailto: in lower case, and no spaces' },
+      { line: 2, message: 'the address "http://h.example" must start with https://, not http://' },
+    ]);
+  });
+});
+
+describe('the stand-in workflow: approved, ready to publish (A1\'s VERSION_STATUS_CLEARED)', () => {
+  it('seeds a cleared version, lists it with drafts and ready ones, and reads it as "Approved, ready to publish"', async () => {
+    const cleared = model.seed({ slug: 'seed-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
+    const read = await api.getWorkingItem(as('officer'), cleared.id);
+    expect(read).toMatchObject({ state: 'ready', working: { status: 'cleared' } });
+    expect(read.working?.contentHash).toHaveLength(32);
+    expect(statusOf(read).label).toBe('Approved, ready to publish');
+    expect((await api.listWorkingItems(as('officer'))).map((i) => i.id)).toContain(cleared.id);
+    expect((await api.listWorkingItems(as('officer'), { states: ['draft'] })).map((i) => i.id)).not.toContain(cleared.id);
+  });
+
+  it('takes an edit of a cleared version back to a draft: the approval no longer counts', async () => {
+    const cleared = model.seed({ slug: 'seed-cleared-edit', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
+    const { item } = await api.saveDraft(as('officer'), { itemId: cleared.id, title: 'Cleared', summary: '', visibility: 'public', markup: 'Changed.' });
+    expect(item).toMatchObject({ state: 'draft', working: { status: 'draft' } });
+    expect(item.working?.contentHash).toHaveLength(0);
+    expect((await api.listItemHistory(as('officer'), cleared.id)).map((h) => h.action)).toEqual(['approval_voided', 'save']);
+  });
+});
+
+describe('the stand-in workflow: the writers\' list (E3 fix 1)', () => {
+  it('lists published and taken-down items by their states, each with when it last changed', async () => {
+    const published = model.seed({ slug: 'seed-fix1-published', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    const changing = model.seed({ slug: 'seed-fix1-changing', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live, changing', change: 'ready' });
+    const down = model.seed({ slug: 'seed-fix1-down', kind: 'announcement', officeId: PRESIDENT.id, state: 'withdrawn', title: 'Down' });
+    const writing = await create('officer', 'Being written');
+    const listed = await api.listWorkingItems(as('officer'), { states: ['published', 'withdrawn'] });
+    expect(listed.map((i) => i.id)).toEqual(expect.arrayContaining([published.id, changing.id, down.id]));
+    expect(listed.map((i) => i.id)).not.toContain(writing.id);
+    expect(statusOf(listed.find((i) => i.id === changing.id) as EditorItem).label).toBe('Published – a change is waiting for approval');
+    expect((await api.listWorkingItems(as('officer'))).map((i) => i.id)).toEqual(expect.arrayContaining([writing.id, changing.id]));
+    expect((await api.listWorkingItems(as('officer'))).map((i) => i.id)).not.toContain(published.id);
+    for (const item of [...listed, writing]) expect(item.lastChangedAt).toBeInstanceOf(Date);
+    const saved = await save('officer', writing, 'Changed.');
+    expect(saved.item.lastChangedAt!.getTime()).toBeGreaterThan(writing.lastChangedAt!.getTime());
+  });
+});
+
+describe('the stand-in workflow: A1\'s version_statuses on the list', () => {
+  it('lists by the working version\'s status when given, and then reads no item state', async () => {
+    const raw = model.handlers(() => PEOPLE['officer'] as never);
+    const cleared = model.seed({ slug: 'seed-vs-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
+    const published = model.seed({ slug: 'seed-vs-published', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    const writing = await create('officer', 'Being written');
+    const list = async (versionStatuses: VersionStatus[], states: ItemState[] = []) =>
+      ((await raw.listWorkingItems({ versionStatuses, states, officeId: '', editionId: '' }, {} as never)) as { items: { id: string }[] }).items.map((i) => i.id);
+    expect(await list([VersionStatus.CLEARED])).toEqual([cleared.id]);
+    const drafts = await list([VersionStatus.DRAFT], [ItemState.PUBLISHED]);
+    expect(drafts).toContain(writing.id);
+    expect(drafts).not.toContain(published.id);
+    expect(drafts).not.toContain(cleared.id);
+  });
+});
+
+describe('the stand-in workflow: auto-save with guards (E3 round 2)', () => {
+  const put = (who: keyof typeof PEOPLE, item: EditorItem, markup: string, extra: { base?: string; auto?: boolean } = {}) =>
+    api.saveDraft(as(who), { itemId: item.id, title: item.working?.title ?? item.live?.title ?? 'T', summary: '', visibility: 'public', markup, ...extra });
+  const actions = async (item: EditorItem) => (await api.listItemHistory(as('officer'), item.id)).map((s) => s.action);
+
+  it('gives each version a base, refuses a save from a changed one and writes nothing, and saves from the current one', async () => {
+    const item = await create('officer', 'Based');
+    const opened = (await api.getWorkingItem(as('officer'), item.id)).working?.base;
+    expect(opened).toMatch(/^\d+\.\d{9}$/);
+    const theirs = await put('admin', item, 'The Admin was here.', { base: opened! });
+    expect(theirs.item.working?.base).not.toBe(opened);
+    const before = await actions(item);
+    for (const auto of [false, true]) expect(await refusal(put('officer', item, 'Mine.', { base: opened!, auto }))).toBeInstanceOf(DraftChanged);
+    expect((await api.getWorkingItem(as('officer'), item.id)).working?.markup).toBe('The Admin was here.');
+    expect(await actions(item)).toEqual(before);
+    expect((await put('officer', item, 'Mine, on theirs.', { base: theirs.item.working!.base! })).item.working?.markup).toBe('Mine, on theirs.');
+    const seeded = model.seed({ slug: 'seed-based-live', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    const live = await api.getWorkingItem(as('officer'), seeded.id);
+    const liveBase = live.live?.base;
+    await put('admin', live, 'A change by the Admin.');
+    expect(await refusal(put('officer', live, 'Mine.', { base: liveBase! }))).toBeInstanceOf(DraftChanged);
+  });
+
+  it('finds no conflict in a save from a stale base that carries what is saved: nothing written, the current base back', async () => {
+    const item = await create('officer', 'Landed first');
+    const opened = (await api.getWorkingItem(as('officer'), item.id)).working?.base;
+    const landed = await put('officer', item, 'Typed, then reloaded.', { base: opened!, auto: true });
+    const before = await actions(item);
+    const again = await put('officer', item, 'Typed, then reloaded.', { base: opened! });
+    expect(again.item.working?.base).toBe(landed.item.working?.base);
+    expect(await actions(item)).toEqual(before);
+    expect(await refusal(put('officer', item, 'Typed, then reloaded, and more.', { base: opened! }))).toBeInstanceOf(DraftChanged);
+  });
+
+  it('saves a draft automatically, one history step for consecutive ones; refuses any other, writing nothing', async () => {
+    const item = await create('officer', 'Auto');
+    for (const n of [1, 2, 3]) await put('officer', item, `Draft ${n}.`, { auto: true });
+    await put('officer', item, 'By hand.');
+    await put('officer', item, 'Again.', { auto: true });
+    expect(await actions(item)).toEqual(['create', 'autosave', 'save', 'autosave']);
+    expect(historySentences(await api.listItemHistory(as('officer'), item.id), { you: PEOPLE['officer']!.sub })[0]?.sentence).toContain('President (you) saved a draft automatically (version 1).');
+    const ready = model.seed({ slug: 'seed-auto-ready', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Ready' });
+    const cleared = model.seed({ slug: 'seed-auto-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
+    const live = model.seed({ slug: 'seed-auto-live', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    for (const seeded of [ready, cleared, live]) {
+      const read = await api.getWorkingItem(as('officer'), seeded.id);
+      expect(await refusal(put('officer', read, 'Saved by itself?', { auto: true }))).toMatchObject({ reason: 'an automatic save only saves a draft' });
+      const after = await api.getWorkingItem(as('officer'), seeded.id);
+      expect(after.working?.status).toBe(read.working?.status);
+      expect(after.working?.id).toBe(read.working?.id);
+    }
   });
 });

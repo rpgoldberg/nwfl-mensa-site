@@ -61,6 +61,9 @@ const LOGINS = {
   'lone-admin': { id: '00000000-0000-4000-8000-0000000000ae', name: 'Rowan Example', groups: ['nwfl-admin'] },
   // S2: the Admin, an officer, whose token lapses at once: each officer page then says to sign in again.
   'lapsed-admin': { id: '00000000-0000-4000-8000-0000000000af', name: 'Hollis Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-admin'], tokenSeconds: 20 },
+  // EDITOR E3: the Treasurer, whose token outlives the site's 30-second margin by 15 seconds: time to open
+  // an item and type, then the sign-in runs out before Save draft.
+  'writer-lapsing': { id: '00000000-0000-4000-8000-0000000000f7', name: 'Sage Example', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer'], tokenSeconds: 45 },
   // W-SIGNUP: an enrolee with no account yet; one an officer invited (fc INVITE1's groups); and the
   // Membership Officer, a membership approver, who also has a sign-up of their own in the queue.
   // PROFILE-ID: a given name, which the sign-up's first name is prefilled from.

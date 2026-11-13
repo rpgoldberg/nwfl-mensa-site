@@ -41,7 +41,7 @@
 // caller a precise answer first.
 // ============================================================================
 import { create } from '@bufbuild/protobuf';
-import { timestampFromDate } from '@bufbuild/protobuf/wkt';
+import { type Timestamp, TimestampSchema, timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type HandlerContext, type ServiceImpl } from '@connectrpc/connect';
 import { recordAudit } from '../audit/audit.js';
 import { type Audience, type Caller, callerOf } from '../auth/caller.js';
@@ -82,6 +82,20 @@ export interface WorkflowDeps {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const VISIBILITY_NAMES = namesOf(ITEM_VISIBILITIES);
 const STATE_NAMES = namesOf(STATES);
+
+/** EDITOR E3: SaveDraft's refusal of a base someone else has changed since; the site tells it apart by these words. */
+export const STALE_BASE = 'This draft was changed by someone else since you opened it';
+/** A Timestamp as microseconds since the epoch, exactly (Postgres keeps microseconds). */
+function microsOf(at: Timestamp): string {
+  return (at.seconds * 1000000n + BigInt(Math.trunc(at.nanos / 1000))).toString();
+}
+/** Microseconds since the epoch, as a Timestamp. */
+function timestampOfMicros(us: string): Timestamp {
+  const total = BigInt(us);
+  const seconds = total / 1000000n;
+  const rest = total % 1000000n;
+  return rest < 0n ? create(TimestampSchema, { seconds: seconds - 1n, nanos: Number(rest + 1000000n) * 1000 }) : create(TimestampSchema, { seconds, nanos: Number(rest) * 1000 });
+}
 const VERSION_STATUS_NAMES = namesOf(VERSION_STATUSES);
 /** A working version's statuses: what ListWorkingItems lists by default. */
 const WORKING_STATUSES = ['draft', 'ready', 'cleared'];
@@ -100,6 +114,8 @@ interface ItemRow {
 }
 
 export interface VersionRow {
+  /** When it was last saved (EDITOR E3); to the millisecond here, to the microsecond on the officer reads. */
+  updated_at: Date;
   id: string;
   item_id: string;
   n: number;
@@ -527,8 +543,33 @@ async function officerItem(client: TxClient, itemId: string, caller: Caller): Pr
     rule: async () => (rule ??= await readRule(client, 'content')),
     office: { slug: item.office_slug, title: item.office_title },
   };
-  const live = liveRow === undefined ? undefined : await versionMessage(client, liveRow, lens, viewer);
-  const working = workingRow === undefined ? undefined : await versionMessage(client, workingRow, lens, viewer);
+  // EDITOR E3: the latest audited step is the last change; a read (an export) is none.
+  // An automatic save that adds no audit row still moves the working version's updated_at; to the microsecond,
+  // as updated_at is read (a Date would round it).
+  const changed = (
+    await client.query<{ us: string | null }>(
+      `SELECT (extract(epoch FROM GREATEST(
+                 (SELECT max(at) FROM audit_event WHERE item_id = $1 AND action NOT LIKE '%\\_read' ESCAPE '\\'),
+                 (SELECT updated_at FROM content_version WHERE id = $2))) * 1000000)::bigint::text AS us`,
+      [item.id, workingRow?.id ?? null],
+    )
+  ).rows[0]?.us;
+  // EDITOR E3: each version's updated_at to the microsecond, the base a form sends back.
+  const stamps = new Map(
+    (
+      await client.query<{ id: string; us: string }>(`SELECT id, (extract(epoch FROM updated_at) * 1000000)::bigint::text AS us FROM content_version WHERE id = ANY($1::uuid[])`, [
+        [liveRow?.id, workingRow?.id].filter((id) => id !== undefined),
+      ])
+    ).rows.map((row) => [row.id, timestampOfMicros(row.us)]),
+  );
+  const stamped = async (row: VersionRow | undefined) => {
+    if (row === undefined) return undefined;
+    const message = await versionMessage(client, row, lens, viewer);
+    message.updatedAt = stamps.get(row.id);
+    return message;
+  };
+  const live = await stamped(liveRow);
+  const working = await stamped(workingRow);
   return create(ContentItemSchema, {
     id: item.id,
     slug: slugFor(item, lens),
@@ -538,6 +579,7 @@ async function officerItem(client: TxClient, itemId: string, caller: Caller): Pr
     ...(live !== undefined ? { live } : {}),
     ...(working !== undefined ? { working } : {}),
     ...(item.withdrawn_at !== null ? { withdrawnAt: timestampFromDate(item.withdrawn_at) } : {}),
+    ...(changed ? { lastChangedAt: timestampOfMicros(changed) } : {}),
   });
 }
 
@@ -647,6 +689,27 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         const base = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string);
         const lens = await loadLens(client, caller.audience, { items: [item.id], versions: [base.id] });
         if (withholds(lens, base)) throw precondition('part of this item is withheld from you; an officer who can see all of it must edit it');
+        // An automatic save saves a draft only: never a ready or approved version, never a new version.
+        if (request.auto && (item.working_version_id === null || base.status !== 'draft')) throw precondition('an automatic save only saves a draft');
+        // EDITOR E3: a save from a base someone else has changed since writes nothing (the item is locked). One
+        // that carries exactly what is saved overwrites nobody (the page's own save, sent as it was left, landed
+        // first): no conflict, and still nothing written; the item comes back with its current base.
+        if (request.baseUpdatedAt !== undefined) {
+          const { rows } = await client.query<{ same: boolean }>(`SELECT updated_at = timestamptz 'epoch' + $2::bigint * interval '1 microsecond' AS same FROM content_version WHERE id = $1`, [
+            base.id,
+            microsOf(request.baseUpdatedAt),
+          ]);
+          if (rows[0]?.same !== true) {
+            const summary = request.summary.trim();
+            const carriesSaved =
+              base.title === request.title.trim() &&
+              (base.summary ?? '') === summary &&
+              base.visibility === (VISIBILITY_NAMES.get(request.visibility) ?? base.visibility) &&
+              base.body_src === request.bodyMarkup;
+            if (!carriesSaved) throw precondition(STALE_BASE);
+            return { item: await officerItem(client, item.id, caller), problems: parseMarkup(request.bodyMarkup).problems };
+          }
+        }
         let version = item.working_version_id !== null ? base : await newVersion(client, item, base, caller);
         const from = version.status;
         if (version.status === 'ready' || version.status === 'cleared') {
@@ -673,8 +736,17 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           )
         ).rows[0] as VersionRow;
         await addEditor(client, version.id, caller.subject as string);
-        await recordAudit(client, caller, {
-          action: 'save',
+        // Consecutive automatic saves by one person on one version within 10 minutes are one 'autosave' row: the
+        // audit is append-only, so the later ones add none; the version's updated_at keeps the last change.
+        const latest = request.auto
+          ? (await client.query<{ action: string; actor_sub: string | null; version_id: string | null; recent: boolean }>(
+              `SELECT action, actor_sub, version_id, at > now() - interval '10 minutes' AS recent FROM audit_event WHERE item_id = $1 ORDER BY id DESC LIMIT 1`,
+              [item.id],
+            )).rows[0]
+          : undefined;
+        const repeat = latest !== undefined && latest.action === 'autosave' && latest.actor_sub === caller.subject && latest.version_id === version.id && latest.recent;
+        if (!repeat) await recordAudit(client, caller, {
+          action: request.auto ? 'autosave' : 'save',
           subjectKind: 'content_version',
           subjectId: version.id,
           itemId: item.id,
@@ -888,14 +960,24 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           : request.states.length > 0
             ? named(request.states.map((state) => STATE_NAMES.get(state)))
             : WORKING_STATUSES;
+      // EDITOR E3: PUBLISHED and WITHDRAWN in the item-state filter name the item's state, whatever its working version.
+      const itemStates =
+        request.versionStatuses.length > 0 ? [] : request.states.map((state) => STATE_NAMES.get(state)).filter((s) => s === 'published' || s === 'withdrawn');
       if (request.officeId !== '') requireId(request.officeId, 'office_id');
       if (request.editionId !== '') requireId(request.editionId, 'edition_id');
       return tx(async (client) => {
+        // A working version listed for its status is filtered by its edition; an item listed for its
+        // state by its live version's. Newest change first: the latest audited step that is no read.
         const { rows } = await client.query<{ id: string }>(
-          `SELECT i.id FROM content_item i JOIN content_version w ON w.id = i.working_version_id
-           WHERE w.status = ANY($1) AND ($2::uuid IS NULL OR i.office_id = $2) AND ($3::uuid IS NULL OR w.edition_id = $3)
-           ORDER BY w.updated_at DESC, i.id`,
-          [statuses, request.officeId === '' ? null : request.officeId, request.editionId === '' ? null : request.editionId],
+          `SELECT i.id FROM content_item i
+             LEFT JOIN content_version w ON w.id = i.working_version_id
+             LEFT JOIN content_version l ON l.id = i.live_version_id
+             LEFT JOIN LATERAL (SELECT max(a.at) AS at FROM audit_event a WHERE a.item_id = i.id AND a.action NOT LIKE '%\\_read' ESCAPE '\\') c ON true
+           WHERE (w.status = ANY($1) OR i.state = ANY($4))
+             AND ($2::uuid IS NULL OR i.office_id = $2)
+             AND ($3::uuid IS NULL OR (CASE WHEN w.status = ANY($1) THEN w.edition_id ELSE l.edition_id END) = $3)
+           ORDER BY COALESCE(GREATEST(c.at, w.updated_at), i.updated_at) DESC, i.id`,
+          [statuses, request.officeId === '' ? null : request.officeId, request.editionId === '' ? null : request.editionId, itemStates],
         );
         const items: ContentItem[] = [];
         for (const row of rows) {

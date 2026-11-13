@@ -18,8 +18,13 @@
 //   NOT_FOUND            ApiNotFound, as for the public reads; also an item id that is not one, never sent
 //   anything else        ApiUnavailable
 // Each is logged by call and code only: never the API's message, the token or what was typed.
+//
+// EDITOR E3: two public reads beside the workflow, sent as the public (no bearer): the roster, for the
+// office ids an item is posted as, and an office's upcoming events, for the President's report's events
+// box. Any failure there is ApiUnavailable.
 import type { MessageInitShape } from '@bufbuild/protobuf';
-import { timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
+import { create } from '@bufbuild/protobuf';
+import { TimestampSchema, timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
 import { PUBLIC_ONLY } from 'astro:env/server';
@@ -35,7 +40,18 @@ import {
   ItemVisibility,
   VersionStatus,
 } from '../../gen/nwfl/mensa/v1/content_pb.js';
-import { type EventOccurrence, type EventOccurrenceSchema, type EventSeries, type EventSeriesSchema, EventService, type Venue, type VenueSchema } from '../../gen/nwfl/mensa/v1/event_pb.js';
+import {
+  type EventOccurrence,
+  type EventOccurrenceSchema,
+  type EventSeries,
+  type EventSeriesSchema,
+  EventService,
+  OccurrenceStatus,
+  type Venue,
+  type VenueSchema,
+} from '../../gen/nwfl/mensa/v1/event_pb.js';
+import { type EventStatus, centralParts } from '../calendar';
+import type { RosterOffice } from '../editor/writer';
 import { type ApiConfig, ApiNotFound, ApiUnavailable, READ_MAX_BYTES, type Reader, apiSetup, sendable } from './client';
 import { sessionReader } from './membership';
 import { OfficerSignInAgain, type OfficerReaderDeps } from './officer';
@@ -44,6 +60,29 @@ import { OfficerSignInAgain, type OfficerReaderDeps } from './officer';
 export { OfficerSignInAgain as SignInAgain };
 
 /** The version changed since the approver opened it: show it again. */
+/** E3 round 2: SaveDraft refused a save from a base someone else has changed since; nothing was written. */
+export class DraftChanged extends Error {
+  constructor(readonly rpc: string) {
+    super(`the draft changed before ${rpc}`);
+    this.name = 'DraftChanged';
+  }
+}
+
+/** The API's words for that refusal (apps/api/src/content/workflow.ts STALE_BASE). */
+export const STALE_BASE = 'This draft was changed by someone else since you opened it';
+
+/** A version's base, as a form carries it: "<seconds>.<nanoseconds, 9 digits>", exact (a Date keeps milliseconds only). */
+export function baseToken(at: Timestamp): string {
+  return `${at.seconds}.${String(at.nanos).padStart(9, '0')}`;
+}
+
+/** A form's base back as a timestamp; none for an empty one; one that is no base is the epoch, which is never current. */
+export function baseTimestamp(token: string): Timestamp | undefined {
+  if (token === '') return undefined;
+  const match = /^(\d{1,12})\.(\d{9})$/.exec(token);
+  return create(TimestampSchema, match ? { seconds: BigInt(match[1] as string), nanos: Number(match[2]) } : { seconds: 0n, nanos: 0 });
+}
+
 export class VersionChanged extends Error {
   constructor(readonly rpc: string) {
     super(`the version changed before ${rpc}`);
@@ -129,6 +168,8 @@ export interface EditorVersion {
   sendBackNote: string;
   /** This officer edited the version: approving it needs one approver set, or the Admin's break-glass. */
   callerEdited: boolean;
+  /** E3 round 2: when it was last saved, as a base for the next save (baseToken). */
+  base?: string;
 }
 
 export interface EditorItem {
@@ -142,6 +183,8 @@ export interface EditorItem {
   /** The draft or ready revision. */
   working?: EditorVersion;
   withdrawnAt?: Date;
+  /** E3: when it last changed (its latest audited step); officer reads. */
+  lastChangedAt?: Date;
 }
 
 export interface Problem {
@@ -173,15 +216,32 @@ export interface HistoryStep {
   note: string;
 }
 
+/** One of an office's events, as the President's report's events box lists it. */
+export interface OfficeEvent {
+  id: string;
+  title: string;
+  /** The Central date, YYYY-MM-DD. */
+  date: string;
+  /** Central wall clock, HH:MM; unset while the time is not decided. */
+  start?: string;
+  end?: { date: string; time: string };
+  status: EventStatus;
+  statusNote: string;
+}
+
 export interface EditorApi {
   createItem(as: Reader, item: { kind: KindName; officeId: string; slug: string; title: string; onBehalfOf?: string }): Promise<EditorItem>;
-  saveDraft(as: Reader, draft: { itemId: string; title: string; summary: string; visibility: VisibilityName; markup: string }): Promise<{ item: EditorItem; problems: Problem[] }>;
+  /** `base`: the version's base as the form opened it (a changed one is refused: DraftChanged); `auto`: an automatic save, of a draft only. */
+  saveDraft(
+    as: Reader,
+    draft: { itemId: string; title: string; summary: string; visibility: VisibilityName; markup: string; base?: string; auto?: boolean },
+  ): Promise<{ item: EditorItem; problems: Problem[] }>;
   markReady(as: Reader, ready: { itemId: string; targets: Targets; editionId?: string; printAsIs?: boolean }): Promise<EditorItem>;
   sendBack(as: Reader, back: { itemId: string; note: string }): Promise<EditorItem>;
   /** `targets` and `editionId` unset keep what was chosen at ready; `breakGlass` is the Admin's own change, with a reason. */
   approve(as: Reader, approval: { itemId: string; contentHash: Uint8Array; targets?: Targets; editionId?: string; breakGlass?: { reason: string } }): Promise<EditorItem>;
   withdraw(as: Reader, itemId: string): Promise<EditorItem>;
-  /** No states: drafts and ready ones. */
+  /** No states: drafts and ready ones (by the working version); published and withdrawn: items in that state (E3). */
   listWorkingItems(as: Reader, filter?: { states?: readonly StateName[]; officeId?: string; editionId?: string }): Promise<EditorItem[]>;
   getWorkingItem(as: Reader, itemId: string): Promise<EditorItem>;
   /** Oldest first, as the API gives it. */
@@ -193,6 +253,10 @@ export interface EditorApi {
   saveSeries(as: Reader, series: MessageInitShape<typeof EventSeriesSchema>, active?: boolean): Promise<EventSeries>;
   /** `active` unset keeps the venue as it is. */
   saveVenue(as: Reader, venue: MessageInitShape<typeof VenueSchema>, active?: boolean): Promise<Venue>;
+  /** E3: the roster's active offices, in its order, read as the public. */
+  offices(): Promise<RosterOffice[]>;
+  /** E3: the office's events from `from` to `to` (YYYY-MM-DD, Central), read as the public: its one-offs, and its series' dates. */
+  officeEvents(officeId: string, from: string, to: string): Promise<OfficeEvent[]>;
 }
 
 const KINDS: Record<KindName, ContentKind> = {
@@ -242,6 +306,7 @@ function versionOf(v: ContentVersion): EditorVersion {
     onBehalfOf: v.onBehalfOf,
     ...(v.readyAt === undefined ? {} : { readyAt: timestampDate(v.readyAt) }),
     ...(v.approvedAt === undefined ? {} : { approvedAt: timestampDate(v.approvedAt) }),
+    ...(v.updatedAt === undefined ? {} : { base: baseToken(v.updatedAt) }),
     sendBackNote: v.sendBackNote,
     callerEdited: v.callerEdited,
   };
@@ -258,6 +323,7 @@ function itemOf(item: ContentItem | undefined): EditorItem {
     ...(item.live === undefined ? {} : { live: versionOf(item.live) }),
     ...(item.working === undefined ? {} : { working: versionOf(item.working) }),
     ...(item.withdrawnAt === undefined ? {} : { withdrawnAt: timestampDate(item.withdrawnAt) }),
+    ...(item.lastChangedAt === undefined ? {} : { lastChangedAt: timestampDate(item.lastChangedAt) }),
   };
 }
 
@@ -285,6 +351,34 @@ function plainReason(message: string): string {
   // By code points, so a cut never splits a character written as two UTF-16 units.
   const line = [...message.replace(/[\p{Cc}\p{Cf}]+/gu, ' ').replace(/\s+/g, ' ').trim()];
   return line.length > REASON_MAX ? `${line.slice(0, REASON_MAX - 1).join('').trimEnd()}…` : line.join('');
+}
+
+const EVENT_STATUSES: Partial<Record<OccurrenceStatus, EventStatus>> = {
+  [OccurrenceStatus.SCHEDULED]: 'scheduled',
+  [OccurrenceStatus.TENTATIVE]: 'tentative',
+  [OccurrenceStatus.CANCELLED]: 'cancelled',
+  [OccurrenceStatus.MOVED]: 'moved',
+};
+
+const isoDate = (d: { year: number; month: number; day: number }) => `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`;
+const protoDate = (iso: string) => ({ year: Number(iso.slice(0, 4)), month: Number(iso.slice(5, 7)), day: Number(iso.slice(8, 10)) });
+
+/** An occurrence as the events box lists it; none for a status the site cannot read, or no date. */
+function officeEventOf(o: EventOccurrence): OfficeEvent[] {
+  const status = EVENT_STATUSES[o.status];
+  if (status === undefined || o.localDate === undefined) return [];
+  const start = o.startsAt === undefined ? undefined : centralParts(timestampDate(o.startsAt));
+  return [
+    {
+      id: o.id,
+      title: o.title,
+      date: isoDate(o.localDate),
+      ...(start === undefined ? {} : { start: start.time }),
+      ...(o.endsAt === undefined ? {} : { end: centralParts(timestampDate(o.endsAt)) }),
+      status,
+      statusNote: o.statusNote,
+    },
+  ];
 }
 
 const codeName = (code: Code) => Code[code].replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
@@ -315,6 +409,8 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
         case Code.Aborted:
           throw new VersionChanged(rpc);
         case Code.FailedPrecondition:
+          if (failure.rawMessage === STALE_BASE) throw new DraftChanged(rpc);
+          throw new EditorRefused(rpc, plainReason(failure.rawMessage));
         case Code.InvalidArgument:
           throw new EditorRefused(rpc, plainReason(failure.rawMessage));
         case Code.PermissionDenied:
@@ -330,6 +426,16 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
     }
   };
 
+  /** A public read: no bearer; any failure is unavailable, logged by call and code. */
+  const read = async <T>(rpc: string, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      log(JSON.stringify({ level: 'error', msg: 'api call failed', rpc, code: codeName(ConnectError.from(error).code) }));
+      throw new ApiUnavailable(rpc);
+    }
+  };
+
   return {
     createItem: (as, item) =>
       call('CreateItem', as, async (o) =>
@@ -340,7 +446,11 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
         'SaveDraft',
         as,
         async (o) => {
-          const answer = await content.saveDraft({ itemId: draft.itemId, title: draft.title, summary: draft.summary, visibility: VISIBILITIES[draft.visibility], bodyMarkup: draft.markup }, o);
+          const base = baseTimestamp(draft.base ?? '');
+          const answer = await content.saveDraft(
+            { itemId: draft.itemId, title: draft.title, summary: draft.summary, visibility: VISIBILITIES[draft.visibility], bodyMarkup: draft.markup, auto: draft.auto ?? false, ...(base ? { baseUpdatedAt: base } : {}) },
+            o,
+          );
           return { item: itemOf(answer.item), problems: answer.problems.map((p) => ({ line: p.line, message: p.message })) };
         },
         draft.itemId,
@@ -401,6 +511,16 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
     saveOccurrence: (as, occurrence) => call('SaveOccurrence', as, async (o) => present((await events.saveOccurrence({ occurrence }, o)).occurrence, 'occurrence')),
     saveSeries: (as, series, active) => call('SaveSeries', as, async (o) => present((await events.saveSeries({ series, ...(active === undefined ? {} : { active }) }, o)).series, 'series')),
     saveVenue: (as, venue, active) => call('SaveVenue', as, async (o) => present((await events.saveVenue({ venue, ...(active === undefined ? {} : { active }) }, o)).venue, 'venue')),
+    offices: () =>
+      read('GetRoster', async () => (await content.getRoster({})).offices.filter((o) => o.active).map((o) => ({ id: o.id, slug: o.slug, title: o.title }))),
+    officeEvents: async (officeId, from, to) => {
+      const [occurrences, series] = await Promise.all([
+        read('ListOccurrences', async () => (await events.listOccurrences({ from: protoDate(from), to: protoDate(to), includeCancelled: true })).occurrences),
+        read('ListSeries', async () => (await events.listSeries({ includeInactive: false })).series),
+      ]);
+      const hosted = new Set(series.filter((s) => s.hostOfficeId === officeId).map((s) => s.id));
+      return occurrences.filter((o) => (o.seriesId === '' ? o.ownerOfficeId === officeId : hosted.has(o.seriesId))).flatMap(officeEventOf);
+    },
   };
 }
 
@@ -421,6 +541,8 @@ export function unavailableEditor(): EditorApi {
     saveOccurrence: fail('SaveOccurrence'),
     saveSeries: fail('SaveSeries'),
     saveVenue: fail('SaveVenue'),
+    offices: fail('GetRoster'),
+    officeEvents: fail('ListOccurrences'),
   };
 }
 
@@ -447,12 +569,17 @@ export function editorApi(): EditorApi | undefined {
 /** Who may open the editor's pages: the API also lets the Admin and the Webmaster read the queue (E1). */
 const EDITOR_GROUPS = ['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster'];
 
+/** EDITOR E3: whether the person may open the editor's pages at all (what they may write is postingOffices'). */
+export function editorAdmits(session: Pick<Session, 'groups'> | undefined): boolean {
+  return session !== undefined && session.groups.some((group) => EDITOR_GROUPS.includes(group));
+}
+
 /**
  * The token to send for the editor, if any: for an officer's, the Admin's or the Webmaster's live session
  * whose token has more than 30 seconds to live (officerReader's rule, with the Webmaster too). Lapsed when
  * that session or token has run out (sign in again).
  */
 export function editorReader(session: Session | undefined, deps: OfficerReaderDeps): { reader: Reader | undefined; lapsed: boolean } {
-  if (session === undefined || !session.groups.some((group) => EDITOR_GROUPS.includes(group))) return { reader: undefined, lapsed: false };
+  if (!editorAdmits(session)) return { reader: undefined, lapsed: false };
   return sessionReader(session, deps);
 }
