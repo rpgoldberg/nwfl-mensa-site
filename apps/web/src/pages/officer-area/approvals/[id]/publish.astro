@@ -87,10 +87,13 @@ const errors = outcome?.errors ?? {};
   {outcome?.notice && !outcome.signIn && <p class="notice" role="alert">{outcome.notice}</p>}
   {outcome?.frozen && <p class="notice" role="note">This piece is for {outcome.frozen}, which is now frozen for print. <a href={`${REVIEW_LINKS.review(id)}#send-back`}>Send it back</a> so the author can pick another edition.</p>}
   {errors['republish'] && (
-    <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
-      <h2 id="error-summary-title">There is a problem</h2>
-      <ul><li><a href="#republish">{errors['republish']}</a></li></ul>
-    </section>
+    <>
+      <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+        <h2 id="error-summary-title">There is a problem</h2>
+        <ul><li><a href="#republish">{errors['republish']}</a></li></ul>
+      </section>
+      <script is:inline type="module" src="/scripts/error-summary.js"></script>
+    </>
   )}
   {item && working?.status === 'cleared' && working.callerMayPublish && (
     <form method="post" action={HERE} class="rule-form" novalidate>

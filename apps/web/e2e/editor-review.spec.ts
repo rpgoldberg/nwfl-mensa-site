@@ -141,17 +141,109 @@ test.describe('approving, with no script', () => {
     await expect(page.getByText('0 of 3 links checked.')).toBeVisible();
   });
 
-  // A3b fix round: the API's refusal is shown as it is given, never parsed.
-  test('a reviewer at the public\'s level is told only that officers must answer links they cannot see', async ({ page }) => {
+  // A3b fix round: the API's refusal is shown as it is given, never parsed. E4 fix round 1 (S3): the link is
+  // in a passage marked for officers only, so the check that it is absent cannot pass for want of a link.
+  test('a reviewer outside the officers group is told only that officers must answer a link marked for them', async ({ browser, page }) => {
+    const officer = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true });
+    const seen = await officer.newPage();
+    await seen.goto(SITE_URL);
+    await signIn(seen, 'treasurer');
+    await seen.goto(`${SITE_URL}${review(REVIEW.membersLink.id)}`);
+    await expect(seen.getByText('0 of 1 link checked.')).toBeVisible();
+    await expect(row(seen, "our members' group").getByRole('link', { name: /^Open the link/ })).toHaveAttribute('href', REVIEW.membersLink.url);
+    await officer.close();
+
     await page.goto('/');
     await signIn(page, 'lone-webmaster');
     await page.goto(review(REVIEW.membersLink.id));
     await expect(page.getByText('This piece has no links.')).toBeVisible();
+    expect(await page.content()).not.toContain(REVIEW.membersLink.url);
     await page.getByRole('button', { name: 'Approve', exact: true }).click();
     await expect(page.getByRole('alert').filter({ hasText: 'It was not approved' })).toHaveText(
       "It was not approved: Some links that only officers can see need an officer's answer before this is approved.",
     );
-    await expect(page.locator('main')).not.toContainText('facebook.com');
+    expect(await page.content()).not.toContain(REVIEW.membersLink.url);
+  });
+
+  // E4 fix round 1 (S1): answers go by row (its place and a short key), never by address, so a long list fits.
+  test('two hundred links, or forty of 2,048 characters, save with a long note; Approve and Send back go through', async ({ page }) => {
+    test.setTimeout(180_000);
+    const o = own();
+    const NOTE = 'N'.repeat(2000);
+    await page.goto('/');
+    await signIn(page, 'treasurer');
+    for (const [saved, back] of [[o.many, o.manyBack], [o.long, o.longBack]] as const) {
+      await page.goto(review(saved.id));
+      await expect(page.getByText(`0 of ${saved.count} links checked.`)).toBeVisible();
+      await page.locator('input[type="radio"][value="yes"]').evaluateAll((els) => els.forEach((el) => ((el as HTMLInputElement).checked = true)));
+      await page.locator('.link-row textarea').first().fill(NOTE);
+      await page.getByRole('textbox', { name: 'Note for the writer' }).fill('Typed, not sent');
+      const [post] = await Promise.all([page.waitForResponse((r) => r.request().method() === 'POST'), page.getByRole('button', { name: 'Save my answers' }).click()]);
+      console.log(`S1 ${saved.title}: Save posted ${post.request().postDataBuffer()?.length} bytes -> ${post.status()}`);
+      expect(post.status()).toBe(303);
+      await expect(page.getByRole('status')).toHaveText('Your answers are saved.');
+      await expect(page.getByText(`${saved.count} of ${saved.count} links checked.`)).toBeVisible();
+      await page.getByRole('button', { name: 'Approve', exact: true }).click();
+      await expect(page.getByRole('status')).toHaveText(`Approved. ${APPROVE_NOTE}`);
+
+      await page.goto(review(back.id));
+      await page.locator('input[type="radio"][value="yes"]').evaluateAll((els) => els.forEach((el) => ((el as HTMLInputElement).checked = true)));
+      await page.locator('.link-row textarea').first().fill(NOTE);
+      await page.getByRole('textbox', { name: 'Note for the writer' }).fill(NOTE);
+      const [sent] = await Promise.all([page.waitForResponse((r) => r.request().method() === 'POST'), page.getByRole('button', { name: 'Send back' }).click()]);
+      console.log(`S1 ${back.title}: Send back posted ${sent.request().postDataBuffer()?.length} bytes -> ${sent.status()}`);
+      await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=sent-back`);
+    }
+  });
+
+  test('a form too large to send says so in plain words, and how to get back what was typed', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'treasurer');
+    await page.goto(review(REVIEW.links.id));
+    const hash = await page.locator('input[name="hash"]').inputValue();
+    const res = await page.request.post(`${SITE_URL}${review(REVIEW.links.id)}`, {
+      form: { hash, step: 'links', 'row-0': '0', 'answer-0': 'yes', 'note-0': 'é'.repeat(40_000) },
+      headers: { Origin: SITE_URL },
+      maxRedirects: 0,
+    });
+    expect(res.status()).toBe(413);
+    const html = await res.text();
+    expect(html).toContain('Too much was sent at once, so nothing was saved.');
+    expect(html).not.toContain('Too large.');
+    // The page itself, with its form: the tab's copy of what was typed fills it again.
+    expect(html).toContain('Check the links');
+  });
+
+  // E4 fix round 1 (S2): an answer the API did not keep is named, never called saved.
+  test('an answer the API did not keep is said, and the others are saved', async ({ page }) => {
+    const { tooLong } = own();
+    await page.goto('/');
+    await signIn(page, 'treasurer');
+    await page.goto(review(tooLong.id));
+    for (const heading of ['the picnic page', 'the full map']) await row(page, heading).getByRole('radio', { name: 'Yes' }).check();
+    await page.getByRole('button', { name: 'Save my answers' }).click();
+    await expect(page.getByRole('alert')).toHaveText('1 answer was not saved: that link is no longer in this piece. The list below is the current one. Your other answer is saved.');
+    await expect(page.getByText('Your answers are saved.')).toHaveCount(0);
+    await expect(page.getByText('1 of 2 links checked.')).toBeVisible();
+    await expect(row(page, 'the picnic page')).toContainText('Checked by Treasurer');
+    await expect(row(page, 'the full map')).toContainText('Not checked yet.');
+  });
+
+  // E4 fix round 1 (S5): a mail link writes an email in this tab; only a web link opens a new one.
+  test('a mail link says "Write an email to" its address and opens no new tab', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'treasurer');
+    await page.goto(review(REVIEW.mailLink.id));
+    const mail = row(page, 'the events desk').getByRole('link', { name: /^Write an email to/ });
+    // The visually hidden words after the address are a block of their own to the name: a space may come between.
+    await expect(mail).toHaveAccessibleName(/^Write an email to events@example\.org ?: the events desk$/);
+    expect(REVIEW.mailLink.address).toBe('events@example.org');
+    await expect(mail).toHaveAttribute('href', `mailto:${REVIEW.mailLink.address}`);
+    await expect(mail).not.toHaveAttribute('target', /./);
+    await expect(row(page, 'the events desk')).not.toContainText('opens a new tab');
+    const web = row(page, 'the picnic page').getByRole('link', { name: /^Open the link \(opens a new tab\)/ });
+    await expect(web).toHaveAttribute('target', '_blank');
+    await expect(web).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
   test('answers to a piece sent for approval again since the page opened are refused, and the list comes back, notes kept', async ({ browser, page }) => {
@@ -200,6 +292,45 @@ test.describe('approving, with no script', () => {
     await page.getByRole('button', { name: 'Approve my own change (break-glass)' }).click();
     await expect(page.locator('[data-error-summary]')).toContainText('Write why you are approving your own change.');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(REVIEW.adminWrote.title);
+  });
+
+  // E4 fix round 1 (N2): a break-glass post by someone not offered it lists the problem without a link to a field not there.
+  test('a break-glass post by a reviewer who is not the Admin links no problem to a field the page lacks', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'treasurer');
+    await page.goto(review(REVIEW.links.id));
+    await expect(page.locator('#reason')).toHaveCount(0);
+    const hash = await page.locator('input[name="hash"]').inputValue();
+    const res = await page.request.post(`${SITE_URL}${review(REVIEW.links.id)}`, { form: { hash, step: 'break-glass' }, headers: { Origin: SITE_URL }, maxRedirects: 0 });
+    expect(res.status()).toBe(400);
+    await page.setContent(await res.text());
+    const summary = page.locator('[data-error-summary]');
+    await expect(summary).toContainText('Write why you are approving your own change.');
+    const targets = await summary.locator('a').evaluateAll((els) => els.map((a) => a.getAttribute('href')));
+    for (const href of targets) expect(await page.locator(href!).count(), href!).toBe(1);
+    await expect(summary.locator('a[href="#reason"]')).toHaveCount(0);
+  });
+
+  // E4 fix round 1 (N5): Astro's origin check, by E4's own suite: a post from another site changes nothing.
+  test('a send back or a publish posted from another site is refused, and nothing changes', async ({ page }) => {
+    const { forgedBack, forgedPublish } = own();
+    await page.goto('/');
+    await signIn(page, 'webmaster');
+    await page.goto(review(forgedBack.id));
+    const back = { hash: await page.locator('input[name="hash"]').inputValue(), links_hash: await page.locator('input[name="links_hash"]').inputValue(), step: 'send-back', note: 'Forged' };
+    await page.goto(`${review(forgedPublish.id)}/publish`);
+    const publish = { hash: await page.locator('input[name="hash"]').inputValue() };
+    for (const [path, form] of [[review(forgedBack.id), back], [`${review(forgedPublish.id)}/publish`, publish]] as const) {
+      const res = await page.request.post(`${SITE_URL}${path}`, { form, headers: { Origin: 'https://evil.example' }, maxRedirects: 0 });
+      expect(res.status(), path).toBe(403);
+    }
+    await page.goto(review(forgedBack.id));
+    await expect(status(page)).toHaveText('Waiting for approval');
+    await page.goto(review(forgedPublish.id));
+    await expect(status(page)).toHaveText('Approved, ready to publish');
+    // The same posts from this site go through: the refusal was the origin's.
+    expect((await page.request.post(`${SITE_URL}${review(forgedBack.id)}`, { form: back, headers: { Origin: SITE_URL }, maxRedirects: 0 })).status()).toBe(303);
+    expect((await page.request.post(`${SITE_URL}${review(forgedPublish.id)}/publish`, { form: publish, headers: { Origin: SITE_URL }, maxRedirects: 0 })).status()).toBe(303);
   });
 
   test('an officer in two seats picks the one they act for; one seat is said in words', async ({ page }) => {
@@ -351,6 +482,7 @@ test.describe('a sign-in that runs out while reviewing', () => {
     await signIn(page, 'writer-lapsing');
     await page.goto(review(REVIEW.links.id));
     await row(page, 'the picnic page').getByRole('textbox', { name: 'Note (optional)' }).fill('My note on the picnic page');
+    await row(page, 'the picnic page').getByRole('radio', { name: 'No' }).check();
     await page.getByRole('textbox', { name: 'Note for the writer' }).fill('My note for the writer');
     await page.waitForTimeout(17_000);
     await page.getByRole('button', { name: 'Save my answers' }).click();
@@ -358,7 +490,8 @@ test.describe('a sign-in that runs out while reviewing', () => {
     await expect(page.getByRole('link', { name: 'Sign in again (opens a new tab)' })).toHaveAttribute('target', '_blank');
     const kept = page.getByRole('region', { name: 'What you typed' });
     await expect(kept).toContainText('My note for the writer');
-    await expect(kept).toContainText('My note on the picnic page');
+    await expect(kept).toContainText(/Your note on link \d: My note on the picnic page/);
+    await expect(kept).toContainText(/Your answer on link \d: No/);
   });
 });
 
@@ -371,6 +504,42 @@ test.describe('approving, with script', () => {
     await page.reload();
     await expect(page.getByRole('textbox', { name: 'Note for the writer' })).toHaveValue('Typed, then the tab reloaded');
     expect(await page.evaluate(() => Object.keys(window.localStorage).filter((k) => k.startsWith('nwfl-review')))).toEqual([]);
+  });
+
+  // E4 fix round 1 (N3): a Yes or No chosen and not saved is kept in the tab, as the notes are.
+  test('a Yes or No chosen and not saved is kept in the tab and put back, never in localStorage', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'treasurer');
+    await page.goto(review(REVIEW.links.id));
+    await row(page, REVIEW.urls.map).getByRole('radio', { name: 'No' }).check();
+    await row(page, 'the picnic page').getByRole('radio', { name: 'Yes' }).check();
+    await page.reload();
+    await expect(row(page, REVIEW.urls.map).getByRole('radio', { name: 'No' })).toBeChecked();
+    await expect(row(page, 'the picnic page').getByRole('radio', { name: 'Yes' })).toBeChecked();
+    for (const radio of await row(page, 'our Facebook group').getByRole('radio').all()) await expect(radio).not.toBeChecked();
+    expect(await page.evaluate(() => Object.keys(window.localStorage).filter((k) => k.startsWith('nwfl-review')))).toEqual([]);
+  });
+
+  // E4 fix round 1 (S4): the Publish confirm's error summary takes focus, as S7's does.
+  test('the Publish confirm\'s list of problems takes focus as the page opens', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'webmaster');
+    await page.goto(`${review(REVIEW.takenDown.id)}/publish`);
+    await page.getByRole('button', { name: 'Publish' }).click();
+    const summary = page.locator('[data-error-summary]');
+    await expect(summary).toContainText('Tick the box to put it back on the website.');
+    await expect(summary).toBeFocused();
+  });
+
+  // E4 fix round 1 (N6): an office title with no place to break wraps rather than push the page sideways.
+  test('a long office name in the header wraps at the largest text on a 320 px screen', async ({ page, context, baseURL }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await setPrefs(context, baseURL!, { size: SIZES[6] });
+    await page.goto('/');
+    await signIn(page, 'treasurer');
+    await page.goto(review(REVIEW.links.id));
+    await page.locator('.item-header .eyebrow').evaluate((el) => (el.textContent = `Announcement · ${'Officeholdertitlewithnobreaks'.padEnd(40, 'x')}`));
+    expect(await sideways(page)).toBeLessThanOrEqual(0);
   });
 });
 

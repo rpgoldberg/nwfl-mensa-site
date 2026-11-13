@@ -771,7 +771,7 @@ main:focus:not(:focus-visible) { outline: none; }
 }
 .card > * { margin: 0; }
 .card h2 { font-size: min(1.5rem, 9.5vw); }
-.eyebrow { font-weight: 700; color: var(--muted); }
+.eyebrow { font-weight: 700; color: var(--muted); overflow-wrap: anywhere; }
 .card.empty { color: var(--ink); }
 
 /* Home: the draft's two columns where they fit (2 : 1), one below the other on a phone. */

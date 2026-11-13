@@ -5,11 +5,13 @@
 // "Live now" for a published item with a change. Then one form, posted without script (post/redirect/get):
 //   - "Acting as": the office the reviewer acts for, as words when they hold one, a choice (radio buttons)
 //     when they hold two or more, their role when none;
-//   - the links panel (SPEC-v3 3.3, M3): each link with where it is, its address, Open (a new tab,
-//     rel="noopener noreferrer"), "Needs a sign-in to check" for Facebook and the like, the latest answer
+//   - the links panel (SPEC-v3 3.3, M3): each link with where it is, its address, Open (a web link in a
+//     new tab, rel="noopener noreferrer"; a mail link "Write an email to <address>" in this one), "Needs
+//     a sign-in to check" for Facebook and the like, the latest answer
 //     and who gave it (by role), and "It shows the right page: Yes / No" with a note; "N of M links
 //     checked"; [Save my answers] keeps each answer at once, bound to the list's hash (a list changed
-//     since is shown again, notes kept). Nobody answers for a version they changed;
+//     since is shown again, notes kept; an answer the API did not keep is said). Each answer is posted
+//     by its row (place and key), never its address. Nobody answers for a version they changed;
 //   - [Approve], with "This does not publish it yet. The Webmaster publishes it." (answers chosen in the
 //     form are saved first); for the Admin who changed it, [Approve my own change (break-glass)] with a
 //     reason; for anyone else who changed it, a line saying another officer must approve it;
@@ -18,7 +20,8 @@
 // a published one offers [Take down] (S9's confirm page). An edition frozen for print (the API's refusal)
 // says so and points to Send back. A refusal is said in plain words, the typed text kept; a sign-in that
 // ran out says "Sign in again; your saved answers are kept", with Sign in again in a new tab.
-// public/scripts/review.js keeps typed notes in the tab's sessionStorage, as the edit page keeps its text.
+// public/scripts/review.js keeps typed notes and Yes/No choices in the tab's sessionStorage, as the edit
+// page keeps its text. Without the roster, an office holder is told to reload, and nothing is sent.
 //
 // Not signed in: sign in first. Not an officer, the Admin or the Webmaster, an id that is not one, or no
 // such item: the plain not-found page. Astro's origin check refuses a cross-site post first.
@@ -33,14 +36,19 @@ import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
 import { documentHtml } from '../../../lib/document';
 import { NOTE_MAX, hashHex } from '../../../lib/editor/form';
-import { APPROVE_NOTE, type ActingChoice, type Outcome, REVIEW_LINKS, actingChoice, answerWords, doneText, enteredForOffice, isPublisher, linkRows, linksSummary, loadFailure, runReview } from '../../../lib/editor/review';
+import { APPROVE_NOTE, type ActingChoice, type Outcome, REVIEW_LINKS, TOO_LARGE, actingChoice, answerWords, doneText, enteredForOffice, errorList, isPublisher, linkRows, linksSummary, loadFailure, runReview } from '../../../lib/editor/review';
 import { type RosterOffice, signInLine } from '../../../lib/editor/writer';
 import { readForm } from '../../../lib/form';
 
 export const prerender = false;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** The form's cap: up to 500 link rows with notes, under Astro's 64 KiB; posted as multipart. */
+/**
+ * The form's cap, under Astro's 64 KiB. Posted URL-encoded (no address in it, S1): a row costs at most
+ * "row-499=<12 hex>&answer-499=yes&note-499=&", 46 bytes, so 500 rows are 23 KB and 200 rows 9 KB; the
+ * rest is notes: 2,000 characters are 2 KB to 18 KB encoded (plain letters to other scripts). A body over
+ * it gets the page again with TOO_LARGE, which says why and how to get back what was typed.
+ */
 const FORM_LIMIT = 60 * 1024;
 
 const id = Astro.params.id ?? '';
@@ -56,7 +64,8 @@ const api = editorApi();
 const { reader } = editorReader(session, deps);
 let problem: 'sign-in' | 'unavailable' | undefined;
 let outcome: Exclude<Outcome, { redirect: string }> | undefined;
-let roster: RosterOffice[] = [];
+/** Undefined when it could not be read: an office holder is then told to reload (N1). */
+let roster: RosterOffice[] | undefined;
 let item: EditorItem | undefined;
 let preview: Preview | undefined;
 let links: PieceLinks | undefined;
@@ -64,14 +73,20 @@ let history: HistoryStep[] = [];
 
 if (api === undefined) problem = 'unavailable';
 else {
-  roster = await api.offices().catch(() => []);
+  roster = await api.offices().catch(() => undefined);
   if (Astro.request.method === 'POST') {
     const read = await readForm(Astro.request, FORM_LIMIT);
-    if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
-    const done = await runReview(api, reader, id, read.field, actingChoice(session.groups, roster));
-    if ('redirect' in done) return Astro.redirect(done.redirect, 303);
-    outcome = done;
-    Astro.response.status = done.status;
+    if (!read.ok && read.status !== 413) return new Response('Send the form.', { status: read.status });
+    if (read.ok) {
+      const done = await runReview(api, reader, id, read.field, actingChoice(session.groups, roster));
+      if ('redirect' in done) return Astro.redirect(done.redirect, 303);
+      outcome = done;
+    } else {
+      // Over the cap: the body is not read, so the connection closes after the page.
+      outcome = { status: 413, notice: TOO_LARGE };
+      Astro.response.headers.set('Connection', 'close');
+    }
+    Astro.response.status = outcome.status;
   }
   if (reader === undefined) problem = 'sign-in';
   else if (!outcome?.gone) {
@@ -93,7 +108,7 @@ else {
 if (problem === 'unavailable' || outcome?.unavailable) markUnavailable(Astro.response);
 
 const working = item?.working;
-const officeName = roster.find((o) => o.id === item?.officeId)?.title ?? '';
+const officeName = roster?.find((o) => o.id === item?.officeId)?.title ?? '';
 const choice: ActingChoice = actingChoice(session.groups, roster);
 const kept = outcome?.kept;
 const errors = outcome?.errors ?? {};
@@ -103,16 +118,20 @@ const cleared = working?.status === 'cleared';
 const mayAnswer = ready && !working.callerEdited;
 const admin = session.groups.includes('nwfl-admin');
 const breakGlass = ready && working.callerEdited && !working.callerMayApprove && admin;
-const mayTakeDown = item?.state === 'published' && (admin || session.groups.includes('nwfl-webmaster') || session.groups.includes(`nwfl-office-${roster.find((o) => o.id === item?.officeId)?.slug ?? ''}`));
+const mayTakeDown = item?.state === 'published' && (admin || session.groups.includes('nwfl-webmaster') || session.groups.includes(`nwfl-office-${roster?.find((o) => o.id === item?.officeId)?.slug ?? ''}`));
 const entered = working !== undefined && enteredForOffice(history, working.number);
 const tokens = deps.tokens.get(session.sid, deps.now());
 const line = item ? signInLine(tokens?.expires_at, deps.now()) : undefined;
 const done = Astro.request.method === 'GET' ? doneText(Astro.url.searchParams) : undefined;
-const listed = Object.entries(errors).map(([field, text]) => ({ href: `#${field === 'answers' ? 'links' : field === 'acting' ? 'acting' : field}`, text }));
 const title = working?.title ?? item?.live?.title ?? 'Review';
 const live = item?.live && working ? item.live : undefined;
-const answerOf = (url: string, row: { answer: 'yes' | 'no' | 'none' }) => kept?.answers[url] ?? (row.answer === 'none' ? undefined : row.answer);
+/** The choice shown: the one posted (the page again), else the latest answer. */
+const answerOf = (row: { key: string; answer: 'yes' | 'no' | 'none' }) => kept?.answers[row.key] ?? (row.answer === 'none' ? undefined : row.answer);
 const formShown = item !== undefined && (ready || cleared);
+// N2: the problems at the top link only to the fields this page shows.
+const present = new Set(formShown ? ['acting', 'note', ...(links ? ['links'] : []), ...(breakGlass ? ['reason'] : []), ...(mayAnswer ? rows.map((r) => `note-${r.index}`) : [])] : []);
+const listed = errorList(errors, present);
+const keptRows = kept ? Object.entries(kept.places).sort(([, a], [, b]) => a - b) : [];
 ---
 <Base path={HERE} title={outcome?.gone ? 'Page not found' : `Review: ${title}`} description="Check a piece, its links and its previews, then approve it, send it back or publish it.">
   {outcome?.gone
@@ -145,7 +164,7 @@ const formShown = item !== undefined && (ready || cleared);
     <>
       <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
         <h2 id="error-summary-title">There is a problem</h2>
-        <ul>{listed.map((e) => <li><a href={e.href}>{e.text}</a></li>)}</ul>
+        <ul>{listed.map((e) => <li>{e.href ? <a href={e.href}>{e.text}</a> : e.text}</li>)}</ul>
       </section>
       <script is:inline type="module" src="/scripts/error-summary.js"></script>
     </>
@@ -154,13 +173,18 @@ const formShown = item !== undefined && (ready || cleared);
   {line && <p class="sign-in-line" data-sign-in data-expires={String(line.expiresAt)} data-soon={line.soonText} data-state={line.soon ? 'soon' : undefined}>{line.text}</p>}
 
   {/* Without the item (the sign-in ran out on a post), what was typed is shown to copy. */}
-  {!item && kept && (kept.note || kept.reason || Object.keys(kept.notes).length > 0) && (
+  {!item && kept && (kept.note || kept.reason || Object.keys(kept.notes).length > 0 || Object.keys(kept.answers).length > 0) && (
     <section class="card" aria-labelledby="kept-title">
       <h2 id="kept-title">What you typed</h2>
       <p>It was not saved. Copy it if you need it, then sign in again and come back to this page.</p>
       {kept.note && <p><b>Your note for the writer:</b> {kept.note}</p>}
       {kept.reason && <p><b>Your reason:</b> {kept.reason}</p>}
-      {Object.entries(kept.notes).map(([url, note]) => <p><b>Your note on {url}:</b> {note}</p>)}
+      {keptRows.map(([key, place]) => (
+        <>
+          {kept.answers[key] && <p><b>Your answer on link {place}:</b> {kept.answers[key] === 'yes' ? 'Yes' : 'No'}</p>}
+          {kept.notes[key] && <p><b>Your note on link {place}:</b> {kept.notes[key]}</p>}
+        </>
+      ))}
     </section>
   )}
 
@@ -195,11 +219,13 @@ const formShown = item !== undefined && (ready || cleared);
   )}
 
   {formShown && working && (
-    <form method="post" action={HERE} enctype="multipart/form-data" class="rule-form editor-form review-form" novalidate data-review data-review-key={`nwfl-review:${id}:${hashHex(working.contentHash).slice(0, 16)}`} data-saved={done ? 'yes' : undefined}>
+    <form method="post" action={HERE} class="rule-form editor-form review-form" novalidate data-review data-review-key={`nwfl-review:${id}:${hashHex(working.contentHash).slice(0, 16)}`} data-saved={done || outcome?.saved ? 'yes' : undefined} data-relisted={outcome?.relisted ? 'yes' : undefined}>
       <input type="hidden" name="hash" value={hashHex(working.contentHash)} />
       <input type="hidden" name="links_hash" value={links ? hashHex(links.linksSha256) : ''} />
 
-      {choice.kind === 'pick'
+      {choice.kind === 'unknown'
+        ? <p class="acting-as error" id="acting"><b>Acting as:</b> We could not load your offices. Reload the page before you answer, approve or send back.</p>
+        : choice.kind === 'pick'
         ? (
           <fieldset id="acting" aria-describedby={errors['acting'] ? 'acting-error' : 'acting-hint'}>
             <legend>Acting as</legend>
@@ -237,25 +263,29 @@ const formShown = item !== undefined && (ready || cleared);
                   <div><dt>Answer so far</dt><dd>{answerWords(row)}</dd></div>
                 </dl>
                 {row.loginWalled && <p class="needs-sign-in"><b>Needs a sign-in to check</b> (such as Facebook): open it in your own browser, signed in to that site.</p>}
-                <p><a class="button button--secondary" href={row.url} target="_blank" rel="noopener noreferrer">Open the link (opens a new tab)<span class="visually-hidden">: {row.text}</span></a></p>
+                <p>
+                  {row.open.newTab
+                    ? <a class="button button--secondary" href={row.url} target="_blank" rel="noopener noreferrer">{row.open.words}<span class="visually-hidden">: {row.text}</span></a>
+                    : <a class="button button--secondary" href={row.url}>{row.open.words}<span class="visually-hidden">: {row.text}</span></a>}
+                </p>
                 {mayAnswer && (
                   <>
-                    <input type="hidden" name={`url-${row.index}`} value={row.url} />
+                    <input type="hidden" name={`row-${row.index}`} value={row.key} />
                     <fieldset>
                       <legend>It shows the right page<span class="visually-hidden">: {row.text}</span></legend>
                       <div class="choice">
-                        <input type="radio" id={`answer-${row.index}-yes`} name={`answer-${row.index}`} value="yes" checked={answerOf(row.url, row) === 'yes'} />
+                        <input type="radio" id={`answer-${row.index}-yes`} name={`answer-${row.index}`} value="yes" checked={answerOf(row) === 'yes'} data-keep-choice={`answer:${row.key}`} />
                         <label for={`answer-${row.index}-yes`}>Yes</label>
                       </div>
                       <div class="choice">
-                        <input type="radio" id={`answer-${row.index}-no`} name={`answer-${row.index}`} value="no" checked={answerOf(row.url, row) === 'no'} />
+                        <input type="radio" id={`answer-${row.index}-no`} name={`answer-${row.index}`} value="no" checked={answerOf(row) === 'no'} data-keep-choice={`answer:${row.key}`} />
                         <label for={`answer-${row.index}-no`}>No</label>
                       </div>
                     </fieldset>
                     <div class="field">
                       <label for={`note-${row.index}`}>Note (optional)<span class="visually-hidden"> on {row.text}</span></label>
                       {errors[`note-${row.index}`] && <p class="error" id={`note-${row.index}-error`}>Problem: {errors[`note-${row.index}`]}</p>}
-                      <textarea id={`note-${row.index}`} name={`note-${row.index}`} rows="2" maxlength={NOTE_MAX} data-keep={`link:${row.url}`} data-answered={row.answer === 'none' ? undefined : 'yes'}>{kept?.notes[row.url] ?? ''}</textarea>
+                      <textarea id={`note-${row.index}`} name={`note-${row.index}`} rows="2" maxlength={NOTE_MAX} data-keep={`link:${row.key}`} data-answered={row.answer === 'none' ? undefined : 'yes'}>{kept?.notes[row.key] ?? ''}</textarea>
                     </div>
                   </>
                 )}

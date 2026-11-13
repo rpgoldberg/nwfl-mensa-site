@@ -10,14 +10,19 @@
 //   the queue  (S6) what waits for approval, and what is approved and ready to publish, oldest first; the
 //              officer-area home counts what this person may approve, and may publish.
 //   links      (S7, M3) each link with its latest answer and who gave it, "N of M links checked"; answers
-//              save per link, bound to the list's hash: a list changed since it was read is shown again
-//              with the notes kept (by address), and the answers asked for again.
+//              save per link, bound to the list's hash. The form posts each answer by its row (the row's
+//              place and a 12-digit key of its address and where it is), never the address, so a list of
+//              500 links of 2,048 characters still fits: the page reads the list again and maps the rows
+//              only when the hash is the one the page showed. A list changed since is shown again with
+//              the notes kept (by row key), and the answers asked for again. An answer the API did not
+//              keep (not in the piece) is said, never called saved.
 //   posts      each answered by a redirect (post/redirect/get) or by the page again, with what was typed
 //              and the refusal in plain words. A sign-in that ran out says "Sign in again; your saved
 //              answers are kept": answers are saved as they are given, so that is true.
 // The API checks every step again: this only decides what the pages offer and say.
+import { createHash } from 'node:crypto';
 import { ApiNotFound } from '../api/client';
-import { EditorRefused, type EditorApi, type EditorItem, type HistoryStep, type LinkAnswer, LinksChanged, NotAllowed, type PieceLink, SignInAgain, VersionChanged } from '../api/editor';
+import { EditorRefused, type EditorApi, type EditorItem, type HistoryStep, type LinkAnswer, LinksChanged, NotAllowed, type PieceLink, type PieceLinks, SignInAgain, VersionChanged } from '../api/editor';
 import type { Reader } from '../api/client';
 import { formatSetDate } from '../approval-rules';
 import { NOTE_MAX, hashFromHex, parseApprove, parseSendBack } from './form';
@@ -48,12 +53,20 @@ export function isPublisher(groups: readonly string[]): boolean {
   return groups.includes('nwfl-webmaster') || groups.includes('nwfl-admin');
 }
 
-export type ActingChoice = { kind: 'none'; label: string } | { kind: 'one'; office: RosterOffice } | { kind: 'pick'; offices: RosterOffice[] };
+export type ActingChoice = { kind: 'none'; label: string } | { kind: 'one'; office: RosterOffice } | { kind: 'pick'; offices: RosterOffice[] } | { kind: 'unknown' };
 
-/** The offices a reviewer may act for: those they hold, in roster order. None: their role says who acted. */
-export function actingChoice(groups: readonly string[], roster: readonly RosterOffice[]): ActingChoice {
+/** The roster could not be read (N1): an office holder's office is not known, so nothing is sent for none. */
+export const OFFICES_UNKNOWN = 'We could not load your offices, so nothing was sent. Reload the page, then try again.';
+
+/**
+ * The offices a reviewer may act for: those they hold, in roster order. None: their role says who acted.
+ * With the roster unread (undefined), an office holder's choice is unknown: never "none", which would act
+ * for no office without saying so.
+ */
+export function actingChoice(groups: readonly string[], roster: readonly RosterOffice[] | undefined): ActingChoice {
   const held = new Set(groups.filter((g) => g.startsWith(OFFICE_GROUP)).map((g) => g.slice(OFFICE_GROUP.length)));
-  const offices = roster.filter((o) => held.has(o.slug));
+  if (roster === undefined && held.size > 0) return { kind: 'unknown' };
+  const offices = (roster ?? []).filter((o) => held.has(o.slug));
   if (offices.length === 1) return { kind: 'one', office: offices[0] as RosterOffice };
   if (offices.length > 1) return { kind: 'pick', offices };
   return { kind: 'none', label: groups.includes('nwfl-admin') ? 'Admin' : groups.includes('nwfl-webmaster') ? 'Webmaster' : 'Officer' };
@@ -63,6 +76,7 @@ const PICK_OFFICE = 'Choose which of your offices you act for.';
 
 /** The office acted for: the one chosen (it must be one held), the one held, or none. */
 export function parseActing(field: Field, choice: ActingChoice): { ok: true; officeId: string } | { ok: false; error: string } {
+  if (choice.kind === 'unknown') return { ok: false, error: OFFICES_UNKNOWN };
   if (choice.kind === 'none') return { ok: true, officeId: '' };
   if (choice.kind === 'one') return { ok: true, officeId: choice.office.id };
   const chosen = choice.offices.find((o) => o.id === field('acting'));
@@ -98,18 +112,49 @@ export function homeLines(counts: { toApprove: number; toPublish: number }, publ
 }
 
 export interface LinkRow extends PieceLink {
-  /** Its place in the list: the form's fields are url-<index>, answer-<index>, note-<index>. */
+  /** Its place in the list: the form's fields are row-<index>, answer-<index>, note-<index>. */
   index: number;
+  /** rowKey: posted in row-<index>, and the key of its note and its choice kept in the tab. */
+  key: string;
+  /** Its Open button (S5): a web link opens a new tab; a mail link writes an email in this one. */
+  open: { newTab: boolean; words: string };
   /** The latest answer: yes, no, or none yet. */
   answer: 'yes' | 'no' | 'none';
   /** What the row is headed with: the link's words, else its address. */
   text: string;
 }
 
+/**
+ * A row's key: the first 12 hex digits of SHA-256 over JSON [url, where]. Two rows of one address (the
+ * text's and an event's) differ by where they are (N4); a list changed since the page was read is matched
+ * row by row with it. 12 digits (48 bits) among at most 500 rows: a clash is about 1 in 2 billion.
+ */
+export function rowKey(link: Pick<PieceLink, 'url' | 'where'>): string {
+  return createHash('sha256').update(JSON.stringify([link.url, link.where])).digest('hex').slice(0, 12);
+}
+
+const NEW_TAB = { newTab: true, words: 'Open the link (opens a new tab)' };
+
+/** S5 (LINKS Q1): only http(s) opens a new tab; a mail link says whom it writes to; anything else just opens. */
+function openOf(url: string): LinkRow['open'] {
+  if (/^https?:/i.test(url)) return NEW_TAB;
+  if (!/^mailto:/i.test(url)) return { newTab: false, words: 'Open the link' };
+  const address = url.slice('mailto:'.length).replace(/\?.*$/s, '');
+  let shown = address;
+  try {
+    shown = decodeURIComponent(address);
+  } catch {
+    // A broken escape: the address as written.
+  }
+  return { newTab: false, words: `Write an email to ${shown}` };
+}
+
 export function linkRows(links: readonly PieceLink[]): LinkRow[] {
   return links.map((link, index) => ({
     ...link,
     index,
+    key: rowKey(link),
+    open: openOf(link.url),
     answer: link.accepted ? 'yes' : link.answeredByLabel !== '' ? 'no' : 'none',
     text: link.label !== '' ? link.label : link.url,
   }));
@@ -129,30 +174,76 @@ export function linksSummary(links: readonly PieceLink[]): string {
   return `${checked} of ${links.length} ${links.length === 1 ? 'link' : 'links'} checked.`;
 }
 
-/** What the links form held: answers and notes by address. */
+/** What the links form held, by row key: the answers chosen, the notes, and each row's place (from 1). */
 export interface KeptAnswers {
   answers: Record<string, 'yes' | 'no'>;
   notes: Record<string, string>;
+  places: Record<string, number>;
+}
+
+/** An answer as the form posts it: by row, not by address (S1). */
+export interface RowAnswer {
+  index: number;
+  key: string;
+  yes: boolean;
+  note: string;
+}
+
+/** The rows posted, each with its key, its choice and its note; at most MAX_ANSWERS rows are read. */
+function readRows(field: Field): { index: number; key: string; answer: string | undefined; note: string }[] {
+  const rows = [];
+  for (let index = 0; index < MAX_ANSWERS; index += 1) {
+    const key = field(`row-${index}`);
+    if (key === undefined) break;
+    rows.push({ index, key, answer: field(`answer-${index}`), note: field(`note-${index}`) ?? '' });
+  }
+  return rows;
+}
+
+function keptAnswers(rows: ReturnType<typeof readRows>): KeptAnswers {
+  const kept: KeptAnswers = { answers: {}, notes: {}, places: {} };
+  for (const row of rows) {
+    kept.places[row.key] = row.index + 1;
+    if (row.note !== '') kept.notes[row.key] = row.note;
+    if (row.answer === 'yes' || row.answer === 'no') kept.answers[row.key] = row.answer;
+  }
+  return kept;
 }
 
 /** The links form: each row answered Yes or No (rows left alone are not sent), its note capped. */
-export function parseAnswers(field: Field): { ok: true; value: { answers: LinkAnswer[] } } | { ok: false; errors: Record<string, string>; values: KeptAnswers } {
-  const values: KeptAnswers = { answers: {}, notes: {} };
+export function parseAnswers(field: Field): { ok: true; value: { answers: RowAnswer[] } } | { ok: false; errors: Record<string, string>; values: KeptAnswers } {
+  const rows = readRows(field);
   const errors: Record<string, string> = {};
-  const answers: LinkAnswer[] = [];
-  for (let i = 0; i < MAX_ANSWERS; i += 1) {
-    const url = field(`url-${i}`);
-    if (url === undefined) break;
-    const answer = field(`answer-${i}`);
-    const note = field(`note-${i}`) ?? '';
-    if (note !== '') values.notes[url] = note;
-    if (answer !== 'yes' && answer !== 'no') continue;
-    values.answers[url] = answer;
-    if (note.trim().length > NOTE_MAX) errors[`note-${i}`] = 'This note is too long: at most 2,000 characters.';
-    answers.push({ url, yes: answer === 'yes', note: note.trim() });
+  const answers: RowAnswer[] = [];
+  for (const row of rows) {
+    if (row.answer !== 'yes' && row.answer !== 'no') continue;
+    if (row.note.trim().length > NOTE_MAX) errors[`note-${row.index}`] = 'This note is too long: at most 2,000 characters.';
+    answers.push({ index: row.index, key: row.key, yes: row.answer === 'yes', note: row.note.trim() });
   }
   if (answers.length === 0) errors['answers'] = 'Choose Yes or No for at least one link.';
-  return Object.keys(errors).length === 0 ? { ok: true, value: { answers } } : { ok: false, errors, values };
+  return Object.keys(errors).length === 0 ? { ok: true, value: { answers } } : { ok: false, errors, values: keptAnswers(rows) };
+}
+
+/** The rows' answers as the API takes them, by address from the list read now, or undefined when a row is not that list's. */
+function mapRows(answers: readonly RowAnswer[], list: PieceLinks): LinkAnswer[] | undefined {
+  const mapped: LinkAnswer[] = [];
+  for (const answer of answers) {
+    const link = list.links[answer.index];
+    if (link === undefined || rowKey(link) !== answer.key) return undefined;
+    mapped.push({ url: link.url, yes: answer.yes, note: answer.note });
+  }
+  return mapped;
+}
+
+/**
+ * The list of problems at the top (N2): each a link to its field, but only to a field the page shows (a
+ * forged step can name one it does not): `present` holds the ids shown. "answers" is the links panel.
+ */
+export function errorList(errors: Record<string, string>, present: ReadonlySet<string>): { href?: string; text: string }[] {
+  return Object.entries(errors).map(([field, text]) => {
+    const id = field === 'answers' ? 'links' : field;
+    return present.has(id) ? { href: `#${id}`, text } : { text };
+  });
 }
 
 /** The edition named in the API's refusal for an edition frozen for print, if that is the refusal. */
@@ -213,22 +304,29 @@ export type Outcome =
       gone?: true;
       /** The site could not reach its records. */
       unavailable?: true;
+      /** Answers were sent and some kept: the tab drops the choices it held (N3). */
+      saved?: true;
+      /** The list of links changed: shown again, its choices asked for again (the tab drops its own). */
+      relisted?: true;
       kept?: Kept;
     };
 
-/** What was typed, for the page again: the link answers and notes by address, the note, the reason. */
+/** What was typed, for the page again: the link answers and notes by row key, the note, the reason. */
 function keptOf(field: Field): Kept {
-  const answers: Record<string, 'yes' | 'no'> = {};
-  const notes: Record<string, string> = {};
-  for (let i = 0; i < MAX_ANSWERS; i += 1) {
-    const url = field(`url-${i}`);
-    if (url === undefined) break;
-    const answer = field(`answer-${i}`);
-    const note = field(`note-${i}`) ?? '';
-    if (answer === 'yes' || answer === 'no') answers[url] = answer;
-    if (note !== '') notes[url] = note;
-  }
-  return { answers, notes, note: field('note') ?? '', reason: field('reason') ?? '' };
+  return { ...keptAnswers(readRows(field)), note: field('note') ?? '', reason: field('reason') ?? '' };
+}
+
+/** The tab's posts are capped (the review page's FORM_LIMIT): what a person sees when theirs is over it. */
+export const TOO_LARGE =
+  'Too much was sent at once, so nothing was saved. This happens with many long notes. What you typed is shown again below; if it is not, use your browser’s Back button to find it. Then shorten the longest notes, or save your answers a few at a time.';
+
+const LIST_AGAIN = 'The links of this piece changed since you opened the page, so nothing was saved. Here is the list again: your notes are kept; choose your answers again.';
+
+/** S2: answers the API did not keep (ConfirmLinksResponse.not_in_piece), in words; `others` were kept. */
+function notKept(count: number, others: number, approving: boolean): string {
+  const lead = count === 1 ? '1 answer was not saved: that link is' : `${count} answers were not saved: those links are`;
+  const rest = others === 0 ? '' : others === 1 ? ' Your other answer is saved.' : ' Your other answers are saved.';
+  return `${lead} no longer in this piece. The list below is the current one.${rest}${approving ? ' It was not approved.' : ''}`;
 }
 
 /**
@@ -277,22 +375,26 @@ export async function runReview(api: EditorApi, reader: Reader | undefined, item
   const actingError = acting.ok ? {} : { acting: acting.error };
   const actingAsOfficeId = acting.ok ? acting.officeId : '';
 
-  /** The answers chosen in the form, kept: undefined when they are, else the page again. */
-  const saveAnswers = async (answers: LinkAnswer[]): Promise<Outcome | undefined> => {
+  // The rows may differ now: the notes stay with their rows (by key), and the answers are asked for again.
+  const listAgain: Outcome = { status: 409, relisted: true, notice: LIST_AGAIN, kept: { ...kept, answers: {} } };
+
+  /**
+   * The answers chosen in the form, kept: undefined when they all are, else the page again. The rows are
+   * mapped to addresses from the list read now, only when it is the list the page showed (its hash).
+   */
+  const saveAnswers = async (answers: RowAnswer[], approving: boolean): Promise<Outcome | undefined> => {
     const linksSha256 = hashFromHex(field('links_hash'));
     if (linksSha256 === undefined) return { status: 409, notice: OUT_OF_DATE, kept };
     try {
-      await api.confirmLinks(reader, { itemId, linksSha256, answers, actingAsOfficeId });
-      return undefined;
+      const list = await api.getItemLinks(reader, itemId);
+      const mapped = Buffer.from(list.linksSha256).equals(Buffer.from(linksSha256)) ? mapRows(answers, list) : undefined;
+      if (mapped === undefined) return listAgain;
+      const { notInPiece } = await api.confirmLinks(reader, { itemId, linksSha256, answers: mapped, actingAsOfficeId });
+      if (notInPiece.length === 0) return undefined;
+      const others = new Set(mapped.map((a) => a.url)).size - notInPiece.length;
+      return { status: 409, saved: true, notice: notKept(notInPiece.length, others, approving), kept: { ...kept, answers: {} } };
     } catch (error) {
-      if (error instanceof LinksChanged) {
-        // The rows may differ now: the notes stay with their addresses, and the answers are asked for again.
-        return {
-          status: 409,
-          notice: 'The links of this piece changed since you opened the page, so nothing was saved. Here is the list again: your notes are kept; choose your answers again.',
-          kept: { ...kept, answers: {} },
-        };
-      }
+      if (error instanceof LinksChanged) return listAgain;
       return refused(error, 'saved', 'answer', kept);
     }
   };
@@ -301,7 +403,7 @@ export async function runReview(api: EditorApi, reader: Reader | undefined, item
     const parsed = parseAnswers(field);
     if (hashFromHex(field('links_hash')) === undefined) return { status: 409, notice: OUT_OF_DATE, kept };
     if (!parsed.ok || !acting.ok) return { status: 400, errors: { ...actingError, ...(parsed.ok ? {} : parsed.errors) }, kept };
-    return (await saveAnswers(parsed.value.answers)) ?? { redirect: `${REVIEW_LINKS.review(itemId)}?done=answers#links` };
+    return (await saveAnswers(parsed.value.answers, false)) ?? { redirect: `${REVIEW_LINKS.review(itemId)}?done=answers#links` };
   }
 
   if (step === 'approve' || step === 'break-glass') {
@@ -313,7 +415,7 @@ export async function runReview(api: EditorApi, reader: Reader | undefined, item
       return { status: 400, errors: { ...actingError, ...answerErrors, ...(parsed.ok ? {} : (parsed.errors as Record<string, string>)) }, kept };
     }
     if (answered.ok) {
-      const unsaved = await saveAnswers(answered.value.answers);
+      const unsaved = await saveAnswers(answered.value.answers, true);
       if (unsaved !== undefined) return unsaved;
     }
     try {
@@ -351,7 +453,7 @@ export async function runPublish(api: EditorApi, reader: Reader | undefined, ite
 
 /** The Take down confirm page's post (S9). */
 export async function runTakeDown(api: EditorApi, reader: Reader | undefined, itemId: string): Promise<Outcome> {
-  if (reader === undefined) return signInAgain({ answers: {}, notes: {}, note: '', reason: '' });
+  if (reader === undefined) return signInAgain({ answers: {}, notes: {}, places: {}, note: '', reason: '' });
   try {
     await api.withdraw(reader, itemId);
     return { redirect: `${REVIEW_LINKS.review(itemId)}?done=taken-down` };

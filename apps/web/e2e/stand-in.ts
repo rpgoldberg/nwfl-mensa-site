@@ -203,8 +203,10 @@ export const REVIEW = {
   selfApproved: { id: reviewId(4), title: 'Seeded: the Admin approved their own change' },
   /** Taken down, with a change approved: its Publish confirm, with the tick, is only looked at. */
   takenDown: { id: reviewId(5), title: 'Seeded: taken down, change approved' },
-  /** A3b fix round: a sign-in link inside a members passage, hidden from a reviewer at the public's level. */
-  membersLink: { id: reviewId(6), title: 'Seeded: a members-only sign-in link' },
+  /** A sign-in link in a members passage marked for officers only: hidden from a reviewer outside the officers group. */
+  membersLink: { id: reviewId(6), title: 'Seeded: an officers-only sign-in link', url: 'https://www.facebook.com/groups/nwfl-members-sample' },
+  /** E4 fix round 1 (S5): a mail link beside a web link. */
+  mailLink: { id: reviewId(7), title: 'Seeded: a mail link', address: 'events@example.org' },
   urls: { picnic: 'https://club.example/picnic', map: 'https://club.example/map', facebook: 'https://www.facebook.com/groups/nwfl-sample' },
   own: (project: string) => {
     const p = ['chromium-desktop', 'chromium-phone', 'webkit-iphone'].indexOf(project);
@@ -218,6 +220,16 @@ export const REVIEW = {
       putBack: { id: own(5), title: `Taken down, change approved (${project})` },
       /** The President's, with links: sent for approval again while a reviewer has it open. */
       readyAgain: { id: own(6), title: `Sent again (${project})` },
+      /** E4 fix round 1 (S1): 200 links; 40 of 2,048 characters; each to save and approve, and to send back. */
+      many: { id: own(7), title: `Two hundred links (${project})`, count: 200 },
+      manyBack: { id: own(8), title: `Two hundred links, to send back (${project})`, count: 200 },
+      long: { id: own(9), title: `Forty long links (${project})`, count: 40 },
+      longBack: { id: own(10), title: `Forty long links, to send back (${project})`, count: 40 },
+      /** (S2) a link of 2,049 characters beside the picnic page: its answer is not kept (not_in_piece). */
+      tooLong: { id: own(11), title: `A link too long to keep (${project})` },
+      /** (N5) one waiting and one approved, for posts from another site. */
+      forgedBack: { id: own(12), title: `Forged send back (${project})` },
+      forgedPublish: { id: own(13), title: `Forged publish (${project})` },
     };
   },
 };

@@ -24,10 +24,14 @@
 // printed addresses of the text, sorted, with the hash of the list; ConfirmLinks keeps each answer of a
 // reviewer who did not edit a waiting version, for its ready time; Approve waits while any answer is no,
 // or a link that needs a sign-in has no yes. Its refusals are the API's, word for word. A3b's fix round
-// (008a115): the hash binds the ready time too; Approve's refusal names only links the caller sees whole
-// (a caller at the public's level does not see members passages), the rest one fixed sentence; a holder
-// who reviews nothing is told "not permitted" for a missing item as for another office's. The office's
-// upcoming events are not in the stand-in's list (E7b checks them on the real API).
+// (008a115): the hash binds the ready time too; Approve's refusal names only links the caller sees whole,
+// the rest one fixed sentence; a holder who reviews nothing is told "not permitted" for a missing item as
+// for another office's. The caller's lens is the redaction lens alone (item-links.ts linksAsSeen): members
+// passages are every reviewer's (officers are members); a seed marked officersOnly has its members
+// passages withheld from anyone outside the officers group, body, preview and links alike, its hash kept.
+// ConfirmLinks keeps no answer for an address over 2,048 characters (link-gate.ts MAX_URL_LENGTH): A3b's
+// parser refuses such a link at save, the stand-in's keeps it, so a seed can show not_in_piece. The
+// office's upcoming events are not in the stand-in's list (E7b checks them on the real API).
 //
 // Items are shared by everyone, as in the API (a writer and an approver are two people). The seeded
 // items (SEEDED) are for reading: a test that changes an item creates its own, with a title of its
@@ -48,7 +52,7 @@ import { ContentKind, ItemState, ItemVisibility, VersionStatus } from '../src/ge
  */
 /**
  * @typedef {{ id: string, slug: string, kind: string, officeId: string, state: 'draft' | 'ready' | 'published' | 'withdrawn',
- *   live?: Version, working?: Version, withdrawnAt?: Date, updatedAt: Date, withheld: boolean, history: Entry[] }} Item
+ *   live?: Version, working?: Version, withdrawnAt?: Date, updatedAt: Date, withheld: boolean, officersOnly: boolean, history: Entry[] }} Item
  */
 /** @typedef {{ at: Date, action: string, actorSubject: string, actorLabel: string, actingOfficeId: string, versionNumber: number, fromState: string, toState: string, note: string }} Entry */
 
@@ -107,6 +111,8 @@ export const IN_TEXT = 'in the text';
 const SHOWN_MAX = 60;
 /** At most this many answers in one call (link-gate.ts MAX_ANSWERS). */
 const MAX_ANSWERS = 500;
+/** The longest address an answer is kept for (apps/api/src/links/urls.ts MAX_URL_LENGTH). */
+const MAX_URL_LENGTH = 2048;
 /** The sites that need a sign-in to check (apps/api/src/links/urls.ts LOGIN_WALLED). */
 const LOGIN_WALLED = ['facebook.com', 'fb.com', 'fb.me', 'fb.watch', 'messenger.com', 'instagram.com', 'instagr.am', 'linkedin.com', 'lnkd.in', 'x.com', 'twitter.com', 't.co', 'nextdoor.com'];
 /** The API's words for answers to a list that changed since it was read. */
@@ -348,6 +354,9 @@ function forPublic(/** @type {any[]} */ blocks) {
 /** The API's audience for a caller (auth/caller.ts audienceFor): the officers group, else a member, else the public. @param {Caller} caller */
 const audienceOf = (caller) => (caller.groups.includes('nwfl-officers') ? 'officers' : caller.groups.includes('nwfl-members') ? 'members' : 'public');
 
+/** Whether the caller's lens withholds the item's members passages: held back for all, or marked for officers only. @param {Item} item @param {Caller} caller */
+const withheldFor = (item, caller) => item.withheld || (item.officersOnly && audienceOf(caller) !== 'officers');
+
 function rolesOf(/** @type {Caller} */ caller) {
   return {
     admin: caller.groups.includes('nwfl-admin'),
@@ -462,7 +471,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
 
   /**
    * The piece's links: `actual` as they are, `links` as the caller sees them (their lens: a seed held back,
-   * or the members passages for a caller at the public's level, as the API's audience reads), with the
+   * or one marked for officers only to a caller outside the officers group; never members passages as such), with the
    * hash of what they see bound to the ready time, and each link's latest answer for this ready time from
    * someone who did not edit it.
    * @param {Item} item @param {Version} v @param {Caller} caller
@@ -470,7 +479,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
   const linksOf = (item, v, caller) => {
     const tree = parseMarkup(v.markup).tree.blocks;
     const actual = canonicalLinks(textLinks(tree));
-    const links = canonicalLinks(textLinks(item.withheld || audienceOf(caller) === 'public' ? forPublic(tree) : tree));
+    const links = canonicalLinks(textLinks(withheldFor(item, caller) ? forPublic(tree) : tree));
     const ready = v.status === 'draft' ? undefined : v.readyAt;
     /** @type {Map<string, Answer>} */
     const latest = new Map();
@@ -483,8 +492,11 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
   /** @param {Version} v @param {Targets} targets @param {string} editionId */
   const hashOf = (v, targets, editionId) => new Uint8Array(createHash('sha256').update(JSON.stringify([v.title, v.summary, v.visibility, v.markup, targets, editionId])).digest());
 
-  /** A version as an officer reads it. @param {Version} v @param {Caller} caller @param {boolean} withheld */
-  const versionMessage = (v, caller, withheld) =>
+  /**
+   * A version as an officer reads it. @param {Version} v @param {Caller} caller @param {boolean} withheld
+   * @param {boolean} hashed whether the hash is given: not for an item held back (E1), but for one only marked for officers
+   */
+  const versionMessage = (v, caller, withheld, hashed = !withheld) =>
     ({
           id: v.id,
           number: v.number,
@@ -495,7 +507,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
           body: withheld ? { blocks: forPublic(parseMarkup(v.markup).tree.blocks) } : parseMarkup(v.markup).tree,
           // E1: withheld, the markup is empty and there is no hash.
           bodyMarkup: withheld ? '' : v.markup,
-          ...(v.hash && !withheld ? { contentHash: v.hash } : {}),
+          ...(v.hash && hashed ? { contentHash: v.hash } : {}),
           targets: v.targets,
           editionId: v.editionId,
           printAsIs: v.printAsIs,
@@ -522,8 +534,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     kind: /** @type {ContentKind} */ (KIND_OUT[item.kind]),
     officeId: item.officeId,
     state: STATE_OUT[item.state],
-    ...(item.live ? { live: versionMessage(item.live, caller, item.withheld) } : {}),
-    ...(item.working ? { working: versionMessage(item.working, caller, item.withheld) } : {}),
+    ...(item.live ? { live: versionMessage(item.live, caller, withheldFor(item, caller), !item.withheld) } : {}),
+    ...(item.working ? { working: versionMessage(item.working, caller, withheldFor(item, caller), !item.withheld) } : {}),
     ...(item.withdrawnAt ? { withdrawnAt: timestamp(item.withdrawnAt) } : {}),
     // E3 fix 1: when it last changed.
     lastChangedAt: timestamp(item.updatedAt),
@@ -551,7 +563,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
   /**
    * Adds an item straight into a state, for the seeds (no history check, no caller).
    * @param {{ id?: string, slug: string, kind: string, officeId: string, state: Item['state'], title: string, summary?: string,
-   *   visibility?: Version['visibility'], markup?: string, withheld?: boolean, working?: boolean, sendBackNote?: string, editors?: string[],
+   *   visibility?: Version['visibility'], markup?: string, withheld?: boolean, officersOnly?: boolean, working?: boolean, sendBackNote?: string, editors?: string[],
    *   cleared?: boolean, change?: 'draft' | 'ready' | 'cleared', editionId?: string, newsletter?: boolean, approvedAs?: string, approvedBy?: string,
    *   selfApproved?: boolean, createdBy?: { sub: string, label: string } }} seed
    */
@@ -583,7 +595,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     if (version.status === 'cleared') Object.assign(version, { approvedAt: at, ...approval });
     if (version.status === 'approved') Object.assign(version, { approvedAt: at, publishedAt: at, approvalKind: 'normal', approvedBy: 'seed:approver', approvedAsLabel: seed.approvedAs ?? 'Treasurer' });
     /** @type {Item} */
-    const item = { id: seed.id ?? randomUUID(), slug: seed.slug, kind: seed.kind, officeId: seed.officeId, state: seed.state, updatedAt: at, withheld: seed.withheld ?? false, history: [] };
+    const item = { id: seed.id ?? randomUUID(), slug: seed.slug, kind: seed.kind, officeId: seed.officeId, state: seed.state, updatedAt: at, withheld: seed.withheld ?? false, officersOnly: seed.officersOnly ?? false, history: [] };
     if (version.status === 'approved') item.live = version;
     else item.working = version;
     // E3 fix 1: a published item with a change being written (a draft) or waiting for approval.
@@ -623,7 +635,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       if ([...items.values()].some((i) => i.slug === req.slug)) throw new ConnectError('already exists', Code.AlreadyExists);
       if ([...title].length > 200) throw invalid('a value is not allowed');
       /** @type {Item} */
-      const item = { id: randomUUID(), slug: req.slug, kind, officeId: office.id, state: 'draft', updatedAt: now(), withheld: false, history: [] };
+      const item = { id: randomUUID(), slug: req.slug, kind, officeId: office.id, state: 'draft', updatedAt: now(), withheld: false, officersOnly: false, history: [] };
       item.working = {
         id: randomUUID(),
         number: 1,
@@ -844,7 +856,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const notInPiece = [];
       let kept = 0;
       for (const [url, answer] of answers) {
-        if (!inPiece.has(url)) {
+        if (url.length > MAX_URL_LENGTH || !inPiece.has(url)) {
           notInPiece.push(url);
           continue;
         }
@@ -918,7 +930,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       // E1: a public body unless the item is for officers; a members item's is the one placeholder.
       const publicBody = version.visibility === 'officers' ? undefined : version.visibility === 'members' ? { blocks: [REDACTED_BLOCK] } : { blocks: forPublic(tree.blocks) };
       // Never wider than the caller's lens: a withheld item's members body is the public's.
-      const membersBody = version.visibility === 'officers' ? undefined : item.withheld ? { blocks: forPublic(tree.blocks) } : tree;
+      const membersBody = version.visibility === 'officers' ? undefined : withheldFor(item, caller) ? { blocks: forPublic(tree.blocks) } : tree;
       return { title: version.title, summary: version.summary, ...(publicBody ? { publicBody } : {}), ...(membersBody ? { membersBody } : {}), problems };
     },
   });

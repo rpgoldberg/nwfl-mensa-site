@@ -9,6 +9,7 @@ import {
   actingChoice,
   answerWords,
   doneText,
+  errorList,
   enteredForOffice,
   frozenEditionOf,
   homeCounts,
@@ -20,6 +21,7 @@ import {
   parseActing,
   parseAnswers,
   reviewQueue,
+  rowKey,
   runPublish,
   runReview,
   runTakeDown,
@@ -98,6 +100,15 @@ describe('who reviews and publishes', () => {
     expect(parseActing(form({ acting: ROSTER[0]!.id }), actingChoice(['nwfl-office-treasurer'], ROSTER))).toEqual({ ok: true, officeId: ROSTER[1]!.id });
     expect(parseActing(form({ acting: ROSTER[0]!.id }), actingChoice(['nwfl-admin'], ROSTER))).toEqual({ ok: true, officeId: '' });
   });
+
+  it('with the roster unread, an office holder is told to reload and nothing is sent for no office (N1)', () => {
+    const unknown = actingChoice(['nwfl-officers', 'nwfl-office-treasurer', 'nwfl-office-member-at-large'], undefined);
+    expect(unknown).toEqual({ kind: 'unknown' });
+    expect(actingChoice(['nwfl-officers', 'nwfl-office-treasurer'], undefined)).toEqual({ kind: 'unknown' });
+    expect(parseActing(form({ acting: ROSTER[1]!.id }), unknown)).toEqual({ ok: false, error: 'We could not load your offices, so nothing was sent. Reload the page, then try again.' });
+    // Holding no office, there is nothing to load: their role says who acted.
+    expect(actingChoice(['nwfl-webmaster'], undefined)).toEqual({ kind: 'none', label: 'Webmaster' });
+  });
 });
 
 describe('the queue (S6) and the officer-area counts', () => {
@@ -147,43 +158,79 @@ describe('the links panel (S7)', () => {
     expect(linksSummary([])).toBe('This piece has no links.');
   });
 
-  it('reads the answers given, with their notes, and keeps all that was typed', () => {
+  it('keys each row by its address and where it is, so two rows of one address are kept apart (N4)', () => {
+    const text = link({ url: 'https://club.example/a', where: 'in the text' });
+    const event = link({ url: 'https://club.example/a', where: 'in the event "Picnic"' });
+    expect(rowKey(text)).toMatch(/^[0-9a-f]{12}$/);
+    expect(rowKey(text)).not.toBe(rowKey(event));
+    expect(rowKey(text)).toBe(rowKey(link({ ...text, label: 'other words' })));
+    expect(linkRows([text, event]).map((r) => r.key)).toEqual([rowKey(text), rowKey(event)]);
+  });
+
+  it('opens a web link in a new tab, and writes an email to a mail link\'s address in this tab (S5)', () => {
+    const rows = linkRows([
+      link({ url: 'https://club.example/a' }),
+      link({ url: 'http://club.example/b' }),
+      link({ url: 'mailto:events@example.org?subject=Picnic' }),
+      link({ url: 'mailto:%E0%A4%A' }),
+      link({ url: 'tel:+18505550100' }),
+    ]);
+    expect(rows.map((r) => r.open)).toEqual([
+      { newTab: true, words: 'Open the link (opens a new tab)' },
+      { newTab: true, words: 'Open the link (opens a new tab)' },
+      { newTab: false, words: 'Write an email to events@example.org' },
+      { newTab: false, words: 'Write an email to %E0%A4%A' },
+      { newTab: false, words: 'Open the link' },
+    ]);
+  });
+
+  it('reads the answers given by row, with their notes: no address is posted, only the row\'s place and key (S1)', () => {
     const fields = {
-      'url-0': 'https://club.example/a',
+      'row-0': 'k0',
       'answer-0': 'yes',
       'note-0': '  Fine.  ',
-      'url-1': 'https://club.example/b',
+      'row-1': 'k1',
       'answer-1': 'no',
       'note-1': '',
-      'url-2': 'https://club.example/c',
+      'row-2': 'k2',
       'note-2': 'Not opened yet',
-      'url-3': 'https://club.example/d',
+      'row-3': 'k3',
       'answer-3': 'maybe',
     };
-    const parsed = parseAnswers(form(fields));
-    expect(parsed).toEqual({
+    expect(parseAnswers(form(fields))).toEqual({
       ok: true,
       value: {
         answers: [
-          { url: 'https://club.example/a', yes: true, note: 'Fine.' },
-          { url: 'https://club.example/b', yes: false, note: '' },
+          { index: 0, key: 'k0', yes: true, note: 'Fine.' },
+          { index: 1, key: 'k1', yes: false, note: '' },
         ],
       },
     });
   });
 
   it('asks for one answer at least, and keeps a note under the cap', () => {
-    expect(parseAnswers(form({ 'url-0': 'https://club.example/a', 'note-0': 'typed' }))).toEqual({
+    expect(parseAnswers(form({ 'row-0': 'k0', 'note-0': 'typed' }))).toEqual({
       ok: false,
       errors: { answers: 'Choose Yes or No for at least one link.' },
-      values: { answers: {}, notes: { 'https://club.example/a': 'typed' } },
+      values: { answers: {}, notes: { k0: 'typed' }, places: { k0: 1 } },
     });
-    const long = parseAnswers(form({ 'url-0': 'https://club.example/a', 'answer-0': 'no', 'note-0': 'x'.repeat(2001) }));
-    expect(long).toMatchObject({ ok: false, errors: { 'note-0': 'This note is too long: at most 2,000 characters.' }, values: { answers: { 'https://club.example/a': 'no' } } });
+    const long = parseAnswers(form({ 'row-0': 'k0', 'answer-0': 'no', 'note-0': 'x'.repeat(2001) }));
+    expect(long).toMatchObject({ ok: false, errors: { 'note-0': 'This note is too long: at most 2,000 characters.' }, values: { answers: { k0: 'no' } } });
     // At most 500 rows are read, as the API takes at most 500 answers.
-    const many = Object.fromEntries(Array.from({ length: 600 }, (_, i) => [[`url-${i}`, `https://club.example/${i}`], [`answer-${i}`, 'yes']]).flat());
+    const many = Object.fromEntries(Array.from({ length: 600 }, (_, i) => [[`row-${i}`, `k${i}`], [`answer-${i}`, 'yes']]).flat());
     const read = parseAnswers(form(many));
     expect(read.ok && read.value.answers).toHaveLength(500);
+  });
+
+  it('links each problem in the list at the top to its field, only when the page shows that field (N2)', () => {
+    const errors = { acting: 'Choose.', answers: 'Choose Yes or No for at least one link.', reason: 'Write why.', 'note-3': 'Too long.' };
+    expect(errorList(errors, new Set(['acting', 'links', 'note-3']))).toEqual([
+      { href: '#acting', text: 'Choose.' },
+      { href: '#links', text: 'Choose Yes or No for at least one link.' },
+      { text: 'Write why.' },
+      { href: '#note-3', text: 'Too long.' },
+    ]);
+    expect(errorList({}, new Set())).toEqual([]);
   });
 
   it('finds the frozen edition in the API\'s refusal', () => {
@@ -238,35 +285,86 @@ describe('loadFailure: what a page does when it cannot read the piece', () => {
 describe('runReview: the review page\'s posts', () => {
   const one = actingChoice(['nwfl-officers', 'nwfl-office-treasurer'], ROSTER);
   const pick = actingChoice(['nwfl-office-treasurer', 'nwfl-office-member-at-large'], ROSTER);
-  const answers = { step: 'links', links_hash: hashHex(LINKS_HASH), 'url-0': 'https://club.example/a', 'answer-0': 'yes', 'note-0': 'ok', 'url-1': 'https://club.example/b', 'note-1': 'later' };
+  const A = link({ url: 'https://club.example/a' });
+  const B = link({ url: 'https://club.example/b', label: 'the map' });
+  const LIST = { linksSha256: LINKS_HASH, links: [A, B] };
+  const lists = () => vi.fn().mockResolvedValue(LIST);
+  const answers = { step: 'links', links_hash: hashHex(LINKS_HASH), 'row-0': rowKey(A), 'answer-0': 'yes', 'note-0': 'ok', 'row-1': rowKey(B), 'note-1': 'later' };
+  const CHANGED = 'The links of this piece changed since you opened the page, so nothing was saved. Here is the list again: your notes are kept; choose your answers again.';
 
-  it('saves the answers for the office acted for, bound to the list read, and goes back to the page', async () => {
+  it('saves the answers for the office acted for, each row mapped to its address from the list read again, and goes back to the page', async () => {
+    const getItemLinks = lists();
     const confirmLinks = vi.fn().mockResolvedValue({ links: [], notInPiece: [] });
-    const out = await runReview(fakeApi({ confirmLinks }), reader, ID, form(answers), one);
+    const out = await runReview(fakeApi({ getItemLinks, confirmLinks }), reader, ID, form(answers), one);
+    expect(getItemLinks).toHaveBeenCalledWith(reader, ID);
     expect(confirmLinks).toHaveBeenCalledWith(reader, { itemId: ID, linksSha256: LINKS_HASH, answers: [{ url: 'https://club.example/a', yes: true, note: 'ok' }], actingAsOfficeId: ROSTER[1]!.id });
     expect(out).toEqual({ redirect: `${REVIEW_LINKS.review(ID)}?done=answers#links` });
   });
 
-  it('reloads the list with a plain message when it changed, keeping what was typed', async () => {
-    const out = await runReview(fakeApi({ confirmLinks: vi.fn().mockRejectedValue(new LinksChanged('ConfirmLinks')) }), reader, ID, form(answers), one);
-    expect(out).toMatchObject({
-      status: 409,
-      notice: 'The links of this piece changed since you opened the page, so nothing was saved. Here is the list again: your notes are kept; choose your answers again.',
-      kept: { notes: { 'https://club.example/a': 'ok', 'https://club.example/b': 'later' } },
-    });
+  it('maps rows only on the same list: another hash, a row key that differs, or a row past the end is the list again, notes kept (S1)', async () => {
+    const confirmLinks = vi.fn();
+    const other = vi.fn().mockResolvedValue({ ...LIST, linksSha256: new Uint8Array(32).fill(1) });
+    const relisted = { status: 409, relisted: true, notice: CHANGED, kept: { answers: {}, notes: { [rowKey(A)]: 'ok', [rowKey(B)]: 'later' } } };
+    expect(await runReview(fakeApi({ getItemLinks: other, confirmLinks }), reader, ID, form(answers), one)).toMatchObject(relisted);
+    expect(await runReview(fakeApi({ getItemLinks: lists(), confirmLinks }), reader, ID, form({ ...answers, 'row-0': rowKey(B) }), one)).toMatchObject({ status: 409, relisted: true });
+    expect(await runReview(fakeApi({ getItemLinks: lists(), confirmLinks }), reader, ID, form({ step: 'links', links_hash: hashHex(LINKS_HASH), 'row-0': rowKey(A), 'row-1': rowKey(B), 'row-2': 'k2', 'answer-2': 'yes' }), one)).toMatchObject({ status: 409, relisted: true });
+    expect(confirmLinks).not.toHaveBeenCalled();
+    // The API's own refusal of the hash says the same.
+    const out = await runReview(fakeApi({ getItemLinks: lists(), confirmLinks: vi.fn().mockRejectedValue(new LinksChanged('ConfirmLinks')) }), reader, ID, form(answers), one);
+    expect(out).toMatchObject(relisted);
     expect('kept' in out ? out.kept?.answers : undefined).toEqual({});
+  });
+
+  it('says which answers the API did not keep (not in the piece), and never that all were saved (S2)', async () => {
+    const both = { ...answers, 'answer-1': 'no' };
+    const kept = (notInPiece: string[]) => vi.fn().mockResolvedValue({ links: [], notInPiece });
+    expect(await runReview(fakeApi({ getItemLinks: lists(), confirmLinks: kept(['https://club.example/a']) }), reader, ID, form(both), one)).toMatchObject({
+      status: 409,
+      saved: true,
+      notice: '1 answer was not saved: that link is no longer in this piece. The list below is the current one. Your other answer is saved.',
+      kept: { answers: {} },
+    });
+    expect(await runReview(fakeApi({ getItemLinks: lists(), confirmLinks: kept(['https://club.example/a', 'https://club.example/b']) }), reader, ID, form(both), one)).toMatchObject({
+      notice: '2 answers were not saved: those links are no longer in this piece. The list below is the current one.',
+    });
+    // Two rows of one address (the text's and an event's) are one answer to the API.
+    const C = link({ url: 'https://club.example/c' });
+    const C2 = link({ url: 'https://club.example/c', where: 'in the event "Picnic"' });
+    const four = vi.fn().mockResolvedValue({ linksSha256: LINKS_HASH, links: [A, B, C, C2] });
+    const rows = { step: 'links', links_hash: hashHex(LINKS_HASH), 'row-0': rowKey(A), 'answer-0': 'yes', 'row-1': rowKey(B), 'answer-1': 'yes', 'row-2': rowKey(C), 'answer-2': 'yes', 'row-3': rowKey(C2), 'answer-3': 'yes' };
+    expect(await runReview(fakeApi({ getItemLinks: four, confirmLinks: kept(['https://club.example/b']) }), reader, ID, form(rows), one)).toMatchObject({
+      notice: '1 answer was not saved: that link is no longer in this piece. The list below is the current one. Your other answers are saved.',
+    });
+    // Approve pressed with them: nothing is approved.
+    const approve = vi.fn();
+    expect(await runReview(fakeApi({ getItemLinks: lists(), confirmLinks: kept(['https://club.example/a']), approve }), reader, ID, form({ ...both, step: 'approve', hash: hashHex(HASH) }), one)).toMatchObject({
+      notice: '1 answer was not saved: that link is no longer in this piece. The list below is the current one. Your other answer is saved. It was not approved.',
+    });
+    expect(approve).not.toHaveBeenCalled();
   });
 
   it('refuses a stale page, a missing answer, or no office chosen, before asking the API', async () => {
     const confirmLinks = vi.fn();
-    expect(await runReview(fakeApi({ confirmLinks }), reader, ID, form({ ...answers, links_hash: 'zz' }), one)).toMatchObject({ status: 409, notice: 'This page is out of date. Open the item again.' });
-    expect(await runReview(fakeApi({ confirmLinks }), reader, ID, form({ step: 'links', links_hash: hashHex(LINKS_HASH), 'url-0': 'https://club.example/a' }), one)).toMatchObject({
+    const getItemLinks = vi.fn();
+    expect(await runReview(fakeApi({ getItemLinks, confirmLinks }), reader, ID, form({ ...answers, links_hash: 'zz' }), one)).toMatchObject({ status: 409, notice: 'This page is out of date. Open the item again.' });
+    expect(await runReview(fakeApi({ getItemLinks, confirmLinks }), reader, ID, form({ step: 'links', links_hash: hashHex(LINKS_HASH), 'row-0': rowKey(A) }), one)).toMatchObject({
       status: 400,
       errors: { answers: 'Choose Yes or No for at least one link.' },
     });
-    expect(await runReview(fakeApi({ confirmLinks }), reader, ID, form(answers), pick)).toMatchObject({ status: 400, errors: { acting: 'Choose which of your offices you act for.' }, kept: { answers: { 'https://club.example/a': 'yes' } } });
-    expect(await runReview(fakeApi({ confirmLinks }), reader, ID, form({ step: 'nonsense' }), one)).toMatchObject({ status: 400, notice: 'This page is out of date. Open the item again.' });
+    expect(await runReview(fakeApi({ getItemLinks, confirmLinks }), reader, ID, form(answers), pick)).toMatchObject({ status: 400, errors: { acting: 'Choose which of your offices you act for.' }, kept: { answers: { [rowKey(A)]: 'yes' } } });
+    expect(await runReview(fakeApi({ getItemLinks, confirmLinks }), reader, ID, form({ step: 'nonsense' }), one)).toMatchObject({ status: 400, notice: 'This page is out of date. Open the item again.' });
     expect(confirmLinks).not.toHaveBeenCalled();
+    expect(getItemLinks).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for an office holder whose offices could not be read (N1)', async () => {
+    const unknown = actingChoice(['nwfl-officers', 'nwfl-office-treasurer'], undefined);
+    const api = fakeApi({ getItemLinks: vi.fn(), confirmLinks: vi.fn(), approve: vi.fn(), sendBack: vi.fn() });
+    const reload = { acting: 'We could not load your offices, so nothing was sent. Reload the page, then try again.' };
+    expect(await runReview(api, reader, ID, form(answers), unknown)).toMatchObject({ status: 400, errors: reload });
+    expect(await runReview(api, reader, ID, form({ step: 'approve', hash: hashHex(HASH) }), unknown)).toMatchObject({ status: 400, errors: reload });
+    expect(await runReview(api, reader, ID, form({ step: 'send-back', note: 'Fix it' }), unknown)).toMatchObject({ status: 400, errors: reload });
+    for (const rpc of [api.getItemLinks, api.confirmLinks, api.approve, api.sendBack]) expect(rpc).not.toHaveBeenCalled();
   });
 
   it('approves by the hash seen, for the office chosen; break-glass with its reason', async () => {
@@ -285,10 +383,12 @@ describe('runReview: the review page\'s posts', () => {
 
   it('says why answers or a note were not saved, and refuses a stale page or a problem in the form before asking the API', async () => {
     const editor = new NotAllowed('ConfirmLinks', 'you edited this version; a second officer must check its links');
-    expect(await runReview(fakeApi({ confirmLinks: vi.fn().mockRejectedValue(editor) }), reader, ID, form(answers), one)).toMatchObject({
+    expect(await runReview(fakeApi({ getItemLinks: lists(), confirmLinks: vi.fn().mockRejectedValue(editor) }), reader, ID, form(answers), one)).toMatchObject({
       status: 403,
       notice: 'Your answers were not saved: you edited this version; a second officer must check its links.',
     });
+    // The list could not be read again: the same plain words.
+    expect(await runReview(fakeApi({ getItemLinks: vi.fn().mockRejectedValue(new SignInAgain('GetItemLinks')) }), reader, ID, form(answers), one)).toMatchObject({ status: 401, signIn: true, kept: { notes: { [rowKey(A)]: 'ok' } } });
     const approve = vi.fn();
     // Approve with an answer chosen but no list hash; with no content hash; with a note too long; with no office chosen.
     expect(await runReview(fakeApi({ approve }), reader, ID, form({ ...answers, step: 'approve', hash: hashHex(HASH), links_hash: '' }), one)).toMatchObject({ status: 409, notice: 'This page is out of date. Open the item again.' });
@@ -309,21 +409,23 @@ describe('runReview: the review page\'s posts', () => {
 
   it('approves by break-glass from its own button, and saves answers chosen in the same form first', async () => {
     const approve = vi.fn().mockResolvedValue(item());
+    const getItemLinks = lists();
     const confirmLinks = vi.fn().mockResolvedValue({ links: [], notInPiece: [] });
-    await runReview(fakeApi({ approve, confirmLinks }), reader, ID, form({ step: 'break-glass', hash: hashHex(HASH), reason: 'The Webmaster is away' }), one);
+    await runReview(fakeApi({ approve, getItemLinks, confirmLinks }), reader, ID, form({ step: 'break-glass', hash: hashHex(HASH), reason: 'The Webmaster is away' }), one);
     expect(approve).toHaveBeenLastCalledWith(reader, { itemId: ID, contentHash: HASH, breakGlass: { reason: 'The Webmaster is away' }, actingAsOfficeId: ROSTER[1]!.id });
     expect(confirmLinks).not.toHaveBeenCalled();
+    expect(getItemLinks).not.toHaveBeenCalled();
     // Approve pressed with a link answered in the form: the answer is saved, then it is approved.
-    expect(await runReview(fakeApi({ approve, confirmLinks }), reader, ID, form({ ...answers, step: 'approve', hash: hashHex(HASH) }), one)).toEqual({ redirect: `${REVIEW_LINKS.review(ID)}?done=approved` });
+    expect(await runReview(fakeApi({ approve, getItemLinks, confirmLinks }), reader, ID, form({ ...answers, step: 'approve', hash: hashHex(HASH) }), one)).toEqual({ redirect: `${REVIEW_LINKS.review(ID)}?done=approved` });
     expect(confirmLinks).toHaveBeenCalledWith(reader, { itemId: ID, linksSha256: LINKS_HASH, answers: [{ url: 'https://club.example/a', yes: true, note: 'ok' }], actingAsOfficeId: ROSTER[1]!.id });
     expect(confirmLinks.mock.invocationCallOrder[0]).toBeLessThan(approve.mock.invocationCallOrder.at(-1)!);
     // Saving them failed: nothing is approved.
     const stale = vi.fn().mockRejectedValue(new LinksChanged('ConfirmLinks'));
     const before = approve.mock.calls.length;
-    expect(await runReview(fakeApi({ approve, confirmLinks: stale }), reader, ID, form({ ...answers, step: 'approve', hash: hashHex(HASH) }), one)).toMatchObject({ status: 409 });
+    expect(await runReview(fakeApi({ approve, getItemLinks, confirmLinks: stale }), reader, ID, form({ ...answers, step: 'approve', hash: hashHex(HASH) }), one)).toMatchObject({ status: 409 });
     expect(approve.mock.calls.length).toBe(before);
     // A note on a link with no answer is not an answer: Approve alone.
-    await runReview(fakeApi({ approve, confirmLinks }), reader, ID, form({ step: 'approve', hash: hashHex(HASH), 'url-0': 'https://club.example/a', 'note-0': 'later' }), one);
+    await runReview(fakeApi({ approve, getItemLinks, confirmLinks }), reader, ID, form({ step: 'approve', hash: hashHex(HASH), 'row-0': rowKey(A), 'note-0': 'later' }), one);
     expect(confirmLinks).toHaveBeenCalledTimes(1);
   });
 
@@ -346,9 +448,9 @@ describe('runReview: the review page\'s posts', () => {
     expect(await runReview(fakeApi({ sendBack }), reader, ID, form({ step: 'send-back', note: ' ' }), one)).toMatchObject({ status: 400, errors: { note: 'Write a note for the author.' } });
   });
 
-  it('asks to sign in again with no token, calling nothing, the typed text kept', async () => {
-    const out = await runReview(fakeApi({}), undefined, ID, form({ step: 'send-back', note: 'Keep me', 'url-0': 'https://club.example/a', 'note-0': 'and me', reason: 'mine' }), one);
-    expect(out).toEqual({ status: 401, signIn: true, notice: SIGN_IN_AGAIN, kept: { notes: { 'https://club.example/a': 'and me' }, answers: {}, note: 'Keep me', reason: 'mine' } });
+  it('asks to sign in again with no token, calling nothing, the typed text and choices kept by row', async () => {
+    const out = await runReview(fakeApi({}), undefined, ID, form({ step: 'send-back', note: 'Keep me', 'row-0': 'k0', 'answer-0': 'no', 'note-0': 'and me', 'row-1': 'k1', reason: 'mine' }), one);
+    expect(out).toEqual({ status: 401, signIn: true, notice: SIGN_IN_AGAIN, kept: { notes: { k0: 'and me' }, answers: { k0: 'no' }, places: { k0: 1, k1: 2 }, note: 'Keep me', reason: 'mine' } });
   });
 });
 

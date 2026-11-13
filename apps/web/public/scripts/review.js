@@ -5,17 +5,25 @@
 //     data-keep) is kept in this tab's sessionStorage, never localStorage, under the form's data-review-key
 //     (the item and the version it was typed on), and put back into an empty field when the page opens
 //     again: after a sign-in that ran out, a reload, or a list of links that changed;
+//   - each Yes or No chosen (the radio buttons marked data-keep-choice, by row) is kept the same way, and
+//     put back as the page opens again: a choice not yet saved wins over the answer shown (N3);
 //   - once answers are saved (the form says so with data-saved), the notes of the links now answered
-//     (data-answered) are dropped: they were saved with their answers;
+//     (data-answered) are dropped: they were saved with their answers; and every choice kept is dropped,
+//     as every one was sent. A list of links that changed (data-relisted) drops the choices too: the
+//     page asks for them again;
 //   - the sign-in line turns to "Save now" for its last five minutes.
 // Loaded as a same-origin module (CSP script-src 'self'), only by the review page; no inline script.
 
 /** The sign-in line says "Save now" this long before the sign-in ends. */
 export const SOON_MS = 5 * 60 * 1000;
 
+/** The prefix of a kept choice's name: "answer:<row key>". */
+const CHOICE = 'answer:';
+
 /**
  * @typedef {{ getItem(key: string): string | null, setItem(key: string, value: string): void, removeItem(key: string): void }} TabStorage
  * @typedef {{ value: string, dataset: Record<string, string | undefined>, addEventListener(type: string, fn: () => void): void }} Kept
+ * @typedef {Kept & { checked: boolean }} Choice
  */
 
 /**
@@ -39,6 +47,8 @@ export function wireReview(doc, { storage, now, every }) {
   const key = form.dataset['reviewKey'] ?? '';
   /** @type {Kept[]} */
   const fields = [...form.querySelectorAll('[data-keep]')];
+  /** @type {Choice[]} */
+  const choices = [...form.querySelectorAll('[data-keep-choice]')];
 
   /** @returns {Record<string, string>} */
   const read = () => {
@@ -60,8 +70,9 @@ export function wireReview(doc, { storage, now, every }) {
   };
 
   const copy = read();
-  if (form.dataset['saved']) {
-    for (const field of fields) if (field.dataset['answered']) delete copy[field.dataset['keep'] ?? ''];
+  if (form.dataset['saved']) for (const field of fields) if (field.dataset['answered']) delete copy[field.dataset['keep'] ?? ''];
+  if (form.dataset['saved'] || form.dataset['relisted']) {
+    for (const name of Object.keys(copy)) if (name.startsWith(CHOICE)) delete copy[name];
     write(copy);
   }
   for (const field of fields) {
@@ -72,6 +83,16 @@ export function wireReview(doc, { storage, now, every }) {
       const next = read();
       if (field.value === '') delete next[name];
       else next[name] = field.value;
+      write(next);
+    });
+  }
+  for (const choice of choices) {
+    const name = choice.dataset['keepChoice'] ?? '';
+    if (typeof copy[name] === 'string') choice.checked = copy[name] === choice.value;
+    choice.addEventListener('change', () => {
+      if (!choice.checked) return;
+      const next = read();
+      next[name] = choice.value;
       write(next);
     });
   }

@@ -38,12 +38,66 @@ class Storage {
   }
 }
 
-function page(fields: Field[], dataset: Record<string, string> = {}, line?: Line) {
-  const form = { dataset: { reviewKey: 'nwfl-review:item:abc', ...dataset }, querySelectorAll: () => fields };
+/** A Yes or No radio button of one link's row, keyed by the row (N3). */
+class Radio extends EventTarget {
+  checked = false;
+  readonly dataset: Record<string, string>;
+  constructor(
+    keep: string,
+    readonly value: string,
+    extra: Record<string, string> = {},
+  ) {
+    super();
+    this.dataset = { keepChoice: keep, ...extra };
+  }
+  choose() {
+    this.checked = true;
+    this.dispatchEvent(new Event('change'));
+  }
+}
+
+function page(fields: Field[], dataset: Record<string, string> = {}, line?: Line, radios: Radio[] = []) {
+  const form = { dataset: { reviewKey: 'nwfl-review:item:abc', ...dataset }, querySelectorAll: (selector: string) => (selector === '[data-keep-choice]' ? radios : fields) };
   return { querySelector: (selector: string) => (selector === 'form[data-review]' ? form : selector === '[data-sign-in]' ? (line ?? null) : null) };
 }
 
 describe('wireReview', () => {
+  it('keeps a Yes or No chosen and not saved, by row, and puts it back when the page opens again (N3)', () => {
+    const storage = new Storage();
+    const rows = () => [new Radio('answer:k0', 'yes'), new Radio('answer:k0', 'no'), new Radio('answer:k1', 'yes'), new Radio('answer:k1', 'no')];
+    const first = rows();
+    wireReview(page([], {}, undefined, first), { storage, now: () => 0, every: () => {} });
+    first[1]!.choose();
+    first[2]!.choose();
+    // A change that leaves a button unchecked (the other of the pair) keeps nothing for it.
+    first[0]!.dispatchEvent(new Event('change'));
+    expect(JSON.parse(storage.getItem('nwfl-review:item:abc')!)).toEqual({ 'answer:k0': 'no', 'answer:k1': 'yes' });
+
+    // The server shows the answer saved before (yes on k0): the choice not yet saved wins.
+    const again = rows();
+    again[0]!.checked = true;
+    wireReview(page([], {}, undefined, again), { storage, now: () => 0, every: () => {} });
+    expect(again.map((r) => r.checked)).toEqual([false, true, true, false]);
+  });
+
+  it('drops every choice kept once answers are saved, or once the list came again; notes stay but for the answered rows (N3)', () => {
+    const storage = new Storage();
+    const stored = { 'answer:k0': 'no', 'answer:gone': 'yes', 'link:k0': 'saved with it', 'link:k1': 'not answered', note: 'for the writer' };
+    storage.setItem('nwfl-review:item:abc', JSON.stringify(stored));
+    const radios = [new Radio('answer:k0', 'yes', { answered: 'yes' }), new Radio('answer:k0', 'no', { answered: 'yes' })];
+    wireReview(page([new Field('link:k0', { answered: 'yes' }), new Field('link:k1'), new Field('note')], { saved: 'yes' }, undefined, radios), { storage, now: () => 0, every: () => {} });
+    expect(radios.map((r) => r.checked)).toEqual([false, false]);
+    expect(JSON.parse(storage.getItem('nwfl-review:item:abc')!)).toEqual({ 'link:k1': 'not answered', note: 'for the writer' });
+
+    storage.setItem('nwfl-review:item:abc', JSON.stringify(stored));
+    const relisted = [new Radio('answer:k0', 'yes'), new Radio('answer:k0', 'no')];
+    const fields = [new Field('link:k0'), new Field('link:k1')];
+    wireReview(page(fields, { relisted: 'yes' }, undefined, relisted), { storage, now: () => 0, every: () => {} });
+    expect(relisted.map((r) => r.checked)).toEqual([false, false]);
+    expect(fields.map((f) => f.value)).toEqual(['saved with it', 'not answered']);
+    expect(JSON.parse(storage.getItem('nwfl-review:item:abc')!)).toEqual({ 'link:k0': 'saved with it', 'link:k1': 'not answered', note: 'for the writer' });
+  });
+
   it('keeps each note as it is typed, by the item and version, and puts it back into an empty field', () => {
     const storage = new Storage();
     const first = [new Field('link:https://club.example/a'), new Field('note')];
