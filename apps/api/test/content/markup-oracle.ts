@@ -3,7 +3,8 @@
 // before the linear rewrite. Copied verbatim except for the lines marked ORACLE:
 // a step budget (the old parser backtracks exponentially on some inputs), and
 // the position of each "unclosed :members[" problem, the one push a retry can
-// repeat (A3a already keeps each URL problem once, by its offset). Never edit
+// repeat (A3a already keeps each URL problem once, by its offset), and
+// oracleSteps(), which reads the budget used (EQUIV-FLAKE). Never edit
 // the parsing logic below.
 // ============================================================================
 import { type UrlProblem, urlMessage, urlProblem, urlsInText } from '../../src/links/rule.js';
@@ -322,6 +323,11 @@ function parseBlocks(lines: Line[], problems: MarkupProblem[], inMembers: boolea
     blocks.push({ type: 'paragraph', children: inlines(paragraph.join(' '), number, problems, starts) });
   }
   return { blocks, rest: [], closed: false };
+}
+
+/** ORACLE: the steps the last oracleParse counted against its budget (BUDGET + 1 when it ran out), so a corpus can bound its total work. */
+export function oracleSteps(): number {
+  return BUDGET - budget.left;
 }
 
 export function oracleParse(src: string): ParsedMarkup {
