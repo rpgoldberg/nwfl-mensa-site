@@ -417,6 +417,22 @@ function withholds(lens: Lens, row: Pick<VersionRow, 'item_id' | 'on_behalf_of'>
   return lens.affected([subjectKey('content_item', row.item_id)]) || (row.on_behalf_of !== null && lens.action('member_name') !== 'show');
 }
 
+/** What a reviewer who cannot see the whole version is asked to leave to an officer who can. */
+export type WholeViewAct = 'approve it' | 'publish it' | 'check its links';
+
+/**
+ * A3B-HARDEN: approving, publishing and vouching for links need the whole version. A reviewer from whom
+ * the lens withholds anything of it (withholds) may only send it back: FAILED_PRECONDITION, as SaveDraft
+ * refuses such an editor, in words that say only that parts are withheld. NOT_FOUND when the lens hides
+ * the item whole, as the reads answer. Called before any hash is compared, so the refusal tells nothing
+ * about a hash.
+ */
+export async function requireWholeView(client: TxClient, caller: Caller, version: VersionRow, act: WholeViewAct): Promise<void> {
+  const lens = await loadLens(client, caller.audience, { items: [version.item_id], versions: [version.id] });
+  if (itemHidden({ id: version.item_id, on_behalf_of: version.on_behalf_of }, version.id, lens)) throw notFound();
+  if (withholds(lens, version)) throw precondition(`part of this item is withheld from you; an officer who can see all of it must ${act}`);
+}
+
 /**
  * The latest send-back note on a version since it was last marked ready (EDITOR E1). Only a draft can
  * carry one: a send-back returns the version to draft, and marking it ready again clears it.
@@ -453,8 +469,12 @@ async function approvedAs(client: TxClient, row: VersionRow, office: Viewer['off
   return actorLabel({ kind: audit.actor_kind, groups: audit.actor_groups, actingOffice: audit.acting_slug === null ? null : { slug: audit.acting_slug, title: audit.acting_title as string } }, office);
 }
 
-/** EDITOR A1: whether the viewer may approve it as it stands (break-glass aside), and publish it. */
-async function mayActOn(row: VersionRow, edited: boolean, viewer: Viewer): Promise<{ approve: boolean; publish: boolean }> {
+/**
+ * EDITOR A1: whether the viewer may approve it as it stands (break-glass aside), and publish it. Neither
+ * when anything of it is withheld from them (A3B-HARDEN, requireWholeView).
+ */
+async function mayActOn(row: VersionRow, edited: boolean, viewer: Viewer, withheld: boolean): Promise<{ approve: boolean; publish: boolean }> {
+  if (withheld) return { approve: false, publish: false };
   const { roles } = viewer;
   const reviewer = roles.officer || roles.admin || roles.webmaster;
   const publisher = roles.admin || roles.webmaster;
@@ -476,7 +496,7 @@ async function versionMessage(client: TxClient, row: VersionRow, lens: Lens, vie
   const subjects = [subjectKey('content_item', row.item_id)];
   const withheld = withholds(lens, row);
   const edited = (await client.query(`SELECT 1 FROM content_version_editor WHERE version_id = $1 AND subject = $2`, [row.id, viewer.subject])).rows.length > 0;
-  const may = await mayActOn(row, edited, viewer);
+  const may = await mayActOn(row, edited, viewer, withheld);
   const { rows: files } = await client.query<{ id: string; filename: string; mime_type: string; size_bytes: string; sha256: Buffer; audience: string; role: string; public_copy_of: string | null }>(
     `SELECT id, filename, mime_type, size_bytes::text AS size_bytes, sha256, audience, role, public_copy_of FROM stored_file WHERE version_id = $1 ORDER BY filename, id`,
     [row.id],
@@ -836,6 +856,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         const item = await loadItem(client, request.itemId);
         let version = item.working_version_id === null ? undefined : await loadVersion(client, item.working_version_id);
         if (version?.status !== 'ready') throw precondition('only a ready version can be approved');
+        await requireWholeView(client, caller, version, 'approve it');
         if (version.content_hash === null || !Buffer.from(request.contentHash).equals(version.content_hash)) {
           throw new ConnectError('the version changed since it was opened; reload it', Code.Aborted);
         }
@@ -918,6 +939,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
         const item = await loadItem(client, request.itemId);
         const version = item.working_version_id === null ? undefined : await loadVersion(client, item.working_version_id);
         if (version?.status !== 'cleared') throw precondition('only an approved version can be published');
+        await requireWholeView(client, caller, version, 'publish it');
         // A cleared version always has its hash (0029).
         if (!Buffer.from(request.contentHash).equals(version.content_hash as Buffer)) {
           throw new ConnectError('the version changed since it was opened; reload it', Code.Aborted);

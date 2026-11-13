@@ -30,7 +30,7 @@ import { MAX_URL_LENGTH } from '../links/urls.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { type PieceLink, actualLinks, currentAnswers, linksAsSeen, linksSha256, loginWalled, rfc3339Micros } from './item-links.js';
 import { normalizeTree } from './tree.js';
-import { type ItemRow, MAX_NOTE, type VersionRow, actingOffice, loadItem, loadVersion, notFound, requireId, timestampOfMicros } from './workflow.js';
+import { type ItemRow, MAX_NOTE, type VersionRow, actingOffice, loadItem, loadVersion, notFound, requireId, requireWholeView, timestampOfMicros } from './workflow.js';
 
 export interface LinkGateDeps {
   db: Db;
@@ -140,6 +140,7 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
         const item = await loadItem(client, request.itemId);
         const version = item.working_version_id === null ? undefined : await loadVersion(client, item.working_version_id);
         if (version?.status !== 'ready') throw precondition('only a version waiting for approval has its links checked');
+        await requireWholeView(client, caller, version, 'check its links');
         const edited = (await client.query(`SELECT 1 FROM content_version_editor WHERE version_id = $1 AND subject = $2`, [version.id, caller.subject])).rows.length > 0;
         if (edited) throw new ConnectError('you edited this version; a second officer must check its links', Code.PermissionDenied);
         const { seen, actual, sha256 } = await listsOf(client, caller, item, version);

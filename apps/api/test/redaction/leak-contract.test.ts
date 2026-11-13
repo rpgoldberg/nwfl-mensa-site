@@ -490,9 +490,18 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       return new Map([
         ['ContentService.Approve', await said(() => content.approve({ itemId: item.id, contentHash }, who))],
         ['ContentService.ConfirmLinks', await said(() => content.confirmLinks({ itemId: item.id, linksSha256, answers: [{ url: 'https://example.org/not-here', yes: true }] }, who))],
+        // A3B-HARDEN: a cleared version is not needed to reach Publish's refusal of a partial viewer's hash.
+        ['ContentService.Publish', await said(() => content.publish({ itemId: item.id, contentHash }, who))],
       ]);
     };
     for (const who of [{}, MEMBER, AGENT, as('lone-admin-token'), as('lone-webmaster-token')]) expect(found(await gate(who), C), JSON.stringify(who)).toEqual({});
+    // A3B-HARDEN: part of this version is withheld from the Admin and the Webmaster without the officers group, so
+    // they are refused, in words that say only that.
+    for (const who of [as('lone-admin-token'), as('lone-webmaster-token')]) {
+      const said = await gate(who);
+      expect(said.get('ContentService.Approve')?.toString()).toContain('part of this item is withheld from you; an officer who can see all of it must approve it');
+      expect(said.get('ContentService.ConfirmLinks')?.toString()).toContain('part of this item is withheld from you; an officer who can see all of it must check its links');
+    }
     expect(found(await gate(OFFICER), C)).toEqual({ phone: ['ContentService.Approve', 'ContentService.ConfirmLinks'] });
   });
 

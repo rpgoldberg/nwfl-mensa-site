@@ -114,6 +114,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ['social', 'Social Chair'],
       ['outings', 'Outings Chair'],
       ['library', 'Librarian'],
+      ['clubs', 'Clubs Chair'],
     ]) {
       offices[slug as string] = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ($1, $2, 'appointed') RETURNING id`, [slug, title]);
     }
@@ -501,50 +502,41 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ]);
       expect(lone.linksSha256).toEqual(sha(lone.links.map((link) => [link.url, link.where]), await readyAtOf(itemId)));
       expect(lone.linksSha256).not.toEqual(officer.linksSha256);
-      // The officer's hash is not the lone Admin's list.
-      expect(await codeOf(content.confirmLinks({ itemId, linksSha256: officer.linksSha256, answers: [{ url: 'https://example.org/fine', yes: true }] }, LONE_ADMIN))).toBe(Code.FailedPrecondition);
-      const response = await confirm(
-        itemId,
-        [
-          { url: 'https://example.org/fine', yes: true },
-          { url: 'https://example.org/ring/[withheld]', yes: true },
-          { url: `https://example.org/ring/${PHONE}`, yes: true },
-          { url: 'https://www.facebook.com/groups/example-phone', yes: true },
-        ],
-        LONE_ADMIN,
-      );
-      expect(response.notInPiece).toEqual(['https://example.org/ring/[withheld]', `https://example.org/ring/${PHONE}`]);
-      expect((await stored(itemId)).map((answer) => answer.url)).toEqual(['https://example.org/fine', 'https://www.facebook.com/groups/example-phone']);
-      expect(row(response.links, 'https://example.org/fine')).toMatchObject({ accepted: true, answeredByLabel: 'Admin' });
+      // A3B-HARDEN: part of this version is withheld from the lone Admin, so they vouch for none of its links,
+      // with the officer's hash or their own (an event mark, below, shows what a reviewer sees whole).
+      for (const linksSha256 of [officer.linksSha256, lone.linksSha256]) {
+        expect(await messageOf(content.confirmLinks({ itemId, linksSha256, answers: [{ url: 'https://example.org/fine', yes: true }] }, LONE_ADMIN))).toBe(
+          'part of this item is withheld from you; an officer who can see all of it must check its links',
+        );
+      }
+      expect(await stored(itemId)).toEqual([]);
     });
 
-    it("never names to Approve's caller a link they may not see whole: a marked URL answered no gets the officers-only sentence", async () => {
+    it("never names to Approve's caller a link in a version part of which is withheld from them: they are refused outright", async () => {
       const marks = api.client(RedactionPolicyService);
       const { itemId, hash } = await piece(`Call via https://example.org/ring/${PHONE} or see https://example.org/fine.`);
       await marks.addRedactionMark({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: itemId, field: MarkField.BODY, quote: PHONE, category: RedactionCategory.MEMBER_PHONE }, OFFICER);
       await confirm(itemId, [{ url: `https://example.org/ring/${PHONE}`, yes: false }], OFFICER);
-      for (const who of [LONE_ADMIN, as('lone-webmaster-token')]) expect(await messageOf(content.approve({ itemId, contentHash: hash }, who))).toBe(OFFICERS_ONLY);
+      for (const who of [LONE_ADMIN, as('lone-webmaster-token')]) {
+        const said = await messageOf(content.approve({ itemId, contentHash: hash }, who));
+        expect(said).toBe('part of this item is withheld from you; an officer who can see all of it must approve it');
+        expect(said).not.toContain(PHONE);
+      }
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(new RegExp(`^a reviewer answered no for the link "https://example.org/ring/${PHONE}"`));
-      // A link the caller sees whole is named, and the hidden one is said once, without a count.
-      await confirm(itemId, [{ url: 'https://example.org/fine', yes: false }], OFFICER);
-      const both = await messageOf(content.approve({ itemId, contentHash: hash }, LONE_ADMIN));
-      expect(both).toBe(
-        `a reviewer answered no for the link "https://example.org/fine" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved. ${OFFICERS_ONLY}`,
-      );
-      expect(both).not.toContain(PHONE);
     });
 
     it('names a blocker the caller sees and adds the officers-only sentence for a hidden sign-in link that only lacks a yes', async () => {
-      const marks = api.client(RedactionPolicyService);
-      const hiddenPhone = '850-555-0143';
-      const { itemId, hash } = await piece(`Ring https://www.facebook.com/groups/ring-${hiddenPhone} or see https://example.org/visible.`);
-      await marks.addRedactionMark({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: itemId, field: MarkField.BODY, quote: hiddenPhone, category: RedactionCategory.MEMBER_PHONE }, OFFICER);
+      await api.pool.query(
+        `INSERT INTO event_occurrence (title, starts_at, url, visibility, owner_office_id) VALUES ('Members chess', '2026-11-19T23:00:00Z', 'https://www.facebook.com/events/66003', 'members', $1)`,
+        [offices['clubs']],
+      );
+      const { itemId, hash } = await piece('See https://example.org/visible.', { writer: ADMIN, office: 'clubs' });
       await confirm(itemId, [{ url: 'https://example.org/visible', yes: false }], OFFICER);
       const said = await messageOf(content.approve({ itemId, contentHash: hash }, LONE_ADMIN));
       expect(said).toBe(
         `a reviewer answered no for the link "https://example.org/visible" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved. ${OFFICERS_ONLY}`,
       );
-      expect(said).not.toContain(hiddenPhone);
+      expect(said).not.toContain('66003');
       // An officer sees both: the no is named, and nothing is hidden from them.
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).not.toContain(OFFICERS_ONLY);
     });
@@ -603,6 +595,30 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       const urls = (await links(itemId, LONE_ADMIN)).links.map((link) => link.url);
       expect(urls).not.toContain('https://parking.example.org/map');
       expect((await links(itemId)).links.map((link) => link.url)).toContain('https://parking.example.org/map');
+    });
+
+    it('lets a reviewer vouch only for what they saw whole: an event address withheld from them is not in the piece', async () => {
+      // After the mark above: the President's Board games night detail is withheld from the public's audience.
+      const { itemId } = await piece('Events below.', { writer: ADMIN, office: 'president' });
+      const officerUrls = (await links(itemId)).links.map((link) => link.url);
+      const lone = await links(itemId, LONE_ADMIN);
+      const withheld = lone.links.map((link) => link.url).filter((url) => !officerUrls.includes(url));
+      expect(withheld).toHaveLength(1);
+      const response = await content.confirmLinks(
+        {
+          itemId,
+          linksSha256: lone.linksSha256,
+          answers: [
+            { url: withheld[0] as string, yes: true },
+            { url: 'https://parking.example.org/map', yes: true },
+            { url: 'https://www.facebook.com/events/1234', yes: true },
+          ],
+        },
+        LONE_ADMIN,
+      );
+      expect(response.notInPiece).toEqual([withheld[0], 'https://parking.example.org/map']);
+      expect((await stored(itemId)).map((answer) => answer.url)).toEqual(['https://www.facebook.com/events/1234']);
+      expect(row(response.links, 'https://www.facebook.com/events/1234', 'event: Board games night')).toMatchObject({ accepted: true, answeredByLabel: 'Admin' });
     });
   });
 
