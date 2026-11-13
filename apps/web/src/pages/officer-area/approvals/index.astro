@@ -1,8 +1,10 @@
 ---
 // EDITOR E4, S6: "Approve news". Two lists, oldest first: "Waiting for approval" (every piece sent for
 // approval; one this person changed is marked, since another officer must approve it) and "Approved, ready
-// to publish" (the Webmaster publishes these, or the Admin as backup). Each card: the title, the office,
-// what it is, its status in words beside the chip (never colour alone), and Review. Any reviewer (an
+// to publish" (the Webmaster publishes these, or the Admin as backup). Each list is a table where it is wide
+// enough (Title, the Review link; What it is; Office; Status, in words beside the chip, never colour alone;
+// When), with a caption and column headers, and a card each where it is not: "Our news"'s pattern and
+// styles (E3 fix 1: a container query on the list's own width, in rem, so large text gets the cards). Any reviewer (an
 // officer, the Admin, the Webmaster) sees both: approving is anyone's but its writer's, publishing is the
 // publishers'. Read with the person's own token (src/lib/api/editor.ts).
 //
@@ -87,21 +89,44 @@ const done = doneText(Astro.url.searchParams);
       {list.rows.length === 0
         ? <p class="card empty">{list.empty}</p>
         : (
-          <ul class="writer-list review-list">
-            {list.rows.map((row) => (
-              <li class="card writer-card">
-                <h3>{row.title}</h3>
-                <dl class="facts facts--grid">
-                  <div><dt>What it is</dt><dd>{KIND_WORDS[row.item.kind]}</dd></div>
-                  <div><dt>Office</dt><dd>{row.office}</dd></div>
-                  <div class="facts__wide"><dt>Status</dt><dd><span class={`chip ${row.status.tone}`}>{row.status.label}</span></dd></div>
-                  <div class="facts__wide"><dt>When</dt><dd>{list.when(row.item)}</dd></div>
-                </dl>
-                {row.item.working?.callerEdited && <p class="review-mine"><strong>You changed this version</strong>, so another officer must approve it.</p>}
-                <p><a class="button button--secondary" href={REVIEW_LINKS.review(row.item.id)} aria-label={`Review ${row.title}`}>Review</a></p>
-              </li>
-            ))}
-          </ul>
+          <div class="writer-items">
+            <p class="hint writer-order">Oldest first.</p>
+            <table class="writer-table review-table">
+              <caption>{list.heading}, oldest first</caption>
+              <thead>
+                <tr><th scope="col">Title</th><th scope="col">What it is</th><th scope="col">Office</th><th scope="col">Status</th><th scope="col">When</th></tr>
+              </thead>
+              <tbody>
+                {list.rows.map((row) => (
+                  <tr>
+                    <th scope="row"><a href={REVIEW_LINKS.review(row.item.id)}>{row.title}</a></th>
+                    <td>{KIND_WORDS[row.item.kind]}</td>
+                    <td>{row.office}</td>
+                    <td>
+                      <span class={`chip ${row.status.tone}`}>{row.status.label}</span>
+                      {row.item.working?.callerEdited && <p class="review-mine"><strong>You changed this version</strong>, so another officer must approve it.</p>}
+                    </td>
+                    <td>{list.when(row.item)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <ul class="writer-list review-list">
+              {list.rows.map((row) => (
+                <li class="card writer-card">
+                  <h3>{row.title}</h3>
+                  <dl class="facts facts--grid">
+                    <div><dt>What it is</dt><dd>{KIND_WORDS[row.item.kind]}</dd></div>
+                    <div><dt>Office</dt><dd>{row.office}</dd></div>
+                    <div class="facts__wide"><dt>Status</dt><dd><span class={`chip ${row.status.tone}`}>{row.status.label}</span></dd></div>
+                    <div class="facts__wide"><dt>When</dt><dd>{list.when(row.item)}</dd></div>
+                  </dl>
+                  {row.item.working?.callerEdited && <p class="review-mine"><strong>You changed this version</strong>, so another officer must approve it.</p>}
+                  <p><a class="button button--secondary" href={REVIEW_LINKS.review(row.item.id)} aria-label={`Review ${row.title}`}>Review</a></p>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
     </section>
   ))}

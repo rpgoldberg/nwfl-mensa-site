@@ -1849,3 +1849,7 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .link-row textarea, .review-step textarea { width: 100%; }
 .break-glass { padding-top: var(--space-3); border-top: var(--border) solid var(--line); }
 .review-counts { margin: var(--space-3) 0; padding-left: 1.5em; display: grid; gap: var(--space-1); font-weight: 700; }
+/* Round 1: S6's lists take "Our news"'s table and cards (above); its last column is When, which wraps. */
+.review-table td:last-child { width: auto; white-space: normal; }
+.review-table tbody th a { overflow-wrap: anywhere; }
+.review-table .review-mine { margin-top: var(--space-2); }

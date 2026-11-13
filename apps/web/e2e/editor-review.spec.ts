@@ -8,7 +8,7 @@
 // Each browser project changes only its own seeds (e2e/stand-in.ts REVIEW.own); the shared ones are only
 // ever refused.
 import AxeBuilder from '@axe-core/playwright';
-import { type Page, expect, test } from '@playwright/test';
+import { type Locator, type Page, expect, test } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
 import { THEMES, setPrefs } from './prefs';
 import { SITE_URL } from './servers';
@@ -31,6 +31,12 @@ const own = () => REVIEW.own(test.info().project.name);
 /** A link's row in the panel, by its heading (its words, else its address). */
 const row = (page: Page, heading: string) => page.locator('.link-row').filter({ has: page.getByRole('heading', { name: heading, exact: true }) });
 const status = (page: Page) => page.locator('.item-header .chip');
+/** A piece in one of S6's lists: its table row where the list is wide enough for one, else its card. */
+async function entry(page: Page, list: Locator, title: string): Promise<Locator> {
+  const table = list.getByRole('table');
+  if (await table.isVisible()) return table.getByRole('row').filter({ has: page.getByRole('rowheader', { name: title, exact: true }) });
+  return list.getByRole('listitem').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
+}
 
 test.describe('approving, with no script', () => {
   test.use({ javaScriptEnabled: false });
@@ -42,12 +48,38 @@ test.describe('approving, with no script', () => {
     await page.getByRole('link', { name: /^Approve news \(\d+ waiting\)$/ }).click();
     await expect(page).toHaveURL(`${SITE_URL}${QUEUE}`);
     const waiting = page.getByRole('region', { name: /^Waiting for approval/ });
-    const mine = waiting.getByRole('listitem').filter({ has: page.getByRole('heading', { name: REVIEW.links.title, exact: true }) });
-    await expect(mine).toContainText('You changed this version, so another officer must approve it.');
-    await expect(waiting.getByRole('listitem').filter({ has: page.getByRole('heading', { name: WORKFLOW.waiting.title, exact: true }) })).not.toContainText('You changed');
+    await expect(await entry(page, waiting, REVIEW.links.title)).toContainText('You changed this version, so another officer must approve it.');
+    await expect(await entry(page, waiting, WORKFLOW.waiting.title)).not.toContainText('You changed');
     const toPublish = page.getByRole('region', { name: /^Approved, ready to publish/ });
-    await expect(toPublish.getByRole('heading', { name: REVIEW.frozen.title, exact: true })).toBeVisible();
+    await expect(await entry(page, toPublish, REVIEW.frozen.title)).toBeVisible();
     await expect(toPublish).toContainText('The Webmaster publishes these, or the Admin as backup.');
+  });
+
+  // Round 1: as "Our news" (E3 fix 1), each list is a table where it is wide enough, a card each where it is not.
+  test('the queue is a table on a wide screen, with the title as its Review link, and cards on a phone', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'webmaster');
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(QUEUE);
+    const waiting = page.getByRole('table', { name: 'Waiting for approval, oldest first' });
+    const toPublish = page.getByRole('table', { name: 'Approved, ready to publish, oldest first' });
+    await expect(waiting).toBeVisible();
+    await expect(toPublish).toBeVisible();
+    for (const table of [waiting, toPublish]) {
+      await expect(table.getByRole('columnheader')).toHaveText(['Title', 'What it is', 'Office', 'Status', 'When']);
+    }
+    const frozen = toPublish.getByRole('row').filter({ has: page.getByRole('rowheader', { name: REVIEW.frozen.title, exact: true }) });
+    await expect(frozen.getByRole('link', { name: REVIEW.frozen.title, exact: true })).toHaveAttribute('href', review(REVIEW.frozen.id));
+    await expect(frozen.getByRole('cell')).toHaveText(['Announcement', 'President', 'Approved, ready to publish', /^Approved [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}, .+ by the Treasurer$/]);
+    await expect(page.locator('.review-list').first()).toBeHidden();
+
+    await page.setViewportSize({ width: 412, height: 900 });
+    await page.goto(QUEUE);
+    await expect(waiting).toBeHidden();
+    await expect(toPublish).toBeHidden();
+    const card = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: REVIEW.frozen.title, exact: true }) });
+    await expect(card).toBeVisible();
+    await expect(card.getByRole('link', { name: `Review ${REVIEW.frozen.title}` })).toHaveAttribute('href', review(REVIEW.frozen.id));
   });
 
   test('a reviewer checks the links by hand: a no holds Approve, a sign-in link needs a yes, then Approve does not publish', async ({ page }) => {
