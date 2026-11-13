@@ -67,6 +67,13 @@ export interface ParsedMarkup {
 /** Counts the parser's work units, so a test can bound the work per character without timing it. */
 export interface MarkupMeter {
   steps: number;
+  /** When given, counts the empty pairs of markers ("__", "****") met, kept as written or dropped. */
+  emptyPairs?: number;
+  /**
+   * For the equivalence test only: drop each empty pair as the old parser did (it read one as an empty
+   * span: the text run ends there and nothing is added), so the rest can be compared with it exactly.
+   */
+  dropEmptyPairs?: boolean;
 }
 
 /**
@@ -127,6 +134,8 @@ const MEMBERS = 2;
 const MEMBERS_UNCLOSED = 3;
 const LINK = 4;
 const EMPHASIS = 5;
+// An opening marker met at once by its closer ("__", "****"): not emphasis, both markers kept as written.
+const PAIR = 6;
 const MEMBERS_MARK = ':members[';
 const PLAIN = /[\\[*_]|:members\[/;
 
@@ -359,7 +368,11 @@ class InlineParser {
         if (marker !== 0 && this.opens(i, marker)) {
           const from = i + CLOSER_LENGTH[marker]!;
           const end = stop[marker]![from]!;
-          if (end !== NONE) {
+          if (end === from) {
+            // Nothing between them: kept as written, both markers (the closer opens nothing either).
+            next = from + CLOSER_LENGTH[marker]!;
+            what = PAIR;
+          } else if (end !== NONE) {
             next = end + CLOSER_LENGTH[marker]!;
             what = EMPHASIS;
             count = sum[marker]![from]!;
@@ -582,6 +595,15 @@ class InlineParser {
           this.reportUrl(target, urlMessage('the link', href, problem));
           add({ type: 'text', text: s.slice(i, end), bold: current.bold, italic: current.italic }, i);
         }
+      } else if (what === PAIR) {
+        const end = a.step[i]!;
+        if (this.meter.emptyPairs !== undefined) this.meter.emptyPairs += 1;
+        if (this.meter.dropEmptyPairs) flush();
+        else {
+          for (let k = i; k < end; k += 1) at.push(k);
+          text += s.slice(i, end);
+        }
+        this.cursor = end;
       } else if (what === EMPHASIS) {
         const marker = this.markerAt(i);
         flush();
