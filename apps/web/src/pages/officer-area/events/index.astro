@@ -1,0 +1,97 @@
+---
+// EDITOR E6, S10: "Our events". The next 90 days of the events the person's offices own (a series date is
+// its series' host office's, a one-off its own office's), or every office's for the Admin, grouped by
+// date: each one's title, time in Central, place, status in words with its chip and note, "Members
+// only" where it is, and a Change link to S11. [Add a one-off event] at the top for anyone with an
+// office. Read with the officer's own token (src/lib/api/officer-events.ts), so a members event comes
+// whole. A date the person's sign-in reads held back is listed with nothing to change.
+//
+// Not signed in: sign in first. Signed in but neither an officer nor the Admin: the plain not-found page.
+import PasswordNote from '../../../components/PasswordNote.astro';
+import StatusChip from '../../../components/StatusChip.astro';
+import Unavailable from '../../../components/Unavailable.astro';
+import Base from '../../../layouts/Base.astro';
+import { editorReader } from '../../../lib/api/editor';
+import { officerEventsApi } from '../../../lib/api/officer-events';
+import { markUnavailable, signInFirst } from '../../../lib/api/page';
+import { runtimeDeps } from '../../../lib/auth/flow';
+import { addDays, todayCentral } from '../../../lib/calendar';
+import { EVENTS_PATH, EVENT_DAYS, NEW_EVENT_PATH, type OurDay, eventOffices, mayUseEvents, ourEvents } from '../../../lib/editor/events';
+import { SignInAgain } from '../../../lib/api/editor';
+import { page } from '../../../lib/site';
+
+export const prerender = false;
+
+const HERE = EVENTS_PATH;
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (!mayUseEvents(session.groups)) return Astro.rewrite('/404');
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+const p = page(HERE);
+
+let problem: 'sign-in' | 'unavailable' | undefined;
+let days: OurDay[] | undefined;
+let mayAdd = false;
+let admin = false;
+const api = officerEventsApi();
+const { reader } = editorReader(session, runtimeDeps());
+if (api === undefined) problem = 'unavailable';
+else if (reader === undefined) problem = 'sign-in';
+else {
+  const today = todayCentral(new Date());
+  try {
+    const [occurrences, series, roster] = await Promise.all([api.occurrences(reader, today, addDays(today, EVENT_DAYS)), api.series(reader), api.offices()]);
+    const who = eventOffices(session.groups, roster);
+    admin = who.admin;
+    mayAdd = who.offices.length > 0;
+    days = ourEvents(occurrences, new Map(series.map((s) => [s.id, s.hostOfficeId])), who);
+  } catch (error) {
+    problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+  }
+}
+if (problem === 'unavailable') markUnavailable(Astro.response);
+const added = Astro.url.searchParams.get('saved') === '1';
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">
+    {admin ? 'Every office’s events' : 'Your office’s events'} in the next {EVENT_DAYS} days. Choose Change to cancel a date, move it, or change its time,
+    place or details. A change shows on the public calendar as soon as it is saved.
+  </p>
+  {added && <p class="notice" role="status">Saved. The public calendar shows it now.</p>}
+  {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a> to see your events.</p>}
+  {problem === 'sign-in' && <PasswordNote />}
+  {problem === 'unavailable' && <Unavailable what="Your events" />}
+  {mayAdd && <p class="writer-start"><a class="button" href={NEW_EVENT_PATH}>Add a one-off event</a></p>}
+  {days !== undefined && !mayAdd && <p>You hold no office, so there are no events for you to change. Ask the Admin if that is wrong.</p>}
+  {days !== undefined && mayAdd && days.length === 0 && <p class="card empty">No events in the next {EVENT_DAYS} days.</p>}
+  {days?.map((day) => (
+    <section class="our-day" aria-labelledby={`day-${day.date}`}>
+      <h2 id={`day-${day.date}`}>{day.heading}</h2>
+      <ul class="our-events">
+        {day.events.map((e) => (
+          <li class="card our-event">
+            <h3>{e.title}</h3>
+            {e.withheld ? (
+              <p>Your sign-in cannot read this event's details, so it cannot be changed here. Ask the Admin.</p>
+            ) : (
+              <>
+                {e.status && <StatusChip status={e.status} note={e.statusNote} />}
+                <p>{e.time}. {e.place}.</p>
+                {(admin || e.members) && (
+                  <p class="our-event__meta">
+                    {admin && <span>{e.office}.</span>} {e.members && <b>Members only.</b>}
+                  </p>
+                )}
+                <p><a class="button button--secondary" href={e.editPath} aria-label={`Change ${e.title}, ${day.heading}`}>Change</a></p>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  ))}
+  <p><a href="/events">See the public calendar</a></p>
+</Base>

@@ -114,8 +114,11 @@ export class Duplicate extends Error {
   }
 }
 
-/** The most of the API's words a page shows. */
-export const REASON_MAX = 300;
+/**
+ * The most of the API's words a page shows. EDITOR E6: an event save refused for its addresses gives one
+ * reason per address (A3a), each about 200 characters, and the event form shows each on its field.
+ */
+export const REASON_MAX = 2000;
 
 /** A step the item is not ready for, or a value the API refused, in the API's words (`reason`), for the page to show. */
 export class EditorRefused extends Error {

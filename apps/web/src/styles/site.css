@@ -1255,6 +1255,43 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 .rule-form .error { margin: 0; color: var(--ink); font-weight: 700; }
 .rule-form [aria-invalid="true"] { border-color: var(--warn); border-width: 0.1875rem; }
 
+/* EDITOR E6: the officers' event screens (S10, S11). Labels above the fields, the date, time and web
+   address as large as the other boxes, each choice's hint under its words, one column on a phone, and
+   "Saving changes the public calendar at once" marked right above Save. */
+.event-form { max-width: 44rem; }
+.event-form .field { display: grid; gap: var(--space-2); min-width: 0; }
+.event-form :is(input[type="date"], input[type="time"], input[type="url"]) {
+  width: 100%;
+  max-width: 24rem;
+  min-height: var(--target);
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink);
+  background: var(--surface);
+  border: var(--border) solid var(--line);
+  border-radius: var(--radius);
+  font: inherit;
+  /* A date or time box is as wide as its own parts at large text: it shrinks to a narrow phone instead. */
+  box-sizing: border-box;
+  min-width: 0;
+}
+.event-form :is(input[type="text"], input[type="url"]) { max-width: none; }
+.event-form fieldset { grid-template-columns: minmax(0, 1fr); }
+.event-form .choice { align-items: flex-start; padding-top: var(--space-2); }
+.event-form .choice input { margin-top: 0.125rem; }
+.event-form .choice > div { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
+.event-form .field-text { margin: 0; }
+.event-form .save-note { margin: 0; padding: var(--space-2) var(--space-3); border: var(--border) solid var(--warn); border-left-width: 0.375rem; border-radius: var(--radius); background: var(--warn-bg); color: var(--ink); font-weight: 700; }
+.our-day { margin: var(--space-5) 0 0; }
+.our-day h2 { overflow-wrap: anywhere; }
+.our-events { list-style: none; padding: 0; margin: var(--space-3) 0 0; display: grid; gap: var(--space-3); }
+.our-event h3 { margin: 0; overflow-wrap: anywhere; }
+.our-event p { overflow-wrap: anywhere; }
+.our-event .status .chip { white-space: normal; }
+dl.kept { display: grid; gap: var(--space-2); margin: 0; }
+dl.kept dt { font-weight: 700; }
+dl.kept dd { margin: 0; overflow-wrap: anywhere; }
+dl.kept .kept__text { white-space: pre-wrap; }
+
 /* W-SIGNUP: the approvers' queue: one card per sign-up, its decisions as plain buttons below. */
 .signup-card form, .rejected-card form { margin: 0; }
 /* QUEUE-C: compact cards. The name with its email right under it; then the details as label and value

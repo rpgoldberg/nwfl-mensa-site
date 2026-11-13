@@ -39,6 +39,10 @@
 //
 // EDITOR E2: the publishing workflow (ContentService CreateItem to PreviewWorkingItem) is a model with
 // state (e2e/workflow.mjs) that takes the verified token's groups as the API does; see WORKFLOW below.
+// EDITOR E6: the calendar is a model with state too (e2e/events-model.mjs), for the officers' event
+// screens: SaveOccurrence with the officer's verified token, and every read has a save at once. The
+// calendar reads take an officer's or the Admin's token too (the event screens read as the officer, so a
+// members event comes whole); any other token there is still refused, as is a cookie. See EVENTS below.
 //
 // SILENT_API_PORT is a second listener that accepts connections and never
 // answers: the API that hangs, for the timeout test. NO_ISSUES_API_PORT is a
@@ -57,6 +61,7 @@ import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole,
 import { AccountRoute, MemberStatus, MembershipService, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
+import { createEventModel } from './events-model.mjs';
 import { createWorkflow } from './workflow.mjs';
 
 const port = Number(process.env['API_PORT'] ?? 9091);
@@ -93,6 +98,9 @@ const ONE_OFF = {
   noStatus: '8d9eafb0-c1d2-43e4-b5a6-b7c8d9e0f1a2',
   early: '9eafb0c1-d2e3-44f5-86a7-c8d9e0f1a2b3',
 };
+
+/** EDITOR E6: the members series' title, which only an officer's read gives. */
+const MEMBERS_SERIES_TITLE = 'Members games night';
 
 const VENUES = {
   bistro: { id: 'a0000000-0000-4000-8000-000000000001', kind: VenueKind.BUSINESS, name: 'Sample Bistro', businessAddress: '100 Example Way', city: 'Destin', area: Area.OKALOOSA, url: 'https://example.org/bistro', accessibilityNote: 'Step-free entrance at the side door.', active: true },
@@ -155,8 +163,11 @@ function occurrence(e) {
   });
 }
 
-/** Every event from `from` to `to`, as the API gives them to the public. @param {string} from @param {string} to */
-function calendar(from, to) {
+/**
+ * Every event from `from` to `to`, as the API gives them to the public; for an officer (E6), the
+ * members event whole. @param {string} from @param {string} to @param {'public' | 'members' | 'officers'} [audience]
+ */
+function calendar(from, to, audience = 'public') {
   const today = central(new Date()).date;
   /** @type {import('../src/gen/nwfl/mensa/v1/event_pb.js').EventOccurrence[]} */
   const out = [];
@@ -184,8 +195,14 @@ function calendar(from, to) {
     if (day === 5 && Number(date.slice(8)) > 7 && Number(date.slice(8)) <= 14) {
       out.push(occurrence({ id: `${SERIES.happyHour}:${date}`, seriesId: SERIES.happyHour, title: 'Happy Hour', date, start: '17:00', venue: VENUES.taproom, area: Area.OKALOOSA, status: OccurrenceStatus.TENTATIVE, statusNote: 'The place may change.' }));
     }
-    // Every Sunday: a members event, withheld.
-    if (day === 0) out.push(create(EventOccurrenceSchema, { id: `${SERIES.members}:${date}`, localDate: protoDate(date), area: Area.BAY, visibility: EventVisibility.MEMBERS, detailsWithheld: true }));
+    // Every Sunday: a members event, withheld from the public.
+    if (day === 0) {
+      out.push(
+        audience === 'public'
+          ? create(EventOccurrenceSchema, { id: `${SERIES.members}:${date}`, localDate: protoDate(date), area: Area.BAY, visibility: EventVisibility.MEMBERS, detailsWithheld: true })
+          : occurrence({ id: `${SERIES.members}:${date}`, seriesId: SERIES.members, title: MEMBERS_SERIES_TITLE, date, start: '19:00', end: '21:00', venue: VENUES.diner, area: Area.BAY, visibility: EventVisibility.MEMBERS }),
+      );
+    }
   }
   const oneOffs = [
     occurrence({ id: ONE_OFF.games, title: 'Board games afternoon', date: addDays(today, 3), start: '14:00', end: '17:00', venue: VENUES.home, area: Area.OKALOOSA, owner: OFFICE.social }),
@@ -205,8 +222,6 @@ function calendar(from, to) {
   return out.sort((a, b) => Number(a.localDate?.year) * 10000 + Number(a.localDate?.month) * 100 + Number(a.localDate?.day) - (Number(b.localDate?.year) * 10000 + Number(b.localDate?.month) * 100 + Number(b.localDate?.day)));
 }
 
-/** @param {{ year: number, month: number, day: number } | undefined} d */
-const iso = (d) => (d ? `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}` : '');
 
 /** @param {string} text */
 const para = (text) => ({ kind: { case: /** @type {const} */ ('paragraph'), value: { inlines: [{ kind: { case: /** @type {const} */ ('text'), value: { text } } }] } } });
@@ -516,6 +531,39 @@ async function officerOf(ctx, { read = false } = {}) {
   return { sub, groups };
 }
 
+/**
+ * EDITOR E6: the caller of the calendar's RPCs, as the API reads one: none for no token (the public);
+ * an officer or the Admin by their verified token, with the API's audience (officers for the officers
+ * group; else members by standing; else the public). Any other token is refused, as is a cookie: the
+ * public pages read the calendar as the public, and only the event screens send a token.
+ * @param {import('@connectrpc/connect').HandlerContext} ctx
+ * @returns {Promise<{ sub: string, groups: string[], audience: 'public' | 'members' | 'officers' } | undefined>}
+ */
+async function eventCaller(ctx) {
+  if (ctx.requestHeader.has('cookie')) throw new ConnectError('the site must never send a cookie', Code.PermissionDenied);
+  if (!ctx.requestHeader.has('authorization')) return undefined;
+  const { sub, groups } = await verifiedCaller(ctx);
+  if (!groups.includes('nwfl-officers') && !groups.includes('nwfl-admin')) throw new ConnectError('the site must call as the public', Code.PermissionDenied);
+  return { sub, groups, audience: groups.includes('nwfl-officers') ? 'officers' : MEMBER_SUBJECTS.has(sub) ? 'members' : 'public' };
+}
+
+/**
+ * EDITOR E6: the calendar for the run, shared by everyone as the API's is. The President hosts the
+ * lunch and the members series, the Social Chair the Happy Hour; each one-off keeps its own office. A
+ * test that changes the calendar changes a date or an event of its own (e2e/stand-in.ts EVENT_EDITS),
+ * so tests in parallel, and the other specs' dates, are never disturbed.
+ */
+const EVENTS = createEventModel({
+  offices: ROSTER.map((o) => ({ id: o.id, slug: o.slug })),
+  base: calendar,
+  series: [
+    { id: SERIES.lunch, slug: 'wednesday-lunchers', title: 'Wednesday Lunchers', category: EventCategory.LUNCH, cadenceLabel: 'Every Wednesday', description: 'Lunch and conversation, every week. Everyone is welcome.', hostOfficeId: OFFICE.president, area: Area.OKALOOSA, visibility: EventVisibility.PUBLIC },
+    { id: SERIES.happyHour, slug: 'happy-hour', title: 'Happy Hour', category: EventCategory.HAPPY_HOUR, cadenceLabel: 'Second Friday of each month', description: 'A different place each time.', hostOfficeId: OFFICE.social, area: Area.OKALOOSA, visibility: EventVisibility.PUBLIC },
+    { id: SERIES.members, slug: 'members-games-night', title: MEMBERS_SERIES_TITLE, category: EventCategory.OTHER, cadenceLabel: 'Every Sunday', description: 'Games and talk.', hostOfficeId: OFFICE.president, area: Area.BAY, visibility: EventVisibility.MEMBERS },
+  ],
+  venues: [VENUES.bistro, VENUES.taproom, VENUES.diner, VENUES.home, VENUES.video],
+});
+
 // EDITOR E2: the publishing workflow (e2e/workflow.mjs), one for the run, shared by every caller as the
 // API's is (a writer and an approver are two people). Who may do what is the model's to decide, from the
 // verified token's groups; the content approval rule is each Admin's own (rulesFor above). The seeds
@@ -646,34 +694,8 @@ function decide(person, id, approve, confirmedWarning = false) {
 
 /** The API's routes; with `issues: false`, nothing of the newsletter is published yet. @param {{ issues: boolean }} options */
 const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').ConnectRouter} */ router) => {
-  router.service(EventService, {
-    listOccurrences: (req, ctx) => {
-      anonymousOnly(ctx);
-      const today = central(new Date()).date;
-      const from = req.from ? iso(req.from) : today;
-      return { occurrences: calendar(from, req.to ? iso(req.to) : addDays(from, 62)) };
-    },
-    getOccurrence: (req, ctx) => {
-      anonymousOnly(ctx);
-      const today = central(new Date()).date;
-      const found = calendar(addDays(today, -60), addDays(today, 400)).find((o) => o.id === req.id);
-      if (!found) throw new ConnectError('occurrence not found', Code.NotFound);
-      return { occurrence: found };
-    },
-    listSeries: (_req, ctx) => {
-      anonymousOnly(ctx);
-      return {
-        series: [
-          { id: SERIES.lunch, slug: 'wednesday-lunchers', title: 'Wednesday Lunchers', category: EventCategory.LUNCH, cadenceLabel: 'Every Wednesday', description: 'Lunch and conversation, every week. Everyone is welcome.', hostOfficeId: OFFICE.president, visibility: EventVisibility.PUBLIC, active: true },
-          { id: SERIES.happyHour, slug: 'happy-hour', title: 'Happy Hour', category: EventCategory.HAPPY_HOUR, cadenceLabel: 'Second Friday of each month', description: 'A different place each time.', hostOfficeId: OFFICE.social, visibility: EventVisibility.PUBLIC, active: true },
-        ],
-      };
-    },
-    listVenues: (_req, ctx) => {
-      anonymousOnly(ctx);
-      return { venues: [VENUES.bistro, VENUES.taproom, VENUES.diner, VENUES.home, VENUES.video] };
-    },
-  });
+  // EDITOR E6: the calendar, with every save in it (EVENTS above).
+  router.service(EventService, EVENTS.handlers(eventCaller));
   router.service(ContentService, {
     // EDITOR E2: the publishing workflow, as the verified caller.
     ...WORKFLOW.handlers(verifiedCaller),
