@@ -5,8 +5,8 @@
 // dropped once a save has gone through; leaving with unsaved changes asks first; the sign-in line turns
 // to "Save now" for its last five minutes; and a problem's line link puts the cursor on that line.
 // Here it runs against small stand-ins for the document, the tab's storage and the window.
-import { describe, expect, it } from 'vitest';
-import { applyMark, countWords, lengthText, lineStart, wireEditor } from '../public/scripts/editor.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AUTOSAVE_MS, applyMark, autosaveDelay, browserAutosave, countWords, createAutosaver, lengthText, lineStart, wireEditor } from '../public/scripts/editor.js';
 import { lengthText as serverLengthText, wordCount } from '../src/lib/editor/writer';
 
 describe('applyMark', () => {
@@ -280,5 +280,385 @@ describe('wireEditor', () => {
     expect(click.defaultPrevented).toBe(true);
     expect([p.markup.selectionStart, p.markup.selectionEnd]).toEqual([4, 4]);
     expect(p.markup.focused).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------------------------------------------
+// Round 2: auto-save.
+
+describe('autosaveDelay', () => {
+  const END = 10_000_000;
+  it('waits a minute after the last change, sooner when the sign-in ends within that and two minutes', () => {
+    expect(AUTOSAVE_MS).toBe(60_000);
+    expect(autosaveDelay(END - 10 * 60_000, END)).toBe(60_000);
+    expect(autosaveDelay(END - 150_000, END)).toBe(30_000);
+    expect(autosaveDelay(END - 120_000, END)).toBe(5_000);
+    expect(autosaveDelay(END - 10_000, END)).toBe(5_000);
+    expect(autosaveDelay(END, Number.NaN)).toBe(60_000);
+  });
+});
+
+/** A clock with timers the test runs by hand. */
+function clock(start = 0) {
+  let now = start;
+  let next = 1;
+  const timers = new Map<number, { at: number; fn: () => void }>();
+  return {
+    now: () => now,
+    later: (fn: () => void, ms: number) => {
+      timers.set(next, { at: now + ms, fn });
+      return next++;
+    },
+    cancel: (id: number) => void timers.delete(id),
+    /** Moves the clock on, running each timer that falls due. */
+    run(ms: number) {
+      const until = now + ms;
+      for (;;) {
+        const due = [...timers.entries()].filter(([, t]) => t.at <= until).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        timers.delete(due[0]);
+        now = due[1].at;
+        due[1].fn();
+      }
+      now = until;
+    },
+    pending: () => timers.size,
+  };
+}
+
+/** An answer the test settles by hand. */
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+function saver(options: { expiresMs?: number; start?: number } = {}) {
+  const c = clock(options.start ?? 0);
+  const sent: { keepalive: boolean; answer: ReturnType<typeof deferred<{ status: number; body?: unknown }>> }[] = [];
+  const reports: { kind: string; [k: string]: unknown }[] = [];
+  const a = createAutosaver({
+    send: (keepalive: boolean) => {
+      const answer = deferred<{ status: number; body?: unknown }>();
+      sent.push({ keepalive, answer });
+      return answer.promise;
+    },
+    later: c.later,
+    cancel: c.cancel,
+    now: c.now,
+    expiresMs: options.expiresMs ?? Number.NaN,
+    report: (outcome: { kind: string }) => reports.push(outcome),
+  });
+  return { a, c, sent, reports };
+}
+const OK = (base = '9.000000000', savedAt = '2:05 pm') => ({ status: 200, body: { base, savedAt } });
+
+describe('createAutosaver', () => {
+  it('saves a minute after the last change, once, and never when nothing changed', async () => {
+    const { a, c, sent, reports } = saver();
+    c.run(5 * 60_000);
+    await a.flush();
+    expect(sent).toHaveLength(0);
+    a.changed();
+    c.run(30_000);
+    a.changed();
+    c.run(59_000);
+    expect(sent).toHaveLength(0);
+    c.run(1_000);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.keepalive).toBe(false);
+    sent[0]?.answer.resolve(OK());
+    await settle();
+    expect(reports).toEqual([{ kind: 'saved', base: '9.000000000', savedAt: '2:05 pm', settled: true }]);
+    c.run(5 * 60_000);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('never sends a second save while one is out; a change made meanwhile is saved after', async () => {
+    const { a, c, sent, reports } = saver();
+    a.changed();
+    c.run(60_000);
+    a.changed();
+    void a.flush(true);
+    expect(sent).toHaveLength(1);
+    sent[0]?.answer.resolve(OK('1.000000000'));
+    await settle();
+    expect(reports.at(-1)).toMatchObject({ kind: 'saved', settled: false });
+    c.run(60_000);
+    expect(sent).toHaveLength(2);
+    sent[1]?.answer.resolve(OK('2.000000000'));
+    await a.idle();
+    expect(reports.at(-1)).toMatchObject({ kind: 'saved', base: '2.000000000', settled: true });
+  });
+
+  it('flushes at once, kept alive, when asked (the page hidden)', async () => {
+    const { a, sent } = saver();
+    a.changed();
+    void a.flush(true);
+    expect(sent.map((s) => s.keepalive)).toEqual([true]);
+  });
+
+  it.each([
+    [409, 'conflict'],
+    [401, 'signed-out'],
+    [422, 'not-draft'],
+  ])('stops for good on %i (%s): later changes send nothing', async (status, kind) => {
+    const { a, c, sent, reports } = saver();
+    a.changed();
+    c.run(60_000);
+    sent[0]?.answer.resolve({ status });
+    await settle();
+    expect(reports).toEqual([{ kind }]);
+    expect(a.stopped()).toBe(true);
+    a.changed();
+    c.run(10 * 60_000);
+    await a.flush(true);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('tries again a minute later when the save fails or the site cannot be reached', async () => {
+    const { a, c, sent, reports } = saver();
+    a.changed();
+    c.run(60_000);
+    sent[0]?.answer.resolve({ status: 503 });
+    await settle();
+    expect(reports).toEqual([{ kind: 'retry' }]);
+    c.run(60_000);
+    expect(sent).toHaveLength(2);
+    sent[1]?.answer.reject(new TypeError('Failed to fetch'));
+    await settle();
+    expect(reports.at(-1)).toEqual({ kind: 'retry' });
+    c.run(60_000);
+    expect(sent).toHaveLength(3);
+  });
+
+  it('saves two minutes before the sign-in ends, if anything changed', async () => {
+    const end = 10 * 60_000;
+    const quiet = saver({ expiresMs: end });
+    quiet.c.run(9 * 60_000);
+    expect(quiet.sent).toHaveLength(0);
+    const busy = saver({ expiresMs: end });
+    busy.c.run(7 * 60_000);
+    busy.a.changed();
+    busy.c.run(59_000);
+    expect(busy.sent).toHaveLength(0);
+    busy.c.run(1_000);
+    expect(busy.sent).toHaveLength(1);
+  });
+});
+
+/** The edit page with auto-save on: the page as wireEditor sees it, and the saves it sends. */
+function autoPage(options: { autosave?: boolean } = {}) {
+  const status = new FakeElement({ textContent: '', hidden: true });
+  const conflict = new FakeElement({ hidden: true });
+  const base = new FakeElement({ value: '1.000000000' });
+  const title = new FakeElement({ value: 'Our year' });
+  const summary = new FakeElement({ value: '' });
+  const markup = new FakeElement({ value: 'Thank you all' });
+  const form = new FakeElement({ dataset: { draftKey: KEY, ...(options.autosave === false ? {} : { autosave: '/officer-area/news/x/autosave' }) } }) as FakeElement & { submit: () => void; submitted: number };
+  form.submitted = 0;
+  form.submit = () => void (form.submitted += 1);
+  form.children['input[name="title"]'] = [title];
+  form.children['input[name="summary"]'] = [summary];
+  form.children['textarea[name="markup"]'] = [markup];
+  form.children['input[name="base"]'] = [base];
+  const one: Record<string, FakeElement | null> = { 'form[data-editor]': form, '[data-autosave-status]': status, '[data-autosave-conflict]': conflict };
+  const doc = Object.assign(new EventTarget(), { visibilityState: 'visible', querySelector: (sel: string) => one[sel] ?? null, querySelectorAll: () => [] });
+  const storage = new FakeStorage();
+  const win = new FakeWindow();
+  const c = clock(1_000);
+  const sent: ReturnType<typeof deferred<{ status: number; body?: unknown }>>[] = [];
+  const keepalive: boolean[] = [];
+  wireEditor(doc as never, {
+    storage: storage as never,
+    win: win as never,
+    now: c.now,
+    autosave: {
+      send: (keep: boolean) => {
+        keepalive.push(keep);
+        const answer = deferred<{ status: number; body?: unknown }>();
+        sent.push(answer);
+        return answer.promise;
+      },
+      later: c.later,
+      cancel: c.cancel,
+    },
+  } as never);
+  const type = (value: string) => {
+    markup.value = value;
+    form.dispatchEvent(new Event('input'));
+  };
+  const leave = () => {
+    const event = new Event('beforeunload', { cancelable: true });
+    win.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  return { form, status, conflict, base, storage, win, doc, c, sent, keepalive, type, leave };
+}
+
+describe('wireEditor: auto-save', () => {
+  it('saves a minute after typing, says so politely, takes the new base and drops the tab\'s copy', async () => {
+    const p = autoPage();
+    // Shown by script only: with none, nothing saves itself.
+    expect(p.status.hidden).toBe(false);
+    p.type('Typed.');
+    expect(p.storage.map.has(KEY)).toBe(true);
+    expect(p.status.textContent).toBe('');
+    p.c.run(60_000);
+    expect(p.sent).toHaveLength(1);
+    p.sent[0]?.resolve(OK('2.000000500', '2:05 pm'));
+    await settle();
+    expect(p.status.textContent).toBe('Saved automatically at 2:05 pm.');
+    expect(p.base.value).toBe('2.000000500');
+    expect(p.storage.map.has(KEY)).toBe(false);
+    expect(p.leave()).toBe(false);
+  });
+
+  it('saves at once, kept alive, when the page is hidden or left', async () => {
+    const p = autoPage();
+    p.type('Typed.');
+    (p.doc as unknown as { visibilityState: string }).visibilityState = 'hidden';
+    p.doc.dispatchEvent(new Event('visibilitychange'));
+    expect(p.keepalive).toEqual([true]);
+    p.sent[0]?.resolve(OK());
+    await settle();
+    p.type('More.');
+    p.win.dispatchEvent(new Event('pagehide'));
+    expect(p.keepalive).toEqual([true, true]);
+  });
+
+  it('stops on someone else\'s change, keeps the text and the tab\'s copy, and shows the way to the latest', async () => {
+    const p = autoPage();
+    p.type('Mine.');
+    p.c.run(60_000);
+    p.sent[0]?.resolve({ status: 409 });
+    await settle();
+    expect(p.status.textContent).toBe('Not saved: someone else changed this draft. Your text is kept here.');
+    expect(p.conflict.hidden).toBe(false);
+    expect(p.storage.map.has(KEY)).toBe(true);
+    expect(p.leave()).toBe(true);
+  });
+
+  it.each([
+    [401, 'Not saved automatically: your sign-in has ended. Your text is kept here: press Save draft.'],
+    [422, 'Not saved automatically: it is no longer a draft. Your text is kept here: press Save draft.'],
+    [503, 'Not saved yet: will try again.'],
+  ])('says what happened on %i', async (status, words) => {
+    const p = autoPage();
+    p.type('Mine.');
+    p.c.run(60_000);
+    p.sent[0]?.resolve({ status });
+    await settle();
+    expect(p.status.textContent).toBe(words);
+    expect(p.conflict.hidden).toBe(true);
+  });
+
+  it('holds a Save draft pressed while an automatic save is out, then sends the form with the new base', async () => {
+    const p = autoPage();
+    p.type('Mine.');
+    p.c.run(60_000);
+    const submit = new Event('submit', { cancelable: true });
+    p.form.dispatchEvent(submit);
+    expect(submit.defaultPrevented).toBe(true);
+    expect(p.form.submitted).toBe(0);
+    p.sent[0]?.resolve(OK('3.000000000'));
+    await settle();
+    await settle();
+    expect(p.base.value).toBe('3.000000000');
+    expect(p.form.submitted).toBe(1);
+    const second = new Event('submit', { cancelable: true });
+    p.form.dispatchEvent(second);
+    expect(second.defaultPrevented).toBe(false);
+  });
+
+  it('does nothing automatic on an item that is no draft (no data-autosave)', () => {
+    const p = autoPage({ autosave: false });
+    p.type('Mine.');
+    p.c.run(10 * 60_000);
+    p.doc.dispatchEvent(new Event('visibilitychange'));
+    expect(p.sent).toHaveLength(0);
+    expect(p.c.pending()).toBe(0);
+  });
+});
+
+describe('browserAutosave', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('posts the form as it stands to its address, same-origin, kept alive when asked, and reads the answer', async () => {
+    const calls: [string, RequestInit][] = [];
+    vi.stubGlobal('FormData', class {
+      constructor(readonly form: unknown) {}
+    });
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return calls.length === 1 ? new Response(JSON.stringify({ base: '2.000000000', savedAt: '2:05 pm' }), { status: 200 }) : new Response('', { status: 409 });
+    });
+    const form = { id: 'the form' };
+    const timers: [() => void, number][] = [];
+    const cleared: number[] = [];
+    const io = browserAutosave('/officer-area/news/x/autosave', form, { setTimeout: (fn: () => void, ms: number) => timers.push([fn, ms]), clearTimeout: (id: number) => cleared.push(id) });
+    expect(await io.send(true)).toEqual({ status: 200, body: { base: '2.000000000', savedAt: '2:05 pm' } });
+    expect(await io.send(false)).toEqual({ status: 409, body: undefined });
+    expect(calls.map(([url, init]) => [url, init.method, init.keepalive, init.credentials, (init.body as unknown as { form: unknown }).form])).toEqual([
+      ['/officer-area/news/x/autosave', 'POST', true, 'same-origin', form],
+      ['/officer-area/news/x/autosave', 'POST', false, 'same-origin', form],
+    ]);
+    expect(io.later(() => {}, 60_000)).toBe(1);
+    io.cancel(1);
+    expect(cleared).toEqual([1]);
+  });
+});
+
+describe('createAutosaver: an answer with no body', () => {
+  it('reports an empty base and time rather than failing', async () => {
+    const { a, c, sent, reports } = saver();
+    a.changed();
+    c.run(60_000);
+    sent[0]?.answer.resolve({ status: 200 });
+    await settle();
+    expect(reports).toEqual([{ kind: 'saved', base: '', savedAt: '', settled: true }]);
+  });
+
+  it('sets no deadline timer when the sign-in has already passed its last two minutes', () => {
+    const { c } = saver({ expiresMs: 60_000, start: 0 });
+    expect(c.pending()).toBe(0);
+  });
+});
+
+describe('wireEditor: auto-save on a page missing its parts', () => {
+  it('still saves with no status line, no conflict note and no base field', async () => {
+    const form = new FakeElement({ dataset: { draftKey: KEY, autosave: '/x/autosave' } });
+    for (const sel of ['input[name="title"]', 'input[name="summary"]', 'textarea[name="markup"]']) form.children[sel] = [new FakeElement()];
+    const doc = { querySelector: (sel: string) => (sel === 'form[data-editor]' ? form : null), querySelectorAll: () => [] };
+    const c = clock();
+    const sent: ReturnType<typeof deferred<{ status: number; body?: unknown }>>[] = [];
+    wireEditor(doc as never, {
+      storage: new FakeStorage() as never,
+      win: new FakeWindow() as never,
+      now: c.now,
+      autosave: {
+        send: () => {
+          const d = deferred<{ status: number; body?: unknown }>();
+          sent.push(d);
+          return d.promise;
+        },
+        later: c.later,
+        cancel: c.cancel,
+      },
+    } as never);
+    form.dispatchEvent(new Event('input'));
+    c.run(60_000);
+    sent[0]?.resolve(OK());
+    await settle();
+    form.dispatchEvent(new Event('input'));
+    c.run(60_000);
+    sent[1]?.resolve({ status: 409 });
+    await settle();
+    expect(sent).toHaveLength(2);
   });
 });

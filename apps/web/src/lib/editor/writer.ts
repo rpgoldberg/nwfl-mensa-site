@@ -44,11 +44,17 @@ export function mayWriteFor(offices: readonly PostingOffice[], item: Pick<Editor
 
 const WHEN = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
+/** The time of day in Central, as the site says it: "2:05 pm", "12:00 noon". */
+export function clockText(at: Date): string {
+  const part = Object.fromEntries(WHEN.formatToParts(at).map((p) => [p.type, p.value]));
+  return formatTime(`${part['hour']}:${part['minute']}`);
+}
+
 /** When an item last changed, in Central time: "Thu 12 Nov, 2:05 pm". */
 export function lastChangeText(at: Date | undefined): string {
   if (at === undefined) return 'Not known';
   const part = Object.fromEntries(WHEN.formatToParts(at).map((p) => [p.type, p.value]));
-  return `${part['weekday']} ${part['day']} ${part['month']}, ${formatTime(`${part['hour']}:${part['minute']}`)}`;
+  return `${part['weekday']} ${part['day']} ${part['month']}, ${clockText(at)}`;
 }
 
 /**
@@ -161,9 +167,10 @@ export interface KeptDraft {
  * (spec S4): the page gives it back with "Your sign-in timed out", reading nothing else. The edit form's
  * cap applies; anything but a form is refused.
  */
-export async function keptText(request: Request): Promise<{ ok: true; values: KeptDraft } | { ok: false; status: 400 | 413 | 415 }> {
+export async function keptText(request: Request): Promise<{ ok: true; values: KeptDraft; base: string } | { ok: false; status: 400 | 413 | 415 }> {
   const read = await readForm(request, EDIT_FORM_LIMIT);
   if (!read.ok) return read;
   const field = (name: string) => read.field(name) ?? '';
-  return { ok: true, values: { title: field('title'), summary: field('summary'), visibility: field('visibility'), markup: field('markup').replace(/\r\n?/g, '\n') } };
+  // Round 2: the base the form was opened from goes back with the kept text, so a later save is still checked.
+  return { ok: true, values: { title: field('title'), summary: field('summary'), visibility: field('visibility'), markup: field('markup').replace(/\r\n?/g, '\n') }, base: field('base') };
 }

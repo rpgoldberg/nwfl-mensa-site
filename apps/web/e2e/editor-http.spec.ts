@@ -56,3 +56,21 @@ test('refuses an edit form over its cap before reading it', async ({ request }) 
   });
   expect(res.status()).toBe(413);
 });
+
+// Round 2: the auto-save endpoint answers a script, never a page: no session is a plain 401; a
+// cross-site post is refused before it; a GET finds nothing; none of it is cached.
+test('answers an auto-save with no session 401, refuses a cross-site one, and a GET 405, never cached', async ({ request }) => {
+  const path = `/officer-area/news/${WORKFLOW.published.id}/autosave`;
+  const none = await request.post(`${SITE_URL}${path}`, { multipart: { title: 'x', markup: 'y', base: '1.000000000' }, headers: { Origin: SITE_URL }, maxRedirects: 0 });
+  expect(none.status()).toBe(401);
+  expect(none.headers()['cache-control']).toBe('private, no-store');
+  expect(none.headers()['content-type']).toContain('application/json');
+  expect(await none.json()).toEqual({ problem: 'sign-in' });
+  const cross = await request.post(`${SITE_URL}${path}`, { multipart: { title: 'x' }, headers: { Origin: 'https://evil.example' }, maxRedirects: 0 });
+  expect(cross.status()).toBe(403);
+  const get = await request.get(`${SITE_URL}${path}`, { maxRedirects: 0 });
+  expect(get.status()).toBe(405);
+  expect(get.headers()['allow']).toBe('POST');
+  expect(get.headers()['cache-control']).toBe('private, no-store');
+  expect((await request.post(`${SITE_URL}/officer-area/news/not-an-id/autosave`, { multipart: { title: 'x' }, headers: { Origin: SITE_URL }, maxRedirects: 0 })).status()).toBe(404);
+});

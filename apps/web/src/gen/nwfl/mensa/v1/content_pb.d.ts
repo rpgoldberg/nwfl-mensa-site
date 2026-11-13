@@ -595,6 +595,14 @@ export declare type ContentVersion = Message<"nwfl.mensa.v1.ContentVersion"> & {
    * @generated from field: bool approval_kind_self = 25;
    */
   approvalKindSelf: boolean;
+
+  /**
+   * When it was last saved, to the microsecond: the base a form sends back
+   * as SaveDraftRequest.base_updated_at (EDITOR E3). Officer reads.
+   *
+   * @generated from field: google.protobuf.Timestamp updated_at = 26;
+   */
+  updatedAt?: Timestamp | undefined;
 };
 
 /**
@@ -1046,6 +1054,25 @@ export declare type SaveDraftRequest = Message<"nwfl.mensa.v1.SaveDraftRequest">
    * @generated from field: string body_markup = 5;
    */
   bodyMarkup: string;
+
+  /**
+   * The updated_at of the version the form opened (the working version, else
+   * the live one). Set and no longer current: refused, FAILED_PRECONDITION,
+   * and nothing is written. Unset: the last save wins, as before (EDITOR E3).
+   *
+   * @generated from field: google.protobuf.Timestamp base_updated_at = 6;
+   */
+  baseUpdatedAt?: Timestamp | undefined;
+
+  /**
+   * An automatic save: refused, FAILED_PRECONDITION, unless the working
+   * version is a draft, so it never voids an approval, never takes a ready
+   * version back and never opens a version. Audited as 'autosave', one row
+   * for consecutive ones by the same person within 10 minutes (EDITOR E3).
+   *
+   * @generated from field: bool auto = 7;
+   */
+  auto: boolean;
 };
 
 /**

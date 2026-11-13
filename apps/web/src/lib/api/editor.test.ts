@@ -3,8 +3,8 @@
 // bearer and nothing else; each answer is read into the editor's own shape; and each refusal becomes
 // the one thing a page can act on: sign in again, the version changed, not allowed, the slug is taken,
 // the API's words for a step the item is not ready for, not found, or unavailable.
-import { create } from '@bufbuild/protobuf';
-import { timestampFromDate } from '@bufbuild/protobuf/wkt';
+import { clone, create } from '@bufbuild/protobuf';
+import { TimestampSchema, timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 import http2 from 'node:http2';
@@ -25,6 +25,7 @@ import { EventOccurrenceSchema, EventSeriesSchema, EventService, OccurrenceStatu
 import type { Tokens } from '../auth/oidc';
 import { ApiNotFound, ApiUnavailable } from './client';
 import {
+  DraftChanged,
   Duplicate,
   EditorRefused,
   NotAllowed,
@@ -35,6 +36,8 @@ import {
   editorApi,
   editorFromEnv,
   editorReader,
+  baseTimestamp,
+  baseToken,
   grpcEditor,
   unavailableEditor,
   type EditorApi,
@@ -727,5 +730,56 @@ describe('grpcEditor: when an item last changed (E3 fix 1)', () => {
     expect(seen).toEqual([[ItemState.PUBLISHED, ItemState.WITHDRAWN]]);
     const server2 = await grpcServer((router) => router.service(ContentService, { getWorkingItem: () => ({ item: ITEM }) }));
     expect((await grpcEditor({ baseUrl: server2.url, timeoutMs: 2000 }, () => {}).getWorkingItem(OFFICER, ITEM_ID)).lastChangedAt).toBeUndefined();
+  });
+});
+
+describe('grpcEditor: auto-save (E3 round 2)', () => {
+  it('reads each version\'s base to the microsecond, and sends it back with a save, automatic or not', async () => {
+    const seen: unknown[] = [];
+    const stamp = { seconds: 1794528300n, nanos: 123456000 };
+    const answer = clone(ContentItemSchema, ITEM);
+    answer.working!.updatedAt = create(TimestampSchema, stamp);
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        getWorkingItem: () => ({ item: answer }),
+        saveDraft: (req) => {
+          seen.push({ base: req.baseUpdatedAt === undefined ? undefined : { seconds: req.baseUpdatedAt.seconds, nanos: req.baseUpdatedAt.nanos }, auto: req.auto });
+          return { item: answer };
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    const base = (await api.getWorkingItem(OFFICER, ITEM_ID)).working?.base;
+    expect(base).toBe('1794528300.123456000');
+    const draft = { itemId: ITEM_ID, title: 'T', summary: '', visibility: 'public' as const, markup: 'x' };
+    await api.saveDraft(OFFICER, { ...draft, base: base!, auto: true });
+    await api.saveDraft(OFFICER, draft);
+    expect(seen).toEqual([
+      { base: stamp, auto: true },
+      { base: undefined, auto: false },
+    ]);
+  });
+
+  it('tells a save from a base someone else has changed since from any other refusal', async () => {
+    let message = 'This draft was changed by someone else since you opened it';
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        saveDraft: () => {
+          throw new ConnectError(message, Code.FailedPrecondition);
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    const draft = { itemId: ITEM_ID, title: 'T', summary: '', visibility: 'public' as const, markup: 'x', base: '1.0' };
+    await expect(api.saveDraft(OFFICER, draft)).rejects.toBeInstanceOf(DraftChanged);
+    message = 'an automatic save only saves a draft';
+    await expect(api.saveDraft(OFFICER, draft)).rejects.toMatchObject({ name: 'EditorRefused', reason: 'an automatic save only saves a draft' });
+  });
+
+  it('turns a base into a timestamp and back exactly; a base that is no number is no current base', () => {
+    expect(baseToken(create(TimestampSchema, { seconds: 5n, nanos: 7000 }))).toBe('5.000007000');
+    expect(baseTimestamp('1794528300.123456000')).toMatchObject({ seconds: 1794528300n, nanos: 123456000 });
+    expect(baseTimestamp('')).toBeUndefined();
+    for (const junk of ['x', '1.2.3', '-1.0', '1.1234567890', '1e9.0']) expect(baseTimestamp(junk), junk).toMatchObject({ seconds: 0n, nanos: 0 });
   });
 });

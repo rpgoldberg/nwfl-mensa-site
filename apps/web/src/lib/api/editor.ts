@@ -23,7 +23,8 @@
 // office ids an item is posted as, and an office's upcoming events, for the President's report's events
 // box. Any failure there is ApiUnavailable.
 import type { MessageInitShape } from '@bufbuild/protobuf';
-import { timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
+import { create } from '@bufbuild/protobuf';
+import { TimestampSchema, timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
 import { PUBLIC_ONLY } from 'astro:env/server';
@@ -59,6 +60,29 @@ import { OfficerSignInAgain, type OfficerReaderDeps } from './officer';
 export { OfficerSignInAgain as SignInAgain };
 
 /** The version changed since the approver opened it: show it again. */
+/** E3 round 2: SaveDraft refused a save from a base someone else has changed since; nothing was written. */
+export class DraftChanged extends Error {
+  constructor(readonly rpc: string) {
+    super(`the draft changed before ${rpc}`);
+    this.name = 'DraftChanged';
+  }
+}
+
+/** The API's words for that refusal (apps/api/src/content/workflow.ts STALE_BASE). */
+export const STALE_BASE = 'This draft was changed by someone else since you opened it';
+
+/** A version's base, as a form carries it: "<seconds>.<nanoseconds, 9 digits>", exact (a Date keeps milliseconds only). */
+export function baseToken(at: Timestamp): string {
+  return `${at.seconds}.${String(at.nanos).padStart(9, '0')}`;
+}
+
+/** A form's base back as a timestamp; none for an empty one; one that is no base is the epoch, which is never current. */
+export function baseTimestamp(token: string): Timestamp | undefined {
+  if (token === '') return undefined;
+  const match = /^(\d{1,12})\.(\d{9})$/.exec(token);
+  return create(TimestampSchema, match ? { seconds: BigInt(match[1] as string), nanos: Number(match[2]) } : { seconds: 0n, nanos: 0 });
+}
+
 export class VersionChanged extends Error {
   constructor(readonly rpc: string) {
     super(`the version changed before ${rpc}`);
@@ -144,6 +168,8 @@ export interface EditorVersion {
   sendBackNote: string;
   /** This officer edited the version: approving it needs one approver set, or the Admin's break-glass. */
   callerEdited: boolean;
+  /** E3 round 2: when it was last saved, as a base for the next save (baseToken). */
+  base?: string;
 }
 
 export interface EditorItem {
@@ -205,7 +231,11 @@ export interface OfficeEvent {
 
 export interface EditorApi {
   createItem(as: Reader, item: { kind: KindName; officeId: string; slug: string; title: string; onBehalfOf?: string }): Promise<EditorItem>;
-  saveDraft(as: Reader, draft: { itemId: string; title: string; summary: string; visibility: VisibilityName; markup: string }): Promise<{ item: EditorItem; problems: Problem[] }>;
+  /** `base`: the version's base as the form opened it (a changed one is refused: DraftChanged); `auto`: an automatic save, of a draft only. */
+  saveDraft(
+    as: Reader,
+    draft: { itemId: string; title: string; summary: string; visibility: VisibilityName; markup: string; base?: string; auto?: boolean },
+  ): Promise<{ item: EditorItem; problems: Problem[] }>;
   markReady(as: Reader, ready: { itemId: string; targets: Targets; editionId?: string; printAsIs?: boolean }): Promise<EditorItem>;
   sendBack(as: Reader, back: { itemId: string; note: string }): Promise<EditorItem>;
   /** `targets` and `editionId` unset keep what was chosen at ready; `breakGlass` is the Admin's own change, with a reason. */
@@ -276,6 +306,7 @@ function versionOf(v: ContentVersion): EditorVersion {
     onBehalfOf: v.onBehalfOf,
     ...(v.readyAt === undefined ? {} : { readyAt: timestampDate(v.readyAt) }),
     ...(v.approvedAt === undefined ? {} : { approvedAt: timestampDate(v.approvedAt) }),
+    ...(v.updatedAt === undefined ? {} : { base: baseToken(v.updatedAt) }),
     sendBackNote: v.sendBackNote,
     callerEdited: v.callerEdited,
   };
@@ -378,6 +409,8 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
         case Code.Aborted:
           throw new VersionChanged(rpc);
         case Code.FailedPrecondition:
+          if (failure.rawMessage === STALE_BASE) throw new DraftChanged(rpc);
+          throw new EditorRefused(rpc, plainReason(failure.rawMessage));
         case Code.InvalidArgument:
           throw new EditorRefused(rpc, plainReason(failure.rawMessage));
         case Code.PermissionDenied:
@@ -413,7 +446,11 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
         'SaveDraft',
         as,
         async (o) => {
-          const answer = await content.saveDraft({ itemId: draft.itemId, title: draft.title, summary: draft.summary, visibility: VISIBILITIES[draft.visibility], bodyMarkup: draft.markup }, o);
+          const base = baseTimestamp(draft.base ?? '');
+          const answer = await content.saveDraft(
+            { itemId: draft.itemId, title: draft.title, summary: draft.summary, visibility: VISIBILITIES[draft.visibility], bodyMarkup: draft.markup, auto: draft.auto ?? false, ...(base ? { baseUpdatedAt: base } : {}) },
+            o,
+          );
           return { item: itemOf(answer.item), problems: answer.problems.map((p) => ({ line: p.line, message: p.message })) };
         },
         draft.itemId,

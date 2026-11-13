@@ -9,6 +9,12 @@
 // from the token's expiry (SPEC-v3 3.1). A President's report lists the office's events beside it.
 // Saved: 303 back here with "Saved."; public/scripts/editor.js then drops the tab's unsent copy.
 //
+// Round 2: the form carries the base it was opened from (the version's updated_at, exact), and every
+// save sends it back. A save from a base someone else has changed since writes nothing: the page comes
+// back, 409, with the text kept, "Someone else changed this draft..." and a link to open the latest in
+// a new tab; the form keeps the old base, so the officer copies what they need rather than overwrite.
+// A draft also saves itself, by script (data-autosave, [id]/autosave.ts); a status line says so.
+//
 // A save posted after the sign-in ran out keeps the text: whether the session is gone (a site restart)
 // or only its token, the page comes back with what was posted and "Your sign-in timed out. Your text
 // is still here." With no session, the text comes from the post alone and nothing is read from the API.
@@ -22,7 +28,7 @@ import StatusChip from '../../../components/StatusChip.astro';
 import Unavailable from '../../../components/Unavailable.astro';
 import Base from '../../../layouts/Base.astro';
 import { ApiNotFound } from '../../../lib/api/client';
-import { EditorRefused, type EditorItem, NotAllowed, type OfficeEvent, type Problem, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
+import { DraftChanged, EditorRefused, type EditorItem, NotAllowed, type OfficeEvent, type Problem, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
 import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
 import { addDays, todayCentral, whenText } from '../../../lib/calendar';
@@ -79,7 +85,9 @@ let view: View = 'edit';
 let item: EditorItem | undefined;
 let values: KeptDraft = { title: '', summary: '', visibility: 'public', markup: '' };
 let errors: Partial<Record<string, string>> = {};
-let notice: { kind: 'refused' | 'not-allowed' | 'unavailable'; text: string } | undefined;
+let notice: { kind: 'refused' | 'not-allowed' | 'unavailable' | 'changed'; text: string } | undefined;
+/** The base the form was opened from, sent back with each save (round 2). */
+let base = '';
 let problems: Problem[] = [];
 let events: OfficeEvent[] | undefined;
 let cannotEdit = '';
@@ -89,6 +97,7 @@ const deps = runtimeDeps();
 if (kept?.ok) {
   view = 'kept';
   values = kept.values;
+  base = kept.base;
 } else if (session) {
   const api = editorApi();
   const { reader } = editorReader(session, deps);
@@ -98,6 +107,7 @@ if (kept?.ok) {
     if (!posted.ok) return new Response(posted.status === 413 ? 'Too large.' : 'Send the form.', { status: posted.status, headers: posted.status === 413 ? { Connection: 'close' } : {} });
     view = 'kept';
     values = posted.values;
+    base = posted.base;
     return undefined;
   };
   if (api === undefined) view = 'unavailable';
@@ -130,6 +140,7 @@ if (kept?.ok) {
         const read = await readForm(Astro.request, EDIT_FORM_LIMIT);
         if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
         const parsed = parseDraft(read.field);
+        base = read.field('base') ?? '';
         if (!parsed.ok) {
           errors = parsed.errors;
           values = parsed.values;
@@ -137,13 +148,17 @@ if (kept?.ok) {
         } else {
           values = parsed.value;
           try {
-            await api.saveDraft(reader, { itemId: id, ...parsed.value });
+            await api.saveDraft(reader, { itemId: id, ...parsed.value, base });
             return Astro.redirect(`${HERE}?saved=1`, 303);
           } catch (error) {
             if (error instanceof ApiNotFound) {
               view = 'gone';
               Astro.response.status = 404;
             } else if (error instanceof SignInAgain) view = 'kept';
+            else if (error instanceof DraftChanged) {
+              notice = { kind: 'changed', text: 'Nothing was saved: someone else changed this draft since you opened it. Your text is kept below: copy what you need, then open the latest version.' };
+              Astro.response.status = 409;
+            }
             else if (error instanceof NotAllowed) {
               notice = { kind: 'not-allowed', text: 'Nothing was saved: you cannot change this item. Ask the Webmaster or the Admin.' };
               Astro.response.status = 403;
@@ -158,6 +173,7 @@ if (kept?.ok) {
         }
       } else {
         values = form.values;
+        base = item.working?.base ?? item.live?.base ?? '';
         // The problems the API finds in what is saved; the page stands without them.
         problems = await api.previewWorkingItem(reader, id).then(
           (preview) => preview.problems,
@@ -181,6 +197,8 @@ const working = item?.working;
 const listed = FIELD_ORDER.filter((field) => errors[field] !== undefined).map((field) => ({ field: field === 'visibility' ? 'visibility-public' : field, text: errors[field] as string }));
 const problemList = problems.map((p) => ({ line: p.line, text: p.line > 0 ? `Line ${p.line}: ${p.message}` : `${p.message.charAt(0).toUpperCase()}${p.message.slice(1)}` }));
 const showForm = view === 'edit' || view === 'kept';
+// Round 2: a draft saves itself (script); never an item waiting for approval or approved, never after a conflict.
+const autosave = view === 'edit' && working?.status === 'draft' && notice === undefined && listed.length === 0;
 const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
 const pageTitle = view === 'gone' ? 'Page not found' : (item?.working?.title ?? item?.live?.title ?? (values.title.trim() || 'Your text'));
 ---
@@ -206,7 +224,12 @@ const pageTitle = view === 'gone' ? 'Page not found' : (item?.working?.title ?? 
   )}
   {view === 'unavailable' && <Unavailable what="This item" />}
   {view === 'cannot-edit' && cannotEdit && <p class="notice" role="note">{cannotEdit}</p>}
-  {notice && <p class="notice" role="alert">{notice.text}</p>}
+  {notice && (
+    <p class="notice" role="alert">
+      {notice.text}
+      {notice.kind === 'changed' && <> <a href={HERE} target="_blank" rel="noopener">Open the latest version (opens a new tab)</a></>}
+    </p>
+  )}
   {view === 'edit' && working?.status === 'ready' && <p class="notice" role="note">It is waiting for approval. If you save a change, it goes back to being a draft: send it for approval again after.</p>}
   {view === 'edit' && working?.status === 'cleared' && <p class="notice" role="note">It is approved. If you save a change, it needs approving again.</p>}
 
@@ -243,8 +266,16 @@ const pageTitle = view === 'gone' ? 'Page not found' : (item?.working?.title ?? 
           <button class="button button--secondary" type="button" data-restore-no>Forget that text</button>
         </div>
       </section>
-      <form method="post" action={HERE} enctype="multipart/form-data" class="rule-form editor-form" novalidate data-editor data-draft-key={draftKey(id)} data-saved={saved ? 'yes' : undefined}>
+      {autosave && (
+        <p class="notice" role="note" data-autosave-conflict hidden>
+          Someone else changed this draft since you opened it. Copy what you need, then
+          <a href={HERE} target="_blank" rel="noopener">open the latest version (opens a new tab)</a>.
+        </p>
+      )}
+      <form method="post" action={HERE} enctype="multipart/form-data" class="rule-form editor-form" novalidate data-editor data-draft-key={draftKey(id)} data-saved={saved ? 'yes' : undefined} data-autosave={autosave ? `${HERE}/autosave` : undefined}>
+        <input type="hidden" name="base" value={base} />
         <div class="btns"><button class="button button--wide" type="submit">Save draft</button></div>
+        {autosave && <p class="hint autosave-status" role="status" data-autosave-status hidden>A draft saves itself a minute after you stop typing.</p>}
         <div class="field">
           <label for="title">Title</label>
           <p class="hint" id="title-hint">Titles are always public. Up to {TITLE_MAX} letters.</p>

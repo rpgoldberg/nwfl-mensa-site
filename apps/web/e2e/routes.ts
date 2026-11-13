@@ -57,6 +57,8 @@ export const OFFICER: Readonly<Record<string, readonly string[]>> = {
   '/officer-area/news/new': ['/officer-area/news/new'],
   '/officer-area/news/[id]': ['/officer-area/news/c0e20000-0000-4000-8000-000000000003'],
   '/officer-area/news/[id]/preview': ['/officer-area/news/c0e20000-0000-4000-8000-000000000003/preview'],
+  // Round 2: the edit page's auto-save, a POST endpoint; a GET finds nothing.
+  '/officer-area/news/[id]/autosave': ['/officer-area/news/c0e20000-0000-4000-8000-000000000003/autosave'],
 };
 
 /**

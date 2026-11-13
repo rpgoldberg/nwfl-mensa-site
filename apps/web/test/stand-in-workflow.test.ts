@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkflow, parseMarkup } from '../e2e/workflow.mjs';
 import { ContentService, ItemState, VersionStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { ApiNotFound } from '../src/lib/api/client';
-import { EditorRefused, type EditorApi, type EditorItem, NotAllowed, SlugTaken, VersionChanged, grpcEditor } from '../src/lib/api/editor';
+import { DraftChanged, EditorRefused, type EditorApi, type EditorItem, NotAllowed, SlugTaken, VersionChanged, grpcEditor } from '../src/lib/api/editor';
 import { editFormFor } from '../src/lib/editor/form';
 import { historySentences } from '../src/lib/editor/history';
 import { createWithSlug } from '../src/lib/editor/slug';
@@ -423,5 +423,59 @@ describe('the stand-in workflow: A1\'s version_statuses on the list', () => {
     expect(drafts).toContain(writing.id);
     expect(drafts).not.toContain(published.id);
     expect(drafts).not.toContain(cleared.id);
+  });
+});
+
+describe('the stand-in workflow: auto-save with guards (E3 round 2)', () => {
+  const put = (who: keyof typeof PEOPLE, item: EditorItem, markup: string, extra: { base?: string; auto?: boolean } = {}) =>
+    api.saveDraft(as(who), { itemId: item.id, title: item.working?.title ?? item.live?.title ?? 'T', summary: '', visibility: 'public', markup, ...extra });
+  const actions = async (item: EditorItem) => (await api.listItemHistory(as('officer'), item.id)).map((s) => s.action);
+
+  it('gives each version a base, refuses a save from a changed one and writes nothing, and saves from the current one', async () => {
+    const item = await create('officer', 'Based');
+    const opened = (await api.getWorkingItem(as('officer'), item.id)).working?.base;
+    expect(opened).toMatch(/^\d+\.\d{9}$/);
+    const theirs = await put('admin', item, 'The Admin was here.', { base: opened! });
+    expect(theirs.item.working?.base).not.toBe(opened);
+    const before = await actions(item);
+    for (const auto of [false, true]) expect(await refusal(put('officer', item, 'Mine.', { base: opened!, auto }))).toBeInstanceOf(DraftChanged);
+    expect((await api.getWorkingItem(as('officer'), item.id)).working?.markup).toBe('The Admin was here.');
+    expect(await actions(item)).toEqual(before);
+    expect((await put('officer', item, 'Mine, on theirs.', { base: theirs.item.working!.base! })).item.working?.markup).toBe('Mine, on theirs.');
+    const seeded = model.seed({ slug: 'seed-based-live', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    const live = await api.getWorkingItem(as('officer'), seeded.id);
+    const liveBase = live.live?.base;
+    await put('admin', live, 'A change by the Admin.');
+    expect(await refusal(put('officer', live, 'Mine.', { base: liveBase! }))).toBeInstanceOf(DraftChanged);
+  });
+
+  it('finds no conflict in a save from a stale base that carries what is saved: nothing written, the current base back', async () => {
+    const item = await create('officer', 'Landed first');
+    const opened = (await api.getWorkingItem(as('officer'), item.id)).working?.base;
+    const landed = await put('officer', item, 'Typed, then reloaded.', { base: opened!, auto: true });
+    const before = await actions(item);
+    const again = await put('officer', item, 'Typed, then reloaded.', { base: opened! });
+    expect(again.item.working?.base).toBe(landed.item.working?.base);
+    expect(await actions(item)).toEqual(before);
+    expect(await refusal(put('officer', item, 'Typed, then reloaded, and more.', { base: opened! }))).toBeInstanceOf(DraftChanged);
+  });
+
+  it('saves a draft automatically, one history step for consecutive ones; refuses any other, writing nothing', async () => {
+    const item = await create('officer', 'Auto');
+    for (const n of [1, 2, 3]) await put('officer', item, `Draft ${n}.`, { auto: true });
+    await put('officer', item, 'By hand.');
+    await put('officer', item, 'Again.', { auto: true });
+    expect(await actions(item)).toEqual(['create', 'autosave', 'save', 'autosave']);
+    expect(historySentences(await api.listItemHistory(as('officer'), item.id), { you: PEOPLE['officer']!.sub })[0]?.sentence).toContain('President (you) saved a draft automatically (version 1).');
+    const ready = model.seed({ slug: 'seed-auto-ready', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Ready' });
+    const cleared = model.seed({ slug: 'seed-auto-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
+    const live = model.seed({ slug: 'seed-auto-live', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    for (const seeded of [ready, cleared, live]) {
+      const read = await api.getWorkingItem(as('officer'), seeded.id);
+      expect(await refusal(put('officer', read, 'Saved by itself?', { auto: true }))).toMatchObject({ reason: 'an automatic save only saves a draft' });
+      const after = await api.getWorkingItem(as('officer'), seeded.id);
+      expect(after.working?.status).toBe(read.working?.status);
+      expect(after.working?.id).toBe(read.working?.id);
+    }
   });
 });

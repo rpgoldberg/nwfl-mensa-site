@@ -27,7 +27,7 @@ import { ContentKind, ItemState, ItemVisibility, VersionStatus } from '../src/ge
 /**
  * @typedef {{ id: string, number: number, status: 'draft' | 'ready' | 'cleared' | 'approved' | 'superseded', title: string, summary: string,
  *   visibility: 'public' | 'members' | 'officers', markup: string, targets: Targets, editionId: string, printAsIs: boolean,
- *   onBehalfOf: string, readyAt?: Date, approvedAt?: Date, hash?: Uint8Array, editors: Set<string>, sendBackNote: string }} Version
+ *   onBehalfOf: string, readyAt?: Date, approvedAt?: Date, hash?: Uint8Array, editors: Set<string>, sendBackNote: string, updatedAt?: Date }} Version
  */
 /**
  * @typedef {{ id: string, slug: string, kind: string, officeId: string, state: 'draft' | 'ready' | 'published' | 'withdrawn',
@@ -73,6 +73,10 @@ const STATUS_IN = new Map([
 
 const invalid = (/** @type {string} */ message) => new ConnectError(message, Code.InvalidArgument);
 const precondition = (/** @type {string} */ message) => new ConnectError(message, Code.FailedPrecondition);
+/** The API's words for a save from a base someone else has changed since (E3 round 2). */
+const STALE_BASE = 'This draft was changed by someone else since you opened it';
+/** A Timestamp in milliseconds: the stand-in keeps no finer time. @param {{ seconds: bigint, nanos: number }} at */
+const msOf = (at) => Number(at.seconds) * 1000 + Math.floor(at.nanos / 1_000_000);
 const denied = () => new ConnectError('not permitted', Code.PermissionDenied);
 
 // ---------------------------------------------------------------------------------------------
@@ -275,8 +279,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
   };
 
   /** @param {Item} item @param {Caller} caller @param {Partial<Entry> & { action: string }} entry @param {boolean} [approving] */
-  const record = (item, caller, entry, approving = false) => {
-    const at = now();
+  const record = (item, caller, entry, approving = false, at = now()) => {
     item.updatedAt = at;
     item.history.push({ at, actorSubject: caller.sub, actorLabel: labelOf(caller, item, approving), actingOfficeId: item.officeId, versionNumber: 0, fromState: '', toState: '', note: '', ...entry });
   };
@@ -306,6 +309,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
           bodyMarkupWithheld: withheld,
           sendBackNote: v.sendBackNote,
           callerEdited: v.editors.has(caller.sub),
+          // E3 round 2: the base a form sends back.
+          ...(v.updatedAt ? { updatedAt: timestamp(v.updatedAt) } : {}),
         });
 
   /** @param {Item} item @param {Caller} caller */
@@ -363,6 +368,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       onBehalfOf: '',
       editors: new Set(seed.editors ?? []),
       sendBackNote: seed.sendBackNote ?? '',
+      updatedAt: at,
     };
     if (version.status !== 'draft') version.hash = hashOf(version, version.targets, '');
     if (version.status === 'ready' || version.status === 'cleared') version.readyAt = at;
@@ -416,6 +422,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
         onBehalfOf: req.onBehalfOf.trim(),
         editors: new Set([caller.sub]),
         sendBackNote: '',
+        updatedAt: item.updatedAt,
       };
       items.set(item.id, item);
       record(item, caller, { action: 'create', versionNumber: 1, toState: 'draft' });
@@ -426,6 +433,16 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const caller = await callerOf(ctx);
       const item = load(req.itemId);
       requireOffice(caller, item);
+      // E3 round 2: a save from a base someone else has changed since writes nothing; an automatic save saves a draft only.
+      const opened = /** @type {Version} */ (item.working ?? item.live);
+      if (req.auto && item.working?.status !== 'draft') throw precondition('an automatic save only saves a draft');
+      // One that carries exactly what is saved overwrites nobody: no conflict, nothing written, as in the API.
+      if (req.baseUpdatedAt && msOf(req.baseUpdatedAt) !== opened.updatedAt?.getTime()) {
+        const carriesSaved =
+          opened.title === req.title.trim() && opened.summary === req.summary.trim() && opened.visibility === (VISIBILITY.get(req.visibility) ?? opened.visibility) && opened.markup === req.bodyMarkup;
+        if (!carriesSaved) throw precondition(STALE_BASE);
+        return { item: itemMessage(item, caller), problems: parseMarkup(opened.markup).problems };
+      }
       const version = item.working ?? newVersion(item);
       const from = version.status;
       if (version.status === 'ready' || version.status === 'cleared') {
@@ -445,7 +462,15 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       version.markup = req.bodyMarkup;
       if (version.visibility === 'officers') version.targets = { ...version.targets, newsletter: false, email: false };
       version.editors.add(caller.sub);
-      record(item, caller, { action: 'save', versionNumber: version.number, fromState: from, toState: 'draft' });
+      // Never the same time twice, so a base always tells two saves apart.
+      const at = new Date(Math.max(now().getTime(), (version.updatedAt?.getTime() ?? 0) + 1));
+      version.updatedAt = at;
+      // Consecutive automatic saves by one person on one version within 10 minutes are one step, as in the API.
+      const last = item.history.at(-1);
+      const repeat =
+        req.auto && last?.action === 'autosave' && last.actorSubject === caller.sub && last.versionNumber === version.number && version.updatedAt.getTime() - last.at.getTime() < 10 * 60_000;
+      if (repeat) item.updatedAt = at;
+      else record(item, caller, { action: req.auto ? 'autosave' : 'save', versionNumber: version.number, fromState: from, toState: 'draft' }, false, at);
       return { item: itemMessage(item, caller), problems: parseMarkup(version.markup).problems };
     },
 

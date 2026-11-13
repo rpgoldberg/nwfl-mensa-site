@@ -8,6 +8,7 @@ import {
   ROSTER_WARNING,
   WORDS_PER_PAGE,
   draftKey,
+  clockText,
   keptText,
   lastChangeText,
   lengthText,
@@ -169,11 +170,11 @@ describe('keptText', () => {
     form.set('summary', 'One line');
     form.set('visibility', 'members');
     form.set('markup', 'Line one\r\nLine <b>two</b>');
-    expect(await keptText(post(form))).toEqual({ ok: true, values: { title: '  My report ', summary: 'One line', visibility: 'members', markup: 'Line one\nLine <b>two</b>' } });
+    expect(await keptText(post(form))).toEqual({ ok: true, values: { title: '  My report ', summary: 'One line', visibility: 'members', markup: 'Line one\nLine <b>two</b>' }, base: '' });
   });
 
   it('gives empty fields for what was not posted', async () => {
-    expect(await keptText(post(new URLSearchParams({ markup: 'Only text' }), 'application/x-www-form-urlencoded'))).toEqual({ ok: true, values: { title: '', summary: '', visibility: '', markup: 'Only text' } });
+    expect(await keptText(post(new URLSearchParams({ markup: 'Only text' }), 'application/x-www-form-urlencoded'))).toEqual({ ok: true, values: { title: '', summary: '', visibility: '', markup: 'Only text' }, base: '' });
   });
 
   it("refuses what is not a form, or is over the edit form's cap", async () => {
@@ -210,5 +211,20 @@ describe('ourNews (fix 1)', () => {
 
   it('keeps the order given for items with the same time or none', () => {
     expect(ourNews([one('x'), one('y')], [one('z')]).map((i) => i.id)).toEqual(['x', 'y', 'z']);
+  });
+});
+
+describe('clockText (round 2)', () => {
+  it('says the time of day in Central, as the site says it', () => {
+    expect(clockText(new Date('2026-11-12T20:05:00Z'))).toBe('2:05 pm');
+    expect(clockText(new Date('2026-07-01T17:00:00Z'))).toBe('12:00 noon');
+  });
+});
+
+describe('keptText keeps the base the form was opened from (round 2)', () => {
+  it('reads it from the post, or none', async () => {
+    const post = (body: string) => new Request('https://example.org/x', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
+    expect(await keptText(post('title=T&summary=&visibility=public&markup=x&base=12.000000500'))).toMatchObject({ ok: true, base: '12.000000500' });
+    expect(await keptText(post('title=T&markup=x'))).toMatchObject({ ok: true, base: '' });
   });
 });
