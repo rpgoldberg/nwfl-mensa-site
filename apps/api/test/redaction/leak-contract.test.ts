@@ -33,7 +33,7 @@ import { MethodOptions_IdempotencyLevel as Idempotency, timestampFromDate } from
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Audience } from '../../src/gen/nwfl/mensa/v1/common_pb.js';
-import { ContentKind, ContentService, ItemVisibility } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentKind, ContentService, ItemVisibility, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
 import {
   LedgerSubjectKind,
@@ -473,7 +473,19 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     );
     const officerList = await content.getItemLinks({ itemId: item.id }, OFFICER);
     await content.confirmLinks({ itemId: item.id, linksSha256: officerList.linksSha256, answers: [{ url: ring, yes: false }] }, OFFICER);
-    /** Approve's refusal and ConfirmLinks' answer (or refusal) for one caller, by RPC. */
+    // A3B-HARDEN: Publish checks the status first, so its refusal is swept on a second piece with the same
+    // marked phone, cleared by an officer (both links answered yes).
+    const cleared = (await content.createItem({ kind: ContentKind.ARTICLE, officeId: office, slug: 'leak-gate-cleared', title: 'Rides' }, PUB)).item!;
+    await content.saveDraft({ itemId: cleared.id, title: 'Rides', summary: '', visibility: ItemVisibility.PUBLIC, bodyMarkup: `Rides: ${ring} or https://example.org/rides.` }, PUB);
+    const clearedHash = (await content.markReady({ itemId: cleared.id }, PUB)).item!.working!.contentHash;
+    await api.client(RedactionPolicyService).addRedactionMark(
+      { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: cleared.id, field: MarkField.BODY, quote: C.phone, category: RedactionCategory.MEMBER_PHONE },
+      OFFICER,
+    );
+    const clearedList = await content.getItemLinks({ itemId: cleared.id }, OFFICER);
+    await content.confirmLinks({ itemId: cleared.id, linksSha256: clearedList.linksSha256, answers: clearedList.links.map((link) => ({ url: link.url, yes: true })) }, OFFICER);
+    expect((await content.approve({ itemId: cleared.id, contentHash: clearedHash }, OFFICER)).item!.working!.status).toBe(VersionStatus.CLEARED);
+    /** Approve's refusal, ConfirmLinks' answer (or refusal) and Publish's refusal for one caller, by RPC. */
     const gate = async (who: { headers?: Record<string, string> }): Promise<Map<string, Buffer>> => {
       const said = async (call: () => Promise<unknown>): Promise<Buffer> => {
         try {
@@ -490,8 +502,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       return new Map([
         ['ContentService.Approve', await said(() => content.approve({ itemId: item.id, contentHash }, who))],
         ['ContentService.ConfirmLinks', await said(() => content.confirmLinks({ itemId: item.id, linksSha256, answers: [{ url: 'https://example.org/not-here', yes: true }] }, who))],
-        // A3B-HARDEN: a cleared version is not needed to reach Publish's refusal of a partial viewer's hash.
-        ['ContentService.Publish', await said(() => content.publish({ itemId: item.id, contentHash }, who))],
+        ['ContentService.Publish', await said(() => content.publish({ itemId: cleared.id, contentHash: clearedHash }, who))],
       ]);
     };
     for (const who of [{}, MEMBER, AGENT, as('lone-admin-token'), as('lone-webmaster-token')]) expect(found(await gate(who), C), JSON.stringify(who)).toEqual({});
@@ -501,6 +512,7 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       const said = await gate(who);
       expect(said.get('ContentService.Approve')?.toString()).toContain('part of this item is withheld from you; an officer who can see all of it must approve it');
       expect(said.get('ContentService.ConfirmLinks')?.toString()).toContain('part of this item is withheld from you; an officer who can see all of it must check its links');
+      expect(said.get('ContentService.Publish')?.toString()).toContain('part of this item is withheld from you; an officer who can see all of it must publish it');
     }
     expect(found(await gate(OFFICER), C)).toEqual({ phone: ['ContentService.Approve', 'ContentService.ConfirmLinks'] });
   });
