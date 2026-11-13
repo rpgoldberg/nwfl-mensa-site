@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { BUDGET, OverBudget, oracleParse, type MarkupProblem as OracleProblem } from '../../test/content/markup-oracle.js';
 import { NESTED_TOO_DEEPLY, parseMarkup, type MarkupProblem } from './markup.js';
 import { MAX_DEPTH, type Block, type Inline, type Tree, normalizeTree } from './tree.js';
+import type { MarkupMeter, ParsedMarkup } from './markup.js';
 
 const FILE = '7a0d3d4e-1f1b-4c55-9a51-0b8f1c6a2e01';
 
@@ -53,8 +54,27 @@ function deepest(tree: Tree): number {
   return most;
 }
 
+// E7A-FIX: an intended difference. An empty pair of markers ("__", "****") is kept as written; the old
+// parser read it as an empty span and dropped it. The comparison reads each input with the switch that
+// drops it as the old parser did, so the rest is compared byte for byte and no input is skipped; and the
+// switch must change nothing unless the input has such a pair.
+const PAIRS = { inputs: 0, pairs: 0 };
+
+/** The parse to hold against the oracle: empty pairs dropped as the old parser did. */
+function asOld(src: string): ParsedMarkup {
+  const meter: MarkupMeter = { steps: 0, emptyPairs: 0, dropEmptyPairs: true };
+  const parsed = parseMarkup(src, meter);
+  if (meter.emptyPairs === 0) expect(parsed).toEqual(parseMarkup(src));
+  else {
+    PAIRS.inputs += 1;
+    PAIRS.pairs += meter.emptyPairs!;
+  }
+  return parsed;
+}
+
 /** Compares one input, or counts it as skipped when the oracle cannot finish it. */
 function same(src: string, tally: Tally): void {
+  const parsed = asOld(src);
   let old;
   try {
     old = oracleParse(src);
@@ -75,12 +95,12 @@ function same(src: string, tally: Tally): void {
   if (deepest(old.tree) > MAX_DEPTH) {
     tally.tooDeep += 1;
     problems.push({ line: expect.any(Number) as number, message: NESTED_TOO_DEEPLY });
-    expect(parseMarkup(src)).toEqual({ tree: old.tree, problems });
+    expect(parsed).toEqual({ tree: old.tree, problems });
     tally.compared += 1;
     return;
   }
   const expected = JSON.stringify({ tree: old.tree, problems });
-  const actual = JSON.stringify(parseMarkup(src));
+  const actual = JSON.stringify(parsed);
   if (actual !== expected) expect.soft(actual, JSON.stringify(src)).toBe(expected);
   tally.compared += 1;
 }
@@ -214,6 +234,12 @@ describe('the linear parser matches the frozen old parser', () => {
     expect(tally.tooDeep).toBeGreaterThan(200);
     expect(tally.tooDeep).toBeLessThan(600);
     if (process.env['MARKUP_DIFF_STATS']) console.info('deep', tally);
+  });
+
+  it('met empty pairs of markers in the corpora above, each compared with the pair dropped as the old parser did', () => {
+    // Runs after the corpora above (tests in a file run in order).
+    if (process.env['MARKUP_DIFF_STATS']) console.info('pairs', PAIRS);
+    expect(PAIRS.inputs).toBeGreaterThan(1_000);
   });
 
   it('reports an unclosed members span once, though the old parser re-read it on a retry', () => {

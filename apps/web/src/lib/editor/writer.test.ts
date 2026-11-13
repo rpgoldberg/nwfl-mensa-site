@@ -12,6 +12,7 @@ import {
   keptText,
   lastChangeText,
   lengthText,
+  mayHoldAnOffice,
   mayWriteFor,
   newsletterPages,
   officeName,
@@ -61,6 +62,16 @@ describe('officeName', () => {
   it('names an office, and says when the Admin writes for it', () => {
     expect(officeName({ ...PRESIDENT, held: true })).toBe('President');
     expect(officeName({ ...PRESIDENT, held: false })).toBe('President (for the office)');
+  });
+});
+
+describe('mayHoldAnOffice', () => {
+  it('is true for an office holder or the Admin, false for the Webmaster or a member alone', () => {
+    expect(mayHoldAnOffice(['nwfl-members', 'nwfl-officers', 'nwfl-office-president'])).toBe(true);
+    expect(mayHoldAnOffice(['nwfl-admin'])).toBe(true);
+    expect(mayHoldAnOffice(['nwfl-members', 'nwfl-webmaster'])).toBe(false);
+    expect(mayHoldAnOffice(['nwfl-members', 'nwfl-officers'])).toBe(false);
+    expect(mayHoldAnOffice([])).toBe(false);
   });
 });
 

@@ -32,6 +32,11 @@ export function postingOffices(groups: readonly string[], roster: readonly Roste
   return roster.filter((o) => admin || held.has(o.slug)).map((o) => ({ ...o, held: held.has(o.slug) }));
 }
 
+/** Whether the person could write for any office at all (holds one, or is the Admin): no roster needed. */
+export function mayHoldAnOffice(groups: readonly string[]): boolean {
+  return groups.includes('nwfl-admin') || groups.some((g) => g.startsWith(OFFICE_GROUP));
+}
+
 /** The office in words: "Treasurer (for the office)" when the Admin writes for an office they do not hold. */
 export function officeName(office: PostingOffice): string {
   return office.held ? office.title : `${office.title} (for the office)`;

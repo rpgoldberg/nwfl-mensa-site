@@ -8,13 +8,15 @@
 //   422                     no longer a draft (sent for approval, approved, published): the script stops;
 //   400                     a field not right yet (a title being typed): the script tries again later;
 //   413 / 415               not the form; 403 / 404 not this person's item; 503 the API is not there.
+// Like the edit page, it answers 404 for an item none of the person's offices writes (E7A-FIX), before any
+// save: at once for someone who holds no office, else once the roster and the item are read.
 // Astro's origin check (security.checkOrigin) refuses a cross-site post first, as for the form.
 import type { APIRoute } from 'astro';
 import { ApiNotFound } from '../../../../lib/api/client';
 import { DraftChanged, EditorRefused, NotAllowed, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../../lib/api/editor';
 import { runtimeDeps } from '../../../../lib/auth/flow';
 import { EDIT_FORM_LIMIT, parseDraft } from '../../../../lib/editor/form';
-import { clockText } from '../../../../lib/editor/writer';
+import { clockText, mayHoldAnOffice, mayWriteFor, postingOffices } from '../../../../lib/editor/writer';
 import { readForm } from '../../../../lib/form';
 
 export const prerender = false;
@@ -44,17 +46,19 @@ export const POST: APIRoute = async ({ params, request, locals }) => {
   if (!UUID.test(id)) return answer(404);
   const session = locals.session;
   if (!session) return answer(401, { problem: 'sign-in' });
-  if (!editorAdmits(session)) return answer(404);
+  if (!editorAdmits(session) || !mayHoldAnOffice(session.groups)) return answer(404);
   const api = editorApi();
   if (api === undefined) return answer(503);
   const deps = runtimeDeps();
   const { reader } = editorReader(session, deps);
   if (reader === undefined) return answer(401, { problem: 'sign-in' });
-  const read = await readForm(request, EDIT_FORM_LIMIT);
-  if (!read.ok) return answer(read.status);
-  const parsed = parseDraft(read.field);
-  if (!parsed.ok) return answer(400, { problem: 'form' });
   try {
+    const [roster, current] = await Promise.all([api.offices(), api.getWorkingItem(reader, id)]);
+    if (!mayWriteFor(postingOffices(session.groups, roster), current)) return answer(404);
+    const read = await readForm(request, EDIT_FORM_LIMIT);
+    if (!read.ok) return answer(read.status);
+    const parsed = parseDraft(read.field);
+    if (!parsed.ok) return answer(400, { problem: 'form' });
     const { item } = await api.saveDraft(reader, { itemId: id, ...parsed.value, base: read.field('base') ?? '', auto: true });
     return answer(200, { base: item.working?.base ?? '', savedAt: clockText(new Date(deps.now() * 1000)) });
   } catch (error) {
