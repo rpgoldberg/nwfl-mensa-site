@@ -178,6 +178,62 @@ test.describe('approving, with no script', () => {
     await expect(await entry(page, waiting, REVIEW.membersLink.title)).toContainText('Parts are hidden from you, so an officer who can see all of it must approve it.');
   });
 
+  // E4 round 4: posts forged from a partial view (same origin, with an officer's hashes, the worst case) are
+  // refused by the site before any call to the API, and nothing changes. The list of links is the same for
+  // both views, so the officer's list hash and row key would be accepted by the API.
+  test('posts forged from a view with part of the piece hidden are refused before the API, and nothing changes', async ({ browser, page }) => {
+    const officer = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true });
+    const seen = await officer.newPage();
+    await seen.goto(SITE_URL);
+    await signIn(seen, 'webmaster');
+    await seen.goto(`${SITE_URL}${review(REVIEW.partialWaiting.id)}`);
+    const waiting = {
+      hash: await seen.locator('input[name="hash"]').inputValue(),
+      links_hash: await seen.locator('input[name="links_hash"]').inputValue(),
+      'row-0': await seen.locator('input[name="row-0"]').inputValue(),
+    };
+    await seen.goto(`${SITE_URL}${review(REVIEW.partialApproved.id)}`);
+    const approvedHash = await seen.locator('input[name="hash"]').inputValue();
+    expect(waiting.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(approvedHash).toMatch(/^[0-9a-f]{64}$/);
+
+    await page.goto('/');
+    await signIn(page, 'lone-webmaster');
+    await page.goto(review(REVIEW.partialWaiting.id));
+    // Nothing to post with: no hashes, no row keys, no answers, and no link to open.
+    await expect(page.locator('input[name="hash"], input[name="links_hash"], input[name^="row-"], input[name^="answer-"]')).toHaveCount(0);
+    const panel = page.getByRole('region', { name: 'Check the links' });
+    await expect(panel.getByRole('link')).toHaveCount(0);
+    expect(await panel.innerHTML()).not.toContain('href=');
+
+    const REFUSED = 'Nothing was changed: parts of this piece are hidden from you, so an officer who can see all of it must check its links and approve it.';
+    const forged: [string, string, Record<string, string>, string][] = [
+      ['links', review(REVIEW.partialWaiting.id), { ...waiting, step: 'links', 'answer-0': 'yes' }, REFUSED],
+      ['approve', review(REVIEW.partialWaiting.id), { ...waiting, step: 'approve' }, REFUSED],
+      ['break-glass', review(REVIEW.partialWaiting.id), { ...waiting, step: 'break-glass', reason: 'Forged' }, REFUSED],
+      ['publish', `${review(REVIEW.partialApproved.id)}/publish`, { hash: approvedHash }, 'It was not published: parts of this piece are hidden from you, so someone who can see all of it must publish it.'],
+    ];
+    for (const [name, path, form, words] of forged) {
+      const res = await page.request.post(`${SITE_URL}${path}`, { form, headers: { Origin: SITE_URL }, maxRedirects: 0 });
+      expect(res.status(), name).toBe(409);
+      expect(await res.text(), name).toContain(words);
+    }
+
+    // Nothing changed: the answer list, the status of each.
+    const after = await officer.newPage();
+    await after.goto(`${SITE_URL}${review(REVIEW.partialWaiting.id)}`);
+    await expect(after.getByText('0 of 1 link checked.')).toBeVisible();
+    await expect(row(after, 'the picnic page')).toContainText('Not checked yet.');
+    await expect(status(after)).toHaveText('Waiting for approval');
+    await after.goto(`${SITE_URL}${review(REVIEW.partialApproved.id)}`);
+    await expect(status(after)).toHaveText('Approved, ready to publish');
+    await officer.close();
+
+    // Send back stays theirs.
+    await page.goto(review(REVIEW.partialWaiting.id));
+    await expect(page.getByRole('button', { name: 'Send back' })).toBeVisible();
+  });
+
   // E4 fix round 1 (S1): answers go by row (its place and a short key), never by address, so a long list fits.
   test('two hundred links, or forty of 2,048 characters, save with a long note; Approve and Send back go through', async ({ page }) => {
     test.setTimeout(180_000);

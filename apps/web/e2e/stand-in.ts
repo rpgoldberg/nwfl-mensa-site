@@ -205,6 +205,9 @@ export const REVIEW = {
   takenDown: { id: reviewId(5), title: 'Seeded: taken down, change approved' },
   /** A sign-in link in a members passage marked for officers only: hidden from a reviewer outside the officers group. */
   membersLink: { id: reviewId(6), title: 'Seeded: an officers-only sign-in link', url: 'https://www.facebook.com/groups/nwfl-members-sample' },
+  /** E4 round 4: a members passage marked for officers only, no link in it; waiting, and approved. Only ever refused. */
+  partialWaiting: { id: reviewId(8), title: 'Seeded: part hidden, waiting' },
+  partialApproved: { id: reviewId(9), title: 'Seeded: part hidden, approved' },
   /** E4 fix round 1 (S5): a mail link beside a web link. */
   mailLink: { id: reviewId(7), title: 'Seeded: a mail link', address: 'events@example.org' },
   urls: { picnic: 'https://club.example/picnic', map: 'https://club.example/map', facebook: 'https://www.facebook.com/groups/nwfl-sample' },

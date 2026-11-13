@@ -607,6 +607,12 @@ WORKFLOW.seed({ id: review(4), slug: 'review-self-approved', kind: 'announcement
 // which a reviewer outside the officers group (the lone Webmaster) cannot see: Approve's refusal to them
 // names no link. E4 fix round 1 (S3): a members passage alone hides nothing from a reviewer, as in A3b.
 WORKFLOW.seed({ id: review(6), slug: 'review-members-link', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: an officers-only sign-in link', markup: "Open to all.\n\n::: members\nPhotos on [our members' group](https://www.facebook.com/groups/nwfl-members-sample).\n:::", officersOnly: true, editors: [PRESIDENT_SUB] });
+// E4 round 4: a members passage marked for officers only, with no link in it, so the list of links is the
+// same for every reviewer (and so its hash): one waiting, one approved. A reviewer outside the officers group
+// sees part of each (no hash): forged posts from that view are refused by the site before the API.
+const PARTIAL = 'See [the picnic page](https://club.example/picnic).\n\n::: members\nThe side gate code is MEMBERS-CANARY.\n:::';
+WORKFLOW.seed({ id: review(8), slug: 'review-partial-waiting', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: part hidden, waiting', markup: PARTIAL, officersOnly: true, editors: [PRESIDENT_SUB] });
+WORKFLOW.seed({ id: review(9), slug: 'review-partial-approved', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: part hidden, approved', markup: PARTIAL, officersOnly: true, cleared: true });
 // E4 fix round 1 (S5): a mail link beside a web link.
 WORKFLOW.seed({ id: review(7), slug: 'review-mail-link', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: a mail link', markup: 'Write to [the events desk](mailto:events@example.org), or see [the picnic page](https://club.example/picnic).', editors: [PRESIDENT_SUB] });
 WORKFLOW.seed({ id: review(5), slug: 'review-taken-down-shared', kind: 'announcement', officeId: OFFICE.president, state: 'withdrawn', title: 'Seeded: taken down, change approved', markup: 'Was on the website.', change: 'cleared' });

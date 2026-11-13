@@ -409,6 +409,19 @@ describe('runReview: the review page\'s posts', () => {
     for (const rpc of [api.getItemLinks, api.confirmLinks, api.approve, api.sendBack]) expect(rpc).not.toHaveBeenCalled();
   });
 
+  it('refuses answers, Approve and break-glass from a view with part of the piece hidden, before the API; Send back stays (round 4)', async () => {
+    const partial = reviewOffers(version({ contentHash: new Uint8Array(0), markupWithheld: true }), true);
+    const api = fakeApi({ getItemLinks: lists(), confirmLinks: vi.fn(), approve: vi.fn(), sendBack: vi.fn().mockResolvedValue(item()) });
+    const REFUSED = 'Nothing was changed: parts of this piece are hidden from you, so an officer who can see all of it must check its links and approve it.';
+    for (const fields of [answers, { ...answers, step: 'approve', hash: hashHex(HASH) }, { step: 'break-glass', hash: hashHex(HASH), reason: 'Forged' }]) {
+      expect(await runReview(api, reader, ID, form(fields), one, partial)).toMatchObject({ status: 409, notice: REFUSED });
+    }
+    for (const rpc of [api.getItemLinks, api.confirmLinks, api.approve]) expect(rpc).not.toHaveBeenCalled();
+    expect(await runReview(api, reader, ID, form({ step: 'send-back', note: 'Fix it' }), one, partial)).toEqual({ redirect: `${REVIEW_LINKS.queue}?done=sent-back` });
+    // A view seen whole (or not known) goes on to the API as before.
+    expect(await runReview(fakeApi({ approve: vi.fn().mockResolvedValue(item()) }), reader, ID, form({ step: 'approve', hash: hashHex(HASH) }), one, reviewOffers(version(), false))).toEqual({ redirect: `${REVIEW_LINKS.review(ID)}?done=approved` });
+  });
+
   it('approves by the hash seen, for the office chosen; break-glass with its reason', async () => {
     const approve = vi.fn().mockResolvedValue(item());
     expect(await runReview(fakeApi({ approve }), reader, ID, form({ step: 'approve', hash: hashHex(HASH), acting: ROSTER[2]!.id }), pick)).toEqual({ redirect: `${REVIEW_LINKS.review(ID)}?done=approved` });
@@ -506,6 +519,16 @@ describe('runPublish and runTakeDown: the confirm pages\' posts', () => {
     await runPublish(fakeApi({ publish }), reader, down, form({ hash: hashHex(HASH), republish: 'yes' }));
     expect(publish).toHaveBeenLastCalledWith(reader, { itemId: ID, contentHash: HASH, republishWithdrawn: true });
     expect(await runPublish(fakeApi({ publish }), reader, item(), form({ hash: 'nope' }))).toMatchObject({ status: 409, notice: 'This page is out of date. Open the item again.' });
+  });
+
+  it('refuses Publish from a view with part of the piece hidden, before the API (round 4)', async () => {
+    const publish = vi.fn();
+    const partial = item({}, { status: 'cleared', callerMayPublish: true, contentHash: new Uint8Array(0), markupWithheld: true });
+    expect(await runPublish(fakeApi({ publish }), reader, partial, form({ hash: hashHex(HASH) }))).toEqual({
+      status: 409,
+      notice: 'It was not published: parts of this piece are hidden from you, so someone who can see all of it must publish it.',
+    });
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('says why Publish was refused: its own approver, a rule changed, a frozen edition, a change', async () => {

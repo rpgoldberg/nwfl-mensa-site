@@ -111,6 +111,15 @@ export const PARTS_HIDDEN = {
   queuePublish: 'Parts are hidden from you, so someone who can see all of it must publish it.',
 } as const;
 
+/**
+ * A step forged from a partial view (round 4): refused by the site before any call to the API, which only
+ * now learns to refuse it too (A3B-HARDEN). Send back stays.
+ */
+export const PARTIAL_REFUSED = {
+  review: 'Nothing was changed: parts of this piece are hidden from you, so an officer who can see all of it must check its links and approve it.',
+  publish: 'It was not published: parts of this piece are hidden from you, so someone who can see all of it must publish it.',
+} as const;
+
 /** SPEC-v3 2.4: what this person may approve (never what they edited, nor what they see only part of), and may publish. */
 export function homeCounts(items: readonly EditorItem[]): { toApprove: number; toPublish: number } {
   return {
@@ -420,11 +429,13 @@ const signInAgain = (kept: Kept): Outcome => ({ status: 401, signIn: true, notic
  * (Approve my own change, with the reason), Send back. Approve pressed with links answered in the form
  * saves those answers first, as the reviewer means them, and approves only once they are kept.
  */
-export async function runReview(api: EditorApi, reader: Reader | undefined, itemId: string, given: Field, choice: ActingChoice): Promise<Outcome> {
+export async function runReview(api: EditorApi, reader: Reader | undefined, itemId: string, given: Field, choice: ActingChoice, offers?: Offers): Promise<Outcome> {
   const kept = keptOf(given);
   if (reader === undefined) return signInAgain(kept);
   const step = given('step');
   if (step !== 'links' && step !== 'approve' && step !== 'break-glass' && step !== 'send-back') return { status: 400, notice: OUT_OF_DATE, kept };
+  // The page's offers, read as the post came: from a view with part of the piece hidden, only Send back.
+  if (offers?.partial && step !== 'send-back') return { status: 409, notice: PARTIAL_REFUSED.review, kept };
   // Break-glass has its own button: its tick is the button.
   const field: Field = (name) => (name === 'break_glass' ? (step === 'break-glass' ? 'yes' : undefined) : given(name));
   const acting = parseActing(field, choice);
@@ -495,6 +506,7 @@ export async function runReview(api: EditorApi, reader: Reader | undefined, item
 /** The Publish confirm page's post: the hash seen, and the tick that puts a taken-down item back. */
 export async function runPublish(api: EditorApi, reader: Reader | undefined, item: EditorItem, field: Field): Promise<Outcome> {
   if (reader === undefined) return signInAgain(keptOf(field));
+  if (item.working !== undefined && seesPartOnly(item.working)) return { status: 409, notice: PARTIAL_REFUSED.publish };
   const contentHash = hashFromHex(field('hash'));
   if (contentHash === undefined) return { status: 409, notice: OUT_OF_DATE };
   const republishWithdrawn = field('republish') === 'yes';
