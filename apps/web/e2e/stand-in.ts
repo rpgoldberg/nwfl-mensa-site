@@ -180,6 +180,9 @@ export const WORKFLOW = {
   published: { id: 'c0e20000-0000-4000-8000-000000000003', title: 'Seeded: published', officeId: '11111111-1111-4111-8111-111111111111' },
   /** EDITOR E3: the President's, approved and waiting to be published (A1's cleared, behind the stand-in until A1 lands). */
   cleared: { id: 'c0e20000-0000-4000-8000-000000000004', title: 'Seeded: approved, ready to publish', officeId: '11111111-1111-4111-8111-111111111111' },
+  /** E3 fix 1: the President's, published with a change waiting for approval (its working title ends ", changed"); and one taken down. */
+  changing: { id: 'c0e20000-0000-4000-8000-000000000005', title: 'Seeded: published, change waiting', officeId: '11111111-1111-4111-8111-111111111111' },
+  takenDown: { id: 'c0e20000-0000-4000-8000-000000000006', title: 'Seeded: taken down', officeId: '11111111-1111-4111-8111-111111111111' },
 } as const;
 
 /**

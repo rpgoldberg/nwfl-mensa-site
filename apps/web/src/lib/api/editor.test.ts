@@ -718,3 +718,24 @@ describe('editorAdmits (E3)', () => {
     expect(editorAdmits(undefined)).toBe(false);
   });
 });
+
+describe('grpcEditor: when an item last changed (E3 fix 1)', () => {
+  it('reads last_changed_at, and lists published and taken-down items by their states', async () => {
+    const CHANGED = new Date('2026-11-12T20:05:00Z');
+    const seen: number[][] = [];
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        listWorkingItems: (req) => {
+          seen.push([...req.states]);
+          return { items: [{ ...ITEM, lastChangedAt: timestampFromDate(CHANGED) }] };
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    const [listed] = await api.listWorkingItems(OFFICER, { states: ['published', 'withdrawn'] });
+    expect(listed?.lastChangedAt).toEqual(CHANGED);
+    expect(seen).toEqual([[ItemState.PUBLISHED, ItemState.WITHDRAWN]]);
+    const server2 = await grpcServer((router) => router.service(ContentService, { getWorkingItem: () => ({ item: ITEM }) }));
+    expect((await grpcEditor({ baseUrl: server2.url, timeoutMs: 2000 }, () => {}).getWorkingItem(OFFICER, ITEM_ID)).lastChangedAt).toBeUndefined();
+  });
+});

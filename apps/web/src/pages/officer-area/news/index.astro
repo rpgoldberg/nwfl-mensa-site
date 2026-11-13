@@ -1,10 +1,12 @@
 ---
-// EDITOR E3, S2: "Our news". The items the person's offices are writing (every office's, for the Admin),
-// newest change first, each a card: its title, what it is and the office, its status in words beside
-// the chip (never colour alone), and Open. A big "Write something new" at the top, for someone who holds
-// an office; an officer with no seat, or the Webmaster, sees the list with a plain line instead. Once
-// published with no change waiting, an item leaves the list (the API's working list: drafts, ready and,
-// with A1, approved ones).
+// EDITOR E3, S2: "Our news". Every item of the person's offices (every office's, for the Admin): those
+// being written, and the published and taken-down ones (fix 1), so a published piece can be found and
+// corrected; newest change first. Each shows its title, the office, its status in words beside the chip
+// (never colour alone), when it last changed ("Thu 12 Nov, 2:05 pm", Central) and Open: a table with a
+// caption and column headers where the list is wide enough, a card each where it is not (a container
+// query on the list's own width, in rem, so large text gets the cards). A big "Write something new" at
+// the top, for someone who holds an office; an officer with no seat, or the Webmaster, sees the list with
+// a plain line instead.
 //
 // Not signed in: sign in first. Signed in but not an officer, the Admin or the Webmaster: the plain
 // not-found page. Read with the person's own token (src/lib/api/editor.ts).
@@ -15,7 +17,7 @@ import { type EditorItem, SignInAgain, editorAdmits, editorApi, editorReader } f
 import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
 import { KIND_WORDS, statusOf } from '../../../lib/editor/status';
-import { EDIT_LINKS, type PostingOffice, type RosterOffice, mayWriteFor, postingOffices } from '../../../lib/editor/writer';
+import { EDIT_LINKS, type PostingOffice, type RosterOffice, lastChangeText, mayWriteFor, ourNews, postingOffices } from '../../../lib/editor/writer';
 import { page } from '../../../lib/site';
 
 export const prerender = false;
@@ -38,7 +40,9 @@ if (api === undefined) problem = 'unavailable';
 else if (reader === undefined) problem = 'sign-in';
 else {
   try {
-    [roster, items] = await Promise.all([api.offices(), api.listWorkingItems(reader)]);
+    const [offices, writing, published] = await Promise.all([api.offices(), api.listWorkingItems(reader), api.listWorkingItems(reader, { states: ['published', 'withdrawn'] })]);
+    roster = offices;
+    items = ourNews(writing, published);
   } catch (error) {
     problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
   }
@@ -47,7 +51,12 @@ if (problem === 'unavailable') markUnavailable(Astro.response);
 
 const offices: PostingOffice[] = postingOffices(session.groups, roster);
 const officeTitle = new Map(roster.map((o) => [o.id, o.title]));
-const ours = items.filter((item) => mayWriteFor(offices, item));
+const ours = items
+  .filter((item) => mayWriteFor(offices, item))
+  .map((item) => {
+    const title = (item.working ?? item.live)?.title ?? '';
+    return { item, title, status: statusOf(item), office: officeTitle.get(item.officeId) ?? 'Another office', changed: lastChangeText(item.lastChangedAt) };
+  });
 const sent = Astro.url.searchParams.get('sent') === '1';
 ---
 <Base {...p}>
@@ -62,29 +71,42 @@ const sent = Astro.url.searchParams.get('sent') === '1';
         ? <p class="writer-start"><a class="button button--wide" href={EDIT_LINKS.create}>Write something new</a></p>
         : <p class="lead">You hold no office that writes news, so there is nothing here for you to write. If you think you should, ask the Webmaster.</p>}
       {ours.length === 0
-        ? <p>Nothing is being written right now.</p>
+        ? <p>Your office has no news here yet.</p>
         : (
-          <>
-            <p class="hint">Newest change first. Once it is published, an item leaves this list: find it on the website.</p>
+          <div class="writer-items">
+            <p class="hint">Newest change first.</p>
+            <table class="writer-table">
+              <caption>Our news</caption>
+              <thead>
+                <tr><th scope="col">Title</th><th scope="col">Office</th><th scope="col">Status</th><th scope="col">Last change</th><th scope="col"><span class="visually-hidden">Open it</span></th></tr>
+              </thead>
+              <tbody>
+                {ours.map((row) => (
+                  <tr>
+                    <th scope="row">{row.title}</th>
+                    <td>{row.office}<br /><span class="hint">{KIND_WORDS[row.item.kind]}</span></td>
+                    <td><span class={`chip ${row.status.tone}`}>{row.status.label}</span></td>
+                    <td data-last-change>{row.changed}</td>
+                    <td><a class="button button--secondary" href={EDIT_LINKS.edit(row.item.id)} aria-label={`Open ${row.title}`}>Open</a></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
             <ul class="writer-list">
-              {ours.map((item) => {
-                const version = item.working ?? item.live;
-                const status = statusOf(item);
-                const title = version?.title ?? '';
-                return (
-                  <li class="card writer-card">
-                    <h2>{title}</h2>
-                    <dl class="facts facts--grid">
-                      <div><dt>What it is</dt><dd>{KIND_WORDS[item.kind]}</dd></div>
-                      <div><dt>Office</dt><dd>{officeTitle.get(item.officeId) ?? 'Another office'}</dd></div>
-                      <div class="facts__wide"><dt>Status</dt><dd><span class={`chip ${status.tone}`}>{status.label}</span></dd></div>
-                    </dl>
-                    <p><a class="button button--secondary" href={EDIT_LINKS.edit(item.id)} aria-label={`Open ${title}`}>Open</a></p>
-                  </li>
-                );
-              })}
+              {ours.map((row) => (
+                <li class="card writer-card">
+                  <h2>{row.title}</h2>
+                  <dl class="facts facts--grid">
+                    <div><dt>What it is</dt><dd>{KIND_WORDS[row.item.kind]}</dd></div>
+                    <div><dt>Office</dt><dd>{row.office}</dd></div>
+                    <div class="facts__wide"><dt>Status</dt><dd><span class={`chip ${row.status.tone}`}>{row.status.label}</span></dd></div>
+                    <div class="facts__wide"><dt>Last change</dt><dd data-last-change>{row.changed}</dd></div>
+                  </dl>
+                  <p><a class="button button--secondary" href={EDIT_LINKS.edit(row.item.id)} aria-label={`Open ${row.title}`}>Open</a></p>
+                </li>
+              ))}
             </ul>
-          </>
+          </div>
         )}
     </>
   )}

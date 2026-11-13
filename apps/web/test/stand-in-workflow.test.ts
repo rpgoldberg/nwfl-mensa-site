@@ -391,3 +391,21 @@ describe('the stand-in workflow: approved, ready to publish (A1, until its proto
     expect((await api.listItemHistory(as('officer'), cleared.id)).map((h) => h.action)).toEqual(['approval_voided', 'save']);
   });
 });
+
+describe('the stand-in workflow: the writers\' list (E3 fix 1)', () => {
+  it('lists published and taken-down items by their states, each with when it last changed', async () => {
+    const published = model.seed({ slug: 'seed-fix1-published', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    const changing = model.seed({ slug: 'seed-fix1-changing', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live, changing', change: 'ready' });
+    const down = model.seed({ slug: 'seed-fix1-down', kind: 'announcement', officeId: PRESIDENT.id, state: 'withdrawn', title: 'Down' });
+    const writing = await create('officer', 'Being written');
+    const listed = await api.listWorkingItems(as('officer'), { states: ['published', 'withdrawn'] });
+    expect(listed.map((i) => i.id)).toEqual(expect.arrayContaining([published.id, changing.id, down.id]));
+    expect(listed.map((i) => i.id)).not.toContain(writing.id);
+    expect(statusOf(listed.find((i) => i.id === changing.id) as EditorItem).label).toBe('Published – a change is waiting for approval');
+    expect((await api.listWorkingItems(as('officer'))).map((i) => i.id)).toEqual(expect.arrayContaining([writing.id, changing.id]));
+    expect((await api.listWorkingItems(as('officer'))).map((i) => i.id)).not.toContain(published.id);
+    for (const item of [...listed, writing]) expect(item.lastChangedAt).toBeInstanceOf(Date);
+    const saved = await save('officer', writing, 'Changed.');
+    expect(saved.item.lastChangedAt!.getTime()).toBeGreaterThan(writing.lastChangedAt!.getTime());
+  });
+});

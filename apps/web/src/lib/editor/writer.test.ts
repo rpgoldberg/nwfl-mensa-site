@@ -9,10 +9,12 @@ import {
   WORDS_PER_PAGE,
   draftKey,
   keptText,
+  lastChangeText,
   lengthText,
   mayWriteFor,
   newsletterPages,
   officeName,
+  ourNews,
   postingOffices,
   signInLine,
   submitTargets,
@@ -177,5 +179,36 @@ describe('keptText', () => {
   it("refuses what is not a form, or is over the edit form's cap", async () => {
     expect(await keptText(post('{}', 'application/json'))).toEqual({ ok: false, status: 415 });
     expect(await keptText(post(new URLSearchParams({ markup: 'a'.repeat(57 * 1024) }).toString(), 'application/x-www-form-urlencoded'))).toEqual({ ok: false, status: 413 });
+  });
+});
+
+describe('lastChangeText (fix 1)', () => {
+  it('says when, in Central time: the weekday, the day, the month and the clock', () => {
+    // 20:05 UTC on Thursday November 12, 2026 is 2:05 pm Central (CST).
+    expect(lastChangeText(new Date('2026-11-12T20:05:00Z'))).toBe('Thu 12 Nov, 2:05 pm');
+    // 03:30 UTC on Friday is still Thursday evening in Central.
+    expect(lastChangeText(new Date('2026-11-13T03:30:00Z'))).toBe('Thu 12 Nov, 9:30 pm');
+    // Summer time: 17:00 UTC on July 1 is noon Central (CDT).
+    expect(lastChangeText(new Date('2026-07-01T17:00:00Z'))).toBe('Wed 1 Jul, 12:00 noon');
+    expect(lastChangeText(new Date('2026-01-05T06:07:00Z'))).toBe('Mon 5 Jan, 12:07 am');
+  });
+
+  it('says nothing is known without a time', () => {
+    expect(lastChangeText(undefined)).toBe('Not known');
+  });
+});
+
+describe('ourNews (fix 1)', () => {
+  const at = (iso: string) => new Date(iso);
+  const one = (id: string, lastChangedAt?: Date): EditorItem => ({ ...item(PRESIDENT.id), id, ...(lastChangedAt ? { lastChangedAt } : {}) });
+
+  it('puts the items being written and the published ones in one list, each once, newest change first', () => {
+    const writing = [one('a', at('2026-11-12T10:00:00Z')), one('b', at('2026-11-12T12:00:00Z'))];
+    const published = [one('b', at('2026-11-12T12:00:00Z')), one('c', at('2026-11-12T11:00:00Z')), one('d')];
+    expect(ourNews(writing, published).map((i) => i.id)).toEqual(['b', 'c', 'a', 'd']);
+  });
+
+  it('keeps the order given for items with the same time or none', () => {
+    expect(ourNews([one('x'), one('y')], [one('z')]).map((i) => i.id)).toEqual(['x', 'y', 'z']);
   });
 });

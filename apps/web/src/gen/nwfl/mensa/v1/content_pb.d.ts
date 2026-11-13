@@ -652,6 +652,14 @@ export declare type ContentItem = Message<"nwfl.mensa.v1.ContentItem"> & {
    * @generated from field: google.protobuf.Timestamp withdrawn_at = 8;
    */
   withdrawnAt?: Timestamp | undefined;
+
+  /**
+   * When the item last changed: its latest audited step (a read is no
+   * change). Officer reads only.
+   *
+   * @generated from field: google.protobuf.Timestamp last_changed_at = 9;
+   */
+  lastChangedAt?: Timestamp | undefined;
 };
 
 /**
@@ -877,6 +885,8 @@ export declare const ListPublishedEditionsResponseSchema: GenMessage<ListPublish
 export declare type ListWorkingItemsRequest = Message<"nwfl.mensa.v1.ListWorkingItemsRequest"> & {
   /**
    * Empty means draft and ready. Read only when version_statuses is empty.
+   * PUBLISHED and WITHDRAWN (EDITOR E3) list the items in that state, with or
+   * without a working version.
    *
    * @generated from field: repeated nwfl.mensa.v1.ItemState states = 1;
    */

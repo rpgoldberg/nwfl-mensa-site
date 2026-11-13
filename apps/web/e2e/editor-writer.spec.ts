@@ -33,6 +33,16 @@ const titled = (what: string) => `${what} ${test.info().project.name} ${test.inf
 /** The item id from the edit page's address. */
 const idOf = (page: Page) => EDIT.exec(page.url())?.[1] as string;
 
+/**
+ * An item's row in "Our news": a row of the table where the list is wide enough for one (fix 1), else
+ * its card. Either holds its status chip and its Open link.
+ */
+async function rowOf(page: Page, title: string) {
+  const table = page.getByRole('table', { name: 'Our news' });
+  if (await table.isVisible()) return table.getByRole('row').filter({ has: page.getByRole('rowheader', { name: title, exact: true }) });
+  return page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
+}
+
 const textBox = (page: Page) => page.getByRole('textbox', { name: 'The text', exact: true });
 const saveTop = (page: Page) => page.getByRole('button', { name: 'Save draft' }).first();
 const saveBottom = (page: Page) => page.getByRole('button', { name: 'Save draft' }).last();
@@ -119,7 +129,7 @@ test.describe('writing news, with no script', () => {
     await page.getByRole('button', { name: 'Send for approval' }).click();
     await expect(page).toHaveURL(`${SITE_URL}${LIST}?sent=1`);
     await expect(page.getByRole('status').filter({ hasText: 'Sent for approval.' })).toBeVisible();
-    const row = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: title }) });
+    const row = await rowOf(page, title);
     await expect(row.locator('.chip')).toHaveText('Waiting for approval');
     await expect(row.getByRole('link', { name: `Open ${title}` })).toHaveAttribute('href', `/officer-area/news/${id}`);
   });
@@ -168,7 +178,7 @@ test.describe('writing news, with no script', () => {
     await createItem(page, title, 'News article', 'Social Chair (for the office)');
     await expect(page.locator('.item-header .eyebrow')).toHaveText('News article · Social Chair');
     await page.goto(LIST);
-    await expect(page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: title }) })).toContainText('Social Chair');
+    await expect(await rowOf(page, title)).toContainText('Social Chair');
   });
 
   test("an item part of which is held back from the officer never opens in the editor", async ({ page }) => {
@@ -184,7 +194,7 @@ test.describe('writing news, with no script', () => {
     await page.goto('/');
     await signIn(page, 'officer');
     await page.goto(LIST);
-    const row = page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: WORKFLOW.cleared.title }) });
+    const row = await rowOf(page, WORKFLOW.cleared.title);
     await expect(row.locator('.chip')).toHaveText('Approved, ready to publish');
     await page.goto(`/officer-area/news/${WORKFLOW.cleared.id}`);
     await expect(page.getByText('It is approved. If you save a change, it needs approving again.')).toBeVisible();
@@ -201,6 +211,85 @@ test.describe('writing news, with no script', () => {
     await createItem(page, titled('Not a report'));
     await expect(page.getByRole('region', { name: 'Events in this report' })).toHaveCount(0);
   });
+});
+
+// Fix 1: "Our news" keeps published and taken-down items, so an officer can find one to correct, with
+// when each last changed; a table where the list is wide enough, cards where it is not.
+test.describe('Our news: every item of the office, newest change first', () => {
+  test.use({ javaScriptEnabled: false });
+  const WHEN = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec), \d{1,2}:\d{2} (am|pm|noon)$/;
+
+  test('lists the published, the changing and the taken-down items in words, each with its last change', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'officer');
+    await page.goto(LIST);
+    await expect(page.getByText('leaves this list')).toHaveCount(0);
+    for (const [title, words] of [
+      [WORKFLOW.published.title, 'Published'],
+      [`${WORKFLOW.changing.title}, changed`, 'Published – a change is waiting for approval'],
+      [WORKFLOW.takenDown.title, /^Taken down on [A-Z][a-z]+ \d{1,2}, \d{4}$/],
+      [WORKFLOW.cleared.title, 'Approved, ready to publish'],
+    ] as const) {
+      const row = await rowOf(page, title);
+      await expect(row.locator('.chip'), title).toHaveText(words);
+      await expect(row.locator('[data-last-change]'), title).toHaveText(WHEN);
+    }
+  });
+
+  test('opens a published item to correct it', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'officer');
+    await page.goto(LIST);
+    await (await rowOf(page, WORKFLOW.published.title)).getByRole('link', { name: `Open ${WORKFLOW.published.title}` }).click();
+    await expect(page).toHaveURL(`${SITE_URL}/officer-area/news/${WORKFLOW.published.id}`);
+    await expect(page.locator('.item-header .chip')).toHaveText('Published');
+    await expect(textBox(page)).toHaveValue('Thank you all.');
+  });
+
+  test('is a table on a wide screen: a caption, a header for each column, a header for each row', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/');
+    await signIn(page, 'officer');
+    await page.goto(LIST);
+    const table = page.getByRole('table', { name: 'Our news' });
+    await expect(table).toBeVisible();
+    await expect(table.getByRole('columnheader')).toHaveText(['Title', 'Office', 'Status', 'Last change', 'Open it']);
+    await expect(table.locator('thead th')).toHaveCount(5);
+    for (const th of await table.locator('thead th').all()) await expect(th).toHaveAttribute('scope', 'col');
+    await expect(table.getByRole('rowheader', { name: WORKFLOW.published.title, exact: true })).toHaveAttribute('scope', 'row');
+    await expect(page.locator('.writer-list')).toBeHidden();
+  });
+
+  test('is cards on a phone', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/');
+    await signIn(page, 'officer');
+    await page.goto(LIST);
+    await expect(page.getByRole('table')).toBeHidden();
+    await expect(page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: WORKFLOW.published.title, exact: true }) })).toBeVisible();
+  });
+
+});
+
+// axe runs in the page: these have script on.
+test.describe('Our news: reflow', () => {
+  for (const [width, size, what, shape] of [
+    [1280, SIZES[6], 'the largest text on a wide screen', 'cards'],
+    [1280, 140, 'large text, still a table', 'table'],
+    [640, 100, 'a wide screen at 200 % zoom', 'cards'],
+    [320, SIZES[6], 'the largest text on a 320 px screen', 'cards'],
+  ] as const) {
+    test(`nothing scrolls sideways at ${what}`, async ({ page, context, baseURL }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await setPrefs(context, baseURL!, { size });
+      await page.goto('/');
+      await signIn(page, 'officer');
+      await page.goto(LIST);
+      await expect(page.getByRole('table', { name: 'Our news' })).toBeVisible({ visible: shape === 'table' });
+      expect(await sideways(page)).toBeLessThanOrEqual(0);
+      expect(await axe(page)).toEqual([]);
+    });
+  }
 });
 
 test.describe('who may write', () => {
@@ -244,7 +333,7 @@ test.describe('who may write', () => {
     await signIn(page, 'seat-only');
     for (const path of [`/officer-area/news/${id}`, `/officer-area/news/${id}/preview`]) expect((await page.goto(path))?.status(), path).toBe(404);
     await page.goto(LIST);
-    await expect(page.getByRole('heading', { name: title })).toHaveCount(0);
+    await expect(page.getByText(title)).toHaveCount(0);
     const save = await page.request.post(`${SITE_URL}/officer-area/news/${id}`, {
       multipart: { title: 'Taken over', summary: '', visibility: 'public', markup: 'Overwritten.' },
       headers: { Origin: SITE_URL },

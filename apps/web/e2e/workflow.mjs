@@ -59,6 +59,8 @@ const STATE_OUT = { draft: ItemState.DRAFT, ready: ItemState.READY, published: I
 const STATE_IN = new Map([
   [ItemState.DRAFT, 'draft'],
   [ItemState.READY, 'ready'],
+  [ItemState.PUBLISHED, 'published'],
+  [ItemState.WITHDRAWN, 'withdrawn'],
 ]);
 /** A1's VERSION_STATUS_CLEARED, by number until its proto lands. */
 const CLEARED = /** @type {VersionStatus} */ (6);
@@ -311,6 +313,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     ...(item.live ? { live: versionMessage(item.live, caller, item.withheld) } : {}),
     ...(item.working ? { working: versionMessage(item.working, caller, item.withheld) } : {}),
     ...(item.withdrawnAt ? { withdrawnAt: timestamp(item.withdrawnAt) } : {}),
+    // E3 fix 1: when it last changed.
+    lastChangedAt: timestamp(item.updatedAt),
   });
 
   /** @param {string} title */
@@ -335,7 +339,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
    * Adds an item straight into a state, for the seeds (no history check, no caller).
    * @param {{ id?: string, slug: string, kind: string, officeId: string, state: Item['state'], title: string, summary?: string,
    *   visibility?: Version['visibility'], markup?: string, withheld?: boolean, working?: boolean, sendBackNote?: string, editors?: string[],
-   *   cleared?: boolean }} seed
+   *   cleared?: boolean, change?: 'draft' | 'ready' }} seed
    */
   const seed = (seed) => {
     const at = now();
@@ -362,6 +366,12 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     const item = { id: seed.id ?? randomUUID(), slug: seed.slug, kind: seed.kind, officeId: seed.officeId, state: seed.state, updatedAt: at, withheld: seed.withheld ?? false, history: [] };
     if (version.status === 'approved') item.live = version;
     else item.working = version;
+    // E3 fix 1: a published item with a change being written (a draft) or waiting for approval.
+    if (seed.change && item.live) {
+      const change = newVersion(item);
+      change.title = `${seed.title}, changed`;
+      if (seed.change === 'ready') Object.assign(change, { status: 'ready', readyAt: at, hash: hashOf(change, change.targets, '') });
+    }
     if (seed.state === 'withdrawn') item.withdrawnAt = at;
     items.set(item.id, item);
     return item;
@@ -520,10 +530,14 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const caller = await callerOf(ctx);
       requireReader(caller);
       /** @type {string[]} */
-      // A1: empty means draft, ready and cleared.
-      const states = req.states.length === 0 ? ['draft', 'ready', 'cleared'] : req.states.map((/** @type {number} */ s) => STATE_IN.get(s)).filter(Boolean);
+      // A1: empty means draft, ready and cleared. E3 fix 1: published and withdrawn name the item's state.
+      const named = req.states.map((/** @type {number} */ s) => STATE_IN.get(s));
+      const states = req.states.length === 0 ? ['draft', 'ready', 'cleared'] : named.filter((s) => s === 'draft' || s === 'ready');
+      /** @type {string[]} */
+      const itemStates = named.filter((s) => s === 'published' || s === 'withdrawn');
+      const byStatus = (/** @type {Item} */ i) => i.working !== undefined && states.includes(i.working.status);
       const listed = [...items.values()]
-        .filter((i) => i.working !== undefined && states.includes(i.working.status) && (req.officeId === '' || i.officeId === req.officeId) && (req.editionId === '' || i.working.editionId === req.editionId))
+        .filter((i) => (byStatus(i) || itemStates.includes(i.state)) && (req.officeId === '' || i.officeId === req.officeId) && (req.editionId === '' || (byStatus(i) ? i.working?.editionId : i.live?.editionId) === req.editionId))
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || a.id.localeCompare(b.id));
       return { items: listed.map((i) => itemMessage(i, caller)) };
     },

@@ -42,6 +42,27 @@ export function mayWriteFor(offices: readonly PostingOffice[], item: Pick<Editor
   return offices.some((o) => o.id === item.officeId);
 }
 
+const WHEN = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+
+/** When an item last changed, in Central time: "Thu 12 Nov, 2:05 pm". */
+export function lastChangeText(at: Date | undefined): string {
+  if (at === undefined) return 'Not known';
+  const part = Object.fromEntries(WHEN.formatToParts(at).map((p) => [p.type, p.value]));
+  return `${part['weekday']} ${part['day']} ${part['month']}, ${formatTime(`${part['hour']}:${part['minute']}`)}`;
+}
+
+/**
+ * "Our news" (S2): the items being written and the published or taken-down ones in one list, each once
+ * (a published item with a change being written is in both), newest change first; an item with no time
+ * keeps its place after those with one.
+ */
+export function ourNews(writing: readonly EditorItem[], published: readonly EditorItem[]): EditorItem[] {
+  const seen = new Set<string>();
+  const all = [...writing, ...published].filter((item) => !seen.has(item.id) && seen.add(item.id));
+  const time = (item: EditorItem) => item.lastChangedAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+  return all.map((item, at) => ({ item, at })).sort((a, b) => time(b.item) - time(a.item) || a.at - b.at).map(({ item }) => item);
+}
+
 /** About this many words fill a page of the newsletter. */
 export const WORDS_PER_PAGE = 500;
 

@@ -157,6 +157,8 @@ export interface EditorItem {
   /** The draft or ready revision. */
   working?: EditorVersion;
   withdrawnAt?: Date;
+  /** E3: when it last changed (its latest audited step); officer reads. */
+  lastChangedAt?: Date;
 }
 
 export interface Problem {
@@ -209,7 +211,7 @@ export interface EditorApi {
   /** `targets` and `editionId` unset keep what was chosen at ready; `breakGlass` is the Admin's own change, with a reason. */
   approve(as: Reader, approval: { itemId: string; contentHash: Uint8Array; targets?: Targets; editionId?: string; breakGlass?: { reason: string } }): Promise<EditorItem>;
   withdraw(as: Reader, itemId: string): Promise<EditorItem>;
-  /** No states: drafts and ready ones. */
+  /** No states: drafts and ready ones (by the working version); published and withdrawn: items in that state (E3). */
   listWorkingItems(as: Reader, filter?: { states?: readonly StateName[]; officeId?: string; editionId?: string }): Promise<EditorItem[]>;
   getWorkingItem(as: Reader, itemId: string): Promise<EditorItem>;
   /** Oldest first, as the API gives it. */
@@ -290,6 +292,7 @@ function itemOf(item: ContentItem | undefined): EditorItem {
     ...(item.live === undefined ? {} : { live: versionOf(item.live) }),
     ...(item.working === undefined ? {} : { working: versionOf(item.working) }),
     ...(item.withdrawnAt === undefined ? {} : { withdrawnAt: timestampDate(item.withdrawnAt) }),
+    ...(item.lastChangedAt === undefined ? {} : { lastChangedAt: timestampDate(item.lastChangedAt) }),
   };
 }
 
