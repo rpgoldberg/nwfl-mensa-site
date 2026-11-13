@@ -51,7 +51,7 @@
 // is what preview and publication show.
 // ============================================================================
 import { type UrlProblem, urlMessage, urlProblem, urlsInText } from '../links/rule.js';
-import { MAX_URL_LENGTH } from '../links/urls.js';
+import { MAX_URL_LENGTH, type Work } from '../links/urls.js';
 import { type Block, type Inline, MAX_DEPTH, type Tree } from './tree.js';
 
 export interface MarkupProblem {
@@ -66,6 +66,11 @@ export interface ParsedMarkup {
 
 /** Counts the parser's work units, so a test can bound the work per character without timing it. */
 export interface MarkupMeter {
+  /**
+   * The URL rule's work, counted apart: a step for each character it reads (each bare URL found and
+   * trimmed, each URL and link target checked). Set by parseMarkup when not given.
+   */
+  url?: Work;
   steps: number;
 }
 
@@ -244,9 +249,8 @@ class InlineParser {
     this.visit();
     const nodes = merge(run(this.build({ bold: false, italic: false }, 0, this.depth)).nodes);
     for (const { text, at } of this.runs) {
-      for (const { url, index } of urlsInText(text)) {
-        this.meter.steps += 1;
-        const problem = urlProblem(url);
+      for (const { url, index } of urlsInText(text, this.meter.url)) {
+        const problem = checked(url, this.meter);
         if (problem !== null) this.reportUrl(at[index] as number, urlMessage('the address', url, problem));
       }
     }
@@ -266,7 +270,8 @@ class InlineParser {
     if (problem === undefined) {
       const end = this.a.step[i]! - 1;
       // Over the limit, urlProblem's first check refuses it; saying so here keeps a long target O(1).
-      problem = end - target > MAX_URL_LENGTH ? TOO_LONG : urlProblem(this.s.slice(target, end));
+      this.meter.steps += 1;
+      problem = end - target > MAX_URL_LENGTH ? TOO_LONG : checked(this.s.slice(target, end), this.meter);
       this.hrefs.set(target, problem);
     }
     return problem;
@@ -636,9 +641,19 @@ function merge(nodes: Inline[]): Inline[] {
 }
 
 /** The bare URLs a paragraph with no markup reports: one run, scanned once, in order. */
-function plainRun(text: string, starts: LineStart[], problems: MarkupProblem[]): void {
-  for (const { url, index } of urlsInText(text)) {
-    const problem = urlProblem(url);
+/**
+ * The URL rule's verdict, its work counted in the meter's URL steps: one for the check and one for each
+ * character it reads (parsing the URL and looking up its site are linear in its length). With the steps
+ * urlsInText and trimTrailing count there, every bare URL and link target is in a bound per character.
+ */
+function checked(url: string, meter: MarkupMeter): UrlProblem | null {
+  meter.url!.steps += url.length + 1;
+  return urlProblem(url);
+}
+
+function plainRun(text: string, starts: LineStart[], problems: MarkupProblem[], meter: MarkupMeter): void {
+  for (const { url, index } of urlsInText(text, meter.url)) {
+    const problem = checked(url, meter);
     if (problem !== null) problems.push({ line: lineOf(starts, index), message: urlMessage('the address', url, problem) });
   }
 }
@@ -670,7 +685,7 @@ class Context {
     if (!PLAIN.test(text)) {
       if (text === '') return [];
       this.at(depth, (starts[0] as LineStart).number);
-      plainRun(text, starts, this.problems);
+      plainRun(text, starts, this.problems, this.meter);
       return [{ type: 'text', text, bold: false, italic: false }];
     }
     if (this.arena === undefined || this.arena.capacity < text.length + 2) this.arena = new Arena(text.length + 2);
@@ -816,6 +831,7 @@ function* parseBlocks(context: Context, lines: Line[], from: number, inMembers: 
 }
 
 export function parseMarkup(src: string, meter: MarkupMeter = { steps: 0 }): ParsedMarkup {
+  meter.url ??= { steps: 0 };
   const problems: MarkupProblem[] = [];
   const lines = src.replace(/\r\n?/g, '\n').split('\n').map((text, index) => ({ text, number: index + 1 }));
   const context = new Context(problems, meter);

@@ -225,12 +225,13 @@ export const registrableDomain = (host: string): string => getDomain(host, { all
 /** The sentence punctuation a URL found in text sheds from its end: . , ; : ! ? ' " */
 const SENTENCE_END = new Set([0x2e, 0x2c, 0x3b, 0x3a, 0x21, 0x3f, 0x27, 0x22]);
 
-/**
- * A URL found in text without its trailing sentence punctuation (a closing bracket only when unbalanced).
- * The brackets are counted once and the end trimmed in one pass (MARKUP-DOS): counting them again for
- * each character taken off was quadratic on a hostile run of them.
- */
-export function trimTrailing(url: string): string {
+/** Work counted when a caller asks: one step for each character a loop reads (the API's markup step meter). */
+export interface Work {
+  steps: number;
+}
+
+/** The round and square brackets in url, opening and closing, counted in one pass. */
+function brackets(url: string, work?: Work): { open: number; close: number; openSquare: number; closeSquare: number } {
   let open = 0;
   let close = 0;
   let openSquare = 0;
@@ -242,8 +243,21 @@ export function trimTrailing(url: string): string {
     else if (code === 0x5b) openSquare += 1;
     else if (code === 0x5d) closeSquare += 1;
   }
+  if (work) work.steps += url.length;
+  return { open, close, openSquare, closeSquare };
+}
+
+/**
+ * A URL found in text without its trailing sentence punctuation (a closing bracket only when unbalanced).
+ * The brackets are counted once and the end trimmed in one pass (MARKUP-DOS): counting them again for
+ * each character taken off was quadratic on a hostile run of them.
+ */
+export function trimTrailing(url: string, work?: Work): string {
+  const { open, openSquare, ...closing } = brackets(url, work);
+  let { close, closeSquare } = closing;
   let end = url.length;
   while (end > 0) {
+    if (work) work.steps += 1;
     const last = url.charCodeAt(end - 1);
     if (SENTENCE_END.has(last)) {
       end -= 1;

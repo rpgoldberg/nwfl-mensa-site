@@ -49,10 +49,14 @@ describe('trimTrailing in one pass', () => {
     }
   });
 
-  it('takes linear time on a hostile run of closing brackets', () => {
+  it('takes linear time on a hostile run of closing brackets: counted steps, not the clock', () => {
     const url = `https://a.example/${')'.repeat(20_000)}${']'.repeat(20_000)}`;
+    const work = { steps: 0 };
     const start = performance.now();
-    expect(trimTrailing(url)).toBe('https://a.example/');
-    expect(performance.now() - start).toBeLessThan(50);
+    expect(trimTrailing(url, work)).toBe('https://a.example/');
+    // One pass to count the brackets, one step per character taken off: at most twice the length.
+    expect(work.steps).toBeLessThanOrEqual(2 * url.length);
+    // Only a catastrophe (seconds); the steps above are the bound.
+    expect(performance.now() - start).toBeLessThan(1_000);
   });
 });
