@@ -453,7 +453,8 @@ test.describe('writing news, with script', () => {
     await expect(textBox(page)).toHaveValue('Typed, never saved.');
     await saveTop(page).click();
     await expect(page.getByRole('status').filter({ hasText: 'Saved.' })).toBeVisible();
-    expect(await page.evaluate((key) => sessionStorage.getItem(key), `nwfl-draft:${id}`)).toBeNull();
+    // The notice is in the page as served; the script that drops the copy runs just after it.
+    await expect.poll(() => page.evaluate((key) => sessionStorage.getItem(key), `nwfl-draft:${id}`)).toBeNull();
     expect(await page.evaluate(() => localStorage.length)).toBe(0);
     await expect(page.getByRole('region', { name: 'Text you had not saved' })).toBeHidden();
   });
