@@ -1788,6 +1788,7 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 /* The time stays on one line in the table; the caption says the order there. */
 .writer-table td[data-last-change] { white-space: nowrap; }
 @container writer (min-width: 44rem) { .writer-order { display: none; } }
-/* Round 2: the auto-save's status line, under the top Save draft button. */
-.autosave-status { margin: var(--space-2) 0 0; }
+/* Round 2: the auto-save's status line and conflict note, just above the text box. */
+.autosave-status { margin: var(--space-2) 0; font-weight: 600; }
+.autosave-conflict { margin: var(--space-2) 0; }
 .autosave-status[hidden], [data-autosave-conflict][hidden] { display: none; }

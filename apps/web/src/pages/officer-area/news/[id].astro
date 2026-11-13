@@ -266,16 +266,9 @@ const pageTitle = view === 'gone' ? 'Page not found' : (item?.working?.title ?? 
           <button class="button button--secondary" type="button" data-restore-no>Forget that text</button>
         </div>
       </section>
-      {autosave && (
-        <p class="notice" role="note" data-autosave-conflict hidden>
-          Someone else changed this draft since you opened it. Copy what you need, then
-          <a href={HERE} target="_blank" rel="noopener">open the latest version (opens a new tab)</a>.
-        </p>
-      )}
       <form method="post" action={HERE} enctype="multipart/form-data" class="rule-form editor-form" novalidate data-editor data-draft-key={draftKey(id)} data-saved={saved ? 'yes' : undefined} data-autosave={autosave ? `${HERE}/autosave` : undefined}>
         <input type="hidden" name="base" value={base} />
         <div class="btns"><button class="button button--wide" type="submit">Save draft</button></div>
-        {autosave && <p class="hint autosave-status" role="status" data-autosave-status hidden>A draft saves itself a minute after you stop typing.</p>}
         <div class="field">
           <label for="title">Title</label>
           <p class="hint" id="title-hint">Titles are always public. Up to {TITLE_MAX} letters.</p>
@@ -305,6 +298,14 @@ const pageTitle = view === 'gone' ? 'Page not found' : (item?.working?.title ?? 
           <div class="toolbar" role="group" aria-label="Format the selected text" data-toolbar hidden>
             {MARKS.map((m) => <button class="button button--secondary" type="button" data-mark={m.mark}>{m.label}</button>)}
           </div>
+          {/* Round 2: the auto-save's status and its conflict note, just above the text box, where the eye is while typing. */}
+          {autosave && <p class="hint autosave-status" role="status" data-autosave-status hidden>A draft saves itself a minute after you stop typing.</p>}
+          {autosave && (
+            <p class="notice autosave-conflict" role="note" data-autosave-conflict hidden>
+              Someone else changed this draft since you opened it. Copy what you need, then{' '}
+              <a href={HERE} target="_blank" rel="noopener">open the latest version (opens a new tab)</a>.
+            </p>
+          )}
           <textarea id="markup" name="markup" rows="18" class="markup-box" aria-invalid={errors['markup'] ? 'true' : undefined} aria-describedby={describedBy('roster-warning', 'markup-length', errors['markup'] && 'markup-error')}>{values.markup}</textarea>
           <p class="hint" id="markup-length" data-length>{lengthText(values.markup)}</p>
         </div>

@@ -104,6 +104,7 @@ test.describe('a draft saves itself', () => {
     await expect(status(page)).toHaveText(CONFLICT);
     const note = page.getByRole('note').filter({ hasText: 'Someone else changed this draft since you opened it.' });
     await expect(note).toBeVisible();
+    await expect(note).toContainText('Copy what you need, then open the latest version (opens a new tab).');
     await expect(note.getByRole('link', { name: 'open the latest version (opens a new tab)' })).toHaveAttribute('target', '_blank');
     await expect(textBox(page)).toHaveValue('Mine, typed after.');
     expect(await page.evaluate((key) => sessionStorage.getItem(key), `nwfl-draft:${id}`)).toContain('Mine, typed after.');
