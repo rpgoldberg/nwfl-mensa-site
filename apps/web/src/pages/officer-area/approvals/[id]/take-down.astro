@@ -10,11 +10,10 @@ import ItemHeader from '../../../../components/ItemHeader.astro';
 import PasswordNote from '../../../../components/PasswordNote.astro';
 import Unavailable from '../../../../components/Unavailable.astro';
 import Base from '../../../../layouts/Base.astro';
-import { ApiNotFound } from '../../../../lib/api/client';
-import { type EditorItem, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../../lib/api/editor';
+import { type EditorItem, editorAdmits, editorApi, editorReader } from '../../../../lib/api/editor';
 import { markUnavailable, signInFirst } from '../../../../lib/api/page';
 import { runtimeDeps } from '../../../../lib/auth/flow';
-import { type Outcome, REVIEW_LINKS, runTakeDown } from '../../../../lib/editor/review';
+import { type Outcome, REVIEW_LINKS, loadFailure, runTakeDown } from '../../../../lib/editor/review';
 import type { RosterOffice } from '../../../../lib/editor/writer';
 import { readForm } from '../../../../lib/form';
 
@@ -43,8 +42,10 @@ else {
   try {
     [roster, item] = await Promise.all([api.offices(), api.getWorkingItem(reader, id)]);
   } catch (error) {
-    if (error instanceof ApiNotFound) return Astro.rewrite('/404');
-    problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+    // Missing, or not this person's: the same plain page (A3b fix round).
+    const failure = loadFailure(error);
+    if (failure === 'not-found') return Astro.rewrite('/404');
+    problem = failure;
   }
 }
 const officeSlug = roster.find((o) => o.id === item?.officeId)?.slug ?? '';

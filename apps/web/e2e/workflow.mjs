@@ -23,7 +23,10 @@
 // And A3b's link gate (apps/api/src/content/link-gate.ts, item-links.ts): GetItemLinks lists the links and
 // printed addresses of the text, sorted, with the hash of the list; ConfirmLinks keeps each answer of a
 // reviewer who did not edit a waiting version, for its ready time; Approve waits while any answer is no,
-// or a link that needs a sign-in has no yes. Its refusals are the API's, word for word. The office's
+// or a link that needs a sign-in has no yes. Its refusals are the API's, word for word. A3b's fix round
+// (008a115): the hash binds the ready time too; Approve's refusal names only links the caller sees whole
+// (a caller at the public's level does not see members passages), the rest one fixed sentence; a holder
+// who reviews nothing is told "not permitted" for a missing item as for another office's. The office's
 // upcoming events are not in the stand-in's list (E7b checks them on the real API).
 //
 // Items are shared by everyone, as in the API (a writer and an approver are two people). The seeded
@@ -159,8 +162,21 @@ export function canonicalLinks(links) {
   return [...rows.values()].sort((a, b) => order(a.url, b.url) || order(a.where, b.where));
 }
 
-/** SHA-256 of the JSON array of [url, where] pairs, in the list's order. @param {{ url: string, where: string }[]} links */
-const linksSha256 = (links) => new Uint8Array(createHash('sha256').update(JSON.stringify(links.map((l) => [l.url, l.where]))).digest());
+/**
+ * A3b fix round: SHA-256 of the JSON array [ready_at, pairs]: the ready time in RFC 3339, in UTC, to the
+ * microsecond (null for a draft; the stand-in keeps milliseconds, so the last three digits are 0), then the
+ * [url, where] pairs in the list's order. Marked ready again, the same list has a new hash.
+ * @param {Date | undefined} readyAt @param {{ url: string, where: string }[]} links
+ */
+const linksSha256 = (readyAt, links) =>
+  new Uint8Array(
+    createHash('sha256')
+      .update(JSON.stringify([readyAt === undefined ? null : `${readyAt.toISOString().slice(0, 23)}000Z`, links.map((l) => [l.url, l.where])]))
+      .digest(),
+  );
+
+/** Approve's refusal for links its caller may not see whole: no URL and no count (item-links.ts OFFICERS_ONLY). */
+export const OFFICERS_ONLY = "Some links that only officers can see need an officer's answer before this is approved.";
 
 /** A URL as Approve's refusal names it (apps/api/src/links/rule.ts shownUrl): cut at SHOWN_MAX, then "...". @param {string} url */
 const shownUrl = (url) => (url.length > SHOWN_MAX ? `${url.slice(0, SHOWN_MAX)}...` : url);
@@ -329,6 +345,9 @@ function forPublic(/** @type {any[]} */ blocks) {
 // Who the caller is, as the API reads the groups (apps/api/src/auth/roles.ts).
 // ---------------------------------------------------------------------------------------------
 
+/** The API's audience for a caller (auth/caller.ts audienceFor): the officers group, else a member, else the public. @param {Caller} caller */
+const audienceOf = (caller) => (caller.groups.includes('nwfl-officers') ? 'officers' : caller.groups.includes('nwfl-members') ? 'members' : 'public');
+
 function rolesOf(/** @type {Caller} */ caller) {
   return {
     admin: caller.groups.includes('nwfl-admin'),
@@ -441,15 +460,22 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     delete v.approvedAsLabel;
   };
 
-  /** The piece's links as they stand, each with its latest answer for this ready time from someone who did not edit it. @param {Item} item @param {Version} v */
-  const linksOf = (item, v) => {
+  /**
+   * The piece's links: `actual` as they are, `links` as the caller sees them (their lens: a seed held back,
+   * or the members passages for a caller at the public's level, as the API's audience reads), with the
+   * hash of what they see bound to the ready time, and each link's latest answer for this ready time from
+   * someone who did not edit it.
+   * @param {Item} item @param {Version} v @param {Caller} caller
+   */
+  const linksOf = (item, v, caller) => {
     const tree = parseMarkup(v.markup).tree.blocks;
-    const links = canonicalLinks(textLinks(item.withheld ? forPublic(tree) : tree));
-    const readyAt = v.status === 'draft' ? undefined : v.readyAt?.getTime();
+    const actual = canonicalLinks(textLinks(tree));
+    const links = canonicalLinks(textLinks(item.withheld || audienceOf(caller) === 'public' ? forPublic(tree) : tree));
+    const ready = v.status === 'draft' ? undefined : v.readyAt;
     /** @type {Map<string, Answer>} */
     const latest = new Map();
-    for (const answer of v.answers) if (answer.readyAt === readyAt && !v.editors.has(answer.sub)) latest.set(answer.url, answer);
-    return { links, latest, hash: linksSha256(links) };
+    for (const answer of v.answers) if (answer.readyAt === ready?.getTime() && !v.editors.has(answer.sub)) latest.set(answer.url, answer);
+    return { actual, links, latest, hash: linksSha256(ready, links) };
   };
   /** @param {{ url: string, label: string, where: string }} link @param {Map<string, Answer>} latest */
   const linkMessage = (link, latest) => ({ ...link, loginWalled: loginWalled(link.url), answeredByLabel: latest.get(link.url)?.label ?? '', accepted: latest.get(link.url)?.yes === true });
@@ -729,13 +755,20 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       if (frozen !== undefined) throw precondition(`${frozen} is already frozen for print: pick an open edition, then approve`);
       const changedTargets = JSON.stringify(targets) !== JSON.stringify(version.targets);
       const changedEdition = editionId !== version.editionId;
-      // A3b's gate, break-glass included, on the list as it is.
-      const { links, latest } = linksOf({ ...item, withheld: false }, version);
-      const urls = [...new Set(links.map((l) => l.url))];
+      // A3b's gate, break-glass included, on the list as it is; its refusal names or counts only the links
+      // the caller sees whole, a no first, and says OFFICERS_ONLY once for the rest (item-links.ts linkGate).
+      const { actual, links, latest } = linksOf(item, version, caller);
+      const urls = [...new Set(actual.map((l) => l.url))];
       const refused = urls.filter((url) => latest.get(url)?.yes === false);
-      if (refused.length > 0) throw precondition(refusedMessage(refused));
       const unchecked = urls.filter((url) => loginWalled(url) && latest.get(url)?.yes !== true);
-      if (unchecked.length > 0) throw precondition(uncheckedMessage(unchecked.length));
+      if (refused.length > 0 || unchecked.length > 0) {
+        const seen = new Set(links.map((l) => l.url));
+        const shownRefused = refused.filter((url) => seen.has(url));
+        const shownUnchecked = unchecked.filter((url) => seen.has(url));
+        const hidden = shownRefused.length < refused.length || shownUnchecked.length < unchecked.length;
+        const named = shownRefused.length > 0 ? refusedMessage(shownRefused) : shownUnchecked.length > 0 ? uncheckedMessage(shownUnchecked.length) : undefined;
+        throw precondition(named === undefined ? OFFICERS_ONLY : hidden ? `${named}. ${OFFICERS_ONLY}` : named);
+      }
       if (changedTargets) record(item, caller, { action: 'targets_changed', versionNumber: version.number }, acting);
       if (changedEdition) record(item, caller, { action: 'edition_changed', versionNumber: version.number }, acting);
       Object.assign(version, { status: 'cleared', targets, editionId, approvedAt: now(), approvalKind: kind, approvedBy: caller.sub, approvedAsLabel: labelOf(caller, item, acting) });
@@ -776,10 +809,11 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const roles = rolesOf(caller);
       const reviewer = roles.officer || roles.admin || roles.webmaster;
       if (!reviewer && roles.offices.length === 0) throw notFound();
+      // A3b fix round: a holder who reviews nothing gets the same answer for a missing item as for another office's.
+      if (!reviewer && !roles.offices.includes(officeById(items.get(req.itemId)?.officeId ?? '')?.slug ?? '')) throw denied();
       const item = load(req.itemId);
-      if (!reviewer && !roles.offices.includes(officeById(item.officeId)?.slug ?? '')) throw denied();
       const version = /** @type {Version} */ (item.working ?? item.live);
-      const { links, latest, hash } = linksOf(item, version);
+      const { links, latest, hash } = linksOf(item, version, caller);
       const readyAt = version.status === 'draft' ? undefined : version.readyAt;
       return { linksSha256: hash, links: links.map((l) => linkMessage(l, latest)), ...(readyAt ? { readyAt: timestamp(readyAt) } : {}) };
     },
@@ -801,9 +835,11 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const version = item.working;
       if (version?.status !== 'ready') throw precondition('only a version waiting for approval has its links checked');
       if (version.editors.has(caller.sub)) throw new ConnectError('you edited this version; a second officer must check its links', Code.PermissionDenied);
-      const { links, hash } = linksOf(item, version);
+      const { actual, links, hash } = linksOf(item, version, caller);
       if (Buffer.compare(Buffer.from(req.linksSha256), Buffer.from(hash)) !== 0) throw precondition(LINKS_CHANGED);
-      const inPiece = new Set(links.map((l) => l.url));
+      // Kept only for an address in both lists: what a reviewer could not see whole, they cannot vouch for.
+      const whole = new Set(actual.map((l) => l.url));
+      const inPiece = new Set(links.map((l) => l.url).filter((url) => whole.has(url)));
       /** @type {string[]} */
       const notInPiece = [];
       let kept = 0;
@@ -816,7 +852,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
         kept += 1;
       }
       if (kept > 0) record(item, caller, { action: 'links_confirmed', versionNumber: version.number }, acting);
-      const { latest } = linksOf(item, version);
+      const { latest } = linksOf(item, version, caller);
       return { links: links.map((l) => linkMessage(l, latest)), notInPiece };
     },
 

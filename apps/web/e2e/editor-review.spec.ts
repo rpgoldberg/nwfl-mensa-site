@@ -141,6 +141,47 @@ test.describe('approving, with no script', () => {
     await expect(page.getByText('0 of 3 links checked.')).toBeVisible();
   });
 
+  // A3b fix round: the API's refusal is shown as it is given, never parsed.
+  test('a reviewer at the public\'s level is told only that officers must answer links they cannot see', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'lone-webmaster');
+    await page.goto(review(REVIEW.membersLink.id));
+    await expect(page.getByText('This piece has no links.')).toBeVisible();
+    await page.getByRole('button', { name: 'Approve', exact: true }).click();
+    await expect(page.getByRole('alert').filter({ hasText: 'It was not approved' })).toHaveText(
+      "It was not approved: Some links that only officers can see need an officer's answer before this is approved.",
+    );
+    await expect(page.locator('main')).not.toContainText('facebook.com');
+  });
+
+  test('answers to a piece sent for approval again since the page opened are refused, and the list comes back, notes kept', async ({ browser, page }) => {
+    const { readyAgain } = own();
+    await page.goto('/');
+    await signIn(page, 'treasurer');
+    await page.goto(review(readyAgain.id));
+    await row(page, 'the picnic page').getByRole('radio', { name: 'Yes' }).check();
+    await row(page, 'the picnic page').getByRole('textbox', { name: 'Note (optional)' }).fill('Typed before it was sent again');
+    // Meanwhile the President saves it (back to a draft) and sends it for approval again: a new round.
+    const writer = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true });
+    const other = await writer.newPage();
+    await other.goto(SITE_URL);
+    await signIn(other, 'officer');
+    await other.goto(`${SITE_URL}/officer-area/news/${readyAgain.id}`);
+    await other.getByRole('button', { name: 'Save draft' }).first().click();
+    await other.goto(`${SITE_URL}/officer-area/news/${readyAgain.id}/preview`);
+    await other.getByRole('button', { name: 'Send for approval' }).click();
+    await expect(other).toHaveURL(`${SITE_URL}/officer-area/news?sent=1`);
+    await writer.close();
+    await page.getByRole('button', { name: 'Save my answers' }).click();
+    await expect(page.getByRole('alert')).toContainText('The links of this piece changed since you opened the page, so nothing was saved.');
+    await expect(row(page, 'the picnic page').getByRole('textbox', { name: 'Note (optional)' })).toHaveValue('Typed before it was sent again');
+    // The page now holds the new round's hash: answering again is kept.
+    await row(page, 'the picnic page').getByRole('radio', { name: 'Yes' }).check();
+    await page.getByRole('button', { name: 'Save my answers' }).click();
+    await expect(page.getByRole('status')).toHaveText('Your answers are saved.');
+    await expect(row(page, 'the picnic page')).toContainText('Checked by Treasurer');
+  });
+
   test('the writer cannot approve or answer for their own version; the Admin may by break-glass, with a reason', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'officer');

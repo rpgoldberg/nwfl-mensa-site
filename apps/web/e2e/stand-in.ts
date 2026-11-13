@@ -203,6 +203,8 @@ export const REVIEW = {
   selfApproved: { id: reviewId(4), title: 'Seeded: the Admin approved their own change' },
   /** Taken down, with a change approved: its Publish confirm, with the tick, is only looked at. */
   takenDown: { id: reviewId(5), title: 'Seeded: taken down, change approved' },
+  /** A3b fix round: a sign-in link inside a members passage, hidden from a reviewer at the public's level. */
+  membersLink: { id: reviewId(6), title: 'Seeded: a members-only sign-in link' },
   urls: { picnic: 'https://club.example/picnic', map: 'https://club.example/map', facebook: 'https://www.facebook.com/groups/nwfl-sample' },
   own: (project: string) => {
     const p = ['chromium-desktop', 'chromium-phone', 'webkit-iphone'].indexOf(project);
@@ -214,6 +216,8 @@ export const REVIEW = {
       sendBack: { id: own(3), title: `To send back (${project})` },
       live: { id: own(4), title: `Published, to take down (${project})` },
       putBack: { id: own(5), title: `Taken down, change approved (${project})` },
+      /** The President's, with links: sent for approval again while a reviewer has it open. */
+      readyAgain: { id: own(6), title: `Sent again (${project})` },
     };
   },
 };

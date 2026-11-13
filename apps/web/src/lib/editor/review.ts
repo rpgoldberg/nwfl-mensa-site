@@ -231,6 +231,16 @@ function keptOf(field: Field): Kept {
   return { answers, notes, note: field('note') ?? '', reason: field('reason') ?? '' };
 }
 
+/**
+ * What a review page does when it cannot read the piece (A3b fix round): "not found" and "not yours"
+ * (PERMISSION_DENIED, which the API gives a holder who reviews nothing for a missing item too) are the
+ * same plain not-found page, so no answer tells which ids exist; else sign in again, or unavailable.
+ */
+export function loadFailure(error: unknown): 'not-found' | 'sign-in' | 'unavailable' {
+  if (error instanceof ApiNotFound || error instanceof NotAllowed) return 'not-found';
+  return error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+}
+
 const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
 
 /** A refused step in words: "It was not approved: <why>." */

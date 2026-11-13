@@ -28,13 +28,12 @@ import PasswordNote from '../../../components/PasswordNote.astro';
 import Previews from '../../../components/Previews.astro';
 import Unavailable from '../../../components/Unavailable.astro';
 import Base from '../../../layouts/Base.astro';
-import { ApiNotFound } from '../../../lib/api/client';
-import { type EditorItem, type HistoryStep, type PieceLinks, type Preview, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
+import { type EditorItem, type HistoryStep, type PieceLinks, type Preview, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
 import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
 import { documentHtml } from '../../../lib/document';
 import { NOTE_MAX, hashHex } from '../../../lib/editor/form';
-import { APPROVE_NOTE, type ActingChoice, type Outcome, REVIEW_LINKS, actingChoice, answerWords, doneText, enteredForOffice, isPublisher, linkRows, linksSummary, runReview } from '../../../lib/editor/review';
+import { APPROVE_NOTE, type ActingChoice, type Outcome, REVIEW_LINKS, actingChoice, answerWords, doneText, enteredForOffice, isPublisher, linkRows, linksSummary, loadFailure, runReview } from '../../../lib/editor/review';
 import { type RosterOffice, signInLine } from '../../../lib/editor/writer';
 import { readForm } from '../../../lib/form';
 
@@ -80,12 +79,14 @@ else {
       [item, preview, history] = await Promise.all([api.getWorkingItem(reader, id), api.previewWorkingItem(reader, id), api.listItemHistory(reader, id)]);
       if (item.working?.status === 'ready' || item.working?.status === 'cleared') links = await api.getItemLinks(reader, id);
     } catch (error) {
-      // A post's body is read: Astro.rewrite cannot follow it, so a missing item is the gone view then.
-      if (error instanceof ApiNotFound) {
+      // Missing, or not this person's (A3b: either may come as "not permitted"): the same plain page. A post's
+      // body is read: Astro.rewrite cannot follow it, so it is the gone view then.
+      const failure = loadFailure(error);
+      if (failure === 'not-found') {
         if (Astro.request.method !== 'POST') return Astro.rewrite('/404');
         outcome = { status: 404, gone: true };
         Astro.response.status = 404;
-      } else problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+      } else problem = failure;
     }
   }
 }

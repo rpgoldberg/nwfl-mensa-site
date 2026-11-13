@@ -598,6 +598,9 @@ WORKFLOW.seed({ id: review(1), slug: 'review-links', kind: 'announcement', offic
 WORKFLOW.seed({ id: review(2), slug: 'review-admin-wrote', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: the Admin wrote this', markup: 'Typed for the office.', editors: [ADMIN_SUB], createdBy: { sub: ADMIN_SUB, label: 'Admin' } });
 WORKFLOW.seed({ id: review(3), slug: 'review-frozen', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: for a frozen issue', markup: 'Too late for print.', cleared: true, newsletter: true, editionId: 'e0000000-0000-4000-8000-0000000000f0' });
 WORKFLOW.seed({ id: review(4), slug: 'review-self-approved', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: the Admin approved their own change', markup: 'Break-glass.', cleared: true, editors: [ADMIN_SUB], selfApproved: true, approvedBy: ADMIN_SUB, approvedAs: 'Admin' });
+// A3b fix round: a sign-in link inside a members passage, which a reviewer at the public's level (the
+// Webmaster outside the officers group) cannot see: Approve's refusal to them names no link.
+WORKFLOW.seed({ id: review(6), slug: 'review-members-link', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: a members-only sign-in link', markup: "Open to all.\n\n::: members\nPhotos on [our members' group](https://www.facebook.com/groups/nwfl-members-sample).\n:::", editors: [PRESIDENT_SUB] });
 WORKFLOW.seed({ id: review(5), slug: 'review-taken-down-shared', kind: 'announcement', officeId: OFFICE.president, state: 'withdrawn', title: 'Seeded: taken down, change approved', markup: 'Was on the website.', change: 'cleared' });
 ['chromium-desktop', 'chromium-phone', 'webkit-iphone'].forEach((project, p) => {
   const own = (/** @type {number} */ n) => review(100 * (p + 1) + n);
@@ -605,6 +608,7 @@ WORKFLOW.seed({ id: review(5), slug: 'review-taken-down-shared', kind: 'announce
   WORKFLOW.seed({ id: own(2), slug: `review-publish-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: `Approved, to publish (${project})`, markup: 'Ready for the website.', cleared: true });
   WORKFLOW.seed({ id: own(3), slug: `review-send-back-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: `To send back (${project})`, markup: 'Needs a time.', editors: [PRESIDENT_SUB] });
   WORKFLOW.seed({ id: own(4), slug: `review-take-down-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'published', title: `Published, to take down (${project})`, markup: 'On the website.' });
+  WORKFLOW.seed({ id: own(6), slug: `review-ready-again-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: `Sent again (${project})`, markup: LINKED, editors: [PRESIDENT_SUB] });
   WORKFLOW.seed({ id: own(5), slug: `review-put-back-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'withdrawn', title: `Taken down, change approved (${project})`, markup: 'Was on the website.', change: 'cleared' });
 });
 

@@ -16,6 +16,7 @@ import {
   isPublisher,
   linkRows,
   linksSummary,
+  loadFailure,
   parseActing,
   parseAnswers,
   reviewQueue,
@@ -221,6 +222,16 @@ describe('what the history tells the review page', () => {
     expect(REVIEW_LINKS.review(ID)).toBe(`/officer-area/approvals/${ID}`);
     expect(REVIEW_LINKS.publish(ID)).toBe(`/officer-area/approvals/${ID}/publish`);
     expect(REVIEW_LINKS.takeDown(ID)).toBe(`/officer-area/approvals/${ID}/take-down`);
+  });
+});
+
+describe('loadFailure: what a page does when it cannot read the piece', () => {
+  it('shows the plain not-found page for a missing piece and for one not yours (the API says either), else asks to sign in or says unavailable', () => {
+    expect(loadFailure(new ApiNotFound('GetWorkingItem'))).toBe('not-found');
+    expect(loadFailure(new NotAllowed('GetItemLinks', 'not permitted'))).toBe('not-found');
+    expect(loadFailure(new SignInAgain('GetWorkingItem'))).toBe('sign-in');
+    expect(loadFailure(new ApiUnavailable('GetWorkingItem'))).toBe('unavailable');
+    expect(loadFailure(new Error('a bug'))).toBe('unavailable');
   });
 });
 

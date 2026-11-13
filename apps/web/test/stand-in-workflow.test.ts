@@ -546,6 +546,60 @@ describe('the stand-in workflow: reading', () => {
   });
 });
 
+// A3b fix round (008a115): the hash is bound to the ready time; Approve's refusal names only links the
+// caller sees whole; a holder who reviews nothing is told PERMISSION_DENIED for a missing item too.
+describe('the stand-in workflow: the link gate after A3b\'s fix round', () => {
+  const FACEBOOK = 'https://www.facebook.com/groups/nwfl-sample';
+  const OFFICERS_ONLY = "Some links that only officers can see need an officer's answer before this is approved.";
+
+  it('binds the hash to the ready time: marked ready again, the same list has a new hash, and the old one is refused', async () => {
+    const item = await create('officer', 'Ready twice');
+    await save('officer', item, `Our [group](${FACEBOOK}).`);
+    const draftHash = (await api.getItemLinks(as('treasurer'), item.id)).linksSha256;
+    const first = await api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+    const before = await api.getItemLinks(as('treasurer'), first.id);
+    expect(Buffer.from(before.linksSha256).equals(Buffer.from(draftHash))).toBe(false);
+    await api.sendBack(as('treasurer'), { itemId: item.id, note: 'Once more.' });
+    await api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+    const after = await api.getItemLinks(as('treasurer'), item.id);
+    expect(after.links).toEqual(before.links);
+    expect(Buffer.from(after.linksSha256).equals(Buffer.from(before.linksSha256))).toBe(false);
+    expect(await refusal(api.confirmLinks(as('treasurer'), { itemId: item.id, linksSha256: before.linksSha256, answers: [{ url: FACEBOOK, yes: true, note: '' }] }))).toBeInstanceOf(LinksChanged);
+    expect((await api.confirmLinks(as('treasurer'), { itemId: item.id, linksSha256: after.linksSha256, answers: [{ url: FACEBOOK, yes: true, note: '' }] })).links[0]?.accepted).toBe(true);
+  });
+
+  it("names only the links the caller sees whole: the rest are one fixed sentence, alone or after the named ones", async () => {
+    const item = await create('officer', 'Members-only sign-in links');
+    await save('officer', item, `Open [page](https://www.instagram.com/nwfl-sample).\n\n::: members\nPhotos on [our members' group](${FACEBOOK}).\n:::`);
+    const ready = await api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+    const hash = ready.working!.contentHash;
+    // An officer sees both: both are counted, as before.
+    expect(await refusal(api.approve(as('treasurer'), { itemId: ready.id, contentHash: hash }))).toMatchObject({
+      reason: '2 links need a sign-in to check (such as Facebook): someone other than the writer must open them and answer yes before this is approved',
+    });
+    // The Webmaster outside the officers group reads at the public's level: the members link is not theirs to see.
+    expect((await api.getItemLinks(as('lone-webmaster'), ready.id)).links.map((l) => l.url)).toEqual(['https://www.instagram.com/nwfl-sample']);
+    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: ready.id, contentHash: hash }))).toMatchObject({
+      reason: `1 link needs a sign-in to check (such as Facebook): someone other than the writer must open it and answer yes before this is approved. ${OFFICERS_ONLY}`,
+    });
+    const list = await api.getItemLinks(as('lone-webmaster'), ready.id);
+    await api.confirmLinks(as('lone-webmaster'), { itemId: ready.id, linksSha256: list.linksSha256, answers: [{ url: 'https://www.instagram.com/nwfl-sample', yes: true, note: '' }] });
+    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: ready.id, contentHash: hash }))).toMatchObject({ reason: OFFICERS_ONLY });
+    // A no on the hidden link is not named to them either.
+    const all = await api.getItemLinks(as('treasurer'), ready.id);
+    await api.confirmLinks(as('treasurer'), { itemId: ready.id, linksSha256: all.linksSha256, answers: [{ url: FACEBOOK, yes: false, note: '' }] });
+    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: ready.id, contentHash: hash }))).toMatchObject({ reason: OFFICERS_ONLY });
+    expect(await refusal(api.approve(as('webmaster'), { itemId: ready.id, contentHash: hash }))).toMatchObject({ reason: expect.stringContaining(`a reviewer answered no for the link "${FACEBOOK}"`) });
+  });
+
+  it('tells a holder who reviews nothing "not permitted" for a missing item as for another office\'s', async () => {
+    expect(await refusal(api.getItemLinks(as('seat-only'), '00000000-0000-4000-8000-000000000000'))).toBeInstanceOf(NotAllowed);
+    const ready = await readyItem('Another office\'s');
+    expect(await refusal(api.getItemLinks(as('seat-only'), ready.id))).toBeInstanceOf(NotAllowed);
+    expect(await refusal(api.getItemLinks(as('officer'), '00000000-0000-4000-8000-000000000000'))).toBeInstanceOf(ApiNotFound);
+  });
+});
+
 describe('the stand-in workflow: the link list and the E4 seeds, in full', () => {
   it('finds links in headings, lists and members passages, once per place, the first words kept, a mailto never sign-in', async () => {
     const item = await create('officer', 'Every kind of link');
