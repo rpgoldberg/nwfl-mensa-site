@@ -141,9 +141,10 @@ test.describe('approving, with no script', () => {
     await expect(page.getByText('0 of 3 links checked.')).toBeVisible();
   });
 
-  // A3b fix round: the API's refusal is shown as it is given, never parsed. E4 fix round 1 (S3): the link is
-  // in a passage marked for officers only, so the check that it is absent cannot pass for want of a link.
-  test('a reviewer outside the officers group is told only that officers must answer a link marked for them', async ({ browser, page }) => {
+  // E4 fix round 1 (S3): the link is in a passage marked for officers only, so the check that it is absent
+  // cannot pass for want of a link. Round 2 (P24): the API gives such a reviewer no hash, so nothing to
+  // approve with: the page says an officer who sees it all approves it, and offers only Send back.
+  test('a reviewer outside the officers group, with part of a piece hidden, is offered only Send back', async ({ browser, page }) => {
     const officer = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true });
     const seen = await officer.newPage();
     await seen.goto(SITE_URL);
@@ -151,18 +152,25 @@ test.describe('approving, with no script', () => {
     await seen.goto(`${SITE_URL}${review(REVIEW.membersLink.id)}`);
     await expect(seen.getByText('0 of 1 link checked.')).toBeVisible();
     await expect(row(seen, "our members' group").getByRole('link', { name: /^Open the link/ })).toHaveAttribute('href', REVIEW.membersLink.url);
+    await expect(seen.getByRole('button', { name: 'Approve', exact: true })).toBeVisible();
     await officer.close();
 
     await page.goto('/');
     await signIn(page, 'lone-webmaster');
     await page.goto(review(REVIEW.membersLink.id));
-    await expect(page.getByText('This piece has no links.')).toBeVisible();
-    expect(await page.content()).not.toContain(REVIEW.membersLink.url);
-    await page.getByRole('button', { name: 'Approve', exact: true }).click();
-    await expect(page.getByRole('alert').filter({ hasText: 'It was not approved' })).toHaveText(
-      "It was not approved: Some links that only officers can see need an officer's answer before this is approved.",
+    await expect(page.getByRole('note').filter({ hasText: 'Parts of this piece are hidden from you' })).toHaveText(
+      'Parts of this piece are hidden from you, so an officer who can see all of it must approve it. You can still send it back.',
     );
+    await expect(page.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /break-glass/ })).toHaveCount(0);
+    await expect(page.getByRole('radio')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Save my answers' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Send back' })).toBeVisible();
     expect(await page.content()).not.toContain(REVIEW.membersLink.url);
+    // The queue lists it, saying so, and the officer area does not count it as theirs to approve.
+    await page.goto(QUEUE);
+    const waiting = page.getByRole('region', { name: /^Waiting for approval/ });
+    await expect(await entry(page, waiting, REVIEW.membersLink.title)).toContainText('Parts are hidden from you, so an officer who can see all of it must approve it.');
   });
 
   // E4 fix round 1 (S1): answers go by row (its place and a short key), never by address, so a long list fits.

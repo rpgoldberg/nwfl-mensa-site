@@ -16,7 +16,7 @@ import { type EditorItem, type HistoryStep, editorAdmits, editorApi, editorReade
 import { markUnavailable, signInFirst } from '../../../../lib/api/page';
 import { runtimeDeps } from '../../../../lib/auth/flow';
 import { hashHex } from '../../../../lib/editor/form';
-import { type Outcome, REVIEW_LINKS, loadFailure, runPublish, takenDown } from '../../../../lib/editor/review';
+import { type Outcome, REVIEW_LINKS, loadFailure, reviewOffers, runPublish, takenDown } from '../../../../lib/editor/review';
 import type { RosterOffice } from '../../../../lib/editor/writer';
 import { readForm } from '../../../../lib/form';
 
@@ -52,8 +52,10 @@ else {
     problem = failure;
   }
 }
-// Nothing this person may publish here: the review page says why.
-if (item !== undefined && !item.working?.callerMayPublish && Astro.request.method === 'GET') return Astro.redirect(REVIEW_LINKS.review(id), 303);
+// Nothing this person may publish here (not theirs, or part of it withheld from them, so no hash): the
+// review page says why.
+const mayPublish = reviewOffers(item?.working, false).publish;
+if (item !== undefined && !mayPublish && Astro.request.method === 'GET') return Astro.redirect(REVIEW_LINKS.review(id), 303);
 
 if (Astro.request.method === 'POST' && api !== undefined) {
   const read = await readForm(Astro.request, FORM_LIMIT);
@@ -95,7 +97,7 @@ const errors = outcome?.errors ?? {};
       <script is:inline type="module" src="/scripts/error-summary.js"></script>
     </>
   )}
-  {item && working?.status === 'cleared' && working.callerMayPublish && (
+  {item && working && mayPublish && (
     <form method="post" action={HERE} class="rule-form" novalidate>
       <input type="hidden" name="hash" value={hashHex(working.contentHash)} />
       <p class="notice notice--rule" role="note">This goes on the website now{working.approvedAsLabel ? `. It was approved by the ${working.approvedAsLabel}` : ''}.</p>
@@ -116,5 +118,5 @@ const errors = outcome?.errors ?? {};
       </div>
     </form>
   )}
-  {item && !(working?.status === 'cleared' && working.callerMayPublish) && <p><a class="button button--secondary" href={REVIEW_LINKS.review(id)}>Back to the review</a></p>}
+  {item && !mayPublish && <p><a class="button button--secondary" href={REVIEW_LINKS.review(id)}>Back to the review</a></p>}
 </Base>

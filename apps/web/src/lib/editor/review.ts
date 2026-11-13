@@ -22,7 +22,7 @@
 // The API checks every step again: this only decides what the pages offer and say.
 import { createHash } from 'node:crypto';
 import { ApiNotFound } from '../api/client';
-import { EditorRefused, type EditorApi, type EditorItem, type HistoryStep, type LinkAnswer, LinksChanged, NotAllowed, type PieceLink, type PieceLinks, SignInAgain, VersionChanged } from '../api/editor';
+import { EditorRefused, type EditorApi, type EditorItem, type EditorVersion, type HistoryStep, type LinkAnswer, LinksChanged, NotAllowed, type PieceLink, type PieceLinks, SignInAgain, VersionChanged } from '../api/editor';
 import type { Reader } from '../api/client';
 import { formatSetDate } from '../approval-rules';
 import { NOTE_MAX, hashFromHex, parseApprove, parseSendBack } from './form';
@@ -94,11 +94,55 @@ export function reviewQueue(items: readonly EditorItem[]): { waiting: EditorItem
   };
 }
 
-/** SPEC-v3 2.4: what this person may approve (never what they edited), and may publish. */
+/**
+ * Whether the API kept part of this version from the caller (A3b workflow.ts versionMessage: with anything
+ * withheld, no hash and no markup). Approve and Publish are bound to the hash, so such a reviewer cannot
+ * do either (E4 round 2, P24: you cannot approve what you cannot see whole); Send back needs no hash.
+ */
+export function seesPartOnly(version: EditorVersion): boolean {
+  return version.markupWithheld || version.contentHash.length === 0;
+}
+
+/** S7, S6: what a reviewer with part of a piece hidden is told, for a waiting piece and an approved one. */
+export const PARTS_HIDDEN = {
+  page: 'Parts of this piece are hidden from you, so an officer who can see all of it must approve it. You can still send it back.',
+  pagePublish: 'Parts of this piece are hidden from you, so someone who can see all of it must publish it. You can still send it back.',
+  queue: 'Parts are hidden from you, so an officer who can see all of it must approve it.',
+  queuePublish: 'Parts are hidden from you, so someone who can see all of it must publish it.',
+} as const;
+
+/** SPEC-v3 2.4: what this person may approve (never what they edited, nor what they see only part of), and may publish. */
 export function homeCounts(items: readonly EditorItem[]): { toApprove: number; toPublish: number } {
   return {
-    toApprove: items.filter((i) => i.working?.status === 'ready' && i.working.callerMayApprove).length,
-    toPublish: items.filter((i) => i.working?.status === 'cleared' && i.working.callerMayPublish).length,
+    toApprove: items.filter((i) => i.working?.status === 'ready' && i.working.callerMayApprove && !seesPartOnly(i.working)).length,
+    toPublish: items.filter((i) => i.working?.status === 'cleared' && i.working.callerMayPublish && !seesPartOnly(i.working)).length,
+  };
+}
+
+/** What S7 offers for the working version: answers, Approve, the Admin's break-glass, Publish, Send back. */
+export interface Offers {
+  /** Part of it is withheld from the caller: only Send back (PARTS_HIDDEN). */
+  partial: boolean;
+  answer: boolean;
+  approve: boolean;
+  breakGlass: boolean;
+  publish: boolean;
+  sendBack: boolean;
+}
+
+export function reviewOffers(version: EditorVersion | undefined, admin: boolean): Offers {
+  const ready = version?.status === 'ready';
+  const cleared = version?.status === 'cleared';
+  const sendBack = ready || cleared;
+  if (version === undefined || !sendBack) return { partial: false, answer: false, approve: false, breakGlass: false, publish: false, sendBack: false };
+  if (seesPartOnly(version)) return { partial: true, answer: false, approve: false, breakGlass: false, publish: false, sendBack };
+  return {
+    partial: false,
+    answer: ready && !version.callerEdited,
+    approve: ready && version.callerMayApprove,
+    breakGlass: ready && version.callerEdited && !version.callerMayApprove && admin,
+    publish: cleared && version.callerMayPublish,
+    sendBack,
   };
 }
 

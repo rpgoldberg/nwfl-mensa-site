@@ -36,7 +36,7 @@ import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
 import { documentHtml } from '../../../lib/document';
 import { NOTE_MAX, hashHex } from '../../../lib/editor/form';
-import { APPROVE_NOTE, type ActingChoice, type Outcome, REVIEW_LINKS, TOO_LARGE, actingChoice, answerWords, doneText, enteredForOffice, errorList, isPublisher, linkRows, linksSummary, loadFailure, runReview } from '../../../lib/editor/review';
+import { APPROVE_NOTE, type ActingChoice, type Outcome, PARTS_HIDDEN, REVIEW_LINKS, TOO_LARGE, actingChoice, answerWords, doneText, enteredForOffice, errorList, isPublisher, linkRows, linksSummary, loadFailure, reviewOffers, runReview } from '../../../lib/editor/review';
 import { type RosterOffice, signInLine } from '../../../lib/editor/writer';
 import { readForm } from '../../../lib/form';
 
@@ -115,9 +115,11 @@ const errors = outcome?.errors ?? {};
 const rows = links === undefined ? [] : linkRows(links.links);
 const ready = working?.status === 'ready';
 const cleared = working?.status === 'cleared';
-const mayAnswer = ready && !working.callerEdited;
 const admin = session.groups.includes('nwfl-admin');
-const breakGlass = ready && working.callerEdited && !working.callerMayApprove && admin;
+// Round 2 (P24): with part of it withheld from this reviewer (no hash), only Send back is offered.
+const offers = reviewOffers(working, admin);
+const mayAnswer = offers.answer;
+const breakGlass = offers.breakGlass;
 const mayTakeDown = item?.state === 'published' && (admin || session.groups.includes('nwfl-webmaster') || session.groups.includes(`nwfl-office-${roster?.find((o) => o.id === item?.officeId)?.slug ?? ''}`));
 const entered = working !== undefined && enteredForOffice(history, working.number);
 const tokens = deps.tokens.get(session.sid, deps.now());
@@ -202,10 +204,11 @@ const keptRows = kept ? Object.entries(kept.places).sort(([, a], [, b]) => a - b
   )}
 
   {item && working?.status === 'draft' && <p class="notice" role="note">It is being written. There is nothing to approve until it is sent for approval.</p>}
+  {item && offers.partial && <p class="notice" role="note">{ready ? PARTS_HIDDEN.page : PARTS_HIDDEN.pagePublish}</p>}
   {item && cleared && (
     <p class="notice" role="note">
       Approved{working.approvedAsLabel ? ` by the ${working.approvedAsLabel}` : ''}. It is ready to publish.{' '}
-      {working.callerMayPublish
+      {offers.publish || offers.partial
         ? ''
         : isPublisher(session.groups) && working.approvalKindSelf
           ? 'It was approved as its approver’s own change, so someone other than that approver publishes it.'
@@ -214,7 +217,7 @@ const keptRows = kept ? Object.entries(kept.places).sort(([, a], [, b]) => a - b
             : 'The Webmaster publishes it, or the Admin as backup.'}
     </p>
   )}
-  {item && cleared && working.callerMayPublish && (
+  {item && offers.publish && (
     <p class="btns"><a class="button button--wide" href={REVIEW_LINKS.publish(id)}>Publish</a></p>
   )}
 
@@ -248,6 +251,8 @@ const keptRows = kept ? Object.entries(kept.places).sort(([, a], [, b]) => a - b
           {rows.length > 0 && (
             mayAnswer
               ? <p>Open each link, then say whether it shows the right page. Each answer is saved when you press Save my answers.</p>
+              : offers.partial
+                ? <p>An officer who can see all of this piece checks its links.</p>
               : ready
                 ? <p>You changed this version, so someone else must check its links.</p>
                 : <p>The answers given before it was approved.</p>
@@ -296,10 +301,10 @@ const keptRows = kept ? Object.entries(kept.places).sort(([, a], [, b]) => a - b
         </section>
       )}
 
-      {ready && (
+      {ready && !offers.partial && (
         <section class="review-step" aria-labelledby="approve-title">
           <h2 id="approve-title">Approve</h2>
-          {working.callerMayApprove
+          {offers.approve
             ? (
               <>
                 <p id="approve-note"><b>{APPROVE_NOTE}</b></p>

@@ -16,7 +16,7 @@ import Base from '../../../layouts/Base.astro';
 import { type EditorItem, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
 import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
-import { REVIEW_LINKS, doneText, isPublisher, reviewQueue } from '../../../lib/editor/review';
+import { PARTS_HIDDEN, REVIEW_LINKS, doneText, isPublisher, reviewQueue, seesPartOnly } from '../../../lib/editor/review';
 import { KIND_WORDS, statusOf } from '../../../lib/editor/status';
 import { type RosterOffice, lastChangeText } from '../../../lib/editor/writer';
 import { page } from '../../../lib/site';
@@ -104,7 +104,7 @@ const done = doneText(Astro.url.searchParams);
                     <td>{row.office}</td>
                     <td>
                       <span class={`chip ${row.status.tone}`}>{row.status.label}</span>
-                      {row.item.working?.callerEdited && <p class="review-mine"><strong>You changed this version</strong>, so another officer must approve it.</p>}
+                      {row.item.working && seesPartOnly(row.item.working) ? <p class="review-mine">{row.item.working.status === 'cleared' ? PARTS_HIDDEN.queuePublish : PARTS_HIDDEN.queue}</p> : row.item.working?.callerEdited && <p class="review-mine"><strong>You changed this version</strong>, so another officer must approve it.</p>}
                     </td>
                     <td>{list.when(row.item)}</td>
                   </tr>
@@ -121,7 +121,7 @@ const done = doneText(Astro.url.searchParams);
                     <div class="facts__wide"><dt>Status</dt><dd><span class={`chip ${row.status.tone}`}>{row.status.label}</span></dd></div>
                     <div class="facts__wide"><dt>When</dt><dd>{list.when(row.item)}</dd></div>
                   </dl>
-                  {row.item.working?.callerEdited && <p class="review-mine"><strong>You changed this version</strong>, so another officer must approve it.</p>}
+                  {row.item.working && seesPartOnly(row.item.working) ? <p class="review-mine">{row.item.working.status === 'cleared' ? PARTS_HIDDEN.queuePublish : PARTS_HIDDEN.queue}</p> : row.item.working?.callerEdited && <p class="review-mine"><strong>You changed this version</strong>, so another officer must approve it.</p>}
                   <p><a class="button button--secondary" href={REVIEW_LINKS.review(row.item.id)} aria-label={`Review ${row.title}`}>Review</a></p>
                 </li>
               ))}

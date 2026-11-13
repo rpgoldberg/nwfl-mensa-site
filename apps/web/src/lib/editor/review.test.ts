@@ -21,6 +21,7 @@ import {
   parseActing,
   parseAnswers,
   reviewQueue,
+  reviewOffers,
   rowKey,
   runPublish,
   runReview,
@@ -129,6 +130,10 @@ describe('the queue (S6) and the officer-area counts', () => {
   it('counts what this person may approve (not what they edited) and publish, in words', () => {
     const counts = homeCounts([waitingNew, waitingOld, waitingNoTime, clearedOld, clearedNew, draft]);
     expect(counts).toEqual({ toApprove: 2, toPublish: 1 });
+    // E4 round 2: a version with parts withheld from the caller (no hash) is not theirs to approve or publish.
+    const partWaiting = item({}, { readyAt: new Date(1), contentHash: new Uint8Array(0), markupWithheld: true });
+    const partCleared = item({}, { status: 'cleared', callerMayPublish: true, contentHash: new Uint8Array(0), markupWithheld: true });
+    expect(homeCounts([waitingNew, partWaiting, clearedOld, partCleared])).toEqual({ toApprove: 1, toPublish: 1 });
     expect(homeLines(counts, true)).toEqual(['2 pieces wait for your approval.', '1 piece is approved and ready to publish.']);
     expect(homeLines({ toApprove: 1, toPublish: 3 }, true)).toEqual(['1 piece waits for your approval.', '3 pieces are approved and ready to publish.']);
     // Not a publisher: no publish line, even with a count.
@@ -279,6 +284,28 @@ describe('loadFailure: what a page does when it cannot read the piece', () => {
     expect(loadFailure(new SignInAgain('GetWorkingItem'))).toBe('sign-in');
     expect(loadFailure(new ApiUnavailable('GetWorkingItem'))).toBe('unavailable');
     expect(loadFailure(new Error('a bug'))).toBe('unavailable');
+  });
+});
+
+describe('reviewOffers: what S7 offers for a version', () => {
+  const none = { partial: false, answer: false, approve: false, breakGlass: false, publish: false, sendBack: false };
+  it('offers answers, Approve and Send back on a waiting version; Publish on an approved one to whom may publish it', () => {
+    expect(reviewOffers(version(), false)).toEqual({ ...none, answer: true, approve: true, sendBack: true });
+    expect(reviewOffers(version({ callerEdited: true, callerMayApprove: false }), false)).toEqual({ ...none, sendBack: true });
+    expect(reviewOffers(version({ callerEdited: true, callerMayApprove: false }), true)).toEqual({ ...none, breakGlass: true, sendBack: true });
+    expect(reviewOffers(version({ status: 'cleared', callerMayPublish: true }), false)).toEqual({ ...none, publish: true, sendBack: true });
+    expect(reviewOffers(version({ status: 'cleared' }), false)).toEqual({ ...none, sendBack: true });
+    expect(reviewOffers(version({ status: 'draft', contentHash: new Uint8Array(0) }), true)).toEqual(none);
+    expect(reviewOffers(undefined, true)).toEqual(none);
+  });
+
+  it('with parts withheld from the caller (no hash, or the markup withheld), offers only Send back (P24)', () => {
+    const partial = { ...none, partial: true, sendBack: true };
+    expect(reviewOffers(version({ contentHash: new Uint8Array(0), markupWithheld: true }), true)).toEqual(partial);
+    expect(reviewOffers(version({ contentHash: new Uint8Array(0) }), false)).toEqual(partial);
+    expect(reviewOffers(version({ markupWithheld: true }), false)).toEqual(partial);
+    expect(reviewOffers(version({ markupWithheld: true, callerEdited: true, callerMayApprove: false }), true)).toEqual(partial);
+    expect(reviewOffers(version({ status: 'cleared', callerMayPublish: true, contentHash: new Uint8Array(0), markupWithheld: true }), true)).toEqual(partial);
   });
 });
 

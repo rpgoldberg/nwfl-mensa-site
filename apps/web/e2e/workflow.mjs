@@ -28,7 +28,9 @@
 // the rest one fixed sentence; a holder who reviews nothing is told "not permitted" for a missing item as
 // for another office's. The caller's lens is the redaction lens alone (item-links.ts linksAsSeen): members
 // passages are every reviewer's (officers are members); a seed marked officersOnly has its members
-// passages withheld from anyone outside the officers group, body, preview and links alike, its hash kept.
+// passages withheld from anyone outside the officers group, body, preview and links alike. With anything
+// withheld, a version comes with no hash and no markup (A3b workflow.ts versionMessage): such a reviewer
+// cannot approve or publish what they do not see whole.
 // ConfirmLinks keeps no answer for an address over 2,048 characters (link-gate.ts MAX_URL_LENGTH): A3b's
 // parser refuses such a link at save, the stand-in's keeps it, so a seed can show not_in_piece. The
 // office's upcoming events are not in the stand-in's list (E7b checks them on the real API).
@@ -492,11 +494,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
   /** @param {Version} v @param {Targets} targets @param {string} editionId */
   const hashOf = (v, targets, editionId) => new Uint8Array(createHash('sha256').update(JSON.stringify([v.title, v.summary, v.visibility, v.markup, targets, editionId])).digest());
 
-  /**
-   * A version as an officer reads it. @param {Version} v @param {Caller} caller @param {boolean} withheld
-   * @param {boolean} hashed whether the hash is given: not for an item held back (E1), but for one only marked for officers
-   */
-  const versionMessage = (v, caller, withheld, hashed = !withheld) =>
+  /** A version as an officer reads it: with anything withheld, no markup and no hash. @param {Version} v @param {Caller} caller @param {boolean} withheld */
+  const versionMessage = (v, caller, withheld) =>
     ({
           id: v.id,
           number: v.number,
@@ -507,7 +506,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
           body: withheld ? { blocks: forPublic(parseMarkup(v.markup).tree.blocks) } : parseMarkup(v.markup).tree,
           // E1: withheld, the markup is empty and there is no hash.
           bodyMarkup: withheld ? '' : v.markup,
-          ...(v.hash && hashed ? { contentHash: v.hash } : {}),
+          ...(v.hash && !withheld ? { contentHash: v.hash } : {}),
           targets: v.targets,
           editionId: v.editionId,
           printAsIs: v.printAsIs,
@@ -534,8 +533,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     kind: /** @type {ContentKind} */ (KIND_OUT[item.kind]),
     officeId: item.officeId,
     state: STATE_OUT[item.state],
-    ...(item.live ? { live: versionMessage(item.live, caller, withheldFor(item, caller), !item.withheld) } : {}),
-    ...(item.working ? { working: versionMessage(item.working, caller, withheldFor(item, caller), !item.withheld) } : {}),
+    ...(item.live ? { live: versionMessage(item.live, caller, withheldFor(item, caller)) } : {}),
+    ...(item.working ? { working: versionMessage(item.working, caller, withheldFor(item, caller)) } : {}),
     ...(item.withdrawnAt ? { withdrawnAt: timestamp(item.withdrawnAt) } : {}),
     // E3 fix 1: when it last changed.
     lastChangedAt: timestamp(item.updatedAt),

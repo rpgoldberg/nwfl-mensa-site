@@ -585,10 +585,16 @@ describe('the stand-in workflow: the link gate after A3b\'s fix round', () => {
     // Its members passage is marked for officers (the redaction lens, REDACT R2a): withheld from anyone outside the officers group.
     const marked = model.seed({ slug: 'officers-only-links', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Marked', markup: `Open [page](https://www.instagram.com/nwfl-sample).\n\n::: members\nPhotos on [our members' group](${FACEBOOK}).\n:::`, officersOnly: true, editors: [PEOPLE['officer']!.sub] });
     const read = await api.getWorkingItem(as('lone-webmaster'), marked.id);
-    const hash = read.working!.contentHash;
-    // The hash is kept (the lens hides a passage, not the version), and the body and markup hold no marked link.
-    expect(hash.length).toBe(32);
+    // P24, as A3b's workflow.ts versionMessage: with anything withheld, no hash and no markup (bodyMarkupWithheld),
+    // so the reviewer cannot approve what they do not see whole; the body holds no marked link.
+    expect(read.working!.contentHash).toHaveLength(0);
+    expect(read.working).toMatchObject({ markup: '', markupWithheld: true });
     expect(JSON.stringify(read)).not.toContain(FACEBOOK);
+    // An officer sees it whole, with its hash; the rest of this test posts that hash, as from elsewhere.
+    const whole = await api.getWorkingItem(as('treasurer'), marked.id);
+    const hash = whole.working!.contentHash;
+    expect(hash).toHaveLength(32);
+    expect(whole.working).toMatchObject({ markupWithheld: false });
     expect(JSON.stringify(await api.previewWorkingItem(as('lone-webmaster'), marked.id))).not.toContain(FACEBOOK);
     expect(JSON.stringify(await api.previewWorkingItem(as('treasurer'), marked.id))).toContain(FACEBOOK);
     // An officer sees both: both are counted.
