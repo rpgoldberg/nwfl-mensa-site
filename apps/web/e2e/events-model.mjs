@@ -7,7 +7,7 @@
 // the Admin any; a one-off with no office the Admin's alone); the strict URL rule (EDITOR A3a, links/
 // rule.ts) with the API's reasons, "url: ..." and "detail line N: ...", joined by "; "; a members event
 // withheld from the public as the API withholds it; the series' venue on a series date's first change
-// with none sent. A database refusal has the API's fixed words (db/errors.ts).
+// with none sent, unless the request says the venue is decided later. A database refusal has the API's fixed words (db/errors.ts).
 //
 // The calendar the model starts from is the caller's (`base`, by audience): nothing changes in it until
 // a save, and while no save falls in a range, a read of it is exactly `base`'s answer.
@@ -187,8 +187,8 @@ export function createEventModel({ offices, base, series, venues, now = () => ne
     if (!admin && !caller.groups.includes(`nwfl-office-${slug}`)) throw denied();
   };
 
-  /** SaveOccurrence, as events/writes.ts answers it. @param {Caller} caller @param {EventOccurrence} occurrence */
-  const save = (caller, occurrence) => {
+  /** SaveOccurrence, as events/writes.ts answers it. @param {Caller} caller @param {EventOccurrence} occurrence @param {boolean} decidedLater */
+  const save = (caller, occurrence, decidedLater) => {
     const id = occurrence.id;
     const match = id === '' ? null : OCCURRENCE_ID.exec(id);
     if (id !== '' && match === null) throw invalid('malformed occurrence id');
@@ -207,6 +207,7 @@ export function createEventModel({ offices, base, series, venues, now = () => ne
       const keptOwner = occurrence.ownerOfficeId === '' || occurrence.ownerOfficeId === (ownerOfficeId ?? '');
       if (!keptSeries || !keptOwner) throw invalid('an occurrence keeps its series and its owning office');
     }
+    if (decidedLater && occurrence.venueId !== '') throw invalid('venue_id must be empty when the venue is decided later');
     const startsAt = occurrence.startsAt ?? prior?.startsAt;
     if (startsAt === undefined) throw invalid('starts_at is required');
     const visibility = VISIBILITIES.has(occurrence.visibility) ? occurrence.visibility : (own?.visibility ?? prior?.visibility);
@@ -214,7 +215,7 @@ export function createEventModel({ offices, base, series, venues, now = () => ne
     const url = occurrence.url.trim();
     checkUrls(url === '' ? null : url, occurrence.detail);
     if (occurrence.venueId !== '' && !ID.test(occurrence.venueId)) throw invalid('venue_id is not an id');
-    const venueId = occurrence.venueId !== '' ? occurrence.venueId : generated ? (prior?.venueId ?? '') : '';
+    const venueId = occurrence.venueId !== '' ? occurrence.venueId : generated && !decidedLater ? (prior?.venueId ?? '') : '';
     const venue = venueId === '' ? undefined : venueById.get(venueId);
     if (venueId !== '' && venue === undefined) throw new ConnectError('refers to something missing or still in use', Code.FailedPrecondition);
     const title = occurrence.title.trim();
@@ -275,7 +276,7 @@ export function createEventModel({ offices, base, series, venues, now = () => ne
         const caller = await callerOf(ctx);
         if (caller === undefined) throw new ConnectError('sign in first', Code.Unauthenticated);
         if (req.occurrence === undefined) throw invalid('occurrence is required');
-        return { occurrence: save(caller, req.occurrence) };
+        return { occurrence: save(caller, req.occurrence, req.venueDecidedLater) };
       },
     }),
   };

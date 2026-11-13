@@ -250,8 +250,11 @@ export interface EditorApi {
   /** Oldest first, as the API gives it. */
   listItemHistory(as: Reader, itemId: string): Promise<HistoryStep[]>;
   previewWorkingItem(as: Reader, itemId: string): Promise<Preview>;
-  /** Live on save. A series date is addressed as `<series>:<YYYY-MM-DD>`; an empty id creates a one-off. */
-  saveOccurrence(as: Reader, occurrence: MessageInitShape<typeof EventOccurrenceSchema>): Promise<EventOccurrence>;
+  /**
+   * Live on save. A series date is addressed as `<series>:<YYYY-MM-DD>`; an empty id creates a one-off.
+   * `venueDecidedLater` (EDITOR E6): the event has no venue after this one save, even a series date's first change.
+   */
+  saveOccurrence(as: Reader, occurrence: MessageInitShape<typeof EventOccurrenceSchema>, options?: { venueDecidedLater?: boolean }): Promise<EventOccurrence>;
   /** `active` unset keeps the series as it is. */
   saveSeries(as: Reader, series: MessageInitShape<typeof EventSeriesSchema>, active?: boolean): Promise<EventSeries>;
   /** `active` unset keeps the venue as it is. */
@@ -511,7 +514,8 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
         },
         itemId,
       ),
-    saveOccurrence: (as, occurrence) => call('SaveOccurrence', as, async (o) => present((await events.saveOccurrence({ occurrence }, o)).occurrence, 'occurrence')),
+    saveOccurrence: (as, occurrence, options = {}) =>
+      call('SaveOccurrence', as, async (o) => present((await events.saveOccurrence({ occurrence, venueDecidedLater: options.venueDecidedLater ?? false }, o)).occurrence, 'occurrence')),
     saveSeries: (as, series, active) => call('SaveSeries', as, async (o) => present((await events.saveSeries({ series, ...(active === undefined ? {} : { active }) }, o)).series, 'series')),
     saveVenue: (as, venue, active) => call('SaveVenue', as, async (o) => present((await events.saveVenue({ venue, ...(active === undefined ? {} : { active }) }, o)).venue, 'venue')),
     offices: () =>

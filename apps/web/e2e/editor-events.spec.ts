@@ -113,6 +113,27 @@ test.describe('the event screens, signed in', () => {
     }
   });
 
+  test("a series date's first change to \"Decided later\" has no venue, in one save", async ({ page, browser }, info) => {
+    // Three weeks past this project's cancelled lunch: a date no other test changes.
+    const date = wednesday(EVENT_EDITS.lunchWeeks[info.project.name]! + 3);
+    await signedIn(page, 'officer');
+    await page.goto(`/officer-area/events/${LUNCH}_${date}`);
+    await expect(page.getByRole('radio', { name: 'Sample Bistro' })).toBeChecked();
+    await page.getByRole('radio', { name: 'Decided later' }).check();
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page).toHaveURL(/\/officer-area\/events\/[0-9a-f-]{36}\?saved=1$/);
+    await expect(page.getByRole('radio', { name: 'Decided later' })).toBeChecked();
+    const id = new URL(page.url()).pathname.split('/').pop()!;
+    const pub = await publicPage(browser);
+    try {
+      await pub.page.goto(`/events/${id}`);
+      await expect(pub.page.getByRole('heading', { level: 1 })).toHaveText('Wednesday Lunchers');
+      await expect(pub.page.locator('main')).not.toContainText('Sample Bistro');
+    } finally {
+      await pub.close();
+    }
+  });
+
   test('add a one-off event; the Admin, who sees every office\'s events, changes it', async ({ page, browser }, info) => {
     const title = `Talk on maps (${info.project.name})`;
     const date = ownDay(info.project.name);
@@ -370,7 +391,9 @@ test.describe('axe in every theme, and 320 px at the largest text', () => {
       await page.emulateMedia({ colorScheme: scheme });
       await signedIn(page, 'officer');
       const found: string[] = [];
-      await screens(page, async (label) => found.push(...(await axe(page)).map((v) => `${label}: ${v}`)));
+      await screens(page, async (label) => {
+        found.push(...(await axe(page)).map((v) => `${label}: ${v}`));
+      });
       expect(found).toEqual([]);
     });
   }

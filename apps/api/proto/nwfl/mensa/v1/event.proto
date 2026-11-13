@@ -200,6 +200,10 @@ message SaveSeriesResponse {
 message SaveOccurrenceRequest {
   // An empty id creates.
   EventOccurrence occurrence = 1;
+  // The venue is to be decided: the saved occurrence has none, and its
+  // venue_id must be empty. Without it, an empty venue_id on the first change
+  // of a series date keeps the series' default venue (EDITOR E6).
+  bool venue_decided_later = 2;
 }
 
 message SaveOccurrenceResponse {

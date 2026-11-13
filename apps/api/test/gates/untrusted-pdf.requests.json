@@ -1149,6 +1149,12 @@
             "label": "optional"
           }
         ]
+      },
+      {
+        "name": "venue_decided_later",
+        "number": 2,
+        "type": "bool",
+        "label": "optional"
       }
     ]
   },

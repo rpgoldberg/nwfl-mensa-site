@@ -338,6 +338,28 @@ describe('grpcEditor: each call, with the officer\'s bearer, read into the edito
     expect((await api.getWorkingItem(OFFICER, ITEM_ID)).working).toMatchObject({ status: 'cleared', approvedAt: READY_AT });
   });
 
+  it("says an event's venue is decided later only when asked (EDITOR E6: one save, never two)", async () => {
+    const seen: unknown[] = [];
+    const occurrence = create(EventOccurrenceSchema, { id: 'stored', venueId: '' });
+    const server = await grpcServer((router) =>
+      router.service(EventService, {
+        saveOccurrence: (req) => {
+          seen.push({ id: req.occurrence?.id, venueId: req.occurrence?.venueId, later: req.venueDecidedLater });
+          return { occurrence };
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    await api.saveOccurrence(OFFICER, { id: 'series:2026-11-18', venueId: '' }, { venueDecidedLater: true });
+    await api.saveOccurrence(OFFICER, { id: 'series:2026-11-18', venueId: '' });
+    await api.saveOccurrence(OFFICER, { id: 'series:2026-11-18', venueId: 'v1' }, { venueDecidedLater: false });
+    expect(seen).toEqual([
+      { id: 'series:2026-11-18', venueId: '', later: true },
+      { id: 'series:2026-11-18', venueId: '', later: false },
+      { id: 'series:2026-11-18', venueId: 'v1', later: false },
+    ]);
+  });
+
   it('saves an event date, a series and a venue, live on save; switching on or off only when asked', async () => {
     const seen: unknown[] = [];
     const occurrence = create(EventOccurrenceSchema, { id: 'series:2026-11-18', title: 'Lunch', status: OccurrenceStatus.CANCELLED, statusNote: 'Thanksgiving week' });

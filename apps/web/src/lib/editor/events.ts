@@ -360,32 +360,29 @@ export type SaveRequest = MessageInitShape<typeof EventOccurrenceSchema>;
  * What SaveOccurrence is sent: the event by its id (a series date as <series>:<date> until its first
  * change, then its own), never its series or office (the API keeps both; only a new one-off names
  * its office). A series date keeps its series' title, and an event keeps its length where it had one.
+ * No place chosen is "decided later", said in the same save (the API would otherwise give a series
+ * date's first change its series' venue): one save, so a refusal always means nothing was saved.
  */
-export function saveRequestFor(input: EventInput, existing: EventOccurrence | undefined, seriesTitle: string | undefined): SaveRequest {
+export function saveRequestFor(input: EventInput, existing: EventOccurrence | undefined, seriesTitle: string | undefined): { occurrence: SaveRequest; venueDecidedLater: boolean } {
   const series = existing !== undefined && existing.seriesId !== '';
   const length = existing?.startsAt !== undefined && existing.endsAt !== undefined ? timestampDate(existing.endsAt).getTime() - timestampDate(existing.startsAt).getTime() : undefined;
   return {
-    id: existing?.id ?? '',
-    seriesId: '',
-    ownerOfficeId: existing === undefined ? input.officeId : '',
-    title: series ? (existing.title === seriesTitle ? '' : existing.title) : input.title,
-    startsAt: timestampFromDate(input.startsAt),
-    ...(length === undefined ? {} : { endsAt: timestampFromDate(new Date(input.startsAt.getTime() + length)) }),
-    venueId: input.venueId,
-    status: STATUS_VALUES[input.status],
-    statusNote: input.statusNote,
-    detail: input.detail,
-    url: input.url,
-    visibility: input.visibility === 'members' ? EventVisibility.MEMBERS : EventVisibility.PUBLIC,
+    occurrence: {
+      id: existing?.id ?? '',
+      seriesId: '',
+      ownerOfficeId: existing === undefined ? input.officeId : '',
+      title: series ? (existing.title === seriesTitle ? '' : existing.title) : input.title,
+      startsAt: timestampFromDate(input.startsAt),
+      ...(length === undefined ? {} : { endsAt: timestampFromDate(new Date(input.startsAt.getTime() + length)) }),
+      venueId: input.venueId,
+      status: STATUS_VALUES[input.status],
+      statusNote: input.statusNote,
+      detail: input.detail,
+      url: input.url,
+      visibility: input.visibility === 'members' ? EventVisibility.MEMBERS : EventVisibility.PUBLIC,
+    },
+    venueDecidedLater: input.venueId === '',
   };
-}
-
-/**
- * The API gives a series date its series' venue on its first change when none is sent
- * (events/writes.ts); "decided later" then needs a second save, of the stored date, with no venue.
- */
-export function venueFollowUp(request: SaveRequest, saved: Pick<EventOccurrence, 'id' | 'venueId'>): SaveRequest | undefined {
-  return request.venueId === '' && saved.venueId !== '' ? { ...request, id: saved.id, venueId: '' } : undefined;
 }
 
 const sentence = (text: string) => (/[.…]$/.test(text) ? text : `${text}.`);

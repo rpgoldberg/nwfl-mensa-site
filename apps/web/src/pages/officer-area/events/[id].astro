@@ -48,7 +48,6 @@ import {
   urlReview,
   valuesOf,
   venueChoices,
-  venueFollowUp,
 } from '../../../lib/editor/events';
 import { readForm } from '../../../lib/form';
 
@@ -122,10 +121,9 @@ if (Astro.request.method === 'POST' && view === 'sign-in') {
     Astro.response.status = 400;
   } else {
     try {
-      const request = saveRequestFor(parsed.value, before, seriesTitle);
-      let saved = await editor.saveOccurrence(reader, request);
-      const followUp = venueFollowUp(request, saved);
-      if (followUp !== undefined) saved = await editor.saveOccurrence(reader, followUp);
+      const { occurrence, venueDecidedLater } = saveRequestFor(parsed.value, before, seriesTitle);
+      // One save: a refusal means nothing was saved.
+      const saved = await editor.saveOccurrence(reader, occurrence, { venueDecidedLater });
       // Q4: the seam A3b fills; today nothing is held back.
       const review = urlReview(before, saved);
       return Astro.redirect(`${editPathOf(saved.id)}?saved=1${review.held.length > 0 ? '&held=1' : ''}`, 303);

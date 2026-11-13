@@ -212,12 +212,16 @@ describe('the stand-in events model', () => {
     expect((await anonymous.list(WED, WED)).map((o) => [o.status, o.url])).toEqual([[OccurrenceStatus.SCHEDULED, '']]);
   });
 
-  it("gives a series date its series' venue on a first change with none, and a stored one none", async () => {
-    const first = await writes.saveOccurrence(as('officer'), { id: `${LUNCH}:${WED}`, venueId: '', visibility: EventVisibility.PUBLIC });
-    expect(first.venueId).toBe(BISTRO.id);
-    const second = await writes.saveOccurrence(as('officer'), { id: first.id, venueId: '', visibility: EventVisibility.PUBLIC });
+  it("keeps a series date's venue on a first change with none sent; decided later is no venue, in one save", async () => {
+    const kept = await writes.saveOccurrence(as('officer'), { id: `${LUNCH}:${WED}`, venueId: '', visibility: EventVisibility.PUBLIC });
+    expect(kept.venueId).toBe(BISTRO.id);
+    const later = await writes.saveOccurrence(as('officer'), { id: `${LUNCH}:2026-11-25`, venueId: '', visibility: EventVisibility.PUBLIC }, { venueDecidedLater: true });
     // The area is the series' then (events/service.ts areaOf).
-    expect(second).toMatchObject({ id: first.id, venueId: '', area: Area.OKALOOSA });
-    expect(second.venue).toBeUndefined();
+    expect(later).toMatchObject({ venueId: '', area: Area.OKALOOSA });
+    expect(later.venue).toBeUndefined();
+    expect((await anonymous.list('2026-11-25', '2026-11-25'))[0]).toMatchObject({ id: later.id, venueId: '' });
+    const refusal = await writes.saveOccurrence(as('officer'), { id: `${LUNCH}:2026-12-02`, venueId: BISTRO.id, visibility: EventVisibility.PUBLIC }, { venueDecidedLater: true }).catch((e: unknown) => e);
+    expect(refusal).toBeInstanceOf(EditorRefused);
+    expect((refusal as EditorRefused).reason).toBe('venue_id must be empty when the venue is decided later');
   });
 });

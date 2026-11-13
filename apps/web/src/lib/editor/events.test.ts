@@ -31,7 +31,6 @@ import {
   urlReview,
   valuesOf,
   venueChoices,
-  venueFollowUp,
 } from './events';
 
 const PRESIDENT = { id: '11111111-1111-4111-8111-111111111111', slug: 'president', title: 'President' };
@@ -306,7 +305,7 @@ describe('the save request', () => {
   const input = { title: '', date: '2026-11-18', startsAt: new Date('2026-11-18T18:00:00Z'), status: 'cancelled' as const, statusNote: 'Closed', venueId: VENUE.id, detail: 'Sorry', url: 'https://example.org/x', visibility: 'public' as const, officeId: '' };
 
   it("changes a series date by its id, keeping its series' title and its length, never moving its series or office", () => {
-    const request = saveRequestFor(input, lunch, 'Wednesday Lunchers');
+    const request = saveRequestFor(input, lunch, 'Wednesday Lunchers').occurrence;
     expect(request).toMatchObject({ id: lunch.id, title: '', seriesId: '', ownerOfficeId: '', venueId: VENUE.id, status: OccurrenceStatus.CANCELLED, statusNote: 'Closed', detail: 'Sorry', url: 'https://example.org/x', visibility: EventVisibility.PUBLIC });
     expect(timestampDate(request.startsAt as Timestamp).toISOString()).toBe('2026-11-18T18:00:00.000Z');
     // 90 minutes long before, 90 minutes long after.
@@ -314,24 +313,23 @@ describe('the save request', () => {
   });
 
   it("keeps a series date's own title where it has one", () => {
-    expect(saveRequestFor(input, { ...lunch, title: 'Lunchers: holiday special' }, 'Wednesday Lunchers').title).toBe('Lunchers: holiday special');
+    expect(saveRequestFor(input, { ...lunch, title: 'Lunchers: holiday special' }, 'Wednesday Lunchers').occurrence.title).toBe('Lunchers: holiday special');
   });
 
   it("writes a one-off's title, and a new one's office; no end where none was known", () => {
-    const changed = saveRequestFor({ ...input, title: 'Board games', visibility: 'members', status: 'moved' }, games, undefined);
+    const changed = saveRequestFor({ ...input, title: 'Board games', visibility: 'members', status: 'moved' }, games, undefined).occurrence;
     expect(changed).toMatchObject({ id: ONE_OFF, title: 'Board games', ownerOfficeId: '', visibility: EventVisibility.MEMBERS, status: OccurrenceStatus.MOVED });
     expect(changed.endsAt).toBeUndefined();
-    const created = saveRequestFor({ ...input, title: 'Picnic', officeId: SOCIAL.id, status: 'tentative' }, undefined, undefined);
+    const created = saveRequestFor({ ...input, title: 'Picnic', officeId: SOCIAL.id, status: 'tentative' }, undefined, undefined).occurrence;
     expect(created).toMatchObject({ id: '', title: 'Picnic', ownerOfficeId: SOCIAL.id, status: OccurrenceStatus.TENTATIVE });
-    expect(saveRequestFor({ ...input, status: 'scheduled' }, undefined, undefined).status).toBe(OccurrenceStatus.SCHEDULED);
+    expect(saveRequestFor({ ...input, status: 'scheduled' }, undefined, undefined).occurrence.status).toBe(OccurrenceStatus.SCHEDULED);
   });
 
-  it('clears the venue in a second save where the API gave a first-changed series date its default venue', () => {
-    const request = saveRequestFor({ ...input, venueId: '' }, lunch, 'Wednesday Lunchers');
-    const saved = variant(lunch, { id: 'c0000000-0000-4000-8000-00000000000a', venueId: VENUE.id });
-    expect(venueFollowUp(request, saved)).toEqual({ ...request, id: saved.id, venueId: '' });
-    expect(venueFollowUp(request, { ...saved, venueId: '' })).toBeUndefined();
-    expect(venueFollowUp(saveRequestFor(input, lunch, 'Wednesday Lunchers'), saved)).toBeUndefined();
+  it('says the venue is decided later, in the same save, exactly when no place is chosen', () => {
+    expect(saveRequestFor({ ...input, venueId: '' }, lunch, 'Wednesday Lunchers').venueDecidedLater).toBe(true);
+    expect(saveRequestFor({ ...input, venueId: '' }, undefined, undefined).venueDecidedLater).toBe(true);
+    expect(saveRequestFor(input, lunch, 'Wednesday Lunchers').venueDecidedLater).toBe(false);
+    expect(saveRequestFor({ ...input, venueId: '' }, lunch, 'Wednesday Lunchers').occurrence.venueId).toBe('');
   });
 });
 

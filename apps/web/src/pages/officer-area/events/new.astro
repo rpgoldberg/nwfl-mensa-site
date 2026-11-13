@@ -84,7 +84,8 @@ if (Astro.request.method === 'POST' && (view === 'form' || view === 'sign-in')) 
     Astro.response.status = 400;
   } else if (editor !== undefined && reader !== undefined) {
     try {
-      const saved = await editor.saveOccurrence(reader, saveRequestFor(parsed.value, undefined, undefined));
+      const { occurrence, venueDecidedLater } = saveRequestFor(parsed.value, undefined, undefined);
+      const saved = await editor.saveOccurrence(reader, occurrence, { venueDecidedLater });
       return Astro.redirect(`${editPathOf(saved.id)}?saved=1`, 303);
     } catch (error) {
       if (error instanceof SignInAgain) view = 'sign-in';
