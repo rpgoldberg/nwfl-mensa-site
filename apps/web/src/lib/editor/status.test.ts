@@ -29,7 +29,7 @@ const WORKING: Record<string, EditorVersion | undefined> = {
   draft: version({ status: 'draft' }),
   'sent back': version({ status: 'draft', sendBackNote: 'Please add the time.' }),
   ready: version({ status: 'ready' }),
-  // EDITOR E3 (A1's split, behind the stand-in until A1 merges): approved by a reviewer, not yet published.
+  // EDITOR E3 (A1's split): approved by a reviewer, not yet published.
   cleared: version({ status: 'cleared' }),
 };
 

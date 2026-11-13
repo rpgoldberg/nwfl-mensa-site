@@ -9,7 +9,7 @@ import http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkflow, parseMarkup } from '../e2e/workflow.mjs';
-import { ContentService } from '../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentService, ItemState, VersionStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { ApiNotFound } from '../src/lib/api/client';
 import { EditorRefused, type EditorApi, type EditorItem, NotAllowed, SlugTaken, VersionChanged, grpcEditor } from '../src/lib/api/editor';
 import { editFormFor } from '../src/lib/editor/form';
@@ -372,7 +372,7 @@ describe('parseMarkup (the stand-in\'s part of the API\'s markup)', () => {
   });
 });
 
-describe('the stand-in workflow: approved, ready to publish (A1, until its proto lands)', () => {
+describe('the stand-in workflow: approved, ready to publish (A1\'s VERSION_STATUS_CLEARED)', () => {
   it('seeds a cleared version, lists it with drafts and ready ones, and reads it as "Approved, ready to publish"', async () => {
     const cleared = model.seed({ slug: 'seed-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
     const read = await api.getWorkingItem(as('officer'), cleared.id);
@@ -407,5 +407,21 @@ describe('the stand-in workflow: the writers\' list (E3 fix 1)', () => {
     for (const item of [...listed, writing]) expect(item.lastChangedAt).toBeInstanceOf(Date);
     const saved = await save('officer', writing, 'Changed.');
     expect(saved.item.lastChangedAt!.getTime()).toBeGreaterThan(writing.lastChangedAt!.getTime());
+  });
+});
+
+describe('the stand-in workflow: A1\'s version_statuses on the list', () => {
+  it('lists by the working version\'s status when given, and then reads no item state', async () => {
+    const raw = model.handlers(() => PEOPLE['officer'] as never);
+    const cleared = model.seed({ slug: 'seed-vs-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared', cleared: true });
+    const published = model.seed({ slug: 'seed-vs-published', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    const writing = await create('officer', 'Being written');
+    const list = async (versionStatuses: VersionStatus[], states: ItemState[] = []) =>
+      ((await raw.listWorkingItems({ versionStatuses, states, officeId: '', editionId: '' }, {} as never)) as { items: { id: string }[] }).items.map((i) => i.id);
+    expect(await list([VersionStatus.CLEARED])).toEqual([cleared.id]);
+    const drafts = await list([VersionStatus.DRAFT], [ItemState.PUBLISHED]);
+    expect(drafts).toContain(writing.id);
+    expect(drafts).not.toContain(published.id);
+    expect(drafts).not.toContain(cleared.id);
   });
 });

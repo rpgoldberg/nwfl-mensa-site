@@ -3,7 +3,7 @@
 // bearer and nothing else; each answer is read into the editor's own shape; and each refusal becomes
 // the one thing a page can act on: sign in again, the version changed, not allowed, the slug is taken,
 // the API's words for a step the item is not ready for, not found, or unavailable.
-import { clone, create } from '@bufbuild/protobuf';
+import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
@@ -621,8 +621,7 @@ describe('editorReader', () => {
 
 // EDITOR E3: the two public reads the writer screens need beside the workflow, sent as the public
 // (no bearer, no cookie): the roster, for the office ids an item is posted as, and the office's
-// upcoming events, for the President's report's events box. And A1's approved-not-published status,
-// which the stand-in sends until A1's proto lands.
+// upcoming events, for the President's report's events box.
 describe('grpcEditor: the public reads beside the workflow (E3)', () => {
   const at = (iso: string) => timestampFromDate(new Date(iso));
 
@@ -699,15 +698,6 @@ describe('grpcEditor: the public reads beside the workflow (E3)', () => {
     const api = unavailableEditor();
     await expect(api.offices()).rejects.toMatchObject({ name: 'ApiUnavailable', rpc: 'GetRoster' });
     await expect(api.officeEvents(OFFICE_ID, '2026-11-17', '2026-12-17')).rejects.toMatchObject({ name: 'ApiUnavailable', rpc: 'ListOccurrences' });
-  });
-
-  it("reads A1's approved-not-published status (6, VERSION_STATUS_CLEARED) as cleared", async () => {
-    const cleared = clone(ContentItemSchema, ITEM);
-    cleared.state = ItemState.READY;
-    cleared.working!.status = 6 as VersionStatus;
-    const server = await grpcServer((router) => router.service(ContentService, { getWorkingItem: () => ({ item: cleared }) }));
-    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
-    expect((await api.getWorkingItem(OFFICER, ITEM_ID)).working?.status).toBe('cleared');
   });
 });
 

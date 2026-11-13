@@ -178,7 +178,7 @@ export const WORKFLOW = {
   withheld: { id: 'c0e20000-0000-4000-8000-000000000001', title: 'Seeded: part held back', canary: 'HELD BACK CANARY', officeId: '11111111-1111-4111-8111-111111111111' },
   waiting: { id: 'c0e20000-0000-4000-8000-000000000002', title: 'Seeded: waiting for approval', membersPassage: 'The gate code is 1234.', officeId: '22222222-2222-4222-8222-222222222222' },
   published: { id: 'c0e20000-0000-4000-8000-000000000003', title: 'Seeded: published', officeId: '11111111-1111-4111-8111-111111111111' },
-  /** EDITOR E3: the President's, approved and waiting to be published (A1's cleared, behind the stand-in until A1 lands). */
+  /** EDITOR E3: the President's, approved and waiting to be published (A1's VERSION_STATUS_CLEARED). */
   cleared: { id: 'c0e20000-0000-4000-8000-000000000004', title: 'Seeded: approved, ready to publish', officeId: '11111111-1111-4111-8111-111111111111' },
   /** E3 fix 1: the President's, published with a change waiting for approval (its working title ends ", changed"); and one taken down. */
   changing: { id: 'c0e20000-0000-4000-8000-000000000005', title: 'Seeded: published, change waiting', officeId: '11111111-1111-4111-8111-111111111111' },

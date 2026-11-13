@@ -7,11 +7,12 @@
 // will get it. Its markup is a small part of the API's (headings, lists, links, :members[..] and
 // ::: members blocks) with the API's problem words, enough to tell the audiences apart.
 //
-// EDITOR E3: two things the API on main does not do yet, kept here behind the stand-in until they land:
-// A3a's strict URL words at save (its markup does: apps/api/src/links/rule.ts, a part of it here), and
-// A1's version approved but not yet published (cleared, VERSION_STATUS_CLEARED = 6, sent by number until
-// A1's proto lands): a seed can be cleared, the list holds it with drafts and ready ones, and an edit
-// takes it back to a draft with an approval_voided step first.
+// EDITOR E3: A3a's strict URL words at save, which the API on main does not do yet (its markup does:
+// apps/api/src/links/rule.ts, a part of it here); and A1's version approved but not yet published
+// (VERSION_STATUS_CLEARED): a seed can be cleared, the list holds it with drafts and ready ones (or
+// lists by version_statuses), and an edit takes it back to a draft with an approval_voided step first.
+// Not modelled yet: A1's two-step approval. Approve here still publishes at once, as E2 had it; no
+// screen of E3 approves, and the Publish RPC has no web client yet.
 //
 // Items are shared by everyone, as in the API (a writer and an approver are two people). The seeded
 // items (SEEDED) are for reading: a test that changes an item creates its own, with a title of its
@@ -62,9 +63,13 @@ const STATE_IN = new Map([
   [ItemState.PUBLISHED, 'published'],
   [ItemState.WITHDRAWN, 'withdrawn'],
 ]);
-/** A1's VERSION_STATUS_CLEARED, by number until its proto lands. */
-const CLEARED = /** @type {VersionStatus} */ (6);
-const STATUS_OUT = { draft: VersionStatus.DRAFT, ready: VersionStatus.READY, cleared: CLEARED, approved: VersionStatus.APPROVED, superseded: VersionStatus.SUPERSEDED };
+const STATUS_OUT = { draft: VersionStatus.DRAFT, ready: VersionStatus.READY, cleared: VersionStatus.CLEARED, approved: VersionStatus.APPROVED, superseded: VersionStatus.SUPERSEDED };
+/** A1's version_statuses: the working version's status, of those the list holds. */
+const STATUS_IN = new Map([
+  [VersionStatus.DRAFT, 'draft'],
+  [VersionStatus.READY, 'ready'],
+  [VersionStatus.CLEARED, 'cleared'],
+]);
 
 const invalid = (/** @type {string} */ message) => new ConnectError(message, Code.InvalidArgument);
 const precondition = (/** @type {string} */ message) => new ConnectError(message, Code.FailedPrecondition);
@@ -530,11 +535,18 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const caller = await callerOf(ctx);
       requireReader(caller);
       /** @type {string[]} */
-      // A1: empty means draft, ready and cleared. E3 fix 1: published and withdrawn name the item's state.
+      // A1: version_statuses names the working version's status; else states names draft and ready; else all
+      // three (draft, ready, cleared). E3 fix 1: published and withdrawn in states name the item's state,
+      // read only when version_statuses is empty.
       const named = req.states.map((/** @type {number} */ s) => STATE_IN.get(s));
-      const states = req.states.length === 0 ? ['draft', 'ready', 'cleared'] : named.filter((s) => s === 'draft' || s === 'ready');
+      const byVersion = (req.versionStatuses ?? []).length > 0;
+      const states = byVersion
+        ? req.versionStatuses.map((/** @type {number} */ s) => STATUS_IN.get(s)).filter(Boolean)
+        : req.states.length === 0
+          ? ['draft', 'ready', 'cleared']
+          : named.filter((s) => s === 'draft' || s === 'ready');
       /** @type {string[]} */
-      const itemStates = named.filter((s) => s === 'published' || s === 'withdrawn');
+      const itemStates = byVersion ? [] : named.filter((s) => s === 'published' || s === 'withdrawn');
       const byStatus = (/** @type {Item} */ i) => i.working !== undefined && states.includes(i.working.status);
       const listed = [...items.values()]
         .filter((i) => (byStatus(i) || itemStates.includes(i.state)) && (req.officeId === '' || i.officeId === req.officeId) && (req.editionId === '' || (byStatus(i) ? i.working?.editionId : i.live?.editionId) === req.editionId))

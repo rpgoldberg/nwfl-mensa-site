@@ -9,7 +9,7 @@
 import { type Client, Code } from '@connectrpc/connect';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ContentKind, ContentService, type ContentItem, ItemState, ItemVisibility } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentKind, ContentService, type ContentItem, ItemState, ItemVisibility, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { type Api, MEMBER, as, insertId, startApi } from '../helpers/api.js';
 import { live } from '../helpers/pg.js';
 
@@ -45,9 +45,11 @@ describe.skipIf(!live)('EDITOR E3: the writers\' list', () => {
     await content.saveDraft({ itemId: item.id, title: 'Fall picnic', summary: 'Saturday', visibility: ItemVisibility.PUBLIC, bodyMarkup: 'Noon at the pier.' }, options);
     return item.id;
   };
+  /** EDITOR A1: ready, approved (cleared), then published by the Webmaster. */
   const publish = async (itemId: string, options = PUB): Promise<void> => {
     const hash = (await content.markReady({ itemId }, options)).item?.working?.contentHash as Uint8Array;
     await content.approve({ itemId, contentHash: hash }, WEBMASTER);
+    await content.publish({ itemId, contentHash: hash }, WEBMASTER);
   };
   const ids = (items: ContentItem[]) => items.map((item) => item.id);
   const lastChanged = (item: ContentItem | undefined) => (item?.lastChangedAt === undefined ? undefined : timestampDate(item.lastChangedAt).getTime());
@@ -84,13 +86,34 @@ describe.skipIf(!live)('EDITOR E3: the writers\' list', () => {
       expect(both.filter((id) => id === changing)).toHaveLength(1);
     });
 
-    it('lists, with no states, drafts and ready items only, as before', async () => {
+    it('lists, with no states, the items being written only, as before', async () => {
       const published = await draft();
       await publish(published);
       const writing = await draft();
       const listed = ids((await content.listWorkingItems({}, PUB)).items);
       expect(listed).toContain(writing);
       expect(listed).not.toContain(published);
+    });
+
+    it('reads no item state once version_statuses is given (A1): those name the working version only', async () => {
+      const published = await draft();
+      await publish(published);
+      const writing = await draft();
+      const listed = ids((await content.listWorkingItems({ versionStatuses: [VersionStatus.DRAFT], states: [ItemState.PUBLISHED] }, PUB)).items);
+      expect(listed).toContain(writing);
+      expect(listed).not.toContain(published);
+    });
+
+    it('lists a published item whose change is approved and waiting to be published, once', async () => {
+      const itemId = await draft();
+      await publish(itemId);
+      await content.saveDraft({ itemId, title: 'Fall picnic, moved', summary: '', visibility: ItemVisibility.PUBLIC, bodyMarkup: 'Noon at the park.' }, PUB);
+      const hash = (await content.markReady({ itemId }, PUB)).item?.working?.contentHash as Uint8Array;
+      await content.approve({ itemId, contentHash: hash }, WEBMASTER);
+      const listed = (await content.listWorkingItems({ states: [ItemState.PUBLISHED] }, PUB)).items.filter((i) => i.id === itemId);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]?.working?.status).toBe(VersionStatus.CLEARED);
+      expect(ids((await content.listWorkingItems({}, PUB)).items)).toContain(itemId);
     });
 
     it('filters published items by office, and by the edition of what is live', async () => {
