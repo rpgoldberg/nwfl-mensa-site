@@ -502,8 +502,11 @@ message GetItemLinksRequest {
 }
 
 message GetItemLinksResponse {
-  // SHA-256 of the list as returned: ConfirmLinks sends it back, and is
-  // refused once the list has changed.
+  // SHA-256 of the JSON array [ready_at, pairs]: the version's ready time in
+  // RFC 3339, in UTC, to the microsecond (null for a draft), then the [url,
+  // where] pair of each link as returned. Opaque to a client: ConfirmLinks
+  // sends it back, and is refused once the list has changed or the version
+  // has been marked ready again since.
   bytes links_sha256 = 1;
   // Sorted by url, then where.
   repeated ItemLink links = 2;
@@ -544,7 +547,7 @@ message ItemLink {
 
 message ConfirmLinksRequest {
   string item_id = 1;
-  // The hash GetItemLinks gave.
+  // The hash GetItemLinks gave, unchanged.
   bytes links_sha256 = 2;
   repeated LinkAnswer answers = 3;
   // The office the caller acts for: one they hold. Empty means their one

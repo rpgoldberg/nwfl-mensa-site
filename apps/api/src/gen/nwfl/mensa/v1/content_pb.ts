@@ -1410,8 +1410,11 @@ export const GetItemLinksRequestSchema: GenMessage<GetItemLinksRequest> = /*@__P
  */
 export type GetItemLinksResponse = Message<"nwfl.mensa.v1.GetItemLinksResponse"> & {
   /**
-   * SHA-256 of the list as returned: ConfirmLinks sends it back, and is
-   * refused once the list has changed.
+   * SHA-256 of the JSON array [ready_at, pairs]: the version's ready time in
+   * RFC 3339, in UTC, to the microsecond (null for a draft), then the [url,
+   * where] pair of each link as returned. Opaque to a client: ConfirmLinks
+   * sends it back, and is refused once the list has changed or the version
+   * has been marked ready again since.
    *
    * @generated from field: bytes links_sha256 = 1;
    */
@@ -1523,7 +1526,7 @@ export type ConfirmLinksRequest = Message<"nwfl.mensa.v1.ConfirmLinksRequest"> &
   itemId: string;
 
   /**
-   * The hash GetItemLinks gave.
+   * The hash GetItemLinks gave, unchanged.
    *
    * @generated from field: bytes links_sha256 = 2;
    */
