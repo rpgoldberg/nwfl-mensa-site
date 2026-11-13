@@ -60,13 +60,11 @@ if (item !== undefined && !mayPublish && Astro.request.method === 'GET') return 
 if (Astro.request.method === 'POST' && api !== undefined) {
   const read = await readForm(Astro.request, FORM_LIMIT);
   if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
-  if (item === undefined) outcome = { status: 401, signIn: true };
-  else {
-    const done = await runPublish(api, reader, item, read.field);
-    if ('redirect' in done) return Astro.redirect(done.redirect, 303);
-    outcome = done;
-    if (done.status === 409 && !done.errors) item = await api.getWorkingItem(reader!, id).catch(() => item);
-  }
+  // The piece as read for this post; not read (sign-in or the site's records), nothing is sent (fail closed).
+  const done = await runPublish(api, reader, item, read.field);
+  if ('redirect' in done) return Astro.redirect(done.redirect, 303);
+  outcome = done;
+  if (done.status === 409 && !done.errors && item !== undefined) item = await api.getWorkingItem(reader!, id).catch(() => item);
   Astro.response.status = outcome.status;
 }
 if (problem === 'unavailable' || outcome?.unavailable) markUnavailable(Astro.response);

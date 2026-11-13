@@ -29,8 +29,9 @@
 // for another office's. The caller's lens is the redaction lens alone (item-links.ts linksAsSeen): members
 // passages are every reviewer's (officers are members); a seed marked officersOnly has its members
 // passages withheld from anyone outside the officers group, body, preview and links alike. With anything
-// withheld, a version comes with no hash and no markup (A3b workflow.ts versionMessage): such a reviewer
-// cannot approve or publish what they do not see whole.
+// withheld, a version comes with no hash and no markup (A3b workflow.ts versionMessage), and (A3B-HARDEN,
+// requireWholeView) neither may approve nor publish it: Approve, Publish and ConfirmLinks refuse such a
+// caller before any hash is compared; Send back is theirs.
 // ConfirmLinks keeps no answer for an address over 2,048 characters (link-gate.ts MAX_URL_LENGTH): A3b's
 // parser refuses such a link at save, the stand-in's keeps it, so a seed can show not_in_piece. The
 // office's upcoming events are not in the stand-in's list (E7b checks them on the real API).
@@ -448,8 +449,23 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     item.history.push({ at, actorSubject: caller.sub, actorLabel: labelOf(caller, item, acting), actingOfficeId: acting, versionNumber: 0, fromState: '', toState: '', note: '', ...entry });
   };
 
-  /** A1: whether the caller may approve the version as it stands (break-glass aside), and publish it. @param {Version} v @param {Caller} caller */
-  const mayActOn = (v, caller) => {
+  /**
+   * A3B-HARDEN (PR #70, workflow.ts requireWholeView): approving, publishing and vouching for links need the
+   * whole version; a caller from whom anything of it is withheld may only send it back. Called before any
+   * hash is compared, so the refusal tells nothing about a hash.
+   * @param {Item} item @param {Caller} caller @param {'approve it' | 'publish it' | 'check its links'} act
+   */
+  const requireWholeView = (item, caller, act) => {
+    if (withheldFor(item, caller)) throw precondition(`part of this item is withheld from you; an officer who can see all of it must ${act}`);
+  };
+
+  /**
+   * A1: whether the caller may approve the version as it stands (break-glass aside), and publish it.
+   * Neither when anything of it is withheld from them (A3B-HARDEN, requireWholeView).
+   * @param {Version} v @param {Caller} caller @param {boolean} withheld
+   */
+  const mayActOn = (v, caller, withheld) => {
+    if (withheld) return { approve: false, publish: false };
     const roles = rolesOf(caller);
     const reviewer = roles.officer || roles.admin || roles.webmaster;
     const publisher = roles.admin || roles.webmaster;
@@ -517,8 +533,8 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
           sendBackNote: v.sendBackNote,
           callerEdited: v.editors.has(caller.sub),
           // E4 (A1): what the reader may do, and who approved it.
-          callerMayApprove: mayActOn(v, caller).approve,
-          callerMayPublish: mayActOn(v, caller).publish,
+          callerMayApprove: mayActOn(v, caller, withheld).approve,
+          callerMayPublish: mayActOn(v, caller, withheld).publish,
           approvedAsLabel: v.approvedAsLabel ?? '',
           approvalKindSelf: v.approvalKind === 'self_breakglass' || v.approvalKind === 'self_single',
           ...(v.publishedAt ? { publishedAt: timestamp(v.publishedAt) } : {}),
@@ -744,6 +760,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const item = load(req.itemId);
       const version = item.working;
       if (version?.status !== 'ready') throw precondition('only a ready version can be approved');
+      requireWholeView(item, caller, 'approve it');
       if (version.hash === undefined || Buffer.compare(Buffer.from(req.contentHash), Buffer.from(version.hash)) !== 0) {
         throw new ConnectError('the version changed since it was opened; reload it', Code.Aborted);
       }
@@ -795,6 +812,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const item = load(req.itemId);
       const version = item.working;
       if (version?.status !== 'cleared') throw precondition('only an approved version can be published');
+      requireWholeView(item, caller, 'publish it');
       if (Buffer.compare(Buffer.from(req.contentHash), Buffer.from(/** @type {Uint8Array} */ (version.hash))) !== 0) {
         throw new ConnectError('the version changed since it was opened; reload it', Code.Aborted);
       }
@@ -845,6 +863,7 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
       const item = load(req.itemId);
       const version = item.working;
       if (version?.status !== 'ready') throw precondition('only a version waiting for approval has its links checked');
+      requireWholeView(item, caller, 'check its links');
       if (version.editors.has(caller.sub)) throw new ConnectError('you edited this version; a second officer must check its links', Code.PermissionDenied);
       const { actual, links, hash } = linksOf(item, version, caller);
       if (Buffer.compare(Buffer.from(req.linksSha256), Buffer.from(hash)) !== 0) throw precondition(LINKS_CHANGED);

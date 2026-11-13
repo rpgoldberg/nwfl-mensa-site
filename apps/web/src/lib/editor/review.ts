@@ -115,6 +115,9 @@ export const PARTS_HIDDEN = {
  * A step forged from a partial view (round 4): refused by the site before any call to the API, which only
  * now learns to refuse it too (A3B-HARDEN). Send back stays.
  */
+/** The piece could not be read again to check the view (fail closed): nothing is sent. */
+export const CHECK_FAILED = "We couldn't check this piece just now, so nothing was changed. Reload and try again.";
+
 export const PARTIAL_REFUSED = {
   review: 'Nothing was changed: parts of this piece are hidden from you, so an officer who can see all of it must check its links and approve it.',
   publish: 'It was not published: parts of this piece are hidden from you, so someone who can see all of it must publish it.',
@@ -429,13 +432,24 @@ const signInAgain = (kept: Kept): Outcome => ({ status: 401, signIn: true, notic
  * (Approve my own change, with the reason), Send back. Approve pressed with links answered in the form
  * saves those answers first, as the reviewer means them, and approves only once they are kept.
  */
-export async function runReview(api: EditorApi, reader: Reader | undefined, itemId: string, given: Field, choice: ActingChoice, offers?: Offers): Promise<Outcome> {
+export async function runReview(api: EditorApi, reader: Reader | undefined, itemId: string, given: Field, choice: ActingChoice): Promise<Outcome> {
   const kept = keptOf(given);
   if (reader === undefined) return signInAgain(kept);
   const step = given('step');
   if (step !== 'links' && step !== 'approve' && step !== 'break-glass' && step !== 'send-back') return { status: 400, notice: OUT_OF_DATE, kept };
-  // The page's offers, read as the post came: from a view with part of the piece hidden, only Send back.
-  if (offers?.partial && step !== 'send-back') return { status: 409, notice: PARTIAL_REFUSED.review, kept };
+  // Round 4: the piece read again as the post came; from a view with part of it hidden, only Send back.
+  // Fail closed: a piece that cannot be read sends nothing (a sign-in that ran out, or one gone, says so).
+  if (step !== 'send-back') {
+    let current: EditorItem;
+    try {
+      current = await api.getWorkingItem(reader, itemId);
+    } catch (error) {
+      if (error instanceof SignInAgain) return signInAgain(kept);
+      if (error instanceof ApiNotFound) return { status: 404, gone: true };
+      return { status: 503, notice: CHECK_FAILED, kept };
+    }
+    if (current.working !== undefined && seesPartOnly(current.working)) return { status: 409, notice: PARTIAL_REFUSED.review, kept };
+  }
   // Break-glass has its own button: its tick is the button.
   const field: Field = (name) => (name === 'break_glass' ? (step === 'break-glass' ? 'yes' : undefined) : given(name));
   const acting = parseActing(field, choice);
@@ -503,9 +517,13 @@ export async function runReview(api: EditorApi, reader: Reader | undefined, item
   }
 }
 
-/** The Publish confirm page's post: the hash seen, and the tick that puts a taken-down item back. */
-export async function runPublish(api: EditorApi, reader: Reader | undefined, item: EditorItem, field: Field): Promise<Outcome> {
+/**
+ * The Publish confirm page's post: the hash seen, and the tick that puts a taken-down item back. `item` is
+ * the piece as the page read it for this post; not read, nothing is sent (fail closed).
+ */
+export async function runPublish(api: EditorApi, reader: Reader | undefined, item: EditorItem | undefined, field: Field): Promise<Outcome> {
   if (reader === undefined) return signInAgain(keptOf(field));
+  if (item === undefined) return { status: 503, notice: CHECK_FAILED };
   if (item.working !== undefined && seesPartOnly(item.working)) return { status: 409, notice: PARTIAL_REFUSED.publish };
   const contentHash = hashFromHex(field('hash'));
   if (contentHash === undefined) return { status: 409, notice: OUT_OF_DATE };

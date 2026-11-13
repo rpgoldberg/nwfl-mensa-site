@@ -78,11 +78,9 @@ else {
     const read = await readForm(Astro.request, FORM_LIMIT);
     if (!read.ok && read.status !== 413) return new Response('Send the form.', { status: read.status });
     if (read.ok) {
-      // Round 4: what the page offers this person now (a view with part of it hidden offers only Send back),
-      // read again for the post, so a step it does not offer is refused before the API.
-      const now = reader === undefined ? undefined : await api.getWorkingItem(reader, id).catch(() => undefined);
-      const offered = now === undefined ? undefined : reviewOffers(now.working, session.groups.includes('nwfl-admin'));
-      const done = await runReview(api, reader, id, read.field, actingChoice(session.groups, roster), offered);
+      // runReview reads the piece again first: from a view with part of it hidden, only Send back (round 4),
+      // and nothing is sent when it cannot be read (fail closed).
+      const done = await runReview(api, reader, id, read.field, actingChoice(session.groups, roster));
       if ('redirect' in done) return Astro.redirect(done.redirect, 303);
       outcome = done;
     } else {

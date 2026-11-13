@@ -550,7 +550,7 @@ describe('the stand-in workflow: reading', () => {
 // caller sees whole; a holder who reviews nothing is told PERMISSION_DENIED for a missing item too.
 describe('the stand-in workflow: the link gate after A3b\'s fix round', () => {
   const FACEBOOK = 'https://www.facebook.com/groups/nwfl-sample';
-  const OFFICERS_ONLY = "Some links that only officers can see need an officer's answer before this is approved.";
+  const WITHHELD = (act: string) => `part of this item is withheld from you; an officer who can see all of it must ${act}`;
 
   it('binds the hash to the ready time: marked ready again, the same list has a new hash, and the old one is refused', async () => {
     const item = await create('officer', 'Ready twice');
@@ -581,7 +581,7 @@ describe('the stand-in workflow: the link gate after A3b\'s fix round', () => {
     });
   });
 
-  it("names only the links the caller sees whole: a passage marked for officers only is one fixed sentence, alone or after the named ones", async () => {
+  it('shows an officer a passage marked for officers only whole, and the lone Webmaster no hash, no marked link and no Approve', async () => {
     // Its members passage is marked for officers (the redaction lens, REDACT R2a): withheld from anyone outside the officers group.
     const marked = model.seed({ slug: 'officers-only-links', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Marked', markup: `Open [page](https://www.instagram.com/nwfl-sample).\n\n::: members\nPhotos on [our members' group](${FACEBOOK}).\n:::`, officersOnly: true, editors: [PEOPLE['officer']!.sub] });
     const read = await api.getWorkingItem(as('lone-webmaster'), marked.id);
@@ -602,17 +602,48 @@ describe('the stand-in workflow: the link gate after A3b\'s fix round', () => {
       reason: '2 links need a sign-in to check (such as Facebook): someone other than the writer must open them and answer yes before this is approved',
     });
     expect((await api.getItemLinks(as('lone-webmaster'), marked.id)).links.map((l) => l.url)).toEqual(['https://www.instagram.com/nwfl-sample']);
-    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: marked.id, contentHash: hash }))).toMatchObject({
-      reason: `1 link needs a sign-in to check (such as Facebook): someone other than the writer must open it and answer yes before this is approved. ${OFFICERS_ONLY}`,
-    });
-    const list = await api.getItemLinks(as('lone-webmaster'), marked.id);
-    await api.confirmLinks(as('lone-webmaster'), { itemId: marked.id, linksSha256: list.linksSha256, answers: [{ url: 'https://www.instagram.com/nwfl-sample', yes: true, note: '' }] });
-    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: marked.id, contentHash: hash }))).toMatchObject({ reason: OFFICERS_ONLY });
-    // A no on the hidden link is not named to them either.
+    // A3B-HARDEN: the lone Webmaster is refused before the gate (and before the hash), so the gate's
+    // OFFICERS_ONLY never reaches them through the text; on the real API it still can through an office
+    // event their audience does not see, which the stand-in does not list.
+    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: marked.id, contentHash: hash }))).toMatchObject({ reason: WITHHELD('approve it') });
+    // A no on the hidden link is named to an officer who sees it whole.
     const all = await api.getItemLinks(as('treasurer'), marked.id);
     await api.confirmLinks(as('treasurer'), { itemId: marked.id, linksSha256: all.linksSha256, answers: [{ url: FACEBOOK, yes: false, note: '' }] });
-    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: marked.id, contentHash: hash }))).toMatchObject({ reason: OFFICERS_ONLY });
     expect(await refusal(api.approve(as('webmaster'), { itemId: marked.id, contentHash: hash }))).toMatchObject({ reason: expect.stringContaining(`a reviewer answered no for the link "${FACEBOOK}"`) });
+  });
+
+  // A3B-HARDEN (PR #70, requireWholeView): a caller from whom anything is withheld may only send it back.
+  it('refuses Approve, break-glass, Publish and ConfirmLinks to a caller with part withheld, before any hash; Send back stays', async () => {
+    const markup = `See [the picnic page](https://club.example/picnic).\n\n::: members\nThe gate code is MEMBERS-CANARY.\n:::`;
+    const waiting = model.seed({ slug: 'harden-waiting', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Hardened, waiting', markup, officersOnly: true, editors: [PEOPLE['officer']!.sub] });
+    const cleared = model.seed({ slug: 'harden-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Hardened, approved', markup, officersOnly: true, cleared: true });
+    const lone = as('lone-webmaster');
+    // Neither may: the flags say so.
+    expect((await api.getWorkingItem(lone, waiting.id)).working).toMatchObject({ callerMayApprove: false, callerMayPublish: false });
+    expect((await api.getWorkingItem(lone, cleared.id)).working).toMatchObject({ callerMayApprove: false, callerMayPublish: false });
+    expect((await api.getWorkingItem(as('webmaster'), cleared.id)).working).toMatchObject({ callerMayPublish: true });
+    // With the officer's hash (the worst case) and with none at all: the same words, so nothing is told about a hash.
+    const hash = (await api.getWorkingItem(as('treasurer'), waiting.id)).working!.contentHash;
+    const clearedHash = (await api.getWorkingItem(as('webmaster'), cleared.id)).working!.contentHash;
+    const list = await api.getItemLinks(as('treasurer'), waiting.id);
+    for (const contentHash of [hash, new Uint8Array(0)]) {
+      expect(await refusal(api.approve(lone, { itemId: waiting.id, contentHash }))).toMatchObject({ reason: WITHHELD('approve it') });
+      expect(await refusal(api.approve(lone, { itemId: waiting.id, contentHash, breakGlass: { reason: 'Forged' } }))).toMatchObject({ reason: WITHHELD('approve it') });
+    }
+    for (const contentHash of [clearedHash, new Uint8Array(0)]) {
+      expect(await refusal(api.publish(lone, { itemId: cleared.id, contentHash }))).toMatchObject({ reason: WITHHELD('publish it') });
+    }
+    for (const linksSha256 of [list.linksSha256, new Uint8Array(32)]) {
+      const refused = await refusal(api.confirmLinks(lone, { itemId: waiting.id, linksSha256, answers: [{ url: 'https://club.example/picnic', yes: true, note: '' }] }));
+      expect(refused).toBeInstanceOf(EditorRefused);
+      expect(refused).toMatchObject({ reason: WITHHELD('check its links') });
+    }
+    // Nothing changed.
+    expect((await api.getItemLinks(as('treasurer'), waiting.id)).links.map((l) => l.answeredByLabel)).toEqual(['']);
+    expect((await api.getWorkingItem(as('treasurer'), waiting.id)).working?.status).toBe('ready');
+    expect((await api.getWorkingItem(as('webmaster'), cleared.id)).working?.status).toBe('cleared');
+    // Send back is theirs, as before.
+    expect((await api.sendBack(lone, { itemId: waiting.id, note: 'Please check the gate code.' })).working?.status).toBe('draft');
   });
 
   it('keeps no answer for an address over 2,048 characters, as A3b\'s ConfirmLinks: it is not_in_piece (S2)', async () => {

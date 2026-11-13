@@ -75,7 +75,8 @@ const item = (over: Partial<EditorItem> = {}, working: Partial<EditorVersion> | 
 });
 const link = (over: Partial<PieceLink> = {}): PieceLink => ({ url: 'https://club.example/a', label: '', where: 'in the text', loginWalled: false, answeredByLabel: '', accepted: false, ...over });
 const form = (fields: Record<string, string>) => (name: string) => fields[name];
-const fakeApi = (over: Partial<EditorApi> = {}) => over as EditorApi;
+/** A fake API: the piece reads back whole unless a test says otherwise (the guard's re-read, round 4). */
+const fakeApi = (over: Partial<EditorApi> = {}) => ({ getWorkingItem: vi.fn().mockResolvedValue(item()), ...over }) as EditorApi;
 
 describe('who reviews and publishes', () => {
   it('names the Webmaster and the Admin as publishers, no one else', () => {
@@ -409,17 +410,35 @@ describe('runReview: the review page\'s posts', () => {
     for (const rpc of [api.getItemLinks, api.confirmLinks, api.approve, api.sendBack]) expect(rpc).not.toHaveBeenCalled();
   });
 
-  it('refuses answers, Approve and break-glass from a view with part of the piece hidden, before the API; Send back stays (round 4)', async () => {
-    const partial = reviewOffers(version({ contentHash: new Uint8Array(0), markupWithheld: true }), true);
-    const api = fakeApi({ getItemLinks: lists(), confirmLinks: vi.fn(), approve: vi.fn(), sendBack: vi.fn().mockResolvedValue(item()) });
+  it('refuses answers, Approve and break-glass from a view with part of the piece hidden, read again, before the API; Send back stays (round 4)', async () => {
+    const getWorkingItem = vi.fn().mockResolvedValue(item({}, { contentHash: new Uint8Array(0), markupWithheld: true }));
+    const api = fakeApi({ getWorkingItem, getItemLinks: lists(), confirmLinks: vi.fn(), approve: vi.fn(), sendBack: vi.fn().mockResolvedValue(item()) });
     const REFUSED = 'Nothing was changed: parts of this piece are hidden from you, so an officer who can see all of it must check its links and approve it.';
     for (const fields of [answers, { ...answers, step: 'approve', hash: hashHex(HASH) }, { step: 'break-glass', hash: hashHex(HASH), reason: 'Forged' }]) {
-      expect(await runReview(api, reader, ID, form(fields), one, partial)).toMatchObject({ status: 409, notice: REFUSED });
+      expect(await runReview(api, reader, ID, form(fields), one)).toMatchObject({ status: 409, notice: REFUSED, kept: { note: '' } });
     }
+    expect(getWorkingItem).toHaveBeenCalledWith(reader, ID);
     for (const rpc of [api.getItemLinks, api.confirmLinks, api.approve]) expect(rpc).not.toHaveBeenCalled();
-    expect(await runReview(api, reader, ID, form({ step: 'send-back', note: 'Fix it' }), one, partial)).toEqual({ redirect: `${REVIEW_LINKS.queue}?done=sent-back` });
-    // A view seen whole (or not known) goes on to the API as before.
-    expect(await runReview(fakeApi({ approve: vi.fn().mockResolvedValue(item()) }), reader, ID, form({ step: 'approve', hash: hashHex(HASH) }), one, reviewOffers(version(), false))).toEqual({ redirect: `${REVIEW_LINKS.review(ID)}?done=approved` });
+    getWorkingItem.mockClear();
+    expect(await runReview(api, reader, ID, form({ step: 'send-back', note: 'Fix it' }), one)).toEqual({ redirect: `${REVIEW_LINKS.queue}?done=sent-back` });
+    expect(getWorkingItem).not.toHaveBeenCalled();
+    // A view seen whole goes on to the API as before.
+    expect(await runReview(fakeApi({ approve: vi.fn().mockResolvedValue(item()) }), reader, ID, form({ step: 'approve', hash: hashHex(HASH) }), one)).toEqual({ redirect: `${REVIEW_LINKS.review(ID)}?done=approved` });
+  });
+
+  it('fails closed: when the piece cannot be read again, nothing is sent and the typed text is kept (last E4 commit)', async () => {
+    const CHECK = "We couldn't check this piece just now, so nothing was changed. Reload and try again.";
+    for (const error of [new ApiUnavailable('GetWorkingItem'), new Error('a bug'), new NotAllowed('GetWorkingItem', 'not permitted')]) {
+      const api = fakeApi({ getWorkingItem: vi.fn().mockRejectedValue(error), getItemLinks: vi.fn(), confirmLinks: vi.fn(), approve: vi.fn() });
+      for (const fields of [answers, { ...answers, step: 'approve', hash: hashHex(HASH), note: 'Kept for the writer' }, { step: 'break-glass', hash: hashHex(HASH), reason: 'Away' }]) {
+        expect(await runReview(api, reader, ID, form(fields), one)).toMatchObject({ status: 503, notice: CHECK, kept: { reason: fields.step === 'break-glass' ? 'Away' : '' } });
+      }
+      expect(await runReview(api, reader, ID, form({ ...answers, step: 'approve', hash: hashHex(HASH), note: 'Kept for the writer' }), one)).toMatchObject({ kept: { note: 'Kept for the writer', notes: { [rowKey(A)]: 'ok' }, answers: { [rowKey(A)]: 'yes' } } });
+      for (const rpc of [api.getItemLinks, api.confirmLinks, api.approve]) expect(rpc).not.toHaveBeenCalled();
+    }
+    // A sign-in that ran out, or a piece gone, says so instead, still sending nothing.
+    expect(await runReview(fakeApi({ getWorkingItem: vi.fn().mockRejectedValue(new SignInAgain('GetWorkingItem')) }), reader, ID, form(answers), one)).toMatchObject({ status: 401, signIn: true });
+    expect(await runReview(fakeApi({ getWorkingItem: vi.fn().mockRejectedValue(new ApiNotFound('GetWorkingItem')) }), reader, ID, form(answers), one)).toMatchObject({ status: 404, gone: true });
   });
 
   it('approves by the hash seen, for the office chosen; break-glass with its reason', async () => {
@@ -519,6 +538,15 @@ describe('runPublish and runTakeDown: the confirm pages\' posts', () => {
     await runPublish(fakeApi({ publish }), reader, down, form({ hash: hashHex(HASH), republish: 'yes' }));
     expect(publish).toHaveBeenLastCalledWith(reader, { itemId: ID, contentHash: HASH, republishWithdrawn: true });
     expect(await runPublish(fakeApi({ publish }), reader, item(), form({ hash: 'nope' }))).toMatchObject({ status: 409, notice: 'This page is out of date. Open the item again.' });
+  });
+
+  it('fails closed: with the piece not read, Publish sends nothing (last E4 commit)', async () => {
+    const publish = vi.fn();
+    expect(await runPublish(fakeApi({ publish }), reader, undefined, form({ hash: hashHex(HASH) }))).toEqual({
+      status: 503,
+      notice: "We couldn't check this piece just now, so nothing was changed. Reload and try again.",
+    });
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('refuses Publish from a view with part of the piece hidden, before the API (round 4)', async () => {
