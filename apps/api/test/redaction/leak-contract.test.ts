@@ -33,7 +33,7 @@ import { MethodOptions_IdempotencyLevel as Idempotency, timestampFromDate } from
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Audience } from '../../src/gen/nwfl/mensa/v1/common_pb.js';
-import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentKind, ContentService, ItemVisibility } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
 import {
   LedgerSubjectKind,
@@ -454,6 +454,46 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     const bytes = new Map([['ExportEdition', Buffer.from(toBinary(NewsletterService.method.exportEdition.output, exported))]]);
     expect(found(bytes, C)).toEqual({});
     expect(exported.contentJson).toContain('[withheld]');
+  });
+
+  // EDITOR A3b: the link gate's writes answer with words too. A ready piece whose printed URL carries the
+  // marked phone canary, answered no by an officer: Approve's refusal and ConfirmLinks' answer, for every
+  // audience, hold no canary unless the caller's lens shows it (the officer, the positive control).
+  it("keeps every canary out of the link gate's refusals and answers, but for an officer", async () => {
+    const content = api.client(ContentService);
+    const PUB = as('pub-token');
+    const office = (await api.pool.query<{ id: string }>(`SELECT id FROM office WHERE slug = 'publications'`)).rows[0]!.id;
+    const item = (await content.createItem({ kind: ContentKind.ARTICLE, officeId: office, slug: 'leak-gate', title: 'Rides' }, PUB)).item!;
+    const ring = `https://example.org/ring/${C.phone}`;
+    await content.saveDraft({ itemId: item.id, title: 'Rides', summary: '', visibility: ItemVisibility.PUBLIC, bodyMarkup: `Rides: ${ring} or https://example.org/rides.` }, PUB);
+    const contentHash = (await content.markReady({ itemId: item.id }, PUB)).item!.working!.contentHash;
+    await api.client(RedactionPolicyService).addRedactionMark(
+      { subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: item.id, field: MarkField.BODY, quote: C.phone, category: RedactionCategory.MEMBER_PHONE },
+      OFFICER,
+    );
+    const officerList = await content.getItemLinks({ itemId: item.id }, OFFICER);
+    await content.confirmLinks({ itemId: item.id, linksSha256: officerList.linksSha256, answers: [{ url: ring, yes: false }] }, OFFICER);
+    /** Approve's refusal and ConfirmLinks' answer (or refusal) for one caller, by RPC. */
+    const gate = async (who: { headers?: Record<string, string> }): Promise<Map<string, Buffer>> => {
+      const said = async (call: () => Promise<unknown>): Promise<Buffer> => {
+        try {
+          return Buffer.from(dump(await call()));
+        } catch (error) {
+          const connectError = ConnectError.from(error);
+          return Buffer.from([connectError.message, dump(connectError.details), dump(connectError.metadata)].join('\n'));
+        }
+      };
+      const linksSha256 = await content.getItemLinks({ itemId: item.id }, who).then(
+        (list) => list.linksSha256,
+        () => new Uint8Array(),
+      );
+      return new Map([
+        ['ContentService.Approve', await said(() => content.approve({ itemId: item.id, contentHash }, who))],
+        ['ContentService.ConfirmLinks', await said(() => content.confirmLinks({ itemId: item.id, linksSha256, answers: [{ url: 'https://example.org/not-here', yes: true }] }, who))],
+      ]);
+    };
+    for (const who of [{}, MEMBER, AGENT, as('lone-admin-token'), as('lone-webmaster-token')]) expect(found(await gate(who), C), JSON.stringify(who)).toEqual({});
+    expect(found(await gate(OFFICER), C)).toEqual({ phone: ['ContentService.Approve', 'ContentService.ConfirmLinks'] });
   });
 
   // Last: it tightens the public officer_contact cell, which must change none of this.

@@ -104,9 +104,14 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
       // As loadItemAs: a caller who can see no working item is told "not found", so the answer gives nothing away.
       if (!reviewer && roles.offices.length === 0) throw notFound();
       return tx(async (client) => {
+        // A holder who reviews nothing reads their own office's items only. Another office's item and a
+        // missing one get the same answer, so the answer tells nothing about which ids exist.
+        if (!reviewer) {
+          const slug = (await client.query<{ slug: string }>(`SELECT o.slug FROM content_item i JOIN office o ON o.id = i.office_id WHERE i.id = $1`, [id])).rows[0]?.slug;
+          if (slug === undefined || !roles.offices.includes(slug)) throw new ConnectError('not permitted', Code.PermissionDenied);
+        }
         // No row locks: a read must not hold up a writer.
         const item = await loadItem(client, id, false);
-        if (!reviewer && !roles.offices.includes(item.office_slug)) throw new ConnectError('not permitted', Code.PermissionDenied);
         // An item always has a working version or a live one.
         const version = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string, false);
         const { seen, sha256, readyAtMicros } = await listsOf(client, caller, item, version);

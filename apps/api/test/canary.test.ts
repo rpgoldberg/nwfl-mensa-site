@@ -22,7 +22,7 @@ import { MethodOptions_IdempotencyLevel as Idempotency } from '@bufbuild/protobu
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Audience } from '../src/gen/nwfl/mensa/v1/common_pb.js';
-import { ContentService } from '../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentKind, ContentService, ItemVisibility } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { MarkSubjectKind } from '../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { SERVED_SERVICES } from '../src/grpc/routes.js';
@@ -35,6 +35,9 @@ import { extractAll } from './pdf/extract.js';
 import { linesPdf } from './pdf/fixtures.js';
 
 const TOKEN = `canary${randomBytes(8).toString('hex')}`;
+// EDITOR A3b: a members event's own address, a URL-borne secret: GetItemLinks lists the office's events, and the link
+// gate's refusals name links; the approvers who read at the public's audience (the lone Admin and Webmaster) get neither.
+const EVENT_TOKEN = `canaryevent${randomBytes(8).toString('hex')}`;
 // What a member typed at sign-up: shown to the verifier and the approvers (PROFILE-ID), to no one else.
 const NUMBER = String(randomInt(100_000_000_000, 999_999_999_999));
 const LAST_NAME = `Canary${randomBytes(4).toString('hex')}`;
@@ -203,6 +206,24 @@ describe.skipIf(!live)('the members-only canary', () => {
       [`Event ${TOKEN}`, `https://example.org/${TOKEN}`]);
   });
 
+  // EDITOR A3b: the publications office's members event, and a ready piece of that office whose event link an officer
+  // answered no, so Approve's refusal would name it.
+  beforeAll(async () => {
+    const office = (await api.pool.query<{ id: string }>(`SELECT id FROM office WHERE slug = 'publications'`)).rows[0]!.id;
+    await api.pool.query(`INSERT INTO event_occurrence (title, starts_at, visibility, url, owner_office_id) VALUES ('Members salon', '2026-11-12T23:00:00Z', 'members', $1, $2)`, [
+      `https://example.org/salon/${EVENT_TOKEN}`,
+      office,
+    ]);
+    const content = api.client(ContentService);
+    const PUB = as('pub-token');
+    const item = (await content.createItem({ kind: ContentKind.ARTICLE, officeId: office, slug: 'canary-gate', title: 'Salon' }, PUB)).item!;
+    await content.saveDraft({ itemId: item.id, title: 'Salon', summary: '', visibility: ItemVisibility.PUBLIC, bodyMarkup: 'See the calendar.' }, PUB);
+    ids['gateItem'] = item.id;
+    ids['gateHash'] = Buffer.from((await content.markReady({ itemId: item.id }, PUB)).item!.working!.contentHash).toString('hex');
+    const list = await content.getItemLinks({ itemId: item.id }, OFFICER);
+    await content.confirmLinks({ itemId: item.id, linksSha256: list.linksSha256, answers: [{ url: `https://example.org/salon/${EVENT_TOKEN}`, yes: false }] }, OFFICER);
+  });
+
   afterAll(async () => {
     await api?.close();
   });
@@ -314,6 +335,39 @@ describe.skipIf(!live)('the members-only canary', () => {
     const preview = await api.client(ContentService).previewWorkingItem({ itemId: ids['publicItem'] as string }, who);
     expect(dump(preview.publicBody)).toContain('Meet at ');
     expect(dump(preview.publicBody)).not.toContain(TOKEN);
+  });
+
+  /** The link gate's answers in words for one caller: Approve's refusal, and ConfirmLinks' answer or refusal. */
+  const gateSaid = async (who: { headers?: Record<string, string> }): Promise<string> => {
+    const content = api.client(ContentService);
+    const said = async (call: () => Promise<unknown>): Promise<string> => {
+      try {
+        return dump(await call());
+      } catch (error) {
+        const connectError = ConnectError.from(error);
+        return [connectError.message, dump(connectError.details), dump(connectError.metadata)].join('\n');
+      }
+    };
+    const itemId = ids['gateItem'] as string;
+    const linksSha256 = await content.getItemLinks({ itemId }, who).then(
+      (list) => list.linksSha256,
+      () => new Uint8Array(),
+    );
+    return [
+      await said(() => content.approve({ itemId, contentHash: Buffer.from(ids['gateHash'] as string, 'hex') }, who)),
+      await said(() => content.confirmLinks({ itemId, linksSha256, answers: [{ url: 'https://example.org/not-here', yes: true }] }, who)),
+    ].join('\n');
+  };
+
+  // EDITOR A3b: a members event's address reaches an officer through GetItemLinks and the gate's refusal (the positive
+  // control), and nobody below the members through any read or any of the gate's answers.
+  it("keeps a members event's address from everyone below the members, the approvers who read there included", async () => {
+    for (const who of [{}, as('lone-admin-token'), as('lone-webmaster-token')]) {
+      expect((await sweep(who)).carriers(EVENT_TOKEN), JSON.stringify(who)).toEqual([]);
+      expect(await gateSaid(who), JSON.stringify(who)).not.toContain(EVENT_TOKEN);
+    }
+    expect((await sweep(OFFICER)).carriers(EVENT_TOKEN)).toContain('ContentService.GetItemLinks');
+    expect(await gateSaid(OFFICER)).toContain(EVENT_TOKEN);
   });
 
   it('keeps the token out of the public search index and in the members index', async () => {

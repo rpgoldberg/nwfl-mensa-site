@@ -217,6 +217,9 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       for (const who of [TREASURER, OFFICER, ADMIN, WEBMASTER, LONE_WEBMASTER, LONE_HOLDER]) expect(await codeOf(links(own.itemId, who))).toBe('ok');
       const others = await piece('See https://example.org/theirs.', { writer: TREASURER, office: 'treasurer' });
       expect(await codeOf(links(others.itemId, LONE_HOLDER))).toBe(Code.PermissionDenied);
+      // No existence oracle: a missing item is answered as another office's one, as GetWorkingItem does.
+      expect(await codeOf(links('00000000-0000-4000-8000-000000000001', LONE_HOLDER))).toBe(Code.PermissionDenied);
+      expect(await codeOf(content.getWorkingItem({ itemId: '00000000-0000-4000-8000-000000000001' }, LONE_HOLDER))).toBe(Code.PermissionDenied);
       expect(await codeOf(links(own.itemId, AFFILIATE))).toBe(Code.NotFound);
       expect(await codeOf(links(own.itemId, MEMBER))).toBe(Code.NotFound);
       expect(await codeOf(content.getItemLinks({ itemId: own.itemId }))).toBe(Code.Unauthenticated);
