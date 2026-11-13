@@ -166,6 +166,11 @@ test.describe('approving, with no script', () => {
     await expect(page.getByRole('radio')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Save my answers' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Send back' })).toBeVisible();
+    // Round 3: the hidden part holds a link, so the panel never says the piece has none.
+    const panel = page.getByRole('region', { name: 'Check the links' });
+    await expect(panel).toContainText('An officer who can see all of this piece checks its links.');
+    await expect(panel).not.toContainText('This piece has no links.');
+    await expect(panel).not.toContainText(/\d+ of \d+ links? checked/);
     expect(await page.content()).not.toContain(REVIEW.membersLink.url);
     // The queue lists it, saying so, and the officer area does not count it as theirs to approve.
     await page.goto(QUEUE);

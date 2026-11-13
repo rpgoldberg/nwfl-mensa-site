@@ -16,6 +16,7 @@ import {
   homeLines,
   isPublisher,
   linkRows,
+  linksPanel,
   linksSummary,
   loadFailure,
   parseActing,
@@ -297,6 +298,20 @@ describe('reviewOffers: what S7 offers for a version', () => {
     expect(reviewOffers(version({ status: 'cleared' }), false)).toEqual({ ...none, sendBack: true });
     expect(reviewOffers(version({ status: 'draft', contentHash: new Uint8Array(0) }), true)).toEqual(none);
     expect(reviewOffers(undefined, true)).toEqual(none);
+  });
+
+  it('says what the links panel is for: never "no links" to a reviewer who sees only part of the piece (round 3)', () => {
+    const open = reviewOffers(version(), false);
+    const mine = reviewOffers(version({ callerEdited: true, callerMayApprove: false }), false);
+    const partial = reviewOffers(version({ contentHash: new Uint8Array(0), markupWithheld: true }), false);
+    const OFFICER = 'An officer who can see all of this piece checks its links.';
+    expect(linksPanel([link()], open, true)).toEqual({ summary: '0 of 1 link checked.', lead: 'Open each link, then say whether it shows the right page. Each answer is saved when you press Save my answers.' });
+    expect(linksPanel([], open, true)).toEqual({ summary: 'This piece has no links.' });
+    expect(linksPanel([link()], mine, true)).toEqual({ summary: '0 of 1 link checked.', lead: 'You changed this version, so someone else must check its links.' });
+    expect(linksPanel([link()], reviewOffers(version({ status: 'cleared' }), false), false)).toEqual({ summary: '0 of 1 link checked.', lead: 'The answers given before it was approved.' });
+    // The hidden part may hold links: no count and no "no links", whether the list the reviewer sees is empty or not.
+    expect(linksPanel([], partial, true)).toEqual({ summary: OFFICER });
+    expect(linksPanel([link()], partial, true)).toEqual({ summary: OFFICER });
   });
 
   it('with parts withheld from the caller (no hash, or the markup withheld), offers only Send back (P24)', () => {

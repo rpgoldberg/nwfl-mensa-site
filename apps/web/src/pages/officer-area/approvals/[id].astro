@@ -36,7 +36,7 @@ import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
 import { documentHtml } from '../../../lib/document';
 import { NOTE_MAX, hashHex } from '../../../lib/editor/form';
-import { APPROVE_NOTE, type ActingChoice, type Outcome, PARTS_HIDDEN, REVIEW_LINKS, TOO_LARGE, actingChoice, answerWords, doneText, enteredForOffice, errorList, isPublisher, linkRows, linksSummary, loadFailure, reviewOffers, runReview } from '../../../lib/editor/review';
+import { APPROVE_NOTE, type ActingChoice, type Outcome, PARTS_HIDDEN, REVIEW_LINKS, TOO_LARGE, actingChoice, answerWords, doneText, enteredForOffice, errorList, isPublisher, linkRows, linksPanel, loadFailure, reviewOffers, runReview } from '../../../lib/editor/review';
 import { type RosterOffice, signInLine } from '../../../lib/editor/writer';
 import { readForm } from '../../../lib/form';
 
@@ -119,6 +119,7 @@ const admin = session.groups.includes('nwfl-admin');
 // Round 2 (P24): with part of it withheld from this reviewer (no hash), only Send back is offered.
 const offers = reviewOffers(working, admin);
 const mayAnswer = offers.answer;
+const panel = linksPanel(links?.links ?? [], offers, ready);
 const breakGlass = offers.breakGlass;
 const mayTakeDown = item?.state === 'published' && (admin || session.groups.includes('nwfl-webmaster') || session.groups.includes(`nwfl-office-${roster?.find((o) => o.id === item?.officeId)?.slug ?? ''}`));
 const entered = working !== undefined && enteredForOffice(history, working.number);
@@ -247,16 +248,8 @@ const keptRows = kept ? Object.entries(kept.places).sort(([, a], [, b]) => a - b
       {links && (
         <section class="links-panel" id="links" aria-labelledby="links-title">
           <h2 id="links-title">Check the links</h2>
-          <p><b>{linksSummary(links.links)}</b></p>
-          {rows.length > 0 && (
-            mayAnswer
-              ? <p>Open each link, then say whether it shows the right page. Each answer is saved when you press Save my answers.</p>
-              : offers.partial
-                ? <p>An officer who can see all of this piece checks its links.</p>
-              : ready
-                ? <p>You changed this version, so someone else must check its links.</p>
-                : <p>The answers given before it was approved.</p>
-          )}
+          <p><b>{panel.summary}</b></p>
+          {panel.lead && <p>{panel.lead}</p>}
           {errors['answers'] && <p class="error" id="answers-error">Problem: {errors['answers']}</p>}
           <ol class="link-rows">
             {rows.map((row) => (

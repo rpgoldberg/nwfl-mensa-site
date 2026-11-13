@@ -218,6 +218,18 @@ export function linksSummary(links: readonly PieceLink[]): string {
   return `${checked} of ${links.length} ${links.length === 1 ? 'link' : 'links'} checked.`;
 }
 
+/**
+ * The links panel's words: its summary, and what to do. To a reviewer who sees only part of the piece the
+ * hidden part may hold links, so they get neither a count nor "no links" (round 3), whatever their list holds.
+ */
+export function linksPanel(links: readonly PieceLink[], offers: Offers, ready: boolean): { summary: string; lead?: string } {
+  if (offers.partial) return { summary: 'An officer who can see all of this piece checks its links.' };
+  const summary = linksSummary(links);
+  if (links.length === 0) return { summary };
+  if (offers.answer) return { summary, lead: 'Open each link, then say whether it shows the right page. Each answer is saved when you press Save my answers.' };
+  return { summary, lead: ready ? 'You changed this version, so someone else must check its links.' : 'The answers given before it was approved.' };
+}
+
 /** What the links form held, by row key: the answers chosen, the notes, and each row's place (from 1). */
 export interface KeptAnswers {
   answers: Record<string, 'yes' | 'no'>;
