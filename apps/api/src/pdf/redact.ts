@@ -229,11 +229,16 @@ export function boxKinds(chars: readonly PageChar[], drawn: readonly Box[], with
   });
 }
 
-/** What no link may sit over on a page (LINKS L3): the passages, the boxes drawn, and every removed glyph's ink, which can reach past its box. */
+/**
+ * What no link may sit over on a page (LINKS L3): the passages, the boxes drawn, and every removed glyph's ink, which can
+ * reach past its box. A character PDFium generated (a line end's "\r\n", a space it inserts) draws nothing and has no
+ * loose box, so stillThere never finds it again and `removed` holds every one; its ink is a point at its line's end, and
+ * counting it blocked a link at the end of every line of the page (LINKS-LINEEND). It is not withheld ink.
+ */
 export function withheldAreas(index: number, regions: readonly Box[], drawn: readonly Box[], chars: readonly PageChar[], removed: Iterable<number>): PageBox[] {
   const inks = [...removed].flatMap((i) => {
-    const ink = chars[i]?.ink;
-    return ink === null || ink === undefined ? [] : [{ ...ink, page: index }];
+    const c = chars[i];
+    return c === undefined || c.generated || c.ink === null ? [] : [{ ...c.ink, page: index }];
   });
   return [...regions.map((box) => ({ ...box, page: index })), ...drawn.map((box) => ({ ...box, page: index })), ...inks];
 }

@@ -302,8 +302,13 @@ only, in one shape: a `/Link` with a `/URI` action to
 `https://<LINK_ORIGIN>/out/<id>` and the label `Link to <host>`. Nothing of
 the original's annotations is copied. A link is dropped when its rect meets
 a drawn box, removed ink or the box of any glyph the copy lacks, or, under
-`blur` and `hide`, any picture PDFium reads: drawn on the page, in a form at
-any depth, or in an annotation's appearance. A picture painted by a tiling
+`blur` and `hide`, any picture PDFium reads. Removed ink is that of glyphs
+the removal took; a character PDFium generates (a line end, an inserted
+space) draws nothing and is never withheld, so a link at a line's end on a
+page with a redaction is kept (LINKS-LINEEND; `ENGINE_VERSION` gained
+`+lineend-1`, so the boot sweep makes every copy again). Under `blur` and
+`hide`, a picture drawn on the page, in a form at any depth, or in an
+annotation's appearance is withheld too. A picture painted by a tiling
 pattern, or drawn in a soft mask's group (an ExtGState's `/SMask`; the name
 `/None`, which InDesign, Illustrator and Acrobat write, is no soft mask, and
 since BOXLABEL's NOTE-1 fix no longer stops the sanitizer; any other soft
