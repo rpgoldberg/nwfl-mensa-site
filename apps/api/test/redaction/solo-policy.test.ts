@@ -2,7 +2,7 @@
 // against a migrated database. Two-person (the default) is as before: the loosening waits, and its
 // proposer may not approve it. One-approver applies it at once, approved by the proposer, recorded
 // under that rule, and replaces a loosening still waiting. The content rule and this one are separate
-// settings: Ross's "content only" answer is content one-approver with this scope left two-person.
+// settings: the editor's "content only" answer is content one-approver with this scope left two-person.
 // Every person here is made up.
 import { type Client, Code } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

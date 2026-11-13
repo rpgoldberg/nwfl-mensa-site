@@ -52,7 +52,7 @@ describe('the zoom steps', () => {
     expect(zoomOut(0.1)).toBe(0.25);
   });
 
-  // W-LOOK3: as Ross's mockup writes it, "100%".
+  // W-LOOK3: as the editor's mockup writes it, "100%".
   it('show as a whole percentage', () => {
     expect(percent(1)).toBe('100%');
     expect(percent(0.7354)).toBe('74%');
@@ -246,7 +246,7 @@ describe('wireViewer', () => {
     expect(OPENING).toBe('Opening the issue');
   });
 
-  // W-LOOK3 (Ross's mockup): the page fills the frame's width, on a computer as on a phone; Fit width shows pressed.
+  // W-LOOK3 (the editor's mockup): the page fills the frame's width, on a computer as on a phone; Fit width shows pressed.
   it('opens at Fit width on a computer and a phone alike, with Fit width pressed', async () => {
     for (const phone of [false, true]) {
       win.phone = phone;
@@ -329,7 +329,7 @@ describe('wireViewer', () => {
     expect(parts['fit-width']!.getAttribute('aria-pressed')).toBe('true');
   });
 
-  // W-LOOK3: the zoom select, as Ross's mockup has it, beside the steps.
+  // W-LOOK3: the zoom select, as the editor's mockup has it, beside the steps.
   it('zooms to the step chosen in the zoom picker, and a choice of the size it is at changes nothing', async () => {
     const { parts, pages } = await open();
     const choose = async (value: string) => {

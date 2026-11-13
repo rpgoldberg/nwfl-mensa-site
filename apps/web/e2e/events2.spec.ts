@@ -1,4 +1,4 @@
-// EVENTS2: Ross's concept for /events (11-10). One toolbar ("‹ period ›" and List | Week | Month) on one
+// EVENTS2: the editor's concept for /events (11-10). One toolbar ("‹ period ›" and List | Week | Month) on one
 // row on a Fold's cover screen (344 px); the list's ribbon holds only days with events and scrolls; the
 // week shows all seven days; the month is the grid, and a selected day's events show right below it.
 // Each event's type icon comes from its series' category, named, with a legend; the view and the date

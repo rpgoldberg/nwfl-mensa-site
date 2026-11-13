@@ -6,7 +6,7 @@
 // not have is the same 404 as a missing one. public/scripts/viewer.js draws it with pdf.js's core API
 // (the legacy build, for older phones and tablets); never pdf.js's viewer.html, and never an address
 // from the query. Open in another app hands the same file to the device's own viewer; Download asks
-// for it as an attachment; both are links in the bar on the frame's top edge (W-LOOK3, Ross's mockup).
+// for it as an attachment; both are links in the bar on the frame's top edge (W-LOOK3, the editor's mockup).
 // Without JavaScript the bar keeps those two, and the frame says the reader needs it.
 import pdfjsUrl from 'pdfjs-dist/legacy/build/pdf.min.mjs?url';
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
@@ -53,7 +53,7 @@ const title = view?.kind === 'not_found' ? 'No such issue' : view?.kind === 'not
   {ok && (
     <>
       <CopyTag members={ok.copy === 'members'} signIn={signIn} />
-      {/* W-LOOK3, Ross's mockup: ONE rounded thin frame whose top edge is the bar. Download and Open in
+      {/* W-LOOK3, the editor's mockup: ONE rounded thin frame whose top edge is the bar. Download and Open in
           another app are links, so the bar shows them without the script; the rest waits for it
           (data-viewer-js). READER2: |<< < [n] of N > >>| (the page typed in a plain text box), search,
           zoom (a picker, never a native select: WebKit's select breaks the site's CSP), Fit, Light pages

@@ -276,7 +276,7 @@ test.describe('/read controls', () => {
     await expect(box).toHaveValue('1');
   });
 
-  // W-LOOK3: 44 px, WCAG 2.5.5's AAA size, for this bar (Ross's mockup); 48 elsewhere on the site.
+  // W-LOOK3: 44 px, WCAG 2.5.5's AAA size, for this bar (the editor's mockup); 48 elsewhere on the site.
   test('every control is a visible target of at least 44 px', async ({ page }) => {
     await page.goto(read(PUBLIC_ID));
     await expect(drawn(page, 1)).toHaveCount(1);

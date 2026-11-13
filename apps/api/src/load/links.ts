@@ -2,7 +2,7 @@
 // LINKS: an issue's approved links, as both loaders read and store them (the
 // issue loader's nwfl-issue/2, load.ts, and the links command's nwfl-links/1,
 // attach.ts). The checker (apps/linkcheck) writes the list off-cluster and
-// Ross approves it by its hash; the server never reads a link from a PDF.
+// The editor approves it by its hash; the server never reads a link from a PDF.
 //
 // A list is per file: { public: [...], members: [...] }. Each link is
 //   id       26 lower-case base32 characters, minted at random by the checker
@@ -24,12 +24,12 @@
 //            test/load/fixtures/links-contract.json pins both parts); the
 //            loader keeps nothing else, and rewrites nothing.
 //   kind     web (https) or mail (mailto).
-//   confirm  a login-walled host Ross confirmed by hand (Facebook and the
+//   confirm  a login-walled host the editor confirmed by hand (Facebook and the
 //            like); the leaving page says so.
 // The host is never taken from the bundle: it is the url's (hostOf), and the
 // database checks it against the url again (0024).
 //
-// linksSha256, the hash Ross approves: SHA-256 of canonicalJson (content/
+// linksSha256, the hash the editor approves: SHA-256 of canonicalJson (content/
 // hash.ts: keys sorted at every depth, arrays in order) of
 //   { v: 2, sha256: { public, members }, links: { public: [...], members: [...] } }
 // with both files' sha256 (lower-case hex), each list sorted by id and each
@@ -183,7 +183,7 @@ export interface FileHashes {
   members: string;
 }
 
-/** The links' hash, as Ross approves it (see the header): over the links and the two files they were approved for. */
+/** The links' hash, as the editor approves it (see the header): over the links and the two files they were approved for. */
 export function linksSha256(files: FileHashes, links: IssueLinks): string {
   return createHash('sha256')
     .update(canonicalJson({ v: 2, sha256: { public: files.public, members: files.members }, links: { public: byId(links.public), members: byId(links.members) } }))

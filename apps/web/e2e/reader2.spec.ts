@@ -1,4 +1,4 @@
-// READER2 (Ross, 2026-11-10): the reader's four asks, in a real browser.
+// READER2 (the editor, 2026-11-10): the reader's four asks, in a real browser.
 // 1. DARKPDF: the pages follow the site's theme, live; dark recolours the page and never a picture;
 //    Light pages shows them as printed (e2e/synthetic-pdf.mjs PICTURE_PDF: a photo, red over blue).
 // 2. Search within the issue: a magnifier opens a search row in the bar, "n of N", previous and next,
@@ -6,7 +6,7 @@
 // 3. Zoomed wider than the frame on a computer: a scrollbar at the foot of the window, the wheel sideways,
 //    Shift and the wheel, and a hand tool that drags the page (a press without a drag still follows a link).
 // 4. |<< < [n] of N > >>|, the page typed; one row of 44 px targets at 300 to 390 px, what has no room in
-//    a More menu (Ross's order: page controls, then search, then Fit, then zoom, then Download and Open).
+//    a More menu (the editor's order: page controls, then search, then Fit, then zoom, then Download and Open).
 // No native select; neither text box raises a CSP violation, in WebKit too.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';

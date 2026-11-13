@@ -1,4 +1,4 @@
-// DARKPDF (Ross's decision (a)): the issue's pages follow the site's theme, as the reader set it in Aa or
+// DARKPDF (the editor's decision (a)): the issue's pages follow the site's theme, as the reader set it in Aa or
 // the device does (src/styles/tokens.css): light shows each page as printed; dark recolours the drawing,
 // light text on a dark page; high contrast tints the paper to the theme's own. Pictures are never
 // recoloured, so a photo never shows as a negative. pdf.js 6.4.299's pageColors cannot do that (its

@@ -12,7 +12,7 @@
 //   Link = { "id": 26 lower-case base32 chars (128 random bits, minted here, never derived),
 //            "page": 1-based page number, "rect": [x1, y1, x2, y2] in PDF points, rounded to 0.01,
 //            x1 < x2 and y1 < y2, "url": its own kept form (urls.ts keptForm: https, or mailto:<one
-//            address>), "kind": "web" | "mail", "confirm": true for a login-walled host Ross confirmed }
+//            address>), "kind": "web" | "mail", "confirm": true for a login-walled host the editor confirmed }
 //   linksSha256 = sha256 hex of canonicalJson({ v: 2, sha256: { public, members }, links: { public: [...],
 //   members: [...] } }), so the links approved for one issue's files cannot attach to another's; computed
 //   as the loader computes marksSha256 (apps/api src/load/load.ts marksSha256), with canonicalJson
@@ -81,7 +81,7 @@ export function mintId(random: (size: number) => Uint8Array = randomBytes): stri
 const byId = (a: ListedLink, b: ListedLink): number => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const shape = (link: ListedLink): ListedLink => ({ id: link.id, page: link.page, rect: link.rect, url: link.url, kind: link.kind, confirm: link.confirm });
 
-/** The approved list's hash, as Ross approves it ("LINKS: ok <prefix>"): over the links and the two files' sha256s. */
+/** The approved list's hash, as the editor approves it ("LINKS: ok <prefix>"): over the links and the two files' sha256s. */
 export function linksSha256(links: LinksByAudience, sha256: Record<Audience, string>): string {
   const sorted = { public: links.public.map(shape).sort(byId), members: links.members.map(shape).sort(byId) };
   return createHash('sha256')

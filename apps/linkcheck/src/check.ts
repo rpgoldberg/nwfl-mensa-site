@@ -2,10 +2,10 @@
 // check (SPEC D4 step 2): one verdict per link, with its reason codes, the chain it followed, and the
 // URL to keep if it is kept. Runs with a network but no PDF.
 //
-// Verdicts, most severe first: drop (removed unless Ross says yes), flag (Ross decides), review (the
-// no-fetch list: "not checked: officer review"), confirm (a login-walled host: Ross's own yes), upgrade
+// Verdicts, most severe first: drop (removed unless the editor says yes), flag (the editor decides), review (the
+// no-fetch list: "not checked: officer review"), confirm (a login-walled host: the editor's own yes), upgrade
 // (kept, rewritten to https or trimmed), ok. A link is kept by default only when ok or upgrade; every
-// other verdict needs Ross's yes, and some reasons cannot be kept at all (keepable: false): no https,
+// other verdict needs the editor's yes, and some reasons cannot be kept at all (keepable: false): no https,
 // a private address, a URL that does not parse or breaks the scheme, port or credentials rules.
 //
 // In order:
@@ -15,7 +15,7 @@
 //   - login-walled hosts: DNS only, never fetched; kept at https;
 //   - the link must be keepable as written (urls.ts parseKept, the contract with L2): no port, no IP
 //     literal, no dotless host, no userinfo; a mailto keeps only its one address, its query dropped;
-//   - http: only its https form is ever fetched (Ross: always https). If it fails at the transport, or
+//   - http: only its https form is ever fetched (the editor: always https). If it fails at the transport, or
 //     answers with a final status outside 2xx, the link has no https and is dropped;
 //   - the status and the chain; an unrelated redirect (another registrable domain, by the Public
 //     Suffix List; www to apex and http to https on one site are related); a redirect down to http;
@@ -88,7 +88,7 @@ export interface CheckResult {
   verdict: Verdict;
   reasons: Reason[];
   notes: Note[];
-  /** Whether Ross's yes can keep it. */
+  /** Whether the editor's yes can keep it. */
   keepable: boolean;
   /** The URL to keep (https, or mailto), if any. */
   kept?: string;
@@ -203,7 +203,7 @@ export function makeChecker(deps: CheckDeps): Checker {
     let kept: string | undefined = https;
     if (link.scheme === 'http') {
       // Only a working https answer upgrades: a transport failure or any final status outside 2xx
-      // means the https form does not work, so the link has no https (N3; Ross: always https).
+      // means the https form does not work, so the link has no https (N3; the editor: always https).
       const noHttps = fetched.failure === undefined ? !is2xx(fetched.final.status as number) : TRANSPORT.includes(fetched.failure);
       if (reasons.length === 0) reasons.unshift('upgraded');
       else if (noHttps) {

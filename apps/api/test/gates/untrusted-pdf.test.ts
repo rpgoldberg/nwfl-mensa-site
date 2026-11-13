@@ -2,7 +2,7 @@
 // UNTRUSTED-PDF-GATE (NEEDS.md, "UNTRUSTED-PDF-GATE"): no untrusted PDF may reach the parser until
 // (1) the engine runs as a sidecar with its own uid and no secrets and (2) the redaction output gate
 // is re-run outside the engine on every copy. Until then the only PDFs parsed are the issue loader's,
-// which Ross runs by hand. This static test, part of the normal API suite (a required check), is the
+// which the editor runs by hand. This static test, part of the normal API suite (a required check), is the
 // fast first line; untrusted-pdf-catalog.test.ts is the backstop on a migrated database. It aims at
 // accidental and lazy paths, so it reads plainly and freezes what it cannot judge:
 //

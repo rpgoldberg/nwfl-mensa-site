@@ -1,9 +1,9 @@
 // ============================================================================
-// From the check to links.json (SPEC D4 output): Ross's answers, then the approved list.
-//   - ok and upgrade are kept unless Ross says no;
-//   - confirm, review, flag and drop are kept only on his yes, and only when keepable;
+// From the check to links.json (SPEC D4 output): the editor's answers, then the approved list.
+//   - ok and upgrade are kept unless the editor says no;
+//   - confirm, review, flag and drop are kept only on the editor's yes, and only when keepable;
 //   - every kept link gets a fresh random id (list.ts mintId), its page and rect from the extraction,
-//     its URL from the check (the https form), and confirm = true when Ross's own yes kept it from
+//     its URL from the check (the https form), and confirm = true when the editor's own yes kept it from
 //     the login-walled or no-fetch list;
 //   - unanswered means removed (fail closed). An answer for a URL the check never saw, or a yes for a
 //     link that cannot be kept, is refused rather than ignored.
@@ -19,7 +19,7 @@ export const ANSWERS_FORMAT = 'nwfl-link-answers/1';
 
 const keptByDefault = (r: CheckResult): boolean => r.verdict === 'ok' || r.verdict === 'upgrade';
 
-/** Whether a result waits on Ross's yes or no. */
+/** Whether a result waits on the editor's yes or no. */
 export const needsAnswer = (r: CheckResult): boolean => r.keepable && !keptByDefault(r);
 
 export interface AnswersFile {
@@ -27,7 +27,7 @@ export interface AnswersFile {
   answers: { row?: number; url: string; keep: boolean }[];
 }
 
-/** The answers file to fill in: every URL that needs an answer, numbered as the sheet numbers it, "keep": false until Ross says yes. */
+/** The answers file to fill in: every URL that needs an answer, numbered as the sheet numbers it, "keep": false until the editor says yes. */
 export function answersTemplate(report: CheckReport): AnswersFile {
   return { format: ANSWERS_FORMAT, answers: report.results.filter(needsAnswer).map((r, i) => ({ row: i + 1, url: r.url, keep: false })) };
 }
@@ -45,7 +45,7 @@ function known(json: Json, where: string, keys: readonly string[]): void {
 
 const own = (json: Json, key: string): unknown => (Object.hasOwn(json, key) ? json[key] : undefined);
 
-/** Ross's answers, by URL, each checked against the report. */
+/** The editor's answers, by URL, each checked against the report. */
 export function parseAnswers(input: unknown, report: CheckReport): Map<string, boolean> {
   const json = object(input, 'the answers');
   known(json, 'the answers', ['format', 'answers']);
@@ -72,7 +72,7 @@ export function parseAnswers(input: unknown, report: CheckReport): Map<string, b
   return out;
 }
 
-/** links.json from the two extractions, the check and Ross's answers; checked by the strict reader before it is returned. */
+/** links.json from the two extractions, the check and the editor's answers; checked by the strict reader before it is returned. */
 export function buildLinkList(extractions: Record<Audience, Extraction>, report: CheckReport, answers: ReadonlyMap<string, boolean>, random: (size: number) => Uint8Array = randomBytes): LinkList {
   const byUrl = new Map(report.results.map((r) => [r.url, r]));
   const links = { public: [], members: [] } as LinksByAudience;

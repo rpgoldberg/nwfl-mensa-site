@@ -1,4 +1,4 @@
-// BOXLABEL (Ross, 11-05): each box in a copy says who may read what it covers. In the public copy, a
+// BOXLABEL (the editor, 11-05): each box in a copy says who may read what it covers. In the public copy, a
 // passage members can see is labelled "Members Only", else "Mbrs Only", else nothing; one members
 // cannot see either (public or members copy) "Private", else nothing. The gate takes exactly these three
 // strings, drawn inside a box in the label style, and nothing else; its leak checks do not count them.

@@ -26,5 +26,9 @@ if command -v gitleaks >/dev/null 2>&1 && [ "$(gitleaks version 2>/dev/null)" = 
   cd "$top"
   exec gitleaks "$@" --redact --verbose --no-banner .
 fi
+# A linked worktree's .git is a file naming a git dir outside the checkout, so the
+# shared git dir is mounted read-only at its own path too; else git fails there
+# and gitleaks reports "0 commits scanned". In a plain checkout it is inside $top.
+common=$(cd "$top" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
 exec docker run --rm --network none --user "$(id -u):$(id -g)" \
-  -v "$top:/repo:ro" -w /repo "$IMAGE" "$@" --redact --verbose --no-banner /repo
+  -v "$top:/repo:ro" -v "$common:$common:ro" -w /repo "$IMAGE" "$@" --redact --verbose --no-banner /repo

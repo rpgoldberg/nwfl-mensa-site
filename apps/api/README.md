@@ -401,7 +401,7 @@ by the ordinary checks.
 
 ### Untrusted PDFs (UNTRUSTED-PDF-GATE)
 
-The loader is the only way a PDF reaches the engine, and Ross runs it by
+The loader is the only way a PDF reaches the engine, and the editor runs it by
 hand. An officer upload, the archive importer, or any new RPC that stores an
 original, waits for two things: the engine as a sidecar with its own uid and
 no secrets, and the output gate re-run outside the engine on every copy. Two

@@ -41,7 +41,7 @@ const ADMIN = as('admin-token');
 const PHONE = '850-555-0199';
 const NAME = 'Quillon Brask';
 // The marks below use private_venue, a category the public redacts and members see, as member_name
-// was before 0022 (Ross, 11-02: the public sees member names).
+// was before 0022 (the editor, 11-02: the public sees member names).
 const sha = (bytes: Uint8Array): Buffer => createHash('sha256').update(bytes).digest();
 const zero = Buffer.alloc(32);
 

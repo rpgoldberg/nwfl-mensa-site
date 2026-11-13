@@ -1,6 +1,6 @@
 // ============================================================================
-// The sheet (SPEC D4 output): what Ross reads and answers, one Markdown file per issue, on his own
-// machine only. Every URL that needs his answer gets one numbered row (all its files and pages on
+// The sheet (SPEC D4 output): what the editor reads and answers, one Markdown file per issue, on their own
+// machine only. Every URL that needs the editor's answer gets one numbered row (all its files and pages on
 // it), with the text under the link, the URL, the final URL, the verdict, the reason and the fix.
 // Then what is kept, what cannot be kept, what was refused when the links were read, and the URLs
 // printed with no link.

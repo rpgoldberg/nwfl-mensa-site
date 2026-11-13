@@ -76,7 +76,7 @@ describe.skipIf(!live)('ContentService.ReadFile', () => {
     files['whole'] = whole.file;
     await mark(whole.itemId, MarkField.UNSPECIFIED, '', RedactionCategory.PRIVATE_VENUE);
 
-    // 0022 (Ross, 11-02): the public sees member names, in the text, the byline and the PDF, while a
+    // 0022 (the editor, 11-02): the public sees member names, in the text, the byline and the PDF, while a
     // phone in the same item stays withheld.
     const names = await publishItem(api.pool, {
       slug: 'names',

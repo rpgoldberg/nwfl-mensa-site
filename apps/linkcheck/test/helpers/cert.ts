@@ -18,19 +18,26 @@ const oid = (dotted: string): Buffer => {
   }
   return tlv(0x06, Buffer.from(bytes));
 };
-const int = (bytes: Buffer): Buffer => tlv(0x02, (bytes[0] as number) & 0x80 ? Buffer.concat([Buffer.from([0]), bytes]) : bytes);
+// Minimal DER INTEGER (non-negative) for any input: redundant leading 0x00 bytes are dropped, and one
+// is kept or added only where the next byte has its top bit set. DER forbids any other padding.
+export const int = (bytes: Buffer): Buffer => {
+  let start = 0;
+  while (start < bytes.length - 1 && bytes[start] === 0) start++;
+  const body = bytes.subarray(start);
+  return tlv(0x02, (body[0] as number) & 0x80 ? Buffer.concat([Buffer.from([0]), body]) : body);
+};
 const utc = (date: Date): Buffer => tlv(0x17, Buffer.from(`${date.toISOString().slice(2, 19).replace(/[-:T]/g, '')}Z`));
 const name = (cn: string): Buffer => seq(tlv(0x31, seq(oid('2.5.4.3'), tlv(0x0c, Buffer.from(cn)))));
 const ECDSA_SHA256 = seq(oid('1.2.840.10045.4.3.2'));
 
-function certificate(subject: string, key: KeyObject, issuer: string, issuerKey: KeyObject, ca: boolean, dnsNames: string[]): string {
+export function certificate(subject: string, key: KeyObject, issuer: string, issuerKey: KeyObject, ca: boolean, dnsNames: string[], serial: Buffer = randomBytes(8)): string {
   const extensions: Buffer[] = [seq(oid('2.5.29.19'), tlv(0x01, Buffer.from([0xff])), tlv(0x04, seq(...(ca ? [tlv(0x01, Buffer.from([0xff]))] : []))))];
   if (ca) extensions.push(seq(oid('2.5.29.15'), tlv(0x01, Buffer.from([0xff])), tlv(0x04, tlv(0x03, Buffer.from([0x01, 0x06])))));
   if (dnsNames.length > 0) extensions.push(seq(oid('2.5.29.17'), tlv(0x04, seq(...dnsNames.map((n) => tlv(0x82, Buffer.from(n)))))));
   const now = Date.now();
   const tbs = seq(
     tlv(0xa0, int(Buffer.from([2]))),
-    int(randomBytes(8)),
+    int(serial),
     ECDSA_SHA256,
     name(issuer),
     seq(utc(new Date(now - 3_600_000)), utc(new Date(now + 86_400_000))),

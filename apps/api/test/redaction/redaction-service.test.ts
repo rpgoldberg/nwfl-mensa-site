@@ -95,7 +95,7 @@ describe.skipIf(!live)('RedactionPolicyService', () => {
         'OFFICERS/IMAGE': 'SHOW',
       });
       expect(await cell('public', 'member_phone')).toMatchObject({ tenant_id: 'nwflorida', updated_by_sub: null });
-      // Ross's 11-02 decision, applied by 0022 through the change history.
+      // The editor's 11-02 decision, applied by 0022 through the change history.
       expect(await cell('public', 'member_name')).toMatchObject({ action: 'show', updated_by_sub: 'system:migration-0022' });
       expect(await cell('public', 'image')).toMatchObject({ action: 'show', updated_by_sub: 'system:migration-0022' });
     });

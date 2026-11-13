@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parkedSignals } from '../src/parked.js';
 
-describe('parkedSignals: any one means parked or for sale (Ross confirms)', () => {
+describe('parkedSignals: any one means parked or for sale (the editor confirms)', () => {
   it('names parking nameservers', () => {
     expect(parkedSignals({ ns: ['ns1.sedoparking.com', 'ns2.sedoparking.com'] })).toEqual(['parking-ns']);
     expect(parkedSignals({ ns: ['NS1.PARKINGCREW.NET.'] })).toEqual(['parking-ns']);

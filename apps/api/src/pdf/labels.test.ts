@@ -1,4 +1,4 @@
-// BOXLABEL: which label a box gets (Ross, 11-05): "Members Only", else "Mbrs Only", else none, for text
+// BOXLABEL: which label a box gets (the editor, 11-05): "Members Only", else "Mbrs Only", else none, for text
 // members can see; "Private", else none, for text members cannot see either. Each fits by its own width.
 import { PDFDocument, StandardFonts } from '@cantoo/pdf-lib';
 import { describe, expect, it } from 'vitest';

@@ -33,7 +33,7 @@ describe.skipIf(!live)('R2a challenge: API', () => {
   beforeAll(async () => {
     api = await startApi('nwfl_chal', { verifier });
     const { pool } = api;
-    // 0022 shows member names to the public by default (Ross, 11-02). The challenge marks names as a
+    // 0022 shows member names to the public by default (the editor, 11-02). The challenge marks names as a
     // category the public redacts, so the public's cell is tightened back to redact (applied at once).
     await api.client(RedactionPolicyService).proposeRedactionChange({ audience: RedactionAudience.PUBLIC, category: RedactionCategory.MEMBER_NAME, action: RedactionAction.REDACT }, OFFICER);
     const office = await insertId(pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);

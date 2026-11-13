@@ -26,7 +26,7 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'pub-token': { client: 'site', subject: 'sub-pub', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications'], scopes: [] },
   // Treasurer.
   'treasurer-token': { client: 'site', subject: 'sub-treasurer', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer'], scopes: [] },
-  // The Admin, who also holds two offices (the Ross pattern, with a made-up subject).
+  // The Admin, who also holds two offices (the Admin-with-offices pattern, with a made-up subject).
   'admin-token': {
     client: 'site',
     subject: 'sub-admin',

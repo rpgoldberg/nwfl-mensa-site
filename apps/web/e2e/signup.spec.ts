@@ -46,7 +46,7 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
     await expect(page.getByLabel('First name')).toHaveAttribute('autocomplete', 'given-name');
     await expect(page.getByLabel('Last name')).toHaveAttribute('autocomplete', 'family-name');
     await expect(page.getByLabel('Mensa membership number')).toHaveAttribute('inputmode', 'numeric');
-    // PROFILE-ID (Ross): one line by the number, read with it. With no SITE_ADMIN_CONTACT set (as here),
+    // PROFILE-ID (the editor): one line by the number, read with it. With no SITE_ADMIN_CONTACT set (as here),
     // its link is the officers page, never an empty or a mailto link.
     const locked = 'Once you send it, your number can’t be changed. If it needs correcting, contact the site administrator.';
     await expect(page.locator('#membershipNumber-locked')).toHaveText(locked);
