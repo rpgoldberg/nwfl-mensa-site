@@ -232,6 +232,10 @@ const version = (patch: Partial<EditorVersion>): EditorVersion => ({
   onBehalfOf: '',
   sendBackNote: '',
   callerEdited: false,
+  callerMayApprove: false,
+  callerMayPublish: false,
+  approvedAsLabel: '',
+  approvalKindSelf: false,
   ...patch,
 });
 const item = (patch: Partial<EditorItem>): EditorItem => ({ id: 'i', slug: 's', kind: 'article', officeId: 'o', state: 'draft', ...patch });

@@ -108,6 +108,10 @@ const version = (patch: Partial<EditorVersion>): EditorVersion => ({
   onBehalfOf: '',
   sendBackNote: '',
   callerEdited: false,
+  callerMayApprove: false,
+  callerMayPublish: false,
+  approvedAsLabel: '',
+  approvalKindSelf: false,
   ...patch,
 });
 const item = (patch: Partial<EditorItem>): EditorItem => ({ id: 'i', slug: 's', kind: 'president_report', officeId: 'o', state: 'draft', working: version({}), ...patch });

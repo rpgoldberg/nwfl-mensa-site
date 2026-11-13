@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkflow, parseMarkup } from '../e2e/workflow.mjs';
 import { ContentService, ItemState, VersionStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { ApiNotFound } from '../src/lib/api/client';
-import { DraftChanged, EditorRefused, type EditorApi, type EditorItem, NotAllowed, SlugTaken, VersionChanged, grpcEditor } from '../src/lib/api/editor';
+import { DraftChanged, EditorRefused, type EditorApi, type EditorItem, LinksChanged, NotAllowed, SlugTaken, VersionChanged, grpcEditor } from '../src/lib/api/editor';
 import { editFormFor } from '../src/lib/editor/form';
 import { historySentences } from '../src/lib/editor/history';
 import { createWithSlug } from '../src/lib/editor/slug';
@@ -20,13 +20,23 @@ import { statusOf } from '../src/lib/editor/status';
 const OFFICES = [
   { id: '11111111-1111-4111-8111-111111111111', slug: 'president', title: 'President' },
   { id: '22222222-2222-4222-8222-222222222222', slug: 'social', title: 'Social Chair' },
+  { id: '33333333-3333-4333-8333-333333333333', slug: 'treasurer', title: 'Treasurer' },
+  { id: '44444444-4444-4444-8444-444444444444', slug: 'publications', title: 'Publications Officer' },
+  { id: '55555555-5555-4555-8555-555555555555', slug: 'editor', title: 'Newsletter Editor' },
 ];
-const [PRESIDENT, SOCIAL] = OFFICES as [(typeof OFFICES)[0], (typeof OFFICES)[0]];
+type Office = (typeof OFFICES)[0];
+const [PRESIDENT, SOCIAL, TREASURER, , EDITOR_OFFICE] = OFFICES as [Office, Office, Office, Office, Office];
+/** EDITOR E4: an edition already frozen for print. */
+const FROZEN = { id: 'e0000000-0000-4000-8000-0000000000f0', title: 'October–November 2026' };
 
 /** The test provider's people (e2e/idp.mjs), by the bearer each sends here. */
 const PEOPLE: Record<string, { sub: string; groups: string[] }> = {
   officer: { sub: '00000000-0000-4000-8000-0000000000a1', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-president'] },
-  admin: { sub: '00000000-0000-4000-8000-0000000000ad', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-admin'] },
+  // EDITOR E4: the Admin holds two offices, as Ross's account does.
+  admin: { sub: '00000000-0000-4000-8000-0000000000ad', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-office-editor', 'nwfl-admin'] },
+  treasurer: { sub: '00000000-0000-4000-8000-0000000000f8', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer'] },
+  // E4: a seat without the officers group (GetItemLinks: its own office's items only).
+  'seat-only': { sub: '00000000-0000-4000-8000-0000000000e6', groups: ['nwfl-users', 'nwfl-office-social'] },
   webmaster: { sub: '00000000-0000-4000-8000-0000000000eb', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-webmaster'] },
   'lone-webmaster': { sub: '00000000-0000-4000-8000-0000000000d7', groups: ['nwfl-users', 'nwfl-webmaster'] },
   'officer-only': { sub: '00000000-0000-4000-8000-0000000000a9', groups: ['nwfl-officers'] },
@@ -50,6 +60,7 @@ beforeEach(async () => {
       return clock;
     },
     ruleFor: () => rule,
+    frozenEditions: [FROZEN],
   });
   const routes = (router: ConnectRouter) =>
     router.service(
@@ -90,6 +101,12 @@ async function readyItem(title: string, who: keyof typeof PEOPLE = 'officer') {
   const item = await create(who, title);
   await save(who, item, 'Lunch is on **Thursday**.');
   return api.markReady(as(who), { itemId: item.id, targets: WEBSITE });
+}
+
+/** EDITOR E4: an item the President wrote and the Treasurer approved: "Approved, ready to publish". */
+async function approved(title: string) {
+  const ready = await readyItem(title);
+  return api.approve(as('treasurer'), { itemId: ready.id, contentHash: ready.working!.contentHash });
 }
 
 describe('the stand-in workflow: writing', () => {
@@ -165,64 +182,106 @@ describe('the stand-in workflow: writing', () => {
   });
 });
 
-describe('the stand-in workflow: approving', () => {
-  it('sends back with a note only, which the writer reads, and clears it once ready again', async () => {
+// EDITOR E4: A1's two steps, as the API answers them (apps/api/src/content/workflow.ts): any reviewer who did
+// not edit a version approves it, which makes it CLEARED ("Approved, ready to publish") and publishes nothing;
+// the Webmaster, or the Admin as backup, publishes it; a self-approval (break-glass, one approver) is published
+// by someone else. Approve, Send back and ConfirmLinks act for an office the reviewer holds.
+describe('the stand-in workflow: sending back', () => {
+  it('sends back with a note by any reviewer, from waiting or approved, for an office they hold, which the writer reads', async () => {
     const ready = await readyItem('Sent back once');
     expect(await refusal(api.sendBack(as('webmaster'), { itemId: ready.id, note: '  ' }))).toMatchObject({ reason: 'a note for the author is required' });
     expect(await refusal(api.sendBack(as('webmaster'), { itemId: ready.id, note: 'x'.repeat(2001) }))).toBeInstanceOf(EditorRefused);
-    expect(await refusal(api.sendBack(as('officer'), { itemId: ready.id, note: 'mine' }))).toBeInstanceOf(NotAllowed);
-    const back = await api.sendBack(as('webmaster'), { itemId: ready.id, note: 'Please add the time.' });
+    expect(await refusal(api.sendBack(as('member'), { itemId: ready.id, note: 'mine' }))).toBeInstanceOf(NotAllowed);
+    expect(await refusal(api.sendBack(as('treasurer'), { itemId: ready.id, note: 'As another.', actingAsOfficeId: SOCIAL.id }))).toMatchObject({ reason: 'you do not hold that office' });
+    const back = await api.sendBack(as('treasurer'), { itemId: ready.id, note: 'Please add the time.' });
     expect(back).toMatchObject({ state: 'draft', working: { status: 'draft', sendBackNote: 'Please add the time.' } });
     expect(statusOf(back).label).toBe('Sent back – please read the note');
-    expect(await refusal(api.sendBack(as('webmaster'), { itemId: ready.id, note: 'again' }))).toMatchObject({ reason: 'only a ready version can be sent back' });
+    expect((await api.listItemHistory(as('officer'), ready.id)).at(-1)).toMatchObject({ action: 'send_back', actorLabel: 'Treasurer', actingOfficeId: TREASURER.id, fromState: 'ready' });
+    expect(await refusal(api.sendBack(as('webmaster'), { itemId: ready.id, note: 'again' }))).toMatchObject({
+      reason: 'only a version waiting for approval, or approved and not yet published, can be sent back',
+    });
     const again = await api.markReady(as('officer'), { itemId: ready.id, targets: WEBSITE });
     expect(again.working?.sendBackNote).toBe('');
+    const cleared = await approved('Sent back once approved');
+    const unclear = await api.sendBack(as('webmaster'), { itemId: cleared.id, note: 'Wrong date.' });
+    expect(unclear).toMatchObject({ state: 'draft', working: { status: 'draft', approvedAsLabel: '', approvalKindSelf: false } });
+    expect(unclear.working?.contentHash).toHaveLength(0);
   });
+});
 
-  it('approves by the hash seen, and refuses one that changed', async () => {
-    const ready = await readyItem('Approved by the webmaster');
-    expect(await refusal(api.approve(as('webmaster'), { itemId: ready.id, contentHash: new Uint8Array(32) }))).toBeInstanceOf(VersionChanged);
-    expect(await refusal(api.approve(as('officer'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toBeInstanceOf(NotAllowed);
-    const published = await api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash });
-    expect(published).toMatchObject({ state: 'published', live: { status: 'approved', number: 1 } });
-    expect(published.working).toBeUndefined();
-    expect(published.live?.approvedAt).toBeInstanceOf(Date);
-    expect(statusOf(published).label).toBe('Published');
+describe('the stand-in workflow: approving', () => {
+  it('approves by the hash seen into "approved, ready to publish": nothing goes live', async () => {
+    const ready = await readyItem('Approved by the treasurer');
+    expect(ready.working).toMatchObject({ callerEdited: true, callerMayApprove: false, callerMayPublish: false });
+    expect((await api.getWorkingItem(as('treasurer'), ready.id)).working).toMatchObject({ callerEdited: false, callerMayApprove: true, callerMayPublish: false });
+    expect(await refusal(api.approve(as('treasurer'), { itemId: ready.id, contentHash: new Uint8Array(32) }))).toBeInstanceOf(VersionChanged);
+    expect(await refusal(api.approve(as('member'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toBeInstanceOf(NotAllowed);
+    const cleared = await api.approve(as('treasurer'), { itemId: ready.id, contentHash: ready.working!.contentHash });
+    expect(cleared).toMatchObject({ state: 'ready', working: { status: 'cleared', approvedAsLabel: 'Treasurer', approvalKindSelf: false, callerMayApprove: false, callerMayPublish: false } });
+    expect(cleared.live).toBeUndefined();
+    expect(cleared.working?.approvedAt).toBeInstanceOf(Date);
+    expect(cleared.working?.publishedAt).toBeUndefined();
+    expect(statusOf(cleared).label).toBe('Approved, ready to publish');
+    expect((await api.getWorkingItem(as('webmaster'), ready.id)).working).toMatchObject({ callerMayPublish: true });
+    expect((await api.listItemHistory(as('officer'), ready.id)).at(-1)).toMatchObject({ action: 'approve', actorLabel: 'Treasurer', actingOfficeId: TREASURER.id, toState: 'cleared' });
     expect(await refusal(api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toMatchObject({ reason: 'only a ready version can be approved' });
   });
 
-  it('marks what the approver edited, and refuses their own approval but by break-glass (the Admin) or one approver set', async () => {
+  it('refuses the officer who edited it, even under one approver; an office they do not hold; and labels the one they act for', async () => {
+    const ready = await readyItem('The President wrote this');
+    expect(await refusal(api.approve(as('officer'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toMatchObject({
+      reason: 'you edited this version; a second officer must approve it',
+    });
+    rule = 'one_approver';
+    expect((await api.getWorkingItem(as('officer'), ready.id)).working?.callerMayApprove).toBe(false);
+    expect(await refusal(api.approve(as('officer'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toBeInstanceOf(NotAllowed);
+    rule = 'two_person';
+    expect(await refusal(api.approve(as('admin'), { itemId: ready.id, contentHash: ready.working!.contentHash, actingAsOfficeId: TREASURER.id }))).toMatchObject({ reason: 'you do not hold that office' });
+    expect(await refusal(api.approve(as('admin'), { itemId: ready.id, contentHash: ready.working!.contentHash, actingAsOfficeId: 'not-an-id' }))).toBeInstanceOf(EditorRefused);
+    const cleared = await api.approve(as('admin'), { itemId: ready.id, contentHash: ready.working!.contentHash, actingAsOfficeId: EDITOR_OFFICE.id });
+    expect(cleared.working?.approvedAsLabel).toBe('Newsletter Editor');
+    // The Admin holds two offices: naming none acts for none.
+    const other = await readyItem('No office named');
+    expect((await api.approve(as('admin'), { itemId: other.id, contentHash: other.working!.contentHash })).working?.approvedAsLabel).toBe('Admin');
+  });
+
+  it("lets the Admin approve their own edit by break-glass with a reason, and someone else publish it", async () => {
     const ready = await readyItem('The Admin wrote this', 'admin');
-    expect(ready.working?.callerEdited).toBe(true);
-    expect((await api.getWorkingItem(as('webmaster'), ready.id)).working?.callerEdited).toBe(false);
     const hash = ready.working!.contentHash;
     expect(await refusal(api.approve(as('admin'), { itemId: ready.id, contentHash: hash }))).toBeInstanceOf(NotAllowed);
     expect(await refusal(api.approve(as('admin'), { itemId: ready.id, contentHash: hash, breakGlass: { reason: ' ' } }))).toMatchObject({ reason: 'a break-glass approval needs a written reason' });
-    const published = await api.approve(as('admin'), { itemId: ready.id, contentHash: hash, breakGlass: { reason: 'The Webmaster is away' } });
-    expect(published.state).toBe('published');
-    const steps = await api.listItemHistory(as('admin'), ready.id);
-    expect(steps.at(-1)).toMatchObject({ action: 'approve_self', note: 'The Webmaster is away', actorLabel: 'Admin' });
+    const cleared = await api.approve(as('admin'), { itemId: ready.id, contentHash: hash, breakGlass: { reason: 'The Webmaster is away' } });
+    expect(cleared.working).toMatchObject({ status: 'cleared', approvalKindSelf: true, callerMayPublish: false });
+    expect((await api.listItemHistory(as('admin'), ready.id)).at(-1)).toMatchObject({ action: 'approve_self', note: 'The Webmaster is away', actorLabel: 'Admin' });
+    expect(await refusal(api.publish(as('admin'), { itemId: ready.id, contentHash: hash }))).toMatchObject({ reason: 'you approved your own change; someone else must publish it' });
+    expect((await api.getWorkingItem(as('webmaster'), ready.id)).working?.callerMayPublish).toBe(true);
+    expect((await api.publish(as('webmaster'), { itemId: ready.id, contentHash: hash })).state).toBe('published');
+  });
 
+  it('lets a publisher approve their own edit under one approver, as self_single, and refuses its publication once the rule is back', async () => {
     rule = 'one_approver';
     const solo = await readyItem('One approver set', 'admin');
-    expect((await api.approve(as('admin'), { itemId: solo.id, contentHash: solo.working!.contentHash })).state).toBe('published');
+    expect(solo.working?.callerMayApprove).toBe(true);
+    const cleared = await api.approve(as('admin'), { itemId: solo.id, contentHash: solo.working!.contentHash });
+    expect(cleared.working?.approvalKindSelf).toBe(true);
     expect((await api.listItemHistory(as('officer'), solo.id)).at(-1)?.action).toBe('approve_single');
+    rule = 'two_person';
+    expect((await api.getWorkingItem(as('webmaster'), solo.id)).working?.callerMayPublish).toBe(false);
+    expect(await refusal(api.publish(as('webmaster'), { itemId: solo.id, contentHash: solo.working!.contentHash }))).toMatchObject({ reason: 'the approval rule changed; send it back' });
   });
 
   it("refuses break-glass to anyone but the Admin, for their own edit", async () => {
-    // The Webmaster edits as no office, so the Admin writes it and the Webmaster cannot have edited it:
-    // seed one with the Webmaster among its editors instead.
     const seeded = model.seed({ slug: 'webmaster-edited', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Webmaster edited', editors: [PEOPLE['webmaster']!.sub] });
     const item = await api.getWorkingItem(as('webmaster'), seeded.id);
     expect(item.working?.callerEdited).toBe(true);
-    expect(await refusal(api.approve(as('webmaster'), { itemId: item.id, contentHash: item.working!.contentHash, breakGlass: { reason: 'Away' } }))).toBeInstanceOf(NotAllowed);
+    expect(await refusal(api.approve(as('webmaster'), { itemId: item.id, contentHash: item.working!.contentHash, breakGlass: { reason: 'Away' } }))).toMatchObject({ reason: 'only the Admin may approve their own edit' });
     expect(await refusal(api.approve(as('webmaster'), { itemId: item.id, contentHash: item.working!.contentHash }))).toBeInstanceOf(NotAllowed);
   });
 
   it('logs a change of targets or edition at approval, and keeps an officers item off the newsletter', async () => {
     const ready = await readyItem('Targets change');
-    const published = await api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash, targets: { website: true, newsletter: true, email: false }, editionId: 'e0000000-0000-4000-8000-000000000001' });
-    expect(published.live).toMatchObject({ targets: { website: true, newsletter: true, email: false }, editionId: 'e0000000-0000-4000-8000-000000000001' });
+    const cleared = await api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash, targets: { website: true, newsletter: true, email: false }, editionId: 'e0000000-0000-4000-8000-000000000001' });
+    expect(cleared.working).toMatchObject({ targets: { website: true, newsletter: true, email: false }, editionId: 'e0000000-0000-4000-8000-000000000001' });
     expect((await api.listItemHistory(as('officer'), ready.id)).map((s) => s.action)).toEqual(['create', 'save', 'ready', 'targets_changed', 'edition_changed', 'approve']);
     const officers = await create('officer', 'Officers only item');
     await save('officer', officers, 'x', 'officers');
@@ -230,29 +289,175 @@ describe('the stand-in workflow: approving', () => {
     expect(await refusal(api.approve(as('webmaster'), { itemId: offReady.id, contentHash: offReady.working!.contentHash, targets: { website: true, newsletter: true, email: false } }))).toBeInstanceOf(EditorRefused);
   });
 
-  it('edits a published item as a new version, shown as a change waiting, and supersedes the old one on approval', async () => {
-    const ready = await readyItem('Published then changed');
-    await api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash });
-    const changed = await save('officer', ready, 'Version two.');
-    expect(changed.item).toMatchObject({ state: 'published', live: { number: 1 }, working: { number: 2, status: 'draft', markup: 'Version two.' } });
-    expect(statusOf(changed.item).label).toBe('Published');
-    const waiting = await api.markReady(as('officer'), { itemId: ready.id, targets: WEBSITE });
-    expect(statusOf(waiting).label).toBe('Published – a change is waiting for approval');
-    const back = await api.sendBack(as('webmaster'), { itemId: ready.id, note: 'Not yet.' });
-    expect(statusOf(back).label).toBe('Sent back – please read the note');
-    const again = await api.markReady(as('officer'), { itemId: ready.id, targets: WEBSITE });
-    const two = await api.approve(as('webmaster'), { itemId: ready.id, contentHash: again.working!.contentHash });
-    expect(two).toMatchObject({ state: 'published', live: { number: 2, markup: 'Version two.' } });
+  it('refuses to approve or publish for an edition frozen for print, in the API\'s words', async () => {
+    const seeded = model.seed({ slug: 'for-a-frozen-issue', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'For a frozen issue', editionId: FROZEN.id, newsletter: true });
+    const item = await api.getWorkingItem(as('webmaster'), seeded.id);
+    expect(await refusal(api.approve(as('webmaster'), { itemId: item.id, contentHash: item.working!.contentHash }))).toMatchObject({
+      reason: `${FROZEN.title} is already frozen for print: pick an open edition, then approve`,
+    });
+    const cleared = model.seed({ slug: 'cleared-for-a-frozen-issue', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Cleared, frozen issue', cleared: true, editionId: FROZEN.id, newsletter: true });
+    const read = await api.getWorkingItem(as('webmaster'), cleared.id);
+    expect(await refusal(api.publish(as('webmaster'), { itemId: read.id, contentHash: read.working!.contentHash }))).toMatchObject({
+      reason: `${FROZEN.title} is already frozen for print: send it back to pick an open edition`,
+    });
+  });
+});
+
+describe('the stand-in workflow: publishing', () => {
+  it('publishes an approved version by the Webmaster, by the hash seen; never an officer, never twice', async () => {
+    const cleared = await approved('Published by the webmaster');
+    const hash = cleared.working!.contentHash;
+    expect(await refusal(api.publish(as('officer'), { itemId: cleared.id, contentHash: hash }))).toBeInstanceOf(NotAllowed);
+    expect(await refusal(api.publish(as('webmaster'), { itemId: cleared.id, contentHash: new Uint8Array(32) }))).toBeInstanceOf(VersionChanged);
+    const published = await api.publish(as('webmaster'), { itemId: cleared.id, contentHash: hash });
+    expect(published).toMatchObject({ state: 'published', live: { status: 'approved', number: 1, approvedAsLabel: 'Treasurer' } });
+    expect(published.working).toBeUndefined();
+    expect(published.live?.publishedAt).toBeInstanceOf(Date);
+    expect(statusOf(published).label).toBe('Published');
+    expect((await api.listItemHistory(as('officer'), cleared.id)).at(-1)).toMatchObject({ action: 'publish', actorLabel: 'Webmaster', fromState: 'cleared', toState: 'published' });
+    expect(await refusal(api.publish(as('webmaster'), { itemId: cleared.id, contentHash: hash }))).toMatchObject({ reason: 'only an approved version can be published' });
   });
 
-  it('takes a published item down, by its office, the Webmaster or the Admin only', async () => {
-    const ready = await readyItem('Taken down');
-    expect(await refusal(api.withdraw(as('officer'), ready.id))).toMatchObject({ reason: 'only a published item can be withdrawn' });
-    await api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash });
-    expect(await refusal(api.withdraw(as('officer-only'), ready.id))).toBeInstanceOf(NotAllowed);
-    const down = await api.withdraw(as('officer'), ready.id);
-    expect(down).toMatchObject({ state: 'withdrawn' });
-    expect(statusOf(down).label).toBe('Taken down on November 17, 2026');
+  it('lets the Admin publish as backup, and the approver publish what they approved', async () => {
+    const one = await approved('Published by the admin');
+    expect((await api.publish(as('admin'), { itemId: one.id, contentHash: one.working!.contentHash })).state).toBe('published');
+    expect((await api.listItemHistory(as('officer'), one.id)).at(-1)).toMatchObject({ action: 'publish', actorLabel: 'Admin', note: '' });
+    const two = await readyItem('Approved and published by the webmaster');
+    const cleared = await api.approve(as('webmaster'), { itemId: two.id, contentHash: two.working!.contentHash });
+    expect(cleared.working?.callerMayPublish).toBe(true);
+    expect((await api.publish(as('webmaster'), { itemId: two.id, contentHash: two.working!.contentHash })).state).toBe('published');
+  });
+
+  it('edits a published item as a new version, shown as a change waiting, and supersedes the old one once published', async () => {
+    const cleared = await approved('Published then changed');
+    await api.publish(as('webmaster'), { itemId: cleared.id, contentHash: cleared.working!.contentHash });
+    const changed = await save('officer', cleared, 'Version two.');
+    expect(changed.item).toMatchObject({ state: 'published', live: { number: 1 }, working: { number: 2, status: 'draft', markup: 'Version two.' } });
+    const waiting = await api.markReady(as('officer'), { itemId: cleared.id, targets: WEBSITE });
+    expect(statusOf(waiting).label).toBe('Published – a change is waiting for approval');
+    const two = await api.approve(as('treasurer'), { itemId: cleared.id, contentHash: waiting.working!.contentHash });
+    expect(statusOf(two).label).toBe('Published – an approved change is waiting to be published');
+    const live = await api.publish(as('webmaster'), { itemId: cleared.id, contentHash: waiting.working!.contentHash });
+    expect(live).toMatchObject({ state: 'published', live: { number: 2, markup: 'Version two.' } });
+    expect(live.working).toBeUndefined();
+  });
+
+  it('takes a published item down by its office, the Webmaster or the Admin; voids a change waiting to be published; puts it back only when told', async () => {
+    const cleared = await approved('Taken down');
+    expect(await refusal(api.withdraw(as('officer'), cleared.id))).toMatchObject({ reason: 'only a published item can be withdrawn' });
+    await api.publish(as('webmaster'), { itemId: cleared.id, contentHash: cleared.working!.contentHash });
+    await save('officer', cleared, 'A change.');
+    const ready = await api.markReady(as('officer'), { itemId: cleared.id, targets: WEBSITE });
+    await api.approve(as('treasurer'), { itemId: cleared.id, contentHash: ready.working!.contentHash });
+    expect(await refusal(api.withdraw(as('officer-only'), cleared.id))).toBeInstanceOf(NotAllowed);
+    const down = await api.withdraw(as('officer'), cleared.id);
+    expect(down).toMatchObject({ state: 'withdrawn', working: { status: 'draft' } });
+    expect(statusOf(down).label).toBe(`Taken down on ${down.withdrawnAt!.toLocaleDateString('en-US', { timeZone: 'America/Chicago', month: 'long', day: 'numeric', year: 'numeric' })}`);
+    expect((await api.listItemHistory(as('officer'), cleared.id)).slice(-2).map((s) => s.action)).toEqual(['withdraw', 'approval_voided']);
+    const again = await api.markReady(as('officer'), { itemId: cleared.id, targets: WEBSITE });
+    await api.approve(as('treasurer'), { itemId: cleared.id, contentHash: again.working!.contentHash });
+    expect(await refusal(api.publish(as('webmaster'), { itemId: cleared.id, contentHash: again.working!.contentHash }))).toMatchObject({
+      reason: 'this item was taken down: publishing puts it back on the website, so confirm that first',
+    });
+    const back = await api.publish(as('webmaster'), { itemId: cleared.id, contentHash: again.working!.contentHash, republishWithdrawn: true });
+    expect(back).toMatchObject({ state: 'published', live: { markup: 'A change.' } });
+  });
+});
+
+describe('the stand-in workflow: the link gate (A3b)', () => {
+  const FACEBOOK = 'https://www.facebook.com/groups/nwfl-sample';
+  /** A ready piece by the President with a plain link, a printed address and a Facebook link. */
+  async function linked(title: string, extra = '') {
+    const item = await create('officer', title);
+    await save('officer', item, `See [the picnic page](https://club.example/picnic) and https://club.example/map.\n\nOur [group](${FACEBOOK}).${extra}`);
+    return api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+  }
+
+  it('lists every link and printed address, sorted, with where it is, its words, and whether it needs a sign-in', async () => {
+    const ready = await linked('Links listed');
+    const list = await api.getItemLinks(as('treasurer'), ready.id);
+    expect(list.linksSha256).toHaveLength(32);
+    expect(list.readyAt).toBeInstanceOf(Date);
+    expect(list.links).toEqual([
+      { url: 'https://club.example/map', label: '', where: 'in the text', loginWalled: false, answeredByLabel: '', accepted: false },
+      { url: 'https://club.example/picnic', label: 'the picnic page', where: 'in the text', loginWalled: false, answeredByLabel: '', accepted: false },
+      { url: FACEBOOK, label: 'group', where: 'in the text', loginWalled: true, answeredByLabel: '', accepted: false },
+    ]);
+    expect(await refusal(api.getItemLinks(as('member'), ready.id))).toBeInstanceOf(ApiNotFound);
+    const draft = await create('officer', 'A draft has no ready time');
+    expect((await api.getItemLinks(as('officer'), draft.id)).readyAt).toBeUndefined();
+  });
+
+  it('holds Approve while a sign-in link has no yes, and while any answer is no; a yes from another reviewer clears it', async () => {
+    const ready = await linked('Gate held');
+    const hash = ready.working!.contentHash;
+    expect(await refusal(api.approve(as('treasurer'), { itemId: ready.id, contentHash: hash }))).toMatchObject({
+      reason: '1 link needs a sign-in to check (such as Facebook): someone other than the writer must open it and answer yes before this is approved',
+    });
+    const list = await api.getItemLinks(as('webmaster'), ready.id);
+    const answered = await api.confirmLinks(as('webmaster'), {
+      itemId: ready.id,
+      linksSha256: list.linksSha256,
+      answers: [
+        { url: FACEBOOK, yes: true, note: 'Opened it in my own browser.' },
+        { url: 'https://club.example/map', yes: false, note: 'It shows the wrong park.' },
+        { url: 'https://elsewhere.example/', yes: true, note: '' },
+      ],
+    });
+    expect(answered.notInPiece).toEqual(['https://elsewhere.example/']);
+    expect(answered.links.map((l) => [l.url, l.answeredByLabel, l.accepted])).toEqual([
+      ['https://club.example/map', 'Webmaster', false],
+      ['https://club.example/picnic', '', false],
+      [FACEBOOK, 'Webmaster', true],
+    ]);
+    expect(await refusal(api.approve(as('treasurer'), { itemId: ready.id, contentHash: hash }))).toMatchObject({
+      reason: 'a reviewer answered no for the link "https://club.example/map" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved',
+    });
+    const yes = await api.confirmLinks(as('treasurer'), { itemId: ready.id, linksSha256: list.linksSha256, answers: [{ url: 'https://club.example/map', yes: true, note: '' }] });
+    expect(yes.links[0]).toMatchObject({ answeredByLabel: 'Treasurer', accepted: true });
+    expect((await api.approve(as('treasurer'), { itemId: ready.id, contentHash: hash })).working?.status).toBe('cleared');
+    expect((await api.listItemHistory(as('officer'), ready.id)).filter((s) => s.action === 'links_confirmed')).toHaveLength(2);
+  });
+
+  it("names the first link answered no and counts the rest, and several sign-in links", async () => {
+    const ready = await linked('Two noes', `\n\nAnd [ours](https://www.instagram.com/nwfl-sample).`);
+    const list = await api.getItemLinks(as('webmaster'), ready.id);
+    expect(await refusal(api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toMatchObject({
+      reason: '2 links need a sign-in to check (such as Facebook): someone other than the writer must open them and answer yes before this is approved',
+    });
+    await api.confirmLinks(as('webmaster'), { itemId: ready.id, linksSha256: list.linksSha256, answers: list.links.map((l) => ({ url: l.url, yes: false, note: '' })) });
+    expect(await refusal(api.approve(as('treasurer'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toMatchObject({
+      reason: 'a reviewer answered no for the link "https://club.example/map" and 3 more (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved',
+    });
+  });
+
+  it('takes answers only from a reviewer who did not edit it, on a waiting version, for the list they read', async () => {
+    const ready = await linked('Answers guarded');
+    const list = await api.getItemLinks(as('officer'), ready.id);
+    const answer = (who: keyof typeof PEOPLE, extra: Partial<{ linksSha256: Uint8Array; actingAsOfficeId: string; answers: { url: string; yes: boolean; note: string }[] }> = {}) =>
+      api.confirmLinks(as(who), { itemId: ready.id, linksSha256: list.linksSha256, answers: [{ url: FACEBOOK, yes: true, note: '' }], ...extra });
+    expect(await refusal(answer('officer'))).toMatchObject({ reason: 'you edited this version; a second officer must check its links' });
+    expect(await refusal(answer('member'))).toBeInstanceOf(NotAllowed);
+    expect(await refusal(answer('treasurer', { actingAsOfficeId: PRESIDENT.id }))).toMatchObject({ reason: 'you do not hold that office' });
+    expect(await refusal(answer('treasurer', { linksSha256: new Uint8Array(32) }))).toBeInstanceOf(LinksChanged);
+    expect(await refusal(answer('treasurer', { answers: [] }))).toMatchObject({ reason: 'no answers were given' });
+    expect(await refusal(answer('treasurer', { answers: [{ url: FACEBOOK, yes: true, note: 'x'.repeat(2001) }] }))).toMatchObject({ reason: 'a note is at most 2000 characters' });
+    const draft = await create('officer', 'Not waiting');
+    const draftList = await api.getItemLinks(as('treasurer'), draft.id);
+    expect(await refusal(api.confirmLinks(as('treasurer'), { itemId: draft.id, linksSha256: draftList.linksSha256, answers: [{ url: FACEBOOK, yes: true, note: '' }] }))).toMatchObject({
+      reason: 'only a version waiting for approval has its links checked',
+    });
+  });
+
+  it('forgets the answers once the piece is edited and sent again: a new ready time', async () => {
+    const ready = await linked('Answers voided');
+    const list = await api.getItemLinks(as('treasurer'), ready.id);
+    await api.confirmLinks(as('treasurer'), { itemId: ready.id, linksSha256: list.linksSha256, answers: [{ url: FACEBOOK, yes: true, note: '' }] });
+    expect((await api.getItemLinks(as('treasurer'), ready.id)).links.find((l) => l.url === FACEBOOK)).toMatchObject({ accepted: true, answeredByLabel: 'Treasurer' });
+    await save('officer', ready, `Our [group](${FACEBOOK}).`);
+    const again = await api.markReady(as('officer'), { itemId: ready.id, targets: WEBSITE });
+    expect((await api.getItemLinks(as('treasurer'), ready.id)).links).toEqual([{ url: FACEBOOK, label: 'group', where: 'in the text', loginWalled: true, answeredByLabel: '', accepted: false }]);
+    expect(await refusal(api.approve(as('treasurer'), { itemId: ready.id, contentHash: again.working!.contentHash }))).toBeInstanceOf(EditorRefused);
   });
 });
 
@@ -310,8 +515,8 @@ describe('the stand-in workflow: reading', () => {
   });
 
   it('previews the live version when there is no working one, and fails closed on an unclosed members block', async () => {
-    const ready = await readyItem('Live preview');
-    await api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash });
+    const ready = await approved('Live preview');
+    await api.publish(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash });
     expect(JSON.stringify((await api.previewWorkingItem(as('officer'), ready.id)).publicBody)).toContain('Thursday');
     const open = await create('officer', 'Unclosed');
     await save('officer', open, 'Before.\n::: members\nNever closed.');
@@ -338,6 +543,184 @@ describe('the stand-in workflow: reading', () => {
     expect(statusOf(await api.getWorkingItem(as('officer'), down.id)).key).toBe('taken_down');
     expect(statusOf(await api.getWorkingItem(as('officer'), back.id)).key).toBe('sent_back');
     expect(back.id).toBe('c0000000-0000-4000-8000-0000000000aa');
+  });
+});
+
+// A3b fix round (008a115): the hash is bound to the ready time; Approve's refusal names only links the
+// caller sees whole; a holder who reviews nothing is told PERMISSION_DENIED for a missing item too.
+describe('the stand-in workflow: the link gate after A3b\'s fix round', () => {
+  const FACEBOOK = 'https://www.facebook.com/groups/nwfl-sample';
+  const WITHHELD = (act: string) => `part of this item is withheld from you; an officer who can see all of it must ${act}`;
+
+  it('binds the hash to the ready time: marked ready again, the same list has a new hash, and the old one is refused', async () => {
+    const item = await create('officer', 'Ready twice');
+    await save('officer', item, `Our [group](${FACEBOOK}).`);
+    const draftHash = (await api.getItemLinks(as('treasurer'), item.id)).linksSha256;
+    const first = await api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+    const before = await api.getItemLinks(as('treasurer'), first.id);
+    expect(Buffer.from(before.linksSha256).equals(Buffer.from(draftHash))).toBe(false);
+    await api.sendBack(as('treasurer'), { itemId: item.id, note: 'Once more.' });
+    await api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+    const after = await api.getItemLinks(as('treasurer'), item.id);
+    expect(after.links).toEqual(before.links);
+    expect(Buffer.from(after.linksSha256).equals(Buffer.from(before.linksSha256))).toBe(false);
+    expect(await refusal(api.confirmLinks(as('treasurer'), { itemId: item.id, linksSha256: before.linksSha256, answers: [{ url: FACEBOOK, yes: true, note: '' }] }))).toBeInstanceOf(LinksChanged);
+    expect((await api.confirmLinks(as('treasurer'), { itemId: item.id, linksSha256: after.linksSha256, answers: [{ url: FACEBOOK, yes: true, note: '' }] })).links[0]?.accepted).toBe(true);
+  });
+
+  it('lists links inside members passages for every reviewer, as A3b does: officers are members (S3)', async () => {
+    const item = await create('officer', 'Members passage links');
+    await save('officer', item, `Open [page](https://www.instagram.com/nwfl-sample).\n\n::: members\nPhotos on [our members' group](${FACEBOOK}).\n:::`);
+    const ready = await api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+    const both = ['https://www.instagram.com/nwfl-sample', FACEBOOK];
+    // The Webmaster outside the officers group sees both, as an officer does: no lens hides a members passage.
+    expect((await api.getItemLinks(as('lone-webmaster'), ready.id)).links.map((l) => l.url).sort()).toEqual(both.sort());
+    expect((await api.getItemLinks(as('treasurer'), ready.id)).links.map((l) => l.url).sort()).toEqual(both.sort());
+    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toMatchObject({
+      reason: '2 links need a sign-in to check (such as Facebook): someone other than the writer must open them and answer yes before this is approved',
+    });
+  });
+
+  it('shows an officer a passage marked for officers only whole, and the lone Webmaster no hash, no marked link and no Approve', async () => {
+    // Its members passage is marked for officers (the redaction lens, REDACT R2a): withheld from anyone outside the officers group.
+    const marked = model.seed({ slug: 'officers-only-links', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Marked', markup: `Open [page](https://www.instagram.com/nwfl-sample).\n\n::: members\nPhotos on [our members' group](${FACEBOOK}).\n:::`, officersOnly: true, editors: [PEOPLE['officer']!.sub] });
+    const read = await api.getWorkingItem(as('lone-webmaster'), marked.id);
+    // P24, as A3b's workflow.ts versionMessage: with anything withheld, no hash and no markup (bodyMarkupWithheld),
+    // so the reviewer cannot approve what they do not see whole; the body holds no marked link.
+    expect(read.working!.contentHash).toHaveLength(0);
+    expect(read.working).toMatchObject({ markup: '', markupWithheld: true });
+    expect(JSON.stringify(read)).not.toContain(FACEBOOK);
+    // An officer sees it whole, with its hash; the rest of this test posts that hash, as from elsewhere.
+    const whole = await api.getWorkingItem(as('treasurer'), marked.id);
+    const hash = whole.working!.contentHash;
+    expect(hash).toHaveLength(32);
+    expect(whole.working).toMatchObject({ markupWithheld: false });
+    expect(JSON.stringify(await api.previewWorkingItem(as('lone-webmaster'), marked.id))).not.toContain(FACEBOOK);
+    expect(JSON.stringify(await api.previewWorkingItem(as('treasurer'), marked.id))).toContain(FACEBOOK);
+    // An officer sees both: both are counted.
+    expect(await refusal(api.approve(as('treasurer'), { itemId: marked.id, contentHash: hash }))).toMatchObject({
+      reason: '2 links need a sign-in to check (such as Facebook): someone other than the writer must open them and answer yes before this is approved',
+    });
+    expect((await api.getItemLinks(as('lone-webmaster'), marked.id)).links.map((l) => l.url)).toEqual(['https://www.instagram.com/nwfl-sample']);
+    // A3B-HARDEN: the lone Webmaster is refused before the gate (and before the hash), so the gate's
+    // OFFICERS_ONLY never reaches them through the text; on the real API it still can through an office
+    // event their audience does not see, which the stand-in does not list.
+    expect(await refusal(api.approve(as('lone-webmaster'), { itemId: marked.id, contentHash: hash }))).toMatchObject({ reason: WITHHELD('approve it') });
+    // A no on the hidden link is named to an officer who sees it whole.
+    const all = await api.getItemLinks(as('treasurer'), marked.id);
+    await api.confirmLinks(as('treasurer'), { itemId: marked.id, linksSha256: all.linksSha256, answers: [{ url: FACEBOOK, yes: false, note: '' }] });
+    expect(await refusal(api.approve(as('webmaster'), { itemId: marked.id, contentHash: hash }))).toMatchObject({ reason: expect.stringContaining(`a reviewer answered no for the link "${FACEBOOK}"`) });
+  });
+
+  // A3B-HARDEN (PR #70, requireWholeView): a caller from whom anything is withheld may only send it back.
+  it('refuses Approve, break-glass, Publish and ConfirmLinks to a caller with part withheld, before any hash; Send back stays', async () => {
+    const markup = `See [the picnic page](https://club.example/picnic).\n\n::: members\nThe gate code is MEMBERS-CANARY.\n:::`;
+    const waiting = model.seed({ slug: 'harden-waiting', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Hardened, waiting', markup, officersOnly: true, editors: [PEOPLE['officer']!.sub] });
+    const cleared = model.seed({ slug: 'harden-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Hardened, approved', markup, officersOnly: true, cleared: true });
+    const lone = as('lone-webmaster');
+    // Neither may: the flags say so.
+    expect((await api.getWorkingItem(lone, waiting.id)).working).toMatchObject({ callerMayApprove: false, callerMayPublish: false });
+    expect((await api.getWorkingItem(lone, cleared.id)).working).toMatchObject({ callerMayApprove: false, callerMayPublish: false });
+    expect((await api.getWorkingItem(as('webmaster'), cleared.id)).working).toMatchObject({ callerMayPublish: true });
+    // With the officer's hash (the worst case) and with none at all: the same words, so nothing is told about a hash.
+    const hash = (await api.getWorkingItem(as('treasurer'), waiting.id)).working!.contentHash;
+    const clearedHash = (await api.getWorkingItem(as('webmaster'), cleared.id)).working!.contentHash;
+    const list = await api.getItemLinks(as('treasurer'), waiting.id);
+    for (const contentHash of [hash, new Uint8Array(0)]) {
+      expect(await refusal(api.approve(lone, { itemId: waiting.id, contentHash }))).toMatchObject({ reason: WITHHELD('approve it') });
+      expect(await refusal(api.approve(lone, { itemId: waiting.id, contentHash, breakGlass: { reason: 'Forged' } }))).toMatchObject({ reason: WITHHELD('approve it') });
+    }
+    for (const contentHash of [clearedHash, new Uint8Array(0)]) {
+      expect(await refusal(api.publish(lone, { itemId: cleared.id, contentHash }))).toMatchObject({ reason: WITHHELD('publish it') });
+    }
+    for (const linksSha256 of [list.linksSha256, new Uint8Array(32)]) {
+      const refused = await refusal(api.confirmLinks(lone, { itemId: waiting.id, linksSha256, answers: [{ url: 'https://club.example/picnic', yes: true, note: '' }] }));
+      expect(refused).toBeInstanceOf(EditorRefused);
+      expect(refused).toMatchObject({ reason: WITHHELD('check its links') });
+    }
+    // Nothing changed.
+    expect((await api.getItemLinks(as('treasurer'), waiting.id)).links.map((l) => l.answeredByLabel)).toEqual(['']);
+    expect((await api.getWorkingItem(as('treasurer'), waiting.id)).working?.status).toBe('ready');
+    expect((await api.getWorkingItem(as('webmaster'), cleared.id)).working?.status).toBe('cleared');
+    // Send back is theirs, as before.
+    expect((await api.sendBack(lone, { itemId: waiting.id, note: 'Please check the gate code.' })).working?.status).toBe('draft');
+  });
+
+  it('keeps no answer for an address over 2,048 characters, as A3b\'s ConfirmLinks: it is not_in_piece (S2)', async () => {
+    const long = `https://club.example/${'z'.repeat(2049 - 'https://club.example/'.length)}`;
+    const edge = `https://club.example/${'q'.repeat(2048 - 'https://club.example/'.length)}`;
+    const seeded = model.seed({ slug: 'too-long-to-keep', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Too long', markup: `[long](${long}) and [edge](${edge}) and [short](https://club.example/s)`, editors: [PEOPLE['officer']!.sub] });
+    const list = await api.getItemLinks(as('treasurer'), seeded.id);
+    expect(list.links.map((l) => l.url.length).sort((x, y) => x - y)).toEqual([22, 2048, 2049]);
+    const out = await api.confirmLinks(as('treasurer'), { itemId: seeded.id, linksSha256: list.linksSha256, answers: [long, edge, 'https://club.example/s'].map((url) => ({ url, yes: true, note: '' })) });
+    expect(out.notInPiece).toEqual([long]);
+    expect(out.links.filter((l) => l.accepted).map((l) => l.url.length).sort((x, y) => x - y)).toEqual([22, 2048]);
+  });
+
+  it('tells a holder who reviews nothing "not permitted" for a missing item as for another office\'s', async () => {
+    expect(await refusal(api.getItemLinks(as('seat-only'), '00000000-0000-4000-8000-000000000000'))).toBeInstanceOf(NotAllowed);
+    const ready = await readyItem('Another office\'s');
+    expect(await refusal(api.getItemLinks(as('seat-only'), ready.id))).toBeInstanceOf(NotAllowed);
+    expect(await refusal(api.getItemLinks(as('officer'), '00000000-0000-4000-8000-000000000000'))).toBeInstanceOf(ApiNotFound);
+  });
+});
+
+describe('the stand-in workflow: the link list and the E4 seeds, in full', () => {
+  it('finds links in headings, lists and members passages, once per place, the first words kept, a mailto never sign-in', async () => {
+    const item = await create('officer', 'Every kind of link');
+    const fb = 'https://facebook.com/events/1';
+    await save('officer', item, `# See [the map](https://club.example/map)\n- [list link](https://club.example/a)\n- https://club.example/a again\n\n::: members\nGate: [code page](${fb}) and :members[inside https://club.example/m]\n:::\nWrite to [us](mailto:club@example.org).`);
+    const ready = await api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+    const list = await api.getItemLinks(as('treasurer'), ready.id);
+    expect(list.links.map((l) => [l.url, l.label, l.loginWalled])).toEqual([
+      ['https://club.example/a', 'list link', false],
+      ['https://club.example/m', '', false],
+      ['https://club.example/map', 'the map', false],
+      [fb, 'code page', true],
+      ['mailto:club@example.org', 'us', false],
+    ]);
+    // The office's own seat reads its own items' links; another office's are refused.
+    const social = await create('admin', 'For the social chair', SOCIAL.id);
+    expect((await api.getItemLinks(as('seat-only'), social.id)).links).toEqual([]);
+    expect(await refusal(api.getItemLinks(as('seat-only'), ready.id))).toBeInstanceOf(NotAllowed);
+    // A held-back passage stays out of the list for a lens that holds it back.
+    const held = model.seed({ slug: 'held-links', kind: 'article', officeId: PRESIDENT.id, state: 'ready', title: 'Held', markup: 'Open [a](https://club.example/open) :members[held https://club.example/held]', withheld: true });
+    expect((await api.getItemLinks(as('treasurer'), held.id)).links.map((l) => l.url)).toEqual(['https://club.example/open']);
+    // At most 500 answers in one call.
+    const many = Array.from({ length: 501 }, (_, i) => ({ url: `https://club.example/${i}`, yes: true, note: '' }));
+    expect(await refusal(api.confirmLinks(as('treasurer'), { itemId: ready.id, linksSha256: list.linksSha256, answers: many }))).toMatchObject({ reason: 'at most 500 answers at a time' });
+    // An answer for an address not in the piece alone is kept nowhere and audited not at all.
+    const before = (await api.listItemHistory(as('officer'), ready.id)).length;
+    expect((await api.confirmLinks(as('treasurer'), { itemId: ready.id, linksSha256: list.linksSha256, answers: [{ url: 'https://elsewhere.example/', yes: true, note: '' }] })).notInPiece).toEqual(['https://elsewhere.example/']);
+    expect(await api.listItemHistory(as('officer'), ready.id)).toHaveLength(before);
+  });
+
+  it('names a long address cut short when a reviewer answered no', async () => {
+    const item = await create('officer', 'A long address');
+    const long = `https://club.example/${'a'.repeat(80)}`;
+    await save('officer', item, `See [it](${long}).`);
+    const ready = await api.markReady(as('officer'), { itemId: item.id, targets: WEBSITE });
+    const list = await api.getItemLinks(as('treasurer'), ready.id);
+    await api.confirmLinks(as('treasurer'), { itemId: ready.id, linksSha256: list.linksSha256, answers: [{ url: long, yes: false, note: '' }] });
+    expect(await refusal(api.approve(as('webmaster'), { itemId: ready.id, contentHash: ready.working!.contentHash }))).toMatchObject({
+      reason: expect.stringContaining(`"${long.slice(0, 60)}..."`),
+    });
+  });
+
+  it('seeds a taken-down item with an approved change, who started a piece, and a self-approval', async () => {
+    const down = model.seed({ slug: 'seed-down-cleared', kind: 'announcement', officeId: PRESIDENT.id, state: 'withdrawn', title: 'Down', change: 'cleared', approvedAs: 'Member at Large' });
+    const read = await api.getWorkingItem(as('webmaster'), down.id);
+    expect(read).toMatchObject({ state: 'withdrawn', working: { status: 'cleared', approvedAsLabel: 'Member at Large', callerMayPublish: true } });
+    expect((await api.listItemHistory(as('webmaster'), down.id)).map((s) => [s.action, s.actorLabel])).toEqual([['withdraw', 'President']]);
+    const typed = model.seed({ slug: 'seed-typed', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Typed', createdBy: { sub: PEOPLE['admin']!.sub, label: 'Admin' } });
+    expect((await api.listItemHistory(as('officer'), typed.id)).map((s) => [s.action, s.actorLabel, s.versionNumber])).toEqual([['create', 'Admin', 1]]);
+    const self = model.seed({ slug: 'seed-self', kind: 'announcement', officeId: PRESIDENT.id, state: 'ready', title: 'Self', cleared: true, selfApproved: true, approvedBy: PEOPLE['admin']!.sub, approvedAs: 'Admin' });
+    expect((await api.getWorkingItem(as('admin'), self.id)).working).toMatchObject({ approvalKindSelf: true, callerMayPublish: false });
+    expect((await api.getWorkingItem(as('webmaster'), self.id)).working?.callerMayPublish).toBe(true);
+    // Taking down an item with no approved change waiting voids nothing.
+    const live = model.seed({ slug: 'seed-live-plain', kind: 'announcement', officeId: PRESIDENT.id, state: 'published', title: 'Live' });
+    await api.withdraw(as('webmaster'), live.id);
+    expect((await api.listItemHistory(as('officer'), live.id)).map((s) => s.action)).toEqual(['withdraw']);
   });
 });
 

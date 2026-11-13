@@ -62,6 +62,12 @@ describe('the route registry (e2e/routes.ts)', () => {
     );
   });
 
+  it('lists the approver and publisher screens as OFFICER routes (EDITOR E4)', () => {
+    expect(Object.keys(OFFICER)).toEqual(
+      expect.arrayContaining(['/officer-area/approvals', '/officer-area/approvals/[id]', '/officer-area/approvals/[id]/publish', '/officer-area/approvals/[id]/take-down']),
+    );
+  });
+
   it('lists as SIGNED_IN only pages that read the API with the person\'s own token, and send the public to sign in (W-SIGNUP)', () => {
     expect(Object.keys(SIGNED_IN)).toEqual(['/account']);
     for (const route of Object.keys(SIGNED_IN)) {

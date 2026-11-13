@@ -101,7 +101,10 @@ describe('the stand-in API serves the publishing workflow', () => {
     const item = await api.createItem(writer, { kind: 'announcement', officeId: '11111111-1111-4111-8111-111111111111', slug: `stand-in-api-${Date.now()}`, title: 'Over the stand-in' });
     await api.saveDraft(writer, { itemId: item.id, title: 'Over the stand-in', summary: '', visibility: 'public', markup: 'Hello.' });
     const ready = await api.markReady(writer, { itemId: item.id, targets: { website: true, newsletter: false, email: false } });
-    const published = await api.approve(approver, { itemId: item.id, contentHash: ready.working!.contentHash });
+    // EDITOR E4: A1's two steps. Approving clears it; publishing (the Webmaster) puts it live.
+    const cleared = await api.approve(approver, { itemId: item.id, contentHash: ready.working!.contentHash });
+    expect(statusOf(cleared).label).toBe('Approved, ready to publish');
+    const published = await api.publish(approver, { itemId: item.id, contentHash: ready.working!.contentHash });
     expect(statusOf(published).label).toBe('Published');
     await expect(api.listWorkingItems({ bearer: await token(MEMBER) })).rejects.toBeInstanceOf(NotAllowed);
     await expect(api.listWorkingItems({ bearer: 'not.a-token' })).rejects.toBeInstanceOf(SignInAgain);

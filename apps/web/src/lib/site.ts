@@ -136,6 +136,8 @@ const PAGES: readonly Page[] = [
   // EDITOR E3: the writer screens, for the officers, the Admin and the Webmaster (robots.txt keeps /officer-area out of search).
   { path: '/officer-area/news', title: 'Our news', description: "News, announcements and reports your office is writing, and where each one stands." },
   { path: '/officer-area/news/new', title: 'Write something new', description: 'Start a new announcement, news article or President\u2019s report.' },
+  // EDITOR E4: the approvers' queue (S6), for every reviewer (robots.txt keeps /officer-area out of search).
+  { path: '/officer-area/approvals', title: 'Approve news', description: 'Pieces waiting for approval, and approved pieces waiting to be published.' },
   // W-SIGNUP D4: the membership approvers' and the Admin's alone; never linked for anyone else.
   { path: '/officer-area/sign-ups', title: 'Sign-ups to approve', description: 'New sign-ups waiting for an officer to approve or reject them.' },
   // EDITOR E6: the officers' event screens (S10, S11); robots.txt keeps /officer-area out of search.

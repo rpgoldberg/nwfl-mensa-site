@@ -63,6 +63,11 @@ export const OFFICER: Readonly<Record<string, readonly string[]>> = {
   '/officer-area/news/[id]/preview': ['/officer-area/news/c0e20000-0000-4000-8000-000000000003/preview'],
   // Round 2: the edit page's auto-save, a POST endpoint; a GET finds nothing.
   '/officer-area/news/[id]/autosave': ['/officer-area/news/c0e20000-0000-4000-8000-000000000003/autosave'],
+  // EDITOR E4: the approver's and publisher's screens, read with the reviewer's own token (src/lib/api/editor.ts).
+  '/officer-area/approvals': ['/officer-area/approvals'],
+  '/officer-area/approvals/[id]': ['/officer-area/approvals/c0e20000-0000-4000-8000-000000000002'],
+  '/officer-area/approvals/[id]/publish': ['/officer-area/approvals/c0e20000-0000-4000-8000-000000000004/publish'],
+  '/officer-area/approvals/[id]/take-down': ['/officer-area/approvals/c0e20000-0000-4000-8000-000000000003/take-down'],
 };
 
 /**

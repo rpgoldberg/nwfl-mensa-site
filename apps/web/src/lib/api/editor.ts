@@ -12,12 +12,16 @@
 //   ABORTED              VersionChanged: the version changed since it was opened (the approve hash)
 //   FAILED_PRECONDITION  EditorRefused, with the API's words: a step the item is not ready for
 //   INVALID_ARGUMENT     EditorRefused too: a value the API refused (the forms check first)
-//   PERMISSION_DENIED    NotAllowed
+//   PERMISSION_DENIED    NotAllowed, with the API's words (EDITOR E4: "you approved your own change; someone
+//                        else must publish it" is the page's to say)
 //   ALREADY_EXISTS       SlugTaken on CreateItem: it tries the next slug (src/lib/editor/slug.ts);
 //                        Duplicate on any other call (a series slug, a series date, a venue)
 //   NOT_FOUND            ApiNotFound, as for the public reads; also an item id that is not one, never sent
 //   anything else        ApiUnavailable
 // Each is logged by call and code only: never the API's message, the token or what was typed.
+//
+// EDITOR E4: A1's Publish and the acting office (Approve, Send back), and A3b's link gate: GetItemLinks
+// and ConfirmLinks, whose refusal of a list changed since it was read is LinksChanged.
 //
 // EDITOR E3: two public reads beside the workflow, sent as the public (no bearer): the roster, for the
 // office ids an item is posted as, and an office's upcoming events, for the President's report's events
@@ -36,6 +40,7 @@ import {
   type ContentVersion,
   type Document,
   type HistoryEntry,
+  type ItemLink,
   ItemState,
   ItemVisibility,
   VersionStatus,
@@ -90,13 +95,27 @@ export class VersionChanged extends Error {
   }
 }
 
-/** The API refused the officer this step on this item. */
+/** The API refused the officer this step on this item; `reason`: the API's words, one plain line (EDITOR E4). */
 export class NotAllowed extends Error {
-  constructor(readonly rpc: string) {
+  constructor(
+    readonly rpc: string,
+    readonly reason = '',
+  ) {
     super(`not allowed: ${rpc}`);
     this.name = 'NotAllowed';
   }
 }
+
+/** EDITOR E4: ConfirmLinks refused answers for a list of links that changed since it was read: read it again. */
+export class LinksChanged extends Error {
+  constructor(readonly rpc: string) {
+    super(`the links changed before ${rpc}`);
+    this.name = 'LinksChanged';
+  }
+}
+
+/** The API's words for that refusal (apps/api/src/content/link-gate.ts, EDITOR A3b). */
+export const LINKS_CHANGED = 'the links changed since you opened them; reload them';
 
 /** The slug is someone else's already. */
 export class SlugTaken extends Error {
@@ -167,6 +186,16 @@ export interface EditorVersion {
   onBehalfOf: string;
   readyAt?: Date;
   approvedAt?: Date;
+  /** EDITOR E4: when it was published (made live); unset until it is. */
+  publishedAt?: Date;
+  /** EDITOR E4 (A1): the reader may approve it as it stands, without break-glass. */
+  callerMayApprove: boolean;
+  /** EDITOR E4 (A1): the reader may publish it as it stands. */
+  callerMayPublish: boolean;
+  /** EDITOR E4 (A1): who approved it, by role ("Treasurer", "Admin"); empty until approved. */
+  approvedAsLabel: string;
+  /** EDITOR E4 (A1): approved by the approver's own exception (break-glass, one approver): someone else publishes it. */
+  approvalKindSelf: boolean;
   /** The approver's note since the version was last marked ready; empty once it is ready again. */
   sendBackNote: string;
   /** This officer edited the version: approving it needs one approver set, or the Admin's break-glass. */
@@ -219,6 +248,37 @@ export interface HistoryStep {
   note: string;
 }
 
+/** EDITOR E4: one link of a piece, for checking by hand before Approve (A3b's ItemLink). */
+export interface PieceLink {
+  /** As written in the piece. */
+  url: string;
+  /** The link's words; empty for a printed address or an event's. */
+  label: string;
+  /** "in the text", "event: <title>" or "venue: <name>". */
+  where: string;
+  /** On a site that needs a sign-in to check (Facebook and the like): Approve waits for a yes. */
+  loginWalled: boolean;
+  /** Who gave the latest answer on this version, by role; empty if no one has. */
+  answeredByLabel: string;
+  /** That answer was yes. Answered and not accepted: the answer was no. */
+  accepted: boolean;
+}
+
+/** EDITOR E4: a piece's links, with the hash an answer is bound to. */
+export interface PieceLinks {
+  linksSha256: Uint8Array;
+  links: PieceLink[];
+  /** The version's ready time; unset for a draft. */
+  readyAt?: Date;
+}
+
+/** EDITOR E4: one reviewer's answer for one link. */
+export interface LinkAnswer {
+  url: string;
+  yes: boolean;
+  note: string;
+}
+
 /** One of an office's events, as the President's report's events box lists it. */
 export interface OfficeEvent {
   id: string;
@@ -240,12 +300,28 @@ export interface EditorApi {
     draft: { itemId: string; title: string; summary: string; visibility: VisibilityName; markup: string; base?: string; auto?: boolean },
   ): Promise<{ item: EditorItem; problems: Problem[] }>;
   markReady(as: Reader, ready: { itemId: string; targets: Targets; editionId?: string; printAsIs?: boolean }): Promise<EditorItem>;
-  sendBack(as: Reader, back: { itemId: string; note: string }): Promise<EditorItem>;
+  /** `actingAsOfficeId` (E4): an office the reviewer holds; unset means their one office, if they hold exactly one. */
+  sendBack(as: Reader, back: { itemId: string; note: string; actingAsOfficeId?: string }): Promise<EditorItem>;
   /** `targets` and `editionId` unset keep what was chosen at ready; `breakGlass` is the Admin's own change, with a reason. */
-  approve(as: Reader, approval: { itemId: string; contentHash: Uint8Array; targets?: Targets; editionId?: string; breakGlass?: { reason: string } }): Promise<EditorItem>;
+  approve(
+    as: Reader,
+    approval: { itemId: string; contentHash: Uint8Array; targets?: Targets; editionId?: string; breakGlass?: { reason: string }; actingAsOfficeId?: string },
+  ): Promise<EditorItem>;
+  /** EDITOR E4: an approved version goes live; `republishWithdrawn` puts a taken-down item back. */
+  publish(as: Reader, publication: { itemId: string; contentHash: Uint8Array; republishWithdrawn?: boolean }): Promise<EditorItem>;
+  /** EDITOR E4: the piece's links, each with its latest answer. */
+  getItemLinks(as: Reader, itemId: string): Promise<PieceLinks>;
+  /** EDITOR E4: a reviewer's answers, each kept at once; `notInPiece`: answered addresses not in it, not kept. */
+  confirmLinks(
+    as: Reader,
+    confirmation: { itemId: string; linksSha256: Uint8Array; answers: readonly LinkAnswer[]; actingAsOfficeId?: string },
+  ): Promise<{ links: PieceLink[]; notInPiece: string[] }>;
   withdraw(as: Reader, itemId: string): Promise<EditorItem>;
-  /** No states: drafts and ready ones (by the working version); published and withdrawn: items in that state (E3). */
-  listWorkingItems(as: Reader, filter?: { states?: readonly StateName[]; officeId?: string; editionId?: string }): Promise<EditorItem[]>;
+  /**
+   * No states: drafts and ready ones (by the working version); published and withdrawn: items in that state (E3).
+   * `versionStatuses` (E4): by the working version's status, draft, ready or cleared; then states are not read.
+   */
+  listWorkingItems(as: Reader, filter?: { states?: readonly StateName[]; officeId?: string; editionId?: string; versionStatuses?: readonly ('draft' | 'ready' | 'cleared')[] }): Promise<EditorItem[]>;
   getWorkingItem(as: Reader, itemId: string): Promise<EditorItem>;
   /** Oldest first, as the API gives it. */
   listItemHistory(as: Reader, itemId: string): Promise<HistoryStep[]>;
@@ -312,10 +388,19 @@ function versionOf(v: ContentVersion): EditorVersion {
     onBehalfOf: v.onBehalfOf,
     ...(v.readyAt === undefined ? {} : { readyAt: timestampDate(v.readyAt) }),
     ...(v.approvedAt === undefined ? {} : { approvedAt: timestampDate(v.approvedAt) }),
+    ...(v.publishedAt === undefined ? {} : { publishedAt: timestampDate(v.publishedAt) }),
     ...(v.updatedAt === undefined ? {} : { base: baseToken(v.updatedAt) }),
     sendBackNote: v.sendBackNote,
     callerEdited: v.callerEdited,
+    callerMayApprove: v.callerMayApprove,
+    callerMayPublish: v.callerMayPublish,
+    approvedAsLabel: v.approvedAsLabel,
+    approvalKindSelf: v.approvalKindSelf,
   };
+}
+
+function linkOf(link: ItemLink): PieceLink {
+  return { url: link.url, label: link.label, where: link.where, loginWalled: link.loginWalled, answeredByLabel: link.answeredByLabel, accepted: link.accepted };
 }
 
 function itemOf(item: ContentItem | undefined): EditorItem {
@@ -416,11 +501,12 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
           throw new VersionChanged(rpc);
         case Code.FailedPrecondition:
           if (failure.rawMessage === STALE_BASE) throw new DraftChanged(rpc);
+          if (failure.rawMessage === LINKS_CHANGED) throw new LinksChanged(rpc);
           throw new EditorRefused(rpc, plainReason(failure.rawMessage));
         case Code.InvalidArgument:
           throw new EditorRefused(rpc, plainReason(failure.rawMessage));
         case Code.PermissionDenied:
-          throw new NotAllowed(rpc);
+          throw new NotAllowed(rpc, plainReason(failure.rawMessage));
         case Code.AlreadyExists:
           // CreateItem's one unique key is the slug, which createWithSlug tries again; elsewhere it is no slug.
           throw rpc === 'CreateItem' ? new SlugTaken(rpc) : new Duplicate(rpc);
@@ -468,7 +554,8 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
         async (o) => itemOf((await content.markReady({ itemId: ready.itemId, targets: ready.targets, editionId: ready.editionId ?? '', printAsIs: ready.printAsIs ?? false }, o)).item),
         ready.itemId,
       ),
-    sendBack: (as, back) => call('SendBack', as, async (o) => itemOf((await content.sendBack({ itemId: back.itemId, note: back.note }, o)).item), back.itemId),
+    sendBack: (as, back) =>
+      call('SendBack', as, async (o) => itemOf((await content.sendBack({ itemId: back.itemId, note: back.note, actingAsOfficeId: back.actingAsOfficeId ?? '' }, o)).item), back.itemId),
     approve: (as, approval) =>
       call(
         'Approve',
@@ -484,6 +571,7 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
                   editionId: approval.editionId ?? '',
                   breakGlass: approval.breakGlass !== undefined,
                   breakGlassReason: approval.breakGlass?.reason ?? '',
+                  actingAsOfficeId: approval.actingAsOfficeId ?? '',
                 },
                 o,
               )
@@ -491,10 +579,56 @@ export function grpcEditor(config: ApiConfig, log: (line: string) => void): Edit
           ),
         approval.itemId,
       ),
+    publish: (as, publication) =>
+      call(
+        'Publish',
+        as,
+        async (o) =>
+          itemOf((await content.publish({ itemId: publication.itemId, contentHash: publication.contentHash, republishWithdrawn: publication.republishWithdrawn ?? false }, o)).item),
+        publication.itemId,
+      ),
+    getItemLinks: (as, itemId) =>
+      call(
+        'GetItemLinks',
+        as,
+        async (o) => {
+          const answer = await content.getItemLinks({ itemId }, o);
+          return { linksSha256: answer.linksSha256, links: answer.links.map(linkOf), ...(answer.readyAt === undefined ? {} : { readyAt: timestampDate(answer.readyAt) }) };
+        },
+        itemId,
+      ),
+    confirmLinks: (as, confirmation) =>
+      call(
+        'ConfirmLinks',
+        as,
+        async (o) => {
+          const answer = await content.confirmLinks(
+            {
+              itemId: confirmation.itemId,
+              linksSha256: confirmation.linksSha256,
+              answers: confirmation.answers.map((a) => ({ url: a.url, yes: a.yes, note: a.note })),
+              actingAsOfficeId: confirmation.actingAsOfficeId ?? '',
+            },
+            o,
+          );
+          return { links: answer.links.map(linkOf), notInPiece: answer.notInPiece };
+        },
+        confirmation.itemId,
+      ),
     withdraw: (as, itemId) => call('Withdraw', as, async (o) => itemOf((await content.withdraw({ itemId }, o)).item), itemId),
     listWorkingItems: (as, filter = {}) =>
       call('ListWorkingItems', as, async (o) =>
-        (await content.listWorkingItems({ states: (filter.states ?? []).map((s) => STATES[s]), officeId: filter.officeId ?? '', editionId: filter.editionId ?? '' }, o)).items.map(itemOf),
+        (
+          await content.listWorkingItems(
+            {
+              states: (filter.states ?? []).map((s) => STATES[s]),
+              officeId: filter.officeId ?? '',
+              editionId: filter.editionId ?? '',
+              versionStatuses: (filter.versionStatuses ?? []).map((s) => STATUSES[s]),
+            },
+            o,
+          )
+        ).items.map(itemOf),
       ),
     getWorkingItem: (as, itemId) => call('GetWorkingItem', as, async (o) => itemOf((await content.getWorkingItem({ itemId }, o)).item), itemId),
     listItemHistory: (as, itemId) => call('ListItemHistory', as, async (o) => (await content.listItemHistory({ itemId }, o)).entries.map(stepOf), itemId),
@@ -540,6 +674,9 @@ export function unavailableEditor(): EditorApi {
     markReady: fail('MarkReady'),
     sendBack: fail('SendBack'),
     approve: fail('Approve'),
+    publish: fail('Publish'),
+    getItemLinks: fail('GetItemLinks'),
+    confirmLinks: fail('ConfirmLinks'),
     withdraw: fail('Withdraw'),
     listWorkingItems: fail('ListWorkingItems'),
     getWorkingItem: fail('GetWorkingItem'),

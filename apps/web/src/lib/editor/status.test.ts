@@ -21,6 +21,10 @@ const version = (patch: Partial<EditorVersion>): EditorVersion => ({
   onBehalfOf: '',
   sendBackNote: '',
   callerEdited: false,
+  callerMayApprove: false,
+  callerMayPublish: false,
+  approvedAsLabel: '',
+  approvalKindSelf: false,
   ...patch,
 });
 

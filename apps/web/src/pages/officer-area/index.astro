@@ -12,15 +12,20 @@
 // Nothing here reaches a member who is none of these, or the public.
 // EDITOR E3 (S1): "Write news" for everyone the editor admits (an officer, the Admin, the Webmaster).
 // "Our events" joins it with E6's pages (writer.ts OUR_EVENTS), so it never leads to a missing page.
+// EDITOR E4 (SPEC-v3 2.4): "Approve news (N waiting)" for every reviewer, and the counts in words: "N
+// pieces wait for your approval" (never what they changed) and, for the Webmaster and the Admin, "N pieces
+// are approved and ready to publish". Read with the person's own token; unread, the link stays and the
+// counts are left out.
 import { officerAreaFor } from '../../../server/account.mjs';
 import OneApproverNote from '../../components/OneApproverNote.astro';
 import PasswordNote from '../../components/PasswordNote.astro';
 import Base from '../../layouts/Base.astro';
 import { type Setting, isAdmin, notesFor } from '../../lib/approval-rules';
-import { editorAdmits } from '../../lib/api/editor';
+import { type EditorItem, editorAdmits, editorApi, editorReader } from '../../lib/api/editor';
 import { OfficerSignInAgain, officerApi, officerReader } from '../../lib/api/officer';
 import { runtimeDeps } from '../../lib/auth/flow';
 import { mayUseEvents } from '../../lib/editor/events';
+import { REVIEW_LINKS, homeCounts, homeLines, isPublisher } from '../../lib/editor/review';
 import { EDIT_LINKS, OUR_EVENTS } from '../../lib/editor/writer';
 import { signUpsLink } from '../../lib/signup';
 import { page } from '../../lib/site';
@@ -30,8 +35,15 @@ if (!session) return Astro.redirect('/sign-in?return=%2Fofficer-area', 303);
 const admitted = officerAreaFor(session);
 const admin = isAdmin(session);
 const signUps = signUpsLink(session);
+// E4: what waits for this reviewer, read with their own token; unread (no token, or the API down), no counts.
+let queue: EditorItem[] | undefined;
+const editor = editorAdmits(session) ? editorApi() : undefined;
+const reviewer = editor ? editorReader(session, runtimeDeps()).reader : undefined;
+if (editor && reviewer) queue = await editor.listWorkingItems(reviewer, { versionStatuses: ['ready', 'cleared'] }).catch(() => undefined);
+const counts = queue === undefined ? undefined : homeCounts(queue);
 const links = [
   ...(editorAdmits(session) ? [{ href: EDIT_LINKS.list, text: 'Write news' }] : []),
+  ...(editorAdmits(session) ? [{ href: REVIEW_LINKS.queue, text: counts === undefined ? 'Approve news' : `Approve news (${counts.toApprove} waiting)` }] : []),
   // E6: only for whom the events pages admit (an officer or the Admin), never a link to a page that turns them away.
   ...(mayUseEvents(session.groups) && OUR_EVENTS !== undefined ? [{ href: OUR_EVENTS, text: 'Our events' }] : []),
   ...(signUps !== undefined ? [{ href: '/officer-area/sign-ups', text: signUps }] : []),
@@ -59,7 +71,7 @@ if (session.officer) {
   if (settings === undefined && (lapsed || refused)) signIn = '/sign-in?return=%2Fofficer-area&again=1';
 }
 const lead = session.officer
-  ? 'Write news for your office here. The approval queue and events come in the next update.'
+  ? 'Write news for your office, and approve what other officers wrote.'
   : admin
     ? 'As the Admin, you can change the approval setting here.'
     : links.length === 0
@@ -73,6 +85,11 @@ const lead = session.officer
         <p class="lead">Welcome, {session.name}.{lead && ` ${lead}`}</p>
         {session.officer && <OneApproverNote notes={notes} signIn={signIn} />}
         {session.officer && signIn && <PasswordNote />}
+        {counts && (
+          <ul class="review-counts" aria-label="Waiting for you">
+            {homeLines(counts, isPublisher(session.groups)).map((text) => <li>{text}</li>)}
+          </ul>
+        )}
         {links.length > 0 && (
           <ul class="link-list">
             {links.map((link) => <li><a href={link.href}>{link.text}</a></li>)}
