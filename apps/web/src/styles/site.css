@@ -1775,7 +1775,8 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
 .writer-items { container: writer / inline-size; max-width: none; }
 .writer-table { display: none; width: 100%; border-collapse: collapse; margin: var(--space-3) 0; }
 .writer-table caption { text-align: left; font-family: var(--font-head); font-weight: 600; font-size: 1.25rem; padding-bottom: var(--space-2); }
-.writer-table th, .writer-table td { padding: var(--space-2) var(--space-3); border-bottom: var(--border) solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.writer-table th, .writer-table td { padding: var(--space-2) var(--space-3); border-bottom: var(--border) solid var(--line); text-align: left; vertical-align: top; overflow-wrap: break-word; }
+.writer-table tbody th { overflow-wrap: anywhere; }
 .writer-table thead th { font-size: var(--fs-small); color: var(--muted); }
 .writer-table tbody th { font-weight: 700; }
 .writer-table .chip { white-space: normal; border-radius: var(--radius); }
