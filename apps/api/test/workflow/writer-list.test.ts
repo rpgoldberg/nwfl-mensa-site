@@ -7,7 +7,6 @@
 //      such as an export, is no change), on every officer read of an item.
 // Made-up people and synthetic text only.
 import { type Client, Code } from '@connectrpc/connect';
-import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentKind, ContentService, type ContentItem, ItemState, ItemVisibility, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { type Api, MEMBER, as, insertId, startApi } from '../helpers/api.js';
@@ -52,10 +51,12 @@ describe.skipIf(!live)('EDITOR E3: the writers\' list', () => {
     await content.publish({ itemId, contentHash: hash }, WEBMASTER);
   };
   const ids = (items: ContentItem[]) => items.map((item) => item.id);
-  const lastChanged = (item: ContentItem | undefined) => (item?.lastChangedAt === undefined ? undefined : timestampDate(item.lastChangedAt).getTime());
-  /** The latest audited change of an item, as the database has it. */
-  const latestStep = async (itemId: string): Promise<number> =>
-    ((await api.pool.query<{ at: Date }>(`SELECT max(at) AS at FROM audit_event WHERE item_id = $1`, [itemId])).rows[0]?.at as Date).getTime();
+  /** When an item last changed, in microseconds since the epoch: exact (a Date would round it). */
+  const lastChanged = (item: ContentItem | undefined) =>
+    item?.lastChangedAt === undefined ? undefined : (item.lastChangedAt.seconds * 1000000n + BigInt(item.lastChangedAt.nanos / 1000)).toString();
+  /** The latest audited change of an item, as the database has it, in microseconds. */
+  const latestStep = async (itemId: string): Promise<string> =>
+    ((await api.pool.query<{ us: string }>(`SELECT (extract(epoch FROM max(at)) * 1000000)::bigint::text AS us FROM audit_event WHERE item_id = $1`, [itemId])).rows[0] as { us: string }).us;
 
   describe('1. published and taken-down items, by state', () => {
     it('lists a published item, with or without a change being written, and a taken-down one, by their states', async () => {
@@ -148,7 +149,7 @@ describe.skipIf(!live)('EDITOR E3: the writers\' list', () => {
       expect(lastChanged((await content.getWorkingItem({ itemId }, PUB)).item)).toBe(created);
       await publish(itemId);
       const approved = await latestStep(itemId);
-      expect(approved).toBeGreaterThanOrEqual(created);
+      expect(BigInt(approved)).toBeGreaterThanOrEqual(BigInt(created));
       const listed = (await content.listWorkingItems({ states: [ItemState.PUBLISHED] }, PUB)).items.find((i) => i.id === itemId);
       expect(lastChanged(listed)).toBe(approved);
       const withdrawn = (await content.withdraw({ itemId }, PUB)).item;
@@ -157,7 +158,7 @@ describe.skipIf(!live)('EDITOR E3: the writers\' list', () => {
 
     it('counts no read as a change: an export read leaves it where it was', async () => {
       const itemId = await draft();
-      const before = lastChanged((await content.getWorkingItem({ itemId }, PUB)).item) as number;
+      const before = lastChanged((await content.getWorkingItem({ itemId }, PUB)).item);
       await api.pool.query(
         `INSERT INTO audit_event (actor_kind, action, subject_kind, subject_id, item_id) VALUES ('agent', 'export_read', 'content_item', $1::text, $1::uuid)`,
         [itemId],
