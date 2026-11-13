@@ -15,7 +15,7 @@
 // and linkcheck's suite checks the same table, so the two can never diverge. Reused by the link
 // gate (A3b) and the event screens (E6).
 // ============================================================================
-import { CONTROLS, type KeptRefusal, MAX_URL_LENGTH, parseKept, trimTrailing } from './urls.js';
+import { CONTROLS, type KeptRefusal, MAX_URL_LENGTH, parseKept, trimTrailing, type Work } from './urls.js';
 
 export type UrlRefusal = KeptRefusal | 'http' | 'not-plain' | 'not-web';
 
@@ -90,9 +90,11 @@ export interface TextUrl {
 }
 
 /** The bare URLs in `text`, each without the sentence punctuation after it. */
-export function urlsInText(text: string): TextUrl[] {
+export function urlsInText(text: string, work?: Work): TextUrl[] {
+  // The pattern reads the text once.
+  if (work) work.steps += text.length;
   return [...text.matchAll(URL_IN_TEXT)].map((match) => ({
-    url: match[0].length > TRIM_MAX ? match[0] : trimTrailing(match[0]),
+    url: match[0].length > TRIM_MAX ? match[0] : trimTrailing(match[0], work),
     index: match.index,
   }));
 }

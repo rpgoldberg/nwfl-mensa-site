@@ -80,9 +80,13 @@ describe('urlsInText: bare URLs in text', () => {
 
   it('does not trim an address far over the limit, and stays fast on a hostile one', () => {
     const hostile = `https://example.org/${')'.repeat(48 * 1024)}`;
+    const text = `${hostile} ${hostile}`;
+    const work = { steps: 0 };
     const started = performance.now();
-    const found = urlsInText(`${hostile} ${hostile}`);
-    expect(performance.now() - started).toBeLessThan(500);
+    const found = urlsInText(text, work);
+    // Counted steps are the bound (the text read once, nothing trimmed); the clock only catches a catastrophe.
+    expect(work.steps).toBe(text.length);
+    expect(performance.now() - started).toBeLessThan(5_000);
     expect(found).toHaveLength(2);
     expect(found[0]?.url).toBe(hostile);
     expect(urlProblem(found[0]?.url as string)?.code).toBe('too-long');
@@ -91,9 +95,12 @@ describe('urlsInText: bare URLs in text', () => {
   it('trims many hostile addresses just under the limit quickly', () => {
     const near = `https://example.org/${')'.repeat(2100)}`;
     const text = Array.from({ length: 23 }, () => near).join(' ');
+    const work = { steps: 0 };
     const started = performance.now();
-    expect(urlsInText(text)).toHaveLength(23);
-    expect(performance.now() - started).toBeLessThan(1000);
+    expect(urlsInText(text, work)).toHaveLength(23);
+    // The text read once, then each URL's brackets counted and its end trimmed: linear, at most 3x the text.
+    expect(work.steps).toBeLessThanOrEqual(3 * text.length);
+    expect(performance.now() - started).toBeLessThan(10_000);
   });
 });
 

@@ -4,8 +4,9 @@
 // is exponential; some block shapes were quadratic (regex backtracking) or
 // recursed past the stack. Every shape below is synthetic.
 //
-// Two guards, so CI cannot flake: a counted-steps bound (deterministic: the
-// parser's work units per input character) and a generous wall-clock bound.
+// The guards are counted steps, the same on every machine, so CI load cannot fail them: the parser's
+// work units per input character, and apart from them the URL rule's (each character it reads). A
+// wall-clock bound stays only to catch a catastrophe (seconds), never ordinary load.
 import { describe, expect, it } from 'vitest';
 import { NESTED_TOO_DEEPLY, SPACE, parseMarkup, type MarkupMeter, type MarkupProblem } from './markup.js';
 import { MAX_URL_LENGTH } from '../links/urls.js';
@@ -16,18 +17,33 @@ import { MAX_DEPTH, normalizeTree } from './tree.js';
 const CAP = 48 * 1024;
 /** Work units per character the parser may spend on any input (the worst found by a 3,000-shape search was 6.8). */
 const STEPS_PER_CHAR = 16;
-/** Generous: the measured worst 48 KiB case is a few milliseconds on a developer box. */
-const WALL_MS = 250;
+/**
+ * URL rule steps per character. A link target is checked once, reading at most MAX_URL_LENGTH characters,
+ * so the work is linear; the worst found is 65 (link targets overlapping inside a members span: each "["
+ * starts a target that runs to the same ")"), about 23 ms at 48 KiB.
+ */
+const URL_STEPS_PER_CHAR = 128;
+/** Only a catastrophe: about 10x the slowest CI run seen (319 ms, the " www.[" shape under coverage). */
+const CATASTROPHE_MS = 3_000;
 
 const fill = (unit: string, prefix = '', suffix = ''): string =>
   prefix + unit.repeat(Math.floor((CAP - prefix.length - suffix.length) / unit.length)) + suffix;
 const half = (a: string, b: string): string => a.repeat(Math.floor(CAP / 2 / a.length)) + b.repeat(Math.floor(CAP / 2 / b.length));
 
-function timed(src: string): { ms: number; steps: number } {
+function timed(src: string): { ms: number; steps: number; urlSteps: number } {
   const meter: MarkupMeter = { steps: 0 };
   const start = performance.now();
   parseMarkup(src, meter);
-  return { ms: performance.now() - start, steps: meter.steps };
+  return { ms: performance.now() - start, steps: meter.steps, urlSteps: meter.url?.steps ?? 0 };
+}
+
+/** The bounds every shape is held to. */
+function bounded(src: string): void {
+  const { ms, steps, urlSteps } = timed(src);
+  expect(steps).toBeGreaterThan(0);
+  expect(steps).toBeLessThan(STEPS_PER_CHAR * src.length);
+  expect(urlSteps).toBeLessThanOrEqual(URL_STEPS_PER_CHAR * src.length);
+  expect(ms).toBeLessThan(CATASTROPHE_MS);
 }
 
 // Sizes the old parser finishes in about a second, so the red run terminates.
@@ -77,6 +93,8 @@ const INLINE_48K: [string, string][] = [
   ['" www.[" (one URL check each)', fill(' www.[')],
   ['URLs with 2,030 trailing ")"', fill(`https://a.example/${')'.repeat(2030)} `)],
   ['overlapping link targets', `[a${']('.repeat(Math.floor((CAP - 3) / 2))})`],
+  // The URL rule's worst found: dense https targets overlapping inside a members span (65 URL steps/char).
+  ['dense overlapping https targets in a members span', fill(`${'[](https://a.b/['.repeat(127)}) `, ':members[')],
   ['a members span over unbalanced https targets (each one checked)', fill(`${'[](https://a.example/['.repeat(90)}) `, ':members[')],
 ];
 
@@ -97,23 +115,28 @@ const BLOCK_48K: [string, string][] = [
 
 describe('parseMarkup stays fast on adversarial input', () => {
   it.each(SCALED)('scaled: %s', (_label, src) => {
-    expect(timed(src).ms).toBeLessThan(50);
+    bounded(src);
   });
 
   it.each(BLOCK_48K)('48 KiB block: %s', (_label, src) => {
     expect(src.length).toBeLessThanOrEqual(CAP);
-    const { ms, steps } = timed(src);
-    expect(steps).toBeGreaterThan(0);
-    expect(steps).toBeLessThan(STEPS_PER_CHAR * src.length);
-    expect(ms).toBeLessThan(WALL_MS);
+    bounded(src);
   });
 
   it.each(INLINE_48K)('48 KiB inline: %s', (_label, src) => {
     expect(src.length).toBeLessThanOrEqual(CAP);
-    const { ms, steps } = timed(src);
-    expect(steps).toBeGreaterThan(0);
-    expect(steps).toBeLessThan(STEPS_PER_CHAR * src.length);
-    expect(ms).toBeLessThan(WALL_MS);
+    bounded(src);
+  });
+
+  it('counts the URL rule\'s work where it runs: bare URLs, their trimming, and link targets', () => {
+    // With no address, the pattern still reads the text once.
+    expect(timed('plain words, no address').urlSteps).toBe('plain words, no address'.length);
+    // A bare URL: the run read once, the URL's brackets counted and its end trimmed, then the check.
+    const bare = 'see https://example.org/x).';
+    expect(timed(bare).urlSteps).toBeGreaterThanOrEqual(bare.length + 2 * 'https://example.org/x).'.length);
+    // A link target is checked, reading all of it.
+    const target = 'https://example.org/page';
+    expect(timed(`[a](${target})`).urlSteps).toBeGreaterThanOrEqual(target.length + 1);
   });
 
   it('grows linearly: doubling the input at most a little more than doubles the work', () => {

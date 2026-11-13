@@ -9,7 +9,7 @@
 //     one more problem, last: checked here against the oracle's own tree.
 // Synthetic inputs only.
 import { describe, expect, it } from 'vitest';
-import { BUDGET, OverBudget, oracleParse, type MarkupProblem as OracleProblem } from '../../test/content/markup-oracle.js';
+import { BUDGET, OverBudget, oracleParse, oracleSteps, type MarkupProblem as OracleProblem } from '../../test/content/markup-oracle.js';
 import { NESTED_TOO_DEEPLY, parseMarkup, type MarkupProblem } from './markup.js';
 import { MAX_DEPTH, type Block, type Inline, type Tree, normalizeTree } from './tree.js';
 import type { MarkupMeter, ParsedMarkup } from './markup.js';
@@ -30,11 +30,23 @@ function once(problems: OracleProblem[]): MarkupProblem[] {
   return out;
 }
 
+// CI time (EQUIV-FLAKE). The two big corpora are fixed work: seeded inputs, each held to the old parser's
+// step budget, and a ceiling on the oracle's total steps below, so a heavier corpus fails here the same
+// way on every machine instead of timing out on a busy one. What varies is the machine: in CI under
+// coverage, passing runs took 10.1-20.4 s for the 40,000 and 13.5-27.8 s for the 2,500, which also hit
+// vitest's 30 s default in four runs. Each gets an explicit timeout of at least 3x the slowest CI pass.
+const RANDOM_TIMEOUT_MS = 75_000;
+const LONG_TIMEOUT_MS = 120_000;
+const RANDOM_STEPS_MAX = 24_000_000; // 21,880,930 measured
+const LONG_STEPS_MAX = 80_000_000; // 75,335,802 measured, about half on the inputs over budget
+
 interface Tally {
   compared: number;
   overBudget: number;
   repeatsCollapsed: number;
   tooDeep: number;
+  /** The old parser's steps over the whole corpus, skipped inputs included: its work, whatever the machine. */
+  oracleSteps: number;
 }
 
 /** The deepest node of a tree, counted as tree.ts's normalizeTree counts it. */
@@ -79,6 +91,7 @@ function same(src: string, tally: Tally): void {
   try {
     old = oracleParse(src);
   } catch (error) {
+    tally.oracleSteps += oracleSteps();
     if (error instanceof OverBudget) {
       tally.overBudget += 1;
       return;
@@ -90,6 +103,7 @@ function same(src: string, tally: Tally): void {
     }
     throw error;
   }
+  tally.oracleSteps += oracleSteps();
   const problems = once(old.problems);
   if (problems.length !== old.problems.length) tally.repeatsCollapsed += 1;
   if (deepest(old.tree) > MAX_DEPTH) {
@@ -161,14 +175,14 @@ const EXISTING_TABLE = [
 
 describe('the linear parser matches the frozen old parser', () => {
   it('on the existing markup test table', () => {
-    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0 };
+    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0, oracleSteps: 0 };
     for (const src of EXISTING_TABLE) same(src, tally);
     expect(tally.compared).toBe(EXISTING_TABLE.length);
   });
 
   it('on every inline string of up to four tokens', () => {
     const tokens = ['*', '**', '_', '[', ']', '(', ')', ':members[', '\\', ' ', 'a', 'https://x'];
-    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0 };
+    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0, oracleSteps: 0 };
     let level = [''];
     for (let length = 1; length <= 4; length += 1) {
       level = level.flatMap((prefix) => tokens.map((token) => prefix + token));
@@ -182,7 +196,7 @@ describe('the linear parser matches the frozen old parser', () => {
   it('on 40,000 seeded random documents, inline and block', () => {
     const next = random(0x6d61726b);
     const pick = (list: string[]): string => list[Math.floor(next() * list.length)] as string;
-    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0 };
+    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0, oracleSteps: 0 };
     for (let n = 0; n < 40_000; n += 1) {
       const count = 1 + Math.floor(next() * 48);
       let src = '';
@@ -193,13 +207,14 @@ describe('the linear parser matches the frozen old parser', () => {
     // a problem, and (rarely) inputs the old parser could not finish.
     expect(tally.compared).toBeGreaterThan(39_000);
     expect(tally.repeatsCollapsed).toBeGreaterThan(100);
+    expect(tally.oracleSteps).toBeLessThanOrEqual(RANDOM_STEPS_MAX);
     if (process.env['MARKUP_DIFF_STATS']) console.info('random', tally, 'budget', BUDGET);
-  });
+  }, RANDOM_TIMEOUT_MS);
 
-  it('on 2,500 longer seeded paragraphs heavy in brackets, members spans and links', () => {
+  it('on 2,500 longer seeded paragraphs heavy in brackets, members spans and links (over 2,100 compared; the rest exceed the old parser\'s step budget)', () => {
     const next = random(0x5b5d);
     const tokens = ['[', ']', ':members[', '\\[', '\\]', 'a', ' ', '](https://x.example)', '](http://h.example)', '(', ')', '*', '_', '**', '[a](mailto:m@example.org)', 'http://b.example ', '\n'];
-    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0 };
+    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0, oracleSteps: 0 };
     for (let n = 0; n < 2_500; n += 1) {
       const count = 40 + Math.floor(next() * 80);
       let src = '';
@@ -208,12 +223,13 @@ describe('the linear parser matches the frozen old parser', () => {
     }
     // About a tenth are too slow for the old parser's budget and are skipped.
     expect(tally.compared).toBeGreaterThan(2_100);
+    expect(tally.oracleSteps).toBeLessThanOrEqual(LONG_STEPS_MAX);
     if (process.env['MARKUP_DIFF_STATS']) console.info('long', tally);
-  });
+  }, LONG_TIMEOUT_MS);
 
   it('on 600 seeded documents nested 16 to 30 deep: the extra problem exactly when the tree is too deep', () => {
     const next = random(0xdee9);
-    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0 };
+    const tally: Tally = { compared: 0, overBudget: 0, repeatsCollapsed: 0, tooDeep: 0, oracleSteps: 0 };
     for (let n = 0; n < 600; n += 1) {
       const levels = 16 + Math.floor(next() * 15);
       const inline = Math.floor(next() * (levels + 1));
