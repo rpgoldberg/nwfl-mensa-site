@@ -23,7 +23,9 @@ const titled = (what: string) => `${what} ${test.info().project.name} ${test.inf
 const textBox = (page: Page) => page.getByRole('textbox', { name: 'The text', exact: true });
 const status = (page: Page) => page.locator('[data-autosave-status]');
 
+/** As editor-writer.spec.ts runs it: from the foot of the page, so no fixed bar sits over a field mid-scroll. */
 async function axe(page: Page): Promise<string[]> {
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   const result = await new AxeBuilder({ page }).withTags(TAGS).analyze();
   return result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
 }
