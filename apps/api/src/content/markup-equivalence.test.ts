@@ -32,9 +32,9 @@ function once(problems: OracleProblem[]): MarkupProblem[] {
 // CI time (EQUIV-FLAKE). The two big corpora are fixed work: seeded inputs, each held to the old parser's
 // step budget, and a ceiling on the oracle's total steps below, so a heavier corpus fails here the same
 // way on every machine instead of timing out on a busy one. What varies is the machine: in CI under
-// coverage the 40,000 took 11-20 s and the 2,500 took 14-19 s, once over 30 s (vitest's default, which
-// it then failed). Each gets an explicit timeout of at least 3x the slowest CI run seen.
-const RANDOM_TIMEOUT_MS = 60_000;
+// coverage, passing runs took 10.1-20.4 s for the 40,000 and 13.5-27.8 s for the 2,500, which also hit
+// vitest's 30 s default in four runs. Each gets an explicit timeout of at least 3x the slowest CI pass.
+const RANDOM_TIMEOUT_MS = 75_000;
 const LONG_TIMEOUT_MS = 120_000;
 const RANDOM_STEPS_MAX = 24_000_000; // 21,880,930 measured
 const LONG_STEPS_MAX = 80_000_000; // 75,335,802 measured, about half on the inputs over budget
