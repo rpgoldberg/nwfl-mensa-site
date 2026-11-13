@@ -1,0 +1,116 @@
+---
+// EDITOR E4: Publish's confirm page (SPEC-v3 1.3). "This goes on the website now." [Publish] [Go back].
+// The hash of the version seen is carried hidden: a version changed since says so, and shows it again.
+// A taken-down item says when and by whom (by role) it was taken down, and needs a tick: "Publishing puts
+// it back on the website". Only for whom may publish it as it stands (the Webmaster, or the Admin as
+// backup; never the approver of their own change): anyone else is sent back to the review page, which
+// says why. A refusal the API still gives is said in plain words.
+//
+// Not signed in: sign in first. Not an officer, the Admin or the Webmaster, an id that is not one, or no
+// such item: the plain not-found page.
+import ItemHeader from '../../../../components/ItemHeader.astro';
+import PasswordNote from '../../../../components/PasswordNote.astro';
+import Unavailable from '../../../../components/Unavailable.astro';
+import Base from '../../../../layouts/Base.astro';
+import { ApiNotFound } from '../../../../lib/api/client';
+import { type EditorItem, type HistoryStep, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../../lib/api/editor';
+import { markUnavailable, signInFirst } from '../../../../lib/api/page';
+import { runtimeDeps } from '../../../../lib/auth/flow';
+import { hashHex } from '../../../../lib/editor/form';
+import { type Outcome, REVIEW_LINKS, runPublish, takenDown } from '../../../../lib/editor/review';
+import type { RosterOffice } from '../../../../lib/editor/writer';
+import { readForm } from '../../../../lib/form';
+
+export const prerender = false;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const FORM_LIMIT = 4 * 1024;
+
+const id = Astro.params.id ?? '';
+const HERE = REVIEW_LINKS.publish(id);
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (!editorAdmits(session) || !UUID.test(id)) return Astro.rewrite('/404');
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+const api = editorApi();
+const { reader } = editorReader(session, runtimeDeps());
+let problem: 'sign-in' | 'unavailable' | undefined;
+let outcome: Exclude<Outcome, { redirect: string }> | undefined;
+let roster: RosterOffice[] = [];
+let item: EditorItem | undefined;
+let history: HistoryStep[] = [];
+if (api === undefined) problem = 'unavailable';
+else if (reader === undefined) problem = 'sign-in';
+else {
+  try {
+    [roster, item, history] = await Promise.all([api.offices(), api.getWorkingItem(reader, id), api.listItemHistory(reader, id)]);
+  } catch (error) {
+    if (error instanceof ApiNotFound) return Astro.rewrite('/404');
+    problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+  }
+}
+// Nothing this person may publish here: the review page says why.
+if (item !== undefined && !item.working?.callerMayPublish && Astro.request.method === 'GET') return Astro.redirect(REVIEW_LINKS.review(id), 303);
+
+if (Astro.request.method === 'POST' && api !== undefined) {
+  const read = await readForm(Astro.request, FORM_LIMIT);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  if (item === undefined) outcome = { status: 401, signIn: true };
+  else {
+    const done = await runPublish(api, reader, item, read.field);
+    if ('redirect' in done) return Astro.redirect(done.redirect, 303);
+    outcome = done;
+    if (done.status === 409 && !done.errors) item = await api.getWorkingItem(reader!, id).catch(() => item);
+  }
+  Astro.response.status = outcome.status;
+}
+if (problem === 'unavailable' || outcome?.unavailable) markUnavailable(Astro.response);
+
+const working = item?.working;
+const officeName = roster.find((o) => o.id === item?.officeId)?.title ?? '';
+const down = item?.state === 'withdrawn' ? takenDown(history) : undefined;
+const title = working?.title ?? item?.live?.title ?? 'Publish';
+const errors = outcome?.errors ?? {};
+---
+<Base path={HERE} title={`Publish: ${title}`} description="Put an approved piece on the website.">
+  {item ? <ItemHeader item={item} officeName={officeName} /> : <h1>Publish</h1>}
+  {(problem === 'sign-in' || outcome?.signIn) && (
+    <>
+      <p class="notice" role="alert">Your sign-in has run out. Nothing was published. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>.</p>
+      <PasswordNote />
+    </>
+  )}
+  {problem === 'unavailable' && <Unavailable what="This piece" />}
+  {outcome?.notice && !outcome.signIn && <p class="notice" role="alert">{outcome.notice}</p>}
+  {outcome?.frozen && <p class="notice" role="note">This piece is for {outcome.frozen}, which is now frozen for print. <a href={`${REVIEW_LINKS.review(id)}#send-back`}>Send it back</a> so the author can pick another edition.</p>}
+  {errors['republish'] && (
+    <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+      <h2 id="error-summary-title">There is a problem</h2>
+      <ul><li><a href="#republish">{errors['republish']}</a></li></ul>
+    </section>
+  )}
+  {item && working?.status === 'cleared' && working.callerMayPublish && (
+    <form method="post" action={HERE} class="rule-form" novalidate>
+      <input type="hidden" name="hash" value={hashHex(working.contentHash)} />
+      <p class="notice notice--rule" role="note">This goes on the website now{working.approvedAsLabel ? `. It was approved by the ${working.approvedAsLabel}` : ''}.</p>
+      {item.state === 'withdrawn' && (
+        <fieldset aria-describedby={errors['republish'] ? 'republish-error' : undefined}>
+          <legend>It was taken down</legend>
+          <p>This item was taken down{down?.on ? ` on ${down.on}` : ''} by {down?.by === undefined || down.by === 'someone' ? 'someone' : `the ${down.by}`}. Publishing puts it back on the website.</p>
+          {errors['republish'] && <p class="error" id="republish-error">Problem: {errors['republish']}</p>}
+          <div class="choice">
+            <input type="checkbox" id="republish" name="republish" value="yes" />
+            <label for="republish">Yes, put it back on the website</label>
+          </div>
+        </fieldset>
+      )}
+      <div class="btns">
+        <button class="button button--wide" type="submit">Publish</button>
+        <a class="button button--secondary button--wide" href={REVIEW_LINKS.review(id)}>Go back</a>
+      </div>
+    </form>
+  )}
+  {item && !(working?.status === 'cleared' && working.callerMayPublish) && <p><a class="button button--secondary" href={REVIEW_LINKS.review(id)}>Back to the review</a></p>}
+</Base>

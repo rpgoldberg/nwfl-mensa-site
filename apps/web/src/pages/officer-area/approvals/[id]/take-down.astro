@@ -1,0 +1,89 @@
+---
+// EDITOR E4, S9: Take down's confirm page. "It disappears from the website at once." [Take it down]
+// [Go back]. When an approved change was waiting to be published, it says that change now needs approving
+// again (SPEC-v3 1.3, S1). For the item's office, the Webmaster or the Admin, on a published item; anyone
+// else, or an item not on the website, is sent back to the review page. A refusal is said in plain words.
+//
+// Not signed in: sign in first. Not an officer, the Admin or the Webmaster, an id that is not one, or no
+// such item: the plain not-found page.
+import ItemHeader from '../../../../components/ItemHeader.astro';
+import PasswordNote from '../../../../components/PasswordNote.astro';
+import Unavailable from '../../../../components/Unavailable.astro';
+import Base from '../../../../layouts/Base.astro';
+import { ApiNotFound } from '../../../../lib/api/client';
+import { type EditorItem, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../../lib/api/editor';
+import { markUnavailable, signInFirst } from '../../../../lib/api/page';
+import { runtimeDeps } from '../../../../lib/auth/flow';
+import { type Outcome, REVIEW_LINKS, runTakeDown } from '../../../../lib/editor/review';
+import type { RosterOffice } from '../../../../lib/editor/writer';
+import { readForm } from '../../../../lib/form';
+
+export const prerender = false;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const FORM_LIMIT = 1024;
+
+const id = Astro.params.id ?? '';
+const HERE = REVIEW_LINKS.takeDown(id);
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (!editorAdmits(session) || !UUID.test(id)) return Astro.rewrite('/404');
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+const api = editorApi();
+const { reader } = editorReader(session, runtimeDeps());
+let problem: 'sign-in' | 'unavailable' | undefined;
+let outcome: Exclude<Outcome, { redirect: string }> | undefined;
+let roster: RosterOffice[] = [];
+let item: EditorItem | undefined;
+if (api === undefined) problem = 'unavailable';
+else if (reader === undefined) problem = 'sign-in';
+else {
+  try {
+    [roster, item] = await Promise.all([api.offices(), api.getWorkingItem(reader, id)]);
+  } catch (error) {
+    if (error instanceof ApiNotFound) return Astro.rewrite('/404');
+    problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+  }
+}
+const officeSlug = roster.find((o) => o.id === item?.officeId)?.slug ?? '';
+const mayTakeDown = session.groups.some((g) => g === 'nwfl-admin' || g === 'nwfl-webmaster' || g === `nwfl-office-${officeSlug}`);
+if (item !== undefined && (item.state !== 'published' || !mayTakeDown) && Astro.request.method === 'GET') return Astro.redirect(REVIEW_LINKS.review(id), 303);
+
+if (Astro.request.method === 'POST' && api !== undefined) {
+  const read = await readForm(Astro.request, FORM_LIMIT);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const done = await runTakeDown(api, reader, id);
+  if ('redirect' in done) return Astro.redirect(done.redirect, 303);
+  outcome = done;
+  Astro.response.status = done.status;
+}
+if (problem === 'unavailable' || outcome?.unavailable) markUnavailable(Astro.response);
+
+const officeName = roster.find((o) => o.id === item?.officeId)?.title ?? '';
+const title = item?.working?.title ?? item?.live?.title ?? 'Take down';
+const waiting = item?.working?.status === 'cleared';
+---
+<Base path={HERE} title={`Take down: ${title}`} description="Take a published piece off the website.">
+  {item ? <ItemHeader item={item} officeName={officeName} /> : <h1>Take down</h1>}
+  {(problem === 'sign-in' || outcome?.signIn) && (
+    <>
+      <p class="notice" role="alert">Your sign-in has run out. Nothing was taken down. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>.</p>
+      <PasswordNote />
+    </>
+  )}
+  {problem === 'unavailable' && <Unavailable what="This piece" />}
+  {outcome?.notice && !outcome.signIn && <p class="notice" role="alert">{outcome.notice}</p>}
+  {item && item.state === 'published' && (
+    <form method="post" action={HERE} class="rule-form" novalidate>
+      <p class="notice notice--rule" role="note">It disappears from the website at once.</p>
+      {waiting && <p>An approved change was waiting to be published; it will need approving again.</p>}
+      <div class="btns">
+        <button class="button button--wide" type="submit">Take it down</button>
+        <a class="button button--secondary button--wide" href={REVIEW_LINKS.review(id)}>Go back</a>
+      </div>
+    </form>
+  )}
+  {item && item.state !== 'published' && <p><a class="button button--secondary" href={REVIEW_LINKS.review(id)}>Back to the review</a></p>}
+</Base>

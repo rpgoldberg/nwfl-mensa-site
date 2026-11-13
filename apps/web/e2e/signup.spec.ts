@@ -412,17 +412,19 @@ test.describe('fix 1: the officer area admits each role, with only its own links
   const links = (page: Page) => page.locator('main .link-list a');
   // EDITOR E3: "Write news" for everyone the editor admits (an officer, the Admin, the Webmaster).
   // EDITOR E6: "Our events" for whom the events pages admit (an officer or the Admin): not a lone Webmaster.
+  // EDITOR E4: "Approve news (N waiting)" for every reviewer; N is whatever other tests left waiting.
+  const queue = /^Approve news \(\d+ waiting\)$/;
   const cases = [
     { login: 'lone-approver', links: ['Sign-ups to approve'] },
-    { login: 'lone-webmaster', links: ['Write news'] },
-    { login: 'lone-admin', links: ['Write news', 'Our events', 'Sign-ups to approve', 'Approval setting'] },
-    { login: 'admin', links: ['Write news', 'Our events', 'Sign-ups to approve', 'Approval setting'] },
-    { login: 'approver', links: ['Write news', 'Our events', 'Sign-ups to approve'] },
-    { login: 'officer', links: ['Write news', 'Our events'] },
-    { login: 'webmaster', links: ['Write news', 'Our events'] },
+    { login: 'lone-webmaster', links: ['Write news', queue] },
+    { login: 'lone-admin', links: ['Write news', queue, 'Our events', 'Sign-ups to approve', 'Approval setting'] },
+    { login: 'admin', links: ['Write news', queue, 'Our events', 'Sign-ups to approve', 'Approval setting'] },
+    { login: 'approver', links: ['Write news', queue, 'Our events', 'Sign-ups to approve'] },
+    { login: 'officer', links: ['Write news', queue, 'Our events'] },
+    { login: 'webmaster', links: ['Write news', queue, 'Our events'] },
   ] as const;
   for (const c of cases) {
-    test(`${c.login}: let in, linked from the header, and shown ${c.links.join(' and ')}`, async ({ page }) => {
+    test(`${c.login}: let in, linked from the header, and shown ${c.links.map((l) => (typeof l === 'string' ? l : 'Approve news')).join(' and ')}`, async ({ page }) => {
       await page.goto('/');
       await signIn(page, c.login);
       await (await openAccount(page)).getByRole('link', { name: 'Officer area' }).click();

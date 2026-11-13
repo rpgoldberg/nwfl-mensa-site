@@ -571,6 +571,8 @@ const EVENTS = createEventModel({
 // reaches the public reads: an item approved here is not listed on Home or /news.
 const WORKFLOW = createWorkflow({
   offices: ROSTER.map((o) => ({ id: o.id, slug: o.slug, title: o.title })),
+  // EDITOR E4: an edition frozen for print, as e2e/stand-in.ts REVIEW.frozen names it.
+  frozenEditions: [{ id: 'e0000000-0000-4000-8000-0000000000f0', title: 'October–November 2026' }],
   ruleFor: (sub) => (/** @type {{ rule: number }} */ (rulesFor(sub).get(ApprovalScope.CONTENT)).rule === ApprovalRule.ONE_APPROVER ? 'one_approver' : 'two_person'),
 });
 WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000001', slug: 'seeded-withheld', kind: 'article', officeId: OFFICE.president, state: 'draft', title: 'Seeded: part held back', markup: 'Open words and :members[HELD BACK CANARY]', withheld: true });
@@ -581,6 +583,30 @@ WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000004', slug: 'seeded-cleare
 // EDITOR E3 fix 1: the President's published item with a change waiting, and one taken down, for "Our news".
 WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000005', slug: 'seeded-changing', kind: 'president_report', officeId: OFFICE.president, state: 'published', title: 'Seeded: published, change waiting', markup: 'Our fall so far.', change: 'ready' });
 WORKFLOW.seed({ id: 'c0e20000-0000-4000-8000-000000000006', slug: 'seeded-taken-down', kind: 'announcement', officeId: OFFICE.president, state: 'withdrawn', title: 'Seeded: taken down', markup: 'Gone.' });
+
+// EDITOR E4: the approver's and publisher's screens (e2e/stand-in.ts REVIEW). Shared and only ever refused
+// (so never changed): a piece with links the President wrote; one the Admin wrote; one approved for an
+// edition frozen for print; one the Admin approved by break-glass; one taken down with an approved change
+// (its Publish confirm is only looked at). Then, for each browser project, its
+// own: a piece with links to answer and approve, one approved to publish, one to send back, one published
+// to take down, and one taken down with an approved change, to put back.
+const PRESIDENT_SUB = '00000000-0000-4000-8000-0000000000a1';
+const ADMIN_SUB = '00000000-0000-4000-8000-0000000000ad';
+const LINKED = 'Our picnic is on Saturday. See [the picnic page](https://club.example/picnic) and the map at https://club.example/map.\n\nPhotos go on [our Facebook group](https://www.facebook.com/groups/nwfl-sample).';
+const review = (/** @type {number} */ n) => `c0e40000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+WORKFLOW.seed({ id: review(1), slug: 'review-links', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: links to check', markup: LINKED, editors: [PRESIDENT_SUB] });
+WORKFLOW.seed({ id: review(2), slug: 'review-admin-wrote', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: the Admin wrote this', markup: 'Typed for the office.', editors: [ADMIN_SUB], createdBy: { sub: ADMIN_SUB, label: 'Admin' } });
+WORKFLOW.seed({ id: review(3), slug: 'review-frozen', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: for a frozen issue', markup: 'Too late for print.', cleared: true, newsletter: true, editionId: 'e0000000-0000-4000-8000-0000000000f0' });
+WORKFLOW.seed({ id: review(4), slug: 'review-self-approved', kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: 'Seeded: the Admin approved their own change', markup: 'Break-glass.', cleared: true, editors: [ADMIN_SUB], selfApproved: true, approvedBy: ADMIN_SUB, approvedAs: 'Admin' });
+WORKFLOW.seed({ id: review(5), slug: 'review-taken-down-shared', kind: 'announcement', officeId: OFFICE.president, state: 'withdrawn', title: 'Seeded: taken down, change approved', markup: 'Was on the website.', change: 'cleared' });
+['chromium-desktop', 'chromium-phone', 'webkit-iphone'].forEach((project, p) => {
+  const own = (/** @type {number} */ n) => review(100 * (p + 1) + n);
+  WORKFLOW.seed({ id: own(1), slug: `review-links-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: `Links to answer (${project})`, markup: LINKED, editors: [PRESIDENT_SUB] });
+  WORKFLOW.seed({ id: own(2), slug: `review-publish-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: `Approved, to publish (${project})`, markup: 'Ready for the website.', cleared: true });
+  WORKFLOW.seed({ id: own(3), slug: `review-send-back-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'ready', title: `To send back (${project})`, markup: 'Needs a time.', editors: [PRESIDENT_SUB] });
+  WORKFLOW.seed({ id: own(4), slug: `review-take-down-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'published', title: `Published, to take down (${project})`, markup: 'On the website.' });
+  WORKFLOW.seed({ id: own(5), slug: `review-put-back-${project}`, kind: 'announcement', officeId: OFFICE.president, state: 'withdrawn', title: `Taken down, change approved (${project})`, markup: 'Was on the website.', change: 'cleared' });
+});
 
 // W-SIGNUP: as in e2e/stand-in.ts (ACCOUNTS, SIGNUP_QUEUE). Every member account was last checked on October 20, 2026.
 const ENROLEE_PENDING_SUBJECT = '00000000-0000-4000-8000-0000000000c2';

@@ -32,6 +32,8 @@ import {
   REASON_MAX,
   SignInAgain,
   SlugTaken,
+  LINKS_CHANGED,
+  LinksChanged,
   VersionChanged,
   editorAdmits,
   editorApi,
@@ -121,6 +123,10 @@ const LIVE_VERSION = {
   onBehalfOf: '',
   sendBackNote: '',
   callerEdited: false,
+  callerMayApprove: false,
+  callerMayPublish: false,
+  approvedAsLabel: '',
+  approvalKindSelf: false,
 };
 const WORKING_VERSION = {
   id: 'v2',
@@ -140,6 +146,10 @@ const WORKING_VERSION = {
   readyAt: READY_AT,
   sendBackNote: '',
   callerEdited: true,
+  callerMayApprove: false,
+  callerMayPublish: false,
+  approvedAsLabel: '',
+  approvalKindSelf: false,
 };
 const EDITOR_ITEM = { id: ITEM_ID, slug: 'lunch-moves', kind: 'announcement', officeId: OFFICE_ID, state: 'published', live: LIVE_VERSION, working: WORKING_VERSION };
 
@@ -270,6 +280,123 @@ describe('grpcEditor: each call, with the officer\'s bearer, read into the edito
     expect(await api.getWorkingItem(OFFICER, ITEM_ID)).toEqual(EDITOR_ITEM);
     expect(seen).toEqual([{ states: [], officeId: '', editionId: '' }, { states: [ItemState.READY], officeId: OFFICE_ID, editionId: 'e1' }, ITEM_ID]);
     expect(server.headers.map((h) => h['authorization'])).toEqual(['Bearer officer.tok-en', 'Bearer officer.tok-en', 'Bearer officer.tok-en']);
+  });
+
+  // EDITOR E4: A1's acting office, Publish and the version's new fields; A3b's link gate.
+  it('sends back and approves for the office named, and none when none is', async () => {
+    const seen: unknown[] = [];
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        sendBack: (req) => {
+          seen.push(['SendBack', req.actingAsOfficeId]);
+          return { item: ITEM };
+        },
+        approve: (req) => {
+          seen.push(['Approve', req.actingAsOfficeId]);
+          return { item: ITEM };
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    await api.sendBack(OFFICER, { itemId: ITEM_ID, note: 'n', actingAsOfficeId: OFFICE_ID });
+    await api.approve(OFFICER, { itemId: ITEM_ID, contentHash: HASH, actingAsOfficeId: OFFICE_ID });
+    await api.approve(OFFICER, { itemId: ITEM_ID, contentHash: HASH });
+    expect(seen).toEqual([
+      ['SendBack', OFFICE_ID],
+      ['Approve', OFFICE_ID],
+      ['Approve', ''],
+    ]);
+  });
+
+  it('publishes by the hash seen, putting a taken-down item back only when told, and reads who may do what', async () => {
+    const seen: unknown[] = [];
+    const PUBLISHED_AT = new Date('2026-11-12T18:00:00Z');
+    const live = create(ContentItemSchema, {
+      ...ITEM,
+      working: undefined,
+      live: { ...ITEM.live!, publishedAt: timestampFromDate(PUBLISHED_AT), approvedAsLabel: 'Treasurer', approvalKindSelf: true, callerMayApprove: true, callerMayPublish: true },
+    });
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        publish: (req) => {
+          seen.push({ itemId: req.itemId, hash: [...req.contentHash], republish: req.republishWithdrawn });
+          return { item: live };
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    const item = await api.publish(OFFICER, { itemId: ITEM_ID, contentHash: HASH });
+    expect(item.live).toMatchObject({ publishedAt: PUBLISHED_AT, approvedAsLabel: 'Treasurer', approvalKindSelf: true, callerMayApprove: true, callerMayPublish: true });
+    await api.publish(OFFICER, { itemId: ITEM_ID, contentHash: HASH, republishWithdrawn: true });
+    expect(seen).toEqual([
+      { itemId: ITEM_ID, hash: [...HASH], republish: false },
+      { itemId: ITEM_ID, hash: [...HASH], republish: true },
+    ]);
+  });
+
+  it("reads a piece's links with their hash and ready time, and sends a reviewer's answers for an office", async () => {
+    const seen: unknown[] = [];
+    const LINK = { url: 'https://www.facebook.com/x', label: 'our group', where: 'in the text', loginWalled: true, answeredByLabel: 'Treasurer', accepted: true };
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        getItemLinks: (req) =>
+          req.itemId === ITEM_ID ? { linksSha256: HASH, links: [{ ...LINK, reasons: ['r'], fix: 'f' }], readyAt: timestampFromDate(READY_AT) } : { linksSha256: HASH, links: [] },
+        confirmLinks: (req) => {
+          seen.push({ itemId: req.itemId, hash: [...req.linksSha256], answers: req.answers.map((a) => [a.url, a.yes, a.note]), acting: req.actingAsOfficeId });
+          return { links: [LINK], notInPiece: ['https://elsewhere.example/'] };
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    expect(await api.getItemLinks(OFFICER, ITEM_ID)).toEqual({ linksSha256: HASH, links: [LINK], readyAt: READY_AT });
+    expect(await api.getItemLinks(OFFICER, 'c0000000-0000-4000-8000-000000000002')).toEqual({ linksSha256: HASH, links: [] });
+    const answer = { url: LINK.url, yes: true, note: 'Opened it.' };
+    expect(await api.confirmLinks(OFFICER, { itemId: ITEM_ID, linksSha256: HASH, answers: [answer], actingAsOfficeId: OFFICE_ID })).toEqual({ links: [LINK], notInPiece: ['https://elsewhere.example/'] });
+    await api.confirmLinks(OFFICER, { itemId: ITEM_ID, linksSha256: HASH, answers: [answer] });
+    expect(seen).toEqual([
+      { itemId: ITEM_ID, hash: [...HASH], answers: [[LINK.url, true, 'Opened it.']], acting: OFFICE_ID },
+      { itemId: ITEM_ID, hash: [...HASH], answers: [[LINK.url, true, 'Opened it.']], acting: '' },
+    ]);
+  });
+
+  it('lists by the working version\'s status when asked', async () => {
+    const seen: unknown[] = [];
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        listWorkingItems: (req) => {
+          seen.push([...req.versionStatuses]);
+          return { items: [] };
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    await api.listWorkingItems(OFFICER, { versionStatuses: ['draft', 'ready', 'cleared'] });
+    expect(seen).toEqual([[VersionStatus.DRAFT, VersionStatus.READY, VersionStatus.CLEARED]]);
+  });
+
+  it("keeps the API's words on a refusal of who may (PERMISSION_DENIED), and tells a changed list of links apart", async () => {
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        publish: () => {
+          throw new ConnectError('you approved your own change; someone else must publish it', Code.PermissionDenied);
+        },
+        confirmLinks: () => {
+          throw new ConnectError(LINKS_CHANGED, Code.FailedPrecondition);
+        },
+        getItemLinks: () => {
+          throw new ConnectError('only a version waiting for approval has its links checked', Code.FailedPrecondition);
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    const refused = (await api.publish(OFFICER, { itemId: ITEM_ID, contentHash: HASH }).catch((e: unknown) => e)) as NotAllowed;
+    expect(refused).toBeInstanceOf(NotAllowed);
+    expect(refused.reason).toBe('you approved your own change; someone else must publish it');
+    expect(new NotAllowed('Approve').reason).toBe('');
+    const changed = await api.confirmLinks(OFFICER, { itemId: ITEM_ID, linksSha256: HASH, answers: [] }).catch((e: unknown) => e);
+    expect(changed).toBeInstanceOf(LinksChanged);
+    expect((changed as LinksChanged).rpc).toBe('ConfirmLinks');
+    expect(await api.getItemLinks(OFFICER, ITEM_ID).catch((e: unknown) => e)).toBeInstanceOf(EditorRefused);
   });
 
   it("reads an item's history, oldest first as the API gives it, with each actor's label", async () => {
@@ -405,6 +532,9 @@ const CALLS: Record<string, (api: EditorApi) => Promise<unknown>> = {
   MarkReady: (api) => api.markReady(OFFICER, { itemId: ITEM_ID, targets: { website: true, newsletter: false, email: false } }),
   SendBack: (api) => api.sendBack(OFFICER, { itemId: ITEM_ID, note: 'n' }),
   Approve: (api) => api.approve(OFFICER, { itemId: ITEM_ID, contentHash: HASH }),
+  Publish: (api) => api.publish(OFFICER, { itemId: ITEM_ID, contentHash: HASH }),
+  GetItemLinks: (api) => api.getItemLinks(OFFICER, ITEM_ID),
+  ConfirmLinks: (api) => api.confirmLinks(OFFICER, { itemId: ITEM_ID, linksSha256: HASH, answers: [{ url: 'https://club.example/', yes: true, note: '' }] }),
   Withdraw: (api) => api.withdraw(OFFICER, ITEM_ID),
   ListWorkingItems: (api) => api.listWorkingItems(OFFICER),
   GetWorkingItem: (api) => api.getWorkingItem(OFFICER, ITEM_ID),
@@ -420,7 +550,7 @@ async function refusingServer(code: Code) {
   const refuse = () => {
     throw new ConnectError('SECRET-MESSAGE for officer.tok-en', code);
   };
-  const content = Object.fromEntries(['createItem', 'saveDraft', 'markReady', 'sendBack', 'approve', 'withdraw', 'listWorkingItems', 'getWorkingItem', 'listItemHistory', 'previewWorkingItem'].map((m) => [m, refuse]));
+  const content = Object.fromEntries(['createItem', 'saveDraft', 'markReady', 'sendBack', 'approve', 'publish', 'getItemLinks', 'confirmLinks', 'withdraw', 'listWorkingItems', 'getWorkingItem', 'listItemHistory', 'previewWorkingItem'].map((m) => [m, refuse]));
   const events = Object.fromEntries(['saveOccurrence', 'saveSeries', 'saveVenue'].map((m) => [m, refuse]));
   return grpcServer((router) => {
     router.service(ContentService, content);

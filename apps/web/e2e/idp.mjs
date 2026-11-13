@@ -55,7 +55,8 @@ const LOGINS = {
   // No enrolee group and a token that lapses at once: never told to sign in again for members reading.
   'lapsed-outsider': { id: '00000000-0000-4000-8000-0000000000c4', name: 'Jamie Placeholder', groups: ['nwfl-officers'], tokenSeconds: 20 },
   // SOLO-APPROVE: the Admin, who alone sets the approval rule, and the Webmaster, who approves but is not the Admin.
-  admin: { id: '00000000-0000-4000-8000-0000000000ad', name: 'Pat Example', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-admin'] },
+  // EDITOR E4: the Admin holds the Publications Officer's and the Newsletter Editor's seats too, as the club's Admin does.
+  admin: { id: '00000000-0000-4000-8000-0000000000ad', name: 'Pat Example', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-office-editor', 'nwfl-admin'] },
   webmaster: { id: '00000000-0000-4000-8000-0000000000eb', name: 'Lee Placeholder', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-webmaster'] },
   // SOLO-APPROVE: the Admin's group alone, without the officers group (the API serves the Admin either way).
   'lone-admin': { id: '00000000-0000-4000-8000-0000000000ae', name: 'Rowan Example', groups: ['nwfl-admin'] },
@@ -86,6 +87,8 @@ const LOGINS = {
   'seat-refused': { id: '00000000-0000-4000-8000-0000000000e7', name: 'Morgan Sample', groups: ['nwfl-users', 'nwfl-officers', 'nwfl-office-membership'] },
   // EDITOR E6: the Treasurer, an officer whose seat owns none of the President's events.
   treasurer: { id: '00000000-0000-4000-8000-0000000000f8', name: 'Treasurer Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer'] },
+  // EDITOR E4: an officer in two seats, the Member at Large's and the Secretary's, who picks which one they act for.
+  'two-seats': { id: '00000000-0000-4000-8000-0000000000f9', name: 'Rory Placeholder', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-member-at-large', 'nwfl-office-secretary'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

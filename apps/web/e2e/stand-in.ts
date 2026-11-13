@@ -92,6 +92,8 @@ export const ACCOUNTS = {
   'lone-approver': '00000000-0000-4000-8000-0000000000d6',
   'lone-webmaster': '00000000-0000-4000-8000-0000000000d7',
   'writer-lapsing': '00000000-0000-4000-8000-0000000000f7',
+  treasurer: '00000000-0000-4000-8000-0000000000f8',
+  'two-seats': '00000000-0000-4000-8000-0000000000f9',
 };
 
 /**
@@ -184,6 +186,37 @@ export const WORKFLOW = {
   changing: { id: 'c0e20000-0000-4000-8000-000000000005', title: 'Seeded: published, change waiting', officeId: '11111111-1111-4111-8111-111111111111' },
   takenDown: { id: 'c0e20000-0000-4000-8000-000000000006', title: 'Seeded: taken down', officeId: '11111111-1111-4111-8111-111111111111' },
 } as const;
+
+const reviewId = (n: number) => `c0e40000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+/**
+ * EDITOR E4: the approver's and publisher's seeds (api.mjs). Shared, and only ever refused: "links" (the
+ * President wrote it: a page link, a printed map address, a Facebook link), "adminWrote", "frozen"
+ * (approved for an edition frozen for print), "selfApproved" (the Admin approved their own change by
+ * break-glass). Each browser project changes only its own (own(project)): links to answer and approve, one
+ * approved to publish, one to send back, one published to take down, one taken down with a change approved.
+ */
+export const REVIEW = {
+  links: { id: reviewId(1), title: 'Seeded: links to check' },
+  adminWrote: { id: reviewId(2), title: 'Seeded: the Admin wrote this' },
+  frozen: { id: reviewId(3), title: 'Seeded: for a frozen issue', edition: 'October–November 2026' },
+  selfApproved: { id: reviewId(4), title: 'Seeded: the Admin approved their own change' },
+  /** Taken down, with a change approved: its Publish confirm, with the tick, is only looked at. */
+  takenDown: { id: reviewId(5), title: 'Seeded: taken down, change approved' },
+  urls: { picnic: 'https://club.example/picnic', map: 'https://club.example/map', facebook: 'https://www.facebook.com/groups/nwfl-sample' },
+  own: (project: string) => {
+    const p = ['chromium-desktop', 'chromium-phone', 'webkit-iphone'].indexOf(project);
+    if (p < 0) throw new Error(`no E4 seeds for ${project}`);
+    const own = (n: number) => reviewId(100 * (p + 1) + n);
+    return {
+      links: { id: own(1), title: `Links to answer (${project})` },
+      toPublish: { id: own(2), title: `Approved, to publish (${project})` },
+      sendBack: { id: own(3), title: `To send back (${project})` },
+      live: { id: own(4), title: `Published, to take down (${project})` },
+      putBack: { id: own(5), title: `Taken down, change approved (${project})` },
+    };
+  },
+};
 
 /**
  * A14: the newsletter's articles (api.mjs ARTICLES). The public article carries a members passage and a

@@ -34,6 +34,7 @@ import { runtimeDeps } from '../../../lib/auth/flow';
 import { addDays, todayCentral, whenText } from '../../../lib/calendar';
 import { EDIT_FORM_LIMIT, SUMMARY_MAX, TITLE_MAX, editFormFor, parseDraft } from '../../../lib/editor/form';
 import { EDIT_LINKS, type KeptDraft, ROSTER_WARNING, type RosterOffice, draftKey, keptText, lengthText, mayWriteFor, postingOffices, signInLine } from '../../../lib/editor/writer';
+import { REVIEW_LINKS } from '../../../lib/editor/review';
 import { readForm } from '../../../lib/form';
 
 export const prerender = false;
@@ -343,6 +344,8 @@ const pageTitle = view === 'gone' ? 'Page not found' : (item?.working?.title ?? 
 
   <div class="btns writer-links">
     {(view === 'edit' || view === 'cannot-edit') && <a class="button button--secondary" href={EDIT_LINKS.preview(id)}>Preview and send</a>}
+    {/* EDITOR E4, S9: a published item is taken down from its confirm page. */}
+    {(view === 'edit' || view === 'cannot-edit') && item?.state === 'published' && <a class="button button--secondary" href={REVIEW_LINKS.takeDown(id)}>Take down</a>}
     <a class="button button--secondary" href={EDIT_LINKS.list}>Back to Our news</a>
   </div>
 </Base>

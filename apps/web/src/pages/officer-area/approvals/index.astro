@@ -1,0 +1,109 @@
+---
+// EDITOR E4, S6: "Approve news". Two lists, oldest first: "Waiting for approval" (every piece sent for
+// approval; one this person changed is marked, since another officer must approve it) and "Approved, ready
+// to publish" (the Webmaster publishes these, or the Admin as backup). Each card: the title, the office,
+// what it is, its status in words beside the chip (never colour alone), and Review. Any reviewer (an
+// officer, the Admin, the Webmaster) sees both: approving is anyone's but its writer's, publishing is the
+// publishers'. Read with the person's own token (src/lib/api/editor.ts).
+//
+// Not signed in: sign in first. Signed in but not an officer, the Admin or the Webmaster: the plain
+// not-found page.
+import PasswordNote from '../../../components/PasswordNote.astro';
+import Unavailable from '../../../components/Unavailable.astro';
+import Base from '../../../layouts/Base.astro';
+import { type EditorItem, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
+import { markUnavailable, signInFirst } from '../../../lib/api/page';
+import { runtimeDeps } from '../../../lib/auth/flow';
+import { REVIEW_LINKS, doneText, isPublisher, reviewQueue } from '../../../lib/editor/review';
+import { KIND_WORDS, statusOf } from '../../../lib/editor/status';
+import { type RosterOffice, lastChangeText } from '../../../lib/editor/writer';
+import { page } from '../../../lib/site';
+
+export const prerender = false;
+
+const HERE = REVIEW_LINKS.queue;
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (!editorAdmits(session)) return Astro.rewrite('/404');
+const p = page(HERE);
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+const api = editorApi();
+const { reader } = editorReader(session, runtimeDeps());
+let problem: 'sign-in' | 'unavailable' | undefined;
+let roster: RosterOffice[] = [];
+let items: EditorItem[] = [];
+if (api === undefined) problem = 'unavailable';
+else if (reader === undefined) problem = 'sign-in';
+else {
+  try {
+    [roster, items] = await Promise.all([api.offices(), api.listWorkingItems(reader, { versionStatuses: ['ready', 'cleared'] })]);
+  } catch (error) {
+    problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+  }
+}
+if (problem === 'unavailable') markUnavailable(Astro.response);
+
+const officeTitle = new Map(roster.map((o) => [o.id, o.title]));
+const queue = reviewQueue(items);
+const card = (item: EditorItem) => ({
+  item,
+  title: item.working?.title ?? '',
+  office: officeTitle.get(item.officeId) ?? 'Another office',
+  status: statusOf(item),
+});
+const lists = [
+  {
+    id: 'waiting',
+    heading: 'Waiting for approval',
+    lead: 'Any officer may approve a piece, except one they changed themselves. Approving does not publish it.',
+    empty: 'Nothing is waiting for approval.',
+    rows: queue.waiting.map(card),
+    when: (item: EditorItem) => `Sent ${lastChangeText(item.working?.readyAt)}`,
+  },
+  {
+    id: 'to-publish',
+    heading: 'Approved, ready to publish',
+    lead: isPublisher(session.groups) ? 'You publish these, as the Webmaster or the Admin.' : 'The Webmaster publishes these, or the Admin as backup.',
+    empty: 'Nothing is waiting to be published.',
+    rows: queue.toPublish.map(card),
+    when: (item: EditorItem) => `Approved ${lastChangeText(item.working?.approvedAt)}${item.working?.approvedAsLabel ? ` by the ${item.working.approvedAsLabel}` : ''}`,
+  },
+];
+const done = doneText(Astro.url.searchParams);
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  {done && <p class="notice" role="status">{done}</p>}
+  {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>.</p>}
+  {problem === 'sign-in' && <PasswordNote />}
+  {problem === 'unavailable' && <Unavailable what="The approval list" />}
+  {problem === undefined && lists.map((list) => (
+    <section class="review-section" aria-labelledby={list.id}>
+      <h2 id={list.id}>{list.heading} ({list.rows.length})</h2>
+      <p>{list.lead}</p>
+      {list.rows.length === 0
+        ? <p class="card empty">{list.empty}</p>
+        : (
+          <ul class="writer-list review-list">
+            {list.rows.map((row) => (
+              <li class="card writer-card">
+                <h3>{row.title}</h3>
+                <dl class="facts facts--grid">
+                  <div><dt>What it is</dt><dd>{KIND_WORDS[row.item.kind]}</dd></div>
+                  <div><dt>Office</dt><dd>{row.office}</dd></div>
+                  <div class="facts__wide"><dt>Status</dt><dd><span class={`chip ${row.status.tone}`}>{row.status.label}</span></dd></div>
+                  <div class="facts__wide"><dt>When</dt><dd>{list.when(row.item)}</dd></div>
+                </dl>
+                {row.item.working?.callerEdited && <p class="review-mine"><strong>You changed this version</strong>, so another officer must approve it.</p>}
+                <p><a class="button button--secondary" href={REVIEW_LINKS.review(row.item.id)} aria-label={`Review ${row.title}`}>Review</a></p>
+              </li>
+            ))}
+          </ul>
+        )}
+    </section>
+  ))}
+  <p><a href="/officer-area">Back to the officer area</a></p>
+</Base>
