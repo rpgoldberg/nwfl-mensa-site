@@ -1,0 +1,138 @@
+---
+// EDITOR E6, S11: the form for one date, for a change (/officer-area/events/<id>) and for a new one-off
+// (/officer-area/events/new). Labels above the fields, a hint under each label, a problem under it in
+// words, and the typed values kept. The fields: the title (a one-off's), whose event it is (a new one, for
+// a person with more than one office), the date (a one-off's; a series date's is fixed and shown as text),
+// the start time in Central time, the status, the note shown on the calendar, where (radio buttons, with
+// "Decided later" first), the details, the web address, and who can see it. Radio buttons, never a native
+// <select>; no script and no inline style (CSP). "Saving changes the public calendar at once" sits right
+// above Save. The form posts here, URL-encoded (every field together fits EVENT_FORM_LIMIT).
+import { formatDate } from '../data/format';
+import { DETAIL_MAX, type EventValues, NOTE_MAX, STATUS_CHOICES, TITLE_MAX, URL_MAX, VISIBILITY_CHOICES, type VenueChoice } from '../lib/editor/events';
+
+interface Props {
+  action: string;
+  mode: 'new' | 'one-off' | 'series';
+  values: EventValues;
+  /** Each field's problems, in words. */
+  errors: Partial<Record<string, string[]>>;
+  venues: readonly VenueChoice[];
+  /** A new event's offices to choose from; asked only when there is more than one. */
+  offices: readonly { id: string; title: string }[];
+  /** Today in Central: the earliest date a one-off may take. */
+  today: string;
+  submit: string;
+  back: string;
+}
+const { action, mode, values, errors, venues, offices, today, submit, back } = Astro.props;
+const oneOff = mode !== 'series';
+const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
+const invalid = (field: string) => ((errors[field]?.length ?? 0) > 0 ? 'true' : undefined);
+const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefined);
+---
+<form method="post" action={action} class="rule-form event-form" novalidate>
+  {oneOff && (
+    <div class="field">
+      <label for="title">Title</label>
+      <p class="hint" id="title-hint">What the calendar calls it. Always public, even for a members event.</p>
+      {errors['title']?.map((text) => <p class="error" id="title-error">Problem: {text}</p>)}
+      <input type="text" id="title" name="title" maxlength={TITLE_MAX} required value={values.title} aria-invalid={invalid('title')} aria-describedby={describedBy('title-hint', errorId('title'))} />
+    </div>
+  )}
+
+  {mode === 'new' && offices.length > 1 && (
+    <fieldset aria-describedby={errorId('office')}>
+      <legend>Whose event is it?</legend>
+      {errors['office']?.map((text) => <p class="error" id="office-error">Problem: {text}</p>)}
+      {offices.map((o, i) => (
+        <div class="choice">
+          <input type="radio" id={`office-${i}`} name="office" value={o.id} checked={values.office === o.id} />
+          <div><label for={`office-${i}`}>{o.title}</label></div>
+        </div>
+      ))}
+    </fieldset>
+  )}
+
+  {oneOff ? (
+    <div class="field">
+      <label for="date">Date</label>
+      <p class="hint" id="date-hint">Year, month and day, such as 2027-03-14.</p>
+      {errors['date']?.map((text) => <p class="error" id="date-error">Problem: {text}</p>)}
+      <input type="date" id="date" name="date" min={today} required value={values.date} aria-invalid={invalid('date')} aria-describedby={describedBy('date-hint', errorId('date'))} />
+    </div>
+  ) : (
+    <p class="field-text"><b>Date:</b> {values.date && formatDate(values.date)}</p>
+  )}
+
+  <div class="field">
+    <label for="time">Start time, in Central time</label>
+    <p class="hint" id="time-hint">The time on a clock in Northwest Florida, such as 11:30 am or 6:00 pm.</p>
+    {errors['time']?.map((text) => <p class="error" id="time-error">Problem: {text}</p>)}
+    <input type="time" id="time" name="time" required value={values.time} aria-invalid={invalid('time')} aria-describedby={describedBy('time-hint', errorId('time'))} />
+  </div>
+
+  <fieldset aria-describedby={errorId('status')}>
+    <legend>Status</legend>
+    {errors['status']?.map((text) => <p class="error" id="status-error">Problem: {text}</p>)}
+    {STATUS_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`status-${c.value}`} name="status" value={c.value} checked={values.status === c.value} aria-describedby={`status-${c.value}-hint`} />
+        <div><label for={`status-${c.value}`}>{c.label}</label><p class="hint" id={`status-${c.value}-hint`}>{c.hint}</p></div>
+      </div>
+    ))}
+  </fieldset>
+
+  <div class="field">
+    <label for="statusNote">Note shown on the calendar</label>
+    <p class="hint" id="statusNote-hint">Short, beside the status, such as "Moved to the 14th" or "Happy Thanksgiving". Leave it empty for none.</p>
+    {errors['statusNote']?.map((text) => <p class="error" id="statusNote-error">Problem: {text}</p>)}
+    <input type="text" id="statusNote" name="statusNote" maxlength={NOTE_MAX} value={values.statusNote} aria-invalid={invalid('statusNote')} aria-describedby={describedBy('statusNote-hint', errorId('statusNote'))} />
+  </div>
+
+  <fieldset aria-describedby={describedBy('venue-hint', errorId('venue'))}>
+    <legend>Where</legend>
+    <p class="hint" id="venue-hint">Choose the place from the list. If it is not known yet, choose "Decided later".</p>
+    {errors['venue']?.map((text) => <p class="error" id="venue-error">Problem: {text}</p>)}
+    <div class="choice">
+      <input type="radio" id="venue-later" name="venue" value="" checked={values.venue === ''} />
+      <label for="venue-later">Decided later</label>
+    </div>
+    {venues.map((v, i) => (
+      <div class="choice">
+        <input type="radio" id={`venue-${i}`} name="venue" value={v.id} checked={values.venue === v.id} aria-describedby={v.hint ? `venue-${i}-hint` : undefined} />
+        <div><label for={`venue-${i}`}>{v.label}</label>{v.hint && <p class="hint" id={`venue-${i}-hint`}>{v.hint}</p>}</div>
+      </div>
+    ))}
+  </fieldset>
+
+  <div class="field">
+    <label for="detail">Details</label>
+    <p class="hint" id="detail-hint">Anything else people should know, such as "We'll sit outside". A web address in here must start with https://.</p>
+    {errors['detail']?.map((text) => <p class="error" id="detail-error">Problem: {text}</p>)}
+    <textarea id="detail" name="detail" rows="6" maxlength={DETAIL_MAX} aria-invalid={invalid('detail')} aria-describedby={describedBy('detail-hint', errorId('detail'))}>{values.detail}</textarea>
+  </div>
+
+  <div class="field">
+    <label for="url">Web address (if there is one)</label>
+    <p class="hint" id="url-hint">A page about the event, starting with https://. Leave it empty for none.</p>
+    {errors['url']?.map((text) => <p class="error" id="url-error">Problem: {text}</p>)}
+    <input type="url" id="url" name="url" inputmode="url" maxlength={URL_MAX} autocomplete="off" value={values.url} aria-invalid={invalid('url')} aria-describedby={describedBy('url-hint', errorId('url'))} />
+  </div>
+
+  <fieldset aria-describedby={errorId('visibility')}>
+    <legend>Who can see it</legend>
+    {errors['visibility']?.map((text) => <p class="error" id="visibility-error">Problem: {text}</p>)}
+    {VISIBILITY_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`visibility-${c.value}`} name="visibility" value={c.value} checked={values.visibility === c.value} aria-describedby={`visibility-${c.value}-hint`} />
+        <div><label for={`visibility-${c.value}`}>{c.label}</label><p class="hint" id={`visibility-${c.value}-hint`}>{c.hint}</p></div>
+      </div>
+    ))}
+  </fieldset>
+
+  <p class="save-note" id="save-note">Saving changes the public calendar at once.</p>
+  <div class="btns">
+    <button class="button" type="submit" aria-describedby="save-note">{submit}</button>
+    <a class="button button--secondary" href={back}>Back to our events</a>
+  </div>
+</form>

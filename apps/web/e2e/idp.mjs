@@ -84,6 +84,8 @@ const LOGINS = {
   // same seat whose token the stand-in API refuses (api.mjs REFUSED_SEAT_SUBJECT).
   'seat-only': { id: '00000000-0000-4000-8000-0000000000e6', name: 'Quinn Placeholder', groups: ['nwfl-users', 'nwfl-officers', 'nwfl-office-membership'] },
   'seat-refused': { id: '00000000-0000-4000-8000-0000000000e7', name: 'Morgan Sample', groups: ['nwfl-users', 'nwfl-officers', 'nwfl-office-membership'] },
+  // EDITOR E6: the Treasurer, an officer whose seat owns none of the President's events.
+  treasurer: { id: '00000000-0000-4000-8000-0000000000f8', name: 'Treasurer Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

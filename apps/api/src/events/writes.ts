@@ -8,7 +8,9 @@
 //   occurrences   a series date: the series' host office; a one-off: its owning
 //                 office; the Admin for any. A date of a series is changed by
 //                 writing a stored occurrence over it (a cancellation, a move).
-// A new venue or series starts active.
+// A new venue or series starts active. A series date's first change takes the
+// series' venue when it sends none, unless the request says the venue is
+// decided later (EDITOR E6): then it has none, in the same write.
 //
 // URLs (EDITOR A3a): a venue's or an occurrence's url, and every bare URL in an
 // occurrence's detail, must pass the strict URL rule (links/rule.ts), or the
@@ -306,6 +308,8 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
           if (!keptSeries || !keptOwner) throw invalid('an occurrence keeps its series and its owning office');
         }
 
+        // EDITOR E6: "decided later" is no venue, in this one write, never the series' default.
+        if (request.venueDecidedLater && occurrence.venueId !== '') throw invalid('venue_id must be empty when the venue is decided later');
         const startsAt = occurrence.startsAt !== undefined ? timestampDate(occurrence.startsAt) : (existing?.starts_at ?? generatedStart);
         if (startsAt === null) throw invalid('starts_at is required');
         const visibility = VISIBILITY_NAMES.get(occurrence.visibility) ?? series?.visibility ?? existing?.visibility;
@@ -316,7 +320,7 @@ export function eventWriteHandlers(deps: { db: Db }): Partial<ServiceImpl<typeof
           series !== undefined ? orNull(occurrence.title) : occurrence.title.trim() === '' ? null : occurrence.title.trim(),
           startsAt,
           occurrence.endsAt !== undefined ? timestampDate(occurrence.endsAt) : null,
-          idOrNull(occurrence.venueId, 'venue_id') ?? (existing === undefined && date !== undefined ? (series?.default_venue_id ?? null) : null),
+          idOrNull(occurrence.venueId, 'venue_id') ?? (existing === undefined && date !== undefined && !request.venueDecidedLater ? (series?.default_venue_id ?? null) : null),
           STATUS_NAMES.get(occurrence.status) ?? 'scheduled',
           orNull(occurrence.statusNote),
           orNull(occurrence.detail),

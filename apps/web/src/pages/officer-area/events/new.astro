@@ -1,0 +1,132 @@
+---
+// EDITOR E6, S11 for a new one-off event: the same form (src/components/EventForm.astro), with the title,
+// the date, and whose event it is (asked only of someone with more than one office; the Admin chooses
+// from every office). Saved through E2's client (SaveOccurrence with no id, live on save, P19); then 303
+// to the new event's own page with "Saved." A save the API refuses for its addresses (A3a) comes back
+// with each reason on its field and everything typed kept; so does a save whose sign-in ran out.
+//
+// Not signed in: sign in first. Not an officer or the Admin: the plain not-found page. An officer with no
+// office is told so, with no form. Astro's origin check refuses a cross-site post first.
+import EventForm from '../../../components/EventForm.astro';
+import PasswordNote from '../../../components/PasswordNote.astro';
+import Unavailable from '../../../components/Unavailable.astro';
+import Base from '../../../layouts/Base.astro';
+import { EditorRefused, NotAllowed, SignInAgain, editorApi, editorReader } from '../../../lib/api/editor';
+import { officerEventsApi } from '../../../lib/api/officer-events';
+import { markUnavailable, signInFirst } from '../../../lib/api/page';
+import { runtimeDeps } from '../../../lib/auth/flow';
+import { todayCentral } from '../../../lib/calendar';
+import {
+  EVENTS_PATH,
+  EVENT_FORM_LIMIT,
+  type EventOffices,
+  type EventValues,
+  type FieldErrors,
+  NEW_EVENT_PATH,
+  type VenueChoice,
+  editPathOf,
+  eventOffices,
+  mayUseEvents,
+  parseEventForm,
+  problemSummary,
+  refusalErrors,
+  saveRequestFor,
+  typedValues,
+  venueChoices,
+} from '../../../lib/editor/events';
+import { readForm } from '../../../lib/form';
+import { page } from '../../../lib/site';
+
+export const prerender = false;
+
+const HERE = NEW_EVENT_PATH;
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (!mayUseEvents(session.groups)) return Astro.rewrite('/404');
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+const p = page(HERE);
+
+const today = todayCentral(new Date());
+const blank: EventValues = { title: '', date: '', time: '', status: 'scheduled', statusNote: '', venue: '', detail: '', url: '', visibility: 'public', office: '' };
+let view: 'form' | 'no-office' | 'sign-in' | 'unavailable' = 'form';
+let values: EventValues = blank;
+let errors: FieldErrors = {};
+let notice: string | undefined;
+let who: EventOffices | undefined;
+let venues: VenueChoice[] = [];
+const api = officerEventsApi();
+const editor = editorApi();
+const { reader } = editorReader(session, runtimeDeps());
+
+if (api === undefined || editor === undefined) view = 'unavailable';
+else if (reader === undefined) view = 'sign-in';
+else {
+  try {
+    const [roster, allVenues] = await Promise.all([api.offices(), api.venues(reader)]);
+    who = eventOffices(session.groups, roster);
+    venues = venueChoices(allVenues);
+    if (who.offices.length === 0) view = 'no-office';
+  } catch (error) {
+    view = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+  }
+}
+
+if (Astro.request.method === 'POST' && (view === 'form' || view === 'sign-in')) {
+  const read = await readForm(Astro.request, EVENT_FORM_LIMIT);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const parsed = parseEventForm(read.field, { mode: 'new', venues, offices: who?.offices ?? [], today });
+  values = typedValues(read.field);
+  if (view === 'sign-in') {
+    // Kept as typed: shown again once signed in.
+  } else if (!parsed.ok) {
+    errors = Object.fromEntries(Object.entries(parsed.errors).map(([k, v]) => [k, [v]]));
+    Astro.response.status = 400;
+  } else if (editor !== undefined && reader !== undefined) {
+    try {
+      const { occurrence, venueDecidedLater } = saveRequestFor(parsed.value, undefined, undefined);
+      const saved = await editor.saveOccurrence(reader, occurrence, { venueDecidedLater });
+      return Astro.redirect(`${editPathOf(saved.id)}?saved=1`, 303);
+    } catch (error) {
+      if (error instanceof SignInAgain) view = 'sign-in';
+      else if (error instanceof NotAllowed) {
+        notice = 'Nothing was saved: you cannot add an event for that office. Ask the Admin.';
+        Astro.response.status = 403;
+      } else if (error instanceof EditorRefused) {
+        const refused = refusalErrors(error.reason);
+        errors = refused.errors;
+        notice = refused.other.length > 0 ? `Nothing was saved: ${refused.other.join(' ')}` : 'Nothing was saved. Put right the problems below, then save again.';
+        Astro.response.status = 400;
+      } else {
+        notice = 'Nothing was saved: the site could not reach its records just now. What you typed is still here: try again in a few minutes.';
+        markUnavailable(Astro.response);
+      }
+    }
+  }
+}
+if (view === 'unavailable') markUnavailable(Astro.response);
+const problems = problemSummary(errors);
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">An event on one date, such as a picnic or a talk. It goes on the calendar as soon as you save it.</p>
+  {view === 'sign-in' && <p class="notice" role="alert">Your sign-in timed out, so nothing was saved. <a href={`${SIGN_IN}&again=1`} target="_blank" rel="noopener">Sign in again (opens a new tab)</a>, then come back and save. What you typed is below.</p>}
+  {view === 'sign-in' && <PasswordNote />}
+  {view === 'unavailable' && <Unavailable what="The event form" />}
+  {view === 'no-office' && <p>You hold no office, so you cannot add an event. Ask the Admin if that is wrong. <a href={EVENTS_PATH}>Back to our events</a>.</p>}
+  {notice && <p class="notice" role="alert">{notice}</p>}
+  {problems.length > 0 && (
+    <>
+      <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+        <h2 id="error-summary-title">There is a problem with this event</h2>
+        <ul>
+          {problems.map((item) => <li><a href={item.href}>{item.text}</a></li>)}
+        </ul>
+      </section>
+      <script is:inline type="module" src="/scripts/error-summary.js"></script>
+    </>
+  )}
+  {(view === 'form' || (view === 'sign-in' && Astro.request.method === 'POST')) && (
+    <EventForm action={HERE} mode="new" values={values} errors={errors} venues={venues} offices={who?.offices.map((o) => ({ id: o.id, title: o.held || !who?.admin ? o.title : `${o.title} (for the office)` })) ?? []} today={today} submit="Add the event" back={EVENTS_PATH} />
+  )}
+</Base>

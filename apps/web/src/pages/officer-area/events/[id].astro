@@ -1,0 +1,215 @@
+---
+// EDITOR E6, S11: the form for one date (src/components/EventForm.astro). A series date is reached as
+// /officer-area/events/<series>_<YYYY-MM-DD>, as the public event pages write it, until its first change
+// makes it an event of its own; a one-off by its id. The event is read with the officer's own token
+// (src/lib/api/officer-events.ts) and saved through E2's client (SaveOccurrence, live on save, P19):
+// "Saving changes the public calendar at once" sits above Save. Saved: 303 to the event's own page with
+// "Saved." A save the API refuses for its addresses (A3a) comes back with each reason on its field and
+// everything typed kept; so does a save whose sign-in ran out, with "Sign in again".
+//
+// Q4 (Ross 11-12): a new or changed address is to show "details to follow" publicly until a reviewer
+// answers yes. That is A3b's, not built: urlReview (src/lib/editor/events.ts) is the seam it fills, and
+// this page already says so when it holds an address back.
+//
+// Not signed in: sign in first. Not an officer or the Admin, an id that is not one, no such event, or an
+// event of an office the person does not hold (the Admin holds every office): the plain not-found page,
+// and nothing is saved. An event the person's sign-in reads held back does not open (a save would write
+// the gaps over the text). Astro's origin check refuses a cross-site post first.
+import EventForm from '../../../components/EventForm.astro';
+import PasswordNote from '../../../components/PasswordNote.astro';
+import StatusChip from '../../../components/StatusChip.astro';
+import Unavailable from '../../../components/Unavailable.astro';
+import Base from '../../../layouts/Base.astro';
+import type { EventOccurrence } from '../../../gen/nwfl/mensa/v1/event_pb.js';
+import { ApiNotFound } from '../../../lib/api/client';
+import { Duplicate, EditorRefused, NotAllowed, SignInAgain, editorApi, editorReader } from '../../../lib/api/editor';
+import { officerEventsApi } from '../../../lib/api/officer-events';
+import { markUnavailable, signInFirst } from '../../../lib/api/page';
+import { runtimeDeps } from '../../../lib/auth/flow';
+import { eventIdFromParam, eventPath, todayCentral } from '../../../lib/calendar';
+import {
+  EVENTS_PATH,
+  EVENT_FORM_LIMIT,
+  STATUS_CHOICES,
+  type EventValues,
+  type FieldErrors,
+  type VenueChoice,
+  editPathOf,
+  eventOffices,
+  isWithheld,
+  mayChange,
+  mayUseEvents,
+  parseEventForm,
+  problemSummary,
+  refusalErrors,
+  saveRequestFor,
+  timeText,
+  typedValues,
+  urlReview,
+  valuesOf,
+  venueChoices,
+} from '../../../lib/editor/events';
+import { readForm } from '../../../lib/form';
+
+export const prerender = false;
+
+const param = Astro.params.id ?? '';
+const id = eventIdFromParam(param);
+const HERE = `${EVENTS_PATH}/${param}`;
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (id === undefined || !mayUseEvents(session.groups)) return Astro.rewrite('/404');
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+type View = 'edit' | 'sign-in' | 'withheld' | 'unavailable' | 'gone';
+let view: View = 'edit';
+let event: EventOccurrence | undefined;
+let seriesTitle: string | undefined;
+let values: EventValues | undefined;
+let errors: FieldErrors = {};
+let notice: string | undefined;
+let venues: VenueChoice[] = [];
+const deps = runtimeDeps();
+const today = todayCentral(new Date());
+const api = officerEventsApi();
+const editor = editorApi();
+const { reader } = editorReader(session, deps);
+
+/** What was posted, when the save cannot be made: kept on the page. */
+const keepPosted = async (): Promise<Response | undefined> => {
+  const read = await readForm(Astro.request, EVENT_FORM_LIMIT);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  values = typedValues(read.field);
+  return undefined;
+};
+
+if (api === undefined || editor === undefined) view = 'unavailable';
+else if (reader === undefined) view = 'sign-in';
+else {
+  try {
+    const [found, series, roster, allVenues] = await Promise.all([api.occurrence(reader, id), api.series(reader), api.offices(), api.venues(reader)]);
+    const hosts = new Map(series.map((s) => [s.id, s.hostOfficeId]));
+    if (!mayChange(found, hosts, eventOffices(session.groups, roster))) return Astro.rewrite('/404');
+    event = found;
+    seriesTitle = series.find((s) => s.id === found.seriesId)?.title;
+    venues = venueChoices(allVenues, found.venue);
+  } catch (error) {
+    if (error instanceof ApiNotFound || error instanceof NotAllowed) return Astro.rewrite('/404');
+    view = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+  }
+}
+if (event !== undefined && isWithheld(event)) {
+  view = 'withheld';
+  if (Astro.request.method === 'POST') Astro.response.status = 409;
+}
+const mode = event?.seriesId ? 'series' : 'one-off';
+
+if (Astro.request.method === 'POST' && view === 'sign-in') {
+  const refusal = await keepPosted();
+  if (refusal) return refusal;
+} else if (Astro.request.method === 'POST' && view === 'edit' && event !== undefined && editor !== undefined && reader !== undefined) {
+  const read = await readForm(Astro.request, EVENT_FORM_LIMIT);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const before = event;
+  const date = valuesOf(before).date;
+  const parsed = parseEventForm(read.field, { mode, date, venues, offices: [], today });
+  // As typed, kept on the page if the save cannot be made; a series date's own date and title stay its own.
+  values = { ...typedValues(read.field), ...(mode === 'series' ? { date, title: before.title } : {}) };
+  if (!parsed.ok) {
+    errors = Object.fromEntries(Object.entries(parsed.errors).map(([k, v]) => [k, [v]]));
+    Astro.response.status = 400;
+  } else {
+    try {
+      const { occurrence, venueDecidedLater } = saveRequestFor(parsed.value, before, seriesTitle);
+      // One save: a refusal means nothing was saved.
+      const saved = await editor.saveOccurrence(reader, occurrence, { venueDecidedLater });
+      // Q4: the seam A3b fills; today nothing is held back.
+      const review = urlReview(before, saved);
+      return Astro.redirect(`${editPathOf(saved.id)}?saved=1${review.held.length > 0 ? '&held=1' : ''}`, 303);
+    } catch (error) {
+      if (error instanceof ApiNotFound) {
+        view = 'gone';
+        Astro.response.status = 404;
+      } else if (error instanceof SignInAgain) {
+        view = 'sign-in';
+      } else if (error instanceof NotAllowed) {
+        notice = 'Nothing was saved: you cannot change this event. Ask the Admin.';
+        Astro.response.status = 403;
+      } else if (error instanceof EditorRefused) {
+        const refused = refusalErrors(error.reason);
+        errors = refused.errors;
+        notice = refused.other.length > 0 ? `Nothing was saved: ${refused.other.join(' ')}` : 'Nothing was saved. Put right the problems below, then save again.';
+        Astro.response.status = 400;
+      } else if (error instanceof Duplicate) {
+        notice = 'Nothing was saved: this series already has a date starting at that time.';
+        Astro.response.status = 409;
+      } else {
+        notice = 'Nothing was saved: the site could not reach its records just now. What you typed is still here: try Save again in a few minutes.';
+        markUnavailable(Astro.response);
+      }
+    }
+  }
+}
+if (view === 'unavailable') markUnavailable(Astro.response);
+if (values === undefined && event !== undefined) values = valuesOf(event);
+
+const saved = view === 'edit' && Astro.request.method === 'GET' && Astro.url.searchParams.get('saved') === '1';
+const held = saved && Astro.url.searchParams.get('held') === '1';
+const problems = problemSummary(errors);
+const title = event?.title || 'An event';
+/** The event's status as saved now, for the chip above the form. */
+const nowStatus = event === undefined ? undefined : (STATUS_CHOICES.find((c) => c.value === valuesOf(event!).status)?.value);
+const pageTitle = view === 'edit' && event !== undefined ? `Change: ${event.title}` : 'Change an event';
+---
+<Base path={HERE} title={pageTitle} description="Change one date on the calendar: its time, place, status and details.">
+  <h1>{pageTitle}</h1>
+  {view === 'sign-in' && (
+    <>
+      <p class="notice" role="alert">Your sign-in timed out, so nothing was saved. {values ? 'What you typed is still here. ' : ''}<a href={`${SIGN_IN}&again=1`} target="_blank" rel="noopener">Sign in again (opens a new tab)</a>, then come back and save.</p>
+      <PasswordNote />
+      {values && (
+        <section class="card" aria-labelledby="kept-title">
+          <h2 id="kept-title">What you typed</h2>
+          <dl class="kept">
+            {values.title && <><dt>Title</dt><dd>{values.title}</dd></>}
+            {values.date && <><dt>Date</dt><dd>{values.date}</dd></>}
+            <dt>Start time</dt><dd>{values.time || 'None'}</dd>
+            <dt>Status</dt><dd>{values.status || 'None'}</dd>
+            <dt>Note shown on the calendar</dt><dd>{values.statusNote || 'None'}</dd>
+            <dt>Details</dt><dd class="kept__text">{values.detail || 'None'}</dd>
+            <dt>Web address</dt><dd>{values.url || 'None'}</dd>
+          </dl>
+        </section>
+      )}
+    </>
+  )}
+  {view === 'unavailable' && <Unavailable what="This event" />}
+  {view === 'gone' && <p class="notice" role="alert">Nothing was saved: this event is no longer on the calendar. <a href={EVENTS_PATH}>Back to our events</a>.</p>}
+  {view === 'withheld' && (
+    <p class="notice" role="alert">This event cannot be changed here: your sign-in cannot read all of its details, and saving would wipe what it cannot read. Ask the Admin. <a href={EVENTS_PATH}>Back to our events</a>.</p>
+  )}
+  {view === 'edit' && event !== undefined && values !== undefined && (
+    <>
+      <div class="item-header">
+        <p><b>{mode === 'series' ? title : 'One-off event'}</b>{mode === 'series' && ', a date of a regular event'}. Now: {timeText(event)}.</p>
+        {nowStatus && <StatusChip status={nowStatus} note={event.statusNote} />}
+      </div>
+      {saved && <p class="notice" role="status">Saved. The public calendar shows the change now. <a href={eventPath(event.id)}>See it on the calendar</a>.</p>}
+      {held && <p class="notice" role="status">A new web address shows as "details to follow" until a reviewer checks it.</p>}
+      {notice && <p class="notice" role="alert">{notice}</p>}
+      {problems.length > 0 && (
+        <>
+          <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+            <h2 id="error-summary-title">There is a problem with this event</h2>
+            <ul>
+              {problems.map((item) => <li><a href={item.href}>{item.text}</a></li>)}
+            </ul>
+          </section>
+          <script is:inline type="module" src="/scripts/error-summary.js"></script>
+        </>
+      )}
+      <EventForm action={HERE} mode={mode} values={values} errors={errors} venues={venues} offices={[]} today={today} submit="Save" back={EVENTS_PATH} />
+    </>
+  )}
+</Base>

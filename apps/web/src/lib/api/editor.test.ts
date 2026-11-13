@@ -29,6 +29,7 @@ import {
   Duplicate,
   EditorRefused,
   NotAllowed,
+  REASON_MAX,
   SignInAgain,
   SlugTaken,
   VersionChanged,
@@ -337,6 +338,28 @@ describe('grpcEditor: each call, with the officer\'s bearer, read into the edito
     expect((await api.getWorkingItem(OFFICER, ITEM_ID)).working).toMatchObject({ status: 'cleared', approvedAt: READY_AT });
   });
 
+  it("says an event's venue is decided later only when asked (EDITOR E6: one save, never two)", async () => {
+    const seen: unknown[] = [];
+    const occurrence = create(EventOccurrenceSchema, { id: 'stored', venueId: '' });
+    const server = await grpcServer((router) =>
+      router.service(EventService, {
+        saveOccurrence: (req) => {
+          seen.push({ id: req.occurrence?.id, venueId: req.occurrence?.venueId, later: req.venueDecidedLater });
+          return { occurrence };
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    await api.saveOccurrence(OFFICER, { id: 'series:2026-11-18', venueId: '' }, { venueDecidedLater: true });
+    await api.saveOccurrence(OFFICER, { id: 'series:2026-11-18', venueId: '' });
+    await api.saveOccurrence(OFFICER, { id: 'series:2026-11-18', venueId: 'v1' }, { venueDecidedLater: false });
+    expect(seen).toEqual([
+      { id: 'series:2026-11-18', venueId: '', later: true },
+      { id: 'series:2026-11-18', venueId: '', later: false },
+      { id: 'series:2026-11-18', venueId: 'v1', later: false },
+    ]);
+  });
+
   it('saves an event date, a series and a venue, live on save; switching on or off only when asked', async () => {
     const seen: unknown[] = [];
     const occurrence = create(EventOccurrenceSchema, { id: 'series:2026-11-18', title: 'Lunch', status: OccurrenceStatus.CANCELLED, statusNote: 'Thanksgiving week' });
@@ -451,19 +474,36 @@ describe('grpcEditor: every refusal, on every call, as one thing a page can act 
     const server = await grpcServer((router) =>
       router.service(ContentService, {
         withdraw: () => {
-          throw new ConnectError('😀'.repeat(400), Code.FailedPrecondition);
+          throw new ConnectError('😀'.repeat(REASON_MAX + 100), Code.FailedPrecondition);
         },
       }),
     );
     const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
     const error = (await api.withdraw(OFFICER, ITEM_ID).catch((e: unknown) => e)) as EditorRefused;
-    expect(error.reason).toBe(`${'😀'.repeat(299)}…`);
+    expect(error.reason).toBe(`${'😀'.repeat(REASON_MAX - 1)}…`);
     expect(error.reason).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
-    expect([...error.reason]).toHaveLength(300);
+    expect([...error.reason]).toHaveLength(REASON_MAX);
+  });
+
+  it("keeps every one of an event save's URL reasons (EDITOR E6: the form shows each on its field)", async () => {
+    // A3a's events/writes.ts: one reason per bad address, joined by "; ". Three run well past 300 characters.
+    const reasons = ['url: the address "http://example.org/" must start with https://, not http://', ...[1, 2, 3].map((n) => `detail line ${n}: the address "https://example.org:808${n}/" names a port (a colon and a number after the site name), which is not allowed`)].join('; ');
+    const server = await grpcServer((router) =>
+      router.service(EventService, {
+        saveOccurrence: () => {
+          throw new ConnectError(reasons, Code.InvalidArgument);
+        },
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    const error = (await api.saveOccurrence(OFFICER, { id: '' }).catch((e: unknown) => e)) as EditorRefused;
+    expect(reasons.length).toBeGreaterThan(400);
+    expect(error.reason).toBe(reasons);
+    expect(REASON_MAX).toBeGreaterThanOrEqual(2000);
   });
 
   it("gives the API's own words for a step the item is not ready for, or a value it refused, plainly and capped", async () => {
-    const long = `only a draft can be marked ready\u0007${'x'.repeat(600)}`;
+    const long = `only a draft can be marked ready\u0007${'x'.repeat(REASON_MAX + 600)}`;
     const server = await grpcServer((router) =>
       router.service(ContentService, {
         markReady: () => {
@@ -484,7 +524,7 @@ describe('grpcEditor: every refusal, on every call, as one thing a page can act 
     await expect(api.sendBack(OFFICER, { itemId: ITEM_ID, note: ' ' })).rejects.toMatchObject({ reason: 'a note for the author is required' });
     const error = (await api.withdraw(OFFICER, ITEM_ID).catch((e: unknown) => e)) as EditorRefused;
     expect(error.reason).toMatch(/^only a draft can be marked ready x+…$/);
-    expect(error.reason.length).toBeLessThanOrEqual(300);
+    expect(error.reason.length).toBeLessThanOrEqual(REASON_MAX);
   });
 
   it('is the same sign-in-again the officer pages already handle', () => {

@@ -233,3 +233,20 @@ export const LINKS = {
   file: 'f0000000-0000-4000-8000-000000000010',
   checked: 'November 4, 2026',
 } as const;
+
+/**
+ * EDITOR E6: what the event screens' tests change on the stand-in's calendar (e2e/events-model.mjs), each
+ * browser project its own, so runs in parallel, and the other specs' dates, are never disturbed. The
+ * lunch (the President's, every Wednesday) is cancelled on a Wednesday 9 to 11 weeks ahead, past what any
+ * other spec reads and inside S10's 90 days; each new one-off has a title of its project's own.
+ */
+export const EVENT_EDITS = {
+  /** The President's series: Wednesday Lunchers. */
+  lunchSeries: '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20',
+  /** The Social Chair's one-off, Board games afternoon. */
+  socialOneOff: '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7',
+  /** Weeks ahead of the next Wednesday, by project. */
+  lunchWeeks: { 'chromium-desktop': 9, 'chromium-phone': 10, 'webkit-iphone': 11 } as Record<string, number>,
+  venues: { bistro: 'Sample Bistro', diner: 'Placeholder Diner' },
+} as const;
+

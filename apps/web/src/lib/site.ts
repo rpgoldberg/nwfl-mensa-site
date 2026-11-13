@@ -138,6 +138,9 @@ const PAGES: readonly Page[] = [
   { path: '/officer-area/news/new', title: 'Write something new', description: 'Start a new announcement, news article or President\u2019s report.' },
   // W-SIGNUP D4: the membership approvers' and the Admin's alone; never linked for anyone else.
   { path: '/officer-area/sign-ups', title: 'Sign-ups to approve', description: 'New sign-ups waiting for an officer to approve or reject them.' },
+  // EDITOR E6: the officers' event screens (S10, S11); robots.txt keeps /officer-area out of search.
+  { path: '/officer-area/events', title: 'Our events', description: "Your office's events in the next 90 days: cancel a date, move it, or change its details." },
+  { path: '/officer-area/events/new', title: 'Add a one-off event', description: 'Put an event on one date on the calendar, such as a picnic or a talk.' },
   // W-SIGNUP D3: a signed-in person's own account: their sign-up, or their standing (robots.txt keeps it out of search).
   { path: '/account', title: 'Your account', description: 'Your sign-up for member access, or your account\u2019s standing.' },
 ];

@@ -203,6 +203,80 @@ describe.skipIf(!live)('event writes', () => {
 
   // API-FIX3 note: a save that does not say whether a series or venue is active
   // keeps it as it is; only the request's own active field switches it.
+  describe('a venue decided later (EDITOR E6)', () => {
+    let seriesId = '';
+    let venueId = '';
+    const stored = async (id: string) => (await api.pool.query<{ venue_id: string | null }>(`SELECT venue_id FROM event_occurrence WHERE id = $1`, [id])).rows[0];
+    const writes = async (id: string) => Number((await api.pool.query<{ n: string }>(`SELECT count(*) AS n FROM audit_event WHERE subject_kind = 'event_occurrence' AND subject_id = $1`, [id])).rows[0]?.n);
+
+    beforeAll(async () => {
+      venueId = must((await events.saveVenue({ venue: create(VenueSchema, { kind: VenueKind.BUSINESS, name: 'Default Diner', area: Area.WALTON }) }, PUB)).venue).id;
+      seriesId = must(
+        (
+          await events.saveSeries(
+            {
+              series: create(EventSeriesSchema, {
+                slug: 'friday-coffee',
+                title: 'Friday Coffee',
+                category: EventCategory.OTHER,
+                recurrence: 'FREQ=WEEKLY;BYDAY=FR',
+                defaultStart: { hours: 9, minutes: 0 },
+                defaultDurationMinutes: 60,
+                defaultVenueId: venueId,
+                area: Area.WALTON,
+                hostOfficeId: offices['publications'] as string,
+                visibility: EventVisibility.PUBLIC,
+                startsOn: { year: 2026, month: 1, day: 2 },
+              }),
+            },
+            PUB,
+          )
+        ).series,
+      ).id;
+    });
+
+    it("stores no venue on a series date's first change, in one save, when the venue is decided later", async () => {
+      const id = `${seriesId}:2026-12-04`;
+      const saved = must((await events.saveOccurrence({ occurrence: { id, status: OccurrenceStatus.TENTATIVE }, venueDecidedLater: true }, PUB)).occurrence);
+      expect(saved).toMatchObject({ venueId: '', status: OccurrenceStatus.TENTATIVE, area: Area.WALTON, title: 'Friday Coffee' });
+      expect(saved.venue).toBeUndefined();
+      expect((await stored(saved.id))?.venue_id).toBeNull();
+      expect(await writes(saved.id)).toBe(1);
+      expect((await events.getOccurrence({ id })).occurrence).toMatchObject({ id: saved.id, venueId: '' });
+    });
+
+    it("keeps the series' venue on a first change that sends no venue and does not say it is decided later", async () => {
+      const saved = must((await events.saveOccurrence({ occurrence: { id: `${seriesId}:2026-12-11`, status: OccurrenceStatus.TENTATIVE } }, PUB)).occurrence);
+      expect(saved.venueId).toBe(venueId);
+      expect((await stored(saved.id))?.venue_id).toBe(venueId);
+    });
+
+    it("clears a stored date's venue, and a new one-off has none; a venue sent with it is refused, and nothing is written", async () => {
+      const first = must((await events.saveOccurrence({ occurrence: { id: `${seriesId}:2026-12-18`, venueId } }, PUB)).occurrence);
+      expect(first.venueId).toBe(venueId);
+      const cleared = must((await events.saveOccurrence({ occurrence: { id: first.id }, venueDecidedLater: true }, PUB)).occurrence);
+      expect(cleared).toMatchObject({ id: first.id, venueId: '' });
+      const oneOff = must(
+        (
+          await events.saveOccurrence(
+            { occurrence: { title: 'Picnic, place to come', startsAt: timestampFromDate(new Date('2026-12-19T17:00:00Z')), visibility: EventVisibility.PUBLIC, ownerOfficeId: offices['publications'] as string }, venueDecidedLater: true },
+            PUB,
+          )
+        ).occurrence,
+      );
+      expect(oneOff.venueId).toBe('');
+      const id = `${seriesId}:2026-12-25`;
+      await expect(events.saveOccurrence({ occurrence: { id, venueId }, venueDecidedLater: true }, PUB)).rejects.toMatchObject({ code: Code.InvalidArgument });
+      expect((await events.getOccurrence({ id })).occurrence?.id).toBe(id);
+    });
+
+    it("refuses another office whatever it says about the venue", async () => {
+      await expect(events.saveOccurrence({ occurrence: { id: `${seriesId}:2027-01-01` }, venueDecidedLater: true }, TREASURER)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(events.saveOccurrence({ occurrence: { id: `${seriesId}:2027-01-01` }, venueDecidedLater: true }, MEMBER)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(events.saveOccurrence({ occurrence: { id: `${seriesId}:2027-01-01` }, venueDecidedLater: true })).rejects.toMatchObject({ code: Code.Unauthenticated });
+    });
+  });
+
   describe('switching a series or a venue on and off', () => {
     it('keeps a series active through an edit that does not say, and switches it only when asked', async () => {
       const base = create(EventSeriesSchema, {

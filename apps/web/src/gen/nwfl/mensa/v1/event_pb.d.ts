@@ -488,6 +488,15 @@ export declare type SaveOccurrenceRequest = Message<"nwfl.mensa.v1.SaveOccurrenc
    * @generated from field: nwfl.mensa.v1.EventOccurrence occurrence = 1;
    */
   occurrence?: EventOccurrence | undefined;
+
+  /**
+   * The venue is to be decided: the saved occurrence has none, and its
+   * venue_id must be empty. Without it, an empty venue_id on the first change
+   * of a series date keeps the series' default venue (EDITOR E6).
+   *
+   * @generated from field: bool venue_decided_later = 2;
+   */
+  venueDecidedLater: boolean;
 };
 
 /**

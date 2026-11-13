@@ -103,6 +103,13 @@ describe('page', () => {
     expect(trailFor('/officer-area/sign-ups', 'Sign-ups to approve').map((c) => c.label)).toEqual(['Home', 'Officer area', 'Sign-ups to approve']);
     expect(MORE_PAGES.map((p) => p.path)).not.toContain('/account');
   });
+
+  it("EDITOR E6: registers the officers' event screens under the officer area, one date's page under Our events", () => {
+    expect(page('/officer-area/events').title).toBe('Our events');
+    expect(page('/officer-area/events/new').title).toBe('Add a one-off event');
+    expect(trailFor('/officer-area/events/0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20_2026-11-18', 'Change: Wednesday Lunchers').map((c) => c.label)).toEqual(['Home', 'Officer area', 'Our events', 'Change: Wednesday Lunchers']);
+    expect(MORE_PAGES.map((p) => p.path)).not.toContain('/officer-area/events');
+  });
 });
 
 describe('currentNav', () => {
