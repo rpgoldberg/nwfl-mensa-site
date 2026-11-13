@@ -241,6 +241,8 @@ describe(`nesting depth: nothing deeper than the stored tree keeps (tree.ts MAX_
     expect(deep(`intro\n${'['.repeat(12)}a\n${'['.repeat(12)}b${'](https://x.example)'.repeat(24)}`)).toEqual([{ line: 3, ...DEEP }]);
     expect(deep(`intro\nmore\n${links(24)}\n\n${'>'.repeat(30)} x`)).toEqual([{ line: 3, ...DEEP }]);
     expect(deep(`- one\n- two\n- ${spans(22)}`)).toEqual([{ line: 3, ...DEEP }]);
+    // A too-deep text that runs onto the next line is reported where it starts.
+    expect(deep(`intro\nmore\n${'['.repeat(24)}a\nb${'](https://x.example)'.repeat(24)}`)).toEqual([{ line: 3, ...DEEP }]);
   });
 
   it('reports it once for a document nested too deeply in several places', () => {
