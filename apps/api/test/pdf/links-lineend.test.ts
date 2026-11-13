@@ -49,15 +49,18 @@ const copyOf = async (original: Uint8Array, links: readonly EngineLink[]) => {
 describe('withheldAreas: only glyphs the removal took are withheld ink (LINKS-LINEEND)', () => {
   const at = (text: string, generated: boolean, ink: Box): PageChar => ({ text, generated, hyphen: false, box: generated ? null : ink, ink, fontSize: 12 });
 
-  it('skips a generated line end or space, and still blocks a removed glyph and a removed space beside the passage', () => {
+  it('skips a generated line end or space, and still blocks a removed glyph, one with no loose box, and a removed space beside the passage', () => {
     const glyph = at('W', false, { left: 128, bottom: 654, right: 140, top: 662 });
     const space = at(' ', false, { left: 221.4, bottom: 654, right: 224.7, top: 654 });
     const lineEnd = [at('\r', true, { left: 306.8, bottom: 632, right: 306.8, top: 632 }), at('\n', true, { left: 306.8, bottom: 632, right: 306.8, top: 632 })];
     const inserted = at(' ', true, { left: 250, bottom: 610, right: 250, top: 610 });
-    const areas = withheldAreas(0, [], [], [glyph, space, ...lineEnd, inserted], new Set([0, 1, 2, 3, 4]));
+    // A drawn glyph PDFium gives no loose box: generated, not a missing box, is what is skipped (challenger C1).
+    const boxless: PageChar = { ...at('x', false, { left: 160, bottom: 654, right: 166, top: 660 }), box: null };
+    const areas = withheldAreas(0, [], [], [glyph, space, ...lineEnd, inserted, boxless], new Set([0, 1, 2, 3, 4, 5]));
     expect(areas).toEqual([
       { ...glyph.ink, page: 0 },
       { ...space.ink, page: 0 },
+      { ...boxless.ink, page: 0 },
     ]);
   });
 });
