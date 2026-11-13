@@ -336,3 +336,54 @@ describe(`${PKG}: rules by name as well as by type`, () => {
     ]);
   });
 });
+
+// EDITOR A3b: the link gate's messages carry the numbers SPEC-v3 1.5 fixed for the units built in
+// parallel (E4 builds its screens on them), and the confirmed_links number v2 planned stays unused.
+describe(`${PKG}: the link gate (EDITOR A3b)`, () => {
+  const numbered = (message: DescMessage | undefined): Array<[string, number]> => (message?.fields ?? []).map((f) => [f.name, f.number]);
+  const method = (name: string): DescMethod | undefined => service('ContentService')?.methods.find((m) => m.name === name);
+
+  it('reads the links with GetItemLinks and takes the answers with ConfirmLinks', () => {
+    expect(numbered(method('GetItemLinks')?.input)).toEqual([['item_id', 1]]);
+    expect(numbered(method('GetItemLinks')?.output)).toEqual([
+      ['links_sha256', 1],
+      ['links', 2],
+      ['ready_at', 3],
+    ]);
+    expect(numbered(method('ConfirmLinks')?.input)).toEqual([
+      ['item_id', 1],
+      ['links_sha256', 2],
+      ['answers', 3],
+      ['acting_as_office_id', 4],
+    ]);
+    expect(numbered(method('ConfirmLinks')?.output)).toEqual([
+      ['links', 1],
+      ['not_in_piece', 2],
+    ]);
+    const answer = method('ConfirmLinks')?.input.fields.find((f) => f.name === 'answers');
+    expect(numbered(answer === undefined ? undefined : fieldMessage(answer))).toEqual([
+      ['url', 1],
+      ['yes', 2],
+      ['note', 3],
+    ]);
+    const link = method('GetItemLinks')?.output.fields.find((f) => f.name === 'links');
+    expect(numbered(link === undefined ? undefined : fieldMessage(link))).toEqual([
+      ['url', 1],
+      ['label', 2],
+      ['where', 3],
+      ['login_walled', 4],
+      ['machine_verdict', 5],
+      ['reasons', 6],
+      ['fix', 7],
+      ['answered_by_label', 8],
+      ['accepted', 9],
+    ]);
+  });
+
+  it('keeps ApproveRequest field 8 (v2 confirmed_links) reserved, number and name', () => {
+    const approve = method('Approve')?.input;
+    expect(approve?.fields.some((f) => f.number === 8)).toBe(false);
+    expect(approve?.proto.reservedRange.map((r) => [r.start, r.end])).toEqual([[8, 9]]);
+    expect(approve?.proto.reservedName).toEqual(['confirmed_links']);
+  });
+});

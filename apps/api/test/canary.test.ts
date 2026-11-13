@@ -72,6 +72,8 @@ describe.skipIf(!live)('the members-only canary', () => {
       GetWorkingItem: () => [{ itemId: ids['publicItem'] }],
       ListItemHistory: () => [{ itemId: ids['publicItem'] }],
       PreviewWorkingItem: () => [{ itemId: ids['publicItem'] }],
+      // EDITOR A3b: the links of an item with a members passage, and of one whose link target is the secret.
+      GetItemLinks: () => [{ itemId: ids['publicItem'] }, { itemId: ids['linkItem'] }],
       ReadFile: () => [{ fileId: ids['pdf'] }],
       GetLinkTarget: () => [{ linkId: LINK_ID }],
     },
@@ -161,12 +163,12 @@ describe.skipIf(!live)('the members-only canary', () => {
       files: [{ objectKey: `${TOKEN}.pdf`, audience: 'members' }],
     });
     // What `[:members[Zoom room]](https://example.org/zoom?pwd=...)` parses to: the target is the secret.
-    await publishItem(pool, {
+    ids['linkItem'] = (await publishItem(pool, {
       slug: 'canary-link',
       officeId: office,
       title: 'Monthly meeting',
       body: { blocks: [paragraph(text('Join us: '), { type: 'link', href: `https://example.org/zoom?pwd=${TOKEN}`, children: [membersSpan('Zoom room')] })] },
-    });
+    })).itemId;
     ids['publicItem'] = publicItem.itemId;
     // A members PDF on a public item, its original stored and its copies made.
     const pdf = await linesPdf([`File ${TOKEN}`]);
@@ -301,14 +303,14 @@ describe.skipIf(!live)('the members-only canary', () => {
   });
 
   // EDITOR E1: the Admin and the Webmaster without the officers group read at the public's audience. As approvers
-  // they read the working tree with its members passages (GetWorkingItem, and the preview's members body); no
-  // other read gives them the token, and the preview's public body never does.
+  // they read the working tree with its members passages (GetWorkingItem, the preview's members body, and EDITOR
+  // A3b's list of the links they check); no other read gives them the token, and the preview's public body never does.
   it.each([
     ['the Admin without the officers group', as('lone-admin-token')],
     ['the Webmaster without the officers group', as('lone-webmaster-token')],
   ])('gives %s the token through the approvers\' working reads only, never in the preview\'s public body', async (_who, who) => {
     const { carriers } = await sweep(who);
-    expect(carriers(TOKEN)).toEqual(['ContentService.GetWorkingItem', 'ContentService.PreviewWorkingItem']);
+    expect(carriers(TOKEN)).toEqual(['ContentService.GetWorkingItem', 'ContentService.GetItemLinks', 'ContentService.PreviewWorkingItem']);
     const preview = await api.client(ContentService).previewWorkingItem({ itemId: ids['publicItem'] as string }, who);
     expect(dump(preview.publicBody)).toContain('Meet at ');
     expect(dump(preview.publicBody)).not.toContain(TOKEN);

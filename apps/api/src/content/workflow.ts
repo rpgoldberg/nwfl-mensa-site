@@ -5,9 +5,9 @@
 //
 //   create      a holder of the office, "Posting as" it; the Admin for any
 //               office (audited as for_office)
-//   save draft  the item's office (or the Admin); a ready version goes back to
-//               draft, unless it is print-as-is; a published or withdrawn item
-//               gets a new version as its revision
+//   save draft  the item's office (or the Admin, audited as for_office); a
+//               ready version goes back to draft, unless it is print-as-is; a
+//               published or withdrawn item gets a new version as its revision
 //   mark ready  the item's office; no markup problems; targets default to
 //               website and newsletter on, email off (P15), and an officers
 //               item never targets the newsletter or email; records the hash
@@ -20,7 +20,10 @@
 //               recorded as self_single; every approval records the rule it
 //               was made under; bound to the hash the reviewer saw; derives
 //               public_ast and both search indexes; makes the version CLEARED,
-//               "approved, ready to publish": nothing goes live (EDITOR A1)
+//               "approved, ready to publish": nothing goes live (EDITOR A1);
+//               refused while a link that needs a sign-in to check (Facebook
+//               and the like) has no reviewer's yes on the version as it stands
+//               (EDITOR A3b, link-gate.ts and item-links.ts)
 //   publish     the Webmaster, or the Admin as backup: a cleared version goes
 //               live, bound to the hash the publisher saw; never by the
 //               approver of their own exception (break-glass, one approver),
@@ -72,11 +75,16 @@ import { recordItems } from '../ledger/ledger.js';
 import { type Rule, readRule } from '../approval/service.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
 import { actorLabel } from './actor-label.js';
+import { uncheckedMessage, uncheckedWalled } from './item-links.js';
+import type { StructuredLogger } from '../platform/logger.js';
 // A cycle (service.ts mounts these handlers), safe: bodyFor is read at call time, never at load.
 import { bodyFor } from './service.js';
 
 export interface WorkflowDeps {
   db: Db;
+  logger: StructuredLogger;
+  /** Today, for the link gate's upcoming events. */
+  now: () => Date;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -90,7 +98,7 @@ function microsOf(at: Timestamp): string {
   return (at.seconds * 1000000n + BigInt(Math.trunc(at.nanos / 1000))).toString();
 }
 /** Microseconds since the epoch, as a Timestamp. */
-function timestampOfMicros(us: string): Timestamp {
+export function timestampOfMicros(us: string): Timestamp {
   const total = BigInt(us);
   const seconds = total / 1000000n;
   const rest = total % 1000000n;
@@ -99,9 +107,9 @@ function timestampOfMicros(us: string): Timestamp {
 const VERSION_STATUS_NAMES = namesOf(VERSION_STATUSES);
 /** A working version's statuses: what ListWorkingItems lists by default. */
 const WORKING_STATUSES = ['draft', 'ready', 'cleared'];
-const MAX_NOTE = 2_000;
+export const MAX_NOTE = 2_000;
 
-interface ItemRow {
+export interface ItemRow {
   id: string;
   slug: string;
   kind: string;
@@ -153,15 +161,15 @@ interface Targets {
 
 const invalid = (message: string): ConnectError => new ConnectError(message, Code.InvalidArgument);
 const precondition = (message: string): ConnectError => new ConnectError(message, Code.FailedPrecondition);
-const notFound = (): ConnectError => new ConnectError('item not found', Code.NotFound);
+export const notFound = (): ConnectError => new ConnectError('item not found', Code.NotFound);
 
-function requireId(value: string, field: string): string {
+export function requireId(value: string, field: string): string {
   if (!UUID.test(value)) throw invalid(`${field} is not an id`);
   return value;
 }
 
 /** `lock: false` for a read that must not wait on (or hold up) a writer: the preview. */
-async function loadItem(client: TxClient, itemId: string, lock = true): Promise<ItemRow> {
+export async function loadItem(client: TxClient, itemId: string, lock = true): Promise<ItemRow> {
   const { rows } = await client.query<ItemRow>(
     `SELECT i.id, i.slug, i.kind, i.office_id, o.slug AS office_slug, i.state, i.live_version_id, i.working_version_id, i.withdrawn_at
      FROM content_item i JOIN office o ON o.id = i.office_id WHERE i.id = $1${lock ? ' FOR UPDATE OF i' : ''}`,
@@ -192,7 +200,7 @@ function publicLine(value: string): string {
   return value;
 }
 
-async function loadVersion(client: TxClient, versionId: string, lock = true): Promise<VersionRow> {
+export async function loadVersion(client: TxClient, versionId: string, lock = true): Promise<VersionRow> {
   const { rows } = await client.query<VersionRow>(`SELECT * FROM content_version WHERE id = $1${lock ? ' FOR UPDATE' : ''}`, [versionId]);
   return rows[0] as VersionRow;
 }
@@ -365,7 +373,7 @@ async function voidApproval(client: TxClient, caller: Caller, version: VersionRo
  * (PERMISSION_DENIED otherwise, the Admin included: acting for an office is not approving as it), or,
  * when they name none, their one office if they hold exactly one. Else none.
  */
-async function actingOffice(client: TxClient, roles: Roles, requested: string): Promise<string | null> {
+export async function actingOffice(client: TxClient, roles: Roles, requested: string): Promise<string | null> {
   if (requested !== '') {
     const id = requireId(requested, 'acting_as_office_id');
     const slug = (await client.query<{ slug: string }>(`SELECT slug FROM office WHERE id = $1`, [id])).rows[0]?.slug;
@@ -683,7 +691,7 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
       refuseLongText({ title: request.title, summary: request.summary, body_markup: request.bodyMarkup });
       return tx(async (client) => {
         const item = await loadItemAs(client, caller, request.itemId);
-        requireOffice(caller, item.office_slug);
+        const { onBehalfOf } = requireOffice(caller, item.office_slug);
         // The data-loss guard (EDITOR E1): a caller who reads this item with anything withheld got no
         // markup, so their save would overwrite the body with what they could not see.
         const base = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string);
@@ -754,6 +762,8 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           fromState: from,
           toState: 'draft',
           actingOfficeId: item.office_id,
+          // AUDIT-FOROFFICE: the Admin saving for an office they do not hold, as CreateItem records it.
+          payload: onBehalfOf ? { for_office: true } : {},
         });
         return { item: await officerItem(client, item.id, caller), problems };
       });
@@ -874,6 +884,18 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           if (targetsChanged) await recordAudit(client, caller, { ...common, action: 'targets_changed', payload: { from: before, to: targets } });
           if (editionChanged) await recordAudit(client, caller, { ...common, action: 'edition_changed', payload: { from: beforeEdition, to: editionId } });
         }
+
+        // The link gate (EDITOR A3b): a link that needs a sign-in to check waits for a reviewer's yes on
+        // this version as it stands, break-glass included; for the edition it is approved for.
+        const office = (await client.query<{ title: string }>(`SELECT title FROM office WHERE id = $1`, [item.office_id])).rows[0] as { title: string };
+        const unchecked = await uncheckedWalled(client, deps, {
+          id: version.id,
+          body: normalizeTree(version.body_ast),
+          officeId: item.office_id,
+          office: { slug: item.office_slug, title: office.title },
+          editionId,
+        });
+        if (unchecked.length > 0) throw precondition(uncheckedMessage(unchecked.length));
 
         await approveVersion(client, caller, version, { kind, reason, rule, actingOfficeId });
         return { item: await officerItem(client, item.id, caller) };

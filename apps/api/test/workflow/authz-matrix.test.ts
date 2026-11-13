@@ -41,6 +41,9 @@ const TABLE: Record<string, Outcome[]> = {
   GetWorkingItem: /*                */ [U, D, A, A, A, A, A, A, A, D, A, D, U],
   ListItemHistory: /*               */ [U, D, A, A, A, A, A, A, A, D, A, D, U],
   PreviewWorkingItem: /*            */ [U, D, A, A, A, A, A, A, A, D, A, D, U],
+  // EDITOR A3b: the links are read by a reviewer or the item's own office; answered by a reviewer who did not edit it.
+  GetItemLinks: /*                  */ [U, N, A, A, A, A, A, A, A, D, A, N, U],
+  ConfirmLinks: /*                  */ [U, D, A, D, A, A, A, A, A, D, A, D, U],
 };
 const rpcOf = (name: string): string => name.split(' ')[0] as string;
 
@@ -123,6 +126,12 @@ describe.skipIf(!live)('EDITOR E1: the workflow authorization matrix', () => {
     GetWorkingItem: async (who) => content.getWorkingItem({ itemId: await draft() }, who),
     ListItemHistory: async (who) => content.listItemHistory({ itemId: await draft() }, who),
     PreviewWorkingItem: async (who) => content.previewWorkingItem({ itemId: await draft() }, who),
+    GetItemLinks: async (who) => content.getItemLinks({ itemId: await draft() }, who),
+    ConfirmLinks: async (who) => {
+      const { itemId } = await ready();
+      const { linksSha256 } = await content.getItemLinks({ itemId }, as('treasurer-token'));
+      return content.confirmLinks({ itemId, linksSha256, answers: [{ url: 'https://example.org/', yes: true }] }, who);
+    },
   };
 
   it('covers every workflow RPC of ContentService, and PreviewWorkingItem', () => {

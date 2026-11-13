@@ -184,6 +184,14 @@ by the handler for a precise answer, and by the database (`0007`).
   edit, a send-back or a withdraw voids an approval waiting to be published.
   Withdraw is 410 at once; restore makes a draft that stays withdrawn until
   published.
+- **The link gate** (EDITOR A3b, `src/content/link-gate.ts`, `0030`):
+  `GetItemLinks` lists the working version's links (those in its text, and
+  the web addresses of its office's upcoming events and their venues) with a
+  hash of the list, for a reviewer or a holder of the item's office. A
+  reviewer who did not edit a ready version answers each link yes or no with
+  `ConfirmLinks`, sending the hash they read; each answer is stored at once,
+  bound to the version's ready time, so any edit voids it. Approve is refused
+  while a link that needs a sign-in (Facebook and the like) has no yes.
 - **Events** (`src/events/writes.ts`): live on save. Venues by any officer,
   series by their host office, a one-off event by its owning office, and the
   Admin for any.
@@ -820,6 +828,9 @@ The rules the database itself enforces:
   approval, and an item's live version is always a published one; an editor
   of a version approves it only by break-glass or under one approver, and a
   version so approved is published by someone else (`0029`);
+- `content_link_check` (0030) is append-only the same way, and takes a
+  reviewer's answer only for a ready version at its ready time as it stands,
+  from someone who did not edit it;
 - `audit_event` is append-only by grant and by trigger, the database numbers
   and times each event, and its payload never holds a membership number or a
   last name under any spelling; `content_version_editor` is append-only and a

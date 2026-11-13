@@ -94,6 +94,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       GetWorkingItem: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
       ListItemHistory: () => [{ itemId: ids['public'] }],
       PreviewWorkingItem: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
+      // EDITOR A3b: the links a reviewer checks, through the caller's lens.
+      GetItemLinks: () => [{ itemId: ids['public'] }, { itemId: ids['whole'] }, { itemId: ids['hidden'] }],
       ReadFile: () => [{ fileId: ids['publicFile'] }, { fileId: ids['wholeFile'] }],
       GetLinkTarget: () => [{ linkId: LINK.plain }, { linkId: LINK.phone }, { linkId: LINK.name }],
     },
@@ -153,6 +155,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     'ContentService.Approve',
     // EDITOR A1: the second step; its answer is the officer read Approve gives, through the caller's lens.
     'ContentService.Publish',
+    // EDITOR A3b: a reviewer's answers on a ready version; its answer is GetItemLinks' list, through the caller's lens.
+    'ContentService.ConfirmLinks',
     'ContentService.Withdraw',
     'ContentService.Restore',
     'ContentService.SaveOfficeTerm',
