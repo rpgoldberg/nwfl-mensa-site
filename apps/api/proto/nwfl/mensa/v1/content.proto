@@ -231,6 +231,9 @@ message ContentItem {
   // The draft or ready revision. Officer reads only.
   ContentVersion working = 7;
   google.protobuf.Timestamp withdrawn_at = 8;
+  // When the item last changed: its latest audited step (a read is no
+  // change). Officer reads only.
+  google.protobuf.Timestamp last_changed_at = 9;
 }
 
 // The pinned (frozen edition) or live version of an item in an edition.
@@ -357,6 +360,8 @@ message ListPublishedEditionsResponse {
 
 message ListWorkingItemsRequest {
   // Empty means draft and ready. Read only when version_statuses is empty.
+  // PUBLISHED and WITHDRAWN (EDITOR E3) list the items in that state, with or
+  // without a working version.
   repeated ItemState states = 1;
   string office_id = 2;
   string edition_id = 3;

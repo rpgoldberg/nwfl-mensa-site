@@ -527,6 +527,10 @@ async function officerItem(client: TxClient, itemId: string, caller: Caller): Pr
     rule: async () => (rule ??= await readRule(client, 'content')),
     office: { slug: item.office_slug, title: item.office_title },
   };
+  // EDITOR E3: the latest audited step is the last change; a read (an export) is none.
+  const changed = (
+    await client.query<{ at: Date | null }>(`SELECT max(at) AS at FROM audit_event WHERE item_id = $1 AND action NOT LIKE '%\\_read' ESCAPE '\\'`, [item.id])
+  ).rows[0]?.at;
   const live = liveRow === undefined ? undefined : await versionMessage(client, liveRow, lens, viewer);
   const working = workingRow === undefined ? undefined : await versionMessage(client, workingRow, lens, viewer);
   return create(ContentItemSchema, {
@@ -538,6 +542,7 @@ async function officerItem(client: TxClient, itemId: string, caller: Caller): Pr
     ...(live !== undefined ? { live } : {}),
     ...(working !== undefined ? { working } : {}),
     ...(item.withdrawn_at !== null ? { withdrawnAt: timestampFromDate(item.withdrawn_at) } : {}),
+    ...(changed ? { lastChangedAt: timestampFromDate(changed) } : {}),
   });
 }
 
@@ -888,14 +893,24 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           : request.states.length > 0
             ? named(request.states.map((state) => STATE_NAMES.get(state)))
             : WORKING_STATUSES;
+      // EDITOR E3: PUBLISHED and WITHDRAWN in the item-state filter name the item's state, whatever its working version.
+      const itemStates =
+        request.versionStatuses.length > 0 ? [] : request.states.map((state) => STATE_NAMES.get(state)).filter((s) => s === 'published' || s === 'withdrawn');
       if (request.officeId !== '') requireId(request.officeId, 'office_id');
       if (request.editionId !== '') requireId(request.editionId, 'edition_id');
       return tx(async (client) => {
+        // A working version listed for its status is filtered by its edition; an item listed for its
+        // state by its live version's. Newest change first: the latest audited step that is no read.
         const { rows } = await client.query<{ id: string }>(
-          `SELECT i.id FROM content_item i JOIN content_version w ON w.id = i.working_version_id
-           WHERE w.status = ANY($1) AND ($2::uuid IS NULL OR i.office_id = $2) AND ($3::uuid IS NULL OR w.edition_id = $3)
-           ORDER BY w.updated_at DESC, i.id`,
-          [statuses, request.officeId === '' ? null : request.officeId, request.editionId === '' ? null : request.editionId],
+          `SELECT i.id FROM content_item i
+             LEFT JOIN content_version w ON w.id = i.working_version_id
+             LEFT JOIN content_version l ON l.id = i.live_version_id
+             LEFT JOIN LATERAL (SELECT max(a.at) AS at FROM audit_event a WHERE a.item_id = i.id AND a.action NOT LIKE '%\\_read' ESCAPE '\\') c ON true
+           WHERE (w.status = ANY($1) OR i.state = ANY($4))
+             AND ($2::uuid IS NULL OR i.office_id = $2)
+             AND ($3::uuid IS NULL OR (CASE WHEN w.status = ANY($1) THEN w.edition_id ELSE l.edition_id END) = $3)
+           ORDER BY COALESCE(c.at, i.updated_at) DESC, i.id`,
+          [statuses, request.officeId === '' ? null : request.officeId, request.editionId === '' ? null : request.editionId, itemStates],
         );
         const items: ContentItem[] = [];
         for (const row of rows) {
