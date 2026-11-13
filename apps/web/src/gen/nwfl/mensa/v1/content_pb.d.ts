@@ -1340,6 +1340,220 @@ export declare type PublishResponse = Message<"nwfl.mensa.v1.PublishResponse"> &
 export declare const PublishResponseSchema: GenMessage<PublishResponse>;
 
 /**
+ * @generated from message nwfl.mensa.v1.GetItemLinksRequest
+ */
+export declare type GetItemLinksRequest = Message<"nwfl.mensa.v1.GetItemLinksRequest"> & {
+  /**
+   * @generated from field: string item_id = 1;
+   */
+  itemId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.GetItemLinksRequest.
+ * Use `create(GetItemLinksRequestSchema)` to create a new message.
+ */
+export declare const GetItemLinksRequestSchema: GenMessage<GetItemLinksRequest>;
+
+/**
+ * @generated from message nwfl.mensa.v1.GetItemLinksResponse
+ */
+export declare type GetItemLinksResponse = Message<"nwfl.mensa.v1.GetItemLinksResponse"> & {
+  /**
+   * SHA-256 of the JSON array [ready_at, pairs]: the version's ready time in
+   * RFC 3339, in UTC, to the microsecond (null for a draft), then the [url,
+   * where] pair of each link as returned. Opaque to a client: ConfirmLinks
+   * sends it back, and is refused once the list has changed or the version
+   * has been marked ready again since.
+   *
+   * @generated from field: bytes links_sha256 = 1;
+   */
+  linksSha256: Uint8Array;
+
+  /**
+   * Sorted by url, then where.
+   *
+   * @generated from field: repeated nwfl.mensa.v1.ItemLink links = 2;
+   */
+  links: ItemLink[];
+
+  /**
+   * The version's ready time; unset for a draft. Answers count for this
+   * ready time only: any edit means a new one.
+   *
+   * @generated from field: google.protobuf.Timestamp ready_at = 3;
+   */
+  readyAt?: Timestamp | undefined;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.GetItemLinksResponse.
+ * Use `create(GetItemLinksResponseSchema)` to create a new message.
+ */
+export declare const GetItemLinksResponseSchema: GenMessage<GetItemLinksResponse>;
+
+/**
+ * @generated from message nwfl.mensa.v1.ItemLink
+ */
+export declare type ItemLink = Message<"nwfl.mensa.v1.ItemLink"> & {
+  /**
+   * As written in the piece.
+   *
+   * @generated from field: string url = 1;
+   */
+  url: string;
+
+  /**
+   * The link's words, for a link with words; empty for a printed URL or an
+   * event's address.
+   *
+   * @generated from field: string label = 2;
+   */
+  label: string;
+
+  /**
+   * "in the text", "event: <title>" or "venue: <name>".
+   *
+   * @generated from field: string where = 3;
+   */
+  where: string;
+
+  /**
+   * A site that needs a sign-in to check (Facebook and the like): Approve
+   * waits for a reviewer's yes on it.
+   *
+   * @generated from field: bool login_walled = 4;
+   */
+  loginWalled: boolean;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.MachineVerdict machine_verdict = 5;
+   */
+  machineVerdict: MachineVerdict;
+
+  /**
+   * @generated from field: repeated string reasons = 6;
+   */
+  reasons: string[];
+
+  /**
+   * @generated from field: string fix = 7;
+   */
+  fix: string;
+
+  /**
+   * Who gave the latest answer on this ready version, by role; empty if no
+   * one has. Set with accepted false, the answer is no: Approve waits until
+   * the writer fixes the link or a reviewer answers yes.
+   *
+   * @generated from field: string answered_by_label = 8;
+   */
+  answeredByLabel: string;
+
+  /**
+   * A reviewer answered yes on this ready version.
+   *
+   * @generated from field: bool accepted = 9;
+   */
+  accepted: boolean;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ItemLink.
+ * Use `create(ItemLinkSchema)` to create a new message.
+ */
+export declare const ItemLinkSchema: GenMessage<ItemLink>;
+
+/**
+ * @generated from message nwfl.mensa.v1.ConfirmLinksRequest
+ */
+export declare type ConfirmLinksRequest = Message<"nwfl.mensa.v1.ConfirmLinksRequest"> & {
+  /**
+   * @generated from field: string item_id = 1;
+   */
+  itemId: string;
+
+  /**
+   * The hash GetItemLinks gave, unchanged.
+   *
+   * @generated from field: bytes links_sha256 = 2;
+   */
+  linksSha256: Uint8Array;
+
+  /**
+   * @generated from field: repeated nwfl.mensa.v1.LinkAnswer answers = 3;
+   */
+  answers: LinkAnswer[];
+
+  /**
+   * The office the caller acts for: one they hold. Empty means their one
+   * office if they hold exactly one, else none.
+   *
+   * @generated from field: string acting_as_office_id = 4;
+   */
+  actingAsOfficeId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ConfirmLinksRequest.
+ * Use `create(ConfirmLinksRequestSchema)` to create a new message.
+ */
+export declare const ConfirmLinksRequestSchema: GenMessage<ConfirmLinksRequest>;
+
+/**
+ * @generated from message nwfl.mensa.v1.LinkAnswer
+ */
+export declare type LinkAnswer = Message<"nwfl.mensa.v1.LinkAnswer"> & {
+  /**
+   * @generated from field: string url = 1;
+   */
+  url: string;
+
+  /**
+   * It shows the right page.
+   *
+   * @generated from field: bool yes = 2;
+   */
+  yes: boolean;
+
+  /**
+   * @generated from field: string note = 3;
+   */
+  note: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.LinkAnswer.
+ * Use `create(LinkAnswerSchema)` to create a new message.
+ */
+export declare const LinkAnswerSchema: GenMessage<LinkAnswer>;
+
+/**
+ * @generated from message nwfl.mensa.v1.ConfirmLinksResponse
+ */
+export declare type ConfirmLinksResponse = Message<"nwfl.mensa.v1.ConfirmLinksResponse"> & {
+  /**
+   * The list after the answers, as GetItemLinks gives it.
+   *
+   * @generated from field: repeated nwfl.mensa.v1.ItemLink links = 1;
+   */
+  links: ItemLink[];
+
+  /**
+   * Answered URLs that are not in the piece: not kept.
+   *
+   * @generated from field: repeated string not_in_piece = 2;
+   */
+  notInPiece: string[];
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.ConfirmLinksResponse.
+ * Use `create(ConfirmLinksResponseSchema)` to create a new message.
+ */
+export declare const ConfirmLinksResponseSchema: GenMessage<ConfirmLinksResponse>;
+
+/**
  * @generated from message nwfl.mensa.v1.WithdrawRequest
  */
 export declare type WithdrawRequest = Message<"nwfl.mensa.v1.WithdrawRequest"> & {
@@ -2088,6 +2302,38 @@ export enum FileRole {
 export declare const FileRoleSchema: GenEnum<FileRole>;
 
 /**
+ * A machine checker's verdict on a link (L-ITEM); unspecified until one runs.
+ *
+ * @generated from enum nwfl.mensa.v1.MachineVerdict
+ */
+export enum MachineVerdict {
+  /**
+   * @generated from enum value: MACHINE_VERDICT_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: MACHINE_VERDICT_OK = 1;
+   */
+  OK = 1,
+
+  /**
+   * @generated from enum value: MACHINE_VERDICT_CONFIRM = 2;
+   */
+  CONFIRM = 2,
+
+  /**
+   * @generated from enum value: MACHINE_VERDICT_DROP = 3;
+   */
+  DROP = 3,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.MachineVerdict.
+ */
+export declare const MachineVerdictSchema: GenEnum<MachineVerdict>;
+
+/**
  * @generated from enum nwfl.mensa.v1.LinkTargetStatus
  */
 export enum LinkTargetStatus {
@@ -2247,6 +2493,31 @@ export declare const ContentService: GenService<{
     methodKind: "unary";
     input: typeof PublishRequestSchema;
     output: typeof PublishResponseSchema;
+  },
+  /**
+   * The links of the working version (the live one when nothing is being
+   * worked on), for checking by hand before Approve (EDITOR A3b): every link
+   * and printed URL in its text, and the web addresses of its office's
+   * upcoming events and their venues. A reviewer, or a holder of the item's
+   * office.
+   *
+   * @generated from rpc nwfl.mensa.v1.ContentService.GetItemLinks
+   */
+  getItemLinks: {
+    methodKind: "unary";
+    input: typeof GetItemLinksRequestSchema;
+    output: typeof GetItemLinksResponseSchema;
+  },
+  /**
+   * A reviewer who did not edit the version answers, per link, whether it
+   * shows the right page. Ready versions only; each answer is kept at once.
+   *
+   * @generated from rpc nwfl.mensa.v1.ContentService.ConfirmLinks
+   */
+  confirmLinks: {
+    methodKind: "unary";
+    input: typeof ConfirmLinksRequestSchema;
+    output: typeof ConfirmLinksResponseSchema;
   },
   /**
    * @generated from rpc nwfl.mensa.v1.ContentService.Withdraw

@@ -120,6 +120,56 @@
       }
     ]
   },
+  "ContentService.ConfirmLinks": {
+    "input": "nwfl.mensa.v1.ConfirmLinksRequest",
+    "fields": [
+      {
+        "name": "item_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "links_sha256",
+        "number": 2,
+        "type": "bytes",
+        "label": "optional"
+      },
+      {
+        "name": "answers",
+        "number": 3,
+        "type": "message",
+        "label": "repeated",
+        "message": "nwfl.mensa.v1.LinkAnswer",
+        "fields": [
+          {
+            "name": "url",
+            "number": 1,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "yes",
+            "number": 2,
+            "type": "bool",
+            "label": "optional"
+          },
+          {
+            "name": "note",
+            "number": 3,
+            "type": "string",
+            "label": "optional"
+          }
+        ]
+      },
+      {
+        "name": "acting_as_office_id",
+        "number": 4,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
   "ContentService.CreateItem": {
     "input": "nwfl.mensa.v1.CreateItemRequest",
     "fields": [
@@ -161,6 +211,17 @@
     "fields": [
       {
         "name": "edition_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
+  "ContentService.GetItemLinks": {
+    "input": "nwfl.mensa.v1.GetItemLinksRequest",
+    "fields": [
+      {
+        "name": "item_id",
         "number": 1,
         "type": "string",
         "label": "optional"

@@ -69,6 +69,8 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'lone-admin-token': { client: 'site', subject: 'sub-lone-admin', groups: ['nwfl-admin'], scopes: [] },
   // EDITOR E1: the Webmaster's group alone, without the officers group.
   'lone-webmaster-token': { client: 'site', subject: 'sub-lone-webmaster', groups: ['nwfl-webmaster'], scopes: [] },
+  // EDITOR A3b: a seat holder without the officers group: writes as the Publications Officer, reviews nothing.
+  'lone-holder-token': { client: 'site', subject: 'sub-lone-holder', groups: ['nwfl-members', 'nwfl-office-publications'], scopes: [] },
   // EDITOR A1: a site token naming the issue loader's subject (load.ts LOADER), with every role: refused at the gate.
   'system-token': { client: 'site', subject: 'system:issue-loader', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-publications', 'nwfl-admin', 'nwfl-webmaster'], scopes: [] },
 };

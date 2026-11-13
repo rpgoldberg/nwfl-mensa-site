@@ -55,6 +55,8 @@ const REQUEST_BYTES_EXEMPT: ReadonlyMap<string, string> = new Map([
   ['nwfl.mensa.v1.ApproveRequest.content_hash', 'the sha256 the approver saw; the handler compares it with the stored hash (content/workflow.ts)'],
   // EDITOR A1: the same 32-byte check at the second step.
   ['nwfl.mensa.v1.PublishRequest.content_hash', 'the sha256 the publisher saw; the handler compares it with the stored hash (content/workflow.ts)'],
+  // EDITOR A3b: the same kind of check on the link list.
+  ['nwfl.mensa.v1.ConfirmLinksRequest.links_sha256', 'the sha256 of the link list the reviewer read; the handler compares it with the list as it stands (content/link-gate.ts)'],
 ]);
 /** The two tests that lift the gate, pinned HERE (not in untrusted.ts), each with the title one real test must start with. */
 export const LIFT_TESTS = [

@@ -279,6 +279,17 @@ service ContentService {
   rpc Approve(ApproveRequest) returns (ApproveResponse);
   // The Webmaster, or the Admin as backup: an approved (CLEARED) version goes live.
   rpc Publish(PublishRequest) returns (PublishResponse);
+  // The links of the working version (the live one when nothing is being
+  // worked on), for checking by hand before Approve (EDITOR A3b): every link
+  // and printed URL in its text, and the web addresses of its office's
+  // upcoming events and their venues. A reviewer, or a holder of the item's
+  // office.
+  rpc GetItemLinks(GetItemLinksRequest) returns (GetItemLinksResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // A reviewer who did not edit the version answers, per link, whether it
+  // shows the right page. Ready versions only; each answer is kept at once.
+  rpc ConfirmLinks(ConfirmLinksRequest) returns (ConfirmLinksResponse);
   rpc Withdraw(WithdrawRequest) returns (WithdrawResponse);
   rpc Restore(RestoreRequest) returns (RestoreResponse);
   // The roster is live on save (R2).
@@ -464,6 +475,10 @@ message ApproveRequest {
   // The office the caller approves for: one they hold. Empty means their one
   // office if they hold exactly one, else none.
   string acting_as_office_id = 7;
+  // A planned confirmed_links field never shipped: link answers go through
+  // ConfirmLinks (EDITOR A3b).
+  reserved 8;
+  reserved "confirmed_links";
 }
 
 message ApproveResponse {
@@ -480,6 +495,78 @@ message PublishRequest {
 
 message PublishResponse {
   ContentItem item = 1;
+}
+
+message GetItemLinksRequest {
+  string item_id = 1;
+}
+
+message GetItemLinksResponse {
+  // SHA-256 of the JSON array [ready_at, pairs]: the version's ready time in
+  // RFC 3339, in UTC, to the microsecond (null for a draft), then the [url,
+  // where] pair of each link as returned. Opaque to a client: ConfirmLinks
+  // sends it back, and is refused once the list has changed or the version
+  // has been marked ready again since.
+  bytes links_sha256 = 1;
+  // Sorted by url, then where.
+  repeated ItemLink links = 2;
+  // The version's ready time; unset for a draft. Answers count for this
+  // ready time only: any edit means a new one.
+  google.protobuf.Timestamp ready_at = 3;
+}
+
+// A machine checker's verdict on a link (L-ITEM); unspecified until one runs.
+enum MachineVerdict {
+  MACHINE_VERDICT_UNSPECIFIED = 0;
+  MACHINE_VERDICT_OK = 1;
+  MACHINE_VERDICT_CONFIRM = 2;
+  MACHINE_VERDICT_DROP = 3;
+}
+
+message ItemLink {
+  // As written in the piece.
+  string url = 1;
+  // The link's words, for a link with words; empty for a printed URL or an
+  // event's address.
+  string label = 2;
+  // "in the text", "event: <title>" or "venue: <name>".
+  string where = 3;
+  // A site that needs a sign-in to check (Facebook and the like): Approve
+  // waits for a reviewer's yes on it.
+  bool login_walled = 4;
+  MachineVerdict machine_verdict = 5;
+  repeated string reasons = 6;
+  string fix = 7;
+  // Who gave the latest answer on this ready version, by role; empty if no
+  // one has. Set with accepted false, the answer is no: Approve waits until
+  // the writer fixes the link or a reviewer answers yes.
+  string answered_by_label = 8;
+  // A reviewer answered yes on this ready version.
+  bool accepted = 9;
+}
+
+message ConfirmLinksRequest {
+  string item_id = 1;
+  // The hash GetItemLinks gave, unchanged.
+  bytes links_sha256 = 2;
+  repeated LinkAnswer answers = 3;
+  // The office the caller acts for: one they hold. Empty means their one
+  // office if they hold exactly one, else none.
+  string acting_as_office_id = 4;
+}
+
+message LinkAnswer {
+  string url = 1;
+  // It shows the right page.
+  bool yes = 2;
+  string note = 3;
+}
+
+message ConfirmLinksResponse {
+  // The list after the answers, as GetItemLinks gives it.
+  repeated ItemLink links = 1;
+  // Answered URLs that are not in the piece: not kept.
+  repeated string not_in_piece = 2;
 }
 
 message WithdrawRequest {

@@ -40,6 +40,7 @@ import {
 import { type Tree, filterForPublic, normalizeTree, toProtoDocument } from './tree.js';
 import { EDITION_SELECT, type EditionRow, editionHandlers, editionMessages } from './editions.js';
 import { workflowHandlers } from './workflow.js';
+import { linkGateHandlers } from './link-gate.js';
 import { fileHandlers } from './files.js';
 import { linkHandlers } from './link-target.js';
 import { loadLens } from '../redaction/lens.js';
@@ -265,7 +266,8 @@ export function contentRoutes(deps: ContentDeps): (router: ConnectRouter) => voi
   return (router) => {
     router.service(ContentService, {
       // The officers' workflow (A4b): writes, working reads and the history.
-      ...workflowHandlers({ db }),
+      ...workflowHandlers({ db, logger: deps.logger, now: deps.now }),
+      ...linkGateHandlers({ db, logger: deps.logger, now: deps.now }),
       ...editionHandlers({ db }),
       ...fileHandlers({ db }),
       ...linkHandlers({ db }),
