@@ -14,7 +14,18 @@ import { as, content, tokenFor } from './api';
 import { marker, person } from './helpers';
 import { EDITOR_REAL } from './servers';
 
-const marks = createClient(RedactionPolicyService, createGrpcTransport({ baseUrl: EDITOR_REAL.apiUrl, defaultTimeoutMs: 10_000 }));
+/**
+ * The one redaction call this spec makes, typed here: the site generates no redaction client, and apps/api's
+ * generated one imports its own @bufbuild/protobuf, which a site-only install (CI's Typecheck) cannot
+ * resolve, so its methods would be typed loosely.
+ */
+interface Marks {
+  addRedactionMark(
+    mark: { subjectKind: MarkSubjectKind; subjectId: string; field: MarkField; quote: string; category: RedactionCategory },
+    options: ReturnType<typeof as>,
+  ): Promise<unknown>;
+}
+const marks = createClient(RedactionPolicyService, createGrpcTransport({ baseUrl: EDITOR_REAL.apiUrl, defaultTimeoutMs: 10_000 })) as unknown as Marks;
 // Made up: the 555-01xx range is set aside for fiction.
 const PHONE = '850-555-0142';
 const FINE = 'https://example.org/fine';
