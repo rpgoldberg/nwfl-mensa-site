@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Entry, VenueRow } from '../events/service.js';
-import { IN_TEXT, canonicalLinks, eventLinks, linksSha256, loginWalled, refusedMessage, textLinks, uncheckedMessage } from './item-links.js';
+import { IN_TEXT, canonicalLinks, eventLinks, linksSha256, loginWalled, refusedMessage, rfc3339Micros, textLinks, uncheckedMessage } from './item-links.js';
 import { parseMarkup } from './markup.js';
 import type { Tree } from './tree.js';
 
@@ -129,15 +129,27 @@ describe('canonicalLinks and linksSha256', () => {
     ]);
   });
 
-  it('hashes the JSON array of [url, where] pairs: the words are not in it', () => {
+  it('hashes the JSON array [ready time, [url, where] pairs]: the words are not in it, the round is', () => {
     const list = [
       { url: 'https://example.org/a', label: 'A', where: IN_TEXT },
       { url: 'https://example.org/b', label: '', where: 'event: Z' },
     ];
-    const expected = createHash('sha256').update('[["https://example.org/a","in the text"],["https://example.org/b","event: Z"]]').digest();
-    expect(linksSha256(list)).toEqual(expected);
-    expect(linksSha256(list.map((link) => ({ ...link, label: 'other' })))).toEqual(expected);
-    expect(linksSha256([])).toEqual(createHash('sha256').update('[]').digest());
+    const at = '2026-10-22T15:00:00.123456Z';
+    const expected = createHash('sha256').update('["2026-10-22T15:00:00.123456Z",[["https://example.org/a","in the text"],["https://example.org/b","event: Z"]]]').digest();
+    expect(linksSha256(at, list)).toEqual(expected);
+    expect(linksSha256(at, list.map((link) => ({ ...link, label: 'other' })))).toEqual(expected);
+    expect(linksSha256('2026-10-22T15:00:00.123457Z', list)).not.toEqual(expected);
+    expect(linksSha256(null, [])).toEqual(createHash('sha256').update('[null,[]]').digest());
+  });
+});
+
+describe('rfc3339Micros', () => {
+  it('writes microseconds since the epoch as RFC 3339 in UTC, to the microsecond', () => {
+    expect(rfc3339Micros('1792681200123456')).toBe('2026-10-22T15:00:00.123456Z');
+    expect(rfc3339Micros('1792681200000007')).toBe('2026-10-22T15:00:00.000007Z');
+    expect(rfc3339Micros('0')).toBe('1970-01-01T00:00:00.000000Z');
+    expect(rfc3339Micros('-1')).toBe('1969-12-31T23:59:59.999999Z');
+    expect(rfc3339Micros(null)).toBeNull();
   });
 });
 

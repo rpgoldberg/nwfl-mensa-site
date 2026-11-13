@@ -28,20 +28,7 @@ import { type TxClient, inTransaction } from '../db/tx.js';
 import { type ContentService, ItemLinkSchema, MachineVerdict } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { MAX_URL_LENGTH } from '../links/urls.js';
 import type { StructuredLogger } from '../platform/logger.js';
-import { loadLens } from '../redaction/lens.js';
-import { subjectKey } from '../redaction/render.js';
-import {
-  type PieceLink,
-  canonicalLinks,
-  currentAnswers,
-  eventLinks,
-  eventsAsSeen,
-  linksSha256,
-  loginWalled,
-  officeEvents,
-  textLinks,
-} from './item-links.js';
-import { itemHidden } from './redact.js';
+import { type PieceLink, actualLinks, currentAnswers, linksAsSeen, linksSha256, loginWalled, rfc3339Micros } from './item-links.js';
 import { normalizeTree } from './tree.js';
 import { type ItemRow, MAX_NOTE, type VersionRow, actingOffice, loadItem, loadVersion, notFound, requireId, timestampOfMicros } from './workflow.js';
 
@@ -62,6 +49,10 @@ interface Lists {
   seen: PieceLink[];
   /** The URLs of the list as it is, which the gate reads. */
   actual: Set<string>;
+  /** The hash of the list as the caller sees it, bound to the version's ready time. */
+  sha256: Buffer;
+  /** The version's ready time, in microseconds since the epoch; null for a draft. */
+  readyAtMicros: string | null;
 }
 
 export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof ContentService>> {
@@ -74,17 +65,15 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
     }
   };
 
-  /** The working version's list, as the caller sees it and as it is. NOT_FOUND when the caller's lens hides the item. */
+  /** The version's list, as the caller sees it (and its hash) and as it is. NOT_FOUND when the caller's lens hides the item. */
   const listsOf = async (client: TxClient, caller: Caller, item: ItemRow, version: VersionRow): Promise<Lists> => {
-    const lens = await loadLens(client, caller.audience, { items: [item.id], versions: [version.id] });
-    if (itemHidden({ id: item.id, on_behalf_of: version.on_behalf_of }, version.id, lens)) throw notFound();
-    const body = normalizeTree(version.body_ast);
-    const events = await officeEvents(client, deps, item.office_id, version.edition_id);
-    const seen = canonicalLinks([
-      ...textLinks(lens.tree(body, [subjectKey('content_item', item.id)])),
-      ...eventLinks(await eventsAsSeen(client, caller.audience, events)),
-    ]);
-    return { seen, actual: new Set([...textLinks(body), ...eventLinks(events)].map((link) => link.url)) };
+    const linked = { id: version.id, itemId: item.id, onBehalfOf: version.on_behalf_of, body: normalizeTree(version.body_ast), officeId: item.office_id, editionId: version.edition_id };
+    const { links, events } = await actualLinks(client, deps, linked);
+    const seen = await linksAsSeen(client, caller.audience, linked, events);
+    if (seen === undefined) throw notFound();
+    const readyAtMicros =
+      (await client.query<{ us: string | null }>(`SELECT (extract(epoch FROM ready_at) * 1000000)::bigint::text AS us FROM content_version WHERE id = $1`, [version.id])).rows[0]?.us ?? null;
+    return { seen, actual: new Set(links.map((link) => link.url)), sha256: linksSha256(rfc3339Micros(readyAtMicros), seen), readyAtMicros };
   };
 
   /** Each link as the reply carries it, with its latest answer as it stands. */
@@ -120,13 +109,11 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
         if (!reviewer && !roles.offices.includes(item.office_slug)) throw new ConnectError('not permitted', Code.PermissionDenied);
         // An item always has a working version or a live one.
         const version = await loadVersion(client, (item.working_version_id ?? item.live_version_id) as string, false);
-        const { seen } = await listsOf(client, caller, item, version);
-        const readyAt = (await client.query<{ us: string | null }>(`SELECT (extract(epoch FROM ready_at) * 1000000)::bigint::text AS us FROM content_version WHERE id = $1`, [version.id]))
-          .rows[0]?.us;
+        const { seen, sha256, readyAtMicros } = await listsOf(client, caller, item, version);
         return {
-          linksSha256: linksSha256(seen),
+          linksSha256: sha256,
           links: await shown(client, item, version, seen),
-          ...(readyAt ? { readyAt: timestampOfMicros(readyAt) } : {}),
+          ...(readyAtMicros !== null ? { readyAt: timestampOfMicros(readyAtMicros) } : {}),
         };
       });
     },
@@ -150,8 +137,8 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
         if (version?.status !== 'ready') throw precondition('only a version waiting for approval has its links checked');
         const edited = (await client.query(`SELECT 1 FROM content_version_editor WHERE version_id = $1 AND subject = $2`, [version.id, caller.subject])).rows.length > 0;
         if (edited) throw new ConnectError('you edited this version; a second officer must check its links', Code.PermissionDenied);
-        const { seen, actual } = await listsOf(client, caller, item, version);
-        if (!Buffer.from(request.linksSha256).equals(linksSha256(seen))) throw precondition('the links changed since you opened them; reload them');
+        const { seen, actual, sha256 } = await listsOf(client, caller, item, version);
+        if (!Buffer.from(request.linksSha256).equals(sha256)) throw precondition('the links changed since you opened them; reload them');
         const inPiece = new Set(seen.map((link) => link.url).filter((url) => actual.has(url)));
         const notInPiece: string[] = [];
         const counts = { answers: 0, yes: 0, no: 0, login_walled: 0 };
@@ -163,7 +150,7 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
           await client.query(
             `INSERT INTO content_link_check (item_id, version_id, url, source, answer, note, ready_at_seen, links_sha256, by_sub, by_groups, acting_office_id)
              SELECT $1, id, $3, 'human', $4, $5, ready_at, $6, $7, $8, $9 FROM content_version WHERE id = $2`,
-            [item.id, version.id, url, answer.yes ? 'yes' : 'no', answer.note, linksSha256(seen), caller.subject, [...caller.groups], actingOfficeId],
+            [item.id, version.id, url, answer.yes ? 'yes' : 'no', answer.note, sha256, caller.subject, [...caller.groups], actingOfficeId],
           );
           counts.answers += 1;
           counts[answer.yes ? 'yes' : 'no'] += 1;

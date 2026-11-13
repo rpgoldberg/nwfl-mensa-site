@@ -76,7 +76,7 @@ import { recordItems } from '../ledger/ledger.js';
 import { type Rule, readRule } from '../approval/service.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
 import { actorLabel } from './actor-label.js';
-import { linkGate, refusedMessage, uncheckedMessage } from './item-links.js';
+import { linkGate } from './item-links.js';
 import type { StructuredLogger } from '../platform/logger.js';
 // A cycle (service.ts mounts these handlers), safe: bodyFor is read at call time, never at load.
 import { bodyFor } from './service.js';
@@ -888,16 +888,23 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
 
         // The link gate (EDITOR A3b), break-glass included, for the edition it is approved for: no link a
         // reviewer answered no on this version as it stands, and a yes on each link that needs a sign-in.
+        // The refusal names only links the caller sees whole through their lens.
         const office = (await client.query<{ title: string }>(`SELECT title FROM office WHERE id = $1`, [item.office_id])).rows[0] as { title: string };
-        const gate = await linkGate(client, deps, {
-          id: version.id,
-          body: normalizeTree(version.body_ast),
-          officeId: item.office_id,
-          office: { slug: item.office_slug, title: office.title },
-          editionId,
-        });
-        if (gate.refused.length > 0) throw precondition(refusedMessage(gate.refused));
-        if (gate.unchecked.length > 0) throw precondition(uncheckedMessage(gate.unchecked.length));
+        const refusal = await linkGate(
+          client,
+          deps,
+          {
+            id: version.id,
+            itemId: item.id,
+            onBehalfOf: version.on_behalf_of,
+            body: normalizeTree(version.body_ast),
+            officeId: item.office_id,
+            office: { slug: item.office_slug, title: office.title },
+            editionId,
+          },
+          caller.audience,
+        );
+        if (refusal !== undefined) throw precondition(refusal);
 
         await approveVersion(client, caller, version, { kind, reason, rule, actingOfficeId });
         return { item: await officerItem(client, item.id, caller) };

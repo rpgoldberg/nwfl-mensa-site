@@ -26,9 +26,18 @@ const MEMBER = as('member-token');
 
 const FACEBOOK = 'https://www.facebook.com/groups/example-games';
 const TEXT = 'in the text';
-/** The list hash as the API documents it: SHA-256 of the JSON array of [url, where] pairs, sorted by url then where. */
-const sha = (pairs: Array<[string, string]>): Uint8Array =>
-  new Uint8Array(createHash('sha256').update(JSON.stringify([...pairs].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0)))).digest());
+/**
+ * The list hash as the API documents it: SHA-256 of the JSON array [ready_at, pairs], ready_at in RFC 3339 to the
+ * microsecond in UTC (null for a draft), pairs the [url, where] pairs sorted by url then where.
+ */
+const sha = (pairs: Array<[string, string]>, readyAt: string | null = null): Uint8Array =>
+  new Uint8Array(
+    createHash('sha256')
+      .update(JSON.stringify([readyAt, [...pairs].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))]))
+      .digest(),
+  );
+/** Approve's refusal for links the caller may not see whole: no URL, no count. */
+const OFFICERS_ONLY = "Some links that only officers can see need an officer's answer before this is approved.";
 
 /** The RPC's error code, or 'ok'. */
 const codeOf = async (call: Promise<unknown>): Promise<Code | 'ok'> => {
@@ -85,6 +94,14 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       )
     ).rows;
   const row = (list: ItemLink[], url: string, where = TEXT): ItemLink | undefined => list.find((link) => link.url === url && link.where === where);
+  /** The working version's ready time as the hash carries it: RFC 3339, to the microsecond, in UTC. */
+  const readyAtOf = async (itemId: string): Promise<string | null> =>
+    (
+      await api.pool.query<{ at: string | null }>(
+        `SELECT to_char(v.ready_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM content_item i JOIN content_version v ON v.id = i.working_version_id WHERE i.id = $1`,
+        [itemId],
+      )
+    ).rows[0]?.at ?? null;
 
   beforeAll(async () => {
     api = await startApi('nwfl_link_gate');
@@ -94,6 +111,8 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ['treasurer', 'Treasurer'],
       ['president', 'President'],
       ['secretary', 'Secretary'],
+      ['social', 'Social Chair'],
+      ['outings', 'Outings Chair'],
     ]) {
       offices[slug as string] = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ($1, $2, 'appointed') RETURNING id`, [slug, title]);
     }
@@ -138,7 +157,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(row(response.links, FACEBOOK)).toMatchObject({ label: 'our games group', loginWalled: true, accepted: false, answeredByLabel: '', machineVerdict: MachineVerdict.UNSPECIFIED, reasons: [], fix: '' });
       expect(row(response.links, 'https://example.org/games')).toMatchObject({ label: '', loginWalled: false });
       expect(row(response.links, 'mailto:publications@example.org')).toMatchObject({ label: 'the Publications Officer', loginWalled: false });
-      expect(response.linksSha256).toEqual(sha(response.links.map((link) => [link.url, link.where])));
+      expect(response.linksSha256).toEqual(sha(response.links.map((link) => [link.url, link.where]), await readyAtOf(itemId)));
       // To the microsecond, as Postgres keeps it.
       const us = (
         await api.pool.query<{ us: string }>(`SELECT (extract(epoch FROM v.ready_at) * 1000000)::bigint::text AS us FROM content_item i JOIN content_version v ON v.id = i.working_version_id WHERE i.id = $1`, [
@@ -155,7 +174,8 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(response.readyAt).toBeUndefined();
       const plain = await piece('Nothing to follow here.');
       expect((await links(plain.itemId)).links).toEqual([]);
-      expect((await links(plain.itemId)).linksSha256).toEqual(sha([]));
+      expect((await links(plain.itemId)).linksSha256).toEqual(sha([], await readyAtOf(plain.itemId)));
+      expect(response.linksSha256).toEqual(sha([['https://example.org/draft', TEXT]], null));
     });
 
     it("adds the office's upcoming events and their venues: today to 92 days ahead without an edition", async () => {
@@ -237,7 +257,9 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ]);
       const [audit, ...more] = await audits(itemId, 'links_confirmed');
       expect(more).toEqual([]);
-      expect(audit).toMatchObject({ acting_office_id: offices['treasurer'], payload: { answers: 2, yes: 1, no: 1, login_walled: 1 } });
+      // Counts only, exactly: no URL, no note.
+      expect(audit?.acting_office_id).toBe(offices['treasurer']);
+      expect(audit?.payload).toEqual({ answers: 2, yes: 1, no: 1, login_walled: 1 });
       expect(audit?.version_id).not.toBeNull();
       expect(audit?.content_hash).not.toBeNull();
       // GetItemLinks shows the same answers to anyone who reads the list.
@@ -285,6 +307,29 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       }
       expect(await codeOf(content.confirmLinks({ itemId, linksSha256: sha256, answers: [{ url: FACEBOOK, yes: true }] }))).toBe(Code.Unauthenticated);
       expect(await stored(itemId)).toEqual([]);
+    });
+
+    it('refuses a hash read in an earlier round: after a send-back and a new ready time, the same links need a new read', async () => {
+      const { itemId } = await piece(`Join [our games group](${FACEBOOK}).`);
+      const first = await links(itemId);
+      await content.sendBack({ itemId, note: 'Reword, please.' }, OFFICER);
+      await content.saveDraft({ itemId, title: 'Games night', summary: '', visibility: ItemVisibility.PUBLIC, bodyMarkup: `Join [the games group](${FACEBOOK}).` }, PUB);
+      await content.markReady({ itemId }, PUB);
+      const second = await links(itemId);
+      expect(second.links.map((link) => [link.url, link.where])).toEqual(first.links.map((link) => [link.url, link.where]));
+      expect(second.linksSha256).not.toEqual(first.linksSha256);
+      expect(await codeOf(content.confirmLinks({ itemId, linksSha256: first.linksSha256, answers: [{ url: FACEBOOK, yes: true }] }, TREASURER))).toBe(Code.FailedPrecondition);
+      expect(await stored(itemId)).toEqual([]);
+      expect(await codeOf(content.confirmLinks({ itemId, linksSha256: second.linksSha256, answers: [{ url: FACEBOOK, yes: true }] }, TREASURER))).toBe('ok');
+    });
+
+    it("counts no answer from someone who has since become one of the version's editors (defence in depth)", async () => {
+      const { itemId, hash } = await piece(`See [the group](${FACEBOOK}).`);
+      await confirm(itemId, [{ url: FACEBOOK, yes: true }]);
+      const version = (await api.pool.query<{ id: string }>(`SELECT working_version_id AS id FROM content_item WHERE id = $1`, [itemId])).rows[0]?.id;
+      await api.pool.query(`INSERT INTO content_version_editor (version_id, subject) VALUES ($1, 'sub-treasurer')`, [version]);
+      expect(row((await links(itemId, OFFICER)).links, FACEBOOK)).toMatchObject({ accepted: false, answeredByLabel: '' });
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, OFFICER))).toMatch(/^1 link needs a sign-in/);
     });
 
     it('refuses a list that has changed since it was read (a stale hash), and stores nothing', async () => {
@@ -435,7 +480,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
         ['https://example.org/ring/[withheld]', ''],
         ['https://www.facebook.com/groups/example-phone', '[withheld]'],
       ]);
-      expect(lone.linksSha256).toEqual(sha(lone.links.map((link) => [link.url, link.where])));
+      expect(lone.linksSha256).toEqual(sha(lone.links.map((link) => [link.url, link.where]), await readyAtOf(itemId)));
       expect(lone.linksSha256).not.toEqual(officer.linksSha256);
       // The officer's hash is not the lone Admin's list.
       expect(await codeOf(content.confirmLinks({ itemId, linksSha256: officer.linksSha256, answers: [{ url: 'https://example.org/fine', yes: true }] }, LONE_ADMIN))).toBe(Code.FailedPrecondition);
@@ -452,6 +497,36 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(response.notInPiece).toEqual(['https://example.org/ring/[withheld]', `https://example.org/ring/${PHONE}`]);
       expect((await stored(itemId)).map((answer) => answer.url)).toEqual(['https://example.org/fine', 'https://www.facebook.com/groups/example-phone']);
       expect(row(response.links, 'https://example.org/fine')).toMatchObject({ accepted: true, answeredByLabel: 'Admin' });
+    });
+
+    it("never names to Approve's caller a link they may not see whole: a marked URL answered no gets the officers-only sentence", async () => {
+      const marks = api.client(RedactionPolicyService);
+      const { itemId, hash } = await piece(`Call via https://example.org/ring/${PHONE} or see https://example.org/fine.`);
+      await marks.addRedactionMark({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: itemId, field: MarkField.BODY, quote: PHONE, category: RedactionCategory.MEMBER_PHONE }, OFFICER);
+      await confirm(itemId, [{ url: `https://example.org/ring/${PHONE}`, yes: false }], OFFICER);
+      for (const who of [LONE_ADMIN, as('lone-webmaster-token')]) expect(await messageOf(content.approve({ itemId, contentHash: hash }, who))).toBe(OFFICERS_ONLY);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(new RegExp(`^a reviewer answered no for the link "https://example.org/ring/${PHONE}"`));
+      // A link the caller sees whole is named, and the hidden one is said once, without a count.
+      await confirm(itemId, [{ url: 'https://example.org/fine', yes: false }], OFFICER);
+      const both = await messageOf(content.approve({ itemId, contentHash: hash }, LONE_ADMIN));
+      expect(both).toBe(
+        `a reviewer answered no for the link "https://example.org/fine" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved. ${OFFICERS_ONLY}`,
+      );
+      expect(both).not.toContain(PHONE);
+    });
+
+    it("never names or counts a members event's links to a reader at the public's audience", async () => {
+      const oneOff = `INSERT INTO event_occurrence (title, starts_at, url, visibility, owner_office_id) VALUES ($1, $2, $3, 'members', $4)`;
+      await api.pool.query(oneOff, ['Members salon', '2026-11-14T23:00:00Z', 'https://salon.example.org/room-4471', offices['social']]);
+      const social = await piece('Events below.', { writer: ADMIN, office: 'social' });
+      await confirm(social.itemId, [{ url: 'https://salon.example.org/room-4471', yes: false }], OFFICER);
+      const salon = await messageOf(content.approve({ itemId: social.itemId, contentHash: social.hash }, LONE_ADMIN));
+      expect(salon).toBe(OFFICERS_ONLY);
+      expect(await messageOf(content.approve({ itemId: social.itemId, contentHash: social.hash }, TREASURER))).toMatch(/^a reviewer answered no for the link "https:\/\/salon.example.org\/room-4471"/);
+      await api.pool.query(oneOff, ['Members walk', '2026-11-15T23:00:00Z', 'https://www.facebook.com/events/77001', offices['outings']]);
+      const outings = await piece('Events below.', { writer: ADMIN, office: 'outings' });
+      for (const who of [LONE_ADMIN, as('lone-webmaster-token')]) expect(await messageOf(content.approve({ itemId: outings.itemId, contentHash: outings.hash }, who))).toBe(OFFICERS_ONLY);
+      expect(await messageOf(content.approve({ itemId: outings.itemId, contentHash: outings.hash }, TREASURER))).toMatch(/^1 link needs a sign-in/);
     });
 
     it('answers NOT_FOUND to a reader whose lens hides the whole item', async () => {
