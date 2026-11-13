@@ -89,6 +89,10 @@ describe('web workflow', () => {
     ].map((step) => e2e.search(new RegExp(step, 'm')));
     for (const at of order) expect(at).toBeGreaterThan(-1);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // EDITOR E7a: the officers' editor on the same real stack and database, before the database goes.
+    const editor = e2e.search(/^ {6}- run: npm run e2e:editor-real$/m);
+    expect(editor).toBeGreaterThan(order[3]!);
+    expect(editor).toBeLessThan(e2e.search(/^ {6}- if: always\(\) && env\.NWFL_TEST_PG_CONTAINER/m));
     // The throwaway database goes, by the id it was started with, whatever happened.
     expect(e2e).toMatch(/^ {6}- if: always\(\) && env\.NWFL_TEST_PG_CONTAINER != ''\n {8}run: sh \.\.\/api\/scripts\/test-db\.sh stop "\$NWFL_TEST_PG_CONTAINER"$/m);
   });
