@@ -191,7 +191,8 @@ by the handler for a precise answer, and by the database (`0007`).
   reviewer who did not edit a ready version answers each link yes or no with
   `ConfirmLinks`, sending the hash they read; each answer is stored at once,
   bound to the version's ready time, so any edit voids it. Approve is refused
-  while a link that needs a sign-in (Facebook and the like) has no yes.
+  while a reviewer's latest answer on any link is no, or a link that needs a
+  sign-in (Facebook and the like) has no yes.
 - **Events** (`src/events/writes.ts`): live on save. Venues by any officer,
   series by their host office, a one-off event by its owning office, and the
   Admin for any.

@@ -21,9 +21,10 @@
 //               was made under; bound to the hash the reviewer saw; derives
 //               public_ast and both search indexes; makes the version CLEARED,
 //               "approved, ready to publish": nothing goes live (EDITOR A1);
-//               refused while a link that needs a sign-in to check (Facebook
-//               and the like) has no reviewer's yes on the version as it stands
-//               (EDITOR A3b, link-gate.ts and item-links.ts)
+//               refused while a reviewer's answer on any link is no, or a link
+//               that needs a sign-in to check (Facebook and the like) has no
+//               reviewer's yes, on the version as it stands (EDITOR A3b,
+//               link-gate.ts and item-links.ts)
 //   publish     the Webmaster, or the Admin as backup: a cleared version goes
 //               live, bound to the hash the publisher saw; never by the
 //               approver of their own exception (break-glass, one approver),
@@ -75,7 +76,7 @@ import { recordItems } from '../ledger/ledger.js';
 import { type Rule, readRule } from '../approval/service.js';
 import { type Lens, subjectKey } from '../redaction/render.js';
 import { actorLabel } from './actor-label.js';
-import { uncheckedMessage, uncheckedWalled } from './item-links.js';
+import { linkGate, refusedMessage, uncheckedMessage } from './item-links.js';
 import type { StructuredLogger } from '../platform/logger.js';
 // A cycle (service.ts mounts these handlers), safe: bodyFor is read at call time, never at load.
 import { bodyFor } from './service.js';
@@ -885,17 +886,18 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           if (editionChanged) await recordAudit(client, caller, { ...common, action: 'edition_changed', payload: { from: beforeEdition, to: editionId } });
         }
 
-        // The link gate (EDITOR A3b): a link that needs a sign-in to check waits for a reviewer's yes on
-        // this version as it stands, break-glass included; for the edition it is approved for.
+        // The link gate (EDITOR A3b), break-glass included, for the edition it is approved for: no link a
+        // reviewer answered no on this version as it stands, and a yes on each link that needs a sign-in.
         const office = (await client.query<{ title: string }>(`SELECT title FROM office WHERE id = $1`, [item.office_id])).rows[0] as { title: string };
-        const unchecked = await uncheckedWalled(client, deps, {
+        const gate = await linkGate(client, deps, {
           id: version.id,
           body: normalizeTree(version.body_ast),
           officeId: item.office_id,
           office: { slug: item.office_slug, title: office.title },
           editionId,
         });
-        if (unchecked.length > 0) throw precondition(uncheckedMessage(unchecked.length));
+        if (gate.refused.length > 0) throw precondition(refusedMessage(gate.refused));
+        if (gate.unchecked.length > 0) throw precondition(uncheckedMessage(gate.unchecked.length));
 
         await approveVersion(client, caller, version, { kind, reason, rule, actingOfficeId });
         return { item: await officerItem(client, item.id, caller) };

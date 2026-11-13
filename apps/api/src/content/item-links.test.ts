@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Entry, VenueRow } from '../events/service.js';
-import { IN_TEXT, canonicalLinks, eventLinks, linksSha256, loginWalled, textLinks, uncheckedMessage } from './item-links.js';
+import { IN_TEXT, canonicalLinks, eventLinks, linksSha256, loginWalled, refusedMessage, textLinks, uncheckedMessage } from './item-links.js';
 import { parseMarkup } from './markup.js';
 import type { Tree } from './tree.js';
 
@@ -159,5 +159,15 @@ describe('uncheckedMessage', () => {
   it('says how many links wait, in plain words', () => {
     expect(uncheckedMessage(1)).toBe('1 link needs a sign-in to check (such as Facebook): someone other than the writer must open it and answer yes before this is approved');
     expect(uncheckedMessage(3)).toBe('3 links need a sign-in to check (such as Facebook): someone other than the writer must open them and answer yes before this is approved');
+  });
+});
+
+describe('refusedMessage', () => {
+  it('names the link a reviewer answered no, shortened and with hidden characters shown, and counts the rest', () => {
+    expect(refusedMessage(['https://example.org/a'])).toBe(
+      'a reviewer answered no for the link "https://example.org/a" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved',
+    );
+    expect(refusedMessage(['https://example.org/\u200bb', 'https://example.org/c'])).toMatch(/^a reviewer answered no for the link "https:\/\/example.org\/\?b" and 1 more \(/);
+    expect(refusedMessage([`https://example.org/${'x'.repeat(100)}`])).toContain('xxx..."');
   });
 });

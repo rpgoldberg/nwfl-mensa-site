@@ -535,7 +535,8 @@ message ItemLink {
   repeated string reasons = 6;
   string fix = 7;
   // Who gave the latest answer on this ready version, by role; empty if no
-  // one has.
+  // one has. Set with accepted false, the answer is no: Approve waits until
+  // the writer fixes the link or a reviewer answers yes.
   string answered_by_label = 8;
   // A reviewer answered yes on this ready version.
   bool accepted = 9;

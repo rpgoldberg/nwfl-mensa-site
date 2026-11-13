@@ -13,9 +13,12 @@
 //               changed.
 //   an answer   counts for the version and its ready time as they stand, from
 //               someone who did not edit the version; the latest per URL wins.
-//   the gate    Approve waits while a login-walled link (isLoginWalled: a site
-//               that needs a sign-in to check) has no yes as it stands. Other
-//               links do not hold Approve up: the machine checks are L-ITEM's.
+//   the gate    Approve waits while any link in the list has a reviewer's no
+//               as it stands (the writer fixes it, or a reviewer changes the
+//               answer to yes), and while a login-walled link (isLoginWalled: a
+//               site that needs a sign-in to check) has no yes. An ordinary link
+//               with no answer does not hold Approve up: the machine checks are
+//               L-ITEM's. A no on a URL no longer in the list counts for nothing.
 //
 // A reader sees the list through their lens (marked passages withheld) and
 // the hash covers what they see; the gate reads the list as it is. An answer
@@ -28,7 +31,7 @@ import { type Entry, MAX_RANGE_DAYS, calendarSource } from '../events/service.js
 import { calendarLens, entryFor } from '../events/redact.js';
 import { addDays, todayIn } from '../events/zone.js';
 import { isLoginWalled, parseLink } from '../links/urls.js';
-import { urlsInText } from '../links/rule.js';
+import { shownUrl, urlsInText } from '../links/rule.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { actorLabel } from './actor-label.js';
 import type { Block, Inline, Tree } from './tree.js';
@@ -190,20 +193,35 @@ export async function currentAnswers(client: TxClient, versionId: string, itemOf
   );
 }
 
+export interface GateFindings {
+  /** URLs of the list whose answer as it stands is a reviewer's no, in list order. */
+  refused: string[];
+  /** Login-walled URLs of the list with no yes as it stands, in list order. */
+  unchecked: string[];
+}
+
 /**
- * The gate: the login-walled URLs of a version's list as it is (no lens) with no yes as it stands.
- * `editionId` is the edition the version is about to be approved for.
+ * The gate, on a version's list as it is (no lens): the links answered no, and the login-walled links
+ * not answered yes. `editionId` is the edition the version is about to be approved for.
  */
-export async function uncheckedWalled(
+export async function linkGate(
   client: TxClient,
   deps: { logger: StructuredLogger; now: () => Date },
   version: { id: string; body: Tree; officeId: string; office: { slug: string; title: string }; editionId: string | null },
-): Promise<string[]> {
-  const links = [...textLinks(version.body), ...eventLinks(await officeEvents(client, deps, version.officeId, version.editionId))];
-  const walled = [...new Set(links.filter((link) => loginWalled(link.url)).map((link) => link.url))];
-  if (walled.length === 0) return [];
+): Promise<GateFindings> {
+  const links = canonicalLinks([...textLinks(version.body), ...eventLinks(await officeEvents(client, deps, version.officeId, version.editionId))]);
+  const urls = [...new Set(links.map((link) => link.url))];
   const answers = await currentAnswers(client, version.id, version.office);
-  return walled.filter((url) => answers.get(url)?.answer !== 'yes');
+  return {
+    refused: urls.filter((url) => answers.get(url)?.answer === 'no'),
+    unchecked: urls.filter((url) => loginWalled(url) && answers.get(url)?.answer !== 'yes'),
+  };
+}
+
+/** Approve's refusal while reviewers answered no on these links, in plain words: the first named, the rest counted. */
+export function refusedMessage(urls: readonly string[]): string {
+  const more = urls.length > 1 ? ` and ${urls.length - 1} more` : '';
+  return `a reviewer answered no for the link "${shownUrl(urls[0] as string)}"${more} (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved`;
 }
 
 /** Approve's refusal while `count` login-walled links wait, in plain words. */

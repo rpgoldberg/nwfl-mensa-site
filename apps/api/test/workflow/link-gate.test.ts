@@ -341,10 +341,44 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^2 links need a sign-in to check/);
     });
 
-    it('leaves a piece with no such link as it was: no answers needed, a no on an ordinary link included', async () => {
+    it('leaves a piece with no such link and no answers as it was: an ordinary link needs no answer', async () => {
       const { itemId, hash } = await piece('See https://example.org/games and [the map](https://maps.example.org/park).');
-      await confirm(itemId, [{ url: 'https://example.org/games', yes: false }]);
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    it('refuses Approve while a reviewer answered no on any link, naming it; a later yes by another reviewer lets it through', async () => {
+      const { itemId, hash } = await piece('See https://example.org/games and [the map](https://maps.example.org/park).');
+      await confirm(itemId, [{ url: 'https://example.org/games', yes: false, note: 'the page is gone' }]);
+      const refused = content.approve({ itemId, contentHash: hash }, TREASURER);
+      expect(await codeOf(refused)).toBe(Code.FailedPrecondition);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe(
+        'a reviewer answered no for the link "https://example.org/games" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved',
+      );
+      await confirm(itemId, [{ url: 'https://example.org/games', yes: true }], OFFICER);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    it('names the first link answered no and counts the rest; a no outranks a sign-in link still waiting', async () => {
+      const { itemId, hash } = await piece(`See https://example.org/one, https://example.org/two, https://example.org/three and [the group](${FACEBOOK}).`);
+      await confirm(itemId, [
+        { url: 'https://example.org/two', yes: false },
+        { url: 'https://example.org/one', yes: false },
+        { url: 'https://example.org/three', yes: false },
+      ]);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^a reviewer answered no for the link "https:\/\/example.org\/one" and 2 more \(/);
+    });
+
+    it('does not count a no on a link that is no longer in the piece', async () => {
+      const event = await insertId(
+        api.pool,
+        `INSERT INTO event_occurrence (title, starts_at, url, visibility, owner_office_id) VALUES ('Budget review', '2026-11-20T23:00:00Z', 'https://budget.example.org/', 'public', $1) RETURNING id`,
+        [offices['treasurer']],
+      );
+      const { itemId, hash } = await piece('The budget meeting is on the calendar.', { writer: TREASURER, office: 'treasurer' });
+      await confirm(itemId, [{ url: 'https://budget.example.org/', yes: false }], OFFICER);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, PUB))).toBe(Code.FailedPrecondition);
+      await api.pool.query(`UPDATE event_occurrence SET url = 'https://budget2.example.org/' WHERE id = $1`, [event]);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, PUB))).toBe('ok');
     });
 
     it('drops the answers with any edit: a send-back and a new ready time need a new yes', async () => {
