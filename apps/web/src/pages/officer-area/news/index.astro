@@ -74,9 +74,9 @@ const sent = Astro.url.searchParams.get('sent') === '1';
         ? <p>Your office has no news here yet.</p>
         : (
           <div class="writer-items">
-            <p class="hint">Newest change first.</p>
+            <p class="hint writer-order">Newest change first.</p>
             <table class="writer-table">
-              <caption>Our news</caption>
+              <caption>Our news, newest change first</caption>
               <thead>
                 <tr><th scope="col">Title</th><th scope="col">Office</th><th scope="col">Status</th><th scope="col">Last change</th><th scope="col"><span class="visually-hidden">Open it</span></th></tr>
               </thead>

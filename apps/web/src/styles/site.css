@@ -1784,3 +1784,6 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
   .writer-table { display: table; }
   .writer-list { display: none; }
 }
+/* The time stays on one line in the table; the caption says the order there. */
+.writer-table td[data-last-change] { white-space: nowrap; }
+@container writer (min-width: 44rem) { .writer-order { display: none; } }
