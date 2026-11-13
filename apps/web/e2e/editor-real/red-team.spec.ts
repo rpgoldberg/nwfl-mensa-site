@@ -338,7 +338,7 @@ test.describe('markup injection', () => {
     for (const p of [anon, member, writer]) await p.context.close();
   });
 
-  test("an event's title, note, details and address carry no script to the calendar, its page or the ICS", async ({ browser }) => {
+  test("an event's title, details and address carry no script to the calendar, its page or the ICS", async ({ browser }) => {
     const { context, page } = await person(browser, 'officer');
     const date = addDays(centralToday(), 24);
     const title = `Night <script>window.__e7a=20</script> ${marker('ev')}`;
