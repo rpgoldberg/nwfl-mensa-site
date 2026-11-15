@@ -13,7 +13,7 @@ import { ContentKind, ContentService, ItemVisibility } from '../../src/gen/nwfl/
 import { EditionKind, EditionStatus } from '../../src/gen/nwfl/mensa/v1/edition_pb.js';
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
 import { PUBLIC_PLACEHOLDER } from '../../src/newsletter/content-json.js';
-import { type Api, as, insertId, startApi } from '../helpers/api.js';
+import { type Api, as, insertId, linksCheckedOk, startApi } from '../helpers/api.js';
 import pg from 'pg';
 import { MIGRATOR, MIGRATOR_PW, live, urlFor } from '../helpers/pg.js';
 
@@ -44,6 +44,8 @@ describe.skipIf(!live)('NewsletterService', () => {
     await content.saveDraft({ itemId, title, summary: extra.summary ?? '', bodyMarkup: markup, visibility: extra.visibility ?? ItemVisibility.PUBLIC }, PUB);
     const hash = (await content.markReady({ itemId, editionId: extra.edition ?? editionId, targets: { website: true, newsletter: extra.newsletter ?? true, email: false } }, PUB)).item
       ?.working?.contentHash as Uint8Array;
+    // L-ITEM: every link needs a verdict before Approve.
+    await linksCheckedOk(api);
     await content.approve({ itemId, contentHash: hash }, WEBMASTER);
     const version = (await content.publish({ itemId, contentHash: hash }, WEBMASTER)).item?.live?.id as string;
     items[slug] = { id: itemId, version };
@@ -246,6 +248,8 @@ describe.skipIf(!live)('NewsletterService', () => {
       const item = items['presidents-report'] as { id: string; version: string };
       await content.saveDraft({ itemId: item.id, title: 'presidents report', bodyMarkup: 'A revision after print.' }, PUB);
       const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
+      // L-ITEM: every link needs a verdict before Approve.
+      await linksCheckedOk(api);
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
       await content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       const listed = (await newsletter.listEditionItems({ editionId }, AGENT)).items;
@@ -262,6 +266,8 @@ describe.skipIf(!live)('NewsletterService', () => {
       // Restore opens a draft; approving and publishing it puts the item back, but not in the printed issue.
       await content.restore({ itemId: item.id }, PUB);
       const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
+      // L-ITEM: every link needs a verdict before Approve.
+      await linksCheckedOk(api);
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
       await content.publish({ itemId: item.id, contentHash: hash, republishWithdrawn: true }, WEBMASTER);
       expect(await listed()).not.toContain(item.version);
@@ -273,6 +279,8 @@ describe.skipIf(!live)('NewsletterService', () => {
       const item = items['puzzle-corner'] as { id: string; version: string };
       await content.saveDraft({ itemId: item.id, title: 'puzzle corner', bodyMarkup: 'Now for members.', visibility: ItemVisibility.MEMBERS }, PUB);
       const hash = (await content.markReady({ itemId: item.id }, PUB)).item?.working?.contentHash as Uint8Array;
+      // L-ITEM: every link needs a verdict before Approve.
+      await linksCheckedOk(api);
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
       await content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       const pub = await exportOf(Audience.PUBLIC);
@@ -285,6 +293,8 @@ describe.skipIf(!live)('NewsletterService', () => {
       const item = items['book-club-extra'] as { id: string; version: string };
       await content.saveDraft({ itemId: item.id, title: 'book club', bodyMarkup: 'Officers only now.', visibility: ItemVisibility.OFFICERS }, PUB);
       const hash = (await content.markReady({ itemId: item.id, targets: { website: true, newsletter: false, email: false } }, PUB)).item?.working?.contentHash as Uint8Array;
+      // L-ITEM: every link needs a verdict before Approve.
+      await linksCheckedOk(api);
       await content.approve({ itemId: item.id, contentHash: hash }, WEBMASTER);
       await content.publish({ itemId: item.id, contentHash: hash }, WEBMASTER);
       for (const audience of [Audience.PUBLIC, Audience.MEMBERS]) expect(JSON.stringify(await exportOf(audience))).not.toContain('made-up memoir');

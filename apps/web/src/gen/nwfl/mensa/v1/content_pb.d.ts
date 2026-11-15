@@ -1451,11 +1451,28 @@ export declare type ItemLink = Message<"nwfl.mensa.v1.ItemLink"> & {
   answeredByLabel: string;
 
   /**
-   * A reviewer answered yes on this ready version.
+   * The link does not hold Approve up (SPEC-v3 3.3): a reviewer's yes on
+   * this ready version (with a note when the checker's latest verdict is
+   * DROP), or the checker's OK under 7 days old on a link that needs no
+   * sign-in, and no reviewer's no as it stands.
    *
    * @generated from field: bool accepted = 9;
    */
   accepted: boolean;
+
+  /**
+   * The latest answer by a reviewer on this ready version, if any.
+   *
+   * @generated from field: nwfl.mensa.v1.ReviewerAnswer reviewer_answer = 10;
+   */
+  reviewerAnswer: ReviewerAnswer;
+
+  /**
+   * When the checker gave machine_verdict; unset when it has given none.
+   *
+   * @generated from field: google.protobuf.Timestamp machine_checked_at = 11;
+   */
+  machineCheckedAt?: Timestamp | undefined;
 };
 
 /**
@@ -2302,7 +2319,10 @@ export enum FileRole {
 export declare const FileRoleSchema: GenEnum<FileRole>;
 
 /**
- * A machine checker's verdict on a link (L-ITEM); unspecified until one runs.
+ * The link checker's latest verdict on a link (L-ITEM); unspecified until it
+ * has given one. OK lets Approve through for 7 days on a link that needs no
+ * sign-in; CONFIRM leaves it to a reviewer; DROP holds Approve until a
+ * reviewer answers yes with a note.
  *
  * @generated from enum nwfl.mensa.v1.MachineVerdict
  */
@@ -2332,6 +2352,33 @@ export enum MachineVerdict {
  * Describes the enum nwfl.mensa.v1.MachineVerdict.
  */
 export declare const MachineVerdictSchema: GenEnum<MachineVerdict>;
+
+/**
+ * A reviewer's answer on a link: it shows the right page, or it does not.
+ *
+ * @generated from enum nwfl.mensa.v1.ReviewerAnswer
+ */
+export enum ReviewerAnswer {
+  /**
+   * @generated from enum value: REVIEWER_ANSWER_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: REVIEWER_ANSWER_YES = 1;
+   */
+  YES = 1,
+
+  /**
+   * @generated from enum value: REVIEWER_ANSWER_NO = 2;
+   */
+  NO = 2,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.ReviewerAnswer.
+ */
+export declare const ReviewerAnswerSchema: GenEnum<ReviewerAnswer>;
 
 /**
  * @generated from enum nwfl.mensa.v1.LinkTargetStatus

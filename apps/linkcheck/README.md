@@ -40,6 +40,17 @@ at all: no https, a private address, a URL that does not parse, another scheme o
 or 410 that still shows a real page (its own title and a text body, not parked or a stock server page) is
 `flag` ("the site says not found but shows a page"), not `drop`.
 
+## Officer pieces: `items` (L-ITEM)
+
+`linkcheck items` checks the links of the officers' pieces that wait for approval or are approved and not yet
+published. It asks the API's `LinkCheckService` for the addresses (addresses only: no text, words or titles),
+checks each by the rules above, and records a verdict on each. `ok` is stored as OK, which lets the link through
+Approve for 7 days. `upgrade`, `confirm`, `review` and `flag` are stored as CONFIRM: a person looks. `drop` is
+stored as DROP, and Approve then waits for a yes with a note. The API refuses OK on a link that needs a sign-in.
+Configuration is by environment: `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL`, `LINKCHECK_PASSWORD_FILE` (the
+service account's app password, in a file), and optionally `LINKCHECK_CLIENT_ID` (`nwfl-linkcheck`),
+`LINKCHECK_USERNAME` (`svc-nwfl-linkcheck`) and `LINKCHECK_SCOPE` (`links.check`). It prints counts only.
+
 ## Safety
 
 - extract is the only part that parses a PDF. pdf.js runs in a worker thread with a 256 MiB heap and a

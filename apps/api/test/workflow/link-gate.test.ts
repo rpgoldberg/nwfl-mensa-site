@@ -4,15 +4,18 @@
 // 92 days without one), with a hash of the list. ConfirmLinks takes a reviewer's answers, per link,
 // on a READY version they did not edit; each is kept at once, bound to the version's ready time.
 // Approve waits while a link that needs a sign-in (Facebook and the like) has no yes on the version
-// as it stands. Also AUDIT-FOROFFICE: the Admin's save for an office is audited as for that office.
+// as it stands; L-ITEM: and until every link is accepted, by a reviewer's yes or the link checker's
+// recent OK (a DROP needs a yes with a note). Also AUDIT-FOROFFICE: the Admin's save for an office is audited as for that office.
 // Every person, place and address here is made up.
 import { createHash } from 'node:crypto';
 import { type Client, Code, ConnectError } from '@connectrpc/connect';
+import pgLib from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ContentKind, ContentService, type ContentItem, type ItemLink, ItemVisibility, MachineVerdict, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { ContentKind, ContentService, type ContentItem, type ItemLink, ItemVisibility, MachineVerdict, ReviewerAnswer, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { LinkCheckService } from '../../src/gen/nwfl/mensa/v1/link_check_pb.js';
 import { type Api, as, insertId, startApi } from '../helpers/api.js';
 import { MarkField, MarkSubjectKind, RedactionCategory, RedactionPolicyService } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
-import { live } from '../helpers/pg.js';
+import { MIGRATOR, MIGRATOR_PW, live, urlFor } from '../helpers/pg.js';
 
 const PUB = as('pub-token');
 const TREASURER = as('treasurer-token');
@@ -60,6 +63,9 @@ const messageOf = async (call: Promise<unknown>): Promise<string> => {
 describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
   let api: Api;
   let content: Client<typeof ContentService>;
+  let checker: Client<typeof LinkCheckService>;
+  /** The database owner: writes a verdict as the link checker cannot (an aged one, one out of turn), standing for time passing or a race. */
+  let owner: pgLib.Client;
   const offices: Record<string, string> = {};
   let november: string;
   let n = 0;
@@ -103,9 +109,19 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       )
     ).rows[0]?.at ?? null;
 
+  /** The link checker's verdict on each of these addresses, through its own service. */
+  const verdict = (urls: string[], given = MachineVerdict.OK, reasons: string[] = []) =>
+    checker.recordLinkVerdicts({ verdicts: urls.map((url) => ({ url, verdict: given, reasons })) }, as('linkcheck-token'));
+  /** A verdict written straight to the table, `days` old: one the service would not take now. */
+  const forced = (itemId: string, url: string, answer: string, days = 0) =>
+    owner.query(`INSERT INTO content_link_check (item_id, url, source, answer, by_sub, at) VALUES ($1, $2, 'machine', $3, 'svc-nwfl-linkcheck', now() - make_interval(days => $4))`, [itemId, url, answer, days]);
+
   beforeAll(async () => {
     api = await startApi('nwfl_link_gate');
     content = api.client(ContentService);
+    checker = api.client(LinkCheckService);
+    owner = new pgLib.Client({ connectionString: urlFor(MIGRATOR, MIGRATOR_PW, (await api.pool.query<{ db: string }>(`SELECT current_database() AS db`)).rows[0]?.db as string) });
+    await owner.connect();
     for (const [slug, title] of [
       ['publications', 'Publications Officer'],
       ['treasurer', 'Treasurer'],
@@ -115,6 +131,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ['outings', 'Outings Chair'],
       ['library', 'Librarian'],
       ['clubs', 'Clubs Chair'],
+      ['hospitality', 'Hospitality Chair'],
     ]) {
       offices[slug as string] = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ($1, $2, 'appointed') RETURNING id`, [slug, title]);
     }
@@ -139,6 +156,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
   });
 
   afterAll(async () => {
+    await owner?.end();
     await api?.close();
   });
 
@@ -234,6 +252,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
 
     it('reads the live version when nothing is being worked on, as the preview does; answers go to a ready version only', async () => {
       const { itemId, hash } = await piece('Published at https://example.org/live.');
+      await verdict(['https://example.org/live']);
       await content.approve({ itemId, contentHash: hash }, TREASURER);
       await content.publish({ itemId, contentHash: hash }, WEBMASTER);
       const response = await links(itemId);
@@ -264,7 +283,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(more).toEqual([]);
       // Counts only, exactly: no URL, no note.
       expect(audit?.acting_office_id).toBe(offices['treasurer']);
-      expect(audit?.payload).toEqual({ answers: 2, yes: 1, no: 1, login_walled: 1 });
+      expect(audit?.payload).toEqual({ answers: 2, yes: 1, no: 1, login_walled: 1, yes_over_drop: 0 });
       expect(audit?.version_id).not.toBeNull();
       expect(audit?.content_hash).not.toBeNull();
       // GetItemLinks shows the same answers to anyone who reads the list.
@@ -349,6 +368,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       const draft = await piece(`See [the group](${FACEBOOK}).`, { draft: true });
       expect(await codeOf(confirm(draft.itemId, [{ url: FACEBOOK, yes: true }]))).toBe(Code.FailedPrecondition);
       const { itemId, hash } = await piece('See https://example.org/fine.');
+      await verdict(['https://example.org/fine']);
       await content.approve({ itemId, contentHash: hash }, TREASURER);
       expect(await codeOf(confirm(itemId, [{ url: 'https://example.org/fine', yes: true }]))).toBe(Code.FailedPrecondition);
       expect(await codeOf(confirm('00000000-0000-4000-8000-000000000000', []))).not.toBe('ok');
@@ -382,6 +402,9 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       await confirm(itemId, [{ url: FACEBOOK, yes: false }]);
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe(Code.FailedPrecondition);
       await confirm(itemId, [{ url: FACEBOOK, yes: true }], OFFICER);
+      // L-ITEM: the ordinary link waits too, until the link checker finds it working.
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
+      await verdict(['https://example.org/games']);
       const approved = (await content.approve({ itemId, contentHash: hash }, TREASURER)).item as ContentItem;
       expect(approved.working?.status).toBe(VersionStatus.CLEARED);
     });
@@ -391,8 +414,21 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^2 links need a sign-in to check/);
     });
 
-    it('leaves a piece with no such link and no answers as it was: an ordinary link needs no answer', async () => {
-      const { itemId, hash } = await piece('See https://example.org/games and [the map](https://maps.example.org/park).');
+    it('L-ITEM: holds an ordinary link too, until the link checker finds it working or a reviewer answers yes (E7B S1)', async () => {
+      const { itemId, hash } = await piece('See https://example.org/plain and [the map](https://maps.example.org/plain-park).');
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe(
+        '2 links have not been checked yet: the link checker checks them, or someone other than the writer opens them and answers yes, before this is approved',
+      );
+      await verdict(['https://example.org/plain']);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe(
+        '1 link has not been checked yet: the link checker checks it, or someone other than the writer opens it and answers yes, before this is approved',
+      );
+      await confirm(itemId, [{ url: 'https://maps.example.org/plain-park', yes: true }]);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    it('leaves a piece with no links at all as it was', async () => {
+      const { itemId, hash } = await piece('No links this month.', { office: 'publications' });
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
     });
 
@@ -405,6 +441,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
         'a reviewer answered no for the link "https://example.org/games" (it does not show the right page): the writer fixes it, or a reviewer changes the answer to yes, before this is approved',
       );
       await confirm(itemId, [{ url: 'https://example.org/games', yes: true }], OFFICER);
+      await verdict(['https://maps.example.org/park']);
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
     });
 
@@ -428,6 +465,9 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       await confirm(itemId, [{ url: 'https://budget.example.org/', yes: false }], OFFICER);
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, PUB))).toBe(Code.FailedPrecondition);
       await api.pool.query(`UPDATE event_occurrence SET url = 'https://budget2.example.org/' WHERE id = $1`, [event]);
+      // L-ITEM: the new address is checked like any other.
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, PUB))).toMatch(/^2 links have not been checked yet/);
+      await verdict(['https://budget2.example.org/', 'https://other.example.org/']);
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, PUB))).toBe('ok');
     });
 
@@ -460,6 +500,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ]);
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link needs a sign-in/);
       await confirm(itemId, [{ url: 'https://www.facebook.com/events/90210', yes: true }]);
+      await verdict(['https://maps.example.org/library']);
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
     });
 
@@ -467,6 +508,9 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       const { itemId, hash } = await piece('The calendar is below.', { writer: ADMIN, office: 'president' });
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link needs a sign-in/);
       await confirm(itemId, [{ url: 'https://www.facebook.com/events/1234', yes: true }]);
+      // L-ITEM: and for the checker on the event's other addresses (its detail, its venue, the next ones).
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^4 links have not been checked yet/);
+      await verdict(['https://cafe.example.org/', 'https://december.example.org/', 'https://diner.example.org/menu', 'https://parking.example.org/map']);
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
     });
 
@@ -476,6 +520,120 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(await codeOf(content.approve({ itemId, contentHash: hash, breakGlass: true, breakGlassReason: 'Deadline tonight' }, ADMIN))).toBe(Code.FailedPrecondition);
       await confirm(itemId, [{ url: FACEBOOK, yes: true }], TREASURER);
       expect(await codeOf(content.approve({ itemId, contentHash: hash, breakGlass: true, breakGlassReason: 'Deadline tonight' }, ADMIN))).toBe('ok');
+    });
+  });
+
+  describe('L-ITEM: the link checker in the gate', () => {
+    const at = async (itemId: string, url: string) => row((await links(itemId)).links, url) as ItemLink;
+
+    it('lets a link through on an OK under 7 days old, and not on one 7 days old', async () => {
+      const { itemId, hash } = await piece('See https://fresh.example.org/ and https://stale.example.org/.');
+      await verdict(['https://fresh.example.org/']);
+      await forced(itemId, 'https://stale.example.org/', 'ok', 7);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
+      expect(await at(itemId, 'https://fresh.example.org/')).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: true });
+      expect(await at(itemId, 'https://stale.example.org/')).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: false });
+      await forced(itemId, 'https://stale.example.org/', 'ok', 6);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    it('never lets a link that needs a sign-in through on an OK, even one written past the service', async () => {
+      const { itemId, hash } = await piece(`See [the group](${FACEBOOK}).`);
+      expect(await codeOf(verdict([FACEBOOK]))).toBe(Code.InvalidArgument);
+      await forced(itemId, FACEBOOK, 'ok');
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link needs a sign-in/);
+      expect(await at(itemId, FACEBOOK)).toMatchObject({ accepted: false });
+    });
+
+    it('holds a DROP until a reviewer answers yes WITH a note; a yes without one does not do, and the yes over a DROP is audited', async () => {
+      const { itemId, hash } = await piece('See https://dropped.example.org/old.');
+      await verdict(['https://dropped.example.org/old'], MachineVerdict.DROP, ['dead']);
+      const dropped =
+        'the link checker found the link "https://dropped.example.org/old" broken: the writer fixes it, or someone other than the writer opens it and answers yes with a note saying why it is right, before this is approved';
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe(dropped);
+      expect(await at(itemId, 'https://dropped.example.org/old')).toMatchObject({ machineVerdict: MachineVerdict.DROP, reasons: ['dead'], accepted: false });
+      await confirm(itemId, [{ url: 'https://dropped.example.org/old', yes: true }]);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe(dropped);
+      expect(await at(itemId, 'https://dropped.example.org/old')).toMatchObject({ reviewerAnswer: ReviewerAnswer.YES, accepted: false });
+      await confirm(itemId, [{ url: 'https://dropped.example.org/old', yes: true, note: 'The page moved but the old address still redirects for members.' }]);
+      expect((await audits(itemId, 'links_confirmed')).map((a) => a.payload['yes_over_drop'])).toEqual([0, 1]);
+      expect(await at(itemId, 'https://dropped.example.org/old')).toMatchObject({ reviewerAnswer: ReviewerAnswer.YES, accepted: true });
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    it('holds again on a DROP after the yes: the latest answer wins', async () => {
+      const { itemId, hash } = await piece('See https://later.example.org/.');
+      await confirm(itemId, [{ url: 'https://later.example.org/', yes: true, note: 'Checked by hand.' }]);
+      await forced(itemId, 'https://later.example.org/', 'drop');
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^the link checker found the link "https:\/\/later.example.org\/" broken/);
+    });
+
+    it("never lets an OK undo a reviewer's no, even a later one: the checker sees a page answer, the reviewer whether it is the right one", async () => {
+      const { itemId, hash } = await piece('See https://wrong.example.org/.');
+      await confirm(itemId, [{ url: 'https://wrong.example.org/', yes: false, note: 'Wrong page.' }]);
+      await forced(itemId, 'https://wrong.example.org/', 'ok');
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^a reviewer answered no for the link "https:\/\/wrong.example.org\/"/);
+      expect(await at(itemId, 'https://wrong.example.org/')).toMatchObject({ machineVerdict: MachineVerdict.OK, reviewerAnswer: ReviewerAnswer.NO, accepted: false });
+    });
+
+    it('reads the latest verdict: a DROP then an OK lets the link through, an OK then a DROP holds it', async () => {
+      const up = await piece('See https://recovered.example.org/.');
+      await verdict(['https://recovered.example.org/'], MachineVerdict.DROP, ['timeout']);
+      await forced(up.itemId, 'https://recovered.example.org/', 'ok');
+      expect(await codeOf(content.approve({ itemId: up.itemId, contentHash: up.hash }, TREASURER))).toBe('ok');
+      const down = await piece('See https://failed.example.org/.');
+      await verdict(['https://failed.example.org/']);
+      await forced(down.itemId, 'https://failed.example.org/', 'drop');
+      expect(await messageOf(content.approve({ itemId: down.itemId, contentHash: down.hash }, TREASURER))).toMatch(/^the link checker found the link/);
+    });
+
+    it('leaves a CONFIRM to a reviewer: it holds the link until a yes', async () => {
+      const { itemId, hash } = await piece('See https://unsure.example.org/.');
+      await verdict(['https://unsure.example.org/'], MachineVerdict.CONFIRM, ['blocked']);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
+      await confirm(itemId, [{ url: 'https://unsure.example.org/', yes: true }]);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    it('orders the reasons worst first: a no, then a DROP, then a sign-in link, then an unchecked one', async () => {
+      const { itemId, hash } = await piece(`See https://a-no.example.org/, https://b-drop.example.org/, [the group](${FACEBOOK}) and https://c-plain.example.org/.`);
+      await verdict(['https://b-drop.example.org/'], MachineVerdict.DROP);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^the link checker found the link "https:\/\/b-drop/);
+      await confirm(itemId, [{ url: 'https://a-no.example.org/', yes: false }]);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^a reviewer answered no for the link "https:\/\/a-no/);
+      await confirm(itemId, [{ url: 'https://a-no.example.org/', yes: true }, { url: 'https://b-drop.example.org/', yes: true, note: 'Fine by hand.' }], OFFICER);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link needs a sign-in/);
+      await confirm(itemId, [{ url: FACEBOOK, yes: true }], OFFICER);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
+    });
+
+    it("says only the officers-only sentence for a hidden link the checker has not seen to, and names nothing of it", async () => {
+      await api.pool.query(
+        `INSERT INTO event_occurrence (title, starts_at, url, visibility, owner_office_id) VALUES ('Members tea', '2026-11-21T23:00:00Z', 'https://tea.example.org/room-5521', 'members', $1)`,
+        [offices['hospitality']],
+      );
+      const { itemId, hash } = await piece('Events below.', { writer: ADMIN, office: 'hospitality' });
+      const said = await messageOf(content.approve({ itemId, contentHash: hash }, LONE_WEBMASTER));
+      expect(said).toBe(OFFICERS_ONLY);
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
+      await verdict(['https://tea.example.org/room-5521']);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    it('shows per link the verdict, its reasons and when it was given, the reviewer answer, and whether the gate accepts it', async () => {
+      const { itemId } = await piece('See https://shown-ok.example.org/ and https://shown-none.example.org/.');
+      const before = Date.now();
+      await verdict(['https://shown-ok.example.org/'], MachineVerdict.OK, ['upgraded']);
+      const ok = await at(itemId, 'https://shown-ok.example.org/');
+      expect(ok).toMatchObject({ machineVerdict: MachineVerdict.OK, reasons: ['upgraded'], reviewerAnswer: ReviewerAnswer.UNSPECIFIED, answeredByLabel: '', accepted: true });
+      const checkedAt = Number(ok.machineCheckedAt?.seconds) * 1000;
+      expect(checkedAt).toBeGreaterThanOrEqual(before - 60_000);
+      expect(checkedAt).toBeLessThanOrEqual(Date.now() + 60_000);
+      const none = await at(itemId, 'https://shown-none.example.org/');
+      expect(none).toMatchObject({ machineVerdict: MachineVerdict.UNSPECIFIED, reasons: [], reviewerAnswer: ReviewerAnswer.UNSPECIFIED, accepted: false });
+      expect(none.machineCheckedAt).toBeUndefined();
+      await confirm(itemId, [{ url: 'https://shown-none.example.org/', yes: true }]);
+      expect(await at(itemId, 'https://shown-none.example.org/')).toMatchObject({ reviewerAnswer: ReviewerAnswer.YES, answeredByLabel: 'Treasurer', accepted: true });
     });
   });
 

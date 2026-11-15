@@ -8,6 +8,7 @@ import {
   SIGN_IN_AGAIN,
   actingChoice,
   answerWords,
+  machineWords,
   doneText,
   errorList,
   enteredForOffice,
@@ -73,7 +74,7 @@ const item = (over: Partial<EditorItem> = {}, working: Partial<EditorVersion> | 
   ...(working === undefined ? {} : { working: version(working) }),
   ...over,
 });
-const link = (over: Partial<PieceLink> = {}): PieceLink => ({ url: 'https://club.example/a', label: '', where: 'in the text', loginWalled: false, answeredByLabel: '', accepted: false, ...over });
+const link = (over: Partial<PieceLink> = {}): PieceLink => ({ url: 'https://club.example/a', label: '', where: 'in the text', loginWalled: false, answeredByLabel: '', reviewerAnswer: 'none', accepted: false, ...over });
 const form = (fields: Record<string, string>) => (name: string) => fields[name];
 /** A fake API: the piece reads back whole unless a test says otherwise (the guard's re-read, round 4). */
 const fakeApi = (over: Partial<EditorApi> = {}) => ({ getWorkingItem: vi.fn().mockResolvedValue(item()), ...over }) as EditorApi;
@@ -146,8 +147,8 @@ describe('the queue (S6) and the officer-area counts', () => {
 describe('the links panel (S7)', () => {
   it('says each link\'s latest answer and who gave it, and how many are checked', () => {
     const links = [
-      link({ url: 'https://club.example/a', accepted: true, answeredByLabel: 'Treasurer' }),
-      link({ url: 'https://club.example/b', answeredByLabel: 'Webmaster' }),
+      link({ url: 'https://club.example/a', accepted: true, answeredByLabel: 'Treasurer', reviewerAnswer: 'yes' }),
+      link({ url: 'https://club.example/b', answeredByLabel: 'Webmaster', reviewerAnswer: 'no' }),
       link({ url: 'https://www.facebook.com/x', loginWalled: true, label: 'our group' }),
     ];
     expect(linkRows(links).map((r) => [r.index, r.answer, r.text])).toEqual([
@@ -160,9 +161,43 @@ describe('the links panel (S7)', () => {
       'Webmaster answered no: it does not show the right page.',
       'Not checked yet.',
     ]);
-    expect(linksSummary(links)).toBe('2 of 3 links checked.');
+    // L-ITEM: "checked" is what the gate accepts, so a no is not counted (E7B S1).
+    expect(linksSummary(links)).toBe('1 of 3 links checked.');
     expect(linksSummary([link()])).toBe('0 of 1 link checked.');
     expect(linksSummary([])).toBe('This piece has no links.');
+  });
+
+  it("L-ITEM: counts a link the link checker found working as checked, and reads a yes over the checker's DROP as the reviewer's own answer", () => {
+    const at = new Date('2026-11-14T15:00:00Z');
+    const links = [
+      link({ url: 'https://club.example/ok', accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: at } }),
+      // A yes with no note over a DROP: the reviewer said yes, and the gate still waits.
+      link({ url: 'https://club.example/drop', answeredByLabel: 'Treasurer', reviewerAnswer: 'yes', machine: { verdict: 'drop', reasons: ['dead'], checkedAt: at } }),
+    ];
+    expect(linkRows(links).map((r) => r.answer)).toEqual(['none', 'yes']);
+    expect(linksSummary(links)).toBe('1 of 2 links checked.');
+  });
+
+  it("L-ITEM: says the link checker's verdict and its age per row, in plain words", () => {
+    const now = new Date('2026-11-15T15:00:00Z');
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    const HOUR = 3_600_000;
+    const words = (over: Partial<PieceLink>) => machineWords(linkRows([link(over)])[0] as ReturnType<typeof linkRows>[number], now);
+    expect(words({})).toBe('The link checker has not checked it yet.');
+    expect(words({ loginWalled: true })).toBe('The link checker does not open links that need a sign-in: a person checks it.');
+    expect(words({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(20 * 60_000) } })).toBe('The link checker found it working less than an hour ago.');
+    expect(words({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(HOUR) } })).toBe('The link checker found it working 1 hour ago.');
+    expect(words({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(5 * HOUR) } })).toBe('The link checker found it working 5 hours ago.');
+    expect(words({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(24 * HOUR) } })).toBe('The link checker found it working 1 day ago.');
+    expect(words({ machine: { verdict: 'ok', reasons: [], checkedAt: ago(8 * 24 * HOUR) } })).toBe(
+      'The link checker found it working 8 days ago. That is too long ago to count: it checks the link again, or a person answers.',
+    );
+    expect(words({ machine: { verdict: 'confirm', reasons: ['blocked'], checkedAt: ago(2 * HOUR) } })).toBe('The link checker could not tell 2 hours ago (blocked): a person checks it.');
+    expect(words({ machine: { verdict: 'drop', reasons: ['dead', 'nxdomain'], checkedAt: ago(3 * 24 * HOUR) } })).toBe(
+      'The link checker found it broken 3 days ago (dead, nxdomain). Answer Yes only with a note saying why it is right.',
+    );
+    // A clock a little behind the API: never "in the future".
+    expect(words({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: new Date(now.getTime() + 60_000) } })).toBe('The link checker found it working less than an hour ago.');
   });
 
   it('keys each row by its address and where it is, so two rows of one address are kept apart (N4)', () => {

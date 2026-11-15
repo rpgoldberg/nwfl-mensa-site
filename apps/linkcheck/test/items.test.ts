@@ -1,0 +1,338 @@
+// L-ITEM: the items mode (items.ts). The verdict mapping, the four LinkCheckService messages written and
+// read by hand, the token, one gRPC call, and the run, against stand-in servers on this container's own
+// loopback. apps/api test/links/linkcheck-items.test.ts drives the same code against the real API server.
+// Every address is made up.
+import http2 from 'node:http2';
+import type { AddressInfo } from 'node:net';
+import { afterEach, describe, expect, it } from 'vitest';
+import { VERDICTS, checkAll } from '../src/check.js';
+import { main, type Io } from '../src/cli.js';
+import {
+  type CheckVerdict,
+  ItemsError,
+  MACHINE,
+  MAX_ANSWER_BYTES,
+  MAX_ROUNDS,
+  clientCredentials,
+  decodeListResponse,
+  decodeRecordResponse,
+  encodeRecordRequest,
+  endpoint,
+  grpcCall,
+  runItems,
+  storedVerdict,
+} from '../src/items.js';
+import { fakeDns } from './helpers/servers.js';
+
+const bytes = (...values: number[]): Uint8Array => new Uint8Array(values);
+const ascii = (value: string): number[] => [...new TextEncoder().encode(value)];
+
+describe('the verdict mapping', () => {
+  it('names every verdict check.ts gives', () => {
+    const all: readonly CheckVerdict[] = VERDICTS;
+    expect([...all].sort()).toEqual(['confirm', 'drop', 'flag', 'ok', 'review', 'upgrade']);
+  });
+
+  it.each([
+    ['ok', MACHINE.OK],
+    ['upgrade', MACHINE.CONFIRM],
+    ['confirm', MACHINE.CONFIRM],
+    ['review', MACHINE.CONFIRM],
+    ['flag', MACHINE.CONFIRM],
+    ['drop', MACHINE.DROP],
+  ] as const)('stores %s as %i', (verdict, stored) => {
+    expect(storedVerdict({ url: 'https://a.example.org/', verdict, reasons: [] })).toEqual({ url: 'https://a.example.org/', verdict: stored, reasons: [] });
+  });
+
+  it('keeps the reason codes once each, at most 8', () => {
+    const reasons = ['dead', 'dead', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    expect(storedVerdict({ url: 'u', verdict: 'drop', reasons }).reasons).toEqual(['dead', 'a', 'b', 'c', 'd', 'e', 'f', 'g']);
+  });
+});
+
+describe('the messages', () => {
+  it('writes RecordLinkVerdictsRequest field by field', () => {
+    const one = [...[0x0a, 3], ...ascii('u:1'), 0x10, 3, ...[0x1a, 4], ...ascii('dead')];
+    expect(encodeRecordRequest([{ url: 'u:1', verdict: MACHINE.DROP, reasons: ['dead'] }])).toEqual(bytes(0x0a, one.length, ...one));
+    expect(encodeRecordRequest([])).toEqual(bytes());
+  });
+
+  it('writes a length over 127 as a varint', () => {
+    const url = `https://example.org/${'a'.repeat(200)}`;
+    const out = encodeRecordRequest([{ url, verdict: MACHINE.OK, reasons: [] }]);
+    // Outer length 225 (2 bytes): the URL's tag, its length 220 (2 bytes), the URL, the verdict's tag and value.
+    expect([...out.subarray(0, 6)]).toEqual([0x0a, 0xe1, 0x01, 0x0a, 0xdc, 0x01]);
+    expect(out.length).toBe(3 + 3 + 220 + 2);
+  });
+
+  it('reads ListLinksAwaitingVerdictResponse, skipping fields it does not know', () => {
+    const answer = bytes(0x0a, 3, ...ascii('a:1'), 0x0a, 3, ...ascii('b:2'), 0x10, 1, 0x18, 0x96, 0x01, 0x21, 1, 2, 3, 4, 5, 6, 7, 8, 0x2d, 1, 2, 3, 4, 0x32, 1, 0x7a);
+    expect(decodeListResponse(answer)).toEqual({ urls: ['a:1', 'b:2'], more: true });
+    expect(decodeListResponse(bytes())).toEqual({ urls: [], more: false });
+    expect(decodeListResponse(bytes(0x10, 0))).toEqual({ urls: [], more: false });
+  });
+
+  it('reads RecordLinkVerdictsResponse', () => {
+    expect(decodeRecordResponse(bytes(0x08, 0xac, 0x02, 0x12, 3, ...ascii('c:3')))).toEqual({ recorded: 300, notAwaiting: ['c:3'] });
+    expect(decodeRecordResponse(bytes())).toEqual({ recorded: 0, notAwaiting: [] });
+  });
+
+  it.each([
+    ['a length past the end', bytes(0x0a, 9, 1)],
+    ['a varint cut short', bytes(0x08, 0x80)],
+    ['a varint of more than 10 bytes', bytes(0x08, ...Array.from({ length: 11 }, () => 0x80))],
+    ['a fixed64 cut short', bytes(0x21, 1, 2)],
+    ['a group', bytes(0x0b)],
+    ['text that is not UTF-8', bytes(0x0a, 1, 0xff)],
+  ])('refuses %s', (_label, answer) => {
+    expect(() => decodeListResponse(answer)).toThrow(ItemsError);
+  });
+
+  it('reads a field of another wire type than its own as unknown, and refuses an address that is not UTF-8', () => {
+    expect(decodeListResponse(bytes(0x08, 1, 0x12, 1, 0x41))).toEqual({ urls: [], more: false });
+    expect(decodeRecordResponse(bytes(0x0a, 1, 0x41, 0x10, 1))).toEqual({ recorded: 0, notAwaiting: [] });
+    expect(() => decodeRecordResponse(bytes(0x12, 1, 0xc3))).toThrow(/UTF-8/);
+  });
+});
+
+describe('endpoint', () => {
+  it('takes https, and http to this machine only', () => {
+    expect(endpoint('X', 'https://api.example.org/base').href).toBe('https://api.example.org/base');
+    for (const local of ['http://127.0.0.1:26100', 'http://localhost:26100', 'http://[::1]:26100']) expect(endpoint('X', local).protocol).toBe('http:');
+    for (const bad of [undefined, '', 'not a url', 'http://api.example.org/', 'ftp://127.0.0.1/']) expect(() => endpoint('LINKCHECK_API_URL', bad)).toThrow('LINKCHECK_API_URL must be an https URL');
+  });
+});
+
+describe('clientCredentials', () => {
+  const request = { tokenUrl: new URL('https://login.example.org/application/o/token/'), clientId: 'nwfl-linkcheck', username: 'svc-nwfl-linkcheck', password: 'app-password', scope: 'links.check' };
+  const answering = (status: number, body: string, seen: Array<{ url: string; init: RequestInit | undefined }> = []): typeof fetch =>
+    ((url: URL, init?: RequestInit) => {
+      seen.push({ url: String(url), init });
+      return Promise.resolve(new Response(body, { status }));
+    }) as typeof fetch;
+
+  it("posts Authentik's machine-to-machine form and returns the access token", async () => {
+    const seen: Array<{ url: string; init: RequestInit | undefined }> = [];
+    expect(await clientCredentials(request, answering(200, JSON.stringify({ access_token: 'eyJ.abc-_.x', token_type: 'Bearer' }), seen))).toBe('eyJ.abc-_.x');
+    expect(seen[0]?.url).toBe('https://login.example.org/application/o/token/');
+    expect(seen[0]?.init).toMatchObject({ method: 'POST', redirect: 'error' });
+    expect(Object.fromEntries(seen[0]?.init?.body as URLSearchParams)).toEqual({
+      grant_type: 'client_credentials',
+      client_id: 'nwfl-linkcheck',
+      username: 'svc-nwfl-linkcheck',
+      password: 'app-password',
+      scope: 'links.check',
+    });
+  });
+
+  it.each([
+    ['a refusal', answering(401, '{}'), /refused the sign-in \(HTTP 401\)/],
+    ['an answer that is not JSON', answering(200, '<html>'), /other than JSON/],
+    ['no token', answering(200, '{}'), /no access token/],
+    ['a token that is not a bearer token', answering(200, JSON.stringify({ access_token: 'a b\r\nX: y' })), /no access token/],
+    ['no answer at all', (() => Promise.reject(new TypeError('fetch failed'))), /could not be reached/],
+  ])('refuses %s', async (_label, fetcher, message) => {
+    await expect(clientCredentials(request, fetcher)).rejects.toThrow(message);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A stand-in gRPC server (h2c on loopback).
+
+interface Call {
+  path: string;
+  authorization: string | undefined;
+  body: Uint8Array;
+}
+type Answer = { status: number; message?: Uint8Array; grpcMessage?: string; trailersOnly?: boolean; raw?: Buffer };
+
+const frame = (message: Uint8Array): Buffer => {
+  const out = Buffer.alloc(5 + message.length);
+  out.writeUInt32BE(message.length, 1);
+  out.set(message, 5);
+  return out;
+};
+
+const servers: http2.Http2Server[] = [];
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
+});
+
+async function standIn(answer: (call: Call) => Answer): Promise<{ url: URL; calls: Call[] }> {
+  const calls: Call[] = [];
+  const server = http2.createServer();
+  server.on('stream', (stream, headers) => {
+    const chunks: Buffer[] = [];
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('end', () => {
+      const body = Buffer.concat(chunks);
+      const call = { path: String(headers[':path']), authorization: headers['authorization'], body: new Uint8Array(body.subarray(5)) };
+      calls.push(call);
+      const reply = answer(call);
+      const trailers = { 'grpc-status': String(reply.status), ...(reply.grpcMessage !== undefined ? { 'grpc-message': reply.grpcMessage } : {}) };
+      if (reply.trailersOnly === true) {
+        stream.respond({ ':status': 200, 'content-type': 'application/grpc', ...trailers }, { endStream: true });
+        return;
+      }
+      stream.respond({ ':status': 200, 'content-type': 'application/grpc' }, { waitForTrailers: true });
+      stream.on('wantTrailers', () => stream.sendTrailers(trailers));
+      stream.end(reply.raw ?? (reply.message === undefined ? Buffer.alloc(0) : frame(reply.message)));
+    });
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { url: new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}`), calls };
+}
+
+const list = (urls: string[], more = false): Uint8Array => bytes(...urls.flatMap((u) => [0x0a, u.length, ...ascii(u)]), ...(more ? [0x10, 1] : []));
+const recorded = (n: number, notAwaiting: string[] = []): Uint8Array => bytes(0x08, n, ...notAwaiting.flatMap((u) => [0x12, u.length, ...ascii(u)]));
+
+describe('grpcCall', () => {
+  it('sends one frame to the method with the bearer token, and returns the answer frame', async () => {
+    const { url, calls } = await standIn(() => ({ status: 0, message: list(['https://a.example.org/']) }));
+    expect(decodeListResponse(await grpcCall(url, 'ListLinksAwaitingVerdict', 'tok-1', bytes()))).toEqual({ urls: ['https://a.example.org/'], more: false });
+    expect(calls).toEqual([{ path: '/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict', authorization: 'Bearer tok-1', body: bytes() }]);
+  });
+
+  it('keeps a base path', async () => {
+    const { url, calls } = await standIn(() => ({ status: 0, message: bytes() }));
+    await grpcCall(new URL(`${url.origin}/api/`), 'RecordLinkVerdicts', 't', bytes(1, 2));
+    expect(calls[0]).toMatchObject({ path: '/api/nwfl.mensa.v1.LinkCheckService/RecordLinkVerdicts', body: bytes(1, 2) });
+  });
+
+  it.each([
+    ['a refusal in the trailers, with its message', { status: 3, grpcMessage: 'the%20link%20checker%20cannot%20accept' }, 'the API refused the call: INVALID_ARGUMENT (the link checker cannot accept)'],
+    ['a trailers-only refusal', { status: 16, trailersOnly: true }, 'the API refused the call: UNAUTHENTICATED'],
+    ['an unknown status, and a message that does not decode', { status: 99, grpcMessage: '%E0%A4%A' }, 'the API refused the call: status 99 (%E0%A4%A)'],
+    ['a message with control characters', { status: 7, grpcMessage: 'no%0Away' }, 'the API refused the call: PERMISSION_DENIED (no way)'],
+    ['no message frame', { status: 0 }, 'the API answer is not one plain gRPC message'],
+    ['a compressed frame', { status: 0, raw: Buffer.from([1, 0, 0, 0, 0]) }, 'the API answer is not one plain gRPC message'],
+    ['two frames', { status: 0, raw: Buffer.concat([frame(bytes(1)), frame(bytes(2))]) }, 'the API answer is not one plain gRPC message'],
+  ] as const)('refuses %s', async (_label, reply, message) => {
+    const { url } = await standIn(() => reply);
+    await expect(grpcCall(url, 'X', 't', bytes())).rejects.toThrow(message);
+  });
+
+  it('refuses an answer over its size cap', async () => {
+    const { url } = await standIn(() => ({ status: 0, raw: frame(new Uint8Array(MAX_ANSWER_BYTES + 10)) }));
+    await expect(grpcCall(url, 'X', 't', bytes())).rejects.toThrow('the API answer is too large');
+  });
+
+  it('refuses an answer with no status', async () => {
+    const server = http2.createServer();
+    server.on('stream', (stream) => {
+      stream.respond({ ':status': 200, 'content-type': 'application/grpc' });
+      stream.end(frame(bytes()));
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    await expect(grpcCall(new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}`), 'X', 't', bytes())).rejects.toThrow('the API answer has no status');
+  });
+
+  it('never sends a token that is not a bearer token, and names an unreachable API by its error class only', async () => {
+    await expect(grpcCall(new URL('http://127.0.0.1:1'), 'X', 'a b', bytes())).rejects.toThrow('the token is not a bearer token');
+    await expect(grpcCall(new URL('http://127.0.0.1:1'), 'X', 't', bytes())).rejects.toThrow(/^the API could not be reached \(\w+\)$/);
+  });
+});
+
+describe('runItems', () => {
+  const checker = (verdicts: Record<string, CheckVerdict>) => (urls: readonly string[]) => Promise.resolve(urls.map((url) => ({ url, verdict: verdicts[url] ?? 'ok', reasons: verdicts[url] === 'drop' ? ['dead'] : [] })));
+
+  it('lists, checks, records, and asks again while more wait', async () => {
+    let lists = 0;
+    const { url, calls } = await standIn((call) => {
+      if (call.path.endsWith('/ListLinksAwaitingVerdict')) {
+        lists += 1;
+        return { status: 0, message: lists === 1 ? list(['https://a.example.org/', 'https://b.example.org/'], true) : list(['https://c.example.org/']) };
+      }
+      return { status: 0, message: lists === 1 ? recorded(3) : recorded(0, ['https://c.example.org/']) };
+    });
+    const totals = await runItems({ api: url, token: 't', check: checker({ 'https://b.example.org/': 'drop', 'https://c.example.org/': 'flag' }) });
+    expect(totals).toEqual({ checked: 3, ok: 1, confirm: 1, drop: 1, recorded: 3, notAwaiting: 1, more: false });
+    expect(calls.map((c) => c.path.split('/').at(-1))).toEqual(['ListLinksAwaitingVerdict', 'RecordLinkVerdicts', 'ListLinksAwaitingVerdict', 'RecordLinkVerdicts']);
+    expect(calls[1]?.body).toEqual(encodeRecordRequest([{ url: 'https://a.example.org/', verdict: MACHINE.OK, reasons: [] }, { url: 'https://b.example.org/', verdict: MACHINE.DROP, reasons: ['dead'] }]));
+  });
+
+  it('stops on an empty list, and on a round that records nothing (it would be handed the same list)', async () => {
+    const empty = await standIn(() => ({ status: 0, message: list([]) }));
+    expect(await runItems({ api: empty.url, token: 't', check: checker({}) })).toMatchObject({ checked: 0, recorded: 0 });
+    expect(empty.calls).toHaveLength(1);
+    const stuck = await standIn((call) => (call.path.endsWith('/ListLinksAwaitingVerdict') ? { status: 0, message: list(['https://a.example.org/'], true) } : { status: 0, message: recorded(0) }));
+    expect(await runItems({ api: stuck.url, token: 't', check: checker({}) })).toMatchObject({ checked: 1, recorded: 0, more: true });
+    expect(stuck.calls).toHaveLength(2);
+  });
+
+  it(`stops after ${MAX_ROUNDS} lists`, async () => {
+    const endless = await standIn((call) => (call.path.endsWith('/ListLinksAwaitingVerdict') ? { status: 0, message: list(['https://a.example.org/'], true) } : { status: 0, message: recorded(1) }));
+    expect(await runItems({ api: endless.url, token: 't', check: checker({}) })).toMatchObject({ checked: MAX_ROUNDS, recorded: MAX_ROUNDS, more: true });
+  });
+});
+
+describe('the items command', () => {
+  const ioFor = (env: Record<string, string>, files: Record<string, string>, fetcher: typeof fetch): Io & { out: string[]; err: string[] } => {
+    const out: string[] = [];
+    const err: string[] = [];
+    return {
+      out,
+      err,
+      readFile: (path) => (files[path] === undefined ? Promise.reject(new Error('ENOENT')) : Promise.resolve(new TextEncoder().encode(files[path]))),
+      writeFile: () => Promise.reject(new Error('items writes no file')),
+      print: (line) => out.push(line),
+      warn: (line) => err.push(line),
+      env,
+      now: () => new Date('2026-11-15T15:00:00Z'),
+      checkDeps: (issueDate) => deps(issueDate),
+      extract: () => Promise.reject(new Error('items reads no PDF')),
+      fetch: fetcher,
+    };
+  };
+ // Offline: only the Facebook host resolves (it is never fetched); any other name is NXDOMAIN.
+  const deps = (issueDate: string) => ({ dns: fakeDns({ 'www.facebook.com': ['157.240.1.35'] }), connect: () => Promise.reject(new Error('no network in this test')), issueDate });
+  const token: typeof fetch = (() => Promise.resolve(new Response(JSON.stringify({ access_token: 'stand-in-token' }))));
+
+  it('signs in, checks the addresses handed out, records them, and prints counts only', async () => {
+    const { url, calls } = await standIn((call) =>
+      call.path.endsWith('/ListLinksAwaitingVerdict') ? { status: 0, message: list(['https://secret-a.example.org/', 'https://www.facebook.com/groups/example']) } : { status: 0, message: recorded(2) },
+    );
+    const io = ioFor({ LINKCHECK_API_URL: url.href, LINKCHECK_TOKEN_URL: 'https://login.example.org/token/', LINKCHECK_PASSWORD_FILE: '/run/pw' }, { '/run/pw': 'app-password\n' }, token);
+    expect(await main(['items'], io)).toBe(0);
+    expect(io.out).toEqual(['items: 2 addresses checked: 0 ok, 1 confirm, 1 drop; 2 recorded, 0 no longer waiting']);
+    expect(io.out.join('\n')).not.toContain('example');
+    expect(calls.every((c) => c.authorization === 'Bearer stand-in-token')).toBe(true);
+    // The very check.ts results, with today as the issue date, each mapped; a login-walled host is never OK.
+    const results = await checkAll(['https://secret-a.example.org/', 'https://www.facebook.com/groups/example'], deps('2026-11-15'));
+    expect(results.map((r) => [r.verdict, storedVerdict(r).verdict])).toEqual([
+      ['drop', MACHINE.DROP],
+      ['confirm', MACHINE.CONFIRM],
+    ]);
+    expect(calls[1]?.body).toEqual(encodeRecordRequest(results.map(storedVerdict)));
+  });
+
+  it('says when more wait', async () => {
+    const { url } = await standIn((call) => (call.path.endsWith('/ListLinksAwaitingVerdict') ? { status: 0, message: list(['mailto:a@example.org'], true) } : { status: 0, message: recorded(0) }));
+    const io = ioFor({ LINKCHECK_API_URL: url.href, LINKCHECK_TOKEN_URL: 'https://login.example.org/token/', LINKCHECK_PASSWORD_FILE: '/run/pw' }, { '/run/pw': 'pw' }, token);
+    expect(await main(['items'], io)).toBe(0);
+    expect(io.out).toEqual(['items: 1 addresses checked: 0 ok, 0 confirm, 1 drop; 0 recorded, 0 no longer waiting; more wait, run again']);
+  });
+
+  it.each([
+    ['no API URL', {}, {}, 'linkcheck: LINKCHECK_API_URL must be an https URL'],
+    ['an http API URL off this machine', { LINKCHECK_API_URL: 'http://api.example.org/' }, {}, 'linkcheck: LINKCHECK_API_URL must be an https URL'],
+    ['no token URL', { LINKCHECK_API_URL: 'https://api.example.org/' }, {}, 'linkcheck: LINKCHECK_TOKEN_URL must be an https URL'],
+    ['no password file', { LINKCHECK_API_URL: 'https://api.example.org/', LINKCHECK_TOKEN_URL: 'https://login.example.org/' }, {}, 'linkcheck: LINKCHECK_PASSWORD_FILE is needed'],
+    ['a password file it cannot read', { LINKCHECK_API_URL: 'https://api.example.org/', LINKCHECK_TOKEN_URL: 'https://login.example.org/', LINKCHECK_PASSWORD_FILE: '/run/none' }, {}, 'linkcheck: cannot read /run/none'],
+    ['an empty password file', { LINKCHECK_API_URL: 'https://api.example.org/', LINKCHECK_TOKEN_URL: 'https://login.example.org/', LINKCHECK_PASSWORD_FILE: '/run/pw' }, { '/run/pw': '\n' }, 'linkcheck: /run/pw is empty'],
+  ])('refuses %s, with exit code 1', async (_label, env, files, message) => {
+    const io = ioFor(env, files, token);
+    expect(await main(['items'], io)).toBe(1);
+    expect(io.err).toEqual([message]);
+  });
+
+  it('reports a refused sign-in, and takes no flag', async () => {
+    const io = ioFor({ LINKCHECK_API_URL: 'https://api.example.org/', LINKCHECK_TOKEN_URL: 'https://login.example.org/', LINKCHECK_PASSWORD_FILE: '/run/pw' }, { '/run/pw': 'pw' }, (() =>
+      Promise.resolve(new Response('', { status: 400 }))));
+    expect(await main(['items'], io)).toBe(1);
+    expect(io.err).toEqual(['linkcheck: the identity provider refused the sign-in (HTTP 400)']);
+    expect(await main(['items', '--out', 'x'], io)).toBe(2);
+  });
+});

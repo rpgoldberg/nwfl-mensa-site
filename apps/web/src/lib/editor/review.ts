@@ -9,7 +9,8 @@
 //              what they hold (the API refuses any other).
 //   the queue  (S6) what waits for approval, and what is approved and ready to publish, oldest first; the
 //              officer-area home counts what this person may approve, and may publish.
-//   links      (S7, M3) each link with its latest answer and who gave it, "N of M links checked"; answers
+//   links      (S7, M3) each link with its latest answer and who gave it, the link checker's latest
+//              verdict and its age (L-ITEM), "N of M links checked" (N: the links the gate accepts); answers
 //              save per link, bound to the list's hash. The form posts each answer by its row (the row's
 //              place and a 12-digit key of its address and where it is), never the address, so a list of
 //              500 links of 2,048 characters still fits: the page reads the list again and maps the rows
@@ -211,7 +212,7 @@ export function linkRows(links: readonly PieceLink[]): LinkRow[] {
     index,
     key: rowKey(link),
     open: openOf(link.url),
-    answer: link.accepted ? 'yes' : link.answeredByLabel !== '' ? 'no' : 'none',
+    answer: link.reviewerAnswer,
     text: link.label !== '' ? link.label : link.url,
   }));
 }
@@ -223,10 +224,34 @@ export function answerWords(row: LinkRow): string {
   return 'Not checked yet.';
 }
 
-/** "2 of 3 links checked." */
+/** The link checker's OK lets a link through for this long (the API's MACHINE_OK_DAYS). */
+const MACHINE_OK_MS = 7 * 24 * 3_600_000;
+
+/** How long ago, in plain words: under an hour, then hours, then days. */
+function ago(at: Date, now: Date): string {
+  const hours = Math.floor(Math.max(0, now.getTime() - at.getTime()) / 3_600_000);
+  if (hours < 1) return 'less than an hour ago';
+  if (hours < 24) return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+}
+
+/** L-ITEM: the link checker's latest verdict on the row, and its age, in plain words. */
+export function machineWords(row: LinkRow, now: Date): string {
+  const machine = row.machine;
+  if (machine === undefined) return row.loginWalled ? 'The link checker does not open links that need a sign-in: a person checks it.' : 'The link checker has not checked it yet.';
+  const when = ago(machine.checkedAt, now);
+  const reasons = machine.reasons.length > 0 ? ` (${machine.reasons.join(', ')})` : '';
+  if (machine.verdict === 'drop') return `The link checker found it broken ${when}${reasons}. Answer Yes only with a note saying why it is right.`;
+  if (machine.verdict === 'confirm') return `The link checker could not tell ${when}${reasons}: a person checks it.`;
+  const stale = now.getTime() - machine.checkedAt.getTime() >= MACHINE_OK_MS;
+  return `The link checker found it working ${when}.${stale ? ' That is too long ago to count: it checks the link again, or a person answers.' : ''}`;
+}
+
+/** "2 of 3 links checked.": the links the gate accepts (a yes, or the link checker's recent OK). */
 export function linksSummary(links: readonly PieceLink[]): string {
   if (links.length === 0) return 'This piece has no links.';
-  const checked = links.filter((l) => l.answeredByLabel !== '').length;
+  const checked = links.filter((l) => l.accepted).length;
   return `${checked} of ${links.length} ${links.length === 1 ? 'link' : 'links'} checked.`;
 }
 

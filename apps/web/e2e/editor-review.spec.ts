@@ -110,7 +110,8 @@ test.describe('approving, with no script', () => {
     await facebook.getByRole('radio', { name: 'Yes' }).check();
     await page.getByRole('button', { name: 'Save my answers' }).click();
     await expect(page.getByRole('status')).toHaveText('Your answers are saved.');
-    await expect(page.getByText('2 of 3 links checked.')).toBeVisible();
+    // L-ITEM: "checked" counts what the gate accepts, so the map answered no is not counted.
+    await expect(page.getByText('1 of 3 links checked.')).toBeVisible();
     await expect(facebook).toContainText('Checked by Treasurer: it shows the right page.');
     await expect(row(page, REVIEW.urls.map)).toContainText('Treasurer answered no: it does not show the right page.');
 

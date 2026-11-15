@@ -11,6 +11,11 @@
 //   VERIFIER_OIDC_ISSUER, VERIFIER_OIDC_AUDIENCE (nwfl-verifier),
 //   VERIFIER_OIDC_JWKS_URL, VERIFIER_SCOPE (membership.verify),
 //   VERIFIER_SUBJECT (svc-nwfl-verifier)
+//   LINKCHECK_OIDC_ISSUER, LINKCHECK_OIDC_AUDIENCE (nwfl-linkcheck),
+//   LINKCHECK_OIDC_JWKS_URL, LINKCHECK_SCOPE (links.check),
+//   LINKCHECK_SUBJECT (svc-nwfl-linkcheck): the link checker (L-ITEM)
+//   Every client's audience must differ from every other's, or the service
+//   refuses to start: one token must never be valid for two clients.
 //   EDGE_CLIENT_IDS        the edge's mesh identities, comma-separated
 //                          (default cloudflared in nwfl-edge). Each must be
 //                          a full identity in the nwfl-edge namespace and
@@ -51,6 +56,7 @@ const DEFAULTS: Record<ClientKind, { prefix: string; audience: string; scope?: s
   site: { prefix: 'SITE', audience: 'nwfl-site' },
   agent: { prefix: 'AGENT', audience: 'nwfl-agent', scope: 'newsletter.read', subject: 'svc-nwfl-newsletter' },
   verifier: { prefix: 'VERIFIER', audience: 'nwfl-verifier', scope: 'membership.verify', subject: 'svc-nwfl-verifier' },
+  linkcheck: { prefix: 'LINKCHECK', audience: 'nwfl-linkcheck', scope: 'links.check', subject: 'svc-nwfl-linkcheck' },
 };
 
 function https(name: string, value: string): string {
@@ -72,7 +78,7 @@ const NOT_EDGE_ACCOUNTS = new Set(['nwfl-web', 'nwfl-api']);
 
 export function readAuthConfig(env: Env): AuthConfig {
   const clients: ClientSpec[] = [];
-  for (const kind of ['site', 'agent', 'verifier'] as const) {
+  for (const kind of ['site', 'agent', 'verifier', 'linkcheck'] as const) {
     const { prefix, audience, scope, subject } = DEFAULTS[kind];
     const issuer = env[`${prefix}_OIDC_ISSUER`];
     if (issuer === undefined || issuer === '') continue;

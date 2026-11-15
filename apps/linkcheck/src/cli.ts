@@ -11,6 +11,14 @@
 //        [--replacements <check-replacements.json>] [--remember <remember.json>] --out <dir>
 //                                                                 no network; writes links.json and remember.json,
 //                                                                 prints linksSha256
+//   items                                                         network; the officer pieces' links (L-ITEM, items.ts):
+//                                                                 lists them from the API, checks them, records the
+//                                                                 verdicts. Configured by the environment:
+//                                                                 LINKCHECK_API_URL, LINKCHECK_TOKEN_URL,
+//                                                                 LINKCHECK_PASSWORD_FILE (the service account's app
+//                                                                 password), LINKCHECK_CLIENT_ID (nwfl-linkcheck),
+//                                                                 LINKCHECK_USERNAME (svc-nwfl-linkcheck),
+//                                                                 LINKCHECK_SCOPE (links.check)
 // It prints counts and the hash only, never a URL or the text under a link (those go to the files on
 // the officer's machine). An unexpected error is named by its class only.
 // ============================================================================
@@ -19,6 +27,7 @@ import { answersTemplate, needsAnswer, parseAnswers, buildLinkList, replacements
 import { type CheckDeps, type CheckResult, VERDICTS, assertKeptForms, checkAll } from './check.js';
 import { EXTRACT_FORMAT, ExtractError, type Extraction, parseExtraction } from './extract.js';
 import { AUDIENCES, type Audience, ListError } from './list.js';
+import { ItemsError, clientCredentials, endpoint, runItems } from './items.js';
 import { CHECK_FORMAT, type CheckReport, ReportError, parseCheckReport } from './report.js';
 import { parseRemember, rememberAnswers } from './remember.js';
 import { renderSheet } from './sheet.js';
@@ -28,7 +37,8 @@ export const USAGE = `usage:
   linkcheck check --issue-date YYYY-MM-DD [--remember <remember.json>] --out <dir> <extract.json> [<extract.json>]
   linkcheck replace --check <check.json> --answers <answers.json> --out <dir>
   linkcheck list --check <check.json> --public <extract.json> --members <extract.json> [--answers <answers.json>]
-                 [--replacements <check-replacements.json>] [--remember <remember.json>] --out <dir>`;
+                 [--replacements <check-replacements.json>] [--remember <remember.json>] --out <dir>
+  linkcheck items   (configured by LINKCHECK_API_URL, LINKCHECK_TOKEN_URL and LINKCHECK_PASSWORD_FILE)`;
 
 export interface Io {
   readFile(path: string): Promise<Uint8Array>;
@@ -39,6 +49,8 @@ export interface Io {
   now(): Date;
   checkDeps(issueDate: string): CheckDeps;
   extract(pdf: Uint8Array, audience: Audience): Promise<Extraction>;
+  /** The identity provider's token endpoint is called with it (items); the global fetch by default. */
+  fetch?: typeof fetch;
 }
 
 class UsageError extends Error {}
@@ -49,6 +61,7 @@ const FLAGS: Record<string, readonly string[]> = {
   check: ['issue-date', 'remember', 'out'],
   replace: ['check', 'answers', 'out'],
   list: ['check', 'public', 'members', 'answers', 'replacements', 'remember', 'out'],
+  items: [],
 };
 
 function parseArgs(command: string, argv: readonly string[]): { flags: Map<string, string>; rest: string[] } {
@@ -167,6 +180,40 @@ async function listCommand(io: Io, flags: Map<string, string>): Promise<void> {
   io.print(`remember: ${remembered.answers.length} answers kept for the next issue`);
 }
 
+/** L-ITEM: the officer pieces' links, from the API and back (items.ts). Prints counts only. */
+async function itemsCommand(io: Io): Promise<void> {
+  const api = endpoint('LINKCHECK_API_URL', io.env['LINKCHECK_API_URL']);
+  const tokenUrl = endpoint('LINKCHECK_TOKEN_URL', io.env['LINKCHECK_TOKEN_URL']);
+  const passwordFile = io.env['LINKCHECK_PASSWORD_FILE'];
+  if (passwordFile === undefined || passwordFile === '') throw new CliError('LINKCHECK_PASSWORD_FILE is needed');
+  const password = new TextDecoder().decode(await read(io, passwordFile)).trim();
+  if (password === '') throw new CliError(`${passwordFile} is empty`);
+  const token = await clientCredentials(
+    {
+      tokenUrl,
+      clientId: io.env['LINKCHECK_CLIENT_ID'] ?? 'nwfl-linkcheck',
+      username: io.env['LINKCHECK_USERNAME'] ?? 'svc-nwfl-linkcheck',
+      password,
+      scope: io.env['LINKCHECK_SCOPE'] ?? 'links.check',
+    },
+    io.fetch,
+  );
+  // A registration "after the issue date" means after today here: a piece is about now.
+  const today = io.now().toISOString().slice(0, 10);
+  const totals = await runItems({
+    api,
+    token,
+    check: async (urls) => {
+      const results = await checkAll(urls, io.checkDeps(today));
+      assertKeptForms(results);
+      return results;
+    },
+  });
+  io.print(
+    `items: ${totals.checked} addresses checked: ${totals.ok} ok, ${totals.confirm} confirm, ${totals.drop} drop; ${totals.recorded} recorded, ${totals.notAwaiting} no longer waiting${totals.more ? '; more wait, run again' : ''}`,
+  );
+}
+
 /** Runs one command; the exit code: 0 done, 1 refused or failed, 2 a usage error. */
 export async function main(argv: readonly string[], io: Io): Promise<number> {
   const [command = 'help', ...rest] = argv;
@@ -180,6 +227,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     if (command === 'extract') await extractCommand(io, flags);
     else if (command === 'check') await checkCommand(io, flags, files);
     else if (command === 'replace') await replaceCommand(io, flags);
+    else if (command === 'items') await itemsCommand(io);
     else await listCommand(io, flags);
     return 0;
   } catch (error) {
@@ -187,7 +235,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
       io.warn(`linkcheck: ${error.message}\n${USAGE}`);
       return 2;
     }
-    const known = error instanceof CliError || error instanceof ExtractError || error instanceof ListError || error instanceof ReportError;
+    const known = error instanceof CliError || error instanceof ExtractError || error instanceof ListError || error instanceof ReportError || error instanceof ItemsError;
     io.warn(`linkcheck: ${known ? error.message : `an unexpected error (${(error as Error)?.constructor?.name ?? 'unknown'})`}`);
     return 1;
   }

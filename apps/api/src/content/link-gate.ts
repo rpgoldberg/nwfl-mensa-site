@@ -7,7 +7,9 @@
 //                 of the item's office: the working version's list (the live
 //                 one's when nothing is being worked on, as the preview reads)
 //                 through the caller's lens, its hash, the version's ready time,
-//                 and each link's latest answer as it stands.
+//                 and per link the latest reviewer answer as it stands, the
+//                 link checker's latest verdict and when it was given (L-ITEM),
+//                 and whether the gate accepts it (item-links.ts linkHold).
 //   ConfirmLinks  a reviewer who did not edit the version, on a READY version
 //                 only (its text is frozen then), with the hash of the list they
 //                 read: a list changed since is refused. Each answer for a URL
@@ -15,7 +17,8 @@
 //                 acts for and the version's ready time; one for a URL not in
 //                 it comes back in not_in_piece and is not stored. Audited once
 //                 per call (links_confirmed), with counts only: no URL goes into
-//                 the audit log.
+//                 the audit log. yes_over_drop counts the yeses with a note on
+//                 a link whose latest verdict is the checker's DROP.
 // ============================================================================
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError, type HandlerContext, type ServiceImpl } from '@connectrpc/connect';
@@ -25,10 +28,11 @@ import { requireReviewer, requireUser } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
-import { type ContentService, ItemLinkSchema, MachineVerdict } from '../gen/nwfl/mensa/v1/content_pb.js';
+import { timestampFromDate } from '@bufbuild/protobuf/wkt';
+import { type ContentService, ItemLinkSchema, MachineVerdict, ReviewerAnswer } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { MAX_URL_LENGTH } from '../links/urls.js';
 import type { StructuredLogger } from '../platform/logger.js';
-import { type PieceLink, actualLinks, currentAnswers, linksAsSeen, linksSha256, loginWalled, rfc3339Micros } from './item-links.js';
+import { type PieceLink, actualLinks, currentAnswers, linkHold, linksAsSeen, linksSha256, loginWalled, machineVerdicts, rfc3339Micros } from './item-links.js';
 import { normalizeTree } from './tree.js';
 import { type ItemRow, MAX_NOTE, type VersionRow, actingOffice, loadItem, loadVersion, notFound, requireId, requireWholeView, timestampOfMicros } from './workflow.js';
 
@@ -40,6 +44,8 @@ export interface LinkGateDeps {
 
 /** At most this many answers in one call: a piece has far fewer links. */
 export const MAX_ANSWERS = 500;
+
+const VERDICT = { ok: MachineVerdict.OK, confirm: MachineVerdict.CONFIRM, drop: MachineVerdict.DROP } as const;
 
 const precondition = (message: string): ConnectError => new ConnectError(message, Code.FailedPrecondition);
 const invalid = (message: string): ConnectError => new ConnectError(message, Code.InvalidArgument);
@@ -76,20 +82,25 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
     return { seen, actual: new Set(links.map((link) => link.url)), sha256: linksSha256(rfc3339Micros(readyAtMicros), seen), readyAtMicros };
   };
 
-  /** Each link as the reply carries it, with its latest answer as it stands. */
+  /** Each link as the reply carries it: its latest answer as it stands, the checker's latest verdict, and whether the gate accepts it. */
   const shown = async (client: TxClient, item: ItemRow, version: VersionRow, links: readonly PieceLink[]) => {
     const office = (await client.query<{ title: string }>(`SELECT title FROM office WHERE id = $1`, [item.office_id])).rows[0] as { title: string };
     const answers = await currentAnswers(client, version.id, { slug: item.office_slug, title: office.title });
+    const verdicts = await machineVerdicts(client, item.id);
     return links.map((link) => {
       const answer = answers.get(link.url);
+      const verdict = verdicts.get(link.url);
       return create(ItemLinkSchema, {
         url: link.url,
         label: link.label,
         where: link.where,
         loginWalled: loginWalled(link.url),
-        machineVerdict: MachineVerdict.UNSPECIFIED,
+        machineVerdict: verdict === undefined ? MachineVerdict.UNSPECIFIED : VERDICT[verdict.verdict],
+        reasons: verdict?.reasons ?? [],
+        ...(verdict !== undefined ? { machineCheckedAt: timestampFromDate(verdict.at) } : {}),
         answeredByLabel: answer?.label ?? '',
-        accepted: answer?.answer === 'yes',
+        reviewerAnswer: answer === undefined ? ReviewerAnswer.UNSPECIFIED : answer.answer === 'yes' ? ReviewerAnswer.YES : ReviewerAnswer.NO,
+        accepted: linkHold(link.url, answer, verdict) === undefined,
       });
     });
   };
@@ -147,7 +158,8 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
         if (!Buffer.from(request.linksSha256).equals(sha256)) throw precondition('the links changed since you opened them; reload them');
         const inPiece = new Set(seen.map((link) => link.url).filter((url) => actual.has(url)));
         const notInPiece: string[] = [];
-        const counts = { answers: 0, yes: 0, no: 0, login_walled: 0 };
+        const counts = { answers: 0, yes: 0, no: 0, login_walled: 0, yes_over_drop: 0 };
+        const verdicts = await machineVerdicts(client, item.id);
         for (const [url, answer] of answers) {
           if (url.length > MAX_URL_LENGTH || !inPiece.has(url)) {
             notInPiece.push(url);
@@ -161,6 +173,7 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
           counts.answers += 1;
           counts[answer.yes ? 'yes' : 'no'] += 1;
           if (loginWalled(url)) counts.login_walled += 1;
+          if (answer.yes && answer.note !== null && verdicts.get(url)?.verdict === 'drop') counts.yes_over_drop += 1;
         }
         if (counts.answers > 0) {
           await recordAudit(client, caller, {

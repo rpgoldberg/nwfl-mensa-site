@@ -1,7 +1,7 @@
 // ============================================================================
 // Bearer-token verification (A3), with jose against each client's JWKS.
 //
-// Three clients, each configured with its own issuer, audience and key set
+// Four clients, each configured with its own issuer, audience and key set
 // (Authentik gives every provider its own issuer and JWKS unless the issuer
 // mode is global; selection works either way):
 //
@@ -10,6 +10,7 @@
 //   agent     nwfl-agent: the newsletter agent's client-credentials token.
 //             Needs its scope and its service-account subject. No groups.
 //   verifier  nwfl-verifier: the membership verifier, likewise.
+//   linkcheck nwfl-linkcheck: the link checker (L-ITEM), likewise.
 //
 // A token is matched to exactly one client by its (unverified) issuer and
 // audience, then verified for real against that client only: signature by a
@@ -45,7 +46,7 @@ export interface ClientConfig {
   issuer: string;
   audience: string;
   jwks: JWTVerifyGetKey;
-  /** A scope the token must carry (agent, verifier). */
+  /** A scope the token must carry (agent, verifier, linkcheck). */
   scope?: string;
   /** The subject the token must have (the service account of a machine client). */
   subject?: string;
@@ -53,7 +54,7 @@ export interface ClientConfig {
 
 export const ALGORITHMS = ['RS256', 'ES256'];
 const CLOCK_TOLERANCE_SECONDS = 30;
-export const MAX_LIFETIME_SECONDS: Record<ClientKind, number> = { site: 3600, agent: 86_400, verifier: 86_400 };
+export const MAX_LIFETIME_SECONDS: Record<ClientKind, number> = { site: 3600, agent: 86_400, verifier: 86_400, linkcheck: 86_400 };
 const SITE_SUBJECT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 class TokenRefused extends Error {

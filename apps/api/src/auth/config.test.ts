@@ -82,8 +82,37 @@ describe('readAuthConfig', () => {
     [{ SITE_OIDC_ISSUER: ISS, SITE_OIDC_JWKS_URL: 'http://keys/' }, /SITE_OIDC_JWKS_URL must be an https URL/],
     [{ AGENT_OIDC_ISSUER: 'not a url' }, /AGENT_OIDC_ISSUER must be an https URL/],
     [{ SITE_OIDC_ISSUER: ISS, AGENT_OIDC_ISSUER: ISS, AGENT_OIDC_AUDIENCE: 'nwfl-site' }, /audiences must differ/],
+    [{ LINKCHECK_OIDC_ISSUER: 'http://login.nwflorida.us/' }, /LINKCHECK_OIDC_ISSUER must be an https URL/],
+    [{ LINKCHECK_OIDC_ISSUER: ISS, LINKCHECK_OIDC_JWKS_URL: 'http://keys/' }, /LINKCHECK_OIDC_JWKS_URL must be an https URL/],
   ])('refuses %j', (env, message) => {
     expect(() => readAuthConfig(env)).toThrow(message);
+  });
+
+  // L-ITEM: the link checker's client, on by LINKCHECK_OIDC_ISSUER (links SPEC section 6).
+  const LINKCHECK_ISS = 'https://login.nwflorida.us/application/o/nwfl-linkcheck/';
+
+  it('turns the link checker on by its issuer: audience nwfl-linkcheck, scope links.check, subject svc-nwfl-linkcheck', () => {
+    expect(readAuthConfig({ LINKCHECK_OIDC_ISSUER: LINKCHECK_ISS }).clients).toEqual([
+      { kind: 'linkcheck', issuer: LINKCHECK_ISS, audience: 'nwfl-linkcheck', jwksUrl: `${LINKCHECK_ISS}jwks/`, scope: 'links.check', subject: 'svc-nwfl-linkcheck' },
+    ]);
+    expect(
+      readAuthConfig({
+        LINKCHECK_OIDC_ISSUER: LINKCHECK_ISS,
+        LINKCHECK_OIDC_AUDIENCE: 'ghi789',
+        LINKCHECK_OIDC_JWKS_URL: 'https://keys.example.org/linkcheck.json',
+        LINKCHECK_SCOPE: 'links:check',
+        LINKCHECK_SUBJECT: 'ak-linkcheck',
+      }).clients,
+    ).toEqual([{ kind: 'linkcheck', issuer: LINKCHECK_ISS, audience: 'ghi789', jwksUrl: 'https://keys.example.org/linkcheck.json', scope: 'links:check', subject: 'ak-linkcheck' }]);
+  });
+
+  it.each([
+    ['the site', { SITE_OIDC_ISSUER: ISS, LINKCHECK_OIDC_AUDIENCE: 'nwfl-site' }],
+    ['the agent', { AGENT_OIDC_ISSUER: ISS, LINKCHECK_OIDC_AUDIENCE: 'nwfl-agent' }],
+    ['the verifier', { VERIFIER_OIDC_ISSUER: ISS, LINKCHECK_OIDC_AUDIENCE: 'nwfl-verifier' }],
+    ['the verifier (its audience set to the checker one)', { VERIFIER_OIDC_ISSUER: ISS, VERIFIER_OIDC_AUDIENCE: 'nwfl-linkcheck' }],
+  ])('refuses to start when the link checker audience is that of %s', (_label, env) => {
+    expect(() => readAuthConfig({ LINKCHECK_OIDC_ISSUER: LINKCHECK_ISS, ...env })).toThrow(/audiences must differ/);
   });
 });
 

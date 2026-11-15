@@ -23,7 +23,7 @@ export interface AuditRecord {
   actingOfficeId?: string | null;
 }
 
-const ACTOR_KIND = { user: 'user', agent: 'agent', verifier: 'verifier', anonymous: 'system' } as const;
+const ACTOR_KIND = { user: 'user', agent: 'agent', verifier: 'verifier', linkcheck: 'linkcheck', anonymous: 'system' } as const;
 
 /** The active span's trace id for an audit row, or null. Also passed to the redaction functions (0013). */
 export function traceId(): string | null {

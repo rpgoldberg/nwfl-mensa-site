@@ -11,6 +11,7 @@ import { type ClientConfig, createJwtVerifier } from './jwt.js';
 const SITE_ISS = 'https://login.example.org/application/o/nwfl-site/';
 const AGENT_ISS = 'https://login.example.org/application/o/nwfl-agent/';
 const VERIFIER_ISS = 'https://login.example.org/application/o/nwfl-verifier/';
+const LINKCHECK_ISS = 'https://login.example.org/application/o/nwfl-linkcheck/';
 // A site token names its user as Authentik's user_uuid sub mode does, str(user.uuid):
 // lowercase and hyphenated (NA1). Made-up values.
 const MEMBER_SUB = '6f1c2a9e-3b4d-4e5f-8a7b-0c1d2e3f4a5b';
@@ -36,6 +37,7 @@ function clients(keySet: JWTVerifyGetKey = createLocalJWKSet(jwks)): ClientConfi
     { kind: 'site', issuer: SITE_ISS, audience: 'nwfl-site', jwks: keySet },
     { kind: 'agent', issuer: AGENT_ISS, audience: 'nwfl-agent', jwks: keySet, scope: 'newsletter.read', subject: 'svc-nwfl-newsletter' },
     { kind: 'verifier', issuer: VERIFIER_ISS, audience: 'nwfl-verifier', jwks: keySet, scope: 'membership.verify', subject: 'svc-nwfl-verifier' },
+    { kind: 'linkcheck', issuer: LINKCHECK_ISS, audience: 'nwfl-linkcheck', jwks: keySet, scope: 'links.check', subject: 'svc-nwfl-linkcheck' },
   ];
 }
 
@@ -90,6 +92,12 @@ describe('createJwtVerifier', () => {
     expect((await verifier.verify(checker)).client).toBe('verifier');
   });
 
+  it('verifies the link checker by its own audience, scope and subject, with no groups (L-ITEM)', async () => {
+    const verifier = createJwtVerifier(clients());
+    const linkcheck = await sign({ iss: LINKCHECK_ISS, aud: 'nwfl-linkcheck', sub: 'svc-nwfl-linkcheck', scope: 'openid links.check', groups: ['nwfl-officers'] });
+    expect(await verifier.verify(linkcheck)).toEqual({ client: 'linkcheck', subject: 'svc-nwfl-linkcheck', groups: [], scopes: ['openid', 'links.check'] });
+  });
+
   it.each([
     ['an expired token', () => sign(site(), { expiresIn: Math.floor(Date.now() / 1000) - 120 })],
     ['a token not valid yet', () => new SignJWT(site()).setProtectedHeader({ alg: 'RS256', kid: 'rsa-1' }).setNotBefore('10m').setExpirationTime('20m').sign(rsa.privateKey)],
@@ -106,6 +114,11 @@ describe('createJwtVerifier', () => {
     ['an agent token for another subject', () => sign({ iss: AGENT_ISS, aud: 'nwfl-agent', sub: 'someone-else', scope: 'newsletter.read' })],
     ['a verifier token presented with the agent audience', () => sign({ iss: VERIFIER_ISS, aud: 'nwfl-agent', sub: 'svc-nwfl-verifier', scope: 'membership.verify' })],
     ['a token that is not a JWT', () => Promise.resolve('not.a.jwt')],
+    ['a link checker token without its scope', () => sign({ iss: LINKCHECK_ISS, aud: 'nwfl-linkcheck', sub: 'svc-nwfl-linkcheck', scope: 'openid' })],
+    ['a link checker token for another subject', () => sign({ iss: LINKCHECK_ISS, aud: 'nwfl-linkcheck', sub: 'svc-nwfl-verifier', scope: 'links.check' })],
+    ['a link checker token presented with the verifier audience', () => sign({ iss: LINKCHECK_ISS, aud: 'nwfl-verifier', sub: 'svc-nwfl-linkcheck', scope: 'links.check' })],
+    ['a verifier token presented with the link checker audience', () => sign({ iss: VERIFIER_ISS, aud: 'nwfl-linkcheck', sub: 'svc-nwfl-verifier', scope: 'membership.verify' })],
+    ['a link checker token naming the site audience too', () => sign({ iss: LINKCHECK_ISS, aud: ['nwfl-linkcheck', 'nwfl-site'], sub: 'svc-nwfl-linkcheck', scope: 'links.check' })],
   ])('refuses %s', async (_label, make) => {
     await expect(createJwtVerifier(clients()).verify(await make())).rejects.toThrow();
   });
@@ -198,6 +211,9 @@ describe('createJwtVerifier', () => {
       await expect(verifier.verify(await at(agent, t, t + 86401))).rejects.toThrow(/lifetime/);
       expect((await verifier.verify(await at(verifierClaims, t, t + 86400))).client).toBe('verifier');
       await expect(verifier.verify(await at(verifierClaims, t, t + 86401))).rejects.toThrow(/lifetime/);
+      const linkcheck = { iss: LINKCHECK_ISS, aud: 'nwfl-linkcheck', sub: 'svc-nwfl-linkcheck', scope: 'links.check' };
+      expect((await verifier.verify(await at(linkcheck, t, t + 86400))).client).toBe('linkcheck');
+      await expect(verifier.verify(await at(linkcheck, t, t + 86401))).rejects.toThrow(/lifetime/);
     });
   });
 

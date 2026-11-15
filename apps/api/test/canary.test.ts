@@ -98,6 +98,10 @@ describe.skipIf(!live)('the members-only canary', () => {
       // VET: released claims are ids and times only.
       ListReleasedClaims: () => [{}],
     },
+    // L-ITEM: the link checker's only; no token and a member are refused.
+    'nwfl.mensa.v1.LinkCheckService': {
+      ListLinksAwaitingVerdict: () => [{}],
+    },
     // SOLO-APPROVE: officers only; they carry no content, so the canary may not appear in them for anyone.
     'nwfl.mensa.v1.ApprovalRuleService': {
       GetApprovalRules: () => [{}],
