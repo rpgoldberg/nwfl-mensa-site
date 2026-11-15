@@ -1,0 +1,220 @@
+---
+// SERIES-UI: start a recurring event (/officer-area/events/series/new) or change one (/officer-area/events/
+// series/<id>), in plain choices (src/components/SeriesForm.astro, src/lib/editor/series.ts). "Show the next
+// dates" checks the form and shows the next five dates, saving nothing; Save saves it through SaveSeries,
+// live on save, then 303 to Our events. A change shows its next dates at once, and names any date changed
+// one by one that the new pattern leaves out: those stay on the calendar as they are, and Save waits for
+// "I have read these dates". "Stop this recurring event" asks once more, in words, then saves the series
+// as it is with active false: its dates leave the calendar.
+//
+// Only a series of one of the person's offices (any, for the Admin) opens; any other id, a stopped series,
+// or no series at all is the plain not-found page. The API checks the office again on every save.
+// Not signed in: sign in first. Not an officer or the Admin: not found. Astro's origin check refuses a
+// cross-site post first.
+import PasswordNote from '../../../../components/PasswordNote.astro';
+import SeriesForm from '../../../../components/SeriesForm.astro';
+import Unavailable from '../../../../components/Unavailable.astro';
+import Base from '../../../../layouts/Base.astro';
+import type { EventOccurrence, EventSeries } from '../../../../gen/nwfl/mensa/v1/event_pb.js';
+import { ApiNotFound } from '../../../../lib/api/client';
+import { Duplicate, EditorRefused, NotAllowed, SignInAgain, editorApi, editorReader } from '../../../../lib/api/editor';
+import { officerEventsApi } from '../../../../lib/api/officer-events';
+import { markUnavailable, signInFirst } from '../../../../lib/api/page';
+import { runtimeDeps } from '../../../../lib/auth/flow';
+import { addDays, todayCentral } from '../../../../lib/calendar';
+import { EVENTS_PATH, EVENT_FORM_LIMIT, type EventOffices, type VenueChoice, eventOffices, mayUseEvents, venueChoices } from '../../../../lib/editor/events';
+import {
+  type DroppedOverride,
+  type KeptRule,
+  NEW_SERIES_PATH,
+  OVERRIDE_DAYS,
+  type SeriesErrors,
+  type SeriesValues,
+  blankSeriesValues,
+  droppedOverrides,
+  nextDates,
+  parseSeriesForm,
+  saveWithSeriesSlug,
+  seriesIdFromParam,
+  seriesPathOf,
+  seriesProblemSummary,
+  seriesRequest,
+  typedSeriesValues,
+  valuesFromSeries,
+} from '../../../../lib/editor/series';
+import { readForm } from '../../../../lib/form';
+
+export const prerender = false;
+
+const param = Astro.params.id ?? '';
+const id = seriesIdFromParam(param);
+const isNew = id === 'new';
+const HERE = isNew ? NEW_SERIES_PATH : seriesPathOf(param);
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+const session = Astro.locals.session;
+if (!session) return signInFirst(SIGN_IN);
+if (id === undefined || !mayUseEvents(session.groups)) return Astro.rewrite('/404');
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+type View = 'form' | 'no-office' | 'sign-in' | 'unavailable' | 'confirm-stop' | 'gone';
+let view = 'form' as View;
+let existing: EventSeries | undefined;
+let occurrences: EventOccurrence[] = [];
+let who: EventOffices | undefined;
+let venues: VenueChoice[] = [];
+let keep: KeptRule | undefined;
+let values: SeriesValues | undefined;
+let errors: SeriesErrors = {};
+let notice: string | undefined;
+let preview: string[] | undefined;
+let dropped: DroppedOverride[] = [];
+const today = todayCentral(new Date());
+const api = officerEventsApi();
+const editor = editorApi();
+const { reader } = editorReader(session, runtimeDeps());
+const isoOf = (d: EventSeries['startsOn']) => (d === undefined ? '' : `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`);
+
+if (api === undefined || editor === undefined) view = 'unavailable';
+else if (reader === undefined) view = 'sign-in';
+else {
+  try {
+    const [roster, allVenues, allSeries, dates] = await Promise.all([
+      api.offices(),
+      api.venues(reader),
+      api.series(reader),
+      isNew ? Promise.resolve([]) : api.occurrences(reader, today, addDays(today, OVERRIDE_DAYS)),
+    ]);
+    who = eventOffices(session.groups, roster);
+    venues = venueChoices(allVenues);
+    occurrences = dates;
+    if (isNew) {
+      if (who.offices.length === 0) view = 'no-office';
+    } else {
+      existing = allSeries.find((s) => s.id === id);
+      // Not theirs, stopped, or none: as if there were no such page.
+      if (existing === undefined || !(who.admin || who.offices.some((o) => o.id === existing!.hostOfficeId))) return Astro.rewrite('/404');
+      // A place no longer listed stays a choice: a save must not lose it.
+      if (existing.defaultVenueId !== '' && !venues.some((v) => v.id === existing!.defaultVenueId)) venues = [...venues, { id: existing.defaultVenueId, label: 'The place it has now', hint: 'No longer on the list of places.' }];
+      ({ values, keep } = valuesFromSeries(existing));
+      preview = nextDates(existing.recurrence, isoOf(existing.startsOn), today);
+    }
+  } catch (error) {
+    if (error instanceof ApiNotFound || error instanceof NotAllowed) return Astro.rewrite('/404');
+    view = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
+  }
+}
+
+/** A save the API did not make: what the officer is told, with what was typed kept. */
+const refused = (error: unknown) => {
+  if (error instanceof SignInAgain) view = 'sign-in';
+  else if (error instanceof ApiNotFound) {
+    view = 'gone';
+    Astro.response.status = 404;
+  } else if (error instanceof NotAllowed) {
+    notice = 'Nothing was saved: you cannot change the events of that office. Ask the Admin.';
+    Astro.response.status = 403;
+  } else if (error instanceof EditorRefused) {
+    notice = `Nothing was saved: ${error.reason}`;
+    Astro.response.status = 400;
+  } else if (error instanceof Duplicate) {
+    notice = 'Nothing was saved: another recurring event has a title too much like this one. Change the title a little, then save again.';
+    Astro.response.status = 409;
+  } else {
+    notice = 'Nothing was saved: the site could not reach its records just now. What you typed is still here: try again in a few minutes.';
+    markUnavailable(Astro.response);
+  }
+};
+
+if (Astro.request.method === 'POST' && (view === 'form' || view === 'sign-in')) {
+  const read = await readForm(Astro.request, EVENT_FORM_LIMIT);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const step = read.field('step');
+  if (view === 'sign-in') {
+    // Kept as typed: shown again once signed in.
+    if (step !== 'stop' && step !== 'stop-confirmed') values = typedSeriesValues(read.field);
+  } else if (step === 'stop' && existing !== undefined) {
+    view = 'confirm-stop';
+  } else if (step === 'stop-confirmed' && existing !== undefined && editor !== undefined && reader !== undefined) {
+    try {
+      // The series as it is, stopped: nothing else changes.
+      await editor.saveSeries(reader, existing, false);
+      return Astro.redirect(`${EVENTS_PATH}?series=stopped`, 303);
+    } catch (error) {
+      refused(error);
+    }
+  } else if (who !== undefined && editor !== undefined && reader !== undefined) {
+    const parsed = parseSeriesForm(read.field, { mode: isNew ? 'new' : 'change', offices: who.offices, venues, today, ...(keep ? { keep } : {}) });
+    values = typedSeriesValues(read.field);
+    preview = undefined;
+    if (!parsed.ok) {
+      errors = Object.fromEntries(Object.entries(parsed.errors).map(([k, v]) => [k, [v]]));
+      Astro.response.status = 400;
+    } else {
+      const input = parsed.value;
+      preview = nextDates(input.rule, input.startsOn, today);
+      if (existing !== undefined) dropped = droppedOverrides(occurrences, existing.id, { rule: existing.recurrence, startsOn: isoOf(existing.startsOn) }, { rule: input.rule, startsOn: input.startsOn });
+      if (step === 'save' && dropped.length > 0 && values.overridesSeen !== 'yes') {
+        errors = { overrides: ['Some dates changed one by one are not on the new pattern. Read them, then tick the box to keep them as they are.'] };
+        Astro.response.status = 400;
+      } else if (step === 'save') {
+        try {
+          if (existing === undefined) await saveWithSeriesSlug(input.title, (slug) => editor.saveSeries(reader, seriesRequest(input, { slug, hostOfficeId: input.officeId })));
+          else await editor.saveSeries(reader, seriesRequest(input, { id: existing.id, slug: existing.slug, hostOfficeId: existing.hostOfficeId }));
+          return Astro.redirect(`${EVENTS_PATH}?series=saved`, 303);
+        } catch (error) {
+          refused(error);
+        }
+      }
+    }
+  }
+}
+if (view === 'unavailable') markUnavailable(Astro.response);
+values ??= { ...blankSeriesValues(), startsOn: today };
+
+const problems = seriesProblemSummary(errors);
+const pageTitle = isNew ? 'Start a recurring event' : existing !== undefined ? `Change: ${existing.title}` : 'Change a recurring event';
+const offices = who?.offices.map((o) => ({ id: o.id, title: o.held || !who?.admin ? o.title : `${o.title} (for the office)` })) ?? [];
+---
+<Base path={HERE} title={pageTitle} description="An event that repeats, such as a weekly lunch or a monthly dinner: when it meets, where, and when it ends.">
+  <h1>{pageTitle}</h1>
+  {view === 'form' && isNew && <p class="lead">An event that repeats, such as a weekly lunch or a dinner on the third Friday. Choose how often it meets; the calendar shows every date.</p>}
+  {view === 'sign-in' && <p class="notice" role="alert">Your sign-in timed out, so nothing was saved. <a href={`${SIGN_IN}&again=1`} target="_blank" rel="noopener">Sign in again (opens a new tab)</a>, then come back and save.{Astro.request.method === 'POST' ? ' What you typed is below.' : ''}</p>}
+  {view === 'sign-in' && <PasswordNote />}
+  {view === 'unavailable' && <Unavailable what="The recurring event form" />}
+  {view === 'gone' && <p class="notice" role="alert">Nothing was saved: this recurring event is no longer on the calendar. <a href={EVENTS_PATH}>Back to our events</a>.</p>}
+  {view === 'no-office' && <p>You hold no office, so you cannot start a recurring event. Ask the Admin if that is wrong. <a href={EVENTS_PATH}>Back to our events</a>.</p>}
+  {notice && <p class="notice" role="alert">{notice}</p>}
+  {view === 'confirm-stop' && existing !== undefined && (
+    <section class="card" aria-labelledby="stop-title">
+      <h2 id="stop-title">Stop {existing.title}?</h2>
+      <p>Its regular dates leave the calendar and the calendar feed, past ones too. A date changed one by one stays as it is: open it from Our events to cancel it. To start it again later, ask the Admin.</p>
+      <form method="post" action={HERE} class="btns">
+        <button class="button" type="submit" name="step" value="stop-confirmed">Yes, stop it</button>
+        <a class="button button--secondary" href={HERE}>No, keep it</a>
+      </form>
+    </section>
+  )}
+  {problems.length > 0 && (
+    <>
+      <section class="error-summary" aria-labelledby="error-summary-title" tabindex="-1" data-error-summary>
+        <h2 id="error-summary-title">There is a problem with this recurring event</h2>
+        <ul>
+          {problems.map((item) => <li><a href={item.href}>{item.text}</a></li>)}
+        </ul>
+      </section>
+      <script is:inline type="module" src="/scripts/error-summary.js"></script>
+    </>
+  )}
+  {(view === 'form' || (view === 'sign-in' && Astro.request.method === 'POST')) && (
+    <SeriesForm action={HERE} mode={isNew ? 'new' : 'change'} values={values} errors={errors} venues={venues} offices={offices} keep={keep} preview={preview} dropped={dropped} submit={isNew ? 'Start it' : 'Save'} back={EVENTS_PATH} />
+  )}
+  {view === 'form' && existing !== undefined && (
+    <section class="card series-stop" aria-labelledby="stop-heading">
+      <h2 id="stop-heading">Stop this recurring event</h2>
+      <p>When it no longer meets. You are asked once more before anything changes.</p>
+      <form method="post" action={HERE}>
+        <button class="button button--secondary" type="submit" name="step" value="stop">Stop this recurring event</button>
+      </form>
+    </section>
+  )}
+</Base>

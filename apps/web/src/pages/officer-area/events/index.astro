@@ -18,6 +18,7 @@ import { runtimeDeps } from '../../../lib/auth/flow';
 import { addDays, todayCentral } from '../../../lib/calendar';
 import { EVENTS_PATH, EVENT_DAYS, NEW_EVENT_PATH, type OurDay, eventOffices, mayUseEvents, ourEvents } from '../../../lib/editor/events';
 import { SignInAgain } from '../../../lib/api/editor';
+import { NEW_SERIES_PATH, type OurSeries, ourSeries } from '../../../lib/editor/series';
 import { page } from '../../../lib/site';
 
 export const prerender = false;
@@ -33,6 +34,7 @@ const p = page(HERE);
 
 let problem: 'sign-in' | 'unavailable' | undefined;
 let days: OurDay[] | undefined;
+let recurring: OurSeries[] = [];
 let mayAdd = false;
 let admin = false;
 const api = officerEventsApi();
@@ -47,12 +49,15 @@ else {
     admin = who.admin;
     mayAdd = who.offices.length > 0;
     days = ourEvents(occurrences, new Map(series.map((s) => [s.id, s.hostOfficeId])), who);
+    recurring = ourSeries(series, occurrences, who);
   } catch (error) {
     problem = error instanceof SignInAgain ? 'sign-in' : 'unavailable';
   }
 }
 if (problem === 'unavailable') markUnavailable(Astro.response);
 const added = Astro.url.searchParams.get('saved') === '1';
+const seriesSaved = Astro.url.searchParams.get('series') === 'saved';
+const seriesStopped = Astro.url.searchParams.get('series') === 'stopped';
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
@@ -61,10 +66,36 @@ const added = Astro.url.searchParams.get('saved') === '1';
     place or details. A change shows on the public calendar as soon as it is saved.
   </p>
   {added && <p class="notice" role="status">Saved. The public calendar shows it now.</p>}
+  {seriesSaved && <p class="notice" role="status">Saved. The public calendar shows its dates now.</p>}
+  {seriesStopped && <p class="notice" role="status">Stopped. Its dates are off the calendar now.</p>}
   {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a> to see your events.</p>}
   {problem === 'sign-in' && <PasswordNote />}
   {problem === 'unavailable' && <Unavailable what="Your events" />}
-  {mayAdd && <p class="writer-start"><a class="button" href={NEW_EVENT_PATH}>Add a one-off event</a></p>}
+  {mayAdd && (
+    <p class="writer-start btns">
+      <a class="button" href={NEW_EVENT_PATH}>Add a one-off event</a>
+      <a class="button" href={NEW_SERIES_PATH}>Start a recurring event</a>
+    </p>
+  )}
+  {days !== undefined && mayAdd && (
+    <section class="our-series" aria-labelledby="recurring-title">
+      <h2 id="recurring-title">Recurring events</h2>
+      {recurring.length === 0 ? (
+        <p class="card empty">{admin ? 'There are no recurring events.' : 'Your office has no recurring events.'}</p>
+      ) : (
+        <ul class="our-events">
+          {recurring.map((s) => (
+            <li class="card our-event">
+              <h3>{s.title}</h3>
+              <p>{s.cadence}. Next: {s.next}.</p>
+              {admin && <p class="our-event__meta"><span>{s.office}.</span></p>}
+              <p><a class="button button--secondary" href={s.changePath} aria-label={`Change ${s.title}, the recurring event`}>Change</a></p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )}
   {days !== undefined && !mayAdd && <p>You hold no office, so there are no events for you to change. Ask the Admin if that is wrong.</p>}
   {days !== undefined && mayAdd && days.length === 0 && <p class="card empty">No events in the next {EVENT_DAYS} days.</p>}
   {days?.map((day) => (
