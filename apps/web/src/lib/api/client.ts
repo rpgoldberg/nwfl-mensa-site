@@ -24,6 +24,7 @@
 // ApiTokenRefused instead (above).
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
+import { traceInterceptor } from '../../../server/trace.mjs';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { type ContentItem, ContentKind, ContentService, LinkTargetKind, LinkTargetStatus, type ReadFileResponse } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import { type EventOccurrence, type EventSeries, EventService } from '../../gen/nwfl/mensa/v1/event_pb.js';
@@ -147,7 +148,7 @@ const protoDate = (iso: string) => ({ year: Number(iso.slice(0, 4)), month: Numb
 
 /** The reads over one HTTP/2 connection to the API. `log` takes one JSON line. */
 export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiReads {
-  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES });
+  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES, interceptors: [traceInterceptor] });
   const events = createClient(EventService, transport);
   const content = createClient(ContentService, transport);
 

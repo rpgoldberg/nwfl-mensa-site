@@ -17,9 +17,14 @@ ARG NODE_IMAGE=node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be8571
 # ============================================================================
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
+# LG-N3: the site redactor is the API's (src/lib/redact.ts): its vendored fc-shared and its
+# import-free key module, from the named build context `api` (--build-context api=apps/api).
+# The server bundle carries them; the runtime stage needs neither.
+COPY --from=api vendor/figurecollecting-fc-shared-1.7.0.tgz /api/vendor/
 # --ignore-scripts: no dependency lifecycle scripts run.
 COPY package.json package-lock.json .npmrc ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY --from=api src/platform/site-redaction.ts /api/src/platform/
 COPY astro.config.mjs tsconfig.json ./
 COPY public ./public
 COPY src ./src

@@ -9,6 +9,7 @@ import { newSession, sessionSetCookie } from '../session.mjs';
 import { sharedTokenStore } from '../token-store.mjs';
 import { randomBytes } from 'node:crypto';
 import { createSiteServer, normalisePath, withSitePolicy } from '../siteServer.mjs';
+import { currentTrace } from '../trace.mjs';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
 
@@ -23,6 +24,15 @@ async function serve(handler: Handler, pages?: Map<string, string>, redirects?: 
   server = http.createServer(withSitePolicy(handler, { ...(pages ? { pages } : {}), ...(redirects ? { redirects } : {}) }));
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
+
+/** A logged line without its LG-N3 stamp, which it must carry: an ISO time, the service and a trace id. */
+function unstamped(line: unknown): Record<string, unknown> {
+  const { time, service, trace_id, ...rest } = JSON.parse(String(line)) as Record<string, unknown>;
+  expect(new Date(String(time)).toISOString()).toBe(time);
+  expect(service).toBe('nwfl-web');
+  expect(trace_id).toMatch(/^[0-9a-f]{32}$/);
+  return rest;
 }
 
 function expectSecurityHeaders(res: Response): void {
@@ -144,9 +154,9 @@ describe('withSitePolicy', () => {
     expect(res.headers.getSetCookie()).toEqual(['__Host-ok=1; Path=/; Secure; HttpOnly; SameSite=Lax']);
     expect(res.headers.get('cache-control')).toBe('private, no-store');
     const logged = error.mock.calls.map((c) => String(c[0]));
-    expect(logged).toEqual([
-      JSON.stringify({ level: 'error', msg: 'dropped a cookie that is not host-only', path: '/', cookie: 'plain' }),
-      JSON.stringify({ level: 'error', msg: 'dropped a cookie that is not host-only', path: '/', cookie: '__Host-wide' }),
+    expect(logged.map(unstamped)).toEqual([
+      { level: 'error', msg: 'dropped a cookie that is not host-only', path: '/', cookie: 'plain' },
+      { level: 'error', msg: 'dropped a cookie that is not host-only', path: '/', cookie: '__Host-wide' },
     ]);
     expect(logged.join()).not.toContain('secret-value');
     error.mockRestore();
@@ -169,7 +179,7 @@ describe('withSitePolicy', () => {
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       server = undefined;
     }
-    expect(error.mock.calls.map((c) => String(c[0]))).toContain(JSON.stringify({ level: 'error', msg: 'dropped Clear-Site-Data directives that clear cookies', path: '/' }));
+    expect(error.mock.calls.map((c) => unstamped(c[0]))).toContainEqual({ level: 'error', msg: 'dropped Clear-Site-Data directives that clear cookies', path: '/' });
     error.mockRestore();
   });
 
@@ -293,7 +303,7 @@ describe('withSitePolicy', () => {
       expect(line).not.toContain('SECRETCODE');
       expect(line).not.toContain('STATEVAL');
       expect(line).not.toContain('?');
-      expect(JSON.parse(line)).toEqual({ level: 'error', msg: 'request failed', path: '/auth/callback', err: 'TypeError' });
+      expect(unstamped(line)).toEqual({ level: 'error', msg: 'request failed', path: '/auth/callback', err: 'TypeError' });
     } finally {
       error.mockRestore();
     }
@@ -621,7 +631,7 @@ describe('the calendar feed log', () => {
     res.write(body.slice(0, 5));
     res.end(Buffer.from(body.slice(5)));
   };
-  const lines = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>);
+  const lines = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.map((c) => unstamped(c[0]));
 
   it('logs a fetch of /calendar.ics or /events.ics, with the query, as one JSON line: path, status, bytes and UA, and no address', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -743,6 +753,82 @@ describe('no shared cache keeps a page (CACHEPREF)', () => {
         expect(res.headers.get('cdn-cache-control'), path).toBeNull();
         expect(res.headers.get('vary'), path).toBe('Cookie');
       }
+    }
+  });
+});
+
+// LG-N3: a fresh W3C trace per request, the same trace id on every line it logs, and no query in a logged path.
+describe('request trace and log hygiene (LG-N3)', () => {
+  const parsed = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>);
+
+  it('serves each request inside a trace of its own, minted here: a browser’s traceparent is not continued', async () => {
+    const seen: (string | undefined)[] = [];
+    const base = await serve((_req, res) => {
+      seen.push(currentTrace()?.traceId);
+      res.end('ok');
+    });
+    const sent = `00-${'1'.repeat(32)}-${'2'.repeat(16)}-01`;
+    await (await fetch(`${base}/a`, { headers: { traceparent: sent } })).text();
+    await (await fetch(`${base}/b`)).text();
+    expect(seen).toHaveLength(2);
+    for (const id of seen) expect(id).toMatch(/^[0-9a-f]{32}$/);
+    expect(seen[0]).not.toBe('1'.repeat(32));
+    expect(seen[0]).not.toBe(seen[1]);
+  });
+
+  it('stamps a failed request’s line with time, service and the trace id the handler saw', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      let id: string | undefined;
+      const base = await serve(async () => {
+        id = currentTrace()?.traceId;
+        await new Promise((r) => setTimeout(r, 1));
+        throw new TypeError('x');
+      });
+      await (await fetch(`${base}/x`)).text();
+      const [line] = parsed(error);
+      expect(line).toMatchObject({ level: 'error', msg: 'request failed', path: '/x', err: 'TypeError', service: 'nwfl-web', trace_id: id });
+      expect(new Date(String(line!['time'])).toISOString()).toBe(line!['time']);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('stamps the calendar feed line, written once the response closes, with the request’s trace id', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      let id: string | undefined;
+      const base = await serve((_req, res) => {
+        id = currentTrace()?.traceId;
+        res.end('BEGIN:VCALENDAR');
+      });
+      await (await fetch(`${base}/calendar.ics`)).text();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(parsed(log)).toEqual([expect.objectContaining({ msg: 'calendar feed', service: 'nwfl-web', trace_id: id })]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('logs no query, even one percent-encoded into the path, on a failed request or a dropped cookie', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(async (req, res) => {
+        if (req.url?.startsWith('/cookie')) {
+          res.setHeader('Set-Cookie', 'plain=1; Path=/');
+          res.end('page');
+          return;
+        }
+        throw new TypeError('x');
+      });
+      for (const target of ['/auth/callback?code=SECRETCODE', '/auth/callback%3Fcode=SECRETCODE', '/auth/callback%3fcode=SECRETCODE', '/auth/callback%23code=SECRETCODE', '/cookie%3Fstate=SECRETCODE']) {
+        await (await fetch(`${base}${target}`)).text();
+      }
+      const lines = parsed(error);
+      expect(lines.map((l) => l['path'])).toEqual(['/auth/callback', '/auth/callback', '/auth/callback', '/auth/callback', '/cookie']);
+      expect(error.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/SECRETCODE|%3f|%23/i);
+    } finally {
+      error.mockRestore();
     }
   });
 });

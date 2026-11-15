@@ -19,6 +19,8 @@ import { PUBLIC_ONLY } from 'astro:env/server';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
+import { apiLog } from '../../../server/log.mjs';
+import { traceInterceptor } from '../../../server/trace.mjs';
 import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
 import type { Date as ProtoDate } from '../../gen/nwfl/mensa/v1/common_pb.js';
@@ -234,7 +236,7 @@ function rejectedOf(request: RejectedSignupMessage): RejectedSignup {
 const REFUSED_MSG: Record<string, string> = { SubmitSignup: 'api refused the sign-up', UpdateMyProfile: 'api refused the profile change' };
 
 export function grpcMembership(config: ApiConfig, log: (line: string) => void): MembershipApi {
-  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES });
+  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES, interceptors: [traceInterceptor] });
   const membership = createClient(MembershipService, transport);
 
   /** refusals: the codes this call says in words, as the error each makes. */
@@ -365,7 +367,7 @@ let membershipClient: { api: MembershipApi | undefined } | undefined;
 
 /** One per process, as officerApi() is. */
 export function membershipApi(): MembershipApi | undefined {
-  membershipClient ??= { api: membershipFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: (line) => console.error(line) }) };
+  membershipClient ??= { api: membershipFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: apiLog }) };
   return membershipClient.api;
 }
 

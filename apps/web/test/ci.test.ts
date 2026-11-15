@@ -23,7 +23,7 @@ const JOBS = ['lint', 'typecheck', 'unit', 'e2e', 'docker', 'publish'];
 describe('web workflow', () => {
   it('runs only for changes to the web app, the API protos its client is generated from, the API the leak test runs, or itself, on pushes and pull requests', () => {
     const triggers = ci.slice(0, ci.search(/^permissions:/m));
-    const paths = String.raw`    paths: \['apps/web/\*\*', 'apps/api/proto/\*\*', 'apps/api/src/\*\*', 'apps/api/migrations/\*\*', 'apps/api/scripts/\*\*', '\.github/workflows/web\.yml'\]$`;
+    const paths = String.raw`    paths: \['apps/web/\*\*', 'apps/api/proto/\*\*', 'apps/api/src/\*\*', 'apps/api/migrations/\*\*', 'apps/api/scripts/\*\*', 'apps/api/vendor/\*\*', '\.github/workflows/web\.yml'\]$`;
     for (const event of ['push', 'pull_request']) expect(triggers).toMatch(new RegExp(`^  ${event}:\\n(?:    .*\\n)*?${paths}`, 'm'));
   });
 
@@ -106,6 +106,16 @@ describe('web workflow', () => {
     expect(docker).toMatch(/\/healthz/);
     expect(docker).toMatch(/--build-arg PUBLIC_ONLY=true/);
     expect(docker).toMatch(/\/auth\/callback/);
+  });
+
+  // LG-N3: the build reads the API's site redaction module and vendored fc-shared from the named context `api`.
+  it('gives every image build the api context', () => {
+    for (const name of ['docker', 'publish']) {
+      const body = job(name);
+      const actions = body.match(/docker\/build-push-action@/g) ?? [];
+      expect((body.match(/^ {10}build-contexts: api=apps\/api$/gm) ?? []).length, name).toBe(actions.length);
+      for (const line of body.match(/docker build .*/g) ?? []) expect(line).toMatch(/ --build-context api=\.\.\/api /);
+    }
   });
 
   it('publishes to ghcr.io/rpgoldberg/nwfl-mensa-site/web on a push to main only, once every check passed', () => {

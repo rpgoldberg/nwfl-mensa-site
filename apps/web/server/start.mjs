@@ -7,6 +7,7 @@ import { authConfig } from './auth-config.mjs';
 import { readBuildInfo } from './build-info.mjs';
 import { compileRedirects } from './redirects.mjs';
 import { sessionKey } from './session.mjs';
+import { stamped } from './log.mjs';
 import { createSiteServer } from './siteServer.mjs';
 
 /** @typedef {Record<string, string | undefined>} Env */
@@ -63,7 +64,7 @@ export async function loadPrerendered(clientDir) {
  *   graceMs?: number,
  * }} opts
  */
-export async function start({ env, loadHandler, proc, clientDir, oldSite, buildInfo, log = console.log, graceMs = 10_000 }) {
+export async function start({ env, loadHandler, proc, clientDir, oldSite, buildInfo, log = stamped(console.log), graceMs = 10_000 }) {
   // Astro's entry starts its own server on import unless told not to.
   env['ASTRO_NODE_AUTOSTART'] = 'disabled';
   const { handler } = await loadHandler();

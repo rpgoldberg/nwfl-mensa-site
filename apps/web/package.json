@@ -38,6 +38,7 @@
     "@bufbuild/buf": "1.75.0",
     "@bufbuild/protoc-gen-es": "2.16.0",
     "@eslint/js": "10.0.1",
+    "@figurecollecting/fc-shared": "file:../api/vendor/figurecollecting-fc-shared-1.7.0.tgz",
     "@fontsource/atkinson-hyperlegible": "5.3.0",
     "@fontsource/lexend": "5.3.0",
     "@playwright/test": "1.64.1",

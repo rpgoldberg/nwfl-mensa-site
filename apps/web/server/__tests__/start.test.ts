@@ -183,6 +183,19 @@ describe('start', () => {
     expect(log).toHaveBeenCalledWith(JSON.stringify({ level: 'info', msg: 'listening', host: '127.0.0.1', port }));
   });
 
+  // LG-N3: in production (no log given) its lines are stamped like every other web line.
+  it('stamps its own lines with time and service by default', async () => {
+    const out = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const server = await start({ env: { PORT: '0', HOST: '127.0.0.1' }, proc: new FakeProcess(), loadHandler: async () => ({ handler: (_req: unknown, res: { end: (s: string) => void }) => res.end('ok') }) });
+      servers.push(server);
+      const lines = out.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>);
+      expect(lines.find((l) => l['msg'] === 'listening')).toMatchObject({ level: 'info', service: 'nwfl-web', time: expect.any(String) });
+    } finally {
+      out.mockRestore();
+    }
+  });
+
   it('closes and exits 0 on SIGTERM', async () => {
     const { proc, server } = await boot((_req, res) => res.end('ok'));
     proc.emit('SIGTERM');

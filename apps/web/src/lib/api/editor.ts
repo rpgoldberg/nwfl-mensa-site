@@ -31,6 +31,8 @@ import { create } from '@bufbuild/protobuf';
 import { TimestampSchema, timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
+import { apiLog } from '../../../server/log.mjs';
+import { traceInterceptor } from '../../../server/trace.mjs';
 import { PUBLIC_ONLY } from 'astro:env/server';
 import type { Session } from '../../../server/session.mjs';
 import {
@@ -477,7 +479,7 @@ const codeName = (code: Code) => Code[code].replace(/([a-z])([A-Z])/g, '$1_$2').
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function grpcEditor(config: ApiConfig, log: (line: string) => void): EditorApi {
-  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES });
+  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES, interceptors: [traceInterceptor] });
   const content = createClient(ContentService, transport);
   const events = createClient(EventService, transport);
 
@@ -706,7 +708,7 @@ let editor: { api: EditorApi | undefined } | undefined;
 
 /** One per process, as officerApi() is. */
 export function editorApi(): EditorApi | undefined {
-  editor ??= { api: editorFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: (line) => console.error(line) }) };
+  editor ??= { api: editorFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: apiLog }) };
   return editor.api;
 }
 
