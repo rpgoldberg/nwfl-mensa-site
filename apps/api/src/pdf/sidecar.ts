@@ -42,6 +42,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { FIRST_BYTES_TIMEOUT_MS, type Frame, MAX_INPUT_BYTES, MAX_REQUEST_HEADER_BYTES, REQUEST_MAGIC, type SidecarReply, decodeRequest, encodeReply, readFrame } from './engine-protocol.js';
+import { NWFL_REDACT_OPTIONS, redactString } from '../platform/shared.js';
 import { ENGINE_CHILD, ENGINE_TIMEOUT_MS, type EngineMessage, isolatedRedact } from './isolated.js';
 import { type Kill, clearNamespace, pid1Problem } from './pidns.js';
 import { inSocketDir } from './socket-engine.js';
@@ -405,6 +406,14 @@ export function wholeArgument(value: string | boolean | undefined, max: number):
   if (value === undefined) return undefined;
   const n = Number(value);
   return Number.isInteger(n) && n >= 1 && n <= max ? n : Number.NaN;
+}
+
+/**
+ * A sidecar's own log: one stderr line per call, through the site redactor (LG-N3). Its lines can quote
+ * an error's message (a refused request, a socket that would not listen).
+ */
+export function stderrLines(write: (text: string) => void = (text) => void process.stderr.write(text)): (line: string) => void {
+  return (line) => write(`${redactString(line, NWFL_REDACT_OPTIONS)}\n`);
 }
 
 /**

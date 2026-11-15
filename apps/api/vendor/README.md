@@ -10,4 +10,7 @@ It is vendored because this repo has no token for the FigureCollecting package
 registry yet (the GitHub owner is undecided). Once a `read:packages` token
 exists, switch `package.json` to the registry version, add the `.npmrc` scope
 line fc-coordinator uses, and delete this folder. `src/platform/shared.ts` is
-the only importer, so nothing else changes.
+the API's only importer. The web (LG-N3) installs this same tarball as a dev
+dependency (`apps/web/package.json`, `file:../api/vendor/...`) for the site
+redactor in its server bundle, and its image build copies it from the `api`
+build context: move both along with this one.

@@ -8,12 +8,13 @@
 // before a reply exits 1, so the kubelet restarts the container.
 // ============================================================================
 import { gateSidecarMain } from './gate-service.js';
-import { type Sidecar, holdSignals } from './sidecar.js';
+import { type Sidecar, holdSignals, stderrLines } from './sidecar.js';
 
 // First: as PID 1 it still gets SIGUSR1, and Node's own handler would open the inspector to a child;
 // and a signal that ends a process by default could end it (N2).
 holdSignals();
-const log = (line: string): void => void process.stderr.write(`${line}\n`);
+// LG-N3: through the site redactor (sidecar.ts stderrLines).
+const log = stderrLines();
 /** Set once it listens. */
 const running: { sidecar?: Sidecar } = {};
 let stopping = false;

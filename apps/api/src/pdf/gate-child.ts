@@ -5,7 +5,7 @@
 // ============================================================================
 import type { GateJob } from './gate-isolated.js';
 import { gateReply } from './gate-rules.js';
-import { withoutCanvasWarnings } from './isolated.js';
+import { withoutCanvasWarnings } from './engine-reply.js';
 
 console.warn = withoutCanvasWarnings(console.warn.bind(console));
 

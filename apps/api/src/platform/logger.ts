@@ -2,7 +2,8 @@
 // Structured JSON logging to stdout (R15), ported from fc-coordinator.
 //
 // Every line is one JSON object and carries the fc-shared trace tag
-// (`trace=<traceId> span=<spanId>`) whenever a span is active. The tag is
+// (`trace=<traceId> span=<spanId>`), and the ids as traceId/spanId and
+// trace_id/span_id, whenever a span is active. The tag is
 // ABSENT, not zeroed, when no span is active. Every field passes through
 // fc-shared redaction with the site's own keys added (platform/shared.ts).
 //
@@ -130,6 +131,9 @@ export function createStructuredLogger(options: LoggerOptions = {}): StructuredL
       entry['trace'] = `trace=${ids.traceId} span=${ids.spanId}`;
       entry['traceId'] = ids.traceId;
       entry['spanId'] = ids.spanId;
+      // LG-N3: the same ids in snake case, the shape the web's lines and a log store key on.
+      entry['trace_id'] = ids.traceId;
+      entry['span_id'] = ids.spanId;
     }
     sink(JSON.stringify(entry));
   };

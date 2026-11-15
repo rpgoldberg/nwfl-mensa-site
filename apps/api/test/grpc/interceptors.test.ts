@@ -1,7 +1,7 @@
 // R15: request logging never logs request bodies. Officer-report text arrives
 // in request messages, so the access log records the method, the outcome and
 // the duration, and nothing the caller sent.
-import { Code, createClient } from '@connectrpc/connect';
+import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
 import type http2 from 'node:http2';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -128,6 +128,46 @@ describe('gRPC interceptors', () => {
     expect(String(access?.['trace'])).toMatch(new RegExp(`^trace=${CALLER_TRACE} span=[0-9a-f]{16}$`));
   });
 
+  // LG-N3: the trace a call ran in goes back to the caller, its request id is the caller's trace id, and
+  // the line names both ids in snake case too.
+  it('answers with a traceresponse naming the trace and the server span the access line logged', async () => {
+    lines.length = 0;
+    let header: string | null = null;
+    await client().check(
+      { service: '' },
+      { headers: { traceparent: `00-${CALLER_TRACE}-00f067aa0ba902b7-01` }, onHeader: (h) => (header = h.get('traceresponse')) },
+    );
+    const access = lines.find((l) => l['msg'] === 'rpc');
+    expect(access).toMatchObject({ trace_id: CALLER_TRACE, traceId: CALLER_TRACE, request_id: CALLER_TRACE });
+    expect(access?.['span_id']).toBe(access?.['spanId']);
+    expect(header).toBe(`00-${CALLER_TRACE}-${String(access?.['span_id'])}-01`);
+  });
+
+  it('answers a failed call with its traceresponse too', async () => {
+    behaviour = 'throw';
+    try {
+      lines.length = 0;
+      const error = await client()
+        .check({ service: '' }, { headers: { traceparent: `00-${CALLER_TRACE}-00f067aa0ba902b7-01` } })
+        .then(() => undefined, (e: unknown) => ConnectError.from(e));
+      const access = lines.find((l) => l['msg'] === 'rpc');
+      expect(error?.metadata.get('traceresponse')).toBe(`00-${CALLER_TRACE}-${String(access?.['span_id'])}-01`);
+    } finally {
+      behaviour = 'ok';
+    }
+  });
+
+  it('keeps a random request id when the caller sends no valid traceparent', async () => {
+    for (const traceparent of [undefined, `00-${'0'.repeat(32)}-00f067aa0ba902b7-01`, `00-${CALLER_TRACE}-${'0'.repeat(16)}-01`, `ff-${CALLER_TRACE}-00f067aa0ba902b7-01`, `00-${CALLER_TRACE.toUpperCase()}-00f067aa0ba902b7-01`, 'garbage']) {
+      lines.length = 0;
+      await client().check({ service: '' }, traceparent ? { headers: { traceparent } } : {});
+      const access = lines.find((l) => l['msg'] === 'rpc');
+      expect(String(access?.['request_id']), traceparent).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(access?.['trace_id']).toMatch(/^[0-9a-f]{32}$/);
+      expect(access?.['trace_id']).not.toBe(CALLER_TRACE);
+    }
+  });
+
   it('opens a fresh trace when the caller sends none', async () => {
     lines.length = 0;
     await client().check({ service: '' });
@@ -138,6 +178,14 @@ describe('gRPC interceptors', () => {
 });
 
 describe('interceptor helpers', () => {
+  it('passes on an error that is not a ConnectError as it is, with nothing to answer on (only the access log makes one)', async () => {
+    const thrown = new TypeError('x');
+    const req = { header: new Headers(), service: { typeName: 's' }, method: { name: 'm' } };
+    const call = traceServerInterceptor()(() => Promise.reject(thrown));
+    await expect(call(req as never)).rejects.toBe(thrown);
+    expect(Object.keys(thrown)).toEqual([]);
+  });
+
   it('names gRPC codes in snake case', () => {
     expect(codeName(Code.NotFound)).toBe('not_found');
     expect(codeName(Code.ResourceExhausted)).toBe('resource_exhausted');

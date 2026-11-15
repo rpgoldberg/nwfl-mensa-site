@@ -45,6 +45,22 @@ describe('startTelemetry', () => {
     }
   });
 
+  // LG-N3: trace context only. Baggage would carry whatever a caller put in it into every span and hop.
+  it('propagates trace context only, never baggage, in or out', async () => {
+    const telemetry = startTelemetry();
+    try {
+      expect(propagation.fields().sort()).toEqual(['traceparent', 'tracestate']);
+      const inbound = propagation.extract(context.active(), { traceparent: `00-${'4bf92f3577b34da6a3ce929d0e0e4736'}-00f067aa0ba902b7-01`, baggage: 'member=CANARY' });
+      expect(propagation.getBaggage(inbound)).toBeUndefined();
+      const carrier: Record<string, string> = {};
+      propagation.inject(propagation.setBaggage(inbound, propagation.createBaggage({ member: { value: 'CANARY' } })), carrier);
+      expect(carrier['baggage']).toBeUndefined();
+      expect(carrier['traceparent']).toMatch(/^00-4bf92f3577b34da6a3ce929d0e0e4736-/);
+    } finally {
+      await telemetry.shutdown();
+    }
+  });
+
   it('defaults the service name and unregisters everything on shutdown', async () => {
     const telemetry = startTelemetry();
     expect(telemetry.state.serviceName).toBe('nwfl-mensa-api');

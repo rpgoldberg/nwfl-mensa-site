@@ -4,7 +4,7 @@
 // leaves when its parent goes (the IPC channel closes), so a dead worker or
 // sidecar leaves no engine running.
 // ============================================================================
-import { type EngineMessage, engineReply, withoutCanvasWarnings } from './isolated.js';
+import { type EngineMessage, engineReply, withoutCanvasWarnings } from './engine-reply.js';
 import { redactPdf } from './redact.js';
 
 console.warn = withoutCanvasWarnings(console.warn.bind(console));
