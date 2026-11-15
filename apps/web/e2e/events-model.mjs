@@ -15,7 +15,7 @@ import { clone, create } from '@bufbuild/protobuf';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { randomUUID } from 'node:crypto';
-import { Area, EventOccurrenceSchema, EventVisibility, OccurrenceStatus } from '../src/gen/nwfl/mensa/v1/event_pb.js';
+import { Area, EventOccurrenceSchema, EventSeriesSchema, EventVisibility, OccurrenceStatus } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 
 /** @typedef {import('../src/gen/nwfl/mensa/v1/event_pb.js').EventOccurrence} EventOccurrence */
 /** @typedef {'public' | 'members' | 'officers'} Audience */
@@ -187,6 +187,28 @@ export function createEventModel({ offices, base, series, venues, now = () => ne
     if (!admin && !caller.groups.includes(`nwfl-office-${slug}`)) throw denied();
   };
 
+  /**
+   * SaveSeries, as events/writes.ts answers it (SERIES-UI): a rule of the subset's shape (the API parses it
+   * whole; the form only writes the subset), a host office, the old and the new host office the caller's
+   * (or the Admin), a slug no other series has (db/errors.ts ALREADY_EXISTS); without `active` it keeps its own.
+   * @param {Caller} caller @param {import('../src/gen/nwfl/mensa/v1/event_pb.js').EventSeries | undefined} s @param {boolean | undefined} active
+   */
+  const saveSeries = (caller, s, active) => {
+    if (s === undefined) throw invalid('series is required');
+    if (!/^FREQ=(WEEKLY|MONTHLY)(;(INTERVAL|BYDAY|BYMONTHDAY|COUNT|UNTIL)=[A-Z0-9,+-]+)*$/.test(s.recurrence)) throw invalid('recurrence: unsupported');
+    if (s.startsOn === undefined) throw invalid('starts_on is required');
+    if (s.hostOfficeId === '') throw invalid('host_office_id is required');
+    const old = s.id === '' ? undefined : seriesById.get(s.id);
+    if (s.id !== '' && old === undefined) throw new ConnectError('series not found', Code.NotFound);
+    if (old !== undefined) requireOwner(caller, old.hostOfficeId);
+    requireOwner(caller, s.hostOfficeId);
+    if ([...seriesById.values()].some((o) => o.slug === s.slug && o.id !== s.id)) throw new ConnectError('already exists', Code.AlreadyExists);
+    const id = s.id === '' ? randomUUID() : s.id;
+    const row = { ...clone(EventSeriesSchema, s), id, active: active ?? (old === undefined ? true : old.active !== false) };
+    seriesById.set(id, row);
+    return create(EventSeriesSchema, row);
+  };
+
   /** SaveOccurrence, as events/writes.ts answers it. @param {Caller} caller @param {EventOccurrence} occurrence @param {boolean} decidedLater */
   const save = (caller, occurrence, decidedLater) => {
     const id = occurrence.id;
@@ -266,11 +288,16 @@ export function createEventModel({ offices, base, series, venues, now = () => ne
       },
       listSeries: async (_req, ctx) => {
         const audience = (await callerOf(ctx))?.audience ?? 'public';
-        return { series: series.filter((s) => audience !== 'public' || s.visibility === EventVisibility.PUBLIC).map((s) => ({ ...s, active: true })) };
+        return { series: [...seriesById.values()].filter((s) => s.active !== false && (audience !== 'public' || s.visibility === EventVisibility.PUBLIC)).map((s) => ({ ...s, active: true })) };
       },
       listVenues: async (_req, ctx) => {
         await callerOf(ctx);
         return { venues: venues.map((v) => ({ ...v })) };
+      },
+      saveSeries: async (req, ctx) => {
+        const caller = await callerOf(ctx);
+        if (caller === undefined) throw new ConnectError('sign in first', Code.Unauthenticated);
+        return { series: saveSeries(caller, req.series, req.active) };
       },
       saveOccurrence: async (req, ctx) => {
         const caller = await callerOf(ctx);

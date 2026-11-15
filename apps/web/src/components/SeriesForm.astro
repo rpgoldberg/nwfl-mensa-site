@@ -1,0 +1,290 @@
+---
+// SERIES-UI: the form for a recurring event, to start one (/officer-area/events/series/new) or change one
+// (/officer-area/events/series/<id>). Plain choices, never the rule itself: how often (every week, every 2
+// weeks, every few weeks, once a month), which days, which day of the month, the first date, the time, how
+// long, where, the area, who can see it, the description, and when it ends. Labels above the fields, a hint
+// under each label, a problem under it in words, and the typed values kept. Radio buttons and tick boxes,
+// never a native <select>; no script and no inline style (CSP). Two buttons: "Show the next dates" (nothing
+// is saved) and Save. The next dates, and any date changed one by one that the new pattern drops, show
+// above the buttons once asked for.
+import { formatDate } from '../data/format';
+import { TITLE_MAX, DETAIL_MAX, VISIBILITY_CHOICES, type VenueChoice } from '../lib/editor/events';
+import {
+  AREA_CHOICES,
+  DAY_CODES,
+  DAY_NAMES,
+  type DroppedOverride,
+  ENDS_CHOICES,
+  KIND_CHOICES,
+  type KeptRule,
+  MONTHLY_CHOICES,
+  ORDINAL_CHOICES,
+  REPEAT_CHOICES,
+  type SeriesValues,
+} from '../lib/editor/series';
+
+interface Props {
+  action: string;
+  mode: 'new' | 'change';
+  values: SeriesValues;
+  /** Each field's problems, in words. */
+  errors: Partial<Record<string, string[]>>;
+  venues: readonly VenueChoice[];
+  /** A new series' offices to choose from; asked only when there is more than one. */
+  offices: readonly { id: string; title: string }[];
+  /** A change's pattern the choices cannot show, offered as "keep it as it is". */
+  keep: KeptRule | undefined;
+  /** The next dates of the pattern as chosen, once asked for. */
+  preview: readonly string[] | undefined;
+  /** The dates changed one by one that the pattern as chosen drops. */
+  dropped: readonly DroppedOverride[];
+  submit: string;
+  back: string;
+}
+const { action, mode, values, errors, venues, offices, keep, preview, dropped, submit, back } = Astro.props;
+const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
+const invalid = (field: string) => ((errors[field]?.length ?? 0) > 0 ? 'true' : undefined);
+const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefined);
+---
+<form method="post" action={action} class="rule-form event-form series-form" novalidate>
+  <div class="field">
+    <label for="title">Title</label>
+    <p class="hint" id="title-hint">What the calendar calls it, such as "Games night". Always public, even for a members event.</p>
+    {errors['title']?.map((text) => <p class="error" id="title-error">Problem: {text}</p>)}
+    <input type="text" id="title" name="title" maxlength={TITLE_MAX} required value={values.title} aria-invalid={invalid('title')} aria-describedby={describedBy('title-hint', errorId('title'))} />
+  </div>
+
+  {mode === 'new' && offices.length > 1 && (
+    <fieldset aria-describedby={errorId('office')}>
+      <legend>Whose event is it?</legend>
+      {errors['office']?.map((text) => <p class="error" id="office-error">Problem: {text}</p>)}
+      {offices.map((o, i) => (
+        <div class="choice">
+          <input type="radio" id={`office-${i}`} name="office" value={o.id} checked={values.office === o.id} />
+          <div><label for={`office-${i}`}>{o.title}</label></div>
+        </div>
+      ))}
+    </fieldset>
+  )}
+
+  <fieldset aria-describedby={errorId('kind')}>
+    <legend>What kind of event is it?</legend>
+    {errors['kind']?.map((text) => <p class="error" id="kind-error">Problem: {text}</p>)}
+    {KIND_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`kind-${c.value}`} name="kind" value={c.value} checked={values.kind === c.value} />
+        <label for={`kind-${c.value}`}>{c.label}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <fieldset aria-describedby={describedBy('repeat-hint', errorId('repeat'))}>
+    <legend>How often is it?</legend>
+    <p class="hint" id="repeat-hint">Then choose the days below: for a weekly event, the days of the week; for a monthly one, which day of the month.</p>
+    {errors['repeat']?.map((text) => <p class="error" id="repeat-error">Problem: {text}</p>)}
+    {keep && (
+      <div class="choice">
+        <input type="radio" id="repeat-keep" name="repeat" value="keep" checked={values.repeat === 'keep'} aria-describedby="repeat-keep-hint" />
+        <div>
+          <label for="repeat-keep">Keep it as it is: {keep.label || 'its own pattern'}</label>
+          <p class="hint" id="repeat-keep-hint">This form cannot show this pattern. Keep it, or choose a new one.</p>
+        </div>
+      </div>
+    )}
+    {REPEAT_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`repeat-${c.value}`} name="repeat" value={c.value} checked={values.repeat === c.value} />
+        <label for={`repeat-${c.value}`}>{c.label}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <div class="field">
+    <label for="everyN">For "Every few weeks": how many weeks apart</label>
+    <p class="hint" id="everyN-hint">A number from 1 to 52, such as 3 for every third week.</p>
+    {errors['everyN']?.map((text) => <p class="error" id="everyN-error">Problem: {text}</p>)}
+    <input type="text" id="everyN" name="everyN" inputmode="numeric" size="3" maxlength="2" autocomplete="off" value={values.everyN} aria-invalid={invalid('everyN')} aria-describedby={describedBy('everyN-hint', errorId('everyN'))} />
+  </div>
+
+  <fieldset aria-describedby={describedBy('days-hint', errorId('days'))}>
+    <legend>For a weekly event: on which days</legend>
+    <p class="hint" id="days-hint">Tick each day it meets.</p>
+    {errors['days']?.map((text) => <p class="error" id="days-error">Problem: {text}</p>)}
+    {DAY_CODES.map((d) => (
+      <div class="choice">
+        <input type="checkbox" id={`day-${d}`} name={`day-${d}`} value="yes" checked={values.days.includes(d)} />
+        <label for={`day-${d}`}>{DAY_NAMES[d]}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <fieldset aria-describedby={errorId('monthly')}>
+    <legend>For a monthly event: which day of the month</legend>
+    {errors['monthly']?.map((text) => <p class="error" id="monthly-error">Problem: {text}</p>)}
+    {MONTHLY_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`monthly-${c.value}`} name="monthly" value={c.value} checked={values.monthly === c.value} />
+        <label for={`monthly-${c.value}`}>{c.label}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <fieldset aria-describedby={describedBy('ordinal-hint', errorId('ordinal'))}>
+    <legend>For a monthly event on a day of the week: which one in the month</legend>
+    <p class="hint" id="ordinal-hint">"Last" is the last one in every month. "Fourth" is not always the last: some months have five.</p>
+    {errors['ordinal']?.map((text) => <p class="error" id="ordinal-error">Problem: {text}</p>)}
+    {ORDINAL_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`ordinal-${c.value}`} name="ordinal" value={c.value} checked={values.ordinal === c.value} />
+        <label for={`ordinal-${c.value}`}>{c.label}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <fieldset aria-describedby={errorId('weekday')}>
+    <legend>For a monthly event on a day of the week: which day</legend>
+    {errors['weekday']?.map((text) => <p class="error" id="weekday-error">Problem: {text}</p>)}
+    {DAY_CODES.map((d) => (
+      <div class="choice">
+        <input type="radio" id={`weekday-${d}`} name="weekday" value={d} checked={values.weekday === d} />
+        <label for={`weekday-${d}`}>{DAY_NAMES[d]}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <div class="field">
+    <label for="monthDay">For a monthly event on a date: the day of the month</label>
+    <p class="hint" id="monthDay-hint">A number from 1 to 31. A month without that day (such as the 31st in April) is skipped: to meet every month at its end, choose "On the last day of the month".</p>
+    {errors['monthDay']?.map((text) => <p class="error" id="monthDay-error">Problem: {text}</p>)}
+    <input type="text" id="monthDay" name="monthDay" inputmode="numeric" size="3" maxlength="2" autocomplete="off" value={values.monthDay} aria-invalid={invalid('monthDay')} aria-describedby={describedBy('monthDay-hint', errorId('monthDay'))} />
+  </div>
+
+  <div class="field">
+    <label for="startsOn">First date</label>
+    <p class="hint" id="startsOn-hint">When it starts. Year, month and day, such as 2027-03-14. The pattern counts from here.</p>
+    {errors['startsOn']?.map((text) => <p class="error" id="startsOn-error">Problem: {text}</p>)}
+    <input type="date" id="startsOn" name="startsOn" required value={values.startsOn} aria-invalid={invalid('startsOn')} aria-describedby={describedBy('startsOn-hint', errorId('startsOn'))} />
+  </div>
+
+  <div class="field">
+    <label for="time">Start time, in Central time</label>
+    <p class="hint" id="time-hint">The time on a clock in Northwest Florida, such as 11:30 am or 6:00 pm.</p>
+    {errors['time']?.map((text) => <p class="error" id="time-error">Problem: {text}</p>)}
+    <input type="time" id="time" name="time" required value={values.time} aria-invalid={invalid('time')} aria-describedby={describedBy('time-hint', errorId('time'))} />
+  </div>
+
+  <div class="field">
+    <label for="length">How long, in minutes</label>
+    <p class="hint" id="length-hint">Such as 90 for an hour and a half. Leave it empty if it is not set.</p>
+    {errors['length']?.map((text) => <p class="error" id="length-error">Problem: {text}</p>)}
+    <input type="text" id="length" name="length" inputmode="numeric" size="5" maxlength="4" autocomplete="off" value={values.length} aria-invalid={invalid('length')} aria-describedby={describedBy('length-hint', errorId('length'))} />
+  </div>
+
+  <fieldset aria-describedby={describedBy('venue-hint', errorId('venue'))}>
+    <legend>Where</legend>
+    <p class="hint" id="venue-hint">Choose the place from the list. If it is not known yet, or it changes from date to date, choose "Decided later".</p>
+    {errors['venue']?.map((text) => <p class="error" id="venue-error">Problem: {text}</p>)}
+    <div class="choice">
+      <input type="radio" id="venue-later" name="venue" value="" checked={values.venue === ''} />
+      <label for="venue-later">Decided later, or it changes from date to date</label>
+    </div>
+    {venues.map((v, i) => (
+      <div class="choice">
+        <input type="radio" id={`venue-${i}`} name="venue" value={v.id} checked={values.venue === v.id} aria-describedby={v.hint ? `venue-${i}-hint` : undefined} />
+        <div><label for={`venue-${i}`}>{v.label}</label>{v.hint && <p class="hint" id={`venue-${i}-hint`}>{v.hint}</p>}</div>
+      </div>
+    ))}
+  </fieldset>
+
+  <fieldset aria-describedby={errorId('area')}>
+    <legend>Area</legend>
+    {errors['area']?.map((text) => <p class="error" id="area-error">Problem: {text}</p>)}
+    {AREA_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`area-${c.value}`} name="area" value={c.value} checked={values.area === c.value} />
+        <label for={`area-${c.value}`}>{c.label}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <fieldset aria-describedby={errorId('visibility')}>
+    <legend>Who can see it</legend>
+    {errors['visibility']?.map((text) => <p class="error" id="visibility-error">Problem: {text}</p>)}
+    {VISIBILITY_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`visibility-${c.value}`} name="visibility" value={c.value} checked={values.visibility === c.value} aria-describedby={`visibility-${c.value}-hint`} />
+        <div><label for={`visibility-${c.value}`}>{c.label}</label><p class="hint" id={`visibility-${c.value}-hint`}>{c.hint}</p></div>
+      </div>
+    ))}
+  </fieldset>
+
+  <div class="field">
+    <label for="description">Description</label>
+    <p class="hint" id="description-hint">What it is and who it is for, such as "Board games and talk. Everyone is welcome."</p>
+    {errors['description']?.map((text) => <p class="error" id="description-error">Problem: {text}</p>)}
+    <textarea id="description" name="description" rows="5" maxlength={DETAIL_MAX} aria-invalid={invalid('description')} aria-describedby={describedBy('description-hint', errorId('description'))}>{values.description}</textarea>
+  </div>
+
+  <fieldset aria-describedby={errorId('ends')}>
+    <legend>When does it end?</legend>
+    {errors['ends']?.map((text) => <p class="error" id="ends-error">Problem: {text}</p>)}
+    {ENDS_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`ends-${c.value}`} name="ends" value={c.value} checked={values.ends === c.value} />
+        <label for={`ends-${c.value}`}>{c.label}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <div class="field">
+    <label for="count">For "After a number of dates": how many dates</label>
+    <p class="hint" id="count-hint">Counted from the first date, such as 10.</p>
+    {errors['count']?.map((text) => <p class="error" id="count-error">Problem: {text}</p>)}
+    <input type="text" id="count" name="count" inputmode="numeric" size="5" maxlength="4" autocomplete="off" value={values.count} aria-invalid={invalid('count')} aria-describedby={describedBy('count-hint', errorId('count'))} />
+  </div>
+
+  <div class="field">
+    <label for="until">For "On a date": the last date</label>
+    <p class="hint" id="until-hint">Year, month and day, such as 2027-12-31. A date on the pattern that day is the last one.</p>
+    {errors['until']?.map((text) => <p class="error" id="until-error">Problem: {text}</p>)}
+    <input type="date" id="until" name="until" value={values.until} aria-invalid={invalid('until')} aria-describedby={describedBy('until-hint', errorId('until'))} />
+  </div>
+
+  {preview && (
+    <section class="card series-preview" aria-labelledby="preview-title">
+      <h2 id="preview-title">The next dates</h2>
+      {preview.length > 0 ? (
+        <ul>
+          {preview.map((date) => <li>{formatDate(date)}</li>)}
+        </ul>
+      ) : (
+        <p>No date falls on this pattern from today.</p>
+      )}
+    </section>
+  )}
+
+  {dropped.length > 0 && (
+    <section class="card series-dropped" aria-labelledby="dropped-title">
+      <h2 id="dropped-title">Dates changed one by one that the new pattern leaves out</h2>
+      <p id="dropped-hint">
+        These dates were changed or cancelled one at a time. They stay on the calendar exactly as they are now, even though the new pattern does not meet on them. To
+        take one off, open it and cancel it.
+      </p>
+      <ul>
+        {dropped.map((d) => <li><a href={d.editPath}>{d.heading}</a>: {d.status}.</li>)}
+      </ul>
+      {errors['overrides']?.map((text) => <p class="error" id="overrides-error">Problem: {text}</p>)}
+      <div class="choice">
+        <input type="checkbox" id="overridesSeen" name="overridesSeen" value="yes" checked={values.overridesSeen === 'yes'} aria-describedby={describedBy('dropped-hint', errorId('overrides'))} />
+        <label for="overridesSeen">I have read these dates. Keep them as they are.</label>
+      </div>
+    </section>
+  )}
+
+  <p class="save-note" id="save-note">Saving changes the public calendar at once.</p>
+  <div class="btns">
+    <button class="button button--secondary" type="submit" name="step" value="preview">Show the next dates</button>
+    <button class="button" type="submit" name="step" value="save" aria-describedby="save-note">{submit}</button>
+    <a class="button button--secondary" href={back}>Back to our events</a>
+  </div>
+</form>

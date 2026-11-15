@@ -254,7 +254,7 @@ export function centralInstant(date: string, time: string): Date | undefined {
 }
 
 /** A real calendar date written YYYY-MM-DD. */
-function isoDate(value: string): boolean {
+export function isoDate(value: string): boolean {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (!m) return false;
   const day = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
@@ -262,7 +262,7 @@ function isoDate(value: string): boolean {
 }
 
 /** A time as HH:MM: 18:00 as a browser's time field sends it, or as typed: 6 pm, 6:05 p.m., 12:00 noon. */
-function readTime(value: string): string | undefined {
+export function readTime(value: string): string | undefined {
   const text = value.trim().toLowerCase();
   if (text === 'noon' || text === '12:00 noon' || text === '12 noon') return '12:00';
   const plain = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(text);

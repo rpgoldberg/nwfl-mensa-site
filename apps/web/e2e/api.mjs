@@ -557,9 +557,9 @@ const EVENTS = createEventModel({
   offices: ROSTER.map((o) => ({ id: o.id, slug: o.slug })),
   base: calendar,
   series: [
-    { id: SERIES.lunch, slug: 'wednesday-lunchers', title: 'Wednesday Lunchers', category: EventCategory.LUNCH, cadenceLabel: 'Every Wednesday', description: 'Lunch and conversation, every week. Everyone is welcome.', hostOfficeId: OFFICE.president, area: Area.OKALOOSA, visibility: EventVisibility.PUBLIC },
-    { id: SERIES.happyHour, slug: 'happy-hour', title: 'Happy Hour', category: EventCategory.HAPPY_HOUR, cadenceLabel: 'Second Friday of each month', description: 'A different place each time.', hostOfficeId: OFFICE.social, area: Area.OKALOOSA, visibility: EventVisibility.PUBLIC },
-    { id: SERIES.members, slug: 'members-games-night', title: MEMBERS_SERIES_TITLE, category: EventCategory.OTHER, cadenceLabel: 'Every Sunday', description: 'Games and talk.', hostOfficeId: OFFICE.president, area: Area.BAY, visibility: EventVisibility.MEMBERS },
+    { id: SERIES.lunch, slug: 'wednesday-lunchers', title: 'Wednesday Lunchers', category: EventCategory.LUNCH, cadenceLabel: 'Every Wednesday', recurrence: 'FREQ=WEEKLY;BYDAY=WE', startsOn: { year: 2026, month: 1, day: 7 }, defaultStart: { hours: 11, minutes: 30 }, description: 'Lunch and conversation, every week. Everyone is welcome.', hostOfficeId: OFFICE.president, area: Area.OKALOOSA, visibility: EventVisibility.PUBLIC },
+    { id: SERIES.happyHour, slug: 'happy-hour', title: 'Happy Hour', category: EventCategory.HAPPY_HOUR, cadenceLabel: 'Second Friday of each month', recurrence: 'FREQ=MONTHLY;BYDAY=2FR', startsOn: { year: 2026, month: 1, day: 9 }, defaultStart: { hours: 17, minutes: 0 }, description: 'A different place each time.', hostOfficeId: OFFICE.social, area: Area.OKALOOSA, visibility: EventVisibility.PUBLIC },
+    { id: SERIES.members, slug: 'members-games-night', title: MEMBERS_SERIES_TITLE, category: EventCategory.OTHER, cadenceLabel: 'Every Sunday', recurrence: 'FREQ=WEEKLY;BYDAY=SU', startsOn: { year: 2026, month: 1, day: 4 }, defaultStart: { hours: 19, minutes: 0 }, description: 'Games and talk.', hostOfficeId: OFFICE.president, area: Area.BAY, visibility: EventVisibility.MEMBERS },
   ],
   venues: [VENUES.bistro, VENUES.taproom, VENUES.diner, VENUES.home, VENUES.video],
 });
