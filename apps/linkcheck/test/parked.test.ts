@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parkedSignals } from '../src/parked.js';
+import { parkedSignals, showsPage } from '../src/parked.js';
 
 describe('parkedSignals: any one means parked or for sale (the editor confirms)', () => {
   it('names parking nameservers', () => {
@@ -78,5 +78,22 @@ describe('parkedSignals: any one means parked or for sale (the editor confirms)'
   it('still hides a for-sale phrase in a script or comment after U+0130', () => {
     expect(parkedSignals({ body: `\u0130\u0130<SCRIPT>buy this domain</SCRIPT><p>Welcome</p>` })).toEqual([]);
     expect(parkedSignals({ body: `\u0130<!-- buy this domain --><p>Welcome</p>` })).toEqual([]);
+  });
+});
+
+describe('showsPage (LINKS-REMEMBER b)', () => {
+  const prose = 'Club news for the month: the games night moved to the library, the speaker series resumes in the spring, and the newsletter wants your puzzles, reviews and photos. Write to the editor with anything you would like to see in the next issue.';
+  it.each([
+    ['no body', undefined, false],
+    ['no title', `<p>${prose}</p>`, false],
+    ['a title tag never closed', `<title>Club news<p>${prose}</p>`, false],
+    ['a title with no end of tag', '<title', false],
+    ['an empty title', `<title></title><p>${prose}</p>`, false],
+    ['a "not found" title', `<TITLE>404 - Not Found</TITLE><p>${prose}</p>`, false],
+    ['a stock server title', `<title>Apache2 Default Page: It works</title><p>${prose}</p>`, false],
+    ['a real title and a short body', '<title>Club news</title><p>Moved.</p>', false],
+    ['a real title and a real body', `<html><head><TITLE>Club news</TITLE></head><body><p>${prose}</p></body></html>`, true],
+  ])('%s: %s', (_name, body, expected) => {
+    expect(showsPage(body)).toBe(expected);
   });
 });

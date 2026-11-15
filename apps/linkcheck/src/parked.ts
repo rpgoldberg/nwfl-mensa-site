@@ -64,6 +64,27 @@ function visible(html: string): string {
   return out.replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/** A title that says the page is missing, or that names a server's or host's stock page. */
+const STOCK_TITLE = /\b(not found|404|410|gone|no longer|does ?n[o']?t exist|error|welcome to nginx|it works|default (web )?(site )?page|test page|index of|account suspended|site not found|not configured|coming soon|under construction)\b/i;
+const MAX_TITLE = 1024;
+
+/**
+ * LINKS-REMEMBER (b): whether a 404 or 410 body still looks like a real page: a title of its own (not a
+ * "not found" or a server's or host's stock title) and a non-trivial visible text. Parked and for-sale
+ * pages are caught by parkedSignals first; this reads the body as data only, by the same linear scan.
+ */
+export function showsPage(body: string | undefined): boolean {
+  if (body === undefined) return false;
+  const lower = body.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  const open = lower.indexOf('<title');
+  const start = open === -1 ? -1 : lower.indexOf('>', open);
+  const close = start === -1 ? -1 : lower.indexOf('</title', start);
+  if (close === -1) return false;
+  const title = body.slice(start + 1, Math.min(close, start + 1 + MAX_TITLE)).replace(/\s+/g, ' ').trim();
+  if (title === '' || STOCK_TITLE.test(title)) return false;
+  return visible(body).length - title.length >= NEAR_EMPTY;
+}
+
 export interface ParkedInput {
   ns?: readonly string[];
   finalUrl?: string;

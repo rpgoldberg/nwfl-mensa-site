@@ -54,8 +54,8 @@ describe('renderSheet', () => {
   });
 
   it('numbers each URL that needs an answer once, with its files and pages', () => {
-    expect(sheet).toContain('| 1 | public | 2, 3 | Odd \\*bold\\* \\| pipe \\<b\\>tag\\</b\\> \\[link\\]\\(javascript:x\\) | `https://site.example/odd` | `https://other.example/x%7Cy` | flag | unrelated-redirect | It now leads to another site; check that it is the right one. |');
-    expect(sheet).toContain('| 2 | members | 1 | Visual novels | `https://vndb.org/v1` |  | review | no-fetch | Not checked: officer review. |');
+    expect(sheet).toContain('| 1 | public | 2, 3 | Odd \\*bold\\* \\| pipe \\<b\\>tag\\</b\\> \\[link\\]\\(javascript:x\\) | `https://site.example/odd` | `https://other.example/x%7Cy` | flag | unrelated-redirect | It now leads to another site; check that it is the right one. Or give a different link. |');
+    expect(sheet).toContain('| 2 | members | 1 | Visual novels | `https://vndb.org/v1` |  | review | no-fetch | Not checked: officer review. Or give a different link. |');
     const both = renderSheet({ ...report, results: [report.results[2] as CheckResult] }, {
       public: extraction('public', [{ page: 2, rect: [1, 1, 2, 2], url: 'https://vndb.org/v1', text: '' }]),
       members: extraction('members', [{ page: 1, rect: [1, 1, 2, 2], url: 'https://vndb.org/v1', text: 'Visual novels' }, { page: 3, rect: [1, 1, 2, 2], url: 'https://vndb.org/v1', text: '' }]),
@@ -66,7 +66,7 @@ describe('renderSheet', () => {
   it('lists what is kept, what cannot be kept, what was refused and what is printed with no link', () => {
     expect(sheet).toContain('| public | 1 | Our site | `https://site.example/` | ok |');
     expect(sheet).toContain('| public | 4 | Books | `https://xn--bcher-kva.example/` | ok |');
-    expect(sheet).toContain('| public | 4 | Inside | `http://10.0.0.1/%60x%60` | private-address | It points into a private network; it cannot be kept. |');
+    expect(sheet).toContain('| public | 4 | Inside | `http://10.0.0.1/%60x%60` | private-address | It points into a private network; it cannot be kept. Or give a different link. |');
     expect(sheet).toContain('| public | 2 | a link with a scheme that is never kept (javascript) |');
     expect(sheet).toContain('| public | 3 | a link whose area is off the page |');
     expect(sheet).toContain('2 links to places inside the file (not kept in this version)');

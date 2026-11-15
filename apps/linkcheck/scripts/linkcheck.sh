@@ -5,17 +5,20 @@
 # stay private (0700):
 #   extract  --network none, --memory=1g: the only container that sees a PDF, mounted read-only;
 #   check    --dns 1.1.1.1, --memory=512m: a network, but no PDF (only the extract files);
-#   list     --network none: the editor's answers in, links.json out.
+#   replace  --dns 1.1.1.1, --memory=512m: the different links in the answers checked (no PDF);
+#   list     --network none: the editor's answers in, links.json and remember.json out.
+# A remember file (LINKS-REMEMBER) is mounted read-only; the list step's new remember.json is copied
+# back over it, so the next issue's check fills in the same answers. It need not exist on the first issue.
 #
-#   linkcheck.sh check <image> <issue-date YYYY-MM-DD> <public.pdf> <members.pdf> <out-dir>
-#   linkcheck.sh list <image> <out-dir> [<answers.json>]
+#   linkcheck.sh check <image> <issue-date YYYY-MM-DD> <public.pdf> <members.pdf> <out-dir> [<remember.json>]
+#   linkcheck.sh list <image> <out-dir> [<answers.json> [<remember.json>]]
 # Give the image by digest (ghcr.io/...@sha256:...), as printed by CI.
 set -eu
 umask 077
 
 usage() {
-  echo "usage: linkcheck.sh check <image> <issue-date> <public.pdf> <members.pdf> <out-dir>" >&2
-  echo "       linkcheck.sh list <image> <out-dir> [<answers.json>]" >&2
+  echo "usage: linkcheck.sh check <image> <issue-date> <public.pdf> <members.pdf> <out-dir> [<remember.json>]" >&2
+  echo "       linkcheck.sh list <image> <out-dir> [<answers.json> [<remember.json>]]" >&2
   exit 2
 }
 
@@ -26,6 +29,12 @@ shift 2
 
 abs() { (CDPATH='' cd -- "$(dirname -- "$1")" && printf '%s/%s\n' "$(pwd)" "$(basename -- "$1")"); }
 
+# The remember file's absolute path; its folder must exist (the file need not, on the first issue).
+remembered() {
+  [ -d "$(dirname -- "$1")" ] || { echo "linkcheck.sh: the folder for $1 does not exist" >&2; exit 2; }
+  abs "$1"
+}
+
 harden() {
   printf '%s\n' --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     --pids-limit 64 --cpus 1 --tmpfs /tmp:rw,noexec,nosuid,size=64m --user "$(id -u):$(id -g)"
@@ -33,10 +42,14 @@ harden() {
 
 case $mode in
   check)
-    [ $# -eq 4 ] || usage
-    date=$1 public=$(abs "$2") members=$(abs "$3") out=$4
+    [ $# -ge 4 ] && [ $# -le 5 ] || usage
+    date=$1 public=$(abs "$2") members=$(abs "$3") out=$4 memory=
     case $date in [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) ;; *) usage ;; esac
     [ -f "$public" ] && [ -f "$members" ] || { echo "linkcheck.sh: both PDFs must exist" >&2; exit 2; }
+    if [ $# -eq 5 ]; then
+      memory=$(remembered "$5")
+      [ -f "$memory" ] || { echo "linkcheck.sh: no remember file yet at $memory; step 8 writes it" >&2; memory=; }
+    fi
     mkdir -p -- "$out"
     out=$(CDPATH='' cd -- "$out" && pwd)
     for audience in public members; do
@@ -46,20 +59,45 @@ case $mode in
         -v "$pdf:/in/file.pdf:ro" -v "$out:/out" "$image" \
         extract --audience "$audience" --in /in/file.pdf --out /out
     done
-    # shellcheck disable=SC2046
-    docker run $(harden) --dns 1.1.1.1 --memory=512m --memory-swap=512m \
-      -v "$out:/out" "$image" \
-      check --issue-date "$date" --out /out /out/extract-public.json /out/extract-members.json
+    if [ -n "$memory" ]; then
+      # shellcheck disable=SC2046
+      docker run $(harden) --dns 1.1.1.1 --memory=512m --memory-swap=512m \
+        -v "$out:/out" -v "$memory:/in/remember.json:ro" "$image" \
+        check --issue-date "$date" --remember /in/remember.json --out /out /out/extract-public.json /out/extract-members.json
+    else
+      # shellcheck disable=SC2046
+      docker run $(harden) --dns 1.1.1.1 --memory=512m --memory-swap=512m \
+        -v "$out:/out" "$image" \
+        check --issue-date "$date" --out /out /out/extract-public.json /out/extract-members.json
+    fi
     ;;
   list)
-    [ $# -ge 1 ] && [ $# -le 2 ] || usage
+    [ $# -ge 1 ] && [ $# -le 3 ] || usage
     out=$(CDPATH='' cd -- "$1" && pwd)
-    if [ $# -eq 2 ]; then
-      answers=$(abs "$2")
+    if [ $# -ge 2 ]; then
+      answers=$(abs "$2") memory=
+      [ -f "$answers" ] || { echo "linkcheck.sh: no answers file at $answers" >&2; exit 2; }
+      [ $# -eq 3 ] && memory=$(remembered "$3")
+      # LINKS-REPLACE: the different links are checked like any link, with DNS and no PDF.
       # shellcheck disable=SC2046
-      docker run $(harden) --network none --memory=512m --memory-swap=512m \
+      docker run $(harden) --dns 1.1.1.1 --memory=512m --memory-swap=512m \
         -v "$out:/out" -v "$answers:/in/answers.json:ro" "$image" \
-        list --check /out/check.json --public /out/extract-public.json --members /out/extract-members.json --answers /in/answers.json --out /out
+        replace --check /out/check.json --answers /in/answers.json --out /out
+      if [ -n "$memory" ] && [ -f "$memory" ]; then
+        # shellcheck disable=SC2046
+        docker run $(harden) --network none --memory=512m --memory-swap=512m \
+          -v "$out:/out" -v "$answers:/in/answers.json:ro" -v "$memory:/in/remember.json:ro" "$image" \
+          list --check /out/check.json --public /out/extract-public.json --members /out/extract-members.json --answers /in/answers.json \
+          --replacements /out/check-replacements.json --remember /in/remember.json --out /out
+      else
+        # shellcheck disable=SC2046
+        docker run $(harden) --network none --memory=512m --memory-swap=512m \
+          -v "$out:/out" -v "$answers:/in/answers.json:ro" "$image" \
+          list --check /out/check.json --public /out/extract-public.json --members /out/extract-members.json --answers /in/answers.json \
+          --replacements /out/check-replacements.json --out /out
+      fi
+      # The next issue fills in these answers: carry the new remember.json back to the officer's file.
+      if [ -n "$memory" ]; then cp -- "$out/remember.json" "$memory"; fi
     else
       # shellcheck disable=SC2046
       docker run $(harden) --network none --memory=512m --memory-swap=512m \

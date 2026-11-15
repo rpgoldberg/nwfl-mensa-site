@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 const SCRIPT = fileURLToPath(new URL('../scripts/linkcheck.sh', import.meta.url));
 const IMAGE = 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:' + '0'.repeat(64);
 
-function run(args: string[]): { runs: string[][]; dir: string; status: number; stderr: string } {
+function run(args: string[], setup: (dir: string) => void = () => undefined): { runs: string[][]; dir: string; status: number; stderr: string } {
   const dir = mkdtempSync(path.join(tmpdir(), 'linkcheck-sh-'));
   const bin = path.join(dir, 'bin');
   mkdirSync(bin);
@@ -20,6 +20,7 @@ function run(args: string[]): { runs: string[][]; dir: string; status: number; s
   writeFileSync(path.join(dir, 'public.pdf'), '%PDF-1.7');
   writeFileSync(path.join(dir, 'members.pdf'), '%PDF-1.7');
   writeFileSync(path.join(dir, 'answers.json'), '{}');
+  setup(dir);
   let status = 0;
   let stderr = '';
   try {
@@ -77,18 +78,58 @@ describe('scripts/linkcheck.sh', () => {
     expect(check.slice(check.indexOf(IMAGE))).toEqual([IMAGE, 'check', '--issue-date', '2026-09-01', '--out', '/out', '/out/extract-public.json', '/out/extract-members.json']);
   });
 
-  it('runs list with no network, with and without answers', () => {
+  it('passes an earlier remember file to check, read-only, and goes on without one on the first issue', () => {
+    const withMemory = run(['check', IMAGE, '2026-10-01', '$DIR/public.pdf', '$DIR/members.pdf', '$DIR/out', '$DIR/remember.json'], (dir) => writeFileSync(path.join(dir, 'remember.json'), '{}'));
+    expect(withMemory.status).toBe(0);
+    const check = withMemory.runs[2] as string[];
+    expect(mounts(check)).toEqual([`${withMemory.dir}/out:/out`, `${withMemory.dir}/remember.json:/in/remember.json:ro`]);
+    expect(check.slice(check.indexOf(IMAGE))).toEqual([IMAGE, 'check', '--issue-date', '2026-10-01', '--remember', '/in/remember.json', '--out', '/out', '/out/extract-public.json', '/out/extract-members.json']);
+    const first = run(['check', IMAGE, '2026-10-01', '$DIR/public.pdf', '$DIR/members.pdf', '$DIR/out', '$DIR/remember.json']);
+    expect(first.status).toBe(0);
+    expect((first.runs[2] as string[]).join(' ')).not.toContain('remember');
+  });
+
+  it('checks the different links with DNS and no PDF, then runs list with no network', () => {
     const withAnswers = run(['list', IMAGE, '$DIR', '$DIR/answers.json']);
     expect(withAnswers.status).toBe(0);
-    const [argv] = withAnswers.runs as [string[]];
+    expect(withAnswers.runs).toHaveLength(2);
+    const [replace, argv] = withAnswers.runs as [string[], string[]];
+    expectHardened(replace);
+    expect(flag(replace, '--dns')).toBe('1.1.1.1');
+    expect(replace).not.toContain('--network');
+    expect(replace).toContain('--memory=512m');
+    expect(mounts(replace)).toEqual([`${withAnswers.dir}:/out`, `${withAnswers.dir}/answers.json:/in/answers.json:ro`]);
+    expect(replace.join(' ')).not.toMatch(/\.pdf/);
+    expect(replace.slice(replace.indexOf(IMAGE) + 1)).toEqual(['replace', '--check', '/out/check.json', '--answers', '/in/answers.json', '--out', '/out']);
     expectHardened(argv);
     expect(flag(argv, '--network')).toBe('none');
     expect(mounts(argv)).toEqual([`${withAnswers.dir}:/out`, `${withAnswers.dir}/answers.json:/in/answers.json:ro`]);
-    expect(argv.slice(argv.indexOf(IMAGE) + 1)).toEqual(['list', '--check', '/out/check.json', '--public', '/out/extract-public.json', '--members', '/out/extract-members.json', '--answers', '/in/answers.json', '--out', '/out']);
+    expect(argv.slice(argv.indexOf(IMAGE) + 1)).toEqual(['list', '--check', '/out/check.json', '--public', '/out/extract-public.json', '--members', '/out/extract-members.json', '--answers', '/in/answers.json', '--replacements', '/out/check-replacements.json', '--out', '/out']);
     const without = run(['list', IMAGE, '$DIR']);
     expect(without.status).toBe(0);
     expect((without.runs[0] as string[]).join(' ')).not.toContain('answers');
     expect(flag(without.runs[0] as string[], '--network')).toBe('none');
+  });
+
+  it('reads the remember file into list, read-only, and carries the new one back to it', () => {
+    const later = run(['list', IMAGE, '$DIR', '$DIR/answers.json', '$DIR/keep/remember.json'], (dir) => {
+      mkdirSync(path.join(dir, 'keep'));
+      writeFileSync(path.join(dir, 'keep', 'remember.json'), 'OLD');
+      writeFileSync(path.join(dir, 'remember.json'), 'NEW');
+    });
+    expect(later.status).toBe(0);
+    const argv = later.runs[1] as string[];
+    expect(flag(argv, '--network')).toBe('none');
+    expect(mounts(argv)).toEqual([`${later.dir}:/out`, `${later.dir}/answers.json:/in/answers.json:ro`, `${later.dir}/keep/remember.json:/in/remember.json:ro`]);
+    expect(argv.slice(argv.indexOf('--replacements'))).toEqual(['--replacements', '/out/check-replacements.json', '--remember', '/in/remember.json', '--out', '/out']);
+    expect(readFileSync(path.join(later.dir, 'keep', 'remember.json'), 'utf8')).toBe('NEW');
+    const first = run(['list', IMAGE, '$DIR', '$DIR/answers.json', '$DIR/keep/remember.json'], (dir) => {
+      mkdirSync(path.join(dir, 'keep'));
+      writeFileSync(path.join(dir, 'remember.json'), 'NEW');
+    });
+    expect(first.status).toBe(0);
+    expect((first.runs[1] as string[]).join(' ')).not.toContain('--remember');
+    expect(readFileSync(path.join(first.dir, 'keep', 'remember.json'), 'utf8')).toBe('NEW');
   });
 
   it.each([
@@ -96,7 +137,10 @@ describe('scripts/linkcheck.sh', () => {
     [['check', IMAGE, '2026-09-01', '$DIR/missing.pdf', '$DIR/members.pdf', '$DIR/out']],
     [['check', IMAGE]],
     [['probe', IMAGE, 'x']],
-    [['list', IMAGE, '$DIR', '$DIR/a', '$DIR/b']],
+    [['list', IMAGE, '$DIR', '$DIR/answers.json', '$DIR/b', '$DIR/c']],
+    [['list', IMAGE, '$DIR', '$DIR/missing.json']],
+    [['list', IMAGE, '$DIR', '$DIR/answers.json', '$DIR/nowhere/remember.json']],
+    [['check', IMAGE, '2026-09-01', '$DIR/public.pdf', '$DIR/members.pdf', '$DIR/out', '$DIR/nowhere/remember.json']],
   ])('refuses %j and starts no container', (args) => {
     const { runs, status } = run(args);
     expect(status).toBe(2);

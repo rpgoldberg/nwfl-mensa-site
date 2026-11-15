@@ -5,6 +5,7 @@ import { EXTRACT_FORMAT, type Extraction, readPdf } from '../src/extract.js';
 import { ANSWERS_FORMAT } from '../src/build.js';
 import { parseLinkList } from '../src/list.js';
 import { parseCheckReport } from '../src/report.js';
+import { REMEMBER_FORMAT, parseRemember } from '../src/remember.js';
 import { buildPdf, uriLink } from './helpers/pdf.js';
 import { fakeDns } from './helpers/servers.js';
 
@@ -104,6 +105,59 @@ describe('the CLI', () => {
     // Without answers, only what is kept by default.
     expect(await main(['list', '--check', '/out/check.json', '--public', '/out/extract-public.json', '--members', '/out/extract-members.json', '--out', '/out'], io)).toBe(0);
     expect(parseLinkList(JSON.parse(text(io, '/out/links.json'))).links.public.map((l) => l.url)).toEqual(['mailto:editor@example.org']);
+  });
+
+  it('checks a different link at step 8, lists it over the same text, and remembers the answers (LINKS-REPLACE, LINKS-REMEMBER)', async () => {
+    const remembered = { format: REMEMBER_FORMAT, answers: [{ url: 'https://www.facebook.com/groups/example', keep: true, answered: '2026-08-12' }] };
+    const io = memoryIo({ '/in/public.pdf': pdf, '/in/members.pdf': pdf, '/in/remember.json': JSON.stringify(remembered) });
+    await main(['extract', '--audience', 'public', '--in', '/in/public.pdf', '--out', '/out'], io);
+    await main(['extract', '--audience', 'members', '--in', '/in/members.pdf', '--out', '/out'], io);
+    expect(await main(['check', '--issue-date', '2026-09-01', '--remember', '/in/remember.json', '--out', '/out', '/out/extract-public.json', '/out/extract-members.json'], io)).toBe(0);
+    expect((JSON.parse(text(io, '/out/answers-template.json')) as { answers: unknown }).answers).toEqual([
+      { row: 1, url: 'https://www.facebook.com/groups/example', keep: true },
+      { row: 2, url: 'https://members.us.mensa.org/directory', keep: false },
+    ]);
+    expect(text(io, '/out/sheet.md')).toContain('Answered before on 2026-08-12: yes (filled in).');
+
+    const answers = (replace: string): string => JSON.stringify({ format: ANSWERS_FORMAT, answers: [{ row: 1, url: 'https://www.facebook.com/groups/example', keep: true }, { row: 2, url: 'https://members.us.mensa.org/directory', replace }] });
+    io.files.set('/in/answers.json', answers('https://www.facebook.com/groups/other'));
+    const list = ['list', '--check', '/out/check.json', '--public', '/out/extract-public.json', '--members', '/out/extract-members.json', '--answers', '/in/answers.json'];
+    expect(await main([...list, '--out', '/out'], io)).toBe(1);
+    expect(io.err.at(-1)).toBe('linkcheck: answers[1] (row 2): the different link was not checked; run step 8 again with linkcheck.sh');
+
+    expect(await main(['replace', '--check', '/out/check.json', '--answers', '/in/answers.json', '--out', '/out'], io)).toBe(0);
+    expect(io.depsSeen.at(-1)).toBe('2026-09-01');
+    expect(io.out.at(-1)).toBe('replace: 1 different link checked: 0 ok, 0 upgrade, 1 confirm, 0 review, 0 flag, 0 drop');
+    expect(parseCheckReport(JSON.parse(text(io, '/out/check-replacements.json'))).results.map((r) => [r.url, r.verdict])).toEqual([['https://www.facebook.com/groups/other', 'confirm']]);
+
+    expect(await main([...list, '--replacements', '/out/check-replacements.json', '--remember', '/in/remember.json', '--out', '/out'], io)).toBe(0);
+    const links = parseLinkList(JSON.parse(text(io, '/out/links.json')));
+    const extraction = JSON.parse(text(io, '/out/extract-public.json')) as Extraction;
+    const directory = extraction.links.find((l) => l.url === 'https://members.us.mensa.org/directory');
+    expect(links.links.public.map((l) => l.url)).toEqual(['https://www.facebook.com/groups/example', 'https://www.facebook.com/groups/other', 'mailto:editor@example.org']);
+    expect(links.links.public[1]).toMatchObject({ page: directory?.page, rect: directory?.rect, confirm: true });
+    expect(io.out).toContain('remember: 2 answers kept for the next issue');
+    expect([...parseRemember(JSON.parse(text(io, '/out/remember.json')))]).toEqual([
+      ['https://members.us.mensa.org/directory', { replace: 'https://www.facebook.com/groups/other', answered: '2026-11-05' }],
+      ['https://www.facebook.com/groups/example', { keep: true, answered: '2026-11-05' }],
+    ]);
+    // With no answers, remember.json is still written (the earlier answers carried).
+    expect(await main(['list', '--check', '/out/check.json', '--public', '/out/extract-public.json', '--members', '/out/extract-members.json', '--remember', '/in/remember.json', '--out', '/o2'], io)).toBe(0);
+    expect(parseRemember(JSON.parse(text(io, '/o2/remember.json'))).size).toBe(1);
+
+    // A different link that fails its check fails step 8, naming the row and printing no URL.
+    io.files.set('/in/answers.json', answers('https://nowhere.example/'));
+    expect(await main(['replace', '--check', '/out/check.json', '--answers', '/in/answers.json', '--out', '/out'], io)).toBe(0);
+    expect(await main([...list, '--replacements', '/out/check-replacements.json', '--out', '/out'], io)).toBe(1);
+    expect(io.err.at(-1)).toBe('linkcheck: answers[1] (row 2): the different link did not pass the check (drop: nxdomain); give another link, or answer keep instead');
+    expect(io.out.join('\n')).not.toContain('nowhere.example');
+  });
+
+  it('refuses a remember file that is not one', async () => {
+    const io = memoryIo({ '/in/p.pdf': pdf, '/in/r.json': '{"format":"x"}' });
+    await main(['extract', '--audience', 'public', '--in', '/in/p.pdf', '--out', '/o'], io);
+    expect(await main(['check', '--issue-date', '2026-09-01', '--remember', '/in/r.json', '--out', '/o', '/o/extract-public.json'], io)).toBe(1);
+    expect(io.err.at(-1)).toMatch(/remembered answers' format must be/);
   });
 
   // S3 and C1 (round 2): a link whose kept form L2 would refuse, or that is not its own kept form, is
