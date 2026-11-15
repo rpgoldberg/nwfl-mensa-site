@@ -10,7 +10,7 @@ import { createGrpcTransport } from '@connectrpc/connect-node';
 import { expect, request, test } from '@playwright/test';
 import { MarkField, MarkSubjectKind, RedactionCategory, RedactionPolicyService } from '../../../api/src/gen/nwfl/mensa/v1/redaction_pb';
 import { ContentKind, ItemVisibility, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
-import { as, content, tokenFor } from './api';
+import { answerEveryLink, as, content, tokenFor } from './api';
 import { marker, person } from './helpers';
 import { EDITOR_REAL } from './servers';
 
@@ -43,6 +43,8 @@ async function partialPiece(president: string, ids: Record<string, string>, appr
   await marks.addRedactionMark({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: id, field: MarkField.BODY, quote: PHONE, category: RedactionCategory.MEMBER_PHONE }, as(president));
   await content.markReady({ itemId: id, targets: { website: true, newsletter: false, email: false } }, as(president));
   if (approve !== undefined) {
+    // L-ITEM: every link needs a yes first (no link checker runs on this stack).
+    await answerEveryLink(id);
     const hash = (await content.getWorkingItem({ itemId: id }, as(approve))).item!.working!.contentHash;
     await content.approve({ itemId: id, contentHash: hash }, as(approve));
   }

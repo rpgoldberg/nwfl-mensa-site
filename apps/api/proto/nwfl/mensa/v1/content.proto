@@ -541,8 +541,7 @@ message ItemLink {
   repeated string reasons = 6;
   string fix = 7;
   // Who gave the latest answer on this ready version, by role; empty if no
-  // one has. Set with accepted false, the answer is no: Approve waits until
-  // the writer fixes the link or a reviewer answers yes.
+  // one has. reviewer_answer says what it was.
   string answered_by_label = 8;
   // The link does not hold Approve up (SPEC-v3 3.3): a reviewer's yes on
   // this ready version (with a note when the checker's latest verdict is

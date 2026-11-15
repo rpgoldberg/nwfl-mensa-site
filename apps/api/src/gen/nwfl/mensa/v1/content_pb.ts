@@ -1494,8 +1494,7 @@ export type ItemLink = Message<"nwfl.mensa.v1.ItemLink"> & {
 
   /**
    * Who gave the latest answer on this ready version, by role; empty if no
-   * one has. Set with accepted false, the answer is no: Approve waits until
-   * the writer fixes the link or a reviewer answers yes.
+   * one has. reviewer_answer says what it was.
    *
    * @generated from field: string answered_by_label = 8;
    */

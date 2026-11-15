@@ -20,6 +20,17 @@ export const as = (token: string) => ({ headers: { authorization: `Bearer ${toke
 
 const tokens = new Map<string, string>();
 
+/**
+ * L-ITEM: a reviewer who did not edit the piece answers yes on every link it lists for them, so its links do
+ * not hold Approve up. No link checker runs on this stack, so every link needs a person's yes.
+ */
+export async function answerEveryLink(itemId: string, login = 'two-seats'): Promise<void> {
+  const token = await tokenFor(login);
+  const { linksSha256, links } = await content.getItemLinks({ itemId }, as(token));
+  const urls = [...new Set(links.map((link) => link.url))];
+  if (urls.length > 0) await content.confirmLinks({ itemId, linksSha256, answers: urls.map((url) => ({ url, yes: true, note: '' })) }, as(token));
+}
+
 /** A person's API access token, signed in at the provider by login (e2e/idp.mjs LOGINS). Fresh each time when `fresh`. */
 export async function tokenFor(login: string, { fresh = false } = {}): Promise<string> {
   const cached = tokens.get(login);
