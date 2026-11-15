@@ -6,7 +6,7 @@ import { relayChildLog } from './isolated.js';
 import { stderrLines } from './sidecar.js';
 
 // Made-up: an address and a bearer token, the shapes a library's error text can carry.
-const EMAIL = 'pat.example@example.test';
+const EMAIL = 'pat.example@example.org';
 const TOKEN = 'Bearer abcDEF123.ghi-jkl_mno';
 
 describe("relayChildLog: a child's stderr, redacted", () => {
@@ -15,7 +15,7 @@ describe("relayChildLog: a child's stderr, redacted", () => {
     const logged: Buffer[] = [];
     const log = relayChildLog(stream, (chunk) => void logged.push(chunk));
     stream.write('engine: opening for pat.exa');
-    stream.write(`mple@example.test\nauth ${TOKEN.slice(0, 12)}`);
+    stream.write(`mple@example.org\nauth ${TOKEN.slice(0, 12)}`);
     stream.end(`${TOKEN.slice(12)} refused\nlast line, no newline`);
     await log.ended;
     const text = Buffer.concat(logged).toString();
@@ -31,8 +31,8 @@ describe("relayChildLog: a child's stderr, redacted", () => {
     stream.end(`x ${EMAIL} and more after the cap ${EMAIL}\n`);
     await log.ended;
     const text = Buffer.concat(logged).toString();
-    expect(text).not.toMatch(/pat\.example|example\.test/);
-    expect(text).toBe("x [REDACTED] and more afte\n[the rest of this child's log is dropped]\n");
+    expect(text).not.toMatch(/pat\.example|example\.org/);
+    expect(text).toBe("x [REDACTED] and more after\n[the rest of this child's log is dropped]\n");
   });
 
   it('keeps a long line whole: no cut of its own below the cap', async () => {

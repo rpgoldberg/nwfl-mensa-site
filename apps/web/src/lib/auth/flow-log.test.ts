@@ -21,7 +21,7 @@ const cfg: AuthConfig = {
   groupPrefix: 'nwfl-',
 };
 // Made-up: an address and a bearer token, the shapes an HTTP client's error can echo.
-const EMAIL = 'pat.example@example.test';
+const EMAIL = 'pat.example@example.org';
 const TOKEN = 'Bearer abcDEF123.ghi-jkl_mno';
 const LEAKY = () => new Error(`request for ${EMAIL} failed with ${TOKEN}`);
 
