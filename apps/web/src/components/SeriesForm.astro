@@ -127,37 +127,37 @@ const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefine
         <label for={`monthly-${c.value}`}>{c.label}</label>
       </div>
     ))}
-
-    <fieldset aria-describedby={describedBy('ordinal-hint', errorId('ordinal'))}>
-      <legend>On a day of the week: which one in the month</legend>
-      <p class="hint" id="ordinal-hint">"Last" is the last one in every month. "Fourth" is not always the last: some months have five.</p>
-      {errors['ordinal']?.map((text) => <p class="error" id="ordinal-error">Problem: {text}</p>)}
-      {ORDINAL_CHOICES.map((c) => (
-        <div class="choice">
-          <input type="radio" id={`ordinal-${c.value}`} name="ordinal" value={c.value} checked={values.ordinal === c.value} />
-          <label for={`ordinal-${c.value}`}>{c.label}</label>
-        </div>
-      ))}
-    </fieldset>
-
-    <fieldset aria-describedby={errorId('weekday')}>
-      <legend>On a day of the week: which day</legend>
-      {errors['weekday']?.map((text) => <p class="error" id="weekday-error">Problem: {text}</p>)}
-      {DAY_CODES.map((d) => (
-        <div class="choice">
-          <input type="radio" id={`weekday-${d}`} name="weekday" value={d} checked={values.weekday === d} />
-          <label for={`weekday-${d}`}>{DAY_NAMES[d]}</label>
-        </div>
-      ))}
-    </fieldset>
-
-    <div class="field">
-      <label for="monthDay">On a date: the day of the month</label>
-      <p class="hint" id="monthDay-hint">A number from 1 to 31. A month without that day (such as the 31st in April) is skipped: to meet every month at its end, choose "On the last day of the month".</p>
-      {errors['monthDay']?.map((text) => <p class="error" id="monthDay-error">Problem: {text}</p>)}
-      <input type="text" id="monthDay" name="monthDay" inputmode="numeric" size="3" maxlength="2" autocomplete="off" value={values.monthDay} aria-invalid={invalid('monthDay')} aria-describedby={describedBy('monthDay-hint', errorId('monthDay'))} />
-    </div>
   </fieldset>
+
+  <fieldset aria-describedby={describedBy('ordinal-hint', errorId('ordinal'))}>
+    <legend>For a monthly event on a day of the week: which one in the month</legend>
+    <p class="hint" id="ordinal-hint">"Last" is the last one in every month. "Fourth" is not always the last: some months have five.</p>
+    {errors['ordinal']?.map((text) => <p class="error" id="ordinal-error">Problem: {text}</p>)}
+    {ORDINAL_CHOICES.map((c) => (
+      <div class="choice">
+        <input type="radio" id={`ordinal-${c.value}`} name="ordinal" value={c.value} checked={values.ordinal === c.value} />
+        <label for={`ordinal-${c.value}`}>{c.label}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <fieldset aria-describedby={errorId('weekday')}>
+    <legend>For a monthly event on a day of the week: which day</legend>
+    {errors['weekday']?.map((text) => <p class="error" id="weekday-error">Problem: {text}</p>)}
+    {DAY_CODES.map((d) => (
+      <div class="choice">
+        <input type="radio" id={`weekday-${d}`} name="weekday" value={d} checked={values.weekday === d} />
+        <label for={`weekday-${d}`}>{DAY_NAMES[d]}</label>
+      </div>
+    ))}
+  </fieldset>
+
+  <div class="field">
+    <label for="monthDay">For a monthly event on a date: the day of the month</label>
+    <p class="hint" id="monthDay-hint">A number from 1 to 31. A month without that day (such as the 31st in April) is skipped: to meet every month at its end, choose "On the last day of the month".</p>
+    {errors['monthDay']?.map((text) => <p class="error" id="monthDay-error">Problem: {text}</p>)}
+    <input type="text" id="monthDay" name="monthDay" inputmode="numeric" size="3" maxlength="2" autocomplete="off" value={values.monthDay} aria-invalid={invalid('monthDay')} aria-describedby={describedBy('monthDay-hint', errorId('monthDay'))} />
+  </div>
 
   <div class="field">
     <label for="startsOn">First date</label>

@@ -32,8 +32,8 @@ async function fillLastMonday(page: Page, title: string) {
   await page.getByRole('radio', { name: 'Something else' }).check();
   await page.getByRole('radio', { name: 'Once a month' }).check();
   await page.getByRole('radio', { name: 'On a day of the week, such as the second Friday' }).check();
-  await page.getByRole('group', { name: 'On a day of the week: which one in the month' }).getByRole('radio', { name: 'Last' }).check();
-  await page.getByRole('group', { name: 'On a day of the week: which day' }).getByRole('radio', { name: 'Monday' }).check();
+  await page.getByRole('group', { name: 'For a monthly event on a day of the week: which one in the month' }).getByRole('radio', { name: 'Last' }).check();
+  await page.getByRole('group', { name: 'For a monthly event on a day of the week: which day' }).getByRole('radio', { name: 'Monday' }).check();
   await page.getByLabel('First date').fill(centralToday());
   await page.getByLabel('Start time, in Central time').fill('19:00');
   await page.getByLabel('How long, in minutes').fill('120');
@@ -56,7 +56,7 @@ test.describe('recurring events', () => {
     await page.getByRole('button', { name: 'Show the next dates' }).click();
     const preview = page.getByRole('region', { name: 'The next dates' });
     await expect(preview.getByRole('listitem')).toHaveCount(5);
-    for (const item of await preview.getByRole('listitem').allTextContents()) expect(item).toMatch(/^Monday, (2[5-9]|3[01]) /);
+    for (const item of await preview.getByRole('listitem').allTextContents()) expect(item).toMatch(/^Monday, (2[2-9]|3[01]) /);
     await expect(page.getByLabel('Title')).toHaveValue(title);
     await page.getByRole('button', { name: 'Start it' }).click();
 
@@ -68,7 +68,7 @@ test.describe('recurring events', () => {
     await mine.getByRole('link', { name: `Change ${title}, the recurring event` }).click();
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(`Change: ${title}`);
     await expect(page.getByRole('radio', { name: 'Once a month' })).toBeChecked();
-    await expect(page.getByRole('group', { name: 'On a day of the week: which one in the month' }).getByRole('radio', { name: 'Last' })).toBeChecked();
+    await expect(page.getByRole('group', { name: 'For a monthly event on a day of the week: which one in the month' }).getByRole('radio', { name: 'Last' })).toBeChecked();
     await page.getByRole('radio', { name: 'Every 2 weeks' }).check();
     await page.getByRole('checkbox', { name: 'Tuesday' }).check();
     await page.getByRole('button', { name: 'Save' }).click();
@@ -143,6 +143,7 @@ test.describe('axe in every theme, and 320 px at the largest text', () => {
     await page.goto(`/officer-area/events/series/${LUNCH}`);
     await visit('change');
     await page.getByRole('button', { name: 'Stop this recurring event' }).click();
+    await expect(page.getByRole('heading', { name: 'Stop Wednesday Lunchers?' })).toBeVisible();
     await visit('stop?');
     await page.goto('/officer-area/events/series/new');
     await page.getByRole('button', { name: 'Start it' }).click();
