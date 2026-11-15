@@ -1,25 +1,34 @@
 // ============================================================================
 // The command line (README). Three steps, each run in its own container (scripts/linkcheck.sh):
 //   extract --audience public|members --in <pdf> --out <dir>      no network; writes extract-<audience>.json
-//   check --issue-date YYYY-MM-DD --out <dir> <extract.json>...    network, no PDF; writes check.json,
-//                                                                 sheet.md and answers-template.json
-//   list --check <check.json> --public <extract.json> --members <extract.json> [--answers <answers.json>] --out <dir>
-//                                                                 no network; writes links.json, prints linksSha256
+//   check --issue-date YYYY-MM-DD [--remember <remember.json>] --out <dir> <extract.json>...
+//                                                                 network, no PDF; writes check.json, sheet.md and
+//                                                                 answers-template.json, with earlier answers filled in
+//   replace --check <check.json> --answers <answers.json> --out <dir>
+//                                                                 network, no PDF; checks the different links given
+//                                                                 (LINKS-REPLACE); writes check-replacements.json
+//   list --check <check.json> --public <extract.json> --members <extract.json> [--answers <answers.json>]
+//        [--replacements <check-replacements.json>] [--remember <remember.json>] --out <dir>
+//                                                                 no network; writes links.json and remember.json,
+//                                                                 prints linksSha256
 // It prints counts and the hash only, never a URL or the text under a link (those go to the files on
 // the officer's machine). An unexpected error is named by its class only.
 // ============================================================================
 import path from 'node:path';
-import { answersTemplate, needsAnswer, parseAnswers, buildLinkList } from './build.js';
-import { type CheckDeps, VERDICTS, assertKeptForms, checkAll } from './check.js';
+import { answersTemplate, needsAnswer, parseAnswers, buildLinkList, replacementsOf } from './build.js';
+import { type CheckDeps, type CheckResult, VERDICTS, assertKeptForms, checkAll } from './check.js';
 import { EXTRACT_FORMAT, ExtractError, type Extraction, parseExtraction } from './extract.js';
 import { AUDIENCES, type Audience, ListError } from './list.js';
 import { CHECK_FORMAT, type CheckReport, ReportError, parseCheckReport } from './report.js';
+import { parseRemember, rememberAnswers } from './remember.js';
 import { renderSheet } from './sheet.js';
 
 export const USAGE = `usage:
   linkcheck extract --audience public|members --in <pdf> --out <dir>
-  linkcheck check --issue-date YYYY-MM-DD --out <dir> <extract.json> [<extract.json>]
-  linkcheck list --check <check.json> --public <extract.json> --members <extract.json> [--answers <answers.json>] --out <dir>`;
+  linkcheck check --issue-date YYYY-MM-DD [--remember <remember.json>] --out <dir> <extract.json> [<extract.json>]
+  linkcheck replace --check <check.json> --answers <answers.json> --out <dir>
+  linkcheck list --check <check.json> --public <extract.json> --members <extract.json> [--answers <answers.json>]
+                 [--replacements <check-replacements.json>] [--remember <remember.json>] --out <dir>`;
 
 export interface Io {
   readFile(path: string): Promise<Uint8Array>;
@@ -37,8 +46,9 @@ class CliError extends Error {}
 
 const FLAGS: Record<string, readonly string[]> = {
   extract: ['audience', 'in', 'out'],
-  check: ['issue-date', 'out'],
-  list: ['check', 'public', 'members', 'answers', 'out'],
+  check: ['issue-date', 'remember', 'out'],
+  replace: ['check', 'answers', 'out'],
+  list: ['check', 'public', 'members', 'answers', 'replacements', 'remember', 'out'],
 };
 
 function parseArgs(command: string, argv: readonly string[]): { flags: Map<string, string>; rest: string[] } {
@@ -97,6 +107,20 @@ async function extractCommand(io: Io, flags: Map<string, string>): Promise<void>
   io.print(`extract ${audience}: ${extraction.links.length} links, ${extraction.refused.length} refused, ${extraction.unlinked.length + extraction.unlinkedMore} printed with no link`);
 }
 
+const verdictCounts = (results: readonly CheckResult[]): string => VERDICTS.map((v) => `${results.filter((r) => r.verdict === v).length} ${v}`).join(', ');
+
+/** LINKS-REPLACE: each different link in the answers, checked like any link, for the list step. */
+async function replaceCommand(io: Io, flags: Map<string, string>): Promise<void> {
+  const report = parseCheckReport(await readJson(io, need(flags, 'check')));
+  const answers = parseAnswers(await readJson(io, need(flags, 'answers')), report);
+  const out = need(flags, 'out');
+  const results = await checkAll(replacementsOf(answers), io.checkDeps(report.issueDate));
+  assertKeptForms(results);
+  const checked: CheckReport = { format: CHECK_FORMAT, issueDate: report.issueDate, checkedAt: io.now().toISOString(), results };
+  await io.writeFile(path.join(out, 'check-replacements.json'), json(checked));
+  io.print(`replace: ${results.length} different link${results.length === 1 ? '' : 's'} checked: ${verdictCounts(results)}`);
+}
+
 async function checkCommand(io: Io, flags: Map<string, string>, files: readonly string[]): Promise<void> {
   const issueDate = need(flags, 'issue-date');
   if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(issueDate)) throw new CliError('--issue-date must be YYYY-MM-DD');
@@ -112,13 +136,15 @@ async function checkCommand(io: Io, flags: Map<string, string>, files: readonly 
   }
   if (io.env['NWFL_SAFE_BROWSING_KEY'] !== undefined) io.warn('linkcheck: a Safe Browsing key is set, but this version does not consult Safe Browsing yet');
   const urls = AUDIENCES.flatMap((audience) => extractions[audience].links.map((l) => l.url));
+  const rememberFile = flags.get('remember');
+  const memory = rememberFile === undefined ? undefined : parseRemember(await readJson(io, rememberFile));
   const results = await checkAll(urls, io.checkDeps(issueDate));
   assertKeptForms(results);
   const report: CheckReport = { format: CHECK_FORMAT, issueDate, checkedAt: io.now().toISOString(), results };
   await io.writeFile(path.join(out, 'check.json'), json(report));
-  await io.writeFile(path.join(out, 'sheet.md'), renderSheet(report, extractions));
-  await io.writeFile(path.join(out, 'answers-template.json'), json(answersTemplate(report)));
-  const counts = VERDICTS.map((v) => `${results.filter((r) => r.verdict === v).length} ${v}`).join(', ');
+  await io.writeFile(path.join(out, 'sheet.md'), renderSheet(report, extractions, memory));
+  await io.writeFile(path.join(out, 'answers-template.json'), json(answersTemplate(report, memory)));
+  const counts = verdictCounts(results);
   io.print(`check: ${counts}; ${results.filter(needsAnswer).length} need an answer`);
 }
 
@@ -127,11 +153,18 @@ async function listCommand(io: Io, flags: Map<string, string>): Promise<void> {
   const extractions = { public: parseExtraction(await readJson(io, need(flags, 'public'))), members: parseExtraction(await readJson(io, need(flags, 'members'))) };
   const answersFile = flags.get('answers');
   const answers = answersFile === undefined ? new Map<string, boolean>() : parseAnswers(await readJson(io, answersFile), report);
+  const replacementsFile = flags.get('replacements');
+  const replaced = replacementsFile === undefined ? undefined : parseCheckReport(await readJson(io, replacementsFile));
+  const rememberFile = flags.get('remember');
+  const prior = rememberFile === undefined ? new Map() : parseRemember(await readJson(io, rememberFile));
   const out = need(flags, 'out');
-  const list = buildLinkList(extractions, report, answers);
+  const list = buildLinkList(extractions, report, answers, undefined, replaced);
+  const remembered = rememberAnswers(prior, report, answers, io.now().toISOString().slice(0, 10));
   await io.writeFile(path.join(out, 'links.json'), json(list));
+  await io.writeFile(path.join(out, 'remember.json'), json(remembered));
   io.print(`linksSha256 ${list.linksSha256}`);
   io.print(`list: ${list.links.public.length} public links, ${list.links.members.length} members links kept`);
+  io.print(`remember: ${remembered.answers.length} answers kept for the next issue`);
 }
 
 /** Runs one command; the exit code: 0 done, 1 refused or failed, 2 a usage error. */
@@ -146,6 +179,7 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     const { flags, rest: files } = parseArgs(command, rest);
     if (command === 'extract') await extractCommand(io, flags);
     else if (command === 'check') await checkCommand(io, flags, files);
+    else if (command === 'replace') await replaceCommand(io, flags);
     else await listCommand(io, flags);
     return 0;
   } catch (error) {

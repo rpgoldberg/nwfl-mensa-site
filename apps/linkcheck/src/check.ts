@@ -19,7 +19,8 @@
 //     answers with a final status outside 2xx, the link has no https and is dropped;
 //   - the status and the chain; an unrelated redirect (another registrable domain, by the Public
 //     Suffix List; www to apex and http to https on one site are related); a redirect down to http;
-//   - parked or for sale (parked.ts), with the nameservers of the registrable domain;
+//   - parked or for sale (parked.ts), with the nameservers of the registrable domain; a 404 or 410 that
+//     is not parked but still shows a real page (a title and a text body) is flagged, not dropped;
 //   - the registration date (rdap.ts): one after the issue date is flagged re-registered;
 //   - mailto: an MX, or A/AAAA as the fallback; a null MX takes no mail.
 // Safe Browsing (Q4) is off until a key exists; every fetched web link notes it, since no hit is
@@ -27,7 +28,7 @@
 // ============================================================================
 import { DnsFailure, resolveAddresses } from './dns.js';
 import { type Fetched, type HopFailure, type NetDeps, follow } from './net.js';
-import { type ParkedSignal, parkedSignals } from './parked.js';
+import { type ParkedSignal, parkedSignals, showsPage } from './parked.js';
 import { type Rdap, rdapDomain } from './rdap.js';
 import { type Kind, type ParsedLink, isLoginWalled, isNoFetch, keptForm, keptUrl, parseKept, registrableDomain, trimTrailing } from './urls.js';
 
@@ -50,6 +51,7 @@ export const REASONS = {
   nxdomain: ['drop', true, 'No such domain; check the spelling.'],
   'no-address': ['drop', true, 'The domain has no web address any more.'],
   dead: ['drop', true, 'The page is gone (404 or 410); find where it moved or remove the link.'],
+  'not-found-page': ['flag', true, 'The site says not found but shows a page: open it yourself.'],
   parked: ['drop', true, 'The domain looks parked or for sale; it may belong to someone else now.'],
   'no-mail': ['drop', true, 'That domain takes no email.'],
   blocked: ['flag', true, 'The site refused the checker (401 or 403); open it yourself.'],
@@ -220,6 +222,8 @@ export function makeChecker(deps: CheckDeps): Checker {
         ...(fetched.body === undefined ? {} : { body: fetched.body }),
       });
       if (signals.length > 0) reasons.push('parked');
+      // A 404 or 410 that still shows a real page (not parked, not a stock page) is the editor's call.
+      else if (reasons[0] === 'dead' && showsPage(fetched.body)) reasons[0] = 'not-found-page';
       notes.push(...signals);
       if (deps.rdap) {
         const answer = await registered(deps.rdap, domain);

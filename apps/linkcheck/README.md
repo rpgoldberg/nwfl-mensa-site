@@ -11,14 +11,22 @@ with no capabilities, no new privileges, a pid, CPU and memory cap and a small t
 | Step | Network | Reads | Writes |
 | --- | --- | --- | --- |
 | `extract` | none | one PDF, read-only | `extract-<audience>.json`: each link's page, rect, URL and the text under it; refused links (page and reason only); URLs printed with no link |
-| `check` | `--dns 1.1.1.1` | the extract files, never a PDF | `check.json` (one verdict per URL), `sheet.md` (what the officer answers), `answers-template.json` |
-| `list` | none | the check, the extracts, the answers | `links.json`, and it prints `linksSha256` |
+| `check` | `--dns 1.1.1.1` | the extract files, never a PDF; a remember file if given | `check.json` (one verdict per URL), `sheet.md` (what the officer answers), `answers-template.json` (earlier answers filled in) |
+| `replace` | `--dns 1.1.1.1` | the check, the answers | `check-replacements.json`: each different link the officer gave, checked like any link |
+| `list` | none | the check, the extracts, the answers, the checked replacements, a remember file if given | `links.json` and `remember.json`, and it prints `linksSha256` |
 
 ```sh
 sh scripts/linkcheck.sh check ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:<digest> 2026-09-01 public.pdf members.pdf out/
-# answer the sheet: copy out/answers-template.json, set "keep": true on each yes
+# answer the sheet: copy out/answers-template.json, set "keep": true on each yes,
+# or "replace": "https://..." in place of "keep" to give a different link over the same printed text
 sh scripts/linkcheck.sh list ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:<digest> out/ answers.json
 ```
+
+Both steps take an optional last argument, a remember file (`nwfl-link-remember/1`): `list` writes each
+answer to it by URL, with the date, and the next issue's `check` fills the same answers in, except over a
+fresh unsafe verdict (a certificate failure, parking, re-registration or an unrelated redirect), which asks
+again. A different link goes in `links.json` only if its own check is `ok`, or `confirm` or `review` (never
+fetched: the replace answer is the officer's yes); `links.json`'s format is unchanged.
 
 The containers run as the invoking user (never root), so the output folder can stay private (0700); the
 image's own user is 65534.
@@ -28,7 +36,9 @@ image's own user is 65534.
 `ok` and `upgrade` (rewritten to https, or trimmed of stray punctuation) are kept unless the officer says
 no. `confirm` (a login-walled host: Facebook, Instagram, LinkedIn, X, Nextdoor), `review` (the no-fetch
 list, "not checked: officer review"), `flag` and `drop` are kept only on a yes. Some reasons cannot be kept
-at all: no https, a private address, a URL that does not parse, another scheme or port, credentials.
+at all: no https, a private address, a URL that does not parse, another scheme or port, credentials. A 404
+or 410 that still shows a real page (its own title and a text body, not parked or a stock server page) is
+`flag` ("the site says not found but shows a page"), not `drop`.
 
 ## Safety
 

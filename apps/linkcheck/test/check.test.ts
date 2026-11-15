@@ -11,6 +11,8 @@ const A = '93.184.216.1';
 const NAMES = ['site.example', 'www.site.example', 'other.example', 'parked.example', 'sale.example', 'old.example', 'reg.example', 'mx.example', 'feed.example', 'slow.example', 'unsure.example'];
 const pki = testPki(NAMES);
 
+const PROSE = 'The spring gala is on the second Saturday at the community hall. Bring a dish to share, a puzzle you like and a friend who has never been. Doors open at six and the quiz starts at seven; tables of four, prizes for the top three, and coffee for everyone who stays to help clear up afterwards.';
+
 type Page = { status: number; headers?: Record<string, string>; body?: string };
 const PAGES: Record<string, Page | 'hang'> = {
   'site.example/': { status: 200, headers: { 'content-type': 'text/html' }, body: '<p>Club news</p>' },
@@ -39,6 +41,16 @@ const PAGES: Record<string, Page | 'hang'> = {
   'reg.example/': { status: 200, body: 'hello' },
   'unsure.example/': { status: 200, body: 'hello' },
   'slow.example/': 'hang',
+  // LINKS-REMEMBER (b): a 404 or 410 that still shows a real page, and the shapes that stay dead.
+  'site.example/still-there': { status: 404, headers: { 'content-type': 'text/html' }, body: `<html><head><title>Spring Gala - Example Club</title></head><body><h1>Spring Gala</h1><p>${PROSE}</p></body></html>` },
+  'site.example/still-410': { status: 410, headers: { 'content-type': 'text/html' }, body: `<title>Puzzle Night</title><p>${PROSE}</p>` },
+  'site.example/nginx-404': { status: 404, headers: { 'content-type': 'text/html' }, body: '<html><head><title>404 Not Found</title></head><body><center><h1>404 Not Found</h1></center><hr><center>nginx</center></body></html>' },
+  'site.example/themed-404': { status: 404, headers: { 'content-type': 'text/html' }, body: `<title>Page not found - Example Club</title><p>${PROSE}</p>` },
+  'site.example/host-404': { status: 404, headers: { 'content-type': 'text/html' }, body: `<title>Welcome to nginx!</title><p>${PROSE}</p>` },
+  'site.example/short-404': { status: 404, headers: { 'content-type': 'text/html' }, body: '<title>Spring Gala</title><p>Gone.</p>' },
+  'site.example/untitled-404': { status: 404, headers: { 'content-type': 'text/html' }, body: `<title>  </title><p>${PROSE}</p>` },
+  'sale.example/old': { status: 404, headers: { 'content-type': 'text/html' }, body: `<title>sale.example</title><h1>This domain is for sale!</h1><p>${PROSE}</p>` },
+  'parked.example/old': { status: 404, headers: { 'content-type': 'text/html' }, body: `<title>Spring Gala</title><p>${PROSE}</p>` },
 };
 
 function route(req: IncomingMessage, res: ServerResponse): void {
@@ -174,8 +186,23 @@ describe('checkLink: one verdict per link, with its reasons', () => {
     ['https://sale.example/', 'drop', ['parked']],
     ['https://parked.example/', 'drop', ['parked']],
     ['https://old.example/', 'flag', ['re-registered']],
+    ['https://site.example/still-there', 'flag', ['not-found-page']],
+    ['https://site.example/still-410', 'flag', ['not-found-page']],
+    ['https://site.example/nginx-404', 'drop', ['dead']],
+    ['https://site.example/themed-404', 'drop', ['dead']],
+    ['https://site.example/host-404', 'drop', ['dead']],
+    ['https://site.example/short-404', 'drop', ['dead']],
+    ['https://site.example/untitled-404', 'drop', ['dead']],
+    ['https://sale.example/old', 'drop', ['dead', 'parked']],
+    ['https://parked.example/old', 'drop', ['dead', 'parked']],
   ])('%s is %s %j', async (url, verdict, reasons) => {
     expect(await check(url)).toMatchObject({ verdict, reasons });
+  });
+
+  it('flags a 404 that still shows a real page, keepable, with a plain fix', async () => {
+    const out = await check('https://site.example/still-there');
+    expect(out).toMatchObject({ verdict: 'flag', keepable: true, kept: 'https://site.example/still-there' });
+    expect(out.fix).toBe('The site says not found but shows a page: open it yourself.');
   });
 
   it('accepts www to apex and http to https on the same site as related', async () => {

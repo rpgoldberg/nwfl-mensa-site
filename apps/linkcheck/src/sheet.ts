@@ -1,7 +1,8 @@
 // ============================================================================
 // The sheet (SPEC D4 output): what the editor reads and answers, one Markdown file per issue, on their own
 // machine only. Every URL that needs the editor's answer gets one numbered row (all its files and pages on
-// it), with the text under the link, the URL, the final URL, the verdict, the reason and the fix.
+// it), with the text under the link, the URL, the final URL, the verdict, the reason and the fix (with the
+// offer of a different link, and any answer remembered from an earlier issue: remember.ts).
 // Then what is kept, what cannot be kept, what was refused when the links were read, and the URLs
 // printed with no link.
 //
@@ -15,6 +16,7 @@ import type { Extraction, RefusalReason } from './extract.js';
 import { AUDIENCES, type Audience } from './list.js';
 import type { CheckReport } from './report.js';
 import { needsAnswer } from './build.js';
+import { type Memory, recall } from './remember.js';
 import { CONTROLS, parseLink } from './urls.js';
 
 const MAX_CELL = 200;
@@ -54,7 +56,23 @@ interface Occurrence {
   text: string;
 }
 
-export function renderSheet(report: CheckReport, extractions: Record<Audience, Extraction>): string {
+const OFFER = new Set(['drop', 'flag', 'review']);
+
+/** LINKS-REMEMBER (a): what was answered before for this URL, and whether it is filled in or asked again. */
+function before(memory: Memory | undefined, r: CheckResult, waits: boolean): string {
+  const got = recall(memory, r, waits);
+  if (got === undefined) return '';
+  const { remembered, unsafe } = got;
+  if (unsafe !== undefined) return ` Answered before on ${remembered.answered}, but asked again: ${unsafe}.`;
+  const what = 'replace' in remembered ? `a different link, ${code(remembered.replace)}` : remembered.keep ? 'yes' : 'no';
+  return ` Answered before on ${remembered.answered}: ${what} (filled in).`;
+}
+
+/** The suggested fix, the offer of a different link (LINKS-REPLACE), and any remembered answer. */
+const fixCell = (memory: Memory | undefined, r: CheckResult, waits: boolean): string =>
+  `${cell(r.fix ?? '')}${OFFER.has(r.verdict) ? ' Or give a different link.' : ''}${before(memory, r, waits)}`;
+
+export function renderSheet(report: CheckReport, extractions: Record<Audience, Extraction>, memory?: Memory): string {
   const byUrl = new Map(report.results.map((r) => [r.url, r]));
   const where = new Map<string, Occurrence[]>();
   for (const audience of AUDIENCES) {
@@ -90,7 +108,7 @@ export function renderSheet(report: CheckReport, extractions: Record<Audience, E
       ? ['Nothing needs your answer.']
       : table(
           ['Row', 'File', 'Page', 'Text under the link', 'Link', 'Final address', 'Verdict', 'Reason', 'Suggested fix'],
-          asking.map((r, i) => row([i + 1, files(r), pages(r), text(r), code(r.url), code(r.finalUrl), r.verdict, reason(r), cell(r.fix ?? '')])),
+          asking.map((r, i) => row([i + 1, files(r), pages(r), text(r), code(r.url), code(r.finalUrl), r.verdict, reason(r), fixCell(memory, r, true)])),
         )),
     '',
     '## Kept',
@@ -112,7 +130,7 @@ export function renderSheet(report: CheckReport, extractions: Record<Audience, E
       AUDIENCES.flatMap((audience) =>
         extractions[audience].links.flatMap((link) => {
           const r = byUrl.get(link.url);
-          return r !== undefined && !r.keepable ? [row([audience, link.page, cell(link.text), code(link.url), reason(r), cell(r.fix ?? '')])] : [];
+          return r !== undefined && !r.keepable ? [row([audience, link.page, cell(link.text), code(link.url), reason(r), fixCell(memory, r, false)])] : [];
         }),
       ),
     ),
