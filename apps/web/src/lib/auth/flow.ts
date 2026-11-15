@@ -19,8 +19,10 @@ import {
   transactionSetCookie,
 } from '../../../server/session.mjs';
 import { authConfig, type AuthConfig, type AuthSetup } from '../../../server/auth-config.mjs';
+import { logEntry } from '../../../server/log.mjs';
 import { PUBLIC_HOSTS } from '../../../server/public-hosts.mjs';
 import { TokenStore, sharedTokenStore } from '../../../server/token-store.mjs';
+import { redactText } from '../redact';
 import * as realOidc from './oidc';
 import type { Tokens } from './oidc';
 
@@ -67,7 +69,8 @@ export interface Deps {
   log: (line: string) => void;
 }
 
-const log = (d: Deps, level: string, msg: string, extra: Record<string, unknown> = {}) => d.log(JSON.stringify({ level, msg, ...extra }));
+// LG-N3: stamped (time, service, the request's trace id); an error's text only through the site redactor.
+const log = (d: Deps, level: string, msg: string, extra: Record<string, unknown> = {}) => d.log(logEntry({ level, msg, ...extra }));
 
 const sameText = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
@@ -122,7 +125,7 @@ export async function beginSignIn(
     const tx = { state: start.state, nonce: start.nonce, verifier: start.verifier, back: to };
     return { kind: 'redirect', location: start.location.href, cookies: [transactionSetCookie(tx, d.key, now)] };
   } catch (error) {
-    log(d, 'error', 'the sign-in provider could not be reached', { err: String(error).slice(0, 200) });
+    log(d, 'error', 'the sign-in provider could not be reached', { err: redactText(String(error)) });
     return { kind: 'unavailable' };
   }
 }
@@ -164,7 +167,7 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
     log(d, 'info', 'signed in', { officer: session.officer, member: session.member });
     return { kind: 'redirect', location: tx.back, cookies: [...cookies, sessionSetCookie(session, d.key, now)], session };
   } catch (err) {
-    return refuse('failed', { err: String(err).slice(0, 200) });
+    return refuse('failed', { err: redactText(String(err)) });
   }
 }
 
@@ -194,7 +197,7 @@ export async function signOut(d: Deps, { cookieHeader }: { cookieHeader: string 
     const end = await d.oidc.endSessionUrl(d.setup.config, { idToken });
     return end ? { ...done, location: end.href } : done;
   } catch (error) {
-    log(d, 'warn', 'the sign-in provider could not be reached to end its session', { err: String(error).slice(0, 200) });
+    log(d, 'warn', 'the sign-in provider could not be reached to end its session', { err: redactText(String(error)) });
     return done;
   }
 }
@@ -205,7 +208,7 @@ export function depsFromEnv(env: Record<string, string | undefined>, logLine: (l
   try {
     key = sessionKey(env);
   } catch (error) {
-    logLine(JSON.stringify({ level: 'error', msg: String(error) }));
+    logLine(logEntry({ level: 'error', msg: redactText(String(error), Infinity) }));
   }
   return { setup: authConfig(env), key, now: () => Math.floor(Date.now() / 1000), oidc: realOidc, tokens: SHARED.tokens, consumed: SHARED.consumed, log: logLine };
 }

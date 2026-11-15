@@ -4,13 +4,14 @@ name: web
 # guard run once for the whole repository, in secrets.yml. A change to the
 # API protos runs it too: the site's gRPC client is generated from them. So
 # does a change to the API's code, migrations or scripts: the redaction leak
-# test runs the real API.
+# test runs the real API. And its vendor folder: the site redactor is the
+# API's fc-shared and site-redaction.ts (LG-N3).
 on:
   push:
     branches: [main, develop]
-    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', '.github/workflows/web.yml']
+    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', 'apps/api/vendor/**', '.github/workflows/web.yml']
   pull_request:
-    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', '.github/workflows/web.yml']
+    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', 'apps/api/vendor/**', '.github/workflows/web.yml']
 
 permissions:
   contents: read
@@ -127,6 +128,7 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: apps/web
+          build-contexts: api=apps/api
           build-args: REVISION=${{ github.sha }}
           push: false
           load: true
@@ -147,7 +149,7 @@ jobs:
           test "$(docker inspect web --format '{{.State.ExitCode}}')" = "0"
       - name: The public-only canary image answers its sign-in routes with 404
         run: |
-          docker build --build-arg PUBLIC_ONLY=true --build-arg REVISION="$GITHUB_SHA" -t nwfl-mensa-web:canary .
+          docker build --build-context api=../api --build-arg PUBLIC_ONLY=true --build-arg REVISION="$GITHUB_SHA" -t nwfl-mensa-web:canary .
           docker run -d --name canary --read-only --tmpfs /tmp -p 127.0.0.1:8081:8080 nwfl-mensa-web:canary
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8081/healthz; then break; fi
@@ -183,6 +185,7 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: apps/web
+          build-contexts: api=apps/api
           build-args: REVISION=${{ github.sha }}
           push: true
           tags: ghcr.io/rpgoldberg/nwfl-mensa-site/web:${{ steps.sha.outputs.short }}

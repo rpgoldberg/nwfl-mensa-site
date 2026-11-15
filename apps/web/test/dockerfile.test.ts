@@ -40,6 +40,15 @@ describe('Dockerfile', () => {
     expect(runtime).toMatch(/^COPY --from=build --chown=root:root \/app\/server \.\/server$/m);
   });
 
+  // LG-N3: the site redactor is the API's: its import-free key module and its vendored fc-shared, from the
+  // named build context `api` (apps/api), into the build stage only; the bundle carries them from there.
+  it("builds with the API's site redaction module and vendored fc-shared, from the api context, in the build stage only", () => {
+    expect(stages[0]).toMatch(/^COPY --from=api vendor\/figurecollecting-fc-shared-1\.7\.0\.tgz \/api\/vendor\/$/m);
+    expect(stages[0]).toMatch(/^COPY --from=api src\/platform\/site-redaction\.ts \/api\/src\/platform\/$/m);
+    expect(stages[0]!.indexOf('--from=api vendor')).toBeLessThan(stages[0]!.indexOf('RUN npm ci'));
+    for (const stage of stages.slice(1)) expect(stage).not.toMatch(/--from=api\b/);
+  });
+
   it("gives the build everything the site is made from, the site's own texts included", () => {
     for (const dir of ['public', 'src', 'content', 'server']) expect(stages[0], dir).toMatch(new RegExp(`^COPY ${dir} \\./${dir}$`, 'm'));
   });

@@ -22,6 +22,9 @@ export default defineConfig({
     // Every stylesheet is a file, so the CSP needs no 'unsafe-inline' or hashes.
     inlineStylesheets: 'never',
   },
+  // LG-N3: fc-shared (a dev dependency, the API's vendored tarball) goes into the server bundle, so
+  // the image's production dependencies do not carry it.
+  vite: { ssr: { noExternal: ['@figurecollecting/fc-shared'] } },
   prefetch: false,
   // The session lives in our own encrypted cookie (W4); Astro's filesystem
   // session store would also need a writable disk, and the root is read-only.

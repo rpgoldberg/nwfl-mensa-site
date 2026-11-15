@@ -3,7 +3,9 @@
 //
 //   traceServerInterceptor  continues the caller's W3C `traceparent` and opens
 //                           a SERVER span for the call, so every line logged
-//                           while it runs carries the caller's trace id.
+//                           while it runs carries the caller's trace id, and
+//                           answers with a `traceresponse` naming that span
+//                           (LG-N3), on success and on error alike.
 //   accessLogInterceptor    one line per call: method, outcome, duration.
 //   authInterceptor         the verified caller, and from it the audience
 //                           (auth/caller.ts). Inside the access log, so a
@@ -18,6 +20,7 @@
 // ============================================================================
 import {
   type Attributes,
+  type SpanContext,
   SpanKind,
   SpanStatusCode,
   context,
@@ -47,6 +50,11 @@ function rpcName(req: { service: { typeName: string }; method: { name: string } 
   return `${req.service.typeName}/${req.method.name}`;
 }
 
+/** The W3C `traceresponse` for a span: version, its trace id, its own id, its flags. */
+export function traceresponse(span: SpanContext): string {
+  return `00-${span.traceId}-${span.spanId}-${span.traceFlags.toString(16).padStart(2, '0')}`;
+}
+
 export function traceServerInterceptor(): Interceptor {
   return (next) => async (req) => {
     const parent = propagation.extract(context.active(), req.header, headersGetter);
@@ -54,11 +62,15 @@ export function traceServerInterceptor(): Interceptor {
     return trace
       .getTracer(TRACER_NAME)
       .startActiveSpan(rpcName(req), { kind: SpanKind.SERVER, attributes }, parent, async (span) => {
+        const answer = traceresponse(span.spanContext());
         try {
-          return await next(req);
+          const response = await next(req);
+          response.header.set('traceresponse', answer);
+          return response;
         } catch (error) {
           span.setStatus({ code: SpanStatusCode.ERROR });
           span.setAttribute('rpc.grpc.status_code', ConnectError.from(error).code);
+          if (error instanceof ConnectError) error.metadata.set('traceresponse', answer);
           throw error;
         } finally {
           span.end();

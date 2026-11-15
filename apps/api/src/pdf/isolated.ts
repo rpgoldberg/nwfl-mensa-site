@@ -23,25 +23,21 @@
 // pdf.js warns three times as it loads that the optional canvas is absent
 // (gate.ts); a child loads it once per copy, so the child drops exactly those
 // three lines (withoutCanvasWarnings). What it writes to stderr reaches the
-// worker's log up to CHILD_LOG_BYTES, a crash included; the rest, and all of
+// worker's log up to CHILD_LOG_BYTES, a crash included, each line through the
+// site redactor (LG-N3: relayChildLog); the rest, and all of
 // its stdout, is dropped (fix round 3, S2: a subverted child could fill the
 // container log, and the kubelet evicts the pod for it).
 // ============================================================================
 import { fork } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { NWFL_REDACT_OPTIONS, type RedactOptions, redactString } from '../platform/shared.js';
 import { CHILD_PERMISSION, type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
-import type { RedactRequest, RedactResult } from './redact.js';
+import type { EngineMessage, EngineReply } from './engine-reply.js';
+import type { RedactResult } from './redact.js';
 import type { Redact } from './regenerate.js';
 
-/** What the worker sends a child. */
-export interface EngineMessage {
-  original: Uint8Array;
-  request: RedactRequest;
-}
-
-/** What a child answers. */
-export type EngineReply = { ok: true; result: RedactResult } | { ok: false; message: string };
+export { type EngineMessage, type EngineReply, engineReply, withoutCanvasWarnings } from './engine-reply.js';
 
 /** The built child next to this module (dist/pdf/engine-child.js). */
 export const ENGINE_CHILD = fileURLToPath(new URL('./engine-child.js', import.meta.url));
@@ -99,25 +95,6 @@ export function killGroup(pid: number, kill: (pid: number, signal: NodeJS.Signal
 /** Ten minutes is the job's lease; a copy that takes half of it is given up. */
 export const ENGINE_TIMEOUT_MS = 300_000;
 
-/** The child's side: runs the engine on one message; never throws. */
-export async function engineReply(message: EngineMessage, redact: Redact): Promise<EngineReply> {
-  try {
-    return { ok: true, result: await redact(message.original, message.request) };
-  } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-const CANVAS_WARNING = /^Warning: Cannot (?:load "@napi-rs\/canvas" package|polyfill `(?:DOMMatrix|Path2D)`)/;
-
-/** console.warn without pdf.js's load-time canvas warnings (the image leaves the canvas out on purpose). */
-export function withoutCanvasWarnings(warn: (...args: unknown[]) => void): (...args: unknown[]) => void {
-  return (...args) => {
-    if (typeof args[0] === 'string' && CANVAS_WARNING.test(args[0])) return;
-    warn(...args);
-  };
-}
-
 export interface IsolatedOptions {
   /** The child (default the built engine-child.js); another module, for tests. */
   module?: string;
@@ -138,6 +115,8 @@ export const CHILD_LOG_BYTES = 64 * 1024;
 /** What V8 writes when a heap runs out, before it aborts (N1). */
 const HEAP_OOM = 'JavaScript heap out of memory';
 const DROPPED = "\n[the rest of this child's log is dropped]\n";
+/** The site redactor, without its own length cut: CHILD_LOG_BYTES already bounds what passes (LG-N3). */
+const CHILD_REDACT: RedactOptions = { ...NWFL_REDACT_OPTIONS, maxStringLength: Number.POSITIVE_INFINITY };
 
 /** A child's stderr, read to its end: whether V8 said its heap ran out, and when the stream is done. */
 export interface ChildLog {
@@ -155,6 +134,16 @@ export function relayChildLog(stream: Readable | null, write: (chunk: Buffer) =>
   let noted = false;
   let tail = '';
   let oom = false;
+  // LG-N3: whole lines through the site redactor, so a secret split across chunks is still seen whole.
+  // The bytes of a line not yet ended wait here (at most `cap` of them).
+  let pending = Buffer.alloc(0);
+  const pass = (bytes: Buffer): void => {
+    if (bytes.length > 0) write(Buffer.from(redactString(bytes.toString('utf8'), CHILD_REDACT)));
+  };
+  const flush = (): void => {
+    pass(pending);
+    pending = Buffer.alloc(0);
+  };
   const ended = new Promise<void>((resolve) => {
     if (stream === null) {
       resolve();
@@ -163,18 +152,28 @@ export function relayChildLog(stream: Readable | null, write: (chunk: Buffer) =>
     stream.on('data', (chunk: Buffer) => {
       const part = chunk.subarray(0, left);
       left -= part.length;
-      if (part.length > 0) write(part);
+      if (part.length > 0) {
+        pending = Buffer.concat([pending, part]);
+        const end = pending.lastIndexOf(0x0a) + 1;
+        pass(pending.subarray(0, end));
+        pending = pending.subarray(end);
+      }
       if (part.length < chunk.length && !noted) {
         noted = true;
+        flush();
         write(Buffer.from(DROPPED));
       }
       const text = tail + chunk.toString('latin1');
       if (text.includes(HEAP_OOM)) oom = true;
       tail = text.slice(-HEAP_OOM.length);
     });
-    stream.once('end', resolve);
-    stream.once('close', resolve);
-    stream.once('error', resolve);
+    const done = (): void => {
+      flush();
+      resolve();
+    };
+    stream.once('end', done);
+    stream.once('close', done);
+    stream.once('error', done);
   });
   return { ended, heapOutOfMemory: () => oom };
 }

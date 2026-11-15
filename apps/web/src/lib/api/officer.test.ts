@@ -13,7 +13,7 @@ import { TokenStore } from '../../../server/token-store.mjs';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope, ApprovalSettingSchema } from '../../gen/nwfl/mensa/v1/approval_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
-import { ApprovalSettingMoved, OfficerSignInAgain, grpcOfficer, officerFromEnv, officerReader, unavailableOfficer } from './officer';
+import { ApprovalSettingMoved, OfficerSignInAgain, grpcOfficer, officerApi, officerFromEnv, officerReader, unavailableOfficer } from './officer';
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -215,5 +215,11 @@ describe('officerReader', () => {
     expect(officerReader(session, deps)).toEqual({ reader: undefined, lapsed: true });
     const ended = signedIn(['nwfl-officers'], { access_token: 'tok.en', expires_at: NOW + 3600 });
     expect(officerReader({ ...ended.session, exp: NOW }, ended.deps)).toEqual({ reader: undefined, lapsed: true });
+  });
+});
+
+describe('officerApi', () => {
+  it('keeps one client per process', () => {
+    expect(officerApi()).toBe(officerApi());
   });
 });

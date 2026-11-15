@@ -15,6 +15,8 @@ import { PUBLIC_ONLY } from 'astro:env/server';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
+import { apiLog } from '../../../server/log.mjs';
+import { traceInterceptor } from '../../../server/trace.mjs';
 import type { Session } from '../../../server/session.mjs';
 import type { TokenStore } from '../../../server/token-store.mjs';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope, type ApprovalSetting } from '../../gen/nwfl/mensa/v1/approval_pb.js';
@@ -63,7 +65,7 @@ function settingOf(setting: ApprovalSetting): Setting {
 }
 
 export function grpcOfficer(config: ApiConfig, log: (line: string) => void): OfficerApi {
-  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES });
+  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES, interceptors: [traceInterceptor] });
   const rules = createClient(ApprovalRuleService, transport);
 
   const call = async <T>(rpc: string, as: Reader, run: (headers: { authorization: string }) => Promise<T>): Promise<T> => {
@@ -125,7 +127,7 @@ let officer: { api: OfficerApi | undefined } | undefined;
 
 /** One per process, as liveData() is. */
 export function officerApi(): OfficerApi | undefined {
-  officer ??= { api: officerFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: (line) => console.error(line) }) };
+  officer ??= { api: officerFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: apiLog }) };
   return officer.api;
 }
 

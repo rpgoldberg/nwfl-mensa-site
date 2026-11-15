@@ -13,6 +13,8 @@
 // Each is logged by call and code only: never the API's message or the token.
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
+import { apiLog } from '../../../server/log.mjs';
+import { traceInterceptor } from '../../../server/trace.mjs';
 import { PUBLIC_ONLY } from 'astro:env/server';
 import { ContentService } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import { type EventOccurrence, type EventSeries, EventService, type Venue } from '../../gen/nwfl/mensa/v1/event_pb.js';
@@ -40,7 +42,7 @@ const protoDate = (iso: string) => ({ year: Number(iso.slice(0, 4)), month: Numb
 const EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?::\d{4}-\d{2}-\d{2})?$/;
 
 export function grpcOfficerEvents(config: ApiConfig, log: (line: string) => void): OfficerEventsApi {
-  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES });
+  const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES, interceptors: [traceInterceptor] });
   const events = createClient(EventService, transport);
   const content = createClient(ContentService, transport);
 
@@ -110,6 +112,6 @@ let client: { api: OfficerEventsApi | undefined } | undefined;
 
 /** One per process, as editorApi() is. */
 export function officerEventsApi(): OfficerEventsApi | undefined {
-  client ??= { api: officerEventsFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: (line) => console.error(line) }) };
+  client ??= { api: officerEventsFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: apiLog }) };
   return client.api;
 }

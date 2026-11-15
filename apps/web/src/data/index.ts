@@ -5,6 +5,7 @@
 // when API_URL is set (W3); without it they are undefined, and the pages keep
 // their bundled content, as the public-only canary does.
 import { PUBLIC_ONLY } from 'astro:env/server';
+import { apiLog } from '../../server/log.mjs';
 import { apiSetup, grpcReads, unavailableReads } from '../lib/api/client';
 import { fixtureData } from './fixtures';
 import { type LiveData, type LiveOptions, liveData as liveFrom } from './live';
@@ -34,6 +35,6 @@ let live: { data: LiveData | undefined } | undefined;
 
 /** One per process, so every page shares one HTTP/2 connection to the API. */
 export function liveData(): LiveData | undefined {
-  live ??= { data: liveFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: (line) => console.error(line) }) };
+  live ??= { data: liveFromEnv(process.env, { publicOnly: PUBLIC_ONLY, log: apiLog }) };
   return live.data;
 }

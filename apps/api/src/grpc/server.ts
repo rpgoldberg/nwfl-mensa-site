@@ -41,12 +41,11 @@
 // ============================================================================
 import { Code, type ConnectRouter, type Interceptor, createContextValues } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
-import { randomUUID } from 'node:crypto';
 import http2 from 'node:http2';
 import { AGENT_SERVICE, DEFAULT_EDGE_CLIENT_IDS, type TokenVerifier, VERIFIER_SERVICE, isEdgePeer, rejectAllTokens } from '../auth/caller.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { codeName } from './interceptors.js';
-import { REQUEST_INFO, type RequestInfo } from './request.js';
+import { REQUEST_INFO, type RequestInfo, requestId } from './request.js';
 
 export const GRPC_PROTOCOLS = { grpc: true, grpcWeb: false, connect: false } as const;
 
@@ -166,7 +165,7 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
   const active: Record<Budget, number> = { site: 0, agent: 0, verifier: 0 };
 
   const handler: NodeHandler = (request, response) => {
-    const info: RequestInfo = { id: randomUUID(), reached: false };
+    const info: RequestInfo = { id: requestId(request.headers), reached: false };
     infos.set(request, info);
     const rpc = RPC_PATH.exec(request.url.split('?', 1)[0] ?? '')?.[1] ?? 'unknown';
     let status: string | undefined;

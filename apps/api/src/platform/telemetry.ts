@@ -7,7 +7,9 @@
 //   1. An AsyncLocalStorage context manager, registered EXPLICITLY, so the
 //      active span survives an `await`.
 //   2. The W3C trace-context propagator, so an inbound `traceparent` is
-//      continued (grpc/interceptors.ts) rather than replaced.
+//      continued (grpc/interceptors.ts) rather than replaced. Trace context
+//      ONLY (LG-N3): no baggage propagator, so a caller's baggage header can
+//      carry nothing into a span or onward.
 //   3. A real TracerProvider (SDK 3.0, @opentelemetry/sdk-trace) with no span
 //      processor: spans record and carry ids, and go nowhere.
 //
@@ -15,7 +17,7 @@
 // ============================================================================
 import { context, propagation, trace } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
-import { CompositePropagator, W3CBaggagePropagator, W3CTraceContextPropagator } from '@opentelemetry/core';
+import { W3CTraceContextPropagator } from '@opentelemetry/core';
 import { TracerProvider } from '@opentelemetry/sdk-trace';
 
 export const DEFAULT_SERVICE_NAME = 'nwfl-mensa-api';
@@ -39,9 +41,7 @@ export function startTelemetry(options: { serviceName?: string } = {}): Telemetr
   contextManager.enable();
   context.setGlobalContextManager(contextManager);
 
-  propagation.setGlobalPropagator(
-    new CompositePropagator({ propagators: [new W3CTraceContextPropagator(), new W3CBaggagePropagator()] }),
-  );
+  propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 
   const provider = new TracerProvider();
   trace.setGlobalTracerProvider(provider);

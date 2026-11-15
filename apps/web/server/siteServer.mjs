@@ -4,13 +4,16 @@
 // files, so the response policy is applied here, once, for every response.
 // Prerendered pages are served from memory with the reader's text size and
 // theme stamped on <html>, as the layout does for on-request pages.
+import { AsyncResource } from 'node:async_hooks';
 import http from 'node:http';
 import { stampAccount } from './account.mjs';
+import { logEntry } from './log.mjs';
 import { cacheControl, cdnCacheControl, isHostOnlyCookie, isLeavingPage, referrerPolicy, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 import { renamedPath, resolveOldUrl } from './redirects.mjs';
 import { readSession } from './session.mjs';
 import { sharedTokenStore } from './token-store.mjs';
+import { newTrace, runWithTrace } from './trace.mjs';
 
 /** @typedef {(req: http.IncomingMessage, res: http.ServerResponse) => unknown} Handler */
 
@@ -63,7 +66,7 @@ function keepHostOnlyCookies(res, path) {
   const kept = cookies.filter((cookie) => {
     if (isHostOnlyCookie(cookie)) return true;
     const name = cookie.replace(/=.*$/s, '').trim();
-    console.error(JSON.stringify({ level: 'error', msg: 'dropped a cookie that is not host-only', path, cookie: name }));
+    console.error(logEntry({ level: 'error', msg: 'dropped a cookie that is not host-only', path: logPath(path), cookie: name }));
     return false;
   });
   if (kept.length > 0) res.setHeader('Set-Cookie', kept);
@@ -83,7 +86,7 @@ function keepOwnSiteData(res, path) {
   const directives = String(res.getHeader('clear-site-data')).split(',').map((d) => d.trim());
   const kept = directives.filter((d) => d !== '"cookies"' && d !== '"*"');
   if (kept.length === directives.length) return;
-  console.error(JSON.stringify({ level: 'error', msg: 'dropped Clear-Site-Data directives that clear cookies', path }));
+  console.error(logEntry({ level: 'error', msg: 'dropped Clear-Site-Data directives that clear cookies', path: logPath(path) }));
   if (kept.length > 0) res.setHeader('Clear-Site-Data', kept.join(', '));
   else res.removeHeader('Clear-Site-Data');
 }
@@ -196,6 +199,18 @@ export function normalisePath(raw) {
 }
 
 /**
+ * LG-N3: a path as it may be logged: a URL's pathname, cut at a query or fragment that was
+ * percent-encoded into it (%3F, %23), which the pathname keeps and decoding would turn back into
+ * one. The request's own query never reaches a pathname.
+ *
+ * @param {string} pathname
+ * @returns {string}
+ */
+export function logPath(pathname) {
+  return pathname.replace(/[?#][\s\S]*$|%(3f|23)[\s\S]*$/i, '');
+}
+
+/**
  * The class name of a failure, safe to log: a bounded identifier or a fixed word, never free text.
  *
  * @param {unknown} err
@@ -236,10 +251,11 @@ function logFeedFetch(req, res, path) {
     if (typeof args[0] !== 'function') count(args[0], args[1]);
     return end.apply(this, /** @type {any} */ (args));
   };
-  res.once('close', () => {
+  // Bound to the request's context: 'close' fires from the socket, outside it, and the line carries its trace id.
+  res.once('close', AsyncResource.bind(() => {
     const ua = String(req.headers['user-agent'] ?? '').replace(/[^\x20-\x7e]/g, '?').slice(0, UA_MAX);
-    console.log(JSON.stringify({ level: 'info', msg: 'calendar feed', path, status: res.statusCode, bytes: req.method === 'HEAD' ? 0 : bytes, ua }));
-  });
+    console.log(logEntry({ level: 'info', msg: 'calendar feed', path, status: res.statusCode, bytes: req.method === 'HEAD' ? 0 : bytes, ua }));
+  }));
 }
 
 /**
@@ -253,7 +269,10 @@ function logFeedFetch(req, res, path) {
  */
 export function withSitePolicy(handler, { pages = new Map(), redirects, sessionKey, formAction = [] } = {}) {
   const headers = securityHeaders({ formAction });
-  return (req, res) => {
+  // LG-N3: each request is served inside a trace minted here (trace.mjs: never a browser's).
+  return (req, res) => runWithTrace(newTrace(), () => serve(req, res));
+  /** @type {http.RequestListener} */
+  function serve(req, res) {
     dropForwardedHost(req);
     const url = new URL(req.url ?? '/', 'http://site.invalid');
     const raw = url.pathname;
@@ -310,9 +329,9 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     }
     /** @param {unknown} err */
     const fail = (err) => {
-      // The pathname only: the query of /auth/callback carries the OIDC code and state. The error's
-      // name only: its message can echo what the request sent.
-      console.error(JSON.stringify({ level: 'error', msg: 'request failed', path: raw, err: errorName(err) }));
+      // The pathname only (logPath): the query of /auth/callback carries the OIDC code and state. The
+      // error's name only: its message can echo what the request sent.
+      console.error(logEntry({ level: 'error', msg: 'request failed', path: logPath(raw), err: errorName(err) }));
       if (res.headersSent) {
         res.destroy();
         return;
@@ -326,7 +345,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     } catch (err) {
       fail(err);
     }
-  };
+  }
 }
 
 /**

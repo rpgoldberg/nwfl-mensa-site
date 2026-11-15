@@ -123,6 +123,12 @@ describe('createStructuredLogger', () => {
     expect(lines[0]?.['trace']).toBeUndefined();
     expect(String(lines[1]?.['trace'])).toMatch(/^trace=[0-9a-f]{32} span=[0-9a-f]{16}$/);
     expect(lines[1]?.['traceId']).toMatch(/^[0-9a-f]{32}$/);
+    // LG-N3: snake case beside the camel fields, the same ids.
+    expect(lines[1]?.['trace_id']).toBe(lines[1]?.['traceId']);
+    expect(lines[1]?.['span_id']).toBe(lines[1]?.['spanId']);
+    expect(lines[1]?.['span_id']).toMatch(/^[0-9a-f]{16}$/);
+    expect(lines[0]?.['trace_id']).toBeUndefined();
+    expect(lines[0]?.['span_id']).toBeUndefined();
   });
 
   it('writes to stdout by default', () => {
