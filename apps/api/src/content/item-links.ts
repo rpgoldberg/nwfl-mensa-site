@@ -15,12 +15,16 @@
 //               version has been marked ready again since (a new round).
 //   an answer   counts for the version and its ready time as they stand, from
 //               someone who did not edit the version; the latest per URL wins.
-//   the gate    Approve waits while any link in the list has a reviewer's no
-//               as it stands (the writer fixes it, or a reviewer changes the
-//               answer to yes), and while a login-walled link (isLoginWalled: a
-//               site that needs a sign-in to check) has no yes. An ordinary link
-//               with no answer does not hold Approve up: the machine checks are
-//               L-ITEM's. A no on a URL no longer in the list counts for nothing.
+//   a verdict   the link checker's (L-ITEM): OK, CONFIRM or DROP on an
+//               address in an item, never a version; the latest per URL wins.
+//   the gate    Approve waits until EVERY link in the list is accepted: a
+//               reviewer's yes as it stands, or the checker's OK under 7 days
+//               old on a link that needs no sign-in (isLoginWalled) and is not
+//               on a host the checker never fetches (isNoFetch). A
+//               reviewer's no holds whatever the checker says; a DROP holds
+//               until a reviewer answers yes with a note after it (linkHold).
+//               An answer or verdict on a URL no longer in the list counts for
+//               nothing.
 //
 // A reader sees the list through their lens (marked passages withheld) and
 // the hash covers what they see; the gate reads the list as it is. An answer
@@ -34,7 +38,7 @@ import type { TxClient } from '../db/tx.js';
 import { type Entry, MAX_RANGE_DAYS, calendarSource } from '../events/service.js';
 import { calendarLens, entryFor } from '../events/redact.js';
 import { addDays, todayIn } from '../events/zone.js';
-import { isLoginWalled, parseLink } from '../links/urls.js';
+import { isLoginWalled, isNoFetch, parseLink } from '../links/urls.js';
 import { shownUrl, urlsInText } from '../links/rule.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { loadLens } from '../redaction/lens.js';
@@ -54,10 +58,25 @@ export interface PieceLink {
   where: string;
 }
 
-/** Whether a URL is on a site that needs a sign-in to check. A mailto or an unreadable address is not. */
+/**
+ * Whether a URL is on a site that needs a sign-in to check; a mailto is not. An address whose host cannot
+ * be read (parseLink refuses it: userinfo, a port other than the scheme's own, no host, another scheme,
+ * a control character, too long) is taken for one that does: it fails closed, so the checker's OK never
+ * counts on it and a reviewer answers.
+ */
 export function loginWalled(url: string): boolean {
   const parsed = parseLink(url);
-  return parsed.ok && parsed.link.kind === 'web' && isLoginWalled(parsed.link.host);
+  return !parsed.ok || (parsed.link.kind === 'web' && isLoginWalled(parsed.link.host));
+}
+
+/**
+ * Whether a URL (a web or a mail address) is on a host the link checker never requests, not even by name
+ * (the no-fetch list, isNoFetch: us.mensa.org and all under it, among others). Its OK on one says nothing.
+ * An address whose host cannot be read is taken for one (it fails closed, as loginWalled does).
+ */
+export function neverFetched(url: string): boolean {
+  const parsed = parseLink(url);
+  return !parsed.ok || isNoFetch(parsed.link.host);
 }
 
 const words = (nodes: readonly Inline[]): string =>
@@ -185,6 +204,10 @@ export async function eventsAsSeen(client: TxClient, audience: string, entries: 
 export interface Answer {
   answer: 'yes' | 'no';
   label: string;
+  /** The reviewer's note, trimmed; null for none. */
+  note: string | null;
+  /** The row's number: answers and verdicts are ordered by it (latest wins). */
+  id: bigint;
 }
 
 /**
@@ -192,8 +215,8 @@ export interface Answer {
  * it stands, from someone who did not edit it, with who gave it in words (actor-label.ts).
  */
 export async function currentAnswers(client: TxClient, versionId: string, itemOffice: { slug: string; title: string }): Promise<Map<string, Answer>> {
-  const { rows } = await client.query<{ url: string; answer: 'yes' | 'no'; by_groups: string[]; slug: string | null; title: string | null }>(
-    `SELECT DISTINCT ON (c.url) c.url, c.answer, c.by_groups, o.slug, o.title
+  const { rows } = await client.query<{ url: string; answer: 'yes' | 'no'; note: string | null; id: string; by_groups: string[]; slug: string | null; title: string | null }>(
+    `SELECT DISTINCT ON (c.url) c.url, c.answer, c.note, c.id::text AS id, c.by_groups, o.slug, o.title
      FROM content_link_check c JOIN content_version v ON v.id = c.version_id LEFT JOIN office o ON o.id = c.acting_office_id
      WHERE c.version_id = $1 AND c.source = 'human' AND c.ready_at_seen = v.ready_at
        AND NOT EXISTS (SELECT 1 FROM content_version_editor e WHERE e.version_id = c.version_id AND e.subject = c.by_sub)
@@ -206,9 +229,66 @@ export async function currentAnswers(client: TxClient, versionId: string, itemOf
       {
         answer: row.answer,
         label: actorLabel({ kind: 'user', groups: row.by_groups, actingOffice: row.slug === null ? null : { slug: row.slug, title: row.title as string } }, itemOffice),
+        note: row.note,
+        id: BigInt(row.id),
       },
     ]),
   );
+}
+
+/** How long the link checker's OK lets a link through Approve (SPEC-v3 3.3). */
+export const MACHINE_OK_DAYS = 7;
+
+export interface Verdict {
+  verdict: 'ok' | 'confirm' | 'drop';
+  reasons: string[];
+  /** When the checker gave it, by the database clock. */
+  at: Date;
+  /** Under MACHINE_OK_DAYS old, by the database clock. */
+  fresh: boolean;
+  id: bigint;
+}
+
+/**
+ * The link checker's latest verdict on each of an item's URLs (L-ITEM). A verdict names the address, not a
+ * version. Latest is by the row's number as a number (c.id): a bare `id` in ORDER BY is the text column
+ * of the result, in which row 99 sorts after row 100.
+ */
+export async function machineVerdicts(client: TxClient, itemId: string): Promise<Map<string, Verdict>> {
+  const { rows } = await client.query<{ url: string; answer: Verdict['verdict']; reasons: string[]; at: Date; fresh: boolean; id: string }>(
+    `SELECT DISTINCT ON (url) url, answer, reasons, at, now() - at < make_interval(days => $2) AS fresh, id::text AS id
+     FROM content_link_check c WHERE item_id = $1 AND source = 'machine' ORDER BY url, c.id DESC`,
+    [itemId, MACHINE_OK_DAYS],
+  );
+  return new Map(rows.map((row) => [row.url, { verdict: row.answer, reasons: row.reasons, at: row.at, fresh: row.fresh, id: BigInt(row.id) }]));
+}
+
+/**
+ * Why a link holds Approve up, worst first: a reviewer's no; a checker's DROP with no later yes that
+ * carries a note; a link that needs a sign-in with no yes; any other link with neither a yes nor a
+ * fresh OK.
+ */
+export type Hold = 'no' | 'drop' | 'walled' | 'unchecked';
+const HOLDS: readonly Hold[] = ['no', 'drop', 'walled', 'unchecked'];
+
+/**
+ * Whether one link is accepted (SPEC-v3 3.3, item 3), from the latest reviewer answer on the version as
+ * it stands and the checker's latest verdict on the address. Within each, the latest wins. Between them:
+ *   - a reviewer's no holds, whatever the checker says: it checks that a page answers, a reviewer that
+ *     it is the right page;
+ *   - a DROP holds until a reviewer answers yes with a note AFTER it (a later DROP holds again);
+ *   - a reviewer's yes accepts;
+ *   - an OK under MACHINE_OK_DAYS old accepts a link that needs no sign-in and whose host the checker
+ *     fetches (neverFetched): an OK on any other was not given by looking;
+ *   - CONFIRM, a stale OK, or nothing accepts nothing.
+ */
+export function linkHold(url: string, human: Answer | undefined, machine: Verdict | undefined): Hold | undefined {
+  if (human?.answer === 'no') return 'no';
+  if (machine?.verdict === 'drop' && !(human !== undefined && human.note !== null && human.id > machine.id)) return 'drop';
+  if (human?.answer === 'yes') return undefined;
+  const walled = loginWalled(url);
+  if (machine?.verdict === 'ok' && machine.fresh && !walled && !neverFetched(url)) return undefined;
+  return walled ? 'walled' : 'unchecked';
 }
 
 /** A version whose links are read: its item and office, its body, and the edition its events run to. */
@@ -239,9 +319,9 @@ export const OFFICERS_ONLY = "Some links that only officers can see need an offi
 
 /**
  * The gate, on a version's list as it is: Approve's refusal in plain words, or undefined when nothing
- * holds it up. Held up by a link whose answer as it stands is a reviewer's no, and by a login-walled link
- * with no yes. Only links the caller (`audience`) sees whole are named or counted, a no first; the rest
- * are OFFICERS_ONLY, said once. `editionId` is the edition the version is about to be approved for.
+ * holds it up: every link accepted (linkHold). Only links the caller (`audience`) sees whole are named
+ * or counted, the worst hold first; the rest are OFFICERS_ONLY, said once. `editionId` is the edition
+ * the version is about to be approved for.
  */
 export async function linkGate(
   client: TxClient,
@@ -252,16 +332,19 @@ export async function linkGate(
   const { links, events } = await actualLinks(client, deps, version);
   const urls = [...new Set(links.map((link) => link.url))];
   const answers = await currentAnswers(client, version.id, version.office);
-  const refused = urls.filter((url) => answers.get(url)?.answer === 'no');
-  const unchecked = urls.filter((url) => loginWalled(url) && answers.get(url)?.answer !== 'yes');
-  if (refused.length === 0 && unchecked.length === 0) return undefined;
+  const verdicts = await machineVerdicts(client, version.itemId);
+  const held = urls.flatMap((url) => {
+    const hold = linkHold(url, answers.get(url), verdicts.get(url));
+    return hold === undefined ? [] : [{ url, hold }];
+  });
+  if (held.length === 0) return undefined;
   const seen = new Set((await linksAsSeen(client, audience, version, events))?.map((link) => link.url));
-  const shownRefused = refused.filter((url) => seen.has(url));
-  const shownUnchecked = unchecked.filter((url) => seen.has(url));
-  const hidden = shownRefused.length < refused.length || shownUnchecked.length < unchecked.length;
-  const named = shownRefused.length > 0 ? refusedMessage(shownRefused) : shownUnchecked.length > 0 ? uncheckedMessage(shownUnchecked.length) : undefined;
-  if (named === undefined) return OFFICERS_ONLY;
-  return hidden ? `${named}. ${OFFICERS_ONLY}` : named;
+  const shown = held.filter((link) => seen.has(link.url));
+  const worst = HOLDS.find((hold) => shown.some((link) => link.hold === hold));
+  if (worst === undefined) return OFFICERS_ONLY;
+  const of = shown.filter((link) => link.hold === worst).map((link) => link.url);
+  const named = worst === 'no' ? refusedMessage(of) : worst === 'drop' ? droppedMessage(of) : worst === 'walled' ? uncheckedMessage(of.length) : waitingMessage(of.length);
+  return shown.length < held.length ? `${named}. ${OFFICERS_ONLY}` : named;
 }
 
 /** Approve's refusal while reviewers answered no on these links, in plain words: the first named, the rest counted. */
@@ -275,4 +358,17 @@ export function uncheckedMessage(count: number): string {
   const them = count === 1 ? '1 link needs' : `${count} links need`;
   const it = count === 1 ? 'it' : 'them';
   return `${them} a sign-in to check (such as Facebook): someone other than the writer must open ${it} and answer yes before this is approved`;
+}
+
+/** Approve's refusal while the link checker found these links broken, in plain words: the first named, the rest counted. */
+export function droppedMessage(urls: readonly string[]): string {
+  const more = urls.length > 1 ? ` and ${urls.length - 1} more` : '';
+  return `the link checker found the link "${shownUrl(urls[0] as string)}"${more} broken: the writer fixes it, or someone other than the writer opens it and answers yes with a note saying why it is right, before this is approved`;
+}
+
+/** Approve's refusal while `count` ordinary links have neither a yes nor a recent OK from the link checker, in plain words. */
+export function waitingMessage(count: number): string {
+  const them = count === 1 ? '1 link has' : `${count} links have`;
+  const it = count === 1 ? 'it' : 'them';
+  return `${them} not been checked yet: the link checker checks ${it}, or someone other than the writer opens ${it} and answers yes, before this is approved`;
 }

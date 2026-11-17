@@ -11,6 +11,15 @@
 //   VERIFIER_OIDC_ISSUER, VERIFIER_OIDC_AUDIENCE (nwfl-verifier),
 //   VERIFIER_OIDC_JWKS_URL, VERIFIER_SCOPE (membership.verify),
 //   VERIFIER_SUBJECT (svc-nwfl-verifier)
+//   LINKCHECK_OIDC_ISSUER, LINKCHECK_OIDC_AUDIENCE (nwfl-linkcheck),
+//   LINKCHECK_OIDC_JWKS_URL, LINKCHECK_SCOPE (links.check),
+//   LINKCHECK_SUBJECT (svc-nwfl-linkcheck): the link checker (L-ITEM)
+//   Every client's audience must differ from every other's, or the service
+//   refuses to start: one token must never be valid for two clients.
+//   An audience, scope or subject of a configured client that is set but
+//   empty or blank (nothing in it that a reader sees: spaces, zero-width
+//   and other hidden characters) also refuses to start, by name: it would
+//   switch that check off, not fall back to the default.
 //   EDGE_CLIENT_IDS        the edge's mesh identities, comma-separated
 //                          (default cloudflared in nwfl-edge). Each must be
 //                          a full identity in the nwfl-edge namespace and
@@ -28,6 +37,7 @@ import { type JWTVerifyGetKey, createRemoteJWKSet } from 'jose';
 import { type ClientKind, DEFAULT_EDGE_CLIENT_IDS, type TokenVerifier, rejectAllTokens } from './caller.js';
 import { parseGroupPrefix } from './groups.js';
 import { type ClientConfig, createJwtVerifier } from './jwt.js';
+import { seenText } from '../platform/seen.js';
 
 type Env = Record<string, string | undefined>;
 
@@ -51,6 +61,7 @@ const DEFAULTS: Record<ClientKind, { prefix: string; audience: string; scope?: s
   site: { prefix: 'SITE', audience: 'nwfl-site' },
   agent: { prefix: 'AGENT', audience: 'nwfl-agent', scope: 'newsletter.read', subject: 'svc-nwfl-newsletter' },
   verifier: { prefix: 'VERIFIER', audience: 'nwfl-verifier', scope: 'membership.verify', subject: 'svc-nwfl-verifier' },
+  linkcheck: { prefix: 'LINKCHECK', audience: 'nwfl-linkcheck', scope: 'links.check', subject: 'svc-nwfl-linkcheck' },
 };
 
 function https(name: string, value: string): string {
@@ -64,6 +75,15 @@ function https(name: string, value: string): string {
   return value;
 }
 
+/** A client's audience, scope or subject: the variable's value, or the default when it is unset. Set but empty or blank refuses to start. */
+function claim(env: Env, name: string, fallback: string): string {
+  const value = env[name];
+  if (value === undefined) return fallback;
+  // Blank as a reviewer's note is blank (platform/seen.ts): nothing in it that a reader sees.
+  if (seenText(value) === null) throw new Error(`${name} must not be empty (unset it for the default)`);
+  return value;
+}
+
 // A Linkerd identity of a service account in the edge namespace: <sa>.nwfl-edge.serviceaccount.identity.linkerd.<trust domain>.
 const LABEL = '[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?';
 const EDGE_IDENTITY = new RegExp(`^(${LABEL})\\.nwfl-edge\\.serviceaccount\\.identity\\.linkerd\\.${LABEL}(?:\\.${LABEL})*$`);
@@ -72,7 +92,7 @@ const NOT_EDGE_ACCOUNTS = new Set(['nwfl-web', 'nwfl-api']);
 
 export function readAuthConfig(env: Env): AuthConfig {
   const clients: ClientSpec[] = [];
-  for (const kind of ['site', 'agent', 'verifier'] as const) {
+  for (const kind of ['site', 'agent', 'verifier', 'linkcheck'] as const) {
     const { prefix, audience, scope, subject } = DEFAULTS[kind];
     const issuer = env[`${prefix}_OIDC_ISSUER`];
     if (issuer === undefined || issuer === '') continue;
@@ -81,10 +101,10 @@ export function readAuthConfig(env: Env): AuthConfig {
     clients.push({
       kind,
       issuer,
-      audience: env[`${prefix}_OIDC_AUDIENCE`] ?? audience,
+      audience: claim(env, `${prefix}_OIDC_AUDIENCE`, audience),
       jwksUrl,
-      ...(scope !== undefined ? { scope: env[`${prefix}_SCOPE`] ?? scope } : {}),
-      ...(subject !== undefined ? { subject: env[`${prefix}_SUBJECT`] ?? subject } : {}),
+      ...(scope !== undefined ? { scope: claim(env, `${prefix}_SCOPE`, scope) } : {}),
+      ...(subject !== undefined ? { subject: claim(env, `${prefix}_SUBJECT`, subject) } : {}),
     });
   }
   if (new Set(clients.map((client) => client.audience)).size !== clients.length) {

@@ -7,11 +7,13 @@
 import type { DescService } from '@bufbuild/protobuf';
 import type { ConnectRouter } from '@connectrpc/connect';
 import { approvalRoutes } from '../approval/service.js';
+import { linkCheckRoutes } from '../content/link-check.js';
 import { contentRoutes } from '../content/service.js';
 import { ApprovalRuleService } from '../gen/nwfl/mensa/v1/approval_pb.js';
 import { Health } from '../gen/grpc/health/v1/health_pb.js';
 import { ContentService } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../gen/nwfl/mensa/v1/event_pb.js';
+import { LinkCheckService } from '../gen/nwfl/mensa/v1/link_check_pb.js';
 import type { Db } from '../db/pool.js';
 import { eventRoutes } from '../events/service.js';
 import { membershipRoutes } from '../membership/service.js';
@@ -33,6 +35,7 @@ export const SERVED_SERVICES: readonly DescService[] = [
   ContentService,
   NewsletterService,
   MembershipVerifierService,
+  LinkCheckService,
   MembershipService,
   RedactionPolicyService,
   ApprovalRuleService,
@@ -55,6 +58,7 @@ export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
     newsletterRoutes({ db: deps.db, logger: deps.logger.child({ component: 'newsletter' }) }),
     membershipRoutes({ db: deps.db, now }),
     verifierRoutes({ db: deps.db, now }),
+    linkCheckRoutes({ db: deps.db, logger: deps.logger.child({ component: 'linkcheck' }), now }),
     redactionRoutes({ db: deps.db }),
     approvalRoutes({ db: deps.db }),
   ];

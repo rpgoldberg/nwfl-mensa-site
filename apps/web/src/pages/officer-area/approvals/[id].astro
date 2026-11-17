@@ -36,7 +36,7 @@ import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
 import { documentHtml } from '../../../lib/document';
 import { NOTE_MAX, hashHex } from '../../../lib/editor/form';
-import { APPROVE_NOTE, type ActingChoice, type Outcome, PARTS_HIDDEN, REVIEW_LINKS, TOO_LARGE, actingChoice, answerWords, doneText, enteredForOffice, errorList, isPublisher, linkRows, linksPanel, loadFailure, reviewOffers, runReview } from '../../../lib/editor/review';
+import { APPROVE_NOTE, type ActingChoice, type Outcome, PARTS_HIDDEN, REVIEW_LINKS, TOO_LARGE, actingChoice, answerWords, doneText, machineWords, enteredForOffice, errorList, isPublisher, linkRows, linksPanel, loadFailure, reviewOffers, runReview } from '../../../lib/editor/review';
 import { type RosterOffice, signInLine } from '../../../lib/editor/writer';
 import { readForm } from '../../../lib/form';
 
@@ -115,6 +115,8 @@ const choice: ActingChoice = actingChoice(session.groups, roster);
 const kept = outcome?.kept;
 const errors = outcome?.errors ?? {};
 const rows = links === undefined ? [] : linkRows(links.links);
+// L-ITEM: each verdict's age is said against the time this page is made.
+const now = new Date();
 const ready = working?.status === 'ready';
 const cleared = working?.status === 'cleared';
 const admin = session.groups.includes('nwfl-admin');
@@ -268,6 +270,7 @@ const keptRows = kept ? Object.entries(kept.places).sort(([, a], [, b]) => a - b
                   <div><dt>Address</dt><dd class="link-url">{row.url}</dd></div>
                   <div><dt>Where</dt><dd>{row.where}</dd></div>
                   <div><dt>Answer so far</dt><dd>{answerWords(row)}</dd></div>
+                  <div><dt>Link checker</dt><dd>{machineWords(row, now)}</dd></div>
                 </dl>
                 {row.loginWalled && <p class="needs-sign-in"><b>Needs a sign-in to check</b> (such as Facebook): open it in your own browser, signed in to that site.</p>}
                 <p>
@@ -290,7 +293,7 @@ const keptRows = kept ? Object.entries(kept.places).sort(([, a], [, b]) => a - b
                       </div>
                     </fieldset>
                     <div class="field">
-                      <label for={`note-${row.index}`}>Note (optional)<span class="visually-hidden"> on {row.text}</span></label>
+                      <label for={`note-${row.index}`}>{row.machine?.verdict === 'drop' ? 'Note (needed with a Yes)' : 'Note (optional)'}<span class="visually-hidden"> on {row.text}</span></label>
                       {errors[`note-${row.index}`] && <p class="error" id={`note-${row.index}-error`}>Problem: {errors[`note-${row.index}`]}</p>}
                       <textarea id={`note-${row.index}`} name={`note-${row.index}`} rows="2" maxlength={NOTE_MAX} data-keep={`link:${row.key}`} data-answered={row.answer === 'none' ? undefined : 'yes'}>{kept?.notes[row.key] ?? ''}</textarea>
                     </div>

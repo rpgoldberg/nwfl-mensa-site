@@ -1476,6 +1476,43 @@
       }
     ]
   },
+  "LinkCheckService.ListLinksAwaitingVerdict": {
+    "input": "nwfl.mensa.v1.ListLinksAwaitingVerdictRequest",
+    "fields": []
+  },
+  "LinkCheckService.RecordLinkVerdicts": {
+    "input": "nwfl.mensa.v1.RecordLinkVerdictsRequest",
+    "fields": [
+      {
+        "name": "verdicts",
+        "number": 1,
+        "type": "message",
+        "label": "repeated",
+        "message": "nwfl.mensa.v1.LinkVerdict",
+        "fields": [
+          {
+            "name": "url",
+            "number": 1,
+            "type": "string",
+            "label": "optional"
+          },
+          {
+            "name": "verdict",
+            "number": 2,
+            "type": "enum",
+            "label": "optional",
+            "message": "nwfl.mensa.v1.MachineVerdict"
+          },
+          {
+            "name": "reasons",
+            "number": 3,
+            "type": "string",
+            "label": "repeated"
+          }
+        ]
+      }
+    ]
+  },
   "MembershipService.ApproveSignup": {
     "input": "nwfl.mensa.v1.ApproveSignupRequest",
     "fields": [

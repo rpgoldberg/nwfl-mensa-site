@@ -1,0 +1,69 @@
+// The link checker's own service (L-ITEM, SPEC-v3 3.4; links SPEC section 6).
+// The checker runs on an officer's own machine and calls in through the edge
+// with its client-credentials token (the linkcheck client, scope links.check).
+// The API refuses its token on every other service, and every other token on
+// this one. No request here carries a bytes field (the untrusted-pdf gate).
+//
+// What it sees: web and mail addresses only, never a piece's text, a link's
+// words or a title. It may be given an address from a members-only passage or
+// an officers-only item, so each list handed out is audited (links_read, at
+// the officers' audience).
+//
+// What it may do: record a verdict on an address it was given. It cannot
+// accept a link that needs a sign-in to check, cannot answer for a reviewer,
+// and cannot change, add or re-enable an address.
+//
+// L5's ListPublishedLinks and ReportLinkCheck join this service later.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "nwfl/mensa/v1/content.proto";
+
+service LinkCheckService {
+  // The addresses waiting for a machine verdict, sorted, each once: those in
+  // the link list (SPEC-v3 3.3) of every piece waiting for approval or
+  // approved and not yet published, its office's event addresses included,
+  // that no reviewer has answered on the version as it stands and that have
+  // had no verdict in the last day. At most 500; `more` says others wait.
+  // A read: its audit row (links_read) changes nothing it reads, as
+  // ListPendingVerifications' does not.
+  rpc ListLinksAwaitingVerdict(ListLinksAwaitingVerdictRequest) returns (ListLinksAwaitingVerdictResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // Records a verdict on each address given that is still waiting, for every
+  // piece it waits in. All or nothing: OK on a link that needs a sign-in, an
+  // unspecified verdict or a malformed reason refuses the whole call and
+  // records nothing. An address not waiting is returned, not recorded.
+  rpc RecordLinkVerdicts(RecordLinkVerdictsRequest) returns (RecordLinkVerdictsResponse);
+}
+
+message ListLinksAwaitingVerdictRequest {}
+
+message ListLinksAwaitingVerdictResponse {
+  // Addresses only, sorted.
+  repeated string urls = 1;
+  // More addresses wait than were given; ask again after recording these.
+  bool more = 2;
+}
+
+message RecordLinkVerdictsRequest {
+  // At most 500. The last verdict for an address in one call is the one kept.
+  repeated LinkVerdict verdicts = 1;
+}
+
+message LinkVerdict {
+  // An address as ListLinksAwaitingVerdict gave it, unchanged.
+  string url = 1;
+  // OK, CONFIRM (a person must look) or DROP (it is broken).
+  MachineVerdict verdict = 2;
+  // The checker's reason codes (lowercase words joined by hyphens), at most 8.
+  repeated string reasons = 3;
+}
+
+message RecordLinkVerdictsResponse {
+  // Rows kept: one per address per piece it waits in.
+  int32 recorded = 1;
+  // Addresses given that were not waiting: not recorded.
+  repeated string not_awaiting = 2;
+}

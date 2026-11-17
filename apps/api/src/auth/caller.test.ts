@@ -10,6 +10,7 @@ import { Health, HealthCheckResponse_ServingStatus } from '../gen/grpc/health/v1
 import { EventService } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { MembershipVerifierService } from '../gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { NewsletterService } from '../gen/nwfl/mensa/v1/newsletter_pb.js';
+import { LinkCheckService } from '../gen/nwfl/mensa/v1/link_check_pb.js';
 import {
   ANONYMOUS,
   type Caller,
@@ -50,6 +51,9 @@ const fakeVerifier: TokenVerifier = {
     if (token === 'officer-token') return Promise.resolve({ client: 'site', subject: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'], scopes: [] });
     if (token === 'agent-token') return Promise.resolve({ client: 'agent', subject: 'svc-nwfl-newsletter', groups: [], scopes: ['newsletter.read'] });
     if (token === 'verifier-token') return Promise.resolve({ client: 'verifier', subject: 'svc-nwfl-verifier', groups: [], scopes: ['membership.verify'] });
+    // L-ITEM: the link checker; groups in its token (none are expected) grant nothing.
+    if (token === 'linkcheck-token') return Promise.resolve({ client: 'linkcheck', subject: 'svc-nwfl-linkcheck', groups: ['nwfl-officers', 'nwfl-admin'], scopes: ['links.check'] });
+    if (token === 'system-linkcheck-token') return Promise.resolve({ client: 'linkcheck', subject: 'system:issue-loader', groups: [], scopes: ['links.check'] });
     // EDITOR A1: a token naming a system subject, as the issue loader writes (load.ts LOADER).
     if (token === 'system-site-token') return Promise.resolve({ client: 'site', subject: 'system:issue-loader', groups: ['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster'], scopes: [] });
     if (token === 'system-agent-token') return Promise.resolve({ client: 'agent', subject: 'system:issue-loader', groups: [], scopes: ['newsletter.read'] });
@@ -91,6 +95,12 @@ function harness(verifier: TokenVerifier = fakeVerifier, memberStanding: MemberS
           return { pending: [] };
         },
       });
+      service(LinkCheckService, {
+        listLinksAwaitingVerdict: (_request, ctx) => {
+          record(ctx.values);
+          return { urls: [] };
+        },
+      });
     },
     { router: { interceptors: [authInterceptor({ verifier, standing: memberStanding, ...(groupPrefix === undefined ? {} : { groupPrefix }) })] } },
   );
@@ -106,6 +116,7 @@ function harness(verifier: TokenVerifier = fakeVerifier, memberStanding: MemberS
     newsletter: (headers: Record<string, string> = {}) => capture(() => createClient(NewsletterService, transport).listEditions({}, as(headers))),
     verifier: (headers: Record<string, string> = {}) =>
       capture(() => createClient(MembershipVerifierService, transport).listPendingVerifications({}, as(headers))),
+    linkcheck: (headers: Record<string, string> = {}) => capture(() => createClient(LinkCheckService, transport).listLinksAwaitingVerdict({}, as(headers))),
   };
 }
 
@@ -138,6 +149,10 @@ describe('authInterceptor: who is calling', () => {
     expect(await api.verifier(bearer('verifier-token'))).toMatchObject({ kind: 'verifier', audience: 'public' });
   });
 
+  it('identifies the link checker as a machine caller at the officers audience, with no groups whatever its token carries', async () => {
+    expect(await api.linkcheck(bearer('linkcheck-token'))).toEqual({ kind: 'linkcheck', subject: 'svc-nwfl-linkcheck', groups: [], scopes: ['links.check'], audience: 'officers' });
+  });
+
   it('refuses a token that does not verify, with no detail, instead of downgrading it to public', async () => {
     const error = await api.events(bearer('forged')).catch((e: unknown) => ConnectError.from(e));
     expect(error).toMatchObject({ code: Code.Unauthenticated, rawMessage: 'invalid token' });
@@ -155,6 +170,7 @@ describe('authInterceptor: who is calling', () => {
       await expect(api.events(bearer(token)), token).rejects.toMatchObject({ code: Code.Unauthenticated, rawMessage: 'invalid token' });
     }
     await expect(api.newsletter(bearer('system-agent-token'))).rejects.toMatchObject({ code: Code.Unauthenticated });
+    await expect(api.linkcheck(bearer('system-linkcheck-token'))).rejects.toMatchObject({ code: Code.Unauthenticated });
   });
 
   it('ignores every other header: no request header can choose the audience', async () => {
@@ -208,11 +224,21 @@ describe('authInterceptor: one kind of caller per service', () => {
     expect((await api.verifier(bearer('verifier-token'))).kind).toBe('verifier');
   });
 
-  it('refuses the agent and the verifier everywhere else, health included', async () => {
-    for (const token of ['agent-token', 'verifier-token']) {
+  it('admits only the link checker to LinkCheckService: no token, a site user (an officer too), the agent and the verifier are refused', async () => {
+    await expect(api.linkcheck()).rejects.toMatchObject({ code: Code.Unauthenticated });
+    for (const token of ['member-token', 'officer-token', 'agent-token', 'verifier-token']) {
+      await expect(api.linkcheck(bearer(token))).rejects.toMatchObject({ code: Code.PermissionDenied });
+    }
+    expect((await api.linkcheck(bearer('linkcheck-token'))).kind).toBe('linkcheck');
+  });
+
+  it('refuses the agent, the verifier and the link checker everywhere else, health included', async () => {
+    for (const token of ['agent-token', 'verifier-token', 'linkcheck-token']) {
       await expect(api.events(bearer(token))).rejects.toMatchObject({ code: Code.PermissionDenied });
       await expect(api.health(bearer(token))).rejects.toMatchObject({ code: Code.PermissionDenied });
     }
+    await expect(api.newsletter(bearer('linkcheck-token'))).rejects.toMatchObject({ code: Code.PermissionDenied });
+    await expect(api.verifier(bearer('linkcheck-token'))).rejects.toMatchObject({ code: Code.PermissionDenied });
     expect((await api.events(bearer('member-token'))).kind).toBe('user');
   });
 });
@@ -232,6 +258,7 @@ describe('authInterceptor: the mesh identity (l5d-client-id) only ever narrows',
     await expect(api.health({ 'l5d-client-id': EDGE })).rejects.toMatchObject({ code: Code.PermissionDenied });
     expect((await api.newsletter({ ...bearer('agent-token'), 'l5d-client-id': EDGE })).kind).toBe('agent');
     expect((await api.verifier({ ...bearer('verifier-token'), 'l5d-client-id': EDGE })).kind).toBe('verifier');
+    expect((await api.linkcheck({ ...bearer('linkcheck-token'), 'l5d-client-id': EDGE })).kind).toBe('linkcheck');
   });
 
   it('gives a forged web identity nothing: the agent still cannot reach EventService, and an anonymous call stays public', async () => {

@@ -505,7 +505,11 @@ export function createWorkflow({ offices, now = () => new Date(), ruleFor = () =
     return { actual, links, latest, hash: linksSha256(ready, links) };
   };
   /** @param {{ url: string, label: string, where: string }} link @param {Map<string, Answer>} latest */
-  const linkMessage = (link, latest) => ({ ...link, loginWalled: loginWalled(link.url), answeredByLabel: latest.get(link.url)?.label ?? '', accepted: latest.get(link.url)?.yes === true });
+  // The stand-in has no link checker (L-ITEM): a link is accepted on a reviewer's yes only, and its gate stays A3b's.
+  const linkMessage = (link, latest) => {
+    const answer = latest.get(link.url);
+    return { ...link, loginWalled: loginWalled(link.url), answeredByLabel: answer?.label ?? '', reviewerAnswer: answer === undefined ? 0 : answer.yes ? 1 : 2, accepted: answer?.yes === true };
+  };
 
   /** @param {Version} v @param {Targets} targets @param {string} editionId */
   const hashOf = (v, targets, editionId) => new Uint8Array(createHash('sha256').update(JSON.stringify([v.title, v.summary, v.visibility, v.markup, targets, editionId])).digest());

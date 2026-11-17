@@ -14,7 +14,7 @@ import { MarkField, MarkSubjectKind, RedactionCategory, RedactionPolicyService }
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentKind, ItemState, ItemVisibility, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventVisibility, OccurrenceStatus } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
-import { as, codeOf, content, events, tokenFor } from './api';
+import { answerEveryLink, as, codeOf, content, events, tokenFor } from './api';
 import { marker, person, publicBodies } from './helpers';
 import { EDITOR_REAL } from './servers';
 
@@ -331,8 +331,8 @@ test.describe('stale hashes', () => {
     ).toBe('FailedPrecondition');
     expect((await content.getItemLinks({ itemId: id }, as(await tok('officer')))).links.filter((l) => l.answeredByLabel !== '')).toEqual([]);
 
-    // Approve from the page opened before: refused, still waiting.
-    await answerYes(id, 'two-seats', [fb]);
+    // Approve from the page opened before: refused, still waiting. (L-ITEM: every link answered, so only the hash refuses.)
+    await answerEveryLink(id);
     const [approve] = await Promise.all([president.page.waitForResponse((r) => r.request().method() === 'POST'), president.page.getByRole('button', { name: 'Approve', exact: true }).click()]);
     expect(approve.status()).toBe(409);
     await expect(president.page.getByRole('alert')).toContainText('It was not approved: it changed since you opened it.');
@@ -345,7 +345,7 @@ test.describe('stale hashes', () => {
     await webmaster.page.goto(`${REVIEW(id)}/publish`);
     const clearedHash = await hashAs(id);
     await edit(id, title, `${markup}\n\nAnother line.`);
-    await answerYes(id, 'two-seats', [fb]);
+    await answerEveryLink(id);
     await approveAs(id, 'officer');
     const [publish] = await Promise.all([webmaster.page.waitForResponse((r) => r.request().method() === 'POST'), webmaster.page.getByRole('button', { name: 'Publish', exact: true }).click()]);
     expect(publish.status()).toBe(409);
@@ -584,6 +584,8 @@ test.describe('a reviewer with part of the piece hidden', () => {
     };
     const waiting = await make();
     const approved = await make();
+    // L-ITEM: every link needs a yes first (no link checker runs on this stack).
+    await answerEveryLink(approved);
     await approveAs(approved, 'treasurer');
     const lone = await tok('lone-webmaster');
     expect((await content.getWorkingItem({ itemId: waiting }, as(lone))).item!.working!.contentHash).toHaveLength(0);

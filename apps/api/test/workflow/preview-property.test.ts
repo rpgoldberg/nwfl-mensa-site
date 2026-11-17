@@ -14,7 +14,7 @@ import {
   RedactionCategory,
   RedactionPolicyService,
 } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
-import { type Api, MEMBER, OFFICER, as, insertId, startApi } from '../helpers/api.js';
+import { type Api, MEMBER, OFFICER, as, insertId, linksCheckedOk, startApi } from '../helpers/api.js';
 import { live } from '../helpers/pg.js';
 
 const SEED = 0x5eed_e1;
@@ -137,6 +137,8 @@ describe.skipIf(!live)(`EDITOR E1: the preview equals the published reads (seed 
     }
     const preview = await content.previewWorkingItem({ itemId }, PUB);
     const hash = (await content.markReady({ itemId }, PUB)).item?.working?.contentHash as Uint8Array;
+    // L-ITEM: every link needs a verdict before Approve.
+    await linksCheckedOk(api);
     await content.approve({ itemId, contentHash: hash }, WEBMASTER);
     await content.publish({ itemId, contentHash: hash }, WEBMASTER);
 

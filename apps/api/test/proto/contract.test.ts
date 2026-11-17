@@ -92,9 +92,9 @@ beforeAll(async () => {
 });
 
 describe(`${PKG}: services`, () => {
-  it('declares the seven services and nothing else', () => {
+  it('declares the eight services and nothing else', () => {
     expect(services().map((s) => s.name).sort()).toEqual(
-      ['ApprovalRuleService', 'ContentService', 'EventService', 'MembershipService', 'MembershipVerifierService', 'NewsletterService', 'RedactionPolicyService'].sort(),
+      ['ApprovalRuleService', 'ContentService', 'EventService', 'LinkCheckService', 'MembershipService', 'MembershipVerifierService', 'NewsletterService', 'RedactionPolicyService'].sort(),
     );
   });
 
@@ -133,6 +133,35 @@ describe(`${PKG}: the approval rule (SOLO-APPROVE)`, () => {
     const get = service('ApprovalRuleService')?.methods.find((m) => m.name === 'GetApprovalRules');
     const setting = get?.output.fields.map(fieldMessage).find((m) => m !== undefined);
     expect(fieldNames(setting)).toEqual(['scope', 'rule', 'set_at', 'revision']);
+  });
+});
+
+describe(`${PKG}: the link checker (L-ITEM)`, () => {
+  it('is its own service with exactly ListLinksAwaitingVerdict (a read) and RecordLinkVerdicts', () => {
+    expect(service('LinkCheckService')?.methods.map((m) => [m.name, m.idempotency === Idempotency.NO_SIDE_EFFECTS])).toEqual([
+      ['ListLinksAwaitingVerdict', true],
+      ['RecordLinkVerdicts', false],
+    ]);
+  });
+
+  it('hands out addresses only: no words, title, where, item or version', () => {
+    const list = service('LinkCheckService')?.methods.find((m) => m.name === 'ListLinksAwaitingVerdict');
+    expect(fieldNames(list?.input)).toEqual([]);
+    expect(fieldNames(list?.output)).toEqual(['urls', 'more']);
+  });
+
+  it('takes an address, a verdict and reason codes: never a replacement address, a reviewer answer or a note', () => {
+    const record = service('LinkCheckService')?.methods.find((m) => m.name === 'RecordLinkVerdicts');
+    expect(fieldNames(record?.input)).toEqual(['verdicts']);
+    const verdict = record?.input.fields.map(fieldMessage).find((m) => m !== undefined);
+    expect(fieldNames(verdict)).toEqual(['url', 'verdict', 'reasons']);
+    expect(verdict?.fields.map(fieldEnum).find((e) => e !== undefined)?.values.map((v) => v.name)).toEqual([
+      'MACHINE_VERDICT_UNSPECIFIED',
+      'MACHINE_VERDICT_OK',
+      'MACHINE_VERDICT_CONFIRM',
+      'MACHINE_VERDICT_DROP',
+    ]);
+    expect(fieldNames(record?.output)).toEqual(['recorded', 'not_awaiting']);
   });
 });
 
@@ -377,6 +406,11 @@ describe(`${PKG}: the link gate (EDITOR A3b)`, () => {
       ['fix', 7],
       ['answered_by_label', 8],
       ['accepted', 9],
+      // L-ITEM: the reviewer's answer apart from the gate's, and when the link checker gave its verdict.
+      ['reviewer_answer', 10],
+      ['machine_checked_at', 11],
+      // Fix round 2: the checker never requests the link's site, so the panel does not word its OK as aged out.
+      ['never_fetched', 12],
     ]);
   });
 

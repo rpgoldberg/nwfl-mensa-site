@@ -110,16 +110,24 @@ test('the Treasurer writes, a second officer checks the Facebook link, the Presi
     await expect(open).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
-  await test.step('they answer yes on the Facebook link, and Save my answers', async () => {
+  await test.step('they answer yes on each link, and Save my answers (L-ITEM: every link, not only the Facebook one)', async () => {
     // The stack's roster holds the President's and the Treasurer's offices only, so a holder of two other
     // seats acts as an officer: the "Acting as" choice is the stand-in suite's (editor-review.spec.ts).
     await expect(s.locator('#acting')).toHaveText('Acting as: Officer');
+    // No link checker runs on this stack: each row says so.
+    await expect(rowFor('the event page')).toContainText('The link checker has not checked it yet.');
+    await expect(rowFor('our Facebook page')).toContainText('The link checker does not open links that need a sign-in: a person checks it.');
     await rowFor('our Facebook page').getByRole('radio', { name: 'Yes' }).check();
     await panel.getByRole('button', { name: 'Save my answers' }).click();
     await expect(s).toHaveURL(new RegExp(`${REVIEW(id)}\\?done=answers#links$`));
     await expect(s.getByRole('status')).toHaveText('Your answers are saved.');
     await expect(panel).toContainText('1 of 3 links checked.');
     await expect(rowFor('our Facebook page')).toContainText('Checked by Officer: it shows the right page.');
+    await rowFor('the event page').getByRole('radio', { name: 'Yes' }).check();
+    await rowFor(officeEventUrl).getByRole('radio', { name: 'Yes' }).check();
+    await panel.getByRole('button', { name: 'Save my answers' }).click();
+    await expect(s.getByRole('status')).toHaveText('Your answers are saved.');
+    await expect(panel).toContainText('3 of 3 links checked.');
   });
 
   await test.step('the saved answer survives a reload, and a fresh sign-in with no tab copy', async () => {

@@ -8,6 +8,9 @@ import type http2 from 'node:http2';
 import pg from 'pg';
 import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
 import { dbStanding } from '../../src/auth/standing.js';
+import { loginWalled } from '../../src/content/item-links.js';
+import { MachineVerdict } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
+import { LinkCheckService } from '../../src/gen/nwfl/mensa/v1/link_check_pb.js';
 import { apiRoutes } from '../../src/grpc/routes.js';
 import { apiInterceptors } from '../../src/grpc/interceptors.js';
 import { createGrpcServer } from '../../src/grpc/server.js';
@@ -61,6 +64,8 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   // The newsletter agent and the membership verifier (machine clients).
   'agent-token': { client: 'agent', subject: 'svc-nwfl-newsletter', groups: [], scopes: ['newsletter.read'] },
   'verifier-token': { client: 'verifier', subject: 'svc-nwfl-verifier', groups: [], scopes: ['membership.verify'] },
+  // L-ITEM: the link checker (a machine client), a stand-in for its client-credentials token.
+  'linkcheck-token': { client: 'linkcheck', subject: 'svc-nwfl-linkcheck', groups: [], scopes: ['links.check'] },
   // The Webmaster, who also holds the webmaster seat.
   'webmaster-token': { client: 'site', subject: 'sub-webmaster', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-webmaster', 'nwfl-webmaster'], scopes: [] },
   // SOLO-APPROVE: an officer whose token carries an admin group under another chapter's prefix, which the gate drops.
@@ -145,4 +150,20 @@ export function dump(value: unknown): string {
   return JSON.stringify(value, (_key, v: unknown) =>
     typeof v === 'bigint' ? v.toString() : v instanceof Uint8Array ? Buffer.from(v).toString('latin1') : v,
   );
+}
+
+/**
+ * L-ITEM: the link checker's OK on every address waiting that needs no sign-in, as its run would give
+ * (a stand-in for the check): Approve then waits only for a yes on a link that needs a sign-in.
+ */
+export async function linksCheckedOk(api: Pick<Api, 'client'>): Promise<void> {
+  const checker = api.client(LinkCheckService);
+  const token = as('linkcheck-token');
+  for (;;) {
+    const { urls, more } = await checker.listLinksAwaitingVerdict({}, token);
+    const ok = urls.filter((url) => !loginWalled(url));
+    if (ok.length === 0) return;
+    await checker.recordLinkVerdicts({ verdicts: ok.map((url) => ({ url, verdict: MachineVerdict.OK })) }, token);
+    if (!more) return;
+  }
 }

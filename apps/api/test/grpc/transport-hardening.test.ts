@@ -19,7 +19,7 @@ import { MAX_ACTIVE_STREAMS, MAX_CONCURRENT_STREAMS, MAX_EDGE_STREAMS, MAX_EDGE_
 import { createStructuredLogger } from '../../src/platform/logger.js';
 import { createReadiness } from '../../src/readiness.js';
 import type { TokenVerifier } from '../../src/auth/caller.js';
-import { EDGE, HEALTH, NEWSLETTER, VERIFIER, createEdgeServer, edgeHeaders } from '../helpers/edge.js';
+import { EDGE, HEALTH, LINKCHECK, NEWSLETTER, VERIFIER, createEdgeServer, edgeHeaders } from '../helpers/edge.js';
 import { grpcFrame, h2Request } from '../helpers/h2.js';
 import { captureLogs, closeHard, listen } from '../helpers/servers.js';
 
@@ -277,6 +277,29 @@ describe('edge admission', () => {
     expect(await call(edgeHeaders(NEWSLETTER, 'agent-token'))).toBe('0');
   });
 
+  it('gives the link checker a budget of its own (L-ITEM): it full leaves the agent, the verifier and the site served', async () => {
+    const linkcheck = await hold(2, edgeHeaders(LINKCHECK, 'linkcheck-token'));
+    try {
+      expect(linkcheck.open()).toBe(2);
+      expect(await call(edgeHeaders(LINKCHECK, 'linkcheck-token'))).toBe('8');
+      expect(await call(edgeHeaders(NEWSLETTER, 'agent-token'))).toBe('0');
+      expect(await call(edgeHeaders(VERIFIER, 'verifier-token'))).toBe('0');
+      expect(await call(grpcHeaders())).toBe('0');
+    } finally {
+      await linkcheck.release();
+    }
+    expect(await call(edgeHeaders(LINKCHECK, 'linkcheck-token'))).toBe('0');
+  });
+
+  it('refuses at once a link checker stream for any other service, and any other token on its service', async () => {
+    const elsewhere = await hold(4, edgeHeaders(VERIFIER, 'linkcheck-token'));
+    expect(elsewhere.open()).toBe(0);
+    await elsewhere.release();
+    for (const path of [NEWSLETTER, VERIFIER, HEALTH]) expect(await call(edgeHeaders(path, 'linkcheck-token'))).toBe('7');
+    for (const token of ['agent-token', 'verifier-token', 'site-token']) expect(await call(edgeHeaders(LINKCHECK, token))).toBe('7');
+    expect(await call(edgeHeaders(LINKCHECK))).toBe('16');
+  });
+
   it('refuses at once an edge stream whose token belongs to another service or a site user, so it holds no slot either', async () => {
     const elsewhere = await hold(4, edgeHeaders(HEALTH, 'agent-token'));
     expect(elsewhere.open()).toBe(0);
@@ -342,9 +365,9 @@ describe('edge admission', () => {
     }
   });
 
-  it('splits the edge into two client budgets of four, eight in all', () => {
+  it('splits the edge into three client budgets of four (the agent, the verifier, the link checker), twelve in all', () => {
     expect(MAX_EDGE_STREAMS_PER_CLIENT).toBe(4);
-    expect(MAX_EDGE_STREAMS).toBe(2 * MAX_EDGE_STREAMS_PER_CLIENT);
+    expect(MAX_EDGE_STREAMS).toBe(3 * MAX_EDGE_STREAMS_PER_CLIENT);
   });
 });
 
@@ -414,6 +437,7 @@ describe('the per-connection cap and the budgets, on one connection', () => {
       await new Promise<void>((resolve) => session.once('remoteSettings', () => resolve()));
       hold(MAX_EDGE_STREAMS_PER_CLIENT, edgeHeaders(NEWSLETTER, 'agent-token'));
       hold(MAX_EDGE_STREAMS_PER_CLIENT, edgeHeaders(VERIFIER, 'verifier-token'));
+      hold(MAX_EDGE_STREAMS_PER_CLIENT, edgeHeaders(LINKCHECK, 'linkcheck-token'));
       hold(MAX_ACTIVE_STREAMS - 1);
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(open()).toBe(MAX_EDGE_STREAMS + MAX_ACTIVE_STREAMS - 1);

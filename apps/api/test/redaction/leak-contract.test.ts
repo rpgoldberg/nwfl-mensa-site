@@ -116,6 +116,10 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       ListPendingVerifications: () => [{}],
       ListReleasedClaims: () => [{}],
     },
+    // L-ITEM: the link checker's only (every audience here is refused); swept like any read.
+    'nwfl.mensa.v1.LinkCheckService': {
+      ListLinksAwaitingVerdict: () => [{}],
+    },
     'nwfl.mensa.v1.ApprovalRuleService': {
       GetApprovalRules: () => [{}],
       ListApprovalRuleChanges: () => [{}],
@@ -172,6 +176,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     // PROFILE-ID: an approved member's own two names; no content, no redacted value.
     'MembershipService.UpdateMyProfile',
     'MembershipVerifierService.ReportVerification',
+    // L-ITEM: the link checker's verdicts; its answer is counts and the addresses it sent, no content.
+    'LinkCheckService.RecordLinkVerdicts',
     'RedactionPolicyService.ProposeRedactionChange',
     'RedactionPolicyService.ApproveRedactionChange',
     'RedactionPolicyService.AddRedactionMark',

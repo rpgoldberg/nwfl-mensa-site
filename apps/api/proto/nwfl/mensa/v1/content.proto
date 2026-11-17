@@ -515,7 +515,10 @@ message GetItemLinksResponse {
   google.protobuf.Timestamp ready_at = 3;
 }
 
-// A machine checker's verdict on a link (L-ITEM); unspecified until one runs.
+// The link checker's latest verdict on a link (L-ITEM); unspecified until it
+// has given one. OK lets Approve through for 7 days on a link that needs no
+// sign-in; CONFIRM leaves it to a reviewer; DROP holds Approve until a
+// reviewer answers yes with a note.
 enum MachineVerdict {
   MACHINE_VERDICT_UNSPECIFIED = 0;
   MACHINE_VERDICT_OK = 1;
@@ -538,11 +541,28 @@ message ItemLink {
   repeated string reasons = 6;
   string fix = 7;
   // Who gave the latest answer on this ready version, by role; empty if no
-  // one has. Set with accepted false, the answer is no: Approve waits until
-  // the writer fixes the link or a reviewer answers yes.
+  // one has. reviewer_answer says what it was.
   string answered_by_label = 8;
-  // A reviewer answered yes on this ready version.
+  // The link does not hold Approve up (SPEC-v3 3.3): a reviewer's yes on
+  // this ready version (with a note when the checker's latest verdict is
+  // DROP), or the checker's OK under 7 days old on a link that needs no
+  // sign-in, and no reviewer's no as it stands.
   bool accepted = 9;
+  // The latest answer by a reviewer on this ready version, if any.
+  ReviewerAnswer reviewer_answer = 10;
+  // When the checker gave machine_verdict; unset when it has given none.
+  google.protobuf.Timestamp machine_checked_at = 11;
+  // A site the link checker never requests (its no-fetch list), or an
+  // address it cannot read: its OK there says nothing, so a reviewer opens
+  // the link and answers.
+  bool never_fetched = 12;
+}
+
+// A reviewer's answer on a link: it shows the right page, or it does not.
+enum ReviewerAnswer {
+  REVIEWER_ANSWER_UNSPECIFIED = 0;
+  REVIEWER_ANSWER_YES = 1;
+  REVIEWER_ANSWER_NO = 2;
 }
 
 message ConfirmLinksRequest {

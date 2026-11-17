@@ -11,6 +11,10 @@
 //     agent     the newsletter agent (audience members: it builds the issue
 //               members receive).
 //     verifier  the membership verifier (audience public).
+//     linkcheck the link checker (L-ITEM; audience officers: it is handed
+//               addresses from officers-only items and members-only
+//               passages, never their text). No groups, whatever its token
+//               carries.
 //   anything else                -> UNAUTHENTICATED, never a quiet downgrade
 //   a subject starting system:   -> UNAUTHENTICATED: the database trusts the issue
 //                                   loader's subject (system:issue-loader, 0029), and
@@ -19,13 +23,14 @@
 // Then each service admits one kind of caller (the design notes, A3):
 //   NewsletterService          the agent only
 //   MembershipVerifierService  the verifier only
+//   LinkCheckService           the link checker only
 //   every other service        anonymous and site users only
 // A caller of the wrong kind gets PERMISSION_DENIED; no token where one is
 // required gets UNAUTHENTICATED.
 //
 // The mesh identity header l5d-client-id only ever NARROWS: a call that
-// arrived through the edge (cloudflared) may reach the agent and verifier
-// services and nothing else. linkerd2-proxy v2.359.0, the proxy of Linkerd
+// arrived through the edge (cloudflared) may reach the agent, verifier and
+// link checker services and nothing else. linkerd2-proxy v2.359.0, the proxy of Linkerd
 // edge-26.6.3, sets the header from the mTLS peer identity on every inbound
 // HTTP request, replacing a client-sent value, and removes it when there is no
 // identity (linkerd/app/inbound/src/http/set_identity_header.rs lines 79-85,
@@ -38,8 +43,8 @@ import { Code, ConnectError, type ContextValues, type Interceptor, createContext
 import { DEFAULT_SITE_GROUP_PREFIX, internalGroups } from './groups.js';
 
 export type Audience = 'public' | 'members' | 'officers';
-export type ClientKind = 'site' | 'agent' | 'verifier';
-export type CallerKind = 'anonymous' | 'user' | 'agent' | 'verifier';
+export type ClientKind = 'site' | 'agent' | 'verifier' | 'linkcheck';
+export type CallerKind = 'anonymous' | 'user' | 'agent' | 'verifier' | 'linkcheck';
 
 export interface VerifiedToken {
   client: ClientKind;
@@ -77,7 +82,14 @@ export const ANONYMOUS: Caller = Object.freeze({ kind: 'anonymous', subject: nul
 
 export const AGENT_SERVICE = 'nwfl.mensa.v1.NewsletterService';
 export const VERIFIER_SERVICE = 'nwfl.mensa.v1.MembershipVerifierService';
-const EDGE_SERVICES = new Set([AGENT_SERVICE, VERIFIER_SERVICE]);
+export const LINKCHECK_SERVICE = 'nwfl.mensa.v1.LinkCheckService';
+/** The one service each machine client may call, and no other caller may. */
+export const MACHINE_SERVICES: Readonly<Record<'agent' | 'verifier' | 'linkcheck', string>> = Object.freeze({
+  agent: AGENT_SERVICE,
+  verifier: VERIFIER_SERVICE,
+  linkcheck: LINKCHECK_SERVICE,
+});
+const EDGE_SERVICES = new Set(Object.values(MACHINE_SERVICES));
 export const DEFAULT_EDGE_CLIENT_IDS: readonly string[] = ['cloudflared.nwfl-edge.serviceaccount.identity.linkerd.cluster.local'];
 
 /**
@@ -135,6 +147,7 @@ async function establish(header: string | null, verifier: TokenVerifier, standin
   const scopes = [...verified.scopes];
   if (verified.client === 'agent') return { kind: 'agent', subject: verified.subject, groups: [], scopes, audience: 'members' };
   if (verified.client === 'verifier') return { kind: 'verifier', subject: verified.subject, groups: [], scopes, audience: 'public' };
+  if (verified.client === 'linkcheck') return { kind: 'linkcheck', subject: verified.subject, groups: [], scopes, audience: 'officers' };
   const groups = internalGroups(verified.groups, groupPrefix);
   const member = await standing.isMember(verified.subject);
   return {
@@ -149,9 +162,9 @@ async function establish(header: string | null, verifier: TokenVerifier, standin
 }
 
 function admit(service: string, caller: Caller): void {
-  const required = service === AGENT_SERVICE ? 'agent' : service === VERIFIER_SERVICE ? 'verifier' : undefined;
+  const required = (Object.keys(MACHINE_SERVICES) as Array<keyof typeof MACHINE_SERVICES>).find((kind) => MACHINE_SERVICES[kind] === service);
   if (required === undefined) {
-    if (caller.kind === 'agent' || caller.kind === 'verifier') throw new ConnectError('this client may not call this service', Code.PermissionDenied);
+    if (caller.kind !== 'anonymous' && caller.kind !== 'user') throw new ConnectError('this client may not call this service', Code.PermissionDenied);
     return;
   }
   if (caller.kind === 'anonymous') throw new ConnectError('a token is required', Code.Unauthenticated);

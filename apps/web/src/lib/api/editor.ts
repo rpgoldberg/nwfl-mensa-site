@@ -45,6 +45,8 @@ import {
   type ItemLink,
   ItemState,
   ItemVisibility,
+  MachineVerdict,
+  ReviewerAnswer,
   VersionStatus,
 } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import {
@@ -260,9 +262,15 @@ export interface PieceLink {
   where: string;
   /** On a site that needs a sign-in to check (Facebook and the like): Approve waits for a yes. */
   loginWalled: boolean;
+  /** On a site the link checker never requests (or an address it cannot read): its OK says nothing, so a person opens it and answers. */
+  neverFetched: boolean;
   /** Who gave the latest answer on this version, by role; empty if no one has. */
   answeredByLabel: string;
-  /** That answer was yes. Answered and not accepted: the answer was no. */
+  /** That latest answer: yes, no, or none yet. */
+  reviewerAnswer: 'yes' | 'no' | 'none';
+  /** The link checker's latest verdict (L-ITEM), its reasons and when it was given; absent when it has given none. */
+  machine?: { verdict: 'ok' | 'confirm' | 'drop'; reasons: string[]; checkedAt: Date };
+  /** The gate accepts the link (a yes, or the checker's recent OK): it does not hold Approve up. */
   accepted: boolean;
 }
 
@@ -401,8 +409,23 @@ function versionOf(v: ContentVersion): EditorVersion {
   };
 }
 
+const VERDICTS: Partial<Record<MachineVerdict, 'ok' | 'confirm' | 'drop'>> = { [MachineVerdict.OK]: 'ok', [MachineVerdict.CONFIRM]: 'confirm', [MachineVerdict.DROP]: 'drop' };
+const ANSWERS: Partial<Record<ReviewerAnswer, 'yes' | 'no'>> = { [ReviewerAnswer.YES]: 'yes', [ReviewerAnswer.NO]: 'no' };
+
 function linkOf(link: ItemLink): PieceLink {
-  return { url: link.url, label: link.label, where: link.where, loginWalled: link.loginWalled, answeredByLabel: link.answeredByLabel, accepted: link.accepted };
+  const verdict = VERDICTS[link.machineVerdict];
+  return {
+    url: link.url,
+    label: link.label,
+    where: link.where,
+    loginWalled: link.loginWalled,
+    neverFetched: link.neverFetched,
+    answeredByLabel: link.answeredByLabel,
+    reviewerAnswer: ANSWERS[link.reviewerAnswer] ?? 'none',
+    // A verdict comes with its time; one without is read as none.
+    ...(verdict !== undefined && link.machineCheckedAt !== undefined ? { machine: { verdict, reasons: [...link.reasons], checkedAt: timestampDate(link.machineCheckedAt) } } : {}),
+    accepted: link.accepted,
+  };
 }
 
 function itemOf(item: ContentItem | undefined): EditorItem {

@@ -9,7 +9,7 @@
 import { type Page, expect, test } from '@playwright/test';
 import { ContentKind, ItemVisibility, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { addDays, centralToday } from '../stand-in';
-import { as, codeOf, content, events, tokenFor } from './api';
+import { answerEveryLink, as, codeOf, content, events, tokenFor } from './api';
 import { EDIT, LIST, createItem, marker, person, problemsRegion, saveTop, textBox } from './helpers';
 import { EDITOR_REAL } from './servers';
 
@@ -319,6 +319,8 @@ test.describe('markup injection', () => {
     expect(await injected(t)).toEqual([]);
     await t.getByRole('button', { name: 'Send for approval' }).click();
     await expect(t).toHaveURL(/\?sent=1$/);
+    // L-ITEM: every link needs a yes before Approve (no link checker runs on this stack).
+    await answerEveryLink(id);
     for (const login of ['officer', 'webmaster']) {
       const token = await tokenFor(login);
       const hash = (await content.getWorkingItem({ itemId: id }, as(token))).item?.working?.contentHash;

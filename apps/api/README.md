@@ -127,17 +127,19 @@ A bearer token is verified with jose against the JWKS of the client it names
 
 | Client | Env (issuer turns it on) | Caller | Reaches |
 |---|---|---|---|
-| `nwfl-site` | `SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`, `SITE_OIDC_JWKS_URL`, `SITE_GROUP_PREFIX` | a user: officers by the `<prefix>officers` group, members by `member_account` | every service but the two below |
+| `nwfl-site` | `SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`, `SITE_OIDC_JWKS_URL`, `SITE_GROUP_PREFIX` | a user: officers by the `<prefix>officers` group, members by `member_account` | every service but the three below |
 | `nwfl-agent` | `AGENT_OIDC_*`, `AGENT_SCOPE`, `AGENT_SUBJECT` | the newsletter agent | `NewsletterService` only |
 | `nwfl-verifier` | `VERIFIER_OIDC_*`, `VERIFIER_SCOPE`, `VERIFIER_SUBJECT` | the membership verifier | `MembershipVerifierService` only |
+| `nwfl-linkcheck` | `LINKCHECK_OIDC_*`, `LINKCHECK_SCOPE` (`links.check`), `LINKCHECK_SUBJECT` (`svc-nwfl-linkcheck`) | the link checker, at the officers' audience: addresses only | `LinkCheckService` only |
 
 No token is public; a token that does not verify is refused. Member-level
 reading comes from `member_account` on each call (AC6 b), not from the
 token's groups; an account unverified for 13 months reads as public.
 `src/auth/roles.ts` holds the own-office rule and the approver checks for the
 write handlers. A call that arrived through the edge (its `l5d-client-id` is
-in `EDGE_CLIENT_IDS`) reaches only the agent and verifier services; the
-header never grants anything. With no issuer set, every token is refused.
+in `EDGE_CLIENT_IDS`) reaches only the agent, verifier and link checker
+services; the header never grants anything. Every client's audience must
+differ from every other's, or the service refuses to start. With no issuer set, every token is refused.
 
 One deployment serves one chapter (CF-ISO-0). A site token is this chapter's
 only by its issuer and audience (`SITE_OIDC_ISSUER`, `SITE_OIDC_AUDIENCE`),

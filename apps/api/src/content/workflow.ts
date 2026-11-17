@@ -907,9 +907,12 @@ export function workflowHandlers(deps: WorkflowDeps): Partial<ServiceImpl<typeof
           if (editionChanged) await recordAudit(client, caller, { ...common, action: 'edition_changed', payload: { from: beforeEdition, to: editionId } });
         }
 
-        // The link gate (EDITOR A3b), break-glass included, for the edition it is approved for: no link a
-        // reviewer answered no on this version as it stands, and a yes on each link that needs a sign-in.
-        // The refusal names only links the caller sees whole through their lens.
+        // The link gate (EDITOR A3b, L-ITEM; item-links.ts linkHold), break-glass included, for the edition it is
+        // approved for. Approve waits until EVERY link in the list is accepted: a reviewer's yes on this version
+        // as it stands, or the link checker's OK under 7 days old on a link that needs no sign-in and that the
+        // checker fetches. A reviewer's no always holds; the checker's DROP holds until a yes with a note after
+        // it; a later OK or CONFIRM replaces the DROP (the latest verdict wins). A DROP after Approve does not
+        // stop Publish. The refusal names or counts only links the caller sees whole through their lens.
         const office = (await client.query<{ title: string }>(`SELECT title FROM office WHERE id = $1`, [item.office_id])).rows[0] as { title: string };
         const refusal = await linkGate(
           client,

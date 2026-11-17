@@ -21,7 +21,7 @@
 //     RESOURCE_EXHAUSTED when full: MAX_ACTIVE_STREAMS for the site's calls,
 //     and for calls that came through the edge (l5d-client-id names an edge
 //     identity, see auth/caller.ts) MAX_EDGE_STREAMS_PER_CLIENT each for the
-//     agent and the verifier. An edge stream is admitted only once its bearer
+//     agent, the verifier and the link checker. An edge stream is admitted only once its bearer
 //     token is verified, at stream start: one with no valid token, or with a
 //     token for another service, is refused at once and holds no slot. So
 //     slow senders on the internet side can fill nothing, one edge client's
@@ -42,7 +42,7 @@
 import { Code, type ConnectRouter, type Interceptor, createContextValues } from '@connectrpc/connect';
 import { connectNodeAdapter } from '@connectrpc/connect-node';
 import http2 from 'node:http2';
-import { AGENT_SERVICE, DEFAULT_EDGE_CLIENT_IDS, type TokenVerifier, VERIFIER_SERVICE, isEdgePeer, rejectAllTokens } from '../auth/caller.js';
+import { DEFAULT_EDGE_CLIENT_IDS, MACHINE_SERVICES, type TokenVerifier, isEdgePeer, rejectAllTokens } from '../auth/caller.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { codeName } from './interceptors.js';
 import { REQUEST_INFO, type RequestInfo, requestId } from './request.js';
@@ -63,8 +63,8 @@ export const ACCEPTED_CONTENT_TYPES: ReadonlySet<string> = new Set(['application
 export const READ_MAX_BYTES = 256 * 1024;
 export const MAX_ACTIVE_STREAMS = 24;
 export const MAX_EDGE_STREAMS_PER_CLIENT = 4;
-/** The agent's and the verifier's budgets together. */
-export const MAX_EDGE_STREAMS = 2 * MAX_EDGE_STREAMS_PER_CLIENT;
+/** The agent's, the verifier's and the link checker's budgets together. */
+export const MAX_EDGE_STREAMS = 3 * MAX_EDGE_STREAMS_PER_CLIENT;
 export const MAX_CONCURRENT_STREAMS = MAX_ACTIVE_STREAMS + MAX_EDGE_STREAMS;
 export const RECEIVE_DEADLINE_MS = 10_000;
 export const MAX_SESSION_MEMORY_MB = 16;
@@ -75,10 +75,9 @@ const STATUS_UNAUTHENTICATED = String(Code.Unauthenticated);
 const STATUS_PERMISSION_DENIED = String(Code.PermissionDenied);
 // RFC 6750 b64token, as the caller gate reads it.
 const BEARER = /^Bearer ([A-Za-z0-9\-._~+/]+=*)$/i;
-// The one service each edge client may call.
-const EDGE_SERVICE = { agent: AGENT_SERVICE, verifier: VERIFIER_SERVICE } as const;
-
-type Budget = 'site' | 'agent' | 'verifier';
+type EdgeClient = keyof typeof MACHINE_SERVICES;
+type Budget = 'site' | EdgeClient;
+const isEdgeClient = (client: string): client is EdgeClient => Object.hasOwn(MACHINE_SERVICES, client);
 
 /**
  * The budget an edge stream is admitted to, decided before it takes a slot:
@@ -95,7 +94,8 @@ async function edgeBudget(request: http2.Http2ServerRequest, rpc: string, verifi
   } catch {
     return { refuse: STATUS_UNAUTHENTICATED };
   }
-  if ((client === 'agent' || client === 'verifier') && rpc.startsWith(`${EDGE_SERVICE[client]}/`)) return { budget: client };
+  // The one service each edge client may call (caller.ts MACHINE_SERVICES).
+  if (isEdgeClient(client) && rpc.startsWith(`${MACHINE_SERVICES[client]}/`)) return { budget: client };
   return { refuse: STATUS_PERMISSION_DENIED };
 }
 // A gRPC path as Connect routes it; anything else is logged as "unknown".
@@ -154,7 +154,7 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
   const maxEdgeStreamsPerClient = options.maxEdgeStreamsPerClient ?? MAX_EDGE_STREAMS_PER_CLIENT;
   const edgeIds = new Set(options.edgeClientIds ?? DEFAULT_EDGE_CLIENT_IDS);
   const verifier = options.verifier ?? rejectAllTokens;
-  const limit: Record<Budget, number> = { site: maxActiveStreams, agent: maxEdgeStreamsPerClient, verifier: maxEdgeStreamsPerClient };
+  const limit: Record<Budget, number> = { site: maxActiveStreams, agent: maxEdgeStreamsPerClient, verifier: maxEdgeStreamsPerClient, linkcheck: maxEdgeStreamsPerClient };
   const infos = new WeakMap<http2.Http2ServerRequest, RequestInfo>();
   const connect = createConnectHandler(options, (request) => {
     const values = createContextValues();
@@ -162,7 +162,7 @@ export function createGrpcServer(options: GrpcServerOptions): http2.Http2Server 
     return values;
   });
   // Active streams per budget.
-  const active: Record<Budget, number> = { site: 0, agent: 0, verifier: 0 };
+  const active: Record<Budget, number> = { site: 0, agent: 0, verifier: 0, linkcheck: 0 };
 
   const handler: NodeHandler = (request, response) => {
     const info: RequestInfo = { id: requestId(request.headers), reached: false };

@@ -1,7 +1,7 @@
 // ============================================================================
 // Bearer-token verification (A3), with jose against each client's JWKS.
 //
-// Three clients, each configured with its own issuer, audience and key set
+// Four clients, each configured with its own issuer, audience and key set
 // (Authentik gives every provider its own issuer and JWKS unless the issuer
 // mode is global; selection works either way):
 //
@@ -10,13 +10,15 @@
 //   agent     nwfl-agent: the newsletter agent's client-credentials token.
 //             Needs its scope and its service-account subject. No groups.
 //   verifier  nwfl-verifier: the membership verifier, likewise.
+//   linkcheck nwfl-linkcheck: the link checker (L-ITEM), likewise.
 //
 // A token is matched to exactly one client by its (unverified) issuer and
 // audience, then verified for real against that client only: signature by a
 // key in that client's set, an allowed algorithm (RS256, ES256; never none or
 // HMAC), the issuer, the audience, a subject, an issue time and an expiry. A
 // token's lifetime (exp - iat), and its age, is at most MAX_LIFETIME_SECONDS
-// for its kind: 1 h for a site token, 24 h for a machine token, so a leaked
+// for its kind: 1 h for a site token and for the link checker's (its provider
+// issues 1 h tokens), 24 h for the agent's and the verifier's, so a leaked
 // token cannot be minted to last for years. A token naming two of our
 // audiences is refused, so one token never works for two clients.
 // A site token's subject is a lowercase UUID, as Authentik's user_uuid sub mode
@@ -45,7 +47,7 @@ export interface ClientConfig {
   issuer: string;
   audience: string;
   jwks: JWTVerifyGetKey;
-  /** A scope the token must carry (agent, verifier). */
+  /** A scope the token must carry (agent, verifier, linkcheck). */
   scope?: string;
   /** The subject the token must have (the service account of a machine client). */
   subject?: string;
@@ -53,7 +55,7 @@ export interface ClientConfig {
 
 export const ALGORITHMS = ['RS256', 'ES256'];
 const CLOCK_TOLERANCE_SECONDS = 30;
-export const MAX_LIFETIME_SECONDS: Record<ClientKind, number> = { site: 3600, agent: 86_400, verifier: 86_400 };
+export const MAX_LIFETIME_SECONDS: Record<ClientKind, number> = { site: 3600, agent: 86_400, verifier: 86_400, linkcheck: 3600 };
 const SITE_SUBJECT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 class TokenRefused extends Error {

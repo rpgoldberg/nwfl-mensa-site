@@ -23,7 +23,7 @@ function job(name: string): string {
 }
 
 describe('api workflow', () => {
-  it('runs only for changes to the API, to itself, or to the linkcheck files the API copies (EDITOR A3a)', () => {
+  it('runs only for changes to the API, to itself, or to the linkcheck files the API copies or drives (EDITOR A3a, L-ITEM)', () => {
     const on = (parse(ci) as { on: Record<string, { paths?: unknown }> }).on;
     for (const event of ['push', 'pull_request']) {
       expect(on[event]?.paths, event).toEqual([
@@ -31,6 +31,7 @@ describe('api workflow', () => {
         '.github/workflows/api.yml',
         'apps/linkcheck/src/urls.ts',
         'apps/linkcheck/src/extract.ts',
+        'apps/linkcheck/src/items.ts',
         'apps/linkcheck/test/urls.test.ts',
         'apps/linkcheck/test/url-rules.test.ts',
         'apps/linkcheck/test/fixtures/url-rules.json',

@@ -17,7 +17,7 @@ import { type Page, expect, test } from '@playwright/test';
 import { ContentKind, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { Area, EventCategory, EventVisibility, OccurrenceStatus } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
 import { addDays, centralToday } from '../stand-in';
-import { as, codeOf, content, events, tokenFor } from './api';
+import { answerEveryLink, as, codeOf, content, events, tokenFor } from './api';
 import { LIST, createItem, longReport, marker, person, postedBytes, problemsRegion, publicBodies, rowOf, saveTop, textBox } from './helpers';
 import { EDITOR_REAL } from './servers';
 
@@ -152,6 +152,8 @@ test('the Treasurer writes a long report, it waits for approval, is approved and
 
   await test.step('the President approves it: "Approved, ready to publish", and still nobody outside sees it', async () => {
     const pToken = await tokenFor('officer');
+    // L-ITEM: every link needs a yes first (no link checker runs on this stack).
+    await answerEveryLink(id);
     const hash = (await content.getWorkingItem({ itemId: id }, as(pToken))).item?.working?.contentHash ?? new Uint8Array();
     const approved = await content.approve({ itemId: id, contentHash: hash }, as(pToken));
     expect(approved.item?.working?.status).toBe(VersionStatus.CLEARED);

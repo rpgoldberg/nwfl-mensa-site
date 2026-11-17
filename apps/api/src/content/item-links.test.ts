@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { Entry, VenueRow } from '../events/service.js';
-import { IN_TEXT, canonicalLinks, eventLinks, linksSha256, loginWalled, refusedMessage, rfc3339Micros, textLinks, uncheckedMessage } from './item-links.js';
+import { type Answer, IN_TEXT, type Verdict, canonicalLinks, eventLinks, linkHold, linksSha256, loginWalled, neverFetched, refusedMessage, rfc3339Micros, textLinks, uncheckedMessage } from './item-links.js';
 import { parseMarkup } from './markup.js';
 import type { Tree } from './tree.js';
 
@@ -160,9 +160,93 @@ describe('loginWalled', () => {
     }
   });
 
-  it('is false for any other site, an email address and an unreadable address', () => {
-    for (const url of ['https://example.org/', 'https://notfacebook.com/', 'mailto:someone@example.org', 'https://facebook.com.example.org/', 'not a url', 'ftp://facebook.com/']) {
+  it('is false for any other site and an email address', () => {
+    for (const url of ['https://example.org/', 'https://notfacebook.com/', 'mailto:someone@example.org', 'https://facebook.com.example.org/', 'https://example.org:443/', 'http://example.org:80/']) {
       expect(loginWalled(url), url).toBe(false);
+    }
+  });
+});
+
+// The no-fetch host, named once: an address with userinfo on it is put together from this, so no text here reads as a person's email address (scripts/made-up-people.mjs).
+const NO_FETCH_HOST = 'us.mensa.org';
+
+// Fix round 2 (R1-N4): an address whose host cannot be read is never taken for one the checker's OK counts on.
+const UNREADABLE = [
+  ['userinfo', `https://user@${NO_FETCH_HOST}/x`],
+  ['userinfo and a password', `https://user:secret@${NO_FETCH_HOST}/x`],
+  ['userinfo on any other host', 'https://user@example.org/x'],
+  ['a port', 'https://us.mensa.org:8443/x'],
+  ['a port on any other host', 'https://club.example.org:8443/x'],
+  ['no host', 'https://'],
+  ['a host that is no host', 'https://exa mple.org/x'],
+  ['words', 'not a url'],
+  ['another scheme', 'ftp://us.mensa.org/x'],
+  ['nothing', ''],
+  ['a control character', 'https://us.mensa.org/\u0007x'],
+  ['a zero-width space in the host', 'https://us.mensa\u200b.org/x'],
+  ['more than 2048 characters', `https://club.example.org/${'x'.repeat(2048)}`],
+  ['a mail address with no domain', 'mailto:someone'],
+] as const;
+
+describe('loginWalled and neverFetched fail closed', () => {
+  it.each(UNREADABLE)('are both true for an address with %s', (_label, url) => {
+    expect(neverFetched(url)).toBe(true);
+    expect(loginWalled(url)).toBe(true);
+  });
+
+  it.each(UNREADABLE)('linkHold holds an address with %s on a fresh OK; a yes still accepts it', (_label, url) => {
+    const ok: Verdict = { verdict: 'ok', reasons: [], at: new Date(), fresh: true, id: 1n };
+    expect(linkHold(url, undefined, ok)).toBe('walled');
+    expect(linkHold(url, { answer: 'yes', label: 'Treasurer', note: null, id: 2n } satisfies Answer, ok)).toBeUndefined();
+  });
+});
+
+describe('neverFetched', () => {
+  it('is true for a host on the no-fetch list, however it is written, with a default port, or as a mail domain', () => {
+    for (const url of ['https://us.mensa.org/x', 'https://US.MENSA.ORG/x', 'https://us.mensa.org./x', 'https://www.us.mensa.org/x', 'https://us.mensa.org:443/x', 'http://us.mensa.org:80/x', `mailto:someone@${NO_FETCH_HOST}`, 'https://vndb.org/v1']) {
+      expect(neverFetched(url), url).toBe(true);
+      expect(linkHold(url, undefined, { verdict: 'ok', reasons: [], at: new Date(), fresh: true, id: 1n }), url).toBe('unchecked');
+    }
+  });
+
+  // The re-challenge's host list (round 1): every way of writing a no-fetch host. Written as escapes.
+  it.each([
+    'https://US.MENSA.ORG/x',
+    'https://us.mensa.org./x',
+    'https://us.mensa.org../x',
+    'https://www.us.mensa.org/x',
+    'https://us.mensa.org:443/x',
+    'https://us.mensa.org:80/x',
+    `https://user@${NO_FETCH_HOST}/x`,
+    'https://\uff55\uff53.\uff4d\uff45\uff4e\uff53\uff41.\uff4f\uff52\uff47/x',
+    'https://us\u3002mensa\u3002org/x',
+    'https://us.mensa.org%2E/x',
+    'https://us%2Emensa.org/x',
+    `mailto:x@${NO_FETCH_HOST}`,
+    `mailto:x@${NO_FETCH_HOST.toUpperCase()}.`,
+    'https://myfigurecollection.net/x',
+    'https://MYFIGURECOLLECTION.co.uk./x',
+    'https://www.vndb.org/v1',
+    'http://us.mensa.org/x',
+    'HTTPS://us.mensa.org/x',
+    'https://us.mensa.org\\x',
+    'https://us.mensa.org?x',
+    'https://us.mensa.org#x',
+    'https://us.mensa.org\u00ad/x',
+  ])('a fresh OK on %s is never accepted', (url) => {
+    expect(neverFetched(url)).toBe(true);
+    expect(linkHold(url, undefined, { verdict: 'ok', reasons: [], at: new Date(), fresh: true, id: 1n })).toBeDefined();
+  });
+
+  it('takes a look-alike host for what it is, another host: the checker fetches that one', () => {
+    // A Cyrillic a in "mensa".
+    expect(neverFetched('https://us.mens\u0430.org/x')).toBe(false);
+  });
+
+  it('is false for a host the checker fetches, with a default port too: a fresh OK there counts', () => {
+    for (const url of ['https://club.example.org/', 'https://club.example.org:443/', 'http://club.example.org:80/', 'mailto:someone@example.org', 'https://us.mensa.org.example.org/']) {
+      expect(neverFetched(url), url).toBe(false);
+      expect(linkHold(url, undefined, { verdict: 'ok', reasons: [], at: new Date(), fresh: true, id: 1n }), url).toBeUndefined();
     }
   });
 });

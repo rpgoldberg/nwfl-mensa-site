@@ -5,12 +5,14 @@ name: api
 on:
   push:
     branches: ['**']
-    # The linkcheck files the API copies or checks against (test/links/shared.test.ts).
+    # The linkcheck files the API copies or checks against (test/links/shared.test.ts, and
+    # test/links/linkcheck-items.test.ts for the items mode).
     paths:
       - 'apps/api/**'
       - '.github/workflows/api.yml'
       - 'apps/linkcheck/src/urls.ts'
       - 'apps/linkcheck/src/extract.ts'
+      - 'apps/linkcheck/src/items.ts'
       - 'apps/linkcheck/test/urls.test.ts'
       - 'apps/linkcheck/test/url-rules.test.ts'
       - 'apps/linkcheck/test/fixtures/url-rules.json'
@@ -24,6 +26,7 @@ on:
       - '.github/workflows/api.yml'
       - 'apps/linkcheck/src/urls.ts'
       - 'apps/linkcheck/src/extract.ts'
+      - 'apps/linkcheck/src/items.ts'
       - 'apps/linkcheck/test/urls.test.ts'
       - 'apps/linkcheck/test/url-rules.test.ts'
       - 'apps/linkcheck/test/fixtures/url-rules.json'

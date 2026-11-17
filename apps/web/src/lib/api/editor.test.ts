@@ -19,6 +19,8 @@ import {
   HistoryEntrySchema,
   ItemState,
   ItemVisibility,
+  MachineVerdict,
+  ReviewerAnswer,
   VersionStatus,
 } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import { EventOccurrenceSchema, EventSeriesSchema, EventService, OccurrenceStatus, VenueKind, VenueSchema } from '../../gen/nwfl/mensa/v1/event_pb.js';
@@ -336,14 +338,15 @@ describe('grpcEditor: each call, with the officer\'s bearer, read into the edito
 
   it("reads a piece's links with their hash and ready time, and sends a reviewer's answers for an office", async () => {
     const seen: unknown[] = [];
-    const LINK = { url: 'https://www.facebook.com/x', label: 'our group', where: 'in the text', loginWalled: true, answeredByLabel: 'Treasurer', accepted: true };
+    const LINK = { url: 'https://www.facebook.com/x', label: 'our group', where: 'in the text', loginWalled: true, neverFetched: false, answeredByLabel: 'Treasurer', reviewerAnswer: 'yes' as const, accepted: true };
+    const WIRE = { ...LINK, reviewerAnswer: ReviewerAnswer.YES };
     const server = await grpcServer((router) =>
       router.service(ContentService, {
         getItemLinks: (req) =>
-          req.itemId === ITEM_ID ? { linksSha256: HASH, links: [{ ...LINK, reasons: ['r'], fix: 'f' }], readyAt: timestampFromDate(READY_AT) } : { linksSha256: HASH, links: [] },
+          req.itemId === ITEM_ID ? { linksSha256: HASH, links: [{ ...WIRE, reasons: ['r'], fix: 'f' }], readyAt: timestampFromDate(READY_AT) } : { linksSha256: HASH, links: [] },
         confirmLinks: (req) => {
           seen.push({ itemId: req.itemId, hash: [...req.linksSha256], answers: req.answers.map((a) => [a.url, a.yes, a.note]), acting: req.actingAsOfficeId });
-          return { links: [LINK], notInPiece: ['https://elsewhere.example/'] };
+          return { links: [WIRE], notInPiece: ['https://elsewhere.example/'] };
         },
       }),
     );
@@ -356,6 +359,33 @@ describe('grpcEditor: each call, with the officer\'s bearer, read into the edito
     expect(seen).toEqual([
       { itemId: ITEM_ID, hash: [...HASH], answers: [[LINK.url, true, 'Opened it.']], acting: OFFICE_ID },
       { itemId: ITEM_ID, hash: [...HASH], answers: [[LINK.url, true, 'Opened it.']], acting: '' },
+    ]);
+  });
+
+  it("reads each link's reviewer answer and the link checker's latest verdict, its reasons and when it was given (L-ITEM)", async () => {
+    const CHECKED = new Date('2026-11-14T15:30:00Z');
+    const base = { label: '', where: 'in the text', loginWalled: false, neverFetched: false };
+    const server = await grpcServer((router) =>
+      router.service(ContentService, {
+        getItemLinks: () => ({
+          linksSha256: HASH,
+          links: [
+            { ...base, url: 'https://a.example/', machineVerdict: MachineVerdict.OK, machineCheckedAt: timestampFromDate(CHECKED), accepted: true },
+            { ...base, url: 'https://b.example/', machineVerdict: MachineVerdict.DROP, reasons: ['dead'], machineCheckedAt: timestampFromDate(CHECKED), reviewerAnswer: ReviewerAnswer.NO, answeredByLabel: 'Treasurer' },
+            // A site the checker never fetches (fix round 2, R1-N1): the gate says so, and the panel words it.
+            { ...base, url: 'https://c.example/', neverFetched: true, machineVerdict: MachineVerdict.CONFIRM, machineCheckedAt: timestampFromDate(CHECKED) },
+            // A verdict with no time is read as none: the API always sends both.
+            { ...base, url: 'https://d.example/', machineVerdict: MachineVerdict.OK },
+          ],
+        }),
+      }),
+    );
+    const api = grpcEditor({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
+    expect((await api.getItemLinks(OFFICER, ITEM_ID)).links).toEqual([
+      { ...base, url: 'https://a.example/', answeredByLabel: '', reviewerAnswer: 'none', accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: CHECKED } },
+      { ...base, url: 'https://b.example/', answeredByLabel: 'Treasurer', reviewerAnswer: 'no', accepted: false, machine: { verdict: 'drop', reasons: ['dead'], checkedAt: CHECKED } },
+      { ...base, url: 'https://c.example/', neverFetched: true, answeredByLabel: '', reviewerAnswer: 'none', accepted: false, machine: { verdict: 'confirm', reasons: [], checkedAt: CHECKED } },
+      { ...base, url: 'https://d.example/', answeredByLabel: '', reviewerAnswer: 'none', accepted: false },
     ]);
   });
 
