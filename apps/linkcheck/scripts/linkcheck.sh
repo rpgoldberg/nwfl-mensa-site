@@ -7,23 +7,30 @@
 #   check    --dns 1.1.1.1, --memory=512m: a network, but no PDF (only the extract files);
 #   replace  --dns 1.1.1.1, --memory=512m: the different links in the answers checked (no PDF);
 #   list     --network none: the editor's answers in, links.json and remember.json out.
+# And one container for the officers' pieces (L-ITEM), which sees no PDF and no folder of the machine:
+#   items    --dns 1.1.1.1, --memory=512m: the links that wait, from the API and back; counts only.
+#            The service account's app password is a file only its owner can read, mounted read-only
+#            at /in/password: it is in no argument and no environment value.
 # A remember file (LINKS-REMEMBER) is mounted read-only; the list step's new remember.json is copied
 # back over it, so the next issue's check fills in the same answers. It need not exist on the first issue.
 #
 #   linkcheck.sh check <image> <issue-date YYYY-MM-DD> <public.pdf> <members.pdf> <out-dir> [<remember.json>]
 #   linkcheck.sh list <image> <out-dir> [<answers.json> [<remember.json>]]
-# Give the image by digest (ghcr.io/...@sha256:...), as printed by CI.
+#   linkcheck.sh items <image>     (LINKCHECK_API_URL, LINKCHECK_TOKEN_URL and LINKCHECK_PASSWORD_FILE in the
+#                                  environment, and optionally LINKCHECK_CLIENT_ID, LINKCHECK_USERNAME, LINKCHECK_SCOPE)
+# Give the image by digest (ghcr.io/...@sha256:...), as printed by CI; items runs nothing else.
 set -eu
 umask 077
 
 usage() {
   echo "usage: linkcheck.sh check <image> <issue-date> <public.pdf> <members.pdf> <out-dir> [<remember.json>]" >&2
   echo "       linkcheck.sh list <image> <out-dir> [<answers.json> [<remember.json>]]" >&2
+  echo "       linkcheck.sh items <image>" >&2
   exit 2
 }
 
 [ "$(id -u)" != "0" ] || { echo "linkcheck.sh: run it as yourself, not as root" >&2; exit 2; }
-[ $# -ge 3 ] || usage
+[ $# -ge 2 ] || usage
 mode=$1 image=$2
 shift 2
 
@@ -104,6 +111,42 @@ case $mode in
         -v "$out:/out" "$image" \
         list --check /out/check.json --public /out/extract-public.json --members /out/extract-members.json --out /out
     fi
+    ;;
+  items)
+    [ $# -eq 0 ] || usage
+    # Only an image named by its digest runs: a name, then @sha256: and 64 lower-case hex characters.
+    name=${image%%@*} digest=${image#*@sha256:}
+    case $image in *@sha256:*) ;; *) name= ;; esac
+    case $digest in *[!0-9a-f]*) name= ;; esac
+    if [ -z "$name" ] || [ ${#digest} -ne 64 ]; then
+      echo "linkcheck.sh: give the image by its digest (ghcr.io/...@sha256:<64 hex characters>), never by a tag" >&2
+      exit 2
+    fi
+    if [ -z "${LINKCHECK_API_URL:-}" ] || [ -z "${LINKCHECK_TOKEN_URL:-}" ]; then
+      echo "linkcheck.sh: LINKCHECK_API_URL and LINKCHECK_TOKEN_URL are needed" >&2
+      exit 2
+    fi
+    if [ -z "${LINKCHECK_PASSWORD_FILE:-}" ] || [ ! -f "$LINKCHECK_PASSWORD_FILE" ]; then
+      echo "linkcheck.sh: LINKCHECK_PASSWORD_FILE must name the file that holds the app password" >&2
+      exit 2
+    fi
+    secret=$(abs "$LINKCHECK_PASSWORD_FILE")
+    if [ -n "$(find "$secret" -prune -perm /077)" ]; then
+      echo "linkcheck.sh: the password file must be yours alone (chmod 600)" >&2
+      exit 2
+    fi
+    case $secret in *:*) echo "linkcheck.sh: the password file's path may not hold a colon" >&2; exit 2 ;; esac
+    # The optional settings go through only when set. Every setting goes by name (docker reads the value
+    # from this environment), so no value is on the command line.
+    set --
+    [ -z "${LINKCHECK_CLIENT_ID:-}" ] || set -- "$@" -e LINKCHECK_CLIENT_ID
+    [ -z "${LINKCHECK_USERNAME:-}" ] || set -- "$@" -e LINKCHECK_USERNAME
+    [ -z "${LINKCHECK_SCOPE:-}" ] || set -- "$@" -e LINKCHECK_SCOPE
+    # exec: a signal sent to this script (the cron wrapper's, a timeout's) reaches docker itself.
+    # shellcheck disable=SC2046
+    exec docker run $(harden) --dns 1.1.1.1 --memory=512m --memory-swap=512m \
+      -e LINKCHECK_API_URL -e LINKCHECK_TOKEN_URL "$@" -e LINKCHECK_PASSWORD_FILE=/in/password \
+      -v "$secret:/in/password:ro" "$image" items
     ;;
   *) usage ;;
 esac

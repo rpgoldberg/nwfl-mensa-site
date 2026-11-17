@@ -53,6 +53,26 @@ Configuration is by environment: `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL`, `LI
 service account's app password, in a file), and optionally `LINKCHECK_CLIENT_ID` (`nwfl-linkcheck`),
 `LINKCHECK_USERNAME` (`svc-nwfl-linkcheck`) and `LINKCHECK_SCOPE` (`links.check`). It prints counts only.
 
+`scripts/linkcheck.sh items <image>` runs it in one container, hardened as the others: read-only, no
+capabilities, `--dns 1.1.1.1`, `--memory=512m`, no PDF and no folder of the machine. It refuses an image given
+without an `@sha256` digest. The settings above come from the environment and go to the container by name.
+`LINKCHECK_PASSWORD_FILE` names a file only its owner can read (0600); it is mounted read-only at
+`/in/password`, so the password is in no argument and no environment value.
+
+```sh
+LINKCHECK_API_URL=https://... LINKCHECK_TOKEN_URL=https://... LINKCHECK_PASSWORD_FILE=/path/to/password \
+  sh scripts/linkcheck.sh items ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:<digest>
+```
+
+`scripts/items-cron.sh` is the wrapper a crontab calls on the officer's machine. It takes no arguments. It
+reads `LINKCHECK_IMAGE` (by digest), `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL` and optionally `LINKCHECK_SCOPE`
+and `BAO_ADDR` from `~/.config/nwfl-linkcheck/items.conf`, one `NAME=value` per line. It lets one run go at a
+time (flock). It reads `client_id`, `username` and `password` at `secret/nwfl-mensa/linkcheck/client` with the
+OpenBao CLI, writes the password to a 0600 file in a fresh 0700 folder that is removed on every exit, and runs
+`linkcheck.sh items`; a run over 20 minutes is stopped. It prints no secret. Each run appends one line to
+`~/.local/state/nwfl-linkcheck/items.log`: the time, `exit=<code>`, and the counts or the reason. Exit codes: 0
+done; 1 the run failed; 2 OpenBao is unreachable or sealed; 3 another run is still going.
+
 ## Safety
 
 - extract is the only part that parses a PDF. pdf.js runs in a worker thread with a 256 MiB heap and a
@@ -112,4 +132,5 @@ service account's app password, in a file), and optionally `LINKCHECK_CLIENT_ID`
 
 `npm test` (`scripts/test-contained.sh`) runs the suite only in a capped container with no network
 (`--memory=2g --pids-limit=512 --cpus=2 --network none`); the stand-in DNS, HTTP and HTTPS servers listen
-on the container's loopback, and the test PDFs and certificates are made up at run time.
+on the container's loopback, and the test PDFs and certificates are made up at run time. The two scripts are
+run for real against a stand-in `docker` and a stand-in `bao` on PATH.

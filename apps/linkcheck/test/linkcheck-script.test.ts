@@ -10,12 +10,12 @@ import { describe, expect, it } from 'vitest';
 const SCRIPT = fileURLToPath(new URL('../scripts/linkcheck.sh', import.meta.url));
 const IMAGE = 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:' + '0'.repeat(64);
 
-function run(args: string[], setup: (dir: string) => void = () => undefined): { runs: string[][]; dir: string; status: number; stderr: string } {
+function run(args: string[], setup: (dir: string) => void = () => undefined, env: Record<string, string> = {}): { runs: string[][]; dir: string; status: number; stderr: string; dockerEnv: string } {
   const dir = mkdtempSync(path.join(tmpdir(), 'linkcheck-sh-'));
   const bin = path.join(dir, 'bin');
   mkdirSync(bin);
   const log = path.join(dir, 'docker.log');
-  writeFileSync(path.join(bin, 'docker'), `#!/bin/sh\nfor a in "$@"; do printf '%s\\037' "$a"; done >> "${log}"\necho >> "${log}"\n`);
+  writeFileSync(path.join(bin, 'docker'), `#!/bin/sh\nfor a in "$@"; do printf '%s\\037' "$a"; done >> "${log}"\necho >> "${log}"\nenv > "${dir}/docker.env"\n`);
   chmodSync(path.join(bin, 'docker'), 0o700);
   writeFileSync(path.join(dir, 'public.pdf'), '%PDF-1.7');
   writeFileSync(path.join(dir, 'members.pdf'), '%PDF-1.7');
@@ -24,7 +24,7 @@ function run(args: string[], setup: (dir: string) => void = () => undefined): { 
   let status = 0;
   let stderr = '';
   try {
-    execFileSync('sh', [SCRIPT, ...args.map((a) => a.replace('$DIR', dir))], { cwd: dir, env: { PATH: `${bin}:/usr/bin:/bin` }, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('sh', [SCRIPT, ...args.map((a) => a.replace('$DIR', dir))], { cwd: dir, env: { PATH: `${bin}:/usr/bin:/bin`, ...Object.fromEntries(Object.entries(env).map(([k, v]) => [k, v.replace('$DIR', dir)])) }, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
     status = (error as { status: number }).status;
     stderr = String((error as { stderr: Buffer }).stderr);
@@ -36,7 +36,13 @@ function run(args: string[], setup: (dir: string) => void = () => undefined): { 
     // no docker run
   }
   const runs = text.split('\n').filter(Boolean).map((line) => line.split('\u001f').filter(Boolean));
-  return { runs, dir, status, stderr };
+  let dockerEnv = '';
+  try {
+    dockerEnv = readFileSync(path.join(dir, 'docker.env'), 'utf8');
+  } catch {
+    // no docker run
+  }
+  return { runs, dir, status, stderr, dockerEnv };
 }
 
 const HARDENING = ['--rm', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--cpus', '1'];
@@ -52,6 +58,22 @@ function expectHardened(argv: string[]): void {
 
 const flag = (argv: string[], name: string): string | undefined => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
 const mounts = (argv: string[]): string[] => argv.flatMap((a, i) => (argv[i - 1] === '-v' ? [a] : []));
+const envFlags = (argv: string[]): string[] => argv.flatMap((a, i) => (argv[i - 1] === '-e' ? [a] : []));
+
+// The items mode (LINKCHECK-CRON): a made-up app password in a private file, and made-up addresses.
+const PASSWORD = 'made-up-app-password-7Qx';
+const ITEMS_ENV = {
+  LINKCHECK_API_URL: 'https://api.example.org/',
+  LINKCHECK_TOKEN_URL: 'https://id.example.org/application/o/token/',
+  LINKCHECK_PASSWORD_FILE: '$DIR/secret/password',
+};
+function passwordFile(mode = 0o600): (dir: string) => void {
+  return (dir) => {
+    mkdirSync(path.join(dir, 'secret'), { mode: 0o700 });
+    writeFileSync(path.join(dir, 'secret', 'password'), PASSWORD, { mode });
+    chmodSync(path.join(dir, 'secret', 'password'), mode);
+  };
+}
 
 describe('scripts/linkcheck.sh', () => {
   it('runs extract twice with no network, then check with DNS and no PDF', () => {
@@ -137,6 +159,7 @@ describe('scripts/linkcheck.sh', () => {
     [['check', IMAGE, '2026-09-01', '$DIR/missing.pdf', '$DIR/members.pdf', '$DIR/out']],
     [['check', IMAGE]],
     [['probe', IMAGE, 'x']],
+    [['items']],
     [['list', IMAGE, '$DIR', '$DIR/answers.json', '$DIR/b', '$DIR/c']],
     [['list', IMAGE, '$DIR', '$DIR/missing.json']],
     [['list', IMAGE, '$DIR', '$DIR/answers.json', '$DIR/nowhere/remember.json']],
@@ -145,5 +168,72 @@ describe('scripts/linkcheck.sh', () => {
     const { runs, status } = run(args);
     expect(status).toBe(2);
     expect(runs).toEqual([]);
+  });
+
+  it('runs items hardened, with DNS and no PDF, the password as a read-only file and never as a value', () => {
+    const { runs, dir, status, dockerEnv } = run(['items', IMAGE], passwordFile(), ITEMS_ENV);
+    expect(status).toBe(0);
+    expect(runs).toHaveLength(1);
+    const argv = runs[0] as string[];
+    expect(argv[0]).toBe('run');
+    expectHardened(argv);
+    expect(flag(argv, '--dns')).toBe('1.1.1.1');
+    expect(argv).not.toContain('--network');
+    expect(argv).toContain('--memory=512m');
+    expect(argv).toContain('--memory-swap=512m');
+    expect(mounts(argv)).toEqual([`${dir}/secret/password:/in/password:ro`]);
+    expect(argv.join(' ')).not.toMatch(/\.pdf/);
+    expect(envFlags(argv)).toEqual(['LINKCHECK_API_URL', 'LINKCHECK_TOKEN_URL', 'LINKCHECK_PASSWORD_FILE=/in/password']);
+    expect(argv.slice(argv.indexOf(IMAGE))).toEqual([IMAGE, 'items']);
+    // The password is in no argument and no environment value; the addresses travel by name, through docker's own environment.
+    expect(argv.join(' ')).not.toContain(PASSWORD);
+    expect(dockerEnv).not.toContain(PASSWORD);
+    expect(dockerEnv).toContain('LINKCHECK_API_URL=https://api.example.org/');
+    expect(dockerEnv).toContain('LINKCHECK_TOKEN_URL=https://id.example.org/application/o/token/');
+  });
+
+  it('passes the optional client, username and scope through by name, and only when they are set', () => {
+    const { runs, status, dockerEnv } = run(['items', IMAGE], passwordFile(), { ...ITEMS_ENV, LINKCHECK_CLIENT_ID: 'made-up-client', LINKCHECK_USERNAME: 'svc-made-up', LINKCHECK_SCOPE: 'links.made-up' });
+    expect(status).toBe(0);
+    const argv = runs[0] as string[];
+    expect(envFlags(argv)).toEqual(['LINKCHECK_API_URL', 'LINKCHECK_TOKEN_URL', 'LINKCHECK_CLIENT_ID', 'LINKCHECK_USERNAME', 'LINKCHECK_SCOPE', 'LINKCHECK_PASSWORD_FILE=/in/password']);
+    expect(argv.join(' ')).not.toMatch(/made-up-client|svc-made-up|links\.made-up/);
+    expect(dockerEnv).toContain('LINKCHECK_CLIENT_ID=made-up-client');
+    expect(dockerEnv).toContain('LINKCHECK_USERNAME=svc-made-up');
+    expect(dockerEnv).toContain('LINKCHECK_SCOPE=links.made-up');
+    const one = run(['items', IMAGE], passwordFile(), { ...ITEMS_ENV, LINKCHECK_CLIENT_ID: '', LINKCHECK_SCOPE: 'links.made-up' });
+    expect(envFlags(one.runs[0] as string[])).toEqual(['LINKCHECK_API_URL', 'LINKCHECK_TOKEN_URL', 'LINKCHECK_SCOPE', 'LINKCHECK_PASSWORD_FILE=/in/password']);
+  });
+
+  it.each([
+    ['a tag', 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck:3f1e5a2'],
+    ['no tag at all', 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck'],
+    ['a short digest', 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:' + '0'.repeat(63)],
+    ['a long digest', 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:' + '0'.repeat(65)],
+    ['a digest that is not lower-case hex', 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:' + 'G'.repeat(64)],
+    ['another digest kind', 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha512:' + '0'.repeat(64)],
+    ['a digest with no name', '@sha256:' + '0'.repeat(64)],
+  ])('refuses items on an image given by %s, and starts no container', (_, image) => {
+    const { runs, status, stderr } = run(['items', image], passwordFile(), ITEMS_ENV);
+    expect(status).toBe(2);
+    expect(runs).toEqual([]);
+    expect(stderr).toContain('give the image by its digest');
+  });
+
+  it.each([
+    ['no API address', { LINKCHECK_API_URL: '' }, passwordFile(), [], 'LINKCHECK_API_URL and LINKCHECK_TOKEN_URL'],
+    ['no token address', { LINKCHECK_TOKEN_URL: '' }, passwordFile(), [], 'LINKCHECK_API_URL and LINKCHECK_TOKEN_URL'],
+    ['no password file named', { LINKCHECK_PASSWORD_FILE: '' }, passwordFile(), [], 'LINKCHECK_PASSWORD_FILE'],
+    ['a password file that is not there', {}, () => undefined, [], 'LINKCHECK_PASSWORD_FILE'],
+    ['a password file others can read', {}, passwordFile(0o640), [], 'chmod 600'],
+    ['a password file anyone can write', {}, passwordFile(0o602), [], 'chmod 600'],
+    ['an extra argument', {}, passwordFile(), ['more'], 'usage'],
+    ['a password file whose path holds a colon', { LINKCHECK_PASSWORD_FILE: '$DIR/se:cret/password' }, (dir: string) => { mkdirSync(path.join(dir, 'se:cret')); writeFileSync(path.join(dir, 'se:cret', 'password'), PASSWORD, { mode: 0o600 }); }, [], 'colon'],
+  ] as const)('refuses items with %s, and starts no container', (_, env, setup, extra, message) => {
+    const { runs, status, stderr } = run(['items', IMAGE, ...extra], setup, { ...ITEMS_ENV, ...env });
+    expect(status).toBe(2);
+    expect(runs).toEqual([]);
+    expect(stderr).toContain(message);
+    expect(stderr).not.toContain(PASSWORD);
   });
 });
