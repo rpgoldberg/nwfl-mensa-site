@@ -1472,6 +1472,15 @@ export declare type ItemLink = Message<"nwfl.mensa.v1.ItemLink"> & {
    * @generated from field: google.protobuf.Timestamp machine_checked_at = 11;
    */
   machineCheckedAt?: Timestamp | undefined;
+
+  /**
+   * A site the link checker never requests (its no-fetch list), or an
+   * address it cannot read: its OK there says nothing, so a reviewer opens
+   * the link and answers.
+   *
+   * @generated from field: bool never_fetched = 12;
+   */
+  neverFetched: boolean;
 };
 
 /**

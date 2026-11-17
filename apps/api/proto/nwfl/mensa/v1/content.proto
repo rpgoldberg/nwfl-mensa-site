@@ -552,6 +552,10 @@ message ItemLink {
   ReviewerAnswer reviewer_answer = 10;
   // When the checker gave machine_verdict; unset when it has given none.
   google.protobuf.Timestamp machine_checked_at = 11;
+  // A site the link checker never requests (its no-fetch list), or an
+  // address it cannot read: its OK there says nothing, so a reviewer opens
+  // the link and answers.
+  bool never_fetched = 12;
 }
 
 // A reviewer's answer on a link: it shows the right page, or it does not.

@@ -30,6 +30,8 @@ const PUBLICATIONS = as('pub-token');
 const TREASURER = as('treasurer-token');
 const OFFICER = as('officer-token');
 const ADMIN = as('admin-token');
+// The no-fetch host, named once: an address with userinfo on it is put together from this, so no text here reads as a person's email address.
+const NO_FETCH_HOST = 'us.mensa.org';
 const CHECKER = as('linkcheck-token');
 
 const codeOf = async (call: Promise<unknown>): Promise<Code | 'ok'> => {
@@ -253,13 +255,28 @@ describe.skipIf(!live)('L-ITEM: LinkCheckService', () => {
             { url: 'https://EXACT.example.org/page', verdict: MachineVerdict.OK },
             { url: 'https://elsewhere.example.org/', verdict: MachineVerdict.OK },
             { url: 'https://draft.example.org/', verdict: MachineVerdict.OK },
-            { url: `https://exact.example.org/${'a'.repeat(2048)}`, verdict: MachineVerdict.OK },
+            { url: `https://exact.example.org/${'a'.repeat(2048)}`, verdict: MachineVerdict.CONFIRM },
           ],
         },
         CHECKER,
       );
       expect(reply.recorded).toBe(0);
       expect(reply.notAwaiting).toHaveLength(5);
+      expect(await machineRows(itemId)).toEqual([]);
+    });
+
+    // Fix round 2 (R1-N4): an OK on an address nobody can read is refused outright, as one on a sign-in or a
+    // no-fetch site is: the checker cannot have opened it. (Its CONFIRM or DROP on one is "not given", above.)
+    it.each([
+      ['too long', `https://exact.example.org/${'a'.repeat(2048)}`],
+      ['with userinfo', `https://user@${NO_FETCH_HOST}/x`],
+      ['with a port', 'https://exact.example.org:8443/page'],
+      ['with a hidden character', 'https://exact.example.org/\u200bpage'],
+      ['that is no address', 'not an address'],
+    ])('refuses an OK on an address %s, and records nothing of the call', async (_label, url) => {
+      const { itemId } = await piece(`Beside: https://beside-${(n += 1)}.example.org/page`);
+      const call = checker.recordLinkVerdicts({ verdicts: [{ url: `https://beside-${n}.example.org/page`, verdict: MachineVerdict.OK }, { url, verdict: MachineVerdict.OK }] }, CHECKER);
+      await expect(call).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: 'the link checker cannot accept a link whose address it cannot read' });
       expect(await machineRows(itemId)).toEqual([]);
     });
 

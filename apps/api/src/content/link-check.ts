@@ -36,7 +36,7 @@ import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import { MachineVerdict } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { LinkCheckService } from '../gen/nwfl/mensa/v1/link_check_pb.js';
-import { MAX_URL_LENGTH } from '../links/urls.js';
+import { MAX_URL_LENGTH, parseLink } from '../links/urls.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { actualLinks, currentAnswers, loginWalled, neverFetched } from './item-links.js';
 import { normalizeTree } from './tree.js';
@@ -167,6 +167,8 @@ export function linkCheckRoutes(deps: LinkCheckDeps): (router: ConnectRouter) =>
           if (verdict === undefined) throw invalid('each verdict is OK, CONFIRM or DROP');
           if (given.reasons.length > MAX_REASONS) throw invalid(`at most ${MAX_REASONS} reasons on a verdict`);
           if (given.reasons.some((reason) => !REASONS.has(reason))) throw invalid("a reason is one of the link checker's reason codes");
+          // An address nobody can read (loginWalled and neverFetched both fail closed on one) was never opened.
+          if (verdict === 'ok' && !parseLink(given.url).ok) throw invalid('the link checker cannot accept a link whose address it cannot read');
           if (verdict === 'ok' && loginWalled(given.url)) throw invalid('the link checker cannot accept a link that needs a sign-in to check');
           if (verdict === 'ok' && neverFetched(given.url)) throw invalid('the link checker cannot accept a link it never fetches');
           verdicts.set(given.url, { verdict, reasons: [...given.reasons] });

@@ -379,9 +379,9 @@ describe('the stand-in workflow: the link gate (A3b)', () => {
     expect(list.linksSha256).toHaveLength(32);
     expect(list.readyAt).toBeInstanceOf(Date);
     expect(list.links).toEqual([
-      { url: 'https://club.example/map', label: '', where: 'in the text', loginWalled: false, answeredByLabel: '', reviewerAnswer: 'none', accepted: false },
-      { url: 'https://club.example/picnic', label: 'the picnic page', where: 'in the text', loginWalled: false, answeredByLabel: '', reviewerAnswer: 'none', accepted: false },
-      { url: FACEBOOK, label: 'group', where: 'in the text', loginWalled: true, answeredByLabel: '', reviewerAnswer: 'none', accepted: false },
+      { url: 'https://club.example/map', label: '', where: 'in the text', loginWalled: false, neverFetched: false, answeredByLabel: '', reviewerAnswer: 'none', accepted: false },
+      { url: 'https://club.example/picnic', label: 'the picnic page', where: 'in the text', loginWalled: false, neverFetched: false, answeredByLabel: '', reviewerAnswer: 'none', accepted: false },
+      { url: FACEBOOK, label: 'group', where: 'in the text', loginWalled: true, neverFetched: false, answeredByLabel: '', reviewerAnswer: 'none', accepted: false },
     ]);
     expect(await refusal(api.getItemLinks(as('member'), ready.id))).toBeInstanceOf(ApiNotFound);
     const draft = await create('officer', 'A draft has no ready time');
@@ -458,7 +458,7 @@ describe('the stand-in workflow: the link gate (A3b)', () => {
     expect((await api.getItemLinks(as('treasurer'), ready.id)).links.find((l) => l.url === FACEBOOK)).toMatchObject({ accepted: true, answeredByLabel: 'Treasurer' });
     await save('officer', ready, `Our [group](${FACEBOOK}).`);
     const again = await api.markReady(as('officer'), { itemId: ready.id, targets: WEBSITE });
-    expect((await api.getItemLinks(as('treasurer'), ready.id)).links).toEqual([{ url: FACEBOOK, label: 'group', where: 'in the text', loginWalled: true, answeredByLabel: '', reviewerAnswer: 'none', accepted: false }]);
+    expect((await api.getItemLinks(as('treasurer'), ready.id)).links).toEqual([{ url: FACEBOOK, label: 'group', where: 'in the text', loginWalled: true, neverFetched: false, answeredByLabel: '', reviewerAnswer: 'none', accepted: false }]);
     expect(await refusal(api.approve(as('treasurer'), { itemId: ready.id, contentHash: again.working!.contentHash }))).toBeInstanceOf(EditorRefused);
   });
 });

@@ -58,19 +58,25 @@ export interface PieceLink {
   where: string;
 }
 
-/** Whether a URL is on a site that needs a sign-in to check. A mailto or an unreadable address is not. */
+/**
+ * Whether a URL is on a site that needs a sign-in to check; a mailto is not. An address whose host cannot
+ * be read (parseLink refuses it: userinfo, a port other than the scheme's own, no host, another scheme,
+ * a control character, too long) is taken for one that does: it fails closed, so the checker's OK never
+ * counts on it and a reviewer answers.
+ */
 export function loginWalled(url: string): boolean {
   const parsed = parseLink(url);
-  return parsed.ok && parsed.link.kind === 'web' && isLoginWalled(parsed.link.host);
+  return !parsed.ok || (parsed.link.kind === 'web' && isLoginWalled(parsed.link.host));
 }
 
 /**
  * Whether a URL (a web or a mail address) is on a host the link checker never requests, not even by name
  * (the no-fetch list, isNoFetch: us.mensa.org and all under it, among others). Its OK on one says nothing.
+ * An address whose host cannot be read is taken for one (it fails closed, as loginWalled does).
  */
 export function neverFetched(url: string): boolean {
   const parsed = parseLink(url);
-  return parsed.ok && isNoFetch(parsed.link.host);
+  return !parsed.ok || isNoFetch(parsed.link.host);
 }
 
 const words = (nodes: readonly Inline[]): string =>

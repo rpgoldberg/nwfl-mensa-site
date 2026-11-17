@@ -164,6 +164,38 @@ describe('verifierFrom', () => {
       }
     });
 
+    // Fix round 2 (R1-N3): a value made only of characters nobody sees (the ones a reviewer's note sheds:
+    // links/urls.ts CONTROLS, then format, ignorable and blank characters) is blank too. Written as escapes.
+    const UNSEEN: [string, string][] = [
+      ['a zero-width space', '\u200b'],
+      ['a byte order mark', '\ufeff'],
+      ['a right-to-left override', '\u202e'],
+      ['an escape and a NUL', '\u001b\u0000'],
+      ['a soft hyphen and a word joiner', '\u00ad\u2060'],
+      ['an ideographic space and a line separator', '\u3000\u2028'],
+      ['a Hangul filler and a blank braille cell', '\u3164\u2800'],
+      ['a variation selector and a combining mark', '\ufe0f\u0301'],
+      ['an object replacement character and a null notehead', '\ufffc\u{1d159}'],
+      ['all of them among spaces', ' \u200b\u202e\ufeff\u00a0\u2066\u2069\u061c\t\u00ad\u3164\ufffc '],
+    ];
+    it.each([
+      ['site', ['SITE_OIDC_AUDIENCE'], { SITE_OIDC_ISSUER: ISS }],
+      ['agent', ['AGENT_OIDC_AUDIENCE', 'AGENT_SCOPE', 'AGENT_SUBJECT'], { AGENT_OIDC_ISSUER: ISS }],
+      ['verifier', ['VERIFIER_OIDC_AUDIENCE', 'VERIFIER_SCOPE', 'VERIFIER_SUBJECT'], { VERIFIER_OIDC_ISSUER: ISS }],
+      ['linkcheck', ['LINKCHECK_OIDC_AUDIENCE', 'LINKCHECK_SCOPE', 'LINKCHECK_SUBJECT'], { LINKCHECK_OIDC_ISSUER: LC }],
+    ])('the %s client: a value made only of characters nobody sees is refused by name', (_kind, names, env) => {
+      for (const name of names) {
+        for (const [label, value] of UNSEEN) {
+          expect(() => readAuthConfig({ ...env, [name]: value }), `${name}: ${label}`).toThrow(new Error(`${name} must not be empty (unset it for the default)`));
+        }
+      }
+    });
+
+    it('takes a value with something to see as it is, hidden characters and all: it then matches no token', () => {
+      expect(readAuthConfig({ SITE_OIDC_ISSUER: ISS, SITE_OIDC_AUDIENCE: 'nwfl\u200b-site' }).clients[0]).toMatchObject({ audience: 'nwfl\u200b-site' });
+      expect(readAuthConfig({ AGENT_OIDC_ISSUER: ISS, AGENT_SCOPE: '\u{1f44d}' }).clients[0]).toMatchObject({ scope: '\u{1f44d}' });
+    });
+
     it('leaves a client that is off alone, and takes a set value as it is', () => {
       expect(readAuthConfig({ LINKCHECK_OIDC_AUDIENCE: '', AGENT_SCOPE: ' ' }).clients).toEqual([]);
       expect(readAuthConfig({ LINKCHECK_OIDC_ISSUER: LC, LINKCHECK_OIDC_AUDIENCE: 'abc', LINKCHECK_SCOPE: 'links.check', LINKCHECK_SUBJECT: 'svc' }).clients[0]).toMatchObject({ audience: 'abc', scope: 'links.check', subject: 'svc' });

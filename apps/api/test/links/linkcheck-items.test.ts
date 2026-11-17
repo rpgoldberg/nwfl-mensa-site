@@ -191,8 +191,9 @@ describe.skipIf(!live)('long addresses against the real API server', () => {
   });
 
   it('the largest request the run writes is one the API reads; a message over the API limit is refused', async () => {
-    // Not waiting anywhere, so nothing is kept: only the size is under test.
-    const verdict = (i: number, length: number) => ({ url: `https://n${String(i).padStart(3, '0')}.example.org/${'x'.repeat(length)}`, verdict: MACHINE.OK, reasons: [] });
+    // Not waiting anywhere, so nothing is kept: only the size is under test. CONFIRM, since the last address is
+    // over 2048 and an OK on an address nobody can read is refused (fix round 2); the bytes are the same.
+    const verdict = (i: number, length: number) => ({ url: `https://n${String(i).padStart(3, '0')}.example.org/${'x'.repeat(length)}`, verdict: MACHINE.CONFIRM, reasons: [] });
     const one = encodeRecordRequest([verdict(0, 1960)]).length;
     const count = Math.floor(MAX_RECORD_BYTES / one);
     const verdicts = Array.from({ length: count }, (_, i) => verdict(i, 1960));

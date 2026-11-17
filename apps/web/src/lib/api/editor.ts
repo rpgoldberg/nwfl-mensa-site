@@ -260,6 +260,8 @@ export interface PieceLink {
   where: string;
   /** On a site that needs a sign-in to check (Facebook and the like): Approve waits for a yes. */
   loginWalled: boolean;
+  /** On a site the link checker never requests (or an address it cannot read): its OK says nothing, so a person opens it and answers. */
+  neverFetched: boolean;
   /** Who gave the latest answer on this version, by role; empty if no one has. */
   answeredByLabel: string;
   /** That latest answer: yes, no, or none yet. */
@@ -415,6 +417,7 @@ function linkOf(link: ItemLink): PieceLink {
     label: link.label,
     where: link.where,
     loginWalled: link.loginWalled,
+    neverFetched: link.neverFetched,
     answeredByLabel: link.answeredByLabel,
     reviewerAnswer: ANSWERS[link.reviewerAnswer] ?? 'none',
     // A verdict comes with its time; one without is read as none.

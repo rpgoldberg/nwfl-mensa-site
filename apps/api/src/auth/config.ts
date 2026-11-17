@@ -17,8 +17,9 @@
 //   Every client's audience must differ from every other's, or the service
 //   refuses to start: one token must never be valid for two clients.
 //   An audience, scope or subject of a configured client that is set but
-//   empty or blank also refuses to start, by name: it would switch that
-//   check off, not fall back to the default.
+//   empty or blank (nothing in it that a reader sees: spaces, zero-width
+//   and other hidden characters) also refuses to start, by name: it would
+//   switch that check off, not fall back to the default.
 //   EDGE_CLIENT_IDS        the edge's mesh identities, comma-separated
 //                          (default cloudflared in nwfl-edge). Each must be
 //                          a full identity in the nwfl-edge namespace and
@@ -36,6 +37,7 @@ import { type JWTVerifyGetKey, createRemoteJWKSet } from 'jose';
 import { type ClientKind, DEFAULT_EDGE_CLIENT_IDS, type TokenVerifier, rejectAllTokens } from './caller.js';
 import { parseGroupPrefix } from './groups.js';
 import { type ClientConfig, createJwtVerifier } from './jwt.js';
+import { seenText } from '../platform/seen.js';
 
 type Env = Record<string, string | undefined>;
 
@@ -77,7 +79,8 @@ function https(name: string, value: string): string {
 function claim(env: Env, name: string, fallback: string): string {
   const value = env[name];
   if (value === undefined) return fallback;
-  if (value.trim() === '') throw new Error(`${name} must not be empty (unset it for the default)`);
+  // Blank as a reviewer's note is blank (platform/seen.ts): nothing in it that a reader sees.
+  if (seenText(value) === null) throw new Error(`${name} must not be empty (unset it for the default)`);
   return value;
 }
 

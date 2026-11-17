@@ -32,9 +32,10 @@ import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { type ContentService, ItemLinkSchema, MachineVerdict, ReviewerAnswer } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { CONTROLS, MAX_URL_LENGTH } from '../links/urls.js';
+import { MAX_URL_LENGTH } from '../links/urls.js';
+import { seenText } from '../platform/seen.js';
 import type { StructuredLogger } from '../platform/logger.js';
-import { type PieceLink, actualLinks, currentAnswers, linkHold, linksAsSeen, linksSha256, loginWalled, machineVerdicts, rfc3339Micros } from './item-links.js';
+import { type PieceLink, actualLinks, currentAnswers, linkHold, linksAsSeen, linksSha256, loginWalled, machineVerdicts, neverFetched, rfc3339Micros } from './item-links.js';
 import { normalizeTree } from './tree.js';
 import { type ItemRow, MAX_NOTE, type VersionRow, actingOffice, loadItem, loadVersion, notFound, requireId, requireWholeView, timestampOfMicros } from './workflow.js';
 
@@ -47,18 +48,11 @@ export interface LinkGateDeps {
 /** At most this many answers in one call: a piece has far fewer links. */
 export const MAX_ANSWERS = 500;
 
-/** Something a reader sees: not a mark with no letter under it, a space, a control or format character, one that is ignored when shown, or a blank braille cell. */
-const VISIBLE = /[^\p{M}\p{Z}\p{C}\p{Default_Ignorable_Code_Point}\u2800]/u;
-
 /**
- * A reviewer's note as kept: the control and format characters (links/urls.ts CONTROL: zero-width,
- * direction overrides, a byte order mark and the like) taken out, then trimmed. Null when nothing a
- * reader sees is left: a note nobody can read is no note, and lifts no DROP.
+ * A reviewer's note as kept (platform/seen.ts): the control and format characters taken out, then trimmed.
+ * Null when nothing a reader sees is left: a note nobody can read is no note, and lifts no DROP.
  */
-export function keptNote(given: string): string | null {
-  const note = given.replace(CONTROLS, '').trim();
-  return VISIBLE.test(note) ? note : null;
-}
+export const keptNote = (given: string): string | null => seenText(given);
 
 const VERDICT = { ok: MachineVerdict.OK, confirm: MachineVerdict.CONFIRM, drop: MachineVerdict.DROP } as const;
 
@@ -110,6 +104,7 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
         label: link.label,
         where: link.where,
         loginWalled: loginWalled(link.url),
+        neverFetched: neverFetched(link.url),
         machineVerdict: verdict === undefined ? MachineVerdict.UNSPECIFIED : VERDICT[verdict.verdict],
         reasons: verdict?.reasons ?? [],
         ...(verdict !== undefined ? { machineCheckedAt: timestampFromDate(verdict.at) } : {}),

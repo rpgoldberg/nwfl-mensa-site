@@ -409,6 +409,8 @@ describe(`${PKG}: the link gate (EDITOR A3b)`, () => {
       // L-ITEM: the reviewer's answer apart from the gate's, and when the link checker gave its verdict.
       ['reviewer_answer', 10],
       ['machine_checked_at', 11],
+      // Fix round 2: the checker never requests the link's site, so the panel does not word its OK as aged out.
+      ['never_fetched', 12],
     ]);
   });
 

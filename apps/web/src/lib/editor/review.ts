@@ -254,8 +254,15 @@ export function machineWords(row: LinkRow, now: Date): string {
   if (machine === undefined) return row.loginWalled ? 'The link checker does not open links that need a sign-in: a person checks it.' : 'The link checker has not checked it yet.';
   const when = ago(machine.checkedAt, now);
   const reasons = machine.reasons.length > 0 ? ` (${machine.reasons.join(', ')})` : '';
-  if (machine.verdict === 'drop') return `The link checker found it broken ${when}${reasons}. Answer Yes only with a note saying why it is right.`;
+  // A DROP the gate accepts was lifted by a yes with a note: said as done, never asked for again.
+  if (machine.verdict === 'drop') {
+    return row.accepted
+      ? `The link checker found it broken ${when}${reasons}; a person's yes with a note lets it through.`
+      : `The link checker found it broken ${when}${reasons}. Answer Yes only with a note saying why it is right.`;
+  }
   if (machine.verdict === 'confirm') return `The link checker could not tell ${when}${reasons}: a person checks it.`;
+  // An OK on a site the checker never requests was not given by looking (the gate never counts it): never "found it working", never aged out.
+  if (row.neverFetched && !row.loginWalled) return row.answer === 'none' ? 'The link checker does not check this site: a person opens it and answers.' : 'The link checker does not check this site.';
   // An OK with no person's answer and no acceptance does not count: on a sign-in link it never does; on any other it has aged out.
   const lapsed =
     row.answer !== 'none' || row.accepted

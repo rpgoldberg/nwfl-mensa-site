@@ -62,6 +62,8 @@ const messageOf = async (call: Promise<unknown>): Promise<string> => {
   }
 };
 
+// The no-fetch host, named once: an address with userinfo on it is put together from this, so no text here reads as a person's email address.
+const NO_FETCH_HOST = 'us.mensa.org';
 describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
   let api: Api;
   let content: Client<typeof ContentService>;
@@ -533,7 +535,7 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       await verdict(['https://fresh.example.org/']);
       await forced(itemId, 'https://stale.example.org/', 'ok', 7);
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
-      expect(await at(itemId, 'https://fresh.example.org/')).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: true });
+      expect(await at(itemId, 'https://fresh.example.org/')).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: true, neverFetched: false });
       expect(await at(itemId, 'https://stale.example.org/')).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: false });
       await forced(itemId, 'https://stale.example.org/', 'ok', 6);
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
@@ -591,10 +593,27 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(await messageOf(verdict([url]))).toBe('the link checker cannot accept a link it never fetches');
       await forced(itemId, url, 'ok');
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
-      expect(await at(itemId, url)).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: false });
+      // Fix round 2 (R1-N1): the row says the checker never fetches it, so the panel does not word the OK as aged out.
+      expect(await at(itemId, url)).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: false, neverFetched: true, loginWalled: false });
       await confirm(itemId, [{ url, yes: true }]);
       expect(await at(itemId, url)).toMatchObject({ accepted: true });
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    // Fix round 2 (R1-N4, new attack): a no-fetch address the checker could never be handed (userinfo, a port,
+    // unreadable), with a fresh OK written past the service. The gate reads the row and still holds each.
+    it.each([
+      ['userinfo', `https://user@${NO_FETCH_HOST}/x`],
+      ['a port', 'https://us.mensa.org:8443/x'],
+      ['a default port', 'https://us.mensa.org:443/x'],
+      ['a host nobody can read', 'https://us.mensa.org\u200b/x'],
+    ])('holds a no-fetch address with %s on a fresh OK written past the service, and the service refuses that OK', async (_label, url) => {
+      const { itemId } = await piece(`See https://beside-${(n += 1)}.example.org/.`);
+      await forced(itemId, url, 'ok');
+      const read = (await machineVerdicts(owner as unknown as TxClient, itemId)).get(url);
+      expect(read).toMatchObject({ verdict: 'ok', fresh: true });
+      expect(linkHold(url, undefined, read)).toMatch(/^(walled|unchecked)$/);
+      expect(await messageOf(verdict([url]))).toMatch(/^the link checker cannot accept a link (whose address it cannot read|it never fetches)$/);
     });
 
     it('holds a DROP until a reviewer answers yes WITH a note; a yes without one does not do, and the yes over a DROP is audited', async () => {
@@ -609,7 +628,8 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(await at(itemId, 'https://dropped.example.org/old')).toMatchObject({ reviewerAnswer: ReviewerAnswer.YES, accepted: false });
       await confirm(itemId, [{ url: 'https://dropped.example.org/old', yes: true, note: 'The page moved but the old address still redirects for members.' }]);
       expect((await audits(itemId, 'links_confirmed')).map((a) => a.payload['yes_over_drop'])).toEqual([0, 1]);
-      expect(await at(itemId, 'https://dropped.example.org/old')).toMatchObject({ reviewerAnswer: ReviewerAnswer.YES, accepted: true });
+      // What the panel is handed for a lifted DROP (re-challenge R-drop-lifted): still DROP, and accepted.
+      expect(await at(itemId, 'https://dropped.example.org/old')).toMatchObject({ machineVerdict: MachineVerdict.DROP, reviewerAnswer: ReviewerAnswer.YES, accepted: true });
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
     });
 
@@ -627,6 +647,9 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ['a soft hyphen and a word joiner', '­⁠'],
       ['a Hangul filler and a blank braille cell', 'ㅤ⠀'],
       ['a variation selector', '️'],
+      // Fix round 2 (R1-N2): two symbols that draw nothing (src/content/kept-note.test.ts has the whole list).
+      ['an object replacement character', '\ufffc'],
+      ['a musical null notehead', '\u{1d159}'],
     ])('keeps a note made only of %s as no note: the yes does not lift a DROP', async (_label, note) => {
       const url = `https://unseen-${(n += 1)}.example.org/`;
       const { itemId, hash } = await piece(`See ${url}.`);
@@ -642,6 +665,8 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       ['one full stop', '.', '.'],
       ['words with hidden characters in and around them', ' ‮Fine​ by hand.﻿ ', 'Fine by hand.'],
       ['a letter with a combining mark', 'é', 'é'],
+      ['an emoji', '\u{1f44d}', '\u{1f44d}'],
+      ['Arabic letters', '\u0646\u0639\u0645', '\u0646\u0639\u0645'],
     ])('keeps a note of %s, without the hidden characters, and it lifts a DROP', async (_label, note, kept) => {
       const url = `https://seen-${(n += 1)}.example.org/`;
       const { itemId, hash } = await piece(`See ${url}.`);
