@@ -13,6 +13,8 @@ import pgLib from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentKind, ContentService, type ContentItem, type ItemLink, ItemVisibility, MachineVerdict, ReviewerAnswer, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { LinkCheckService } from '../../src/gen/nwfl/mensa/v1/link_check_pb.js';
+import { MACHINE_OK_DAYS, linkHold, machineVerdicts } from '../../src/content/item-links.js';
+import type { TxClient } from '../../src/db/tx.js';
 import { type Api, as, insertId, startApi } from '../helpers/api.js';
 import { MarkField, MarkSubjectKind, RedactionCategory, RedactionPolicyService } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { MIGRATOR, MIGRATOR_PW, live, urlFor } from '../helpers/pg.js';
@@ -537,12 +539,62 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
     });
 
+    // Fix round 1 (mutants M6 and W2): the 7 days, to the microsecond. Inside one transaction the database's
+    // now() stands still, so "exactly 7 days old" is exact here.
+    it(`accepts an OK one microsecond under ${MACHINE_OK_DAYS} days old and not one exactly ${MACHINE_OK_DAYS} days old, by the database clock`, async () => {
+      expect(MACHINE_OK_DAYS).toBe(7);
+      const { itemId } = await piece('See https://under.example.org/, https://exact.example.org/ and https://over.example.org/.');
+      await owner.query('BEGIN');
+      try {
+        for (const [name, age] of [
+          ['under', `interval '7 days' - interval '1 microsecond'`],
+          ['exact', `interval '7 days'`],
+          ['over', `interval '7 days' + interval '1 microsecond'`],
+        ]) {
+          await owner.query(`INSERT INTO content_link_check (item_id, url, source, answer, by_sub, at) VALUES ($1, $2, 'machine', 'ok', 'svc-nwfl-linkcheck', now() - (${age}))`, [itemId, `https://${name}.example.org/`]);
+        }
+        const verdicts = await machineVerdicts(owner as unknown as TxClient, itemId);
+        const read = (name: string) => {
+          const url = `https://${name}.example.org/`;
+          return [verdicts.get(url)?.verdict, verdicts.get(url)?.fresh, linkHold(url, undefined, verdicts.get(url))];
+        };
+        expect(read('under')).toEqual(['ok', true, undefined]);
+        expect(read('exact')).toEqual(['ok', false, 'unchecked']);
+        expect(read('over')).toEqual(['ok', false, 'unchecked']);
+      } finally {
+        await owner.query('ROLLBACK');
+      }
+    });
+
+    it('lets Approve through on an OK a minute under 7 days old (challenger P8)', async () => {
+      const { itemId, hash } = await piece('See https://nearly.example.org/.');
+      await owner.query(`INSERT INTO content_link_check (item_id, url, source, answer, by_sub, at) VALUES ($1, 'https://nearly.example.org/', 'machine', 'ok', 'svc-nwfl-linkcheck', now() - interval '7 days' + interval '1 minute')`, [itemId]);
+      expect(await at(itemId, 'https://nearly.example.org/')).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: true });
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
     it('never lets a link that needs a sign-in through on an OK, even one written past the service', async () => {
       const { itemId, hash } = await piece(`See [the group](${FACEBOOK}).`);
       expect(await codeOf(verdict([FACEBOOK]))).toBe(Code.InvalidArgument);
       await forced(itemId, FACEBOOK, 'ok');
       expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link needs a sign-in/);
       expect(await at(itemId, FACEBOOK)).toMatchObject({ accepted: false });
+    });
+
+    // Fix round 1 (GATE-4, challenger P15): the checker never requests a no-fetch host, so its OK on one counts for nothing.
+    it.each([
+      ['a subdomain', 'https://www.us.mensa.org/join/'],
+      ['a case variant', 'https://Secure.US.Mensa.org/nwflorida/'],
+      ['another name on the no-fetch list', 'https://vndb.org/v17'],
+    ])('never lets a link the checker never fetches through on an OK (%s), even one written past the service; a yes does', async (_label, url) => {
+      const { itemId, hash } = await piece(`National: ${url} for members.`);
+      expect(await messageOf(verdict([url]))).toBe('the link checker cannot accept a link it never fetches');
+      await forced(itemId, url, 'ok');
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
+      expect(await at(itemId, url)).toMatchObject({ machineVerdict: MachineVerdict.OK, accepted: false });
+      await confirm(itemId, [{ url, yes: true }]);
+      expect(await at(itemId, url)).toMatchObject({ accepted: true });
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
     });
 
     it('holds a DROP until a reviewer answers yes WITH a note; a yes without one does not do, and the yes over a DROP is audited', async () => {
@@ -559,6 +611,52 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       expect((await audits(itemId, 'links_confirmed')).map((a) => a.payload['yes_over_drop'])).toEqual([0, 1]);
       expect(await at(itemId, 'https://dropped.example.org/old')).toMatchObject({ reviewerAnswer: ReviewerAnswer.YES, accepted: true });
       expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    // Fix round 1 (GATE-3, challenger P4): a note nobody can see is no note. Control and format characters
+    // (links/urls.ts CONTROL) are taken out before trimming, and what is left must show something.
+    it.each([
+      ['spaces, a tab and a line end', '   \t\n '],
+      ['a zero-width space', '​'],
+      ['a no-break space', ' '],
+      ['a right-to-left override', '‮'],
+      ['a byte order mark', '﻿'],
+      ['an escape and a NUL', '\u001b\u0000'],
+      ['all of them together', ' ​‮﻿ ⁦⁩؜\t'],
+      ['combining marks only', '́̈⃝'],
+      ['a soft hyphen and a word joiner', '­⁠'],
+      ['a Hangul filler and a blank braille cell', 'ㅤ⠀'],
+      ['a variation selector', '️'],
+    ])('keeps a note made only of %s as no note: the yes does not lift a DROP', async (_label, note) => {
+      const url = `https://unseen-${(n += 1)}.example.org/`;
+      const { itemId, hash } = await piece(`See ${url}.`);
+      await verdict([url], MachineVerdict.DROP, ['dead']);
+      await confirm(itemId, [{ url, yes: true, note }]);
+      expect((await stored(itemId)).map((r) => [r.answer, r.note])).toEqual([['yes', null]]);
+      expect((await audits(itemId, 'links_confirmed')).map((a) => a.payload['yes_over_drop'])).toEqual([0]);
+      expect(await at(itemId, url)).toMatchObject({ reviewerAnswer: ReviewerAnswer.YES, accepted: false });
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^the link checker found the link/);
+    });
+
+    it.each([
+      ['one full stop', '.', '.'],
+      ['words with hidden characters in and around them', ' ‮Fine​ by hand.﻿ ', 'Fine by hand.'],
+      ['a letter with a combining mark', 'é', 'é'],
+    ])('keeps a note of %s, without the hidden characters, and it lifts a DROP', async (_label, note, kept) => {
+      const url = `https://seen-${(n += 1)}.example.org/`;
+      const { itemId, hash } = await piece(`See ${url}.`);
+      await verdict([url], MachineVerdict.DROP, ['dead']);
+      await confirm(itemId, [{ url, yes: true, note }]);
+      expect((await stored(itemId)).map((r) => [r.answer, r.note])).toEqual([['yes', kept]]);
+      expect((await audits(itemId, 'links_confirmed')).map((a) => a.payload['yes_over_drop'])).toEqual([1]);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    it('measures a note after the hidden characters are taken out', async () => {
+      const { itemId } = await piece('See https://measured.example.org/.');
+      expect(await codeOf(confirm(itemId, [{ url: 'https://measured.example.org/', yes: true, note: `${'n'.repeat(2000)}${'​'.repeat(50)}` }]))).toBe('ok');
+      expect(await codeOf(confirm(itemId, [{ url: 'https://measured.example.org/', yes: true, note: `${'n'.repeat(2001)}` }]))).toBe(Code.InvalidArgument);
+      expect((await stored(itemId)).map((r) => r.note?.length)).toEqual([2000]);
     });
 
     it('holds again on a DROP after the yes: the latest answer wins', async () => {
@@ -585,6 +683,48 @@ describe.skipIf(!live)('EDITOR A3b: the link gate', () => {
       await verdict(['https://failed.example.org/']);
       await forced(down.itemId, 'https://failed.example.org/', 'drop');
       expect(await messageOf(content.approve({ itemId: down.itemId, contentHash: down.hash }, TREASURER))).toMatch(/^the link checker found the link/);
+    });
+
+    // Fix round 1 (found while fixing GATE-3): "latest" is by the row's number as a number. Read as text,
+    // row 99 sorts after row 100, and an OK would outlive the DROP that followed it.
+    it('reads the latest verdict by row number, not by its digits: row 1000000000000 is later than row 999999999999', async () => {
+      const { itemId, hash } = await piece('See https://digits.example.org/.');
+      const numbered = (id: string, answer: string) =>
+        owner.query(`INSERT INTO content_link_check (id, item_id, url, source, answer, by_sub) OVERRIDING SYSTEM VALUE VALUES ($1, $2, 'https://digits.example.org/', 'machine', $3, 'svc-nwfl-linkcheck')`, [id, itemId, answer]);
+      await numbered('999999999999', 'ok');
+      await numbered('1000000000000', 'drop');
+      expect(await at(itemId, 'https://digits.example.org/')).toMatchObject({ machineVerdict: MachineVerdict.DROP, accepted: false });
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^the link checker found the link "https:\/\/digits.example.org\/" broken/);
+      await numbered('1000000000001', 'ok');
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    // Decided (GATE-6, challenger P7): the latest verdict wins, so a CONFIRM after a DROP lifts "needs a note".
+    it('asks for no note once a later CONFIRM has replaced the DROP: a plain yes then does', async () => {
+      const { itemId, hash } = await piece('See https://relented.example.org/.');
+      await verdict(['https://relented.example.org/'], MachineVerdict.DROP, ['dead']);
+      await forced(itemId, 'https://relented.example.org/', 'confirm');
+      expect(await messageOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
+      await confirm(itemId, [{ url: 'https://relented.example.org/', yes: true }]);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+    });
+
+    // Challenger P9: a verdict is on an address in a piece, never on the address everywhere.
+    it('does not carry an OK in one piece over to the same address in another', async () => {
+      const a = await piece('See https://carried.example.org/.');
+      await forced(a.itemId, 'https://carried.example.org/', 'ok');
+      const b = await piece('See https://carried.example.org/.');
+      expect(await codeOf(content.approve({ itemId: a.itemId, contentHash: a.hash }, TREASURER))).toBe('ok');
+      expect(await messageOf(content.approve({ itemId: b.itemId, contentHash: b.hash }, TREASURER))).toMatch(/^1 link has not been checked yet/);
+    });
+
+    // Decided (GATE-7, challenger P12): the gate is Approve's. A DROP after Approve does not stop Publish (L5's job).
+    it('does not stop Publish on a DROP that comes after Approve', async () => {
+      const { itemId, hash } = await piece('See https://after.example.org/.');
+      await verdict(['https://after.example.org/']);
+      expect(await codeOf(content.approve({ itemId, contentHash: hash }, TREASURER))).toBe('ok');
+      await forced(itemId, 'https://after.example.org/', 'drop');
+      expect(await codeOf(content.publish({ itemId, contentHash: hash }, WEBMASTER))).toBe('ok');
     });
 
     it('leaves a CONFIRM to a reviewer: it holds the link until a yes', async () => {

@@ -19,7 +19,8 @@
 //               address in an item, never a version; the latest per URL wins.
 //   the gate    Approve waits until EVERY link in the list is accepted: a
 //               reviewer's yes as it stands, or the checker's OK under 7 days
-//               old on a link that needs no sign-in (isLoginWalled). A
+//               old on a link that needs no sign-in (isLoginWalled) and is not
+//               on a host the checker never fetches (isNoFetch). A
 //               reviewer's no holds whatever the checker says; a DROP holds
 //               until a reviewer answers yes with a note after it (linkHold).
 //               An answer or verdict on a URL no longer in the list counts for
@@ -37,7 +38,7 @@ import type { TxClient } from '../db/tx.js';
 import { type Entry, MAX_RANGE_DAYS, calendarSource } from '../events/service.js';
 import { calendarLens, entryFor } from '../events/redact.js';
 import { addDays, todayIn } from '../events/zone.js';
-import { isLoginWalled, parseLink } from '../links/urls.js';
+import { isLoginWalled, isNoFetch, parseLink } from '../links/urls.js';
 import { shownUrl, urlsInText } from '../links/rule.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { loadLens } from '../redaction/lens.js';
@@ -61,6 +62,15 @@ export interface PieceLink {
 export function loginWalled(url: string): boolean {
   const parsed = parseLink(url);
   return parsed.ok && parsed.link.kind === 'web' && isLoginWalled(parsed.link.host);
+}
+
+/**
+ * Whether a URL (a web or a mail address) is on a host the link checker never requests, not even by name
+ * (the no-fetch list, isNoFetch: us.mensa.org and all under it, among others). Its OK on one says nothing.
+ */
+export function neverFetched(url: string): boolean {
+  const parsed = parseLink(url);
+  return parsed.ok && isNoFetch(parsed.link.host);
 }
 
 const words = (nodes: readonly Inline[]): string =>
@@ -233,11 +243,15 @@ export interface Verdict {
   id: bigint;
 }
 
-/** The link checker's latest verdict on each of an item's URLs (L-ITEM). A verdict names the address, not a version. */
+/**
+ * The link checker's latest verdict on each of an item's URLs (L-ITEM). A verdict names the address, not a
+ * version. Latest is by the row's number as a number (c.id): a bare `id` in ORDER BY is the text column
+ * of the result, in which row 99 sorts after row 100.
+ */
 export async function machineVerdicts(client: TxClient, itemId: string): Promise<Map<string, Verdict>> {
   const { rows } = await client.query<{ url: string; answer: Verdict['verdict']; reasons: string[]; at: Date; fresh: boolean; id: string }>(
     `SELECT DISTINCT ON (url) url, answer, reasons, at, now() - at < make_interval(days => $2) AS fresh, id::text AS id
-     FROM content_link_check WHERE item_id = $1 AND source = 'machine' ORDER BY url, id DESC`,
+     FROM content_link_check c WHERE item_id = $1 AND source = 'machine' ORDER BY url, c.id DESC`,
     [itemId, MACHINE_OK_DAYS],
   );
   return new Map(rows.map((row) => [row.url, { verdict: row.answer, reasons: row.reasons, at: row.at, fresh: row.fresh, id: BigInt(row.id) }]));
@@ -258,7 +272,8 @@ const HOLDS: readonly Hold[] = ['no', 'drop', 'walled', 'unchecked'];
  *     it is the right page;
  *   - a DROP holds until a reviewer answers yes with a note AFTER it (a later DROP holds again);
  *   - a reviewer's yes accepts;
- *   - an OK under MACHINE_OK_DAYS old accepts a link that needs no sign-in;
+ *   - an OK under MACHINE_OK_DAYS old accepts a link that needs no sign-in and whose host the checker
+ *     fetches (neverFetched): an OK on any other was not given by looking;
  *   - CONFIRM, a stale OK, or nothing accepts nothing.
  */
 export function linkHold(url: string, human: Answer | undefined, machine: Verdict | undefined): Hold | undefined {
@@ -266,7 +281,7 @@ export function linkHold(url: string, human: Answer | undefined, machine: Verdic
   if (machine?.verdict === 'drop' && !(human !== undefined && human.note !== null && human.id > machine.id)) return 'drop';
   if (human?.answer === 'yes') return undefined;
   const walled = loginWalled(url);
-  if (machine?.verdict === 'ok' && machine.fresh && !walled) return undefined;
+  if (machine?.verdict === 'ok' && machine.fresh && !walled && !neverFetched(url)) return undefined;
   return walled ? 'walled' : 'unchecked';
 }
 

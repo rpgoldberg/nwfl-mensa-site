@@ -18,7 +18,9 @@
 //                 it comes back in not_in_piece and is not stored. Audited once
 //                 per call (links_confirmed), with counts only: no URL goes into
 //                 the audit log. yes_over_drop counts the yeses with a note on
-//                 a link whose latest verdict is the checker's DROP.
+//                 a link whose latest verdict is the checker's DROP. A note is
+//                 kept without control and format characters, and one with
+//                 nothing a reader sees is no note (keptNote).
 // ============================================================================
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError, type HandlerContext, type ServiceImpl } from '@connectrpc/connect';
@@ -30,7 +32,7 @@ import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { type ContentService, ItemLinkSchema, MachineVerdict, ReviewerAnswer } from '../gen/nwfl/mensa/v1/content_pb.js';
-import { MAX_URL_LENGTH } from '../links/urls.js';
+import { CONTROLS, MAX_URL_LENGTH } from '../links/urls.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import { type PieceLink, actualLinks, currentAnswers, linkHold, linksAsSeen, linksSha256, loginWalled, machineVerdicts, rfc3339Micros } from './item-links.js';
 import { normalizeTree } from './tree.js';
@@ -44,6 +46,19 @@ export interface LinkGateDeps {
 
 /** At most this many answers in one call: a piece has far fewer links. */
 export const MAX_ANSWERS = 500;
+
+/** Something a reader sees: not a mark with no letter under it, a space, a control or format character, one that is ignored when shown, or a blank braille cell. */
+const VISIBLE = /[^\p{M}\p{Z}\p{C}\p{Default_Ignorable_Code_Point}\u2800]/u;
+
+/**
+ * A reviewer's note as kept: the control and format characters (links/urls.ts CONTROL: zero-width,
+ * direction overrides, a byte order mark and the like) taken out, then trimmed. Null when nothing a
+ * reader sees is left: a note nobody can read is no note, and lifts no DROP.
+ */
+export function keptNote(given: string): string | null {
+  const note = given.replace(CONTROLS, '').trim();
+  return VISIBLE.test(note) ? note : null;
+}
 
 const VERDICT = { ok: MachineVerdict.OK, confirm: MachineVerdict.CONFIRM, drop: MachineVerdict.DROP } as const;
 
@@ -142,9 +157,9 @@ export function linkGateHandlers(deps: LinkGateDeps): Partial<ServiceImpl<typeof
       // The last answer to a URL in this call is the one kept.
       const answers = new Map<string, { yes: boolean; note: string | null }>();
       for (const answer of request.answers) {
-        const note = answer.note.trim();
-        if (note.length > MAX_NOTE) throw invalid(`a note is at most ${MAX_NOTE} characters`);
-        answers.set(answer.url, { yes: answer.yes, note: note === '' ? null : note });
+        const note = keptNote(answer.note);
+        if (note !== null && note.length > MAX_NOTE) throw invalid(`a note is at most ${MAX_NOTE} characters`);
+        answers.set(answer.url, { yes: answer.yes, note });
       }
       return tx(async (client) => {
         const actingOfficeId = await actingOffice(client, roles, request.actingAsOfficeId);

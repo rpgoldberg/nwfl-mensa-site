@@ -143,4 +143,30 @@ describe('verifierFrom', () => {
     expect(verifier).not.toBe(rejectAllTokens);
     await expect(verifier.verify('not.a.jwt')).rejects.toThrow();
   });
+  // Fix round 1 (F3): an audience, scope or subject set to nothing would switch that check off (a token is
+  // matched to a client by audience; an empty scope or subject is one no token is asked for). Refused at start, by name.
+  describe('refuses to start on an empty or blank audience, scope or subject of a configured client', () => {
+    const LC = 'https://login.nwflorida.us/application/o/nwfl-linkcheck/';
+    it.each([
+      ['site', 'SITE_OIDC_AUDIENCE', { SITE_OIDC_ISSUER: ISS }],
+      ['agent', 'AGENT_OIDC_AUDIENCE', { AGENT_OIDC_ISSUER: ISS }],
+      ['agent', 'AGENT_SCOPE', { AGENT_OIDC_ISSUER: ISS }],
+      ['agent', 'AGENT_SUBJECT', { AGENT_OIDC_ISSUER: ISS }],
+      ['verifier', 'VERIFIER_OIDC_AUDIENCE', { VERIFIER_OIDC_ISSUER: ISS }],
+      ['verifier', 'VERIFIER_SCOPE', { VERIFIER_OIDC_ISSUER: ISS }],
+      ['verifier', 'VERIFIER_SUBJECT', { VERIFIER_OIDC_ISSUER: ISS }],
+      ['linkcheck', 'LINKCHECK_OIDC_AUDIENCE', { LINKCHECK_OIDC_ISSUER: LC }],
+      ['linkcheck', 'LINKCHECK_SCOPE', { LINKCHECK_OIDC_ISSUER: LC }],
+      ['linkcheck', 'LINKCHECK_SUBJECT', { LINKCHECK_OIDC_ISSUER: LC }],
+    ])('the %s client: %s', (_kind, name, env) => {
+      for (const value of ['', ' ', '\t\n', ' ']) {
+        expect(() => readAuthConfig({ ...env, [name]: value }), JSON.stringify(value)).toThrow(new Error(`${name} must not be empty (unset it for the default)`));
+      }
+    });
+
+    it('leaves a client that is off alone, and takes a set value as it is', () => {
+      expect(readAuthConfig({ LINKCHECK_OIDC_AUDIENCE: '', AGENT_SCOPE: ' ' }).clients).toEqual([]);
+      expect(readAuthConfig({ LINKCHECK_OIDC_ISSUER: LC, LINKCHECK_OIDC_AUDIENCE: 'abc', LINKCHECK_SCOPE: 'links.check', LINKCHECK_SUBJECT: 'svc' }).clients[0]).toMatchObject({ audience: 'abc', scope: 'links.check', subject: 'svc' });
+    });
+  });
 });

@@ -217,15 +217,23 @@ export function linkRows(links: readonly PieceLink[]): LinkRow[] {
   }));
 }
 
-/** The latest answer in words, with who gave it, by role. */
+/**
+ * The latest answer in words, with who gave it, by role, and worded from what the gate says of the link
+ * (`accepted`), so the row never says "checked" while Approve still waits for it:
+ *   - a yes the gate accepts is "Checked by";
+ *   - a yes it does not accept (the link checker found the link broken, and no yes with a note came
+ *     after that) says so, and what it needs;
+ *   - with no answer, a link the link checker's OK let through is not "Not checked yet".
+ */
 export function answerWords(row: LinkRow): string {
-  if (row.answer === 'yes') return `Checked by ${row.answeredByLabel}: it shows the right page.`;
   if (row.answer === 'no') return `${row.answeredByLabel} answered no: it does not show the right page.`;
-  return 'Not checked yet.';
+  if (row.answer === 'yes') {
+    if (row.accepted) return `Checked by ${row.answeredByLabel}: it shows the right page.`;
+    const why = row.machine?.verdict === 'drop' ? ': the link checker found it broken, so it needs a Yes with a note saying why it is right' : '';
+    return `${row.answeredByLabel} answered yes, but that does not count yet${why}.`;
+  }
+  return row.accepted ? 'No person has answered: the link checker found it working, and that counts.' : 'Not checked yet.';
 }
-
-/** The link checker's OK lets a link through for this long (the API's MACHINE_OK_DAYS). */
-const MACHINE_OK_MS = 7 * 24 * 3_600_000;
 
 /** How long ago, in plain words: under an hour, then hours, then days. */
 function ago(at: Date, now: Date): string {
@@ -236,7 +244,11 @@ function ago(at: Date, now: Date): string {
   return `${days} ${days === 1 ? 'day' : 'days'} ago`;
 }
 
-/** L-ITEM: the link checker's latest verdict on the row, and its age, in plain words. */
+/**
+ * L-ITEM: the link checker's latest verdict on the row, and its age, in plain words. Whether an OK still
+ * counts is the gate's word (`accepted`, by the API's database clock), never this server's clock: `now`
+ * only words the age.
+ */
 export function machineWords(row: LinkRow, now: Date): string {
   const machine = row.machine;
   if (machine === undefined) return row.loginWalled ? 'The link checker does not open links that need a sign-in: a person checks it.' : 'The link checker has not checked it yet.';
@@ -244,8 +256,14 @@ export function machineWords(row: LinkRow, now: Date): string {
   const reasons = machine.reasons.length > 0 ? ` (${machine.reasons.join(', ')})` : '';
   if (machine.verdict === 'drop') return `The link checker found it broken ${when}${reasons}. Answer Yes only with a note saying why it is right.`;
   if (machine.verdict === 'confirm') return `The link checker could not tell ${when}${reasons}: a person checks it.`;
-  const stale = now.getTime() - machine.checkedAt.getTime() >= MACHINE_OK_MS;
-  return `The link checker found it working ${when}.${stale ? ' That is too long ago to count: it checks the link again, or a person answers.' : ''}`;
+  // An OK with no person's answer and no acceptance does not count: on a sign-in link it never does; on any other it has aged out.
+  const lapsed =
+    row.answer !== 'none' || row.accepted
+      ? ''
+      : row.loginWalled
+        ? ' That does not count for a link that needs a sign-in: a person checks it.'
+        : ' That no longer counts (an OK counts for 7 days): it checks the link again, or a person answers.';
+  return `The link checker found it working ${when}.${lapsed}`;
 }
 
 /** "2 of 3 links checked.": the links the gate accepts (a yes, or the link checker's recent OK). */

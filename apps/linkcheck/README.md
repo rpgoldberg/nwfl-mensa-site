@@ -47,6 +47,8 @@ published. It asks the API's `LinkCheckService` for the addresses (addresses onl
 checks each by the rules above, and records a verdict on each. `ok` is stored as OK, which lets the link through
 Approve for 7 days. `upgrade`, `confirm`, `review` and `flag` are stored as CONFIRM: a person looks. `drop` is
 stored as DROP, and Approve then waits for a yes with a note. The API refuses OK on a link that needs a sign-in.
+A piece is about now, so there is no issue date to compare a registration with: a domain registered in the last
+90 days gets the reason `re-registered`, which is `flag`, and so is stored as CONFIRM.
 Configuration is by environment: `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL`, `LINKCHECK_PASSWORD_FILE` (the
 service account's app password, in a file), and optionally `LINKCHECK_CLIENT_ID` (`nwfl-linkcheck`),
 `LINKCHECK_USERNAME` (`svc-nwfl-linkcheck`) and `LINKCHECK_SCOPE` (`links.check`). It prints counts only.

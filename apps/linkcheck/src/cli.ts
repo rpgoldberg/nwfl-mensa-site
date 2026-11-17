@@ -27,7 +27,7 @@ import { answersTemplate, needsAnswer, parseAnswers, buildLinkList, replacements
 import { type CheckDeps, type CheckResult, VERDICTS, assertKeptForms, checkAll } from './check.js';
 import { EXTRACT_FORMAT, ExtractError, type Extraction, parseExtraction } from './extract.js';
 import { AUDIENCES, type Audience, ListError } from './list.js';
-import { ItemsError, clientCredentials, endpoint, runItems } from './items.js';
+import { ItemsError, clientCredentials, endpoint, newDomainSince, runItems } from './items.js';
 import { CHECK_FORMAT, type CheckReport, ReportError, parseCheckReport } from './report.js';
 import { parseRemember, rememberAnswers } from './remember.js';
 import { renderSheet } from './sheet.js';
@@ -198,13 +198,14 @@ async function itemsCommand(io: Io): Promise<void> {
     },
     io.fetch,
   );
-  // A registration "after the issue date" means after today here: a piece is about now.
-  const today = io.now().toISOString().slice(0, 10);
+  // A piece is about now, so "registered after the issue date" would never fire with today as the date:
+  // here a domain registered in the last NEW_DOMAIN_DAYS days is flagged (re-registered), stored as CONFIRM.
+  const since = newDomainSince(io.now());
   const totals = await runItems({
     api,
     token,
     check: async (urls) => {
-      const results = await checkAll(urls, io.checkDeps(today));
+      const results = await checkAll(urls, io.checkDeps(since));
       assertKeptForms(results);
       return results;
     },

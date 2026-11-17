@@ -4,25 +4,31 @@
 // Every address is made up.
 import http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
-import { VERDICTS, checkAll } from '../src/check.js';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { VERDICTS, checkAll, makeChecker } from '../src/check.js';
 import { main, type Io } from '../src/cli.js';
 import {
   type CheckVerdict,
   ItemsError,
   MACHINE,
   MAX_ANSWER_BYTES,
+  MAX_RECORD_BYTES,
+  MAX_RECORD_VERDICTS,
   MAX_ROUNDS,
+  NEW_DOMAIN_DAYS,
   clientCredentials,
   decodeListResponse,
   decodeRecordResponse,
   encodeRecordRequest,
   endpoint,
   grpcCall,
+  newDomainSince,
+  recordRequests,
   runItems,
   storedVerdict,
 } from '../src/items.js';
-import { fakeDns } from './helpers/servers.js';
+import { type Stand, fakeDns, routedConnect, startHttps, testPki } from './helpers/servers.js';
 
 const bytes = (...values: number[]): Uint8Array => new Uint8Array(values);
 const ascii = (value: string): number[] => [...new TextEncoder().encode(value)];
@@ -299,8 +305,8 @@ describe('the items command', () => {
     expect(io.out).toEqual(['items: 2 addresses checked: 0 ok, 1 confirm, 1 drop; 2 recorded, 0 no longer waiting']);
     expect(io.out.join('\n')).not.toContain('example');
     expect(calls.every((c) => c.authorization === 'Bearer stand-in-token')).toBe(true);
-    // The very check.ts results, with today as the issue date, each mapped; a login-walled host is never OK.
-    const results = await checkAll(['https://secret-a.example.org/', 'https://www.facebook.com/groups/example'], deps('2026-11-15'));
+    // The very check.ts results, with the day 90 days back as the issue date, each mapped; a login-walled host is never OK.
+    const results = await checkAll(['https://secret-a.example.org/', 'https://www.facebook.com/groups/example'], deps('2026-08-17'));
     expect(results.map((r) => [r.verdict, storedVerdict(r).verdict])).toEqual([
       ['drop', MACHINE.DROP],
       ['confirm', MACHINE.CONFIRM],
@@ -334,5 +340,192 @@ describe('the items command', () => {
     expect(await main(['items'], io)).toBe(1);
     expect(io.err).toEqual(['linkcheck: the identity provider refused the sign-in (HTTP 400)']);
     expect(await main(['items', '--out', 'x'], io)).toBe(2);
+  });
+});
+
+// Fix round 1 (GATE-2): a piece is about now, so "after the issue date" would never fire with today as
+// the date. In items mode a domain registered in the last NEW_DOMAIN_DAYS days is a person's call.
+describe('a newly registered domain in items mode', () => {
+  const A = '93.184.216.1';
+  const pki = testPki(['squat.example', 'hop.example']);
+  let tls: Stand;
+  const route = (req: IncomingMessage, res: ServerResponse): void => {
+    const host = (req.headers.host ?? '').split(':')[0];
+    if (host === 'hop.example' && req.url === '/') {
+      res.writeHead(302, { location: 'https://hop.example/login' }).end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' }).end('<p>Welcome to the club page. Lots of real text here about events and lunches.</p>');
+  };
+  beforeAll(async () => {
+    tls = await startHttps(route, pki);
+  });
+  afterAll(async () => {
+    await tls.close();
+  });
+  const net = (issueDate: string, registered: string) => ({
+    dns: fakeDns({ 'squat.example': [A], 'hop.example': [A] }, { ns: {} }),
+    connect: routedConnect({ [`${A}:443`]: tls.port }, pki.ca),
+    rdap: { registered: () => Promise.resolve({ status: 'dated' as const, date: registered }) },
+    issueDate,
+    limits: { hopMs: 500 },
+  });
+
+  it(`counts back ${NEW_DOMAIN_DAYS} days from today, in UTC`, () => {
+    expect(NEW_DOMAIN_DAYS).toBe(90);
+    expect(newDomainSince(new Date('2026-11-16T15:00:00Z'))).toBe('2026-08-18');
+    expect(newDomainSince(new Date('2026-03-31T23:59:59Z'))).toBe('2025-12-31');
+  });
+
+  it.each([
+    ['last week', '2026-11-10', MACHINE.CONFIRM, ['re-registered']],
+    ['89 days ago', '2026-08-19', MACHINE.CONFIRM, ['re-registered']],
+    ['90 days ago', '2026-08-18', MACHINE.OK, []],
+    ['years ago', '2011-04-02', MACHINE.OK, []],
+  ] as const)('a domain registered %s (%s) is recorded as verdict %i', async (_label, registered, verdict, reasons) => {
+    const seen: string[] = [];
+    const { url, calls } = await standIn((call) => (call.path.endsWith('/ListLinksAwaitingVerdict') ? { status: 0, message: list(['https://squat.example/']) } : { status: 0, message: recorded(1) }));
+    const out: string[] = [];
+    const io: Io = {
+      readFile: () => Promise.resolve(new TextEncoder().encode('app-password\n')),
+      writeFile: () => Promise.reject(new Error('items writes no file')),
+      print: (line) => out.push(line),
+      warn: (line) => out.push(line),
+      env: { LINKCHECK_API_URL: url.href, LINKCHECK_TOKEN_URL: 'https://login.example.org/token/', LINKCHECK_PASSWORD_FILE: '/run/pw' },
+      now: () => new Date('2026-11-16T15:00:00Z'),
+      checkDeps: (issueDate) => {
+        seen.push(issueDate);
+        return net(issueDate, registered);
+      },
+      extract: () => Promise.reject(new Error('items reads no PDF')),
+      fetch: () => Promise.resolve(new Response(JSON.stringify({ access_token: 'stand-in-token' }))),
+    };
+    expect(await main(['items'], io)).toBe(0);
+    expect(seen).toEqual(['2026-08-18']);
+    expect(calls[1]?.body).toEqual(encodeRecordRequest([{ url: 'https://squat.example/', verdict, reasons: [...reasons] }]));
+    expect(out).toEqual([`items: 1 addresses checked: ${verdict === MACHINE.OK ? 1 : 0} ok, ${verdict === MACHINE.CONFIRM ? 1 : 0} confirm, 0 drop; 1 recorded, 0 no longer waiting`]);
+  });
+
+  // Challenger C3 (round 0, held): a redirect on the same site is followed, and the page it ends on is the one judged.
+  it('follows a redirect on the same site and judges where it ends', async () => {
+    const result = await makeChecker(net('2026-08-18', '2011-04-02')).check('https://hop.example/');
+    expect(result.chain).toEqual([
+      { url: 'https://hop.example/', status: 302 },
+      { url: 'https://hop.example/login', status: 200 },
+    ]);
+    expect(storedVerdict(result)).toEqual({ url: 'https://hop.example/', verdict: MACHINE.OK, reasons: [] });
+  });
+});
+
+// Challenger C4 to C7 (round 0, held): a hostile API answer costs a bounded amount and tells nothing.
+describe('a hostile API', () => {
+  it('reads the most empty addresses its size cap lets through', () => {
+    const count = MAX_ANSWER_BYTES / 2;
+    const answer = new Uint8Array(MAX_ANSWER_BYTES);
+    for (let i = 0; i < count; i += 1) answer[2 * i] = 0x0a;
+    expect(decodeListResponse(answer).urls).toHaveLength(count);
+  });
+
+  it.each([
+    ['a length of 2^63', [0x0a, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f], 'the API answer is cut short'],
+    ['an 11-byte varint', [0x10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01], 'the API answer holds a bad number'],
+    ['a group', [0x0b], 'the API answer is not a message this checker reads'],
+    ['a huge field number', [0xff, 0xff, 0xff, 0xff, 0x7a, 0x00], 'the API answer is not a message this checker reads'],
+    ['an address that is not UTF-8', [0x0a, 0x01, 0xff], 'the API answer holds text that is not UTF-8'],
+  ])('refuses %s', (_label, given, message) => {
+    expect(() => decodeListResponse(bytes(...given))).toThrow(new ItemsError(message));
+  });
+
+  it('reads field 0 as unknown, and a 10-byte "more" as true', () => {
+    expect(decodeListResponse(bytes(0x02, 0x00))).toEqual({ urls: [], more: false });
+    expect(decodeListResponse(bytes(0x10, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02))).toEqual({ urls: [], more: true });
+  });
+
+  it(`stops an endless list after ${MAX_ROUNDS} lists and as many records`, async () => {
+    const { url, calls } = await standIn((call) => (call.path.endsWith('/ListLinksAwaitingVerdict') ? { status: 0, message: list(['https://site.example/aaaa'], true) } : { status: 0, message: recorded(1) }));
+    let checked = 0;
+    const totals = await runItems({
+      api: url,
+      token: 'abc',
+      check: (urls) => {
+        checked += urls.length;
+        return Promise.resolve(urls.map((u) => ({ url: u, verdict: 'ok' as const, reasons: [] })));
+      },
+    });
+    expect(totals).toEqual({ checked: MAX_ROUNDS, ok: MAX_ROUNDS, confirm: 0, drop: 0, recorded: MAX_ROUNDS, notAwaiting: 0, more: true });
+    expect(checked).toBe(MAX_ROUNDS);
+    expect(calls.filter((c) => c.path.endsWith('/ListLinksAwaitingVerdict'))).toHaveLength(MAX_ROUNDS);
+    expect(calls.filter((c) => c.path.endsWith('/RecordLinkVerdicts'))).toHaveLength(MAX_ROUNDS);
+  });
+
+  it('cuts a refusal message to 200 characters with no control character', async () => {
+    const { url } = await standIn(() => ({ status: 7, trailersOnly: true, grpcMessage: encodeURIComponent(`\u001b[31mYOUR TOKEN abc\u0007${'x'.repeat(5000)}`) }));
+    const error = await grpcCall(url, 'ListLinksAwaitingVerdict', 'abc', new Uint8Array()).then(
+      () => new Error('the call was not refused'),
+      (e: unknown) => e as Error,
+    );
+    expect(error).toBeInstanceOf(ItemsError);
+    // eslint-disable-next-line no-control-regex
+    expect(error.message).not.toMatch(/[\u0000-\u001f\u007f]/);
+    expect(error.message).toHaveLength('the API refused the call: PERMISSION_DENIED ()'.length + 200);
+    expect(error.message.startsWith('the API refused the call: PERMISSION_DENIED ( [31mYOUR TOKEN abc x')).toBe(true);
+  });
+});
+
+// Fix round 1 (GATE-1): the API reads messages of at most 256 KiB, so the verdicts go in requests of at
+// most MAX_RECORD_BYTES and MAX_RECORD_VERDICTS each, in the order given.
+describe('recordRequests', () => {
+  const verdict = (i: number, length: number) => ({ url: `https://n${String(i).padStart(3, '0')}.example.org/${'x'.repeat(length)}`, verdict: MACHINE.OK, reasons: ['upgraded'] });
+  /** `count` verdicts whose one request would be `total` bytes. */
+  const sized = (total: number) => {
+    const one = encodeRecordRequest([verdict(0, 1900)]).length;
+    const count = Math.floor(total / one);
+    const verdicts = Array.from({ length: count }, (_, i) => verdict(i, 1900));
+    verdicts[count - 1] = verdict(count - 1, 1900 + total - count * one);
+    expect(encodeRecordRequest(verdicts)).toHaveLength(total);
+    return verdicts;
+  };
+
+  it('keeps the cap under the 256 KiB the API reads, with room for the frame', () => {
+    expect(MAX_RECORD_BYTES).toBe(200_000);
+    expect(MAX_RECORD_VERDICTS).toBe(500);
+  });
+
+  it('writes no request for no verdicts, and one for a few', () => {
+    expect(recordRequests([])).toEqual([]);
+    const few = [verdict(0, 10), verdict(1, 10)];
+    expect(recordRequests(few)).toEqual([encodeRecordRequest(few)]);
+  });
+
+  it('writes one request at exactly the byte cap', () => {
+    const verdicts = sized(MAX_RECORD_BYTES);
+    expect(recordRequests(verdicts)).toEqual([encodeRecordRequest(verdicts)]);
+  });
+
+  it('writes two requests at one byte over the cap: the last verdict goes in the second', () => {
+    const verdicts = sized(MAX_RECORD_BYTES + 1);
+    expect(recordRequests(verdicts)).toEqual([encodeRecordRequest(verdicts.slice(0, -1)), encodeRecordRequest(verdicts.slice(-1))]);
+  });
+
+  it(`writes at most ${MAX_RECORD_VERDICTS} verdicts in a request`, () => {
+    const verdicts = Array.from({ length: MAX_RECORD_VERDICTS + 1 }, (_, i) => verdict(i, 0));
+    expect(recordRequests(verdicts)).toEqual([encodeRecordRequest(verdicts.slice(0, MAX_RECORD_VERDICTS)), encodeRecordRequest(verdicts.slice(MAX_RECORD_VERDICTS))]);
+  });
+
+  it('sends a verdict larger than the cap on its own: the API refuses it, and nothing else is lost with it', () => {
+    const verdicts = [verdict(0, 10), verdict(1, MAX_RECORD_BYTES), verdict(2, 10)];
+    expect(recordRequests(verdicts)).toEqual(verdicts.map((v) => encodeRecordRequest([v])));
+  });
+
+  it('records a round in as many calls as it needs, and adds up what each kept', async () => {
+    const urls = Array.from({ length: 120 }, (_, i) => `https://n${String(i).padStart(3, '0')}.example.org/${'x'.repeat(1990)}`);
+    const big = new Uint8Array([...urls.flatMap((u) => [0x0a, ...[(u.length & 0x7f) | 0x80, u.length >> 7], ...ascii(u)])]);
+    const { url, calls } = await standIn((call) => (call.path.endsWith('/ListLinksAwaitingVerdict') ? { status: 0, message: big } : { status: 0, message: recorded(call.body.length > 100_000 ? 90 : 7, ['https://gone.example.org/']) }));
+    const totals = await runItems({ api: url, token: 't', check: (given) => Promise.resolve(given.map((u) => ({ url: u, verdict: 'ok' as const, reasons: [] }))) });
+    const records = calls.filter((c) => c.path.endsWith('/RecordLinkVerdicts'));
+    expect(records.length).toBe(2);
+    for (const call of records) expect(call.body.length).toBeLessThanOrEqual(MAX_RECORD_BYTES);
+    expect(Buffer.concat(records.map((c) => c.body))).toEqual(Buffer.from(encodeRecordRequest(urls.map((u) => ({ url: u, verdict: MACHINE.OK, reasons: [] })))));
+    expect(totals).toEqual({ checked: 120, ok: 120, confirm: 0, drop: 0, recorded: 97, notAwaiting: 2, more: false });
   });
 });

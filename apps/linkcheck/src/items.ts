@@ -10,8 +10,11 @@
 //                                                     one that works, it needs a sign-in, it is on the
 //                                                     no-fetch list, or the checker could not tell)
 //        drop                             -> DROP    (holds Approve until a yes with a note)
-//      with the check's reason codes;
-//   4. LinkCheckService.RecordLinkVerdicts, then the next list while more wait.
+//      with the check's reason codes. A piece is about now, so check.ts is given the day NEW_DOMAIN_DAYS
+//      before today as its issue date: a domain registered in the last 90 days is `re-registered`, which
+//      is `flag`, stored as CONFIRM. A domain bought last week never gets an OK with no person looking;
+//   4. LinkCheckService.RecordLinkVerdicts, in requests of at most MAX_RECORD_BYTES (the API reads no
+//      message over 256 KiB), then the next list while more wait.
 //
 // This module needs node built-ins only, so the API's suite can drive it against the real API server
 // (apps/api test/links/linkcheck-items.test.ts). The protobuf messages are written and read here by hand:
@@ -35,6 +38,14 @@ export interface LinkVerdict {
 
 export class ItemsError extends Error {
   override name = 'ItemsError';
+}
+
+/** A domain registered in the last this many days is a person's call (`re-registered`, stored as CONFIRM). */
+export const NEW_DOMAIN_DAYS = 90;
+
+/** The issue date check.ts is given in items mode: NEW_DOMAIN_DAYS before today (UTC), YYYY-MM-DD. A registration after it is flagged. */
+export function newDomainSince(now: Date): string {
+  return new Date(now.getTime() - NEW_DOMAIN_DAYS * 86_400_000).toISOString().slice(0, 10);
 }
 
 /** The stored verdict for a check result (the table above). */
@@ -69,9 +80,47 @@ export function encodeRecordRequest(verdicts: readonly LinkVerdict[]): Uint8Arra
   const out: number[] = [];
   for (const v of verdicts) {
     const inner = [...lengthDelimited(1, encoder.encode(v.url)), ...varint(2 << 3), ...varint(v.verdict), ...v.reasons.flatMap((r) => lengthDelimited(3, encoder.encode(r)))];
-    out.push(...lengthDelimited(1, new Uint8Array(inner)));
+    // No spread into push: an address as long as a hostile answer allows would overflow the call stack.
+    for (const byte of lengthDelimited(1, new Uint8Array(inner))) out.push(byte);
   }
   return new Uint8Array(out);
+}
+
+/** The largest RecordLinkVerdicts request written: under the 256 KiB the API reads (its READ_MAX_BYTES). */
+export const MAX_RECORD_BYTES = 200_000;
+/** At most this many verdicts in one request: the API's own limit (MAX_AWAITING). */
+export const MAX_RECORD_VERDICTS = 500;
+
+/**
+ * The RecordLinkVerdicts requests for these verdicts, in order: as few as hold them with each at most
+ * MAX_RECORD_BYTES and MAX_RECORD_VERDICTS. A verdict larger than the cap by itself goes alone, so the
+ * API's refusal of it costs no other verdict.
+ */
+export function recordRequests(verdicts: readonly LinkVerdict[]): Uint8Array[] {
+  const requests: Uint8Array[] = [];
+  let batch: Uint8Array[] = [];
+  let size = 0;
+  const flush = (): void => {
+    if (batch.length === 0) return;
+    const request = new Uint8Array(size);
+    let at = 0;
+    for (const part of batch) {
+      request.set(part, at);
+      at += part.length;
+    }
+    requests.push(request);
+    batch = [];
+    size = 0;
+  };
+  for (const verdict of verdicts) {
+    // A repeated field's entries, one after another, are the message.
+    const one = encodeRecordRequest([verdict]);
+    if (size + one.length > MAX_RECORD_BYTES || batch.length === MAX_RECORD_VERDICTS) flush();
+    batch.push(one);
+    size += one.length;
+  }
+  flush();
+  return requests;
 }
 
 interface Field {
@@ -306,11 +355,15 @@ export async function runItems(deps: ItemsDeps): Promise<ItemsTotals> {
     const verdicts = (await deps.check(list.urls)).map(storedVerdict);
     totals.checked += verdicts.length;
     for (const v of verdicts) totals[v.verdict === MACHINE.OK ? 'ok' : v.verdict === MACHINE.DROP ? 'drop' : 'confirm'] += 1;
-    const recorded = decodeRecordResponse(await grpcCall(deps.api, 'RecordLinkVerdicts', deps.token, encodeRecordRequest(verdicts)));
-    totals.recorded += recorded.recorded;
-    totals.notAwaiting += recorded.notAwaiting.length;
+    let kept = 0;
+    for (const request of recordRequests(verdicts)) {
+      const recorded = decodeRecordResponse(await grpcCall(deps.api, 'RecordLinkVerdicts', deps.token, request));
+      kept += recorded.recorded;
+      totals.notAwaiting += recorded.notAwaiting.length;
+    }
+    totals.recorded += kept;
     // Nothing kept: the next list would be this one again.
-    if (!list.more || recorded.recorded === 0) break;
+    if (!list.more || kept === 0) break;
   }
   return totals;
 }

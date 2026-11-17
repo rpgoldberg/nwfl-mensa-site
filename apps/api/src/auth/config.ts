@@ -16,6 +16,9 @@
 //   LINKCHECK_SUBJECT (svc-nwfl-linkcheck): the link checker (L-ITEM)
 //   Every client's audience must differ from every other's, or the service
 //   refuses to start: one token must never be valid for two clients.
+//   An audience, scope or subject of a configured client that is set but
+//   empty or blank also refuses to start, by name: it would switch that
+//   check off, not fall back to the default.
 //   EDGE_CLIENT_IDS        the edge's mesh identities, comma-separated
 //                          (default cloudflared in nwfl-edge). Each must be
 //                          a full identity in the nwfl-edge namespace and
@@ -70,6 +73,14 @@ function https(name: string, value: string): string {
   return value;
 }
 
+/** A client's audience, scope or subject: the variable's value, or the default when it is unset. Set but empty or blank refuses to start. */
+function claim(env: Env, name: string, fallback: string): string {
+  const value = env[name];
+  if (value === undefined) return fallback;
+  if (value.trim() === '') throw new Error(`${name} must not be empty (unset it for the default)`);
+  return value;
+}
+
 // A Linkerd identity of a service account in the edge namespace: <sa>.nwfl-edge.serviceaccount.identity.linkerd.<trust domain>.
 const LABEL = '[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?';
 const EDGE_IDENTITY = new RegExp(`^(${LABEL})\\.nwfl-edge\\.serviceaccount\\.identity\\.linkerd\\.${LABEL}(?:\\.${LABEL})*$`);
@@ -87,10 +98,10 @@ export function readAuthConfig(env: Env): AuthConfig {
     clients.push({
       kind,
       issuer,
-      audience: env[`${prefix}_OIDC_AUDIENCE`] ?? audience,
+      audience: claim(env, `${prefix}_OIDC_AUDIENCE`, audience),
       jwksUrl,
-      ...(scope !== undefined ? { scope: env[`${prefix}_SCOPE`] ?? scope } : {}),
-      ...(subject !== undefined ? { subject: env[`${prefix}_SUBJECT`] ?? subject } : {}),
+      ...(scope !== undefined ? { scope: claim(env, `${prefix}_SCOPE`, scope) } : {}),
+      ...(subject !== undefined ? { subject: claim(env, `${prefix}_SUBJECT`, subject) } : {}),
     });
   }
   if (new Set(clients.map((client) => client.audience)).size !== clients.length) {

@@ -6,7 +6,7 @@ import { type AddressInfo } from 'node:net';
 import http from 'node:http';
 import { type JWK, type JWTVerifyGetKey, SignJWT, UnsecuredJWT, createLocalJWKSet, createRemoteJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type ClientConfig, createJwtVerifier } from './jwt.js';
+import { type ClientConfig, MAX_LIFETIME_SECONDS, createJwtVerifier } from './jwt.js';
 
 const SITE_ISS = 'https://login.example.org/application/o/nwfl-site/';
 const AGENT_ISS = 'https://login.example.org/application/o/nwfl-agent/';
@@ -170,7 +170,7 @@ describe('createJwtVerifier', () => {
     });
   });
 
-  describe('token lifetime (STACK-FIX): an issue time is required, and exp - iat is at most 1 h for a site token, 24 h for a machine token', () => {
+  describe('token lifetime (STACK-FIX): an issue time is required, and exp - iat is at most 1 h for a site or link checker token, 24 h for the agent and the verifier', () => {
     const now = (): number => Math.floor(Date.now() / 1000);
     const at = (claims: Record<string, unknown>, iat: number | undefined, exp: number): Promise<string> => {
       let jwt = new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'rsa-1' }).setExpirationTime(exp);
@@ -204,7 +204,7 @@ describe('createJwtVerifier', () => {
       await expect(createJwtVerifier(clients()).verify(await at(site(), t + 600, t + 900))).rejects.toThrow(/"iat"/);
     });
 
-    it('accepts a machine token living 24 h, and refuses one living longer', async () => {
+    it('accepts an agent or verifier token living 24 h and a link checker token living 1 h, and refuses one living longer', async () => {
       const verifier = createJwtVerifier(clients());
       const t = now();
       expect((await verifier.verify(await at(agent, t, t + 86400))).client).toBe('agent');
@@ -212,8 +212,13 @@ describe('createJwtVerifier', () => {
       expect((await verifier.verify(await at(verifierClaims, t, t + 86400))).client).toBe('verifier');
       await expect(verifier.verify(await at(verifierClaims, t, t + 86401))).rejects.toThrow(/lifetime/);
       const linkcheck = { iss: LINKCHECK_ISS, aud: 'nwfl-linkcheck', sub: 'svc-nwfl-linkcheck', scope: 'links.check' };
-      expect((await verifier.verify(await at(linkcheck, t, t + 86400))).client).toBe('linkcheck');
-      await expect(verifier.verify(await at(linkcheck, t, t + 86401))).rejects.toThrow(/lifetime/);
+      // Fix round 1 (F5): the link checker's tokens are issued for 1 h (FC-REQUEST), so no longer one is taken.
+      expect(MAX_LIFETIME_SECONDS.linkcheck).toBe(3600);
+      expect((await verifier.verify(await at(linkcheck, t, t + 3600))).client).toBe('linkcheck');
+      await expect(verifier.verify(await at(linkcheck, t, t + 3601))).rejects.toThrow(/lifetime/);
+      await expect(verifier.verify(await at(linkcheck, t, t + 86400))).rejects.toThrow(/lifetime/);
+      // And its age: one issued over an hour ago is refused though its expiry is still ahead.
+      await expect(verifier.verify(await at(linkcheck, t - 3700, t - 3700 + 3600 + 200))).rejects.toThrow();
     });
   });
 

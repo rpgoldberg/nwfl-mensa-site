@@ -4,7 +4,8 @@
 // (auth/caller.ts); each handler checks it again.
 //
 //   ListLinksAwaitingVerdict  addresses only, sorted, each once, at most
-//                             MAX_AWAITING: those of the link list (item-links.ts,
+//                             MAX_AWAITING and MAX_AWAITING_BYTES of them (the
+//                             first always): those of the link list (item-links.ts,
 //                             as it is, no lens) of every piece whose working
 //                             version is ready or cleared, its office's event
 //                             addresses included, that are waiting in it: no
@@ -15,8 +16,10 @@
 //   RecordLinkVerdicts        a verdict per address, for every piece it is
 //                             waiting in, as machine rows of content_link_check.
 //                             All or nothing on its input: OK on a link that
-//                             needs a sign-in, an unspecified verdict or a bad
-//                             reason refuses the call. An address not waiting
+//                             needs a sign-in or that the checker never fetches
+//                             (the no-fetch list), an unspecified verdict or a
+//                             reason that is not one of the checker's codes
+//                             (REASON_CODES) refuses the call. An address not waiting
 //                             (changed, answered, unknown) is returned, not kept.
 //                             Audited once (link_verdicts), counts only.
 //
@@ -35,7 +38,7 @@ import { MachineVerdict } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { LinkCheckService } from '../gen/nwfl/mensa/v1/link_check_pb.js';
 import { MAX_URL_LENGTH } from '../links/urls.js';
 import type { StructuredLogger } from '../platform/logger.js';
-import { actualLinks, currentAnswers, loginWalled } from './item-links.js';
+import { actualLinks, currentAnswers, loginWalled, neverFetched } from './item-links.js';
 import { normalizeTree } from './tree.js';
 
 export interface LinkCheckDeps {
@@ -46,13 +49,27 @@ export interface LinkCheckDeps {
 
 /** At most this many addresses handed out, or verdicts taken, in one call. */
 export const MAX_AWAITING = 500;
+/**
+ * At most this many bytes of addresses handed out in one call (the first address always): what the
+ * checker sends back must fit a message this service reads (READ_MAX_BYTES, grpc/server.ts), and it
+ * writes requests of at most 200,000 bytes (apps/linkcheck items.ts MAX_RECORD_BYTES).
+ */
+export const MAX_AWAITING_BYTES = 180_000;
 /** An address with a verdict this recent is not handed out again. */
 export const RECHECK_HOURS = 24;
 /** At most this many reason codes on one verdict. */
 export const MAX_REASONS = 8;
-/** A reason code: lowercase words joined by hyphens, as the checker's (apps/linkcheck check.ts REASONS). */
-const REASON = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const MAX_REASON_LENGTH = 40;
+/**
+ * The checker's reason codes: the names of apps/linkcheck check.ts REASONS, in its order (a test holds the
+ * two lists equal). A reason is one of these, never words of the caller's choosing: officers read them.
+ */
+export const REASON_CODES: readonly string[] = [
+  'no-https', 'private-address', 'malformed', 'scheme', 'port', 'credentials', 'ip-literal', 'local-name', 'host-name', 'too-long', 'control',
+  'nxdomain', 'no-address', 'dead', 'not-found-page', 'parked', 'no-mail', 'blocked', 'rate-limited', 'server-error', 'http-error', 'timeout', 'tls',
+  'unreachable', 'protocol', 'dns-failure', 'unrelated-redirect', 'redirect-to-http', 'bad-redirect', 'too-many-redirects', 're-registered',
+  'login-walled', 'no-fetch', 'upgraded', 'trimmed',
+];
+const REASONS: ReadonlySet<string> = new Set(REASON_CODES);
 
 const STORED: Partial<Record<MachineVerdict, 'ok' | 'confirm' | 'drop'>> = {
   [MachineVerdict.OK]: 'ok',
@@ -118,7 +135,13 @@ export function linkCheckRoutes(deps: LinkCheckDeps): (router: ConnectRouter) =>
         return tx(async (client) => {
           const awaiting = await awaitingVerdicts(client, deps);
           const all = [...awaiting.keys()].sort((a, b) => (a < b ? -1 : 1));
-          const urls = all.slice(0, MAX_AWAITING);
+          const urls: string[] = [];
+          let size = 0;
+          for (const url of all) {
+            size += Buffer.byteLength(url);
+            if (urls.length === MAX_AWAITING || (urls.length > 0 && size > MAX_AWAITING_BYTES)) break;
+            urls.push(url);
+          }
           const more = all.length > urls.length;
           if (urls.length > 0) {
             const itemIds = [...new Set(urls.flatMap((url) => awaiting.get(url) as string[]))].sort();
@@ -143,8 +166,9 @@ export function linkCheckRoutes(deps: LinkCheckDeps): (router: ConnectRouter) =>
           const verdict = STORED[given.verdict];
           if (verdict === undefined) throw invalid('each verdict is OK, CONFIRM or DROP');
           if (given.reasons.length > MAX_REASONS) throw invalid(`at most ${MAX_REASONS} reasons on a verdict`);
-          if (given.reasons.some((reason) => reason.length > MAX_REASON_LENGTH || !REASON.test(reason))) throw invalid('a reason is a code: lowercase words joined by hyphens');
+          if (given.reasons.some((reason) => !REASONS.has(reason))) throw invalid("a reason is one of the link checker's reason codes");
           if (verdict === 'ok' && loginWalled(given.url)) throw invalid('the link checker cannot accept a link that needs a sign-in to check');
+          if (verdict === 'ok' && neverFetched(given.url)) throw invalid('the link checker cannot accept a link it never fetches');
           verdicts.set(given.url, { verdict, reasons: [...given.reasons] });
         }
         return tx(async (client) => {

@@ -190,7 +190,7 @@ describe('the links panel (S7)', () => {
     expect(words({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(5 * HOUR) } })).toBe('The link checker found it working 5 hours ago.');
     expect(words({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(24 * HOUR) } })).toBe('The link checker found it working 1 day ago.');
     expect(words({ machine: { verdict: 'ok', reasons: [], checkedAt: ago(8 * 24 * HOUR) } })).toBe(
-      'The link checker found it working 8 days ago. That is too long ago to count: it checks the link again, or a person answers.',
+      'The link checker found it working 8 days ago. That no longer counts (an OK counts for 7 days): it checks the link again, or a person answers.',
     );
     expect(words({ machine: { verdict: 'confirm', reasons: ['blocked'], checkedAt: ago(2 * HOUR) } })).toBe('The link checker could not tell 2 hours ago (blocked): a person checks it.');
     expect(words({ machine: { verdict: 'drop', reasons: ['dead', 'nxdomain'], checkedAt: ago(3 * 24 * HOUR) } })).toBe(
@@ -198,6 +198,75 @@ describe('the links panel (S7)', () => {
     );
     // A clock a little behind the API: never "in the future".
     expect(words({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: new Date(now.getTime() + 60_000) } })).toBe('The link checker found it working less than an hour ago.');
+  });
+
+  // Fix round 1 (GATE-5, challenger panel probe): each row is worded from what the gate says (`accepted`),
+  // so the panel never says a link is checked while Approve still waits for it, or the other way round.
+  describe('words each row from what the gate accepts', () => {
+    const now = new Date('2026-11-16T15:00:00Z');
+    const HOUR = 3_600_000;
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    const rowOf = (over: Partial<PieceLink>) => linkRows([link(over)])[0] as ReturnType<typeof linkRows>[number];
+
+    it('says a Yes over a DROP with no note needs a note, never "Checked by"', () => {
+      const row = rowOf({ answeredByLabel: 'Treasurer', reviewerAnswer: 'yes', accepted: false, machine: { verdict: 'drop', reasons: ['dead'], checkedAt: ago(3 * HOUR) } });
+      expect(answerWords(row)).toBe('Treasurer answered yes, but that does not count yet: the link checker found it broken, so it needs a Yes with a note saying why it is right.');
+      expect(answerWords(row)).not.toContain('Checked by');
+      // The same yes, once the gate accepts it (it came with a note after the DROP).
+      expect(answerWords(rowOf({ answeredByLabel: 'Treasurer', reviewerAnswer: 'yes', accepted: true, machine: { verdict: 'drop', reasons: ['dead'], checkedAt: ago(3 * HOUR) } }))).toBe(
+        'Checked by Treasurer: it shows the right page.',
+      );
+    });
+
+    it('says a yes the gate does not accept for any other reason does not count yet, with no reason it cannot know', () => {
+      expect(answerWords(rowOf({ answeredByLabel: 'Treasurer', reviewerAnswer: 'yes', accepted: false }))).toBe('Treasurer answered yes, but that does not count yet.');
+      expect(answerWords(rowOf({ answeredByLabel: 'Treasurer', reviewerAnswer: 'yes', accepted: false, machine: { verdict: 'ok', reasons: [], checkedAt: ago(HOUR) } }))).toBe(
+        'Treasurer answered yes, but that does not count yet.',
+      );
+    });
+
+    it('does not say "Not checked yet" on a link the link checker\'s OK let through', () => {
+      const row = rowOf({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(HOUR) } });
+      expect(answerWords(row)).toBe('No person has answered: the link checker found it working, and that counts.');
+      expect(answerWords(rowOf({ accepted: false, machine: { verdict: 'ok', reasons: [], checkedAt: ago(HOUR) } }))).toBe('Not checked yet.');
+      expect(answerWords(rowOf({ accepted: false, machine: { verdict: 'confirm', reasons: [], checkedAt: ago(HOUR) } }))).toBe('Not checked yet.');
+      expect(answerWords(rowOf({}))).toBe('Not checked yet.');
+    });
+
+    it("takes staleness from the gate, not from this server's clock", () => {
+      // Half an hour short of 7 days by this clock, but the API (its database clock) no longer accepts it.
+      expect(machineWords(rowOf({ accepted: false, machine: { verdict: 'ok', reasons: [], checkedAt: ago((7 * 24 - 0.5) * HOUR) } }), now)).toBe(
+        'The link checker found it working 6 days ago. That no longer counts (an OK counts for 7 days): it checks the link again, or a person answers.',
+      );
+      // Past 7 days by this clock, but the API still accepts it: no "no longer counts".
+      expect(machineWords(rowOf({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago((7 * 24 + 0.5) * HOUR) } }), now)).toBe('The link checker found it working 7 days ago.');
+      // Exactly 7 days by this clock, either way the gate went.
+      expect(machineWords(rowOf({ accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(7 * 24 * HOUR) } }), now)).toBe('The link checker found it working 7 days ago.');
+    });
+
+    it("says an OK on a sign-in link does not count, and leaves the OK alone once a person has answered", () => {
+      expect(machineWords(rowOf({ loginWalled: true, accepted: false, machine: { verdict: 'ok', reasons: [], checkedAt: ago(HOUR) } }), now)).toBe(
+        'The link checker found it working 1 hour ago. That does not count for a link that needs a sign-in: a person checks it.',
+      );
+      expect(machineWords(rowOf({ answeredByLabel: 'Webmaster', reviewerAnswer: 'no', accepted: false, machine: { verdict: 'ok', reasons: [], checkedAt: ago(9 * 24 * HOUR) } }), now)).toBe(
+        'The link checker found it working 9 days ago.',
+      );
+      expect(machineWords(rowOf({ answeredByLabel: 'Treasurer', reviewerAnswer: 'yes', accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(9 * 24 * HOUR) } }), now)).toBe(
+        'The link checker found it working 9 days ago.',
+      );
+    });
+
+    it('the summary counts what the gate accepts, in the same three rows', () => {
+      const links = [
+        link({ url: 'https://drop.example.org/', answeredByLabel: 'Treasurer', reviewerAnswer: 'yes', accepted: false, machine: { verdict: 'drop', reasons: ['dead'], checkedAt: ago(3 * HOUR) } }),
+        link({ url: 'https://skew.example.org/', accepted: false, machine: { verdict: 'ok', reasons: [], checkedAt: ago((7 * 24 - 0.5) * HOUR) } }),
+        link({ url: 'https://ok.example.org/', accepted: true, machine: { verdict: 'ok', reasons: [], checkedAt: ago(HOUR) } }),
+      ];
+      expect(linksSummary(links)).toBe('1 of 3 links checked.');
+      const said = linkRows(links).map((row) => `${answerWords(row)} ${machineWords(row, now)}`);
+      expect(said.filter((words) => /Checked by|found it working, and that counts/.test(words))).toHaveLength(1);
+      expect(said.filter((words) => /does not count yet|Not checked yet|no longer counts/.test(words))).toHaveLength(2);
+    });
   });
 
   it('keys each row by its address and where it is, so two rows of one address are kept apart (N4)', () => {

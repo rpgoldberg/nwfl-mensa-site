@@ -10,7 +10,8 @@
 //                             change an address.
 // Only the link checker may call it, and it may call nothing else. Every person, place and address here
 // is made up.
-import { type Client, Code, ConnectError } from '@connectrpc/connect';
+import { readFileSync } from 'node:fs';
+import { type Client, Code, ConnectError, type Interceptor, createClient, createRouterTransport } from '@connectrpc/connect';
 import pgLib from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ApprovalRuleService } from '../../src/gen/nwfl/mensa/v1/approval_pb.js';
@@ -19,7 +20,10 @@ import { EventService } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
 import { LinkCheckService } from '../../src/gen/nwfl/mensa/v1/link_check_pb.js';
 import { MembershipVerifierService } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
-import { type Api, as, dump, insertId, startApi } from '../helpers/api.js';
+import { authInterceptor } from '../../src/auth/caller.js';
+import { REASON_CODES, linkCheckRoutes } from '../../src/content/link-check.js';
+import type { StructuredLogger } from '../../src/platform/logger.js';
+import { type Api, as, dump, fakeVerifier, insertId, startApi } from '../helpers/api.js';
 import { MIGRATOR, MIGRATOR_PW, live, urlFor } from '../helpers/pg.js';
 
 const PUBLICATIONS = as('pub-token');
@@ -290,6 +294,84 @@ describe.skipIf(!live)('L-ITEM: LinkCheckService', () => {
       expect((await machineRows(itemId)).map((row) => row.answer)).toEqual(['confirm']);
     });
 
+    // Challenger P10: the sign-in rule reads the host as the checker does, whatever its spelling, waiting or not.
+    it.each(['https://FACEBOOK.com/x', 'https://www.facebook.com./x', 'https://m.facebook.com/x', 'https://facebook.com:443/x', 'https://facebook%2Ecom/x', 'https://ｆａｃｅｂｏｏｋ.com/x'])(
+      'refuses OK on a sign-in host spelled %s',
+      async (url) => {
+        await expect(checker.recordLinkVerdicts({ verdicts: [{ url, verdict: MachineVerdict.OK }] }, CHECKER)).rejects.toMatchObject({
+          code: Code.InvalidArgument,
+          rawMessage: 'the link checker cannot accept a link that needs a sign-in to check',
+        });
+      },
+    );
+
+    // Fix round 1 (GATE-4): the checker never requests a no-fetch host (us.mensa.org and under it), so an OK
+    // on one says nothing was looked at. Refused like an OK on a sign-in link, whatever the spelling.
+    it.each([
+      ['the host itself', 'https://us.mensa.org/'],
+      ['a subdomain', 'https://www.us.mensa.org/join/'],
+      ['a deeper subdomain', 'https://secure.us.mensa.org/nwflorida/'],
+      ['a case variant', 'https://WWW.Us.Mensa.ORG/join/'],
+      ['a trailing dot', 'https://www.us.mensa.org./join/'],
+      ['a port-free https address with a query', 'https://www.us.mensa.org/search/?q=games'],
+      ['another name on the no-fetch list', 'https://www.vndb.org/v17'],
+    ])('cannot accept a link the checker never fetches (%s): OK on one refuses the whole call and records nothing', async (_label, noFetch) => {
+      const { itemId } = await piece(`National ${noFetch} and https://beside-${(n += 1)}.example.org/`);
+      const beside = `https://beside-${n}.example.org/`;
+      const call = checker.recordLinkVerdicts({ verdicts: [{ url: beside, verdict: MachineVerdict.OK }, { url: noFetch, verdict: MachineVerdict.OK }] }, CHECKER);
+      await expect(call).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: 'the link checker cannot accept a link it never fetches' });
+      expect(await machineRows(itemId)).toEqual([]);
+    });
+
+    it('takes CONFIRM on a link the checker never fetches, as the checker gives it', async () => {
+      const { itemId } = await piece('National https://www.us.mensa.org/learn/ page.');
+      await checker.recordLinkVerdicts({ verdicts: [{ url: 'https://www.us.mensa.org/learn/', verdict: MachineVerdict.CONFIRM, reasons: ['no-fetch'] }] }, CHECKER);
+      expect((await machineRows(itemId)).map((row) => [row.url, row.answer, row.reasons])).toEqual([['https://www.us.mensa.org/learn/', 'confirm', ['no-fetch']]]);
+    });
+
+    it('still takes OK on a host that only looks like one: us.mensa.org.example.org, notus.mensa.org', async () => {
+      const { itemId } = await piece('See https://us.mensa.org.example.org/ and https://notus.mensa.org/.');
+      const reply = await checker.recordLinkVerdicts({ verdicts: ['https://us.mensa.org.example.org/', 'https://notus.mensa.org/'].map((url) => ({ url, verdict: MachineVerdict.OK })) }, CHECKER);
+      expect(reply).toMatchObject({ recorded: 2, notAwaiting: [] });
+      expect((await machineRows(itemId)).map((row) => row.answer)).toEqual(['ok', 'ok']);
+    });
+
+    // Fix round 1 (GATE-8, challenger P14): a reason is one of the checker's own codes (apps/linkcheck
+    // check.ts REASONS), never words of the caller's choosing: the panel shows reasons to officers.
+    it.each([
+      ['words shaped like a code', ['call-555-0100-to-unlock', 'admin-says-approve-anyway']],
+      ['one real code and one made up', ['dead', 'approve-anyway']],
+      ['a real code in capitals', ['DEAD']],
+      ['a real code with a space after it', ['dead ']],
+      ['a note, which is not a reason', ['safe-browsing-off']],
+      ['a name every object has', ['constructor']],
+      ['another', ['__proto__']],
+    ])('refuses %s as a reason, and records nothing', async (_label, reasons) => {
+      const url = `https://reasons-${(n += 1)}.example.org/`;
+      const { itemId } = await piece(`See ${url}`);
+      const call = checker.recordLinkVerdicts({ verdicts: [{ url, verdict: MachineVerdict.DROP, reasons }] }, CHECKER);
+      await expect(call).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: "a reason is one of the link checker's reason codes" });
+      expect(await machineRows(itemId)).toEqual([]);
+    });
+
+    it("takes every one of the checker's reason codes, which are check.ts's REASONS, name for name", async () => {
+      // The list in apps/linkcheck/src/check.ts, read as text: this suite must not need linkcheck's packages.
+      const source = readFileSync(new URL('../../../linkcheck/src/check.ts', import.meta.url), 'utf8');
+      const block = /export const REASONS = \{\n([\s\S]*?)\n\} as const/.exec(source)?.[1] as string;
+      const theirs = block.split('\n').map((line) => /^ {2}'?([a-z0-9-]+)'?: \[/.exec(line)?.[1]);
+      expect(theirs).not.toContain(undefined);
+      expect(theirs.length).toBeGreaterThan(30);
+      expect([...REASON_CODES]).toEqual(theirs);
+      // At most 8 on a verdict: each code is taken on some verdict, each on a piece of its own.
+      for (let i = 0; i < REASON_CODES.length; i += 8) {
+        const url = `https://reasons-${(n += 1)}.example.org/`;
+        const { itemId } = await piece(`See ${url}`);
+        const reasons = REASON_CODES.slice(i, i + 8);
+        expect(await checker.recordLinkVerdicts({ verdicts: [{ url, verdict: MachineVerdict.CONFIRM, reasons: [...reasons] }] }, CHECKER)).toMatchObject({ recorded: 1 });
+        expect((await machineRows(itemId)).map((row) => row.reasons)).toEqual([[...reasons]]);
+      }
+    });
+
     it.each([
       ['no verdicts', { verdicts: [] }],
       ['an unspecified verdict', { verdicts: [{ url: 'https://fine.example.org/', verdict: MachineVerdict.UNSPECIFIED }] }],
@@ -300,6 +382,24 @@ describe.skipIf(!live)('L-ITEM: LinkCheckService', () => {
       ['501 verdicts', { verdicts: Array.from({ length: 501 }, (_, i) => ({ url: `https://x${i}.example.org/`, verdict: MachineVerdict.OK })) }],
     ])('refuses %s with INVALID_ARGUMENT', async (_label, request) => {
       expect(await codeOf(checker.recordLinkVerdicts(request, CHECKER))).toBe(Code.InvalidArgument);
+    });
+
+    // Fix round 1 (mutant L12): the day's wait after a verdict is per piece. A verdict in one piece does
+    // not keep the same address, newly waiting in another, from being handed out and recorded there.
+    it('hands out again an address with a verdict in one piece when it newly waits in another, and records it there only', async () => {
+      const url = 'https://two-pieces.example.org/';
+      const a = await piece(`First: ${url}`);
+      await checker.recordLinkVerdicts({ verdicts: [{ url, verdict: MachineVerdict.CONFIRM }] }, CHECKER);
+      expect(await awaiting()).not.toContain(url);
+      const b = await piece(`Second: ${url}`);
+      expect(await awaiting()).toContain(url);
+      const read = (await audits('links_read')).at(-1)?.payload as { item_ids: string[] };
+      expect(read.item_ids).toContain(b.itemId);
+      expect(read.item_ids).not.toContain(a.itemId);
+      expect(await checker.recordLinkVerdicts({ verdicts: [{ url, verdict: MachineVerdict.OK }] }, CHECKER)).toMatchObject({ recorded: 1, notAwaiting: [] });
+      expect((await machineRows(a.itemId)).map((row) => row.answer)).toEqual(['confirm']);
+      expect((await machineRows(b.itemId)).map((row) => row.answer)).toEqual(['ok']);
+      expect(await awaiting()).not.toContain(url);
     });
 
     it('never writes a reviewer answer: the piece still shows no answer and who answered nobody', async () => {
@@ -336,5 +436,62 @@ describe.skipIf(!live)('L-ITEM: LinkCheckService', () => {
       for (const [name, call] of calls) expect(await codeOf(call), name).toBe(Code.PermissionDenied);
       expect((await api.pool.query(`SELECT 1 FROM content_link_check WHERE item_id = $1`, [itemId])).rows).toEqual([]);
     });
+  });
+});
+
+// Fix round 1 (F1, challenger mutant M15): the handlers' own check, apart from the caller gate. The gate
+// is shown each call as one to ContentService, so it admits a person; only requireLinkCheck then stands
+// between that person and the address list. No database: a handler that reaches it has let them in.
+describe('L-ITEM: the handlers check the caller again', () => {
+  const gate = authInterceptor({ verifier: fakeVerifier });
+  const disguise: Interceptor = (next) => (req) => gate((r) => next(r))({ ...req, service: ContentService });
+  const reached = (): Promise<never> => Promise.reject(new Error('the handler reached the database'));
+  const logger = { info() {}, warn() {}, error() {}, debug() {}, child: () => logger } as unknown as StructuredLogger;
+  const client = createClient(
+    LinkCheckService,
+    createRouterTransport(linkCheckRoutes({ db: { query: reached, connect: reached }, logger, now: () => new Date() }), { router: { interceptors: [disguise] } }),
+  );
+
+  it.each(['member-token', 'officer-token', 'admin-token', 'webmaster-token'])('refuses %s on both RPCs even when the gate let it through', async (token) => {
+    expect(await codeOf(client.listLinksAwaitingVerdict({}, as(token)))).toBe(Code.PermissionDenied);
+    expect(await codeOf(client.recordLinkVerdicts({ verdicts: [{ url: 'https://fine.example.org/', verdict: MachineVerdict.OK }] }, as(token)))).toBe(Code.PermissionDenied);
+  });
+
+  it('the disguise is real: the gate itself refuses the link checker on what it takes for ContentService', async () => {
+    expect(await codeOf(client.listLinksAwaitingVerdict({}, CHECKER))).toBe(Code.PermissionDenied);
+  });
+});
+
+// Fix round 1 (F2, mutant M21): a verdict is written under the subject of the token that gave it, not
+// under a name this code knows. Here the deployment's LINKCHECK_SUBJECT is not the default, so the
+// verified token carries that subject.
+describe.skipIf(!live)('L-ITEM: a link checker under another subject', () => {
+  const SUBJECT = 'svc-other-checker';
+  let api: Api;
+
+  beforeAll(async () => {
+    api = await startApi('nwfl_link_check_subject', {
+      verifier: { verify: (token) => (token === 'linkcheck-token' ? Promise.resolve({ client: 'linkcheck', subject: SUBJECT, groups: [], scopes: ['links.check'] }) : fakeVerifier.verify(token)) },
+    });
+  });
+
+  afterAll(async () => {
+    await api?.close();
+  });
+
+  it('writes each verdict, and both audit rows, under the subject of the token', async () => {
+    const content = api.client(ContentService);
+    const checker = api.client(LinkCheckService);
+    const office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
+    const item = (await content.createItem({ kind: ContentKind.ARTICLE, officeId: office, slug: 'subject', title: 'Games night' }, PUBLICATIONS)).item as ContentItem;
+    await content.saveDraft({ itemId: item.id, title: 'Games night', summary: '', visibility: ItemVisibility.PUBLIC, bodyMarkup: 'See https://subject.example.org/.' }, PUBLICATIONS);
+    await content.markReady({ itemId: item.id }, PUBLICATIONS);
+    expect((await checker.listLinksAwaitingVerdict({}, CHECKER)).urls).toEqual(['https://subject.example.org/']);
+    expect(await checker.recordLinkVerdicts({ verdicts: [{ url: 'https://subject.example.org/', verdict: MachineVerdict.OK }] }, CHECKER)).toMatchObject({ recorded: 1 });
+    expect((await api.pool.query(`SELECT by_sub, source FROM content_link_check WHERE item_id = $1`, [item.id])).rows).toEqual([{ by_sub: SUBJECT, source: 'machine' }]);
+    expect((await api.pool.query(`SELECT action, actor_kind, actor_sub FROM audit_event WHERE action IN ('links_read', 'link_verdicts') ORDER BY id`)).rows).toEqual([
+      { action: 'links_read', actor_kind: 'linkcheck', actor_sub: SUBJECT },
+      { action: 'link_verdicts', actor_kind: 'linkcheck', actor_sub: SUBJECT },
+    ]);
   });
 });
