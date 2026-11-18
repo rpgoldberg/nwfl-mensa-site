@@ -72,13 +72,27 @@ file (not a link) of plain ASCII text with Unix line endings, and neither it nor
 group or others: whoever can write it chooses the image that is handed the password. It lets one run go at a
 time (flock). It reads `client_id`, `username` and `password` at `secret/nwfl-mensa/linkcheck/client` with the
 OpenBao CLI, writes the password to a 0600 file in a fresh 0700 folder, and runs `linkcheck.sh items`; a run
-over 20 minutes is stopped. The password file is removed as soon as the container has ended, and the folder on
-every exit; a folder that a killed run left behind is removed by the next run, which says so in the log. It
+over 20 minutes is stopped. docker writes the container's id into that folder (`--cidfile`), and as the wrapper
+ends it removes the container by that id (`docker rm -f`, ten seconds at most), so a container that ignored the
+stop does not outlive the run or meet the next one; if docker cannot remove it, a `note:` line says so. The
+password file is removed as soon as the container has ended, and the folder on every exit; a folder that a
+killed run left behind is removed by the next run, with the container it names, which says so in the log. It
 prints no secret. Each run appends one line to `~/.local/state/nwfl-linkcheck/items.log`: the time,
 `exit=<code>`, and the counts or the reason. The reason is the checker's message only when it is one of its
-fixed messages, or docker's own first line when docker itself failed (exit 125 to 127); anything else is logged
-as `the run failed (unrecognised message)`, so nothing a server said reaches the log. Exit codes: 0 done; 1 the
+fixed messages, or docker's own first line (printable ASCII only) when docker failed with exit 125 to 127
+before it made a container; anything else is logged as `the run failed (unrecognised message)`, so nothing a
+server or the container said reaches the log. Exit codes: 0 done; 1 the
 run failed; 2 OpenBao is unreachable or sealed (and nothing else); 3 another run is still going.
+
+Limits of the wrapper, known and left as they are:
+
+- It checks the modes of its settings, lock and log, not who owns them. A file or folder that another user
+  owns, or a `~/.config` that others can write, is not noticed; placing one takes root or the officer's own
+  write access.
+- An exit of 137 is read by the clock: under 20 minutes it is logged as out of memory, at 20 minutes or more
+  as the time limit. A clock that jumps, or a container that itself exits 124, is mislabelled.
+- When docker fails to start a container it has already made (exit 126 or 127), its reason is not logged:
+  the container is removed with its record, so the exit cannot be told from the container's own.
 
 ## Safety
 

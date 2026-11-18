@@ -53,13 +53,26 @@ finish() {
   exit "$1"
 }
 
-# The private folder that holds the password file is removed on every exit. A signal stops the
-# container first; the run then ends through finish, so the folder goes and the log says so.
+# Makes sure the container whose id docker wrote to the cid file $1 is gone. docker's client removes
+# its container itself (--rm) unless it is killed first: timeout's KILL of a run that ignored the
+# stop, or a kill of this script. Only a whole container id is ever handed to docker.
+reap() {
+  id=$(cat "$1" 2> /dev/null) || return 0
+  case $id in *[!0-9a-f]*) return 0 ;; esac
+  [ ${#id} -eq 64 ] || return 0
+  timeout -k 5 10 docker rm -f "$id" > /dev/null 2>&1 ||
+    say "note: this run's container could not be removed; remove it by hand: docker rm -f $(printf '%s' "$id" | cut -c 1-12)"
+}
+
+# The private folder that holds the password file is removed on every exit, after the container. A
+# signal is passed on to docker's client, which stops the container; the run then ends through
+# finish, so the folder goes and the log says so.
 dir='' child='' stopped=''
-trap '[ -z "$dir" ] || rm -rf -- "${dir:?}"' EXIT
+trap '[ -z "$dir" ] || { reap "$dir/cid"; rm -rf -- "${dir:?}"; }' EXIT
 trap 'stopped=1; [ -z "$child" ] || kill -TERM "$child" 2>/dev/null' INT TERM HUP
 
-# One run at a time. The container inherits the lock, so it is held for as long as one runs.
+# One run at a time. This script holds the lock (docker's client inherits it, the container does
+# not), and it removes its container as it ends (the EXIT trap), so no container outlives the lock.
 # `command` keeps the shell alive when the file cannot be opened, so the log can say so.
 if ! plain "$lock" || ! { command exec 9>> "$lock"; } 2> /dev/null; then
   finish 1 "the lock file $lock cannot be opened: it must be a plain file of yours"
@@ -71,10 +84,11 @@ case $? in
   *) finish 1 "the lock on $lock could not be taken" ;;
 esac
 
-# With the lock held, a folder a killed run left behind belongs to nobody: its password file goes now.
+# With the lock held, a folder a killed run left behind belongs to nobody: its container, if it still
+# runs, and its password file go now.
 left=''
 for old in "$state"/run.*; do
-  [ ! -d "$old" ] || { rm -rf -- "${old:?}" && left=1; }
+  [ ! -d "$old" ] || { reap "$old/cid"; rm -rf -- "${old:?}" && left=1; }
 done
 [ -z "$left" ] || say "note: a run was killed before it could clean up; the private folder it left behind is removed"
 
@@ -136,13 +150,17 @@ export LINKCHECK_API_URL LINKCHECK_TOKEN_URL LINKCHECK_CLIENT_ID LINKCHECK_USERN
 [ -z "$scope" ] || { LINKCHECK_SCOPE=$scope && export LINKCHECK_SCOPE; }
 began=$(date +%s)
 # In the background, so a signal is acted on at once. linkcheck.sh execs docker, so the TERM that
-# timeout passes on reaches docker, which stops the container.
-LINKCHECK_PASSWORD_FILE=$dir/password timeout -k 30 "$limit" sh "$here/linkcheck.sh" items "$image" > "$dir/out" 2> "$dir/err" &
+# timeout passes on reaches docker's client, which passes it to the container. A container that
+# ignores it outlives the client that timeout then kills; the EXIT trap removes it by its id (reap).
+LINKCHECK_CID_FILE=$dir/cid LINKCHECK_PASSWORD_FILE=$dir/password timeout -k 30 "$limit" sh "$here/linkcheck.sh" items "$image" > "$dir/out" 2> "$dir/err" &
 child=$!
 wait "$child"
 code=$?
-# After a signal the first wait returns at once: wait again, until the container has stopped.
+# After a signal the first wait returns at once: wait again, until docker's client has ended.
 [ -z "$stopped" ] || wait "$child" 2> /dev/null
+# A cid file means docker made a container: whatever is said from here on may be the container's own.
+made=''
+[ ! -s "$dir/cid" ] || made=1
 # The password's last use (as plain text, never as a pattern), and then its file is gone.
 leak=''
 ! grep -q -F -f "$dir/password" "$dir/err" || leak=1
@@ -152,7 +170,7 @@ rm -f -- "$dir/password"
 case $code in
   0)
     # Counts only: digits, lower-case words and , ; : and nothing an address could be made of.
-    counts=$(grep -m 1 -x 'items: [0-9][0-9a-z ,;:]*' "$dir/out") || finish 1 "the run ended without a counts line"
+    counts=$(grep -a -m 1 -x 'items: [0-9][0-9a-z ,;:]*' "$dir/out") || finish 1 "the run ended without a counts line"
     finish 0 "$counts"
     ;;
   124) finish 1 "the run took over $((limit / 60)) minutes and was stopped" ;;
@@ -177,15 +195,16 @@ known="$known|linkcheck: LINKCHECK_(API|TOKEN)_URL must be an https URL"
 known="$known|linkcheck: (LINKCHECK_PASSWORD_FILE is needed|cannot read /in/password|/in/password is empty)"
 known="$known|linkcheck: (unknown command items|an unexpected error \([A-Za-z]{1,40}\))"
 known="$known|linkcheck\.sh: (run it as yourself, not as root|the password file's path may not hold a colon)"
-if why=$(grep -m 1 -x -E -e "$known" "$dir/err"); then
+# grep -a: a NUL byte in the output must not make grep call it binary and say nothing.
+if why=$(grep -a -m 1 -x -E -e "$known" "$dir/err"); then
   # What the API said in its refusal is the server's own text: only the status is logged.
   case $why in 'linkcheck: the API refused the call: '*) why=${why%% (*} ;; esac
 elif grep -q -E '^(Cannot connect to the Docker daemon|failed to connect to the docker API)' "$dir/err"; then
   why='docker could not be reached (is its daemon running?)'
-elif [ "$code" -ge 125 ] && [ "$code" -le 127 ] && why=$(grep -m 1 -E '^(docker:|Error response)' "$dir/err"); then
-  # 125 to 127 are docker's own: no container ran. Its reason is the first line that starts so; its
-  # last line is only a pointer to its help.
-  why=$(printf '%s' "$why" | tr -d '\000-\037\177' | cut -c 1-300)
+elif [ -z "$made" ] && [ "$code" -ge 125 ] && [ "$code" -le 127 ] && why=$(grep -a -m 1 -E '^(docker:|Error response)' "$dir/err"); then
+  # 125 to 127 with no container made are docker's own failure. Its reason is the first line that
+  # starts so; its last line is only a pointer to its help. Printable ASCII only goes to the log.
+  why=$(printf '%s' "$why" | tr -cd '\040-\176' | cut -c 1-300)
 elif [ -s "$dir/err" ]; then
   finish 1 "the run failed (unrecognised message): exit code $code"
 else

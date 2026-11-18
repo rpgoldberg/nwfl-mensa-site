@@ -210,6 +210,15 @@ describe('scripts/linkcheck.sh', () => {
     expect(readFileSync(path.join(dir, 'docker.pid'), 'utf8').trim()).toBe(String(done.pid));
   });
 
+  it('asks docker for a cid file only when LINKCHECK_CID_FILE names one', () => {
+    const without = run(['items', IMAGE], passwordFile(), ITEMS_ENV);
+    expect(without.runs[0] as string[]).not.toContain('--cidfile');
+    const withOne = run(['items', IMAGE], passwordFile(), { ...ITEMS_ENV, LINKCHECK_CID_FILE: '$DIR/secret/cid' });
+    expect(withOne.status).toBe(0);
+    expect(flag(withOne.runs[0] as string[], '--cidfile')).toBe(`${withOne.dir}/secret/cid`);
+    expect((withOne.runs[0] as string[]).slice(-2)).toEqual([IMAGE, 'items']);
+  });
+
   it('reads the image name in the C locale, whatever locale it is given', () => {
     const { status, dockerEnv } = run(['items', IMAGE], passwordFile(), { ...ITEMS_ENV, LC_ALL: 'en_US.UTF-8' });
     expect(status).toBe(0);

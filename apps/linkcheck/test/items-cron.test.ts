@@ -21,14 +21,23 @@ const DOCKER_DAEMON_REFUSES = 'Cannot connect to the Docker daemon at unix:///va
 const DOCKER_NO_SOCKET = 'failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory\n';
 // Not captured: the older form, with no "docker:" in front.
 const DOCKER_DENIED = `Unable to find image '${IMAGE}' locally\nError response from daemon: Head "https://ghcr.io/v2/made-up/none/manifests/sha256:made-up": denied\nRun 'docker run --help' for more information\n`;
+const CID = 'ab12'.repeat(16);
 const STAMP = String.raw`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d`;
 
 // The stand-in docker records its arguments and environment, and what the mounted password file
 // held and how private it was while "the container" ran. ctl/ files steer it: docker-out (stdout),
 // docker-err (stderr), docker-exit (the exit code), docker-block (wait for ctl/release or a TERM),
 // docker-stop-slow (with docker-block: take a while to stop after the TERM, as a container does).
+// Like docker, it writes the container's id to the --cidfile once "the container" exists: always, but
+// for exit 125 (docker failed before it made one); ctl/docker-cid (yes or no) overrides that.
+// \`docker rm -f <id>\` is noted in docker-rm.log and exits with ctl/docker-rm-exit (0 by default).
 const DOCKER = (dir: string): string => `#!/bin/sh
 D='${dir}'
+if [ "$1" = rm ]; then
+  echo "$*" >> "$D/docker-rm.log"
+  [ ! -e "$D/ctl/docker-rm-hang" ] || exec sleep 60
+  exit "$(cat "$D/ctl/docker-rm-exit" 2>/dev/null || echo 0)"
+fi
 for a in "$@"; do printf '%s\\037' "$a"; done >> "$D/docker.log"
 echo >> "$D/docker.log"
 env > "$D/docker.env"
@@ -39,8 +48,12 @@ for a in "$@"; do
     cat "$src" > "$D/seen-password"
     stat -c %a "$src" "$(dirname "$src")" | tr '\\n' ' ' > "$D/seen-modes"
   fi
+  [ "$prev" != --cidfile ] || cidfile=$a
   prev=$a
 done
+code=$(cat "$D/ctl/docker-exit" 2>/dev/null || echo 0)
+made=$(cat "$D/ctl/docker-cid" 2>/dev/null || { [ "$code" = 125 ] && echo no || echo yes; })
+[ "$made" != yes ] || [ -z "\${cidfile:-}" ] || printf '%s' '${CID}' > "$cidfile"
 if [ -e "$D/ctl/docker-block" ]; then
   trap 'echo term >> "$D/docker-term"; [ ! -e "$D/ctl/docker-stop-slow" ] || { sleep 0.6; : > "$D/docker-stopped"; }; exit 143' TERM
   : > "$D/started"
@@ -110,6 +123,7 @@ function box({ conf = CONF, secret = SECRET, bao = true, ctl = { 'docker-out': `
 const read = (file: string): string => (existsSync(file) ? readFileSync(file, 'utf8') : '');
 const logLines = (b: Box): string[] => read(path.join(b.state, 'items.log')).split('\n').filter(Boolean);
 const dockerRuns = (b: Box): string[][] => read(path.join(b.dir, 'docker.log')).split('\n').filter(Boolean).map((line) => line.split('\u001f').filter(Boolean));
+const removals = (b: Box): string[] => read(path.join(b.dir, 'docker-rm.log')).split('\n').filter(Boolean);
 const baoCalls = (b: Box): string[] => read(path.join(b.dir, 'bao.log')).split('\n').filter(Boolean);
 const runDirs = (b: Box): string[] => (existsSync(b.state) ? readdirSync(b.state).filter((name) => name.startsWith('run.')) : []);
 const mode = (file: string): number => statSync(file).mode & 0o777;
@@ -174,6 +188,10 @@ describe('scripts/items-cron.sh', () => {
     expect(runs).toHaveLength(1);
     const argv = runs[0] as string[];
     expect(argv.slice(-2)).toEqual([IMAGE, 'items']);
+    // docker writes the container's id into the private folder; with it the wrapper makes sure, once,
+    // that no container of this run is left (docker's client alone does not, when it is killed).
+    expect(argv[argv.indexOf('--cidfile') + 1]).toMatch(new RegExp(`^${b.state}/run\\.[A-Za-z0-9]{6}/cid$`));
+    expect(removals(b)).toEqual([`rm -f ${CID}`]);
     expect(argv).toContain('--read-only');
     const env = read(path.join(b.dir, 'docker.env'));
     // docker and OpenBao are asked in the C locale, so their words are the ones this script knows.
@@ -276,6 +294,14 @@ describe('scripts/items-cron.sh', () => {
     ['the checker meets an error it does not know', { 'docker-exit': '1', 'docker-err': 'linkcheck: an unexpected error (TypeError)\n' }, 'the run failed: linkcheck: an unexpected error (TypeError)'],
     ['the image is older than the items command', { 'docker-exit': '2', 'docker-err': 'linkcheck: unknown command items\nusage: linkcheck extract --audience <public|members>\n' }, 'the run failed: linkcheck: unknown command items'],
     ['a known message follows other lines', { 'docker-exit': '1', 'docker-err': '(node:1) Warning: made-up\nlinkcheck: the API did not answer in time\n' }, 'the run failed: linkcheck: the API did not answer in time'],
+    ['the container itself exits 126 with a line dressed as docker\'s', { 'docker-exit': '126', 'docker-err': 'docker: Error response from daemon: bWFkZS11cC1jb3B5\n' }, 'the run failed (unrecognised message): exit code 126'],
+    ['the container itself exits 127 with a line dressed as docker\'s', { 'docker-exit': '127', 'docker-err': 'Error response from daemon: bWFkZS11cC1jb3B5\n' }, 'the run failed (unrecognised message): exit code 127'],
+    ['the container itself exits 125 with a line dressed as docker\'s', { 'docker-exit': '125', 'docker-cid': 'yes', 'docker-err': 'docker: Error response from daemon: bWFkZS11cC1jb3B5\n' }, 'the run failed (unrecognised message): exit code 125'],
+    ['docker fails with 126 before it makes a container', { 'docker-exit': '126', 'docker-cid': 'no', 'docker-err': 'docker: Error response from daemon: made-up words of docker\n' }, 'the run failed: docker: Error response from daemon: made-up words of docker'],
+    ['a NUL byte follows a known message', { 'docker-exit': '1', 'docker-err': 'linkcheck: the token is not a bearer token\n\u0000bWFkZS11cC1jb3B5\n' }, 'the run failed: linkcheck: the token is not a bearer token'],
+    ['a NUL byte follows docker\'s reason', { 'docker-exit': '125', 'docker-err': 'docker: Error response from daemon: made-up\n\u0000\n' }, 'the run failed: docker: Error response from daemon: made-up'],
+    ['a NUL byte follows the daemon-away line', { 'docker-exit': '1', 'docker-err': `${DOCKER_DAEMON_REFUSES}\u0000\n` }, 'the run failed: docker could not be reached (is its daemon running?)'],
+    ['docker\'s reason holds bytes outside printable ASCII', { 'docker-exit': '125', 'docker-err': 'docker: x\u0085 made-up \u2028 \u009b 2J \u00e9\n' }, 'the run failed: docker: x made-up   2J '],
     ['the container runs out of memory', { 'docker-exit': '137' }, 'the run ran out of memory and was killed (exit 137)'],
     ['a good exit printed no counts', { 'docker-out': 'https://example.org/ a line that is not counts\n' }, 'the run ended without a counts line'],
     ['a counts line holds more than counts', { 'docker-out': 'items: 1 addresses checked at https://example.org/\n' }, 'the run ended without a counts line'],
@@ -397,6 +423,12 @@ describe('scripts/items-cron.sh', () => {
     const b = box({ conf: CONF.trimEnd() });
     expect(runOnce(b).status).toBe(0);
     expect(read(path.join(b.dir, 'docker.env'))).toContain('LINKCHECK_TOKEN_URL=https://id.example.org/application/o/token/\n');
+  });
+
+  it('reads the counts line when a NUL byte follows it', () => {
+    const b = box({ ctl: { 'docker-out': `${COUNTS}\n\u0000\n` } });
+    expect(runOnce(b).status).toBe(0);
+    expect(logLines(b)[0]).toMatch(new RegExp(`^${STAMP} exit=0 ${COUNTS}$`));
   });
 
   it('knows every fixed message of the items command, and logs each as it is', () => {
@@ -571,6 +603,7 @@ describe('scripts/items-cron.sh', () => {
     expect(existsSync(path.join(b.dir, 'docker-stopped'))).toBe(true);
     expect(dateSaw(b)).toEqual(['+%s there', '-Iseconds gone']);
     expect(read(path.join(b.dir, 'docker-term'))).toBe('term\n');
+    expect(removals(b)).toEqual([`rm -f ${CID}`]);
     expect(runDirs(b)).toEqual([]);
     expect(logLines(b)).toHaveLength(1);
     expect(logLines(b)[0]).toMatch(new RegExp(`^${STAMP} exit=1 stopped by a signal$`));
@@ -618,6 +651,72 @@ describe('scripts/items-cron.sh', () => {
     expect(run.status).toBe(1);
     expect(read(path.join(b.dir, 'timeout.args'))).toMatch(/^-k 30 1200 sh \/.*\/scripts\/linkcheck\.sh items ghcr\.io\S+\n$/);
     expect(logLines(b)[0]).toMatch(new RegExp(`^${STAMP} exit=1 the run took over 20 minutes and was stopped$`));
+    expect(runDirs(b)).toEqual([]);
+    // No container was made (no cid file), so docker is not asked to remove one.
+    expect(removals(b)).toEqual([]);
+  });
+
+  it.each([
+    ['the run was killed (137: timeout\'s KILL of a run that ignored the stop, or the memory limit)', '137', 'the run ran out of memory and was killed (exit 137)'],
+    ['the time limit was reached (124)', '124', 'the run took over 20 minutes and was stopped'],
+    ['the run ended on its own', '1', 'the run failed: exit code 1 and no message'],
+  ])('removes the container by its id when %s, before the lock is let go', (_, code, words) => {
+    const b = box({ ctl: { 'docker-exit': code } });
+    const run = runOnce(b);
+    expect(run.status).toBe(1);
+    expect(removals(b)).toEqual([`rm -f ${CID}`]);
+    expect(logLines(b)).toHaveLength(1);
+    expect((logLines(b)[0] as string).replace(new RegExp(`^${STAMP} exit=1 `), '')).toBe(words);
+  });
+
+  it('says so in one fixed line when the container cannot be removed, and asks docker once only', () => {
+    const b = box({ ctl: { 'docker-exit': '137', 'docker-rm-exit': '1' } });
+    const run = runOnce(b);
+    expect(run.status).toBe(1);
+    expect(removals(b)).toEqual([`rm -f ${CID}`]);
+    const lines = logLines(b);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(new RegExp(`^${STAMP} exit=1 the run ran out of memory and was killed \\(exit 137\\)$`));
+    expect(lines[1]).toMatch(new RegExp(`^${STAMP} note: this run's container could not be removed; remove it by hand: docker rm -f ${CID.slice(0, 12)}$`));
+    expect(runDirs(b)).toEqual([]);
+  });
+
+  it('gives docker ten seconds to remove the container, then says it could not and ends', () => {
+    const b = box({ ctl: { 'docker-exit': '137', 'docker-rm-hang': '' } });
+    const began = Date.now();
+    const done = spawnSync('sh', [SCRIPT], { env: b.env, encoding: 'utf8', timeout: 40_000 });
+    expect(done.status).toBe(1);
+    expect(Date.now() - began).toBeGreaterThan(9_000);
+    expect(Date.now() - began).toBeLessThan(25_000);
+    expect(logLines(b)).toHaveLength(2);
+    expect(logLines(b)[1]).toMatch(/ note: this run's container could not be removed; /);
+    expect(runDirs(b)).toEqual([]);
+  }, 60_000);
+
+  it.each([
+    ['a flag', '--volume=/:/host'],
+    ['a short id', 'ab12'.repeat(15)],
+    ['a long id', 'ab12'.repeat(17)],
+    ['upper-case hex', 'AB12'.repeat(16)],
+    ['two lines', `${'cd34'.repeat(16)}\n--all`],
+    ['nothing', ''],
+  ])('asks docker to remove nothing when the cid file holds %s', (_, text) => {
+    const b = box();
+    mkdirSync(path.join(b.state, 'run.dead01'), { recursive: true });
+    writeFileSync(path.join(b.state, 'run.dead01', 'cid'), text);
+    expect(runOnce(b).status).toBe(0);
+    expect(removals(b)).toEqual([`rm -f ${CID}`]);
+    expect(runDirs(b)).toEqual([]);
+  });
+
+  it('removes the container a killed run left running, by the id in its leftover folder, before it starts its own', () => {
+    const b = box();
+    const old = 'cd34'.repeat(16);
+    mkdirSync(path.join(b.state, 'run.dead01'), { recursive: true });
+    writeFileSync(path.join(b.state, 'run.dead01', 'cid'), old);
+    expect(runOnce(b).status).toBe(0);
+    expect(removals(b)).toEqual([`rm -f ${old}`, `rm -f ${CID}`]);
+    expect(dockerRuns(b)).toHaveLength(1);
     expect(runDirs(b)).toEqual([]);
   });
 });

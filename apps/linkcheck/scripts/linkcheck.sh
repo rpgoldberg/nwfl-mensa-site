@@ -17,7 +17,8 @@
 #   linkcheck.sh check <image> <issue-date YYYY-MM-DD> <public.pdf> <members.pdf> <out-dir> [<remember.json>]
 #   linkcheck.sh list <image> <out-dir> [<answers.json> [<remember.json>]]
 #   linkcheck.sh items <image>     (LINKCHECK_API_URL, LINKCHECK_TOKEN_URL and LINKCHECK_PASSWORD_FILE in the
-#                                  environment, and optionally LINKCHECK_CLIENT_ID, LINKCHECK_USERNAME, LINKCHECK_SCOPE)
+#                                  environment, and optionally LINKCHECK_CLIENT_ID, LINKCHECK_USERNAME, LINKCHECK_SCOPE
+#                                  and LINKCHECK_CID_FILE, a file docker writes the container's id to)
 # Give the image by digest (ghcr.io/...@sha256:...), as printed by CI; items runs nothing else.
 set -eu
 umask 077
@@ -146,6 +147,9 @@ case $mode in
     [ -z "${LINKCHECK_CLIENT_ID:-}" ] || set -- "$@" -e LINKCHECK_CLIENT_ID
     [ -z "${LINKCHECK_USERNAME:-}" ] || set -- "$@" -e LINKCHECK_USERNAME
     [ -z "${LINKCHECK_SCOPE:-}" ] || set -- "$@" -e LINKCHECK_SCOPE
+    # The cron wrapper's: docker writes the container's id there, so the wrapper can remove a container
+    # that outlives docker's client.
+    [ -z "${LINKCHECK_CID_FILE:-}" ] || set -- "$@" --cidfile "$LINKCHECK_CID_FILE"
     # exec: a signal sent to this script (the cron wrapper's, a timeout's) reaches docker itself.
     # shellcheck disable=SC2046
     exec docker run $(harden) --dns 1.1.1.1 --memory=512m --memory-swap=512m \
