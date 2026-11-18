@@ -114,9 +114,13 @@ case $mode in
     ;;
   items)
     [ $# -eq 0 ] || usage
-    # Only an image named by its digest runs: a name, then @sha256: and 64 lower-case hex characters.
-    name=${image%%@*} digest=${image#*@sha256:}
+    # Only an image named by its digest runs: a name, then @sha256: and 64 lower-case hex characters, and
+    # nothing else. The name starts with a letter or a digit, so docker cannot read it as an option, and
+    # holds only lower-case letters, digits and . _ / : -, so it has no space and is one line.
+    LC_ALL=C
+    name=${image%@sha256:*} digest=${image##*@sha256:}
     case $image in *@sha256:*) ;; *) name= ;; esac
+    case $name in [!a-z0-9]* | *[!a-z0-9._/:-]*) name= ;; esac
     case $digest in *[!0-9a-f]*) name= ;; esac
     if [ -z "$name" ] || [ ${#digest} -ne 64 ]; then
       echo "linkcheck.sh: give the image by its digest (ghcr.io/...@sha256:<64 hex characters>), never by a tag" >&2

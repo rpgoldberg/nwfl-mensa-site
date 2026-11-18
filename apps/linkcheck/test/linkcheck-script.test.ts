@@ -1,17 +1,24 @@
 // scripts/linkcheck.sh run for real against a stand-in `docker` that only records its arguments, so
 // each container's hardening is checked as the officer's machine would get it.
-import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/linkcheck.sh', import.meta.url));
 const IMAGE = 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:' + '0'.repeat(64);
 
+// Every folder is removed after its test, so the suite does not fill the container's small /tmp.
+const made: string[] = [];
+afterEach(() => {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
 function run(args: string[], setup: (dir: string) => void = () => undefined, env: Record<string, string> = {}): { runs: string[][]; dir: string; status: number; stderr: string; dockerEnv: string } {
   const dir = mkdtempSync(path.join(tmpdir(), 'linkcheck-sh-'));
+  made.push(dir);
   const bin = path.join(dir, 'bin');
   mkdirSync(bin);
   const log = path.join(dir, 'docker.log');
@@ -192,6 +199,23 @@ describe('scripts/linkcheck.sh', () => {
     expect(dockerEnv).toContain('LINKCHECK_TOKEN_URL=https://id.example.org/application/o/token/');
   });
 
+  it('becomes docker for items (exec), so a signal sent to the script reaches docker itself', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'linkcheck-sh-'));
+    made.push(dir);
+    mkdirSync(path.join(dir, 'bin'));
+    writeFileSync(path.join(dir, 'bin', 'docker'), `#!/bin/sh\necho $$ > '${dir}/docker.pid'\n`, { mode: 0o700 });
+    passwordFile()(dir);
+    const done = spawnSync('sh', [SCRIPT, 'items', IMAGE], { cwd: dir, env: { PATH: `${dir}/bin:/usr/bin:/bin`, ...ITEMS_ENV, LINKCHECK_PASSWORD_FILE: `${dir}/secret/password` } });
+    expect(done.status).toBe(0);
+    expect(readFileSync(path.join(dir, 'docker.pid'), 'utf8').trim()).toBe(String(done.pid));
+  });
+
+  it('reads the image name in the C locale, whatever locale it is given', () => {
+    const { status, dockerEnv } = run(['items', IMAGE], passwordFile(), { ...ITEMS_ENV, LC_ALL: 'en_US.UTF-8' });
+    expect(status).toBe(0);
+    expect(dockerEnv.split('\n')).toContain('LC_ALL=C');
+  });
+
   it('passes the optional client, username and scope through by name, and only when they are set', () => {
     const { runs, status, dockerEnv } = run(['items', IMAGE], passwordFile(), { ...ITEMS_ENV, LINKCHECK_CLIENT_ID: 'made-up-client', LINKCHECK_USERNAME: 'svc-made-up', LINKCHECK_SCOPE: 'links.made-up' });
     expect(status).toBe(0);
@@ -213,6 +237,17 @@ describe('scripts/linkcheck.sh', () => {
     ['a digest that is not lower-case hex', 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:' + 'G'.repeat(64)],
     ['another digest kind', 'ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha512:' + '0'.repeat(64)],
     ['a digest with no name', '@sha256:' + '0'.repeat(64)],
+    ['a flag in front of the digest (--volume)', '--volume=/:/host@sha256:' + '0'.repeat(64)],
+    ['a flag alone in front of the digest (--privileged)', '--privileged@sha256:' + '0'.repeat(64)],
+    ['a flag in front of the digest (--mount)', '--mount=type=bind,src=/,dst=/host@sha256:' + '0'.repeat(64)],
+    ['a bare 64-character image ID', 'b6768d51cf8ff5352ffd6b080449852a8b3ef30cdd7e490a7421da906cf3a9ff'],
+    ['a name that starts with a dot', '.ghcr.io/made-up/linkcheck@sha256:' + '0'.repeat(64)],
+    ['a name with a space', 'ghcr.io/made-up/linkcheck --privileged@sha256:' + '0'.repeat(64)],
+    ['a name with upper-case letters', 'GHCR.IO/made-up/linkcheck@sha256:' + '0'.repeat(64)],
+    ['two digests', 'ghcr.io/made-up/linkcheck@sha256:' + '1'.repeat(64) + '@sha256:' + '0'.repeat(64)],
+    ['a trailing newline', IMAGE + '\n'],
+    ['a trailing carriage return', IMAGE + '\r'],
+    ['a second line', 'ghcr.io/made-up/linkcheck\n--privileged@sha256:' + '0'.repeat(64)],
   ])('refuses items on an image given by %s, and starts no container', (_, image) => {
     const { runs, status, stderr } = run(['items', image], passwordFile(), ITEMS_ENV);
     expect(status).toBe(2);

@@ -54,8 +54,9 @@ service account's app password, in a file), and optionally `LINKCHECK_CLIENT_ID`
 `LINKCHECK_USERNAME` (`svc-nwfl-linkcheck`) and `LINKCHECK_SCOPE` (`links.check`). It prints counts only.
 
 `scripts/linkcheck.sh items <image>` runs it in one container, hardened as the others: read-only, no
-capabilities, `--dns 1.1.1.1`, `--memory=512m`, no PDF and no folder of the machine. It refuses an image given
-without an `@sha256` digest. The settings above come from the environment and go to the container by name.
+capabilities, `--dns 1.1.1.1`, `--memory=512m`, no PDF and no folder of the machine. It runs only an image given
+as a name, `@sha256:` and 64 hex characters, and nothing else: no tag alone, no bare image ID, and no name that
+starts with a dash or holds a space (docker would read it as an option). The settings above come from the environment and go to the container by name.
 `LINKCHECK_PASSWORD_FILE` names a file only its owner can read (0600); it is mounted read-only at
 `/in/password`, so the password is in no argument and no environment value.
 
@@ -66,12 +67,18 @@ LINKCHECK_API_URL=https://... LINKCHECK_TOKEN_URL=https://... LINKCHECK_PASSWORD
 
 `scripts/items-cron.sh` is the wrapper a crontab calls on the officer's machine. It takes no arguments. It
 reads `LINKCHECK_IMAGE` (by digest), `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL` and optionally `LINKCHECK_SCOPE`
-and `BAO_ADDR` from `~/.config/nwfl-linkcheck/items.conf`, one `NAME=value` per line. It lets one run go at a
+and `BAO_ADDR` from `~/.config/nwfl-linkcheck/items.conf`, one `NAME=value` per line. The file must be a plain
+file (not a link) of plain ASCII text with Unix line endings, and neither it nor its folder may be writable by
+group or others: whoever can write it chooses the image that is handed the password. It lets one run go at a
 time (flock). It reads `client_id`, `username` and `password` at `secret/nwfl-mensa/linkcheck/client` with the
-OpenBao CLI, writes the password to a 0600 file in a fresh 0700 folder that is removed on every exit, and runs
-`linkcheck.sh items`; a run over 20 minutes is stopped. It prints no secret. Each run appends one line to
-`~/.local/state/nwfl-linkcheck/items.log`: the time, `exit=<code>`, and the counts or the reason. Exit codes: 0
-done; 1 the run failed; 2 OpenBao is unreachable or sealed; 3 another run is still going.
+OpenBao CLI, writes the password to a 0600 file in a fresh 0700 folder, and runs `linkcheck.sh items`; a run
+over 20 minutes is stopped. The password file is removed as soon as the container has ended, and the folder on
+every exit; a folder that a killed run left behind is removed by the next run, which says so in the log. It
+prints no secret. Each run appends one line to `~/.local/state/nwfl-linkcheck/items.log`: the time,
+`exit=<code>`, and the counts or the reason. The reason is the checker's message only when it is one of its
+fixed messages, or docker's own first line when docker itself failed (exit 125 to 127); anything else is logged
+as `the run failed (unrecognised message)`, so nothing a server said reaches the log. Exit codes: 0 done; 1 the
+run failed; 2 OpenBao is unreachable or sealed (and nothing else); 3 another run is still going.
 
 ## Safety
 
