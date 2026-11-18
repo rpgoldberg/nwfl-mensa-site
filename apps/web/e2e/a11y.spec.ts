@@ -56,6 +56,32 @@ test('axe on the page a retired old URL shows (410)', async ({ page }) => {
   expect(await axe(page)).toEqual([]);
 });
 
+// LAUNCH-FIX-1: the error page, at its own address (the server answers it 500, as it answers a failed
+// request with it), and the privacy page, at the phone's 412 px and at 1280 px in every browser.
+for (const width of [412, 1280]) {
+  test(`axe on the error page (500) and the privacy page at ${width} px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const res = await page.goto('/500');
+    expect(res?.status()).toBe(500);
+    await expect(page.getByRole('heading', { level: 1, name: 'Something went wrong on our side' })).toBeVisible();
+    await expect(page.locator('main').getByRole('link', { name: 'tell an officer' })).toHaveAttribute('href', '/officers');
+    expect(await axe(page)).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    await page.goto('/privacy');
+    await expect(page.getByRole('heading', { level: 1, name: 'Privacy' })).toBeVisible();
+    expect(await axe(page)).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  });
+}
+
+test('the footer of every page links to the privacy page, a target at least 44 px tall', async ({ page }) => {
+  await page.goto('/');
+  const link = page.locator('footer').getByRole('link', { name: 'Privacy' });
+  expect((await link.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await link.click();
+  await expect(page).toHaveURL(/\/privacy$/);
+});
+
 // Signed in (W4): the header's account area, the Officer area, and the pages
 // sign-in can end on.
 test.describe('axe, signed in', () => {

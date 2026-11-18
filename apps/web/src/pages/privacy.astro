@@ -1,0 +1,52 @@
+---
+// LAUNCH-FIX-1: what the site keeps about a person, in plain words. Every statement here is held to
+// the code by test/components/launch-pages.test.ts, which names the file that makes it true: change
+// what is stored, who reads it, a cookie or a log line, and this text changes with it.
+import Base from '../layouts/Base.astro';
+import { page } from '../lib/site';
+
+export const prerender = true;
+const p = page('/privacy');
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">{p.description}</p>
+  <div class="prose" data-source="static">
+    <h2>What we keep when you sign up</h2>
+    <p>Before the members' pages open for you, an officer has to know you are a member. So we keep:</p>
+    <ul>
+      <li>your first name and last name, as you typed them;</li>
+      <li>your Mensa membership number, as you typed it;</li>
+      <li>the name and email address on your sign-in;</li>
+      <li>the date you signed up, whether your sign-up was approved, who decided and when;</li>
+      <li>the result of the membership check, and the date your membership was last confirmed.</li>
+    </ul>
+    <p>Once you are approved, the Your account page shows your name and number, and you can correct your name there.</p>
+
+    <h2>What we do not keep</h2>
+    <p>We never ask for the user name or password you use at American Mensa's website, and we do not keep them. We check your membership with Mensa's own records.</p>
+    <p>We do not keep your address, phone number or birthday.</p>
+
+    <h2>Who can see it</h2>
+    <ul>
+      <li>You.</li>
+      <li>The officers who approve sign-ups, and the site's Admin: what you typed, your email address and the result of the membership check.</li>
+      <li>The Admin and the Membership Officer can also see a sign-up that was not approved.</li>
+    </ul>
+    <p>No page on this site shows it to other members or to the public.</p>
+
+    <h2>How long we keep it</h2>
+    <p>Member access lasts 13 months from the last time your membership was confirmed. After that it is paused until an officer confirms it again.</p>
+    <p>If your account is removed, your member access ends, but the record of your sign-up stays. We keep that record until you ask us to remove it.</p>
+
+    <h2>Cookies</h2>
+    <p>A cookie is a small note a site leaves in your browser. This site uses cookies only to sign you in and keep you signed in, and to remember your text size, your theme and your choice about links that leave the site.</p>
+    <p>There is no tracking and no advertising on this site, and nothing here follows what you read.</p>
+
+    <h2>The server's log</h2>
+    <p>Our server keeps a log so that we can find faults. A line in it has the time, what was asked for and a request number. It does not record what a page says or what you type into a form.</p>
+
+    <h2>To see your record, or have it removed</h2>
+    <p>Write to an officer: their addresses are on the <a href="/officers">Officers page</a>. You can ask for a copy of what we keep about you, or ask us to remove it.</p>
+  </div>
+</Base>

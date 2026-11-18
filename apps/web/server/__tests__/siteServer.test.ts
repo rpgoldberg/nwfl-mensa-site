@@ -340,6 +340,73 @@ describe('withSitePolicy', () => {
     }
   });
 
+  // LAUNCH-FIX-1: the site's own error page (src/pages/500.astro, prerendered), never bare text.
+  const ERROR_PAGE = '<!doctype html><html lang="en" data-size="100" data-theme="auto" data-links="ask"><body><h1>Something went wrong on our side</h1><a href="/officers">tell an officer</a></body></html>';
+
+  for (const [how, handler] of [
+    ['throws', () => { throw new RangeError('boom SECRETTEXT at /srv/app/secret.mjs:12'); }],
+    ['rejects', async () => { throw new RangeError('boom SECRETTEXT at /srv/app/secret.mjs:12'); }],
+  ] as const) {
+    it(`shows the error page, status 500 and never stored, when the handler ${how}: no error text, no stack`, async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const base = await serve(handler, new Map([['/500', ERROR_PAGE]]));
+        const res = await fetch(`${base}/officer-area?x=1`, { headers: { cookie: `${SIZE_COOKIE}=175; ${THEME_COOKIE}=dark` } });
+        expect(res.status).toBe(500);
+        expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        expectSecurityHeaders(res);
+        const body = await res.text();
+        expect(body).toContain('<h1>Something went wrong on our side</h1>');
+        expect(body).toContain('<a href="/officers">tell an officer</a>');
+        // In the reader's own text size and theme, as every prerendered page is.
+        expect(body).toContain('<html lang="en" data-size="175" data-theme="dark"');
+        expect(body).not.toMatch(/SECRETTEXT|boom|RangeError|secret\.mjs|\bat \/|Internal Server Error/);
+        expect(Number(res.headers.get('content-length'))).toBe(Buffer.byteLength(body));
+        // The log line stays as it was: the path and the error's class.
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(unstamped(error.mock.calls[0]?.[0])).toEqual({ level: 'error', msg: 'request failed', path: '/officer-area', err: 'RangeError' });
+      } finally {
+        error.mockRestore();
+      }
+    });
+  }
+
+  it('answers a failed HEAD with the error page\'s headers and no body', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => { throw new Error('boom'); }, new Map([['/500', ERROR_PAGE]]));
+      const res = await fetch(`${base}/x`, { method: 'HEAD' });
+      expect(res.status).toBe(500);
+      expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(await res.text()).toBe('');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('answers the error page\'s own address with 500, never 200, and never asks the handler', async () => {
+    const base = await serve(() => { throw new Error('the handler must not see the error page'); }, new Map([['/500', ERROR_PAGE], ['/500.html', ERROR_PAGE]]));
+    for (const path of ['/500', '/500.html']) {
+      const res = await fetch(`${base}${path}`);
+      expect(res.status, path).toBe(500);
+      expect(res.headers.get('cache-control'), path).toBe('no-store');
+      expect(await res.text(), path).toContain('Something went wrong on our side');
+    }
+  });
+
+  it('keeps the plain 500 when no error page was built, still with no error text', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => { throw new Error('boom SECRETTEXT'); });
+      const res = await fetch(`${base}/x`);
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('Internal Server Error');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('answers a handler that rejects with a 500', async () => {
     const base = await serve(async () => {
       throw new Error('boom');

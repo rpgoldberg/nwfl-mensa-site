@@ -68,6 +68,14 @@ const HOME_SCREEN: Page = {
 
 const SEARCH: Page = { path: '/search', title: 'Search', description: 'Search the newsletter archive.' };
 
+/** LAUNCH-FIX-1: what the site keeps about a person; linked from the footer of every page, the sign-up form and /account. */
+export const PRIVACY: Page = {
+  path: '/privacy',
+  title: 'Privacy',
+  description: 'What this site keeps about you, who can see it, and how to ask about it.',
+  prerender: true,
+};
+
 /** What the More page lists: every section but Home, then Search, Help and the home-screen how-to. */
 export const MORE_PAGES: readonly Page[] = [...SECTIONS.filter((s) => s.path !== '/'), SEARCH, HELP, HOME_SCREEN];
 
@@ -127,6 +135,7 @@ const PAGES: readonly Page[] = [
   SEARCH,
   HELP,
   HOME_SCREEN,
+  PRIVACY,
   { path: '/more', title: 'More', description: 'The club, what\u2019s on, and how to join or get help.' },
   { path: '/sign-in', title: 'Sign in', description: 'Sign in to the site, for officers and members.' },
   { path: '/signed-out', title: "You're signed out", description: 'You have signed out of this site. You can sign in again at any time.' },

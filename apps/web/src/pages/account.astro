@@ -179,6 +179,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {view === 'form' && (
     <>
       <p class="lead">Welcome, {session.name}. To read the members' pages, tell us your name and your Mensa membership number. An external membership verification service confirms them, then an officer approves your account.</p>
+      <p><a href="/privacy">What we keep about you, and who can see it</a></p>
       <form method="post" action={HERE} class="rule-form" novalidate>
         <input type="hidden" name="form" value="signup" />
         <fieldset>
@@ -293,6 +294,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
       {view === 'waiting' && <p>Until then you can read every public page. Member access starts as soon as it is approved.</p>}
       {view === 'rejected' && <p>{contactBefore}<a href="/officers">Membership Officer</a>{contactAfter}</p>}
       {view === 'officer' && <p><a href="/officer-area">Go to the officer area</a></p>}
+      <p><a href="/privacy">What we keep about you, and who can see it</a></p>
       {(view === 'lapsed' || view === 'removed' || view === 'not-club') && <p>If you think this is a mistake, please <a href="/officers">contact an officer</a>.</p>}
     </>
   )}

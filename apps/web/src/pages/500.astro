@@ -1,0 +1,15 @@
+---
+// LAUNCH-FIX-1: what a reader sees when the server fails, in the site's own layout and plain words.
+// Built at deploy time, so showing it needs nothing that can itself fail: the server wrapper
+// (server/siteServer.mjs) sends it, status 500, when a request fails, and Astro reads the same file
+// when a page throws. No detail of the failure is ever on it; the log line has that.
+import Base from '../layouts/Base.astro';
+
+export const prerender = true;
+const title = 'Something went wrong on our side';
+---
+<Base path="/500" title={title} description="Something went wrong on our side. Please try again in a few minutes." noindex>
+  <h1>{title}</h1>
+  <p class="lead">Please try again in a few minutes.</p>
+  <p>If it keeps happening, <a href="/officers">tell an officer</a>.</p>
+</Base>
