@@ -33,6 +33,56 @@ Postgres hangs during the drain, closing the pool can hang too; a backstop
 then exits with code 1, 5 s after the drain deadline and before the kubelet's
 SIGKILL. That exit code is accepted: the pod is going away either way.
 
+## Trace export
+
+Off by default. The API always makes a span per call, so that log lines carry
+a trace id; the spans go nowhere unless an endpoint is set
+(`src/platform/telemetry.ts`).
+
+| Variable | Meaning |
+|----------|---------|
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The OTLP gRPC collector for traces, as `http://host:port` (plain; the mesh adds mTLS) or `https://host:port`. Wins when both are set. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The same, read when the traces one is unset or blank. |
+| `SERVICE_VERSION` | Sent as `service.version` when set. |
+
+Unset, empty or made only of characters that draw nothing means off: no span
+processor, nothing sent. The first of the two that is set decides. A value
+that is not a bare http or https URL (another scheme, a user, a path, a query,
+a fragment, a hidden character) is refused with one warning at start,
+`trace export refused: nothing is exported`, naming the variable and the
+reason but not the value; the API then runs without export. A URL with no
+port gets its scheme's (80 or 443). When export is on, one line at start says
+`trace export on` with the endpoint. The exporter library also reads the
+other `OTEL_EXPORTER_OTLP_*` variables (headers, certificates, compression);
+none is needed on the mesh.
+
+Leave both unset until the receiver for this tenant exists on the app
+cluster's gateway. Until then the image ships with export dark.
+
+What is sent (`src/platform/span-redaction.ts`):
+
+- Attributes by allow-list: `rpc.system`, `rpc.method` and
+  `rpc.grpc.status_code` on a span, `exception.type` and `exception.message`
+  on an event. Any other key is left out, a stack trace included. To export a
+  new attribute, add its key there.
+- Every text that remains (span and event names, status message, the allowed
+  values, the scope, the resource) goes through the log redaction
+  (`src/platform/shared.ts`), and then has query strings, `token=` style
+  pairs and runs of four or more digits masked. Number attributes are not
+  touched.
+- Ids and flags only from a span context: no `tracestate`, no baggage.
+- The resource is `service.name`, and `service.version` when known. No host
+  name, no process or environment detail.
+
+Export never holds a call up. Ending a span puts it on a queue of 2,048;
+batches of up to 512 go out every 5 s, each with a 5 s deadline. A full queue
+drops the span; a collector that is down, slow or refusing costs that batch.
+Nothing is retried. On shutdown the queue is flushed for at most 2 s, and one
+line, `trace export stopped`, gives the counts: `accepted`, `exported`,
+`dropped_queue_full`, `dropped_export_failed`, `dropped_at_shutdown`. It is a
+warning when anything was dropped. A caller that sends `traceparent` with the
+sampled flag off gets no exported span.
+
 ## Testing
 
     npm run lint && npm run typecheck && npm run test:coverage
@@ -881,3 +931,6 @@ Accepted residual risks, with no code against them:
 - yaml 2.9.1, a dev dependency, parses the workflows in the api-gate
   self-check.
 - jose 6.2.13 verifies tokens (RS256 and ES256 only).
+- `@opentelemetry/exporter-trace-otlp-grpc` 0.300.0 is the release built on
+  sdk-trace 3.0.0 and core 3.0.0, the versions pinned here; 0.301.x needs
+  sdk-trace 3.1.x, so the four move together or not at all.
