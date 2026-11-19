@@ -102,6 +102,10 @@ const FROZEN: Record<Name, unknown[]> = {
     { function: 'redaction_mark_approve_removal(uuid,text,text[],text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'redaction_mark_propose_removal(uuid,text,text[],text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'redaction_propose(text,text,text,text,text,text[],text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
+    // ARCHIVE-SEARCH S1 (0032): the search index's two writers. Neither reads or writes pdf_original or pdf_copy: the item
+    // writer takes text from the app, the page writer takes the worker's text for the copy the ledger says is served.
+    { function: 'search_item_put(uuid,text,bytea,text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
+    { function: 'search_page_put(uuid,text,bytea,integer,text[],text[])', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
   ],
   members: [],
   putOwner: [

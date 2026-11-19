@@ -1,0 +1,375 @@
+{
+  "about": [
+    "The one line-end hyphen rule (ARCHIVE-SEARCH, SEARCH-HYPH), shared by the search index (apps/api/src/search/text.ts)",
+    "and the reader's find (apps/web/public/scripts/viewer-find.js). Both apps keep a byte-equal copy of this file.",
+    "items: a page's text items as pdf.js getTextContent gives them. text: the joined reading. extra: the kept-hyphen",
+    "forms of the words the rule joined, space-separated. finds / misses: what a reader may type, compared without case.",
+    "The index keeps case and applies NFKC; the reader folds further (case, accents), so it compares its own fold of text."
+  ],
+  "rule": [
+    "Each item's string is NFKC-normalised. Every run of white space is one space; a line end (hasEOL) is a space.",
+    "U+00AD (soft hyphen) folds to nothing.",
+    "A line that ends in a letter and then \"-\" or U+2010, when the next character after the line end is a letter, joins: no hyphen, no space. The word with its hyphen kept (as \"-\") goes to extra.",
+    "A line that ends in a letter and then U+00AD joins the same way, with nothing for extra.",
+    "The line end may be on the item itself or on an empty item right after it. A second line end in a row (a blank line), white space, a digit or any other non-letter cancels the join: the hyphen stays and a space follows."
+  ],
+  "cases": [
+    {
+      "name": "a line end is a space",
+      "items": [
+        {
+          "str": "Hello",
+          "hasEOL": true
+        },
+        {
+          "str": "world"
+        }
+      ],
+      "text": "Hello world",
+      "extra": "",
+      "finds": [
+        "hello world"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a word split at a line end is one word",
+      "items": [
+        {
+          "str": "All mem-",
+          "hasEOL": true
+        },
+        {
+          "str": "bers of the group"
+        }
+      ],
+      "text": "All members of the group",
+      "extra": "mem-bers",
+      "finds": [
+        "members",
+        "all members of"
+      ],
+      "misses": [
+        "mem bers"
+      ]
+    },
+    {
+      "name": "a soft hyphen inside a word folds to nothing",
+      "items": [
+        {
+          "str": "mem­bers meet"
+        }
+      ],
+      "text": "members meet",
+      "extra": "",
+      "finds": [
+        "members"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a soft hyphen at a line end joins, with no kept form",
+      "items": [
+        {
+          "str": "mem­",
+          "hasEOL": true
+        },
+        {
+          "str": "bers meet"
+        }
+      ],
+      "text": "members meet",
+      "extra": "",
+      "finds": [
+        "members"
+      ],
+      "misses": []
+    },
+    {
+      "name": "U+2010 at a line end joins like a hyphen",
+      "items": [
+        {
+          "str": "the news‐",
+          "hasEOL": true
+        },
+        {
+          "str": "letter"
+        }
+      ],
+      "text": "the newsletter",
+      "extra": "news-letter",
+      "finds": [
+        "newsletter",
+        "news-letter"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a real compound split at a line end keeps its typed form in extra",
+      "items": [
+        {
+          "str": "a well-",
+          "hasEOL": true
+        },
+        {
+          "str": "known member"
+        }
+      ],
+      "text": "a wellknown member",
+      "extra": "well-known",
+      "finds": [
+        "well-known",
+        "wellknown"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a hyphen inside a line is left alone",
+      "items": [
+        {
+          "str": "a well-known member"
+        }
+      ],
+      "text": "a well-known member",
+      "extra": "",
+      "finds": [
+        "well-known"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a hyphen before a digit does not join",
+      "items": [
+        {
+          "str": "pages 3-",
+          "hasEOL": true
+        },
+        {
+          "str": "5"
+        }
+      ],
+      "text": "pages 3- 5",
+      "extra": "",
+      "finds": [],
+      "misses": [
+        "35"
+      ]
+    },
+    {
+      "name": "a letter then a hyphen before a digit does not join",
+      "items": [
+        {
+          "str": "room B-",
+          "hasEOL": true
+        },
+        {
+          "str": "12"
+        }
+      ],
+      "text": "room B- 12",
+      "extra": "",
+      "finds": [],
+      "misses": [
+        "b12"
+      ]
+    },
+    {
+      "name": "a capital after the line end joins too",
+      "items": [
+        {
+          "str": "Quill-",
+          "hasEOL": true
+        },
+        {
+          "str": "Brask spoke"
+        }
+      ],
+      "text": "QuillBrask spoke",
+      "extra": "Quill-Brask",
+      "finds": [
+        "quill-brask",
+        "quillbrask"
+      ],
+      "misses": []
+    },
+    {
+      "name": "the line end may be an empty item of its own",
+      "items": [
+        {
+          "str": "mem-"
+        },
+        {
+          "str": "",
+          "hasEOL": true
+        },
+        {
+          "str": "bers"
+        }
+      ],
+      "text": "members",
+      "extra": "mem-bers",
+      "finds": [
+        "members"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a blank line cancels the join",
+      "items": [
+        {
+          "str": "mem-",
+          "hasEOL": true
+        },
+        {
+          "str": "",
+          "hasEOL": true
+        },
+        {
+          "str": "bers"
+        }
+      ],
+      "text": "mem- bers",
+      "extra": "",
+      "finds": [],
+      "misses": [
+        "members"
+      ]
+    },
+    {
+      "name": "a dash after a space is not a split word",
+      "items": [
+        {
+          "str": "yes -",
+          "hasEOL": true
+        },
+        {
+          "str": "no"
+        }
+      ],
+      "text": "yes - no",
+      "extra": "",
+      "finds": [],
+      "misses": [
+        "yesno"
+      ]
+    },
+    {
+      "name": "white space after the line end cancels the join",
+      "items": [
+        {
+          "str": "mem-",
+          "hasEOL": true
+        },
+        {
+          "str": " bers"
+        }
+      ],
+      "text": "mem- bers",
+      "extra": "",
+      "finds": [],
+      "misses": [
+        "members"
+      ]
+    },
+    {
+      "name": "a word split twice joins twice",
+      "items": [
+        {
+          "str": "inter-",
+          "hasEOL": true
+        },
+        {
+          "str": "nation-",
+          "hasEOL": true
+        },
+        {
+          "str": "al news"
+        }
+      ],
+      "text": "international news",
+      "extra": "inter-nation-al",
+      "finds": [
+        "international"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a ligature reads as its letters",
+      "items": [
+        {
+          "str": "the oﬃce"
+        }
+      ],
+      "text": "the office",
+      "extra": "",
+      "finds": [
+        "office"
+      ],
+      "misses": []
+    },
+    {
+      "name": "runs of space are one space and the ends are trimmed",
+      "items": [
+        {
+          "str": "  a \t b  "
+        },
+        {
+          "str": " c ",
+          "hasEOL": true
+        }
+      ],
+      "text": "a b c",
+      "extra": "",
+      "finds": [
+        "a b c"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a hyphen at the very end of the page stays",
+      "items": [
+        {
+          "str": "mem-",
+          "hasEOL": true
+        }
+      ],
+      "text": "mem-",
+      "extra": "",
+      "finds": [],
+      "misses": [
+        "members"
+      ]
+    },
+    {
+      "name": "two split words on one page both go to extra",
+      "items": [
+        {
+          "str": "mem-",
+          "hasEOL": true
+        },
+        {
+          "str": "bers and news-",
+          "hasEOL": true
+        },
+        {
+          "str": "letters"
+        }
+      ],
+      "text": "members and newsletters",
+      "extra": "mem-bers news-letters",
+      "finds": [
+        "members",
+        "newsletters"
+      ],
+      "misses": []
+    },
+    {
+      "name": "an empty page is empty",
+      "items": [],
+      "text": "",
+      "extra": "",
+      "finds": [],
+      "misses": []
+    }
+  ]
+}

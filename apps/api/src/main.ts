@@ -10,6 +10,7 @@ import { readAuthConfig, verifierFrom } from './auth/config.js';
 import { readConfig } from './config.js';
 import { createPool, describeTarget } from './db/pool.js';
 import { createStructuredLogger } from './platform/logger.js';
+import { runBackfill } from './search/backfill.js';
 import { startTelemetry } from './platform/telemetry.js';
 import { startServer } from './server.js';
 import { refuseToStart, startTenantGate, tenantRows } from './tenant.js';
@@ -48,6 +49,9 @@ const server = await startServer({
 });
 
 // The redacted PDF copies are made by the worker process (src/worker.ts), as its own database role.
+
+// ARCHIVE-SEARCH S1: the news-item rows no change has written since 0032. In the background; it never throws.
+void runBackfill(pool, logger);
 
 let stopping = false;
 const stop = (signal: string): void => {

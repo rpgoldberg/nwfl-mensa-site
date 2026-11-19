@@ -42,6 +42,8 @@ const WORKER_FUNCTIONS = [
   'pdf_regen_request_files',
   'publication_ledger_lock',
   'publication_ledger_record_file',
+  // ARCHIVE-SEARCH S1 (0032): the page rows of the copy it just made; it reads no original and no table directly.
+  'search_page_put',
 ];
 
 describe.skipIf(!live)('0017: the PDF worker role', () => {
