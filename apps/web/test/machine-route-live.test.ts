@@ -240,16 +240,17 @@ describe.skipIf(!live)('the machine route in front of the real API', () => {
   });
 
   it.each([
-    ['a site token (another audience)', 'site', 'PERMISSION_DENIED'],
-    ['a token for no audience of ours', 'stranger', 'UNAUTHENTICATED'],
-  ] as const)('%s is refused by the API, through the route, and nothing is recorded', async (_label, kind, code) => {
+    ['a site token (another audience)', 'site', 'PERMISSION_DENIED', 'the call is not permitted'],
+    ['a token for no audience of ours', 'stranger', 'UNAUTHENTICATED', 'the bearer token was refused'],
+  ] as const)('%s is refused by the API, through the route, and nothing is recorded', async (_label, kind, code, words) => {
     const itemId = await piece('See https://refused.example.org/.');
     issuing = kind;
     const before = apiCalls('ListLinksAwaitingVerdict').length;
     const run = await runCli();
     issuing = 'linkcheck';
     expect(run.code).toBe(1);
-    expect(run.err).toEqual([`linkcheck: the API refused the call: ${code}`]);
+    // The route's own fixed words for the code, never the API's.
+    expect(run.err).toEqual([`linkcheck: the API refused the call: ${code} (${words})`]);
     // The API judged it: the call reached it, and it refused.
     expect(apiCalls('ListLinksAwaitingVerdict').slice(before).map((l) => l['code'])).toEqual([code.toLowerCase()]);
     expect((await api.pool.query(`SELECT 1 FROM content_link_check WHERE item_id = $1`, [itemId])).rows).toEqual([]);
@@ -262,14 +263,14 @@ describe.skipIf(!live)('the machine route in front of the real API', () => {
     const before = api.logs.length;
     const post = (path: string, init: RequestInit = {}) => fetch(`${site}${path}`, { method: 'POST', ...init, headers: { 'content-type': 'application/proto', ...(init.headers ?? {}) } });
     const bare = await post('/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict', { body: new Uint8Array() });
-    expect([bare.status, (await bare.json()) as unknown]).toEqual([401, { code: 'unauthenticated' }]);
+    expect([bare.status, (await bare.json()) as unknown]).toEqual([401, { code: 'unauthenticated', message: 'a bearer token is needed' }]);
     for (const path of ['/nwfl.mensa.v1.LinkCheckService/DeleteEverything', '/nwfl.mensa.v1.NewsletterService/', '/nwfl.mensa.v1.LinkCheckService/listLinksAwaitingVerdict']) {
       expect((await post(path, { headers: { authorization: `Bearer ${token}` }, body: new Uint8Array() })).status, path).toBe(404);
     }
     const get = await fetch(`${site}/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict?encoding=proto&message=`, { headers: { authorization: `Bearer ${token}` } });
     expect(get.status).toBe(404);
     const big = await post('/nwfl.mensa.v1.LinkCheckService/RecordLinkVerdicts', { headers: { authorization: `Bearer ${token}` }, body: new Uint8Array(MACHINE_BODY_MAX + 1) });
-    expect([big.status, (await big.json()) as unknown]).toEqual([413, { code: 'resource_exhausted' }]);
+    expect([big.status, (await big.json()) as unknown]).toEqual([413, { code: 'resource_exhausted', message: 'the request body is too large' }]);
     // Not one of them reached the API.
     expect(api.logs.slice(before)).toEqual([]);
   });

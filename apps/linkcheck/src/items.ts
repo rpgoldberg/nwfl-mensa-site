@@ -281,8 +281,11 @@ function refusal(status: number, body: Uint8Array | undefined): ItemsError {
   return new ItemsError(`the API refused the call: ${code.toUpperCase()}${said === '' ? '' : ` (${said})`}`);
 }
 
-/** One unary call: the message POSTed as Connect binary, the answer's message back, or the API's refusal. */
-export async function connectCall(api: URL, method: string, token: string, message: Uint8Array): Promise<Uint8Array> {
+/** A failure of the call's own time limit (AbortSignal.timeout's TimeoutError). */
+const timedOut = (error: unknown): boolean => (error as Error | undefined)?.name === 'TimeoutError';
+
+/** One unary call: the message POSTed as Connect binary, the answer's message back, or the API's refusal. `callMs` bounds the whole call, its answer read in full. */
+export async function connectCall(api: URL, method: string, token: string, message: Uint8Array, callMs = CALL_MS): Promise<Uint8Array> {
   if (!B64TOKEN.test(token)) throw new ItemsError('the token is not a bearer token');
   const url = new URL(`${api.pathname.replace(/\/$/, '')}${SERVICE}/${method}`, api.origin);
   let response: Response;
@@ -293,9 +296,10 @@ export async function connectCall(api: URL, method: string, token: string, messa
       body: message,
       // A redirect is refused, never followed with the token.
       redirect: 'error',
-      signal: AbortSignal.timeout(CALL_MS),
+      signal: AbortSignal.timeout(callMs),
     });
   } catch (error) {
+    if (timedOut(error)) throw new ItemsError('the API did not answer in time');
     throw new ItemsError(`the API could not be reached (${(error as Error).constructor.name})`);
   }
   if (response.status !== 200) {
@@ -314,6 +318,7 @@ export async function connectCall(api: URL, method: string, token: string, messa
   try {
     return await readCapped(response, MAX_ANSWER_BYTES);
   } catch (error) {
+    if (timedOut(error)) throw new ItemsError('the API did not answer in time');
     throw new ItemsError(error instanceof TooLarge ? 'the API answer is too large' : 'the API answer was cut short');
   }
 }

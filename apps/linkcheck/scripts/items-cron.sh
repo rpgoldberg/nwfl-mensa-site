@@ -186,8 +186,8 @@ esac
 # Only words this script knows are logged. A message may carry what a server said (an echo of the
 # sign-in, in any encoding), so the checker's line is logged only when it is, whole, one of the fixed
 # messages of the items command (src/items.ts and src/cli.ts) or of linkcheck.sh.
-known='linkcheck: the API answer (is cut short|holds a bad number|is not a message this checker reads|holds text that is not UTF-8|is too large|has no status|is not one plain gRPC message)'
-known="$known|linkcheck: the API refused the call: ([A-Z_]{2,24}|status [0-9]{1,3})( \(.*\))?"
+known='linkcheck: the API answer (is cut short|holds a bad number|is not a message this checker reads|holds text that is not UTF-8|was cut short|is too large|is not one plain Connect message)'
+known="$known|linkcheck: the API refused the call: ([A-Z_]{2,24}|HTTP [1-5][0-9]{2})( \(.*\))?"
 known="$known|linkcheck: the API (could not be reached \([A-Za-z]{1,40}\)|did not answer in time)"
 known="$known|linkcheck: the token is not a bearer token"
 known="$known|linkcheck: the identity provider (could not be reached|refused the sign-in \(HTTP [0-9]{3}\)|answered with something other than JSON|gave no access token)"

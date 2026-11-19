@@ -151,8 +151,79 @@ exec /usr/bin/date "$@"
 }
 const dateSaw = (b: Box): string[] => read(path.join(b.dir, 'date-saw')).split('\n').filter(Boolean);
 
-/** Every simple message of the items command, read from its source: the wrapper must know each one. */
-const FIXED_MESSAGES = [...new Set([...readFileSync(fileURLToPath(new URL('../src/items.ts', import.meta.url)), 'utf8').matchAll(/new ItemsError\('([^'\n]+)'\)/g)].map((m) => m[1] as string))];
+/**
+ * Every message the items command can stop with, read from its source: the literal texts of each
+ * `new ItemsError(...)`, a template's holes filled from TEMPLATE_SAMPLES. A template with no samples, or a
+ * call this reading cannot take apart, fails the test; the wrapper must know each message.
+ */
+const ITEMS_SOURCE = readFileSync(fileURLToPath(new URL('../src/items.ts', import.meta.url)), 'utf8');
+const CLOUDFLARE_5XX = ['520', '521', '522', '523', '524', '525', '526', '527', '530'];
+const TEMPLATE_SAMPLES: Record<string, string[]> = {
+  '`${name} must be an https URL`': ['LINKCHECK_API_URL must be an https URL', 'LINKCHECK_TOKEN_URL must be an https URL'],
+  '`the API refused the call: HTTP ${status}`': ['400', '401', '403', '404', '405', '408', '413', '415', '429', '431', '500', '501', '502', '503', '504', '505', ...CLOUDFLARE_5XX].map((s) => `the API refused the call: HTTP ${s}`),
+  "`the API refused the call: ${code.toUpperCase()}${said === '' ? '' : ` (${said})`}`": [
+    ...['CANCELED', 'UNKNOWN', 'INVALID_ARGUMENT', 'DEADLINE_EXCEEDED', 'NOT_FOUND', 'ALREADY_EXISTS', 'PERMISSION_DENIED', 'RESOURCE_EXHAUSTED', 'FAILED_PRECONDITION', 'ABORTED', 'OUT_OF_RANGE', 'UNIMPLEMENTED', 'INTERNAL', 'UNAVAILABLE', 'DATA_LOSS', 'UNAUTHENTICATED'].map((c) => `the API refused the call: ${c}`),
+    'the API refused the call: UNAUTHENTICATED (made-up words from the API)',
+  ],
+  '`the API could not be reached (${(error as Error).constructor.name})`': ['TypeError', 'DOMException', 'Error'].map((n) => `the API could not be reached (${n})`),
+  '`the identity provider refused the sign-in (HTTP ${response.status})`': ['400', '401', '403', '500', '502', ...CLOUDFLARE_5XX].map((s) => `the identity provider refused the sign-in (HTTP ${s})`),
+};
+
+/** The end of a quoted string or template starting at `at`, a template's holes (nested templates and all) skipped whole. */
+function literalEnd(src: string, at: number): number {
+  const quote = src[at] as string;
+  for (let i = at + 1; i < src.length; i += 1) {
+    if (src[i] === '\\') i += 1;
+    else if (src[i] === quote) return i + 1;
+    else if (quote === '`' && src.startsWith('${', i)) i = holeEnd(src, i + 2) - 1;
+  }
+  throw new Error(`an unclosed literal at ${String(at)}`);
+}
+
+/** The index past the brace that closes a hole or call opened just before `at`. */
+function holeEnd(src: string, at: number, open = '{', close = '}'): number {
+  let depth = 1;
+  for (let i = at; i < src.length; i += 1) {
+    const c = src[i] as string;
+    if (c === "'" || c === '"' || c === '`') i = literalEnd(src, i) - 1;
+    else if (c === open) depth += 1;
+    else if (c === close && (depth -= 1) === 0) return i + 1;
+  }
+  throw new Error(`an unclosed ${open} at ${String(at)}`);
+}
+
+/** The literals at the top of each `new ItemsError(...)`'s argument: quoted texts as they are, templates by their source. */
+function itemsErrorLiterals(src: string): Array<{ plain: string } | { template: string }> {
+  const out: Array<{ plain: string } | { template: string }> = [];
+  for (const call of src.matchAll(/new ItemsError\(/g)) {
+    const start = call.index + call[0].length;
+    const end = holeEnd(src, start, '(', ')') - 1;
+    let found = 0;
+    for (let i = start; i < end; i += 1) {
+      const c = src[i] as string;
+      if (c !== "'" && c !== '"' && c !== '`') continue;
+      const close = literalEnd(src, i);
+      const text = src.slice(i, close);
+      out.push(c === '`' && text.includes('${') ? { template: text } : { plain: text.slice(1, -1) });
+      found += 1;
+      i = close - 1;
+    }
+    if (found === 0) throw new Error(`new ItemsError at ${String(call.index)} has no literal text`);
+  }
+  return out;
+}
+
+const LITERALS = itemsErrorLiterals(ITEMS_SOURCE);
+const FIXED_MESSAGES = [
+  ...new Set(
+    LITERALS.flatMap((l) => {
+      if ('plain' in l) return [l.plain];
+      const samples = TEMPLATE_SAMPLES[l.template];
+      if (samples === undefined) throw new Error(`no samples for the message template ${l.template}`);
+      return samples;
+    }),
+  ),
+];
 
 function runOnce(b: Box): { status: number | null; stdout: string; stderr: string } {
   const done = spawnSync('sh', [SCRIPT], { env: b.env, encoding: 'utf8', timeout: 20_000 });
@@ -286,7 +357,7 @@ describe('scripts/items-cron.sh', () => {
     ['docker itself says something else', { 'docker-exit': '125', 'docker-err': "unknown flag: --made-up\n\nUsage:  docker run [OPTIONS] IMAGE [COMMAND] [ARG...]\n\nRun 'docker run --help' for more information\n" }, 'the run failed (unrecognised message): exit code 125'],
     ['the runtime ends on its own error', { 'docker-exit': '134', 'docker-err': 'FATAL ERROR: made-up words of the runtime\n' }, 'the run failed (unrecognised message): exit code 134'],
     ['the API refuses the call, with words of its own', { 'docker-exit': '1', 'docker-err': 'linkcheck: the API refused the call: PERMISSION_DENIED (made-up words (of the server) here)\n' }, 'the run failed: linkcheck: the API refused the call: PERMISSION_DENIED'],
-    ['the API refuses the call with a status it does not name', { 'docker-exit': '1', 'docker-err': 'linkcheck: the API refused the call: status 99\n' }, 'the run failed: linkcheck: the API refused the call: status 99'],
+    ['the API refuses the call with a status it does not name', { 'docker-exit': '1', 'docker-err': 'linkcheck: the API refused the call: HTTP 524\n' }, 'the run failed: linkcheck: the API refused the call: HTTP 524'],
     ['the API refuses the call with a status that is not a number', { 'docker-exit': '1', 'docker-err': 'linkcheck: the API refused the call: status made-up-words\n' }, 'the run failed (unrecognised message): exit code 1'],
     ['the identity provider refuses the sign-in', { 'docker-exit': '1', 'docker-err': 'linkcheck: the identity provider refused the sign-in (HTTP 401)\n' }, 'the run failed: linkcheck: the identity provider refused the sign-in (HTTP 401)'],
     ['the API cannot be reached', { 'docker-exit': '1', 'docker-err': 'linkcheck: the API could not be reached (Error)\n' }, 'the run failed: linkcheck: the API could not be reached (Error)'],
@@ -431,12 +502,18 @@ describe('scripts/items-cron.sh', () => {
     expect(logLines(b)[0]).toMatch(new RegExp(`^${STAMP} exit=0 ${COUNTS}$`));
   });
 
-  it('knows every fixed message of the items command, and logs each as it is', () => {
-    expect(FIXED_MESSAGES.length).toBeGreaterThanOrEqual(12);
+  it('knows every fixed message of the items command, and logs each as it is (a refusal without the server\'s words)', () => {
+    // Every template has samples, and every sample is of a template in use.
+    const templates = LITERALS.flatMap((l) => ('template' in l ? [l.template] : []));
+    expect(Object.keys(TEMPLATE_SAMPLES).sort()).toEqual([...new Set(templates)].sort());
+    // The messages a Connect client adds: a refusal by its HTTP status (Cloudflare's 5xx included), a body cut short, an answer of another kind.
+    for (const message of ['the API refused the call: HTTP 502', 'the API refused the call: HTTP 524', 'the API answer was cut short', 'the API answer is not one plain Connect message', 'the API did not answer in time']) expect(FIXED_MESSAGES).toContain(message);
     for (const message of FIXED_MESSAGES) {
       const b = box({ ctl: { 'docker-exit': '1', 'docker-err': `linkcheck: ${message}\n` } });
       expect(runOnce(b).status).toBe(1);
-      expect((logLines(b)[0] as string).replace(new RegExp(`^${STAMP} exit=1 `), '')).toBe(`the run failed: linkcheck: ${message}`);
+      // A refusal's words in brackets are the server's own: only the status is logged.
+      const logged = message.startsWith('the API refused the call: ') ? message.replace(/ \(.*$/, '') : message;
+      expect((logLines(b)[0] as string).replace(new RegExp(`^${STAMP} exit=1 `), '')).toBe(`the run failed: linkcheck: ${logged}`);
     }
   });
 

@@ -329,21 +329,6 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       res.end('Forbidden');
       return;
     }
-    if (machinePath) {
-      // Never Astro: the route, or nothing at all.
-      if (machine) machine(req, res, /** @type {string} */ (path));
-      else {
-        res.statusCode = 404;
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        res.end('Not found');
-      }
-      return;
-    }
-    const html = pages.get(path);
-    if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
-      servePrerendered(req, res, html, sessionKey);
-      return;
-    }
     /** @param {unknown} err */
     const fail = (err) => {
       // The pathname only (logPath): the query of /auth/callback carries the OIDC code and state. The
@@ -357,6 +342,26 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('Internal Server Error');
     };
+    if (machinePath) {
+      // Never Astro: the route, or nothing at all. Inside the guard, as Astro is: no request may end the process.
+      if (machine) {
+        try {
+          Promise.resolve(machine(req, res, /** @type {string} */ (path))).catch(fail);
+        } catch (err) {
+          fail(err);
+        }
+      } else {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not found');
+      }
+      return;
+    }
+    const html = pages.get(path);
+    if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
+      servePrerendered(req, res, html, sessionKey);
+      return;
+    }
     try {
       Promise.resolve(handler(req, res)).catch(fail);
     } catch (err) {

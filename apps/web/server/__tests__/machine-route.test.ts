@@ -7,12 +7,14 @@ import { Code, ConnectError, createClient, type ConnectRouter, type HandlerConte
 import { connectNodeAdapter, createConnectTransport } from '@connectrpc/connect-node';
 import http from 'node:http';
 import http2 from 'node:http2';
+import net from 'node:net';
+import { gzipSync } from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { LinkCheckService, RecordLinkVerdictsRequestSchema, RecordLinkVerdictsResponseSchema } from '../../src/gen/nwfl/mensa/v1/link_check_pb.js';
 import { ExportEditionRequestSchema, NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
-import { MACHINE_BODY_MAX, MACHINE_LIMIT, createMachineRoute, machineRouteFromEnv, unaryMethods } from '../machine-route.mjs';
+import { MACHINE_BODY_MAX, MACHINE_BODY_MS, MACHINE_LIMIT, createMachineRoute, machineRouteFromEnv, unaryMethods } from '../machine-route.mjs';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { createSiteServer } from '../siteServer.mjs';
 
@@ -286,6 +288,16 @@ describe('refused before a byte reaches the API', () => {
     expect(reply.status).not.toBe(200);
     expect(seen).toEqual([]);
   });
+
+  // Challenger C-W6: a valid gzip of a valid request, which a server that took gzip would forward.
+  it.each(['gzip', 'br'])('refuses a well-formed %s body too, unforwarded', async (encoding) => {
+    const { base, seen } = await stack(() => ({ urls: [], more: false }));
+    const message = encode(RecordLinkVerdictsRequestSchema, { verdicts: [{ url: 'https://n.example.org/', verdict: 2 }] });
+    const body = encoding === 'gzip' ? gzipSync(message) : (await import('node:zlib')).brotliCompressSync(message);
+    const reply = await send(base, RECORD, { headers: asCaller({ 'content-encoding': encoding }), body });
+    expect({ status: reply.status, error: errorOf(reply) }).toEqual({ status: 501, error: { code: 'unimplemented', message: FIXED.unimplemented } });
+    expect(seen).toEqual([]);
+  });
 });
 
 describe('the API answers', () => {
@@ -360,6 +372,54 @@ describe('it cannot starve the pages', () => {
   });
 });
 
+/** A socket that sends a call's head and trickles its body, never finishing it; its whole reply, read to its close. */
+function slowBody(base: string, authorization = 'Bearer notarealtoken'): Promise<{ reply: string; closedMs: number }> {
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const socket = net.connect(Number(new URL(base).port), '127.0.0.1');
+    let reply = '';
+    const drip = setInterval(() => socket.write('x'), 50);
+    socket.on('data', (d) => (reply += d.toString('latin1')));
+    socket.on('close', () => {
+      clearInterval(drip);
+      resolve({ reply, closedMs: performance.now() - started });
+    });
+    socket.on('error', () => undefined);
+    socket.write(`POST ${RECORD} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: ${authorization}\r\nContent-Type: application/proto\r\nContent-Length: 1000\r\n\r\nx`);
+  });
+}
+
+describe('a caller whose body is slow (challenger round 1: slot hold)', () => {
+  it(`holds no place while its body arrives: ${MACHINE_LIMIT} of them leave a real call served at once`, async () => {
+    const { base, seen } = await stack(() => ({ urls: [], more: false }), { bodyMs: 400 });
+    const slow = Array.from({ length: MACHINE_LIMIT }, () => slowBody(base));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const started = performance.now();
+    const real = await send(base, LIST, { headers: asCaller(), body: new Uint8Array() });
+    expect(real.status).toBe(200);
+    expect(performance.now() - started).toBeLessThan(400 + 1000);
+    expect(seen.map((s) => s.rpc)).toEqual(['LinkCheckService/ListLinksAwaitingVerdict']);
+    // Each slow one is refused at the body time with a fixed message, and its connection closed.
+    for (const { reply, closedMs } of await Promise.all(slow)) {
+      expect(reply.slice(0, 12)).toBe('HTTP/1.1 408');
+      expect(reply).toMatch(/\r\nconnection: close\r\n/i);
+      expect(JSON.parse(reply.slice(reply.indexOf('\r\n\r\n') + 4))).toEqual({ code: 'deadline_exceeded', message: 'the request body did not arrive in time' });
+      expect(closedMs).toBeLessThan(400 + 1000);
+    }
+    expect(seen).toHaveLength(1);
+  });
+
+  it(`gives a body ${MACHINE_BODY_MS / 1000} s to arrive by default`, () => {
+    expect(MACHINE_BODY_MS).toBe(5000);
+  });
+
+  it('frees the places of calls whose bodies stall once they hold one: a full set of slow bodies with a limit of one', async () => {
+    const { base } = await stack(() => ({ urls: [], more: false }), { limit: 1, bodyMs: 200 });
+    await Promise.all([slowBody(base), slowBody(base)]);
+    expect((await send(base, LIST, { headers: asCaller(), body: new Uint8Array() })).status).toBe(200);
+  });
+});
+
 describe('the log', () => {
   it('writes one line per call: the method, the code, the time taken and the trace id; never the token or the body', async () => {
     const { base } = await stack((rpc) => {
@@ -393,8 +453,79 @@ describe('the log', () => {
       await send(base, RECORD, { headers: asCaller({ 'transfer-encoding': 'chunked' }), body: new Uint8Array(MACHINE_BODY_MAX + 1) });
       await send(base, LIST, { headers: { authorization: BEARER, 'content-type': 'text/html' }, body: 'x' });
     });
-    // The size by Connect's own cap (429), and a type it does not read (415).
-    expect(lines.map((l) => l['code'])).toEqual(['http_429', 'http_415']);
+    // The size by the route's own read of the body (resource_exhausted), and a type Connect does not read (415).
+    expect(lines.map((l) => l['code'])).toEqual(['resource_exhausted', 'http_415']);
+  });
+});
+
+// Challenger round 1, item 5: each refusal carries a fixed plain message, never a library's or the API's text.
+const FIXED = {
+  invalid_argument: 'the request is not valid',
+  unimplemented: 'the call is not served in this form',
+  permission_denied: 'the call is not permitted',
+  unauthenticated: 'the bearer token was refused',
+} as const;
+
+describe('the refusals the route writes', () => {
+  it.each([
+    ['no bearer', RECORD, { ...proto }, new Uint8Array(), 401, { code: 'unauthenticated', message: 'a bearer token is needed' }],
+    ['a body too large by its length', RECORD, asCaller({ 'content-length': String(MACHINE_BODY_MAX + 1) }), new Uint8Array(MACHINE_BODY_MAX + 1), 413, { code: 'resource_exhausted', message: 'the request body is too large' }],
+    ['a body too large by its bytes', RECORD, asCaller({ 'transfer-encoding': 'chunked' }), new Uint8Array(MACHINE_BODY_MAX + 1), 413, { code: 'resource_exhausted', message: 'the request body is too large' }],
+    // Connect calls a body it cannot decode internal; the route keeps the code and writes its own words.
+    ['a body that is no message', LIST, asCaller(), new Uint8Array([0xff, 0xff, 0xff]), 500, { code: 'internal', message: 'the call failed' }],
+    ['a JSON body that is no message', LIST, { ...asCaller(), 'content-type': 'application/json' }, '{"nope": [', 400, { code: 'invalid_argument', message: FIXED.invalid_argument }],
+    ['a timeout that is no number', LIST, asCaller({ 'connect-timeout-ms': 'soon' }), new Uint8Array(), 400, { code: 'invalid_argument', message: FIXED.invalid_argument }],
+  ] as const)('%s: a fixed message', async (_label, path, headers, body, status, error) => {
+    const { base, seen } = await stack(() => ({ urls: [], more: false }));
+    const reply = await send(base, path, { headers: headers as Record<string, string>, body });
+    expect({ status: reply.status, error: errorOf(reply) }).toEqual({ status, error });
+    expect(reply.body.toString('utf8')).not.toMatch(/readMaxBytes|cannot decode|premature|unexpected|protocol|timeout value/i);
+    expect(seen).toEqual([]);
+  });
+
+  it('too many at once: a fixed message', async () => {
+    const held: Array<() => void> = [];
+    const { base } = await stack(() => new Promise((resolve) => held.push(() => resolve({ urls: [], more: false }))), { limit: 1 });
+    const first = send(base, LIST, { headers: asCaller(), body: new Uint8Array() });
+    await vi.waitFor(() => expect(held).toHaveLength(1));
+    const extra = await send(base, LIST, { headers: asCaller(), body: new Uint8Array() });
+    expect({ status: extra.status, error: errorOf(extra) }).toEqual({ status: 429, error: { code: 'resource_exhausted', message: 'too many calls at once; try again shortly' } });
+    held[0]?.();
+    expect((await first).status).toBe(200);
+  });
+
+  it('a type Connect does not read: 415 with no body at all', async () => {
+    const { base } = await stack(() => ({}));
+    const reply = await send(base, LIST, { headers: { authorization: BEARER, 'content-type': 'text/html' }, body: 'x' });
+    expect({ status: reply.status, body: reply.body.toString('utf8') }).toEqual({ status: 415, body: '' });
+  });
+
+  it.each([
+    [Code.PermissionDenied, 403, 'permission_denied'],
+    [Code.Unauthenticated, 401, 'unauthenticated'],
+  ] as const)("an API refusal (%i) keeps its code and gets the route's fixed message for it", async (code, status, name) => {
+    const { base } = await stack(() => {
+      throw new ConnectError('secret detail about sub-1234', code);
+    });
+    const reply = await send(base, LIST, { headers: asCaller(), body: new Uint8Array() });
+    expect({ status: reply.status, error: errorOf(reply) }).toEqual({ status, error: { code: name, message: FIXED[name] } });
+  });
+});
+
+describe('the site guard (challenger round 1: pre-auth crash)', () => {
+  it.each([
+    ['throws', () => {
+      throw new Error('made-up failure');
+    }],
+    ['rejects', () => Promise.reject(new Error('made-up failure'))],
+  ])('a route that %s is answered 500 by the site, which goes on serving pages', async (_label, machine) => {
+    const web = await site(machine as unknown as ReturnType<typeof createMachineRoute>);
+    const { lines } = await logged(async () => {
+      const reply = await send(web.base, LIST, { headers: asCaller(), body: new Uint8Array() });
+      expect({ status: reply.status, body: reply.body.toString('utf8') }).toEqual({ status: 500, body: 'Internal Server Error' });
+    });
+    expect(lines.map((l) => [l['msg'], l['err']])).toEqual([['request failed', 'Error']]);
+    expect((await send(web.base, '/about', { method: 'GET' })).status).toBe(200);
   });
 });
 

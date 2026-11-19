@@ -254,6 +254,31 @@ describe('connectCall', () => {
     await expect(connectCall(new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}`), 'X', 't', bytes())).rejects.toThrow('the API answer was cut short');
   });
 
+  // Challenger C-L1: the redirect's target is a live server on this machine, so following it would show.
+  it.each([
+    ['to another origin', true],
+    ['to another path of the same origin', false],
+  ])('never follows a redirect %s: nothing is sent there, the bearer least of all', async (_label, otherOrigin) => {
+    const target = await standIn(() => ({ status: 0, message: bytes() }));
+    const first = await standIn((call) => (call.path === '/moved' ? { status: 0, message: bytes() } : { http: 307, location: otherOrigin ? `${target.url.origin}/moved` : '/moved' }));
+    await expect(connectCall(first.url, 'X', 't', bytes())).rejects.toThrow(/^the API could not be reached \(\w+\)$/);
+    expect(first.calls.map((c) => c.path)).toEqual(['/nwfl.mensa.v1.LinkCheckService/X']);
+    expect(target.calls).toEqual([]);
+  });
+
+  // Challenger C-L4: an API that takes the call and never answers, or answers only its head.
+  it.each([
+    ['says nothing', () => undefined],
+    ['sends its head and stalls', (_req: IncomingMessage, res: ServerResponse) => void res.writeHead(200, { 'content-type': 'application/proto', 'content-length': '10' }).write(Buffer.alloc(2))],
+  ])('gives up on an API that %s at the call time', async (_label, handler) => {
+    const server = http.createServer(handler);
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const started = performance.now();
+    await expect(connectCall(new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}`), 'X', 't', bytes(), 200)).rejects.toThrow('the API did not answer in time');
+    expect(performance.now() - started).toBeLessThan(2000);
+  }, 5000);
+
   it('never sends a token that is not a bearer token, and names an unreachable API by its error class only', async () => {
     await expect(connectCall(new URL('http://127.0.0.1:1'), 'X', 'a b', bytes())).rejects.toThrow('the token is not a bearer token');
     await expect(connectCall(new URL('http://127.0.0.1:1'), 'X', 't', bytes())).rejects.toThrow(/^the API could not be reached \(\w+\)$/);
