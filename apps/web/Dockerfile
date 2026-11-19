@@ -35,7 +35,7 @@ COPY server ./server
 ARG PUBLIC_ONLY=false
 RUN PUBLIC_ONLY=${PUBLIC_ONLY} npx astro build
 # Readable to the runtime user whatever mode the checkout gave the sources.
-RUN chmod -R a+rX dist server
+RUN chmod -R a+rX dist server src/gen
 
 # ============================================================================
 FROM ${NODE_IMAGE} AS deps
@@ -72,6 +72,8 @@ WORKDIR /app
 COPY --from=deps --chown=root:root /app/node_modules ./node_modules
 COPY --from=build --chown=root:root /app/dist ./dist
 COPY --from=build --chown=root:root /app/server ./server
+# MACHINE-ROUTE: server/machine-route.mjs runs outside the bundle and reads the generated API code.
+COPY --from=build --chown=root:root /app/src/gen ./src/gen
 COPY --chown=root:root --chmod=0644 package.json ./
 
 # The commit this image is built from, and where it lives: fc-infra's pins read

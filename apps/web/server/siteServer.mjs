@@ -8,7 +8,7 @@ import { AsyncResource } from 'node:async_hooks';
 import http from 'node:http';
 import { stampAccount } from './account.mjs';
 import { logEntry } from './log.mjs';
-import { cacheControl, cdnCacheControl, isHostOnlyCookie, isLeavingPage, referrerPolicy, securityHeaders } from './policy.mjs';
+import { cacheControl, cdnCacheControl, isHostOnlyCookie, isLeavingPage, isMachinePath, referrerPolicy, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 import { renamedPath, resolveOldUrl } from './redirects.mjs';
 import { readSession } from './session.mjs';
@@ -146,10 +146,11 @@ function servePrerendered(req, res, html, key) {
 
 /** @typedef {import('./redirects.mjs').Tables} Redirects */
 /**
- * @typedef {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects, sessionKey?: Buffer | undefined, formAction?: string[] }} SiteOptions
+ * @typedef {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects, sessionKey?: Buffer | undefined, formAction?: string[], machine?: import('./machine-route.mjs').MachineHandler }} SiteOptions
  * pages: prerendered HTML by path; redirects: the old-site table; sessionKey: to
  * read the session on prerendered pages; formAction: origins a form may lead to
- * (the sign-in provider)
+ * (the sign-in provider); machine: the machine clients' route (MACHINE-ROUTE), none
+ * in a public-only build or with no API
  */
 
 const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
@@ -172,7 +173,11 @@ function dropForwardedHost(req) {
  * A state-changing request must say where it comes from. Astro's origin check
  * lets one through that carries neither an Origin nor a Sec-Fetch-Site header;
  * every browser sends at least one, so such a request is refused here. One that
- * does carry them goes on to Astro, which compares the origin.
+ * does carry them goes on to Astro, which compares the origin. The one exception,
+ * in serve: a POST to the machine route (MACHINE-ROUTE), whose clients are no
+ * browser and send none. It reads and sets no cookie, so a cross-site form has no
+ * session to ride on, and it is refused without a bearer, which a cross-site
+ * browser cannot attach (that takes a preflight, and the route answers none).
  *
  * @param {http.IncomingMessage} req
  */
@@ -267,7 +272,7 @@ function logFeedFetch(req, res, path) {
  * @param {SiteOptions} [opts]
  * @returns {http.RequestListener}
  */
-export function withSitePolicy(handler, { pages = new Map(), redirects, sessionKey, formAction = [] } = {}) {
+export function withSitePolicy(handler, { pages = new Map(), redirects, sessionKey, formAction = [], machine } = {}) {
   const headers = securityHeaders({ formAction });
   // LG-N3: each request is served inside a trace minted here (trace.mjs: never a browser's).
   return (req, res) => runWithTrace(newTrace(), () => serve(req, res));
@@ -277,8 +282,10 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     const url = new URL(req.url ?? '/', 'http://site.invalid');
     const raw = url.pathname;
     const path = normalisePath(raw);
-    const renamed = path === undefined ? undefined : renamedPath(path);
-    const old = redirects && path !== undefined && !renamed ? resolveOldUrl(path, redirects) : undefined;
+    // MACHINE-ROUTE: by the decoded path, exactly the two prefixes; no old URL or renamed page is under them.
+    const machinePath = isMachinePath(path);
+    const renamed = path === undefined || machinePath ? undefined : renamedPath(path);
+    const old = redirects && path !== undefined && !renamed && !machinePath ? resolveOldUrl(path, redirects) : undefined;
     beforeHeaders(res, () => {
       if (old?.status === 410) res.statusCode = 410;
       // The cache rule reads the raw path: only a plain /_astro/ name is immutable.
@@ -316,10 +323,20 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       }
       req.url = '/gone';
     }
-    if (originUnknown(req)) {
+    if (originUnknown(req) && !(machinePath && req.method === 'POST')) {
       res.statusCode = 403;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('Forbidden');
+      return;
+    }
+    if (machinePath) {
+      // Never Astro: the route, or nothing at all.
+      if (machine) machine(req, res, /** @type {string} */ (path));
+      else {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not found');
+      }
       return;
     }
     const html = pages.get(path);

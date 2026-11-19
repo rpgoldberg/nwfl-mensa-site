@@ -5,13 +5,15 @@ name: web
 # API protos runs it too: the site's gRPC client is generated from them. So
 # does a change to the API's code, migrations or scripts: the redaction leak
 # test runs the real API. And its vendor folder: the site redactor is the
-# API's fc-shared and site-redaction.ts (LG-N3).
+# API's fc-shared and site-redaction.ts (LG-N3). And the checker's code and
+# the API's test harness: the machine route test (MACHINE-ROUTE) drives the
+# real checker through the site to the real API.
 on:
   push:
     branches: [main, develop]
-    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', 'apps/api/vendor/**', '.github/workflows/web.yml']
+    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', 'apps/api/vendor/**', 'apps/api/test/helpers/**', 'apps/linkcheck/src/**', 'apps/linkcheck/test/helpers/**', 'apps/linkcheck/package-lock.json', '.github/workflows/web.yml']
   pull_request:
-    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', 'apps/api/vendor/**', '.github/workflows/web.yml']
+    paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', 'apps/api/vendor/**', 'apps/api/test/helpers/**', 'apps/linkcheck/src/**', 'apps/linkcheck/test/helpers/**', 'apps/linkcheck/package-lock.json', '.github/workflows/web.yml']
 
 permissions:
   contents: read
@@ -72,8 +74,15 @@ jobs:
       # panel-against-the-gate test), so the API's packages are installed too.
       - run: npm ci --ignore-scripts
         working-directory: apps/api
+      # MACHINE-ROUTE: test/machine-route-live.test.ts runs the real checker CLI
+      # through the site's route to the real API over a throwaway Postgres.
+      - run: npm ci --ignore-scripts
+        working-directory: apps/linkcheck
+      - run: sh ../api/scripts/test-db.sh start >> "$GITHUB_ENV"
       # vitest.config.ts holds the 85 % line and branch gate.
       - run: npm run test:coverage
+      - if: always() && env.NWFL_TEST_PG_CONTAINER != ''
+        run: sh ../api/scripts/test-db.sh stop "$NWFL_TEST_PG_CONTAINER"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()
         with:
