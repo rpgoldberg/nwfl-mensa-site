@@ -283,6 +283,32 @@ function logFeedFetch(req, res, path) {
 }
 
 /**
+ * The request's URL, read as a path on this site and never as an authority: only an origin-form
+ * target (one that starts with "/") is read, after a fixed authority, so //host/x is the path
+ * //host/x and nothing in a target can make the URL unreadable. A backslash in the path is kept
+ * as one (%5C, which normalisePath refuses), never read as a "/". null for anything else: an
+ * absolute-form target, the asterisk form.
+ *
+ * @param {string | undefined} target
+ * @returns {URL | null}
+ */
+export function originFormUrl(target) {
+  if (!target?.startsWith('/')) return null;
+  const path = target.replace(/^[^?#]*/, (p) => p.replaceAll('\\', '%5C'));
+  return URL.parse(`http://site.invalid${path}`);
+}
+
+/**
+ * A decoded path as a Location value: each segment percent-encoded again, so a renamed page whose
+ * path decodes to a non-ASCII or reserved character redirects to that same path.
+ *
+ * @param {string} path
+ */
+function encodePath(path) {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
  * Wrap a request handler so every response carries the site policy, answer
  * old URLs (R16) and the site's own renamed pages, serve the prerendered pages, and answer the health probe
  * without touching Astro.
@@ -297,10 +323,52 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
   return (req, res) => runWithTrace(newTrace(), () => serve(req, res));
   /** @type {http.RequestListener} */
   function serve(req, res) {
+    const url = originFormUrl(req.url);
+    const raw = url?.pathname ?? '';
+    /** @param {unknown} err */
+    const fail = (err) => {
+      // The pathname only (logPath): the query of /auth/callback carries the OIDC code and state. The
+      // error's name only: its message can echo what the request sent.
+      console.error(logEntry({ level: 'error', msg: 'request failed', path: logPath(raw), err: errorName(err) }));
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      // LAUNCH-FIX-1: the site's own error page, for a fault before the handler as for one in it. The
+      // plain line where none was built, or where reading or sending it fails too: fail never throws.
+      try {
+        const errorPage = pages.get(ERROR_PAGE);
+        if (errorPage !== undefined) {
+          serveErrorPage(req, res, errorPage);
+          return;
+        }
+      } catch {
+        // Fall through to the plain line.
+      }
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Internal Server Error');
+    };
+    // Everything a request runs here is inside the guard: no request may end the process.
+    try {
+      route(req, res, url, raw, fail);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  /**
+   * @param {http.IncomingMessage} req
+   * @param {http.ServerResponse} res
+   * @param {URL | null} url
+   * @param {string} raw
+   * @param {(err: unknown) => void} fail
+   */
+  function route(req, res, url, raw, fail) {
     dropForwardedHost(req);
-    const url = new URL(req.url ?? '/', 'http://site.invalid');
-    const raw = url.pathname;
-    const path = normalisePath(raw);
+    // A fixed reason only: the target is the caller's text.
+    if (!url) console.log(logEntry({ level: 'warn', msg: 'bad request target', reason: 'not a path on this site' }));
+    const path = url ? normalisePath(raw) : undefined;
     const renamed = path === undefined ? undefined : renamedPath(path);
     const old = redirects && path !== undefined && !renamed ? resolveOldUrl(path, redirects) : undefined;
     beforeHeaders(res, () => {
@@ -323,7 +391,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     }
     if (renamed) {
       // The query goes along: a month of the calendar is still that month.
-      res.writeHead(301, { Location: `${renamed}${url.search}` });
+      res.writeHead(301, { Location: `${encodePath(renamed)}${/** @type {URL} */ (url).search}` });
       res.end();
       return;
     }
@@ -352,25 +420,6 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       else servePrerendered(req, res, html, sessionKey);
       return;
     }
-    /** @param {unknown} err */
-    const fail = (err) => {
-      // The pathname only (logPath): the query of /auth/callback carries the OIDC code and state. The
-      // error's name only: its message can echo what the request sent.
-      console.error(logEntry({ level: 'error', msg: 'request failed', path: logPath(raw), err: errorName(err) }));
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-      // LAUNCH-FIX-1: the site's own error page; the plain line only where none was built.
-      const errorPage = pages.get(ERROR_PAGE);
-      if (errorPage !== undefined) {
-        serveErrorPage(req, res, errorPage);
-        return;
-      }
-      res.statusCode = 500;
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.end('Internal Server Error');
-    };
     try {
       Promise.resolve(handler(req, res)).catch(fail);
     } catch (err) {

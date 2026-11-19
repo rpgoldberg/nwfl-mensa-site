@@ -1,5 +1,5 @@
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { SIZES, SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../prefs.mjs';
@@ -8,7 +8,7 @@ import { accountHtml } from '../account.mjs';
 import { newSession, sessionSetCookie } from '../session.mjs';
 import { sharedTokenStore } from '../token-store.mjs';
 import { randomBytes } from 'node:crypto';
-import { createSiteServer, normalisePath, withSitePolicy } from '../siteServer.mjs';
+import { createSiteServer, normalisePath, originFormUrl, withSitePolicy } from '../siteServer.mjs';
 import { currentTrace } from '../trace.mjs';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
@@ -304,6 +304,25 @@ describe('withSitePolicy', () => {
       expect(line).not.toContain('STATEVAL');
       expect(line).not.toContain('?');
       expect(unstamped(line)).toEqual({ level: 'error', msg: 'request failed', path: '/auth/callback', err: 'TypeError' });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('answers 500 for a fault in code a request runs before the handler, and logs it by class only', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const pages = new Map<string, string>();
+      pages.get = () => {
+        throw new TypeError('made-up fault');
+      };
+      const base = await serve(() => undefined, pages);
+      const res = await fetch(`${base}/about`);
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('Internal Server Error');
+      expectSecurityHeaders(res);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(unstamped(error.mock.calls[0]?.[0])).toEqual({ level: 'error', msg: 'request failed', path: '/about', err: 'TypeError' });
     } finally {
       error.mockRestore();
     }
@@ -896,6 +915,48 @@ describe('request trace and log hygiene (LG-N3)', () => {
       expect(error.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/SECRETCODE|%3f|%23/i);
     } finally {
       error.mockRestore();
+    }
+  });
+});
+
+describe('originFormUrl', () => {
+  it('reads an origin-form target after a fixed authority, // and all', () => {
+    expect(originFormUrl('/news?page=2')?.href).toBe('http://site.invalid/news?page=2');
+    expect(originFormUrl('//ok/news')?.pathname).toBe('//ok/news');
+    expect(originFormUrl('//[::1')?.pathname).toBe('//[::1');
+    expect(originFormUrl('//a:99999/')?.host).toBe('site.invalid');
+  });
+
+  it('keeps a backslash in the path as %5C, and leaves the query as sent', () => {
+    expect(originFormUrl('/\\[::1')?.pathname).toBe('/%5C[::1');
+    expect(originFormUrl('/\\\\[::1')?.pathname).toBe('/%5C%5C[::1');
+    expect(originFormUrl('/a?b=\\')?.search).toBe('?b=\\');
+  });
+
+  it.each([undefined, '', '*', 'news', 'http://[/news', 'https://evil.example/news', 'evil.example:443'])('reads %j as no path', (target) => {
+    expect(originFormUrl(target)).toBeNull();
+  });
+});
+
+describe('a target that is no path, in process', () => {
+  it('answers 400 with fixed text and logs one fixed line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve(() => undefined);
+      const reply = await new Promise<string>((resolve) => {
+        const s = net.connect(Number(new URL(base).port), '127.0.0.1');
+        let out = '';
+        s.on('data', (d) => (out += d.toString('latin1')));
+        s.on('close', () => resolve(out));
+        s.write('GET http://[zq7/news HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      });
+      expect(reply.slice(0, 12)).toBe('HTTP/1.1 400');
+      expect(reply.slice(reply.indexOf('\r\n\r\n') + 4)).toBe('Bad request');
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(unstamped(log.mock.calls[0]?.[0])).toEqual({ level: 'warn', msg: 'bad request target', reason: 'not a path on this site' });
+      expect(String(log.mock.calls[0]?.[0])).not.toContain('zq7');
+    } finally {
+      log.mockRestore();
     }
   });
 });
