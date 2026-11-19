@@ -219,6 +219,22 @@ describe('authConfig in production (MT-03, S2): sign-in only on a profile', () =
     expect(authConfig({ ...canary, OIDC_SCOPE: 'profile email' })).toEqual({ enabled: false, reason: 'OIDC_SCOPE must include openid' });
   });
 
+  // SIGNIN-SLOW: discovery and the token call give up after OIDC_TIMEOUT_MS, not openid-client's 30 s.
+  it('bounds each call to the provider: OIDC_TIMEOUT_MS, 8000 by default, a whole number from 1000 to 30000', () => {
+    expect('OIDC_TIMEOUT_MS' in canary).toBe(false);
+    expect(authConfig(canary).enabled && (authConfig(canary) as { config: { timeoutMs: number } }).config.timeoutMs).toBe(8000);
+    for (const ok of ['1000', '2500', '30000']) {
+      const setup = authConfig({ ...canary, OIDC_TIMEOUT_MS: ok });
+      expect(setup.enabled && setup.config.timeoutMs, ok).toBe(Number(ok));
+    }
+    for (const bad of ['0', '999', '30001', '1.5', '', ' 8000', '8e3', '-5000', '0x1f40', 'NaN']) {
+      expect(authConfig({ ...canary, OIDC_TIMEOUT_MS: bad }), bad).toEqual({
+        enabled: false,
+        reason: 'OIDC_TIMEOUT_MS must be a whole number of milliseconds from 1000 to 30000',
+      });
+    }
+  });
+
   it('VET fix 1: turns sign-in off for a configured scope without email, since the sign-up needs it', () => {
     for (const scope of ['openid profile', 'openid', 'openid profile emails', 'openid profile offline_access']) {
       expect(authConfig({ ...canary, OIDC_SCOPE: scope }), scope).toEqual({ enabled: false, reason: 'OIDC_SCOPE must include email: the sign-up needs it' });

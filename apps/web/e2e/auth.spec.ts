@@ -221,6 +221,12 @@ test.describe('the callback refuses, in plain words', () => {
 
     await context.clearCookies();
     await context.addCookies([tx]);
+    // SIGNIN-SLOW: the first time, one fresh sign-in instead, marked so it is never taken twice running.
+    await page.goto(callback);
+    await expect(page).toHaveURL(AT_PROVIDER);
+    expect(await cookie(context, '__Host-nwfl-fresh')).toMatchObject({ value: '1', domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
+    expect(await cookie(context, '__Host-nwfl-session')).toBeUndefined();
+    await context.addCookies([tx]);
     const replay = await page.goto(callback);
     expect(replay?.status()).toBe(400);
     await expect(page.getByRole('main')).toContainText('has already been used');

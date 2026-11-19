@@ -6,6 +6,7 @@
 // theme stamped on <html>, as the layout does for on-request pages.
 import { AsyncResource } from 'node:async_hooks';
 import http from 'node:http';
+import { performance } from 'node:perf_hooks';
 import { stampAccount } from './account.mjs';
 import { logEntry } from './log.mjs';
 import { cacheControl, cdnCacheControl, isHostOnlyCookie, isLeavingPage, referrerPolicy, securityHeaders } from './policy.mjs';
@@ -221,6 +222,25 @@ function errorName(err) {
   return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name) ? err.name : 'Error';
 }
 
+/**
+ * SIGNIN-SLOW: one line per request, once its response closes, so a slow page (the sign-in callback
+ * among them) can be measured at the origin: the method, the path without its query (logPath), the
+ * status and the milliseconds taken. Its request id is the trace id every line carries (LG-N3): the
+ * close is bound to the request's context. Never the query, a header, a cookie or the body. The
+ * health probe has no line, and the calendar feed has its own (logFeedFetch), so no request has two.
+ *
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {string} raw the URL's pathname
+ * @param {number} started when the request came in (performance.now())
+ */
+function logAccess(req, res, raw, started) {
+  const method = req.method;
+  res.once('close', AsyncResource.bind(() => {
+    console.log(logEntry({ level: 'info', msg: 'request', method, path: logPath(raw), status: res.statusCode, ms: Math.round(performance.now() - started) }));
+  }));
+}
+
 /** The calendar feed's two paths (fc CALFEED): /calendar.ics, and /events.ics, the same feed. */
 const FEED_PATHS = new Set(['/calendar.ics', '/events.ics']);
 const UA_MAX = 200;
@@ -273,6 +293,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
   return (req, res) => runWithTrace(newTrace(), () => serve(req, res));
   /** @type {http.RequestListener} */
   function serve(req, res) {
+    const started = performance.now();
     dropForwardedHost(req);
     const url = new URL(req.url ?? '/', 'http://site.invalid');
     const raw = url.pathname;
@@ -285,6 +306,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       applyPolicy(req, res, raw, headers, path);
     });
     if (path !== undefined && FEED_PATHS.has(path)) logFeedFetch(req, res, path);
+    else if (req.url !== '/healthz') logAccess(req, res, raw, started);
     if (path === undefined) {
       res.statusCode = 400;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');

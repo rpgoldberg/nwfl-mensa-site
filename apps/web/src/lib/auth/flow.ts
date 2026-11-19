@@ -2,15 +2,19 @@
 // callback takes a transaction only from this browser's own cookie, matches its
 // state exactly, uses it once, within ten minutes, and has openid-client check
 // the nonce. A refusal is told to the reader in plain words; what the provider
-// said is never repeated, and only its error code (tidied) is logged.
+// said is never repeated, and only its error code (tidied) is logged. SIGNIN-SLOW: a refusal another
+// round may mend (used, expired, a slow or broken path to the provider) starts one fresh sign-in first.
 import { timingSafeEqual } from 'node:crypto';
+import { readCookie } from '../../../server/cookies.mjs';
 import { safeBack } from '../../../server/prefs.mjs';
 import {
   AUTH_COOKIE,
+  FRESH_COOKIE,
   SESSION_COOKIE,
   type Session,
   TRANSACTION_SECONDS,
   clearCookie,
+  freshSetCookie,
   newSession,
   openTransaction,
   readSession,
@@ -130,6 +134,25 @@ export async function beginSignIn(
   }
 }
 
+/** The error codes of a path to the provider that stalled or broke: openid-client's timeout and abort, Node's and undici's network codes. */
+const PASSING_CODES = /^(OAUTH_TIMEOUT|OAUTH_ABORT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|UND_ERR_[A-Z_]+)$/;
+
+/**
+ * SIGNIN-SLOW: a failure on the way to the provider that another round may well not meet: a timeout,
+ * a broken connection, or a gateway's 5xx (an edge in between). Read along the error's causes, four
+ * deep. A refusal the provider gave, a token that failed its checks, or a bug is not one.
+ */
+export function passing(err: unknown): boolean {
+  let e = err;
+  for (let depth = 0; depth < 4 && typeof e === 'object' && e !== null; depth++) {
+    const { code, status, cause } = e as { code?: unknown; status?: unknown; cause?: unknown };
+    if (typeof code === 'string' && PASSING_CODES.test(code)) return true;
+    if (typeof status === 'number' && status >= 500 && status <= 599) return true;
+    e = cause;
+  }
+  return false;
+}
+
 /**
  * The tokens with the time their access token expires (A14: the site forwards it only while it has time to live).
  * No expires_in, or a nonsense one, gives no expires_at: it is then never forwarded.
@@ -147,11 +170,23 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
     log(d, 'warn', 'sign-in refused', { reason, ...extra });
     return { kind: 'refused', reason, cookies };
   };
+  /**
+   * SIGNIN-SLOW: one fresh sign-in instead of the refusal, back to the reader's page when it is known
+   * (by the return rules), else home. The provider keeps the reader's session, so it normally passes
+   * straight through. The mark it leaves makes it once in ten minutes: then the refusal page, never a loop.
+   */
+  const afresh = (reason: Refusal, back: string | undefined, extra: Record<string, unknown> = {}): Outcome => {
+    if (readCookie(cookieHeader, FRESH_COOKIE) !== undefined) return refuse(reason, extra);
+    log(d, 'warn', 'sign-in refused', { reason, ...extra, fresh_round: true });
+    const to = safeBack(back);
+    const location = to === '/' ? '/sign-in' : `/sign-in?${new URLSearchParams({ return: to })}`;
+    return { kind: 'redirect', location, cookies: [...cookies, freshSetCookie()] };
+  };
   const tx = openTransaction(cookieHeader, d.key, now);
-  if (!tx) return refuse('expired');
+  if (!tx) return afresh('expired', undefined);
   const state = url.searchParams.get('state') ?? '';
   if (!sameText(state, tx.state)) return refuse('mismatch');
-  if (d.consumed.has(state, now)) return refuse('used');
+  if (d.consumed.has(state, now)) return afresh('used', tx.back);
   d.consumed.add(state, tx.at + TRANSACTION_SECONDS);
   const error = url.searchParams.get('error');
   if (error !== null) {
@@ -167,7 +202,9 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
     log(d, 'info', 'signed in', { officer: session.officer, member: session.member });
     return { kind: 'redirect', location: tx.back, cookies: [...cookies, sessionSetCookie(session, d.key, now)], session };
   } catch (err) {
-    return refuse('failed', { err: redactText(String(err)) });
+    // Never the same code again (it is single-use): a passing failure starts afresh, with a new one.
+    const extra = { err: redactText(String(err)) };
+    return passing(err) ? afresh('failed', tx.back, extra) : refuse('failed', extra);
   }
 }
 

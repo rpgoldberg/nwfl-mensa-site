@@ -138,6 +138,13 @@ const hostOnly = (name, value, maxAge) => `${name}=${value}; Path=/; Max-Age=${m
 export const clearCookie = (name) => hostOnly(name, '', 0);
 
 /**
+ * SIGNIN-SLOW: the mark a callback leaves when it starts one fresh sign-in instead of refusing, so a
+ * second refusal within ten minutes shows the page and never loops. It holds no token, code or state.
+ */
+export const FRESH_COOKIE = '__Host-nwfl-fresh';
+export const freshSetCookie = () => hostOnly(FRESH_COOKIE, '1', TRANSACTION_SECONDS);
+
+/**
  * @param {Session} session
  * @param {Buffer} key
  * @param {number} now

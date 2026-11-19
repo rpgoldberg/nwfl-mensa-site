@@ -4,7 +4,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { PASSWORD_NOTE } from '../src/lib/auth/password-note';
 import { SIGN_IN_OFF_URL } from './servers';
-import { signIn } from './signin';
+import { freshRoundTaken, signIn } from './signin';
 
 const NOTE = `${PASSWORD_NOTE.lead} ${PASSWORD_NOTE.rest}`;
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
@@ -31,7 +31,8 @@ test('/sign-in, when signing in is not available, says which password to use', a
   expect(await axe(page)).toEqual([]);
 });
 
-test('a refused sign-in says it beside the link to start again', async ({ page }) => {
+test('a refused sign-in says it beside the link to start again', async ({ page, context, baseURL }) => {
+  await freshRoundTaken(context, baseURL);
   const res = await page.goto('/auth/callback?code=x&state=y');
   expect(res?.status()).toBe(400);
   await expect(note(page)).toHaveCount(1);

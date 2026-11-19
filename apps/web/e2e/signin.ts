@@ -1,12 +1,20 @@
 // Signing in at the local test identity provider (e2e/idp.mjs), as one of its
 // made-up people, from any page with the site header; done once the site shows
 // them signed in.
-import { expect, type Locator, type Page } from '@playwright/test';
+import { expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { IDP_ORIGIN } from './servers';
 
 export const AT_PROVIDER = new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/`);
 
 export const banner = (page: Page) => page.getByRole('banner');
+
+/**
+ * SIGNIN-SLOW: the mark a callback leaves when it starts one fresh sign-in instead of refusing. With
+ * it set, a refused callback shows the refusal page at once, as a second refusal in ten minutes does.
+ */
+export async function freshRoundTaken(context: BrowserContext, baseURL: string | undefined) {
+  await context.addCookies([{ name: '__Host-nwfl-fresh', value: '1', url: `${baseURL}/`, secure: true, httpOnly: true, sameSite: 'Lax' }]);
+}
 
 export async function signIn(page: Page, login: 'member' | 'mixed' | 'officer' | 'pending' | 'long-name' | 'refused' | 'lapsed' | 'articles-down' | 'stale' | 'officer-only' | 'enrolee' | 'enrolee-pending' | 'lapsed-outsider' | 'admin' | 'webmaster' | 'lone-admin' | 'lapsed-admin' | 'newcomer' | 'invitee' | 'approver' | 'turned-down' | 'lone-approver' | 'lone-webmaster' | 'reopen-desktop' | 'reopen-phone' | 'reopen-iphone' | 'seat-only' | 'seat-refused' | 'writer-lapsing' | 'treasurer' | 'two-seats') {
   await banner(page).getByRole('link', { name: 'Sign in', exact: true }).click();

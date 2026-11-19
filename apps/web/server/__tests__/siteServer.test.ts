@@ -631,7 +631,8 @@ describe('the calendar feed log', () => {
     res.write(body.slice(0, 5));
     res.end(Buffer.from(body.slice(5)));
   };
-  const lines = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.map((c) => unstamped(c[0]));
+  // SIGNIN-SLOW: every other request has its access line on the same stream; the feed's own line is read here.
+  const lines = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.map((c) => unstamped(c[0])).filter((l) => l['msg'] === 'calendar feed');
 
   it('logs a fetch of /calendar.ics or /events.ics, with the query, as one JSON line: path, status, bytes and UA, and no address', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -670,7 +671,7 @@ describe('the calendar feed log', () => {
     const base = await serve(feed('x'.repeat(10)));
     for (const path of ['/events', '/events/abc.ics', '/calendar.ics/x', '/', '/calendar.icsx']) await (await fetch(`${base}${path}`)).text();
     await new Promise((r) => setTimeout(r, 20));
-    expect(log).not.toHaveBeenCalled();
+    expect(lines(log)).toEqual([]);
     log.mockRestore();
   });
 
@@ -829,6 +830,98 @@ describe('request trace and log hygiene (LG-N3)', () => {
       expect(error.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/SECRETCODE|%3f|%23/i);
     } finally {
       error.mockRestore();
+    }
+  });
+});
+
+// SIGNIN-SLOW: one access line per request, so a slow page (the sign-in callback among them) can be
+// measured at the origin: the method, the path without its query, the status and the time taken, with
+// the request's trace id (LG-N3) as its request id. Never the query, a header, a cookie or the body.
+// The health probe has none, and the calendar feed keeps its own line (CALFEED), so no request has two.
+describe('the access line', () => {
+  const access = (log: { mock: { calls: unknown[][] } }) =>
+    log.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>).filter((l) => l['msg'] === 'request');
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+
+  it('logs method, path, status and milliseconds, stamped with the request’s trace id, and nothing else', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      let id: string | undefined;
+      const base = await serve((_req, res) => {
+        id = currentTrace()?.traceId;
+        setTimeout(() => res.end('page'), 120);
+      });
+      await (await fetch(`${base}/about`)).text();
+      await settle();
+      const [line, ...more] = access(log);
+      expect(more).toEqual([]);
+      expect(unstamped(JSON.stringify(line))).toEqual({ level: 'info', msg: 'request', method: 'GET', path: '/about', status: 200, ms: expect.any(Number) });
+      expect(line!['trace_id']).toBe(id);
+      expect(line!['ms']).toBeGreaterThanOrEqual(100);
+      expect(Number.isInteger(line!['ms'])).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('never logs the query (the callback’s code and state), a header, a cookie or the body', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve(async (req, res) => {
+        await new Promise((resolve) => req.resume().on('end', resolve));
+        res.statusCode = 303;
+        res.setHeader('Location', '/sign-in');
+        res.end();
+      });
+      const headers = { Cookie: '__Host-nwfl-auth=SECRETCOOKIE', Authorization: 'Bearer SECRETBEARER', 'User-Agent': 'SECRETAGENT', Referer: 'https://example.org/?SECRETREF' };
+      for (const target of ['/auth/callback?code=SECRET1&state=SECRET2', '/auth/callback%3Fcode=SECRET3', '/auth/callback?code=SECRET4#SECRET5']) {
+        await (await fetch(`${base}${target}`, { headers, redirect: 'manual' })).text();
+      }
+      await (await fetch(`${base}/account`, { method: 'POST', headers: { ...headers, Origin: base }, body: 'code=SECRETBODY', redirect: 'manual' })).text();
+      await settle();
+      const lines = access(log);
+      expect(lines.map((l) => [l['method'], l['path'], l['status']])).toEqual([
+        ['GET', '/auth/callback', 303],
+        ['GET', '/auth/callback', 303],
+        ['GET', '/auth/callback', 303],
+        ['POST', '/account', expect.any(Number)],
+      ]);
+      expect(log.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/SECRET|%3f|code=|state=/i);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('logs no health probe, and a refused or failed request with its status', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve((req) => {
+        if (req.url === '/boom') throw new TypeError('x');
+      });
+      for (let i = 0; i < 3; i++) await (await fetch(`${base}/healthz`)).text();
+      await (await fetch(`${base}/boom`)).text();
+      await (await fetch(`${base}/a%2fb`)).text();
+      await settle();
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([
+        ['/boom', 500],
+        ['/a%2fb', 400],
+      ]);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('leaves the calendar feed to its own line: one line per request', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => res.end('BEGIN:VCALENDAR'));
+      await (await fetch(`${base}/calendar.ics`)).text();
+      await settle();
+      expect(log.mock.calls.map((c) => (JSON.parse(String(c[0])) as Record<string, unknown>)['msg'])).toEqual(['calendar feed']);
+    } finally {
+      log.mockRestore();
     }
   });
 });

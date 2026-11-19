@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { ALL_PAGES } from './pages';
 import { SIZES } from '../server/prefs.mjs';
 import { THEMES, setPrefs } from './prefs';
-import { banner, signIn } from './signin';
+import { banner, freshRoundTaken, signIn } from './signin';
 
 // WCAG 2.2 A and AA, plus AAA (color-contrast-enhanced: 7:1 body text) and best practice.
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
@@ -82,7 +82,8 @@ test.describe('axe, signed in', () => {
   });
 });
 
-test('axe on a refused sign-in (400)', async ({ page }) => {
+test('axe on a refused sign-in (400)', async ({ page, context, baseURL }) => {
+  await freshRoundTaken(context, baseURL);
   const res = await page.goto('/auth/callback?code=x&state=y');
   expect(res?.status()).toBe(400);
   expect(await axe(page)).toEqual([]);

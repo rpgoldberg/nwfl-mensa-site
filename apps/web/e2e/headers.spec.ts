@@ -189,9 +189,9 @@ test('the full build keeps sign-in: it starts at the provider, and the header li
 });
 
 /** A GET to the server as cloudflared sends it, with the Host the reader asked for. */
-function onHost(path: string, host: string) {
+function onHost(path: string, host: string, extra: Record<string, string> = {}) {
   return new Promise<{ status: number; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
-    const req = http.request(`${BACKEND_URL}${path}`, { headers: { host, 'x-forwarded-proto': 'https' } });
+    const req = http.request(`${BACKEND_URL}${path}`, { headers: { ...extra, host, 'x-forwarded-proto': 'https' } });
     req.on('response', (res) => {
       res.resume();
       res.on('end', () => resolve({ status: res.statusCode!, headers: res.headers }));
@@ -222,11 +222,16 @@ test('/sign-in on another of our hosts never carries a return off the site', asy
   }
 });
 
-test('/sign-in on a host that is not ours starts at the provider outside production, as here; a callback on another host is refused', async () => {
+test('/sign-in on a host that is not ours starts at the provider outside production, as here; a callback on another host never signs in', async () => {
   const res = await onHost('/sign-in?return=%2Fnews', 'evil.example');
   expect(res.status).toBe(303);
   expect(res.headers['location']).toMatch(new RegExp(`^${IDP_ORIGIN.replaceAll('.', '\\.')}/auth\\?`));
-  expect((await onHost('/auth/callback?code=x&state=y', 'www.nwflmensa.us')).status).toBe(400);
+  // SIGNIN-SLOW: it has no transaction there, so one fresh sign-in, back through the profile's /sign-in; then refused.
+  const fresh = await onHost('/auth/callback?code=x&state=y', 'www.nwflmensa.us');
+  expect(fresh.status).toBe(303);
+  expect(fresh.headers['location']).toBe('/sign-in');
+  expect(String(fresh.headers['set-cookie'])).not.toMatch(/__Host-nwfl-session=[^;]/);
+  expect((await onHost('/auth/callback?code=x&state=y', 'www.nwflmensa.us', { cookie: '__Host-nwfl-fresh=1' })).status).toBe(400);
 });
 
 test('the full build shows the submitted content the canary hides (the other half of canary condition 3)', async ({ request }) => {
