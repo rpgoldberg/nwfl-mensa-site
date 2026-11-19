@@ -138,13 +138,6 @@ const hostOnly = (name, value, maxAge) => `${name}=${value}; Path=/; Max-Age=${m
 export const clearCookie = (name) => hostOnly(name, '', 0);
 
 /**
- * SIGNIN-SLOW: the mark a callback leaves when it starts one fresh sign-in instead of refusing, so a
- * second refusal within ten minutes shows the page and never loops. It holds no token, code or state.
- */
-export const FRESH_COOKIE = '__Host-nwfl-fresh';
-export const freshSetCookie = () => hostOnly(FRESH_COOKIE, '1', TRANSACTION_SECONDS);
-
-/**
  * @param {Session} session
  * @param {Buffer} key
  * @param {number} now
@@ -167,7 +160,11 @@ export function readSession(cookieHeader, key, now, store) {
   return session && typeof session.exp === 'number' && session.exp > now && store.has(session.sid, now) ? session : undefined;
 }
 
-/** @typedef {{ state: string, nonce: string, verifier: string, back: string }} Transaction */
+/**
+ * @typedef {{ state: string, nonce: string, verifier: string, back: string, fresh?: true, again?: true }} Transaction
+ * fresh: the sign-in a refused callback started in its place (SIGNIN-SLOW): its own refusal shows the page.
+ * again: "Sign in again" (A14), kept so a fresh round asks again too.
+ */
 
 /**
  * @param {Transaction} tx
@@ -196,8 +193,20 @@ export function transactionSetCookie(tx, key, now) {
  * @returns {(Transaction & { at: number }) | undefined}
  */
 export function openTransaction(cookieHeader, key, now) {
+  const tx = sealedTransaction(cookieHeader, key);
+  return tx && now - tx.at < TRANSACTION_SECONDS && tx.at - now <= SKEW_SECONDS ? tx : undefined;
+}
+
+/**
+ * SIGNIN-SLOW: the transaction this browser started, whatever its age, so a callback can tell an old one
+ * from none at all (cookies blocked, a bot, a link from elsewhere). Sealed by this key, as any is.
+ *
+ * @param {string | null | undefined} cookieHeader
+ * @param {Buffer} key
+ * @returns {(Transaction & { at: number }) | undefined}
+ */
+export function sealedTransaction(cookieHeader, key) {
   /** @type {(Transaction & { at: number }) | undefined} */
   const tx = openValue(readCookie(cookieHeader, AUTH_COOKIE), key, AUTH_COOKIE);
-  if (!tx || typeof tx.at !== 'number') return undefined;
-  return now - tx.at < TRANSACTION_SECONDS && tx.at - now <= SKEW_SECONDS ? tx : undefined;
+  return tx && typeof tx.at === 'number' ? tx : undefined;
 }

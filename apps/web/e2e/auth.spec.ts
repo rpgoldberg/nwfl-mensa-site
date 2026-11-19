@@ -221,12 +221,20 @@ test.describe('the callback refuses, in plain words', () => {
 
     await context.clearCookies();
     await context.addCookies([tx]);
-    // SIGNIN-SLOW: the first time, one fresh sign-in instead, marked so it is never taken twice running.
+    // SIGNIN-SLOW: the first time, one fresh sign-in instead, marked in its own transaction (no cookie of its own).
     await page.goto(callback);
-    await expect(page).toHaveURL(AT_PROVIDER);
-    expect(await cookie(context, '__Host-nwfl-fresh')).toMatchObject({ value: '1', domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' });
-    expect(await cookie(context, '__Host-nwfl-session')).toBeUndefined();
-    await context.addCookies([tx]);
+    await expect(page.locator('input[name="login"]')).toBeVisible();
+    expect(page.url()).toMatch(AT_PROVIDER);
+    expect((await context.cookies()).map((c) => c.name).filter((n) => n.startsWith('__Host-nwfl-')).sort()).toEqual(['__Host-nwfl-auth']);
+    const freshTx = (await cookie(context, '__Host-nwfl-auth'))!;
+    expect(freshTx.value).not.toBe(tx.value);
+    await page.locator('input[name="login"]').fill('member');
+    await page.locator('input[name="password"]').fill('any');
+    await page.getByRole('button', { name: 'Sign-in' }).click();
+    await expect(banner(page)).toContainText('Jordan Example');
+    // The fresh round's own callback, used again: the page, never another round.
+    await context.clearCookies();
+    await context.addCookies([freshTx]);
     const replay = await page.goto(callback);
     expect(replay?.status()).toBe(400);
     await expect(page.getByRole('main')).toContainText('has already been used');

@@ -1,14 +1,15 @@
 // SIGNIN-SLOW: the callback against a provider whose token endpoint takes the code and never answers
 // (a slow path out through the edge and back), with the real OIDC client and the real flow. The reader
 // is answered within the timeout and a second, sent on to one fresh sign-in, and the code is never
-// sent twice; a second stall within ten minutes shows the refusal page, as before.
+// sent twice; a stall in the fresh round's own callback shows the refusal page, as before. And the
+// real error chains openid-client 6.8.8 throws (a stall after the headers, a socket closed mid-body four
+// causes deep, a 5xx), each read as passing or not by the real flow.
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { authConfig } from '../../../server/auth-config.mjs';
-import { FRESH_COOKIE } from '../../../server/session.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
 import { ConsumedStates, beginSignIn, completeSignIn, type Deps, type Outcome } from './flow';
 import * as oidc from './oidc';
@@ -16,7 +17,8 @@ import * as oidc from './oidc';
 const TIMEOUT_MS = 1000;
 let server: http.Server;
 let issuer: string;
-let stall = true;
+/** How the token endpoint answers. */
+let mode: 'stall' | 'ok' | 'headers-then-stall' | 'headers-then-close' | '503-invalid-grant' | '502-page' = 'stall';
 let codes: string[] = [];
 let nonce = '';
 let keys: Awaited<ReturnType<typeof generateKeyPair>>;
@@ -45,7 +47,21 @@ beforeAll(async () => {
       let body = '';
       for await (const chunk of req) body += chunk;
       codes.push(new URLSearchParams(body).get('code') ?? '');
-      if (stall) return; // takes the code, and never answers
+      if (mode === 'stall') return; // takes the code, and never answers
+      if (mode === 'headers-then-stall' || mode === 'headers-then-close') {
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': '200' });
+        res.write('{"access_token":');
+        if (mode === 'headers-then-close') setTimeout(() => req.socket.destroy(), 20);
+        return;
+      }
+      if (mode === '503-invalid-grant') {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        return res.end('{"error":"invalid_grant"}');
+      }
+      if (mode === '502-page') {
+        res.writeHead(502, { 'content-type': 'text/html' });
+        return res.end('<html><body>Bad gateway</body></html>');
+      }
       const now = Math.floor(Date.now() / 1000);
       const idToken = await new SignJWT({ iss: issuer, aud: 'nwfl-site', sub: 'user-1', iat: now, exp: now + 300, nonce, groups: ['nwfl-members'] })
         .setProtectedHeader({ alg: 'ES256', kid: 'k1' })
@@ -65,7 +81,7 @@ afterAll(() => {
 
 let d: Deps;
 beforeEach(() => {
-  stall = true;
+  mode = 'stall';
   codes = [];
   oidc.forgetDiscovery();
   const setup = authConfig({
@@ -90,9 +106,17 @@ function keep(jar: Map<string, string>, setCookies: string[]) {
 }
 const header = (jar: Map<string, string>) => [...jar].map(([n, v]) => `${n}=${v}`).join('; ');
 
-/** /sign-in, then the provider's answer at the callback with `code`: the outcome and how long the callback took. */
-async function round(jar: Map<string, string>, back: string | null, code: string): Promise<{ out: Outcome; ms: number }> {
-  const begun = await beginSignIn(d, { cookieHeader: header(jar), back });
+/** Where a fresh round sends the reader: /sign-in with its query, as the page reads it. */
+const signInAt = (out: Outcome) => {
+  if (out.kind !== 'redirect') throw new Error(out.kind);
+  const at = new URL(`https://localhost:8443${out.location}`);
+  expect(at.pathname).toBe('/sign-in');
+  return { back: at.searchParams.get('return'), fresh: at.searchParams.get('fresh') === '1', again: at.searchParams.get('again') === '1' };
+};
+
+/** /sign-in (as sign-in.astro reads its query), then the provider's answer at the callback with `code`: the outcome and how long the callback took. */
+async function round(jar: Map<string, string>, back: string | null, code: string, { fresh = false, again = false } = {}): Promise<{ out: Outcome; ms: number }> {
+  const begun = await beginSignIn(d, { cookieHeader: header(jar), back, fresh, again });
   if (begun.kind !== 'redirect') throw new Error(begun.kind);
   keep(jar, begun.cookies);
   const at = new URL(begun.location);
@@ -110,19 +134,18 @@ describe('a token call that never answers', () => {
     const jar = new Map<string, string>();
     const { out, ms } = await round(jar, '/members?tab=dues', 'code-1');
     expect(ms).toBeLessThan(TIMEOUT_MS + 1000);
-    expect(out).toMatchObject({ kind: 'redirect', location: '/sign-in?return=%2Fmembers%3Ftab%3Ddues' });
-    expect(out.kind === 'redirect' && out.cookies).toContain(`${FRESH_COOKIE}=1; Path=/; Max-Age=600; SameSite=Lax; HttpOnly; Secure`);
-    expect(jar.get(FRESH_COOKIE)).toBe('1');
+    expect(out).toMatchObject({ kind: 'redirect', location: '/sign-in?return=%2Fmembers%3Ftab%3Ddues&fresh=1' });
+    expect(out.kind === 'redirect' && out.cookies.map((c) => c.split('=')[0])).toEqual(['__Host-nwfl-auth']);
+    expect([...jar.keys()]).toEqual([]);
     await new Promise((r) => setTimeout(r, 200));
     expect(codes).toEqual(['code-1']);
   });
 
-  it('shows the refusal page on a second stall within ten minutes, never a loop, and never a code twice', async () => {
+  it('shows the refusal page on a second stall in the same chain, never a loop, and never a code twice', async () => {
     const jar = new Map<string, string>();
     const first = await round(jar, '/members', 'code-1');
-    expect(first.out.kind).toBe('redirect');
-    const back = new URL(`https://localhost:8443${first.out.kind === 'redirect' ? first.out.location : ''}`).searchParams.get('return');
-    const second = await round(jar, back, 'code-2');
+    const to = signInAt(first.out);
+    const second = await round(jar, to.back, 'code-2', to);
     expect(second.ms).toBeLessThan(TIMEOUT_MS + 1000);
     expect(second.out).toEqual({ kind: 'refused', reason: 'failed', cookies: [expect.stringMatching(/^__Host-nwfl-auth=;/)] });
     await new Promise((r) => setTimeout(r, 200));
@@ -131,11 +154,30 @@ describe('a token call that never answers', () => {
 
   it('signs the reader in on the fresh round once the provider answers, back to their page', async () => {
     const jar = new Map<string, string>();
-    const first = await round(jar, '/members', 'code-1');
-    stall = false;
-    const back = new URL(`https://localhost:8443${first.out.kind === 'redirect' ? first.out.location : ''}`).searchParams.get('return');
-    const second = await round(jar, back, 'code-2');
+    const first = await round(jar, '/members', 'code-1', { again: true });
+    mode = 'ok';
+    const to = signInAt(first.out);
+    expect(to).toEqual({ back: '/members', fresh: true, again: true });
+    const second = await round(jar, to.back, 'code-2', to);
     expect(second.out).toMatchObject({ kind: 'redirect', location: '/members' });
     expect(codes).toEqual(['code-1', 'code-2']);
+  });
+});
+
+describe('the real error chains of a token call that broke', () => {
+  it.each(['headers-then-stall', 'headers-then-close', '502-page'] as const)('takes %s (the path, not the provider) to one fresh round', async (m) => {
+    mode = m;
+    const jar = new Map<string, string>();
+    const { out, ms } = await round(jar, '/news', 'code-1');
+    expect(ms).toBeLessThan(TIMEOUT_MS + 1000);
+    expect(out).toMatchObject({ kind: 'redirect', location: '/sign-in?return=%2Fnews&fresh=1' });
+    expect(codes).toEqual(['code-1']);
+  });
+
+  // The provider's own answer on a 5xx: the code was refused, not lost on the way; the page, as before.
+  it('shows the page for a 5xx carrying the provider’s invalid_grant', async () => {
+    mode = '503-invalid-grant';
+    const { out } = await round(new Map(), '/news', 'code-1');
+    expect(out).toMatchObject({ kind: 'refused', reason: 'failed' });
   });
 });

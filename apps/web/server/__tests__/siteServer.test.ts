@@ -1,5 +1,5 @@
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { SIZES, SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../prefs.mjs';
@@ -910,6 +910,53 @@ describe('the access line', () => {
     } finally {
       log.mockRestore();
       error.mockRestore();
+    }
+  });
+
+  // A reader who gives up on a slow page is not a 200.
+  it('logs a request the client abandoned before the answer as 499, not the status it never got', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => {
+        setTimeout(() => res.end('late'), 400);
+      });
+      const { port } = new URL(base);
+      await new Promise<void>((resolve) => {
+        const socket = net.connect(Number(port), '127.0.0.1', () => {
+          socket.write('GET /news HTTP/1.1\r\nHost: localhost\r\n\r\n');
+          setTimeout(() => {
+            socket.destroy();
+            resolve();
+          }, 100);
+        });
+      });
+      await new Promise((r) => setTimeout(r, 500));
+      await (await fetch(`${base}/about`)).text();
+      await settle();
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([
+        ['/news', 499],
+        ['/about', 200],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('cuts a long path to 512 characters, and says it did', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => res.end('x'));
+      for (const path of [`/${'a'.repeat(511)}`, `/${'b'.repeat(512)}`, `/${'c'.repeat(9000)}`]) await (await fetch(`${base}${path}`)).text();
+      await settle();
+      const lines = access(log);
+      expect(lines.map((l) => [String(l['path']).length, l['path_cut']])).toEqual([
+        [512, undefined],
+        [512, true],
+        [512, true],
+      ]);
+      expect(lines[1]!['path']).toBe(`/${'b'.repeat(511)}`);
+    } finally {
+      log.mockRestore();
     }
   });
 

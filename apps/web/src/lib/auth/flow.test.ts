@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { SIZE_COOKIE, THEME_COOKIE } from '../../../server/prefs.mjs';
-import { AUTH_COOKIE, FRESH_COOKIE, SESSION_COOKIE, TRANSACTION_SECONDS, newSession, readSession, sessionSetCookie, transactionSetCookie } from '../../../server/session.mjs';
+import { AUTH_COOKIE, SESSION_COOKIE, TRANSACTION_SECONDS, newSession, openTransaction, readSession, sessionSetCookie, transactionSetCookie } from '../../../server/session.mjs';
 import type { AuthConfig, AuthSetup } from '../../../server/auth-config.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
-import { ConsumedStates, REFUSALS, beginSignIn, completeSignIn, depsFromEnv, signOut, type Deps } from './flow';
+import { ConsumedStates, REFUSALS, beginSignIn, completeSignIn, depsFromEnv, passing, signOut, type Deps } from './flow';
 
 const key = randomBytes(32);
 const NOW = 1_800_000_000;
@@ -49,11 +49,9 @@ function deps(over: Partial<Deps> = {}): Deps & { lines: string[] } {
 /** The Cookie header a browser sends back for the Set-Cookie values it was given. */
 const jar = (setCookies: string[]) => setCookies.map((c) => c.split(';')[0]).filter((c) => !c!.endsWith('=')).join('; ');
 
-/** The once-only mark a fresh round leaves (SIGNIN-SLOW), as the browser sends it back. */
-const FRESH = `${FRESH_COOKIE}=1`;
-
-async function started(d: Deps, back = '/about') {
-  const begun = await beginSignIn(d, { cookieHeader: undefined, back });
+/** SIGNIN-SLOW: `fresh`, the sign-in a refused callback started in its place (/sign-in?fresh=1); `again`, "Sign in again". */
+async function started(d: Deps, back = '/about', { fresh = false, again = false } = {}) {
+  const begun = await beginSignIn(d, { cookieHeader: undefined, back, fresh, again });
   if (begun.kind !== 'redirect') throw new Error(begun.kind);
   return { cookieHeader: jar(begun.cookies), state: new URL(begun.location).searchParams.get('n') ? `state-${new URL(begun.location).searchParams.get('n')}` : '' };
 }
@@ -262,13 +260,13 @@ describe('completeSignIn: the callback', () => {
     expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ kind: 'refused', reason: 'failed' });
   });
 
-  // SIGNIN-SLOW: refused, as here, once the one fresh round (below) has been taken.
+  // SIGNIN-SLOW: an old transaction that was itself the fresh round is refused as here (one with no mark takes it, below).
   it('refuses a callback with no transaction, or one older than ten minutes, as timed out', async () => {
     const d = deps();
-    expect(await completeSignIn(d, { url: url({ code: 'c', state: 's' }), cookieHeader: FRESH })).toMatchObject({ kind: 'refused', reason: 'expired' });
-    const { cookieHeader, state } = await started(d);
+    expect(await completeSignIn(d, { url: url({ code: 'c', state: 's' }), cookieHeader: undefined })).toMatchObject({ kind: 'refused', reason: 'expired' });
+    const { cookieHeader, state } = await started(d, '/about', { fresh: true });
     const late = { ...d, now: () => NOW + TRANSACTION_SECONDS };
-    expect(await completeSignIn(late, { url: url({ code: 'c', state }), cookieHeader: `${cookieHeader}; ${FRESH}` })).toMatchObject({ kind: 'refused', reason: 'expired' });
+    expect(await completeSignIn(late, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ kind: 'refused', reason: 'expired' });
   });
 
   it('refuses a state that is not exactly this browser’s', async () => {
@@ -285,8 +283,11 @@ describe('completeSignIn: the callback', () => {
     const d = deps();
     const { cookieHeader, state } = await started(d);
     expect((await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).kind).toBe('redirect');
-    expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader: `${cookieHeader}; ${FRESH}` })).toMatchObject({ kind: 'refused', reason: 'used' });
-    expect(d.oidc.finishSignIn).toHaveBeenCalledTimes(1);
+    expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ kind: 'redirect', location: '/sign-in?return=%2Fabout&fresh=1' });
+    const fresh = await started(d, '/about', { fresh: true });
+    expect((await completeSignIn(d, { url: url({ code: 'c', state: fresh.state }), cookieHeader: fresh.cookieHeader })).kind).toBe('redirect');
+    expect(await completeSignIn(d, { url: url({ code: 'c', state: fresh.state }), cookieHeader: fresh.cookieHeader })).toMatchObject({ kind: 'refused', reason: 'used' });
+    expect(d.oidc.finishSignIn).toHaveBeenCalledTimes(2);
   });
 
   it('says plainly that sign-in was cancelled, and never repeats what the provider said', async () => {
@@ -326,76 +327,133 @@ describe('completeSignIn: the callback', () => {
 
 // SIGNIN-SLOW: a callback refused as used, expired, or failed on a slow or broken path to the provider
 // starts one fresh sign-in instead of the refusal page; the provider still has the reader's session, so
-// it normally passes straight through. A mark (a cookie, ten minutes) makes it once only: a second
-// refusal shows the page as before. A mismatch or a cancel never takes it.
+// it normally passes straight through. The mark rides in the signed transaction (/sign-in?fresh=1), never
+// in a cookie of its own: a refusal of the fresh round's own callback shows the page as before. Only a
+// browser that carried a transaction may take it; a provider's error= (a cancel) or a mismatch never does.
 describe('completeSignIn: one fresh round', () => {
   const url = (params: Record<string, string>) => new URL(`https://nwflorida.us/auth/callback?${new URLSearchParams(params)}`);
-  const FRESH_SET = `${FRESH_COOKIE}=1; Path=/; Max-Age=600; SameSite=Lax; HttpOnly; Secure`;
   const CLEAR_TX = `${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`;
   const timedOut = () => Object.assign(new Error('operation timed out'), { name: 'ClientError', code: 'OAUTH_TIMEOUT' });
+  const late = (d: Deps, by = TRANSACTION_SECONDS + 60) => ({ ...d, now: () => NOW + by });
+  /** The cookie names any outcome sets: only the ones the site set before SIGNIN-SLOW. */
+  const names = (out: Awaited<ReturnType<typeof completeSignIn>>) => (out.kind === 'unavailable' ? [] : out.cookies.map((c) => c.slice(0, c.indexOf('='))));
 
   it('takes a used callback (a code already spent) to a fresh sign-in, back to the same page, once only', async () => {
     const d = deps();
     const { cookieHeader, state } = await started(d, '/calendar?month=2026-12');
     await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader });
     const out = await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader });
-    expect(out).toEqual({ kind: 'redirect', location: '/sign-in?return=%2Fcalendar%3Fmonth%3D2026-12', cookies: [CLEAR_TX, FRESH_SET] });
-    expect(new URL(`https://nwflorida.us${out.kind === 'redirect' ? out.location : ''}`).searchParams.get('return')).toBe('/calendar?month=2026-12');
-    expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader: `${cookieHeader}; ${FRESH}` })).toEqual({ kind: 'refused', reason: 'used', cookies: [CLEAR_TX] });
+    expect(out).toEqual({ kind: 'redirect', location: '/sign-in?return=%2Fcalendar%3Fmonth%3D2026-12&fresh=1', cookies: [CLEAR_TX] });
+    const to = new URL(`https://nwflorida.us${out.kind === 'redirect' ? out.location : ''}`).searchParams;
+    expect([to.get('return'), to.get('fresh'), to.get('again')]).toEqual(['/calendar?month=2026-12', '1', null]);
+    const fresh = await started(d, '/calendar?month=2026-12', { fresh: true });
+    await completeSignIn(d, { url: url({ code: 'c', state: fresh.state }), cookieHeader: fresh.cookieHeader });
+    expect(await completeSignIn(d, { url: url({ code: 'c', state: fresh.state }), cookieHeader: fresh.cookieHeader })).toEqual({ kind: 'refused', reason: 'used', cookies: [CLEAR_TX] });
   });
 
-  it('takes an expired callback, whose page is not known, to a fresh sign-in that returns home', async () => {
+  it('takes a transaction that is present but older than ten minutes to a fresh sign-in, back to its page', async () => {
     const d = deps();
-    expect(await completeSignIn(d, { url: url({ code: 'c', state: 's' }), cookieHeader: undefined })).toEqual({ kind: 'redirect', location: '/sign-in', cookies: [CLEAR_TX, FRESH_SET] });
-    const { cookieHeader, state } = await started(d);
-    const late = { ...d, now: () => NOW + TRANSACTION_SECONDS };
-    expect(await completeSignIn(late, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ kind: 'redirect', location: '/sign-in' });
-    expect(await completeSignIn(late, { url: url({ code: 'c', state }), cookieHeader: `${cookieHeader}; ${FRESH}` })).toMatchObject({ kind: 'refused', reason: 'expired' });
+    const { cookieHeader, state } = await started(d, '/news');
+    expect(await completeSignIn(late(d), { url: url({ code: 'c', state }), cookieHeader })).toEqual({ kind: 'redirect', location: '/sign-in?return=%2Fnews&fresh=1', cookies: [CLEAR_TX] });
+    expect(d.oidc.finishSignIn).not.toHaveBeenCalled();
+    const fresh = await started(d, '/news', { fresh: true });
+    expect(await completeSignIn(late(d), { url: url({ code: 'c', state: fresh.state }), cookieHeader: fresh.cookieHeader })).toMatchObject({ kind: 'refused', reason: 'expired' });
   });
 
-  it('takes a token call that timed out to a fresh sign-in, never the same code again; a second time shows the page', async () => {
+  // A browser that keeps no cookie of this site, its provider session kept: every callback has none, so a round would loop.
+  it('never starts a round for a browser that carried no transaction: cookies blocked, a bot, a link from elsewhere', async () => {
+    const d = deps();
+    const forged = `${AUTH_COOKIE}=v1.not-sealed-by-us`;
+    const other = (await started(deps({ key: randomBytes(32) }))).cookieHeader;
+    for (const cookieHeader of [undefined, '', 'x=1', forged, other]) {
+      for (const params of [{ code: 'c', state: 's' }, { error: 'access_denied', state: 's' }, {}]) {
+        const out = await completeSignIn(d, { url: url(params), cookieHeader });
+        expect(out, `${cookieHeader} ${JSON.stringify(params)}`).toEqual({ kind: 'refused', reason: 'expired', cookies: [CLEAR_TX] });
+      }
+    }
+    expect(d.lines.join()).not.toContain('fresh_round');
+  });
+
+  it('takes a token call that timed out to a fresh sign-in, never the same code again; the fresh round’s own failure shows the page', async () => {
     const d = deps();
     vi.mocked(d.oidc.finishSignIn).mockRejectedValue(timedOut());
     const first = await started(d);
     expect(await completeSignIn(d, { url: url({ code: 'c', state: first.state }), cookieHeader: first.cookieHeader })).toEqual({
       kind: 'redirect',
-      location: '/sign-in?return=%2Fabout',
-      cookies: [CLEAR_TX, FRESH_SET],
-    });
-    expect(d.oidc.finishSignIn).toHaveBeenCalledTimes(1);
-    const second = await started(d);
-    expect(await completeSignIn(d, { url: url({ code: 'c2', state: second.state }), cookieHeader: `${second.cookieHeader}; ${FRESH}` })).toEqual({
-      kind: 'refused',
-      reason: 'failed',
+      location: '/sign-in?return=%2Fabout&fresh=1',
       cookies: [CLEAR_TX],
     });
+    expect(d.oidc.finishSignIn).toHaveBeenCalledTimes(1);
+    const second = await started(d, '/about', { fresh: true });
+    expect(await completeSignIn(d, { url: url({ code: 'c2', state: second.state }), cookieHeader: second.cookieHeader })).toEqual({ kind: 'refused', reason: 'failed', cookies: [CLEAR_TX] });
     expect(d.oidc.finishSignIn).toHaveBeenCalledTimes(2);
   });
 
-  it('counts a network failure or a gateway error on the way to the provider as passing too', async () => {
+  it('records the mark, and "Sign in again", in the new transaction, and keeps both through the round', async () => {
+    const d = deps();
+    const read = async (opts: { fresh?: boolean; again?: boolean }) => openTransaction((await started(d, '/news', opts)).cookieHeader, key, NOW);
+    expect(await read({})).not.toHaveProperty('fresh');
+    expect(await read({})).not.toHaveProperty('again');
+    expect(await read({ fresh: true })).toMatchObject({ fresh: true });
+    expect(await read({ again: true })).toMatchObject({ again: true });
+    vi.mocked(d.oidc.finishSignIn).mockRejectedValue(timedOut());
+    const again = await started(d, '/news', { again: true });
+    expect(await completeSignIn(d, { url: url({ code: 'c', state: again.state }), cookieHeader: again.cookieHeader })).toMatchObject({ location: '/sign-in?return=%2Fnews&again=1&fresh=1' });
+    const home = await started(d, '/', { again: true });
+    expect(await completeSignIn(d, { url: url({ code: 'c', state: home.state }), cookieHeader: home.cookieHeader })).toMatchObject({ location: '/sign-in?again=1&fresh=1' });
+  });
+
+  it('never takes a round for an error the provider sent, whatever the transaction’s age: a cancel after ten minutes says cancelled', async () => {
+    const d = deps();
+    const { cookieHeader, state } = await started(d);
+    for (const [error, reason] of [['access_denied', 'cancelled'], ['server_error', 'failed']] as const) {
+      expect(await completeSignIn(late(d), { url: url({ error, state }), cookieHeader }), error).toEqual({ kind: 'refused', reason, cookies: [CLEAR_TX] });
+      expect(await completeSignIn(late(d, 3600 * 24), { url: url({ error, state }), cookieHeader }), error).toMatchObject({ kind: 'refused', reason });
+    }
+    // A used state with an error= too: the page, never a round.
+    const used = await started(d);
+    await completeSignIn(d, { url: url({ code: 'c', state: used.state }), cookieHeader: used.cookieHeader });
+    expect(await completeSignIn(d, { url: url({ error: 'access_denied', state: used.state }), cookieHeader: used.cookieHeader })).toMatchObject({ kind: 'refused', reason: 'used' });
+    expect(d.lines.join()).not.toContain('fresh_round');
+  });
+
+  it('counts a network failure, a stall or a gateway error on the way to the provider as passing too', async () => {
     const network = new TypeError('fetch failed', { cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) });
     const wrapped = Object.assign(new Error('something went wrong', { cause: network }), { name: 'ClientError' });
     const gateway = Object.assign(new Error('unexpected HTTP response status code', { cause: { status: 524 } }), { code: 'OAUTH_RESPONSE_IS_NOT_CONFORM' });
+    const edgePage = Object.assign(new Error('unexpected HTTP response status code', { cause: new Response('<html>Bad gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } }) }), { code: 'OAUTH_RESPONSE_IS_NOT_CONFORM' });
     const aborted = Object.assign(new Error('operation aborted'), { code: 'OAUTH_ABORT' });
     const dns = new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo'), { code: 'EAI_AGAIN' }) });
-    for (const err of [network, wrapped, gateway, aborted, dns]) {
+    const socket = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' });
+    // openid-client 6.8.8's own chains (a real stub: slow-signin.test.ts): the body stalls after the headers, or the socket closes mid-body.
+    const opError = (cause: unknown) => Object.assign(new Error('failed to parse', { cause }), { name: 'OperationProcessingError', code: 'OAUTH_PARSE_ERROR' });
+    const client = (cause: unknown) => Object.assign(new Error('something went wrong', { cause }), { name: 'ClientError', code: 'OAUTH_PARSE_ERROR' });
+    const stalledBody = client(opError(new DOMException('The operation was aborted due to timeout', 'TimeoutError')));
+    const abortedBody = client(opError(new DOMException('This operation was aborted', 'AbortError')));
+    const closedBody = client(opError(new TypeError('terminated', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) })));
+    for (const err of [network, wrapped, gateway, edgePage, aborted, dns, socket, stalledBody, abortedBody, closedBody]) {
       const d = deps();
       vi.mocked(d.oidc.finishSignIn).mockRejectedValueOnce(err);
       const { cookieHeader, state } = await started(d);
-      expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader }), err.message).toMatchObject({ kind: 'redirect', location: '/sign-in?return=%2Fabout' });
+      expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader }), `${err.name} ${err.message}`).toMatchObject({ kind: 'redirect', location: '/sign-in?return=%2Fabout&fresh=1' });
     }
+    expect(passing(closedBody)).toBe(true);
   });
 
-  it('shows the page at once for a failure that another round would not mend: a bad token, a refusal, a bug', async () => {
+  it('shows the page at once for a failure that another round would not mend: a bad token, the provider’s refusal, a bug', async () => {
     const notFound = Object.assign(new Error('unexpected HTTP response status code', { cause: { status: 404 } }), { code: 'OAUTH_RESPONSE_IS_NOT_CONFORM' });
     const refused = Object.assign(new Error('server responded with an error in the response body'), { code: 'OAUTH_RESPONSE_BODY_ERROR', status: 400, error: 'invalid_client' });
+    // The provider itself refused the code, on a 5xx: openid-client leaves the body unread (a Response as the cause).
+    const grant5xx = Object.assign(new Error('server responded with an error in the response body'), { code: 'OAUTH_RESPONSE_BODY_ERROR', status: 500, error: 'invalid_grant' });
+    const json5xx = Object.assign(new Error('unexpected HTTP response status code', { cause: new Response('{"error":"invalid_grant"}', { status: 503, headers: { 'content-type': 'application/json; charset=utf-8' } }) }), { code: 'OAUTH_RESPONSE_IS_NOT_CONFORM' });
     const typeBug = new TypeError("Cannot read properties of undefined (reading 'x')");
     const odd = { cause: { cause: { cause: { cause: { cause: { cause: { code: 'ECONNRESET' } } } } } } };
-    for (const err of [new Error('unexpected ID Token "nonce" claim value'), notFound, refused, typeBug, odd, 'a string', null]) {
+    const named = { name: 'TimeoutErrorX', code: 'xECONNRESET', status: 600 };
+    for (const err of [new Error('unexpected ID Token "nonce" claim value'), notFound, refused, grant5xx, json5xx, typeBug, odd, named, 'a string', null]) {
       const d = deps();
       vi.mocked(d.oidc.finishSignIn).mockRejectedValueOnce(err);
       const { cookieHeader, state } = await started(d);
-      expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader }), String(err)).toMatchObject({ kind: 'refused', reason: 'failed' });
+      expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader }), JSON.stringify(err)).toMatchObject({ kind: 'refused', reason: 'failed' });
     }
   });
 
@@ -405,22 +463,35 @@ describe('completeSignIn: one fresh round', () => {
     for (const params of [{ code: 'c', state: `${state}x` }, { error: 'access_denied', state }]) {
       const out = await completeSignIn(deps(), { url: url(params), cookieHeader });
       expect(out.kind, JSON.stringify(params)).toBe('refused');
-      expect(JSON.stringify(out)).not.toContain(FRESH_COOKIE);
     }
     expect(await completeSignIn(d, { url: url({ error: 'server_error', state }), cookieHeader })).toMatchObject({ kind: 'refused', reason: 'failed' });
+  });
+
+  it('sets no cookie but the transaction’s and the session’s, on any outcome (the privacy page lists them all)', async () => {
+    const d = deps();
+    const seen = new Set<string>();
+    const { cookieHeader, state } = await started(d);
+    seen.add(names(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).join());
+    seen.add(names(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).join());
+    seen.add(names(await completeSignIn(late(d), { url: url({ code: 'c', state }), cookieHeader })).join());
+    seen.add(names(await completeSignIn(d, { url: url({ code: 'c', state: 'x' }), cookieHeader: undefined })).join());
+    vi.mocked(d.oidc.finishSignIn).mockRejectedValueOnce(timedOut());
+    const slow = await started(d);
+    seen.add(names(await completeSignIn(d, { url: url({ code: 'c', state: slow.state }), cookieHeader: slow.cookieHeader })).join());
+    expect([...seen].sort()).toEqual([AUTH_COOKIE, `${AUTH_COOKIE},${SESSION_COOKIE}`]);
   });
 
   it('keeps the return rules: a return that is not a path on this site goes home', async () => {
     const d = deps();
     const { cookieHeader, state } = await started(d, '//evil.example.org/x');
     await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader });
-    expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ location: '/sign-in' });
+    expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ location: '/sign-in?fresh=1' });
     // Even a transaction sealed with an unsafe return (none of ours is) is read through the same rules.
     for (const back of ['https://evil.example.org/', '/\\evil.example.org', '/ok\nx']) {
       const tx = transactionSetCookie({ state: 'st', nonce: 'n', verifier: 'v', back }, key, NOW).split(';')[0]!;
       const d2 = deps();
       vi.mocked(d2.oidc.finishSignIn).mockRejectedValueOnce(timedOut());
-      expect(await completeSignIn(d2, { url: url({ code: 'c', state: 'st' }), cookieHeader: tx }), back).toMatchObject({ location: '/sign-in' });
+      expect(await completeSignIn(d2, { url: url({ code: 'c', state: 'st' }), cookieHeader: tx }), back).toMatchObject({ location: '/sign-in?fresh=1' });
     }
   });
 
@@ -433,6 +504,14 @@ describe('completeSignIn: one fresh round', () => {
     expect(line).toMatchObject({ level: 'warn', msg: 'sign-in refused', reason: 'failed', fresh_round: true });
     expect(d.lines.join('\n')).not.toContain('SECRETCODE');
     expect(d.lines.join('\n')).not.toContain(state);
+  });
+});
+
+describe('beginSignIn: the fresh round', () => {
+  it('carries the mark on to the profile’s origin when it starts there (S2)', async () => {
+    const d = deps({ setup: { enabled: true, config: { ...cfg, redirectUri: 'https://canary.nwflmensa.us/auth/callback' } } });
+    const out = await beginSignIn(d, { cookieHeader: undefined, back: '/news', again: true, fresh: true, host: 'nwflorida.us' });
+    expect(out.kind === 'redirect' && out.location).toBe('https://canary.nwflmensa.us/sign-in?return=%2Fnews&again=1&fresh=1');
   });
 });
 

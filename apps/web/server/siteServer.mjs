@@ -222,12 +222,17 @@ function errorName(err) {
   return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name) ? err.name : 'Error';
 }
 
+/** The longest path an access line holds (SIGNIN-SLOW); a longer one is cut, and the line says so. */
+const ACCESS_PATH_MAX = 512;
+
 /**
  * SIGNIN-SLOW: one line per request, once its response closes, so a slow page (the sign-in callback
- * among them) can be measured at the origin: the method, the path without its query (logPath), the
- * status and the milliseconds taken. Its request id is the trace id every line carries (LG-N3): the
- * close is bound to the request's context. Never the query, a header, a cookie or the body. The
- * health probe has no line, and the calendar feed has its own (logFeedFetch), so no request has two.
+ * among them) can be measured at the origin: the method, the path without its query (logPath, cut to
+ * 512 characters), the status and the milliseconds taken. A request the client gave up on before the
+ * answer was sent logs 499 (nginx's "client closed request"), never the status it did not get. Its
+ * request id is the trace id every line carries (LG-N3): the close is bound to the request's context.
+ * Never the query, a header, a cookie or the body. The health probe has no line, and the calendar feed
+ * has its own (logFeedFetch), so no request has two.
  *
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
@@ -237,7 +242,10 @@ function errorName(err) {
 function logAccess(req, res, raw, started) {
   const method = req.method;
   res.once('close', AsyncResource.bind(() => {
-    console.log(logEntry({ level: 'info', msg: 'request', method, path: logPath(raw), status: res.statusCode, ms: Math.round(performance.now() - started) }));
+    const path = logPath(raw);
+    const cut = path.length > ACCESS_PATH_MAX ? { path_cut: true } : {};
+    const status = res.writableFinished ? res.statusCode : 499;
+    console.log(logEntry({ level: 'info', msg: 'request', method, path: path.slice(0, ACCESS_PATH_MAX), ...cut, status, ms: Math.round(performance.now() - started) }));
   }));
 }
 
