@@ -16,12 +16,18 @@
 //   4. LinkCheckService.RecordLinkVerdicts, in requests of at most MAX_RECORD_BYTES (the API reads no
 //      message over 256 KiB), then the next list while more wait.
 //
-// This module needs node built-ins only, so the API's suite can drive it against the real API server
-// (apps/api test/links/linkcheck-items.test.ts). The protobuf messages are written and read here by hand:
-// four small messages, checked against the API's generated code in that test. The address list and the
-// verdicts never reach stdout: the command prints counts only. A token is never printed.
+// MACHINE-ROUTE: the calls go to the website (LINKCHECK_API_URL is its origin), which serves exactly
+// this service and NewsletterService in the Connect protocol and forwards each call to the API over the
+// mesh: Cloudflare's tunnel carries no gRPC on a public hostname. A unary Connect call is a plain HTTP
+// POST of the message bytes (application/proto), so it is written here by hand over fetch, as the messages
+// are, and this module still needs node built-ins only.
+//
+// The protobuf messages are written and read here by hand: four small messages, checked against the
+// API's generated code (apps/api test/links/linkcheck-items.test.ts); apps/web
+// test/machine-route-live.test.ts drives this module through the site's route to the real API. The
+// address list and the verdicts never reach stdout: the command prints counts only. A token is never
+// printed.
 // ============================================================================
-import http2 from 'node:http2';
 
 /** check.ts's verdicts (VERDICTS), named here so this module needs nothing else. */
 export type CheckVerdict = 'ok' | 'upgrade' | 'confirm' | 'review' | 'flag' | 'drop';
@@ -194,11 +200,13 @@ export function decodeRecordResponse(bytes: Uint8Array): { recorded: number; not
 }
 
 // ---------------------------------------------------------------------------
-// A unary gRPC call over HTTP/2, and the token.
+// A unary Connect call over HTTP/1.1, and the token.
 
 export const SERVICE = '/nwfl.mensa.v1.LinkCheckService';
 /** The largest answer read: 500 addresses of 2,048 characters, with room. */
 export const MAX_ANSWER_BYTES = 2 * 1024 * 1024;
+/** The most of a refusal read: a Connect error is a small JSON object. */
+const MAX_REFUSAL_BYTES = 64 * 1024;
 const CALL_MS = 60_000;
 // RFC 6750 b64token, as the API's caller gate reads it.
 const B64TOKEN = /^[A-Za-z0-9\-._~+/]+=*$/;
@@ -216,82 +224,98 @@ export function endpoint(name: string, value: string | undefined): URL {
   return url;
 }
 
-const GRPC_CODES = ['OK', 'CANCELLED', 'UNKNOWN', 'INVALID_ARGUMENT', 'DEADLINE_EXCEEDED', 'NOT_FOUND', 'ALREADY_EXISTS', 'PERMISSION_DENIED', 'RESOURCE_EXHAUSTED', 'FAILED_PRECONDITION', 'ABORTED', 'OUT_OF_RANGE', 'UNIMPLEMENTED', 'INTERNAL', 'UNAVAILABLE', 'DATA_LOSS', 'UNAUTHENTICATED'];
+/** The Connect protocol's error codes (connectrpc.com/docs/protocol, "Error Codes"). */
+const CONNECT_CODES = new Set([
+  'canceled',
+  'unknown',
+  'invalid_argument',
+  'deadline_exceeded',
+  'not_found',
+  'already_exists',
+  'permission_denied',
+  'resource_exhausted',
+  'failed_precondition',
+  'aborted',
+  'out_of_range',
+  'unimplemented',
+  'internal',
+  'unavailable',
+  'data_loss',
+  'unauthenticated',
+]);
 
-function refusal(status: string, message: string | undefined): ItemsError {
-  let said: string;
-  try {
-    said = decodeURIComponent(message ?? '');
-  } catch {
-    said = message ?? '';
+class TooLarge extends Error {}
+
+/** The body, read to its end, refused past `max` bytes. */
+async function readCapped(response: Response, max: number): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (response.body !== null) {
+    for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+      size += chunk.length;
+      if (size > max) throw new TooLarge();
+      chunks.push(chunk);
+    }
   }
-  // eslint-disable-next-line no-control-regex
-  said = said.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200);
-  return new ItemsError(`the API refused the call: ${GRPC_CODES[Number(status)] ?? `status ${status}`}${said === '' ? '' : ` (${said})`}`);
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, at);
+    at += chunk.length;
+  }
+  return out;
 }
 
-/** One unary call: the message in a gRPC frame, the answer's one frame back, or the API's refusal. */
-export function grpcCall(api: URL, method: string, token: string, message: Uint8Array): Promise<Uint8Array> {
-  if (!B64TOKEN.test(token)) return Promise.reject(new ItemsError('the token is not a bearer token'));
-  return new Promise((resolve, reject) => {
-    const session = http2.connect(api.origin);
-    const timers: { call?: NodeJS.Timeout } = {};
-    const fail = (error: Error): void => {
-      clearTimeout(timers.call);
-      session.destroy();
-      reject(error instanceof ItemsError ? error : new ItemsError(`the API could not be reached (${error.constructor.name})`));
-    };
-    session.on('error', fail);
-    timers.call = setTimeout(() => fail(new ItemsError('the API did not answer in time')), CALL_MS);
-    const stream = session.request({
-      ':method': 'POST',
-      ':path': `${api.pathname.replace(/\/$/, '')}${SERVICE}/${method}`,
-      'content-type': 'application/grpc',
-      te: 'trailers',
-      authorization: `Bearer ${token}`,
+/** A Connect error's code and message, as the API refused the call; a refusal in any other form by its HTTP status. */
+function refusal(status: number, body: Uint8Array | undefined): ItemsError {
+  let error: unknown;
+  try {
+    error = body === undefined ? undefined : JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    error = undefined;
+  }
+  const { code, message } = (typeof error === 'object' && error !== null ? error : {}) as { code?: unknown; message?: unknown };
+  if (typeof code !== 'string' || !CONNECT_CODES.has(code)) return new ItemsError(`the API refused the call: HTTP ${status}`);
+  // eslint-disable-next-line no-control-regex
+  const said = typeof message === 'string' ? message.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200) : '';
+  return new ItemsError(`the API refused the call: ${code.toUpperCase()}${said === '' ? '' : ` (${said})`}`);
+}
+
+/** One unary call: the message POSTed as Connect binary, the answer's message back, or the API's refusal. */
+export async function connectCall(api: URL, method: string, token: string, message: Uint8Array): Promise<Uint8Array> {
+  if (!B64TOKEN.test(token)) throw new ItemsError('the token is not a bearer token');
+  const url = new URL(`${api.pathname.replace(/\/$/, '')}${SERVICE}/${method}`, api.origin);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/proto', 'connect-protocol-version': '1', 'accept-encoding': 'identity', authorization: `Bearer ${token}` },
+      body: message,
+      // A redirect is refused, never followed with the token.
+      redirect: 'error',
+      signal: AbortSignal.timeout(CALL_MS),
     });
-    const chunks: Buffer[] = [];
-    let size = 0;
-    let status: string | undefined;
-    let said: string | undefined;
-    const statusFrom = (headers: http2.IncomingHttpHeaders): void => {
-      const value = headers['grpc-status'];
-      if (value === undefined) return;
-      status = String(value);
-      said = headers['grpc-message'] as string | undefined;
-    };
-    stream.on('response', statusFrom);
-    stream.on('trailers', statusFrom);
-    stream.on('data', (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > MAX_ANSWER_BYTES + 5) {
-        stream.close();
-        fail(new ItemsError('the API answer is too large'));
-        return;
-      }
-      chunks.push(chunk);
-    });
-    stream.on('error', fail);
-    stream.on('end', () => {
-      clearTimeout(timers.call);
-      session.close();
-      if (status !== '0') {
-        reject(status === undefined ? new ItemsError('the API answer has no status') : refusal(status, said));
-        return;
-      }
-      const body = Buffer.concat(chunks);
-      const length = body.length >= 5 ? body.readUInt32BE(1) : -1;
-      if (body.length < 5 || body[0] !== 0 || length !== body.length - 5) {
-        reject(new ItemsError('the API answer is not one plain gRPC message'));
-        return;
-      }
-      resolve(new Uint8Array(body.subarray(5)));
-    });
-    const frame = Buffer.alloc(5 + message.length);
-    frame.writeUInt32BE(message.length, 1);
-    frame.set(message, 5);
-    stream.end(frame);
-  });
+  } catch (error) {
+    throw new ItemsError(`the API could not be reached (${(error as Error).constructor.name})`);
+  }
+  if (response.status !== 200) {
+    let body: Uint8Array | undefined;
+    try {
+      body = await readCapped(response, MAX_REFUSAL_BYTES);
+    } catch {
+      body = undefined;
+    }
+    throw refusal(response.status, body);
+  }
+  if (!/^application\/proto(;|$)/.test(response.headers.get('content-type') ?? '')) {
+    await response.body?.cancel();
+    throw new ItemsError('the API answer is not one plain Connect message');
+  }
+  try {
+    return await readCapped(response, MAX_ANSWER_BYTES);
+  } catch (error) {
+    throw new ItemsError(error instanceof TooLarge ? 'the API answer is too large' : 'the API answer was cut short');
+  }
 }
 
 export interface TokenRequest {
@@ -349,7 +373,7 @@ export interface ItemsTotals {
 export async function runItems(deps: ItemsDeps): Promise<ItemsTotals> {
   const totals: ItemsTotals = { checked: 0, ok: 0, confirm: 0, drop: 0, recorded: 0, notAwaiting: 0, more: false };
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    const list = decodeListResponse(await grpcCall(deps.api, 'ListLinksAwaitingVerdict', deps.token, new Uint8Array()));
+    const list = decodeListResponse(await connectCall(deps.api, 'ListLinksAwaitingVerdict', deps.token, new Uint8Array()));
     totals.more = list.more;
     if (list.urls.length === 0) break;
     const verdicts = (await deps.check(list.urls)).map(storedVerdict);
@@ -357,7 +381,7 @@ export async function runItems(deps: ItemsDeps): Promise<ItemsTotals> {
     for (const v of verdicts) totals[v.verdict === MACHINE.OK ? 'ok' : v.verdict === MACHINE.DROP ? 'drop' : 'confirm'] += 1;
     let kept = 0;
     for (const request of recordRequests(verdicts)) {
-      const recorded = decodeRecordResponse(await grpcCall(deps.api, 'RecordLinkVerdicts', deps.token, request));
+      const recorded = decodeRecordResponse(await connectCall(deps.api, 'RecordLinkVerdicts', deps.token, request));
       kept += recorded.recorded;
       totals.notAwaiting += recorded.notAwaiting.length;
     }

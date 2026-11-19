@@ -1,10 +1,10 @@
 // L-ITEM: the items mode (items.ts). The verdict mapping, the four LinkCheckService messages written and
-// read by hand, the token, one gRPC call, and the run, against stand-in servers on this container's own
-// loopback. apps/api test/links/linkcheck-items.test.ts drives the same code against the real API server.
-// Every address is made up.
-import http2 from 'node:http2';
+// read by hand, the token, one Connect call, and the run, against stand-in servers on this container's own
+// loopback. apps/api test/links/linkcheck-items.test.ts holds the messages to the API's generated code, and
+// apps/web test/machine-route-live.test.ts drives the same code through the site's route to the real API
+// (MACHINE-ROUTE). Every address is made up.
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { VERDICTS, checkAll, makeChecker } from '../src/check.js';
 import { main, type Io } from '../src/cli.js';
@@ -22,7 +22,7 @@ import {
   decodeRecordResponse,
   encodeRecordRequest,
   endpoint,
-  grpcCall,
+  connectCall,
   newDomainSince,
   recordRequests,
   runItems,
@@ -143,46 +143,48 @@ describe('clientCredentials', () => {
 });
 
 // ---------------------------------------------------------------------------
-// A stand-in gRPC server (h2c on loopback).
+// A stand-in for the site's Connect route (HTTP/1.1 on loopback).
 
 interface Call {
   path: string;
+  method: string;
   authorization: string | undefined;
+  contentType: string | undefined;
+  protocolVersion: string | undefined;
   body: Uint8Array;
 }
-type Answer = { status: number; message?: Uint8Array; grpcMessage?: string; trailersOnly?: boolean; raw?: Buffer };
+/** Success: the message, as application/proto. Otherwise: the HTTP status, and a body and type of the test's choosing. */
+type Answer = { status: 0; message: Uint8Array } | { http: number; contentType?: string; raw?: Buffer | string; location?: string };
 
-const frame = (message: Uint8Array): Buffer => {
-  const out = Buffer.alloc(5 + message.length);
-  out.writeUInt32BE(message.length, 1);
-  out.set(message, 5);
-  return out;
-};
-
-const servers: http2.Http2Server[] = [];
+const servers: http.Server[] = [];
 afterEach(async () => {
-  await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
+  for (const server of servers.splice(0)) {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 async function standIn(answer: (call: Call) => Answer): Promise<{ url: URL; calls: Call[] }> {
   const calls: Call[] = [];
-  const server = http2.createServer();
-  server.on('stream', (stream, headers) => {
+  const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
-    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-    stream.on('end', () => {
-      const body = Buffer.concat(chunks);
-      const call = { path: String(headers[':path']), authorization: headers['authorization'], body: new Uint8Array(body.subarray(5)) };
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const call = {
+        path: String(req.url),
+        method: String(req.method),
+        authorization: req.headers.authorization,
+        contentType: req.headers['content-type'],
+        protocolVersion: req.headers['connect-protocol-version'] as string | undefined,
+        body: new Uint8Array(Buffer.concat(chunks)),
+      };
       calls.push(call);
       const reply = answer(call);
-      const trailers = { 'grpc-status': String(reply.status), ...(reply.grpcMessage !== undefined ? { 'grpc-message': reply.grpcMessage } : {}) };
-      if (reply.trailersOnly === true) {
-        stream.respond({ ':status': 200, 'content-type': 'application/grpc', ...trailers }, { endStream: true });
+      if ('message' in reply) {
+        res.writeHead(200, { 'content-type': 'application/proto' }).end(Buffer.from(reply.message));
         return;
       }
-      stream.respond({ ':status': 200, 'content-type': 'application/grpc' }, { waitForTrailers: true });
-      stream.on('wantTrailers', () => stream.sendTrailers(trailers));
-      stream.end(reply.raw ?? (reply.message === undefined ? Buffer.alloc(0) : frame(reply.message)));
+      res.writeHead(reply.http, { ...(reply.contentType !== undefined ? { 'content-type': reply.contentType } : {}), ...(reply.location !== undefined ? { location: reply.location } : {}) }).end(reply.raw ?? '');
     });
   });
   servers.push(server);
@@ -192,52 +194,69 @@ async function standIn(answer: (call: Call) => Answer): Promise<{ url: URL; call
 
 const list = (urls: string[], more = false): Uint8Array => bytes(...urls.flatMap((u) => [0x0a, u.length, ...ascii(u)]), ...(more ? [0x10, 1] : []));
 const recorded = (n: number, notAwaiting: string[] = []): Uint8Array => bytes(0x08, n, ...notAwaiting.flatMap((u) => [0x12, u.length, ...ascii(u)]));
+const connectError = (http: number, body: unknown): Answer => ({ http, contentType: 'application/json', raw: JSON.stringify(body) });
 
-describe('grpcCall', () => {
-  it('sends one frame to the method with the bearer token, and returns the answer frame', async () => {
+describe('connectCall', () => {
+  it('posts the message as Connect binary to the method with the bearer token, and returns the answer', async () => {
     const { url, calls } = await standIn(() => ({ status: 0, message: list(['https://a.example.org/']) }));
-    expect(decodeListResponse(await grpcCall(url, 'ListLinksAwaitingVerdict', 'tok-1', bytes()))).toEqual({ urls: ['https://a.example.org/'], more: false });
-    expect(calls).toEqual([{ path: '/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict', authorization: 'Bearer tok-1', body: bytes() }]);
+    expect(decodeListResponse(await connectCall(url, 'ListLinksAwaitingVerdict', 'tok-1', bytes()))).toEqual({ urls: ['https://a.example.org/'], more: false });
+    expect(calls).toEqual([
+      { path: '/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict', method: 'POST', authorization: 'Bearer tok-1', contentType: 'application/proto', protocolVersion: '1', body: bytes() },
+    ]);
   });
 
-  it('keeps a base path', async () => {
+  it('keeps a base path, and sends the message bytes as they are', async () => {
     const { url, calls } = await standIn(() => ({ status: 0, message: bytes() }));
-    await grpcCall(new URL(`${url.origin}/api/`), 'RecordLinkVerdicts', 't', bytes(1, 2));
+    await connectCall(new URL(`${url.origin}/api/`), 'RecordLinkVerdicts', 't', bytes(1, 2));
     expect(calls[0]).toMatchObject({ path: '/api/nwfl.mensa.v1.LinkCheckService/RecordLinkVerdicts', body: bytes(1, 2) });
   });
 
   it.each([
-    ['a refusal in the trailers, with its message', { status: 3, grpcMessage: 'the%20link%20checker%20cannot%20accept' }, 'the API refused the call: INVALID_ARGUMENT (the link checker cannot accept)'],
-    ['a trailers-only refusal', { status: 16, trailersOnly: true }, 'the API refused the call: UNAUTHENTICATED'],
-    ['an unknown status, and a message that does not decode', { status: 99, grpcMessage: '%E0%A4%A' }, 'the API refused the call: status 99 (%E0%A4%A)'],
-    ['a message with control characters', { status: 7, grpcMessage: 'no%0Away' }, 'the API refused the call: PERMISSION_DENIED (no way)'],
-    ['no message frame', { status: 0 }, 'the API answer is not one plain gRPC message'],
-    ['a compressed frame', { status: 0, raw: Buffer.from([1, 0, 0, 0, 0]) }, 'the API answer is not one plain gRPC message'],
-    ['two frames', { status: 0, raw: Buffer.concat([frame(bytes(1)), frame(bytes(2))]) }, 'the API answer is not one plain gRPC message'],
+    ['a Connect refusal, with its message', connectError(400, { code: 'invalid_argument', message: 'the link checker cannot accept' }), 'the API refused the call: INVALID_ARGUMENT (the link checker cannot accept)'],
+    ['a Connect refusal with no message', connectError(401, { code: 'unauthenticated' }), 'the API refused the call: UNAUTHENTICATED'],
+    ['a refusal of the size', connectError(413, { code: 'resource_exhausted', message: '' }), 'the API refused the call: RESOURCE_EXHAUSTED'],
+    ['a code Connect does not name', connectError(400, { code: 'not_a_code', message: 'x' }), 'the API refused the call: HTTP 400'],
+    ['a refusal that is not JSON', { http: 404, contentType: 'text/plain', raw: 'Not found' }, 'the API refused the call: HTTP 404'],
+    ['a refusal that is JSON but no object', connectError(503, ['unavailable']), 'the API refused the call: HTTP 503'],
+    ['a message with control characters', connectError(403, { code: 'permission_denied', message: 'no\nway' }), 'the API refused the call: PERMISSION_DENIED (no way)'],
+    ['a message that is not text', connectError(403, { code: 'permission_denied', message: 7 }), 'the API refused the call: PERMISSION_DENIED'],
+    ['an answer that is not application/proto', { http: 200, contentType: 'application/json', raw: '{}' }, 'the API answer is not one plain Connect message'],
+    ['an answer with no type', { http: 200, raw: 'x' }, 'the API answer is not one plain Connect message'],
+    ['a redirect, never followed with the token', { http: 302, location: 'https://elsewhere.example.org/' }, /^the API could not be reached \(\w+\)$/],
   ] as const)('refuses %s', async (_label, reply, message) => {
-    const { url } = await standIn(() => reply);
-    await expect(grpcCall(url, 'X', 't', bytes())).rejects.toThrow(message);
+    const { url, calls } = await standIn(() => reply);
+    await expect(connectCall(url, 'X', 't', bytes())).rejects.toThrow(message);
+    expect(calls).toHaveLength(1);
   });
 
-  it('refuses an answer over its size cap', async () => {
-    const { url } = await standIn(() => ({ status: 0, raw: frame(new Uint8Array(MAX_ANSWER_BYTES + 10)) }));
-    await expect(grpcCall(url, 'X', 't', bytes())).rejects.toThrow('the API answer is too large');
+  it('takes application/proto with parameters', async () => {
+    const { url } = await standIn(() => ({ http: 200, contentType: 'application/proto; charset=binary', raw: Buffer.from(recorded(2)) }));
+    expect(decodeRecordResponse(await connectCall(url, 'X', 't', bytes()))).toEqual({ recorded: 2, notAwaiting: [] });
   });
 
-  it('refuses an answer with no status', async () => {
-    const server = http2.createServer();
-    server.on('stream', (stream) => {
-      stream.respond({ ':status': 200, 'content-type': 'application/grpc' });
-      stream.end(frame(bytes()));
+  it('refuses an answer over its size cap, and a refusal over its own', async () => {
+    const big = await standIn(() => ({ http: 200, contentType: 'application/proto', raw: Buffer.alloc(MAX_ANSWER_BYTES + 1) }));
+    await expect(connectCall(big.url, 'X', 't', bytes())).rejects.toThrow('the API answer is too large');
+    const exact = await standIn(() => ({ http: 200, contentType: 'application/proto', raw: Buffer.alloc(MAX_ANSWER_BYTES) }));
+    expect(await connectCall(exact.url, 'X', 't', bytes())).toHaveLength(MAX_ANSWER_BYTES);
+    const refusal = await standIn(() => ({ http: 500, contentType: 'application/json', raw: `{"code":"internal","message":"${'x'.repeat(70_000)}"}` }));
+    await expect(connectCall(refusal.url, 'X', 't', bytes())).rejects.toThrow('the API refused the call: HTTP 500');
+  });
+
+  it('refuses an answer cut short', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/proto', 'content-length': '100' });
+      res.write(Buffer.alloc(10));
+      setTimeout(() => res.destroy(), 20);
     });
     servers.push(server);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    await expect(grpcCall(new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}`), 'X', 't', bytes())).rejects.toThrow('the API answer has no status');
+    await expect(connectCall(new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}`), 'X', 't', bytes())).rejects.toThrow('the API answer was cut short');
   });
 
   it('never sends a token that is not a bearer token, and names an unreachable API by its error class only', async () => {
-    await expect(grpcCall(new URL('http://127.0.0.1:1'), 'X', 'a b', bytes())).rejects.toThrow('the token is not a bearer token');
-    await expect(grpcCall(new URL('http://127.0.0.1:1'), 'X', 't', bytes())).rejects.toThrow(/^the API could not be reached \(\w+\)$/);
+    await expect(connectCall(new URL('http://127.0.0.1:1'), 'X', 'a b', bytes())).rejects.toThrow('the token is not a bearer token');
+    await expect(connectCall(new URL('http://127.0.0.1:1'), 'X', 't', bytes())).rejects.toThrow(/^the API could not be reached \(\w+\)$/);
   });
 });
 
@@ -459,8 +478,8 @@ describe('a hostile API', () => {
   });
 
   it('cuts a refusal message to 200 characters with no control character', async () => {
-    const { url } = await standIn(() => ({ status: 7, trailersOnly: true, grpcMessage: encodeURIComponent(`\u001b[31mYOUR TOKEN abc\u0007${'x'.repeat(5000)}`) }));
-    const error = await grpcCall(url, 'ListLinksAwaitingVerdict', 'abc', new Uint8Array()).then(
+    const { url } = await standIn(() => connectError(403, { code: 'permission_denied', message: `\u001b[31mYOUR TOKEN abc\u0007${'x'.repeat(5000)}` }));
+    const error = await connectCall(url, 'ListLinksAwaitingVerdict', 'abc', new Uint8Array()).then(
       () => new Error('the call was not refused'),
       (e: unknown) => e as Error,
     );
