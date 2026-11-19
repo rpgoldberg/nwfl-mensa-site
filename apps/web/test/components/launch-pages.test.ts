@@ -2,7 +2,7 @@
 // The privacy page's statements are held to the code by name: each test below names the file that
 // makes its statement true.
 import { experimental_AstroContainer as AstroContainer } from 'astro/container';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { LINKS_COOKIE, SIZE_COOKIE, THEME_COOKIE } from '../../server/prefs.mjs';
 import { AUTH_COOKIE } from '../../server/session.mjs';
@@ -92,6 +92,29 @@ describe('/privacy', () => {
     expect(text).toContain('It does not record what a page says or what you type into a form.');
     expect(readFileSync('server/log.mjs', 'utf8')).toContain('trace_id: trace?.traceId');
     expect(readFileSync('../api/src/grpc/interceptors.ts', 'utf8')).toContain('request_id: requestId');
+  });
+
+  it("says this site's password stays with the sign-in service: a code grant with PKCE (src/lib/auth/oidc.ts), bearer tokens at the API (api/src/auth/jwt.ts), no password field", () => {
+    expect(text).toContain("Your password for this site is kept by our sign-in service; the site's own pages never see it.");
+    const oidc = readFileSync('src/lib/auth/oidc.ts', 'utf8');
+    expect(oidc).toContain('client.authorizationCodeGrant(');
+    expect(oidc).toContain("code_challenge_method: 'S256'");
+    expect(readFileSync('../api/src/auth/jwt.ts', 'utf8')).toContain('jwtVerify(token, client.jwks');
+    const pages = (readdirSync('src', { recursive: true }) as string[]).filter((f) => f.endsWith('.astro'));
+    expect(pages.length).toBeGreaterThan(20);
+    for (const f of pages) expect(readFileSync(`src/${f}`, 'utf8'), f).not.toMatch(/type=["']?password/i);
+    const protos = (readdirSync('../api/proto', { recursive: true }) as string[]).filter((f) => f.endsWith('.proto'));
+    expect(protos.length).toBeGreaterThan(5);
+    for (const f of protos) expect(readFileSync(`../api/proto/${f}`, 'utf8'), f).not.toMatch(/\bpassword\b/i);
+  });
+
+  it('says Cloudflare carries the traffic and keeps its own records, with no period of its own (api/src/auth/caller.ts: the edge is cloudflared)', () => {
+    const sentence = "Cloudflare, which carries the site's traffic, keeps its own records under its own privacy policy.";
+    expect(text).toContain(sentence);
+    const log = /The server.s log (.*?) To see your record/.exec(text)?.[1] ?? '';
+    expect(log).toContain(sentence);
+    expect(log).not.toMatch(/\d|day|week|month|year/i);
+    expect(readFileSync('../api/src/auth/caller.ts', 'utf8')).toContain("DEFAULT_EDGE_CLIENT_IDS: readonly string[] = ['cloudflared.nwfl-edge.serviceaccount.identity.linkerd.cluster.local']");
   });
 
   it('sends a request for a copy or for removal to the officers page, and links nowhere behind sign-in', () => {
