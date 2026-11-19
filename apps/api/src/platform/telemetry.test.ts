@@ -195,4 +195,65 @@ describe('startTelemetry, trace export', () => {
     expect(said({ ...zero, accepted: 3, exported: 3, dropped_queue_full: 4 })).toMatchObject([{ level: 'warn', dropped_queue_full: 4 }]);
     expect(said({ ...zero, accepted: 3, exported: 1, dropped_at_shutdown: 2 })).toMatchObject([{ level: 'warn', dropped_at_shutdown: 2 }]);
   });
+
+  // Fix round 1: the standard switches turn export off even with an endpoint set.
+  describe('the standard off switches', () => {
+    const ENDPOINT = { [TRACES_ENDPOINT_ENV]: 'http://127.0.0.1:9', [GENERAL_ENDPOINT_ENV]: 'http://127.0.0.1:9' };
+
+    it.each([
+      ['OTEL_SDK_DISABLED', 'true'],
+      ['OTEL_SDK_DISABLED', 'TRUE'],
+      ['OTEL_SDK_DISABLED', ' True '],
+      ['OTEL_TRACES_EXPORTER', 'none'],
+      ['OTEL_TRACES_EXPORTER', 'NONE'],
+      ['OTEL_TRACES_EXPORTER', 'console'],
+      ['OTEL_TRACES_EXPORTER', 'otlp,console'],
+      ['OTEL_TRACES_EXPORTER', 'zipkin'],
+      ['OTEL_TRACES_EXPORTER', 'otlp\u200b'],
+    ])('%s=%j: no exporter is built, and one line says which variable', async (name, value) => {
+      let built = 0;
+      const telemetry = startTelemetry({ env: { ...ENDPOINT, [name]: value }, createExporter: () => ((built += 1), { export: () => undefined, shutdown: () => Promise.resolve() }) });
+      try {
+        expect(readTraceEndpoint({ ...ENDPOINT, [name]: value })).toEqual({ state: 'disabled', env: name });
+        expect(telemetry.traceExport).toEqual({ state: 'disabled', env: name });
+        expect(built).toBe(0);
+        expect(telemetry.exportCounts()).toBeNull();
+        expect(trace.getTracer('t').startSpan('s').spanContext().traceId).not.toMatch(/^0+$/);
+        const out = lines();
+        logTraceExport(telemetry, createStructuredLogger({ sink: out.sink }));
+        logTraceExportCounts(telemetry, createStructuredLogger({ sink: out.sink }));
+        expect(out.read()).toMatchObject([{ level: 'info', msg: 'trace export off', env: name }]);
+        expect(JSON.stringify(out.read())).not.toContain('127.0.0.1');
+      } finally {
+        await telemetry.shutdown();
+      }
+    });
+
+    it.each([
+      ['OTEL_SDK_DISABLED', 'false'],
+      ['OTEL_SDK_DISABLED', ''],
+      ['OTEL_SDK_DISABLED', '1'],
+      ['OTEL_SDK_DISABLED', 'yes'],
+      ['OTEL_TRACES_EXPORTER', 'otlp'],
+      ['OTEL_TRACES_EXPORTER', ' OTLP '],
+      ['OTEL_TRACES_EXPORTER', ''],
+      ['OTEL_TRACES_EXPORTER', ' \u200b'],
+    ])('%s=%j leaves export on', (name, value) => {
+      expect(readTraceEndpoint({ ...ENDPOINT, [name]: value })).toMatchObject({ state: 'on', env: TRACES_ENDPOINT_ENV });
+    });
+
+    it('wins over a bad endpoint too, and SDK_DISABLED is named first', () => {
+      expect(readTraceEndpoint({ [TRACES_ENDPOINT_ENV]: 'ftp://x', OTEL_TRACES_EXPORTER: 'none' })).toEqual({ state: 'disabled', env: 'OTEL_TRACES_EXPORTER' });
+      expect(readTraceEndpoint({ OTEL_TRACES_EXPORTER: 'none', OTEL_SDK_DISABLED: 'true' })).toEqual({ state: 'disabled', env: 'OTEL_SDK_DISABLED' });
+    });
+  });
+
+  it('gives the exporter the endpoint and the export deadline, 5 s unless set', async () => {
+    const seen: Array<[string, number]> = [];
+    const createExporter = (endpoint: string, timeoutMillis: number) => (seen.push([endpoint, timeoutMillis]), { export: () => undefined, shutdown: () => Promise.resolve() });
+    const env = { [TRACES_ENDPOINT_ENV]: 'http://127.0.0.1:9' };
+    await startTelemetry({ env, createExporter }).shutdown();
+    await startTelemetry({ env, createExporter, traceExport: { exportTimeoutMillis: 750 } }).shutdown();
+    expect(seen).toEqual([['http://127.0.0.1:9', 5_000], ['http://127.0.0.1:9', 750]]);
+  });
 });

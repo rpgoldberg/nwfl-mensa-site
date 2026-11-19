@@ -43,6 +43,8 @@ a trace id; the spans go nowhere unless an endpoint is set
 |----------|---------|
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The OTLP gRPC collector for traces, as `http://host:port` (plain; the mesh adds mTLS) or `https://host:port`. Wins when both are set. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | The same, read when the traces one is unset or blank. |
+| `OTEL_SDK_DISABLED` | `true`, in any case: export is off whatever the endpoint says. Spans are still made, for the trace ids in the log. |
+| `OTEL_TRACES_EXPORTER` | Unset or `otlp`: as the endpoint says. Anything else, `none` included: off. |
 | `SERVICE_VERSION` | Sent as `service.version` when set. |
 
 Unset, empty or made only of characters that draw nothing means off: no span
@@ -52,32 +54,44 @@ a fragment, a hidden character) is refused with one warning at start,
 `trace export refused: nothing is exported`, naming the variable and the
 reason but not the value; the API then runs without export. A URL with no
 port gets its scheme's (80 or 443). When export is on, one line at start says
-`trace export on` with the endpoint. The exporter library also reads the
+`trace export on` with the endpoint; when a switch turned it off, one line
+says `trace export off` and names the variable. The exporter library also reads the
 other `OTEL_EXPORTER_OTLP_*` variables (headers, certificates, compression);
 none is needed on the mesh.
 
 Leave both unset until the receiver for this tenant exists on the app
 cluster's gateway. Until then the image ships with export dark.
 
-What is sent (`src/platform/span-redaction.ts`):
+What is sent (`src/platform/span-redaction.ts`). No free text leaves: a mask
+can spot an address or a number, never a name, so a text is sent only in a
+fixed form that a sentence cannot have.
 
-- Attributes by allow-list: `rpc.system`, `rpc.method` and
-  `rpc.grpc.status_code` on a span, `exception.type` and `exception.message`
-  on an event. Any other key is left out, a stack trace included. To export a
-  new attribute, add its key there.
-- Every text that remains (span and event names, status message, the allowed
-  values, the scope, the resource) goes through the log redaction
-  (`src/platform/shared.ts`), and then has query strings, `token=` style
-  pairs and runs of four or more digits masked. Number attributes are not
-  touched.
-- Ids and flags only from a span context: no `tracestate`, no baggage.
-- The resource is `service.name`, and `service.version` when known. No host
-  name, no process or environment detail.
+- Span name: only in the gRPC form `package.Service/Method`; anything else
+  is sent as `span`.
+- Status: the code. Never the message.
+- Span attributes, three keys, each only with a value of its own kind:
+  `rpc.system` (`grpc`), `rpc.method` (a method name in that same form) and
+  `rpc.grpc.status_code` (a number, 0 to 16). Any other key is left out. To
+  export a new attribute, add its key and a rule for its value there.
+- Events: the name `exception`, or `event` for any other. Of the attributes
+  only `exception.type`, as an identifier. No message and no stack trace.
+- Scope: the tracer's name and version in an identifier form, else `scope`.
+- Ids and flags only from a span context: no `tracestate`, no baggage, no
+  link attributes.
+- The resource is `service.name`, and `service.version` when it looks like a
+  release or a commit id. No host name, no process or environment detail.
+- What is kept still goes through the log redaction
+  (`src/platform/shared.ts`) and, after percent-decoding and Unicode
+  folding, has query strings, `token=` style pairs, anything around an at
+  sign and runs of four or more digits masked.
 
 Export never holds a call up. Ending a span puts it on a queue of 2,048;
 batches of up to 512 go out every 5 s, each with a 5 s deadline. A full queue
 drops the span; a collector that is down, slow or refusing costs that batch.
-Nothing is retried. On shutdown the queue is flushed for at most 2 s, and one
+Nothing is retried. After three failed batches in a row the exporter is
+replaced by a new one with a new connection, since a connection can stay
+unusable after the collector recovers (seen with an answer over the
+client's size limit). On shutdown the queue is flushed for at most 2 s, and one
 line, `trace export stopped`, gives the counts: `accepted`, `exported`,
 `dropped_queue_full`, `dropped_export_failed`, `dropped_at_shutdown`. It is a
 warning when anything was dropped. A caller that sends `traceparent` with the

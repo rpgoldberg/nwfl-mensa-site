@@ -14,7 +14,9 @@
 //   4. Trace export (LG-N6), OFF unless an endpoint is configured. With
 //      neither OTEL_EXPORTER_OTLP_TRACES_ENDPOINT nor
 //      OTEL_EXPORTER_OTLP_ENDPOINT set to something visible, the provider has
-//      no span processor: spans record, carry ids and go nowhere. With one
+//      no span processor: spans record, carry ids and go nowhere. The same
+//      with OTEL_SDK_DISABLED=true, or OTEL_TRACES_EXPORTER set to anything
+//      but `otlp`, whatever the endpoint says. Otherwise, with an endpoint
 //      set, spans go to an OTLP gRPC collector through a batch processor, and
 //      every span is redacted first (span-redaction.ts).
 //
@@ -45,8 +47,15 @@ export const TRACES_ENDPOINT_ENV = 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT';
 /** The endpoint for every signal: used when the traces one is unset or blank. */
 export const GENERAL_ENDPOINT_ENV = 'OTEL_EXPORTER_OTLP_ENDPOINT';
 
+/** `true` (any case) switches export off. The SDK still makes trace ids for the log lines. */
+export const SDK_DISABLED_ENV = 'OTEL_SDK_DISABLED';
+/** Unset or `otlp`: export as the endpoint says. Anything else, `none` included: off. */
+export const TRACES_EXPORTER_ENV = 'OTEL_TRACES_EXPORTER';
+
 export type TraceExport =
   | { state: 'off' }
+  /** Switched off by a standard variable, named here, whatever the endpoint says. */
+  | { state: 'disabled'; env: string }
   | { state: 'on'; env: string; endpoint: string }
   /** Configured, but not usable: nothing is exported. The reason never repeats the value. */
   | { state: 'refused'; env: string; reason: string };
@@ -92,9 +101,15 @@ const REFUSED_EXPORTER = 'the exporter could not be built';
 /**
  * Where traces go, from the environment. The traces endpoint wins over the general one; a value that
  * is unset, empty or made only of characters that draw nothing counts as unset, so the general one is
- * read next. The first value that is set decides: when it is refused, the other is not tried.
+ * read next. The first value that is set decides: when it is refused, the other is not tried. The two
+ * standard off switches are read before either.
  */
 export function readTraceEndpoint(env: Record<string, string | undefined>): TraceExport {
+  // The SDK itself stays on either way: log lines need its trace ids. Only export is switched off.
+  if (seenText(env[SDK_DISABLED_ENV] ?? '')?.toLowerCase() === 'true') return { state: 'disabled', env: SDK_DISABLED_ENV };
+  // Only OTLP is built in. Any other choice, `none` or one this service does not know, exports nothing.
+  const exporter = env[TRACES_EXPORTER_ENV];
+  if (exporter !== undefined && seenText(exporter) !== null && exporter.trim().toLowerCase() !== 'otlp') return { state: 'disabled', env: TRACES_EXPORTER_ENV };
   for (const name of [TRACES_ENDPOINT_ENV, GENERAL_ENDPOINT_ENV]) {
     const given = env[name];
     if (given === undefined || seenText(given) === null) continue;
@@ -114,6 +129,15 @@ export function readTraceEndpoint(env: Record<string, string | undefined>): Trac
 
 const FAILED: ExportResult = { code: ExportResultCode.FAILED };
 
+/** Failed batches in a row before the exporter is replaced: three, so 15 s at the default pace. */
+const REBUILD_AFTER_FAILED_BATCHES = 3;
+
+/** Close an exporter, whatever it answers. */
+const close = (exporter: SpanExporter): Promise<void> =>
+  Promise.resolve()
+    .then(() => exporter.shutdown())
+    .catch(() => undefined);
+
 /**
  * The queue's bound, the redaction and the counts, around the SDK's batch processor and the OTLP
  * exporter. The processor half refuses a span when as many wait as the queue holds, so the batch
@@ -122,14 +146,17 @@ const FAILED: ExportResult = { code: ExportResultCode.FAILED };
 class RedactingExport implements SpanProcessor {
   readonly counts: TraceExportCounts = { accepted: 0, exported: 0, dropped_queue_full: 0, dropped_export_failed: 0, dropped_at_shutdown: 0 };
   private readonly batches: BatchSpanProcessor;
+  private inner: SpanExporter;
   private waiting = 0;
+  private failedInARow = 0;
   private closed = false;
 
   constructor(
-    private readonly inner: SpanExporter,
+    private readonly build: () => SpanExporter,
     private readonly resource: SpanResource,
     private readonly settings: TraceExportSettings,
   ) {
+    this.inner = build();
     this.batches = new BatchSpanProcessor({
       // The inner exporter is closed in shutdown() below, deadline or not, so not from here.
       exporter: { export: (spans, done) => this.send(spans, done), shutdown: () => Promise.resolve() },
@@ -162,7 +189,12 @@ class RedactingExport implements SpanProcessor {
       if (settled) return;
       settled = true;
       // After the shutdown deadline the batch is already counted as left behind.
-      if (!this.closed) this.counts[result.code === ExportResultCode.SUCCESS ? 'exported' : 'dropped_export_failed'] += spans.length;
+      if (!this.closed) {
+        const sent = result.code === ExportResultCode.SUCCESS;
+        this.counts[sent ? 'exported' : 'dropped_export_failed'] += spans.length;
+        this.failedInARow = sent ? 0 : this.failedInARow + 1;
+        if (this.failedInARow >= REBUILD_AFTER_FAILED_BATCHES) this.rebuild();
+      }
       done(result);
     };
     try {
@@ -173,6 +205,24 @@ class RedactingExport implements SpanProcessor {
     } catch {
       settle(FAILED);
     }
+  }
+
+  /**
+   * A connection can end up unusable for good while the collector is healthy again (an answer larger
+   * than the client accepts leaves it refusing every later call). So after a few failed batches in a
+   * row the exporter is replaced by a new one, with a new connection; the old one is closed.
+   */
+  private rebuild(): void {
+    this.failedInARow = 0;
+    let next: SpanExporter;
+    try {
+      next = this.build();
+    } catch {
+      return;
+    }
+    const old = this.inner;
+    this.inner = next;
+    void close(old);
   }
 
   forceFlush(): Promise<void> {
@@ -186,15 +236,11 @@ class RedactingExport implements SpanProcessor {
     const deadline = new Promise<void>((resolve) => {
       timer = setTimeout(resolve, this.settings.shutdownTimeoutMillis);
     });
-    const close = (): Promise<void> =>
-      Promise.resolve()
-        .then(() => this.inner.shutdown())
-        .catch(() => undefined);
     let flushed = false;
     const flush = this.batches
       .shutdown()
       .catch(() => undefined)
-      .then(close)
+      .then(() => close(this.inner))
       .then(() => {
         flushed = true;
       });
@@ -203,7 +249,7 @@ class RedactingExport implements SpanProcessor {
     this.closed = true;
     this.counts.dropped_at_shutdown = this.counts.accepted - this.counts.exported - this.counts.dropped_export_failed;
     // Past the deadline a call is still out, and closing the exporter waits for it: asked for, not waited on.
-    if (!flushed) void close();
+    if (!flushed) void close(this.inner);
   }
 }
 
@@ -244,8 +290,9 @@ export function startTelemetry(options: TelemetryOptions = {}): Telemetry {
   if (traceExport.state === 'on') {
     const settings = { ...DEFAULT_TRACE_EXPORT_SETTINGS, ...options.traceExport };
     try {
-      const exporter = (options.createExporter ?? otlpGrpcExporter)(traceExport.endpoint, settings.exportTimeoutMillis);
-      exporting = new RedactingExport(exporter, exportResource(serviceName, seenText(env['SERVICE_VERSION'] ?? '') ?? undefined), settings);
+      const { endpoint } = traceExport;
+      const build = (): SpanExporter => (options.createExporter ?? otlpGrpcExporter)(endpoint, settings.exportTimeoutMillis);
+      exporting = new RedactingExport(build, exportResource(serviceName, seenText(env['SERVICE_VERSION'] ?? '') ?? undefined), settings);
     } catch {
       traceExport = { state: 'refused', env: traceExport.env, reason: REFUSED_EXPORTER };
     }
@@ -271,11 +318,12 @@ export function startTelemetry(options: TelemetryOptions = {}): Telemetry {
 
 /**
  * One line at start saying whether traces are exported: where to, or why not. Silent when no endpoint
- * is configured. A refused endpoint is named by its variable and the reason, never by its value.
+ * is configured and no switch is set. A refused endpoint is named by its variable and the reason, never by its value.
  */
 export function logTraceExport(telemetry: Telemetry, logger: { info(fields: object, message: string): void; warn(fields: object, message: string): void }): void {
   const found = telemetry.traceExport;
   if (found.state === 'on') logger.info({ env: found.env, endpoint: found.endpoint }, 'trace export on');
+  if (found.state === 'disabled') logger.info({ env: found.env }, 'trace export off');
   if (found.state === 'refused') logger.warn({ env: found.env, reason: found.reason }, 'trace export refused: nothing is exported');
 }
 

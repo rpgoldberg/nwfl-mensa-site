@@ -12,7 +12,7 @@ import { closedPort, startOtlpReceiver, type OtlpReceiver } from '../helpers/otl
 const EMAIL = 'avery.quill@example.com';
 const NUMBER = '10234567';
 const NAME = 'Avery Quill';
-const CANARIES = [EMAIL, 'avery', NUMBER, NAME, 'Quill', 's3cr3tcode', 'abc.DEF-123_xyz', 'hunter2', 'members.js', 'node-17'];
+const CANARIES = [EMAIL, 'avery', NUMBER, NAME, 'Avery', 'Quill', 's3cr3tcode', 'abc.DEF-123_xyz', 'hunter2', 'members.js', 'node-17', 'duplicate', 'retry', 'no row', 'callback', 'Find'];
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -97,36 +97,51 @@ describe('trace export', () => {
     span.addEvent(`retry for ${EMAIL}`, { note: NAME, 'peer.label': NAME });
     span.setStatus({ code: SpanStatusCode.ERROR, message: `Error: no row for ${EMAIL} (${NUMBER}), token=hunter2` });
     span.end();
+    // What new code might do to the API's own span, from inside a call (the challenger's probe).
+    await trace.getTracer('nwfl-mensa-api/grpc').startActiveSpan('nwfl.v1.X/Y', async (own) => {
+      await Promise.resolve();
+      const active = trace.getActiveSpan();
+      active?.setAttributes({ 'enduser.id': EMAIL, 'db.statement': `select * from member where number = '${NUMBER}'`, 'rpc.request.metadata.authorization': 'Bearer abc.DEF-123_xyz', 'rpc.method': `nwfl.v1.X/Y ${EMAIL}`, 'rpc.service': 'nwfl.v1.X' });
+      active?.addEvent('lookup', { 'member.name': NAME, 'exception.message': `no row for ${NAME}` });
+      active?.recordException(new TypeError(`no row for ${NAME}`));
+      active?.updateName(`Find ${NAME} ${NUMBER}`);
+      own.end();
+    });
     await rpc({ traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01', baggage: `member=${NUMBER}` }, true);
 
     const sending = telemetry;
-    await until(() => sending.exportCounts()?.exported === 2);
-    const spans = (receiver?.spans() ?? []).sort((a, b) => a.name.localeCompare(b.name));
-    expect(spans).toHaveLength(2);
+    await until(() => sending.exportCounts()?.exported === 3);
+    const spans = receiver?.spans() ?? [];
+    expect(spans).toHaveLength(3);
     const raw = receiver?.rawText() ?? '';
     for (const canary of CANARIES) expect(raw).not.toContain(canary);
 
-    const [manual, call] = spans;
+    const [manual, renamed, call] = spans;
     expect(manual?.resource).toEqual({ 'service.name': 'svc [REDACTED]', 'service.version': '1.2.3' });
     expect(manual?.traceId).toBe('4bf92f3577b34da6a3ce929d0e0e4736');
     expect(manual?.traceState).toBe('');
-    expect(manual?.name).toBe('GET /auth/callback[REDACTED] for [REDACTED]');
-    expect(manual?.scope).toBe('scope for [REDACTED]');
-    expect(Object.keys(manual?.attributes ?? {}).sort()).toEqual(['rpc.grpc.status_code', 'rpc.method', 'rpc.system']);
-    expect(manual?.attributes['rpc.method']).toBe('nwfl.v1.MemberService/Find [REDACTED] [REDACTED] [REDACTED] /x[REDACTED] access_[REDACTED]');
-    expect(manual?.attributes['rpc.grpc.status_code']).toBe(13);
+    // Free text does not leave: a fixed word for the name, the scope and an event, and no message anywhere.
+    expect(manual?.name).toBe('span');
+    expect(manual?.scope).toBe('scope');
+    expect(manual?.attributes).toEqual({ 'rpc.system': 'grpc', 'rpc.grpc.status_code': 13 });
     expect(manual?.events).toEqual([
-      { name: 'exception', attributes: { 'exception.type': 'Error', 'exception.message': 'duplicate key (email)=([REDACTED]) for member [REDACTED]' } },
-      { name: 'retry for [REDACTED]', attributes: {} },
+      { name: 'exception', attributes: { 'exception.type': 'Error' } },
+      { name: 'event', attributes: {} },
     ]);
     expect(manual?.links).toBe(1);
-    expect(manual?.statusMessage).toBe('Error: no row for [REDACTED] ([REDACTED]), [REDACTED]');
+    expect(manual?.statusMessage).toBe('');
     expect(manual?.statusCode).toBe(SpanStatusCode.ERROR);
+
+    expect(renamed).toMatchObject({ name: 'span', scope: 'nwfl-mensa-api/grpc', attributes: {}, statusMessage: '' });
+    expect(renamed?.events).toEqual([
+      { name: 'event', attributes: {} },
+      { name: 'exception', attributes: { 'exception.type': 'TypeError' } },
+    ]);
 
     // The API's own span for a failed call: the method, the code, nothing of the error.
     expect(call).toMatchObject({ name: 'nwfl.v1.EventService/ListEvents', traceId: '4bf92f3577b34da6a3ce929d0e0e4736', statusCode: SpanStatusCode.ERROR, statusMessage: '', events: [] });
     expect(call?.attributes).toEqual({ 'rpc.system': 'grpc', 'rpc.method': 'nwfl.v1.EventService/ListEvents', 'rpc.grpc.status_code': 2 });
-    expect(telemetry.exportCounts()).toEqual({ accepted: 2, exported: 2, dropped_queue_full: 0, dropped_export_failed: 0, dropped_at_shutdown: 0 });
+    expect(telemetry.exportCounts()).toEqual({ accepted: 3, exported: 3, dropped_queue_full: 0, dropped_export_failed: 0, dropped_at_shutdown: 0 });
     expect(unhandled).toEqual([]);
   });
 
@@ -181,6 +196,100 @@ describe('trace export', () => {
       expect(unhandled).toEqual([]);
       telemetry = undefined;
     });
+  });
+
+  // Ending a span is all a call pays for export. The median resists a busy box; a few milliseconds
+  // of work per span, or an export started from the call, would move it far past the bound.
+  it('ends a span in well under a millisecond while the collector never answers', async () => {
+    receiver = await startOtlpReceiver('hang');
+    telemetry = startTelemetry({
+      env: { [TRACES_ENDPOINT_ENV]: receiver.url },
+      traceExport: { scheduledDelayMillis: 5, maxExportBatchSize: 8, maxQueueSize: 64, exportTimeoutMillis: 1_000, shutdownTimeoutMillis: 100 },
+    });
+    const tracer = trace.getTracer('t');
+    const costs: number[] = [];
+    for (let i = 0; i < 600; i += 1) {
+      const span = tracer.startSpan('nwfl.v1.EventService/ListEvents', { attributes: { 'rpc.system': 'grpc', 'rpc.method': 'nwfl.v1.EventService/ListEvents' } });
+      const started = performance.now();
+      span.end();
+      costs.push(performance.now() - started);
+      if (i % 50 === 0) await sleep(2);
+    }
+    costs.sort((a, b) => a - b);
+    expect(costs[300]).toBeLessThan(0.5);
+    expect(costs[540]).toBeLessThan(2);
+  });
+
+  it('builds a new exporter after three failed batches in a row, so a stuck connection is not kept', async () => {
+    const built: Array<{ fail: boolean; shut: number }> = [];
+    let fail = true;
+    telemetry = startTelemetry({
+      env: { [TRACES_ENDPOINT_ENV]: 'http://127.0.0.1:9' },
+      traceExport: { scheduledDelayMillis: 1, maxExportBatchSize: 1, shutdownTimeoutMillis: 200 },
+      createExporter: () => {
+        const mine = { fail, shut: 0 };
+        built.push(mine);
+        return { export: (_spans, done) => done({ code: mine.fail ? ExportResultCode.FAILED : ExportResultCode.SUCCESS }), shutdown: () => ((mine.shut += 1), Promise.reject(new Error('closing failed'))) };
+      },
+    });
+    const sending = telemetry;
+    const one = async (): Promise<void> => {
+      const before = total(sending);
+      trace.getTracer('t').startSpan('s').end();
+      await until(() => total(sending) === before + 1);
+    };
+    await one();
+    await one();
+    expect(built).toHaveLength(1);
+    fail = false;
+    await one();
+    // The third failure in a row: the old exporter is closed and the next batch goes to a new one.
+    expect(built).toHaveLength(2);
+    expect(built[0]?.shut).toBe(1);
+    await one();
+    await one();
+    await one();
+    await one();
+    expect(built).toHaveLength(2);
+    expect(telemetry.exportCounts()).toMatchObject({ accepted: 7, exported: 4, dropped_export_failed: 3 });
+    // A success in between starts the count again.
+    built[1]!.fail = true;
+    await one();
+    await one();
+    built[1]!.fail = false;
+    await one();
+    built[1]!.fail = true;
+    await one();
+    await one();
+    expect(built).toHaveLength(2);
+    await telemetry.shutdown();
+    expect(built[1]?.shut).toBe(1);
+    await sleep(20);
+    expect(unhandled).toEqual([]);
+    telemetry = undefined;
+  });
+
+  it('keeps the exporter it has when a new one cannot be built', async () => {
+    let builds = 0;
+    telemetry = startTelemetry({
+      env: { [TRACES_ENDPOINT_ENV]: 'http://127.0.0.1:9' },
+      traceExport: { scheduledDelayMillis: 1, maxExportBatchSize: 1, shutdownTimeoutMillis: 200 },
+      createExporter: () => {
+        builds += 1;
+        if (builds > 1) throw new Error('no exporter today');
+        return { export: (_spans, done) => done({ code: ExportResultCode.FAILED }), shutdown: () => Promise.resolve() };
+      },
+    });
+    const sending = telemetry;
+    const started = performance.now();
+    for (let i = 1; i <= 7; i += 1) {
+      trace.getTracer('t').startSpan('s').end();
+      await until(() => sending.exportCounts()?.dropped_export_failed === i);
+    }
+    // Each batch was answered: none was left for the batch processor's own timeout to end.
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(builds).toBe(3);
+    expect(unhandled).toEqual([]);
   });
 
   it('drops, and counts, what does not fit in the queue', async () => {
