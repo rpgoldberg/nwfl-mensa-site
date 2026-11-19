@@ -57,6 +57,47 @@ Configuration is by environment: `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL`, `LI
 service account's app password, in a file), and optionally `LINKCHECK_CLIENT_ID` (`nwfl-linkcheck`),
 `LINKCHECK_USERNAME` (`svc-nwfl-linkcheck`) and `LINKCHECK_SCOPE` (`links.check`). It prints counts only.
 
+`scripts/linkcheck.sh items <image>` runs it in one container, hardened as the others: read-only, no
+capabilities, `--dns 1.1.1.1`, `--memory=512m`, no PDF and no folder of the machine. It runs only an image given
+as a name, `@sha256:` and 64 hex characters, and nothing else: no tag alone, no bare image ID, and no name that
+starts with a dash or holds a space (docker would read it as an option). The settings above come from the environment and go to the container by name.
+`LINKCHECK_PASSWORD_FILE` names a file only its owner can read (0600); it is mounted read-only at
+`/in/password`, so the password is in no argument and no environment value.
+
+```sh
+LINKCHECK_API_URL=https://... LINKCHECK_TOKEN_URL=https://... LINKCHECK_PASSWORD_FILE=/path/to/password \
+  sh scripts/linkcheck.sh items ghcr.io/rpgoldberg/nwfl-mensa-site/linkcheck@sha256:<digest>
+```
+
+`scripts/items-cron.sh` is the wrapper a crontab calls on the officer's machine. It takes no arguments. It
+reads `LINKCHECK_IMAGE` (by digest), `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL` and optionally `LINKCHECK_SCOPE`
+and `BAO_ADDR` from `~/.config/nwfl-linkcheck/items.conf`, one `NAME=value` per line. The file must be a plain
+file (not a link) of plain ASCII text with Unix line endings, and neither it nor its folder may be writable by
+group or others: whoever can write it chooses the image that is handed the password. It lets one run go at a
+time (flock). It reads `client_id`, `username` and `password` at `secret/nwfl-mensa/linkcheck/client` with the
+OpenBao CLI, writes the password to a 0600 file in a fresh 0700 folder, and runs `linkcheck.sh items`; a run
+over 20 minutes is stopped. docker writes the container's id into that folder (`--cidfile`), and as the wrapper
+ends it removes the container by that id (`docker rm -f`, ten seconds at most), so a container that ignored the
+stop does not outlive the run or meet the next one; if docker cannot remove it, a `note:` line says so. The
+password file is removed as soon as the container has ended, and the folder on every exit; a folder that a
+killed run left behind is removed by the next run, with the container it names, which says so in the log. It
+prints no secret. Each run appends one line to `~/.local/state/nwfl-linkcheck/items.log`: the time,
+`exit=<code>`, and the counts or the reason. The reason is the checker's message only when it is one of its
+fixed messages, or docker's own first line (printable ASCII only) when docker failed with exit 125 to 127
+before it made a container; anything else is logged as `the run failed (unrecognised message)`, so nothing a
+server or the container said reaches the log. Exit codes: 0 done; 1 the
+run failed; 2 OpenBao is unreachable or sealed (and nothing else); 3 another run is still going.
+
+Limits of the wrapper, known and left as they are:
+
+- It checks the modes of its settings, lock and log, not who owns them. A file or folder that another user
+  owns, or a `~/.config` that others can write, is not noticed; placing one takes root or the officer's own
+  write access.
+- An exit of 137 is read by the clock: under 20 minutes it is logged as out of memory, at 20 minutes or more
+  as the time limit. A clock that jumps, or a container that itself exits 124, is mislabelled.
+- When docker fails to start a container it has already made (exit 126 or 127), its reason is not logged:
+  the container is removed with its record, so the exit cannot be told from the container's own.
+
 ## Safety
 
 - extract is the only part that parses a PDF. pdf.js runs in a worker thread with a 256 MiB heap and a
@@ -116,4 +157,5 @@ service account's app password, in a file), and optionally `LINKCHECK_CLIENT_ID`
 
 `npm test` (`scripts/test-contained.sh`) runs the suite only in a capped container with no network
 (`--memory=2g --pids-limit=512 --cpus=2 --network none`); the stand-in DNS, HTTP and HTTPS servers listen
-on the container's loopback, and the test PDFs and certificates are made up at run time.
+on the container's loopback, and the test PDFs and certificates are made up at run time. The two scripts are
+run for real against a stand-in `docker` and a stand-in `bao` on PATH.
