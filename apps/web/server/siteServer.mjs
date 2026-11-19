@@ -144,6 +144,36 @@ function servePrerendered(req, res, html, key) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
+/**
+ * LAUNCH-FIX-1: the paths of the site's own error page (src/pages/500.astro, built at deploy time).
+ * Asked for by name it answers 500, as it does when a request fails: never 200, so nothing stores it
+ * or lists it as a page.
+ */
+const ERROR_PAGE = '/500';
+const ERROR_PATHS = new Set([ERROR_PAGE, `${ERROR_PAGE}.html`]);
+
+/**
+ * MACHINE-ROUTE: a fault on a call under the machine route's prefixes, as a Connect error with the
+ * route's own fixed words for `internal` (machine-route.mjs CODE_MESSAGES).
+ */
+export const MACHINE_FAULT = JSON.stringify({ code: 'internal', message: 'the call failed' });
+
+/**
+ * The error page, status 500, in the reader's text size and theme. Signed out as it was built: it
+ * reads no session, so what failed cannot fail it too. Nothing of the failure is in it.
+ *
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {string} html
+ */
+function serveErrorPage(req, res, html) {
+  const body = stampHtml(html, readPrefs(req.headers.cookie));
+  res.statusCode = 500;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Length', Buffer.byteLength(body));
+  res.end(req.method === 'HEAD' ? undefined : body);
+}
+
 /** @typedef {import('./redirects.mjs').Tables} Redirects */
 /**
  * @typedef {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects, sessionKey?: Buffer | undefined, formAction?: string[], machine?: import('./machine-route.mjs').MachineHandler }} SiteOptions
@@ -306,6 +336,8 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
   function serve(req, res) {
     const url = originFormUrl(req.url);
     const raw = url?.pathname ?? '';
+    /** What a fault answers: set once the path is read. */
+    const call = { machine: false };
     /** @param {unknown} err */
     const fail = (err) => {
       // The pathname only (logPath): the query of /auth/callback carries the OIDC code and state. The
@@ -315,13 +347,32 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
         res.destroy();
         return;
       }
+      // LAUNCH-FIX-1: the site's own error page, for a fault before the handler as for one in it. The
+      // plain line where none was built, or where reading or sending it fails too: fail never throws.
+      try {
+        // MACHINE-ROUTE: a call under the two prefixes gets a Connect error, as the route's own
+        // refusals are, never the page; its client reads no HTML.
+        if (call.machine) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(MACHINE_FAULT);
+          return;
+        }
+        const errorPage = pages.get(ERROR_PAGE);
+        if (errorPage !== undefined) {
+          serveErrorPage(req, res, errorPage);
+          return;
+        }
+      } catch {
+        // Fall through to the plain line.
+      }
       res.statusCode = 500;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('Internal Server Error');
     };
     // Everything a request runs here is inside the guard: no request may end the process.
     try {
-      route(req, res, url, raw, fail);
+      route(req, res, url, raw, fail, call);
     } catch (err) {
       fail(err);
     }
@@ -333,14 +384,16 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
    * @param {URL | null} url
    * @param {string} raw
    * @param {(err: unknown) => void} fail
+   * @param {{ machine: boolean }} call
    */
-  function route(req, res, url, raw, fail) {
+  function route(req, res, url, raw, fail, call) {
     dropForwardedHost(req);
     // A fixed reason only: the target is the caller's text.
     if (!url) console.log(logEntry({ level: 'warn', msg: 'bad request target', reason: 'not a path on this site' }));
     const path = url ? normalisePath(raw) : undefined;
     // MACHINE-ROUTE: by the decoded path, exactly the two prefixes; no old URL or renamed page is under them.
     const machinePath = isMachinePath(path);
+    call.machine = machinePath;
     const renamed = path === undefined || machinePath ? undefined : renamedPath(path);
     const old = redirects && path !== undefined && !renamed && !machinePath ? resolveOldUrl(path, redirects) : undefined;
     beforeHeaders(res, () => {
@@ -403,7 +456,8 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     }
     const html = pages.get(path);
     if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
-      servePrerendered(req, res, html, sessionKey);
+      if (ERROR_PATHS.has(path)) serveErrorPage(req, res, html);
+      else servePrerendered(req, res, html, sessionKey);
       return;
     }
     try {

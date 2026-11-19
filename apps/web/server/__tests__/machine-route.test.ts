@@ -14,9 +14,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { LinkCheckService, RecordLinkVerdictsRequestSchema, RecordLinkVerdictsResponseSchema } from '../../src/gen/nwfl/mensa/v1/link_check_pb.js';
 import { ExportEditionRequestSchema, NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
-import { MACHINE_BODY_MAX, MACHINE_BODY_MS, MACHINE_LIMIT, createMachineRoute, machineRouteFromEnv, unaryMethods } from '../machine-route.mjs';
+import { CODE_MESSAGES, MACHINE_BODY_MAX, MACHINE_BODY_MS, MACHINE_LIMIT, createMachineRoute, machineRouteFromEnv, unaryMethods } from '../machine-route.mjs';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
-import { createSiteServer } from '../siteServer.mjs';
+import { MACHINE_FAULT, createSiteServer } from '../siteServer.mjs';
 
 const TOKEN = 'mAcHiNe.tok-en_9~+/=';
 const BEARER = `Bearer ${TOKEN}`;
@@ -59,7 +59,7 @@ async function standInApi(answer: Answer = () => ({})): Promise<{ baseUrl: strin
 }
 
 /** The site in front of the stand-in, with an Astro stand-in that says it was reached. */
-async function site(machine: ReturnType<typeof createMachineRoute> | undefined): Promise<{ base: string; astro: string[] }> {
+async function site(machine: ReturnType<typeof createMachineRoute> | undefined, pages?: Map<string, string>): Promise<{ base: string; astro: string[]; server: http.Server }> {
   const astro: string[] = [];
   const server = createSiteServer(
     (req, res) => {
@@ -68,7 +68,7 @@ async function site(machine: ReturnType<typeof createMachineRoute> | undefined):
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('astro');
     },
-    machine ? { machine } : {},
+    { ...(machine ? { machine } : {}), ...(pages ? { pages } : {}) },
   );
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   closers.push(
@@ -78,7 +78,7 @@ async function site(machine: ReturnType<typeof createMachineRoute> | undefined):
         server.close(() => resolve());
       }),
   );
-  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, astro };
+  return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, astro, server };
 }
 
 async function stack(answer?: Answer, opts?: Parameters<typeof createMachineRoute>[1]) {
@@ -512,19 +512,51 @@ describe('the refusals the route writes', () => {
   });
 });
 
+// Round 3: the site's error page (main #78) is for readers; a call under the two prefixes that fails
+// in the site gets a Connect error with the route's own words for internal, never HTML.
+const ERROR_PAGE = new Map([['/500', '<!doctype html><html lang="en" data-size="100" data-theme="auto" data-links="ask"><body><h1>Something went wrong on our side</h1></body></html>']]);
+const FAULT = { status: 500, type: 'application/json', error: { code: 'internal', message: 'the call failed' } };
+const faultOf = (reply: Reply) => ({ status: reply.status, type: reply.headers['content-type'], error: errorOf(reply) });
+
 describe('the site guard (challenger round 1: pre-auth crash)', () => {
+  it('writes the fault in the route\'s own words for internal', () => {
+    expect(JSON.parse(MACHINE_FAULT)).toEqual({ code: 'internal', message: CODE_MESSAGES.internal });
+  });
+
   it.each([
     ['throws', () => {
       throw new Error('made-up failure');
     }],
     ['rejects', () => Promise.reject(new Error('made-up failure'))],
-  ])('a route that %s is answered 500 by the site, which goes on serving pages', async (_label, machine) => {
-    const web = await site(machine as unknown as ReturnType<typeof createMachineRoute>);
-    const { lines } = await logged(async () => {
-      const reply = await send(web.base, LIST, { headers: asCaller(), body: new Uint8Array() });
-      expect({ status: reply.status, body: reply.body.toString('utf8') }).toEqual({ status: 500, body: 'Internal Server Error' });
+  ])('a route that %s is answered 500 by the site as a Connect error, with or without the error page, and pages go on', async (_label, machine) => {
+    for (const pages of [undefined, ERROR_PAGE]) {
+      const web = await site(machine as unknown as ReturnType<typeof createMachineRoute>, pages);
+      const { lines } = await logged(async () => {
+        const reply = await send(web.base, LIST, { headers: asCaller(), body: new Uint8Array() });
+        expect(faultOf(reply)).toEqual(FAULT);
+        expect(reply.headers['cache-control']).toBe('private, no-store');
+      });
+      expect(lines.map((l) => [l['msg'], l['err']])).toEqual([['request failed', 'Error']]);
+      expect((await send(web.base, '/about', { method: 'GET' })).status).toBe(200);
+    }
+  });
+
+  it('a fault in the site before it hands a machine path to the route: a Connect error; on a page path, the error page', async () => {
+    const web = await site(createMachineRoute({ baseUrl: 'http://127.0.0.1:9', timeoutMs: 1000 }), ERROR_PAGE);
+    // A stand-in for any code the site runs on a request before the route: here the Origin rule's read throws.
+    web.server.prependListener('request', (req: http.IncomingMessage) => {
+      if (req.url?.endsWith('?fault')) Object.defineProperty(req.headers, 'origin', { get: () => { throw new TypeError('made-up fault'); } });
     });
-    expect(lines.map((l) => [l['msg'], l['err']])).toEqual([['request failed', 'Error']]);
+    const { lines, text } = await logged(async () => {
+      const call = await send(web.base, `${LIST}?fault`, { headers: asCaller(), body: new Uint8Array() });
+      expect(faultOf(call)).toEqual(FAULT);
+      const page = await send(web.base, '/about?fault', { body: '' });
+      expect({ status: page.status, type: page.headers['content-type'] }).toEqual({ status: 500, type: 'text/html; charset=utf-8' });
+      expect(page.body.toString('utf8')).toContain('Something went wrong on our side');
+    });
+    expect(lines.filter((l) => l['msg'] === 'request failed').map((l) => [l['path'], l['err']])).toEqual([[LIST, 'TypeError'], ['/about', 'TypeError']]);
+    expect(text).not.toContain('made-up fault');
+    expect(web.astro).toEqual([]);
     expect((await send(web.base, '/about', { method: 'GET' })).status).toBe(200);
   });
 });

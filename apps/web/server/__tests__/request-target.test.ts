@@ -19,6 +19,7 @@ const handler = (req, res) => { res.statusCode = 404; res.end('handler ' + req.u
 const site = createSiteServer(handler, { pages, machine: createMachineRoute({ baseUrl: 'http://127.0.0.1:9', timeoutMs: 1000 }) });
 site.listen(0, '127.0.0.1', () => console.log('PORT ' + site.address().port));
 `;
+// MACHINE-ROUTE: each rule holds on the machine route's path too.
 const LIST = 'nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict';
 
 const children: ChildProcess[] = [];
@@ -26,8 +27,8 @@ afterEach(() => {
   for (const child of children.splice(0)) child.kill('SIGTERM');
 });
 
-async function startSite(): Promise<{ port: number; exited: () => boolean; output: () => string }> {
-  const child = spawn(process.execPath, ['--input-type=module', '-e', SERVER], { stdio: ['ignore', 'pipe', 'pipe'] });
+async function startSite(source = SERVER): Promise<{ port: number; exited: () => boolean; output: () => string }> {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source], { stdio: ['ignore', 'pipe', 'pipe'] });
   children.push(child);
   let exited = false;
   let output = '';
@@ -121,10 +122,11 @@ describe('a refused target is logged', () => {
   it('in one fixed line with a fixed reason, never the target', async () => {
     const site = await startSite();
     await raw(site.port, request('GET', 'http://[zq7-target/news', false));
+    await raw(site.port, request('POST', 'http://x:99999/zq7-target/news', true));
     await raw(site.port, request('POST', `http://x:99999/zq7-target/${LIST}`, true));
     await settle();
     const lines = site.output().split('\n').filter((l) => l.startsWith('{'));
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
     for (const line of lines) {
       const entry = JSON.parse(line);
       expect(entry).toMatchObject({ level: 'warn', msg: 'bad request target', reason: 'not a path on this site' });
@@ -172,6 +174,18 @@ describe('a renamed page whose path decodes to non-ASCII', () => {
     await settle();
     expect(site.exited()).toBe(false);
   }, 15_000);
+
+  it('keeps a reserved character that decodes from the path inside the path', async () => {
+    const site = await startSite();
+    const query = await raw(site.port, request('GET', '/newsletter/%3Fa=1', false));
+    expect(query.slice(0, 12)).toBe('HTTP/1.1 301');
+    expect(query).toMatch(/\r\nlocation: \/news\/%3Fa%3D1\r\n/i);
+    const fragment = await raw(site.port, request('GET', '/newsletter/%23top', false));
+    expect(fragment.slice(0, 12)).toBe('HTTP/1.1 301');
+    expect(fragment).toMatch(/\r\nlocation: \/news\/%23top\r\n/i);
+    await settle();
+    expect(site.exited()).toBe(false);
+  }, 15_000);
 });
 
 describe('a fault in any code a request runs before the handler', () => {
@@ -180,6 +194,35 @@ describe('a fault in any code a request runs before the handler', () => {
     const reply = await raw(site.port, request('GET', '/throws', false));
     expect(reply.slice(0, 12)).toBe('HTTP/1.1 500');
     expect(body(reply)).toBe('Internal Server Error');
+    expect((await raw(site.port, request('GET', '/news', false))).slice(0, 12)).toBe('HTTP/1.1 200');
+    await settle();
+    expect(site.exited()).toBe(false);
+    expect(site.output()).toContain('"msg":"request failed","path":"/throws","err":"TypeError"');
+    expect(site.output()).not.toContain('made-up fault');
+  }, 15_000);
+});
+
+// LAUNCH-FIX round 3: with the site's own error page built, a fault before the handler shows that
+// page (status 500, never stored, no error text), as a fault in the handler does; the site lives on.
+const ERROR_HTML = '<!doctype html><html lang="en" data-size="100" data-theme="auto" data-links="ask"><body><h1>Something went wrong on our side</h1><form method="post" action="/prefs"><input type="hidden" name="back" value="/"></form><a href="/officers">tell an officer</a></body></html>';
+const SERVER_WITH_ERROR_PAGE = SERVER.replace(
+  "new Map([['/news', '<html><body>the news page</body></html>']])",
+  `new Map([['/news', '<html><body>the news page</body></html>'], ['/500', ${JSON.stringify(ERROR_HTML)}]])`,
+);
+
+describe('a fault before the handler, with the error page built', () => {
+  it('answers with the error page, not plain text, logs the error by name only, and the site lives on', async () => {
+    expect(SERVER_WITH_ERROR_PAGE).not.toBe(SERVER);
+    const site = await startSite(SERVER_WITH_ERROR_PAGE);
+    const reply = await raw(site.port, request('GET', '/throws', false));
+    expect(reply.slice(0, 12)).toBe('HTTP/1.1 500');
+    expect(reply).toMatch(/\r\ncontent-type: text\/html; charset=utf-8\r\n/i);
+    expect(reply).toMatch(/\r\ncache-control: no-store\r\n/i);
+    expect(body(reply)).toContain('<h1>Something went wrong on our side</h1>');
+    expect(body(reply)).not.toMatch(/Internal Server Error|made-up fault|TypeError/);
+    // The error page's controls still go Home, never back to the error page.
+    expect(body(reply)).toContain('<input type="hidden" name="back" value="/">');
+    expect(body(reply)).not.toMatch(/(href|action|value)="\/500/);
     expect((await raw(site.port, request('GET', '/news', false))).slice(0, 12)).toBe('HTTP/1.1 200');
     await settle();
     expect(site.exited()).toBe(false);
