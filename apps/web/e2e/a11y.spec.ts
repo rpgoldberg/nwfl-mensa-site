@@ -74,6 +74,37 @@ for (const width of [412, 1280]) {
   });
 }
 
+// LAUNCH-FIX round 2: no control on the built error page leads back to it. Every link, form, return
+// field and Sign in's return; then each Aa press, posted as the form posts it: the 303 goes Home.
+test('the error page (500) has no control that leads to /500', async ({ page, baseURL }) => {
+  const res = await page.goto('/500');
+  expect(res?.status()).toBe(500);
+  const found = await page.evaluate(() => ({
+    // A link to a place on this page (#main, #reader-menu) moves within it, and that place must exist; every other link navigates.
+    links: [...document.querySelectorAll('a[href]')].filter((a) => !a.getAttribute('href')!.startsWith('#')).map((a) => (a as HTMLAnchorElement).href),
+    inPage: [...document.querySelectorAll('a[href^="#"]')].map((a) => a.getAttribute('href')!.slice(1)).filter((id) => document.getElementById(id) === null),
+    forms: [...document.querySelectorAll('form')].map((f) => f.action),
+    fields: [...document.querySelectorAll('input[type="hidden"][name="back"], input[type="hidden"][name="return"]')].map((i) => (i as HTMLInputElement).value),
+  }));
+  expect(found.links.length).toBeGreaterThan(10);
+  expect(found.inPage).toEqual([]);
+  expect(found.fields.length).toBeGreaterThan(0);
+  const returns = found.links.flatMap((l) => [...new URL(l).searchParams.entries()].filter(([k]) => /^(return|back|next)$/.test(k)).map(([, v]) => v));
+  for (const target of [...found.links, ...found.forms, ...found.fields, ...returns]) expect(new URL(target, baseURL).pathname, target).not.toMatch(/^\/500(\.html)?\/?$/);
+  const presses = await page.locator('.reader-form button[type="submit"]').evaluateAll((bs) => bs.map((b) => [(b as HTMLButtonElement).name, (b as HTMLButtonElement).value]));
+  expect(presses.length).toBeGreaterThanOrEqual(10);
+  const hidden = Object.fromEntries(await page.locator('.reader-form input[type="hidden"]').evaluateAll((is) => is.map((i) => [(i as HTMLInputElement).name, (i as HTMLInputElement).value])));
+  for (const [name, value] of presses) {
+    const posted = await page.request.post('/prefs', { form: { ...hidden, [name!]: value! }, headers: { origin: new URL(baseURL!).origin }, maxRedirects: 0 });
+    expect(posted.status(), `${name}=${value}`).toBe(303);
+    expect(new URL(posted.headers()['location']!, baseURL).pathname, `${name}=${value}`).toBe('/');
+  }
+  // And in the browser: a theme press from the error page lands on Home, not on the error page.
+  await page.locator('#reader-toggle').click();
+  await Promise.all([page.waitForURL((u) => u.pathname === '/'), page.locator('.reader-panel .theme-btn[value="dark"]').click()]);
+  expect(await page.locator('html').getAttribute('data-theme')).toBe('dark');
+});
+
 test('the footer of every page links to the privacy page, a target at least 44 px tall', async ({ page }) => {
   await page.goto('/');
   const link = page.locator('footer').getByRole('link', { name: 'Privacy' });
