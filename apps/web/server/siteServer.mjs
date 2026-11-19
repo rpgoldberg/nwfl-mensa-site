@@ -144,6 +144,30 @@ function servePrerendered(req, res, html, key) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
+/**
+ * LAUNCH-FIX-1: the paths of the site's own error page (src/pages/500.astro, built at deploy time).
+ * Asked for by name it answers 500, as it does when a request fails: never 200, so nothing stores it
+ * or lists it as a page.
+ */
+const ERROR_PAGE = '/500';
+const ERROR_PATHS = new Set([ERROR_PAGE, `${ERROR_PAGE}.html`]);
+
+/**
+ * The error page, status 500, in the reader's text size and theme. Signed out as it was built: it
+ * reads no session, so what failed cannot fail it too. Nothing of the failure is in it.
+ *
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {string} html
+ */
+function serveErrorPage(req, res, html) {
+  const body = stampHtml(html, readPrefs(req.headers.cookie));
+  res.statusCode = 500;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Length', Buffer.byteLength(body));
+  res.end(req.method === 'HEAD' ? undefined : body);
+}
+
 /** @typedef {import('./redirects.mjs').Tables} Redirects */
 /**
  * @typedef {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects, sessionKey?: Buffer | undefined, formAction?: string[] }} SiteOptions
@@ -310,6 +334,17 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
         res.destroy();
         return;
       }
+      // LAUNCH-FIX-1: the site's own error page, for a fault before the handler as for one in it. The
+      // plain line where none was built, or where reading or sending it fails too: fail never throws.
+      try {
+        const errorPage = pages.get(ERROR_PAGE);
+        if (errorPage !== undefined) {
+          serveErrorPage(req, res, errorPage);
+          return;
+        }
+      } catch {
+        // Fall through to the plain line.
+      }
       res.statusCode = 500;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('Internal Server Error');
@@ -381,7 +416,8 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     }
     const html = pages.get(path);
     if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
-      servePrerendered(req, res, html, sessionKey);
+      if (ERROR_PATHS.has(path)) serveErrorPage(req, res, html);
+      else servePrerendered(req, res, html, sessionKey);
       return;
     }
     try {

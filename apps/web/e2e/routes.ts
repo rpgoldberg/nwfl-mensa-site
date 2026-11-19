@@ -82,6 +82,8 @@ export const SIGNED_IN: Readonly<Record<string, readonly string[]>> = {
 
 export const STATIC: Readonly<Record<string, readonly string[]>> = {
   '/404': ['/404', '/no-such-page'],
+  // LAUNCH-FIX-1: the error page, built at deploy time; the server answers its own address 500.
+  '/500': ['/500'],
   '/about': ['/about'],
   '/auth/callback': ['/auth/callback', '/auth/callback?code=x&state=y'],
   '/gone': ['/gone'],
@@ -92,6 +94,7 @@ export const STATIC: Readonly<Record<string, readonly string[]>> = {
   '/minutes': ['/minutes'],
   '/more': ['/more'],
   '/prefs': ['/prefs'],
+  '/privacy': ['/privacy'],
   '/robots.txt': ['/robots.txt'],
   // A placeholder: test/search-contract.test.ts holds what it may read once built (R29).
   '/search': ['/search', '/search?q=picnic'],

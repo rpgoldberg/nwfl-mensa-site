@@ -24,8 +24,8 @@ afterEach(() => {
   for (const child of children.splice(0)) child.kill('SIGTERM');
 });
 
-async function startSite(): Promise<{ port: number; exited: () => boolean; output: () => string }> {
-  const child = spawn(process.execPath, ['--input-type=module', '-e', SERVER], { stdio: ['ignore', 'pipe', 'pipe'] });
+async function startSite(source = SERVER): Promise<{ port: number; exited: () => boolean; output: () => string }> {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', source], { stdio: ['ignore', 'pipe', 'pipe'] });
   children.push(child);
   let exited = false;
   let output = '';
@@ -184,6 +184,35 @@ describe('a fault in any code a request runs before the handler', () => {
     const reply = await raw(site.port, request('GET', '/throws', false));
     expect(reply.slice(0, 12)).toBe('HTTP/1.1 500');
     expect(body(reply)).toBe('Internal Server Error');
+    expect((await raw(site.port, request('GET', '/news', false))).slice(0, 12)).toBe('HTTP/1.1 200');
+    await settle();
+    expect(site.exited()).toBe(false);
+    expect(site.output()).toContain('"msg":"request failed","path":"/throws","err":"TypeError"');
+    expect(site.output()).not.toContain('made-up fault');
+  }, 15_000);
+});
+
+// LAUNCH-FIX round 3: with the site's own error page built, a fault before the handler shows that
+// page (status 500, never stored, no error text), as a fault in the handler does; the site lives on.
+const ERROR_HTML = '<!doctype html><html lang="en" data-size="100" data-theme="auto" data-links="ask"><body><h1>Something went wrong on our side</h1><form method="post" action="/prefs"><input type="hidden" name="back" value="/"></form><a href="/officers">tell an officer</a></body></html>';
+const SERVER_WITH_ERROR_PAGE = SERVER.replace(
+  "new Map([['/news', '<html><body>the news page</body></html>']])",
+  `new Map([['/news', '<html><body>the news page</body></html>'], ['/500', ${JSON.stringify(ERROR_HTML)}]])`,
+);
+
+describe('a fault before the handler, with the error page built', () => {
+  it('answers with the error page, not plain text, logs the error by name only, and the site lives on', async () => {
+    expect(SERVER_WITH_ERROR_PAGE).not.toBe(SERVER);
+    const site = await startSite(SERVER_WITH_ERROR_PAGE);
+    const reply = await raw(site.port, request('GET', '/throws', false));
+    expect(reply.slice(0, 12)).toBe('HTTP/1.1 500');
+    expect(reply).toMatch(/\r\ncontent-type: text\/html; charset=utf-8\r\n/i);
+    expect(reply).toMatch(/\r\ncache-control: no-store\r\n/i);
+    expect(body(reply)).toContain('<h1>Something went wrong on our side</h1>');
+    expect(body(reply)).not.toMatch(/Internal Server Error|made-up fault|TypeError/);
+    // The error page's controls still go Home, never back to the error page.
+    expect(body(reply)).toContain('<input type="hidden" name="back" value="/">');
+    expect(body(reply)).not.toMatch(/(href|action|value)="\/500/);
     expect((await raw(site.port, request('GET', '/news', false))).slice(0, 12)).toBe('HTTP/1.1 200');
     await settle();
     expect(site.exited()).toBe(false);

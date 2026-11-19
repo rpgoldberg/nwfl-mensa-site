@@ -3,7 +3,7 @@
 // search engines to stay out, so no copy of the site competes with it. The
 // calendar feed stays fetchable (Google Calendar refuses a feed robots.txt
 // blocks); the feed itself carries X-Robots-Tag: noindex.
-import { MORE_PAGES } from './site';
+import { MORE_PAGES, PRIVACY } from './site';
 
 export const CANONICAL_HOST = 'nwflorida.us';
 
@@ -26,8 +26,8 @@ export function robotsTxt(host: string): string {
   ].join('\n');
 }
 
-/** Home, the sections and the public help pages, as absolute https URLs. */
+/** Home, the sections, the public help pages and the privacy page, as absolute https URLs. Never the error page. */
 export function sitemapXml(): string {
-  const urls = ['/', ...MORE_PAGES.map((p) => p.path)].map((path) => `  <url><loc>https://${CANONICAL_HOST}${path}</loc></url>`);
+  const urls = ['/', ...MORE_PAGES.map((p) => p.path), PRIVACY.path].map((path) => `  <url><loc>https://${CANONICAL_HOST}${path}</loc></url>`);
   return ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">', ...urls, '</urlset>', ''].join('\n');
 }
