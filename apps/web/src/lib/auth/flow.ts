@@ -3,7 +3,7 @@
 // state exactly, uses it once, within ten minutes, and has openid-client check
 // the nonce. A refusal is told to the reader in plain words; what the provider
 // said is never repeated, and only its error code (tidied) is logged. SIGNIN-SLOW: a refusal another
-// round may mend (used, expired, a slow or broken path to the provider) starts one fresh sign-in first,
+// round may mend (used, or a slow or broken path to the provider), with a current transaction, starts one fresh sign-in first,
 // marked in its own transaction so it is never taken twice running.
 import { timingSafeEqual } from 'node:crypto';
 import { safeBack } from '../../../server/prefs.mjs';
@@ -17,7 +17,6 @@ import {
   newSession,
   openTransaction,
   readSession,
-  sealedTransaction,
   sessionKey,
   sessionSetCookie,
   transactionSetCookie,
@@ -150,29 +149,60 @@ const PASSING_NAMES = /^(TimeoutError|AbortError)$/;
 /** openid-client 6.8.8's own chain for a socket closed mid-body is four deep: ClientError, OperationProcessingError, TypeError, SocketError. */
 const CAUSE_DEPTH = 4;
 
+/** An edge's 5xx body is read this far and this long, no further: an OAuth error object is short. */
+const BODY_MAX_BYTES = 16_384;
+const BODY_MAX_MS = 500;
+
 /**
- * A 5xx the provider itself sent rather than an edge in between: an OAuth error in it (invalid_grant: the
- * code was refused, not lost on the way), or a JSON body, which openid-client leaves unread on a 5xx.
- * An edge's 5xx (Cloudflare's 502, 504, 524) is a page, or nothing.
+ * Whether a 5xx body is an OAuth error object (a string `error`: invalid_grant, the code was refused, not
+ * lost on the way). openid-client 6.8.8 leaves a 5xx body unread, so it is read here, bounded. Anything
+ * else (a page, nothing, Cloudflare's JSON error with its numeric error_code, a body too long or too slow)
+ * is an edge's, not the provider's.
  */
-function providerAnswered(e: { error?: unknown; headers?: unknown }): boolean {
-  if (typeof e.error === 'string') return true;
-  const type = e.headers instanceof Headers ? e.headers.get('content-type') : null;
-  return type !== null && /\bjson\b/i.test(type);
+async function oauthErrorBody(res: Response): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'late'>((resolve) => {
+    timer = setTimeout(() => resolve('late'), BODY_MAX_MS);
+  });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    if (!res.body) return false;
+    reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    for (let size = 0; ; ) {
+      const next = await Promise.race([reader.read(), late]);
+      if (next === 'late') return false;
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > BODY_MAX_BYTES) return false;
+      chunks.push(next.value);
+    }
+    const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string';
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    reader?.cancel().catch(() => {});
+  }
 }
 
 /**
  * SIGNIN-SLOW: a failure on the way to the provider that another round may well not meet: a timeout (the
- * body's too), a broken connection, or a gateway's 5xx (an edge in between). Read along the error's
- * causes, four deep. A refusal the provider gave, a token that failed its checks, or a bug is not one.
+ * body's too), a broken connection, or a 5xx whose body is not an OAuth error object (an edge in between,
+ * whatever its body: Cloudflare's 52x and 530 answer JSON too). Read along the error's causes, four deep.
+ * A refusal the provider gave, a token that failed its checks, or a bug is not one.
  */
-export function passing(err: unknown): boolean {
+export async function passing(err: unknown): Promise<boolean> {
   let e = err;
   for (let depth = 0; depth < CAUSE_DEPTH && typeof e === 'object' && e !== null; depth++) {
-    const { code, name, status, cause } = e as { code?: unknown; name?: unknown; status?: unknown; cause?: unknown };
+    const { code, name, status, cause, error } = e as { code?: unknown; name?: unknown; status?: unknown; cause?: unknown; error?: unknown };
     if (typeof code === 'string' && PASSING_CODES.test(code)) return true;
     if (typeof name === 'string' && PASSING_NAMES.test(name)) return true;
-    if (typeof status === 'number' && status >= 500 && status <= 599) return !providerAnswered(e);
+    if (typeof status === 'number' && status >= 500 && status <= 599) {
+      if (typeof error === 'string') return false;
+      return !(e instanceof Response && (await oauthErrorBody(e)));
+    }
     e = cause;
   }
   return false;
@@ -196,7 +226,6 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
     return { kind: 'refused', reason, cookies };
   };
   const error = url.searchParams.get('error');
-  const providerSaid = (code: string) => refuse(code === 'access_denied' ? 'cancelled' : 'failed', { error: code.replace(/[^a-z_]/g, '').slice(0, 40) });
   /**
    * SIGNIN-SLOW: one fresh sign-in instead of the refusal, back to the reader's page (by the return rules)
    * and asking again if they had, marked fresh=1 so beginSignIn seals the mark into its transaction. Never
@@ -212,21 +241,18 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
     params.set('fresh', '1');
     return { kind: 'redirect', location: `/sign-in?${params}`, cookies };
   };
+  // No current transaction (none, older than ten minutes, dated ahead, or not ours): the page, never a
+  // round, exactly as before SIGNIN-SLOW. A browser that keeps no cookie of ours, or replays an old one,
+  // would otherwise go round for ever; and the state below is checked before anything else.
   const tx = openTransaction(cookieHeader, d.key, now);
-  if (!tx) {
-    // No transaction at all (cookies blocked, a bot, a link from elsewhere): the page, never a round, or
-    // a browser that keeps no cookie of ours would go round for ever. An old one: the provider's error
-    // first (a cancel after ten minutes is a cancel), else one round.
-    const old = sealedTransaction(cookieHeader, d.key);
-    if (!old) return refuse('expired');
-    if (error !== null) return providerSaid(error);
-    return afresh('expired', old);
-  }
+  if (!tx) return refuse('expired');
   const state = url.searchParams.get('state') ?? '';
   if (!sameText(state, tx.state)) return refuse('mismatch');
   if (d.consumed.has(state, now)) return afresh('used', tx);
   d.consumed.add(state, tx.at + TRANSACTION_SECONDS);
-  if (error !== null) return providerSaid(error);
+  if (error !== null) {
+    return refuse(error === 'access_denied' ? 'cancelled' : 'failed', { error: error.replace(/[^a-z_]/g, '').slice(0, 40) });
+  }
   try {
     const signedIn = await d.oidc.finishSignIn(d.setup.config, url, tx);
     const session = newSession(signedIn.claims, now, d.setup.config.groupPrefix);
@@ -239,7 +265,7 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
   } catch (err) {
     // Never the same code again (it is single-use): a passing failure starts afresh, with a new one.
     const extra = { err: redactText(String(err)) };
-    return passing(err) ? afresh('failed', tx, extra) : refuse('failed', extra);
+    return (await passing(err)) ? afresh('failed', tx, extra) : refuse('failed', extra);
   }
 }
 

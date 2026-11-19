@@ -193,20 +193,8 @@ export function transactionSetCookie(tx, key, now) {
  * @returns {(Transaction & { at: number }) | undefined}
  */
 export function openTransaction(cookieHeader, key, now) {
-  const tx = sealedTransaction(cookieHeader, key);
-  return tx && now - tx.at < TRANSACTION_SECONDS && tx.at - now <= SKEW_SECONDS ? tx : undefined;
-}
-
-/**
- * SIGNIN-SLOW: the transaction this browser started, whatever its age, so a callback can tell an old one
- * from none at all (cookies blocked, a bot, a link from elsewhere). Sealed by this key, as any is.
- *
- * @param {string | null | undefined} cookieHeader
- * @param {Buffer} key
- * @returns {(Transaction & { at: number }) | undefined}
- */
-export function sealedTransaction(cookieHeader, key) {
   /** @type {(Transaction & { at: number }) | undefined} */
   const tx = openValue(readCookie(cookieHeader, AUTH_COOKIE), key, AUTH_COOKIE);
-  return tx && typeof tx.at === 'number' ? tx : undefined;
+  if (!tx || typeof tx.at !== 'number') return undefined;
+  return now - tx.at < TRANSACTION_SECONDS && tx.at - now <= SKEW_SECONDS ? tx : undefined;
 }

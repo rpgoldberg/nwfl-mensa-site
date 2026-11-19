@@ -260,7 +260,7 @@ describe('completeSignIn: the callback', () => {
     expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ kind: 'refused', reason: 'failed' });
   });
 
-  // SIGNIN-SLOW: an old transaction that was itself the fresh round is refused as here (one with no mark takes it, below).
+  // SIGNIN-SLOW: an old transaction never takes a round, marked or not (below, one fresh round).
   it('refuses a callback with no transaction, or one older than ten minutes, as timed out', async () => {
     const d = deps();
     expect(await completeSignIn(d, { url: url({ code: 'c', state: 's' }), cookieHeader: undefined })).toMatchObject({ kind: 'refused', reason: 'expired' });
@@ -325,11 +325,11 @@ describe('completeSignIn: the callback', () => {
   });
 });
 
-// SIGNIN-SLOW: a callback refused as used, expired, or failed on a slow or broken path to the provider
+// SIGNIN-SLOW: a callback refused as used, or failed on a slow or broken path to the provider
 // starts one fresh sign-in instead of the refusal page; the provider still has the reader's session, so
 // it normally passes straight through. The mark rides in the signed transaction (/sign-in?fresh=1), never
 // in a cookie of its own: a refusal of the fresh round's own callback shows the page as before. Only a
-// browser that carried a transaction may take it; a provider's error= (a cancel) or a mismatch never does.
+// current transaction with the right state may take it; an old one, a provider's error= (a cancel) or a mismatch never does.
 describe('completeSignIn: one fresh round', () => {
   const url = (params: Record<string, string>) => new URL(`https://nwflorida.us/auth/callback?${new URLSearchParams(params)}`);
   const CLEAR_TX = `${AUTH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly; Secure`;
@@ -351,13 +351,65 @@ describe('completeSignIn: one fresh round', () => {
     expect(await completeSignIn(d, { url: url({ code: 'c', state: fresh.state }), cookieHeader: fresh.cookieHeader })).toEqual({ kind: 'refused', reason: 'used', cookies: [CLEAR_TX] });
   });
 
-  it('takes a transaction that is present but older than ten minutes to a fresh sign-in, back to its page', async () => {
+  // Round 2: no round for an old transaction at all. A browser drops it at Max-Age=600 anyway, and one that
+  // replays it (a stale jar, a bot) would otherwise skip the state check and could loop for ever.
+  it('refuses a transaction that is old, future-dated or unreadable as expired, exactly as main: never a round, whatever the state', async () => {
+    const tx = { state: 'st', nonce: 'n', verifier: 'v'.repeat(43), back: '/news' };
+    const sealedAt = (at: number) => transactionSetCookie(tx, key, at).split(';')[0]!;
+    const current = sealedAt(NOW);
+    const unreadable = `${current.slice(0, -2)}${current.endsWith('AA') ? 'BB' : 'AA'}`;
+    const cases = { 'eleven minutes old': sealedAt(NOW - 11 * 60), 'three days old': sealedAt(NOW - 3 * 86400), 'an hour ahead': sealedAt(NOW + 3600), unreadable };
+    for (const [what, cookieHeader] of Object.entries(cases)) {
+      for (const params of [{ code: 'c', state: 'st' }, { code: 'c', state: 'not-the-state' }, { error: 'access_denied', state: 'st' }, { error: 'access_denied', state: 'x' }]) {
+        const d = deps();
+        expect(await completeSignIn(d, { url: url(params), cookieHeader }), `${what} ${JSON.stringify(params)}`).toEqual({ kind: 'refused', reason: 'expired', cookies: [CLEAR_TX] });
+        expect(d.oidc.finishSignIn).not.toHaveBeenCalled();
+        expect(d.consumed.has('st', NOW)).toBe(false);
+        expect(d.lines.join()).not.toContain('fresh_round');
+      }
+    }
+    // A transaction this browser really started, read eleven minutes later: the same.
     const d = deps();
     const { cookieHeader, state } = await started(d, '/news');
-    expect(await completeSignIn(late(d), { url: url({ code: 'c', state }), cookieHeader })).toEqual({ kind: 'redirect', location: '/sign-in?return=%2Fnews&fresh=1', cookies: [CLEAR_TX] });
-    expect(d.oidc.finishSignIn).not.toHaveBeenCalled();
-    const fresh = await started(d, '/news', { fresh: true });
-    expect(await completeSignIn(late(d), { url: url({ code: 'c', state: fresh.state }), cookieHeader: fresh.cookieHeader })).toMatchObject({ kind: 'refused', reason: 'expired' });
+    expect(await completeSignIn(late(d), { url: url({ code: 'c', state }), cookieHeader })).toEqual({ kind: 'refused', reason: 'expired', cookies: [CLEAR_TX] });
+  });
+
+  // Round 2: the state check runs first on every path that could sign in or take a round. Remove it, or move
+  // it after any other, and one of these signs in, takes a round, or spends the state.
+  it('checks the state before anything else on every path: a wrong one is a mismatch, touching nothing', async () => {
+    const wrong = (state: string) => [`${state}x`, state.slice(0, -1), '', 'not-the-state'];
+    const expectMismatch = async (d: Deps & { lines: string[] }, state: string, cookieHeader: string, extra: Record<string, string> = { code: 'c' }) => {
+      for (const forged of wrong(state)) {
+        const before = vi.mocked(d.oidc.finishSignIn).mock.calls.length;
+        const out = await completeSignIn(d, { url: url({ ...extra, state: forged }), cookieHeader });
+        expect(out, forged).toEqual({ kind: 'refused', reason: 'mismatch', cookies: [CLEAR_TX] });
+        expect(vi.mocked(d.oidc.finishSignIn).mock.calls.length).toBe(before);
+        expect(d.consumed.has(forged, NOW)).toBe(false);
+      }
+      expect(d.lines.join()).not.toContain('fresh_round');
+    };
+    // An ordinary transaction, one that was itself the fresh round, and "Sign in again".
+    for (const opts of [{}, { fresh: true }, { again: true }, { fresh: true, again: true }]) {
+      const d = deps();
+      const { cookieHeader, state } = await started(d, '/news', opts);
+      await expectMismatch(d, state, cookieHeader);
+      await expectMismatch(d, state, cookieHeader, { error: 'access_denied' });
+      // ...and the right state still signs in afterwards: nothing was spent.
+      expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader })).toMatchObject({ kind: 'redirect', location: '/news' });
+    }
+    // A spent state (the used path), and a token call that would time out (the passing path).
+    const used = deps();
+    const spent = await started(used, '/news');
+    await completeSignIn(used, { url: url({ code: 'c', state: spent.state }), cookieHeader: spent.cookieHeader });
+    for (const forged of wrong(spent.state)) used.consumed.add(forged, NOW + TRANSACTION_SECONDS);
+    for (const forged of wrong(spent.state)) {
+      expect(await completeSignIn(used, { url: url({ code: 'c', state: forged }), cookieHeader: spent.cookieHeader }), forged).toEqual({ kind: 'refused', reason: 'mismatch', cookies: [CLEAR_TX] });
+    }
+    expect(used.lines.join()).not.toContain('fresh_round');
+    const slow = deps();
+    vi.mocked(slow.oidc.finishSignIn).mockRejectedValue(timedOut());
+    const pending = await started(slow, '/news');
+    await expectMismatch(slow, pending.state, pending.cookieHeader);
   });
 
   // A browser that keeps no cookie of this site, its provider session kept: every callback has none, so a round would loop.
@@ -403,12 +455,16 @@ describe('completeSignIn: one fresh round', () => {
     expect(await completeSignIn(d, { url: url({ code: 'c', state: home.state }), cookieHeader: home.cookieHeader })).toMatchObject({ location: '/sign-in?again=1&fresh=1' });
   });
 
-  it('never takes a round for an error the provider sent, whatever the transaction’s age: a cancel after ten minutes says cancelled', async () => {
+  it('never takes a round for an error the provider sent; after ten minutes, the expired page, exactly as main', async () => {
     const d = deps();
     const { cookieHeader, state } = await started(d);
+    for (const error of ['access_denied', 'server_error']) {
+      expect(await completeSignIn(late(d), { url: url({ error, state }), cookieHeader }), error).toEqual({ kind: 'refused', reason: 'expired', cookies: [CLEAR_TX] });
+      expect(await completeSignIn(late(d, 3600 * 24), { url: url({ error, state }), cookieHeader }), error).toMatchObject({ kind: 'refused', reason: 'expired' });
+    }
     for (const [error, reason] of [['access_denied', 'cancelled'], ['server_error', 'failed']] as const) {
-      expect(await completeSignIn(late(d), { url: url({ error, state }), cookieHeader }), error).toEqual({ kind: 'refused', reason, cookies: [CLEAR_TX] });
-      expect(await completeSignIn(late(d, 3600 * 24), { url: url({ error, state }), cookieHeader }), error).toMatchObject({ kind: 'refused', reason });
+      const now = await started(d);
+      expect(await completeSignIn(d, { url: url({ error, state: now.state }), cookieHeader: now.cookieHeader }), error).toEqual({ kind: 'refused', reason, cookies: [CLEAR_TX] });
     }
     // A used state with an error= too: the page, never a round.
     const used = await started(d);
@@ -431,13 +487,37 @@ describe('completeSignIn: one fresh round', () => {
     const stalledBody = client(opError(new DOMException('The operation was aborted due to timeout', 'TimeoutError')));
     const abortedBody = client(opError(new DOMException('This operation was aborted', 'AbortError')));
     const closedBody = client(opError(new TypeError('terminated', { cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }) })));
-    for (const err of [network, wrapped, gateway, edgePage, aborted, dns, socket, stalledBody, abortedBody, closedBody]) {
+    // Round 2: an edge's 5xx is passing whatever its body says, unless that body is an OAuth error object (a string `error`).
+    // Cloudflare's structured errors (RFC 9457, sent to Accept: application/json, as openid-client asks) carry
+    // type, title, status, error_code (a number) and error_name, never `error`: developers.cloudflare.com/fundamentals/reference/error-responses/
+    const notConform = (res: Response) => Object.assign(new Error('unexpected HTTP response status code', { cause: res }), { name: 'OperationProcessingError', code: 'OAUTH_RESPONSE_IS_NOT_CONFORM' });
+    const cf = (status: number, code: number, type = 'application/json; charset=utf-8') =>
+      notConform(new Response(JSON.stringify({ type: `https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-${code}/`, title: `Error ${code}: Cloudflare Tunnel error`, status, detail: 'The origin could not be reached.', instance: '9f140b785e57c458', error_code: code, error_name: 'tunnel_error', error_category: 'origin', ray_id: '9f140b785e57c458', cloudflare_error: true, retryable: true, retry_after: 60 }), { status, headers: { 'content-type': type } }));
+    const cf530 = cf(530, 1033);
+    const cf522 = cf(522, 522, 'application/problem+json; charset=utf-8');
+    const numericError = notConform(new Response('{"error":503,"message":"down"}', { status: 503, headers: { 'content-type': 'application/json' } }));
+    const notJson = notConform(new Response('{"error":"invalid_gr', { status: 503, headers: { 'content-type': 'application/json' } }));
+    const arrayBody = notConform(new Response('["error"]', { status: 502, headers: { 'content-type': 'application/json' } }));
+    const noBody = notConform(new Response(null, { status: 504 }));
+    const brokenBody = notConform(new Response(new ReadableStream({ pull: (c) => c.error(new Error('reset')) }), { status: 502 }));
+    for (const err of [network, wrapped, gateway, edgePage, aborted, dns, socket, stalledBody, abortedBody, closedBody, cf530, cf522, numericError, notJson, arrayBody, noBody, brokenBody]) {
       const d = deps();
       vi.mocked(d.oidc.finishSignIn).mockRejectedValueOnce(err);
       const { cookieHeader, state } = await started(d);
       expect(await completeSignIn(d, { url: url({ code: 'c', state }), cookieHeader }), `${err.name} ${err.message}`).toMatchObject({ kind: 'redirect', location: '/sign-in?return=%2Fabout&fresh=1' });
     }
-    expect(passing(closedBody)).toBe(true);
+    expect(await passing(closedBody)).toBe(true);
+    expect(await passing(client(cf530))).toBe(true);
+  });
+
+  it('reads an edge 5xx body only so far: one that never ends, or is huge, is passing, and soon', async () => {
+    const notConform = (res: Response) => Object.assign(new Error('unexpected HTTP response status code', { cause: res }), { code: 'OAUTH_RESPONSE_IS_NOT_CONFORM' });
+    const never = notConform(new Response(new ReadableStream({ start: (c) => c.enqueue(new TextEncoder().encode('{"error":')) }), { status: 502, headers: { 'content-type': 'application/json' } }));
+    const t0 = performance.now();
+    expect(await passing(never)).toBe(true);
+    expect(performance.now() - t0).toBeLessThan(1500);
+    const huge = notConform(new Response(`{"pad":"${'x'.repeat(100_000)}","error":"invalid_grant"}`, { status: 503, headers: { 'content-type': 'application/json' } }));
+    expect(await passing(huge)).toBe(true);
   });
 
   it('shows the page at once for a failure that another round would not mend: a bad token, the provider’s refusal, a bug', async () => {
@@ -449,7 +529,9 @@ describe('completeSignIn: one fresh round', () => {
     const typeBug = new TypeError("Cannot read properties of undefined (reading 'x')");
     const odd = { cause: { cause: { cause: { cause: { cause: { cause: { code: 'ECONNRESET' } } } } } } };
     const named = { name: 'TimeoutErrorX', code: 'xECONNRESET', status: 600 };
-    for (const err of [new Error('unexpected ID Token "nonce" claim value'), notFound, refused, grant5xx, json5xx, typeBug, odd, named, 'a string', null]) {
+    // A 5xx whose body is an OAuth error object, whatever its content type: the provider's own answer.
+    const problemGrant = Object.assign(new Error('unexpected HTTP response status code', { cause: new Response('{"error":"invalid_grant","error_description":"x"}', { status: 500 }) }), { code: 'OAUTH_RESPONSE_IS_NOT_CONFORM' });
+    for (const err of [new Error('unexpected ID Token "nonce" claim value'), notFound, refused, grant5xx, json5xx, problemGrant, typeBug, odd, named, 'a string', null]) {
       const d = deps();
       vi.mocked(d.oidc.finishSignIn).mockRejectedValueOnce(err);
       const { cookieHeader, state } = await started(d);

@@ -9,8 +9,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
-import { expect, test, type Page } from '@playwright/test';
-import { sessionKey, transactionSetCookie } from '../server/session.mjs';
+import { expect, test, type Browser, type Page } from '@playwright/test';
 
 /** The cookies the site set before SIGNIN-SLOW, all of them listed on the privacy page; it sets no other. */
 const MAIN_COOKIES = ['__Host-nwfl-auth', '__Host-nwfl-links', '__Host-nwfl-session', '__Host-nwfl-size', '__Host-nwfl-theme'];
@@ -28,8 +27,6 @@ let site = '';
 const children: ChildProcess[] = [];
 let proxy: http.Server;
 let block = false;
-/** A cookie the proxy adds on the way in, as a browser would send one set long ago. */
-let inject = '';
 const hits = { signIn: 0, callback: 0 };
 const setCookieNames = new Set<string>();
 const SESSION_KEY = randomBytes(32).toString('base64');
@@ -52,7 +49,6 @@ test.describe.configure({ mode: 'default' });
 // Every test: the site sets no cookie beyond the ones it always set (a failed test restarts the worker, so per test).
 test.beforeEach(() => {
   setCookieNames.clear();
-  inject = '';
 });
 test.afterEach(() => {
   expect([...setCookieNames].filter((n) => !MAIN_COOKIES.includes(n))).toEqual([]);
@@ -92,7 +88,6 @@ test.beforeAll(async () => {
     if (path.startsWith('/auth/callback')) hits.callback++;
     const headers = { ...req.headers, 'x-forwarded-proto': 'https' };
     if (block) delete headers.cookie;
-    if (inject) headers.cookie = [headers.cookie, inject].filter(Boolean).join('; ');
     const upstream = http.request({ host: '127.0.0.1', port: webPort, path, method: req.method, headers }, (u) => {
       const out = { ...u.headers };
       for (const c of [out['set-cookie'] ?? []].flat()) setCookieNames.add(c.slice(0, c.indexOf('=')));
@@ -197,15 +192,30 @@ test('"Sign in again" (again=1) survives the fresh round: a new sign-in, not a s
   expect((await page.context().cookies()).find((c) => c.name === '__Host-nwfl-session')?.value).not.toBe(before);
 });
 
-test('cancelled at the provider eleven minutes after starting: the cancelled page, no round', async ({ page }) => {
+// What real Chromium does when the reader comes back from the provider after 605 s: the site's transaction
+// cookie (Max-Age=600) has gone, so the callback has none: the expired page, exactly as main, and no round,
+// whether they signed in or pressed Cancel. Both readers wait side by side, so the test takes ten minutes once.
+test('back from the provider after 605 s, with a code or a cancel: the expired page, no round, as main', async ({ browser }) => {
+  test.setTimeout(13 * 60_000);
   await stallTokens(0);
-  const key = sessionKey({ SESSION_KEY })!;
-  const started = Math.floor(Date.now() / 1000) - 11 * 60;
-  const tx = transactionSetCookie({ state: 'st-old', nonce: 'n', verifier: 'v'.repeat(43), back: '/about' }, key, started).split(';')[0]!;
-  inject = tx;
-  const res = await page.goto(`${site}/auth/callback?error=access_denied&state=st-old`);
-  expect(res?.status()).toBe(400);
-  await expect(page.getByRole('main')).toContainText('Sign-in was cancelled');
-  await page.waitForTimeout(1000);
-  expect({ ...(await provider()), ...hits }).toEqual({ auth: 0, token: 0, signIn: 0, callback: 1 });
+  const reader = async (b: Browser, act: (page: Page) => Promise<void>) => {
+    const context = await b.newContext();
+    const page = await context.newPage();
+    await page.goto(`${site}/sign-in?return=%2Fabout`);
+    await expect(page.locator('input[name="login"]')).toBeVisible();
+    expect((await context.cookies(site)).map((c) => c.name)).toContain('__Host-nwfl-auth');
+    await page.waitForTimeout(605_000);
+    expect((await context.cookies(site)).map((c) => c.name)).not.toContain('__Host-nwfl-auth');
+    const callback = page.waitForResponse((r) => r.url().includes('/auth/callback'));
+    await act(page);
+    expect((await callback).status()).toBe(400);
+    await expect(heading(page)).toHaveText('We could not sign you in');
+    await expect(page.getByRole('main')).toContainText('took more than ten minutes');
+    await context.close();
+  };
+  await Promise.all([
+    reader(browser, (page) => logIn(page)),
+    reader(browser, (page) => page.getByRole('link', { name: '[ Cancel ]' }).click()),
+  ]);
+  expect({ ...(await provider()), ...hits }).toEqual({ auth: 2, token: 0, signIn: 2, callback: 2 });
 });

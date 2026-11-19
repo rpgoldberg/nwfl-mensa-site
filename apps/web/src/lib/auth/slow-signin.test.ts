@@ -18,7 +18,7 @@ const TIMEOUT_MS = 1000;
 let server: http.Server;
 let issuer: string;
 /** How the token endpoint answers. */
-let mode: 'stall' | 'ok' | 'headers-then-stall' | 'headers-then-close' | '503-invalid-grant' | '502-page' = 'stall';
+let mode: 'stall' | 'ok' | 'headers-then-stall' | 'headers-then-close' | '503-invalid-grant' | '502-page' | '530-cloudflare-json' = 'stall';
 let codes: string[] = [];
 let nonce = '';
 let keys: Awaited<ReturnType<typeof generateKeyPair>>;
@@ -57,6 +57,11 @@ beforeAll(async () => {
       if (mode === '503-invalid-grant') {
         res.writeHead(503, { 'content-type': 'application/json' });
         return res.end('{"error":"invalid_grant"}');
+      }
+      // Cloudflare's structured error (RFC 9457) for a tunnel down, as it answers openid-client's Accept: application/json.
+      if (mode === '530-cloudflare-json') {
+        res.writeHead(530, { 'content-type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ type: 'https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1033/', title: 'Error 1033: Cloudflare Tunnel error', status: 530, error_code: 1033, error_name: 'tunnel_error', cloudflare_error: true, retryable: true }));
       }
       if (mode === '502-page') {
         res.writeHead(502, { 'content-type': 'text/html' });
@@ -165,7 +170,7 @@ describe('a token call that never answers', () => {
 });
 
 describe('the real error chains of a token call that broke', () => {
-  it.each(['headers-then-stall', 'headers-then-close', '502-page'] as const)('takes %s (the path, not the provider) to one fresh round', async (m) => {
+  it.each(['headers-then-stall', 'headers-then-close', '502-page', '530-cloudflare-json'] as const)('takes %s (the path, not the provider) to one fresh round', async (m) => {
     mode = m;
     const jar = new Map<string, string>();
     const { out, ms } = await round(jar, '/news', 'code-1');
