@@ -164,6 +164,18 @@ describe('a renamed page whose path decodes to non-ASCII', () => {
     await settle();
     expect(site.exited()).toBe(false);
   }, 15_000);
+
+  it('keeps a reserved character that decodes from the path inside the path', async () => {
+    const site = await startSite();
+    const query = await raw(site.port, request('GET', '/newsletter/%3Fa=1', false));
+    expect(query.slice(0, 12)).toBe('HTTP/1.1 301');
+    expect(query).toMatch(/\r\nlocation: \/news\/%3Fa%3D1\r\n/i);
+    const fragment = await raw(site.port, request('GET', '/newsletter/%23top', false));
+    expect(fragment.slice(0, 12)).toBe('HTTP/1.1 301');
+    expect(fragment).toMatch(/\r\nlocation: \/news\/%23top\r\n/i);
+    await settle();
+    expect(site.exited()).toBe(false);
+  }, 15_000);
 });
 
 describe('a fault in any code a request runs before the handler', () => {
