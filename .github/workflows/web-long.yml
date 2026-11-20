@@ -1,0 +1,49 @@
+name: web-long
+
+# SIGNIN-SLOW: the one long browser test, a reader back from the sign-in provider after 605 s
+# (e2e/signin-slow.spec.ts, tagged @long). Ten minutes of waiting is too long for every pull
+# request, so it runs here: each night and by hand (Actions, web-long, Run workflow). A failed
+# run is red in Actions like any other. It never gates a pull request or the image's publish.
+# Locally, from apps/web: npm run build && npm run e2e:long
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-long
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: apps/web
+
+jobs:
+  long:
+    name: E2E long (Chromium, sign-in after 605 s)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version-file: apps/web/.nvmrc
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run e2e:long
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: failure()
+        with:
+          name: web-long-playwright-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+          retention-days: 7
