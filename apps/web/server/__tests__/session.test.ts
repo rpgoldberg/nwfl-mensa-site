@@ -213,6 +213,14 @@ describe('the sign-in transaction cookie', () => {
     expect(openTransaction(undefined, key, NOW)).toBeUndefined();
   });
 
+  // SIGNIN-SLOW round 3: arithmetic would read a numeric string as its number; only a number is a time.
+  it('opens none whose time is not a number, though signed with the key', () => {
+    for (const at of [String(NOW), [NOW], null, true]) {
+      const sealed = sealTransaction(tx, key, at as unknown as number);
+      expect(openTransaction(`${AUTH_COOKIE}=${sealed}`, key, NOW), JSON.stringify(at)).toBeUndefined();
+    }
+  });
+
   it('is never mistaken for a session, nor a session for it', () => {
     const sealed = sealTransaction(tx, key, NOW);
     expect(readSession(`${SESSION_COOKIE}=${sealed}`, key, NOW, { has: () => true })).toBeUndefined();

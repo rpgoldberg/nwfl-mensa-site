@@ -8,7 +8,7 @@ import { accountHtml } from '../account.mjs';
 import { newSession, sessionSetCookie } from '../session.mjs';
 import { sharedTokenStore } from '../token-store.mjs';
 import { randomBytes } from 'node:crypto';
-import { createSiteServer, normalisePath, withSitePolicy } from '../siteServer.mjs';
+import { createSiteServer, normalisePath, originFormUrl, withSitePolicy } from '../siteServer.mjs';
 import { currentTrace } from '../trace.mjs';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
@@ -309,6 +309,25 @@ describe('withSitePolicy', () => {
     }
   });
 
+  it('answers 500 for a fault in code a request runs before the handler, and logs it by class only', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const pages = new Map<string, string>();
+      pages.get = () => {
+        throw new TypeError('made-up fault');
+      };
+      const base = await serve(() => undefined, pages);
+      const res = await fetch(`${base}/about`);
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('Internal Server Error');
+      expectSecurityHeaders(res);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(unstamped(error.mock.calls[0]?.[0])).toEqual({ level: 'error', msg: 'request failed', path: '/about', err: 'TypeError' });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('logs a thrown non-Error as a fixed name, not its text', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -335,6 +354,73 @@ describe('withSitePolicy', () => {
       const line = String(error.mock.calls[0]?.[0]);
       expect(line).not.toContain('SECRETCODE');
       expect(JSON.parse(line)).toMatchObject({ err: 'Error' });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  // LAUNCH-FIX-1: the site's own error page (src/pages/500.astro, prerendered), never bare text.
+  const ERROR_PAGE = '<!doctype html><html lang="en" data-size="100" data-theme="auto" data-links="ask"><body><h1>Something went wrong on our side</h1><a href="/officers">tell an officer</a></body></html>';
+
+  for (const [how, handler] of [
+    ['throws', () => { throw new RangeError('boom SECRETTEXT at /srv/app/secret.mjs:12'); }],
+    ['rejects', async () => { throw new RangeError('boom SECRETTEXT at /srv/app/secret.mjs:12'); }],
+  ] as const) {
+    it(`shows the error page, status 500 and never stored, when the handler ${how}: no error text, no stack`, async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const base = await serve(handler, new Map([['/500', ERROR_PAGE]]));
+        const res = await fetch(`${base}/officer-area?x=1`, { headers: { cookie: `${SIZE_COOKIE}=175; ${THEME_COOKIE}=dark` } });
+        expect(res.status).toBe(500);
+        expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        expectSecurityHeaders(res);
+        const body = await res.text();
+        expect(body).toContain('<h1>Something went wrong on our side</h1>');
+        expect(body).toContain('<a href="/officers">tell an officer</a>');
+        // In the reader's own text size and theme, as every prerendered page is.
+        expect(body).toContain('<html lang="en" data-size="175" data-theme="dark"');
+        expect(body).not.toMatch(/SECRETTEXT|boom|RangeError|secret\.mjs|\bat \/|Internal Server Error/);
+        expect(Number(res.headers.get('content-length'))).toBe(Buffer.byteLength(body));
+        // The log line stays as it was: the path and the error's class.
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(unstamped(error.mock.calls[0]?.[0])).toEqual({ level: 'error', msg: 'request failed', path: '/officer-area', err: 'RangeError' });
+      } finally {
+        error.mockRestore();
+      }
+    });
+  }
+
+  it('answers a failed HEAD with the error page\'s headers and no body', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => { throw new Error('boom'); }, new Map([['/500', ERROR_PAGE]]));
+      const res = await fetch(`${base}/x`, { method: 'HEAD' });
+      expect(res.status).toBe(500);
+      expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(await res.text()).toBe('');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('answers the error page\'s own address with 500, never 200, and never asks the handler', async () => {
+    const base = await serve(() => { throw new Error('the handler must not see the error page'); }, new Map([['/500', ERROR_PAGE], ['/500.html', ERROR_PAGE]]));
+    for (const path of ['/500', '/500.html']) {
+      const res = await fetch(`${base}${path}`);
+      expect(res.status, path).toBe(500);
+      expect(res.headers.get('cache-control'), path).toBe('no-store');
+      expect(await res.text(), path).toContain('Something went wrong on our side');
+    }
+  });
+
+  it('keeps the plain 500 when no error page was built, still with no error text', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => { throw new Error('boom SECRETTEXT'); });
+      const res = await fetch(`${base}/x`);
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('Internal Server Error');
     } finally {
       error.mockRestore();
     }
@@ -967,6 +1053,162 @@ describe('the access line', () => {
       await (await fetch(`${base}/calendar.ics`)).text();
       await settle();
       expect(log.mock.calls.map((c) => (JSON.parse(String(c[0])) as Record<string, unknown>)['msg'])).toEqual(['calendar feed']);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+// SIGNIN-SLOW round 3, on main's request-target reading (#77) and machine route (#79): which logger owns a
+// request. The access line has every request but the health probe, the calendar feed (its own line), a target
+// that is no path (its own fixed warning) and a machine call (machine-route.mjs logs each).
+describe('the access line, after the request-target hotfix', () => {
+  const access = (log: { mock: { calls: unknown[][] } }) =>
+    log.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>).filter((l) => l['msg'] === 'request');
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+
+  it('logs the path #77 reads, // and all, cut at 512', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => res.end('x'));
+      for (const target of ['//ok/news', '//ok/news?code=SECRET', `//${'d'.repeat(600)}`]) await (await fetch(`${base}${target}`)).text();
+      await settle();
+      expect(access(log).map((l) => [l['path'], l['path_cut']])).toEqual([
+        ['//ok/news', undefined],
+        ['//ok/news', undefined],
+        [`//${'d'.repeat(510)}`, true],
+      ]);
+      expect(log.mock.calls.join('\n')).not.toContain('SECRET');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('skips only the health probe itself: /healthz?x and /healthzz are pages like any other', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => {
+        res.statusCode = 404;
+        res.end('nope');
+      });
+      for (const target of ['/healthz', '/healthz?x', '/healthzz', '/healthz/']) await (await fetch(`${base}${target}`)).text();
+      await settle();
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([
+        ['/healthz', 404],
+        ['/healthzz', 404],
+        ['/healthz/', 404],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  // end() was called, so writableEnded is true; the body never reached the reader, so it is not a 200.
+  it('logs 499 when the reader leaves while a body it was sent is still in flight', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      let ended: () => void = () => {};
+      const sent = new Promise<void>((resolve) => (ended = resolve));
+      const base = await serve((_req, res) => {
+        res.end(Buffer.alloc(32 * 1024 * 1024, 'x'));
+        ended();
+      });
+      const socket = net.connect(Number(new URL(base).port), '127.0.0.1');
+      socket.on('error', () => undefined);
+      socket.write('GET /big HTTP/1.1\r\nHost: localhost\r\n\r\n');
+      socket.pause();
+      await sent;
+      await new Promise((r) => setTimeout(r, 50));
+      socket.destroy();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([['/big', 499]]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('leaves a target that is no path to its one fixed warning, and logs a machine path with no route mounted', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve(() => undefined);
+      await new Promise<void>((resolve) => {
+        const s = net.connect(Number(new URL(base).port), '127.0.0.1');
+        s.on('data', () => undefined);
+        s.on('close', () => resolve());
+        s.write('GET http://example.org/news HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      });
+      await (await fetch(`${base}/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict`, { method: 'POST', body: '' })).text();
+      await settle();
+      expect(log.mock.calls.map((c) => {
+        const l = JSON.parse(String(c[0])) as Record<string, unknown>;
+        return [l['msg'], l['path'], l['status']];
+      })).toEqual([
+        ['bad request target', undefined, undefined],
+        ['request', '/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict', 404],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('logs a fault before the handler with its status: one access line, beside the error line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => undefined);
+      // A Host header read by dropForwardedHost that throws: the route never reaches the handler.
+      server!.prependListener('request', (req: http.IncomingMessage) => {
+        if (req.url === '/early') Object.defineProperty(req, 'headers', { get: () => { throw new TypeError('x'); } });
+      });
+      const res = await fetch(`${base}/early`);
+      await res.text();
+      await settle();
+      expect(res.status).toBe(500);
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([['/early', 500]]);
+      expect(error.mock.calls.map((c) => (JSON.parse(String(c[0])) as Record<string, unknown>)['msg'])).toEqual(['request failed']);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+});
+
+describe('originFormUrl', () => {
+  it('reads an origin-form target after a fixed authority, // and all', () => {
+    expect(originFormUrl('/news?page=2')?.href).toBe('http://site.invalid/news?page=2');
+    expect(originFormUrl('//ok/news')?.pathname).toBe('//ok/news');
+    expect(originFormUrl('//[::1')?.pathname).toBe('//[::1');
+    expect(originFormUrl('//a:99999/')?.host).toBe('site.invalid');
+  });
+
+  it('keeps a backslash in the path as %5C, and leaves the query as sent', () => {
+    expect(originFormUrl('/\\[::1')?.pathname).toBe('/%5C[::1');
+    expect(originFormUrl('/\\\\[::1')?.pathname).toBe('/%5C%5C[::1');
+    expect(originFormUrl('/a?b=\\')?.search).toBe('?b=\\');
+  });
+
+  it.each([undefined, '', '*', 'news', 'http://[/news', 'https://evil.example/news', 'evil.example:443'])('reads %j as no path', (target) => {
+    expect(originFormUrl(target)).toBeNull();
+  });
+});
+
+describe('a target that is no path, in process', () => {
+  it('answers 400 with fixed text and logs one fixed line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve(() => undefined);
+      const reply = await new Promise<string>((resolve) => {
+        const s = net.connect(Number(new URL(base).port), '127.0.0.1');
+        let out = '';
+        s.on('data', (d) => (out += d.toString('latin1')));
+        s.on('close', () => resolve(out));
+        s.write('GET http://[zq7/news HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      });
+      expect(reply.slice(0, 12)).toBe('HTTP/1.1 400');
+      expect(reply.slice(reply.indexOf('\r\n\r\n') + 4)).toBe('Bad request');
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(unstamped(log.mock.calls[0]?.[0])).toEqual({ level: 'warn', msg: 'bad request target', reason: 'not a path on this site' });
+      expect(String(log.mock.calls[0]?.[0])).not.toContain('zq7');
     } finally {
       log.mockRestore();
     }

@@ -14,7 +14,8 @@
 //   items                                                         network; the officer pieces' links (L-ITEM, items.ts):
 //                                                                 lists them from the API, checks them, records the
 //                                                                 verdicts. Configured by the environment:
-//                                                                 LINKCHECK_API_URL, LINKCHECK_TOKEN_URL,
+//                                                                 LINKCHECK_API_URL (the website's origin:
+//                                                                 its Connect route, MACHINE-ROUTE), LINKCHECK_TOKEN_URL,
 //                                                                 LINKCHECK_PASSWORD_FILE (the service account's app
 //                                                                 password), LINKCHECK_CLIENT_ID (nwfl-linkcheck),
 //                                                                 LINKCHECK_USERNAME (svc-nwfl-linkcheck),
