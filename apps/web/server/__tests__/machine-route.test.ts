@@ -439,8 +439,9 @@ function rawCall(base: string, head: string | Buffer, body = '', waitMs = 8000):
     socket.write(typeof head === 'string' ? head + body : head);
   });
 }
-const rawHead = (path: string, extra: string, host = '127.0.0.1') =>
-  `POST ${path} HTTP/1.1\r\nHost: ${host}\r\nAuthorization: ${BEARER}\r\nContent-Type: application/proto\r\nConnect-Protocol-Version: 1\r\nConnection: close\r\n${extra}\r\n`;
+/** A call's head; `close` false leaves the connection to the server (HTTP/1.1 keeps it by default). */
+const rawHead = (path: string, extra: string, host = '127.0.0.1', close = true) =>
+  `POST ${path} HTTP/1.1\r\nHost: ${host}\r\nAuthorization: ${BEARER}\r\nContent-Type: application/proto\r\nConnect-Protocol-Version: 1\r\n${close ? 'Connection: close\r\n' : ''}${extra}\r\n`;
 
 describe('recheck 2 (round 4): what the suite did not pin', () => {
   // B-M2a: the read cap alone would wait for bytes that never come, to the body time.
@@ -505,13 +506,24 @@ describe('recheck 2 (round 4): what the suite did not pin', () => {
   });
 });
 
+describe('refusals with the body unread end the connection (round 4)', () => {
+  it('a call with no bearer on a kept connection: 401, then the server closes it', async () => {
+    const { base } = await stack(() => ({}));
+    const head = rawHead(RECORD, 'Content-Length: 100\r\n', '127.0.0.1', false).replace(`Authorization: ${BEARER}\r\n`, '');
+    const reply = await rawCall(base, head, 'x'.repeat(10), 3000);
+    expect(reply.status).toBe('HTTP/1.1 401 Unauthorized');
+    expect(reply.ms).toBeLessThan(1000);
+  });
+});
+
 describe('bodies in flight (round 4: a memory bound)', () => {
   it(`gives the reading of bodies at most ${MACHINE_READING_LIMIT} places at once: ${MACHINE_READING_LIMIT} by default`, () => {
     expect(MACHINE_READING_LIMIT).toBe(16);
   });
 
   // Each sends all but the last byte of the largest body, and waits: one Buffer, shared by every call.
-  const almost = Buffer.from(rawHead(RECORD, `Content-Length: ${MACHINE_BODY_MAX}\r\n`) + 'x'.repeat(MACHINE_BODY_MAX - 1), 'latin1');
+  // No Connection: close: the server must end each refused one itself, its body unread.
+  const almost = Buffer.from(rawHead(RECORD, `Content-Length: ${MACHINE_BODY_MAX}\r\n`, '127.0.0.1', false) + 'x'.repeat(MACHINE_BODY_MAX - 1), 'latin1');
 
   it(`refuses a body past ${MACHINE_READING_LIMIT} being read with 503 at once, unread; pages and a later call are served`, async () => {
     const bodyMs = 1500;
