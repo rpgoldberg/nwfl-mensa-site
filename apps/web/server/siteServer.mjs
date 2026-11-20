@@ -265,7 +265,8 @@ const ACCESS_PATH_MAX = 512;
  * among them) can be measured at the origin: the method, the path without its query (logPath, cut to
  * 512 characters), the status and the milliseconds taken. A request the client gave up on before the
  * answer was sent logs 499 (nginx's "client closed request"), never the status it did not get; an answer
- * cut short by a fault on the site's side (fail ran after the headers went out) logs 500, or the 5xx sent. Its
+ * cut short by a fault on the site's side (fail ran after the headers went out, or Astro's writer destroyed
+ * a streamed page with its error) logs 500, or the 5xx sent. Its
  * request id is the trace id every line carries (LG-N3): the close is bound to the request's context.
  * Never the query, a header, a cookie or the body. Registered before anything else runs, so a fault
  * anywhere is logged with its status; a request another line owns sets `call.logged` and has none here:
@@ -284,9 +285,11 @@ function logAccess(req, res, raw, started, call) {
     if (call.logged) return;
     const path = logPath(raw);
     const cut = path.length > ACCESS_PATH_MAX ? { path_cut: true } : {};
-    // An answer that ended has its status. One cut short by a fault (fail destroyed it) is ours, never the
-    // reader's: 500, or the 5xx it had already sent. Only a reader who left first is 499.
-    const status = res.writableFinished ? res.statusCode : call.failed ? Math.max(res.statusCode, 500) : 499;
+    // An answer that ended has its status. One cut short by a fault is ours, never the reader's: 500, or
+    // the 5xx it had already sent. A fault is fail having run, or the answer destroyed with an error, as
+    // Astro's writer does when a streamed page fails partway (it catches the error, so fail never runs);
+    // a reader leaving (a close or a reset) sets no error on the answer. Only a reader who left first is 499.
+    const status = res.writableFinished ? res.statusCode : call.failed || res.errored ? Math.max(res.statusCode, 500) : 499;
     console.log(logEntry({ level: 'info', msg: 'request', method, path: path.slice(0, ACCESS_PATH_MAX), ...cut, status, ms: Math.round(performance.now() - started) }));
   }));
 }

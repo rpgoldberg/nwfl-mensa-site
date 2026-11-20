@@ -10,6 +10,7 @@ import { sharedTokenStore } from '../token-store.mjs';
 import { randomBytes } from 'node:crypto';
 import { createSiteServer, normalisePath, originFormUrl, withSitePolicy } from '../siteServer.mjs';
 import { currentTrace } from '../trace.mjs';
+import { writeResponse } from 'astro/app/node';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
 
@@ -1202,6 +1203,58 @@ describe('the access line, after the request-target hotfix', () => {
       ]);
       expect(lines.map((l) => l['trace_id'])).toEqual([...faults, '/leave'].map((p) => ids[p]));
       expect(error.mock.calls.map((c) => (JSON.parse(String(c[0])) as Record<string, unknown>)['path'])).toEqual(faults);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  // Pages stream by default, and Astro's own writer (writeResponse) catches a fault partway through a page: it
+  // destroys the answer with the error and never throws, so fail does not run. The answer's error is the mark:
+  // set by that destroy, never by a reader leaving (a close or a reset), so the fault is 500 and the reader 499.
+  it("logs a fault partway through a page Astro's writer streams as 500; a reader who leaves mid-stream is 499", async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const ids: Record<string, string | undefined> = {};
+      const base = await serve(async (req, res) => {
+        const url = String(req.url);
+        ids[url] = currentTrace()?.traceId;
+        let n = 0;
+        const body = new ReadableStream<Uint8Array>({
+          async pull(c) {
+            if (n++ === 0) return c.enqueue(new TextEncoder().encode('<html>head'));
+            if (url === '/stream-fault') return c.error(new Error('render fault'));
+            await new Promise((r) => setTimeout(r, 20));
+            c.enqueue(new TextEncoder().encode('more'));
+          },
+        });
+        await writeResponse(new Response(body, { status: 200, headers: { 'Content-Type': 'text/html' } }), res);
+      });
+      const port = Number(new URL(base).port);
+      const ask = (path: string, leave?: (s: net.Socket) => void) =>
+        new Promise<string>((resolve) => {
+          let got = '';
+          const s = net.connect(port, '127.0.0.1');
+          s.on('error', () => undefined);
+          s.on('data', (d: Buffer) => {
+            got += d.toString();
+            if (leave && got.includes('head')) leave(s);
+          });
+          s.on('close', () => resolve(got));
+          s.write(`GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`);
+        });
+      expect(await ask('/stream-fault')).toMatch(/^HTTP\/1\.1 200 OK/);
+      await ask('/leave-mid-stream', (s) => s.destroy());
+      await ask('/reset-mid-stream', (s) => s.resetAndDestroy());
+      await new Promise((r) => setTimeout(r, 200));
+      const lines = access(log);
+      expect(lines.map((l) => [l['path'], l['status']])).toEqual([
+        ['/stream-fault', 500],
+        ['/leave-mid-stream', 499],
+        ['/reset-mid-stream', 499],
+      ]);
+      expect(lines.map((l) => l['trace_id'])).toEqual(['/stream-fault', '/leave-mid-stream', '/reset-mid-stream'].map((p) => ids[p]));
     } finally {
       log.mockRestore();
       error.mockRestore();
