@@ -10,7 +10,7 @@ name: web
 # real checker through the site to the real API.
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'release/web-*']
     paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', 'apps/api/vendor/**', 'apps/api/test/helpers/**', 'apps/linkcheck/src/**', 'apps/linkcheck/test/helpers/**', 'apps/linkcheck/package-lock.json', '.github/workflows/web.yml']
   pull_request:
     paths: ['apps/web/**', 'apps/api/proto/**', 'apps/api/src/**', 'apps/api/migrations/**', 'apps/api/scripts/**', 'apps/api/vendor/**', 'apps/api/test/helpers/**', 'apps/linkcheck/src/**', 'apps/linkcheck/test/helpers/**', 'apps/linkcheck/package-lock.json', '.github/workflows/web.yml']
@@ -174,11 +174,12 @@ jobs:
           docker stop canary
 
   publish:
-    name: Publish the image (main only)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Publish the image (main and release branches)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/web-'))
     needs: [lint, typecheck, unit, e2e, docker]
     runs-on: ubuntu-latest
-    # The only job that may write packages; it never runs on a pull request.
+    # The only job that may write packages: on a push to main or to a release/web-* branch, never on a pull
+    # request, and only after every gate above has passed.
     permissions:
       contents: read
       packages: write
