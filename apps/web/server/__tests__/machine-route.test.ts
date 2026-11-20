@@ -566,6 +566,49 @@ describe('bodies in flight (round 4: a memory bound)', () => {
     expect(statuses.filter((s) => s === '503')).toHaveLength(200);
     expect((await send(base, LIST, { headers: asCaller(), body: new Uint8Array() })).status).toBe(200);
   }, 15_000);
+
+  // Recheck 3 (R5-1): a read that fails gives its place back once. Given back twice, the count would go
+  // below zero, and after these ten failures the bound would let 26 bodies be read at once, not 16.
+  it(`still refuses the body past ${MACHINE_READING_LIMIT} after reads that failed: callers who left mid-body, resets, 413s and 408s`, async () => {
+    const bodyMs = 1500;
+    const { base, seen } = await stack(() => ({ urls: [], more: false }), { bodyMs });
+    const port = Number(new URL(base).port);
+    const midBody = (leave: (socket: net.Socket) => void) =>
+      new Promise<void>((resolve) => {
+        const socket = net.connect(port, '127.0.0.1');
+        socket.on('error', () => undefined);
+        socket.on('close', () => resolve());
+        socket.write(rawHead(RECORD, 'Content-Length: 100\r\n') + 'x'.repeat(10));
+        setTimeout(() => leave(socket), 100);
+      });
+    const over = MACHINE_BODY_MAX + 1;
+    // Past the cap by its bytes, mid-read: no last chunk, so only the cap can end it.
+    const tooLarge = () => rawCall(base, rawHead(RECORD, 'Transfer-Encoding: chunked\r\n'), `${over.toString(16)}\r\n${'x'.repeat(over)}\r\n`);
+    const { lines } = await logged(async () => {
+      const [, , , , , , large1, large2, slow1, slow2] = await Promise.all([
+        ...Array.from({ length: 4 }, () => midBody((socket) => socket.destroy())),
+        ...Array.from({ length: 2 }, () => midBody((socket) => socket.resetAndDestroy())),
+        tooLarge(),
+        tooLarge(),
+        rawCall(base, rawHead(RECORD, 'Content-Length: 100\r\n'), 'x'.repeat(10)),
+        rawCall(base, rawHead(RECORD, 'Content-Length: 100\r\n'), 'x'.repeat(10)),
+      ]);
+      for (const large of [large1, large2]) expect(large?.status).toBe('HTTP/1.1 413 Payload Too Large');
+      for (const slow of [slow1, slow2]) expect(slow?.status).toBe('HTTP/1.1 408 Request Timeout');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    // Every one of the ten was a read that began and failed.
+    expect(lines.map((l) => l['code']).sort()).toEqual([...Array(6).fill('aborted'), ...Array(2).fill('deadline_exceeded'), ...Array(2).fill('resource_exhausted')]);
+    vi.restoreAllMocks();
+    const reading = Array.from({ length: MACHINE_READING_LIMIT }, () => rawCall(base, almost));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const extra = await rawCall(base, almost);
+    expect(extra.status).toBe('HTTP/1.1 503 Service Unavailable');
+    expect(extra.ms).toBeLessThan(bodyMs / 2);
+    for (const slow of await Promise.all(reading)) expect(slow.status).toBe('HTTP/1.1 408 Request Timeout');
+    expect(seen).toEqual([]);
+    expect((await send(base, LIST, { headers: asCaller(), body: new Uint8Array() })).status).toBe(200);
+  }, 15_000);
 });
 
 describe('a caller that leaves (round 4)', () => {
