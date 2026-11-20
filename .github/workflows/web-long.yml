@@ -3,7 +3,8 @@ name: web-long
 # SIGNIN-SLOW: the one long browser test, a reader back from the sign-in provider after 605 s
 # (e2e/signin-slow.spec.ts, tagged @long). Ten minutes of waiting is too long for every pull
 # request, so it runs here: each night and by hand (Actions, web-long, Run workflow). A failed
-# run is red in Actions like any other. It never gates a pull request or the image's publish.
+# run is red in Actions like any other, and so is one in which it was skipped or not found
+# (e2e:long checks Playwright's JSON report). It never gates a pull request or the image's publish.
 # Locally, from apps/web: npm run build && npm run e2e:long
 on:
   schedule:

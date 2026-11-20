@@ -264,7 +264,8 @@ const ACCESS_PATH_MAX = 512;
  * SIGNIN-SLOW: one line per request, once its response closes, so a slow page (the sign-in callback
  * among them) can be measured at the origin: the method, the path without its query (logPath, cut to
  * 512 characters), the status and the milliseconds taken. A request the client gave up on before the
- * answer was sent logs 499 (nginx's "client closed request"), never the status it did not get. Its
+ * answer was sent logs 499 (nginx's "client closed request"), never the status it did not get; an answer
+ * cut short by a fault on the site's side (fail ran after the headers went out) logs 500, or the 5xx sent. Its
  * request id is the trace id every line carries (LG-N3): the close is bound to the request's context.
  * Never the query, a header, a cookie or the body. Registered before anything else runs, so a fault
  * anywhere is logged with its status; a request another line owns sets `call.logged` and has none here:
@@ -275,7 +276,7 @@ const ACCESS_PATH_MAX = 512;
  * @param {http.ServerResponse} res
  * @param {string} raw the URL's pathname, as originFormUrl reads it ('//ok/news' stays '//ok/news')
  * @param {number} started when the request came in (performance.now())
- * @param {{ logged: boolean }} call
+ * @param {{ logged: boolean, failed: boolean }} call
  */
 function logAccess(req, res, raw, started, call) {
   const method = req.method;
@@ -283,7 +284,9 @@ function logAccess(req, res, raw, started, call) {
     if (call.logged) return;
     const path = logPath(raw);
     const cut = path.length > ACCESS_PATH_MAX ? { path_cut: true } : {};
-    const status = res.writableFinished ? res.statusCode : 499;
+    // An answer that ended has its status. One cut short by a fault (fail destroyed it) is ours, never the
+    // reader's: 500, or the 5xx it had already sent. Only a reader who left first is 499.
+    const status = res.writableFinished ? res.statusCode : call.failed ? Math.max(res.statusCode, 500) : 499;
     console.log(logEntry({ level: 'info', msg: 'request', method, path: path.slice(0, ACCESS_PATH_MAX), ...cut, status, ms: Math.round(performance.now() - started) }));
   }));
 }
@@ -369,10 +372,14 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     const started = performance.now();
     const url = originFormUrl(req.url);
     const raw = url?.pathname ?? '';
-    /** What a fault answers: set once the path is read. logged: another line owns this request (logAccess). */
-    const call = { machine: false, logged: false };
+    /**
+     * What a fault answers: set once the path is read. logged: another line owns this request (logAccess).
+     * failed: fail ran, so an answer it cut short logs as a fault, not 499.
+     */
+    const call = { machine: false, logged: false, failed: false };
     /** @param {unknown} err */
     const fail = (err) => {
+      call.failed = true;
       // The pathname only (logPath): the query of /auth/callback carries the OIDC code and state. The
       // error's name only: its message can echo what the request sent.
       console.error(logEntry({ level: 'error', msg: 'request failed', path: logPath(raw), err: errorName(err) }));
@@ -418,7 +425,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
    * @param {URL | null} url
    * @param {string} raw
    * @param {(err: unknown) => void} fail
-   * @param {{ machine: boolean, logged: boolean }} call
+   * @param {{ machine: boolean, logged: boolean, failed: boolean }} call
    */
   function route(req, res, url, raw, fail, call) {
     dropForwardedHost(req);

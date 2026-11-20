@@ -1003,7 +1003,9 @@ describe('the access line', () => {
   it('logs a request the client abandoned before the answer as 499, not the status it never got', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      const base = await serve((_req, res) => {
+      const ids: Record<string, string | undefined> = {};
+      const base = await serve((req, res) => {
+        ids[String(req.url)] = currentTrace()?.traceId;
         setTimeout(() => res.end('late'), 400);
       });
       const { port } = new URL(base);
@@ -1023,6 +1025,9 @@ describe('the access line', () => {
         ['/news', 499],
         ['/about', 200],
       ]);
+      // The reader's socket closes outside the request's context: the line still carries its trace id.
+      expect(access(log).map((l) => l['trace_id'])).toEqual([ids['/news'], ids['/about']]);
+      expect(ids['/news']).toMatch(/^[0-9a-f]{32}$/);
     } finally {
       log.mockRestore();
     }
@@ -1148,6 +1153,58 @@ describe('the access line, after the request-target hotfix', () => {
       ]);
     } finally {
       log.mockRestore();
+    }
+  });
+
+  // 499 says only that the reader left before the answer ended. An answer a fault on the site's side cut short
+  // after its headers went out (fail destroys it) is a fault: 500, or the 5xx it had already sent. An answer that
+  // ended has the status the reader got, whether the fault came after it in step (a throw) or later (a rejection).
+  it('logs a fault after the headers as 500 (or the 5xx sent), never 499; a reader who leaves is 499: each once', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const ids: Record<string, string | undefined> = {};
+      const base = await serve((req, res) => {
+        const url = String(req.url);
+        ids[url] = currentTrace()?.traceId;
+        if (url === '/leave') {
+          setTimeout(() => res.end('late'), 400);
+          return;
+        }
+        res.writeHead(url === '/503-then-throw' ? 503 : 200, { 'Content-Type': 'text/plain' });
+        if (url.startsWith('/end-then-')) res.end('whole');
+        else res.write('part');
+        if (url.includes('reject')) return new Promise((_, reject) => setTimeout(() => reject(new RangeError('x')), 20));
+        throw new RangeError('x');
+      });
+      const port = Number(new URL(base).port);
+      const ask = (path: string, leaveAfter?: number) =>
+        new Promise<void>((resolve) => {
+          const s = net.connect(port, '127.0.0.1');
+          s.on('error', () => undefined);
+          s.on('data', () => undefined);
+          s.on('close', () => resolve());
+          s.write(`GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`);
+          if (leaveAfter !== undefined) setTimeout(() => s.destroy(), leaveAfter);
+        });
+      const faults = ['/throw-after-headers', '/reject-after-headers', '/503-then-throw', '/end-then-throw', '/end-then-reject'];
+      for (const path of faults) await ask(path);
+      await ask('/leave', 100);
+      await new Promise((r) => setTimeout(r, 500));
+      const lines = access(log);
+      expect(lines.map((l) => [l['path'], l['status']])).toEqual([
+        ['/throw-after-headers', 500],
+        ['/reject-after-headers', 500],
+        ['/503-then-throw', 503],
+        ['/end-then-throw', 200],
+        ['/end-then-reject', 200],
+        ['/leave', 499],
+      ]);
+      expect(lines.map((l) => l['trace_id'])).toEqual([...faults, '/leave'].map((p) => ids[p]));
+      expect(error.mock.calls.map((c) => (JSON.parse(String(c[0])) as Record<string, unknown>)['path'])).toEqual(faults);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
     }
   });
 

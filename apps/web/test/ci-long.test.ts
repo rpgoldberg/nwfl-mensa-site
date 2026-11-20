@@ -42,8 +42,10 @@ describe('the long e2e workflow', () => {
     expect(spec).toMatch(/test\.skip\(process\.env\.E2E_LONG !== '1', /);
     expect(spec.match(/@long/g)).toHaveLength(1);
     const scripts = (JSON.parse(read('apps', 'web', 'package.json')) as { scripts: Record<string, string> }).scripts;
-    expect(scripts['e2e:long']).toBe('E2E_LONG=1 playwright test --grep @long --project=chromium-desktop');
-    expect(Object.entries(scripts).filter(([, v]) => v.includes('E2E_LONG')).map(([k]) => k)).toEqual(['e2e:long']);
-    expect(read('.github', 'workflows', 'web.yml')).not.toMatch(/E2E_LONG|e2e:long/);
+    // Round 4: e2e:long sets E2E_LONG=1 itself and fails a run in which the long test was skipped or not found.
+    expect(scripts['e2e:long']).toBe('node scripts/e2e-long.mjs');
+    expect(read('apps', 'web', 'scripts', 'e2e-long.mjs')).toMatch(/E2E_LONG: '1'/);
+    expect(Object.entries(scripts).filter(([, v]) => /E2E_LONG|e2e-long/.test(v)).map(([k]) => k)).toEqual(['e2e:long']);
+    expect(read('.github', 'workflows', 'web.yml')).not.toMatch(/E2E_LONG|e2e:long|e2e-long/);
   });
 });

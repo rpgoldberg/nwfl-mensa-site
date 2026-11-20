@@ -196,7 +196,8 @@ test('"Sign in again" (again=1) survives the fresh round: a new sign-in, not a s
 // cookie (Max-Age=600) has gone, so the callback has none: the expired page, exactly as main, and no round,
 // whether they signed in or pressed Cancel. Both readers wait side by side, so the test takes ten minutes once:
 // too long for every pull request. It runs in .github/workflows/web-long.yml (nightly and by hand), or locally
-// with `npm run build && npm run e2e:long`; elsewhere it is reported as skipped.
+// with `npm run build && npm run e2e:long`; elsewhere it is reported as skipped. e2e:long fails a run in which
+// it was skipped or not found (scripts/e2e-long.mjs names it by this title).
 test('back from the provider after 605 s, with a code or a cancel: the expired page, no round, as main', { tag: '@long' }, async ({ browser }) => {
   test.skip(process.env.E2E_LONG !== '1', 'ten minutes long: web-long.yml, or E2E_LONG=1 (npm run e2e:long)');
   test.setTimeout(13 * 60_000);
