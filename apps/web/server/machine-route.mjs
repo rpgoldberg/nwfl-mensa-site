@@ -21,10 +21,13 @@
 //     site's own traceparent (LG-N3: a caller's is never continued). Nothing else: no cookie, no Origin;
 //   - its answer comes back as it is; a refusal keeps its Connect code, and its message is the route's own
 //     fixed text for that code (never the API's, never a library's), with no details;
+//   - at most MACHINE_READING_LIMIT bodies read at once (503 past it, unread), so slow senders cannot
+//     hold the site's memory;
 //   - at most MACHINE_LIMIT calls at once, each forwarded with MACHINE_CALL_MS to answer and dropped at
 //     MACHINE_DEADLINE_MS, so the route cannot starve the pages.
 // No cookie is read or set here, and every answer is never stored (policy.mjs). One log line per call:
-// the method, the code, the time taken and the trace id; never the token, never the body.
+// the method, the code, the time taken and the trace id; never the token, never the body. A caller gone
+// before its answer was sent in full is logged as aborted.
 import { AsyncResource } from 'node:async_hooks';
 import { performance } from 'node:perf_hooks';
 import { Code, ConnectError, createConnectRouter, createContextKey, createContextValues } from '@connectrpc/connect';
@@ -47,6 +50,12 @@ export const MACHINE_CALL_MS = 30_000;
 export const MACHINE_DEADLINE_MS = 35_000;
 /** The time a call's body has to arrive in full, from its first byte; it holds no place meanwhile. */
 export const MACHINE_BODY_MS = 5_000;
+/**
+ * Bodies read at once; one more is refused at once, unread. Bodies are read before a call takes a place,
+ * so without a bound every open socket could hold one: 16 hold at most 16 x MACHINE_BODY_MAX (3.2 MB),
+ * four times the calls served at once, room for each machine client's own retries.
+ */
+export const MACHINE_READING_LIMIT = 16;
 /** The authority the call's URL is built on: never the caller's Host. */
 const FIXED_AUTHORITY = 'machine-route.invalid';
 /** The caller's headers Connect reads; no other is handed on (the forwarder sends only authorization). */
@@ -234,6 +243,7 @@ export function createMachineRoute(config, { limit = MACHINE_LIMIT, deadlineMs =
   /** The router's handler of each method, by its path. */
   const handlers = new Map(router.handlers.map((handler) => [handler.requestPath, handler]));
   let active = 0;
+  let reading = 0;
   return async (req, res, path) => {
     const started = performance.now();
     const rpc = methods.get(path);
@@ -244,7 +254,7 @@ export function createMachineRoute(config, { limit = MACHINE_LIMIT, deadlineMs =
     res.once(
       'close',
       AsyncResource.bind(() => {
-        const code = outcome.code ?? `http_${res.statusCode}`;
+        const code = outcome.code ?? (res.writableFinished ? `http_${res.statusCode}` : 'aborted');
         console.log(logEntry({ level: code === 'ok' ? 'info' : 'warn', msg: 'machine call', rpc: rpc ?? 'unknown', code, ms: Math.round(performance.now() - started) }));
       }),
     );
@@ -258,6 +268,7 @@ export function createMachineRoute(config, { limit = MACHINE_LIMIT, deadlineMs =
     if (!validHost(req.headers.host)) return refuse(res, outcome, 400, Code.InvalidArgument, 'the request has no valid Host header', true);
     if (!BEARER.test(req.headers.authorization ?? '')) return refuse(res, outcome, 401, Code.Unauthenticated, 'a bearer token is needed', true);
     if (Number(req.headers['content-length']) > MACHINE_BODY_MAX) return refuse(res, outcome, 413, Code.ResourceExhausted, 'the request body is too large', true);
+    if (reading >= MACHINE_READING_LIMIT) return refuse(res, outcome, 503, Code.Unavailable, 'too many bodies are arriving at once; try again shortly', true);
     const deadline = setTimeout(() => {
       outcome.code ??= 'deadline_exceeded';
       req.destroy();
@@ -266,6 +277,7 @@ export function createMachineRoute(config, { limit = MACHINE_LIMIT, deadlineMs =
     res.once('close', () => clearTimeout(deadline));
     /** @type {Uint8Array} */
     let body;
+    reading += 1;
     try {
       // Read before the call takes a place: a sender that trickles its body holds none.
       body = await readBody(req, MACHINE_BODY_MAX, bodyMs);
@@ -273,6 +285,8 @@ export function createMachineRoute(config, { limit = MACHINE_LIMIT, deadlineMs =
       if (res.destroyed) return;
       if (error instanceof TooLarge) return refuse(res, outcome, 413, Code.ResourceExhausted, 'the request body is too large', true);
       return refuse(res, outcome, 408, Code.DeadlineExceeded, 'the request body did not arrive in time', true);
+    } finally {
+      reading -= 1;
     }
     if (active >= limit) return refuse(res, outcome, 429, Code.ResourceExhausted, 'too many calls at once; try again shortly');
     active += 1;

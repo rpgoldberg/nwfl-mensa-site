@@ -8,13 +8,15 @@ import { connectNodeAdapter, createConnectTransport } from '@connectrpc/connect-
 import http from 'node:http';
 import http2 from 'node:http2';
 import net from 'node:net';
+import v8 from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { gzipSync } from 'node:zlib';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { LinkCheckService, RecordLinkVerdictsRequestSchema, RecordLinkVerdictsResponseSchema } from '../../src/gen/nwfl/mensa/v1/link_check_pb.js';
 import { ExportEditionRequestSchema, NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
-import { CODE_MESSAGES, MACHINE_BODY_MAX, MACHINE_BODY_MS, MACHINE_LIMIT, createMachineRoute, machineRouteFromEnv, unaryMethods } from '../machine-route.mjs';
+import { CODE_MESSAGES, MACHINE_BODY_MAX, MACHINE_BODY_MS, MACHINE_LIMIT, MACHINE_READING_LIMIT, createMachineRoute, machineRouteFromEnv, unaryMethods } from '../machine-route.mjs';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { MACHINE_FAULT, createSiteServer } from '../siteServer.mjs';
 
@@ -421,7 +423,7 @@ describe('a caller whose body is slow (challenger round 1: slot hold)', () => {
 });
 
 /** A raw call on its own socket: the reply's status line, its body, and the time to the socket's close. */
-function rawCall(base: string, head: string, body = '', waitMs = 8000): Promise<{ status: string; body: string; ms: number }> {
+function rawCall(base: string, head: string | Buffer, body = '', waitMs = 8000): Promise<{ status: string; body: string; ms: number }> {
   const started = performance.now();
   return new Promise((resolve) => {
     const socket = net.connect(Number(new URL(base).port), '127.0.0.1');
@@ -433,7 +435,8 @@ function rawCall(base: string, head: string, body = '', waitMs = 8000): Promise<
       resolve({ status: reply.split('\r\n')[0] ?? '', body: reply.slice(reply.indexOf('\r\n\r\n') + 4), ms: performance.now() - started });
     });
     socket.on('error', () => undefined);
-    socket.write(head + body);
+    // A Buffer goes as it is, so many calls can share one without a copy each.
+    socket.write(typeof head === 'string' ? head + body : head);
   });
 }
 const rawHead = (path: string, extra: string, host = '127.0.0.1') =>
@@ -499,6 +502,83 @@ describe('recheck 2 (round 4): what the suite did not pin', () => {
     const reply = await rawCall(base, rawHead(LIST, 'Content-Length: 0\r\n', host));
     expect(reply.status).toBe('HTTP/1.1 200 OK');
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe('bodies in flight (round 4: a memory bound)', () => {
+  it(`gives the reading of bodies at most ${MACHINE_READING_LIMIT} places at once: ${MACHINE_READING_LIMIT} by default`, () => {
+    expect(MACHINE_READING_LIMIT).toBe(16);
+  });
+
+  // Each sends all but the last byte of the largest body, and waits: one Buffer, shared by every call.
+  const almost = Buffer.from(rawHead(RECORD, `Content-Length: ${MACHINE_BODY_MAX}\r\n`) + 'x'.repeat(MACHINE_BODY_MAX - 1), 'latin1');
+
+  it(`refuses a body past ${MACHINE_READING_LIMIT} being read with 503 at once, unread; pages and a later call are served`, async () => {
+    const bodyMs = 1500;
+    const { base, seen } = await stack(() => ({ urls: [], more: false }), { bodyMs });
+    const reading = Array.from({ length: MACHINE_READING_LIMIT }, () => rawCall(base, almost));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const extras = await Promise.all(Array.from({ length: 20 }, () => rawCall(base, almost)));
+    for (const extra of extras) {
+      expect(extra.status).toBe('HTTP/1.1 503 Service Unavailable');
+      expect(JSON.parse(extra.body)).toEqual({ code: 'unavailable', message: 'too many bodies are arriving at once; try again shortly' });
+      expect(extra.ms).toBeLessThan(bodyMs / 2);
+    }
+    expect((await send(base, '/about', { method: 'GET' })).status).toBe(200);
+    for (const slow of await Promise.all(reading)) expect(slow.status).toBe('HTTP/1.1 408 Request Timeout');
+    expect(seen).toEqual([]);
+    expect((await send(base, LIST, { headers: asCaller(), body: new Uint8Array() })).status).toBe(200);
+  }, 15_000);
+
+  // 200 more than the bound, all open at once: unbounded, they would hold about 40 MB.
+  it('holds the memory of the bodies it reads, not of every socket that sends one', async () => {
+    const bodyMs = 2000;
+    const { base } = await stack(() => ({ urls: [], more: false }), { bodyMs });
+    // What is held, not what is passing through: the refused sockets' unread bytes are read and dropped
+    // (node's own dump of an unread body), garbage until a collection, so collect first.
+    v8.setFlagsFromString('--expose-gc');
+    const gc = runInNewContext('gc') as () => void;
+    const memory = () => {
+      gc();
+      return process.memoryUsage().heapUsed + process.memoryUsage().external;
+    };
+    const start = memory();
+    const calls = Array.from({ length: MACHINE_READING_LIMIT + 200 }, () => rawCall(base, almost));
+    await new Promise((resolve) => setTimeout(resolve, bodyMs / 4));
+    const grown = memory() - start;
+    // The bound: the bodies being read, and a margin for 432 sockets, both ends of them in this process
+    // (round 4, Node 24: 11.8 MB held with the bound, 47.6 MB without it).
+    expect(grown).toBeLessThan(MACHINE_READING_LIMIT * MACHINE_BODY_MAX + 16 * 1024 * 1024);
+    const statuses = (await Promise.all(calls)).map((c) => c.status.slice(9, 12));
+    expect(statuses.filter((s) => s === '408')).toHaveLength(MACHINE_READING_LIMIT);
+    expect(statuses.filter((s) => s === '503')).toHaveLength(200);
+    expect((await send(base, LIST, { headers: asCaller(), body: new Uint8Array() })).status).toBe(200);
+  }, 15_000);
+});
+
+describe('a caller that leaves (round 4)', () => {
+  it('is logged as aborted, mid-body or mid-call, never by a status it was not sent', async () => {
+    const { base, seen } = await stack(() => new Promise(() => {}));
+    const { lines } = await logged(async () => {
+      // Mid-body: ten bytes of a hundred, then gone.
+      const midBody = net.connect(Number(new URL(base).port), '127.0.0.1');
+      midBody.on('error', () => undefined);
+      midBody.write(rawHead(RECORD, 'Content-Length: 100\r\n') + 'x'.repeat(10));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      midBody.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Mid-call: the call forwarded, then gone before the API answers.
+      const req = http.request(`${base}${LIST}`, { method: 'POST', headers: asCaller() });
+      req.on('error', () => undefined);
+      req.end();
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      req.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(lines.map((l) => [l['rpc'], l['code'], l['level']])).toEqual([
+      ['LinkCheckService/RecordLinkVerdicts', 'aborted', 'warn'],
+      ['LinkCheckService/ListLinksAwaitingVerdict', 'aborted', 'warn'],
+    ]);
   });
 });
 

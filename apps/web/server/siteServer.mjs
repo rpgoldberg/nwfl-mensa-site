@@ -441,13 +441,9 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     }
     if (machinePath) {
       // Never Astro: the route, or nothing at all. Inside the guard, as Astro is: no request may end the process.
-      if (machine) {
-        try {
-          Promise.resolve(machine(req, res, /** @type {string} */ (path))).catch(fail);
-        } catch (err) {
-          fail(err);
-        }
-      } else {
+      // A throw before its first await reaches serve's own guard; a rejection, fail.
+      if (machine) Promise.resolve(machine(req, res, /** @type {string} */ (path))).catch(fail);
+      else {
         res.statusCode = 404;
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.end('Not found');
