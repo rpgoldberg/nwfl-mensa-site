@@ -17,6 +17,9 @@ let keys: Awaited<ReturnType<typeof generateKeyPair>>;
 let discoveryCalls = 0;
 let failDiscovery = false;
 let offerLogout = true;
+// SIGNIN-SLOW: a provider that takes the request and never answers (a slow path through the edge).
+let stallDiscovery = false;
+let stallToken = false;
 
 beforeAll(async () => {
   keys = await generateKeyPair('ES256');
@@ -29,6 +32,7 @@ beforeAll(async () => {
     };
     if (url.pathname === '/.well-known/openid-configuration') {
       discoveryCalls++;
+      if (stallDiscovery) return;
       if (failDiscovery) return json({ error: 'down' }, 503);
       return json({
         issuer,
@@ -45,6 +49,7 @@ beforeAll(async () => {
       let body = '';
       for await (const chunk of req) body += chunk;
       tokenRequests.push({ authorization: req.headers.authorization, body: new URLSearchParams(body) });
+      if (stallToken) return;
       const now = Math.floor(Date.now() / 1000);
       const token = await new SignJWT({ iss: issuer, aud: 'nwfl-site', sub: 'user-1', iat: now, exp: now + 300, ...idToken })
         .setProtectedHeader({ alg: 'ES256', kid: 'k1' })
@@ -57,7 +62,11 @@ beforeAll(async () => {
   issuer = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+afterAll(() => {
+  // A stalled request holds its socket open: drop it, so the server can close.
+  server.closeAllConnections();
+  return new Promise<void>((resolve) => server.close(() => resolve()));
+});
 
 const config = (): AuthConfig => ({
   issuer: new URL(issuer),
@@ -68,6 +77,7 @@ const config = (): AuthConfig => ({
   scope: 'openid profile',
   allowInsecure: true,
   groupPrefix: 'nwfl-',
+  timeoutMs: 1000,
 });
 
 beforeEach(() => {
@@ -75,6 +85,8 @@ beforeEach(() => {
   idToken = {};
   failDiscovery = false;
   offerLogout = true;
+  stallDiscovery = false;
+  stallToken = false;
   forgetDiscovery();
 });
 
@@ -157,6 +169,46 @@ describe('finishSignIn', () => {
     await expect(finishSignIn(config(), callback({ code: 'c', state: start.state, iss: issuer }), start)).rejects.toThrow();
     idToken = { nonce: start.nonce, iss: 'https://login.example.org' };
     await expect(finishSignIn(config(), callback({ code: 'c', state: start.state, iss: issuer }), start)).rejects.toThrow();
+  });
+});
+
+// SIGNIN-SLOW: openid-client waits 30 s by default; a reader at the callback must not.
+describe('a provider that does not answer', () => {
+  const timed = async (work: Promise<unknown>) => {
+    const t0 = performance.now();
+    const error = await work.then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    return { error: error as { code?: string } | undefined, ms: performance.now() - t0 };
+  };
+
+  it('gives up on the token call after OIDC_TIMEOUT_MS, having sent the code once only', async () => {
+    const start = await startSignIn(config());
+    stallToken = true;
+    const { error, ms } = await timed(finishSignIn(config(), callback({ code: 'code-1', state: start.state, iss: issuer }), start));
+    expect(error?.code).toBe('OAUTH_TIMEOUT');
+    expect(ms).toBeGreaterThanOrEqual(900);
+    expect(ms).toBeLessThan(2000);
+    // Authentik's codes are single-use: a second request with it would only be refused, or spend it.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(tokenRequests.map((r) => r.body.get('code'))).toEqual(['code-1']);
+  });
+
+  it('gives up on discovery after OIDC_TIMEOUT_MS too, and reads it afresh next time', async () => {
+    stallDiscovery = true;
+    const { error, ms } = await timed(startSignIn(config()));
+    expect(error?.code).toBe('OAUTH_TIMEOUT');
+    expect(ms).toBeLessThan(2000);
+    stallDiscovery = false;
+    await expect(startSignIn(config())).resolves.toMatchObject({ state: expect.any(String) });
+  });
+
+  it('reads the metadata again when the timeout changes, so the new one applies to every call', async () => {
+    discoveryCalls = 0;
+    await startSignIn(config());
+    await startSignIn({ ...config(), timeoutMs: 2000 });
+    expect(discoveryCalls).toBe(2);
   });
 });
 

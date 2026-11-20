@@ -45,6 +45,7 @@ npm run lint
 npm run typecheck
 npm run test:coverage   # unit tests, 85 % line and branch gate
 npm run build && npm run e2e   # Playwright: Chromium and WebKit (iPhone), axe, over https
+npm run build && npm run e2e:long   # the ten-minute sign-in test (@long), nightly in web-long.yml; fails if it was skipped or not found
 ```
 
 ## Secrets and people
@@ -83,6 +84,8 @@ The API gets the same issuer and prefix (`SITE_OIDC_ISSUER`, `SITE_GROUP_PREFIX`
 Sessions and their tokens are held in the server's memory, so **the site runs as one replica until W5a**, which moves them to a shared store behind the API; the server logs `session_store: memory (single replica)` at start. A session is valid only while its record is there: sign-out deletes it, so a copy of the cookie is dead at once, and a restart signs everyone out.
 
 `SITE_ADMIN_CONTACT` (optional) is the Admin role's mailbox, one plain address. The sign-up form's line by the membership number (it can't be changed once sent; contact the site administrator to correct it) links it as a mailto; unset or not one plain address, the line links the officers page instead, never an empty or broken link. The sign-up's first name is prefilled from the ID token's `given_name` when the provider sends one.
+
+`OIDC_TIMEOUT_MS` (default 8000; a whole number from 1000 to 30000, or sign-in is off) bounds each call to the provider, discovery and the token call; openid-client's own default is 30 s. The code is never sent twice: it is single-use. A callback with a current transaction and the right state, refused as used or failed on a timeout, a broken connection or a 5xx whose body is not an OAuth error object (an edge's page or Cloudflare's JSON error), starts one fresh sign-in instead (`/sign-in?fresh=1`), back to the reader's page and asking again if they had. No cookie of its own: the mark is sealed in the new sign-in's transaction, so that round's own refusal shows the page. A transaction missing, older than ten minutes, dated ahead or unreadable, a mismatch, or any `error=` from the provider (a cancel) never takes it: those show the page as before. The server logs one access line per request (`msg: "request"`: method, path without its query and cut to 512 characters with `path_cut`, status (499 when the client gave up first; 500, or the 5xx already sent, when a fault on our side cut the answer short), ms, and the trace id as its request id), none for `/healthz`; the calendar feed, a target that is no path and a machine call each keep their own line instead, so every request has one.
 
 The public-only build (`npm run build:public-only`, or the image's `PUBLIC_ONLY=true` build argument) has no sign-in at all: every sign-in route is the 404 page however it is spelled, and the server ignores any `OIDC_*` or `SESSION_KEY` it is given, and logs that it did. The build writes `dist/build.json` so the server knows which build it is.
 

@@ -9,18 +9,18 @@ import type { AuthConfig } from '../../../server/auth-config.mjs';
 
 let discovered: { key: string; config: Promise<client.Configuration> } | undefined;
 
-/** The provider's metadata, read once per issuer and client; read again after a failure. */
+/** The provider’s metadata, read once per issuer, client and timeout; read again after a failure. */
 function discover(cfg: AuthConfig): Promise<client.Configuration> {
-  const key = `${cfg.issuer.href} ${cfg.clientId}`;
+  const key = `${cfg.issuer.href} ${cfg.clientId} ${cfg.timeoutMs}`;
   if (discovered?.key !== key) {
+    // SIGNIN-SLOW: openid-client takes the timeout in seconds, 30 by default; given here, it bounds
+    // discovery and is kept on the Configuration for every later call (the token call among them).
+    // openid-client never repeats a token call, and nor does the site: the code is single-use.
     const config = client
-      .discovery(
-        cfg.issuer,
-        cfg.clientId,
-        undefined,
-        client.ClientSecretPost(cfg.clientSecret),
-        cfg.allowInsecure ? { execute: [client.allowInsecureRequests] } : undefined,
-      )
+      .discovery(cfg.issuer, cfg.clientId, undefined, client.ClientSecretPost(cfg.clientSecret), {
+        timeout: cfg.timeoutMs / 1000,
+        ...(cfg.allowInsecure ? { execute: [client.allowInsecureRequests] } : {}),
+      })
       .catch((error: unknown) => {
         discovered = undefined;
         throw error;

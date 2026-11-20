@@ -160,7 +160,11 @@ export function readSession(cookieHeader, key, now, store) {
   return session && typeof session.exp === 'number' && session.exp > now && store.has(session.sid, now) ? session : undefined;
 }
 
-/** @typedef {{ state: string, nonce: string, verifier: string, back: string }} Transaction */
+/**
+ * @typedef {{ state: string, nonce: string, verifier: string, back: string, fresh?: true, again?: true }} Transaction
+ * fresh: the sign-in a refused callback started in its place (SIGNIN-SLOW): its own refusal shows the page.
+ * again: "Sign in again" (A14), kept so a fresh round asks again too.
+ */
 
 /**
  * @param {Transaction} tx

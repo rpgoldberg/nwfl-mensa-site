@@ -17,6 +17,8 @@ const out = await beginSignIn(runtimeDeps(), {
   cookieHeader: Astro.request.headers.get('cookie'),
   back: Astro.url.searchParams.get('return'),
   again: Astro.url.searchParams.get('again') === '1',
+  // SIGNIN-SLOW: the one fresh round a refused callback started (flow.ts completeSignIn).
+  fresh: Astro.url.searchParams.get('fresh') === '1',
   host: Astro.request.headers.get('host'),
 });
 if (out.kind === 'redirect') {

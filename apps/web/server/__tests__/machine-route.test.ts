@@ -851,3 +851,66 @@ describe('unaryMethods', () => {
   });
 });
 
+
+// SIGNIN-SLOW round 3: the site's access line beside the route's own. Each request has exactly one
+// summary line on stdout: a machine call the route's ("machine call"), anything else the access line
+// ("request"); a fault adds only its diagnosis on stderr ("request failed").
+describe('one line per request, with the access line', () => {
+  it('logs a machine call, a page, a sign-in callback, a page the reader left and a 500 once each', async () => {
+    const api = await standInApi((rpc) => (rpc === 'RecordLinkVerdicts' ? new Promise(() => {}) : { urls: [], more: false }));
+    const server = createSiteServer(
+      (req, res) => {
+        if (req.url?.startsWith('/boom')) throw new TypeError('x');
+        if (req.url === '/slow') return void setTimeout(() => res.end('late'), 400);
+        if (req.url?.startsWith('/auth/callback')) {
+          res.writeHead(303, { Location: '/sign-in' });
+          res.end();
+          return;
+        }
+        res.end('page');
+      },
+      { machine: createMachineRoute({ baseUrl: api.baseUrl, timeoutMs: 3000 }) },
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    closers.push(() => new Promise((resolve) => (server.closeAllConnections(), server.close(() => resolve()))));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const out: string[] = [];
+    const err: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: unknown) => void out.push(String(line)));
+    vi.spyOn(console, 'error').mockImplementation((line: unknown) => void err.push(String(line)));
+    const settle = (ms = 60) => new Promise((resolve) => setTimeout(resolve, ms));
+    const leave = async (path: string, extra = '') => {
+      const socket = net.connect(Number(new URL(base).port), '127.0.0.1');
+      socket.on('error', () => undefined);
+      socket.write(`POST ${path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/proto\r\nConnect-Protocol-Version: 1\r\n${extra}Content-Length: 0\r\n\r\n`);
+      await settle(150);
+      socket.destroy();
+      await settle(500);
+    };
+    expect((await send(base, LIST, { headers: asCaller(), body: new Uint8Array() })).status).toBe(200);
+    await leave(RECORD, `Authorization: ${BEARER}\r\n`);
+    await (await fetch(`${base}/about`)).text();
+    await (await fetch(`${base}/auth/callback?code=SECRETCODE&state=SECRETSTATE`, { redirect: 'manual' })).text();
+    const socket = net.connect(Number(new URL(base).port), '127.0.0.1');
+    socket.on('error', () => undefined);
+    socket.write('GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n');
+    await settle(100);
+    socket.destroy();
+    await settle(500);
+    expect((await fetch(`${base}/boom`)).status).toBe(500);
+    await (await fetch(`${base}/healthz`)).text();
+    await settle();
+    const lines = out.map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines.map((l) => [l['msg'], l['rpc'] ?? l['path'], l['code'] ?? l['status']])).toEqual([
+      ['machine call', 'LinkCheckService/ListLinksAwaitingVerdict', 'ok'],
+      ['machine call', 'LinkCheckService/RecordLinkVerdicts', 'aborted'],
+      ['request', '/about', 200],
+      ['request', '/auth/callback', 303],
+      ['request', '/slow', 499],
+      ['request', '/boom', 500],
+    ]);
+    expect(new Set(lines.map((l) => l['trace_id'])).size).toBe(lines.length);
+    expect(err.map((l) => (JSON.parse(l) as Record<string, unknown>)['msg'])).toEqual(['request failed']);
+    expect([...out, ...err].join('\n')).not.toMatch(/SECRET|mAcHiNe/);
+  });
+});
