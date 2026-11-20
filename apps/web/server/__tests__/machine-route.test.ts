@@ -420,6 +420,88 @@ describe('a caller whose body is slow (challenger round 1: slot hold)', () => {
   });
 });
 
+/** A raw call on its own socket: the reply's status line, its body, and the time to the socket's close. */
+function rawCall(base: string, head: string, body = '', waitMs = 8000): Promise<{ status: string; body: string; ms: number }> {
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const socket = net.connect(Number(new URL(base).port), '127.0.0.1');
+    let reply = '';
+    const giveUp = setTimeout(() => socket.destroy(), waitMs);
+    socket.on('data', (d) => (reply += d.toString('latin1')));
+    socket.on('close', () => {
+      clearTimeout(giveUp);
+      resolve({ status: reply.split('\r\n')[0] ?? '', body: reply.slice(reply.indexOf('\r\n\r\n') + 4), ms: performance.now() - started });
+    });
+    socket.on('error', () => undefined);
+    socket.write(head + body);
+  });
+}
+const rawHead = (path: string, extra: string, host = '127.0.0.1') =>
+  `POST ${path} HTTP/1.1\r\nHost: ${host}\r\nAuthorization: ${BEARER}\r\nContent-Type: application/proto\r\nConnect-Protocol-Version: 1\r\nConnection: close\r\n${extra}\r\n`;
+
+describe('recheck 2 (round 4): what the suite did not pin', () => {
+  // B-M2a: the read cap alone would wait for bytes that never come, to the body time.
+  it(`refuses a Content-Length over ${MACHINE_BODY_MAX} with no body at once, unread, well before the body time`, async () => {
+    const { base, seen } = await stack(() => ({}));
+    const reply = await rawCall(base, rawHead(RECORD, `Content-Length: ${MACHINE_BODY_MAX + 1}\r\n`));
+    expect(reply.status).toBe('HTTP/1.1 413 Payload Too Large');
+    expect(JSON.parse(reply.body)).toEqual({ code: 'resource_exhausted', message: 'the request body is too large' });
+    expect(reply.ms).toBeLessThan(MACHINE_BODY_MS / 5);
+    expect(seen).toEqual([]);
+  });
+
+  // R3-C9: every place a call takes is given back once, whatever its end.
+  it(`still admits exactly ${MACHINE_LIMIT} at once after calls of every ending, one by one and together`, async () => {
+    const held: Array<() => void> = [];
+    const { base, seen } = await stack((_rpc, _message, ctx) => {
+      const bearer = ctx.requestHeader.get('authorization');
+      if (bearer === 'Bearer never') return new Promise(() => {});
+      if (bearer === 'Bearer hold') return new Promise((resolve) => held.push(() => resolve({ urls: [], more: false })));
+      return { urls: [], more: false };
+    });
+    const call = (authorization = BEARER, extra: Record<string, string> = {}) => send(base, LIST, { headers: { ...proto, authorization, ...extra }, body: new Uint8Array() });
+    /** A call forwarded, then left by its caller before the API answers. */
+    const leave = async () => {
+      const before = seen.length;
+      const req = http.request(`${base}${LIST}`, { method: 'POST', headers: { ...proto, authorization: 'Bearer never' } });
+      req.on('error', () => undefined);
+      req.end();
+      await vi.waitFor(() => expect(seen.length).toBeGreaterThan(before));
+      req.destroy();
+    };
+    const timedOut = () => call('Bearer never', { 'connect-timeout-ms': '50' });
+    const N = MACHINE_LIMIT + 2;
+    // One by one: served, refused before a place, timed out, left.
+    for (let i = 0; i < N; i += 1) {
+      expect((await call()).status).toBe(200);
+      expect((await call('none')).status).toBe(401);
+      expect(errorOf(await timedOut()).code).toBe('deadline_exceeded');
+      await leave();
+    }
+    // Together: more than the limit, so some are refused for want of a place.
+    const together = await Promise.all([...Array.from({ length: N }, () => call()), ...Array.from({ length: N }, () => timedOut())]);
+    expect(together.map((r) => r.status).filter((s) => s !== 200 && s !== 429 && s !== 504)).toEqual([]);
+    await Promise.all(Array.from({ length: N }, () => leave()));
+    // Every place given back once: give the left calls' closes a moment.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const holding = Array.from({ length: MACHINE_LIMIT }, () => call('Bearer hold'));
+    await vi.waitFor(() => expect(held).toHaveLength(MACHINE_LIMIT));
+    const fifth = await call();
+    expect({ status: fifth.status, error: errorOf(fifth) }).toEqual({ status: 429, error: { code: 'resource_exhausted', message: 'too many calls at once; try again shortly' } });
+    for (const release of held) release();
+    for (const reply of await Promise.all(holding)) expect(reply.status).toBe(200);
+    expect((await call()).status).toBe(200);
+  }, 30_000);
+
+  // R3-C4: a Host the route takes as an authority but a URL parser does not; the call's URL never reads it.
+  it.each(['[::1::1]', '[:::]', '[.]'])('serves a call whose Host is %s: it passes the Host rule, and the URL is built on its own authority', async (host) => {
+    const { base, seen } = await stack(() => ({ urls: [], more: false }));
+    const reply = await rawCall(base, rawHead(LIST, 'Content-Length: 0\r\n', host));
+    expect(reply.status).toBe('HTTP/1.1 200 OK');
+    expect(seen).toHaveLength(1);
+  });
+});
+
 describe('the log', () => {
   it('writes one line per call: the method, the code, the time taken and the trace id; never the token or the body', async () => {
     const { base } = await stack((rpc) => {
