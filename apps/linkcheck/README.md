@@ -49,6 +49,10 @@ Approve for 7 days. `upgrade`, `confirm`, `review` and `flag` are stored as CONF
 stored as DROP, and Approve then waits for a yes with a note. The API refuses OK on a link that needs a sign-in.
 A piece is about now, so there is no issue date to compare a registration with: a domain registered in the last
 90 days gets the reason `re-registered`, which is `flag`, and so is stored as CONFIRM.
+It calls the website, not the API: `LINKCHECK_API_URL` is the site's origin (`https://nwflmensa.us`), whose
+Connect route serves `LinkCheckService` and forwards each call to the API over the cluster mesh (the tunnel
+carries no gRPC on a public hostname). The call is a plain HTTPS POST of the message, with the token as
+`Authorization: Bearer`; the API still checks the token. A redirect is refused, never followed with the token.
 Configuration is by environment: `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL`, `LINKCHECK_PASSWORD_FILE` (the
 service account's app password, in a file), and optionally `LINKCHECK_CLIENT_ID` (`nwfl-linkcheck`),
 `LINKCHECK_USERNAME` (`svc-nwfl-linkcheck`) and `LINKCHECK_SCOPE` (`links.check`). It prints counts only.

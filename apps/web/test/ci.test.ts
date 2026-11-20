@@ -21,9 +21,9 @@ function job(name: string): string {
 const JOBS = ['lint', 'typecheck', 'unit', 'e2e', 'docker', 'publish'];
 
 describe('web workflow', () => {
-  it('runs only for changes to the web app, the API protos its client is generated from, the API the leak test runs, or itself, on pushes and pull requests', () => {
+  it('runs only for changes to the web app, the API protos its client is generated from, the API the leak test runs, the checker the machine route test drives, or itself, on pushes and pull requests', () => {
     const triggers = ci.slice(0, ci.search(/^permissions:/m));
-    const paths = String.raw`    paths: \['apps/web/\*\*', 'apps/api/proto/\*\*', 'apps/api/src/\*\*', 'apps/api/migrations/\*\*', 'apps/api/scripts/\*\*', 'apps/api/vendor/\*\*', '\.github/workflows/web\.yml'\]$`;
+    const paths = String.raw`    paths: \['apps/web/\*\*', 'apps/api/proto/\*\*', 'apps/api/src/\*\*', 'apps/api/migrations/\*\*', 'apps/api/scripts/\*\*', 'apps/api/vendor/\*\*', 'apps/api/test/helpers/\*\*', 'apps/linkcheck/src/\*\*', 'apps/linkcheck/test/helpers/\*\*', 'apps/linkcheck/package-lock\.json', '\.github/workflows/web\.yml'\]$`;
     for (const event of ['push', 'pull_request']) expect(triggers).toMatch(new RegExp(`^  ${event}:\\n(?:    .*\\n)*?${paths}`, 'm'));
   });
 
@@ -66,6 +66,19 @@ describe('web workflow', () => {
   it('runs the unit tests with the coverage gate, and keeps the report', () => {
     expect(job('unit')).toMatch(/run: npm run test:coverage$/m);
     expect(job('unit')).toMatch(/path: apps\/web\/coverage\/$/m);
+  });
+
+  it('runs them with the throwaway Postgres and the checker installed: the machine route test drives the real API and checker (MACHINE-ROUTE)', () => {
+    const unit = job('unit');
+    const order = [
+      String.raw`run: npm ci --ignore-scripts\n {8}working-directory: apps/api`,
+      String.raw`run: npm ci --ignore-scripts\n {8}working-directory: apps/linkcheck`,
+      String.raw`run: sh \.\./api/scripts/test-db\.sh start >> "\$GITHUB_ENV"`,
+      'run: npm run test:coverage',
+      String.raw`- if: always\(\) && env\.NWFL_TEST_PG_CONTAINER != ''\n {8}run: sh \.\./api/scripts/test-db\.sh stop "\$NWFL_TEST_PG_CONTAINER"`,
+    ].map((step) => unit.search(new RegExp(step, 'm')));
+    for (const at of order) expect(at).toBeGreaterThan(-1);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
   it('runs one e2e job: the built site, then the public-only canary, with one browser install', () => {

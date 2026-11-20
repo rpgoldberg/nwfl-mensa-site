@@ -154,6 +154,31 @@ describe('start: sign-in settings from the environment (W4)', () => {
   });
 });
 
+// MACHINE-ROUTE: the machine clients' Connect route is mounted on a full build with an API, never on the
+// public-only canary build, whatever its environment says (machine-route.mjs).
+describe('the machine route', () => {
+  const LIST = '/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict';
+  const post = (base: string) => fetch(`${base}${LIST}`, { method: 'POST', headers: { 'content-type': 'application/proto' }, body: new Uint8Array() });
+
+  it('is served on a full build with API_URL: a call with no bearer is unauthenticated, not 404', async () => {
+    const handler = vi.fn((_req: http.IncomingMessage, res: http.ServerResponse) => res.end('x'));
+    const { base } = await boot(handler, { env: { API_URL: 'http://127.0.0.1:1' } });
+    const res = await post(base);
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: 'unauthenticated' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('is 404 on a public-only build, API_URL or not, and on a full build with no API', async () => {
+    const handler = vi.fn((_req: http.IncomingMessage, res: http.ServerResponse) => res.end('x'));
+    const publicOnly = await boot(handler, { env: { API_URL: 'http://127.0.0.1:1' }, buildInfo: new URL('./fixtures/build-public-only.json', import.meta.url) });
+    expect((await post(publicOnly.base)).status).toBe(404);
+    const noApi = await boot(handler);
+    expect((await post(noApi.base)).status).toBe(404);
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
 describe('start', () => {
   it('answers old URLs from the table it is given', async () => {
     const { base } = await boot(() => {}, { oldSite: new URL('./fixtures/old-site.json', import.meta.url) });

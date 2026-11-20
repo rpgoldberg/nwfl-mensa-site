@@ -9,15 +9,18 @@ import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const SERVER = `
+import { createMachineRoute } from '${new URL('../machine-route.mjs', import.meta.url).pathname}';
 import { createSiteServer } from '${new URL('../siteServer.mjs', import.meta.url).pathname}';
 const pages = new Map([['/news', '<html><body>the news page</body></html>']]);
 // A stand-in for any code a request runs before the handler: it throws on one path.
 const get = pages.get.bind(pages);
 pages.get = (path) => { if (path === '/throws') throw new TypeError('made-up fault'); return get(path); };
 const handler = (req, res) => { res.statusCode = 404; res.end('handler ' + req.url); };
-const site = createSiteServer(handler, { pages });
+const site = createSiteServer(handler, { pages, machine: createMachineRoute({ baseUrl: 'http://127.0.0.1:9', timeoutMs: 1000 }) });
 site.listen(0, '127.0.0.1', () => console.log('PORT ' + site.address().port));
 `;
+// MACHINE-ROUTE: each rule holds on the machine route's path too.
+const LIST = 'nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict';
 
 const children: ChildProcess[] = [];
 afterEach(() => {
@@ -58,7 +61,7 @@ const request = (method: string, target: string, bearer: boolean) =>
 const body = (reply: string) => reply.slice(reply.indexOf('\r\n\r\n') + 4);
 const settle = () => new Promise((r) => setTimeout(r, 50));
 
-// Each target ends in "/" and gets a page path after it.
+// Each target ends in "/" and gets a page path or the machine path after it.
 const BAD = [
   ['an unclosed IP literal, absolute-form', 'http://[/'],
   ['a port out of range, absolute-form', 'http://x:99999/'],
@@ -74,6 +77,7 @@ const BAD = [
 describe.each(BAD)('a request target with %s', (_label, prefix) => {
   it.each([
     ['a page path', 'GET', 'news'],
+    ['the machine path', 'POST', LIST],
   ])('on %s, with and without a bearer, answers 400 with fixed text and the site lives on', async (_where, method, rest) => {
     const site = await startSite();
     for (const bearer of [false, true]) {
@@ -119,9 +123,10 @@ describe('a refused target is logged', () => {
     const site = await startSite();
     await raw(site.port, request('GET', 'http://[zq7-target/news', false));
     await raw(site.port, request('POST', 'http://x:99999/zq7-target/news', true));
+    await raw(site.port, request('POST', `http://x:99999/zq7-target/${LIST}`, true));
     await settle();
     const lines = site.output().split('\n').filter((l) => l.startsWith('{'));
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
     for (const line of lines) {
       const entry = JSON.parse(line);
       expect(entry).toMatchObject({ level: 'warn', msg: 'bad request target', reason: 'not a path on this site' });
@@ -134,6 +139,8 @@ describe('a refused target is logged', () => {
 
 describe('a path that starts with //', () => {
   const page = (target: string, bearer: boolean) => request('GET', target, bearer);
+  const call = (target: string, bearer: boolean) =>
+    `POST ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://127.0.0.1\r\n${bearer ? 'Authorization: Bearer made-up\r\n' : ''}Content-Length: 0\r\nConnection: close\r\n\r\n`;
 
   // The handler gets each as it came; Astro collapses the slashes (//ok/news is /ok/news, no page): 404.
   it.each([
@@ -141,8 +148,11 @@ describe('a path that starts with //', () => {
     ['//[::1/news', page, 'news'],
     ['//a:99999/news', page, 'news'],
     ['//[::1', page, ''],
+    ['//ok/<machine path>', call, LIST],
+    ['//[::1/<machine path>', call, LIST],
+    ['//a:99999/<machine path>', call, LIST],
   ] as const)('%s is that literal path, never the page or the route after the "authority"', async (label, make, rest) => {
-    const target = label.replace(/news$/, '') + rest;
+    const target = label.replace(/<machine path>|news$/, '') + rest;
     const site = await startSite();
     for (const bearer of [false, true]) {
       const reply = await raw(site.port, make(target, bearer));
