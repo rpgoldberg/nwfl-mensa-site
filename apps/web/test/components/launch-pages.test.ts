@@ -156,10 +156,11 @@ describe('/privacy', () => {
     expect(readFileSync('../api/src/auth/caller.ts', 'utf8')).toContain("DEFAULT_EDGE_CLIENT_IDS: readonly string[] = ['cloudflared.nwfl-edge.serviceaccount.identity.linkerd.cluster.local']");
   });
 
-  // The year is the sign-in service's own setting (the infrastructure keeps its default, 365 days); no code
-  // in this repo holds it, so the test holds the sentence and its place.
+  // The year and the fields are the sign-in service's own settings (live: event retention 365 days, the default;
+  // each sign-in event records the IP with its GeoIP location and ASN); no code in this repo holds them, so the
+  // test holds the sentence and its place.
   it('says the sign-in service keeps its own record of each sign-in for a year, after the Cloudflare sentence', () => {
-    const sentence = 'Our sign-in service keeps its own record of each sign-in, with the time and your internet address, for a year.';
+    const sentence = 'Our sign-in service keeps its own record of each sign-in, with the time, your internet address, and the approximate location and internet provider that address points to, for a year.';
     const log = /The server.s log (.*?) To see your record/.exec(text)?.[1] ?? '';
     expect(log.endsWith(`keeps its own records under its own privacy policy. ${sentence}`)).toBe(true);
     expect(log.split(sentence)).toHaveLength(2);
@@ -191,7 +192,7 @@ describe('/privacy', () => {
         'This site uses cookies only to sign you in and keep you signed in, and to remember your text size, your theme and your choice about links that leave the site.',
         'There is no tracking and no advertising on this site, and nothing here follows what you read.',
         "The server's log Our server keeps a log so that we can find faults. A line in it has the time, what was asked for and a request number. It does not record what a page says or what you type into a form.",
-        "Cloudflare, which carries the site's traffic, keeps its own records under its own privacy policy. Our sign-in service keeps its own record of each sign-in, with the time and your internet address, for a year.",
+        "Cloudflare, which carries the site's traffic, keeps its own records under its own privacy policy. Our sign-in service keeps its own record of each sign-in, with the time, your internet address, and the approximate location and internet provider that address points to, for a year.",
         'To see your record, or have it removed Write to an officer: their addresses are on the Officers page . You can ask for a copy of what we keep about you, or ask us to remove it.',
       ].join(' '),
     );
