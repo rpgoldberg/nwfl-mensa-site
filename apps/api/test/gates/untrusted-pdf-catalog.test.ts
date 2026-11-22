@@ -106,6 +106,8 @@ const FROZEN: Record<Name, unknown[]> = {
     // writer takes text from the app, the page writer takes the worker's text for the copy the ledger says is served.
     { function: 'search_item_put(uuid,text,bytea,text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'search_page_put(uuid,text,bytea,integer,text[],text[])', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
+    // S1 fix 1: the trigger that deletes a file's page rows when its audience may no longer open it; it reads no PDF.
+    { function: 'search_page_unservable()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
   ],
   members: [],
   putOwner: [

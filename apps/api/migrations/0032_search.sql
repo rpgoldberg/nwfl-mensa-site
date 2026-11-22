@@ -18,8 +18,10 @@
 -- writes them. Each write goes through a SECURITY DEFINER function that refuses (55000) unless the
 -- publication ledger's CURRENT output for the subject and audience is the sha it is given:
 --   * search_page_put(file, audience, sha, text_version, pages[], extras[]): the worker's, for a
---     file whose current ledger row says the audience is served a copy. It replaces the audience's
---     rows for the file. Caps: 1 to 300 pages, 64 KiB a page and an extra, 4 MiB in all.
+--     file whose current ledger row says the audience is served a copy, and that the audience may
+--     open now (servableFile's SQL: the live version of a published item that is not officers-only,
+--     or a published edition); else 55000. It replaces the audience's rows for the file. Caps: 1 to
+--     300 pages, 64 KiB a page and an extra, 4 MiB in all.
 --   * search_item_put(version, audience, sha, title, text): the app's. With a NULL sha (the ledger
 --     says the audience is given nothing) or a NULL title (given something with nothing to index: a
 --     withdrawn item's stub) it deletes the version's row instead.
@@ -39,6 +41,9 @@
 --     a put that meets an append waits for it and then no longer finds the row current; and an
 --     append that meets a put waits for the put. The worker's own append (a new copy becomes
 --     current) takes no file lock, and this is what holds a put against it.
+--   * search_page_unservable (a trigger) deletes both audiences' page rows for an item's files when
+--     its state or live version changes, for a version's when its visibility changes, and for an
+--     edition's when it leaves published, under the same file locks, in the change's transaction.
 --   A row still outlives its sha when the ledger moves on WITHOUT pdf_regen_request (the worker
 --   finishing a new copy): the read side must return a row only when its sha is the ledger's
 --   current output (S3), and the worker replaces the rows after each copy (S2).
@@ -143,6 +148,17 @@ BEGIN
   IF NOT FOUND OR v_output IS DISTINCT FROM p_sha OR v_served IS DISTINCT FROM 'copy' THEN
     RAISE EXCEPTION 'the ledger does not say this audience is served this copy now' USING ERRCODE = '55000';
   END IF;
+  -- What the audience may open (content/files.ts servableFile, its SQL): a PDF of the live version of a published
+  -- item that is not officers-only, or of a published edition. Read after the file lock, so a change that stops it
+  -- (search_page_unservable, below) either is seen here or waits for this put and then deletes its rows.
+  IF NOT EXISTS (
+    SELECT 1 FROM stored_file f
+      LEFT JOIN content_version v ON v.id = f.version_id
+      LEFT JOIN content_item i ON i.live_version_id = v.id AND i.state = 'published' AND v.visibility <> 'officers'
+      LEFT JOIN edition e ON e.id = f.edition_id AND e.status = 'published'
+     WHERE f.id = p_file AND f.mime_type = 'application/pdf' AND (i.id IS NOT NULL OR e.id IS NOT NULL)) THEN
+    RAISE EXCEPTION 'the audience may not open this file now' USING ERRCODE = '55000';
+  END IF;
   SELECT v.item_id INTO v_item FROM content_version v WHERE v.id = v_file.version_id;
   IF p_audience = 'public' THEN
     DELETE FROM search_page_public WHERE file_id = p_file;
@@ -228,6 +244,42 @@ BEGIN
   UPDATE pdf_copy SET stale = true WHERE file_id = ANY (p_files) AND NOT stale;
 END
 $fn$;
+
+-- A change that can stop an audience opening a file deletes both audiences' page rows for it, in the change's own
+-- transaction: an item's state or live version (withdrawn, superseded, back to draft), a version's visibility, an
+-- edition leaving published. The live version's visibility and an edition's status are frozen today (0029, 0011);
+-- the trigger holds if that changes. It takes the file locks search_page_put takes, in id order, so a put either
+-- waits for the change and is then refused, or is waited for and its rows deleted. A definer: the app role, which
+-- makes these changes, may not write the page tables.
+CREATE FUNCTION search_page_unservable() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_files uuid[];
+BEGIN
+  IF TG_TABLE_NAME = 'content_item' THEN
+    v_files := ARRAY(SELECT f.id FROM stored_file f JOIN content_version v ON v.id = f.version_id WHERE v.item_id = NEW.id);
+  ELSIF TG_TABLE_NAME = 'content_version' THEN
+    v_files := ARRAY(SELECT f.id FROM stored_file f WHERE f.version_id = NEW.id);
+  ELSE
+    v_files := ARRAY(SELECT f.id FROM stored_file f WHERE f.edition_id = NEW.id);
+  END IF;
+  PERFORM 1 FROM stored_file f WHERE f.id = ANY (v_files) ORDER BY f.id FOR NO KEY UPDATE OF f;
+  DELETE FROM search_page_public WHERE file_id = ANY (v_files);
+  DELETE FROM search_page_members WHERE file_id = ANY (v_files);
+  RETURN NULL;
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION search_page_unservable() FROM PUBLIC;
+
+CREATE TRIGGER content_item_search_pages AFTER UPDATE OF state, live_version_id ON content_item
+  FOR EACH ROW WHEN (OLD.state IS DISTINCT FROM NEW.state OR OLD.live_version_id IS DISTINCT FROM NEW.live_version_id)
+  EXECUTE FUNCTION search_page_unservable();
+CREATE TRIGGER content_version_search_pages AFTER UPDATE OF visibility ON content_version
+  FOR EACH ROW WHEN (OLD.visibility IS DISTINCT FROM NEW.visibility)
+  EXECUTE FUNCTION search_page_unservable();
+CREATE TRIGGER edition_search_pages AFTER UPDATE OF status ON edition
+  FOR EACH ROW WHEN (OLD.status = 'published' AND NEW.status <> 'published')
+  EXECUTE FUNCTION search_page_unservable();
 
 -- 0025's function, with the page writer: the worker's alone once the role exists.
 CREATE OR REPLACE FUNCTION nwfl_worker_grants() RETURNS boolean
