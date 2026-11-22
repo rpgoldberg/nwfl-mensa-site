@@ -63,6 +63,8 @@
   --grp-club-tile: #d9ecef; --grp-club-icon: #0b5c6e; --grp-club-edge: #0b5c6e;
   --grp-on-tile: #ede4f7;   --grp-on-icon: #5b2d91;   --grp-on-edge: #6b3fa0;
   --grp-join-tile: #e3e6f5; --grp-join-icon: #2a3a8f; --grp-join-edge: #2a3a8f;
+  /* The solid tile behind the footer's Mensa logo, a white mark in every theme: 3:1 at least on the page, the mark 4.5:1 at least on it. */
+  --logo-tile: #00566b;
   color-scheme: light;
 }
 
@@ -87,6 +89,7 @@ html[data-size="175"] { font-size: min(175%, 8.75vw); }
     --grp-club-tile: #1d4550; --grp-club-icon: #9fdbe8; --grp-club-edge: #5fb8cb;
     --grp-on-tile: #3a2860; --grp-on-icon: #d4c0f5; --grp-on-edge: #a98be0;
     --grp-join-tile: #2a3466; --grp-join-icon: #c3caf5; --grp-join-edge: #8f9be0;
+    --logo-tile: #1f7a8c;
     color-scheme: dark;
   }
 }
@@ -99,6 +102,7 @@ html[data-theme="dark"] {
   --grp-club-tile: #1d4550; --grp-club-icon: #9fdbe8; --grp-club-edge: #5fb8cb;
   --grp-on-tile: #3a2860; --grp-on-icon: #d4c0f5; --grp-on-edge: #a98be0;
   --grp-join-tile: #2a3466; --grp-join-icon: #c3caf5; --grp-join-edge: #8f9be0;
+  --logo-tile: #1f7a8c;
   color-scheme: dark;
 }
 
@@ -112,6 +116,7 @@ html[data-theme="contrast-yellow"] {
   --grp-club-tile: #f0e7a8; --grp-club-icon: #000000; --grp-club-edge: #0b5c6e;
   --grp-on-tile: #f0e7a8; --grp-on-icon: #000000; --grp-on-edge: #6b3fa0;
   --grp-join-tile: #f0e7a8; --grp-join-icon: #000000; --grp-join-edge: #2a3a8f;
+  --logo-tile: #00205b;
   color-scheme: light;
 }
 
@@ -126,6 +131,7 @@ html[data-theme="contrast-yellow"] {
     --grp-club-tile: #e6ecfa; --grp-club-icon: #000000; --grp-club-edge: #0b5c6e;
     --grp-on-tile: #e6ecfa; --grp-on-icon: #000000; --grp-on-edge: #6b3fa0;
     --grp-join-tile: #e6ecfa; --grp-join-icon: #000000; --grp-join-edge: #2a3a8f;
+    --logo-tile: #00308f;
     color-scheme: light;
   }
 }
@@ -138,6 +144,7 @@ html[data-theme="contrast-white"] {
   --grp-club-tile: #e6ecfa; --grp-club-icon: #000000; --grp-club-edge: #0b5c6e;
   --grp-on-tile: #e6ecfa; --grp-on-icon: #000000; --grp-on-edge: #6b3fa0;
   --grp-join-tile: #e6ecfa; --grp-join-icon: #000000; --grp-join-edge: #2a3a8f;
+  --logo-tile: #00308f;
   color-scheme: light;
 }
 

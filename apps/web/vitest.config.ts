@@ -13,7 +13,7 @@ export default defineConfig({
     ],
     coverage: {
       provider: 'v8',
-      include: ['server/**/*.mjs', 'scripts/e2e-long.mjs', 'src/lib/**/*.ts', 'src/data/**/*.ts', 'src/middleware.ts', 'src/pages/**/*.ts', 'public/scripts/**/*.js'],
+      include: ['server/**/*.mjs', 'scripts/e2e-long.mjs', 'scripts/make-logo.mjs', 'src/lib/**/*.ts', 'src/data/**/*.ts', 'src/middleware.ts', 'src/pages/**/*.ts', 'public/scripts/**/*.js'],
       exclude: ['**/*.test.*'],
       reporter: ['text', 'lcov'],
       // The 85 % line AND branch gate, here so CI and a local run fail alike.
