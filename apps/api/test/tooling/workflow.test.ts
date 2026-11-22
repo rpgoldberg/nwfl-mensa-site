@@ -92,6 +92,8 @@ describe('api workflow', () => {
     // Fix round 3: no HEALTHCHECK runs in a sidecar (an exec'd process makes it exit 1, N3), and node is non-dumpable (S6).
     expect(smoke).toContain("AS_PID1='--no-healthcheck --entrypoint node'");
     expect(smoke).toContain('[ "$dump" = "status=open environ=EACCES mem=EACCES" ]');
+    // ARCHIVE-SEARCH S2: the gate sidecar also answers the worker a copy's text, and none for a marked copy.
+    for (const needed of ['workerText(env, {})', "grep -q \"read the copy's text\"", "grep -q 'gave no text for a marked copy'"]) expect(smoke, needed).toContain(needed);
   });
 
   it('checks the protos against the base commit, with the whole history at hand', () => {
