@@ -131,12 +131,13 @@ describe('web workflow', () => {
     }
   });
 
-  it('publishes to ghcr.io/rpgoldberg/nwfl-mensa-site/web on a push to main or a release/web-* branch only, once every check passed', () => {
+  it('publishes to ghcr.io/rpgoldberg/nwfl-mensa-site/web on a push to develop, main or a release/web-* branch only, once every check passed', () => {
     const publish = job('publish');
-    expect(publish).toMatch(/^ {4}if: github\.event_name == 'push' && \(github\.ref == 'refs\/heads\/main' \|\| startsWith\(github\.ref, 'refs\/heads\/release\/web-'\)\)$/m);
-    expect(publish).toMatch(/^ {4}name: Publish the image \(main and release branches\)$/m);
+    expect(publish).toMatch(/^ {4}if: github\.event_name == 'push' && \(github\.ref == 'refs\/heads\/develop' \|\| github\.ref == 'refs\/heads\/main' \|\| startsWith\(github\.ref, 'refs\/heads\/release\/web-'\)\)$/m);
+    expect(publish).toMatch(/^ {4}name: Publish the image \(develop, main and release branches\)$/m);
     // A release/web-* push must run the workflow at all (never release/**: other apps' release branches stay out).
-    expect(ci).toMatch(/^ {2}push:\n {4}branches: \[main, develop, 'release\/web-\*'\]$/m);
+    expect(ci).toMatch(/^ {2}push:\n {4}branches: \[develop, main, 'release\/web-\*'\]$/m);
+    expect(ci).toMatch(/^ {2}pull_request:\n {4}branches: \[develop, main\]$/m);
     expect(publish).toMatch(/^ {4}needs: \[lint, typecheck, unit, e2e, docker\]$/m);
     expect(publish).toMatch(/uses: docker\/login-action@/);
     expect(publish).toMatch(/registry: ghcr\.io$/m);

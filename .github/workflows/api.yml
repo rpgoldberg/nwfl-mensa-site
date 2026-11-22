@@ -4,7 +4,7 @@ name: api
 # once for the whole repository, in secrets.yml.
 on:
   push:
-    branches: ['**']
+    branches: [develop, main]
     # The linkcheck files the API copies or checks against (test/links/shared.test.ts, and
     # test/links/linkcheck-items.test.ts for the items mode).
     paths:
@@ -20,6 +20,7 @@ on:
       - 'apps/linkcheck/package-lock.json'
   pull_request:
     types: [opened, synchronize, reopened]
+    branches: [develop, main]
     # The linkcheck files the API copies or checks against (test/links/shared.test.ts).
     paths:
       - 'apps/api/**'
@@ -47,10 +48,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           # .nvmrc pins the same Node 24 LTS release the Dockerfile runs.
           node-version-file: apps/api/.nvmrc
@@ -96,13 +97,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # buf breaking reads the base commit from the local history.
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version-file: apps/api/.nvmrc
           cache: npm
@@ -132,7 +133,7 @@ jobs:
     needs: test
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Make the checkout look like a umask 077 one
         # Files 0600 and directories 0700, as a checkout made under umask 077
@@ -186,7 +187,7 @@ jobs:
     needs: test
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Make the checkout look like a umask 077 one
         # As in the image job: the image must set its own modes and still run.
@@ -211,8 +212,8 @@ jobs:
         run: sh scripts/smoke-migrate-image.sh nwfl-mensa-api-migrate:ci
 
   publish:
-    name: Publish the image (main only)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: Publish the image (develop and main)
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
     needs: [test, proto, image, migrate-image]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -222,7 +223,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -234,7 +235,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

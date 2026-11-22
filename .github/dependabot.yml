@@ -1,0 +1,43 @@
+version: 2
+
+# Weekly update PRs against develop, minor and patch grouped into one PR per ecosystem.
+# The three packages (apps/api, apps/linkcheck, apps/web) each have their own lockfile.
+updates:
+  - package-ecosystem: "npm"
+    directories:
+      - "/apps/api"
+      - "/apps/linkcheck"
+      - "/apps/web"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/apps/api"
+      - "/apps/linkcheck"
+      - "/apps/web"
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      docker-minor-patch:
+        update-types:
+          - minor
+          - patch
