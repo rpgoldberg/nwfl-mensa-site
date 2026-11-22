@@ -70,6 +70,7 @@ const reads: ApiReads = {
   listPublishedItems: (kind) => Promise.resolve(LISTS.get(kind) ?? []),
   readFile: (id) => Promise.resolve(id === FILES[0]!.id ? { kind: 'not_ready' } : { kind: 'not_found' }),
   getLinkTarget: () => Promise.resolve({ kind: 'not_found' }),
+  search: () => Promise.resolve({ kind: 'ok', hits: [], hasMore: false }),
 };
 
 describe('the public output of the live reads, as before A14', () => {

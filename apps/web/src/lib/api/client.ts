@@ -6,9 +6,10 @@
 // Every call goes out as the public: no Authorization header, no cookie,
 // nothing about the reader. The API works the audience out from what it gets
 // (no token: anonymous, public; apps/api/src/auth/caller.ts), so the site
-// never claims an audience of its own. Three reads only, ListPublishedItems,
-// ReadFile and GetLinkTarget, may carry a signed-in reader's access token (A14,
-// /news and its PDFs; LINKS L4, the links in those PDFs, /out/<id>), as
+// never claims an audience of its own. Four reads only, ListPublishedItems,
+// ReadFile, GetLinkTarget and Search, may carry a signed-in reader's access token
+// (A14, /news and its PDFs; LINKS L4, the links in those PDFs, /out/<id>;
+// ARCHIVE-SEARCH, /search), as
 // "Authorization: Bearer", and only when given a Reader; no other
 // read takes one, so the calendar, the roster and every feed stay the
 // public's. A token the API refuses (UNAUTHENTICATED) is ApiTokenRefused, for
@@ -22,6 +23,10 @@
 // API's message, never a token) and becomes ApiUnavailable, which the pages
 // answer with a plain "temporarily unavailable" and 503; a refused token is
 // ApiTokenRefused instead (above).
+//
+// Search (ARCHIVE-SEARCH S4) sends the visitor's words in the request message
+// and nowhere else. No line logged here ever holds them: a search the API
+// refuses or has no room for is logged by call and code, like any failure.
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcTransport } from '@connectrpc/connect-node';
 import { traceInterceptor } from '../../../server/trace.mjs';
@@ -29,6 +34,7 @@ import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { type ContentItem, ContentKind, ContentService, LinkTargetKind, LinkTargetStatus, type ReadFileResponse } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import { type EventOccurrence, type EventSeries, EventService } from '../../gen/nwfl/mensa/v1/event_pb.js';
 import type { Office } from '../../gen/nwfl/mensa/v1/roster_pb.js';
+import { type SearchHit, SearchService } from '../../gen/nwfl/mensa/v1/search_pb.js';
 
 export interface ApiConfig {
   baseUrl: string;
@@ -100,6 +106,13 @@ export type LinkRead =
   | { kind: 'disabled'; fileId: string; page: number; at?: Date }
   | { kind: 'not_found' };
 
+/**
+ * ARCHIVE-SEARCH: one page of hits, as the API answers for the caller's audience (it sends no total). `invalid`:
+ * the API would not take the query (INVALID_ARGUMENT). `busy`: it is at its limit (RESOURCE_EXHAUSTED) or ran
+ * out of time (DEADLINE_EXCEEDED, the API's two seconds or this client's timeout): the visitor may try again.
+ */
+export type SearchRead = { kind: 'ok'; hits: SearchHit[]; hasMore: boolean } | { kind: 'invalid' } | { kind: 'busy' };
+
 export class ApiNotFound extends Error {
   constructor(readonly rpc: string) {
     super(`the API has no such thing (${rpc})`);
@@ -140,6 +153,8 @@ export interface ApiReads {
   readFile(id: string, as?: Reader): Promise<FileRead>;
   /** LINKS L4. With a reader, as them; a refused token rejects with ApiTokenRefused. */
   getLinkTarget(id: string, as?: Reader): Promise<LinkRead>;
+  /** ARCHIVE-SEARCH. `page` is 1-based. With a reader, as them; a refused token rejects with ApiTokenRefused. */
+  search(query: string, page: number, as?: Reader): Promise<SearchRead>;
 }
 
 const codeName = (code: Code) => Code[code].replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
@@ -151,6 +166,7 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
   const transport = createGrpcTransport({ baseUrl: config.baseUrl, defaultTimeoutMs: config.timeoutMs, readMaxBytes: READ_MAX_BYTES, interceptors: [traceInterceptor] });
   const events = createClient(EventService, transport);
   const content = createClient(ContentService, transport);
+  const searches = createClient(SearchService, transport);
 
   const call = async <T>(rpc: string, run: () => Promise<T>, notFound = false, bearer = false): Promise<T> => {
     try {
@@ -263,9 +279,37 @@ export function grpcReads(config: ApiConfig, log: (line: string) => void): ApiRe
     }
   };
 
+  const search = (query: string, page: number, as?: Reader): Promise<SearchRead> => {
+    const headers = authorization(as);
+    return call(
+      'Search',
+      async (): Promise<SearchRead> => {
+        try {
+          const got = await searches.search({ query, page }, headers ? { headers } : {});
+          return { kind: 'ok', hits: got.hits, hasMore: got.hasMore };
+        } catch (error) {
+          const code = ConnectError.from(error).code;
+          // The call and the code only: the API's message may repeat the query.
+          if (code === Code.InvalidArgument) {
+            log(JSON.stringify({ level: 'warn', msg: 'api search refused', rpc: 'Search', code: codeName(code) }));
+            return { kind: 'invalid' };
+          }
+          if (code === Code.ResourceExhausted || code === Code.DeadlineExceeded) {
+            log(JSON.stringify({ level: 'warn', msg: 'api search busy', rpc: 'Search', code: codeName(code) }));
+            return { kind: 'busy' };
+          }
+          throw error;
+        }
+      },
+      false,
+      headers !== undefined,
+    );
+  };
+
   return {
     readFile,
     getLinkTarget,
+    search,
     listOccurrences: (from, to) =>
       call('ListOccurrences', async () => (await events.listOccurrences({ from: protoDate(from), to: protoDate(to), includeCancelled: true })).occurrences),
     getOccurrence: (id) => call('GetOccurrence', async () => (await events.getOccurrence({ id })).occurrence, true),
@@ -289,5 +333,6 @@ export function unavailableReads(): ApiReads {
     listPublishedItems: fail('ListPublishedItems'),
     readFile: fail('ReadFile'),
     getLinkTarget: fail('GetLinkTarget'),
+    search: fail('Search'),
   };
 }

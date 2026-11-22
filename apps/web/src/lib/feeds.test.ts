@@ -38,6 +38,7 @@ const live = (over: Partial<LiveData> = {}): LiveData => ({
   news: () => Promise.reject(new Error('a feed never reads the news')),
   file: () => Promise.resolve({ kind: 'not_found' }),
   link: () => Promise.resolve({ kind: 'not_found' }),
+  search: () => Promise.reject(new Error('a feed never searches')),
   ...over,
 });
 
