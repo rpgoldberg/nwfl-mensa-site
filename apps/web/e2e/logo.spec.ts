@@ -64,7 +64,7 @@ function contrast(a: string, b: string): number {
 function held(s: Seen, width: number): void {
   expect(s.count).toBe(1);
   expect(s.logo.complete).toBe(true);
-  expect(s.words.text).toBe('Northwest Florida Mensa, a local group of American Mensa');
+  expect(s.words.text).toBe('Northwest Florida Mensa, a local group of American Mensa for the Florida Panhandle, west of the Apalachicola River.');
   // Never stretched, upright: the drawn box keeps the picture's proportions, with no transform.
   expect(s.logo.width / s.logo.height).toBeCloseTo(RATIO, 1);
   expect(s.logo.natural).toBeCloseTo(RATIO, 2);

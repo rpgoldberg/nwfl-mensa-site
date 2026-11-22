@@ -42,7 +42,7 @@ describe('the footer of every page', () => {
   it('puts it beside the group’s name, as words, and neither is a link', () => {
     for (const html of pages) {
       const brand = /<div class="foot-brand">([\s\S]*?)<\/div>/.exec(footerOf(html))?.[1] ?? '';
-      expect(brand.replace(/\s+/g, ' ').trim()).toMatch(/^<img\b[^>]*> ?<p>Northwest Florida Mensa, a local group of American Mensa<\/p>$/);
+      expect(brand.replace(/\s+/g, ' ').trim()).toMatch(/^<img\b[^>]*> ?<p>Northwest Florida Mensa, a local group of American Mensa for the Florida Panhandle, west of the Apalachicola River\.<\/p>$/);
       expect(brand).not.toContain('<a');
     }
   });
