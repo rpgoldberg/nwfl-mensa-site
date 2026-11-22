@@ -421,8 +421,9 @@ test.describe('fix 1: the officer area admits each role, with only its own links
   const cases = [
     { login: 'lone-approver', links: ['Sign-ups to approve'] },
     { login: 'lone-webmaster', links: ['Write news', queue] },
-    { login: 'lone-admin', links: ['Write news', queue, 'Our events', 'Sign-ups to approve', 'Approval setting'] },
-    { login: 'admin', links: ['Write news', queue, 'Our events', 'Sign-ups to approve', 'Approval setting'] },
+    // PROFILE-ERASE: "Member records" for the Admin alone.
+    { login: 'lone-admin', links: ['Write news', queue, 'Our events', 'Sign-ups to approve', 'Member records', 'Approval setting'] },
+    { login: 'admin', links: ['Write news', queue, 'Our events', 'Sign-ups to approve', 'Member records', 'Approval setting'] },
     { login: 'approver', links: ['Write news', queue, 'Our events', 'Sign-ups to approve'] },
     { login: 'officer', links: ['Write news', queue, 'Our events'] },
     { login: 'webmaster', links: ['Write news', queue, 'Our events'] },

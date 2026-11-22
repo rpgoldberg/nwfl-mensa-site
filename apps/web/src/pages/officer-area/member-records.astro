@@ -1,0 +1,263 @@
+---
+// PROFILE-ERASE: the Admin's member records. The decided sign-ups, newest first, one card each: the
+// name and email from the person's sign-in, what they typed if it is still held, the decision and
+// its day, and the account's standing. Two things are done here, each by the Admin alone:
+//
+//   Erase this record   when the person asks (the privacy page's promise). A confirmation step first
+//                       names everything that will be erased, says it cannot be undone and, for an
+//                       approved member, that their member access ends with it. The API then erases
+//                       the name, the email, the names and the number of every decided sign-up of
+//                       that person; the date and the decision stay.
+//   Correct the number  for an approved member whose number was typed wrong. A form with two labelled
+//                       fields (the new number, digits only as at sign-up, and a reason in words with
+//                       no digits), then a step that shows the change before it is made. The reason is
+//                       kept in the record with the Admin's name; the number never is.
+//
+// Each call goes to the API with the Admin's own token (src/lib/api/membership.ts), which alone
+// decides who may, and never on their own record. Not signed in: sign in first. Signed in but not the
+// Admin: the plain not-found page, and it is never linked for them. It works with no script: each step
+// is a link or a form post, answered with a page or a 303 back here. Astro's origin check refuses a
+// cross-site post first; the body is capped and must be a form (src/lib/form.ts).
+import PasswordNote from '../../components/PasswordNote.astro';
+import Unavailable from '../../components/Unavailable.astro';
+import Base from '../../layouts/Base.astro';
+import { CorrectionRefused, DecisionRefused, MembershipSignInAgain, type SignupRecord, membershipApi, sessionReader } from '../../lib/api/membership';
+import { markUnavailable, signInFirst } from '../../lib/api/page';
+import { isAdmin } from '../../lib/approval-rules';
+import { runtimeDeps } from '../../lib/auth/flow';
+import { readForm } from '../../lib/form';
+import {
+  CORRECT_REFUSED,
+  type CorrectErrors,
+  ERASE_REFUSED,
+  MAX_REASON,
+  RECORDS_PATH,
+  type RecordForm,
+  canCorrect,
+  doneFromQuery,
+  doneText,
+  endsAccess,
+  eraseList,
+  parseRecordForm,
+  recordFacts,
+  recordsShownNote,
+} from '../../lib/member-records';
+import { MAX_NUMBER_DIGITS, MAX_NUMBER_TYPED } from '../../lib/signup';
+import { page } from '../../lib/site';
+
+export const prerender = false;
+
+const HERE = RECORDS_PATH;
+const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
+/** Five short fields; a reason of 500 characters, percent-encoded, fits many times over. */
+const MAX_FORM_BYTES = 16 * 1024;
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const session = Astro.locals.session;
+// Never stored by a shared cache (src/lib/api/page.ts signInFirst).
+if (!session) return signInFirst(SIGN_IN);
+if (!isAdmin(session)) return Astro.rewrite('/404');
+const p = page(HERE);
+const api = membershipApi();
+const { reader } = sessionReader(session, runtimeDeps());
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+/** A step to show: the erasure to confirm, or the correction to fill in or to check. */
+let step: RecordForm | undefined;
+let correcting: { requestId: string; errors: CorrectErrors; values: { membershipNumber: string; reason: string } } | undefined;
+let refused: string | undefined;
+let problem: 'sign-in' | 'unavailable' | 'form' | undefined;
+
+if (Astro.request.method === 'POST') {
+  const read = await readForm(Astro.request, MAX_FORM_BYTES);
+  if (!read.ok) return new Response(read.status === 413 ? 'Too large.' : 'Send the form.', { status: read.status, headers: read.status === 413 ? { Connection: 'close' } : {} });
+  const parsed = parseRecordForm(read.field);
+  if (!parsed.ok) {
+    if (parsed.requestId === undefined) problem = 'form';
+    else correcting = { requestId: parsed.requestId, errors: parsed.errors, values: parsed.values };
+    Astro.response.status = 400;
+  } else if (parsed.value.action === 'erase' ? !parsed.value.confirmed : parsed.value.step === 'review') {
+    step = parsed.value;
+  } else if (api === undefined) {
+    problem = 'unavailable';
+  } else if (reader === undefined) {
+    problem = 'sign-in';
+  } else {
+    const form = parsed.value;
+    try {
+      if (form.action === 'erase') {
+        const { erased, accessEnded } = await api.eraseSignup(reader, form.requestId);
+        return Astro.redirect(`${HERE}?done=${erased === 0 ? 'already' : accessEnded ? 'erased-access' : 'erased'}`, 303);
+      }
+      await api.correctMembershipNumber(reader, form.requestId, { membershipNumber: form.membershipNumber, reason: form.reason });
+      return Astro.redirect(`${HERE}?done=corrected`, 303);
+    } catch (error) {
+      if (error instanceof DecisionRefused) refused = ERASE_REFUSED[error.reason];
+      else if (error instanceof CorrectionRefused) refused = CORRECT_REFUSED[error.reason];
+      else problem = error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+      if (refused !== undefined) Astro.response.status = 409;
+    }
+  }
+} else {
+  // The link from a card: the correction form for that record.
+  const asked = Astro.url.searchParams.get('correct');
+  if (asked !== null && REQUEST_ID.test(asked)) correcting = { requestId: asked, errors: {}, values: { membershipNumber: '', reason: '' } };
+}
+
+let records: SignupRecord[] | undefined;
+if (api !== undefined && reader !== undefined) {
+  try {
+    records = await api.listSignupRecords(reader);
+  } catch (error) {
+    problem ??= error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+  }
+} else {
+  problem ??= api === undefined ? 'unavailable' : 'sign-in';
+}
+if (problem === 'unavailable') markUnavailable(Astro.response);
+
+const find = (id: string | undefined): SignupRecord | undefined => records?.find((r) => r.requestId === id);
+const erasing = step?.action === 'erase' ? find(step.requestId) : undefined;
+const review = step?.action === 'correct' ? step : undefined;
+const reviewed = review && find(review.requestId);
+// Only a record the API lists, and only one whose number can be corrected.
+const formFor = correcting && find(correcting.requestId);
+const correctable = formFor !== undefined && canCorrect(formFor) ? formFor : undefined;
+// A step for a record no longer in the list: nothing to show but the list as it is now.
+if (records !== undefined && ((step !== undefined && !erasing && !(reviewed && canCorrect(reviewed))) || (correcting !== undefined && !correctable))) {
+  problem ??= 'form';
+  if (Astro.request.method === 'POST') Astro.response.status = 400;
+}
+const showing = erasing ? 'erase' : reviewed && canCorrect(reviewed) ? 'review' : correctable ? 'correct' : 'list';
+const done = Astro.request.method === 'GET' && showing === 'list' ? doneFromQuery(Astro.url.searchParams) : undefined;
+const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
+---
+<Base {...p}>
+  <h1>{p.title}</h1>
+  <p class="lead">Sign-ups that have been decided. Correct a wrong membership number here, or erase a record when the person asks. Only you, as the Admin, see this page.</p>
+  {done && <p class="notice" role="status">{doneText(done)}</p>}
+  {refused && <p class="notice" role="alert">{refused}</p>}
+  {problem === 'form' && <p class="notice" role="alert">Nothing was changed: start again from the list below.</p>}
+  {problem === 'sign-in' && <p class="notice" role="note">Your sign-in has run out for this page. <a href={`${SIGN_IN}&again=1`}>Sign in again</a>, then try again.</p>}
+  {problem === 'sign-in' && <PasswordNote />}
+  {problem === 'unavailable' && <Unavailable what="The member records" />}
+
+  {showing === 'erase' && erasing && (
+    <section class="card record-step" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Erase this record?</h2>
+      <p>{erasing.displayName} ({erasing.email}).</p>
+      <p id="erase-what">This will be erased:</p>
+      <ul aria-labelledby="erase-what">
+        {eraseList(erasing).map((line) => <li>{line}</li>)}
+      </ul>
+      <p><b>This cannot be undone. Only the date and the decision are kept.{endsAccess(erasing) && ' Their member access ends as well.'}</b></p>
+      <form method="post" action={HERE}>
+        <input type="hidden" name="action" value="erase" />
+        <input type="hidden" name="request" value={erasing.requestId} />
+        <input type="hidden" name="confirmed" value="yes" />
+        <div class="btns">
+          <button class="button" type="submit">Yes, erase it</button>
+          <a class="button button--secondary" href={HERE}>Cancel</a>
+        </div>
+      </form>
+    </section>
+  )}
+
+  {showing === 'review' && review && reviewed && (
+    <section class="card record-step" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Check this correction</h2>
+      <p>{reviewed.displayName} ({reviewed.email}).</p>
+      <dl class="facts facts--grid">
+        <div><dt>Number now</dt><dd>{reviewed.membershipNumber}</dd></div>
+        <div><dt>New number</dt><dd>{review.membershipNumber}</dd></div>
+        <div class="facts__wide"><dt>Reason</dt><dd class="reason-text">{review.reason}</dd></div>
+      </dl>
+      <p><b>The member's account page will show the new number. The reason is kept in the record with your name; the number is not.</b></p>
+      <form method="post" action={HERE}>
+        <input type="hidden" name="action" value="correct" />
+        <input type="hidden" name="step" value="apply" />
+        <input type="hidden" name="request" value={reviewed.requestId} />
+        <input type="hidden" name="membershipNumber" value={review.membershipNumber} />
+        <input type="hidden" name="reason" value={review.reason} />
+        <div class="btns">
+          <button class="button" type="submit">Yes, correct it</button>
+          <a class="button button--secondary" href={HERE}>Cancel</a>
+        </div>
+      </form>
+    </section>
+  )}
+
+  {showing === 'correct' && correcting && correctable && (
+    <form method="post" action={HERE} class="rule-form record-step" novalidate>
+      <input type="hidden" name="action" value="correct" />
+      <input type="hidden" name="step" value="review" />
+      <input type="hidden" name="request" value={correctable.requestId} />
+      <fieldset>
+        <legend>Correct the membership number</legend>
+        <p id="correct-who">{correctable.displayName} ({correctable.email}). Number now: {correctable.membershipNumber}.</p>
+        <label for="membershipNumber">New membership number</label>
+        <p class="hint" id="number-hint">Digits only, up to {MAX_NUMBER_DIGITS} of them.</p>
+        {correcting.errors.membershipNumber && <p class="error" id="number-error">Problem: {correcting.errors.membershipNumber}</p>}
+        <input
+          type="text"
+          id="membershipNumber"
+          name="membershipNumber"
+          inputmode="numeric"
+          autocomplete="off"
+          maxlength={MAX_NUMBER_TYPED}
+          required
+          value={correcting.values.membershipNumber}
+          aria-invalid={correcting.errors.membershipNumber ? 'true' : undefined}
+          aria-describedby={describedBy('correct-who', 'number-hint', correcting.errors.membershipNumber && 'number-error')}
+        />
+        <label for="reason">Why are you correcting it?</label>
+        <p class="hint" id="reason-hint">Needed. Write it in words, with no digits: the number itself is never put in the record. Up to {MAX_REASON} characters. It is kept with your name.</p>
+        {correcting.errors.reason && <p class="error" id="reason-error">Problem: {correcting.errors.reason}</p>}
+        <textarea
+          id="reason"
+          name="reason"
+          rows="4"
+          maxlength={MAX_REASON}
+          required
+          aria-invalid={correcting.errors.reason ? 'true' : undefined}
+          aria-describedby={describedBy('reason-hint', correcting.errors.reason && 'reason-error')}
+        >{correcting.values.reason}</textarea>
+        <div class="btns">
+          <button class="button" type="submit">Review this correction</button>
+          <a class="button button--secondary" href={HERE}>Cancel</a>
+        </div>
+      </fieldset>
+    </form>
+  )}
+
+  {showing === 'list' && records !== undefined && (
+    records.length === 0 ? (
+      <p class="card empty">There are no records to show.</p>
+    ) : (
+      <>
+        <p>{records.length === 1 ? 'One record.' : `${records.length} records.`} Newest first.</p>
+        {recordsShownNote(records.length) && <p role="note">{recordsShownNote(records.length)}</p>}
+        {records.map((r, i) => (
+          <section class="card record-card" aria-labelledby={`record-${i}`}>
+            <div class="signup-who">
+              <h2 id={`record-${i}`}>{r.displayName}</h2>
+              <p>{r.email}</p>
+            </div>
+            <dl class="facts facts--grid">
+              {recordFacts(r).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
+            </dl>
+            <div class="btns">
+              {canCorrect(r) && <a class="button button--secondary" href={`${HERE}?correct=${r.requestId}`} aria-describedby={`record-${i}`}>Correct the number</a>}
+              <form method="post" action={HERE}>
+                <input type="hidden" name="action" value="erase" />
+                <input type="hidden" name="request" value={r.requestId} />
+                <button class="button button--secondary" type="submit" aria-describedby={`record-${i}`}>Erase this record</button>
+              </form>
+            </div>
+          </section>
+        ))}
+      </>
+    )
+  )}
+  <p><a href={showing === 'list' ? '/officer-area' : HERE}>{showing === 'list' ? 'Back to the officer area' : 'Back to the member records'}</a></p>
+</Base>

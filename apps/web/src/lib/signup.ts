@@ -79,14 +79,23 @@ function namesOf(field: (name: string) => string | undefined): { names: ProfileF
   return { names, errors };
 }
 
+/**
+ * A membership number as typed: its digits, typing noise dropped, or none when it is not 1 to 12
+ * digits. The one check for the sign-up form and for the Admin's correction (PROFILE-ERASE).
+ */
+export function digitsOf(typed: string): string | undefined {
+  const digits = typed.trim().replace(NUMBER_NOISE, '');
+  return DIGITS.test(digits) ? digits : undefined;
+}
+
 /** The sign-up form's three fields, checked; each problem is said in words, by field. */
 export function parseSignupForm(field: (name: string) => string | undefined): ParsedSignup {
   const { names, errors: nameErrors } = namesOf(field);
-  const membershipNumber = (field('membershipNumber') ?? '').trim().replace(NUMBER_NOISE, '');
+  const membershipNumber = digitsOf(field('membershipNumber') ?? '');
   const errors: SignupErrors = { ...nameErrors };
   if ((field('membershipNumber') ?? '').trim() === '') errors.membershipNumber = 'Enter your membership number.';
-  else if (!DIGITS.test(membershipNumber)) errors.membershipNumber = `Enter your membership number using digits only, up to ${MAX_NUMBER_DIGITS} of them.`;
-  if (Object.keys(errors).length > 0) return { ok: false, errors, values: names };
+  else if (membershipNumber === undefined) errors.membershipNumber = `Enter your membership number using digits only, up to ${MAX_NUMBER_DIGITS} of them.`;
+  if (membershipNumber === undefined || Object.keys(errors).length > 0) return { ok: false, errors, values: names };
   return { ok: true, value: { ...names, membershipNumber } };
 }
 

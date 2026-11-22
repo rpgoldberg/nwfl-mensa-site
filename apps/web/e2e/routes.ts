@@ -57,6 +57,8 @@ export const OFFICER: Readonly<Record<string, readonly string[]>> = {
   '/officer-area/events/series/[id]': ['/officer-area/events/series/new', '/officer-area/events/series/3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7'],
   // W-SIGNUP D4: the approvers' queue, read with their own token (src/lib/api/membership.ts).
   '/officer-area/sign-ups': ['/officer-area/sign-ups'],
+  // PROFILE-ERASE: the Admin's member records, read with their own token (src/lib/api/membership.ts).
+  '/officer-area/member-records': ['/officer-area/member-records'],
   // EDITOR E3: the writer screens, read with the officer's own token (src/lib/api/editor.ts), at a seeded item's id.
   '/officer-area/news': ['/officer-area/news'],
   '/officer-area/news/new': ['/officer-area/news/new'],

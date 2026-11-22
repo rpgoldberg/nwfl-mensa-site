@@ -1310,13 +1310,17 @@ dl.kept dd { margin: 0; overflow-wrap: anywhere; }
 dl.kept .kept__text { white-space: pre-wrap; }
 
 /* W-SIGNUP: the approvers' queue: one card per sign-up, its decisions as plain buttons below. */
-.signup-card form, .rejected-card form { margin: 0; }
+.signup-card form, .rejected-card form, .record-card form { margin: 0; }
 /* QUEUE-C: compact cards. The name with its email right under it; then the details as label and value
    pairs (dl.facts--grid): as many to a row as fit at 8.5rem each, never more than four, so two on a
    phone and one at the largest text on a 320 px screen. A value wraps, even inside a long email, and
    is never cut short. The membership check's sentence runs across the card. The cards are set closer
    than the site's other cards (the editor: less wasted height), their type at full size. */
-.signup-card, .rejected-card { gap: var(--space-2); margin: var(--space-3) 0; padding: var(--space-3); }
+.signup-card, .rejected-card, .record-card { gap: var(--space-2); margin: var(--space-3) 0; padding: var(--space-3); }
+/* PROFILE-ERASE: the steps that name a person: a long email or name wraps, even at 200 % text on a phone. */
+.record-step p, .record-step li, .record-step legend { overflow-wrap: anywhere; }
+/* PROFILE-ERASE: a correction's reason as typed, its line breaks kept. */
+dl.facts--grid .reason-text { white-space: pre-wrap; }
 .signup-who { display: grid; gap: 0; }
 .signup-who > * { margin: 0; }
 .signup-who p { overflow-wrap: anywhere; line-height: 1.4; }

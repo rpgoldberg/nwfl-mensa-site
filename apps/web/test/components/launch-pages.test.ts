@@ -43,9 +43,9 @@ describe('/privacy', () => {
     expect(text).not.toMatch(/draft/i);
   });
 
-  it('lists what a sign-up stores: the columns of signup_request and member_account (migrations 0005 to 0028)', () => {
+  it('lists what a sign-up stores: the columns of signup_request and member_account (migrations 0005 to 0034)', () => {
     for (const words of ['first name and last name', 'Mensa membership number', 'name and email address on your sign-in', 'date you signed up', 'who decided', 'result of the membership check', 'last confirmed']) expect(text, words).toContain(words);
-    const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql'].map((f) => readFileSync(`../api/migrations/${f}`, 'utf8')).join('\n');
+    const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql', '0034_profile_erase.sql'].map((f) => readFileSync(`../api/migrations/${f}`, 'utf8')).join('\n');
     for (const column of ['first_name', 'last_name', 'membership_number', 'display_name', 'email', 'created_at', 'decided_by_sub', 'decided_at', 'verification', 'verified_on']) expect(schema, column).toMatch(new RegExp(`\\b${column}\\b`));
     // What the page says we do not keep has no column anywhere in the schema.
     expect(text).toContain('We do not keep your address, phone number or birthday.');
@@ -94,9 +94,53 @@ describe('/privacy', () => {
     expect(text).toContain(`Member access lasts ${VERIFICATION_MONTHS} months from the last time your membership was confirmed. After that it is paused until an officer confirms it again.`);
   });
 
-  it('says a decided sign-up is kept and only removed by hand: migration 0026 takes DELETE from the app and refuses it for a decided row; no app code deletes one', () => {
-    expect(text).toContain('If your account is removed, your member access ends, but the record of your sign-up stays. We keep that record so a decision can be checked later. If you ask us to remove it, we remove it by hand.');
-    expect(text).not.toContain('until you ask us to remove it');
+  // PROFILE-ERASE (11-22) replaced the rule this test held before ("the record of your sign-up stays ... we remove
+  // it by hand"): a removal now erases the profile, and the Admin erases the rest on request.
+  it('says a removal erases the names and the number at once: migration 0034\'s trigger, on every removal, in the same statement', () => {
+    expect(text).toContain('If an officer removes your account, your member access ends. We then erase your first name, last name and membership number.');
+    const m0034 = readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8');
+    expect(m0034).toMatch(
+      /CREATE FUNCTION member_account_removed_erases_profile\(\)[\s\S]*?UPDATE signup_request SET first_name = NULL, last_name = NULL, membership_number = NULL\s+WHERE sub = NEW\.sub AND decision = 'approved'/,
+    );
+    expect(m0034).toMatch(/CREATE TRIGGER member_account_removed_erases_profile AFTER INSERT OR UPDATE ON member_account\s+FOR EACH ROW WHEN \(NEW\.status = 'removed'\)/);
+    // And it stays erased: the sign-up's own trigger refuses putting it back.
+    expect(m0034).toContain("a removed account''s profile stays erased");
+    // The officer's removal is that status change (api/src/membership/service.ts RemoveMember).
+    expect(readFileSync('../api/src/membership/service.ts', 'utf8')).toContain("UPDATE member_account SET status = 'removed', removed_at = now(), updated_at = now() WHERE sub = $1");
+  });
+
+  it('erases no more than that at a removal: the sign-in\'s name and email wait for the person to ask', () => {
+    // The removal's trigger touches the three profile columns only.
+    const erase = /CREATE FUNCTION member_account_removed_erases_profile\(\)[\s\S]*?\$fn\$;/.exec(readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8'))?.[0] ?? '';
+    expect(erase).toContain('UPDATE signup_request SET');
+    for (const column of ['display_name', 'email', 'created_at', 'decision', 'decided_at']) expect(erase, column).not.toMatch(new RegExp(`\\b${column}\\s*=\\s*NULL`));
+  });
+
+  it('says the Admin erases the rest on request, and what is then left: migration 0034\'s signup_request_erase, which only the Admin may call', () => {
+    expect(text).toContain('If you ask us to remove your record, the Admin erases the name and email address too, and your member access ends. The dates and the decision stay.');
+    expect(text).not.toContain('we remove it by hand');
+    const m0034 = readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8');
+    const erase = /CREATE FUNCTION signup_request_erase\([\s\S]*?\$fn\$;/.exec(m0034)?.[0] ?? '';
+    // Only the Admin, by the verified token's groups; every name, the number and the email, and nothing else.
+    expect(erase).toContain("NOT coalesce('nwfl-admin' = ANY (p_groups), false)");
+    expect(erase).toContain('UPDATE signup_request s SET display_name = NULL, email = NULL, first_name = NULL, last_name = NULL, membership_number = NULL,\n           erased_at = now(), erased_by_sub = p_sub');
+    expect([...erase.matchAll(/UPDATE signup_request/g)]).toHaveLength(1);
+    // An approved member's account is removed with it.
+    expect(erase).toContain("UPDATE member_account a SET status = 'removed'");
+    // The dates and the decision stay: the erasure sets no other column, and an erased row holds none of the five, by a CHECK.
+    const set = /UPDATE signup_request s SET([\s\S]*?)WHERE/.exec(erase)?.[1] ?? 'created_at';
+    for (const column of ['created_at', 'decided_at', 'decision']) expect(set, column).not.toMatch(new RegExp(`\\b${column}\\b`));
+    expect(m0034).toContain('CHECK (erased_at IS NULL OR num_nonnulls(display_name, email, first_name, last_name, membership_number) = 0)');
+    // The API's call is the Admin's alone, and the Admin's page is what makes it.
+    const service = readFileSync('../api/src/membership/service.ts', 'utf8');
+    expect(/eraseSignup: async \(request, ctx\) => \{\s+const caller = callerIn\(ctx\);\s+requireAdmin\(caller\);/.test(service)).toBe(true);
+    expect(readFileSync('../api/src/auth/roles.ts', 'utf8')).toContain('if (!requireUser(caller).admin) throw denied();');
+    const records = readFileSync('src/pages/officer-area/member-records.astro', 'utf8');
+    expect(records).toContain("if (!isAdmin(session)) return Astro.rewrite('/404');");
+    expect(records).toContain('await api.eraseSignup(reader, form.requestId)');
+  });
+
+  it('still never deletes a decided sign-up: migration 0026 takes DELETE from the app and refuses it for a decided row; no app code deletes one', () => {
     const m0026 = readFileSync('../api/migrations/0026_signup_reopen.sql', 'utf8');
     expect(m0026).toContain('REVOKE DELETE ON signup_request FROM nwfl;');
     expect(m0026).toMatch(/CREATE TRIGGER signup_request_keep_decided BEFORE DELETE ON signup_request\s+FOR EACH ROW EXECUTE FUNCTION signup_request_keep_decided\(\);/);
@@ -187,7 +231,8 @@ describe('/privacy', () => {
         'The membership check: your membership number, last name and email address, to confirm you are a member.',
         'No page on this site shows it to other members or to the public.',
         'How long we keep it Member access lasts 13 months from the last time your membership was confirmed. After that it is paused until an officer confirms it again.',
-        'If your account is removed, your member access ends, but the record of your sign-up stays. We keep that record so a decision can be checked later. If you ask us to remove it, we remove it by hand.',
+        'If an officer removes your account, your member access ends. We then erase your first name, last name and membership number.',
+        'If you ask us to remove your record, the Admin erases the name and email address too, and your member access ends. The dates and the decision stay.',
         'Cookies A cookie is a small note a site leaves in your browser.',
         'This site uses cookies only to sign you in and keep you signed in, and to remember your text size, your theme and your choice about links that leave the site.',
         'There is no tracking and no advertising on this site, and nothing here follows what you read.',

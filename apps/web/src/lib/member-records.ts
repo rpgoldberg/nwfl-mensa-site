@@ -1,0 +1,145 @@
+// PROFILE-ERASE: the Admin's member-records page (/officer-area/member-records), in words. The decided
+// sign-ups, each with two things only the Admin may do (the API decides again on every call):
+//   - erase the record when the person asks, after a step that names everything to be erased;
+//   - correct a wrong membership number on an approved member's profile, with a reason.
+// The forms are checked here before the API is asked: the new number as the sign-up form checks one
+// (digitsOf), and the reason in words with no digit of any script, so the record of a correction never
+// holds the old or the new number. The API and the database check again.
+import type { SignupRecord, Standing } from './api/membership';
+import { MAX_NUMBER_DIGITS, digitsOf, formatMoment, typedFacts } from './signup';
+
+export const RECORDS_PATH = '/officer-area/member-records';
+/** The officer area's link to the page, for the Admin alone. */
+export const RECORDS_LINK = 'Member records';
+/** The most characters in a reason, as the API's MAX_REASON (apps/api/src/membership/service.ts). */
+export const MAX_REASON = 500;
+/**
+ * The most records the API lists, newest first, with no paging (its MAX_RECORDS_LISTED, kept equal).
+ * A full list says so, so an older one is never hidden without a word.
+ */
+export const RECORDS_LISTED_MAX = 500;
+
+export type RecordForm =
+  | { action: 'erase'; requestId: string; /** Applied only once confirmed. */ confirmed: boolean }
+  | { action: 'correct'; requestId: string; step: 'review' | 'apply'; membershipNumber: string; reason: string };
+
+export type CorrectErrors = Partial<Record<'membershipNumber' | 'reason', string>>;
+
+export type ParsedRecordForm =
+  | { ok: true; value: RecordForm }
+  /** With a record id: a correction to show again with its problems. Without: a form the page cannot read. */
+  | { ok: false; requestId?: string; errors: CorrectErrors; values: { membershipNumber: string; reason: string } };
+
+/** The API's request ids, lower-case. */
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A letter: a reason says something in words. */
+const SAYS_SOMETHING = /\p{L}/u;
+/** Any digit, of any script (after compatibility folding: full-width, circled, superscript). */
+const DIGIT = /\p{N}/u;
+/** A control character other than a tab or a line break. */
+const CONTROL = /[^\P{Cc}\t\n\r]/u;
+
+/** A reason's problem in words, or none. */
+function reasonProblem(reason: string): string | undefined {
+  if (!SAYS_SOMETHING.test(reason)) return 'Say why, in words.';
+  if ([...reason].length > MAX_REASON) return `Keep the reason to ${MAX_REASON} characters or fewer.`;
+  if (CONTROL.test(reason)) return 'Type the reason again: it has a hidden character that cannot be kept.';
+  if (DIGIT.test(reason.normalize('NFKC'))) return 'Write the reason without any digits. The number itself is never put in the record.';
+  return undefined;
+}
+
+export function parseRecordForm(field: (name: string) => string | undefined): ParsedRecordForm {
+  const action = field('action');
+  const requestId = field('request') ?? '';
+  const typed = (field('membershipNumber') ?? '').trim();
+  const reason = (field('reason') ?? '').trim();
+  const unreadable: ParsedRecordForm = { ok: false, errors: {}, values: { membershipNumber: typed, reason } };
+  if (!REQUEST_ID.test(requestId)) return unreadable;
+  if (action === 'erase') return { ok: true, value: { action, requestId, confirmed: field('confirmed') === 'yes' } };
+  const step = field('step');
+  if (action !== 'correct' || (step !== 'review' && step !== 'apply')) return unreadable;
+  const errors: CorrectErrors = {};
+  const membershipNumber = digitsOf(typed);
+  if (typed === '') errors.membershipNumber = 'Enter the new membership number.';
+  else if (membershipNumber === undefined) errors.membershipNumber = `Enter the number using digits only, up to ${MAX_NUMBER_DIGITS} of them.`;
+  const problem = reasonProblem(reason);
+  if (problem !== undefined) errors.reason = problem;
+  if (membershipNumber === undefined || problem !== undefined) return { ok: false, requestId, errors, values: { membershipNumber: typed, reason } };
+  return { ok: true, value: { action, requestId, step, membershipNumber, reason } };
+}
+
+const DECISION_TEXT: Record<SignupRecord['decision'], [string, string]> = {
+  approved: ['Approved', ''],
+  rejected: ['Rejected', ''],
+  reopened: ['Rejected', ', then reopened'],
+};
+const ACCOUNT_TEXT: Record<Standing, string> = { pending: 'Waiting', member: 'Member', affiliate: 'Affiliate', lapsed: 'Lapsed', removed: 'Removed' };
+/** An account that still gives member access, or could again. */
+const STANDS: readonly (Standing | undefined)[] = ['member', 'affiliate', 'lapsed'];
+
+/** A record's label and value pairs for its card: what was typed (if still held), the decision and its day, the account. */
+export function recordFacts(record: SignupRecord): Array<[string, string]> {
+  const [decided, after] = DECISION_TEXT[record.decision];
+  return [
+    ...typedFacts(record),
+    ['Decision', `${decided}${record.decidedAt ? ` on ${formatMoment(record.decidedAt)}` : ''}${after}`],
+    ['Account', record.status === undefined ? 'None' : ACCOUNT_TEXT[record.status]],
+  ];
+}
+
+/** A number is corrected only on an approved member's profile that holds one, as the API's rule. */
+export function canCorrect(record: SignupRecord): boolean {
+  return record.decision === 'approved' && record.membershipNumber !== undefined && STANDS.includes(record.status);
+}
+
+/** Erasing an approved member's record ends their member access too. */
+export function endsAccess(record: SignupRecord): boolean {
+  return record.decision === 'approved' && STANDS.includes(record.status);
+}
+
+/** Everything an erasure erases, by name and value, for the confirmation step. */
+export function eraseList(record: SignupRecord): string[] {
+  const names = [record.firstName, record.lastName].filter((name) => name !== undefined);
+  const which = record.firstName !== undefined && record.lastName !== undefined ? 'first name and last name' : record.firstName !== undefined ? 'first name' : 'last name';
+  return [
+    `The name and email address from their sign-in: ${record.displayName}, ${record.email}.`,
+    ...(names.length > 0 ? [`Their ${which}: ${names.join(' ')}.`] : []),
+    ...(record.membershipNumber !== undefined ? [`Their membership number: ${record.membershipNumber}.`] : []),
+  ];
+}
+
+export function recordsShownNote(count: number): string | undefined {
+  return count >= RECORDS_LISTED_MAX ? `Showing the latest ${RECORDS_LISTED_MAX} records. Any older ones are not shown here.` : undefined;
+}
+
+export type Done = 'erased' | 'erased-access' | 'already' | 'corrected';
+
+const DONE_TEXT: Record<Done, string> = {
+  erased: 'Erased. Only the date and the decision are kept.',
+  'erased-access': 'Erased. Only the date and the decision are kept, and the person’s member access has ended.',
+  already: 'Nothing was changed: this record was already erased.',
+  corrected: 'Corrected. The member’s account page now shows the new number.',
+};
+
+/** The outcome named by the address the page lands on after a change (?done=...). */
+export function doneFromQuery(params: URLSearchParams): Done | undefined {
+  const done = params.get('done');
+  return done === 'erased' || done === 'erased-access' || done === 'already' || done === 'corrected' ? done : undefined;
+}
+
+export function doneText(done: Done): string {
+  return DONE_TEXT[done];
+}
+
+/** An erasure the API refused. */
+export const ERASE_REFUSED: Record<'own' | 'closed', string> = {
+  own: 'Nothing was changed: only the Admin erases a record, and never their own.',
+  closed: 'Nothing was changed: this record is no longer in the list, or the person has a sign-up still waiting, which is decided first. The list below is as it is now.',
+};
+
+/** A correction the API refused. */
+export const CORRECT_REFUSED: Record<'own' | 'closed' | 'invalid', string> = {
+  own: 'Nothing was changed: only the Admin corrects a number, and never their own.',
+  closed: 'Nothing was changed: only an approved member’s number is corrected, and the new number must differ from the one on file. The list below is as it is now.',
+  invalid: 'Nothing was changed: the number or the reason was not accepted. Use digits only in the number, and no digits in the reason.',
+};
