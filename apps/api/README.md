@@ -806,6 +806,44 @@ engine), limits of 1 CPU and 1Gi,
 memory of the container that writes them. No HEALTHCHECK or exec probe runs
 in either sidecar: any process exec'd into its namespace makes it exit 1.
 
+### The issue text in the search index (ARCHIVE-SEARCH S2)
+
+The worker also keeps the search index's issue text: the tables
+`search_page_public` and `search_page_members` (0032), one per audience with
+no audience column. What is indexed for an audience is the text of the
+**copy** that audience is served now, and nothing else
+(`src/search/pages.ts`). An audience served the original, nothing or a
+refusal has no issue text. Nothing reads `content_version`'s own search
+columns: they are derived at approval and hold passages a mark withholds.
+
+The worker parses no PDF for this either. It sends the stored copy, with its
+sha256 and what the audience withholds, to the gate as a request of kind
+`text` (`src/pdf/text-protocol.ts`): the gate sidecar's socket when
+`PDF_GATE_SOCKET` is set, else the gate's capped in-pod child. The same child,
+under the same limits, reads the pages with pdf.js as a check reads them and
+joins words split at a line end (`src/search/text.ts`). It looks for the
+withheld passages again and answers no text at all if it finds one, so a
+fault upstream cannot put a withheld passage in an index. It answers by code
+only when there is no text: `withheld`, `over-cap` (more than 300 pages,
+64 KiB a page, or 4 MiB in all), `unfinished` or `mismatch`. A check's
+frames are unchanged, so the protocol version stays 3; a gate that does not
+know `text` gives no answer, and the worker logs a reading that failed.
+
+The rows are written only by `search_page_put`, which takes them only while
+the publication ledger says this audience is served the copy with this
+sha256. A mark, a policy change or a new link deletes a file's rows in its
+own transaction (0032), before the worker has made the next copy.
+
+When it runs: after each regeneration run that finished, and in a sweep that
+starts at each boot and goes ten copies at a time after each drain. The
+sweep first deletes every row whose copy its audience is served no longer
+(`search_page_sweep`), then reads each served copy with no rows at this
+`TEXT_VERSION` (`search_page_lacking`, 0033). Raising `TEXT_VERSION` reads
+every copy again. A reading that fails writes and deletes nothing, and is
+logged by file, audience and code, never by content: `a PDF copy was not
+indexed`. Both functions are the worker's alone; it reads no index table and
+no ledger row.
+
 ### The api-gate check
 
 `.github/workflows/api-gate.yml` runs every test in `test/gates` on every push
