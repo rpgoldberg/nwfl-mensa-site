@@ -822,8 +822,9 @@ sha256 and what the audience withholds, to the gate as a request of kind
 `PDF_GATE_SOCKET` is set, else the gate's capped in-pod child. The same child,
 under the same limits, reads the pages with pdf.js as a check reads them and
 joins words split at a line end (`src/search/text.ts`). It looks for the
-withheld passages again and answers no text at all if it finds one, so a
-fault upstream cannot put a withheld passage in an index. It answers by code
+withheld passages again, with the gate's own test and then in the joined text
+it would hand over, and answers no text at all if it finds one, so a fault
+upstream cannot put a withheld passage in an index. It answers by code
 only when there is no text: `withheld`, `over-cap` (more than 300 pages,
 64 KiB a page, or 4 MiB in all), `unfinished` or `mismatch`. A check's
 frames are unchanged, so the protocol version stays 3; a gate that does not
@@ -831,14 +832,17 @@ know `text` gives no answer, and the worker logs a reading that failed.
 
 The rows are written only by `search_page_put`, which takes them only while
 the publication ledger says this audience is served the copy with this
-sha256. A mark, a policy change or a new link deletes a file's rows in its
+sha256, and only for a file the public or members may open at all
+(`search_page_servable`, 0033: a PDF on its item's live version, the item
+published and not officers-only, or a PDF of a published edition). A mark, a policy change or a new link deletes a file's rows in its
 own transaction (0032), before the worker has made the next copy.
 
-When it runs: after each regeneration run that finished, and in a sweep that
-starts at each boot and goes ten copies at a time after each drain. The
-sweep first deletes every row whose copy its audience is served no longer
-(`search_page_sweep`), then reads each served copy with no rows at this
-`TEXT_VERSION` (`search_page_lacking`, 0033). Raising `TEXT_VERSION` reads
+When it runs: after each regeneration run that finished, and in a sweep
+after each drain. Each step deletes every row whose copy its audience is
+served no longer, or whose file it may not open (`search_page_sweep`), so a
+withdrawn or re-scoped item's text is gone a drain later. From each boot it
+also reads each served copy with no rows at this `TEXT_VERSION`
+(`search_page_lacking`, 0033), ten copies a step. Raising `TEXT_VERSION` reads
 every copy again. A reading that fails writes and deletes nothing, and is
 logged by file, audience and code, never by content: `a PDF copy was not
 indexed`. Both functions are the worker's alone; it reads no index table and
