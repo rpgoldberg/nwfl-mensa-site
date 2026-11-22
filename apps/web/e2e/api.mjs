@@ -61,6 +61,7 @@ import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole,
 import { AccountRoute, MemberStatus, MembershipService, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
+import { SearchService } from '../src/gen/nwfl/mensa/v1/search_pb.js';
 import { createEventModel } from './events-model.mjs';
 import { createWorkflow } from './workflow.mjs';
 
@@ -801,6 +802,43 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       const place = { fileId: LINK_FILE, page: link.page ?? 1, statusAt: LINK_AT };
       if (link.disabled) return { status: LinkTargetStatus.DISABLED, url: link.url, host: link.host, ...place };
       return { status: LinkTargetStatus.ACTIVE, url: link.url, host: link.host, kind: link.kind, confirm: link.confirm ?? false, ...place };
+    },
+  });
+  // ARCHIVE-SEARCH S4: the archive search, as the caller's audience (a reader's token is taken, never a
+  // cookie). Made-up answers by the words asked for, so each state of /search can be reached:
+  //   "zebra"    nothing matches;        "busy"     at its limit;        "offline"  it cannot answer;
+  //   "many"     25 hits, ten a page;    "endless"  more on every page;  "unplain"  refused as a query;
+  //   anything else: a page of the newest issue (the members copy for a member or an officer), a long
+  //   label, a snippet full of markup that must show as text, and an article on /news.
+  router.service(SearchService, {
+    search: async (req, ctx) => {
+      const audience = await audienceOf(ctx);
+      const members = audience === 'members' || audience === 'officers';
+      const q = req.query.toLowerCase();
+      const page = req.page || 1;
+      const found = (/** @type {string} */ text) => `${text} \uE000${req.query.split(' ')[0]}\uE001 in the made-up text of this page, which runs on for a line or two as a real page would.`;
+      const issuePage = (/** @type {string} */ fileId, /** @type {string} */ issueLabel, /** @type {number} */ n, /** @type {string} */ snippet) => ({ hit: { case: /** @type {const} */ ('issuePage'), value: { fileId, issueLabel, page: n, snippet } } });
+      if (q.includes('busy')) throw new ConnectError('at the limit', Code.ResourceExhausted);
+      if (q.includes('offline')) throw new ConnectError('cannot answer', Code.Unavailable);
+      if (q.includes('unplain')) throw new ConnectError('a search is plain words', Code.InvalidArgument);
+      if (!issues || q.includes('zebra')) return { hits: [], hasMore: false };
+      if (q.includes('many') || q.includes('endless')) {
+        const total = q.includes('endless') ? 1000 : 25;
+        const first = (page - 1) * 10;
+        const count = Math.max(0, Math.min(10, total - first));
+        return { hits: Array.from({ length: count }, (_, i) => issuePage(LONG_ID, 'Pensa Mensa, June-July 2026', first + i + 1, found(`Result ${first + i + 1}:`))), hasMore: first + count < total };
+      }
+      if (page > 1) return { hits: [], hasMore: false };
+      const open = articles(audience)[0];
+      return {
+        hits: [
+          issuePage(members && NEWEST.membersPdf ? NEWEST.membersPdf : NEWEST.publicPdf, NEWEST.title, 2, found(members ? 'From the members copy:' : 'From the public copy:')),
+          issuePage(LONG_ID, 'Pensa Mensa, the newsletter of Northwest Florida Mensa, a combined double issue for December 2025 and January-February 2026', 12, found('A long label wraps:')),
+          issuePage(PICTURE_ID, 'Pensa Mensa, June-July 2026', 1, `<script>document.title='SNIPPET-RAN'</script><img src=x onerror="document.title='SNIPPET-RAN'"> \uE000${req.query.split(' ')[0]}\uE001 <mark>not a mark</mark> &amp; <a href="https://example.org/">a link</a>`),
+          { hit: { case: /** @type {const} */ ('newsItem'), value: { slug: open?.slug ?? '', title: ARTICLES.open.title, publishedOn: { year: 2026, month: 3, day: 3 }, snippet: found(ARTICLES.open.plain), kind: ContentKind.ARTICLE } } },
+        ],
+        hasMore: false,
+      };
     },
   });
   router.service(ApprovalRuleService, {

@@ -639,6 +639,32 @@ main:focus:not(:focus-visible) { outline: none; }
 /* The draft's secondary button: outlined in the accent, on the surface. */
 .button--secondary { background: var(--surface); color: var(--accent); }
 
+/* ARCHIVE-SEARCH S4: /search's results. A numbered list of cards; each card's first line is the link, a
+   whole row at least a full target tall, then a few lines of the text with the words found marked. */
+.search-form + .notice { margin-top: var(--space-4); }
+.search-results { margin-top: var(--space-5); }
+.hits { margin: 0; padding: 0; list-style-position: inside; display: grid; gap: var(--space-3); }
+.hit {
+  padding: var(--space-2) var(--space-3);
+  border: var(--border) solid var(--line-soft); border-radius: var(--radius); background: var(--surface);
+  overflow-wrap: anywhere;
+}
+/* The number sits on the link's row: the link is the rest of that row, so the marker never takes a row alone. */
+.hit::marker { font-weight: 700; }
+.hit__link { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; vertical-align: middle; max-width: calc(100% - 3ch); }
+.hit__meta, .hit__snippet { margin: 0; }
+.hit__snippet { margin-bottom: var(--space-1); }
+/* A word found: bold on the theme's highlight, so it is told apart without colour too. */
+.hit mark { padding: 0 0.15em; border-radius: 2px; background: var(--warn-bg); color: var(--ink); font-weight: 700; }
+.hits__note { margin: var(--space-3) 0 0; }
+.pager { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-5); }
+@media (forced-colors: active) {
+  .hit mark { background: Mark; color: MarkText; }
+}
+/* /news: an article a search result opened is shown, not just scrolled to. */
+.articles .item { scroll-margin-top: var(--space-4); }
+.articles .item:target { outline: 3px solid var(--focus); outline-offset: var(--space-2); }
+
 .link-list { list-style: none; padding: 0; }
 .link-list li { margin: 0 0 var(--space-2); }
 .link-list a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }

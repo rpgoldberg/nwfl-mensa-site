@@ -309,6 +309,26 @@ describe('withSitePolicy', () => {
     }
   });
 
+  it('ARCHIVE-SEARCH S4: a search writes no line of its own, and one that fails logs the path alone, never the words', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((req, res) => {
+        if (req.url?.includes('boom')) throw new RangeError(`could not search ${req.url}`);
+        res.end('results');
+      });
+      expect((await fetch(`${base}/search?q=quokka+picnic&page=2`)).status).toBe(200);
+      expect([...log.mock.calls, ...error.mock.calls]).toEqual([]);
+      expect((await fetch(`${base}/search?q=quokka+boom`)).status).toBe(500);
+      expect(log).not.toHaveBeenCalled();
+      expect(error.mock.calls.map((c) => unstamped(c[0]))).toEqual([{ level: 'error', msg: 'request failed', path: '/search', err: 'RangeError' }]);
+      expect(String(error.mock.calls[0]?.[0])).not.toMatch(/quokka|boom|\?/);
+    } finally {
+      error.mockRestore();
+      log.mockRestore();
+    }
+  });
+
   it('logs a thrown non-Error as a fixed name, not its text', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

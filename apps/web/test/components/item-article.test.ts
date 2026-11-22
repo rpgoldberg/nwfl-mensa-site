@@ -97,7 +97,9 @@ describe('ItemArticle, against the pages that write the same markup today', () =
     const page = articles(await container.renderToString(News, { request: new Request('http://localhost/news'), locals: {} }));
     const news = await liveData()!.news(undefined, { signIn: undefined });
     expect(page).toHaveLength(3);
-    for (const [i, a] of news.items.entries()) expect(page[i], a.title).toBe(await render({ layout: 'article', ...a }));
+    // ARCHIVE-SEARCH S4: each article carries the id a search result opens it by.
+    for (const [i, a] of news.items.entries()) expect(page[i], a.title).toBe(await render({ layout: 'article', ...a, anchor: `item-${a.slug}` }));
+    expect(page[0]).toMatch(/^<article class="item" id="item-s-0004"/);
     expect(page[1]).toContain('Members only.');
     expect(page[1]).not.toContain(MEMBERS_RULE);
     expect(page[2]).not.toContain('class="muted"');
