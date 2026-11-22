@@ -101,6 +101,25 @@ describe.skipIf(!live)('0033: what the worker\'s index job may do', () => {
       ]);
     });
 
+    it('gives the servable rule to no one: the three definers call it as its owner (S2 challenge M2)', async () => {
+      const sql = `SELECT search_page_servable('00000000-0000-4000-8000-000000000001')`;
+      expect(await sqlstate(worker, sql)).toBe('42501');
+      expect(await sqlstate(app, sql)).toBe('42501');
+      await other.query(`SET ROLE ${nobody}`);
+      try {
+        expect(await sqlstate(other, sql)).toBe('42501');
+      } finally {
+        await other.query(`RESET ROLE`);
+      }
+      const { rows } = await owner.query<{ proname: string; prosecdef: boolean; proconfig: string[] | null; owner: string; volatile: string }>(
+        `SELECT proname, prosecdef, proconfig, pg_get_userbyid(proowner) AS owner, provolatile AS volatile FROM pg_proc WHERE proname IN ('search_page_servable', 'search_page_put') ORDER BY proname`,
+      );
+      expect(rows).toEqual([
+        { proname: 'search_page_put', prosecdef: true, proconfig: ['search_path=pg_catalog, public, pg_temp'], owner: 'nwfl_migrator', volatile: 'v' },
+        { proname: 'search_page_servable', prosecdef: false, proconfig: ['search_path=pg_catalog, public, pg_temp'], owner: 'nwfl_migrator', volatile: 's' },
+      ]);
+    });
+
     it('still lets the worker read no index table and no ledger row, and write neither', async () => {
       for (const table of [...PAGE_TABLES, 'search_item_public', 'search_item_members', 'publication_ledger']) {
         expect(await sqlstate(worker, `SELECT count(*) FROM ${table}`), table).toBe('42501');

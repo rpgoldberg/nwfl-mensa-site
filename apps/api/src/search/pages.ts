@@ -22,12 +22,15 @@
 //
 // When it runs (pdf/worker.ts runWorker):
 //   * indexFile, after each regeneration run that finished;
-//   * indexSweeper, a batch after each drain until it is through: first
-//     search_page_sweep() deletes every row whose copy its audience is served
-//     no longer, then search_page_lacking(TEXT_VERSION) lists each served copy
-//     with no rows at this version, and those are read. So a first deploy, a
-//     put that was lost, and a new TEXT_VERSION are all made good at the next
-//     start, a few files at a time between the copies' own runs.
+//   * indexSweeper, after each drain: search_page_sweep() deletes every row
+//     whose copy its audience is served no longer, or whose file the public
+//     and members may not open at all (an officers-only, draft or withdrawn
+//     item, a version no longer live), at every step, so such rows go a drain
+//     after the change; and at the first step search_page_lacking(TEXT_VERSION)
+//     lists each served copy with no rows at this version, read a batch a step
+//     until it is through. So a first deploy, a put that was lost, and a new
+//     TEXT_VERSION are all made good at the next start, a few files at a time
+//     between the copies' own runs.
 //
 // A reading that fails (the gate cannot be asked, the child ran out of time or
 // memory, the copy is over a cap) writes nothing and deletes nothing: the rows
@@ -151,21 +154,22 @@ export interface SweepStep {
 }
 
 /**
- * The index's sweep, a step at a time (pdf/regenerate.ts startRegenerator's `after`). The first step deletes the rows
- * of copies served no longer (search_page_sweep) and lists every served copy with no rows at this text version
- * (search_page_lacking); that step and each one after it reads at most `batch` of them. Once none is left a step does
- * nothing: the next start sweeps again. A step that cannot list rejects, and the next one lists again.
+ * The index's sweep, a step at a time (pdf/regenerate.ts startRegenerator's `after`). Each step deletes the rows of
+ * copies served no longer and of files no audience here may open (search_page_sweep). The first step also lists every
+ * served copy with no rows at this text version (search_page_lacking); that step and each one after it reads at most
+ * `batch` of them. Once none is left a step only deletes: the next start lists again. A step that cannot list rejects,
+ * and the next one lists again.
  */
 export function indexSweeper(db: Query, options: IndexOptions & { batch?: number }): () => Promise<SweepStep> {
   const textVersion = options.textVersion ?? TEXT_VERSION;
   const batch = options.batch ?? SWEEP_BATCH;
   let pending: Array<{ fileId: string; audience: SearchAudience }> | null = null;
   return async () => {
-    let deleted = 0;
+    // Every step: a withdrawn, re-scoped or no-longer-served file's rows go a drain after the change, with no restart.
+    const swept = await db.query<{ n: number }>(`SELECT search_page_sweep() AS n`);
+    const deleted = swept.rows[0]?.n ?? 0;
     if (pending === null) {
-      const swept = await db.query<{ n: number }>(`SELECT search_page_sweep() AS n`);
       const lacking = await db.query<{ file_id: string; audience: string }>(`SELECT file_id, audience FROM search_page_lacking($1)`, [textVersion]);
-      deleted = swept.rows[0]?.n ?? 0;
       pending = lacking.rows.flatMap((row) => {
         const audience = SEARCH_AUDIENCES.find((known) => known === row.audience);
         return audience === undefined ? [] : [{ fileId: row.file_id, audience }];

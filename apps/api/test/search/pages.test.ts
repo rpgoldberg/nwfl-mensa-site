@@ -49,10 +49,22 @@ describe.skipIf(!live)('the issue-text index job', () => {
   const warned: Array<{ fields: Record<string, unknown>; message: string }> = [];
   const warn = (fields: Record<string, unknown>, message: string): void => void warned.push({ fields, message });
 
-  const issue = async (pages: ReadonlyArray<readonly string[]>, audience: 'public' | 'members' = 'public'): Promise<{ itemId: string; fileId: string }> => {
+  const issue = async (
+    pages: ReadonlyArray<readonly string[]>,
+    audience: 'public' | 'members' = 'public',
+    visibility: 'public' | 'members' | 'officers' = 'public',
+  ): Promise<{ itemId: string; fileId: string }> => {
     const n = ++counter;
     const bytes = await pagesPdf(pages);
-    const { itemId, versionId } = await publishItem(api.pool, { slug: `issue-${n}`, kind: 'document', officeId: office, title: `Synthetic issue ${n}`, body: { blocks: [] }, files: [{ objectKey: `issue-${n}.pdf`, audience, bytes }] });
+    const { itemId, versionId } = await publishItem(api.pool, {
+      slug: `issue-${n}`,
+      kind: 'document',
+      officeId: office,
+      title: `Synthetic issue ${n}`,
+      body: { blocks: [] },
+      visibility,
+      files: [{ objectKey: `issue-${n}.pdf`, audience, bytes }],
+    });
     const fileId = (await api.pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [versionId])).rows[0]!.id;
     await storeOriginal(api.pool, { fileId, bytes, ...STORER });
     return { itemId, fileId };
@@ -381,6 +393,156 @@ describe.skipIf(!live)('the issue-text index job', () => {
     });
   });
 
+  describe('only what its audience may open (S2 challenge M2)', () => {
+    const steps = async (step: () => Promise<{ deleted: number; indexed: number; left: number }>): Promise<Array<{ deleted: number; indexed: number; left: number }>> => {
+      const out = [];
+      for (let n = 0; n < 500; n++) {
+        const result = await step();
+        out.push(result);
+        if (result.left === 0) break;
+      }
+      return out;
+    };
+    /** The ledger's current row for a file and audience, as the put reads it. */
+    const ledger = async (fileId: string, audience: 'public' | 'members'): Promise<{ sha: Buffer; served: string } | undefined> =>
+      (
+        await owner.query<{ sha: Buffer; served: string }>(
+          `SELECT output_sha256 AS sha, inputs ->> 'served' AS served FROM publication_ledger
+            WHERE tenant_id = 'nwflorida' AND subject_kind = 'stored_file' AND subject_id = $1 AND audience = $2 AND current_to IS NULL`,
+          [fileId, audience],
+        )
+      ).rows[0];
+    const lacking = async (): Promise<string[]> =>
+      (await api.worker.query<{ file_id: string; audience: string }>(`SELECT file_id, audience FROM search_page_lacking($1)`, [TEXT_VERSION])).rows.map((row) => `${row.file_id} ${row.audience}`);
+    const put = (fileId: string, audience: 'public' | 'members', sha256: Buffer) =>
+      api.worker.query(`SELECT search_page_put($1, $2, $3, $4, $5::text[], $6::text[])`, [fileId, audience, sha256, TEXT_VERSION, ['a planted page'], ['']]);
+    /** A row as a fault (or an older build) would leave it: the ledger's current copy, the text of an item no audience here may open. */
+    const plant = async (fileId: string, audience: 'public' | 'members', text: string): Promise<void> => {
+      const current = await ledger(fileId, audience);
+      await owner.query(`INSERT INTO search_page_${audience} (file_id, page, served_sha256, text_version, text, extra) VALUES ($1, 1, $2, $3, $4, '')`, [fileId, current!.sha, TEXT_VERSION, text]);
+    };
+    const tx = async (work: (client: pg.PoolClient) => Promise<unknown>): Promise<void> => {
+      const client = await api.pool.connect();
+      try {
+        await client.query('BEGIN');
+        await work(client);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
+    /** A file on a version that was never approved: a draft's. */
+    const draft = async (line: string): Promise<string> => {
+      const n = ++counter;
+      const bytes = await pagesPdf([[line]]);
+      const itemId = await insertId(api.pool, `INSERT INTO content_item (slug, kind, office_id) VALUES ($1, 'document', $2) RETURNING id`, [`draft-${n}`, office]);
+      const versionId = await insertId(
+        api.pool,
+        `INSERT INTO content_version (item_id, n, title, visibility, body_ast, created_by_sub, acting_office_id) VALUES ($1, 1, 'A draft', 'public', '{"blocks":[]}', 'sub-author', $2) RETURNING id`,
+        [itemId, office],
+      );
+      const fileId = await insertId(
+        api.pool,
+        `INSERT INTO stored_file (version_id, object_key, filename, mime_type, size_bytes, sha256, audience) VALUES ($1, $2, $2, 'application/pdf', $3, $4, 'public') RETURNING id`,
+        [versionId, `draft-${n}.pdf`, bytes.length, sha(bytes)],
+      );
+      await storeOriginal(api.pool, { fileId, bytes, ...STORER });
+      return fileId;
+    };
+    /** A file of an edition (the hosted issue), at `status`. */
+    const editionFile = async (line: string, status: 'proof' | 'published'): Promise<{ editionId: string; fileId: string }> => {
+      const n = ++counter;
+      const bytes = await pagesPdf([[line]]);
+      const editionId = await insertId(
+        api.pool,
+        `INSERT INTO edition (slug, title, kind, period_start, period_end, status) VALUES ($1, 'A synthetic issue', 'regular', '2030-01-01', '2030-01-31', $2) RETURNING id`,
+        [`2030-01-xtra-${n}`, status],
+      );
+      const fileId = await insertId(
+        api.pool,
+        `INSERT INTO stored_file (edition_id, object_key, filename, mime_type, size_bytes, sha256, audience) VALUES ($1, $2, $2, 'application/pdf', $3, $4, 'public') RETURNING id`,
+        [editionId, `edition-${n}.pdf`, bytes.length, sha(bytes)],
+      );
+      await storeOriginal(api.pool, { fileId, bytes, ...STORER });
+      return { editionId, fileId };
+    };
+
+    it('indexes nothing of an officers-only item or a draft, lists neither, refuses their puts, and sweeps away rows planted for them', async () => {
+      await steps(indexSweeper(api.worker, { text: reader, warn }));
+      const officers = await issue([['Confidential zanzibar minutes']], 'public', 'officers');
+      const drafted = await draft('Confidential narwhal minutes');
+      await run();
+      await steps(indexSweeper(api.worker, { text: reader, warn }));
+      for (const fileId of [officers.fileId, drafted]) {
+        // What makes the rule needed: the ledger alone says both audiences are served a copy.
+        expect((await ledger(fileId, 'public'))?.served, fileId).toBe('copy');
+        for (const audience of ['public', 'members'] as const) {
+          expect(await rows(audience, fileId), `${fileId} ${audience}`).toEqual([]);
+          await expect(put(fileId, audience, (await ledger(fileId, audience))!.sha), `${fileId} ${audience}`).rejects.toMatchObject({ code: '55000' });
+        }
+      }
+      for (const word of ['zanzibar', 'narwhal']) expect([await hits('public', word), await hits('members', word)], word).toEqual([0, 0]);
+      const listed = await lacking();
+      for (const fileId of [officers.fileId, drafted]) expect(listed.filter((entry) => entry.startsWith(fileId))).toEqual([]);
+      // Rows a fault left behind, with the ledger's own sha: the sweep deletes all four.
+      for (const fileId of [officers.fileId, drafted]) for (const audience of ['public', 'members'] as const) await plant(fileId, audience, 'Confidential planted minutes');
+      expect(await hits('members', 'planted')).toBe(2);
+      expect(await steps(indexSweeper(api.worker, { text: reader, warn }))).toEqual([{ deleted: 4, indexed: 0, left: 0 }]);
+      expect([await hits('public', 'planted'), await hits('members', 'planted')]).toEqual([0, 0]);
+    });
+
+    it('removes, at the next step of a running sweep, the rows of an item withdrawn or moved to an officers-only revision', async () => {
+      const withdrawn = await issue([['Confidential quokka minutes']]);
+      const rescoped = await issue([['Confidential wombat minutes']]);
+      const kept = await issue([['Kite festival at the beach']]);
+      await run();
+      const step = indexSweeper(api.worker, { text: reader, warn });
+      await steps(step);
+      for (const { fileId } of [withdrawn, rescoped, kept]) for (const audience of ['public', 'members'] as const) expect(await rows(audience, fileId)).toHaveLength(1);
+      // Withdrawn as the workflow withdraws (content/workflow.ts): the state, then the ledger, in one transaction.
+      await tx(async (client) => {
+        await client.query(`UPDATE content_item SET state = 'withdrawn', withdrawn_at = now(), updated_at = now() WHERE id = $1`, [withdrawn.itemId]);
+        await recordItems(client, [withdrawn.itemId]);
+      });
+      // A revision for officers alone is approved: the live version moves, and the file of the old one is no one's here.
+      const revision = await insertId(
+        api.pool,
+        `INSERT INTO content_version (item_id, n, title, visibility, body_ast, created_by_sub, acting_office_id, target_newsletter)
+           VALUES ($1, 2, 'Revised', 'officers', '{"blocks":[]}', 'sub-author', $2, false) RETURNING id`,
+        [rescoped.itemId, office],
+      );
+      await api.pool.query(`UPDATE content_version SET status = 'ready', content_hash = sha256('revised'::bytea), ready_at = now() WHERE id = $1`, [revision]);
+      await api.pool.query(`UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal', public_ast = '{"blocks":[]}' WHERE id = $1`, [revision]);
+      await api.pool.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [revision]);
+      await tx(async (client) => {
+        await client.query(`UPDATE content_item SET live_version_id = $2, updated_at = now() WHERE id = $1`, [rescoped.itemId, revision]);
+        await recordItems(client, [rescoped.itemId]);
+      });
+      // The same sweep, a drain later: no restart.
+      expect(await step()).toEqual({ deleted: 4, indexed: 0, left: 0 });
+      for (const { fileId } of [withdrawn, rescoped]) for (const audience of ['public', 'members'] as const) expect(await rows(audience, fileId), `${fileId} ${audience}`).toEqual([]);
+      for (const word of ['quokka', 'wombat']) expect([await hits('public', word), await hits('members', word)], word).toEqual([0, 0]);
+      for (const audience of ['public', 'members'] as const) expect(words(await rows(audience, kept.fileId))).toContain('Kite festival at the beach');
+      // And nothing brings them back: a fresh sweep lists neither.
+      expect(await steps(indexSweeper(api.worker, { text: reader, warn }))).toEqual([{ deleted: 0, indexed: 0, left: 0 }]);
+    });
+
+    it('indexes a file of an edition once the edition is published, and not before', async () => {
+      const { editionId, fileId } = await editionFile('Hosted issue: sailing club news', 'proof');
+      await run();
+      await steps(indexSweeper(api.worker, { text: reader, warn }));
+      expect(await rows('public', fileId)).toEqual([]);
+      await expect(put(fileId, 'public', (await ledger(fileId, 'public'))!.sha)).rejects.toMatchObject({ code: '55000' });
+      await api.pool.query(`UPDATE edition SET status = 'published' WHERE id = $1`, [editionId]);
+      expect(await lacking()).toContain(`${fileId} public`);
+      await steps(indexSweeper(api.worker, { text: reader, warn }));
+      expect(words(await rows('public', fileId))).toContain('Hosted issue: sailing club news');
+    });
+  });
+
   describe('the worker process', () => {
     it('indexes each copy it makes and, at boot, each served copy with no text, through its capped child and its own role', async () => {
       const swept = await issue([['Lanterns on the lake']]);
@@ -404,7 +566,16 @@ describe.skipIf(!live)('the issue-text index job', () => {
       const deadline = Date.now() + 90_000;
       const ready = async (): Promise<boolean> => (await rows('members', made.fileId)).length > 0 && (await rows('public', made.fileId)).length > 0 && (await rows('public', swept.fileId)).length > 0;
       while (!(await ready()) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+      // S2 challenge S1 (mutant X17): a copy made after boot, once the sweep has made its list (it indexed `swept` from
+      // it), is indexed by the run's own hook, with no restart.
+      expect(await ready()).toBe(true);
+      const late = await issue([['Late news: kite festival moved']]);
+      const lateIndexed = async (): Promise<boolean> => (await rows('public', late.fileId)).length > 0 && (await rows('members', late.fileId)).length > 0;
+      const lateDeadline = Date.now() + 60_000;
+      while (!(await lateIndexed()) && Date.now() < lateDeadline) await new Promise((resolve) => setTimeout(resolve, 100));
       await job.stop();
+      expect(words(await rows('public', late.fileId))).toContain('Late news: kite festival moved');
+      expect(words(await rows('members', late.fileId))).toContain('Late news: kite festival moved');
       expect(errors).toEqual([]);
       expect(warned).toEqual([]);
       expect(words(await rows('public', swept.fileId))).toContain('Lanterns on the lake');
@@ -414,6 +585,6 @@ describe.skipIf(!live)('the issue-text index job', () => {
       expect(words(pub)).not.toContain('0142');
       expect(words(mem)).toContain(`Tickets from ${PHONE} only.`);
       expect(pub[0]!.served_sha256.equals(await served(made.fileId, 'public'))).toBe(true);
-    }, 120_000);
+    }, 180_000);
   });
 });
