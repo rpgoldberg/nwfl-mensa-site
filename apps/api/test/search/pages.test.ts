@@ -516,8 +516,9 @@ describe.skipIf(!live)('the issue-text index job', () => {
       );
       await api.pool.query(`UPDATE content_version SET status = 'ready', content_hash = sha256('revised'::bytea), ready_at = now() WHERE id = $1`, [revision]);
       await api.pool.query(`UPDATE content_version SET status = 'cleared', approved_at = now(), approved_by_sub = 'sub-webmaster', approval_kind = 'normal', public_ast = '{"blocks":[]}' WHERE id = $1`, [revision]);
-      await api.pool.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [revision]);
+      // Approved, and made live, in one transaction, as approval does (0010: the live version is the newest approved, at commit).
       await tx(async (client) => {
+        await client.query(`UPDATE content_version SET status = 'approved', published_at = now(), published_by_sub = 'sub-webmaster' WHERE id = $1`, [revision]);
         await client.query(`UPDATE content_item SET live_version_id = $2, updated_at = now() WHERE id = $1`, [rescoped.itemId, revision]);
         await recordItems(client, [rescoped.itemId]);
       });
