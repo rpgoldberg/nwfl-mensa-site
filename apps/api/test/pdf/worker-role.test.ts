@@ -42,8 +42,13 @@ const WORKER_FUNCTIONS = [
   'pdf_regen_request_files',
   'publication_ledger_lock',
   'publication_ledger_record_file',
+  // ARCHIVE-SEARCH S2 (0033): which served copies lack their text (file ids and audiences only). It still reads no
+  // index table and no ledger row.
+  'search_page_lacking',
   // ARCHIVE-SEARCH S1 (0032): the page rows of the copy it just made; it reads no original and no table directly.
   'search_page_put',
+  // ARCHIVE-SEARCH S2 (0033): the delete of page rows no audience is served any longer.
+  'search_page_sweep',
 ];
 
 describe.skipIf(!live)('0017: the PDF worker role', () => {

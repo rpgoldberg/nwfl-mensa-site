@@ -105,7 +105,11 @@ const FROZEN: Record<Name, unknown[]> = {
     // ARCHIVE-SEARCH S1 (0032): the search index's two writers. Neither reads or writes pdf_original or pdf_copy: the item
     // writer takes text from the app, the page writer takes the worker's text for the copy the ledger says is served.
     { function: 'search_item_put(uuid,text,bytea,text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
+    // ARCHIVE-SEARCH S2 (0033): the index sweep's two. One lists file ids and audiences from the ledger; the other deletes
+    // index rows. Neither reads or writes pdf_original or pdf_copy.
+    { function: 'search_page_lacking(integer)', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     { function: 'search_page_put(uuid,text,bytea,integer,text[],text[])', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
+    { function: 'search_page_sweep()', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
   ],
   members: [],
   putOwner: [
