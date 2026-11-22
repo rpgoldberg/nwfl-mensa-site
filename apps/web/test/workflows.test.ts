@@ -108,4 +108,37 @@ describe('dependabot.yml', () => {
     for (const b of blocks.filter((x) => !x.startsWith('"github-actions"'))) for (const dir of ['apps/api', 'apps/linkcheck', 'apps/web']) expect(b).toContain(`      - "/${dir}"`);
     expect(blocks.find((x) => x.startsWith('"github-actions"'))).toMatch(/^ {4}directory: "\/"$/m);
   });
+
+  /** One block's ignore rules as "name" or "name major", each under its own comment line. */
+  function ignores(kind: string): string[] {
+    const b = t.split(/^ {2}- package-ecosystem: /m).find((x) => x.startsWith(`"${kind}"`)) ?? '';
+    const at = b.search(/^ {4}ignore:$/m);
+    if (at === -1) return [];
+    const rest = b.slice(at).split('\n').slice(1);
+    const end = rest.findIndex((l) => l !== '' && !l.startsWith('      '));
+    const lines = end === -1 ? rest : rest.slice(0, end);
+    const out: string[] = [];
+    lines.forEach((l, i) => {
+      const m = /^ {6}- dependency-name: "([^"]+)"$/.exec(l);
+      if (!m) return;
+      expect(lines[i - 1], `a comment says why ${m[1]} is held`).toMatch(/^ {6}# \S/);
+      const next = lines[i + 1] ?? '';
+      if (next === '        update-types: ["version-update:semver-major"]') out.push(`${m[1]} major`);
+      else {
+        expect(next, `${m[1]} is held whole or for majors only`).not.toMatch(/^ {8}\S/);
+        out.push(m[1]);
+      }
+    });
+    return out.sort();
+  }
+
+  it('holds pdf.js whole (PDFJS-6.5) and stops the TypeScript and @types/node majors (DEP-89)', () => {
+    expect(ignores('npm')).toEqual(['@types/node major', 'pdfjs-dist', 'typescript major']);
+    expect(t).toMatch(/^ {6}# .*PDFJS-6\.5.*\n {6}- dependency-name: "pdfjs-dist"$/m);
+  });
+
+  it('stops the postgres image majors, so the tests stay on production Postgres 17 (DEP-89)', () => {
+    expect(ignores('docker')).toEqual(['postgres major']);
+    expect(ignores('github-actions')).toEqual([]);
+  });
 });
