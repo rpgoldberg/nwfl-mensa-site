@@ -15,6 +15,7 @@ import { apiRoutes } from '../../src/grpc/routes.js';
 import { apiInterceptors } from '../../src/grpc/interceptors.js';
 import { createGrpcServer } from '../../src/grpc/server.js';
 import { createStructuredLogger } from '../../src/platform/logger.js';
+import type { SearchLimits } from '../../src/search/limits.js';
 import { APP, APP_PW, WORKER, WORKER_PW, dropDatabase, freshDatabase, migrate, urlFor, testPool } from './pg.js';
 import { captureLogs, closeHard, listen } from './servers.js';
 
@@ -103,7 +104,11 @@ export interface Api {
 /** Thursday 2026-10-22, 10:00 Central. */
 export const NOW = new Date('2026-10-22T15:00:00Z');
 
-export async function startApi(prefix: string, options: { verifier?: TokenVerifier; now?: () => Date; groupPrefix?: string } = {}): Promise<Api> {
+export async function startApi(
+  prefix: string,
+  /** `search`: the search limits to run with, where a suite searches faster than production allows (ARCHIVE-SEARCH S3). */
+  options: { verifier?: TokenVerifier; now?: () => Date; groupPrefix?: string; search?: Partial<SearchLimits> } = {},
+): Promise<Api> {
   const now = options.now ?? ((): Date => NOW);
   const db = await freshDatabase(prefix);
   const run = await migrate(db);
@@ -117,7 +122,7 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const { lines, sink } = captureLogs();
   const logger = createStructuredLogger({ sink });
   const server: http2.Http2Server = createGrpcServer({
-    routes: apiRoutes({ db: pool, logger, now, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
+    routes: apiRoutes({ db: pool, logger, now, ...(options.search === undefined ? {} : { search: options.search }), readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
     interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now), groupPrefix: options.groupPrefix }),
     // As in production: the gate's verifier also admits edge streams.
     verifier: options.verifier ?? fakeVerifier,

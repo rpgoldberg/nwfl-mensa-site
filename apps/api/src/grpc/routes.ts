@@ -23,9 +23,12 @@ import { MembershipService } from '../gen/nwfl/mensa/v1/membership_pb.js';
 import { MembershipVerifierService } from '../gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { NewsletterService } from '../gen/nwfl/mensa/v1/newsletter_pb.js';
 import { RedactionPolicyService } from '../gen/nwfl/mensa/v1/redaction_pb.js';
+import { SearchService } from '../gen/nwfl/mensa/v1/search_pb.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import type { Readiness } from '../readiness.js';
 import { redactionRoutes } from '../redaction/service.js';
+import type { SearchLimits } from '../search/limits.js';
+import { searchRoutes } from '../search/service.js';
 import { healthRoutes } from './health.js';
 
 /** Every service apiRoutes registers. The canary sweeps the reads of each. */
@@ -39,6 +42,7 @@ export const SERVED_SERVICES: readonly DescService[] = [
   MembershipService,
   RedactionPolicyService,
   ApprovalRuleService,
+  SearchService,
 ];
 
 export interface ApiDeps {
@@ -47,6 +51,8 @@ export interface ApiDeps {
   readiness: Readiness;
   /** The clock "today" is read from. Tests pin it. */
   now?: () => Date;
+  /** The search limits to run with; production's (search/limits.ts) when not given. Tests lift the rate. */
+  search?: Partial<SearchLimits>;
 }
 
 export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
@@ -61,6 +67,7 @@ export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
     linkCheckRoutes({ db: deps.db, logger: deps.logger.child({ component: 'linkcheck' }), now }),
     redactionRoutes({ db: deps.db }),
     approvalRoutes({ db: deps.db }),
+    searchRoutes({ db: deps.db, logger: deps.logger.child({ component: 'search' }), ...(deps.search === undefined ? {} : { limits: deps.search }) }),
   ];
   return (router) => routes.forEach((register) => register(router));
 }

@@ -35,6 +35,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Audience } from '../../src/gen/nwfl/mensa/v1/common_pb.js';
 import { ContentKind, ContentService, ItemVisibility, VersionStatus } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { NewsletterService } from '../../src/gen/nwfl/mensa/v1/newsletter_pb.js';
+import { SearchService } from '../../src/gen/nwfl/mensa/v1/search_pb.js';
 import {
   LedgerSubjectKind,
   MarkField,
@@ -50,7 +51,9 @@ import { paragraph, publishItem, text } from '../helpers/content.js';
 import { live, url, withClient } from '../helpers/pg.js';
 import { type Redact, drain } from '../../src/pdf/regenerate.js';
 import { redactPdf } from '../../src/pdf/redact.js';
+import { textReply } from '../../src/pdf/gate-text.js';
 import { storeOriginal } from '../../src/pdf/store.js';
+import { indexFile } from '../../src/search/pages.js';
 import { extractAll } from '../pdf/extract.js';
 import { linesPdf } from '../pdf/fixtures.js';
 
@@ -138,6 +141,17 @@ describe.skipIf(!live)('the redaction leak contract', () => {
           { subjectKind: LedgerSubjectKind.STORED_FILE, subjectId: ids['wholeFile'], audience, at: timestampFromDate(new Date()) },
         ]),
       VerifyLedger: () => [{}],
+    },
+    // ARCHIVE-SEARCH S3: a search for every canary by itself (three to a query, either of them), and for the plain
+    // words beside them, whose hits carry titles and snippets. A member finds the canaries the members policy shows.
+    'nwfl.mensa.v1.SearchService': {
+      Search: () => [
+        ...[0, 3, 6].map((at) => ({ query: Object.values(C).slice(at, at + 3).join(' or ') })),
+        { query: 'Picnic' },
+        { query: 'Rides call Friday' },
+        { query: 'Words' },
+        { query: 'Mailing or Write' },
+      ],
     },
   };
 
@@ -256,7 +270,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
   const whole = (responses: Map<string, Buffer>): string => Buffer.concat([...responses.values()]).toString('utf8');
 
   beforeAll(async () => {
-    api = await startApi('nwfl_leak');
+    // The sweeps search faster than ten a second: a refused search would read as a search that found nothing.
+    api = await startApi('nwfl_leak', { search: { perSecond: 100_000, burst: 100_000 } });
     const { pool } = api;
     const policy = api.client(RedactionPolicyService);
     const office = await insertId(pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
@@ -363,7 +378,11 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       const links = targets.map(([id], n) => asked.find((link) => link.id === id) ?? { ...plain, id, rect: rect(n) });
       return redactPdf(original, { ...request, links });
     };
-    await drain(api.worker, { redact: everyLink });
+    // ARCHIVE-SEARCH S3: and each copy's text indexed, as the worker does after it makes one (the real reader, in this process).
+    await drain(api.worker, {
+      redact: everyLink,
+      index: async (fileId) => void (await indexFile(api.worker, fileId, { text: ({ copy, quotes }) => textReply({ kind: 'text', copy, quotes }) })),
+    });
     // Every ready copy of the public PDF holds all three, as the read is to be tested against.
     await withClient(rootUrl.toString(), async (root) => {
       const { rows } = await root.query<{ held: string[] }>(
@@ -421,6 +440,24 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     const swept = found(await sweep(MEMBER, 'nwfl.mensa.v1.ContentService'), { phone: C.phone, name: C.name });
     expect(swept['phone']).toContain('ContentService.GetLinkTarget');
     expect(swept['name']).toContain('ContentService.GetLinkTarget');
+  });
+
+  // ARCHIVE-SEARCH S3: the search positive control. The sweep's searches do find the seeded text: a member is given the
+  // phone and the name, in a news item and on a page of the PDF; the public the same hits without either.
+  it('finds the marked item and its PDF by search: with the canaries for a member, and without them for the public', async () => {
+    const search = api.client(SearchService);
+    const kinds = (response: { hits: Array<{ hit: { case?: string } }> }): string[] => [...new Set(response.hits.map((hit) => hit.hit.case as string))].sort();
+    const member = await search.search({ query: C.phone }, MEMBER);
+    expect(kinds(member)).toEqual(['issuePage', 'newsItem']);
+    expect(dump(member)).toContain(C.phone);
+    expect((await search.search({ query: C.phone })).hits).toEqual([]);
+    const open = await search.search({ query: 'Rides' });
+    expect(kinds(open)).toEqual(['issuePage', 'newsItem']);
+    expect(found(new Map([['Search', Buffer.from(dump(open))]]), C)).toEqual({});
+    expect(dump(await search.search({ query: 'Rides' }, MEMBER))).toContain(C.phone);
+    // The item hidden from the public by the email policy, and the one a whole-item mark withholds: no hit at all.
+    expect((await search.search({ query: 'Mailing or Write' })).hits).toEqual([]);
+    expect((await search.search({ query: 'Words' })).hits).toEqual([]);
   });
 
   it('gives a member what the members policy shows, and not a member’s address', async () => {

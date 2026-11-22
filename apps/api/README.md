@@ -105,7 +105,8 @@ This repository's whole history is meant to be publishable.
 ## Contract
 
 `proto/nwfl/mensa/v1` holds the API: `EventService`, `ContentService`,
-`MembershipService`, `NewsletterService` and `MembershipVerifierService`. The
+`MembershipService`, `NewsletterService`, `MembershipVerifierService` and
+`SearchService`. The
 generated code under `src/gen` is committed; CI regenerates it and fails on a
 diff. `test/proto/contract.test.ts` walks the generated descriptors and holds
 the rules a handler cannot be trusted to keep:
@@ -843,6 +844,38 @@ every copy again. A reading that fails writes and deletes nothing, and is
 logged by file, audience and code, never by content: `a PDF copy was not
 indexed`. Both functions are the worker's alone; it reads no index table and
 no ledger row.
+
+### Searching the index (ARCHIVE-SEARCH S3)
+
+`SearchService.Search` (`proto/nwfl/mensa/v1/search.proto`, `src/search/`)
+answers a query with ten hits a page: pages of issues and published items.
+
+- **Audience.** From the verified caller only; the request has no such
+  field. No token reads the public tables. A member or an officer reads the
+  members tables; officers have none of their own.
+- **What is a hit** (`sql.ts`). A row counts only while the publication
+  ledger's current output for its subject and that audience is the row's own
+  sha, and, for a page, the ledger says the audience is served a copy. Its
+  item must be the live version of a published item that is not
+  officers-only, or its file a published edition's. For members, an issue's
+  hits come from the members file alone.
+- **The lens** (`service.ts`). Each hit is then put to the lens as the served
+  reads put it (`servableFile`, `itemHidden`, `slugFor`). A hit it hides is
+  left out before the page is cut, so neither a page's length nor `has_more`
+  says that something withheld matched.
+- **Snippets.** `ts_headline` over the row's own text, for the page answered
+  only. The words found sit between U+E000 and U+E001; the text is plain,
+  never markup.
+- **Limits** (`query.ts`, `limits.ts`). 2 to 100 characters after trimming
+  and NFKC, at most 8 words, pages 1 to 10. Ten searches a second with a
+  burst of twenty and four at once, for the whole API, else
+  `RESOURCE_EXHAUSTED`. One read-only snapshot whose statements end after two
+  seconds (`DEADLINE_EXCEEDED`).
+- **Query language.** `websearch_to_tsquery`: words, a quoted phrase, `or`
+  and a leading hyphen. No prefix or wildcard. A query of stop words only,
+  or one that only leaves words out, finds nothing.
+- **Log.** One line a search: audience, query length, word count, hits and
+  milliseconds. Never the query. No audit row.
 
 ### The api-gate check
 
