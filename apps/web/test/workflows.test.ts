@@ -119,14 +119,14 @@ describe('dependabot.yml', () => {
     const lines = end === -1 ? rest : rest.slice(0, end);
     const out: string[] = [];
     lines.forEach((l, i) => {
-      const m = /^ {6}- dependency-name: "([^"]+)"$/.exec(l);
-      if (!m) return;
-      expect(lines[i - 1], `a comment says why ${m[1]} is held`).toMatch(/^ {6}# \S/);
+      const name = /^ {6}- dependency-name: "([^"]+)"$/.exec(l)?.[1];
+      if (name === undefined) return;
+      expect(lines[i - 1], `a comment says why ${name} is held`).toMatch(/^ {6}# \S/);
       const next = lines[i + 1] ?? '';
-      if (next === '        update-types: ["version-update:semver-major"]') out.push(`${m[1]} major`);
+      if (next === '        update-types: ["version-update:semver-major"]') out.push(`${name} major`);
       else {
-        expect(next, `${m[1]} is held whole or for majors only`).not.toMatch(/^ {8}\S/);
-        out.push(m[1]);
+        expect(next, `${name} is held whole or for majors only`).not.toMatch(/^ {8}\S/);
+        out.push(name);
       }
     });
     return out.sort();
