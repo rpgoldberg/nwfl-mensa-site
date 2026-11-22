@@ -246,6 +246,14 @@ describe('redactSpan', () => {
     ]);
   });
 
+  it('sends an event name that is only near `exception` as the fixed word, its text never', () => {
+    const nearMisses = ['exceptionX', 'exception.message', 'exception foo', `exception: ${NAME}`, `exception${NAME}`, 'exceptions', 'exception ', ' exception', 'Exception', 'EXCEPTION', 'exception\n', 'exception​', `${NAME} exception`, 'my.exception'];
+    const out = redactSpan(span({ events: nearMisses.map((name) => ({ time: [1, 1] as [number, number], name, attributes: { 'exception.type': 'ConnectError' } })) }), RESOURCE);
+    expect(out.events.map((event) => event.name)).toEqual(nearMisses.map(() => 'event'));
+    const sent = JSON.stringify(out.events);
+    for (const gone of ['Avery', 'Quill', 'foo', 'message', 'exceptionX', 'exceptions', 'Exception', 'EXCEPTION', 'my.']) expect(sent).not.toContain(gone);
+  });
+
   it('exports ids only from a span context: no tracestate, on the span, its parent or a link', () => {
     const traceState = createTraceState(`vendor=${NUMBER}`);
     const out = redactSpan(

@@ -210,7 +210,8 @@ class RedactingExport implements SpanProcessor {
   /**
    * A connection can end up unusable for good while the collector is healthy again (an answer larger
    * than the client accepts leaves it refusing every later call). So after a few failed batches in a
-   * row the exporter is replaced by a new one, with a new connection; the old one is closed.
+   * row the exporter is replaced by a new one (a new gRPC client, which may still share the old one's
+   * connection while that is open); the old one is closed.
    */
   private rebuild(): void {
     this.failedInARow = 0;

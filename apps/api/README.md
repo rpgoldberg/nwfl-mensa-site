@@ -89,9 +89,11 @@ Export never holds a call up. Ending a span puts it on a queue of 2,048;
 batches of up to 512 go out every 5 s, each with a 5 s deadline. A full queue
 drops the span; a collector that is down, slow or refusing costs that batch.
 Nothing is retried. After three failed batches in a row the exporter is
-replaced by a new one with a new connection, since a connection can stay
-unusable after the collector recovers (seen with an answer over the
-client's size limit). On shutdown the queue is flushed for at most 2 s, and one
+replaced by a new one (a new gRPC client) and the old one is closed, since a
+client can stay unusable after the collector recovers (seen with an answer
+over the client's size limit). The new client may share the old one's
+connection while that is still open, so a rebuild does not promise a new
+connection. On shutdown the queue is flushed for at most 2 s, and one
 line, `trace export stopped`, gives the counts: `accepted`, `exported`,
 `dropped_queue_full`, `dropped_export_failed`, `dropped_at_shutdown`. It is a
 warning when anything was dropped. A caller that sends `traceparent` with the

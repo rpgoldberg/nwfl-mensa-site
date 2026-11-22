@@ -319,6 +319,28 @@ describe('trace export', () => {
     telemetry = undefined;
   });
 
+  // The deadline that matters is the one the real OTLP exporter enforces, not the number handed to a
+  // seam: with none (the library's ten seconds) or a longer one, the failure would land seconds later.
+  it('gives up an export to a collector that never answers at the export deadline, well before the backstop', async () => {
+    receiver = await startOtlpReceiver('hang');
+    const hung = receiver;
+    telemetry = startTelemetry({
+      env: { [TRACES_ENDPOINT_ENV]: hung.url },
+      traceExport: { scheduledDelayMillis: 5, maxExportBatchSize: 1, exportTimeoutMillis: 300, shutdownTimeoutMillis: 200 },
+    });
+    const sending = telemetry;
+    await rpc();
+    await until(() => hung.calls() > 0, 5_000);
+    const asked = performance.now();
+    await until(() => (sending.exportCounts()?.dropped_export_failed ?? 0) > 0, 5_000);
+    const took = performance.now() - asked;
+    // The batch processor's own backstop is the deadline plus one second; the exporter must end the call first.
+    expect(took).toBeGreaterThan(150);
+    expect(took).toBeLessThan(1_000);
+    expect(sending.exportCounts()).toMatchObject({ accepted: 1, exported: 0, dropped_export_failed: 1 });
+    expect(unhandled).toEqual([]);
+  });
+
   it('gives up the flush at its deadline when the collector never answers, and counts what was left', async () => {
     receiver = await startOtlpReceiver('hang');
     telemetry = startTelemetry({
