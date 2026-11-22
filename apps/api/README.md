@@ -286,6 +286,20 @@ by the handler for a precise answer, and by the database (`0007`).
   changes no group or account there. The list holds the latest 50 rejections,
   with no paging (`MAX_REJECTED_LISTED`); when it is full the site says
   "Showing the latest 50", so an older one is never hidden without a word.
+- **Erasing a sign-up record, and correcting a number** (PROFILE-ERASE,
+  `src/membership/service.ts`, migration `0034`): the Admin alone, never on
+  their own sign-up. `ListSignupRecords` lists the decided sign-ups not yet
+  erased. `EraseSignup` erases a person's record when they ask: the display
+  name, the email, the first and last name and the membership number of every
+  decided sign-up of theirs. The date and the decision stay, an approved
+  member's account is removed with it, and a pending sign-up is decided first.
+  `CorrectMembershipNumber` is the one way a stored number changes: the
+  number is checked as at sign-up, and the reason goes to the audit log with
+  who and when. A reason with any digit in it is refused, so the log never
+  holds the old or the new number.
+- **Removing a member** (`RemoveMember`): the removal erases the first name,
+  the last name and the membership number on the member's approved sign-up
+  in the same statement (a trigger of `0034`), audited by the sign-up's id.
 
 ## Seeding the calendar and roster
 
@@ -913,13 +927,16 @@ The rules the database itself enforces:
   version is never deleted;
 - a member's home has no street address, city or link; a `.docx` is
   officers-only; an edition's hosted PDF is a public file of that edition;
-- a sign-up keeps the first name, last name and membership number it typed in
-  every state (0028); the number never changes once stored, for any role, and
-  the names change only on an approved sign-up, the member's profile;
-  `affiliate` needs a recorded grant;
+- a sign-up keeps the first name, last name and membership number it typed
+  (0028) until its account is removed, which erases them, or the Admin erases
+  the record whole (0034); the number changes only by the Admin's correction,
+  with its audit row, and the names change only on an approved sign-up, the
+  member's profile; `affiliate` needs a recorded grant;
 - a decided sign-up keeps its decision (0009); only a rejected one can be
   reopened, by whom and when recorded together, and a reopened row never
-  changes again (0026). A person has one sign-up at most that is not
+  changes again but to be erased (0026, 0034). An erased row holds no name,
+  number or email, and changes no more, but that a rejected one can still be
+  reopened. A person has one sign-up at most that is not
   reopened, and an account row is deleted only as a reopening deletes it: a
   rejection's closed account (removed, never approved, granted or checked).
   A sign-up row is never deleted: the app role holds no DELETE on it, and a

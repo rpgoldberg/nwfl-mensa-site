@@ -42,7 +42,10 @@
 //                       once verified more than 12 months ago (the 13th month
 //                       is grace; after it standing lapses by itself)
 //   RemoveMember        approvers and the Admin; a sign-up still open for the
-//                       account is rejected with it
+//                       account is rejected with it. PROFILE-ERASE: a member's
+//                       profile (first name, last name, number) is erased with
+//                       the removal, by the database (0034), and audited by the
+//                       sign-up's id
 //   ConfirmMember       approvers and the Admin, never on themselves: the
 //                       yearly re-check, confirmed by an officer, dates a
 //                       member's (or a lapsed account's) verification today
@@ -62,6 +65,21 @@
 //                       meanwhile): FAILED_PRECONDITION, so a double reopen is
 //                       refused, never repeated.
 //
+//   ListSignupRecords   PROFILE-ERASE, the Admin alone: the decided sign-ups not
+//                       erased, newest first, never their own
+//   EraseSignup         the Admin alone, never on their own: erases a person's
+//                       sign-up record at their request (0034
+//                       signup_request_erase): the display name, the email, the
+//                       names and the number of every decided sign-up of theirs.
+//                       The date and the decision stay; an approved member's
+//                       account is removed with it. A pending sign-up is decided
+//                       first.
+//   CorrectMembershipNumber  the Admin alone, never on their own: the one way a
+//                       stored number changes (0034
+//                       signup_request_correct_number). The number is checked as
+//                       at sign-up; the reason goes to the audit with who and
+//                       when, and holds no digit, so never a number.
+//
 // A person has one open sign-up at most: the rows not reopened (0026). Every
 // lookup by subject reads only those.
 //
@@ -72,9 +90,9 @@
 import { create } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@connectrpc/connect';
-import { recordAudit } from '../audit/audit.js';
+import { recordAudit, traceId } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
-import { requireGrantor, requireMembershipApprover, requireSignupReopener, requireUser } from '../auth/roles.js';
+import { requireAdmin, requireGrantor, requireMembershipApprover, requireSignupReopener, requireUser } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -89,6 +107,8 @@ import {
   MemberStatus,
   MembershipService,
   RejectedSignupSchema,
+  SignupDecision,
+  SignupRecordSchema,
   SignupRequestSchema,
   Verification,
 } from '../gen/nwfl/mensa/v1/membership_pb.js';
@@ -105,6 +125,7 @@ const STATUSES: Record<string, MemberStatus> = {
   lapsed: MemberStatus.LAPSED,
   removed: MemberStatus.REMOVED,
 };
+const DECISIONS = { approved: SignupDecision.APPROVED, rejected: SignupDecision.REJECTED } as const;
 const ROUTES: Record<string, AccountRoute> = { invite: AccountRoute.INVITE, signup: AccountRoute.SIGNUP, admin_grant: AccountRoute.ADMIN_GRANT };
 const VERIFICATIONS: Record<string, Verification> = {
   unchecked: Verification.UNCHECKED,
@@ -151,6 +172,22 @@ const MAX_REJECTED_LISTED = 50;
 const CLOSED_BY_REJECTION = `a.status = 'removed' AND a.verified_on IS NULL AND a.approved_by_sub IS NULL AND a.affiliate_granted_by_sub IS NULL`;
 /** W-SIGNUP D2: an officer invited this person (fc INVITE1's <prefix>invited, renamed by groups.ts). */
 const INVITED_GROUP = 'nwfl-invited';
+/**
+ * PROFILE-ERASE: the most decided sign-ups listed for the Admin, newest first, with no paging. Plenty for
+ * this group's size; the site says when the list is full (apps/web src/lib/member-records.ts
+ * RECORDS_LISTED_MAX, kept equal).
+ */
+const MAX_RECORDS_LISTED = 500;
+/** PROFILE-ERASE: the most characters in the reason for a number correction (0034 membership_reason_ok). */
+const MAX_REASON = 500;
+/** A letter: a reason says something in words. */
+const SAYS_SOMETHING = /\p{L}/u;
+/** Any digit, of any script (after compatibility folding: full-width, circled, superscript). */
+const DIGIT = /\p{N}/u;
+/** A control character other than a tab or a line break. */
+const REASON_CONTROL = /[^\P{Cc}\t\n\r]/u;
+/** no_data_found, from 0034's functions: the sign-up named does not exist. */
+const NO_DATA_FOUND = 'P0002';
 
 interface AccountRow {
   status: string;
@@ -199,6 +236,38 @@ function nameOf(value: string, which: 'first name' | 'last name'): string {
   // As the site refuses it: no name holds a control character, and a NUL would never reach the database.
   if (CONTROL.test(name)) throw invalid(`a ${which} has a hidden character`);
   return name;
+}
+
+/**
+ * A membership number as typed: trimmed, needed, typing noise dropped, then 1 to 12 digits. The one
+ * check for a sign-up and for the Admin's correction. Never echoed.
+ */
+function numberOf(value: string): string {
+  const typed = value.trim();
+  if (typed === '') throw invalid('a membership number is needed');
+  const number = typed.replace(NUMBER_NOISE, '');
+  if (!NUMBER.test(number)) throw invalid('a membership number is 1 to 12 digits');
+  return number;
+}
+
+/**
+ * PROFILE-ERASE: why a number is corrected, in words. No digit of any script, so the audit row it goes
+ * to never holds the old or the new number, whatever is typed between the digits. The database checks
+ * again (0034), and holds every character to a letter, a punctuation mark or a space.
+ */
+function reasonOf(value: string): string {
+  const reason = value.trim();
+  if (!SAYS_SOMETHING.test(reason)) throw invalid('say why, in words');
+  if ([...reason].length > MAX_REASON) throw invalid(`a reason is at most ${MAX_REASON} characters`);
+  if (REASON_CONTROL.test(reason)) throw invalid('write the reason in plain text, without control characters');
+  if (DIGIT.test(reason.normalize('NFKC'))) throw invalid('write the reason in words, with no digits: the number is never put in the record');
+  return reason;
+}
+
+/** A refusal from one of 0034's functions as a status: a missing sign-up is NOT_FOUND, the rest as dbError says. */
+function recordError(error: unknown): unknown {
+  if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === NO_DATA_FOUND) return new ConnectError('sign-up not found', Code.NotFound);
+  return dbError(error);
 }
 
 function requestId(id: string): string {
@@ -262,10 +331,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         if (name === '' || email === '') throw precondition('add your name and email to your account first');
         if (email.length > 254 || !EMAIL.test(email)) throw precondition('the email on your account is not an address');
         // W-SIGNUP D1: the number and the last name, for every sign-up. Neither is ever echoed.
-        const typed = request.membershipNumber.trim();
-        if (typed === '') throw invalid('a membership number is needed');
-        const number = typed.replace(NUMBER_NOISE, '');
-        if (!NUMBER.test(number)) throw invalid('a membership number is 1 to 12 digits');
+        const number = numberOf(request.membershipNumber);
         const lastName = nameOf(request.lastName, 'last name');
         // PROFILE-ID: optional, so a sign-up from a site that does not ask for it yet is still taken.
         const firstName = request.firstName.trim() === '' ? null : nameOf(request.firstName, 'first name');
@@ -345,13 +411,15 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         >(
           // Fix 1 (N2): a rejected (or reopened) earlier sign-up's name stays with the Admin and the
           // Membership Officer (ListRejectedSignups): it is never read here, nor (PROFILE-ID) what it typed.
+          // PROFILE-ERASE: an erased earlier sign-up holds no name: it reads as closed too.
           `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.created_at, coalesce(a.route, 'signup') AS route,
              s.first_name, s.last_name, s.membership_number,
-             CASE WHEN c.decision = 'rejected' THEN '' ELSE c.display_name END AS earlier_name, c.created_at AS earlier_at, c.decision = 'rejected' AS earlier_closed,
-             CASE WHEN c.decision = 'rejected' THEN NULL ELSE c.first_name END AS earlier_first,
-             CASE WHEN c.decision = 'rejected' THEN NULL ELSE c.last_name END AS earlier_last,
-             CASE WHEN c.decision = 'rejected' THEN NULL ELSE c.membership_number END AS earlier_number
-           FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub LEFT JOIN signup_request c ON c.id = s.conflicting_request_id
+             CASE WHEN c.closed THEN '' ELSE c.display_name END AS earlier_name, c.created_at AS earlier_at, c.closed AS earlier_closed,
+             CASE WHEN c.closed THEN NULL ELSE c.first_name END AS earlier_first,
+             CASE WHEN c.closed THEN NULL ELSE c.last_name END AS earlier_last,
+             CASE WHEN c.closed THEN NULL ELSE c.membership_number END AS earlier_number
+           FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub
+             LEFT JOIN (SELECT *, decision = 'rejected' OR erased_at IS NOT NULL AS closed FROM signup_request) c ON c.id = s.conflicting_request_id
            WHERE s.decision = 'pending' ORDER BY s.created_at, s.id`,
         );
         return {
@@ -468,8 +536,17 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           const row = (await client.query<{ status: string }>(`SELECT status FROM member_account WHERE sub = $1 FOR UPDATE`, [sub])).rows[0];
           if (row === undefined) throw new ConnectError('account not found', Code.NotFound);
           if (row.status === 'removed') throw precondition('this account is already removed');
+          // PROFILE-ERASE: the profile the removal erases (0034's trigger, in the same statement), for its audit row.
+          const { rows: profiles } = await client.query<{ id: string }>(
+            `SELECT id FROM signup_request WHERE sub = $1 AND decision = 'approved' AND num_nonnulls(first_name, last_name, membership_number) > 0 FOR UPDATE`,
+            [sub],
+          );
           await client.query(`UPDATE member_account SET status = 'removed', removed_at = now(), updated_at = now() WHERE sub = $1`, [sub]);
           await recordAudit(client, caller, { action: 'remove', subjectKind: 'member_account', subjectId: sub, fromState: row.status, toState: 'removed' });
+          // By the sign-up's id: the row names no one but the officer who acted.
+          for (const profile of profiles) {
+            await recordAudit(client, caller, { action: 'erase_profile', subjectKind: 'signup_request', subjectId: profile.id, fromState: 'approved', toState: 'profile_erased' });
+          }
           // A sign-up still open for the account is rejected with it, so it leaves both queues.
           const open = (await client.query<{ id: string }>(`SELECT id FROM signup_request WHERE sub = $1 AND decision = 'pending' FOR UPDATE`, [sub])).rows[0];
           if (open !== undefined) {
@@ -542,9 +619,10 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const caller = callerIn(ctx);
         requireSignupReopener(caller);
         const { rows } = await db.query<TypedRow & { id: string; display_name: string; email: string; verification: string; verified_on: string | null; decided_at: Date }>(
+          // PROFILE-ERASE: never an erased one, which holds no one to show.
           `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.decided_at, s.first_name, s.last_name, s.membership_number
            FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub
-           WHERE s.decision = 'rejected' AND s.reopened_at IS NULL AND s.sub <> $1 AND (a.sub IS NULL OR (${CLOSED_BY_REJECTION}))
+           WHERE s.decision = 'rejected' AND s.reopened_at IS NULL AND s.erased_at IS NULL AND s.sub <> $1 AND (a.sub IS NULL OR (${CLOSED_BY_REJECTION}))
            ORDER BY s.decided_at DESC, s.id DESC LIMIT $2`,
           [caller.subject, MAX_REJECTED_LISTED],
         );
@@ -590,6 +668,65 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           }
           return {};
         });
+      },
+
+      listSignupRecords: async (_request, ctx) => {
+        const caller = callerIn(ctx);
+        requireAdmin(caller);
+        const { rows } = await db.query<TypedRow & { id: string; display_name: string; email: string; decision: 'approved' | 'rejected'; reopened: boolean; decided_at: Date; status: string | null }>(
+          // A reopened sign-up's account, if any, belongs to a later sign-up: it is not this row's standing.
+          `SELECT s.id, s.display_name, s.email, s.first_name, s.last_name, s.membership_number, s.decision, s.reopened_at IS NOT NULL AS reopened, s.decided_at,
+             CASE WHEN s.reopened_at IS NULL THEN a.status END AS status
+           FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub
+           WHERE s.decision <> 'pending' AND s.erased_at IS NULL AND s.sub <> $1
+           ORDER BY s.decided_at DESC, s.id DESC LIMIT $2`,
+          [caller.subject, MAX_RECORDS_LISTED],
+        );
+        return {
+          records: rows.map((row) =>
+            create(SignupRecordSchema, {
+              requestId: row.id,
+              displayName: row.display_name,
+              email: row.email,
+              ...typedFields(row),
+              decision: row.reopened ? SignupDecision.REOPENED : DECISIONS[row.decision],
+              decidedAt: timestampFromDate(row.decided_at),
+              ...(row.status !== null ? { accountStatus: STATUSES[row.status] } : {}),
+            }),
+          ),
+        };
+      },
+
+      eraseSignup: async (request, ctx) => {
+        const caller = callerIn(ctx);
+        requireAdmin(caller);
+        const id = requestId(request.requestId);
+        try {
+          const { rows } = await db.query<{ erased: number; access_ended: boolean }>(`SELECT erased, access_ended FROM signup_request_erase($1, $2, $3, $4)`, [
+            id,
+            caller.subject,
+            [...caller.groups],
+            traceId(),
+          ]);
+          const row = rows[0] as { erased: number; access_ended: boolean };
+          return { erased: row.erased, accessEnded: row.access_ended };
+        } catch (error) {
+          throw recordError(error);
+        }
+      },
+
+      correctMembershipNumber: async (request, ctx) => {
+        const caller = callerIn(ctx);
+        requireAdmin(caller);
+        const id = requestId(request.requestId);
+        const number = numberOf(request.membershipNumber);
+        const reason = reasonOf(request.reason);
+        try {
+          await db.query(`SELECT signup_request_correct_number($1, $2, $3, $4, $5, $6)`, [id, number, reason, caller.subject, [...caller.groups], traceId()]);
+          return {};
+        } catch (error) {
+          throw recordError(error);
+        }
       },
     });
   };

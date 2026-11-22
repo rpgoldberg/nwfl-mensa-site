@@ -52,6 +52,9 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'spacer-token': { client: 'site', subject: 'sub-spacer', groups: ['nwfl-pending'], scopes: [], name: 'Sky Spacer', email: 'sky@example.org' },
   // PROFILE-ID: a person whose sign-up is refused for a mistyped number, so no error is seen to give it back.
   'typo-token': { client: 'site', subject: 'sub-typo', groups: ['nwfl-pending'], scopes: [], name: 'Lee Typo', email: 'lee@example.org' },
+  // PROFILE-ERASE: a member an officer removes, and a person whose sign-up claims a number already claimed.
+  'leaver-token': { client: 'site', subject: 'sub-leaver', groups: ['nwfl-pending'], scopes: [], name: 'Blake Leaver', email: 'blake@example.org' },
+  'claimant-token': { client: 'site', subject: 'sub-claimant', groups: ['nwfl-pending'], scopes: [], name: 'Reese Claimant', email: 'reese@example.org' },
   // The Membership Officer: approves sign-ups; also signs up once, to show no one decides their own.
   'approver-token': {
     client: 'site',
