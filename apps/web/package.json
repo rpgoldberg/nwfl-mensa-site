@@ -55,7 +55,7 @@
     "oidc-provider": "9.12.2",
     "pdfjs-dist": "6.4.299",
     "sharp": "0.35.5",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "typescript-eslint": "8.72.0",
     "vitest": "5.0.5"
   }
