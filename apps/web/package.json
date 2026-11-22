@@ -43,7 +43,7 @@
     "@fontsource/atkinson-hyperlegible": "5.3.0",
     "@fontsource/lexend": "5.3.0",
     "@playwright/test": "1.64.1",
-    "@types/node": "24.19.2",
+    "@types/node": "26.6.6",
     "@types/oidc-provider": "9.12.1",
     "@vitest/coverage-v8": "5.0.5",
     "astro-eslint-parser": "3.2.0",
