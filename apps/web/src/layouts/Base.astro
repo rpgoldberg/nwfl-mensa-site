@@ -2,7 +2,7 @@
 // The frame of every page, after the design draft: skip link; header with the
 // NWFL monogram and the site name as text over the teal-and-sand stripe, the
 // wide-screen nav, Aa and Sign in (Help is on More); the Aa panel; breadcrumbs
-// and Back; the footer; and the phone's bottom bar. The chrome is in px and one row, so only the content grows with the
+// and Back; the footer, with the Mensa logo; and the phone's bottom bar. The chrome is in px and one row, so only the content grows with the
 // reader's size (W-LOOK). No script needed: Aa opens its panel as a link
 // target, and the reader's size and theme come from cookies. On a phone the
 // header is one row: the monogram, the name, Aa and Sign in, or an Account
@@ -93,7 +93,11 @@ const back = backProp ?? (Astro.isPrerendered ? path : `${Astro.url.pathname}${A
     </div>
     <footer class="site-footer">
       <p class="foot-links"><a href="/help">Help</a> <a href="/officers">Contact an officer</a> <a href="/home-screen">Put the club on your home screen</a> <a href="/privacy">Privacy</a></p>
-      <p>{SITE_NAME} is the local group of American Mensa for the Florida Panhandle, west of the Apalachicola River.</p>
+      {/* LOGO-UNIT: the Mensa logo, once on the page, on its own solid tile (scripts/make-logo.mjs: its clear space is part of the picture). */}
+      <div class="foot-brand">
+        <img class="foot-logo" src="/icons/mensa-logo.png" srcset="/icons/mensa-logo.png 1x, /icons/mensa-logo-2x.png 2x, /icons/mensa-logo-3x.png 3x" alt="Mensa" width="238" height="77" />
+        <p>{SITE_NAME}, a local group of American Mensa</p>
+      </div>
     </footer>
     <div class="dock">
       <PrimaryNav path={path} variant="bottom" />

@@ -17,7 +17,7 @@ function block(selector: RegExp): Record<string, string> {
 const GROUPS = ['club', 'on', 'join'] as const;
 const GROUP_COLOURS = GROUPS.flatMap((g) => [`grp-${g}-tile`, `grp-${g}-icon`, `grp-${g}-edge`]);
 
-const COLOURS = ['bg', 'surface', 'ink', 'muted', 'accent', 'on-accent', 'accent-soft', 'line', 'line-soft', 'focus', 'ok', 'ok-bg', 'warn', 'warn-bg', 'stop', 'stop-bg', 'members', 'members-bg', ...GROUP_COLOURS];
+const COLOURS = ['bg', 'surface', 'ink', 'muted', 'accent', 'on-accent', 'accent-soft', 'line', 'line-soft', 'focus', 'ok', 'ok-bg', 'warn', 'warn-bg', 'stop', 'stop-bg', 'members', 'members-bg', 'logo-tile', ...GROUP_COLOURS];
 
 const light = block(/:root/);
 const THEMES: Record<string, Record<string, string>> = {
@@ -84,6 +84,14 @@ describe('contrast, computed from tokens.css', () => {
         [`grp-${g}-edge`, 'surface'],
       ] as const).filter(([fg, bg]) => contrast(theme[fg]!, theme[bg]!) < 3).map(([fg, bg]) => `${fg}/${bg} ${contrast(theme[fg]!, theme[bg]!).toFixed(2)}`);
       expect(low).toEqual([]);
+    });
+  }
+
+  // LOGO-UNIT: the footer's Mensa logo is a white mark on a solid tile in every theme.
+  for (const [name, theme] of Object.entries(THEMES)) {
+    it(`${name}: the logo's tile is at least 3:1 on the page, and its white mark at least 4.5:1 on the tile`, () => {
+      expect(contrast(theme['logo-tile']!, theme['bg']!)).toBeGreaterThanOrEqual(3);
+      expect(contrast('#ffffff', theme['logo-tile']!)).toBeGreaterThanOrEqual(4.5);
     });
   }
 

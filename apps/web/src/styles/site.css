@@ -716,6 +716,23 @@ main:focus:not(:focus-visible) { outline: none; }
 .site-footer p { margin: 0 0 var(--space-3); max-width: var(--measure); }
 .site-footer a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
 .foot-links { display: flex; flex-wrap: wrap; gap: 0 var(--space-5); }
+/* LOGO-UNIT: the Mensa logo beside the group's name; the name drops below it where the two do not
+   fit a row. The picture is a white mark on clear with its clear space built in (half the mark's
+   width on every side), so the tile is its own background: one solid colour, a theme's own. It is
+   238 by 77 px and does not grow with the reader's size; on a narrower page it shrinks in
+   proportion. Where the system or a printer drops backgrounds the tile stays, or the mark would vanish. */
+.foot-brand { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-4); }
+.foot-brand p { flex: 1 1 12rem; min-width: 0; margin: 0; }
+.foot-logo {
+  display: block;
+  flex: none;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: var(--logo-tile);
+  forced-color-adjust: none;
+  print-color-adjust: exact;
+}
 
 /* The home-screen how-to: a drawn phone beside each step. */
 .steps { display: grid; gap: var(--space-6); padding-left: 1.5em; }
