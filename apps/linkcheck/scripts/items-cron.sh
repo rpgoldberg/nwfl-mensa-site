@@ -11,11 +11,17 @@
 #   LINKCHECK_TOKEN_URL  the identity provider's token endpoint
 #   LINKCHECK_SCOPE      optional
 #   BAO_ADDR             optional: OpenBao's address, for a crontab that does not set it
+#   LINKCHECK_BAO_TOKEN_FILE  optional: the cron's own OpenBao token, by its full path; by default
+#                        ~/.config/nwfl-linkcheck/bao.token. A plain file of yours, mode 0600, in a folder
+#                        that only you may write. It is renewed on every run (`bao token renew`).
 #
 # Exit codes: 0 done; 1 the run failed (the log says why); 2 OpenBao is unreachable or sealed, and
 # nothing else; 3 another run is still going.
 set -u
 umask 077
+# OpenBao is asked with the cron's own token only, never with one the environment or a sign-in left
+# (a token helper's file is not read while BAO_TOKEN is set, and it always is for the bao calls).
+unset BAO_TOKEN BAO_TOKEN_PATH VAULT_TOKEN VAULT_TOKEN_PATH
 # Patterns below mean bytes (a-z is 26 letters), and docker answers in its own fixed words.
 LC_ALL=C
 export LC_ALL
@@ -29,6 +35,7 @@ log=$state/items.log
 lock=$state/items.lock
 secret=secret/nwfl-mensa/linkcheck/client
 limit=1200
+remint='the cron token is gone or expired: re-mint: tenants/nwfl/APPLY.md step 35j (LINKCRON-TOKEN)'
 
 if ! mkdir -p -- "$state" || ! chmod 700 -- "$state"; then
   echo "items-cron: $state cannot be made" >&2
@@ -99,7 +106,7 @@ done
 # `read` would drop a NUL byte and keep a carriage return, so a value would not be what the file shows.
 [ "$(tr -d '\n\040-\176' < "$conf" | wc -c)" -eq 0 ] ||
   finish 1 "$conf holds a character that is not plain text (a tab, a Windows line ending, a NUL byte or a letter outside ASCII)"
-image='' LINKCHECK_API_URL='' LINKCHECK_TOKEN_URL='' scope='' n=0
+image='' LINKCHECK_API_URL='' LINKCHECK_TOKEN_URL='' scope='' tokenfile=${conf%/*}/bao.token n=0
 while IFS= read -r line || [ -n "$line" ]; do
   n=$((n + 1))
   case $line in
@@ -109,6 +116,7 @@ while IFS= read -r line || [ -n "$line" ]; do
     LINKCHECK_TOKEN_URL=*) LINKCHECK_TOKEN_URL=${line#*=} ;;
     LINKCHECK_SCOPE=*) scope=${line#*=} ;;
     BAO_ADDR=*) BAO_ADDR=${line#*=} && export BAO_ADDR ;;
+    LINKCHECK_BAO_TOKEN_FILE=*) tokenfile=${line#*=} ;;
     *) finish 1 "line $n of $conf is not a setting this script knows" ;;
   esac
 done < "$conf"
@@ -126,20 +134,37 @@ if [ -z "$name" ] || [ ${#digest} -ne 64 ]; then
   finish 1 "LINKCHECK_IMAGE in $conf is not an image by its digest (ghcr.io/...@sha256:<64 hex characters>)"
 fi
 
+# The cron's own token: whoever can write its file or folder chooses what OpenBao is asked as, and
+# whoever can read it reads the secret. It is read by the shell itself into a variable that is never
+# exported: each bao call is given it in its own environment, and nothing here prints it.
+case $tokenfile in /*) ;; *) finish 1 "LINKCHECK_BAO_TOKEN_FILE in $conf must be a full path (starting with /)" ;; esac
+plain "$tokenfile" || finish 1 "$tokenfile must be a plain file: not a link, a folder or a pipe"
+[ -e "$tokenfile" ] || finish 1 "$remint"
+[ -n "$(find "$tokenfile" -prune -user "$(id -u)")" ] || finish 1 "$tokenfile must be a file of yours"
+[ -n "$(find "$tokenfile" -prune -perm 0600)" ] || finish 1 "$tokenfile must be readable and writable by you alone (chmod 600)"
+[ -z "$(find "${tokenfile%/*}/." -prune -perm /022)" ] || finish 1 "the folder of $tokenfile must be writable by you alone (chmod go-w)"
+token=''
+{ IFS= read -r token < "$tokenfile"; } 2> /dev/null
+[ -n "$token" ] || finish 1 "$remint"
+
 command -v bao > /dev/null 2>&1 || finish 2 "OpenBao cannot be reached: there is no bao command"
-# `bao status` needs no sign-in: 0 unsealed, 2 sealed, anything else an error.
-bao status > /dev/null 2>&1
+# `bao status` needs no sign-in: 0 unsealed, 2 sealed, anything else an error. It is given the cron's
+# token all the same, so that the CLI sends no other (it would take one from ~/.vault-token).
+BAO_TOKEN=$token bao status > /dev/null 2>&1
 case $? in
   0) ;;
   2) finish 2 "OpenBao is sealed" ;;
   *) finish 2 "OpenBao cannot be reached" ;;
 esac
+# A periodic token lives while it is renewed: every run renews it (the renew-self endpoint), before
+# the secret is read. Its answer holds the token, so none of it is kept.
+BAO_TOKEN=$token bao token renew > /dev/null 2>&1 || finish 1 "$remint"
 
 # The password goes from OpenBao straight into a 0600 file (umask 077) in a fresh 0700 folder: it is
 # never in a variable, an argument or an environment value, and nothing here prints a field. It is the
 # last thing fetched, just before the container starts, and the file goes as soon as that has ended.
 dir=$(mktemp -d "$state/run.XXXXXX") || finish 1 "no private folder could be made in $state"
-field() { bao kv get -field="$1" "$secret" 2> /dev/null; }
+field() { BAO_TOKEN=$token bao kv get -field="$1" "$secret" 2> /dev/null; }
 if ! LINKCHECK_CLIENT_ID=$(field client_id) || ! LINKCHECK_USERNAME=$(field username) || ! field password > "$dir/password" ||
   [ -z "$LINKCHECK_CLIENT_ID" ] || [ -z "$LINKCHECK_USERNAME" ] || [ ! -s "$dir/password" ]; then
   finish 1 "OpenBao did not give the linkcheck client secret: sign in to OpenBao, or the secret is not there yet"

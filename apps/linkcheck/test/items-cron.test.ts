@@ -22,6 +22,11 @@ const DOCKER_NO_SOCKET = 'failed to connect to the docker API at unix:///var/run
 // Not captured: the older form, with no "docker:" in front.
 const DOCKER_DENIED = `Unable to find image '${IMAGE}' locally\nError response from daemon: Head "https://ghcr.io/v2/made-up/none/manifests/sha256:made-up": denied\nRun 'docker run --help' for more information\n`;
 const CID = 'ab12'.repeat(16);
+// The cron's own OpenBao token (made up), the one its token file holds, and a made-up token of another
+// login that the environment and the token helper's file may still hold: the wrapper must use only the first.
+const CRON_TOKEN = 'made-up-cron-token-Zk3';
+const OTHER_TOKEN = 'made-up-other-login-token-Pq8';
+const REMINT = 'the cron token is gone or expired: re-mint: tenants/nwfl/APPLY.md step 35j (LINKCRON-TOKEN)';
 const STAMP = String.raw`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d`;
 
 // The stand-in docker records its arguments and environment, and what the mounted password file
@@ -64,20 +69,38 @@ fi
 exit "$(cat "$D/ctl/docker-exit" 2>/dev/null || echo 0)"
 `;
 
-// The stand-in bao answers `status` with ctl/bao-status (0 by default) and `kv get -field=<f> <path>`
-// with ctl/secret-<f>, for the one path the wrapper may read. ctl/bao-block makes it wait for ctl/release.
+// The stand-in bao answers `status` with ctl/bao-status (0 by default), `token renew` (the renewal of the
+// token it is given) with ctl/bao-renew (0 by default) and `kv get -field=<f> <path>` with ctl/secret-<f>,
+// for the one path the wrapper may read. Like the real CLI, it takes its token from BAO_TOKEN, or when that
+// is empty from VAULT_TOKEN, then from the token helper's file (BAO_TOKEN_PATH or ~/.vault-token). The
+// renewal and the read are refused unless that token is ctl/bao-token. Each call's token settings go to
+// bao-env.log (not one of the files a person sees). The renewal prints the token, as the real one does in
+// its table, and so does a refusal here: the wrapper must show none of it. ctl/bao-block makes it wait for
+// ctl/release.
 const BAO = (dir: string): string => `#!/bin/sh
 D='${dir}'
 echo "$*" >> "$D/bao.log"
 echo "BAO_ADDR=\${BAO_ADDR:-}" > "$D/bao.env"
+echo "$1 BAO_TOKEN=\${BAO_TOKEN-(unset)} BAO_TOKEN_PATH=\${BAO_TOKEN_PATH-(unset)} VAULT_TOKEN=\${VAULT_TOKEN-(unset)}" >> "$D/bao-env.log"
 if [ -e "$D/ctl/bao-block" ]; then
   : > "$D/bao-started"
   while [ ! -e "$D/ctl/release" ]; do sleep 0.05; done
 fi
+tok=\${BAO_TOKEN:-\${VAULT_TOKEN:-}}
+[ -n "$tok" ] || tok=$(cat "\${BAO_TOKEN_PATH:-$HOME/.vault-token}" 2>/dev/null)
+signed() { [ -n "$tok" ] && [ "$tok" = "$(cat "$D/ctl/bao-token" 2>/dev/null)" ]; }
 case $1 in
   status) exit "$(cat "$D/ctl/bao-status" 2>/dev/null || echo 0)" ;;
+  token)
+    [ "$2" = renew ] && [ $# -eq 2 ] || { echo "Usage: bao token <subcommand>" >&2; exit 127; }
+    code=$(cat "$D/ctl/bao-renew" 2>/dev/null || echo 0)
+    signed || code=2
+    if [ "$code" -ne 0 ]; then echo "Error renewing token $tok: Code: 403. Errors: * permission denied" >&2; exit "$code"; fi
+    printf 'Key Value\\ntoken %s\\ntoken_renewable true\\n' "$tok"
+    ;;
   kv)
     [ "$2" = get ] && [ "$4" = secret/nwfl-mensa/linkcheck/client ] || exit 2
+    signed || { echo "Error reading with $tok: Code: 403. Errors: * permission denied" >&2; exit 2; }
     f="$D/ctl/secret-\${3#-field=}"
     [ -e "$f" ] || { echo "No value found" >&2; exit 2; }
     cat "$f"
@@ -98,6 +121,8 @@ interface Setup {
   bao?: boolean;
   ctl?: Record<string, string>;
   home?: string;
+  /** What ~/.config/nwfl-linkcheck/bao.token holds (made 0600), or null for no file. */
+  token?: string | null;
 }
 
 // Every box is removed after its test, so the suite does not fill the container's small /tmp.
@@ -106,7 +131,7 @@ afterEach(() => {
   for (const dir of boxes.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function box({ conf = CONF, secret = SECRET, bao = true, ctl = { 'docker-out': `${COUNTS}\n` }, home: homeName = 'home' }: Setup = {}): Box {
+function box({ conf = CONF, secret = SECRET, bao = true, ctl = { 'docker-out': `${COUNTS}\n` }, home: homeName = 'home', token = `${CRON_TOKEN}\n` }: Setup = {}): Box {
   const dir = mkdtempSync(path.join(tmpdir(), 'items-cron-'));
   boxes.push(dir);
   const bin = path.join(dir, 'bin');
@@ -117,6 +142,8 @@ function box({ conf = CONF, secret = SECRET, bao = true, ctl = { 'docker-out': `
   if (conf !== null) writeFileSync(path.join(home, '.config', 'nwfl-linkcheck', 'items.conf'), conf);
   for (const [field, value] of Object.entries(secret)) writeFileSync(path.join(dir, 'ctl', `secret-${field}`), value);
   for (const [name, value] of Object.entries(ctl)) writeFileSync(path.join(dir, 'ctl', name), value);
+  writeFileSync(path.join(dir, 'ctl', 'bao-token'), CRON_TOKEN);
+  if (token !== null) writeFileSync(path.join(home, '.config', 'nwfl-linkcheck', 'bao.token'), token, { mode: 0o600 });
   return { dir, state: path.join(home, '.local', 'state', 'nwfl-linkcheck'), env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home } };
 }
 
@@ -125,6 +152,8 @@ const logLines = (b: Box): string[] => read(path.join(b.state, 'items.log')).spl
 const dockerRuns = (b: Box): string[][] => read(path.join(b.dir, 'docker.log')).split('\n').filter(Boolean).map((line) => line.split('\u001f').filter(Boolean));
 const removals = (b: Box): string[] => read(path.join(b.dir, 'docker-rm.log')).split('\n').filter(Boolean);
 const baoCalls = (b: Box): string[] => read(path.join(b.dir, 'bao.log')).split('\n').filter(Boolean);
+const baoEnv = (b: Box): string[] => read(path.join(b.dir, 'bao-env.log')).split('\n').filter(Boolean);
+const tokenFile = (b: Box): string => path.join(b.env['HOME'] as string, '.config', 'nwfl-linkcheck', 'bao.token');
 const runDirs = (b: Box): string[] => (existsSync(b.state) ? readdirSync(b.state).filter((name) => name.startsWith('run.')) : []);
 const mode = (file: string): number => statSync(file).mode & 0o777;
 
@@ -253,7 +282,9 @@ describe('scripts/items-cron.sh', () => {
     const lines = logLines(b);
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(new RegExp(`^${STAMP} exit=0 ${COUNTS}$`));
-    expect(baoCalls(b)).toEqual(['status', ...['client_id', 'username', 'password'].map((f) => `kv get -field=${f} secret/nwfl-mensa/linkcheck/client`)]);
+    expect(baoCalls(b)).toEqual(['status', 'token renew', ...['client_id', 'username', 'password'].map((f) => `kv get -field=${f} secret/nwfl-mensa/linkcheck/client`)]);
+    // Every call is given the cron's own token, in its environment only.
+    expect(baoEnv(b)).toEqual(['status', 'token', 'kv', 'kv', 'kv'].map((c) => `${c} BAO_TOKEN=${CRON_TOKEN} BAO_TOKEN_PATH=(unset) VAULT_TOKEN=(unset)`));
     expect(read(path.join(b.dir, 'bao.env'))).toBe('BAO_ADDR=https://bao.example.org:8200\n');
     const runs = dockerRuns(b);
     expect(runs).toHaveLength(1);
@@ -795,5 +826,151 @@ describe('scripts/items-cron.sh', () => {
     expect(removals(b)).toEqual([`rm -f ${old}`, `rm -f ${CID}`]);
     expect(dockerRuns(b)).toHaveLength(1);
     expect(runDirs(b)).toEqual([]);
+  });
+
+  /** A run that the cron token stops: exit 1, the fixed words on stderr and in one log line, no container, no secret read. */
+  function refusedForToken(b: Box, run: { status: number | null; stdout: string; stderr: string }, words: string): void {
+    expect(run.status).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toBe(`items-cron: ${words}\n`);
+    expect(logLines(b)).toHaveLength(1);
+    expect((logLines(b)[0] as string).replace(new RegExp(`^${STAMP} exit=1 `), '')).toBe(words);
+    expect(baoCalls(b).some((call) => call.startsWith('kv'))).toBe(false);
+    expect(dockerRuns(b)).toEqual([]);
+    expect(runDirs(b)).toEqual([]);
+    expect(everythingWritten(b, run)).not.toContain(CRON_TOKEN);
+  }
+
+  it('reads the token file named in the settings, when there is one', () => {
+    const b = box({ token: null });
+    const own = path.join(b.dir, 'elsewhere');
+    mkdirSync(own, { mode: 0o700 });
+    writeFileSync(path.join(own, 'cron.token'), `${CRON_TOKEN}\n`, { mode: 0o600 });
+    writeFileSync(path.join(b.env['HOME'] as string, '.config', 'nwfl-linkcheck', 'items.conf'), `${CONF}LINKCHECK_BAO_TOKEN_FILE=${own}/cron.token\n`);
+    const run = runOnce(b);
+    expect(run).toEqual({ status: 0, stdout: '', stderr: '' });
+    expect(baoEnv(b)).toHaveLength(5);
+    for (const line of baoEnv(b)) expect(line).toMatch(new RegExp(` BAO_TOKEN=${CRON_TOKEN} `));
+  });
+
+  it('reads a token file whose line has no newline', () => {
+    const b = box({ token: CRON_TOKEN });
+    expect(runOnce(b)).toEqual({ status: 0, stdout: '', stderr: '' });
+    expect(baoCalls(b)).toHaveLength(5);
+  });
+
+  it("never uses another login's token from the environment or the token helper's file, and hands docker none", () => {
+    const b = box();
+    const helper = path.join(b.dir, 'other-token');
+    writeFileSync(helper, OTHER_TOKEN);
+    writeFileSync(path.join(b.env['HOME'] as string, '.vault-token'), OTHER_TOKEN);
+    b.env['BAO_TOKEN'] = OTHER_TOKEN;
+    b.env['BAO_TOKEN_PATH'] = helper;
+    b.env['VAULT_TOKEN'] = OTHER_TOKEN;
+    const run = runOnce(b);
+    expect(run).toEqual({ status: 0, stdout: '', stderr: '' });
+    expect(baoEnv(b)).toEqual(['status', 'token', 'kv', 'kv', 'kv'].map((c) => `${c} BAO_TOKEN=${CRON_TOKEN} BAO_TOKEN_PATH=(unset) VAULT_TOKEN=(unset)`));
+    const env = read(path.join(b.dir, 'docker.env'));
+    expect(env).not.toMatch(/BAO_TOKEN|VAULT_TOKEN/);
+    for (const token of [CRON_TOKEN, OTHER_TOKEN]) expect(everythingWritten(b, run)).not.toContain(token);
+  });
+
+  it("ends the run, and does not fall back on another login's token, when there is no token file", () => {
+    const b = box({ token: null });
+    writeFileSync(path.join(b.env['HOME'] as string, '.vault-token'), OTHER_TOKEN);
+    b.env['BAO_TOKEN'] = OTHER_TOKEN;
+    b.env['VAULT_TOKEN'] = OTHER_TOKEN;
+    const run = runOnce(b);
+    refusedForToken(b, run, REMINT);
+    expect(baoCalls(b)).toEqual([]);
+    expect(everythingWritten(b, run)).not.toContain(OTHER_TOKEN);
+  });
+
+  it('shows the token nowhere: not on stdout or stderr, in the log, or in any argument', () => {
+    const b = box();
+    const run = runOnce(b);
+    expect(run.status).toBe(0);
+    expect(everythingWritten(b, run)).not.toContain(CRON_TOKEN);
+    expect(read(path.join(b.dir, 'docker.env'))).not.toContain(CRON_TOKEN);
+  });
+
+  it.each([
+    ['there is no token file', null],
+    ['the token file is empty', ''],
+    ['the token file holds only an empty line', '\n'],
+  ])('ends the run with the re-mint step when %s, before it asks OpenBao for anything', (_, token) => {
+    const b = box({ token });
+    const run = runOnce(b);
+    refusedForToken(b, run, REMINT);
+    expect(baoCalls(b)).toEqual([]);
+  });
+
+  it.each([
+    ['OpenBao refuses the renewal (expired or revoked: 403)', { 'bao-renew': '2' }, `${CRON_TOKEN}\n`],
+    ['the renewal fails for a reason of its own', { 'bao-renew': '1' }, `${CRON_TOKEN}\n`],
+    ['the token is not one OpenBao knows', {}, 'made-up-revoked-token\n'],
+  ])('ends the run with the re-mint step when %s, after asking OpenBao its status and before reading the secret', (_, ctl, token) => {
+    const b = box({ ctl: { 'docker-out': `${COUNTS}\n`, ...ctl }, token });
+    const run = runOnce(b);
+    refusedForToken(b, run, REMINT);
+    expect(baoCalls(b)).toEqual(['status', 'token renew']);
+    expect(everythingWritten(b, run)).not.toContain('made-up-revoked-token');
+  });
+
+  it.each([
+    ['readable by its group', 0o640],
+    ['readable by anyone', 0o644],
+    ['writable by anyone', 0o602],
+    ['read-only (0400)', 0o400],
+    ['runnable (0700)', 0o700],
+  ])('ends the run when the token file is %s: its mode must be exactly 0600', (_, fileMode) => {
+    const b = box();
+    chmodSync(tokenFile(b), fileMode);
+    const run = runOnce(b);
+    refusedForToken(b, run, `${tokenFile(b)} must be readable and writable by you alone (chmod 600)`);
+    expect(baoCalls(b)).toEqual([]);
+  });
+
+  it.each([
+    ['a link to a 0600 file of yours', (file: string, b: Box) => { writeFileSync(path.join(b.dir, 'linked.token'), CRON_TOKEN, { mode: 0o600 }); symlinkSync(path.join(b.dir, 'linked.token'), file); }],
+    ['a link to nothing', (file: string, b: Box) => symlinkSync(path.join(b.dir, 'nothing-here'), file)],
+    ['a folder', (file: string) => mkdirSync(file, { mode: 0o700 })],
+    ['a pipe (which would wait for ever to be opened)', (file: string) => expect(spawnSync('mkfifo', ['-m', '600', file]).status).toBe(0)],
+  ] as const)('ends the run when the token file is %s', (_, make) => {
+    const b = box({ token: null });
+    make(tokenFile(b), b);
+    const run = runOnce(b);
+    refusedForToken(b, run, `${tokenFile(b)} must be a plain file: not a link, a folder or a pipe`);
+    expect(baoCalls(b)).toEqual([]);
+  });
+
+  it('ends the run when the token file belongs to another user', () => {
+    // /etc/passwd is root's, in a folder only root may write: the owner is the rule it breaks first.
+    const b = box({ token: null, conf: `${CONF}LINKCHECK_BAO_TOKEN_FILE=/etc/passwd\n` });
+    const run = runOnce(b);
+    refusedForToken(b, run, '/etc/passwd must be a file of yours');
+    expect(baoCalls(b)).toEqual([]);
+  });
+
+  it.each([
+    ['its group', 0o770],
+    ['anyone', 0o707],
+  ])("ends the run when the token file's folder can be written by %s", (_, folderMode) => {
+    const b = box({ token: null });
+    const folder = path.join(b.dir, 'tokens');
+    mkdirSync(folder);
+    writeFileSync(path.join(folder, 'cron.token'), `${CRON_TOKEN}\n`, { mode: 0o600 });
+    chmodSync(folder, folderMode);
+    writeFileSync(path.join(b.env['HOME'] as string, '.config', 'nwfl-linkcheck', 'items.conf'), `${CONF}LINKCHECK_BAO_TOKEN_FILE=${folder}/cron.token\n`);
+    const run = runOnce(b);
+    refusedForToken(b, run, `the folder of ${folder}/cron.token must be writable by you alone (chmod go-w)`);
+    expect(baoCalls(b)).toEqual([]);
+  });
+
+  it('ends the run when the settings name a token file by a path that is not a full one', () => {
+    const b = box({ conf: `${CONF}LINKCHECK_BAO_TOKEN_FILE=.config/nwfl-linkcheck/bao.token\n` });
+    const run = runOnce(b);
+    refusedForToken(b, run, `LINKCHECK_BAO_TOKEN_FILE in ${b.env['HOME'] as string}/.config/nwfl-linkcheck/items.conf must be a full path (starting with /)`);
+    expect(baoCalls(b)).toEqual([]);
   });
 });

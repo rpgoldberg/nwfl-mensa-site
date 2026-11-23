@@ -70,13 +70,22 @@ LINKCHECK_API_URL=https://... LINKCHECK_TOKEN_URL=https://... LINKCHECK_PASSWORD
 ```
 
 `scripts/items-cron.sh` is the wrapper a crontab calls on the officer's machine. It takes no arguments. It
-reads `LINKCHECK_IMAGE` (by digest), `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL` and optionally `LINKCHECK_SCOPE`
-and `BAO_ADDR` from `~/.config/nwfl-linkcheck/items.conf`, one `NAME=value` per line. The file must be a plain
-file (not a link) of plain ASCII text with Unix line endings, and neither it nor its folder may be writable by
+reads `LINKCHECK_IMAGE` (by digest), `LINKCHECK_API_URL`, `LINKCHECK_TOKEN_URL` and optionally `LINKCHECK_SCOPE`,
+`BAO_ADDR` and `LINKCHECK_BAO_TOKEN_FILE` from `~/.config/nwfl-linkcheck/items.conf`, one `NAME=value` per
+line. The file must be a plain file (not a link) of plain ASCII text with Unix line endings, and neither it nor its folder may be writable by
 group or others: whoever can write it chooses the image that is handed the password. It lets one run go at a
-time (flock). It reads `client_id`, `username` and `password` at `secret/nwfl-mensa/linkcheck/client` with the
-OpenBao CLI, writes the password to a 0600 file in a fresh 0700 folder, and runs `linkcheck.sh items`; a run
-over 20 minutes is stopped. docker writes the container's id into that folder (`--cidfile`), and as the wrapper
+time (flock). OpenBao is asked with the cron's own token only: a periodic (72 h), renewable token that can read
+that one secret, kept in `LINKCHECK_BAO_TOKEN_FILE` (by its full path; by default
+`~/.config/nwfl-linkcheck/bao.token`). That file must be a plain file (not a link, a folder or a pipe) of yours,
+mode exactly 0600, in a folder that neither group nor others may write; otherwise the run ends with exit 1 and
+the rule it breaks. The shell reads the token itself and gives it to each `bao` call in that call's environment
+(`BAO_TOKEN`) only: never as an argument, never to docker, never printed. A `BAO_TOKEN`, `BAO_TOKEN_PATH` or
+`VAULT_TOKEN` the run inherits is dropped first, and `~/.vault-token` is not read, so a token of another login
+is never used. After `bao status`, every run renews the token (`bao token renew`, the renew-self endpoint);
+when the file is missing or empty, or the renewal fails, the run ends with exit 1 and `the cron token is gone
+or expired: re-mint: tenants/nwfl/APPLY.md step 35j (LINKCRON-TOKEN)`. It then reads `client_id`, `username`
+and `password` at `secret/nwfl-mensa/linkcheck/client` with the OpenBao CLI, writes the password to a 0600
+file in a fresh 0700 folder, and runs `linkcheck.sh items`; a run over 20 minutes is stopped. docker writes the container's id into that folder (`--cidfile`), and as the wrapper
 ends it removes the container by that id (`docker rm -f`, ten seconds at most), so a container that ignored the
 stop does not outlive the run or meet the next one; if docker cannot remove it, a `note:` line says so. The
 password file is removed as soon as the container has ended, and the folder on every exit; a folder that a
@@ -90,7 +99,8 @@ run failed; 2 OpenBao is unreachable or sealed (and nothing else); 3 another run
 
 Limits of the wrapper, known and left as they are:
 
-- It checks the modes of its settings, lock and log, not who owns them. A file or folder that another user
+- It checks the modes of its settings, lock and log, not who owns them (it does check the owner of the token
+  file, though not of the token file's folder). A file or folder that another user
   owns, or a `~/.config` that others can write, is not noticed; placing one takes root or the officer's own
   write access.
 - An exit of 137 is read by the clock: under 20 minutes it is logged as out of memory, at 20 minutes or more
