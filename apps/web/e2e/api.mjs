@@ -660,7 +660,7 @@ const CHAPTER = 'Northwest Florida Mensa';
 const RECHECK_OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000fb';
 const GUEST_OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000fc';
 const WAITING_OFFICERS = new Set([UNVERIFIED_OFFICER_SUBJECT, RECHECK_OFFICER_SUBJECT, GUEST_OFFICER_SUBJECT]);
-/** Their profiles, as approved. */
+/** @type {Record<string, { firstName: string, lastName: string, membershipNumber: string, localGroup: string }>} their profiles, as approved */
 const WAITING_PROFILES = {
   [RECHECK_OFFICER_SUBJECT]: { firstName: 'Robbie', lastName: 'Placeholder', membershipNumber: '000033011', localGroup: CHAPTER },
   [GUEST_OFFICER_SUBJECT]: { firstName: 'Gale', lastName: 'Placeholder', membershipNumber: '000033012', localGroup: 'Boston Mensa' },
