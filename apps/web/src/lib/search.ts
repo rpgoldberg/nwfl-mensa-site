@@ -11,7 +11,8 @@
 //   its page with the words in the fragment, which no server is sent; the PDF itself is linked beside it.
 // - Each visitor may search 20 times a minute (the API's own bucket is one for everyone, and the site is
 //   its only caller). The visitor is the address Cloudflare, the site's edge, names in CF-Connecting-IP;
-//   it is held in memory for the count alone, and never written anywhere.
+//   it is held in memory for the count alone, and never written anywhere. A request without one address
+//   there did not come through the edge, and every such request shares one bucket: none goes uncounted.
 //
 // Nothing here writes a log line: the visitor's words reach no log of the site's.
 import { isIP } from 'node:net';
@@ -149,32 +150,44 @@ export function hitView(hit: SearchHit, query: string): HitView | undefined {
 /** The request header in which the site's edge (Cloudflare) names the visitor's address. */
 export const VISITOR_HEADER = 'cf-connecting-ip';
 
-/** The first four parts of an IPv6 address (its /64), each in lower case with no leading zeros. */
-function prefix64(address: string): string {
+/** The visitor every request is counted against that does not name one address in the edge's header. */
+export const UNNAMED_VISITOR = 'unnamed';
+
+/** The eight parts of an IPv6 address node has checked, as numbers; a dotted IPv4 ending is its last two. */
+function parts(address: string): number[] {
   const [head = '', tail] = address.split('::');
-  const partsOf = (text: string) => (text === '' ? [] : text.split(':'));
+  const partsOf = (text: string) =>
+    (text === '' ? [] : text.split(':')).flatMap((part) => {
+      if (!part.includes('.')) return [parseInt(part, 16)];
+      const [a = 0, b = 0, c = 0, d = 0] = part.split('.').map(Number);
+      return [a * 256 + b, c * 256 + d];
+    });
   const before = partsOf(head);
   const after = tail === undefined ? [] : partsOf(tail);
-  // A dotted IPv4 ending stands for two parts; this far from the front it is only ever counted, never read.
-  const afterCount = after.length + (after.some((part) => part.includes('.')) ? 1 : 0);
-  const zeros = tail === undefined ? 0 : 8 - before.length - afterCount;
-  return [...before, ...Array<string>(zeros).fill('0'), ...after]
+  return [...before, ...Array<number>(8 - before.length - after.length).fill(0), ...after];
+}
+
+/** An IPv6 visitor: an IPv4-mapped address (::ffff:a.b.c.d) as its IPv4 address, any other by its /64. */
+function ipv6Key(address: string): string {
+  const p = parts(address);
+  if (p.slice(0, 5).every((part) => part === 0) && p[5] === 0xffff) return [p[6]! >> 8, p[6]! & 255, p[7]! >> 8, p[7]! & 255].join('.');
+  return p
     .slice(0, 4)
-    .map((part) => parseInt(part, 16).toString(16))
+    .map((part) => part.toString(16))
     .join(':');
 }
 
 /**
  * Who a search is counted against: the one address in the edge's header, an IPv6 address by its /64.
- * None when the header is missing or is not one address (a request that did not come through the edge):
- * such a search is not counted, and the API's own limit still holds.
+ * When the header is missing or is not one address (a request that did not come through the edge), the
+ * one unnamed visitor: all such searches share a bucket, so none is uncounted (fail closed).
  */
-export function visitorKey(headers: Headers): string | undefined {
-  const value = headers.get(VISITOR_HEADER)?.trim();
-  if (value === undefined) return undefined;
+export function visitorKey(headers: Headers): string {
+  const value = headers.get(VISITOR_HEADER)?.trim() ?? '';
   const version = isIP(value);
   if (version === 4) return value;
-  return version === 6 ? prefix64(value.toLowerCase()) : undefined;
+  // node takes a zone (fe80::1%eth0), which no address from the edge has.
+  return version === 6 && !value.includes('%') ? ipv6Key(value) : UNNAMED_VISITOR;
 }
 
 /** 20 searches at once, and one more every three seconds: 20 a minute. */
@@ -185,8 +198,8 @@ const FULL = VISITOR_BURST * REFILL_MS;
 const MAX_VISITORS = 10_000;
 
 export interface VisitorLimit {
-  /** Count one search against the visitor at `now` (ms); no visitor is never refused. `retryAfter`: whole seconds. */
-  take(visitor: string | undefined, now: number): { ok: true } | { ok: false; retryAfter: number };
+  /** Count one search against the visitor at `now` (ms). `retryAfter`: whole seconds. */
+  take(visitor: string, now: number): { ok: true } | { ok: false; retryAfter: number };
   size(): number;
 }
 
@@ -200,7 +213,6 @@ export function visitorLimit({ maxVisitors = MAX_VISITORS }: { maxVisitors?: num
   };
   return {
     take(visitor, now) {
-      if (visitor === undefined) return { ok: true };
       let bucket = buckets.get(visitor);
       if (bucket === undefined) {
         if (buckets.size >= maxVisitors) makeRoom(now);
@@ -245,6 +257,8 @@ export interface SearchView {
   /** The state in plain words. */
   message?: string;
   hits: HitView[];
+  /** Set when a sign-in has lapsed and a search was made: only the public copies were searched (LAPSED_NOTE). */
+  lapsed?: true;
   /** The number the first hit carries in the list. */
   start?: number;
   previous?: string;
@@ -261,6 +275,23 @@ const REFUSALS = {
 /** How long a visitor is asked to wait when the API is at its limit. */
 const BUSY_RETRY_SECONDS = 10;
 
+/**
+ * What a reader whose sign-in has lapsed is told above what a search found: the search went as the
+ * public's (src/data/live.ts sends no token that has run out). The page puts "Sign in again" between.
+ */
+export const LAPSED_NOTE = Object.freeze({ lead: 'Your sign-in has expired, so only the public copies were searched.', rest: "to search the members' copies too." });
+
+/**
+ * The heading and words for a page with no result to show. `found`: the API sent hits, none of which can
+ * be opened here (a kind no page lists); `more`: a Next link follows. Never "nothing matches" above Next.
+ */
+function noneWords(page: number, found: boolean, more: boolean): [string, string] {
+  if (found && more) return ['No results to show on this page', 'The results on this page cannot be opened from this site. There are more on the next page.'];
+  if (page > 1) return ['No more results', 'There are no more results.'];
+  if (found) return ['No results', 'None of the results can be opened from this site. Try fewer or different words.'];
+  return ['No results', 'Nothing in the archive matches those words. Check the spelling, or try fewer or different words.'];
+}
+
 const pageHref = (query: string, page: number) => `/search?${new URLSearchParams(page === 1 ? { q: query } : { q: query, page: String(page) }).toString()}`;
 
 export interface SearchRequest {
@@ -269,14 +300,17 @@ export interface SearchRequest {
   params: URLSearchParams;
   /** The signed-in reader whose token goes with the search, if any (src/lib/auth/bearer.ts). The API decides the audience. */
   reader: Reader | undefined;
-  visitor: string | undefined;
+  /** Whether the reader's sign-in has lapsed (readerFor in src/lib/auth/bearer.ts): the search then goes as the public's. */
+  lapsed: boolean;
+  /** visitorKey's answer. */
+  visitor: string;
   limit: VisitorLimit;
   /** Milliseconds. */
   now: number;
 }
 
 /** What /search shows for one request. A failure that is not the API being unavailable is a bug, and is thrown. */
-export async function searchView({ live, params, reader, visitor, limit, now }: SearchRequest): Promise<SearchView> {
+export async function searchView({ live, params, reader, lapsed, visitor, limit, now }: SearchRequest): Promise<SearchView> {
   const query = readQuery(params.get('q'));
   if (query.kind === 'none') return { state: 'blank', status: 200, query: '', title: 'Search', hits: [] };
   const refuse = (kind: keyof typeof REFUSALS, echo: string): SearchView => ({ state: kind, status: 400, query: echo, ...REFUSALS[kind], hits: [] });
@@ -318,14 +352,15 @@ export async function searchView({ live, params, reader, visitor, limit, now }: 
   }
 
   const hits = read.hits.flatMap((hit) => hitView(hit, q) ?? []);
+  const next = read.hasMore && page < MAX_PAGE ? pageHref(q, page + 1) : undefined;
   const paging = {
     ...(page > 1 ? { previous: pageHref(q, page - 1) } : {}),
-    ...(read.hasMore && page < MAX_PAGE ? { next: pageHref(q, page + 1) } : {}),
+    ...(next === undefined ? {} : { next }),
   };
+  const note = lapsed ? { lapsed: true as const } : {};
   if (hits.length === 0) {
-    const heading = page > 1 ? 'No more results' : 'No results';
-    const message = page > 1 ? 'There are no more results.' : 'Nothing in the archive matches those words. Check the spelling, or try fewer or different words.';
-    return { state: 'none', status: 200, query: q, title: `Search: ${heading.toLowerCase()} for ${q}`, heading, message, hits, ...paging };
+    const [heading, message] = noneWords(page, read.hits.length > 0, next !== undefined);
+    return { state: 'none', status: 200, query: q, title: `Search: ${heading.toLowerCase()} for ${q}`, heading, message, ...note, hits, ...paging };
   }
   const start = (page - 1) * PAGE_SIZE + 1;
   const whole = page === 1 && !read.hasMore;
@@ -336,6 +371,7 @@ export async function searchView({ live, params, reader, visitor, limit, now }: 
     query: q,
     title: `Search: ${whole ? heading : heading.toLowerCase()} for ${q}`,
     heading,
+    ...note,
     ...(read.hasMore && page === MAX_PAGE ? { message: `Only the first ${PAGE_SIZE * MAX_PAGE} results are shown. Add a word to narrow the search.` } : {}),
     hits,
     start,

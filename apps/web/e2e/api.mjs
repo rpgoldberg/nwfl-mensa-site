@@ -808,6 +808,7 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
   // cookie). Made-up answers by the words asked for, so each state of /search can be reached:
   //   "zebra"    nothing matches;        "busy"     at its limit;        "offline"  it cannot answer;
   //   "many"     25 hits, ten a page;    "endless"  more on every page;  "unplain"  refused as a query;
+  //   "unlinkable" a first page of hits no page of the site lists, then two it can;
   //   anything else: a page of the newest issue (the members copy for a member or an officer), a long
   //   label, a snippet full of markup that must show as text, and an article on /news.
   router.service(SearchService, {
@@ -822,6 +823,11 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       if (q.includes('offline')) throw new ConnectError('cannot answer', Code.Unavailable);
       if (q.includes('unplain')) throw new ConnectError('a search is plain words', Code.InvalidArgument);
       if (!issues || q.includes('zebra')) return { hits: [], hasMore: false };
+      // A first page of hits of a kind no page of the site lists (PAGE), with more after it.
+      if (q.includes('unlinkable')) {
+        if (page === 1) return { hits: Array.from({ length: 10 }, (_, i) => ({ hit: { case: /** @type {const} */ ('newsItem'), value: { slug: `page-${i}`, title: 'A page', snippet: found('Page text:'), kind: ContentKind.PAGE } } })), hasMore: true };
+        return { hits: [issuePage(LONG_ID, 'Pensa Mensa, June-July 2026', 3, found('After them:')), issuePage(LONG_ID, 'Pensa Mensa, June-July 2026', 4, found('And:'))], hasMore: false };
+      }
       if (q.includes('many') || q.includes('endless')) {
         const total = q.includes('endless') ? 1000 : 25;
         const first = (page - 1) * 10;

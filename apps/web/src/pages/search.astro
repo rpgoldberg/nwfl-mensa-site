@@ -13,26 +13,36 @@
 //
 // The words searched for are in the request's own query and nowhere else the site writes: no log line
 // (the site logs paths, never queries), no cookie, and in a result's link only after the #, which no
-// server is sent. The answer is the visitor's alone: private, never stored, never indexed.
+// server is sent. The answer is the visitor's alone: private, never stored, never indexed. And no page
+// opened from it is told where the reader came from (Referrer-Policy: no-referrer), so the words never
+// ride on to the next page in a Referer header, on this site or any other.
+//
+// A reader whose sign-in has lapsed is searched for as the public, and told so, with a way to sign in
+// again back to /search alone: the way back never holds the words.
+import { PUBLIC_ONLY } from 'astro:env/server';
+import PasswordNote from '../components/PasswordNote.astro';
 import Base from '../layouts/Base.astro';
 import { liveData } from '../data';
-import { readerFor } from '../lib/auth/bearer';
+import { readerFor, signInLink } from '../lib/auth/bearer';
 import { runtimeDeps } from '../lib/auth/flow';
-import { searchView, siteVisitorLimit, visitorKey } from '../lib/search';
+import { LAPSED_NOTE, searchView, siteVisitorLimit, visitorKey } from '../lib/search';
 import { page } from '../lib/site';
 
 export const prerender = false;
 
 const p = page('/search');
 const auth = runtimeDeps();
-const { reader } = readerFor(Astro.locals.session, auth);
-const view = await searchView({ live: liveData(), params: Astro.url.searchParams, reader, visitor: visitorKey(Astro.request.headers), limit: siteVisitorLimit(), now: Date.now() });
+const { reader, lapsed } = readerFor(Astro.locals.session, auth);
+const view = await searchView({ live: liveData(), params: Astro.url.searchParams, reader, lapsed, visitor: visitorKey(Astro.request.headers), limit: siteVisitorLimit(), now: Date.now() });
 
 Astro.response.status = view.status;
 if (view.retryAfter !== undefined) Astro.response.headers.set('Retry-After', String(view.retryAfter));
 // The site policy turns a handler's private into private, no-store (server/policy.mjs).
 Astro.response.headers.set('Cache-Control', 'private');
 Astro.response.headers.set('X-Robots-Tag', 'noindex');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+// Back to /search alone: never the words, which would then ride in the sign-in's return path.
+const signIn = view.lapsed ? signInLink(auth, PUBLIC_ONLY, '/search') : undefined;
 const listed = view.state === 'results' || view.state === 'none';
 const note = !listed && view.message !== undefined;
 ---
@@ -45,6 +55,8 @@ const note = !listed && view.message !== undefined;
     <button type="submit">Search</button>
   </form>
   {note && <p class="notice" id="search-note">{view.message}</p>}
+  {view.lapsed && <p class="notice" role="note">{LAPSED_NOTE.lead} {signIn ? <a href={signIn}>Sign in again</a> : 'Sign in again'} {LAPSED_NOTE.rest}</p>}
+  {signIn && <PasswordNote />}
   {listed && (
     <section class="search-results" aria-labelledby="results-title">
       <h2 id="results-title">{view.heading}</h2>

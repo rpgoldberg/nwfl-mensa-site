@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ContentKind } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { type SearchHit, SearchHitSchema } from '../gen/nwfl/mensa/v1/search_pb.js';
 import { ApiUnavailable, type Reader, type SearchRead } from './api/client';
-import { VISITOR_BURST, VISITOR_HEADER, hitView, readPage, readQuery, searchView, snippetHtml, visitorKey, visitorLimit } from './search';
+import { LAPSED_NOTE, UNNAMED_VISITOR, VISITOR_BURST, VISITOR_HEADER, hitView, readPage, readQuery, searchView, snippetHtml, visitorKey, visitorLimit } from './search';
 
 const FILE = 'f0000000-0000-4000-8000-000000000010';
 const START = '';
@@ -153,15 +153,30 @@ describe('hitView', () => {
 describe('visitorKey', () => {
   const key = (value?: string) => visitorKey(new Headers(value === undefined ? {} : { [VISITOR_HEADER]: value }));
 
-  it("is the address the edge names (Cloudflare's CF-Connecting-IP), and nothing without it", () => {
+  it("is the address the edge names (Cloudflare's CF-Connecting-IP)", () => {
     expect(VISITOR_HEADER).toBe('cf-connecting-ip');
     expect(key('203.0.113.9')).toBe('203.0.113.9');
     expect(key(' 203.0.113.9 ')).toBe('203.0.113.9');
-    expect(key()).toBeUndefined();
   });
 
-  it('is nothing for a value that is not one address', () => {
-    for (const value of ['', 'unknown', '203.0.113.9, 198.51.100.1', '999.1.1.1', '<script>']) expect(key(value), value).toBeUndefined();
+  it('is the one shared unnamed visitor with no header, or one that is not one address: such requests are counted together, never skipped', () => {
+    expect(UNNAMED_VISITOR).toBe('unnamed');
+    expect(key()).toBe(UNNAMED_VISITOR);
+    for (const value of ['', ' ', 'unknown', '203.0.113.9, 198.51.100.1', '203.0.113.9,203.0.113.9', '999.1.1.1', '<script>', 'fe80::1%eth0']) expect(key(value), value).toBe(UNNAMED_VISITOR);
+    const twice = new Headers();
+    twice.append(VISITOR_HEADER, '203.0.113.9');
+    twice.append(VISITOR_HEADER, '198.51.100.1');
+    expect(visitorKey(twice)).toBe(UNNAMED_VISITOR);
+  });
+
+  it('is an IPv4-mapped IPv6 address as its IPv4 address, so mapped visitors never share one bucket', () => {
+    expect(key('::ffff:203.0.113.9')).toBe('203.0.113.9');
+    expect(key('::FFFF:198.51.100.1')).toBe('198.51.100.1');
+    expect(key('0:0:0:0:0:ffff:cb00:7109')).toBe('203.0.113.9');
+    expect(key('::ffff:cb00:7109')).toBe('203.0.113.9');
+    // Not mapped: an ordinary IPv6 address whose fifth or sixth part differs is keyed by its /64.
+    expect(key('::fffe:203.0.113.9')).toBe('0:0:0:0');
+    expect(key('0:0:0:1:0:ffff:cb00:7109')).toBe('0:0:0:1');
   });
 
   it("is an IPv6 visitor's /64, so one household's addresses share a bucket", () => {
@@ -187,12 +202,14 @@ describe('visitorLimit', () => {
     expect(limit.take('203.0.113.9', 600_000).ok).toBe(false);
   });
 
-  it('keeps each visitor to their own bucket, and never limits a request with no visitor named', () => {
+  it('keeps each visitor to their own bucket, and holds every unnamed request to one shared bucket (fail closed)', () => {
     const limit = visitorLimit();
     for (let i = 0; i < 20; i++) limit.take('203.0.113.9', 0);
     expect(limit.take('203.0.113.9', 0).ok).toBe(false);
     expect(limit.take('198.51.100.1', 0)).toEqual({ ok: true });
-    for (let i = 0; i < 50; i++) expect(limit.take(undefined, 0)).toEqual({ ok: true });
+    for (let i = 0; i < 20; i++) expect(limit.take(UNNAMED_VISITOR, 0), String(i)).toEqual({ ok: true });
+    expect(limit.take(UNNAMED_VISITOR, 0)).toEqual({ ok: false, retryAfter: 3 });
+    expect(limit.take('192.0.2.1', 0)).toEqual({ ok: true });
   });
 
   it('is not fooled by a clock that goes backwards', () => {
@@ -231,7 +248,7 @@ describe('searchView', () => {
     return { live, asked };
   };
   const hits = (n: number) => Array.from({ length: n }, (_, i) => issue({ page: i + 1 }));
-  const view = (live: Live, query: string, over: Partial<Parameters<typeof searchView>[0]> = {}) => searchView({ live, params: params(query), reader: undefined, visitor: undefined, limit: visitorLimit(), now: 0, ...over });
+  const view = (live: Live, query: string, over: Partial<Parameters<typeof searchView>[0]> = {}) => searchView({ live, params: params(query), reader: undefined, lapsed: false, visitor: UNNAMED_VISITOR, limit: visitorLimit(), now: 0, ...over });
 
   it('with no query, shows the form alone and asks nothing', async () => {
     const { live, asked } = answer({ kind: 'ok', hits: [], hasMore: false });
@@ -314,6 +331,45 @@ describe('searchView', () => {
     const got = await view(answer({ kind: 'ok', hits: [issue(), issue({ fileId: 'nope' }), news({ kind: ContentKind.PAGE })], hasMore: false }).live, 'q=picnic');
     expect(got).toMatchObject({ state: 'results', heading: '1 result' });
     expect(await view(answer({ kind: 'ok', hits: [issue({ fileId: 'nope' })], hasMore: false }).live, 'q=picnic')).toMatchObject({ state: 'none', heading: 'No results' });
+  });
+
+  it('never says nothing matches above a Next link: a page whose every hit cannot be opened here says so, and Next stays', async () => {
+    const unlinkable = Array.from({ length: 10 }, () => news({ kind: ContentKind.PAGE }));
+    const first = await view(answer({ kind: 'ok', hits: unlinkable, hasMore: true }).live, 'q=picnic');
+    expect(first).toEqual({
+      state: 'none',
+      status: 200,
+      query: 'picnic',
+      title: 'Search: no results to show on this page for picnic',
+      heading: 'No results to show on this page',
+      message: 'The results on this page cannot be opened from this site. There are more on the next page.',
+      hits: [],
+      next: '/search?q=picnic&page=2',
+    });
+    const later = await view(answer({ kind: 'ok', hits: unlinkable, hasMore: true }).live, 'q=picnic&page=3');
+    expect(later).toMatchObject({ heading: 'No results to show on this page', previous: '/search?q=picnic&page=2', next: '/search?q=picnic&page=4' });
+    // With nothing after them, a first page of them says plainly that none can be opened; a later page, that there are no more.
+    expect(await view(answer({ kind: 'ok', hits: unlinkable, hasMore: false }).live, 'q=picnic')).toMatchObject({
+      heading: 'No results',
+      message: 'None of the results can be opened from this site. Try fewer or different words.',
+    });
+    expect(await view(answer({ kind: 'ok', hits: unlinkable, hasMore: false }).live, 'q=picnic&page=2')).toMatchObject({ heading: 'No more results', message: 'There are no more results.' });
+    // And at the tenth page, no Next: the plain words for the end.
+    const tenth = await view(answer({ kind: 'ok', hits: unlinkable, hasMore: true }).live, 'q=picnic&page=10');
+    expect(tenth.next).toBeUndefined();
+    expect(tenth).toMatchObject({ heading: 'No more results', message: 'There are no more results.' });
+  });
+
+  it("tells a reader whose sign-in has lapsed that only the public copies were searched, on results and on none; never anyone else", async () => {
+    expect(LAPSED_NOTE).toEqual({ lead: 'Your sign-in has expired, so only the public copies were searched.', rest: "to search the members' copies too." });
+    const found = await view(answer({ kind: 'ok', hits: [issue()], hasMore: false }).live, 'q=picnic', { lapsed: true });
+    expect(found).toMatchObject({ state: 'results', lapsed: true });
+    expect(await view(answer({ kind: 'ok', hits: [], hasMore: false }).live, 'q=zebra', { lapsed: true })).toMatchObject({ state: 'none', lapsed: true });
+    expect((await view(answer({ kind: 'ok', hits: [issue()], hasMore: false }).live, 'q=picnic')).lapsed).toBeUndefined();
+    // Nothing was searched for the form alone, a refused query, busy or down: no word about copies there.
+    expect((await view(answer({ kind: 'ok', hits: [], hasMore: false }).live, '', { lapsed: true })).lapsed).toBeUndefined();
+    expect((await view(answer({ kind: 'ok', hits: [], hasMore: false }).live, 'q=a', { lapsed: true })).lapsed).toBeUndefined();
+    expect((await view(answer({ kind: 'busy' }).live, 'q=picnic', { lapsed: true })).lapsed).toBeUndefined();
   });
 
   it('says busy, 503 with a time to come back, when the API is at its limit or ran out of time', async () => {

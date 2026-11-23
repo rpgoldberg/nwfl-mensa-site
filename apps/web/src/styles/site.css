@@ -643,15 +643,18 @@ main:focus:not(:focus-visible) { outline: none; }
    whole row at least a full target tall, then a few lines of the text with the words found marked. */
 .search-form + .notice { margin-top: var(--space-4); }
 .search-results { margin-top: var(--space-5); }
-.hits { margin: 0; padding: 0; list-style-position: inside; display: grid; gap: var(--space-3); }
+.hits { margin: 0; padding: 0; list-style-position: inside; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+/* Words wrap between words; only a single word wider than the whole card is broken, as a last resort. */
 .hit {
   padding: var(--space-2) var(--space-3);
   border: var(--border) solid var(--line-soft); border-radius: var(--radius); background: var(--surface);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
-/* The number sits on the link's row: the link is the rest of that row, so the marker never takes a row alone. */
+/* The number sits on the link's row when the whole title fits beside it; a longer title takes the full
+   width of the card on the row below, so it is never squeezed into a narrow column beside the number
+   (at 320 px and the largest text that broke words: "newslette / r"). */
 .hit::marker { font-weight: 700; }
-.hit__link { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; vertical-align: middle; max-width: calc(100% - 3ch); }
+.hit__link { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; vertical-align: middle; max-width: 100%; }
 .hit__meta, .hit__snippet { margin: 0; }
 .hit__snippet { margin-bottom: var(--space-1); }
 /* A word found: bold on the theme's highlight, so it is told apart without colour too. */

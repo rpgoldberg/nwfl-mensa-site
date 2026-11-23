@@ -9,6 +9,8 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ContentKind, ContentService, ItemVisibility } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { SearchService } from '../../src/gen/nwfl/mensa/v1/search_pb.js';
+import { PASSWORD_NOTE } from '../../src/lib/auth/password-note';
+import { LAPSED_NOTE } from '../../src/lib/search';
 import News from '../../src/pages/news.astro';
 import Search from '../../src/pages/search.astro';
 
@@ -18,6 +20,21 @@ const STOP = '';
 const issue = (page: number, snippet = `the ${START}picnic${STOP} is on`) => ({ hit: { case: 'issuePage' as const, value: { fileId: FILE, issueLabel: 'Pensa Mensa, March 2019', page, snippet } } });
 const article = { hit: { case: 'newsItem' as const, value: { slug: 'spring-picnic', title: 'Spring <picnic> & more', snippet: `a ${START}picnic${STOP}`, kind: ContentKind.ARTICLE, publishedOn: { year: 2026, month: 3, day: 3 } } } };
 const HOSTILE = `<script>alert(1)</script><img src=x onerror=alert(2)> ${START}picnic${STOP} <mark>fake</mark>`;
+
+// A sign-in that has lapsed (src/lib/auth/bearer.ts readerFor) and sign-in set up, while `lapsed` is set; the real ones otherwise.
+const auth = vi.hoisted(() => ({ lapsed: false, backs: [] as string[] }));
+vi.mock('../../src/lib/auth/bearer', async (actual) => {
+  const real = await actual<typeof import('../../src/lib/auth/bearer')>();
+  return {
+    ...real,
+    readerFor: (...args: Parameters<typeof real.readerFor>) => (auth.lapsed ? { reader: undefined, lapsed: true } : real.readerFor(...args)),
+    signInLink: (...args: Parameters<typeof real.signInLink>) => {
+      if (!auth.lapsed) return real.signInLink(...args);
+      auth.backs.push(args[2]);
+      return `/sign-in?return=${encodeURIComponent(args[2])}&again=1`;
+    },
+  };
+});
 
 const asked: { query: string; page: number; authorization: string | null }[] = [];
 let close: () => Promise<void> = async () => {};
@@ -31,6 +48,7 @@ beforeAll(async () => {
         if (req.query === 'busy day') throw new ConnectError('at the limit', Code.ResourceExhausted);
         if (req.query === 'down day') throw new ConnectError('down', Code.Unavailable);
         if (req.query === 'zebra') return { hits: [], hasMore: false };
+        if (req.query === 'unlinkable') return { hits: Array.from({ length: 10 }, () => ({ hit: { case: 'newsItem' as const, value: { slug: 'about', title: 'About', snippet: '', kind: ContentKind.PAGE } } })), hasMore: true };
         if (req.query === 'hostile') return { hits: [issue(2, HOSTILE)], hasMore: false };
         if (req.query === 'many') return { hits: Array.from({ length: 10 }, (_, i) => issue(i + 1)), hasMore: true };
         return { hits: [issue(4), article], hasMore: false };
@@ -68,7 +86,10 @@ afterAll(async () => {
   await close();
 });
 
-const get = (query: string, headers: Record<string, string> = {}) => container.renderToResponse(Search, { request: new Request(`http://localhost/search${query}`, { headers }), locals: {} });
+// Each request from a visitor of its own (TEST-NET-2), unless a test names one: the site's limit is one bucket per visitor.
+let visitors = 0;
+const get = (query: string, headers: Record<string, string> = { 'cf-connecting-ip': `198.51.100.${++visitors % 250}` }) =>
+  container.renderToResponse(Search, { request: new Request(`http://localhost/search${query}`, { headers }), locals: {} });
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 const results = (html: string) => /<div[^>]*data-search-results[^>]*>([\s\S]*?)<\/div>\s*<nav|<div[^>]*data-search-results[^>]*>([\s\S]*?)<\/div>\s*<\/section>/.exec(html)?.slice(1).find((m) => m !== undefined) ?? '';
 
@@ -196,7 +217,52 @@ describe('/search', () => {
     expect(text(await res.text())).toContain('You have searched many times in a short while. Please wait a moment, then try again.');
     expect(asked).toHaveLength(before);
     expect((await get('?q=picnic', { 'cf-connecting-ip': '203.0.113.78' })).status).toBe(200);
-    expect((await get('?q=picnic')).status).toBe(200);
+  });
+
+  it('holds every request with no address, or a value that is not one address, to one shared bucket: never unlimited', async () => {
+    const unnamed = [{}, { 'cf-connecting-ip': 'unknown' }, { 'cf-connecting-ip': '203.0.113.1, 203.0.113.2' }];
+    const statuses: number[] = [];
+    for (let i = 0; i < 30; i++) statuses.push((await get('?q=picnic', unnamed[i % 3])).status);
+    expect(statuses.slice(0, 20)).toEqual(Array<number>(20).fill(200));
+    expect(statuses.slice(20)).toEqual(Array<number>(10).fill(429));
+    // A named visitor is not held up by them.
+    expect((await get('?q=picnic', { 'cf-connecting-ip': '203.0.113.79' })).status).toBe(200);
+  });
+
+  it('sends no Referer from the page in any state, so the words never ride to the next page, same site or not', async () => {
+    for (const query of ['', '?q=spring+picnic', '?q=zebra', '?q=a', '?q=busy+day', '?q=down+day']) {
+      const res = await get(query);
+      expect(res.headers.get('referrer-policy'), query).toBe('no-referrer');
+    }
+  });
+
+  it('tells a reader whose sign-in has lapsed that only the public copies were searched, with Sign in again back to /search alone', async () => {
+    auth.lapsed = true;
+    try {
+      const html = await (await get('?q=spring+picnic')).text();
+      const note = /<p class="notice" role="note">([^<]*)<a href="([^"]*)">Sign in again<\/a>([^<]*)<\/p>/.exec(html);
+      expect(note?.[2]).toBe('/sign-in?return=%2Fsearch&amp;again=1');
+      expect(text(note?.[0] ?? '').replace(/&#39;/g, "'").trim()).toBe(`${LAPSED_NOTE.lead} Sign in again ${LAPSED_NOTE.rest}`);
+      expect(text(html)).toContain(PASSWORD_NOTE.lead);
+      expect(auth.backs).toEqual(['/search']);
+      // The way back holds no words. (The header's own Sign in, on every page, returns to the page as it is.)
+      expect(html.match(/href="\/sign-in[^"]*again=1"/g)).toEqual(['href="/sign-in?return=%2Fsearch&amp;again=1"']);
+      expect(await (await get('?q=zebra')).text()).toContain(LAPSED_NOTE.lead);
+      // Nothing was searched for the form alone or a refused query: no word about copies.
+      expect(await (await get('')).text()).not.toContain(LAPSED_NOTE.lead);
+      expect(await (await get('?q=a')).text()).not.toContain(LAPSED_NOTE.lead);
+    } finally {
+      auth.lapsed = false;
+    }
+    expect(await (await get('?q=spring+picnic')).text()).not.toContain(LAPSED_NOTE.lead);
+  });
+
+  it('says what is true when no hit on the page can be opened here, and keeps Next', async () => {
+    const html = await (await get('?q=unlinkable')).text();
+    expect(html).toMatch(/<h2 id="results-title"[^>]*>No results to show on this page<\/h2>/);
+    expect(text(html)).toContain('The results on this page cannot be opened from this site. There are more on the next page.');
+    expect(text(html)).not.toContain('Nothing in the archive matches');
+    expect(html).toContain('<a class="button" href="/search?q=unlinkable&amp;page=2" rel="next">Next results</a>');
   });
 
   it('keeps the breadcrumb and the page heading plain: the query is in the title and the box only', async () => {

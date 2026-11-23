@@ -9,6 +9,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { SIZES } from '../server/prefs.mjs';
 import { THEMES, setPrefs } from './prefs';
+import { SIGN_IN_OFF_URL } from './servers';
 import { signIn } from './signin';
 import { NEWSLETTER } from './stand-in';
 
@@ -36,6 +37,40 @@ const results = (page: Page) => page.locator('[data-search-results]');
 const hits = (page: Page) => results(page).getByRole('listitem');
 const box = (page: Page) => page.getByRole('searchbox', { name: 'Search the newsletter archive' });
 const newest = NEWSLETTER.issues[0]!;
+
+// The site counts searches per visitor, by the edge's CF-Connecting-IP, and every request without one in a
+// single shared bucket. Each test here is a visitor of its own (an IPv6 /64 in the documentation range, from
+// the test's id, project and retry), so the tests never use up each other's searches or the shared bucket.
+function visitorFor(info: { testId: string; project: { name: string }; retry: number }): string {
+  let h = 0;
+  for (const c of `${info.testId} ${info.project.name} ${info.retry}`) h = (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0;
+  return `2001:db8:${(h >>> 16).toString(16)}:${(h & 0xffff).toString(16)}::1`;
+}
+// eslint-disable-next-line no-empty-pattern -- Playwright reads a fixture's needs from this destructuring; this one needs none.
+test.use({ extraHTTPHeaders: async ({}, use, testInfo) => use({ 'CF-Connecting-IP': visitorFor(testInfo) }) });
+
+/**
+ * The words of each result's title that a line break splits in two (a title line ending mid-word). A break
+ * after a space or a hyphen ("January- / February") is ordinary wrapping, so each piece up to one is a word.
+ */
+const splitWords = (page: Page) =>
+  page.locator('.hit__link').evaluateAll((links) =>
+    links.flatMap((a) => {
+      const node = [...a.childNodes].find((n) => n.nodeType === Node.TEXT_NODE);
+      if (node === undefined) return ['(no title text)'];
+      const split: string[] = [];
+      let at = 0;
+      for (const piece of (node.textContent ?? '').split(/(?<=[ -])/)) {
+        const word = piece.trimEnd();
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + word.length);
+        if (new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size > 1) split.push(word);
+        at += piece.length;
+      }
+      return split;
+    }),
+  );
 
 test.describe('a search', () => {
   test('says the count in the title and a heading, then lists each result as a plainly labelled link', async ({ page }) => {
@@ -83,7 +118,7 @@ test.describe('a search', () => {
   });
 
   test('works with JavaScript off: the form is a plain GET, and Previous and Next are links', async ({ browser, baseURL }) => {
-    const context = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true, baseURL: baseURL! });
+    const context = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true, baseURL: baseURL!, extraHTTPHeaders: { 'CF-Connecting-IP': visitorFor(test.info()) } });
     const page = await context.newPage();
     await page.goto('/search');
     await box(page).fill('many things');
@@ -156,6 +191,73 @@ test.describe('a search', () => {
     // The form itself is never held back, and nor is anyone else.
     expect((await request.get('/search', { headers: visitor })).status()).toBe(200);
     expect((await request.get('/search?q=zebra', { headers: { 'CF-Connecting-IP': '198.51.100.7' } })).status()).toBe(200);
+  });
+
+  test('holds every request that names no one address to one shared bucket: no header, two addresses or junk are refused after 20', async ({ playwright }, testInfo) => {
+    // The site with sign-in off is a process of its own, so its shared bucket is used up here alone: by one
+    // project of a run, since the projects share that process (the WebKit run has its own).
+    test.skip(!['chromium-desktop', 'webkit-iphone'].includes(testInfo.project.name), 'one project per run uses up the shared bucket');
+    // A context of its own with no visitor header: this file's own one (test.use above) would otherwise go with every request.
+    const ctx = await playwright.request.newContext({ baseURL: SIGN_IN_OFF_URL, extraHTTPHeaders: {} });
+    const unnamed: Record<string, string>[] = [{}, { 'CF-Connecting-IP': '198.51.100.51, 198.51.100.52' }, { 'CF-Connecting-IP': 'unknown' }];
+    const statuses: number[] = [];
+    for (let i = 0; i < 30; i++) statuses.push((await ctx.get('/search?q=zebra', { headers: unnamed[i % 3]! })).status());
+    expect(statuses).toEqual([...Array<number>(20).fill(200), ...Array<number>(10).fill(429)]);
+    // Each IPv4-mapped address is its own visitor, not one bucket for them all.
+    expect((await ctx.get('/search?q=zebra', { headers: { 'CF-Connecting-IP': '::ffff:198.51.100.61' } })).status()).toBe(200);
+    expect((await ctx.get('/search?q=zebra', { headers: { 'CF-Connecting-IP': '::ffff:198.51.100.62' } })).status()).toBe(200);
+    await ctx.dispose();
+  });
+
+  test('sends no Referer from a search: a result, the PDF, an article and Sign in all leave the words behind', async ({ page }) => {
+    const res = await page.goto('/search?q=picnic+refword');
+    expect(res?.headers()['referrer-policy']).toBe('no-referrer');
+    const referers: string[] = [];
+    page.on('request', (r) => {
+      const referer = r.headers()['referer'];
+      if (referer !== undefined) referers.push(`${r.url()} <- ${referer}`);
+    });
+    await hits(page).first().getByRole('link', { name: `${newest.title}, page 2`, exact: true }).click();
+    await page.waitForLoadState('load');
+    await page.goto('/search?q=picnic+refword');
+    await hits(page).last().getByRole('link', { name: 'A new home for the Wednesday lunch' }).click();
+    await expect(page).toHaveURL(/\/news#/);
+    await page.goto('/search?q=picnic+refword');
+    const pdf = page.waitForRequest((r) => r.url().includes('/documents/'));
+    await page.evaluate(() => (document.querySelector('.hit .pdf-files a') as HTMLAnchorElement).click());
+    await pdf;
+    await page.goto('/search?q=picnic+refword');
+    const signInAsked = page.waitForRequest((r) => new URL(r.url()).pathname === '/sign-in');
+    await page.evaluate(() => (document.querySelector('a[href^="/sign-in"]') as HTMLAnchorElement).click());
+    await signInAsked;
+    expect(referers.filter((r) => r.includes('refword'))).toEqual([]);
+  });
+
+  test('tells a reader whose sign-in has lapsed that only the public copies were searched, and how to sign in again', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'lapsed');
+    await page.goto('/search?q=picnic');
+    await expect(hits(page).first()).toContainText('From the public copy:');
+    const note = page.getByRole('main').getByRole('note').filter({ hasText: 'Your sign-in has expired' });
+    await expect(note).toHaveText("Your sign-in has expired, so only the public copies were searched. Sign in again to search the members' copies too.");
+    // Back to /search alone: the words never go to the sign-in, nor on to the identity provider.
+    await expect(note.getByRole('link', { name: 'Sign in again' })).toHaveAttribute('href', '/sign-in?return=%2Fsearch&again=1');
+    // A member signed in and current is told nothing of the kind.
+    await page.context().clearCookies();
+    await page.goto('/');
+    await signIn(page, 'member');
+    await page.goto('/search?q=picnic');
+    await expect(page.getByText('Your sign-in has expired')).toHaveCount(0);
+  });
+
+  test('says what is true when no result on a page can be opened here, and Next still leads on', async ({ page }) => {
+    await page.goto('/search?q=unlinkable');
+    await expect(page.getByRole('heading', { level: 2, name: 'No results to show on this page' })).toBeVisible();
+    await expect(page.getByRole('main')).toContainText('The results on this page cannot be opened from this site. There are more on the next page.');
+    await expect(page.getByRole('main')).not.toContainText('Nothing in the archive matches');
+    await page.getByRole('link', { name: 'Next results' }).click();
+    await expect(page).toHaveURL(/\/search\?q=unlinkable&page=2$/);
+    await expect(page.getByRole('heading', { level: 2, name: 'Results 11 to 12' })).toBeVisible();
   });
 
   test('a result for an article opens /news at that article', async ({ page }) => {
@@ -248,6 +350,8 @@ test.describe('axe and layout on the results', () => {
         await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
         await expect(page.locator('html')).toHaveAttribute('data-size', String(SIZES[6]));
         expect(await sideways(page)).toBeLessThanOrEqual(0);
+        // A title wraps between words, never inside one ("newslette / r"), even at 320 px.
+        expect(await splitWords(page)).toEqual([]);
         // The text really is larger: the reader's setting is honoured, not overridden.
         expect(await hits(page).first().locator('.hit__snippet').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(28);
         expect(await axe(page)).toEqual([]);
@@ -261,7 +365,7 @@ test.describe('axe and layout on the results', () => {
   for (const [name, width] of [['1280 px screen', 640], ['640 px screen', 320]] as const) {
     for (const scheme of ['light', 'dark'] as const) {
       test(`200 % zoom on a ${name}, ${scheme}: the results reflow, nothing scrolls sideways, no violation`, async ({ browser, baseURL }) => {
-        const context = await browser.newContext({ viewport: { width, height: 400 }, deviceScaleFactor: 2, colorScheme: scheme, ignoreHTTPSErrors: true, baseURL: baseURL! });
+        const context = await browser.newContext({ viewport: { width, height: 400 }, deviceScaleFactor: 2, colorScheme: scheme, ignoreHTTPSErrors: true, baseURL: baseURL!, extraHTTPHeaders: { 'CF-Connecting-IP': visitorFor(test.info()) } });
         const page = await context.newPage();
         await page.goto('/search?q=picnic');
         await expect(hits(page)).toHaveCount(4);
@@ -272,6 +376,17 @@ test.describe('axe and layout on the results', () => {
       });
     }
   }
+
+  test(`forced colours at 320 px and the largest text (${SIZES[6]} %): titles wrap between words, nothing scrolls sideways, no violation`, async ({ page, context, baseURL }) => {
+    await setPrefs(context, baseURL!, { size: SIZES[6] });
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.emulateMedia({ forcedColors: 'active' });
+    await page.goto('/search?q=picnic');
+    expect(await sideways(page)).toBeLessThanOrEqual(0);
+    expect(await splitWords(page)).toEqual([]);
+    expect(await axe(page)).toEqual([]);
+    await shot(page, `results-320-forced-colours-${SIZES[6]}pct`);
+  });
 
   test('forced colours (Windows high contrast): the words found are still marked, and no violation', async ({ page }) => {
     await page.emulateMedia({ forcedColors: 'active' });
