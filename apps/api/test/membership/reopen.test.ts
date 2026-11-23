@@ -183,7 +183,7 @@ describe.skipIf(!live)('MembershipService: reopening a rejected sign-up (REOPEN)
     expect((await rows('sub-redo6'))[0]).toMatchObject({ reopened: false });
 
     // The Membership Officer's own rejected sign-up: refused to them, reopened by the Admin.
-    const { requestId: own } = await membership.submitSignup({ firstName: 'Avery', lastName: LAST, membershipNumber: NUMBER }, APPROVER);
+    const { requestId: own } = await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, APPROVER);
     await membership.rejectSignup({ requestId: own }, ADMIN);
     await expect(membership.reopenSignup({ requestId: own }, APPROVER)).rejects.toMatchObject({ code: Code.PermissionDenied });
     expect((await membership.listRejectedSignups({}, APPROVER)).requests.map((r) => r.requestId)).not.toContain(own);

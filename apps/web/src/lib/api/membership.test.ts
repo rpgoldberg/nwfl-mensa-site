@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { newSession } from '../../../server/session.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
-import { AccountRoute, LocalGroupStanding, MemberStatus, MembershipService, OfficerTools, RejectedSignupSchema, SignupDecision, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerTools, RejectedSignupSchema, SignupDecision, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
 import { DecisionRefused, MembershipSignInAgain, ProfileRefused, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
@@ -497,6 +497,26 @@ describe('grpcMembership: OFFICER-VERIFY', () => {
       { requestId: ID, displayName: 'Jesse Example', email: 'jesse@example.org', route: 'invite', verification: 'verified_local', firstNameMatched: false, localGroup: 'Boston Mensa', localGroupStanding: 'guest' },
       { requestId: ID, displayName: 'Kendall Sample', email: 'kendall@example.org', route: 'signup', verification: 'unchecked' },
     ]);
+  });
+
+  // Fix round 1: the API says (switched on only) whether each sign-up may be approved by hand; unspecified
+  // (switched off) is left out, and the page then keeps the rule as before.
+  it('reads what an approver may do with each sign-up by hand, and refuses an answer it cannot read', async () => {
+    let answer = [HandApproval.OPEN, HandApproval.AS_GUEST, HandApproval.NEEDS_CHECK, HandApproval.UNSPECIFIED];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: answer.map((handApproval) =>
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, handApproval }),
+          ),
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect((await api.listSignupRequests(PERSON)).map((r) => r.handApproval)).toEqual(['open', 'as_guest', 'needs_check', undefined]);
+    expect((await api.listSignupRequests(PERSON)).at(-1)).not.toHaveProperty('handApproval');
+    answer = [9 as HandApproval];
+    await expect(api.listSignupRequests(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
   });
 
   it('reads one sign-up\'s decision by its id, and nothing at all on any failure', async () => {

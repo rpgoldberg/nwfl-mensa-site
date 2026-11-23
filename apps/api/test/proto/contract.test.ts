@@ -233,8 +233,8 @@ describe(`${PKG}: the membership verifier`, () => {
 
   it('PROFILE-ID: shows the approvers what each sign-up typed, pending or rejected', () => {
     const message = (name: string) => allMessages().find((m) => m.typeName === `${PKG}.${name}`);
-    // OFFICER-VERIFY: then the check's first-name answer and local group.
-    expect(fieldNames(message('SignupRequest')).slice(-6)).toEqual(['first_name', 'last_name', 'membership_number', 'first_name_matched', 'local_group', 'local_group_standing']);
+    // OFFICER-VERIFY: then the check's first-name answer and local group, and what an approver may do by hand.
+    expect(fieldNames(message('SignupRequest')).slice(-7)).toEqual(['first_name', 'last_name', 'membership_number', 'first_name_matched', 'local_group', 'local_group_standing', 'hand_approval']);
     expect(fieldNames(message('RejectedSignup')).slice(-3)).toEqual(['first_name', 'last_name', 'membership_number']);
     expect(fieldNames(message('SubmitSignupRequest'))).toEqual(['last_name', 'membership_number', 'first_name']);
   });

@@ -14,6 +14,7 @@
 import type http2 from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { type MemberStanding, type TokenVerifier, rejectAllTokens } from './auth/caller.js';
+import type { OfficerVerify } from './auth/config.js';
 import { dbStanding } from './auth/standing.js';
 import type { Db } from './db/pool.js';
 import { apiInterceptors } from './grpc/interceptors.js';
@@ -38,10 +39,8 @@ export interface ServerOptions {
   edgeClientIds?: readonly string[];
   /** The chapter's group prefix (SITE_GROUP_PREFIX, auth/groups.ts). Default nwfl-. */
   groupPrefix?: string;
-  /** OFFICER_VERIFY (auth/config.ts): an officer power needs member standing too. Default off. */
-  officerVerify?: boolean;
-  /** CHAPTER_GROUP_NAME (auth/config.ts): the chapter's own local group. Default none. */
-  chapterGroup?: string | null;
+  /** OFFICER_VERIFY (auth/config.ts): on, with the chapter's own local group; null or absent is off, the default. */
+  officerVerify?: OfficerVerify | null;
   /** Not ready until it is verified (CF-ISO-0, tenant.ts startTenantGate). */
   tenantGate?: { readonly verified: boolean };
 }
@@ -62,14 +61,14 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   const shutdown = new AbortController();
 
   const grpc = createGrpcServer({
-    routes: apiRoutes({ db: options.db, logger, readiness, chapterGroup: options.chapterGroup ?? null }),
+    routes: apiRoutes({ db: options.db, logger, readiness, officerVerify: options.officerVerify ?? null }),
     interceptors: apiInterceptors({
       logger,
       verifier: options.verifier ?? rejectAllTokens,
-      standing: options.standing ?? dbStanding(options.db),
+      standing: options.standing ?? dbStanding(options.db, undefined, options.officerVerify?.chapterGroup ?? null),
       ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
       groupPrefix: options.groupPrefix,
-      officerVerify: options.officerVerify === true,
+      officerVerify: (options.officerVerify ?? null) !== null,
     }),
     shutdownSignal: shutdown.signal,
     ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),

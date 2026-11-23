@@ -33,13 +33,14 @@
 // REOPEN: the Admin and the Membership Officer's seat list the rejections and reopen one, never their
 // own; a reopening is kept for everyone, as in the API, so the rejected person's own sign-in sees its
 // account gone and gets the form again. Each browser project reopens its own person (REJECTED).
-// OFFICER-VERIFY: as the API with OFFICER_VERIFY on, every officer persona is a verified chapter member
-// (a member account, its officer tools open), save "officer-unverified" (UNVERIFIED_OFFICER_SUBJECT),
-// whose tools wait for the check (AWAITING_CHECK) until an approval this stand-in never makes. An
-// officer power, like the invited group, makes a sign-up's route "invite", which needs the first name.
-// The queue carries the first-name check and the local group; an invited sign-up the check did not
-// confirm is refused by hand, and an other-group one is approved as a guest. GetSignupRequest says
-// where one sign-up stands, for this sign-in's decisions and the reopenings (WEB-SMALL-1).
+// OFFICER-VERIFY: as the API with OFFICER_VERIFY off, every officer persona's tools are open and it needs
+// no account, as before; "officer-unverified" (UNVERIFIED_OFFICER_SUBJECT) is the API switched on: its
+// tools wait for the check (AWAITING_CHECK) until an approval this stand-in never makes, its sign-up takes
+// the invite route and needs the first name. In the queue, the cards the API switched on would describe
+// carry the first-name check, the local group and what an approver may do by hand (handApproval: Indy
+// waits for the check, Lou is approved as a guest), and the stand-in holds to it; the others are as
+// before (Harper, found in another group, is not approved). GetSignupRequest says where one sign-up
+// stands, for this sign-in's decisions and the reopenings (WEB-SMALL-1).
 // PROFILE-ID: the queue and the rejections carry what each sign-up typed (names and number), and a
 // duplicate claim what its earlier claim typed (none once closed). The member "Jordan Example" has a
 // profile (MEMBER_PROFILE), changed per sign-in by UpdateMyProfile, which takes the two names only.
@@ -65,7 +66,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility, LinkTargetKind, LinkTargetStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
-import { AccountRoute, LocalGroupStanding, MemberStatus, MembershipService, OfficerTools, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerTools, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
 import { createEventModel } from './events-model.mjs';
@@ -655,18 +656,18 @@ const CHAPTER = 'Northwest Florida Mensa';
 const holdsPower = (groups) => groups.some((g) => ['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers'].includes(g) || /^nwfl-office-./.test(g));
 const CHECKED = { year: 2026, month: 10, day: 20 };
 const SIGNUP_QUEUE = [
-  { requestId: 'b1000000-0000-4000-8000-000000000001', firstName: 'Jesse', lastName: 'Example', membershipNumber: '000011001', sub: '00000000-0000-4000-8000-0000000001e1', displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T15:00:00Z'), firstNameMatched: true, localGroup: CHAPTER, localGroupStanding: LocalGroupStanding.CHAPTER },
+  { requestId: 'b1000000-0000-4000-8000-000000000001', firstName: 'Jesse', lastName: 'Example', membershipNumber: '000011001', sub: '00000000-0000-4000-8000-0000000001e1', displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T15:00:00Z'), firstNameMatched: true, localGroup: CHAPTER, localGroupStanding: LocalGroupStanding.CHAPTER, handApproval: HandApproval.OPEN },
   { requestId: 'b1000000-0000-4000-8000-000000000002', firstName: 'Kendall', lastName: 'Sample', membershipNumber: '000011002', sub: '00000000-0000-4000-8000-0000000001e2', displayName: 'Kendall Sample', email: 'kendall@example.org', route: AccountRoute.SIGNUP, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T16:00:00Z') },
-  { requestId: 'b1000000-0000-4000-8000-000000000003', firstName: 'Harper', lastName: 'Placeholder', membershipNumber: '000011003', sub: '00000000-0000-4000-8000-0000000001e3', displayName: 'Harper Placeholder', email: 'harper@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 3 }, createdAt: new Date('2026-11-02T15:00:00Z'), firstNameMatched: true, localGroup: 'Boston Mensa', localGroupStanding: LocalGroupStanding.GUEST },
+  { requestId: 'b1000000-0000-4000-8000-000000000003', firstName: 'Harper', lastName: 'Placeholder', membershipNumber: '000011003', sub: '00000000-0000-4000-8000-0000000001e3', displayName: 'Harper Placeholder', email: 'harper@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 3 }, createdAt: new Date('2026-11-02T15:00:00Z') },
   { requestId: 'b1000000-0000-4000-8000-000000000004', firstName: 'Blair', lastName: 'Example', membershipNumber: '000011004', sub: APPROVER_SUBJECT, displayName: 'Blair Example', email: 'blair@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED, createdAt: new Date('2026-11-03T15:00:00Z') },
   // VET: an email the membership verification service did not confirm, and a number an earlier sign-up (Jordan Firstclaim, approved, no longer queued) claimed first.
   { requestId: 'b1000000-0000-4000-8000-000000000005', firstName: 'Dana', lastName: 'Mismatch', membershipNumber: '000011005', sub: '00000000-0000-4000-8000-0000000001e5', displayName: 'Dana Mismatch', email: 'dana@example.org', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T15:00:00Z') },
   { requestId: 'b1000000-0000-4000-8000-000000000006', firstName: 'Drew', lastName: 'Secondclaim', membershipNumber: '000011006', sub: '00000000-0000-4000-8000-0000000001e6', displayName: 'Drew Secondclaim', email: 'drew@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T16:00:00Z'), earlierClaim: { displayName: 'Jordan Firstclaim', signedUpAt: new Date('2026-10-28T15:00:00Z'), firstName: 'Jordan', lastName: 'Firstclaim', membershipNumber: '000011006' } },
   // VET fix 1 (N2): a number an earlier sign-up claimed, since rejected: the API sends no name, only that it is closed.
   { requestId: 'b1000000-0000-4000-8000-000000000007', firstName: 'Eli', lastName: 'Thirdclaim', membershipNumber: '000011007', sub: '00000000-0000-4000-8000-0000000001e7', displayName: 'Eli Thirdclaim', email: 'eli@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 5 }, createdAt: new Date('2026-11-05T15:00:00Z'), earlierClaim: { displayName: '', closed: true, signedUpAt: new Date('2026-10-20T15:00:00Z') } },
-  // OFFICER-VERIFY: an invited officer the check did not find (no Approve: reject it), and a local match in a group name the site does not know.
-  { requestId: 'b1000000-0000-4000-8000-000000000008', firstName: 'Indy', lastName: 'Unconfirmed', membershipNumber: '000011008', sub: '00000000-0000-4000-8000-0000000001e8', displayName: 'Indy Unconfirmed', email: 'indy@example.org', route: AccountRoute.INVITE, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 6 }, createdAt: new Date('2026-11-06T15:00:00Z') },
-  { requestId: 'b1000000-0000-4000-8000-000000000009', firstName: 'Lou', lastName: 'Unlisted', membershipNumber: '000011009', sub: '00000000-0000-4000-8000-0000000001e9', displayName: 'Lou Unlisted', email: 'lou@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 6 }, createdAt: new Date('2026-11-06T16:00:00Z'), firstNameMatched: false, localGroup: 'Atlantis Mensa', localGroupStanding: LocalGroupStanding.GUEST_UNLISTED },
+  // OFFICER-VERIFY (as the API switched on): an invited officer the check did not find (no Approve: reject it), and a local match in a group name the site does not know (approved as a guest).
+  { requestId: 'b1000000-0000-4000-8000-000000000008', firstName: 'Indy', lastName: 'Unconfirmed', membershipNumber: '000011008', sub: '00000000-0000-4000-8000-0000000001e8', displayName: 'Indy Unconfirmed', email: 'indy@example.org', route: AccountRoute.INVITE, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 6 }, createdAt: new Date('2026-11-06T15:00:00Z'), handApproval: HandApproval.NEEDS_CHECK },
+  { requestId: 'b1000000-0000-4000-8000-000000000009', firstName: 'Lou', lastName: 'Unlisted', membershipNumber: '000011009', sub: '00000000-0000-4000-8000-0000000001e9', displayName: 'Lou Unlisted', email: 'lou@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 6 }, createdAt: new Date('2026-11-06T16:00:00Z'), firstNameMatched: false, localGroup: 'Atlantis Mensa', localGroupStanding: LocalGroupStanding.GUEST_UNLISTED, handApproval: HandApproval.AS_GUEST },
 ];
 /** REOPEN: rejected sign-ups, newest first; the first three are reopened by one browser project each (e2e/stand-in.ts REJECTED). */
 const REJECTED = [
@@ -715,11 +716,11 @@ async function personOf(ctx) {
 
 /**
  * The account the API would hold: the members since October 20, the pending enrolee, the rejected
- * sign-up (removed, never checked), this sign-in's own sign-up. OFFICER-VERIFY: every officer persona
- * is a verified chapter member, save the one whose tools wait for the check.
- * @param {{ sub: string, session: string, groups?: string[] }} person
+ * sign-up (removed, never checked), this sign-in's own sign-up. Being an officer or the Admin gives no
+ * account, as in the API: nothing opens one for them, and they need none (W-SIGNUP fix 1).
+ * @param {{ sub: string, session: string }} person
  */
-function accountOf({ sub, session, groups = [] }) {
+function accountOf({ sub, session }) {
   const route = SIGNUPS.get(session);
   if (route !== undefined) return { status: MemberStatus.PENDING, route };
   if (MEMBER_SUBJECTS.has(sub)) return { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, verifiedOn: CHECKED };
@@ -728,15 +729,12 @@ function accountOf({ sub, session, groups = [] }) {
   // REOPEN: rejected and removed until reopened; then no account, as for one who never signed up.
   const rejected = REJECTED.find((r) => r.sub === sub);
   if (rejected !== undefined && !REOPENED.has(rejected.requestId)) return { status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP };
-  if (holdsPower(groups) && sub !== UNVERIFIED_OFFICER_SUBJECT) return { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, verifiedOn: CHECKED, localGroupStanding: LocalGroupStanding.CHAPTER };
   return undefined;
 }
 
 /** OFFICER-VERIFY: the officer tools, as the API's GetMyAccount says them. @param {{ sub: string, groups: string[] }} person */
 const toolsOf = ({ sub, groups }) => (!holdsPower(groups) ? OfficerTools.UNSPECIFIED : sub === UNVERIFIED_OFFICER_SUBJECT ? OfficerTools.AWAITING_CHECK : OfficerTools.OPEN);
 
-/** OFFICER-VERIFY: what the API's CONFIRMED_BY_CHECK lets an approver approve by hand on the invite route. */
-const CONFIRMED_BY_CHECK = [Verification.VERIFIED_LOCAL, Verification.VERIFIED_OTHER_GROUP, Verification.EMAIL_MISMATCH];
 
 /** The approvers and the Admin, as requireMembershipApprover. @param {import('@connectrpc/connect').HandlerContext} ctx */
 async function approverOf(ctx) {
@@ -759,10 +757,11 @@ function decide(person, id, approve, confirmedWarning = false) {
   if (request.sub === person.sub) throw new ConnectError('no one decides their own sign-up', Code.PermissionDenied);
   const decided = DECIDED.get(person.session) ?? new Map();
   if (decided.has(id)) throw new ConnectError('this sign-up is already decided', Code.FailedPrecondition);
-  // OFFICER-VERIFY: an invited sign-up only once the check confirmed it; an other-group one as a guest.
-  if (approve && request.route === AccountRoute.INVITE && (!CONFIRMED_BY_CHECK.includes(request.verification) || request.firstNameMatched === false)) {
+  // OFFICER-VERIFY: what the card says an approver may do by hand; with nothing said, as before (R33).
+  if (approve && request.handApproval === HandApproval.NEEDS_CHECK) {
     throw new ConnectError('an invited sign-up is approved only once the membership check confirmed it', Code.FailedPrecondition);
   }
+  if (approve && request.handApproval === undefined && request.verification === Verification.VERIFIED_OTHER_GROUP) throw new ConnectError('an other-group member is not approved', Code.FailedPrecondition);
   // VET fix 1: as the API, an email mismatch or a duplicate claim only with the approver's confirmation.
   if (approve && !confirmedWarning && (request.verification === Verification.EMAIL_MISMATCH || request.verification === Verification.DUPLICATE_CLAIM)) {
     throw new ConnectError('confirm the warning, then approve with confirmed_warning', Code.FailedPrecondition);
@@ -880,8 +879,10 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       if (number === '') throw new ConnectError('a membership number is needed', Code.InvalidArgument);
       if (!/^[0-9]{1,12}$/.test(number)) throw new ConnectError('a membership number is 1 to 12 digits', Code.InvalidArgument);
       if (lastName === '' || [...lastName].length > 80) throw new ConnectError('a last name is needed', Code.InvalidArgument);
-      const route = person.groups.includes('nwfl-invited') || holdsPower(person.groups) ? AccountRoute.INVITE : AccountRoute.SIGNUP;
-      if (route === AccountRoute.INVITE && !nameOk(req.firstName.trim())) throw new ConnectError('a first name is needed', Code.InvalidArgument);
+      // OFFICER-VERIFY: switched on (the one persona), an officer power takes the invite route, which needs the first name.
+      const on = person.sub === UNVERIFIED_OFFICER_SUBJECT;
+      const route = person.groups.includes('nwfl-invited') || (on && holdsPower(person.groups)) ? AccountRoute.INVITE : AccountRoute.SIGNUP;
+      if (on && route === AccountRoute.INVITE && !nameOk(req.firstName.trim())) throw new ConnectError('a first name is needed', Code.InvalidArgument);
       SIGNUPS.set(person.session, route);
       return { requestId: randomUUID() };
     },
@@ -903,6 +904,7 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
           membershipNumber: r.membershipNumber,
           ...(r.firstNameMatched !== undefined ? { firstNameMatched: r.firstNameMatched } : {}),
           ...(r.localGroup !== undefined ? { localGroup: r.localGroup, localGroupStanding: r.localGroupStanding } : {}),
+          ...(r.handApproval !== undefined ? { handApproval: r.handApproval } : {}),
           ...(r.earlierClaim
             ? {
                 earlierClaim: {

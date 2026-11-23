@@ -24,6 +24,7 @@ import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { type Api, insertId, startApi } from '../helpers/api.js';
 import { membersSpan, paragraph, publishItem, text } from '../helpers/content.js';
 import { live } from '../helpers/pg.js';
+import { seedAccount } from '../helpers/standing.js';
 
 /** Every group with a power (groups.ts isPowerGroup), plus the enrolee group. */
 const ALL_POWERS = [
@@ -83,13 +84,11 @@ describe.skipIf(!live)('OFFICER-VERIFY: every officer power needs member standin
     api = await startApi('nwfl_officer_verify', { verifier, officerVerify: true });
     off = await startApi('nwfl_officer_verify_off', { verifier });
     for (const db of [api, off]) {
-      await db.pool.query(
-        `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on, chapter_member) VALUES
-           ('sub-ov-verified', 'member', 'invite', 'svc-nwfl-verifier', now(), '2026-10-01', true),
-           ('sub-ov-guest', 'member', 'invite', 'svc-nwfl-verifier', now(), '2026-10-01', false),
-           ('sub-ov-unconfirmed', 'member', 'signup', 'sub-ov-verified', now(), '2026-10-01', NULL),
-           ('sub-ov-lapsed', 'member', 'invite', 'svc-nwfl-verifier', now(), '2025-08-01', true)`,
-      );
+      // Chapter or guest by the group the approved sign-up's check reported (decided when read, auth/standing.ts).
+      await seedAccount(db.pool, { sub: 'sub-ov-verified', route: 'invite', check: { localGroup: 'Northwest Florida Mensa' } });
+      await seedAccount(db.pool, { sub: 'sub-ov-guest', route: 'invite', check: { localGroup: 'Boston Mensa' } });
+      await seedAccount(db.pool, { sub: 'sub-ov-unconfirmed', check: { verification: 'verified_local' } });
+      await seedAccount(db.pool, { sub: 'sub-ov-lapsed', route: 'invite', verifiedOn: '2025-08-01', check: { localGroup: 'Northwest Florida Mensa' } });
       await db.pool.query(
         `INSERT INTO member_account (sub, status, route, affiliate_granted_by_sub, affiliate_granted_at, verified_on) VALUES ('sub-ov-affiliate', 'affiliate', 'admin_grant', 'sub-ov-verified', now(), '2026-10-01')`,
       );
@@ -248,5 +247,7 @@ describe.skipIf(!live)('OFFICER-VERIFY: every officer power needs member standin
     expect(await outcome(() => offApproval.getApprovalRules({}, as('unverified')))).toMatch(/^ok /);
     expect(await outcome(() => off.client(MembershipService).listSignupRequests({}, as('unverified')))).toMatch(/^ok /);
     expect(await outcome(() => offApproval.getApprovalRules({}, as('powerless')))).toBe('PermissionDenied');
+    // Fix round 1: no guest standing either, and no power waits: a guest or unconfirmed holder keeps every power too.
+    for (const who of ['guest', 'unconfirmed', 'lapsed'] as const) expect(await outcome(() => offApproval.getApprovalRules({}, as(who))), who).toMatch(/^ok /);
   });
 });

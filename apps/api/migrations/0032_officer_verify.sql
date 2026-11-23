@@ -7,9 +7,9 @@
 --     the membership records (Ross, 11-23: "perfectly harmless"); the API compares it with the chapter's
 --     own group name (CHAPTER_GROUP_NAME) to tell a chapter member from a guest member.
 --   * Both are written with the report only (an unchecked sign-up has neither) and never change after.
---   * member_account.chapter_member: whether the approved account's reported local group is this
---     chapter's; NULL when none was reported (an account approved before this, or on a report that did
---     not say).
+--   * Nothing derived is stored: whether the group makes a person a chapter member or a guest is decided
+--     each time a standing is read (auth/standing.ts), against CHAPTER_GROUP_NAME, so a missing or wrong
+--     setting never fixes anyone as a guest. The API writes both only with OFFICER_VERIFY on.
 --
 -- ADDITIVE. The API before OFFICER-VERIFY never writes these columns, so it runs unchanged on 0032.
 
@@ -38,8 +38,3 @@ $fn$;
 
 CREATE TRIGGER signup_request_report_final BEFORE UPDATE ON signup_request
   FOR EACH ROW EXECUTE FUNCTION signup_request_report_final();
-
--- 3. The account: a chapter member, a guest member, or not reported.
-ALTER TABLE member_account ADD COLUMN chapter_member boolean;
-
-COMMENT ON COLUMN member_account.chapter_member IS 'OFFICER-VERIFY: true for this chapter''s local group, false for a guest member, NULL when no group was reported.';

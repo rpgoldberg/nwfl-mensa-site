@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { newSession } from '../../server/session.mjs';
 import { TokenStore } from '../../server/token-store.mjs';
 import { ApiUnavailable } from './api/client';
-import { type MembershipApi, type MyAccount, MembershipSignInAgain, type PendingSignup } from './api/membership';
+import { type MembershipApi, type MyAccount, type MyStanding, MembershipSignInAgain, type PendingSignup } from './api/membership';
 import type { Tokens } from './auth/oidc';
 import {
   ACCOUNT_PATH,
@@ -26,11 +26,13 @@ import {
   INVITE_UNCONFIRMED,
   OFFICER_CHECK_NOTICE,
   approvableByHand,
+  approvalNote,
+  OTHER_GROUP_TEXT,
   bannerShown,
   checkFacts,
   accountView,
   donePath,
-  mayConfirmMembership,
+  maySignUp,
   standingText,
   adminContactHref,
   errorSummary,
@@ -158,21 +160,43 @@ describe('accountView (D3)', () => {
     expect(accountView(session(['nwfl-users']), account('removed'))).toBe('removed');
   });
 
-  it('OFFICER-VERIFY: gives an officer, the Admin, the Webmaster or an approver with no account the form: they confirm their membership too', () => {
-    for (const groups of [['nwfl-officers'], ['nwfl-members', 'nwfl-officers'], ['nwfl-admin'], ['nwfl-users', 'nwfl-admin'], ['nwfl-webmaster'], ['nwfl-membership-approvers'], ['nwfl-office-treasurer']]) {
-      expect(accountView(session(groups), undefined), groups.join()).toBe('form');
-      expect(mayConfirmMembership(session(groups)), groups.join()).toBe(true);
+  // Fix round 1 (BLOCKER-2): develop's view, decided by the API's officer tools, never by groups. Open (always so
+  // with the switch off): an officer or the Admin with no account is told the officer area needs none.
+  it('fix 1 (NOTE-8): tells an officer or the Admin with no account that the officer area needs none, with no form', () => {
+    for (const groups of [['nwfl-officers'], ['nwfl-members', 'nwfl-officers'], ['nwfl-admin'], ['nwfl-users', 'nwfl-admin']]) {
+      expect(accountView(session(groups), undefined), groups.join()).toBe('officer');
+      expect(accountView(session(groups), undefined, 'open'), groups.join()).toBe('officer');
     }
+    expect(STANDING_TEXT.officer).toBe('You need no member account to use the officer area.');
     expect(accountView(session(['nwfl-members', 'nwfl-officers']), account('member'))).toBe('member');
     expect(accountView(session(['nwfl-members', 'nwfl-officers']), account('pending'))).toBe('waiting');
+  });
+
+  it('gives no form to an account that is not the group\'s (no enrolee group, not an officer, not the Admin), only a plain line', () => {
+    expect(accountView(session([]), undefined)).toBe('not-club');
+    expect(accountView(session(['nwfl-webmaster']), undefined)).toBe('not-club');
+    expect(accountView(session(['nwfl-webmaster']), undefined, 'open')).toBe('not-club');
+    expect(accountView(session(['mensa-nwfl-admin']), undefined)).toBe('not-club');
+    expect(accountView(session(['nwfl-affiliates', 'nwfl-role-rvc']), undefined)).toBe('not-club');
+  });
+
+  it('OFFICER-VERIFY: gives anyone whose officer tools wait for the check, with no account, the form', () => {
+    for (const groups of [['nwfl-officers'], ['nwfl-members', 'nwfl-officers'], ['nwfl-admin'], ['nwfl-users', 'nwfl-admin'], ['nwfl-webmaster'], ['nwfl-membership-approvers'], ['nwfl-office-treasurer']]) {
+      expect(accountView(session(groups), undefined, 'awaiting_check'), groups.join()).toBe('form');
+      expect(maySignUp(session(groups), 'awaiting_check'), groups.join()).toBe(true);
+    }
+    expect(accountView(session(['nwfl-members', 'nwfl-officers']), account('member'), 'awaiting_check')).toBe('member');
+    expect(accountView(session(['nwfl-members', 'nwfl-officers']), account('pending'), 'awaiting_check')).toBe('waiting');
     expect(OFFICER_CHECK_NOTICE).toBe('Your officer tools open once your membership is confirmed. Until then you see what the public sees.');
   });
 
-  it('gives no form to an account that is not the group\'s (no enrolee group, no officer power), only a plain line', () => {
-    expect(accountView(session([]), undefined)).toBe('not-club');
-    expect(accountView(session(['mensa-nwfl-admin']), undefined)).toBe('not-club');
-    expect(accountView(session(['nwfl-affiliates', 'nwfl-role-rvc']), undefined)).toBe('not-club');
-    expect(mayConfirmMembership(session(['nwfl-invited']))).toBe(false);
+  it('lets an enrolee send a sign-up, and anyone else only while their officer tools wait for the check', () => {
+    expect(maySignUp(session(['nwfl-users']), 'none')).toBe(true);
+    expect(maySignUp(session(['nwfl-users', 'nwfl-officers']), 'open')).toBe(true);
+    for (const groups of [['nwfl-webmaster'], ['nwfl-officers'], ['nwfl-invited'], []]) {
+      expect(maySignUp(session(groups), 'open'), groups.join()).toBe(false);
+      expect(maySignUp(session(groups), 'none'), groups.join()).toBe(false);
+    }
   });
 
   it('OFFICER-VERIFY: says a guest member\'s standing in their own words, and names the local group', () => {
@@ -404,6 +428,14 @@ describe('firstStop (D3: the callback sends a person with no account to /account
         return answer();
       },
     }) as MembershipApi;
+  /** OFFICER-VERIFY: an API that answers GetMyAccount with the account and the officer tools. */
+  const standing = (answer: () => Promise<MyStanding>, seen: string[] = []): MembershipApi =>
+    ({
+      getMyStanding: (as) => {
+        seen.push(as.bearer);
+        return answer();
+      },
+    }) as MembershipApi;
 
   it('sends an enrolee with no account to /account, whatever the return', async () => {
     const { session: s, deps } = signedIn(['nwfl-users']);
@@ -431,16 +463,37 @@ describe('firstStop (D3: the callback sends a person with no account to /account
     expect(seen).toEqual([]);
   });
 
-  it('OFFICER-VERIFY: sends officers, the Admin and the approvers with no account to /account too: they confirm their membership', async () => {
+  // Fix round 1 (BLOCKER-2): the API's officer tools decide, never the groups. Open (always so with the switch
+  // off): develop's routing, back where they were. The API is asked once, for the tools.
+  it('fix 1 (SHOULD-2): honours the return for officers and the Admin whose officer tools are open: they need no account', async () => {
     const seen: string[] = [];
-    const ask = api(() => Promise.resolve(undefined), seen);
-    for (const groups of [['nwfl-members', 'nwfl-officers'], ['nwfl-officers'], ['nwfl-users', 'nwfl-admin'], ['nwfl-webmaster'], ['nwfl-users', 'nwfl-membership-approvers']]) {
+    const ask = standing(() => Promise.resolve({ officerTools: 'open' }), seen);
+    for (const groups of [['nwfl-members', 'nwfl-officers'], ['nwfl-users', 'nwfl-officers'], ['nwfl-users', 'nwfl-admin'], ['nwfl-members', 'nwfl-officers', 'nwfl-membership-approvers'], ['nwfl-webmaster']]) {
       const { session: s, deps } = signedIn(groups);
-      expect(await firstStop(s, '/news', ask, deps), groups.join()).toBe(ACCOUNT_PATH);
+      expect(await firstStop(s, '/officer-area', ask, deps), groups.join()).toBe('/officer-area');
     }
     expect(seen).toHaveLength(5);
-    const member = signedIn(['nwfl-members', 'nwfl-officers']);
-    expect(await firstStop(member.session, '/news', api(() => Promise.resolve({ status: 'member', route: 'invite' })), member.deps)).toBe('/news');
+  });
+
+  it('sends an enrolee office holder with no account to /account, tools open or not, as develop', async () => {
+    const { session: s, deps } = signedIn(['nwfl-users', 'nwfl-office-treasurer']);
+    expect(await firstStop(s, '/news', standing(() => Promise.resolve({ officerTools: 'open' })), deps)).toBe(ACCOUNT_PATH);
+  });
+
+  it('OFFICER-VERIFY: sends anyone whose officer tools wait for the check, with no account, to /account', async () => {
+    const ask = standing(() => Promise.resolve({ officerTools: 'awaiting_check' }));
+    for (const groups of [['nwfl-members', 'nwfl-officers'], ['nwfl-officers'], ['nwfl-users', 'nwfl-admin'], ['nwfl-webmaster'], ['nwfl-users', 'nwfl-membership-approvers']]) {
+      const { session: s, deps } = signedIn(groups);
+      expect(await firstStop(s, '/officer-area', ask, deps), groups.join()).toBe(ACCOUNT_PATH);
+    }
+    const waiting = signedIn(['nwfl-members', 'nwfl-officers']);
+    const pending = standing(() => Promise.resolve({ account: { status: 'pending', route: 'invite' }, officerTools: 'awaiting_check' }));
+    expect(await firstStop(waiting.session, '/news', pending, waiting.deps)).toBe('/news');
+  });
+
+  it('honours an officer\'s return when the API cannot say', async () => {
+    const { session: s, deps } = signedIn(['nwfl-members', 'nwfl-officers']);
+    expect(await firstStop(s, '/officer-area', standing(() => Promise.reject(new ApiUnavailable('GetMyAccount'))), deps)).toBe('/officer-area');
   });
 
   it('honours the return when the API cannot say: signing in never fails for this', async () => {
@@ -559,7 +612,7 @@ describe('pendingFacts and rejectedFacts (QUEUE-C: the label and value pairs of 
 // which invited sign-ups an approver may not approve by hand (the orchestrator's ruling on Ross's "the
 // officer needs to also pass the verifier"). WEB-SMALL-1: the banner after a decision only when true.
 describe('the queue after OFFICER-VERIFY', () => {
-  const pending = (extra: Partial<PendingSignup>): PendingSignup => ({ requestId: ID, displayName: 'Jesse Example', email: 'jesse@example.org', route: 'invite', verification: 'verified_local', ...extra });
+  const pending = (extra: Partial<PendingSignup>): PendingSignup => ({ requestId: ID, displayName: 'Jesse Example', email: 'jesse@example.org', route: 'invite', verification: 'verified_local', handApproval: 'open', ...extra });
 
   it('adds the first-name check and the local group, in words, after how they came', () => {
     expect(checkFacts(pending({ firstNameMatched: true, localGroup: 'Northwest Florida Mensa', localGroupStanding: 'chapter' }))).toEqual([
@@ -576,29 +629,36 @@ describe('the queue after OFFICER-VERIFY', () => {
     expect(checkFacts(pending({}))).toEqual([]);
   });
 
-  it.each<[string, Partial<PendingSignup>, boolean]>([
-    ['a local match', { verification: 'verified_local' }, true],
-    ['a local match with the first name confirmed', { verification: 'verified_local', firstNameMatched: true }, true],
-    ['an other-group match (a guest)', { verification: 'verified_other_group' }, true],
-    ['an email mismatch (confirmed by the box)', { verification: 'email_mismatch' }, true],
-    ['a first-name mismatch', { verification: 'verified_local', firstNameMatched: false }, false],
-    ['not checked yet', { verification: 'unchecked' }, false],
-    ['not found', { verification: 'not_found' }, false],
-    ['a check error', { verification: 'error' }, false],
-    ['a duplicate claim', { verification: 'duplicate_claim' }, false],
-  ])('an invited sign-up with %s may be approved by hand: %s', (_why, extra, may) => {
-    expect(approvableByHand(pending(extra))).toBe(may);
+  // Fix round 1 (BLOCKER-3): the API decides which sign-ups an approver may approve by hand, and why not
+  // (handApproval: the same rule it enforces); the page only says so. Switched off, it is develop's rule.
+  it.each<[string, NonNullable<PendingSignup['handApproval']>, boolean, string | undefined]>([
+    ['open', 'open', true, undefined],
+    ['as a guest (switched on)', 'as_guest', true, GUEST_APPROVAL],
+    ['waiting for the check (switched on)', 'needs_check', false, INVITE_UNCONFIRMED],
+  ])('a sign-up the API calls %s (%s): approvable by hand %s, with its note', (_why, handApproval, may, note) => {
+    expect(approvableByHand(pending({ handApproval }))).toBe(may);
+    expect(approvalNote(pending({ handApproval }))).toBe(note);
   });
 
-  it('lets a plain sign-up be approved by hand whatever the check said, as before', () => {
-    for (const verification of ['unchecked', 'not_found', 'error', 'verified_other_group'] as const) {
-      expect(approvableByHand(pending({ route: 'signup', verification }))).toBe(true);
+  it('with no answer from the API (switched off, or an older API), keeps develop\'s rule: an other-group match is not approved as a member', () => {
+    const unsaid = (verification: PendingSignup['verification']): PendingSignup => ({ requestId: ID, displayName: 'Jesse Example', email: 'jesse@example.org', route: 'invite', verification });
+    expect(approvableByHand(unsaid('verified_other_group'))).toBe(false);
+    expect(approvalNote(unsaid('verified_other_group'))).toBe(OTHER_GROUP_TEXT);
+    for (const verification of ['unchecked', 'not_found', 'error', 'verified_local', 'email_mismatch', 'duplicate_claim'] as const) {
+      expect(approvableByHand(unsaid(verification)), verification).toBe(true);
+      expect(approvalNote(unsaid(verification)), verification).toBeUndefined();
     }
-    expect(approvableByHand(pending({ route: 'signup', verification: 'verified_local', firstNameMatched: false }))).toBe(true);
+  });
+
+  it('keeps the words of each note', () => {
     expect(INVITE_UNCONFIRMED).toBe(
       'An invited sign-up can be approved only once the membership check has confirmed the membership number and names. This one has not been, so it cannot be approved here: reject it, and it can then be reopened for a new check.',
     );
     expect(GUEST_APPROVAL).toBe('This person is a member of another local group, or of none. Approving gives them guest member access: the public pages, and the events as members see them.');
+    // develop's words, unchanged.
+    expect(OTHER_GROUP_TEXT).toBe(
+      'This person is a member of another local group, so the sign-up cannot be approved as a member here. Reject it, or ask the Admin or the Webmaster about affiliate access.',
+    );
   });
 
   it('shows the banner only when the named sign-up really is in that state', () => {

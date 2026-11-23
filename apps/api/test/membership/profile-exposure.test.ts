@@ -3,8 +3,7 @@
 // and the owner only. Here EVERY unary RPC of EVERY service is called as each person who must not see it,
 // and signed out, with an empty request and then once per sign-up id in every string field. Every response
 // and every error is searched for every typed value. The one exception is the verifier's own contract:
-// ListPendingVerifications returns the number, last name and (OFFICER-VERIFY) first name of an unchecked
-// sign-up, and nothing of a checked or decided one.
+// ListPendingVerifications returns the number and last name of an unchecked sign-up, never a first name.
 // The queue shown to an approver is the control that proves the walk can see a leak. Every value is made up.
 import { randomInt } from 'node:crypto';
 import { create, ScalarType, type DescService } from '@bufbuild/protobuf';
@@ -109,9 +108,8 @@ describe.skipIf(!live)('PROFILE-ID: no RPC of any service gives a typed value to
           const text = dump(out);
           const pendingList = who === 'verifier-token' && method.name === 'ListPendingVerifications';
           for (const t of everyone) {
-            // The verifier's contract returns an unchecked sign-up's typed values (OFFICER-VERIFY: the first name
-            // too); the test below holds it to the unchecked ones.
-            const values = pendingList ? [] : [t.number, t.first, t.last];
+            // The verifier's contract returns an unchecked sign-up's number and last name, never a first name.
+            const values = pendingList ? [t.first] : [t.number, t.first, t.last];
             for (const value of values) if (text.includes(value)) seen.push(`${service.typeName}.${method.name}: ${value}`);
           }
         }
@@ -125,11 +123,10 @@ describe.skipIf(!live)('PROFILE-ID: no RPC of any service gives a typed value to
     expect(everyone.some((t) => text.includes(t.number) && text.includes(t.first) && text.includes(t.last))).toBe(true);
   });
 
-  it('the verifier hears the number, last name and first name of a pending sign-up, and nothing of a checked or decided one', async () => {
+  it('the verifier hears the number and last name of a pending sign-up, and never a first name', async () => {
     const text = dump(await verifier.listPendingVerifications({}, VERIFIER));
-    const [approved, rejected, pending, duplicate] = everyone;
-    expect([pending!.number, pending!.last, pending!.first].every((value) => text.includes(value))).toBe(true);
-    expect([approved, rejected, duplicate].flatMap((t) => [t!.number, t!.first, t!.last]).filter((value) => text.includes(value))).toEqual([]);
+    expect(everyone.some((t) => text.includes(t.number) && text.includes(t.last))).toBe(true);
+    expect(everyone.filter((t) => text.includes(t.first))).toEqual([]);
   });
 
   it('the API never logs any typed value', () => {

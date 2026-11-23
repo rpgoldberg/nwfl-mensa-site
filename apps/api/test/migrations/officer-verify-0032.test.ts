@@ -4,8 +4,8 @@
 //   - signup_request.local_group: the local group the check reported, the one value the site keeps from
 //     the membership records (Ross 11-23); 1 to 120 characters, no control character.
 //   - Both are written with the report only: never on an unchecked sign-up, and never changed after.
-//   - member_account.chapter_member: whether the approved account's local group is this chapter's;
-//     NULL when no group was reported.
+//   - Nothing derived is stored (fix round 1): member_account has no chapter or guest column; the
+//     standing is decided when read, from the reported group (auth/standing.ts).
 // Every subject here is made up.
 import type pg from 'pg';
 import pgLib from 'pg';
@@ -75,25 +75,10 @@ describe.skipIf(!live)('schema after OFFICER-VERIFY (0032)', () => {
     expect(await sqlstate(app, `UPDATE signup_request SET local_group = NULL WHERE id = $1`, [id])).toBe(NOT_IN_PREREQUISITE_STATE);
   });
 
-  it('keeps chapter_member on the account: true, false, or NULL when no group was reported', async () => {
-    for (const [sub, chapter] of [
-      ['ov-chapter', true],
-      ['ov-guest', false],
-      ['ov-unconfirmed', null],
-    ] as const) {
-      expect(
-        await sqlstate(
-          app,
-          `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on, chapter_member) VALUES ($1, 'member', 'invite', 'sub-x', now(), current_date, $2)`,
-          [sub, chapter],
-        ),
-      ).toBe('ok');
-    }
-    const { rows } = await app.query<{ sub: string; chapter_member: boolean | null }>(`SELECT sub, chapter_member FROM member_account WHERE sub LIKE 'ov-%' ORDER BY sub`);
-    expect(rows).toEqual([
-      { sub: 'ov-chapter', chapter_member: true },
-      { sub: 'ov-guest', chapter_member: false },
-      { sub: 'ov-unconfirmed', chapter_member: null },
-    ]);
+  it('stores no derived chapter or guest flag on the account: only the reported group, on the sign-up', async () => {
+    const { rows } = await app.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'member_account' AND column_name ~ 'chapter|guest|local'`,
+    );
+    expect(rows).toEqual([]);
   });
 });

@@ -48,7 +48,9 @@ enum Verification {
   VERIFICATION_DUPLICATE_CLAIM = 7;
 }
 
-// OFFICER-VERIFY: what the membership check's local group says about a person.
+// OFFICER-VERIFY: what the membership check's local group says about a person,
+// decided when read against CHAPTER_GROUP_NAME; always unspecified while
+// OFFICER_VERIFY is off.
 enum LocalGroupStanding {
   // No local group was reported.
   LOCAL_GROUP_STANDING_UNSPECIFIED = 0;
@@ -119,6 +121,23 @@ message SignupRequest {
   // person; empty and unspecified when none was reported.
   string local_group = 13;
   LocalGroupStanding local_group_standing = 14;
+  // OFFICER-VERIFY: whether an approver may approve this sign-up by hand, and
+  // why not; ApproveSignup holds to the same answer. Unspecified while
+  // OFFICER_VERIFY is off, when the rule is as before: an other-group match is
+  // not approved as a member.
+  HandApproval hand_approval = 15;
+}
+
+// OFFICER-VERIFY (switched on): what an approver may do with a sign-up by hand.
+enum HandApproval {
+  // OFFICER_VERIFY off: the rule as before.
+  HAND_APPROVAL_UNSPECIFIED = 0;
+  // May be approved, a chapter member or (a plain sign-up) on the approver's word.
+  HAND_APPROVAL_OPEN = 1;
+  // May be approved, as a guest member: another local group, or none.
+  HAND_APPROVAL_AS_GUEST = 2;
+  // An invited sign-up the check has not confirmed: reject it, or reopen it.
+  HAND_APPROVAL_NEEDS_CHECK = 3;
 }
 
 // VET: the earlier sign-up that claimed the same number, as the site already

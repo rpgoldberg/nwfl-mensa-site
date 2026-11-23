@@ -27,8 +27,8 @@ logger.info({ db_target: describeTarget(), service_version: process.env['SERVICE
 logger.info({ enabled_clients: auth.clients.map((client) => client.kind), group_prefix: auth.groupPrefix }, 'auth');
 // OFFICER-VERIFY: one line naming the mode, read once here (auth/config.ts OFFICER_VERIFY; default off).
 logger.info(
-  { officer_verify: auth.officerVerify ? 'on' : 'off', chapter_group: auth.chapterGroup ?? '' },
-  auth.officerVerify ? 'officer powers need member standing' : 'officer powers do not need member standing',
+  { officer_verify: auth.officerVerify !== null ? 'on' : 'off', chapter_group: auth.officerVerify?.chapterGroup ?? '' },
+  auth.officerVerify !== null ? 'officer powers need member standing' : 'officer powers do not need member standing',
 );
 
 // The chapter this process serves must be the database's one tenant row (CF-ISO-0, tenant.ts). Checked in
@@ -51,7 +51,6 @@ const server = await startServer({
   edgeClientIds: auth.edgeClientIds,
   groupPrefix: auth.groupPrefix,
   officerVerify: auth.officerVerify,
-  chapterGroup: auth.chapterGroup,
   tenantGate,
 });
 

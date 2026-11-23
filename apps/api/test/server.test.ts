@@ -101,7 +101,7 @@ describe('startServer', () => {
     const officer: TokenVerifier = { verify: () => Promise.resolve({ client: 'site', subject: 'sub-officer', groups: ['nwfl-officers'], scopes: [] }) };
     // No member_account row: no standing.
     const db = fakeDb(() => Promise.resolve({ rows: [] }));
-    const officerRead = async (officerVerify?: boolean): Promise<unknown> => {
+    const officerRead = async (officerVerify?: { chapterGroup: string } | null): Promise<unknown> => {
       const server = await startServer({ ...base, db, logger: createStructuredLogger({ sink }), verifier: officer, ...(officerVerify === undefined ? {} : { officerVerify }) });
       try {
         const client = createClient(RedactionPolicyService, createGrpcTransport({ baseUrl: `http://127.0.0.1:${server.grpcPort}` }));
@@ -110,8 +110,8 @@ describe('startServer', () => {
         await server.close();
       }
     };
-    expect(await officerRead(true)).toBe(7);
-    expect(await officerRead(false)).toBe('ok');
+    expect(await officerRead({ chapterGroup: 'Northwest Florida Mensa' })).toBe(7);
+    expect(await officerRead(null)).toBe('ok');
     expect(await officerRead()).toBe('ok');
   });
 

@@ -205,11 +205,15 @@ test.describe('the approvers\' queue (D4)', () => {
     }
     await expect(page.locator('.lead')).toHaveText('People who signed up and are waiting for member access. Approve a sign-up to give the account member access, or reject it.');
     await expect(page.locator('main')).not.toContainText(/erase|never shown/i);
-    // OFFICER-VERIFY: found in another local group: approved as a guest member, in words.
+    // Found in another local group: no Approve, only Reject, and words saying why.
     const other = cards.filter({ hasText: 'Harper Placeholder' });
-    await expect(other.getByRole('button', { name: 'Approve' })).toHaveCount(1);
+    await expect(other.getByRole('button', { name: 'Approve' })).toHaveCount(0);
     await expect(other.getByRole('button', { name: 'Reject' })).toHaveCount(1);
-    await expect(other).toContainText('Approving gives them guest member access: the public pages, and the events as members see them.');
+    await expect(other).toContainText('cannot be approved as a member here');
+    // OFFICER-VERIFY, as the API switched on says it: another group's member approved as a guest, in words.
+    const guest = cards.filter({ hasText: 'Lou Unlisted' });
+    await expect(guest.getByRole('button', { name: 'Approve' })).toHaveCount(1);
+    await expect(guest).toContainText('Approving gives them guest member access: the public pages, and the events as members see them.');
     // An invited sign-up the check did not confirm: no Approve, only Reject, and words saying why.
     const unconfirmed = cards.filter({ hasText: 'Indy Unconfirmed' });
     await expect(unconfirmed.getByRole('button', { name: 'Approve' })).toHaveCount(0);
@@ -351,10 +355,13 @@ test.describe('the approvers\' queue (D4)', () => {
     await page.goto('/');
     await signIn(page, 'approver');
     await page.goto(QUEUE);
-    // OFFICER-VERIFY: an invited sign-up the check did not confirm, posted anyway.
-    const res = await post(page, QUEUE, { decision: 'approve', request: QUEUE_IDS['Indy Unconfirmed'] });
+    const res = await post(page, QUEUE, { decision: 'approve', request: 'b1000000-0000-4000-8000-000000000003' });
     expect(res.status()).toBe(409);
     expect(await res.text()).toContain('Nothing was changed: this sign-up was already decided, or it cannot be approved as a member.');
+    // OFFICER-VERIFY: an invited sign-up the check did not confirm (the API switched on), posted anyway.
+    const unconfirmed = await post(page, QUEUE, { decision: 'approve', request: QUEUE_IDS['Indy Unconfirmed'] });
+    expect(unconfirmed.status()).toBe(409);
+    expect(await unconfirmed.text()).toContain('Nothing was changed: this sign-up was already decided, or it cannot be approved as a member.');
     expect((await post(page, QUEUE, { decision: 'grant', request: 'b1000000-0000-4000-8000-000000000002' })).status()).toBe(400);
     expect((await post(page, QUEUE, { decision: 'approve', request: 'b1000000-0000-4000-8000-000000000002' }, 'https://evil.example.org')).status()).toBe(403);
   });
@@ -414,24 +421,43 @@ test.describe('fix 1: a rejected sign-up (SHOULD-1)', () => {
   });
 });
 
-// OFFICER-VERIFY (Ross 11-23: "the officer needs to also pass the verifier"): an officer confirms their
-// membership like anyone else; until the check passes, the officer tools wait and the officer area sends
-// them to /account. A verified officer is a member and goes back where they were.
-test.describe('OFFICER-VERIFY: officers confirm their membership too', () => {
-  const NOTICE = 'Your officer tools open once your membership is confirmed. Until then you see what the public sees.';
-
+test.describe('fix 1: officers and the Admin need no member account (SHOULD-2, NOTE-8)', () => {
   for (const login of ['officer', 'approver', 'admin', 'lone-admin', 'officer-only'] as const) {
-    test(`${login}, verified, goes back where they were after signing in, and /account shows member access, with no form`, async ({ page }) => {
+    test(`${login} goes back where they were after signing in, and /account says the officer area needs no account, with no form`, async ({ page }) => {
       await page.goto('/about');
       await signIn(page, login);
       await expect(page).toHaveURL(`${SITE_URL}/about`);
       await page.goto(ACCOUNT);
-      await expect(page.locator('.lead')).toHaveText('Your account has member access.');
+      await expect(page.locator('.lead')).toHaveText('You need no member account to use the officer area.');
+      await expect(page.getByRole('link', { name: 'Go to the officer area' })).toHaveAttribute('href', '/officer-area');
       await expect(page.getByRole('button', { name: 'Send my sign-up' })).toHaveCount(0);
+      await expect(page.locator('main')).not.toContainText('not one of the group');
       await expect(page.locator('[data-officer-check]')).toHaveCount(0);
       expect(await axe(page)).toEqual([]);
     });
   }
+
+  test('one of the group\'s enrolees with no account, not an officer, is stopped at /account after each sign-in until they sign up', async ({ page }) => {
+    for (let round = 0; round < 2; round += 1) {
+      await page.goto('/news');
+      await signIn(page, 'newcomer');
+      await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
+      await (await signOutButton(page)).click();
+      await page.getByRole('button', { name: 'Yes, sign me out' }).click();
+      await expect(page).toHaveURL(/\/signed-out$/);
+    }
+    // A membership approver who is no officer signs up like anyone else.
+    await page.goto('/news');
+    await signIn(page, 'lone-approver');
+    await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
+  });
+});
+
+// OFFICER-VERIFY, with the API switched on (Ross 11-23: "the officer needs to also pass the verifier"): an
+// officer whose officer tools wait for the membership check confirms their membership like anyone else;
+// until it passes the officer area sends them to /account. The API's officer_tools decides, never the groups.
+test.describe('OFFICER-VERIFY: an officer whose check waits confirms their membership', () => {
+  const NOTICE = 'Your officer tools open once your membership is confirmed. Until then you see what the public sees.';
 
   test('an officer whose check waits lands on /account after signing in, with the form and the notice', async ({ page }) => {
     await page.goto('/about');
@@ -469,21 +495,6 @@ test.describe('OFFICER-VERIFY: officers confirm their membership too', () => {
     await expect(page.getByRole('note').filter({ hasText: NOTICE })).toBeVisible();
     expect(await axe(page)).toEqual([]);
     await fits(page);
-  });
-
-  test('one of the group\'s enrolees with no account, not an officer, is stopped at /account after each sign-in until they sign up', async ({ page }) => {
-    for (let round = 0; round < 2; round += 1) {
-      await page.goto('/news');
-      await signIn(page, 'newcomer');
-      await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
-      await (await signOutButton(page)).click();
-      await page.getByRole('button', { name: 'Yes, sign me out' }).click();
-      await expect(page).toHaveURL(/\/signed-out$/);
-    }
-    // OFFICER-VERIFY: an officer with no account is stopped there too.
-    await page.goto('/news');
-    await signIn(page, 'officer-unverified');
-    await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
   });
 });
 

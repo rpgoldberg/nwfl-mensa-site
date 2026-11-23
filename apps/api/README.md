@@ -227,10 +227,15 @@ refuses to start). The caller gate (`src/auth/caller.ts`) then withholds every
 power group from a holder without a chapter member's or an affiliate's
 standing (`src/auth/standing-policy.ts`), so no role check and no SQL function
 sees one. `CHAPTER_GROUP_NAME` (e.g. `Northwest Florida Mensa`, one of
-`src/membership/local-groups.ts`; required when the switch is on) tells a
-chapter member from a guest by the local group the membership check reports.
-Guests follow one policy (`guestPolicy`): the public's pages, events as
-members see them, no officer power. One startup line names the mode.
+`src/membership/local-groups.ts`; required when the switch is on, ignored
+when off) tells a chapter member from a guest by the local group the
+membership check reported, compared each time a standing is read
+(`src/auth/standing.ts`): only the reported group is stored. Guests follow one
+policy (`guestPolicy`): the public's pages, events as members see them, no
+officer power. Every rule of the unit (the invite route for officers, the first
+name, the hand-approval rule, guest approval, approval by the report) applies
+only with the switch on; off, the API behaves as before. One startup line
+names the mode.
 
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare

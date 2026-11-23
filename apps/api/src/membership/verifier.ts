@@ -4,8 +4,8 @@
 //
 //   ListPendingVerifications  the undecided, unchecked sign-ups that typed a
 //                             number: id, number, last name, the email
-//                             stored on the sign-up (VET) and the typed first
-//                             name (OFFICER-VERIFY), oldest first, ten
+//                             stored on the sign-up (VET) and, OFFICER_VERIFY
+//                             on only, the typed first name, oldest first, ten
 //                             at most. The verifier's only read that returns
 //                             a number; each row read is audited, no payload.
 //   ReportVerification        the outcome and today's date. What the sign-up
@@ -13,19 +13,20 @@
 //                             leaves this list, which reads unchecked rows.
 //                             A local match does not approve the sign-up: an
 //                             officer still does (R24), with one exception
-//                             (OFFICER-VERIFY): an invited sign-up (the
+//                             (OFFICER-VERIFY, switched on): an invited sign-up (the
 //                             invite route) reported VERIFIED_LOCAL with
 //                             first_name_matched true and the chapter's own
 //                             local group (CHAPTER_GROUP_NAME) is approved
 //                             by the report, in its transaction, as the
 //                             verifier (decided_by_sub and approved_by_sub
 //                             are its subject; audited approve_auto and
-//                             approve_verified). The report also keeps
-//                             first_name_matched and local_group (0032; a
+//                             approve_verified). Switched on, the report also
+//                             keeps first_name_matched and local_group (0032; a
 //                             first-name answer for a sign-up that typed
 //                             none, or a group longer than 120 characters or
 //                             holding a control character, is
-//                             INVALID_ARGUMENT). VET: a duplicate claim
+//                             INVALID_ARGUMENT); switched off, both are
+//                             ignored, as before. VET: a duplicate claim
 //                             may name the earlier sign-up, which must exist
 //                             and be another; no other outcome may name one.
 //                             SIGNOUT (C): the same report again (outcome,
@@ -48,15 +49,16 @@ import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
 import { todayIn } from '../events/zone.js';
 import { ClaimReleaseKind, MembershipVerifierService, VerificationOutcome } from '../gen/nwfl/mensa/v1/membership_verifier_pb.js';
+import type { OfficerVerify } from '../auth/config.js';
 import { LocalGroupStanding } from '../gen/nwfl/mensa/v1/membership_pb.js';
 import { approveAccount } from './approve.js';
-import { reportedStanding } from './local-group.js';
+import { localStanding } from './local-group.js';
 
 export interface VerifierDeps {
   db: Db;
   now: () => Date;
-  /** CHAPTER_GROUP_NAME (auth/config.ts): the chapter's own local group; null for none, so nothing is approved alone. */
-  chapterGroup?: string | null;
+  /** OFFICER_VERIFY (auth/config.ts): on, with the chapter's own local group; null or absent is off, as before. */
+  officerVerify?: OfficerVerify | null;
 }
 
 /** The most characters in a reported local group (0032). */
@@ -85,18 +87,20 @@ const RELEASE_KINDS: Record<string, ClaimReleaseKind> = {
 // What a sign-up the verifier may act on looks like.
 const WAITING = `verification = 'unchecked' AND decision = 'pending' AND membership_number IS NOT NULL`;
 
-/** OFFICER-VERIFY: the sign-up decided and the account a chapter member from the report's date, as the verifier. */
+/** OFFICER-VERIFY (switched on): the sign-up decided and the account a member from the report's date, as the verifier. */
 async function approveByReport(client: TxClient, caller: Caller, reported: { id: string; sub: string; verified_on: string }): Promise<void> {
   const by = caller.subject as string;
   await client.query(`UPDATE signup_request SET decision = 'approved', decided_at = now(), decided_by_sub = $2 WHERE id = $1`, [reported.id, by]);
   await recordAudit(client, caller, { action: 'approve_auto', subjectKind: 'signup_request', subjectId: reported.id, fromState: 'pending', toState: 'approved' });
   // The account is pending (the report read its route from a pending account, in this transaction).
-  await approveAccount(client, { sub: reported.sub, by, verifiedOn: reported.verified_on, chapterMember: true });
+  await approveAccount(client, { sub: reported.sub, by, verifiedOn: reported.verified_on });
   await recordAudit(client, caller, { action: 'approve_verified', subjectKind: 'member_account', subjectId: reported.sub, toState: 'member' });
 }
 
 export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => void {
   const { db } = deps;
+  // OFFICER-VERIFY: null is switched off, and then the contract is as before (fix round 1).
+  const officerVerify = deps.officerVerify ?? null;
   const tx = async <T>(fn: (client: TxClient) => Promise<T>): Promise<T> => {
     try {
       return await inTransaction(db, fn);
@@ -118,7 +122,8 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
           );
           for (const row of rows) await recordAudit(client, caller, { action: 'verification_listed', subjectKind: 'signup_request', subjectId: row.id });
           return {
-            pending: rows.map((row) => ({ requestId: row.id, membershipNumber: row.membership_number, lastName: row.last_name, email: row.email, firstName: row.first_name ?? '' })),
+            // OFFICER-VERIFY, switched on only: the typed first name, for the check to compare.
+            pending: rows.map((row) => ({ requestId: row.id, membershipNumber: row.membership_number, lastName: row.last_name, email: row.email, firstName: officerVerify !== null ? (row.first_name ?? '') : '' })),
           };
         });
       },
@@ -132,12 +137,13 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
           if (request.outcome !== VerificationOutcome.DUPLICATE_CLAIM) throw new ConnectError('conflicting_request_id goes with DUPLICATE_CLAIM only', Code.InvalidArgument);
           if (!UUID.test(conflicting) || conflicting === request.requestId) throw new ConnectError('conflicting_request_id is not another sign-up', Code.InvalidArgument);
         }
-        // OFFICER-VERIFY: the local group as reported, trimmed; empty is not reported.
-        const localGroup = request.localGroup.trim() === '' ? null : request.localGroup.trim();
+        // OFFICER-VERIFY, switched on only: the local group as reported, trimmed (empty is not reported), and the
+        // first-name answer. Switched off, both are ignored, as an API before them ignored them.
+        const localGroup = officerVerify === null || request.localGroup.trim() === '' ? null : request.localGroup.trim();
         if (localGroup !== null && ([...localGroup].length > MAX_LOCAL_GROUP || CONTROL.test(localGroup))) {
           throw new ConnectError(`local_group is at most ${MAX_LOCAL_GROUP} characters, with no control character`, Code.InvalidArgument);
         }
-        const firstNameMatched = request.firstNameMatched ?? null;
+        const firstNameMatched = officerVerify === null ? null : (request.firstNameMatched ?? null);
         const caller = callerOf(ctx.values);
         return tx(async (client) => {
           if (firstNameMatched !== null) {
@@ -160,9 +166,9 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
             // the same answers) is a no-op, decided since or not; anything else is refused as before.
             const { rows: known } = await client.query<{ landed: boolean }>(
               `SELECT verification = $2 AND conflicting_request_id IS NOT DISTINCT FROM $3::uuid
-                 AND first_name_matched IS NOT DISTINCT FROM $4::boolean AND local_group IS NOT DISTINCT FROM $5::text AS landed
+                 AND (NOT $6::boolean OR (first_name_matched IS NOT DISTINCT FROM $4::boolean AND local_group IS NOT DISTINCT FROM $5::text)) AS landed
                FROM signup_request WHERE id = $1`,
-              [request.requestId, outcome, conflicting, firstNameMatched, localGroup],
+              [request.requestId, outcome, conflicting, firstNameMatched, localGroup, officerVerify !== null],
             );
             const found = known[0];
             if (found === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
@@ -176,9 +182,13 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
             fromState: 'unchecked',
             toState: outcome,
           });
-          // OFFICER-VERIFY: an invited sign-up that passed every check is approved by the report itself.
+          // OFFICER-VERIFY, switched on only: an invited sign-up that passed every check is approved by the report itself.
           const full =
-            outcome === 'verified_local' && firstNameMatched === true && reported.route === 'invite' && reportedStanding(localGroup, deps.chapterGroup ?? null) === LocalGroupStanding.CHAPTER;
+            officerVerify !== null &&
+            outcome === 'verified_local' &&
+            firstNameMatched === true &&
+            reported.route === 'invite' &&
+            localStanding(localGroup, outcome, officerVerify.chapterGroup) === LocalGroupStanding.CHAPTER;
           if (full) await approveByReport(client, caller, reported);
           return {};
         });

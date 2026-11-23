@@ -6,13 +6,15 @@
 // is told so in plain words, with whom to contact (fix 1). A member (an officer with an account too)
 // sees their standing and the day it was last checked, and (PROFILE-ID) their profile: the two names,
 // labelled, with a Save button, and the membership number shown as text, never as a field.
-// OFFICER-VERIFY: officers, the Admin, the Webmaster and the approvers confirm their membership the same
-// way: with no account they get the form, and while their officer tools wait for the check (the
-// API's officer_tools, also the officer area's gate) a notice says so. A guest member's standing is
-// said in their own words, and the profile shows the local group the check reported. An account that
-// is not the group's (no enrolee group, no officer power) gets a plain line and no form. The callback
-// sends anyone who may sign up and has no account here after each sign-in until they do
-// (src/lib/signup.ts firstStop); the header links here for every enrolee.
+// Officers and the Admin with no account get a plain line: the officer area needs none (fix 1).
+// OFFICER-VERIFY, decided by the API's officer_tools (switched on in the API; off, the tools are open
+// and all is as before): anyone whose officer tools wait for the membership check gets the form with
+// no account, and a notice while they wait (also the officer area's gate). A guest member's standing
+// is said in their own words, and the profile shows the local group the check reported (switched on
+// only). An account that is not the group's (no enrolee group) gets a plain line and no form. The
+// callback sends one of the group's enrolees with no account here after each sign-in until they sign
+// up, officers and the Admin never, unless their tools wait for the check (src/lib/signup.ts
+// firstStop); the header links here for every enrolee.
 //
 // Not signed in: sign in first (a 303 never stored, fix 1). It works with no script: the form posts
 // here, answered with this page or a 303 back here. A form with problems opens with a summary at the
@@ -46,7 +48,7 @@ import {
   adminContactHref,
   errorSummary,
   formatDay,
-  mayConfirmMembership,
+  maySignUp,
   parseProfileForm,
   parseSignupForm,
   prefillFirstName,
@@ -76,6 +78,9 @@ let profileInvalid: { errors: ProfileErrors; values: ProfileForm } | undefined;
 let profileRefused: keyof typeof PROFILE_REFUSED | undefined;
 let problem: 'sign-in' | 'unavailable' | undefined;
 const posted = Astro.request.method === 'POST';
+/** OFFICER-VERIFY: the caller's officer tools, as the API says (asked only for a sign-up from one who is not an enrolee). */
+const toolsOf = async (): Promise<OfficerToolsState> =>
+  api === undefined || reader === undefined ? 'none' : ((await api.getMyStanding(reader).catch(() => undefined))?.officerTools ?? 'none');
 
 if (posted) {
   const read = await readForm(Astro.request, MAX_FORM_BYTES);
@@ -104,8 +109,9 @@ if (posted) {
         }
       }
     }
-  } else if (!mayConfirmMembership(session)) {
-    // Not one of the group's accounts, nor an officer: there is no sign-up to send (the page says so below).
+  } else if (!maySignUp(session, session.enrolee ? 'none' : await toolsOf())) {
+    // Not one of the group's accounts, nor (OFFICER-VERIFY) one whose officer tools wait for the check:
+    // there is no sign-up to send (the page says so below).
     Astro.response.status = 403;
   } else if (!parsed.ok) {
     invalid = parsed;
@@ -144,7 +150,7 @@ if (api !== undefined && reader !== undefined) {
 }
 if (problem === 'unavailable') markUnavailable(Astro.response);
 
-const view = loaded ? accountView(session, account) : undefined;
+const view = loaded ? accountView(session, account, officerTools) : undefined;
 const sent = !posted && Astro.url.searchParams.get('sent') === '1' && view === 'waiting';
 const checked = account?.verifiedOn !== undefined && (view === 'member' || view === 'affiliate' || view === 'lapsed') ? formatDay(account.verifiedOn) : undefined;
 const errors = invalid?.errors ?? {};
@@ -301,6 +307,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
       )}
       {view === 'waiting' && <p>Until then you can read every public page. Member access starts as soon as it is approved.</p>}
       {view === 'rejected' && <p>{contactBefore}<a href="/officers">Membership Officer</a>{contactAfter}</p>}
+      {view === 'officer' && <p><a href="/officer-area">Go to the officer area</a></p>}
       <p><a href="/privacy">What we keep about you, and who can see it</a></p>
       {(view === 'lapsed' || view === 'removed' || view === 'not-club') && <p>If you think this is a mistake, please <a href="/officers">contact an officer</a>.</p>}
     </>

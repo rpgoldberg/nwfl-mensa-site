@@ -255,16 +255,15 @@ describe('authInterceptor: officer powers need member standing (OFFICER-VERIFY)'
     expect(await harness(holding('sub-guest'), verified, undefined, true).events(bearer('t'))).toMatchObject({ groups: kept, audience: 'public', eventsAudience: 'members' });
   });
 
-  it('reads a guest as the public with events as a member with the switch off too', async () => {
-    const guest: TokenVerifier = { verify: () => Promise.resolve({ client: 'site', subject: 'sub-guest', groups: ['nwfl-members'], scopes: [] }) };
-    expect(await harness(guest, verified).events(bearer('t'))).toEqual({
-      kind: 'user',
-      subject: 'sub-guest',
-      groups: ['nwfl-members'],
-      scopes: [],
-      audience: 'public',
-      eventsAudience: 'members',
-    });
+  // Fix round 1 (the orchestrator's rule: switched off, everything as develop) replaces a test that pinned
+  // the guest policy with the switch off: there is no guest standing then, so a guest reads as a member.
+  it('switched off (and by default), reads a guest or an unconfirmed member as a member, events too, as before', async () => {
+    for (const subject of ['sub-guest', 'sub-unconfirmed']) {
+      const reader: TokenVerifier = { verify: () => Promise.resolve({ client: 'site', subject, groups: ['nwfl-members'], scopes: [] }) };
+      for (const api of [harness(reader, verified, undefined, false), harness(reader, verified)]) {
+        expect(await api.events(bearer('t'))).toEqual({ kind: 'user', subject, groups: ['nwfl-members'], scopes: [], audience: 'members' });
+      }
+    }
   });
 
   it('switched on, a member without a power is untouched', async () => {

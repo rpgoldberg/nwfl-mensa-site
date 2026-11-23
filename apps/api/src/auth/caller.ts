@@ -26,8 +26,9 @@
 //               in `withheld`, read only for the sign-up route and
 //               GetMyAccount. This is the ONE gate: every role check
 //               (roles.ts) and every SQL function handed caller.groups (0014,
-//               0015, 0016, 0020, 0023) sees no power. Off (the default), the
-//               groups pass as before.
+//               0015, 0016, 0020, 0023) sees no power. Off (the default),
+//               everything is as before: the groups pass, and any standing
+//               reads at member level, events too (no guest policy).
 //   anything else                -> UNAUTHENTICATED, never a quiet downgrade
 //   a subject starting system:   -> UNAUTHENTICATED: the database trusts the issue
 //                                   loader's subject (system:issue-loader, 0029), and
@@ -169,11 +170,12 @@ async function establish(header: string | null, verifier: TokenVerifier, standin
   if (verified.client === 'verifier') return { kind: 'verifier', subject: verified.subject, groups: [], scopes, audience: 'public' };
   if (verified.client === 'linkcheck') return { kind: 'linkcheck', subject: verified.subject, groups: [], scopes, audience: 'officers' };
   const kind = await standing.standingOf(verified.subject);
-  const member = readsAsMember(kind);
+  // Switched off, as before: any standing reads at member level (there is no guest), and no power waits.
+  const member = officerVerify ? readsAsMember(kind) : kind !== 'none';
   const all = internalGroups(verified.groups, groupPrefix);
   const { kept: groups, withheld } = officerVerify && !holdsOfficerPower(kind) ? withholdPower(all) : { kept: all, withheld: [] };
   const audience = audienceFor(groups, member);
-  const eventsAudience = audienceFor(groups, readsEventsAsMember(kind));
+  const eventsAudience = officerVerify ? audienceFor(groups, readsEventsAsMember(kind)) : audience;
   return {
     kind: 'user',
     subject: verified.subject,

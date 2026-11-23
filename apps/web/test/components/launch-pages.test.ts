@@ -49,7 +49,7 @@ describe('/privacy', () => {
     const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql', '0032_officer_verify.sql']
       .map((f) => readFileSync(`../api/migrations/${f}`, 'utf8'))
       .join('\n');
-    for (const column of ['first_name', 'last_name', 'membership_number', 'display_name', 'email', 'created_at', 'decided_by_sub', 'decided_at', 'verification', 'verified_on', 'first_name_matched', 'local_group', 'chapter_member']) {
+    for (const column of ['first_name', 'last_name', 'membership_number', 'display_name', 'email', 'created_at', 'decided_by_sub', 'decided_at', 'verification', 'verified_on', 'first_name_matched', 'local_group']) {
       expect(schema, column).toMatch(new RegExp(`\\b${column}\\b`));
     }
     // OFFICER-VERIFY (0032): the local group the check reports, whether that makes a chapter or a guest member,
@@ -91,7 +91,8 @@ describe('/privacy', () => {
     const verifier = readFileSync('../api/src/membership/verifier.ts', 'utf8');
     expect(/SELECT id, ([a-z_, ]+) FROM signup_request WHERE \$\{WAITING\}/.exec(verifier)?.[1]?.split(', ')).toEqual(['membership_number', 'last_name', 'email', 'first_name']);
     expect(verifier).toContain(
-      "pending: rows.map((row) => ({ requestId: row.id, membershipNumber: row.membership_number, lastName: row.last_name, email: row.email, firstName: row.first_name ?? '' }))",
+      // OFFICER-VERIFY: the first name only with OFFICER_VERIFY on; the page names everything that can be sent.
+      "pending: rows.map((row) => ({ requestId: row.id, membershipNumber: row.membership_number, lastName: row.last_name, email: row.email, firstName: officerVerify !== null ? (row.first_name ?? '') : '' }))",
     );
   });
 

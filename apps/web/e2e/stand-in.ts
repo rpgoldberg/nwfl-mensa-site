@@ -130,7 +130,6 @@ export const QUEUE_IDS = {
 /** OFFICER-VERIFY: what each card says of the first-name check and the local group (api.mjs), by name. */
 export const CHECK_FACTS = {
   'Jesse Example': [['First name check', 'Confirmed'], ['Local group', 'Northwest Florida Mensa (this chapter)']],
-  'Harper Placeholder': [['First name check', 'Confirmed'], ['Local group', 'Boston Mensa (guest member)']],
   'Lou Unlisted': [['First name check', 'Did not match'], ['Local group', 'Atlantis Mensa (guest member; not a known local group name: check it)']],
 } as const;
 

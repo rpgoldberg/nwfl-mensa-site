@@ -148,6 +148,16 @@ export declare type SignupRequest = Message<"nwfl.mensa.v1.SignupRequest"> & {
    * @generated from field: nwfl.mensa.v1.LocalGroupStanding local_group_standing = 14;
    */
   localGroupStanding: LocalGroupStanding;
+
+  /**
+   * OFFICER-VERIFY: whether an approver may approve this sign-up by hand, and
+   * why not; ApproveSignup holds to the same answer. Unspecified while
+   * OFFICER_VERIFY is off, when the rule is as before: an other-group match is
+   * not approved as a member.
+   *
+   * @generated from field: nwfl.mensa.v1.HandApproval hand_approval = 15;
+   */
+  handApproval: HandApproval;
 };
 
 /**
@@ -948,7 +958,9 @@ export enum Verification {
 export declare const VerificationSchema: GenEnum<Verification>;
 
 /**
- * OFFICER-VERIFY: what the membership check's local group says about a person.
+ * OFFICER-VERIFY: what the membership check's local group says about a person,
+ * decided when read against CHAPTER_GROUP_NAME; always unspecified while
+ * OFFICER_VERIFY is off.
  *
  * @generated from enum nwfl.mensa.v1.LocalGroupStanding
  */
@@ -1060,6 +1072,46 @@ export enum SignupDecision {
  * Describes the enum nwfl.mensa.v1.SignupDecision.
  */
 export declare const SignupDecisionSchema: GenEnum<SignupDecision>;
+
+/**
+ * OFFICER-VERIFY (switched on): what an approver may do with a sign-up by hand.
+ *
+ * @generated from enum nwfl.mensa.v1.HandApproval
+ */
+export enum HandApproval {
+  /**
+   * OFFICER_VERIFY off: the rule as before.
+   *
+   * @generated from enum value: HAND_APPROVAL_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * May be approved, a chapter member or (a plain sign-up) on the approver's word.
+   *
+   * @generated from enum value: HAND_APPROVAL_OPEN = 1;
+   */
+  OPEN = 1,
+
+  /**
+   * May be approved, as a guest member: another local group, or none.
+   *
+   * @generated from enum value: HAND_APPROVAL_AS_GUEST = 2;
+   */
+  AS_GUEST = 2,
+
+  /**
+   * An invited sign-up the check has not confirmed: reject it, or reopen it.
+   *
+   * @generated from enum value: HAND_APPROVAL_NEEDS_CHECK = 3;
+   */
+  NEEDS_CHECK = 3,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.HandApproval.
+ */
+export declare const HandApprovalSchema: GenEnum<HandApproval>;
 
 /**
  * Accounts and approvals. The subject, display name and email come from the

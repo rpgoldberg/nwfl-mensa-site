@@ -33,6 +33,7 @@ import type { Date as ProtoDate } from '../../gen/nwfl/mensa/v1/common_pb.js';
 import {
   AccountRoute,
   type EarlierClaim as EarlierClaimMessage,
+  HandApproval,
   LocalGroupStanding,
   MemberStatus,
   MembershipService,
@@ -51,6 +52,8 @@ export type Route = 'invite' | 'signup' | 'admin_grant';
 export type Check = 'unchecked' | 'verified_local' | 'verified_other_group' | 'not_found' | 'error' | 'email_mismatch' | 'duplicate_claim';
 /** OFFICER-VERIFY: what the reported local group makes the person; none reported is left out. */
 export type LocalGroup = 'chapter' | 'guest' | 'guest_unlisted';
+/** OFFICER-VERIFY (switched on): what an approver may do with a sign-up by hand, as the API decides and enforces it. */
+export type HandApprovalState = 'open' | 'as_guest' | 'needs_check';
 /** OFFICER-VERIFY: the person's officer tools. */
 export type OfficerToolsState = 'open' | 'awaiting_check' | 'none';
 /** GetSignupRequest: where one sign-up stands. */
@@ -114,6 +117,8 @@ export interface PendingSignup extends Typed {
   /** OFFICER-VERIFY: the reported local group and what it makes the person, when one was reported. */
   localGroup?: string;
   localGroupStanding?: LocalGroup;
+  /** OFFICER-VERIFY: what an approver may do by hand; absent while switched off (the rule as before). */
+  handApproval?: HandApprovalState;
 }
 
 /** REOPEN: a rejected sign-up that can be reopened, as the Admin or the Membership Officer sees it. */
@@ -200,6 +205,7 @@ const LOCAL_GROUP: Record<LocalGroup, LocalGroupStanding> = {
   guest: LocalGroupStanding.GUEST,
   guest_unlisted: LocalGroupStanding.GUEST_UNLISTED,
 };
+const HAND_APPROVAL: Record<HandApprovalState, HandApproval> = { open: HandApproval.OPEN, as_guest: HandApproval.AS_GUEST, needs_check: HandApproval.NEEDS_CHECK };
 const TOOLS: Record<OfficerToolsState, OfficerTools> = { none: OfficerTools.UNSPECIFIED, open: OfficerTools.OPEN, awaiting_check: OfficerTools.AWAITING_CHECK };
 const DECISION: Record<Decision, SignupDecision> = {
   pending: SignupDecision.PENDING,
@@ -263,6 +269,7 @@ function pendingOf(request: SignupRequest): PendingSignup {
     ...(request.firstNameMatched !== undefined ? { firstNameMatched: request.firstNameMatched } : {}),
     ...(request.localGroup !== '' ? { localGroup: request.localGroup } : {}),
     ...(standing !== undefined ? { localGroupStanding: standing } : {}),
+    ...(request.handApproval !== HandApproval.UNSPECIFIED ? { handApproval: nameOf(HAND_APPROVAL, request.handApproval) } : {}),
     ...(request.earlierClaim
       ? {
           earlierClaim: {

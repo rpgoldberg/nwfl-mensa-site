@@ -1,7 +1,9 @@
-// OFFICER-VERIFY: what a reported local group makes a person, against the chapter's own name.
+// OFFICER-VERIFY: what a reported local group makes a person, decided when read against the chapter's
+// own name (switched on only), and what an approver may then do by hand (fix round 1: switched off,
+// neither applies).
 import { describe, expect, it } from 'vitest';
-import { LocalGroupStanding } from '../gen/nwfl/mensa/v1/membership_pb.js';
-import { accountStanding, chapterMemberOf, reportedStanding } from './local-group.js';
+import { HandApproval, LocalGroupStanding } from '../gen/nwfl/mensa/v1/membership_pb.js';
+import { handApproval, localStanding } from './local-group.js';
 import { LOCAL_GROUPS, NO_GROUP } from './local-groups.js';
 
 const CHAPTER = 'Northwest Florida Mensa';
@@ -15,42 +17,54 @@ describe('the local group list', () => {
   });
 });
 
-describe('reportedStanding', () => {
-  it.each<[string | null, string | null, LocalGroupStanding]>([
-    [null, CHAPTER, LocalGroupStanding.UNSPECIFIED],
-    [CHAPTER, CHAPTER, LocalGroupStanding.CHAPTER],
-    ['Boston Mensa', CHAPTER, LocalGroupStanding.GUEST],
-    [NO_GROUP, CHAPTER, LocalGroupStanding.GUEST],
-    ['northwest florida mensa', CHAPTER, LocalGroupStanding.GUEST_UNLISTED],
-    ['Atlantis Mensa', CHAPTER, LocalGroupStanding.GUEST_UNLISTED],
-    [CHAPTER, null, LocalGroupStanding.GUEST],
-  ])('%j against %j is %s', (group, chapter, standing) => {
-    expect(reportedStanding(group, chapter)).toBe(standing);
+describe('localStanding (decided when read)', () => {
+  it.each<[string | null, string, string | null, LocalGroupStanding]>([
+    [null, 'verified_local', CHAPTER, LocalGroupStanding.UNSPECIFIED],
+    [null, 'not_found', CHAPTER, LocalGroupStanding.UNSPECIFIED],
+    [null, 'verified_other_group', CHAPTER, LocalGroupStanding.GUEST],
+    [CHAPTER, 'verified_local', CHAPTER, LocalGroupStanding.CHAPTER],
+    [CHAPTER, 'verified_other_group', CHAPTER, LocalGroupStanding.CHAPTER],
+    ['Boston Mensa', 'verified_local', CHAPTER, LocalGroupStanding.GUEST],
+    [NO_GROUP, 'verified_local', CHAPTER, LocalGroupStanding.GUEST],
+    ['northwest florida mensa', 'verified_local', CHAPTER, LocalGroupStanding.GUEST_UNLISTED],
+    ['Atlantis Mensa', 'verified_local', CHAPTER, LocalGroupStanding.GUEST_UNLISTED],
+    // A different chapter group setting reads the same rows differently: nothing is fixed.
+    [CHAPTER, 'verified_local', 'Boston Mensa', LocalGroupStanding.GUEST],
+    ['Boston Mensa', 'verified_local', 'Boston Mensa', LocalGroupStanding.CHAPTER],
+    // Switched off: no chapter group, no standing at all.
+    [CHAPTER, 'verified_local', null, LocalGroupStanding.UNSPECIFIED],
+    ['Boston Mensa', 'verified_other_group', null, LocalGroupStanding.UNSPECIFIED],
+  ])('%j (%s) against %j is %s', (group, verification, chapter, standing) => {
+    expect(localStanding(group, verification, chapter)).toBe(standing);
   });
 });
 
-describe('accountStanding', () => {
-  it.each<[boolean | null, string | null, LocalGroupStanding]>([
-    [true, CHAPTER, LocalGroupStanding.CHAPTER],
-    [null, null, LocalGroupStanding.UNSPECIFIED],
-    [false, 'Boston Mensa', LocalGroupStanding.GUEST],
-    [false, null, LocalGroupStanding.GUEST],
-    [false, 'Atlantis Mensa', LocalGroupStanding.GUEST_UNLISTED],
-  ])('chapter_member %s with %j is %s', (chapter, group, standing) => {
-    expect(accountStanding(chapter, group)).toBe(standing);
-  });
-});
+describe('handApproval', () => {
+  const ON = { chapterGroup: CHAPTER };
+  const signup = (extra: Partial<Parameters<typeof handApproval>[0]>) => ({ route: 'signup', verification: 'unchecked', firstNameMatched: null, localGroup: null, ...extra });
 
-describe('chapterMemberOf', () => {
-  it.each<[string, string | null, string | null, boolean | null]>([
-    ['verified_local', CHAPTER, CHAPTER, true],
-    ['verified_local', 'Boston Mensa', CHAPTER, false],
-    ['verified_other_group', CHAPTER, CHAPTER, true],
-    ['verified_other_group', null, CHAPTER, false],
-    ['verified_local', null, CHAPTER, null],
-    ['not_found', null, CHAPTER, null],
-    ['verified_local', CHAPTER, null, false],
-  ])('%s reporting %j against %j: %s', (verification, group, chapter, member) => {
-    expect(chapterMemberOf(verification, group, chapter)).toBe(member);
+  it('switched off, says nothing: the rule is as before (an other-group match is not approved as a member)', () => {
+    for (const verification of ['unchecked', 'verified_local', 'verified_other_group', 'not_found']) {
+      for (const route of ['signup', 'invite']) expect(handApproval(signup({ route, verification, firstNameMatched: false, localGroup: 'Boston Mensa' }), null)).toBe(HandApproval.UNSPECIFIED);
+    }
+  });
+
+  it.each<[string, Partial<Parameters<typeof handApproval>[0]>, HandApproval]>([
+    ['a plain sign-up, unchecked', {}, HandApproval.OPEN],
+    ['a plain sign-up, not found', { verification: 'not_found' }, HandApproval.OPEN],
+    ['a plain sign-up, a first-name mismatch', { verification: 'verified_local', firstNameMatched: false, localGroup: CHAPTER }, HandApproval.OPEN],
+    ['a plain sign-up in another group', { verification: 'verified_local', localGroup: 'Boston Mensa' }, HandApproval.AS_GUEST],
+    ['a plain other-group match, no group said', { verification: 'verified_other_group' }, HandApproval.AS_GUEST],
+    ['an invited local match', { route: 'invite', verification: 'verified_local', localGroup: CHAPTER }, HandApproval.OPEN],
+    ['an invited local match, no group said', { route: 'invite', verification: 'verified_local' }, HandApproval.OPEN],
+    ['an invited email mismatch', { route: 'invite', verification: 'email_mismatch', localGroup: CHAPTER }, HandApproval.OPEN],
+    ['an invited other-group match', { route: 'invite', verification: 'verified_other_group', localGroup: 'Boston Mensa' }, HandApproval.AS_GUEST],
+    ['an invited unchecked sign-up', { route: 'invite' }, HandApproval.NEEDS_CHECK],
+    ['an invited not found', { route: 'invite', verification: 'not_found' }, HandApproval.NEEDS_CHECK],
+    ['an invited check error', { route: 'invite', verification: 'error' }, HandApproval.NEEDS_CHECK],
+    ['an invited duplicate claim', { route: 'invite', verification: 'duplicate_claim' }, HandApproval.NEEDS_CHECK],
+    ['an invited first-name mismatch', { route: 'invite', verification: 'verified_local', firstNameMatched: false, localGroup: CHAPTER }, HandApproval.NEEDS_CHECK],
+  ])('switched on, %s is %s', (_why, extra, answer) => {
+    expect(handApproval(signup(extra), ON)).toBe(answer);
   });
 });
