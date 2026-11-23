@@ -108,4 +108,47 @@ describe('dependabot.yml', () => {
     for (const b of blocks.filter((x) => !x.startsWith('"github-actions"'))) for (const dir of ['apps/api', 'apps/linkcheck', 'apps/web']) expect(b).toContain(`      - "/${dir}"`);
     expect(blocks.find((x) => x.startsWith('"github-actions"'))).toMatch(/^ {4}directory: "\/"$/m);
   });
+
+  /** One block's ignore rules as "name major", "name minor+major" or "name <one version line>", each under its own comment line; none holds a package whole. */
+  function ignores(kind: string): string[] {
+    const b = t.split(/^ {2}- package-ecosystem: /m).find((x) => x.startsWith(`"${kind}"`)) ?? '';
+    const at = b.search(/^ {4}ignore:$/m);
+    if (at === -1) return [];
+    const rest = b.slice(at).split('\n').slice(1);
+    const end = rest.findIndex((l) => l !== '' && !l.startsWith('      '));
+    const lines = end === -1 ? rest : rest.slice(0, end);
+    const out: string[] = [];
+    lines.forEach((l, i) => {
+      const name = /^ {6}- dependency-name: "([^"]+)"$/.exec(l)?.[1];
+      if (name === undefined) return;
+      expect(lines[i - 1], `a comment says why ${name} is held`).toMatch(/^ {6}# \S/);
+      const kinds = /^ {8}update-types: \[(.*)\]$/.exec(lines[i + 1] ?? '')?.[1];
+      // Or one minor line, as "1.65.x": the next minor still comes.
+      const line = /^ {8}versions: \["(\d+\.\d+\.x)"\]$/.exec(lines[i + 1] ?? '')?.[1];
+      // Patch releases always come through: no rule holds a package whole or its patches.
+      const held = line ?? { '"version-update:semver-major"': 'major', '"version-update:semver-minor", "version-update:semver-major"': 'minor+major' }[kinds ?? ''];
+      expect(held, `${name} is held for majors, minors and majors, or one minor line only`).toBeDefined();
+      out.push(`${name} ${held}`);
+    });
+    return out.sort();
+  }
+
+  it('holds pdf.js minors and majors (PDFJS-6.5) but lets its patches through, and stops the TypeScript and @types/node majors (DEP-89)', () => {
+    expect(ignores('npm')).toEqual(['@playwright/test 1.65.x', '@types/node major', 'pdfjs-dist minor+major', 'typescript major']);
+    expect(t).toMatch(/^ {6}# .*PDFJS-6\.5.*\n(?: {6}# .*\n)* {6}- dependency-name: "pdfjs-dist"$/m);
+  });
+
+  it('stops the postgres image majors, so the tests stay on production Postgres 17 (DEP-89)', () => {
+    expect(ignores('docker')).toEqual(['postgres major']);
+    expect(ignores('github-actions')).toEqual([]);
+  });
+
+  it('holds Playwright 1.65.x, whose WebKit cannot follow sign-in back to the site (microsoft/playwright#44254), and the icon script runs the image of the version installed', () => {
+    expect(t).toMatch(/^ {6}# .*microsoft\/playwright#44254.*\n(?: {6}# .*\n)* {6}- dependency-name: "@playwright\/test"$/m);
+    const pkg = JSON.parse(readFileSync(path.join(ROOT, 'apps', 'web', 'package.json'), 'utf8')) as { devDependencies: Record<string, string> };
+    const pw = pkg.devDependencies['@playwright/test'];
+    expect(pw).toBe('1.64.1');
+    const icons = readFileSync(path.join(ROOT, 'apps', 'web', 'scripts', 'make-icons.mjs'), 'utf8');
+    expect(icons.match(/mcr\.microsoft\.com\/playwright:v[\d.]+-noble/g)).toEqual([`mcr.microsoft.com/playwright:v${pw}-noble`]);
+  });
 });

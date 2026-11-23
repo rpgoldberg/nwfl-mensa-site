@@ -16,6 +16,21 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # PDFJS-6.5: pdf.js is the redaction gate's reader, so a new minor or major is its own unit with a red-team.
+      # Patch releases still come through.
+      - dependency-name: "pdfjs-dist"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # Playwright 1.65.x: its WebKit asserts on the cross-site hop back to the site after sign-in,
+      # whose pages send Cross-Origin-Opener-Policy (microsoft/playwright#44254). 1.66 still comes.
+      - dependency-name: "@playwright/test"
+        versions: ["1.65.x"]
+      # TypeScript 7 is its own later unit.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # The runtime is Node 24; the types follow it.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -41,3 +56,7 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # The tests' Postgres stays on production's major, 17.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]

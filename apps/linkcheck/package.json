@@ -18,15 +18,15 @@
   },
   "dependencies": {
     "pdfjs-dist": "6.4.299",
-    "tldts": "7.4.24"
+    "tldts": "7.5.5"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.19.2",
-    "@vitest/coverage-v8": "5.1.0",
-    "eslint": "10.14.0",
+    "@vitest/coverage-v8": "5.1.1",
+    "eslint": "10.15.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.1",
-    "vitest": "5.1.0"
+    "typescript-eslint": "8.73.0",
+    "vitest": "5.1.1"
   }
 }
