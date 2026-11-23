@@ -42,7 +42,7 @@
     "@figurecollecting/fc-shared": "file:../api/vendor/figurecollecting-fc-shared-1.7.0.tgz",
     "@fontsource/atkinson-hyperlegible": "5.3.0",
     "@fontsource/lexend": "5.3.0",
-    "@playwright/test": "1.65.1",
+    "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
     "@types/oidc-provider": "9.13.1",
     "@vitest/coverage-v8": "5.1.1",

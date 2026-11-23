@@ -5,7 +5,7 @@
 // Chromium, and commit the PNGs it writes to public/icons/:
 //
 //   docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD":/work -w /work \
-//     mcr.microsoft.com/playwright:v1.65.1-noble node scripts/make-icons.mjs
+//     mcr.microsoft.com/playwright:v1.64.1-noble node scripts/make-icons.mjs
 //
 // Lexend is under the SIL Open Font License; pictures drawn with it are not.
 import { readFileSync } from 'node:fs';
