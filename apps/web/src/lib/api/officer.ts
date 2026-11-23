@@ -44,7 +44,8 @@ export class ApprovalSettingMoved extends Error {
 export interface OfficerApi {
   getApprovalRules(as: Reader): Promise<Setting[]>;
   /** expectedRevision: the revision the Admin read ('' for the default); always sent, so the API checks it. */
-  setApprovalRule(as: Reader, change: { scope: Scope; rule: Rule; reason: string; expectedRevision: string }): Promise<{ changed: boolean }>;
+  /** revision: the setting's revision after it, from the API's answer (the page's "done" check). */
+  setApprovalRule(as: Reader, change: { scope: Scope; rule: Rule; reason: string; expectedRevision: string }): Promise<{ changed: boolean; revision: string }>;
 }
 
 const SCOPE_IN: Record<Scope, ApprovalScope> = { content: ApprovalScope.CONTENT, redaction_policy: ApprovalScope.REDACTION_POLICY };
@@ -97,8 +98,7 @@ export function grpcOfficer(config: ApiConfig, log: (line: string) => void): Off
           { headers },
         );
         if (answer.setting === undefined) throw new ConnectError('no setting in the answer', Code.DataLoss);
-        settingOf(answer.setting);
-        return { changed: answer.changed };
+        return { changed: answer.changed, revision: settingOf(answer.setting).revision };
       }),
   };
 }
