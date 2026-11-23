@@ -14,7 +14,8 @@ import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
 import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService, EventVisibility, OccurrenceStatus } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
 import { HandApproval, LocalGroupStanding, MembershipService, OfficerTools } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
-import { MembershipVerifierService, VerificationOutcome } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
+import { MembershipVerifierService, PendingVerificationSchema, VerificationOutcome } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
+import { create, toBinary } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { type Api, insertId, startApi } from '../helpers/api.js';
 import { membersSpan, paragraph, publishItem } from '../helpers/content.js';
@@ -216,11 +217,27 @@ describe.skipIf(!live).each([
       });
     });
 
-    it('gives the verifier no first name', async () => {
+    // (V), fix round 2: what goes to the verifier is develop's payload, byte for byte (PROFILE-ID: never a first
+    // name until the flip), and nothing it reports beyond develop's fields is stored or used.
+    it('sends the verifier develop\'s pending payload, byte for byte: id, number, last name and email, never a first name', async () => {
       const id = await signUp(`joiner.${next()}`, 'Robin');
       const { pending } = await api.client(MembershipVerifierService).listPendingVerifications({ pageSize: 100 }, as('verifier'));
-      expect(pending.find((p) => p.requestId === id)?.firstName).toBe('');
+      const item = pending.find((p) => p.requestId === id);
+      expect(item?.firstName).toBe('');
+      const develop = create(PendingVerificationSchema, { requestId: id, membershipNumber: item?.membershipNumber ?? '', lastName: 'Madeup', email: item?.email ?? '' });
+      expect(Buffer.from(toBinary(PendingVerificationSchema, item!)).toString('hex')).toBe(Buffer.from(toBinary(PendingVerificationSchema, develop)).toString('hex'));
+      expect(JSON.stringify(pending)).not.toContain('Robin');
       await report(id, VerificationOutcome.NOT_FOUND);
+    });
+
+    it('stores and uses neither the first-name answer nor the local group a report carries', async () => {
+      const token = `invitee.${next()}`;
+      const id = await signUp(token);
+      await report(id, VerificationOutcome.VERIFIED_LOCAL, { firstNameMatched: true, localGroup: 'Boston Mensa' });
+      expect(await row(id)).toMatchObject({ decision: 'pending', status: 'pending', first_name_matched: null, local_group: null });
+      // Not used either: approved by hand, the person reads as a member, as on develop.
+      expect(await code(membership().approveSignup({ requestId: id }, as('approver')))).toBe('ok');
+      expect(await reads(token)).toEqual({ members: true, events: true });
     });
   });
 });

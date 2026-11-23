@@ -116,15 +116,20 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
         const size = request.pageSize === 0 ? MAX_PENDING_PAGE : Math.min(request.pageSize, MAX_PENDING_PAGE);
         const caller = callerOf(ctx.values);
         return tx(async (client) => {
-          const { rows } = await client.query<{ id: string; membership_number: string; last_name: string; email: string; first_name: string | null }>(
-            `SELECT id, membership_number, last_name, email, first_name FROM signup_request WHERE ${WAITING} ORDER BY created_at, id LIMIT $1`,
+          const { rows } = await client.query<{ id: string; membership_number: string; last_name: string; email: string }>(
+            `SELECT id, membership_number, last_name, email FROM signup_request WHERE ${WAITING} ORDER BY created_at, id LIMIT $1`,
             [size],
           );
           for (const row of rows) await recordAudit(client, caller, { action: 'verification_listed', subjectKind: 'signup_request', subjectId: row.id });
-          return {
-            // OFFICER-VERIFY, switched on only: the typed first name, for the check to compare.
-            pending: rows.map((row) => ({ requestId: row.id, membershipNumber: row.membership_number, lastName: row.last_name, email: row.email, firstName: officerVerify !== null ? (row.first_name ?? '') : '' })),
-          };
+          const listed = { pending: rows.map((row) => ({ requestId: row.id, membershipNumber: row.membership_number, lastName: row.last_name, email: row.email })) };
+          // Switched off, exactly as before (PROFILE-ID: no first name to the verifier); the first name is not even read.
+          if (officerVerify === null) return listed;
+          // OFFICER-VERIFY, switched on: the typed first name too, for the check to compare.
+          const { rows: named } = await client.query<{ id: string; first_name: string | null }>(`SELECT id, first_name FROM signup_request WHERE id = ANY($1::uuid[])`, [
+            rows.map((row) => row.id),
+          ]);
+          const firstNames = new Map(named.map((row) => [row.id, row.first_name ?? '']));
+          return { pending: listed.pending.map((item) => ({ ...item, firstName: firstNames.get(item.requestId) ?? '' })) };
         });
       },
 
