@@ -113,6 +113,24 @@ CREATE INDEX search_item_members_version ON search_item_members (version_id);
 REVOKE ALL ON search_page_public, search_page_members, search_item_public, search_item_members FROM nwfl;
 GRANT SELECT ON search_page_public, search_page_members, search_item_public, search_item_members TO nwfl;
 
+-- When the app last re-recorded a version for an audience, against when a policy cell last changed, on one sequence
+-- (search_file_servable's passage-mark answer must postdate the last policy change; see there). A sequence, not a
+-- time: values follow the order of the calls, and a re-record takes the ledger lock before it renders, as a policy
+-- change does before it writes.
+CREATE SEQUENCE rerecord_seq;
+CREATE TABLE policy_change_epoch (
+  id  boolean PRIMARY KEY DEFAULT true CHECK (id),
+  seq bigint  NOT NULL
+);
+CREATE TABLE version_rerecorded (
+  version_id uuid    NOT NULL REFERENCES content_version (id) ON DELETE CASCADE,
+  audience   text    NOT NULL CHECK (audience IN ('public', 'members')),
+  seq        bigint  NOT NULL,
+  PRIMARY KEY (version_id, audience)
+);
+REVOKE ALL ON policy_change_epoch, version_rerecorded FROM nwfl;
+REVOKE ALL ON SEQUENCE rerecord_seq FROM nwfl;
+
 -- servableFile (content/files.ts) as one predicate: whether it gives the audience (public or members) the file now.
 -- servableFile answers null when:
 --   * the file is not a PDF, or is neither a PDF of the live version of a published item that is not officers-only nor
@@ -126,7 +144,13 @@ GRANT SELECT ON search_page_public, search_page_members, search_item_public, sea
 -- be stored). The last test runs quoteMatches (folding, look-alikes, whole words) and cannot be written here. For it
 -- the predicate reads the app's own answer: the ledger's current row for this version and audience, which
 -- renderVersion (ledger/ledger.ts) records with no output exactly when itemHidden holds, and which every mark and policy
--- change records again in its own transaction (redaction/marks.ts, redaction/service.ts). No row, or no output: refused.
+-- change made through the API records again in its own transaction (redaction/marks.ts, redaction/service.ts). No row,
+-- or no output: refused. A policy cell written outside the API (as 0022 wrote its change) re-records nothing, so the row
+-- counts only if the app re-recorded the version after the last policy change (version_rerecorded against
+-- policy_change_epoch, below): until it does, refused. A version never re-recorded since 0032 is refused too (its row
+-- may predate a change written as 0022 wrote its own); the boot backfill re-records each one whose render still is
+-- its row (search/backfill.ts). NOT covered: a change to the lens CODE (quoteMatches,
+-- normalizeTree) deployed without a re-record leaves the rows as they were; that is ARCHIVE-SEARCH S3's (with P1d).
 -- An invoker function with no grant: search_page_put, a definer, calls it as the owner.
 CREATE FUNCTION search_file_servable(p_file uuid, p_audience text) RETURNS boolean
   LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
@@ -154,9 +178,12 @@ CREATE FUNCTION search_file_servable(p_file uuid, p_audience text) RETURNS boole
                        AND NOT EXISTS (SELECT 1 FROM redaction_mark_anchor x JOIN stored_file af ON af.id = x.file_id
                                         WHERE x.tenant_id = 'nwflorida' AND x.mark_id = m.id AND af.version_id = v.id))
                    OR (m.field <> 'file' AND a.action = 'redact'
-                       AND NOT EXISTS (SELECT 1 FROM publication_ledger l
-                                        WHERE l.tenant_id = 'nwflorida' AND l.subject_kind = 'content_version' AND l.subject_id = v.id
-                                          AND l.audience = p_audience AND l.current_to IS NULL AND l.output_sha256 IS NOT NULL)))))))
+                       AND NOT (EXISTS (SELECT 1 FROM publication_ledger l
+                                         WHERE l.tenant_id = 'nwflorida' AND l.subject_kind = 'content_version' AND l.subject_id = v.id
+                                           AND l.audience = p_audience AND l.current_to IS NULL AND l.output_sha256 IS NOT NULL)
+                                AND EXISTS (SELECT 1 FROM version_rerecorded c
+                                             WHERE c.version_id = v.id AND c.audience = p_audience
+                                               AND c.seq > coalesce((SELECT s.seq FROM policy_change_epoch s), 0)))))))))
 $fn$;
 REVOKE EXECUTE ON FUNCTION search_file_servable(uuid, text) FROM PUBLIC;
 
@@ -244,6 +271,11 @@ BEGIN
   IF v_output IS DISTINCT FROM p_sha THEN
     RAISE EXCEPTION 'the ledger does not say this audience is given this output now' USING ERRCODE = '55000';
   END IF;
+  -- The app re-recorded this version for the audience now (recordSubjects calls this put for every version it renders,
+  -- changed or not): its ledger row answers for the policy as it now stands.
+  INSERT INTO version_rerecorded (version_id, audience, seq)
+    SELECT p_version, p_audience, nextval('rerecord_seq') WHERE EXISTS (SELECT 1 FROM content_version WHERE id = p_version)
+    ON CONFLICT (version_id, audience) DO UPDATE SET seq = EXCLUDED.seq;
   IF p_sha IS NULL OR p_title IS NULL THEN
     IF p_audience = 'public' THEN
       DELETE FROM search_item_public WHERE version_id = p_version;
@@ -330,6 +362,22 @@ CREATE TRIGGER content_version_search_pages AFTER UPDATE OF visibility ON conten
 CREATE TRIGGER edition_search_pages AFTER UPDATE OF status ON edition
   FOR EACH ROW WHEN (OLD.status = 'published' AND NEW.status <> 'published')
   EXECUTE FUNCTION search_page_unservable();
+
+-- Any write to a policy cell, by any path, in its own transaction: until the app re-records a version
+-- (search_item_put), its ledger row no longer answers for a passage mark (search_file_servable). Writes nothing to the
+-- ledger, and touches no guarded table. An invoker: only the owner writes policy cells (0013 revoked the app's
+-- writes; redaction_propose and redaction_approve are the owner's definers), and the owner owns these two tables.
+CREATE FUNCTION policy_change_epoch_bump() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $fn$
+BEGIN
+  INSERT INTO policy_change_epoch (id, seq) VALUES (true, nextval('rerecord_seq'))
+    ON CONFLICT (id) DO UPDATE SET seq = EXCLUDED.seq;
+  RETURN NULL;
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION policy_change_epoch_bump() FROM PUBLIC;
+CREATE TRIGGER redaction_policy_epoch AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON redaction_policy
+  FOR EACH STATEMENT EXECUTE FUNCTION policy_change_epoch_bump();
 
 -- 0025's function, with the page writer: the worker's alone once the role exists.
 CREATE OR REPLACE FUNCTION nwfl_worker_grants() RETURNS boolean

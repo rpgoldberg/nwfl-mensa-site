@@ -28,7 +28,28 @@ type Action = 'show' | 'redact' | 'hide' | 'missing';
 /** A policy for one audience: each mark category's cell, or 'missing' for no row. */
 type Cells = Record<(typeof CATEGORIES)[number], Action>;
 type Config = { name: string } & Record<Aud, Cells>;
-type MarkKind = 'whole' | 'present' | 'absent' | 'file-this' | 'file-other' | 'file-other-tenant-anchor' | 'removed' | 'other-tenant';
+type MarkKind =
+  | 'whole'
+  | 'present'
+  | 'absent'
+  | 'present-title'
+  | 'absent-title'
+  | 'absent-summary'
+  | 'absent-obo'
+  | 'file-this'
+  | 'file-other'
+  | 'file-other-tenant-anchor'
+  | 'removed'
+  | 'other-tenant';
+/** A passage mark's field and quote: the quote carried (in the title, so in every text list) or not. */
+const PASSAGES: Partial<Record<MarkKind, [string, string]>> = {
+  present: ['body', 'Lantern walk'],
+  absent: ['body', 'Quill gate code 4417'],
+  'present-title': ['title', 'Lantern walk'],
+  'absent-title': ['title', 'Wren Halloway 850-555-0163'],
+  'absent-summary': ['summary', 'Thornwick ferry pass 2290'],
+  'absent-obo': ['on_behalf_of', 'Blake Zephyr'],
+};
 type Life = 'live' | 'withdrawn' | 'draft' | 'superseded';
 interface ItemSpec {
   kind: 'item';
@@ -205,9 +226,10 @@ describe.skipIf(!live)('search_page_put succeeds exactly when servableFile gives
         const id = await markAdd(itemId, null, null, mark.category);
         if (mark.kind === 'removed')
           await guardOff('redaction_mark', 'redaction_mark_guard', `UPDATE redaction_mark SET status = 'removed', removed_at = now() WHERE id = $1`, [id]);
-      } else if (mark.kind === 'present') await markAdd(itemId, 'body', 'Lantern walk', mark.category);
-      else if (mark.kind === 'absent') await markAdd(itemId, 'body', 'Quill gate code 4417', mark.category);
-      else if (mark.kind === 'other-tenant')
+      } else if (PASSAGES[mark.kind] !== undefined) {
+        const [field, quote] = PASSAGES[mark.kind] as [string, string];
+        await markAdd(itemId, field, quote, mark.category);
+      } else if (mark.kind === 'other-tenant')
         await owner.query(`INSERT INTO redaction_mark (tenant_id, content_item_id, category, created_by_sub) VALUES ('other-group', $1, $2, 'sub-other')`, [itemId, mark.category]);
       else if (mark.kind === 'file-this') await fileMark(itemId, mark.category, [fileId]);
       else {
@@ -328,6 +350,11 @@ describe.skipIf(!live)('search_page_put succeeds exactly when servableFile gives
       item('passage carried', [{ kind: 'present', category: 'member_phone' }]),
       item('passage not carried', [{ kind: 'absent', category: 'member_phone' }]),
       item('passage not carried, on behalf of', [{ kind: 'absent', category: 'member_phone' }], { obo: true }),
+      // Every field a passage mark can name, not only the body (recheck 3, V5).
+      item('passage not carried, in the title', [{ kind: 'absent-title', category: 'member_phone' }]),
+      item('passage not carried, in the summary', [{ kind: 'absent-summary', category: 'member_address' }]),
+      item('passage not carried, in the on-behalf-of name', [{ kind: 'absent-obo', category: 'member_name' }], { obo: true }),
+      item('title passage carried', [{ kind: 'present-title', category: 'member_phone' }]),
       item('whole-item mark', [{ kind: 'whole', category: 'member_address' }]),
       item('file mark in this version', [{ kind: 'file-this', category: 'member_email' }]),
       item('file mark in another version only', [{ kind: 'file-other', category: 'member_email' }]),
@@ -349,8 +376,8 @@ describe.skipIf(!live)('search_page_put succeeds exactly when servableFile gives
     for (let i = 0; i < 30; i++) {
       const pdf = random() < 0.9;
       const kinds: MarkKind[] = pdf
-        ? ['whole', 'present', 'absent', 'file-this', 'file-other', 'file-other-tenant-anchor', 'removed', 'other-tenant']
-        : ['whole', 'present', 'absent', 'removed', 'other-tenant'];
+        ? ['whole', 'present', 'absent', 'present-title', 'absent-title', 'absent-summary', 'absent-obo', 'file-this', 'file-other', 'file-other-tenant-anchor', 'removed', 'other-tenant']
+        : ['whole', 'present', 'absent', 'present-title', 'absent-title', 'absent-summary', 'absent-obo', 'removed', 'other-tenant'];
       const marks = Array.from({ length: weighted<number>([[0, 3], [1, 4], [2, 2], [3, 1]]) }, () => ({ kind: pick(kinds), category: pick(CATEGORIES) }));
       drawn.push(
         item(`drawn ${i}`, marks, {
