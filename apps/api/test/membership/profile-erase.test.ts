@@ -3,14 +3,18 @@
 //            and holds the person's names, number and email nowhere, the audit included; the date and
 //            the decision stay. On every decided state: approved, rejected, reopened, already removed.
 //   CORRECT  CorrectMembershipNumber, the Admin's alone: the number is checked as at sign-up, and the
-//            audit row holds who, when and the reason, never the old or the new number.
+//            audit row holds who, when and the reason as one of three fixed codes, never the old or the
+//            new number and no free text. A number already on another live sign-up is refused.
 //   REMOVAL  RemoveMember (an approver's) erases the member's first name, last name and number with the
-//            removal; its audit rows name the acting officer alone. That person cannot sign up again.
+//            removal, on every decided sign-up of theirs; its audit rows name the acting officer alone.
+//            That person cannot sign up again. A person removed while still waiting keeps what they typed.
+//            The privacy page's sentence is held to this outcome.
 // The API's log never holds a number, and no error gives one back. Every value here is made up.
 import { randomInt } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { Code, type Client } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MemberStatus, MembershipService, SignupDecision } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { CorrectionReason, MemberStatus, MembershipService, SignupDecision } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { MembershipVerifierService, VerificationOutcome } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { type Api, PEOPLE, as, dump, startApi } from '../helpers/api.js';
 import { live } from '../helpers/pg.js';
@@ -19,6 +23,8 @@ const APPROVER = as('approver-token');
 const ADMIN = as('admin-token');
 const VERIFIER = as('verifier-token');
 const NO_ID = '00000000-0000-4000-8000-000000000000';
+/** The privacy page's sentence on a removal (apps/web src/pages/privacy.astro). */
+const REMOVAL_SENTENCE = "If an officer removes a member's account, we erase their first name, last name and membership number.";
 
 type Token = Parameters<typeof as>[0];
 
@@ -137,19 +143,19 @@ describe.skipIf(!live)('PROFILE-ERASE: erase on request, correct a number, erase
     it.each(NOT_ADMIN)('refuses %s: listing, erasing and correcting', async (_who, token) => {
       expect(await refusal(membership.listSignupRecords({}, as(token)))).toBe(Code.PermissionDenied);
       expect(await refusal(membership.eraseSignup({ requestId: target.id }, as(token)))).toBe(Code.PermissionDenied);
-      expect(await refusal(membership.correctMembershipNumber({ requestId: target.id, membershipNumber: '123', reason: 'A typing slip' }, as(token)))).toBe(Code.PermissionDenied);
+      expect(await refusal(membership.correctMembershipNumber({ requestId: target.id, membershipNumber: '123', reason: CorrectionReason.TYPED_WRONG }, as(token)))).toBe(Code.PermissionDenied);
     });
 
     it('refuses the person themself, on their own sign-up', async () => {
       expect(await refusal(membership.listSignupRecords({}, as(target.token)))).toBe(Code.PermissionDenied);
       expect(await refusal(membership.eraseSignup({ requestId: target.id }, as(target.token)))).toBe(Code.PermissionDenied);
-      expect(await refusal(membership.correctMembershipNumber({ requestId: target.id, membershipNumber: '123', reason: 'A typing slip' }, as(target.token)))).toBe(Code.PermissionDenied);
+      expect(await refusal(membership.correctMembershipNumber({ requestId: target.id, membershipNumber: '123', reason: CorrectionReason.TYPED_WRONG }, as(target.token)))).toBe(Code.PermissionDenied);
     });
 
     it('refuses the public', async () => {
       expect(await refusal(membership.listSignupRecords({}, {}))).toBe(Code.Unauthenticated);
       expect(await refusal(membership.eraseSignup({ requestId: target.id }, {}))).toBe(Code.Unauthenticated);
-      expect(await refusal(membership.correctMembershipNumber({ requestId: target.id, membershipNumber: '123', reason: 'A typing slip' }, {}))).toBe(Code.Unauthenticated);
+      expect(await refusal(membership.correctMembershipNumber({ requestId: target.id, membershipNumber: '123', reason: CorrectionReason.TYPED_WRONG }, {}))).toBe(Code.Unauthenticated);
     });
 
     it('changed nothing through every refusal', async () => {
@@ -295,7 +301,7 @@ describe.skipIf(!live)('PROFILE-ERASE: erase on request, correct a number, erase
       );
       const own = (rows[0] as { id: string }).id;
       await expect(membership.eraseSignup({ requestId: own }, ADMIN)).rejects.toMatchObject({ code: Code.PermissionDenied });
-      await expect(membership.correctMembershipNumber({ requestId: own, membershipNumber: '424243', reason: 'A typing slip' }, ADMIN)).rejects.toMatchObject({ code: Code.PermissionDenied });
+      await expect(membership.correctMembershipNumber({ requestId: own, membershipNumber: '424243', reason: CorrectionReason.TYPED_WRONG }, ADMIN)).rejects.toMatchObject({ code: Code.PermissionDenied });
       expect((await records()).map((r) => r.requestId)).not.toContain(own);
       expect(await stored(own)).toMatchObject({ display_name: 'Dana Placeholder', membership_number: '424242', erased: false });
       // The other Admin may.
@@ -305,30 +311,54 @@ describe.skipIf(!live)('PROFILE-ERASE: erase on request, correct a number, erase
 
   describe('CORRECT: the Admin corrects a wrong membership number', () => {
     let typed: Typed;
-    const REASON = 'Two digits were swapped at sign-up; the member showed their card.';
+    const REASON = CorrectionReason.CARD_DIFFERS;
 
     beforeAll(async () => {
       typed = await member('typo-token');
     });
 
-    it('takes the number as sign-up does (spaces and dashes dropped), and audits who, when and the reason, never a number', async () => {
+    it('takes the number as sign-up does (spaces and dashes dropped), and audits who, when and the reason as its code, never a number', async () => {
       const corrected = newNumber();
       const mark = await auditMark();
-      await membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: ` ${corrected.slice(0, 4)} ${corrected.slice(4, 8)}-${corrected.slice(8)} `, reason: `  ${REASON}  ` }, ADMIN);
+      await membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: ` ${corrected.slice(0, 4)} ${corrected.slice(4, 8)}-${corrected.slice(8)} `, reason: REASON }, ADMIN);
       // The member's profile shows it; the names are untouched.
       expect((await membership.getMyAccount({}, as('typo-token'))).profile).toMatchObject({ firstName: typed.first, lastName: typed.last, membershipNumber: corrected });
       expect(await whereIs(corrected)).toEqual(['signup_request.membership_number']);
       expect(await whereIs(typed.number)).toEqual([]);
       const { rows } = await api.pool.query<Record<string, unknown>>(
-        `SELECT action, actor_sub, actor_groups, subject_kind, subject_id, note, payload, at > now() - interval '1 minute' AS just_now FROM audit_event WHERE id > $1`,
+        `SELECT action, actor_sub, actor_groups, subject_kind, subject_id, from_state, to_state, note, payload, at > now() - interval '1 minute' AS just_now FROM audit_event WHERE id > $1`,
         [mark],
       );
       expect(rows).toEqual([
-        { action: 'correct_number', actor_sub: 'sub-admin', actor_groups: PEOPLE['admin-token']?.groups, subject_kind: 'signup_request', subject_id: typed.id, note: REASON, payload: {}, just_now: true },
+        {
+          action: 'correct_number',
+          actor_sub: 'sub-admin',
+          actor_groups: PEOPLE['admin-token']?.groups,
+          subject_kind: 'signup_request',
+          subject_id: typed.id,
+          from_state: null,
+          to_state: 'card_differs',
+          note: null,
+          payload: {},
+          just_now: true,
+        },
       ]);
       expect(dump(rows)).not.toContain(corrected);
       expect(dump(rows)).not.toContain(typed.number);
       typed = { ...typed, number: corrected };
+    });
+
+    it('keeps each of the three reasons as its own code', async () => {
+      const mark = await auditMark();
+      for (const reason of [CorrectionReason.TYPED_WRONG, CorrectionReason.NEW_NUMBER]) {
+        const corrected = newNumber();
+        await membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: corrected, reason }, ADMIN);
+        typed = { ...typed, number: corrected };
+      }
+      expect((await auditSince(mark)).map((r) => [r.to_state, r.note])).toEqual([
+        ['typed_wrong', null],
+        ['new_number', null],
+      ]);
     });
 
     it.each([
@@ -343,41 +373,44 @@ describe.skipIf(!live)('PROFILE-ERASE: erase on request, correct a number, erase
       expect((await stored(typed.id))['membership_number']).toBe(typed.number);
     });
 
+    // Before F5 the reason was free text held to "no digits"; the cases below replace those (a reason holding the
+    // old number, the new one, spaced, full-width or circled digits, a date, nothing, spaces, no word, 501
+    // characters, a hidden character): the wire now carries only one of three codes, so no text can be sent.
     it.each([
-      ['the old number', (t: Typed) => `It was ${t.number} before`],
-      ['the new number', () => 'It should be 100200300400'],
-      ['a single digit', () => 'The 3rd digit was wrong'],
-      ['digits spaced out', () => 'It was 1 0 0 2 0 0'],
-      ['digits with dashes', () => 'It was 1-0-0-2'],
-      ['full-width digits', () => 'It was １００'],
-      ['Arabic-Indic digits', () => 'It was ١٠٠'],
-      ['circled digits', () => 'It was ①②'],
-      ['a date', () => 'The member wrote on November 20'],
-    ])('refuses a reason holding %s, changes nothing and audits nothing', async (_what, reason) => {
+      ['no reason', CorrectionReason.UNSPECIFIED],
+      ['a reason the API does not know', 99 as CorrectionReason],
+      ['a negative reason', -1 as CorrectionReason],
+    ])('refuses %s, changes nothing and audits nothing', async (_what, reason) => {
       const mark = await auditMark();
-      const error = await membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: '100200300400', reason: reason(typed) }, ADMIN).catch((e: unknown) => e);
-      expect(error).toMatchObject({ code: Code.InvalidArgument, rawMessage: 'write the reason in words, with no digits: the number is never put in the record' });
-      expect(dump(error)).not.toContain(typed.number);
+      await expect(membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: '100200300400', reason }, ADMIN)).rejects.toMatchObject({
+        code: Code.InvalidArgument,
+        rawMessage: 'choose one of the three reasons',
+      });
       expect((await stored(typed.id))['membership_number']).toBe(typed.number);
       expect(await auditSince(mark)).toEqual([]);
     });
 
-    it.each([
-      ['no reason', '', 'say why, in words'],
-      ['a reason of spaces', ' \n\t ', 'say why, in words'],
-      ['a reason with no word', '?!...', 'say why, in words'],
-      ['a reason over 500 characters', 'a'.repeat(501), 'a reason is at most 500 characters'],
-      ['a reason with a hidden character', 'A typing\u0007slip', 'write the reason in plain text, without control characters'],
-    ])('refuses %s', async (_what, reason, message) => {
-      await expect(membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: '100200300400', reason }, ADMIN)).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: message });
+    // Before F5: "refuses a reason only the database finds fault with". The database is still the backstop: free
+    // text sent to its function by hand, the Admin's groups and all, is refused.
+    it('refuses free text sent straight to the database function, in fixed words', async () => {
+      const error = await api.pool
+        .query(`SELECT signup_request_correct_number($1, '100200300400', 'Two digits were swapped', 'sub-admin', $2, NULL)`, [typed.id, PEOPLE['admin-token']?.groups])
+        .catch((e: unknown) => e);
+      expect(error).toMatchObject({ code: '22023' });
       expect((await stored(typed.id))['membership_number']).toBe(typed.number);
     });
 
-    it('refuses a reason only the database finds fault with, in fixed words', async () => {
-      // A symbol the API's own check lets by is still held to letters, punctuation and spaces by the database.
-      const error = await membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: '100200300400', reason: 'A slip \u{1F600}‍' }, ADMIN).catch((e: unknown) => e);
-      expect(error).toMatchObject({ code: Code.InvalidArgument });
+    it('refuses a number already on another live sign-up, pending or approved, without naming whose (F7)', async () => {
+      const holder = await member('holder-token');
+      const waiting = await signUp('pender-token');
+      const mark = await auditMark();
+      for (const number of [holder.number, waiting.number]) {
+        const error = await membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: number, reason: REASON }, ADMIN).catch((e: unknown) => e);
+        expect(error).toMatchObject({ code: Code.AlreadyExists, rawMessage: 'that number is already on another sign-up' });
+        for (const value of [number, holder.name, holder.last, waiting.name, waiting.last]) expect(dump(error)).not.toContain(value);
+      }
       expect((await stored(typed.id))['membership_number']).toBe(typed.number);
+      expect(await auditSince(mark)).toEqual([]);
     });
 
     it('refuses the number already on the profile, an id that is not one, and a sign-up that does not exist', async () => {
@@ -435,7 +468,7 @@ describe.skipIf(!live)('PROFILE-ERASE: erase on request, correct a number, erase
     });
 
     it('puts no number back: a removed account\'s number is not corrected', async () => {
-      await expect(membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: '123', reason: 'A typing slip' }, ADMIN)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+      await expect(membership.correctMembershipNumber({ requestId: typed.id, membershipNumber: '123', reason: CorrectionReason.TYPED_WRONG }, ADMIN)).rejects.toMatchObject({ code: Code.FailedPrecondition });
       expect(await stored(typed.id)).toMatchObject({ membership_number: null });
     });
 
@@ -455,6 +488,50 @@ describe.skipIf(!live)('PROFILE-ERASE: erase on request, correct a number, erase
     it('frees the number for another sign-up: the claim is released to the verifier', async () => {
       const released = (await verifier.listReleasedClaims({}, VERIFIER)).released.filter((r) => r.requestId === typed.id);
       expect(released).toHaveLength(1);
+    });
+
+    it('erases the profile from every decided sign-up of the member, a reopened earlier one included, and audits each by its id (F2)', async () => {
+      const first = await signUp('returner-token');
+      await membership.rejectSignup({ requestId: first.id }, APPROVER);
+      await membership.reopenSignup({ requestId: first.id }, ADMIN);
+      const second = await member('returner-token');
+      const before = await auditMark();
+      await membership.removeMember({ subject: second.sub }, APPROVER);
+      for (const typed of [first, second]) await heldNowhere(typed, ['first', 'last', 'number']);
+      expect(await stored(first.id)).toMatchObject({ first_name: null, last_name: null, membership_number: null, display_name: first.name, email: first.email, decision: 'rejected', erased: false });
+      const rows = await auditSince(before);
+      expect(rows).toEqual([
+        { action: 'remove', actor_sub: 'sub-approver', subject_kind: 'member_account', subject_id: second.sub, from_state: 'member', to_state: 'removed', note: null, payload: {} },
+        { action: 'erase_profile', actor_sub: 'sub-approver', subject_kind: 'signup_request', subject_id: first.id, from_state: 'reopened', to_state: 'profile_erased', note: null, payload: {} },
+        { action: 'erase_profile', actor_sub: 'sub-approver', subject_kind: 'signup_request', subject_id: second.id, from_state: 'approved', to_state: 'profile_erased', note: null, payload: {} },
+      ]);
+      for (const value of [first.first, first.last, first.number, second.first, second.last, second.number]) expect(dump(rows)).not.toContain(value);
+      // The Admin's list shows the earlier row with nothing typed left.
+      expect((await records()).find((r) => r.requestId === first.id)).toMatchObject({ firstName: '', lastName: '', membershipNumber: '', decision: SignupDecision.REOPENED });
+    });
+
+    it('keeps what a person still waiting typed when an officer removes them: their sign-up is rejected, not erased (F3)', async () => {
+      const waiting = await signUp('waiter-token');
+      const before = await auditMark();
+      await membership.removeMember({ subject: waiting.sub }, APPROVER);
+      expect(await stored(waiting.id)).toMatchObject({ first_name: waiting.first, last_name: waiting.last, membership_number: waiting.number, decision: 'rejected', erased: false });
+      expect((await auditSince(before)).map((r) => r.action)).not.toContain('erase_profile');
+    });
+
+    it('is what the privacy page says a removal does, for a member, whatever sign-ups they had (F6)', async () => {
+      // The sentence, as the page has it ...
+      const page = readFileSync(new URL('../../../web/src/pages/privacy.astro', import.meta.url), 'utf8');
+      expect(page).toContain(REMOVAL_SENTENCE);
+      // ... is the outcome: after a removal, no first name, last name or number of the member is held on any of their sign-ups.
+      const { rows } = await api.pool.query<{ sub: string; held: number }>(
+        `SELECT a.sub, count(*) FILTER (WHERE num_nonnulls(s.first_name, s.last_name, s.membership_number) > 0)::int AS held
+         FROM member_account a JOIN signup_request s ON s.sub = a.sub
+         WHERE a.status = 'removed' AND EXISTS (SELECT 1 FROM signup_request x WHERE x.sub = a.sub AND x.decision = 'approved')
+         GROUP BY a.sub ORDER BY a.sub`,
+      );
+      // Removed members, by RemoveMember and by EraseSignup, from the tests above: each holds nothing typed.
+      expect(rows.map((r) => r.sub)).toEqual(expect.arrayContaining(['sub-leaver', 'sub-returner', 'sub-invitee']));
+      for (const row of rows) expect(row, row.sub).toEqual({ sub: row.sub, held: 0 });
     });
 
     it('audits nothing more when the account had no profile to erase', async () => {

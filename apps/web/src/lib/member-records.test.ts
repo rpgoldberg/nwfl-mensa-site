@@ -1,12 +1,12 @@
 // PROFILE-ERASE: the Admin's member-records page, in words. The forms are checked before the API is
-// asked: the new number as the sign-up form checks one, and a reason in words with no digit of any
-// script, so the record of a correction never holds the old or the new number.
+// asked: the new number as the sign-up form checks one, and the reason as one of three fixed choices
+// (fix 1, F5): no free text, so the record of a correction never holds a number or a name.
 import { describe, expect, it } from 'vitest';
 import type { SignupRecord } from './api/membership';
 import {
+  CORRECTION_REASONS,
   CORRECT_REFUSED,
   ERASE_REFUSED,
-  MAX_REASON,
   RECORDS_LISTED_MAX,
   canCorrect,
   doneFromQuery,
@@ -43,7 +43,7 @@ describe('parseRecordForm: erasing', () => {
     ['an action it does not know', { action: 'delete', request: ID }],
     ['no record', { action: 'erase' }],
     ['a record id that is not one', { action: 'erase', request: '../x' }],
-    ['a correction with no step', { action: 'correct', request: ID, membershipNumber: '12', reason: 'A slip' }],
+    ['a correction with no step', { action: 'correct', request: ID, membershipNumber: '12', reason: 'typed_wrong' }],
   ])('refuses %s as a form it cannot read', (_what, values) => {
     expect(parseRecordForm(form(values))).toMatchObject({ ok: false, errors: {} });
     expect(parseRecordForm(form(values))).not.toHaveProperty('requestId');
@@ -51,13 +51,13 @@ describe('parseRecordForm: erasing', () => {
 });
 
 describe('parseRecordForm: correcting a number', () => {
-  const correct = (values: Record<string, string>) => parseRecordForm(form({ action: 'correct', request: ID, step: 'review', membershipNumber: '000033002', reason: 'Two digits were swapped.', ...values }));
+  const correct = (values: Record<string, string>) => parseRecordForm(form({ action: 'correct', request: ID, step: 'review', membershipNumber: '000033002', reason: 'typed_wrong', ...values }));
 
   it('reads a correction for review and to apply, the number as the sign-up form reads one', () => {
-    expect(correct({})).toEqual({ ok: true, value: { action: 'correct', requestId: ID, step: 'review', membershipNumber: '000033002', reason: 'Two digits were swapped.' } });
-    expect(correct({ step: 'apply', membershipNumber: ' 0000-33 002 ', reason: '  A typing slip.\n' })).toEqual({
+    expect(correct({})).toEqual({ ok: true, value: { action: 'correct', requestId: ID, step: 'review', membershipNumber: '000033002', reason: 'typed_wrong' } });
+    expect(correct({ step: 'apply', membershipNumber: ' 0000-33 002 ', reason: 'new_number' })).toEqual({
       ok: true,
-      value: { action: 'correct', requestId: ID, step: 'apply', membershipNumber: '000033002', reason: 'A typing slip.' },
+      value: { action: 'correct', requestId: ID, step: 'apply', membershipNumber: '000033002', reason: 'new_number' },
     });
   });
 
@@ -68,31 +68,36 @@ describe('parseRecordForm: correcting a number', () => {
     ['thirteen digits', '1234567890123', 'Enter the number using digits only, up to 12 of them.'],
     ['a full-width digit', '1234５', 'Enter the number using digits only, up to 12 of them.'],
   ])('says what is wrong with %s, and keeps what was typed', (_what, membershipNumber, problem) => {
-    expect(correct({ membershipNumber })).toEqual({ ok: false, requestId: ID, errors: { membershipNumber: problem }, values: { membershipNumber: membershipNumber.trim(), reason: 'Two digits were swapped.' } });
+    expect(correct({ membershipNumber })).toEqual({ ok: false, requestId: ID, errors: { membershipNumber: problem }, values: { membershipNumber: membershipNumber.trim(), reason: 'typed_wrong' } });
   });
 
+  it('offers exactly three reasons, in plain words, each kept as its code', () => {
+    expect(CORRECTION_REASONS).toEqual([
+      ['typed_wrong', 'Typed wrong at sign-up'],
+      ['card_differs', 'The member’s card shows a different number'],
+      ['new_number', 'Mensa issued a new number'],
+    ]);
+    for (const [code] of CORRECTION_REASONS) expect(correct({ reason: code })).toMatchObject({ ok: true, value: { reason: code } });
+  });
+
+  // Before fix 1 the reason was free text and these said which digit or character was wrong; now any text at
+  // all, the old cases included, is not a choice.
   it.each([
-    ['no reason', '', 'Say why, in words.'],
-    ['a reason with no word', '?!', 'Say why, in words.'],
-    ['a reason over 500 characters', 'a'.repeat(MAX_REASON + 1), 'Keep the reason to 500 characters or fewer.'],
-    ['a reason with a hidden character', 'A typing\u0007slip', 'Type the reason again: it has a hidden character that cannot be kept.'],
-    ['the number in the reason', 'It was 000033001', 'Write the reason without any digits. The number itself is never put in the record.'],
-    ['one digit in the reason', 'The 3rd was wrong', 'Write the reason without any digits. The number itself is never put in the record.'],
-    ['spaced digits in the reason', 'It was 0 0 3', 'Write the reason without any digits. The number itself is never put in the record.'],
-    ['full-width digits in the reason', 'It was ０３', 'Write the reason without any digits. The number itself is never put in the record.'],
-    ['Arabic-Indic digits in the reason', 'It was ٣', 'Write the reason without any digits. The number itself is never put in the record.'],
-    ['circled digits in the reason', 'It was ③', 'Write the reason without any digits. The number itself is never put in the record.'],
-  ])('says what is wrong with %s', (_what, reason, problem) => {
-    expect(correct({ reason })).toMatchObject({ ok: false, requestId: ID, errors: { reason: problem } });
-  });
-
-  it('takes a reason of exactly 500 characters, with line breaks and punctuation', () => {
-    expect(correct({ reason: 'a'.repeat(MAX_REASON) })).toMatchObject({ ok: true });
-    expect(correct({ reason: 'The member’s card says otherwise.\nChecked — twice!' })).toMatchObject({ ok: true });
+    ['no reason', ''],
+    ['a reason in words', 'Two digits were swapped.'],
+    ['a reason over 500 characters', 'a'.repeat(501)],
+    ['a reason with a hidden character', 'A typing\u0007slip'],
+    ['the number in the reason', 'It was 000033001'],
+    ['the words of a choice, not its code', 'Typed wrong at sign-up'],
+    ['a code in capitals', 'TYPED_WRONG'],
+    ['a code with a space', ' typed_wrong'],
+    ['a code that is not one', 'other'],
+  ])('says what is wrong with %s, and keeps no choice', (_what, reason) => {
+    expect(correct({ reason })).toEqual({ ok: false, requestId: ID, errors: { reason: 'Choose why you are correcting it.' }, values: { membershipNumber: '000033002', reason: '' } });
   });
 
   it('reports both problems at once', () => {
-    expect(correct({ membershipNumber: 'x', reason: '' })).toMatchObject({ ok: false, errors: { membershipNumber: expect.any(String) as string, reason: 'Say why, in words.' } });
+    expect(correct({ membershipNumber: 'x', reason: '' })).toMatchObject({ ok: false, errors: { membershipNumber: expect.any(String) as string, reason: 'Choose why you are correcting it.' } });
   });
 });
 
@@ -167,6 +172,8 @@ describe('what happened, in words', () => {
   it('says each refusal plainly, and that nothing changed', () => {
     for (const text of [...Object.values(ERASE_REFUSED), ...Object.values(CORRECT_REFUSED)]) expect(text).toMatch(/^Nothing was changed: /);
     expect(Object.keys(ERASE_REFUSED)).toEqual(['own', 'closed']);
-    expect(Object.keys(CORRECT_REFUSED)).toEqual(['own', 'closed', 'invalid']);
+    expect(Object.keys(CORRECT_REFUSED)).toEqual(['own', 'closed', 'invalid', 'taken']);
+    expect(CORRECT_REFUSED.taken).toBe('Nothing was changed: that number is already on another person’s sign-up.');
+    expect(CORRECT_REFUSED.invalid).toBe('Nothing was changed: the number or the reason was not accepted. Use digits only in the number, and choose one of the reasons.');
   });
 });

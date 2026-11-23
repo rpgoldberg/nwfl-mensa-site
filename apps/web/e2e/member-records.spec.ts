@@ -1,6 +1,7 @@
 // PROFILE-ERASE, through the browser: the Admin's member records in the officer area. Each decided
 // sign-up is a card with real buttons (48 px); erasing asks first, on a step that names everything
-// that will be erased; a number is corrected through a labelled form and a step that shows the change.
+// that will be erased; a number is corrected through a labelled form, with one of three labelled reasons
+// (fix 1: no free text), and a step that shows the change.
 // Only the Admin has the page or its link. Every step works from the keyboard alone, on a 412 px
 // phone, at the largest text size and at 200 % text, with nothing to scroll sideways. Axe on each state.
 // Every person and address here is made up.
@@ -10,11 +11,14 @@ import { SIZES } from '../server/prefs.mjs';
 import { setPrefs } from './prefs';
 import { SITE_URL } from './servers';
 import { signIn } from './signin';
-import { RECORDS } from './stand-in';
+import { RECORDS, SIGNUP_QUEUE } from './stand-in';
 
 const HERE = '/officer-area/member-records';
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
-const REASON = 'Two digits were swapped at sign-up; the member showed their card.';
+/** A correction's reason as the form posts it (its code), and the words the Admin reads for it. */
+const REASON = 'card_differs';
+const REASON_WORDS = 'The member’s card shows a different number';
+const CHOICES = ['Typed wrong at sign-up', 'The member’s card shows a different number', 'Mensa issued a new number'] as const;
 const NEW_NUMBER = '000044009';
 
 async function axe(page: Page): Promise<string[]> {
@@ -215,34 +219,41 @@ test.describe('PROFILE-ERASE: erasing a record', () => {
 });
 
 test.describe('PROFILE-ERASE: correcting a membership number', () => {
-  test('the form has real labels, says what is wrong next to each field, and keeps what was typed', async ({ page }) => {
+  test('the form has real labels and three labelled reasons, says what is wrong next to each, and keeps what was typed', async ({ page }) => {
     await asAdmin(page);
     await card(page, RECORDS.member.name).getByRole('link', { name: 'Correct the number' }).click();
     await expect(page).toHaveURL(`${SITE_URL}${HERE}?correct=${RECORDS.member.id}`);
     const group = page.getByRole('group', { name: 'Correct the membership number' });
     await expect(group).toContainText(`${RECORDS.member.name} (${RECORDS.member.email}). Number now: ${RECORDS.member.number}.`);
     const number = group.getByRole('textbox', { name: 'New membership number' });
-    const reason = group.getByRole('textbox', { name: 'Why are you correcting it?' });
+    const reasons = group.getByRole('group', { name: 'Why are you correcting it?' });
     await expect(number).toHaveAccessibleDescription(/Digits only, up to 12 of them\./);
-    await expect(reason).toHaveAccessibleDescription(/Write it in words, with no digits: the number itself is never put in the record\./);
+    await expect(reasons).toHaveAccessibleDescription(/Needed\. Choose one\. It is kept in the record with your name; the number is not\./);
+    // No free text: three choices, each a radio button with its own label, none chosen yet.
+    await expect(group.getByRole('textbox')).toHaveCount(1);
+    await expect(reasons.getByRole('radio')).toHaveCount(3);
+    for (const words of CHOICES) await expect(reasons.getByRole('radio', { name: words, exact: true })).not.toBeChecked();
     expect((await number.boundingBox())?.height).toBeGreaterThanOrEqual(48);
+    for (const words of CHOICES) expect((await reasons.locator('.choice').filter({ hasText: words }).boundingBox())?.height).toBeGreaterThanOrEqual(48);
     expect(await axe(page)).toEqual([]);
     await fits(page);
     await number.fill('00004400x');
-    await reason.fill(`It was ${RECORDS.member.number} before`);
     await group.getByRole('button', { name: 'Review this correction' }).click();
     const again = page.getByRole('group', { name: 'Correct the membership number' });
     await expect(again.getByRole('textbox', { name: 'New membership number' })).toHaveAttribute('aria-invalid', 'true');
     await expect(again.getByRole('textbox', { name: 'New membership number' })).toHaveAccessibleDescription(/Problem: Enter the number using digits only, up to 12 of them\./);
     await expect(again.getByRole('textbox', { name: 'New membership number' })).toHaveValue('00004400x');
-    await expect(again.getByRole('textbox', { name: 'Why are you correcting it?' })).toHaveAttribute('aria-invalid', 'true');
-    await expect(again.getByRole('textbox', { name: 'Why are you correcting it?' })).toHaveAccessibleDescription(/Problem: Write the reason without any digits\. The number itself is never put in the record\./);
-    await expect(again.getByRole('textbox', { name: 'Why are you correcting it?' })).toHaveValue(`It was ${RECORDS.member.number} before`);
+    await expect(again.getByRole('group', { name: 'Why are you correcting it?' })).toHaveAccessibleDescription(/Problem: Choose why you are correcting it\./);
+    // A choice made is kept when the form comes back for another problem.
+    await again.getByRole('radio', { name: REASON_WORDS }).check();
+    await again.getByRole('button', { name: 'Review this correction' }).click();
+    await expect(page.getByRole('group', { name: 'Why are you correcting it?' }).getByRole('radio', { name: REASON_WORDS })).toBeChecked();
+    await expect(page.getByRole('group', { name: 'Why are you correcting it?' })).not.toHaveAccessibleDescription(/Problem/);
     expect(await axe(page)).toEqual([]);
     await fits(page);
   });
 
-  test('from the keyboard alone: the link, the two fields, the review and Yes; the card then shows the new number', async ({ page }) => {
+  test('from the keyboard alone: the link, the number, a reason, the review and Yes; the card then shows the new number', async ({ page }) => {
     await asAdmin(page);
     await page.locator('h1').evaluate((el) => { (el as HTMLElement).tabIndex = -1; (el as HTMLElement).focus(); });
     await tabTo(page, card(page, RECORDS.member.name).getByRole('link', { name: 'Correct the number' }));
@@ -253,8 +264,10 @@ test.describe('PROFILE-ERASE: correcting a membership number', () => {
     await tabTo(page, group.getByRole('textbox', { name: 'New membership number' }));
     await page.keyboard.type('0000 44-009');
     await page.keyboard.press('Tab');
-    await expect(group.getByRole('textbox', { name: 'Why are you correcting it?' })).toBeFocused();
-    await page.keyboard.type(REASON);
+    const first = group.getByRole('radio', { name: CHOICES[0] });
+    await expect(first).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(first).toBeChecked();
     await page.keyboard.press('Tab');
     await expect(group.getByRole('button', { name: 'Review this correction' })).toBeFocused();
     await page.keyboard.press('Enter');
@@ -262,7 +275,7 @@ test.describe('PROFILE-ERASE: correcting a membership number', () => {
     const main = page.locator('main');
     await expect(fact(main, 'Number now')).toHaveText(RECORDS.member.number);
     await expect(fact(main, 'New number')).toHaveText(NEW_NUMBER);
-    await expect(fact(main, 'Reason')).toHaveText(REASON);
+    await expect(fact(main, 'Reason')).toHaveText(CHOICES[0] as string);
     await expect(main).toContainText('The reason is kept in the record with your name; the number is not.');
     expect(await axe(page)).toEqual([]);
     await fits(page);
@@ -293,10 +306,18 @@ test.describe('PROFILE-ERASE: correcting a membership number', () => {
     const own = await post(page, { action: 'correct', step: 'apply', request: RECORDS.ownId, membershipNumber: NEW_NUMBER, reason: REASON });
     expect(own.status()).toBe(409);
     expect(await own.text()).toContain('Nothing was changed: only the Admin corrects a number, and never their own.');
-    // A reason with a digit never reaches the API: the form comes back with the problem.
-    const digits = await post(page, { action: 'correct', step: 'apply', request: RECORDS.member.id, membershipNumber: NEW_NUMBER, reason: 'It was 000044001' });
-    expect(digits.status()).toBe(400);
-    expect(await digits.text()).toContain('Problem: Write the reason without any digits.');
+    // Before fix 1: a reason with a digit never reached the API. Now any reason not one of the three never does.
+    for (const reason of ['It was 000044001', 'Two digits were swapped', 'Card shows a different number']) {
+      const typed = await post(page, { action: 'correct', step: 'apply', request: RECORDS.member.id, membershipNumber: NEW_NUMBER, reason });
+      expect(typed.status()).toBe(400);
+      expect(await typed.text()).toContain('Problem: Choose why you are correcting it.');
+      expect(await typed.text()).not.toContain(reason);
+    }
+    // A number already on another person's sign-up is refused in words, without saying whose.
+    const taken = await post(page, { action: 'correct', step: 'apply', request: RECORDS.member.id, membershipNumber: SIGNUP_QUEUE[0].number, reason: REASON });
+    expect(taken.status()).toBe(409);
+    expect(await taken.text()).toContain('Nothing was changed: that number is already on another person’s sign-up.');
+    expect(await taken.text()).not.toContain(SIGNUP_QUEUE[0].name);
     await page.goto(HERE);
     await expect(fact(card(page, RECORDS.member.name), 'Membership number')).toHaveText(RECORDS.member.number);
   });
@@ -322,11 +343,11 @@ test.describe('PROFILE-ERASE: large text', () => {
       await card(page, RECORDS.member.name).getByRole('link', { name: 'Correct the number' }).click();
       await page.getByRole('button', { name: 'Review this correction' }).click();
       await expect(page.getByText('Problem: Enter the new membership number.')).toBeVisible();
-      await expect(page.getByText('Problem: Say why, in words.')).toBeVisible();
+      await expect(page.getByText('Problem: Choose why you are correcting it.')).toBeVisible();
       expect(await axe(page)).toEqual([]);
       await fits(page);
       await page.getByRole('textbox', { name: 'New membership number' }).fill(NEW_NUMBER);
-      await page.getByRole('textbox', { name: 'Why are you correcting it?' }).fill(REASON);
+      await page.getByRole('radio', { name: REASON_WORDS }).check();
       await page.getByRole('button', { name: 'Review this correction' }).click();
       await expect(page.getByRole('button', { name: 'Yes, correct it' })).toBeVisible();
       expect(await axe(page)).toEqual([]);

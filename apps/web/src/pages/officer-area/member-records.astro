@@ -8,10 +8,10 @@
 //                       approved member, that their member access ends with it. The API then erases
 //                       the name, the email, the names and the number of every decided sign-up of
 //                       that person; the date and the decision stay.
-//   Correct the number  for an approved member whose number was typed wrong. A form with two labelled
-//                       fields (the new number, digits only as at sign-up, and a reason in words with
-//                       no digits), then a step that shows the change before it is made. The reason is
-//                       kept in the record with the Admin's name; the number never is.
+//   Correct the number  for an approved member whose number is wrong. A form with a labelled field (the
+//                       new number, digits only as at sign-up) and a group of three labelled choices for
+//                       why (fix 1: no free text), then a step that shows the change before it is made.
+//                       The reason is kept in the record with the Admin's name; the number never is.
 //
 // Each call goes to the API with the Admin's own token (src/lib/api/membership.ts), which alone
 // decides who may, and never on their own record. Not signed in: sign in first. Signed in but not the
@@ -21,16 +21,16 @@
 import PasswordNote from '../../components/PasswordNote.astro';
 import Unavailable from '../../components/Unavailable.astro';
 import Base from '../../layouts/Base.astro';
-import { CorrectionRefused, DecisionRefused, MembershipSignInAgain, type SignupRecord, membershipApi, sessionReader } from '../../lib/api/membership';
+import { type CorrectionCode, CorrectionRefused, DecisionRefused, MembershipSignInAgain, type SignupRecord, membershipApi, sessionReader } from '../../lib/api/membership';
 import { markUnavailable, signInFirst } from '../../lib/api/page';
 import { isAdmin } from '../../lib/approval-rules';
 import { runtimeDeps } from '../../lib/auth/flow';
 import { readForm } from '../../lib/form';
 import {
+  CORRECTION_REASONS,
   CORRECT_REFUSED,
   type CorrectErrors,
   ERASE_REFUSED,
-  MAX_REASON,
   RECORDS_PATH,
   type RecordForm,
   canCorrect,
@@ -40,6 +40,7 @@ import {
   eraseList,
   parseRecordForm,
   recordFacts,
+  reasonText,
   recordsShownNote,
 } from '../../lib/member-records';
 import { MAX_NUMBER_DIGITS, MAX_NUMBER_TYPED } from '../../lib/signup';
@@ -49,7 +50,7 @@ export const prerender = false;
 
 const HERE = RECORDS_PATH;
 const SIGN_IN = `/sign-in?return=${encodeURIComponent(HERE)}`;
-/** Five short fields; a reason of 500 characters, percent-encoded, fits many times over. */
+/** Five short fields fit many times over. */
 const MAX_FORM_BYTES = 16 * 1024;
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -64,7 +65,7 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
 
 /** A step to show: the erasure to confirm, or the correction to fill in or to check. */
 let step: RecordForm | undefined;
-let correcting: { requestId: string; errors: CorrectErrors; values: { membershipNumber: string; reason: string } } | undefined;
+let correcting: { requestId: string; errors: CorrectErrors; values: { membershipNumber: string; reason: CorrectionCode | '' } } | undefined;
 let refused: string | undefined;
 let problem: 'sign-in' | 'unavailable' | 'form' | undefined;
 
@@ -170,7 +171,7 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
       <dl class="facts facts--grid">
         <div><dt>Number now</dt><dd>{reviewed.membershipNumber}</dd></div>
         <div><dt>New number</dt><dd>{review.membershipNumber}</dd></div>
-        <div class="facts__wide"><dt>Reason</dt><dd class="reason-text">{review.reason}</dd></div>
+        <div class="facts__wide"><dt>Reason</dt><dd class="reason-text">{reasonText(review.reason)}</dd></div>
       </dl>
       <p><b>The member's account page will show the new number. The reason is kept in the record with your name; the number is not.</b></p>
       <form method="post" action={HERE}>
@@ -210,18 +211,17 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
           aria-invalid={correcting.errors.membershipNumber ? 'true' : undefined}
           aria-describedby={describedBy('correct-who', 'number-hint', correcting.errors.membershipNumber && 'number-error')}
         />
-        <label for="reason">Why are you correcting it?</label>
-        <p class="hint" id="reason-hint">Needed. Write it in words, with no digits: the number itself is never put in the record. Up to {MAX_REASON} characters. It is kept with your name.</p>
-        {correcting.errors.reason && <p class="error" id="reason-error">Problem: {correcting.errors.reason}</p>}
-        <textarea
-          id="reason"
-          name="reason"
-          rows="4"
-          maxlength={MAX_REASON}
-          required
-          aria-invalid={correcting.errors.reason ? 'true' : undefined}
-          aria-describedby={describedBy('reason-hint', correcting.errors.reason && 'reason-error')}
-        >{correcting.values.reason}</textarea>
+        <fieldset aria-describedby={describedBy('reason-hint', correcting.errors.reason && 'reason-error')}>
+          <legend>Why are you correcting it?</legend>
+          <p class="hint" id="reason-hint">Needed. Choose one. It is kept in the record with your name; the number is not.</p>
+          {correcting.errors.reason && <p class="error" id="reason-error">Problem: {correcting.errors.reason}</p>}
+          {CORRECTION_REASONS.map(([code, words]) => (
+            <div class="choice">
+              <input type="radio" id={`reason-${code}`} name="reason" value={code} required checked={correcting.values.reason === code} />
+              <label for={`reason-${code}`}>{words}</label>
+            </div>
+          ))}
+        </fieldset>
         <div class="btns">
           <button class="button" type="submit">Review this correction</button>
           <a class="button button--secondary" href={HERE}>Cancel</a>

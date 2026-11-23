@@ -42,10 +42,11 @@
 //                       once verified more than 12 months ago (the 13th month
 //                       is grace; after it standing lapses by itself)
 //   RemoveMember        approvers and the Admin; a sign-up still open for the
-//                       account is rejected with it. PROFILE-ERASE: a member's
-//                       profile (first name, last name, number) is erased with
-//                       the removal, by the database (0034), and audited by the
-//                       sign-up's id
+//                       account is rejected with it, and keeps what was typed.
+//                       PROFILE-ERASE: a member's profile (first name, last name,
+//                       number) is erased with the removal from every decided
+//                       sign-up of theirs, a reopened one included, by the
+//                       database (0034), and audited by each sign-up's id
 //   ConfirmMember       approvers and the Admin, never on themselves: the
 //                       yearly re-check, confirmed by an officer, dates a
 //                       member's (or a lapsed account's) verification today
@@ -77,8 +78,9 @@
 //   CorrectMembershipNumber  the Admin alone, never on their own: the one way a
 //                       stored number changes (0034
 //                       signup_request_correct_number). The number is checked as
-//                       at sign-up; the reason goes to the audit with who and
-//                       when, and holds no digit, so never a number.
+//                       at sign-up; the reason is one of three fixed choices,
+//                       kept in the audit as its code with who and when. A
+//                       number already on another live sign-up: ALREADY_EXISTS.
 //
 // A person has one open sign-up at most: the rows not reopened (0026). Every
 // lookup by subject reads only those.
@@ -107,6 +109,7 @@ import {
   MemberStatus,
   MembershipService,
   RejectedSignupSchema,
+  CorrectionReason,
   SignupDecision,
   SignupRecordSchema,
   SignupRequestSchema,
@@ -178,16 +181,16 @@ const INVITED_GROUP = 'nwfl-invited';
  * RECORDS_LISTED_MAX, kept equal).
  */
 const MAX_RECORDS_LISTED = 500;
-/** PROFILE-ERASE: the most characters in the reason for a number correction (0034 membership_reason_ok). */
-const MAX_REASON = 500;
-/** A letter: a reason says something in words. */
-const SAYS_SOMETHING = /\p{L}/u;
-/** Any digit, of any script (after compatibility folding: full-width, circled, superscript). */
-const DIGIT = /\p{N}/u;
-/** A control character other than a tab or a line break. */
-const REASON_CONTROL = /[^\P{Cc}\t\n\r]/u;
+/** PROFILE-ERASE fix 1: a correction's reason, a fixed choice, as 0034 stores it. */
+const CORRECTION_REASONS: ReadonlyMap<CorrectionReason, string> = new Map([
+  [CorrectionReason.TYPED_WRONG, 'typed_wrong'],
+  [CorrectionReason.CARD_DIFFERS, 'card_differs'],
+  [CorrectionReason.NEW_NUMBER, 'new_number'],
+]);
 /** no_data_found, from 0034's functions: the sign-up named does not exist. */
 const NO_DATA_FOUND = 'P0002';
+/** unique_violation, from 0034's correction: the new number is on another live sign-up. */
+const NUMBER_TAKEN = '23505';
 
 interface AccountRow {
   status: string;
@@ -250,23 +253,21 @@ function numberOf(value: string): string {
   return number;
 }
 
-/**
- * PROFILE-ERASE: why a number is corrected, in words. No digit of any script, so the audit row it goes
- * to never holds the old or the new number, whatever is typed between the digits. The database checks
- * again (0034), and holds every character to a letter, a punctuation mark or a space.
- */
-function reasonOf(value: string): string {
-  const reason = value.trim();
-  if (!SAYS_SOMETHING.test(reason)) throw invalid('say why, in words');
-  if ([...reason].length > MAX_REASON) throw invalid(`a reason is at most ${MAX_REASON} characters`);
-  if (REASON_CONTROL.test(reason)) throw invalid('write the reason in plain text, without control characters');
-  if (DIGIT.test(reason.normalize('NFKC'))) throw invalid('write the reason in words, with no digits: the number is never put in the record');
-  return reason;
+/** PROFILE-ERASE: why a number is corrected, one of three fixed choices, as its stored code. */
+function reasonOf(value: CorrectionReason): string {
+  const code = CORRECTION_REASONS.get(value);
+  if (code === undefined) throw invalid('choose one of the three reasons');
+  return code;
 }
 
-/** A refusal from one of 0034's functions as a status: a missing sign-up is NOT_FOUND, the rest as dbError says. */
+/**
+ * A refusal from one of 0034's functions as a status: a missing sign-up is NOT_FOUND, a number on another
+ * sign-up ALREADY_EXISTS in fixed words (never the number, never whose), the rest as dbError says.
+ */
 function recordError(error: unknown): unknown {
-  if (typeof error === 'object' && error !== null && (error as { code?: unknown }).code === NO_DATA_FOUND) return new ConnectError('sign-up not found', Code.NotFound);
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+  if (code === NO_DATA_FOUND) return new ConnectError('sign-up not found', Code.NotFound);
+  if (code === NUMBER_TAKEN) return new ConnectError('that number is already on another sign-up', Code.AlreadyExists);
   return dbError(error);
 }
 
@@ -536,16 +537,20 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           const row = (await client.query<{ status: string }>(`SELECT status FROM member_account WHERE sub = $1 FOR UPDATE`, [sub])).rows[0];
           if (row === undefined) throw new ConnectError('account not found', Code.NotFound);
           if (row.status === 'removed') throw precondition('this account is already removed');
-          // PROFILE-ERASE: the profile the removal erases (0034's trigger, in the same statement), for its audit row.
-          const { rows: profiles } = await client.query<{ id: string }>(
-            `SELECT id FROM signup_request WHERE sub = $1 AND decision = 'approved' AND num_nonnulls(first_name, last_name, membership_number) > 0 FOR UPDATE`,
+          // PROFILE-ERASE: the profiles the removal erases (0034's trigger, in the same statement), for their audit
+          // rows: a member's, on every decided sign-up of theirs, a reopened one too. A person never approved keeps them.
+          const { rows: profiles } = await client.query<{ id: string; state: string }>(
+            `SELECT s.id, CASE WHEN s.reopened_at IS NOT NULL THEN 'reopened' ELSE s.decision END AS state FROM signup_request s
+             WHERE s.sub = $1 AND s.decision <> 'pending' AND num_nonnulls(s.first_name, s.last_name, s.membership_number) > 0
+               AND EXISTS (SELECT 1 FROM signup_request x WHERE x.sub = s.sub AND x.decision = 'approved')
+             ORDER BY s.created_at, s.id FOR UPDATE OF s`,
             [sub],
           );
           await client.query(`UPDATE member_account SET status = 'removed', removed_at = now(), updated_at = now() WHERE sub = $1`, [sub]);
           await recordAudit(client, caller, { action: 'remove', subjectKind: 'member_account', subjectId: sub, fromState: row.status, toState: 'removed' });
           // By the sign-up's id: the row names no one but the officer who acted.
           for (const profile of profiles) {
-            await recordAudit(client, caller, { action: 'erase_profile', subjectKind: 'signup_request', subjectId: profile.id, fromState: 'approved', toState: 'profile_erased' });
+            await recordAudit(client, caller, { action: 'erase_profile', subjectKind: 'signup_request', subjectId: profile.id, fromState: profile.state, toState: 'profile_erased' });
           }
           // A sign-up still open for the account is rejected with it, so it leaves both queues.
           const open = (await client.query<{ id: string }>(`SELECT id FROM signup_request WHERE sub = $1 AND decision = 'pending' FOR UPDATE`, [sub])).rows[0];

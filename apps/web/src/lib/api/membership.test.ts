@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { newSession } from '../../../server/session.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
-import { AccountRoute, MemberStatus, MembershipService, RejectedSignupSchema, SignupDecision, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, CorrectionReason, MemberStatus, MembershipService, RejectedSignupSchema, SignupDecision, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
 import { CorrectionRefused, DecisionRefused, MembershipSignInAgain, ProfileRefused, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
@@ -683,7 +683,7 @@ describe('grpcMembership: PROFILE-ERASE, the Admin\'s records', () => {
     expect(lines.join('')).not.toContain('person.tok-en');
   });
 
-  it('corrects a number with the Admin\'s bearer, sending the number and the reason', async () => {
+  it('corrects a number with the Admin\'s bearer, sending the number and the reason as its code', async () => {
     const seen: object[] = [];
     const server = await grpcServer((router) =>
       router.service(MembershipService, {
@@ -693,8 +693,13 @@ describe('grpcMembership: PROFILE-ERASE, the Admin\'s records', () => {
         },
       }),
     );
-    await grpcMembership(config(server.url), () => {}).correctMembershipNumber(PERSON, ID, { membershipNumber: FAKE_NUMBER, reason: 'A typing slip.' });
-    expect(seen).toEqual([{ requestId: ID, membershipNumber: FAKE_NUMBER, reason: 'A typing slip.' }]);
+    const api = grpcMembership(config(server.url), () => {});
+    for (const reason of ['typed_wrong', 'card_differs', 'new_number'] as const) await api.correctMembershipNumber(PERSON, ID, { membershipNumber: FAKE_NUMBER, reason });
+    expect(seen).toEqual([
+      { requestId: ID, membershipNumber: FAKE_NUMBER, reason: CorrectionReason.TYPED_WRONG },
+      { requestId: ID, membershipNumber: FAKE_NUMBER, reason: CorrectionReason.CARD_DIFFERS },
+      { requestId: ID, membershipNumber: FAKE_NUMBER, reason: CorrectionReason.NEW_NUMBER },
+    ]);
   });
 
   it.each([
@@ -702,6 +707,7 @@ describe('grpcMembership: PROFILE-ERASE, the Admin\'s records', () => {
     [Code.PermissionDenied, 'own'],
     [Code.FailedPrecondition, 'closed'],
     [Code.NotFound, 'closed'],
+    [Code.AlreadyExists, 'taken'],
   ] as const)('says a correction the API refuses (%s) by kind, and never logs the number or the reason', async (code, reason) => {
     const lines: string[] = [];
     const server = await grpcServer((router) =>
@@ -712,13 +718,13 @@ describe('grpcMembership: PROFILE-ERASE, the Admin\'s records', () => {
       }),
     );
     const error = await grpcMembership(config(server.url), (line) => lines.push(line))
-      .correctMembershipNumber(PERSON, ID, { membershipNumber: FAKE_NUMBER, reason: 'A typing slip.' })
+      .correctMembershipNumber(PERSON, ID, { membershipNumber: FAKE_NUMBER, reason: 'card_differs' })
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(CorrectionRefused);
     expect((error as CorrectionRefused).reason).toBe(reason);
     expect(JSON.parse(lines[0] as string)).toMatchObject({ level: 'warn', msg: 'api refused the correction', rpc: 'CorrectMembershipNumber' });
     expect(lines.join('')).not.toContain(FAKE_NUMBER);
-    expect(lines.join('')).not.toContain('typing slip');
+    expect(lines.join('')).not.toContain('card_differs');
   });
 
   it('asks to sign in again when the token is refused, and is unavailable when the API is set up wrongly or fails', async () => {
@@ -729,10 +735,10 @@ describe('grpcMembership: PROFILE-ERASE, the Admin\'s records', () => {
     const api = grpcMembership(config(server.url), () => {});
     await expect(api.listSignupRecords(PERSON)).rejects.toBeInstanceOf(MembershipSignInAgain);
     await expect(api.eraseSignup(PERSON, ID)).rejects.toBeInstanceOf(MembershipSignInAgain);
-    await expect(api.correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'A slip' })).rejects.toBeInstanceOf(MembershipSignInAgain);
+    await expect(api.correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'typed_wrong' })).rejects.toBeInstanceOf(MembershipSignInAgain);
     await expect(unavailableMembership().listSignupRecords(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(unavailableMembership().eraseSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
-    await expect(unavailableMembership().correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'A slip' })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(unavailableMembership().correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'typed_wrong' })).rejects.toBeInstanceOf(ApiUnavailable);
     const down = await grpcServer((router) =>
       router.service(MembershipService, {
         eraseSignup: () => {
@@ -744,6 +750,6 @@ describe('grpcMembership: PROFILE-ERASE, the Admin\'s records', () => {
       }),
     );
     await expect(grpcMembership(config(down.url), () => {}).eraseSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
-    await expect(grpcMembership(config(down.url), () => {}).correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'A slip' })).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(grpcMembership(config(down.url), () => {}).correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'typed_wrong' })).rejects.toBeInstanceOf(ApiUnavailable);
   });
 });

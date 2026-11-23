@@ -1,18 +1,22 @@
 // PROFILE-ERASE: the Admin's member-records page (/officer-area/member-records), in words. The decided
 // sign-ups, each with two things only the Admin may do (the API decides again on every call):
 //   - erase the record when the person asks, after a step that names everything to be erased;
-//   - correct a wrong membership number on an approved member's profile, with a reason.
+//   - correct a wrong membership number on an approved member's profile, with one of three fixed reasons.
 // The forms are checked here before the API is asked: the new number as the sign-up form checks one
-// (digitsOf), and the reason in words with no digit of any script, so the record of a correction never
-// holds the old or the new number. The API and the database check again.
-import type { SignupRecord, Standing } from './api/membership';
+// (digitsOf), and the reason as one of the three choices (fix 1, F5): no free text, so the record of a
+// correction never holds a number or a name. The API and the database check again.
+import type { CorrectionCode, SignupRecord, Standing } from './api/membership';
 import { MAX_NUMBER_DIGITS, digitsOf, formatMoment, typedFacts } from './signup';
 
 export const RECORDS_PATH = '/officer-area/member-records';
 /** The officer area's link to the page, for the Admin alone. */
 export const RECORDS_LINK = 'Member records';
-/** The most characters in a reason, as the API's MAX_REASON (apps/api/src/membership/service.ts). */
-export const MAX_REASON = 500;
+/** The three reasons for a correction, by the code the API keeps and the words the Admin reads, in this order. */
+export const CORRECTION_REASONS: ReadonlyArray<readonly [CorrectionCode, string]> = [
+  ['typed_wrong', 'Typed wrong at sign-up'],
+  ['card_differs', 'The member’s card shows a different number'],
+  ['new_number', 'Mensa issued a new number'],
+];
 /**
  * The most records the API lists, newest first, with no paging (its MAX_RECORDS_LISTED, kept equal).
  * A full list says so, so an older one is never hidden without a word.
@@ -21,39 +25,29 @@ export const RECORDS_LISTED_MAX = 500;
 
 export type RecordForm =
   | { action: 'erase'; requestId: string; /** Applied only once confirmed. */ confirmed: boolean }
-  | { action: 'correct'; requestId: string; step: 'review' | 'apply'; membershipNumber: string; reason: string };
+  | { action: 'correct'; requestId: string; step: 'review' | 'apply'; membershipNumber: string; reason: CorrectionCode };
 
 export type CorrectErrors = Partial<Record<'membershipNumber' | 'reason', string>>;
 
 export type ParsedRecordForm =
   | { ok: true; value: RecordForm }
-  /** With a record id: a correction to show again with its problems. Without: a form the page cannot read. */
-  | { ok: false; requestId?: string; errors: CorrectErrors; values: { membershipNumber: string; reason: string } };
+  /** With a record id: a correction to show again with its problems, and the reason chosen if it was one. Without: a form the page cannot read. */
+  | { ok: false; requestId?: string; errors: CorrectErrors; values: { membershipNumber: string; reason: CorrectionCode | '' } };
 
 /** The API's request ids, lower-case. */
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** A letter: a reason says something in words. */
-const SAYS_SOMETHING = /\p{L}/u;
-/** Any digit, of any script (after compatibility folding: full-width, circled, superscript). */
-const DIGIT = /\p{N}/u;
-/** A control character other than a tab or a line break. */
-const CONTROL = /[^\P{Cc}\t\n\r]/u;
 
-/** A reason's problem in words, or none. */
-function reasonProblem(reason: string): string | undefined {
-  if (!SAYS_SOMETHING.test(reason)) return 'Say why, in words.';
-  if ([...reason].length > MAX_REASON) return `Keep the reason to ${MAX_REASON} characters or fewer.`;
-  if (CONTROL.test(reason)) return 'Type the reason again: it has a hidden character that cannot be kept.';
-  if (DIGIT.test(reason.normalize('NFKC'))) return 'Write the reason without any digits. The number itself is never put in the record.';
-  return undefined;
+/** One of the three reasons' codes, exactly, or none. */
+function reasonCode(value: string | undefined): CorrectionCode | undefined {
+  return CORRECTION_REASONS.find(([code]) => code === value)?.[0];
 }
 
 export function parseRecordForm(field: (name: string) => string | undefined): ParsedRecordForm {
   const action = field('action');
   const requestId = field('request') ?? '';
   const typed = (field('membershipNumber') ?? '').trim();
-  const reason = (field('reason') ?? '').trim();
-  const unreadable: ParsedRecordForm = { ok: false, errors: {}, values: { membershipNumber: typed, reason } };
+  const reason = reasonCode(field('reason'));
+  const unreadable: ParsedRecordForm = { ok: false, errors: {}, values: { membershipNumber: typed, reason: reason ?? '' } };
   if (!REQUEST_ID.test(requestId)) return unreadable;
   if (action === 'erase') return { ok: true, value: { action, requestId, confirmed: field('confirmed') === 'yes' } };
   const step = field('step');
@@ -62,9 +56,8 @@ export function parseRecordForm(field: (name: string) => string | undefined): Pa
   const membershipNumber = digitsOf(typed);
   if (typed === '') errors.membershipNumber = 'Enter the new membership number.';
   else if (membershipNumber === undefined) errors.membershipNumber = `Enter the number using digits only, up to ${MAX_NUMBER_DIGITS} of them.`;
-  const problem = reasonProblem(reason);
-  if (problem !== undefined) errors.reason = problem;
-  if (membershipNumber === undefined || problem !== undefined) return { ok: false, requestId, errors, values: { membershipNumber: typed, reason } };
+  if (reason === undefined) errors.reason = 'Choose why you are correcting it.';
+  if (membershipNumber === undefined || reason === undefined) return { ok: false, requestId, errors, values: { membershipNumber: typed, reason: reason ?? '' } };
   return { ok: true, value: { action, requestId, step, membershipNumber, reason } };
 }
 
@@ -138,8 +131,14 @@ export const ERASE_REFUSED: Record<'own' | 'closed', string> = {
 };
 
 /** A correction the API refused. */
-export const CORRECT_REFUSED: Record<'own' | 'closed' | 'invalid', string> = {
+export const CORRECT_REFUSED: Record<'own' | 'closed' | 'invalid' | 'taken', string> = {
   own: 'Nothing was changed: only the Admin corrects a number, and never their own.',
   closed: 'Nothing was changed: only an approved member’s number is corrected, and the new number must differ from the one on file. The list below is as it is now.',
-  invalid: 'Nothing was changed: the number or the reason was not accepted. Use digits only in the number, and no digits in the reason.',
+  invalid: 'Nothing was changed: the number or the reason was not accepted. Use digits only in the number, and choose one of the reasons.',
+  taken: 'Nothing was changed: that number is already on another person’s sign-up.',
 };
+
+/** A reason's words, by its code. */
+export function reasonText(code: CorrectionCode): string {
+  return CORRECTION_REASONS.find(([c]) => c === code)?.[1] ?? '';
+}

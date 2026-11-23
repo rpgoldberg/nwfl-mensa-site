@@ -5,21 +5,30 @@
 //            row, the owner's included, and an erased row changes no more (a rejected one is still
 //            reopened).
 //   CORRECT  signup_request_correct_number, the Admin's alone, is the one way a stored number changes.
-//            Its audit row holds who, when and the reason, never a number: a reason with a digit of any
-//            script is refused, by the function and by the audit table's own CHECK.
-//   REMOVAL  an account that becomes removed loses the profile on its approved sign-up in the same
-//            statement, and it stays erased. A rejection keeps what was typed.
+//            Its audit row holds who, when and the reason as one of three fixed codes, never a number
+//            and never a note: no free text is taken, by the function or by the audit table's own CHECK.
+//            A number already on another live sign-up (pending, or approved and not erased) is refused.
+//   REMOVAL  a member's account that becomes removed loses the profile (first name, last name, number)
+//            on every decided sign-up of that person, a reopened earlier one included, in the same
+//            statement, and it stays erased. A rejection, or the removal of a person still waiting,
+//            keeps what was typed. A member removed before 0034 is erased by 0034 itself.
+//   STATS    after an erasure the table is analysed again, so pg_stats, which the app role reads, holds
+//            no erased value.
 // Every subject and value here is made up.
 import type pg from 'pg';
 import pgLib from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { APP, APP_PW, MIGRATOR, MIGRATOR_PW, dropDatabase, freshDatabase, live, migrate, sqlstate, urlFor } from '../helpers/pg.js';
+import { APP, APP_PW, MIGRATOR, MIGRATOR_PW, dockerExec, dropDatabase, freshDatabase, live, migrate, sqlstate, urlFor } from '../helpers/pg.js';
 
 const CHECK_VIOLATION = '23514';
 const NOT_IN_PREREQUISITE_STATE = '55000';
 const INSUFFICIENT_PRIVILEGE = '42501';
 const INVALID_PARAMETER = '22023';
 const NO_DATA_FOUND = 'P0002';
+const UNIQUE_VIOLATION = '23505';
+/** The three fixed reasons for a correction, as stored (0034). */
+const REASONS = ['typed_wrong', 'card_differs', 'new_number'];
+const NO_PROFILE = { first_name: null, last_name: null, membership_number: null };
 
 const ADMIN = ['nwfl-members', 'nwfl-admin'];
 /** Every role that is not the Admin, by the groups its token carries. */
@@ -78,7 +87,7 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
   const typed = (id: string) => one<Record<string, unknown>>(`SELECT first_name, last_name, membership_number FROM signup_request WHERE id = $1`, [id]);
   const status = async (sub: string) => (await one<{ status: string } | undefined>(`SELECT status FROM member_account WHERE sub = $1`, [sub]))?.status;
   const erase = (id: string, sub = 'admin-1', groups = ADMIN, client = app) => sqlstate(client, `SELECT * FROM signup_request_erase($1, $2, $3, NULL)`, [id, sub, groups]);
-  const correct = (id: string, number: string, reason = 'Two digits were swapped at sign-up', sub = 'admin-1', groups = ADMIN) =>
+  const correct = (id: string, number: string, reason = 'typed_wrong', sub = 'admin-1', groups = ADMIN) =>
     sqlstate(app, `SELECT signup_request_correct_number($1, $2, $3, $4, $5, NULL)`, [id, number, reason, sub, groups]);
   const audit = async (id: string): Promise<Record<string, unknown>[]> =>
     (await app.query<Record<string, unknown>>(`SELECT action, actor_sub, from_state, to_state, note, payload, at IS NOT NULL AS dated FROM audit_event WHERE subject_id = $1 ORDER BY id`, [id])).rows;
@@ -182,12 +191,13 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
       const { rows } = await owner.query(
         `SELECT p.proname, has_function_privilege('public', p.oid, 'EXECUTE') AS public, has_function_privilege('nwfl', p.oid, 'EXECUTE') AS app,
                 has_function_privilege('nwfl_worker', p.oid, 'EXECUTE') AS worker
-         FROM pg_proc p WHERE p.proname IN ('signup_request_erase', 'signup_request_correct_number', 'membership_reason_ok') ORDER BY 1`,
+         FROM pg_proc p WHERE p.proname IN ('signup_request_erase', 'signup_request_correct_number', 'signup_request_erase_profile', 'membership_reason_ok') ORDER BY 1`,
       );
+      // The free-text reason's check (membership_reason_ok) is gone with the free text (F5).
       expect(rows).toEqual([
-        { proname: 'membership_reason_ok', public: false, app: false, worker: false },
         { proname: 'signup_request_correct_number', public: false, app: true, worker: false },
         { proname: 'signup_request_erase', public: false, app: true, worker: false },
+        { proname: 'signup_request_erase_profile', public: false, app: false, worker: false },
       ]);
     });
 
@@ -266,26 +276,36 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
   });
 
   describe('CORRECT: the Admin corrects a membership number', () => {
-    it('changes the number, and audits who, when and the reason, never a number', async () => {
+    it('changes the number, and audits who, when and the reason as its code, never a number and never a note', async () => {
       const id = await approved('c-ok', '1234567');
-      expect(await correct(id, '1234576', '  Two digits were swapped at sign-up.  ')).toBe('ok');
+      expect(await correct(id, '1234576', 'typed_wrong')).toBe('ok');
       expect(await typed(id)).toEqual({ first_name: 'Pat', last_name: 'Example', membership_number: '1234576' });
       const rows = await audit(id);
-      expect(rows).toEqual([{ action: 'correct_number', actor_sub: 'admin-1', from_state: null, to_state: null, note: 'Two digits were swapped at sign-up.', payload: {}, dated: true }]);
+      expect(rows).toEqual([{ action: 'correct_number', actor_sub: 'admin-1', from_state: null, to_state: 'typed_wrong', note: null, payload: {}, dated: true }]);
       expect(JSON.stringify(rows)).not.toMatch(/1234567|1234576/);
+    });
+
+    it('takes each of the three fixed reasons, and keeps it as its code', async () => {
+      const id = await approved('c-codes', '8100000');
+      let n = 0;
+      for (const reason of REASONS) {
+        n += 1;
+        expect(await correct(id, `810000${n}`, reason), reason).toBe('ok');
+      }
+      expect((await audit(id)).map((r) => [r.to_state, r.note])).toEqual(REASONS.map((r) => [r, null]));
     });
 
     it.each(NOT_ADMIN)('refuses %s', async (who, groups) => {
       const id = await approved(`c-role-${who.replace(/\W/g, '')}`);
-      expect(await correct(id, '7654321', 'A typing slip', 'someone-1', groups)).toBe(INSUFFICIENT_PRIVILEGE);
+      expect(await correct(id, '7654321', 'typed_wrong', 'someone-1', groups)).toBe(INSUFFICIENT_PRIVILEGE);
       expect(await typed(id)).toMatchObject({ membership_number: '1234567' });
     });
 
     it('refuses a caller with no subject, and the Admin\'s own number', async () => {
       const id = await approved('c-nosub');
-      expect(await correct(id, '7654321', 'A typing slip', '')).toBe(INSUFFICIENT_PRIVILEGE);
+      expect(await correct(id, '7654321', 'typed_wrong', '')).toBe(INSUFFICIENT_PRIVILEGE);
       const own = await approved('admin-9');
-      expect(await correct(own, '7654321', 'A typing slip', 'admin-9')).toBe(INSUFFICIENT_PRIVILEGE);
+      expect(await correct(own, '7654321', 'typed_wrong', 'admin-9')).toBe(INSUFFICIENT_PRIVILEGE);
       expect(await typed(own)).toMatchObject({ membership_number: '1234567' });
     });
 
@@ -300,7 +320,7 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
 
     it('refuses no number at all', async () => {
       const id = await approved('c-null');
-      expect(await sqlstate(app, `SELECT signup_request_correct_number($1, NULL, 'A typing slip', 'admin-1', $2, NULL)`, [id, ADMIN])).toBe(INVALID_PARAMETER);
+      expect(await sqlstate(app, `SELECT signup_request_correct_number($1, NULL, 'typed_wrong', 'admin-1', $2, NULL)`, [id, ADMIN])).toBe(INVALID_PARAMETER);
     });
 
     it.each([
@@ -320,6 +340,16 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
       ['nothing', ''],
       ['only spaces', ' \t\n '],
       ['501 characters', 'a'.repeat(501)],
+      // F5 (challenge P3): no free text at all, so nothing that could carry a number or a name.
+      ['a number spelled out', 'Old number was seven six five four three two one'],
+      ['CJK numerals', '旧番号は七六五四三二一'],
+      ['Roman numerals', 'Number was MMMCCCXXI thousand'],
+      ['the member\'s last name', 'Example typed it wrong'],
+      ['plain words', 'Two digits were swapped at sign-up'],
+      ['a fixed reason\'s words, not its code', 'Typed wrong at sign-up'],
+      ['a code in capitals', 'TYPED_WRONG'],
+      ['a code with a space before it', ' typed_wrong'],
+      ['a code that is not one', 'other'],
     ])('refuses a reason with %s, and changes nothing', async (what, reason) => {
       const id = await approved(`c-reason-${what.replace(/\W/g, '')}`);
       // Whatever SQLSTATE the driver gives a NUL, the number is unchanged and nothing is audited.
@@ -329,10 +359,12 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
       expect(await audit(id)).toEqual([]);
     });
 
-    it('takes a reason in words of any script, with punctuation and line breaks, up to 500 characters', async () => {
+    // Before F5 this test took a reason in words of any script; now no words are taken at all.
+    it('refuses a reason in words of any script, with punctuation and line breaks: only the three codes are kept', async () => {
       const id = await approved('c-words');
-      expect(await correct(id, '7654321', 'Café note: the member’s card (seen by the officer) says otherwise.\nChecked — twice!')).toBe('ok');
-      expect(await correct(id, '7654322', 'a'.repeat(500))).toBe('ok');
+      expect(await correct(id, '7654321', 'Café note: the member’s card (seen by the officer) says otherwise.\nChecked — twice!')).toBe(INVALID_PARAMETER);
+      expect(await correct(id, '7654322', 'a'.repeat(500))).toBe(INVALID_PARAMETER);
+      expect(await audit(id)).toEqual([]);
     });
 
     it('refuses a null reason', async () => {
@@ -344,6 +376,29 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
       const id = await approved('c-same');
       expect(await correct(id, '1234567')).toBe(NOT_IN_PREREQUISITE_STATE);
       expect(await correct('00000000-0000-4000-8000-000000000000', '7654321')).toBe(NO_DATA_FOUND);
+    });
+
+    it('refuses a new number already on another live sign-up, pending or approved, and changes nothing (F7)', async () => {
+      const id = await approved('c-dup', '3000001');
+      await approved('c-dup-held', '3000002');
+      await signup('c-dup-waiting', '3000003');
+      for (const number of ['3000002', '3000003']) expect(await correct(id, number), number).toBe(UNIQUE_VIOLATION);
+      expect(await typed(id)).toMatchObject({ membership_number: '3000001' });
+      expect(await audit(id)).toEqual([]);
+    });
+
+    it('takes a number held only by a sign-up that is not live: rejected, reopened, erased, or a removed member\'s', async () => {
+      const id = await approved('c-free', '3100001');
+      const turnedDown = await signup('c-free-rej', '3100002');
+      await decide(turnedDown, 'rejected');
+      const reopenedOne = await signup('c-free-reo', '3100003');
+      await decide(reopenedOne, 'rejected');
+      await remove('c-free-reo');
+      await app.query(`UPDATE signup_request SET reopened_at = now(), reopened_by_sub = 'admin-1' WHERE id = $1`, [reopenedOne]);
+      expect(await erase(await approved('c-free-era', '3100004'))).toBe('ok');
+      await approved('c-free-rem', '3100005');
+      await remove('c-free-rem');
+      for (const number of ['3100002', '3100003', '3100004', '3100005']) expect(await correct(id, number), number).toBe('ok');
     });
 
     it('refuses a sign-up that is pending, rejected, reopened, removed or erased', async () => {
@@ -378,7 +433,7 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
         const id = await approved('c-more');
         await rolledBack(app, async () => {
           await app.query(
-            `INSERT INTO audit_event (actor_kind, actor_sub, actor_groups, action, subject_kind, subject_id, note) VALUES ('user', 'admin-1', $2, 'correct_number', 'signup_request', $1, 'A typing slip')`,
+            `INSERT INTO audit_event (actor_kind, actor_sub, actor_groups, action, subject_kind, subject_id, to_state) VALUES ('user', 'admin-1', $2, 'correct_number', 'signup_request', $1, 'typed_wrong')`,
             [id, ADMIN],
           );
           await app.query(`SELECT set_config('nwfl.signup_correct_number', $1, true)`, [id]);
@@ -390,11 +445,22 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
     describe('the audit log', () => {
       const NOTE = `INSERT INTO audit_event (actor_kind, actor_sub, action, subject_kind, subject_id, note) VALUES ('user', 'admin-1', $1, $2, 'x', $3)`;
 
-      it('still takes no note on a membership record, but a correction\'s reason', async () => {
+      // Before F5 a correction's reason was the one note a membership record took; now it takes none.
+      it('still takes no note on a membership record, a correction\'s included', async () => {
         expect(await sqlstate(app, NOTE, ['approve', 'signup_request', 'a note'])).toBe(CHECK_VIOLATION);
         expect(await sqlstate(app, NOTE, ['remove', 'member_account', 'a note'])).toBe(CHECK_VIOLATION);
         expect(await sqlstate(app, NOTE, ['correct_number', 'member_account', 'a note'])).toBe(CHECK_VIOLATION);
-        expect(await sqlstate(app, NOTE, ['correct_number', 'signup_request', 'A typing slip'])).toBe('ok');
+        expect(await sqlstate(app, NOTE, ['correct_number', 'signup_request', 'A typing slip'])).toBe(CHECK_VIOLATION);
+      });
+
+      const CODED = `INSERT INTO audit_event (actor_kind, actor_sub, action, subject_kind, subject_id, to_state) VALUES ('user', 'admin-1', 'correct_number', 'signup_request', 'x', $1)`;
+
+      it.each(REASONS)('takes a correction coded %s written straight to the log', async (code) => {
+        expect(await sqlstate(app, CODED, [code])).toBe('ok');
+      });
+
+      it.each([null, '', 'other', 'Typed wrong at sign-up', 'TYPED_WRONG', '1234567'])('refuses a correction coded %j written straight to the log', async (code) => {
+        expect(await sqlstate(app, CODED, [code])).toBe(CHECK_VIOLATION);
       });
 
       it.each(['Was 1234567', 'Was １２', 'Was ١', '', '...', 'a'.repeat(501)])('refuses a correction\'s reason %j written straight to the log', async (note) => {
@@ -450,12 +516,226 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
       expect(await typed(id)).toEqual({ first_name: 'Pat', last_name: 'Example', membership_number: '1234567' });
     });
 
+    it('is erased from every decided sign-up of the member, a reopened earlier one included, and nothing else on it changes (F2)', async () => {
+      const first = await reopened('r-earlier');
+      const rest = async (id: string) =>
+        (await one<{ rest: unknown }>(`SELECT to_jsonb(s) - ARRAY['first_name', 'last_name', 'membership_number'] AS rest FROM signup_request s WHERE id = $1`, [id])).rest;
+      const before = await rest(first);
+      const second = await approved('r-earlier', '5100001');
+      expect(await typed(first)).toEqual({ first_name: 'Pat', last_name: 'Example', membership_number: '1234567' });
+      await remove('r-earlier');
+      expect(await typed(first)).toEqual(NO_PROFILE);
+      expect(await typed(second)).toEqual(NO_PROFILE);
+      expect(await rest(first)).toEqual(before);
+      // It stays erased, and the reopened row still takes no other change, for the app role or the owner.
+      for (const client of [app, owner]) {
+        expect(await sqlstate(client, `UPDATE signup_request SET first_name = 'Pat' WHERE id = $1`, [first])).toBe(NOT_IN_PREREQUISITE_STATE);
+        expect(await sqlstate(client, `UPDATE signup_request SET display_name = 'Other' WHERE id = $1`, [first])).toBe(NOT_IN_PREREQUISITE_STATE);
+      }
+      // The Admin's erasure on request still takes the rest.
+      expect(await erase(first)).toBe('ok');
+      expect(await row(first)).toEqual({ ...ERASED, decision: 'rejected' });
+    });
+
+    it('opens a reopened row to that erasure alone: not while the account stands, not without an approved sign-up, never beyond the three fields', async () => {
+      const NULLS = `UPDATE signup_request SET first_name = NULL, last_name = NULL, membership_number = NULL WHERE id = $1`;
+      const marked = (client: pg.Client, sub: string, sql: string, id: string) =>
+        rolledBack(client, async () => {
+          await client.query(`SELECT set_config('nwfl.profile_erase', $1, true)`, [sub]);
+          expect(await sqlstate(client, sql, [id])).toBe(NOT_IN_PREREQUISITE_STATE);
+        });
+      // The account stands: the marker alone opens nothing.
+      const standing = await reopened('r-narrow-a');
+      await approved('r-narrow-a', '5100002');
+      for (const client of [app, owner]) await marked(client, 'r-narrow-a', NULLS, standing);
+      // Removed, but never approved (a person removed while still waiting): what was typed stays.
+      const waiting = await reopened('r-narrow-b');
+      await signup('r-narrow-b', '5100003');
+      await remove('r-narrow-b');
+      for (const client of [app, owner]) await marked(client, 'r-narrow-b', NULLS, waiting);
+      expect(await typed(waiting)).toEqual({ first_name: 'Pat', last_name: 'Example', membership_number: '1234567' });
+      // Removed member: still only the three fields, all three, to nothing.
+      const gone = await reopened('r-narrow-c');
+      await approved('r-narrow-c', '5100004');
+      await remove('r-narrow-c');
+      for (const client of [app, owner]) await marked(client, 'r-narrow-c', `UPDATE signup_request SET email = 'other@example.org' WHERE id = $1`, gone);
+    });
+
+    it('is not erased when a person still waiting is removed: the sign-up is rejected and keeps what was typed (F3)', async () => {
+      const id = await signup('r-waiting', '5300001');
+      await app.query('BEGIN');
+      await remove('r-waiting');
+      await decide(id, 'rejected');
+      await app.query('COMMIT');
+      expect(await typed(id)).toEqual({ first_name: 'Pat', last_name: 'Example', membership_number: '5300001' });
+    });
+
     it('is not erased while the account stands: no number goes alone, and a member\'s names still change', async () => {
       const id = await approved('r-live');
       expect(await sqlstate(app, `UPDATE signup_request SET first_name = NULL, last_name = NULL, membership_number = NULL WHERE id = $1`, [id])).toBe(NOT_IN_PREREQUISITE_STATE);
       expect(await sqlstate(app, `UPDATE signup_request SET first_name = 'Patricia', last_name = 'Sample' WHERE id = $1`, [id])).toBe('ok');
       await remove('r-live');
       expect(await typed(id)).toEqual({ first_name: null, last_name: null, membership_number: null });
+    });
+  });
+
+  describe('STATS: pg_stats, which the app role reads, keeps no erased value (F4)', () => {
+    let statsDb: string;
+    let a: pg.Client;
+    let o: pg.Client;
+    const COLUMNS = ['display_name', 'email', 'first_name', 'last_name', 'membership_number'];
+    /** The columns whose statistics, as the app role reads them, still hold a value matching marks. */
+    const leaked = async (marks: RegExp): Promise<string[]> =>
+      (
+        await a.query<{ attname: string; v: string }>(
+          `SELECT attname, coalesce(most_common_vals::text, '') || ' ' || coalesce(histogram_bounds::text, '') AS v FROM pg_stats
+           WHERE schemaname = 'public' AND tablename = 'signup_request' AND attname = ANY ($1) ORDER BY attname`,
+          [COLUMNS],
+        )
+      ).rows
+        .filter((r) => marks.test(r.v))
+        .map((r) => r.attname);
+    /** Eight approved members, each with its own values under the tag. */
+    const eight = async (tag: string, base: number): Promise<{ id: string; sub: string }[]> => {
+      const made: { id: string; sub: string }[] = [];
+      for (let i = 0; i < 8; i += 1) {
+        const sub = `${tag}-${i}`;
+        const { id } = (
+          await a.query<{ id: string }>(
+            `INSERT INTO signup_request (sub, display_name, email, first_name, last_name, membership_number) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+            [sub, `Pat ${tag}${i}`, `${tag}${i}@example.net`, `${tag}${i}`, `${tag}${i}`, String(base + i)],
+          )
+        ).rows[0] as { id: string };
+        await a.query(`INSERT INTO member_account (sub, status, route) VALUES ($1, 'pending', 'signup')`, [sub]);
+        await a.query(`UPDATE signup_request SET decision = 'approved', decided_at = now(), decided_by_sub = 'officer-1' WHERE id = $1`, [id]);
+        await a.query(`UPDATE member_account SET status = 'member', approved_by_sub = 'officer-1', approved_at = now(), verified_on = current_date WHERE sub = $1`, [sub]);
+        made.push({ id, sub });
+      }
+      return made;
+    };
+
+    beforeAll(async () => {
+      statsDb = await freshDatabase('nwfl_erase0034_stats');
+      const run = await migrate(statsDb);
+      if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
+      a = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, statsDb) });
+      await a.connect();
+      o = new pgLib.Client({ connectionString: urlFor(MIGRATOR, MIGRATOR_PW, statsDb) });
+      await o.connect();
+    });
+
+    afterAll(async () => {
+      await a?.end();
+      await o?.end();
+      if (statsDb !== undefined) await dropDatabase(statsDb);
+    });
+
+    it('after the Admin\'s erasure', async () => {
+      const people = await eight('Statserase', 540000);
+      await o.query('ANALYZE signup_request');
+      // Not vacuous: the values are there first.
+      expect(await leaked(/statserase|54000\d/i)).toEqual(COLUMNS);
+      for (const { id } of people) expect(await sqlstate(a, `SELECT * FROM signup_request_erase($1, 'admin-1', $2, NULL)`, [id, ADMIN])).toBe('ok');
+      expect(await leaked(/statserase|54000\d/i)).toEqual([]);
+    });
+
+    it('after a removal', async () => {
+      const people = await eight('Statsremove', 550000);
+      await o.query('ANALYZE signup_request');
+      expect(await leaked(/statsremove|55000\d/i)).toEqual(COLUMNS);
+      for (const { sub } of people) await a.query(`UPDATE member_account SET status = 'removed', removed_at = now() WHERE sub = $1`, [sub]);
+      // The sign-in's name and email stay until the person asks; the three typed fields are gone, from the statistics too.
+      expect((await leaked(/statsremove|55000\d/i)).filter((c) => ['first_name', 'last_name', 'membership_number'].includes(c))).toEqual([]);
+    });
+  });
+
+  describe('BACKFILL: a member removed before 0034 is erased by 0034 (builder Q5)', () => {
+    let old: string;
+
+    afterAll(async () => {
+      if (old) {
+        await dockerExec(['sh', '-c', `rm -rf /tmp/${old}-pre`]);
+        await dropDatabase(old);
+      }
+    });
+
+    it('erases the profile on every decided sign-up of a removed member, and nothing else, of no one else', async () => {
+      old = await freshDatabase('nwfl_erase0034_pre');
+      const dir = `/tmp/${old}-pre`;
+      // 0034 and every later migration left out, so the copy is the schema just before 0034.
+      await dockerExec(['sh', '-c', `rm -rf ${dir} && mkdir -p ${dir} && cp /repo/migrations/*.sql ${dir}/ && for f in ${dir}/*.sql; do n=$(basename "$f"); n=\${n%%_*}; if [ "$n" -ge 34 ]; then rm "$f"; fi; done`]);
+      const first = await migrate(old, dir);
+      expect(first.code, first.stderr).toBe(0);
+      const pre = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, old) });
+      await pre.connect();
+      const ids: Record<string, string> = {};
+      try {
+        const put = async (key: string, sub: string, number: string) => {
+          ids[key] = (
+            await pre.query<{ id: string }>(
+              `INSERT INTO signup_request (sub, display_name, email, first_name, last_name, membership_number) VALUES ($1, 'Pat Backfill', 'backfill@example.org', 'Pat', 'Backfill', $2) RETURNING id`,
+              [sub, number],
+            )
+          ).rows[0]?.id as string;
+          await pre.query(`INSERT INTO member_account (sub, status, route) VALUES ($1, 'pending', 'signup') ON CONFLICT (sub) DO NOTHING`, [sub]);
+        };
+        const decideOld = (key: string, decision: string) =>
+          pre.query(`UPDATE signup_request SET decision = $2, decided_at = now(), decided_by_sub = 'officer-1' WHERE id = $1`, [ids[key], decision]);
+        const approveOld = async (key: string, sub: string) => {
+          await decideOld(key, 'approved');
+          await pre.query(`UPDATE member_account SET status = 'member', approved_by_sub = 'officer-1', approved_at = now(), verified_on = current_date WHERE sub = $1`, [sub]);
+        };
+        const removeOld = (sub: string) => pre.query(`UPDATE member_account SET status = 'removed', removed_at = now() WHERE sub = $1`, [sub]);
+        // Removed member, with a reopened earlier sign-up.
+        await put('earlier', 'b-gone', '6100001');
+        await decideOld('earlier', 'rejected');
+        await removeOld('b-gone');
+        await pre.query(`UPDATE signup_request SET reopened_at = now(), reopened_by_sub = 'admin-1' WHERE id = $1`, [ids['earlier']]);
+        await pre.query(`DELETE FROM member_account WHERE sub = 'b-gone'`);
+        await put('gone', 'b-gone', '6100002');
+        await approveOld('gone', 'b-gone');
+        await removeOld('b-gone');
+        // A member still standing, and a rejected person: both keep what was typed.
+        await put('standing', 'b-standing', '6100003');
+        await approveOld('standing', 'b-standing');
+        await put('rejected', 'b-rejected', '6100004');
+        await decideOld('rejected', 'rejected');
+        await removeOld('b-rejected');
+        // Before 0034 the removed member's profile is still held.
+        expect((await pre.query(`SELECT count(*)::int AS n FROM signup_request WHERE membership_number IN ('6100001', '6100002')`)).rows[0]).toEqual({ n: 2 });
+      } finally {
+        await pre.end();
+      }
+      const ownerPre = new pgLib.Client({ connectionString: urlFor(MIGRATOR, MIGRATOR_PW, old) });
+      await ownerPre.connect();
+      await ownerPre.query('ANALYZE signup_request');
+      await ownerPre.end();
+      const second = await migrate(old);
+      expect(second.code, second.stderr).toBe(0);
+      const after = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, old) });
+      await after.connect();
+      try {
+        const { rows } = await after.query<Record<string, unknown>>(
+          `SELECT id, first_name, last_name, membership_number, display_name, email, decision, reopened_at IS NOT NULL AS reopened, erased_at IS NULL AS not_erased FROM signup_request ORDER BY created_at, id`,
+        );
+        const by = (key: string) => rows.find((r) => r['id'] === ids[key]);
+        const KEPT = { display_name: 'Pat Backfill', email: 'backfill@example.org', not_erased: true };
+        expect(by('earlier')).toMatchObject({ ...NO_PROFILE, ...KEPT, decision: 'rejected', reopened: true });
+        expect(by('gone')).toMatchObject({ ...NO_PROFILE, ...KEPT, decision: 'approved', reopened: false });
+        expect(by('standing')).toMatchObject({ first_name: 'Pat', last_name: 'Backfill', membership_number: '6100003', ...KEPT });
+        expect(by('rejected')).toMatchObject({ first_name: 'Pat', last_name: 'Backfill', membership_number: '6100004', ...KEPT });
+        // Audited by the system, by the sign-up's id alone.
+        const audited = (await after.query(`SELECT actor_kind, actor_sub, action, subject_id, from_state, to_state, note, payload FROM audit_event WHERE action = 'erase_profile' ORDER BY from_state`)).rows;
+        expect(audited).toEqual([
+          { actor_kind: 'system', actor_sub: null, action: 'erase_profile', subject_id: ids['gone'], from_state: 'approved', to_state: 'profile_erased', note: null, payload: {} },
+          { actor_kind: 'system', actor_sub: null, action: 'erase_profile', subject_id: ids['earlier'], from_state: 'reopened', to_state: 'profile_erased', note: null, payload: {} },
+        ]);
+        // And the statistics no longer hold the erased numbers.
+        const stats = (await after.query(`SELECT coalesce(most_common_vals::text, '') || ' ' || coalesce(histogram_bounds::text, '') AS v FROM pg_stats WHERE tablename = 'signup_request' AND attname = 'membership_number'`)).rows;
+        expect(JSON.stringify(stats)).not.toMatch(/610000[12]/);
+      } finally {
+        await after.end();
+      }
     });
   });
 

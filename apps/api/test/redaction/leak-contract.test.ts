@@ -104,6 +104,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
       ListSignupRequests: () => [{}],
       ListMembers: () => [{}],
       ListRejectedSignups: () => [{}],
+      // PROFILE-ERASE: the Admin's decided sign-ups.
+      ListSignupRecords: () => [{}],
     },
     'nwfl.mensa.v1.NewsletterService': {
       ListEditions: () => [{}],
@@ -175,6 +177,9 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     'MembershipService.ReopenSignup',
     // PROFILE-ID: an approved member's own two names; no content, no redacted value.
     'MembershipService.UpdateMyProfile',
+    // PROFILE-ERASE: the Admin's erasure (two counts back) and number correction (an empty answer); no content.
+    'MembershipService.EraseSignup',
+    'MembershipService.CorrectMembershipNumber',
     'MembershipVerifierService.ReportVerification',
     // L-ITEM: the link checker's verdicts; its answer is counts and the addresses it sent, no content.
     'LinkCheckService.RecordLinkVerdicts',

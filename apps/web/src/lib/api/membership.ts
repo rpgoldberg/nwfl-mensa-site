@@ -28,6 +28,7 @@ import type { TokenStore } from '../../../server/token-store.mjs';
 import type { Date as ProtoDate } from '../../gen/nwfl/mensa/v1/common_pb.js';
 import {
   AccountRoute,
+  CorrectionReason,
   type EarlierClaim as EarlierClaimMessage,
   MemberStatus,
   MembershipService,
@@ -144,9 +145,12 @@ export class DecisionRefused extends Error {
   }
 }
 
-/** PROFILE-ERASE. invalid: a number or a reason the API would not take; own: not theirs to correct; closed: not an approved member's, gone, or the same number. */
+/**
+ * PROFILE-ERASE. invalid: a number or a reason the API would not take; own: not theirs to correct; closed: not an
+ * approved member's, gone, or the same number; taken: the number is on another live sign-up (fix 1, F7).
+ */
 export class CorrectionRefused extends Error {
-  constructor(readonly reason: 'invalid' | 'own' | 'closed') {
+  constructor(readonly reason: 'invalid' | 'own' | 'closed' | 'taken') {
     super(`the correction was refused (${reason})`);
     this.name = 'CorrectionRefused';
   }
@@ -169,8 +173,16 @@ export interface MembershipApi {
   listSignupRecords(as: Reader): Promise<SignupRecord[]>;
   /** The person's decided sign-ups erased (none when already), and whether their member access ended with it. */
   eraseSignup(as: Reader, requestId: string): Promise<{ erased: number; accessEnded: boolean }>;
-  correctMembershipNumber(as: Reader, requestId: string, correction: { membershipNumber: string; reason: string }): Promise<void>;
+  correctMembershipNumber(as: Reader, requestId: string, correction: { membershipNumber: string; reason: CorrectionCode }): Promise<void>;
 }
+
+/** PROFILE-ERASE fix 1: a correction's reason, one of three fixed choices, by the code the API keeps. */
+export type CorrectionCode = 'typed_wrong' | 'card_differs' | 'new_number';
+const CORRECTION_REASON: Record<CorrectionCode, CorrectionReason> = {
+  typed_wrong: CorrectionReason.TYPED_WRONG,
+  card_differs: CorrectionReason.CARD_DIFFERS,
+  new_number: CorrectionReason.NEW_NUMBER,
+};
 
 const STANDING: Record<Standing, MemberStatus> = {
   pending: MemberStatus.PENDING,
@@ -218,6 +230,7 @@ const CORRECTION_REFUSALS: Partial<Record<Code, CorrectionRefused['reason']>> = 
   [Code.PermissionDenied]: 'own',
   [Code.FailedPrecondition]: 'closed',
   [Code.NotFound]: 'closed',
+  [Code.AlreadyExists]: 'taken',
 };
 const DECISION_REFUSALS: Partial<Record<Code, DecisionRefused['reason']>> = {
   [Code.PermissionDenied]: 'own',
@@ -407,7 +420,7 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
         'CorrectMembershipNumber',
         as,
         async (headers) => {
-          await membership.correctMembershipNumber({ requestId, membershipNumber: correction.membershipNumber, reason: correction.reason }, { headers });
+          await membership.correctMembershipNumber({ requestId, membershipNumber: correction.membershipNumber, reason: CORRECTION_REASON[correction.reason] }, { headers });
         },
         correctionRefused,
       ),

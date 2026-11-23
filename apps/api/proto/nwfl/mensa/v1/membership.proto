@@ -4,7 +4,7 @@
 // (first name, last name, membership number) is kept on the sign-up, shown to
 // the approvers and the Admin, and once approved is the member's profile: the
 // names editable by the member, the number by the Admin's correction alone.
-// PROFILE-ERASE: a removed account's profile is erased, and the Admin erases a
+// PROFILE-ERASE: a removed member's profile is erased, and the Admin erases a
 // sign-up record whole when the person asks.
 syntax = "proto3";
 
@@ -146,6 +146,18 @@ enum SignupDecision {
   SIGNUP_DECISION_REOPENED = 3;
 }
 
+// PROFILE-ERASE: why the Admin corrects a membership number: a fixed choice,
+// never free text, so the audit log never holds a number or a name.
+enum CorrectionReason {
+  CORRECTION_REASON_UNSPECIFIED = 0;
+  // Typed wrong at sign-up.
+  CORRECTION_REASON_TYPED_WRONG = 1;
+  // The member's card shows a different number.
+  CORRECTION_REASON_CARD_DIFFERS = 2;
+  // Mensa issued a new number.
+  CORRECTION_REASON_NEW_NUMBER = 3;
+}
+
 // PROFILE-ERASE: a decided sign-up as the Admin alone sees it, to erase it at
 // the person's request or to correct its number. Never an erased one: it holds
 // nothing to show.
@@ -154,7 +166,8 @@ message SignupRecord {
   string display_name = 2;
   // As the member typed it.
   string email = 3;
-  // As typed at sign-up. Empty for a removed account: its profile is erased.
+  // As typed at sign-up. Empty once a member's account is removed: the profile
+  // is erased from every decided sign-up of theirs.
   string first_name = 4;
   string last_name = 5;
   string membership_number = 6;
@@ -230,8 +243,9 @@ service MembershipService {
   // PROFILE-ERASE: the Admin only, never on their own sign-up. Corrects a
   // wrong membership number on an approved member's profile: the one way a
   // stored number changes. The number is checked as at sign-up. The reason is
-  // kept in the audit log with who and when; a reason with any digit in it is
-  // INVALID_ARGUMENT, so the log never holds the old or the new number.
+  // one of three fixed choices, kept in the audit log as its code with who and
+  // when; no reason, or one not listed, is INVALID_ARGUMENT. A number already
+  // on another sign-up still waiting or approved is ALREADY_EXISTS.
   rpc CorrectMembershipNumber(CorrectMembershipNumberRequest) returns (CorrectMembershipNumberResponse);
 }
 
@@ -357,8 +371,8 @@ message CorrectMembershipNumberRequest {
   string request_id = 1;
   // Digits only, as at sign-up.
   string membership_number = 2;
-  // Why, in words: 1 to 500 characters, with no digits.
-  string reason = 3;
+  // Why: one of the three fixed choices.
+  CorrectionReason reason = 3;
 }
 
 message CorrectMembershipNumberResponse {}

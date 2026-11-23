@@ -96,13 +96,19 @@ describe('/privacy', () => {
 
   // PROFILE-ERASE (11-22) replaced the rule this test held before ("the record of your sign-up stays ... we remove
   // it by hand"): a removal now erases the profile, and the Admin erases the rest on request.
-  it('says a removal erases the names and the number at once: migration 0034\'s trigger, on every removal, in the same statement', () => {
-    expect(text).toContain('If an officer removes your account, your member access ends. We then erase your first name, last name and membership number.');
+  // Fix 1 (F2, F3): the sentence speaks of a member's account, and holds for every sign-up of that member, a
+  // reopened earlier one included. A person removed while still waiting is rejected and keeps what was typed;
+  // the Admin's erasure on request covers that. The API suite (apps/api test/membership/profile-erase.test.ts)
+  // holds this same sentence to the database's outcome.
+  it('says a member\'s removal erases the names and the number at once: migration 0034\'s trigger, on every decided sign-up of that member, in the same statement', () => {
+    expect(text).toContain("If an officer removes a member's account, we erase their first name, last name and membership number.");
+    expect(text).not.toContain('If an officer removes your account');
     const m0034 = readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8');
     expect(m0034).toMatch(
-      /CREATE FUNCTION member_account_removed_erases_profile\(\)[\s\S]*?UPDATE signup_request SET first_name = NULL, last_name = NULL, membership_number = NULL\s+WHERE sub = NEW\.sub AND decision = 'approved'/,
+      /CREATE FUNCTION signup_request_erase_profile\(p_sub text\)[\s\S]*?a\.status = 'removed'[\s\S]*?s\.decision = 'approved'[\s\S]*?UPDATE signup_request s SET first_name = NULL, last_name = NULL, membership_number = NULL\s+WHERE s\.sub = p_sub AND s\.decision <> 'pending'/,
     );
     expect(m0034).toMatch(/CREATE TRIGGER member_account_removed_erases_profile AFTER INSERT OR UPDATE ON member_account\s+FOR EACH ROW WHEN \(NEW\.status = 'removed'\)/);
+    expect(m0034).toMatch(/CREATE FUNCTION member_account_removed_erases_profile\(\)[\s\S]*?signup_request_erase_profile\(NEW\.sub\)/);
     // And it stays erased: the sign-up's own trigger refuses putting it back.
     expect(m0034).toContain("a removed account''s profile stays erased");
     // The officer's removal is that status change (api/src/membership/service.ts RemoveMember).
@@ -110,14 +116,14 @@ describe('/privacy', () => {
   });
 
   it('erases no more than that at a removal: the sign-in\'s name and email wait for the person to ask', () => {
-    // The removal's trigger touches the three profile columns only.
-    const erase = /CREATE FUNCTION member_account_removed_erases_profile\(\)[\s\S]*?\$fn\$;/.exec(readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8'))?.[0] ?? '';
-    expect(erase).toContain('UPDATE signup_request SET');
+    // The removal's erasure touches the three profile columns only.
+    const erase = /CREATE FUNCTION signup_request_erase_profile\([\s\S]*?\$fn\$;/.exec(readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8'))?.[0] ?? '';
+    expect(erase).toContain('UPDATE signup_request s SET');
     for (const column of ['display_name', 'email', 'created_at', 'decision', 'decided_at']) expect(erase, column).not.toMatch(new RegExp(`\\b${column}\\s*=\\s*NULL`));
   });
 
   it('says the Admin erases the rest on request, and what is then left: migration 0034\'s signup_request_erase, which only the Admin may call', () => {
-    expect(text).toContain('If you ask us to remove your record, the Admin erases the name and email address too, and your member access ends. The dates and the decision stay.');
+    expect(text).toContain('If you ask us to remove your record, the Admin also erases your name and email, and your access ends. The dates and decisions stay.');
     expect(text).not.toContain('we remove it by hand');
     const m0034 = readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8');
     const erase = /CREATE FUNCTION signup_request_erase\([\s\S]*?\$fn\$;/.exec(m0034)?.[0] ?? '';
@@ -138,6 +144,13 @@ describe('/privacy', () => {
     const records = readFileSync('src/pages/officer-area/member-records.astro', 'utf8');
     expect(records).toContain("if (!isAdmin(session)) return Astro.rewrite('/404');");
     expect(records).toContain('await api.eraseSignup(reader, form.requestId)');
+  });
+
+  // Fix 1 (F4): pg-nwfl's backups (fc-infra tenants/nwfl/pg-nwfl.yaml, retentionPolicy "3m", daily base backups)
+  // keep what was erased until they age out. The API's README records the setting this sentence rests on.
+  it('says how long backups keep erased details: the API README records pg-nwfl\'s backup retention of three months', () => {
+    expect(text).toContain('Backups keep erased details for about three months.');
+    expect(readFileSync('../api/README.md', 'utf8')).toContain('pg-nwfl\'s backup retention (fc-infra `tenants/nwfl/pg-nwfl.yaml`, `retentionPolicy: "3m"`, a daily base backup) bounds how long: about three months.');
   });
 
   it('still never deletes a decided sign-up: migration 0026 takes DELETE from the app and refuses it for a decided row; no app code deletes one', () => {
@@ -231,8 +244,9 @@ describe('/privacy', () => {
         'The membership check: your membership number, last name and email address, to confirm you are a member.',
         'No page on this site shows it to other members or to the public.',
         'How long we keep it Member access lasts 13 months from the last time your membership was confirmed. After that it is paused until an officer confirms it again.',
-        'If an officer removes your account, your member access ends. We then erase your first name, last name and membership number.',
-        'If you ask us to remove your record, the Admin erases the name and email address too, and your member access ends. The dates and the decision stay.',
+        "If an officer removes a member's account, we erase their first name, last name and membership number.",
+        'If you ask us to remove your record, the Admin also erases your name and email, and your access ends. The dates and decisions stay.',
+        'Backups keep erased details for about three months.',
         'Cookies A cookie is a small note a site leaves in your browser.',
         'This site uses cookies only to sign you in and keep you signed in, and to remember your text size, your theme and your choice about links that leave the site.',
         'There is no tracking and no advertising on this site, and nothing here follows what you read.',

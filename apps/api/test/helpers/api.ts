@@ -55,6 +55,12 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   // PROFILE-ERASE: a member an officer removes, and a person whose sign-up claims a number already claimed.
   'leaver-token': { client: 'site', subject: 'sub-leaver', groups: ['nwfl-pending'], scopes: [], name: 'Blake Leaver', email: 'blake@example.org' },
   'claimant-token': { client: 'site', subject: 'sub-claimant', groups: ['nwfl-pending'], scopes: [], name: 'Reese Claimant', email: 'reese@example.org' },
+  // PROFILE-ERASE fix 1: a member once turned down and reopened, then removed; a person removed while still
+  // waiting; a member and a person waiting whose numbers a correction may not take.
+  'returner-token': { client: 'site', subject: 'sub-returner', groups: ['nwfl-pending'], scopes: [], name: 'Casey Returner', email: 'casey@example.org' },
+  'waiter-token': { client: 'site', subject: 'sub-waiter', groups: ['nwfl-pending'], scopes: [], name: 'Drew Waiting', email: 'drew@example.org' },
+  'holder-token': { client: 'site', subject: 'sub-holder', groups: ['nwfl-pending'], scopes: [], name: 'Jordan Holder', email: 'jordan@example.org' },
+  'pender-token': { client: 'site', subject: 'sub-pender', groups: ['nwfl-pending'], scopes: [], name: 'Riley Pending', email: 'riley@example.org' },
   // The Membership Officer: approves sign-ups; also signs up once, to show no one decides their own.
   'approver-token': {
     client: 'site',

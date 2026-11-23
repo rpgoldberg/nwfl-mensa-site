@@ -9,12 +9,22 @@
 --            account is removed with it, so no account is left with no record behind it. A pending
 --            sign-up is not erased: it is decided first.
 --   CORRECT  The Admin corrects a wrong membership number on an approved member's profile.
---            signup_request_correct_number takes the number (digits only, as at sign-up) and a
---            reason in words. The audit row holds who, when and the reason, and never the old or the
---            new number: a reason is refused if it holds any digit, in any script.
---   REMOVAL  When an account is removed (an officer's RemoveMember, or the erasure above), the
---            profile on its approved sign-up (first name, last name, membership number) is erased in
---            the same statement, by a trigger, whoever makes the change. It stays erased.
+--            signup_request_correct_number takes the number (digits only, as at sign-up) and one of
+--            three fixed reasons, by its code: typed_wrong (typed wrong at sign-up), card_differs (the
+--            member's card shows a different number), new_number (Mensa issued a new number). No free
+--            text, so nothing typed can carry a number or a name into the log. The audit row holds
+--            who, when and the code (to_state); its note stays empty. A number already on another live
+--            sign-up (pending, or approved and not erased) is refused (23505).
+--   REMOVAL  When a member's account is removed (an officer's RemoveMember, or the erasure above), the
+--            profile (first name, last name, membership number) on every decided sign-up of that
+--            person, a reopened earlier one included, is erased in the same statement, by a trigger,
+--            whoever makes the change. It stays erased. A person never approved (a rejection, or the
+--            removal of a person still waiting, which rejects their sign-up) keeps what was typed, so
+--            a mistaken rejection can be judged and reopened; the Admin erases it on request.
+--            A member removed before 0034 is erased here, once (section 8).
+--   STATS    Each erasure ends by analysing the table again, so pg_stats (which the app role reads)
+--            holds no erased value. The dead row versions, the WAL and the backups keep the values
+--            until vacuum and pg-nwfl's backup retention remove them.
 --
 -- Both functions are SECURITY DEFINER and the one writer of their change. Each refuses a caller
 -- whose groups do not hold nwfl-admin (42501; the API passes the verified token's groups and is the
@@ -46,29 +56,14 @@ COMMENT ON COLUMN signup_request.erased_at IS 'PROFILE-ERASE: when the Admin era
 COMMENT ON COLUMN signup_request.erased_by_sub IS 'PROFILE-ERASE: the Admin who erased it.';
 COMMENT ON COLUMN signup_request.membership_number IS 'As the member typed it, digits only. Changed only by the Admin''s correction (signup_request_correct_number); erased when the account is removed or the record is erased. Never in an audit row or a log.';
 
--- 2. A reason in words, with no number in it. After compatibility folding (full-width and circled
---    digits become plain ones), every character must be a letter, a punctuation mark or symbol, or a
---    space: a digit of any script is none of those under the builtin Unicode classes, so it is
---    refused whatever is put between the digits. It needs a letter, and is 500 characters at most.
-CREATE FUNCTION membership_reason_ok(p_reason text) RETURNS boolean
-  LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog, pg_temp AS $fn$
-  SELECT p_reason IS NOT NULL
-     AND length(p_reason) BETWEEN 1 AND 500
-     AND (normalize(p_reason, NFKC) COLLATE pg_c_utf8) ~ '^[[:alpha:][:punct:][:space:]]+$'
-     AND (normalize(p_reason, NFKC) COLLATE pg_c_utf8) ~ '[[:alpha:]]'
-$fn$;
+-- 2. (Before fix 1, a free-text reason and its digit check, membership_reason_ok. Gone: the reason is a
+--    fixed choice, and no note goes on a membership record, a correction's included: 0004 unchanged.)
 
--- 3. The audit log: a membership record still gets no payload (0009) and no note (0004), but for
---    the reason of a number correction, which holds no digit.
+-- 3. The audit log: a correction's reason is one of three codes, in to_state, and nothing else.
 ALTER TABLE audit_event
-  DROP CONSTRAINT audit_event_no_note_on_membership,
-  ADD CONSTRAINT audit_event_no_note_on_membership
-    CHECK (note IS NULL OR subject_kind NOT IN ('member_account', 'signup_request')
-           OR (subject_kind = 'signup_request' AND action = 'correct_number'
-               -- membership_reason_ok, written out: a CHECK that called it would need every writer of this table to hold EXECUTE.
-               AND length(note) BETWEEN 1 AND 500
-               AND (normalize(note, NFKC) COLLATE pg_c_utf8) ~ '^[[:alpha:][:punct:][:space:]]+$'
-               AND (normalize(note, NFKC) COLLATE pg_c_utf8) ~ '[[:alpha:]]'));
+  ADD CONSTRAINT audit_event_correction_reason
+    CHECK (action <> 'correct_number' OR subject_kind <> 'signup_request'
+           OR (to_state IS NOT NULL AND to_state IN ('typed_wrong', 'card_differs', 'new_number') AND from_state IS NULL));
 
 -- 4. What may change on a sign-up, and when (0009, 0026, 0028, and the three rules above).
 CREATE OR REPLACE FUNCTION signup_request_decision_final() RETURNS trigger LANGUAGE plpgsql
@@ -95,6 +90,18 @@ BEGIN
      AND (to_jsonb(NEW) - ARRAY['reopened_at', 'reopened_by_sub']) IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['reopened_at', 'reopened_by_sub']) THEN
     RAISE EXCEPTION 'signup_request % is erased', OLD.id USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
+  -- REMOVAL: a removed member's profile goes from every decided sign-up of theirs, a reopened one too, only
+  -- inside signup_request_erase_profile (a transaction-local marker naming the person): the three typed
+  -- fields, all three to nothing, nothing else, and only for a person who was approved and is removed.
+  IF current_setting('nwfl.profile_erase', true) = OLD.sub
+     AND OLD.decision <> 'pending'
+     AND num_nonnulls(NEW.first_name, NEW.last_name, NEW.membership_number) = 0
+     AND (to_jsonb(NEW) - ARRAY['first_name', 'last_name', 'membership_number'])
+         = (to_jsonb(OLD) - ARRAY['first_name', 'last_name', 'membership_number'])
+     AND EXISTS (SELECT 1 FROM member_account a WHERE a.sub = OLD.sub AND a.status = 'removed')
+     AND EXISTS (SELECT 1 FROM signup_request s WHERE s.sub = OLD.sub AND s.decision = 'approved') THEN
+    RETURN NEW;
+  END IF;
   IF OLD.reopened_at IS NOT NULL AND NEW IS DISTINCT FROM OLD THEN
     RAISE EXCEPTION 'signup_request % is reopened', OLD.id USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
@@ -111,7 +118,8 @@ BEGIN
        OR OLD.decision <> 'approved' OR OLD.membership_number IS NULL OR v_removed
        OR (to_jsonb(NEW) - 'membership_number') IS DISTINCT FROM (to_jsonb(OLD) - 'membership_number')
        OR NOT EXISTS (SELECT 1 FROM audit_event e WHERE e.subject_kind = 'signup_request' AND e.subject_id = OLD.id::text
-                        AND e.action = 'correct_number' AND e.at = now() AND e.note IS NOT NULL AND 'nwfl-admin' = ANY (e.actor_groups)) THEN
+                        AND e.action = 'correct_number' AND e.at = now() AND e.note IS NULL
+                        AND e.to_state IN ('typed_wrong', 'card_differs', 'new_number') AND 'nwfl-admin' = ANY (e.actor_groups)) THEN
       RAISE EXCEPTION 'signup_request %: a membership number is never changed', OLD.id USING ERRCODE = 'object_not_in_prerequisite_state';
     END IF;
   END IF;
@@ -135,14 +143,37 @@ $fn$;
 COMMENT ON TRIGGER signup_request_decision_final ON signup_request IS
   'Refuses every role''s other changes of a decided, reopened or erased row, the owner''s included; the owner can disable or drop it, as for every guard trigger (0019).';
 
--- 5. REMOVAL: an account that becomes removed loses the profile on its approved sign-up, in the same
---    statement, whoever removes it. (A rejection also closes its account, but its sign-up is rejected,
---    not approved: what it typed stays, so a mistaken rejection can be judged and reopened.)
-CREATE FUNCTION member_account_removed_erases_profile() RETURNS trigger LANGUAGE plpgsql
+-- 5. REMOVAL: an account that becomes removed loses the profile on every decided sign-up of the person,
+--    in the same statement, whoever removes it, when the person was approved: a member's account. (A
+--    rejection also closes its account, but nothing of that person was approved: what it typed stays, so a
+--    mistaken rejection can be judged and reopened.) signup_request_erase_profile is the one writer, called
+--    by the trigger and by section 8; it is no one's to call directly. The trigger's function runs as the
+--    owner, so it may analyse the table and call the writer.
+CREATE FUNCTION signup_request_erase_profile(p_sub text) RETURNS integer LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_count integer;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM member_account a WHERE a.sub = p_sub AND a.status = 'removed')
+     OR NOT EXISTS (SELECT 1 FROM signup_request s WHERE s.sub = p_sub AND s.decision = 'approved') THEN
+    RETURN 0;
+  END IF;
+  PERFORM set_config('nwfl.profile_erase', p_sub, true);
+  UPDATE signup_request s SET first_name = NULL, last_name = NULL, membership_number = NULL
+   WHERE s.sub = p_sub AND s.decision <> 'pending' AND num_nonnulls(s.first_name, s.last_name, s.membership_number) > 0;
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  PERFORM set_config('nwfl.profile_erase', '', true);
+  RETURN v_count;
+END
+$fn$;
+
+CREATE FUNCTION member_account_removed_erases_profile() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog, public, pg_temp AS $fn$
 BEGIN
-  UPDATE signup_request SET first_name = NULL, last_name = NULL, membership_number = NULL
-   WHERE sub = NEW.sub AND decision = 'approved' AND num_nonnulls(first_name, last_name, membership_number) > 0;
+  IF signup_request_erase_profile(NEW.sub) > 0 THEN
+    -- STATS: the planner's statistics hold no erased value.
+    ANALYZE signup_request;
+  END IF;
   RETURN NULL;
 END
 $fn$;
@@ -194,6 +225,10 @@ BEGIN
       VALUES (p_trace, 'user', p_sub, p_groups, 'remove', 'member_account', v_row.sub, v_status, 'removed');
     v_ended := true;
   END IF;
+  IF v_count > 0 THEN
+    -- STATS: the planner's statistics hold no erased value.
+    ANALYZE signup_request;
+  END IF;
   RETURN QUERY SELECT v_count, v_ended;
 END
 $fn$;
@@ -204,8 +239,7 @@ CREATE FUNCTION signup_request_correct_number(p_id uuid, p_number text, p_reason
   RETURNS void
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
 DECLARE
-  v_reason text := regexp_replace(coalesce(p_reason, '') COLLATE pg_c_utf8, '^[[:space:]]+|[[:space:]]+$', '', 'g');
-  v_row    signup_request;
+  v_row signup_request;
 BEGIN
   IF coalesce(p_sub, '') = '' OR NOT coalesce('nwfl-admin' = ANY (p_groups), false) THEN
     RAISE EXCEPTION 'only the Admin corrects a membership number' USING ERRCODE = '42501';
@@ -213,8 +247,8 @@ BEGIN
   IF p_number IS NULL OR p_number !~ '^[0-9]{1,12}$' THEN
     RAISE EXCEPTION 'a membership number is 1 to 12 digits' USING ERRCODE = '22023';
   END IF;
-  IF NOT membership_reason_ok(v_reason) THEN
-    RAISE EXCEPTION 'a correction needs a reason in words, with no digits' USING ERRCODE = '22023';
+  IF p_reason IS NULL OR p_reason NOT IN ('typed_wrong', 'card_differs', 'new_number') THEN
+    RAISE EXCEPTION 'a correction''s reason is one of three codes' USING ERRCODE = '22023';
   END IF;
   SELECT * INTO v_row FROM signup_request s WHERE s.id = p_id FOR UPDATE;
   IF NOT FOUND THEN
@@ -230,14 +264,29 @@ BEGIN
   IF v_row.membership_number = p_number THEN
     RAISE EXCEPTION 'that is the number already on the profile' USING ERRCODE = '55000';
   END IF;
-  INSERT INTO audit_event (trace_id, actor_kind, actor_sub, actor_groups, action, subject_kind, subject_id, note)
-    VALUES (p_trace, 'user', p_sub, p_groups, 'correct_number', 'signup_request', v_row.id::text, v_reason);
+  -- Never onto a number another live sign-up holds: one waiting, or an approved one not erased.
+  IF EXISTS (SELECT 1 FROM signup_request s WHERE s.membership_number = p_number AND s.id <> v_row.id
+               AND s.decision IN ('pending', 'approved') AND s.erased_at IS NULL) THEN
+    RAISE EXCEPTION 'that number is already on another sign-up' USING ERRCODE = 'unique_violation';
+  END IF;
+  INSERT INTO audit_event (trace_id, actor_kind, actor_sub, actor_groups, action, subject_kind, subject_id, to_state)
+    VALUES (p_trace, 'user', p_sub, p_groups, 'correct_number', 'signup_request', v_row.id::text, p_reason);
   PERFORM set_config('nwfl.signup_correct_number', v_row.id::text, true);
   UPDATE signup_request s SET membership_number = p_number WHERE s.id = v_row.id;
   PERFORM set_config('nwfl.signup_correct_number', '', true);
 END
 $fn$;
 
+-- 8. REMOVAL, for a member removed before 0034: erased once, here, audited by the system by the sign-up's id.
+INSERT INTO audit_event (actor_kind, action, subject_kind, subject_id, from_state, to_state)
+  SELECT 'system', 'erase_profile', 'signup_request', s.id::text, CASE WHEN s.reopened_at IS NOT NULL THEN 'reopened' ELSE s.decision END, 'profile_erased'
+    FROM signup_request s JOIN member_account a ON a.sub = s.sub AND a.status = 'removed'
+   WHERE s.decision <> 'pending' AND num_nonnulls(s.first_name, s.last_name, s.membership_number) > 0
+     AND EXISTS (SELECT 1 FROM signup_request x WHERE x.sub = s.sub AND x.decision = 'approved')
+   ORDER BY s.created_at, s.id;
+SELECT signup_request_erase_profile(a.sub) FROM member_account a WHERE a.status = 'removed' ORDER BY a.sub;
+ANALYZE signup_request;
+
 REVOKE EXECUTE ON FUNCTION signup_request_erase(uuid, text, text[], text), signup_request_correct_number(uuid, text, text, text, text[], text),
-  membership_reason_ok(text), member_account_removed_erases_profile() FROM PUBLIC;
+  signup_request_erase_profile(text), member_account_removed_erases_profile() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION signup_request_erase(uuid, text, text[], text), signup_request_correct_number(uuid, text, text, text, text[], text) TO nwfl;

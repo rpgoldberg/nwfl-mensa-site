@@ -58,7 +58,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility, LinkTargetKind, LinkTargetStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
-import { AccountRoute, MemberStatus, MembershipService, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, CorrectionReason, MemberStatus, MembershipService, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
 import { createEventModel } from './events-model.mjs';
@@ -990,9 +990,8 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     correctMembershipNumber: async (req, ctx) => {
       const person = await adminOf(ctx);
       const number = req.membershipNumber.trim().replace(/[\p{Zs}\p{Pd}\u2212]/gu, '');
-      const reason = req.reason.trim();
       if (!/^[0-9]{1,12}$/.test(number)) throw new ConnectError('a membership number is 1 to 12 digits', Code.InvalidArgument);
-      if (!/\p{L}/u.test(reason) || [...reason].length > 500 || /\p{N}/u.test(reason.normalize('NFKC'))) throw new ConnectError('write the reason in words, with no digits', Code.InvalidArgument);
+      if (![CorrectionReason.TYPED_WRONG, CorrectionReason.CARD_DIFFERS, CorrectionReason.NEW_NUMBER].includes(req.reason)) throw new ConnectError('choose one of the three reasons', Code.InvalidArgument);
       const record = recordFor(person, req.requestId);
       const corrected = CORRECTED.get(person.session) ?? new Map();
       const now = corrected.get(record.requestId) ?? record.membershipNumber;
@@ -1000,6 +999,9 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       if (erased || record.decision !== SignupDecision.APPROVED || now === '' || !STANDS.includes(record.accountStatus) || now === number) {
         throw new ConnectError('only an approved member\'s number is corrected', Code.FailedPrecondition);
       }
+      // As the API's: never a number another live sign-up holds (one waiting, or an approved one).
+      const live = [...SIGNUP_QUEUE.map((r) => r.membershipNumber), ...RECORDS.filter((r) => r.requestId !== record.requestId && r.decision === SignupDecision.APPROVED).map((r) => r.membershipNumber)];
+      if (live.includes(number)) throw new ConnectError('that number is already on another sign-up', Code.AlreadyExists);
       corrected.set(record.requestId, number);
       CORRECTED.set(person.session, corrected);
       return {};

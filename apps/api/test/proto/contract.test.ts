@@ -256,9 +256,12 @@ describe(`${PKG}: the membership verifier`, () => {
   });
 
   // PROFILE-ID: the owner (GetMyAccount) and the approvers (the queue and the rejections) see it too.
+  // PROFILE-ERASE: the Admin's list of decided sign-ups shows them (ListSignupRecords out); the names never go
+  // in there, and only the number goes in, by the Admin's correction (CorrectMembershipNumber in, below).
   const NUMBER_CARRIERS = [
     'MembershipService.GetMyAccount out',
     'MembershipService.ListRejectedSignups out',
+    'MembershipService.ListSignupRecords out',
     'MembershipService.ListSignupRequests out',
     'MembershipService.SubmitSignup in',
     'MembershipVerifierService.ListPendingVerifications out',
@@ -271,8 +274,8 @@ describe(`${PKG}: the membership verifier`, () => {
       ])
       .sort();
 
-  it('lets the membership number reach only the pending list, the sign-up call, the owner and the approvers\' two lists', () => {
-    expect(carriersOf('membership_number')).toEqual(NUMBER_CARRIERS);
+  it('lets the membership number reach only the pending list, the sign-up call, the owner and the approvers\' two lists, and the Admin\'s list and correction', () => {
+    expect(carriersOf('membership_number')).toEqual([...NUMBER_CARRIERS, 'MembershipService.CorrectMembershipNumber in'].sort());
   });
 
   it('lets the last name reach the same places, and the owner\'s change of name (in)', () => {
@@ -327,8 +330,11 @@ describe(`${PKG}: nothing National-sourced has a field`, () => {
     expect(membershipFiles.length).toBeGreaterThanOrEqual(2);
     const offenders = membershipFiles
       .flatMap((f) => f.messages)
-      .flatMap((m) => m.fields.filter((f) => /note|comment|remark|reason/.test(f.name)).map((f) => `${m.name}.${f.name}`));
+      // PROFILE-ERASE fix 1: a correction's reason is a fixed choice (an enum), not free text; any other kind still fails.
+      .flatMap((m) => m.fields.filter((f) => /note|comment|remark|reason/.test(f.name) && f.fieldKind !== 'enum').map((f) => `${m.name}.${f.name}`));
     expect(offenders).toEqual([]);
+    const reason = allMessages().find((m) => m.typeName === `${PKG}.CorrectMembershipNumberRequest`)?.fields.find((f) => f.name === 'reason');
+    expect(reason?.fieldKind === 'enum' ? reason.enum.typeName : reason?.fieldKind).toBe(`${PKG}.CorrectionReason`);
   });
 });
 
@@ -356,9 +362,12 @@ describe(`${PKG}: rules by name as well as by type`, () => {
       ...(reachableFields(m.input).some((f) => NUMBER_LIKE.test(f.name)) ? [`${rpc(m)} in`] : []),
       ...(reachableFields(m.output).some((f) => NUMBER_LIKE.test(f.name)) ? [`${rpc(m)} out`] : []),
     ]);
+    // PROFILE-ERASE: "never in to change it" now has one exception, the Admin's correction (PID-S1).
     expect(carriers.sort()).toEqual([
+      'MembershipService.CorrectMembershipNumber in',
       'MembershipService.GetMyAccount out',
       'MembershipService.ListRejectedSignups out',
+      'MembershipService.ListSignupRecords out',
       'MembershipService.ListSignupRequests out',
       'MembershipService.SubmitSignup in',
       'MembershipVerifierService.ListPendingVerifications out',

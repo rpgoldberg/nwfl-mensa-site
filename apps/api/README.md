@@ -294,12 +294,18 @@ by the handler for a precise answer, and by the database (`0007`).
   decided sign-up of theirs. The date and the decision stay, an approved
   member's account is removed with it, and a pending sign-up is decided first.
   `CorrectMembershipNumber` is the one way a stored number changes: the
-  number is checked as at sign-up, and the reason goes to the audit log with
-  who and when. A reason with any digit in it is refused, so the log never
-  holds the old or the new number.
+  number is checked as at sign-up, and the reason is one of three fixed
+  choices (typed wrong at sign-up, the member's card shows a different number,
+  Mensa issued a new number), kept in the audit log as its code with who and
+  when. There is no free text, so the log never holds a number or a name. A
+  number already on another sign-up that is waiting or approved is refused.
 - **Removing a member** (`RemoveMember`): the removal erases the first name,
-  the last name and the membership number on the member's approved sign-up
-  in the same statement (a trigger of `0034`), audited by the sign-up's id.
+  the last name and the membership number on every decided sign-up of the
+  member, a reopened earlier one included, in the same statement (a trigger of
+  `0034`), audited by each sign-up's id. A person removed while still waiting
+  is rejected and keeps what was typed, until the Admin erases it on request.
+  `0034` itself erased the members removed before it. Each erasure analyses
+  the table again, so `pg_stats` holds no erased value.
 
 ## Seeding the calendar and roster
 
@@ -928,7 +934,8 @@ The rules the database itself enforces:
 - a member's home has no street address, city or link; a `.docx` is
   officers-only; an edition's hosted PDF is a public file of that edition;
 - a sign-up keeps the first name, last name and membership number it typed
-  (0028) until its account is removed, which erases them, or the Admin erases
+  (0028) until a member's account is removed, which erases them from every
+  decided sign-up of that person, or the Admin erases
   the record whole (0034); the number changes only by the Admin's correction,
   with its audit row, and the names change only on an approved sign-up, the
   member's profile; `affiliate` needs a recorded grant;
@@ -946,8 +953,11 @@ Accepted residual risks, with no code against them:
 
 - The schema owner can disable a trigger or drop a constraint. The migrator
   role runs migrations only; the service never connects as it.
-- A deleted sign-up's membership number still exists in Postgres WAL and in
-  backups until they age out; pg-nwfl's backup retention bounds how long.
+- A deleted or erased sign-up's names, number and email still exist in dead
+  row versions until vacuum, in Postgres WAL and in backups until they age
+  out; pg-nwfl's backup retention (fc-infra `tenants/nwfl/pg-nwfl.yaml`, `retentionPolicy: "3m"`, a daily base backup) bounds how long: about three months.
+  The planner's statistics (pg_stats, which the app role reads) are
+  refreshed by every erasure (0034), so they hold none of it.
 - Free-text fields (an event's detail, a send-back note) could hold someone's
   contact details if an officer types them. The approval screens for members
   have no notes field at all.
