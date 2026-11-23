@@ -463,6 +463,14 @@ export declare type GetMyAccountResponse = Message<"nwfl.mensa.v1.GetMyAccountRe
    * @generated from field: nwfl.mensa.v1.OfficerTools officer_tools = 3;
    */
   officerTools: OfficerTools;
+
+  /**
+   * OFFICER-VERIFY: for an approved account whose officer tools wait, what
+   * opens them.
+   *
+   * @generated from field: nwfl.mensa.v1.OfficerCheck officer_check = 4;
+   */
+  officerCheck: OfficerCheck;
 };
 
 /**
@@ -1035,6 +1043,58 @@ export enum OfficerTools {
 export declare const OfficerToolsSchema: GenEnum<OfficerTools>;
 
 /**
+ * OFFICER-VERIFY: what an approved member or affiliate whose officer tools
+ * wait can do about it. An officer power needs a check that confirmed the
+ * number, the last name and the first name, and either the chapter's own
+ * local group or an Admin's affiliate grant. Unspecified whenever the tools do
+ * not wait, and for a caller with no approved account (they sign up, or wait
+ * for their first check).
+ *
+ * @generated from enum nwfl.mensa.v1.OfficerCheck
+ */
+export enum OfficerCheck {
+  /**
+   * @generated from enum value: OFFICER_CHECK_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The check has not confirmed all of it: SubmitSignup with the names again
+   * asks for a fresh check.
+   *
+   * @generated from enum value: OFFICER_CHECK_CONFIRM_DETAILS = 1;
+   */
+  CONFIRM_DETAILS = 1,
+
+  /**
+   * A fresh check is asked for and has not answered yet.
+   *
+   * @generated from enum value: OFFICER_CHECK_RUNNING = 2;
+   */
+  RUNNING = 2,
+
+  /**
+   * The last fresh check did not confirm the details; they may ask again.
+   *
+   * @generated from enum value: OFFICER_CHECK_NOT_CONFIRMED = 3;
+   */
+  NOT_CONFIRMED = 3,
+
+  /**
+   * Confirmed as a member of another local group (a guest member): the tools
+   * open when the Admin or the Webmaster grants affiliate standing.
+   *
+   * @generated from enum value: OFFICER_CHECK_NEEDS_GRANT = 4;
+   */
+  NEEDS_GRANT = 4,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.OfficerCheck.
+ */
+export declare const OfficerCheckSchema: GenEnum<OfficerCheck>;
+
+/**
  * GetSignupRequest: where one sign-up stands.
  *
  * @generated from enum nwfl.mensa.v1.SignupDecision
@@ -1125,6 +1185,15 @@ export declare const MembershipService: GenService<{
    * both required, invited or not; the membership verification service
    * confirms them, and an approver decides. A token with the invited group opens the account with
    * the invite route.
+   *
+   * OFFICER-VERIFY (switched on): an approved member or affiliate whose officer
+   * tools wait (GetMyAccount officer_check CONFIRM_DETAILS or NOT_CONFIRMED)
+   * calls this again to ask for a fresh membership check. The first and last
+   * name as sent replace the profile's; the membership number never changes
+   * (sent, it must be the one on file, else INVALID_ARGUMENT). The account
+   * keeps its standing meanwhile, and the answer carries the same request_id.
+   * While a fresh check runs, and for everyone else with a sign-up on file:
+   * ALREADY_EXISTS, as before.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.SubmitSignup
    */
@@ -1235,7 +1304,11 @@ export declare const MembershipService: GenService<{
   /**
    * Admin or Webmaster only. Member-level reading for an invited affiliate,
    * with the verifier's other-group result as its verification when there is
-   * one, and the grantor's attestation otherwise.
+   * one, and the grantor's attestation otherwise. OFFICER-VERIFY (switched
+   * on): also for an approved guest member, one the membership check confirmed
+   * as a member of another local group; any other approved member is
+   * FAILED_PRECONDITION, as before. An affiliate's officer tools open only once
+   * the check confirmed their number, last name and first name.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.GrantAffiliate
    */

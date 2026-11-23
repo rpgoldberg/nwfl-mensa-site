@@ -24,7 +24,14 @@ import {
   GUEST_APPROVAL,
   GUEST_TEXT,
   INVITE_UNCONFIRMED,
+  FRESH_CHECK_ASKED,
+  FRESH_CHECK_REFUSED,
+  OFFICER_CHECK_CONTACT,
   OFFICER_CHECK_NOTICE,
+  OFFICER_CHECK_TEXT,
+  freshCheckErrorSummary,
+  mayAskFreshCheck,
+  officerCheckNotice,
   approvableByHand,
   approvalNote,
   OTHER_GROUP_TEXT,
@@ -188,6 +195,68 @@ describe('accountView (D3)', () => {
     expect(accountView(session(['nwfl-members', 'nwfl-officers']), account('member'), 'awaiting_check')).toBe('member');
     expect(accountView(session(['nwfl-members', 'nwfl-officers']), account('pending'), 'awaiting_check')).toBe('waiting');
     expect(OFFICER_CHECK_NOTICE).toBe('Your officer tools open once your membership is confirmed. Until then you see what the public sees.');
+  });
+
+  // Fix round 3 (no dead ends): an approved account whose officer tools wait is told what opens them.
+  describe('OFFICER-VERIFY: what waiting officer tools wait for', () => {
+    it('says nothing unless the tools wait', () => {
+      for (const tools of ['none', 'open'] as const) {
+        expect(officerCheckNotice(tools, undefined, undefined)).toBeUndefined();
+        expect(officerCheckNotice(tools, 'confirm_details', account('member'))).toBeUndefined();
+        expect(mayAskFreshCheck(tools, 'confirm_details')).toBe(false);
+      }
+    });
+
+    it('keeps the first notice for one with no account yet, or a sign-up still waiting', () => {
+      expect(officerCheckNotice('awaiting_check', undefined, undefined)).toBe(OFFICER_CHECK_NOTICE);
+      expect(officerCheckNotice('awaiting_check', undefined, account('pending'))).toBe(OFFICER_CHECK_NOTICE);
+    });
+
+    it('says each state in plain words', () => {
+      expect(OFFICER_CHECK_TEXT).toEqual({
+        confirm_details:
+          'Your officer tools are waiting. They open when the membership check confirms your membership number, your last name and your first name, and that you belong to this chapter. It has not confirmed all of these yet. Check your names below, then ask for a new check.',
+        not_confirmed:
+          'Your officer tools are still waiting: the last membership check did not confirm your details. Check that your names below are as they are on your Mensa membership, then ask for a new check. If they are right, please contact the Membership Officer.',
+        running:
+          'A new membership check has been asked for. Your officer tools open when it confirms your membership number, your last name and your first name, and that you belong to this chapter. You do not need to do anything now.',
+        needs_grant:
+          'Your membership is confirmed, with another local group. Your officer tools open when the Admin or the Webmaster gives your account affiliate access. Please ask the Admin.',
+      });
+      for (const check of ['confirm_details', 'not_confirmed', 'running', 'needs_grant'] as const) {
+        expect(officerCheckNotice('awaiting_check', check, account('member'))).toBe(OFFICER_CHECK_TEXT[check]);
+      }
+    });
+
+    it('sends an approved account with nothing to check again to an officer, and does not say they read as the public', () => {
+      for (const status of ['member', 'affiliate', 'lapsed', 'removed'] as const) {
+        expect(officerCheckNotice('awaiting_check', undefined, account(status)), status).toBe(OFFICER_CHECK_CONTACT);
+      }
+      expect(OFFICER_CHECK_CONTACT).toBe('Your officer tools are waiting for your membership to be confirmed. Please contact the Membership Officer.');
+    });
+
+    it('offers the fresh check only when the details are theirs to confirm', () => {
+      expect(mayAskFreshCheck('awaiting_check', 'confirm_details')).toBe(true);
+      expect(mayAskFreshCheck('awaiting_check', 'not_confirmed')).toBe(true);
+      expect(mayAskFreshCheck('awaiting_check', 'running')).toBe(false);
+      expect(mayAskFreshCheck('awaiting_check', 'needs_grant')).toBe(false);
+      expect(mayAskFreshCheck('awaiting_check', undefined)).toBe(false);
+    });
+
+    it('names the fresh check form\'s fields for its error summary, and says each refusal', () => {
+      expect(freshCheckErrorSummary({ firstName: 'Enter your first name.', lastName: 'Enter your last name.' })).toEqual([
+        { field: 'recheck-firstName', text: 'Enter your first name.' },
+        { field: 'recheck-lastName', text: 'Enter your last name.' },
+      ]);
+      expect(freshCheckErrorSummary({ lastName: 'Enter your last name.' })).toEqual([{ field: 'recheck-lastName', text: 'Enter your last name.' }]);
+      expect(freshCheckErrorSummary({})).toEqual([]);
+      expect(FRESH_CHECK_REFUSED).toEqual({
+        invalid: 'The new check was not asked for. Check your names, and try again.',
+        on_file: 'A new check could not be asked for: one is already under way, or none is needed. Nothing was changed.',
+        profile: 'A new check could not be asked for. Please contact the Membership Officer.',
+      });
+      expect(FRESH_CHECK_ASKED).toBe('Thank you. A new membership check has been asked for.');
+    });
   });
 
   it('lets an enrolee send a sign-up, and anyone else only while their officer tools wait for the check', () => {

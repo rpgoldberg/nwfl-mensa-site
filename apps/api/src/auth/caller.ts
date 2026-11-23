@@ -21,8 +21,10 @@
 //               standing as well as its group. A holder without standing
 //               keeps only the groups that carry no power (groups.ts
 //               withholdPower) and reads by its standing (standing-policy.ts:
-//               chapter and affiliate hold powers; a guest by the one guest
-//               policy; unconfirmed and none never); the powers ride apart
+//               chapter and affiliate hold powers, and each is a standing
+//               whose membership check confirmed number, last name and first
+//               name; a guest by the one guest policy; a partly checked,
+//               unconfirmed or absent standing never); the powers ride apart
 //               in `withheld`, read only for the sign-up route and
 //               GetMyAccount. This is the ONE gate: every role check
 //               (roles.ts) and every SQL function handed caller.groups (0014,

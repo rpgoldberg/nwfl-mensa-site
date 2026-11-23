@@ -20,7 +20,9 @@
 // membership check, or are not theirs (getMyStanding, for /account and the officer area's gate), and an
 // account and a pending sign-up carry the reported local group: a chapter member, a guest, or a guest
 // in a group the site does not know. getSignupDecision reads one sign-up's decision for the approvers'
-// banner; on any failure at all it answers nothing, so no banner is shown.
+// banner; on any failure at all it answers nothing, so no banner is shown. Fix round 3: for an approved
+// account whose tools wait, GetMyAccount's officer_check says what opens them (their details again for a
+// fresh check, a check running, or the Admin's grant); a value the site does not know is left out.
 import { PUBLIC_ONLY } from 'astro:env/server';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
@@ -37,6 +39,7 @@ import {
   LocalGroupStanding,
   MemberStatus,
   MembershipService,
+  OfficerCheck,
   OfficerTools,
   type RejectedSignup as RejectedSignupMessage,
   SignupDecision,
@@ -56,6 +59,8 @@ export type LocalGroup = 'chapter' | 'guest' | 'guest_unlisted';
 export type HandApprovalState = 'open' | 'as_guest' | 'needs_check';
 /** OFFICER-VERIFY: the person's officer tools. */
 export type OfficerToolsState = 'open' | 'awaiting_check' | 'none';
+/** OFFICER-VERIFY (fix round 3): what opens the officer tools of an approved account while they wait. */
+export type OfficerCheckState = 'confirm_details' | 'running' | 'not_confirmed' | 'needs_grant';
 /** GetSignupRequest: where one sign-up stands. */
 export type Decision = 'pending' | 'approved' | 'rejected' | 'reopened';
 
@@ -99,6 +104,8 @@ export interface MyAccount {
 export interface MyStanding {
   account?: MyAccount;
   officerTools: OfficerToolsState;
+  /** Fix round 3: for an approved account whose tools wait, what opens them, when the API says. */
+  officerCheck?: OfficerCheckState;
 }
 
 /** A pending sign-up as an approver sees it, with what it typed (PROFILE-ID). */
@@ -207,6 +214,13 @@ const LOCAL_GROUP: Record<LocalGroup, LocalGroupStanding> = {
 };
 const HAND_APPROVAL: Record<HandApprovalState, HandApproval> = { open: HandApproval.OPEN, as_guest: HandApproval.AS_GUEST, needs_check: HandApproval.NEEDS_CHECK };
 const TOOLS: Record<OfficerToolsState, OfficerTools> = { none: OfficerTools.UNSPECIFIED, open: OfficerTools.OPEN, awaiting_check: OfficerTools.AWAITING_CHECK };
+/** Fix round 3. Read leniently: a value a newer API adds is no hint, never a page that cannot load. */
+const OFFICER_CHECK: Partial<Record<OfficerCheck, OfficerCheckState>> = {
+  [OfficerCheck.CONFIRM_DETAILS]: 'confirm_details',
+  [OfficerCheck.RUNNING]: 'running',
+  [OfficerCheck.NOT_CONFIRMED]: 'not_confirmed',
+  [OfficerCheck.NEEDS_GRANT]: 'needs_grant',
+};
 const DECISION: Record<Decision, SignupDecision> = {
   pending: SignupDecision.PENDING,
   approved: SignupDecision.APPROVED,
@@ -342,9 +356,10 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
 
   const getMyStanding = (as: Reader): Promise<MyStanding> =>
     call('GetMyAccount', as, async (headers) => {
-      const { account, profile, officerTools } = await membership.getMyAccount({}, { headers });
+      const { account, profile, officerTools, officerCheck } = await membership.getMyAccount({}, { headers });
       const tools = nameOf(TOOLS, officerTools);
       if (account === undefined) return { officerTools: tools };
+      const check = OFFICER_CHECK[officerCheck];
       const group = localGroupOf(account.localGroupStanding);
       return {
         account: {
@@ -364,6 +379,7 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
             : {}),
         },
         officerTools: tools,
+        ...(check !== undefined ? { officerCheck: check } : {}),
       };
     });
 

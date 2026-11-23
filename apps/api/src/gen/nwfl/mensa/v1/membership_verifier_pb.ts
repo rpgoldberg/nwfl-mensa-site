@@ -350,7 +350,10 @@ export const MembershipVerifierService: GenService<{
   /**
    * The sign-ups that typed a number and have not been checked yet, with the
    * email stored on each (VET). This is the only RPC of this service that
-   * returns a membership number.
+   * returns a membership number. OFFICER-VERIFY: an approved sign-up whose
+   * owner asked for a fresh check is listed again, under the same request id,
+   * with the names as they are now; check it afresh (its own earlier claim on
+   * its number is not a duplicate).
    *
    * @generated from rpc nwfl.mensa.v1.MembershipVerifierService.ListPendingVerifications
    */
@@ -365,6 +368,13 @@ export const MembershipVerifierService: GenService<{
    * with one exception (OFFICER-VERIFY): an invited sign-up whose report is
    * VERIFIED_LOCAL with first_name_matched true and a local_group naming the
    * chapter's own group is approved by the report itself, as the verifier.
+   * OFFICER-VERIFY: first_name_matched and local_group are kept only with an
+   * outcome that confirms the number and the last name (VERIFIED_LOCAL,
+   * VERIFIED_OTHER_GROUP, EMAIL_MISMATCH); with any other outcome they are
+   * dropped. The report of a fresh check (an approved sign-up listed again)
+   * replaces the earlier answers when its outcome confirms; otherwise the
+   * earlier answers stand and only the outcome of the fresh check is noted.
+   * It never changes the decision.
    *
    * VET fix 1: a report refused with FAILED_PRECONDITION or NOT_FOUND records
    * nothing here. The verifier must then not keep a claim for it: a sign-up

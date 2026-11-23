@@ -43,8 +43,14 @@ const PEOPLE: Record<string, VerifiedToken> = {
   unverified: person('sub-ov-unverified', ALL_POWERS),
   // Every power, a verified member.
   verified: person('sub-ov-verified', ALL_POWERS),
-  // Every power, an affiliate (Admin-granted standing): keeps the powers (the orchestrator's ruling, 11-23).
+  // Every power, an affiliate (Admin-granted standing) the check confirmed in full: keeps the powers (the
+  // orchestrator's ruling, 11-23). Fix round 3: one the check did not confirm reads as a member, with none.
   affiliate: person('sub-ov-affiliate', ALL_POWERS),
+  affiliateUnchecked: person('sub-ov-affiliate-unchecked', ALL_POWERS),
+  // Fix round 3 (S1): a chapter member whose first name the check did not confirm.
+  unnamed: person('sub-ov-unnamed', ALL_POWERS),
+  // A member with standing and no power group: what a holder whose powers are withheld must equal.
+  plainMember: person('sub-ov-plain-member', ['nwfl-members']),
   // Every power, a guest member (another local group): option (a), no power.
   guest: person('sub-ov-guest', ALL_POWERS),
   // Every power, a member approved with no local group reported: no power.
@@ -89,9 +95,10 @@ describe.skipIf(!live)('OFFICER-VERIFY: every officer power needs member standin
       await seedAccount(db.pool, { sub: 'sub-ov-guest', route: 'invite', check: { localGroup: 'Boston Mensa' } });
       await seedAccount(db.pool, { sub: 'sub-ov-unconfirmed', check: { verification: 'verified_local' } });
       await seedAccount(db.pool, { sub: 'sub-ov-lapsed', route: 'invite', verifiedOn: '2025-08-01', check: { localGroup: 'Northwest Florida Mensa' } });
-      await db.pool.query(
-        `INSERT INTO member_account (sub, status, route, affiliate_granted_by_sub, affiliate_granted_at, verified_on) VALUES ('sub-ov-affiliate', 'affiliate', 'admin_grant', 'sub-ov-verified', now(), '2026-10-01')`,
-      );
+      await seedAccount(db.pool, { sub: 'sub-ov-affiliate', status: 'affiliate', route: 'admin_grant', check: { verification: 'verified_other_group', localGroup: 'Boston Mensa' } });
+      await seedAccount(db.pool, { sub: 'sub-ov-affiliate-unchecked', status: 'affiliate', route: 'admin_grant' });
+      await seedAccount(db.pool, { sub: 'sub-ov-plain-member' });
+      await seedAccount(db.pool, { sub: 'sub-ov-unnamed', route: 'invite', check: { localGroup: 'Northwest Florida Mensa', firstNameMatched: false } });
     }
     publications = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
     await api.pool.query(`INSERT INTO office (slug, title, kind) VALUES ('editor', 'Newsletter Editor', 'appointed'), ('membership', 'Membership Officer', 'appointed')`);
@@ -230,9 +237,25 @@ describe.skipIf(!live)('OFFICER-VERIFY: every officer power needs member standin
     expect(await titles('powerless')).not.toContain('Members dinner');
   });
 
-  it('keeps the powers of an affiliate (Admin-granted standing)', async () => {
+  it('keeps the powers of an affiliate (Admin-granted standing) whose check confirmed number, last name and first name', async () => {
     expect(await outcome(() => approval().getApprovalRules({}, as('affiliate')))).toBe(await outcome(() => approval().getApprovalRules({}, as('verified'))));
     expect(await outcome(() => membership().listSignupRequests({}, as('affiliate')))).toMatch(/^ok /);
+  });
+
+  // Fix round 3: a power always rests on a full check, so a grant alone, or a check without the first name, gives none.
+  it.each(['affiliateUnchecked', 'unnamed'] as const)('gives %s member-level reading and no power', async (who) => {
+    expect(await outcome(() => approval().getApprovalRules({}, as(who)))).toBe('PermissionDenied');
+    expect(await outcome(() => membership().listSignupRequests({}, as(who)))).toBe('PermissionDenied');
+    const read = await outcome(() => content().listPublishedItems({}, as(who)));
+    expect(read).toContain('Members only line.');
+    expect(read).not.toContain('Board only');
+  });
+
+  it.each(ROWS)('%s: a partly checked holder gets what a member with no power group gets', async (_name, call) => {
+    const member = await outcome(() => call('plainMember'));
+    expect(await outcome(() => call('affiliateUnchecked'))).toBe(member);
+    expect(await outcome(() => call('unnamed'))).toBe(member);
+    expect(await outcome(() => call('verified'))).not.toBe(member);
   });
 
   it('records the groups actually used: an unverified holder\'s audit rows carry no power group', async () => {
@@ -248,6 +271,6 @@ describe.skipIf(!live)('OFFICER-VERIFY: every officer power needs member standin
     expect(await outcome(() => off.client(MembershipService).listSignupRequests({}, as('unverified')))).toMatch(/^ok /);
     expect(await outcome(() => offApproval.getApprovalRules({}, as('powerless')))).toBe('PermissionDenied');
     // Fix round 1: no guest standing either, and no power waits: a guest or unconfirmed holder keeps every power too.
-    for (const who of ['guest', 'unconfirmed', 'lapsed'] as const) expect(await outcome(() => offApproval.getApprovalRules({}, as(who))), who).toMatch(/^ok /);
+    for (const who of ['guest', 'unconfirmed', 'lapsed', 'affiliateUnchecked', 'unnamed'] as const) expect(await outcome(() => offApproval.getApprovalRules({}, as(who))), who).toMatch(/^ok /);
   });
 });

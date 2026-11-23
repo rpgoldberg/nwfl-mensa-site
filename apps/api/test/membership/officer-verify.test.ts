@@ -227,7 +227,8 @@ describe.skipIf(!live)('OFFICER-VERIFY: membership', () => {
       expect(await listed(local)).toMatchObject({ handApproval: HandApproval.OPEN });
       expect(await approve(on, local)).toBe('ok');
       expect(await signupRow(on, local)).toMatchObject({ decision: 'approved' });
-      expect(await kindOf(await subOf(local))).toBe('chapter');
+      // Fix round 3 (S1): a chapter member, whose officer power still waits for the first name (officer-verify-recheck.test.ts).
+      expect(await kindOf(await subOf(local))).toBe('chapter_partial');
       const mismatch = await signUp(on, `invitee.${next()}`);
       await report(on, mismatch, VerificationOutcome.EMAIL_MISMATCH, { firstNameMatched: true, localGroup: CHAPTER });
       expect(await approve(on, mismatch)).toBe('FailedPrecondition');
@@ -275,7 +276,8 @@ describe.skipIf(!live)('OFFICER-VERIFY: membership', () => {
           handApproval: chapter ? HandApproval.OPEN : HandApproval.AS_GUEST,
         });
         expect(await approve(on, id)).toBe('ok');
-        expect(await kindOf(await subOf(id))).toBe(chapter ? 'chapter' : 'guest');
+        // The first name did not match (fix round 3, S1): a chapter member with no officer power.
+        expect(await kindOf(await subOf(id))).toBe(chapter ? 'chapter_partial' : 'guest');
         const mine = await on.client(MembershipService).getMyAccount({}, as(token));
         expect(mine.account?.localGroupStanding).toBe(standing);
         expect(mine.profile?.localGroup).toBe(group);

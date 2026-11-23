@@ -2,7 +2,8 @@
 // sign-up form with the notice, then the waiting line with it; the approvers' queue shows the first-name
 // check, the local group and the invited sign-up that cannot be approved by hand. At 320, 412 and 1280 px
 // and at 200 % text: nothing scrolls sideways, every button is whole and at least 48 px tall, and axe
-// finds nothing. With OV_SHOTS set, each state is saved there as a screenshot. Every name is made up.
+// finds nothing. Fix round 3: an approved member whose tools wait is told what they wait for and asks for
+// a fresh check; a guest member is told of the Admin's grant. With OV_SHOTS set, each state is saved there as a screenshot. Every name is made up.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { signIn } from './signin';
@@ -10,6 +11,11 @@ import { signIn } from './signin';
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
 const NOTICE = 'Your officer tools open once your membership is confirmed. Until then you see what the public sees.';
 const FAKE_NUMBER = '000012345';
+const CONFIRM =
+  'Your officer tools are waiting. They open when the membership check confirms your membership number, your last name and your first name, and that you belong to this chapter. It has not confirmed all of these yet. Check your names below, then ask for a new check.';
+const RUNNING =
+  'A new membership check has been asked for. Your officer tools open when it confirms your membership number, your last name and your first name, and that you belong to this chapter. You do not need to do anything now.';
+const GRANT = 'Your membership is confirmed, with another local group. Your officer tools open when the Admin or the Webmaster gives your account affiliate access. Please ask the Admin.';
 
 async function axe(page: Page): Promise<string[]> {
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -71,6 +77,61 @@ test.describe('OFFICER-VERIFY: the activation pages', () => {
       await held(page, view.width);
       expect(await axe(page)).toEqual([]);
       await shot(page, `${name}-account-waiting`, info.project.name);
+    });
+
+    // Fix round 3 (no dead ends): an approved member whose officer tools wait is told why, and asks for a fresh check.
+    test(`an approved member whose tools wait, at ${name}: what they wait for, the fresh check, then the check running`, async ({ page }, info) => {
+      await page.setViewportSize(view);
+      await page.goto('/');
+      await signIn(page, 'officer-recheck');
+      // The officer area sends them to their account, where the way through is.
+      await page.goto('/officer-area');
+      await expect(page).toHaveURL(/\/account$/);
+      if (big) await doubled(page);
+      await expect(page.getByRole('note').filter({ hasText: CONFIRM })).toBeVisible();
+      await expect(page.locator('[data-membership-number]')).toHaveText('000033011');
+      const again = page.locator('[data-fresh-check]');
+      await expect(again.getByRole('heading', { name: 'Check my membership again' })).toBeVisible();
+      await expect(again.getByLabel('First name')).toHaveValue('Robbie');
+      await expect(again.getByLabel('Last name')).toHaveValue('Placeholder');
+      await held(page, view.width);
+      expect(await axe(page)).toEqual([]);
+      await again.scrollIntoViewIfNeeded();
+      await shot(page, `${name}-account-check-again`, info.project.name, !big);
+
+      // A name left empty is said by its field, and nothing is sent.
+      await again.getByLabel('First name').fill('');
+      await again.getByRole('button', { name: 'Check my membership again' }).click();
+      await expect(page.getByRole('heading', { name: 'There is a problem with your names' })).toBeVisible();
+      await expect(page.locator('#recheck-firstName-error')).toHaveText('Problem: Enter your first name.');
+      if (big) await doubled(page);
+      expect(await axe(page)).toEqual([]);
+
+      await page.locator('#recheck-firstName').fill('Roberta');
+      await page.locator('[data-fresh-check]').getByRole('button', { name: 'Check my membership again' }).click();
+      await expect(page).toHaveURL(/\/account\?asked=1$/);
+      if (big) await doubled(page);
+      await expect(page.getByRole('status')).toHaveText('Thank you. A new membership check has been asked for.');
+      await expect(page.getByRole('note').filter({ hasText: RUNNING })).toBeVisible();
+      await expect(page.locator('[data-fresh-check]')).toHaveCount(0);
+      await expect(page.locator('#profile-firstName')).toHaveValue('Roberta');
+      await held(page, view.width);
+      expect(await axe(page)).toEqual([]);
+      await shot(page, `${name}-account-check-running`, info.project.name, !big);
+    });
+
+    test(`an approved guest member whose tools wait, at ${name}: the Admin's grant, and no form to send`, async ({ page }, info) => {
+      await page.setViewportSize(view);
+      await page.goto('/');
+      await signIn(page, 'officer-guest');
+      await page.goto('/account');
+      if (big) await doubled(page);
+      await expect(page.getByRole('note').filter({ hasText: GRANT })).toBeVisible();
+      await expect(page.locator('[data-local-group]')).toHaveText('Boston Mensa');
+      await expect(page.locator('[data-fresh-check]')).toHaveCount(0);
+      await held(page, view.width);
+      expect(await axe(page)).toEqual([]);
+      await shot(page, `${name}-account-guest-grant`, info.project.name, !big);
     });
 
     test(`the approvers' queue at ${name}: the checks in words, and no Approve on an unconfirmed invited sign-up`, async ({ page }, info) => {

@@ -6,6 +6,10 @@
 // a member is a chapter member or a guest member by the local group its
 // approved sign-up's check reported, compared when read with the chapter's own
 // (CHAPTER_GROUP_NAME, switched on only); with none (switched off), unconfirmed.
+// Fix round 3: only a check whose outcome confirmed the person says anything
+// (B1); a chapter member or an affiliate whose first name the check did not
+// confirm is a partial one, who holds no officer power (S1); and the chapter's
+// name is compared exactly, after trimming (S3).
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbStanding } from '../../src/auth/standing.js';
@@ -30,6 +34,22 @@ describe.skipIf(!live)('dbStanding', () => {
     await at('chapter', 'member', '2026-10-01', { localGroup: CHAPTER });
     await at('guest', 'member', '2026-10-01', { localGroup: 'Boston Mensa' });
     await at('guest-unlisted', 'member', '2026-10-01', { localGroup: 'Atlantis Mensa' });
+    // S3: the chapter's name in another case is another name (the compare is exact, after trimming).
+    await at('chapter-lowercase', 'member', '2026-10-01', { localGroup: 'northwest florida mensa' });
+    await at('chapter-uppercase', 'member', '2026-10-01', { localGroup: 'NORTHWEST FLORIDA MENSA' });
+    await at('chapter-padded', 'member', '2026-10-01', { localGroup: '  Northwest Florida Mensa ' });
+    // S1: the first name not confirmed (a mismatch, or no answer).
+    await at('chapter-name-mismatch', 'member', '2026-10-01', { localGroup: CHAPTER, firstNameMatched: false });
+    await at('chapter-name-unsaid', 'member', '2026-10-01', { localGroup: CHAPTER, firstNameMatched: null });
+    await at('chapter-email-mismatch', 'member', '2026-10-01', { verification: 'email_mismatch', localGroup: CHAPTER });
+    await at('other-group-chapter-said', 'member', '2026-10-01', { verification: 'verified_other_group', localGroup: CHAPTER });
+    // B1: approved by hand on a check that did not confirm them.
+    await at('not-found', 'member', '2026-10-01', { verification: 'not_found' });
+    await at('duplicate', 'member', '2026-10-01', { verification: 'duplicate_claim' });
+    await at('unchecked', 'member', '2026-10-01', { verification: 'unchecked' });
+    await at('affiliate-name-unsaid', 'affiliate', '2026-10-01', { localGroup: 'Boston Mensa', firstNameMatched: null });
+    await at('affiliate-not-found', 'affiliate', '2026-10-01', { verification: 'not_found' });
+    await at('affiliate-chapter', 'affiliate', '2026-10-01', { localGroup: CHAPTER });
     await at('other-group-unsaid', 'member', '2026-10-01', { verification: 'verified_other_group' });
     await at('checked-unsaid', 'member', '2026-10-01', { verification: 'verified_local' });
     await at('chapter-just-over', 'member', '2025-09-21', { localGroup: CHAPTER });
@@ -67,12 +87,26 @@ describe.skipIf(!live)('dbStanding', () => {
     ['chapter', 'chapter'],
     ['guest', 'guest'],
     ['guest-unlisted', 'guest'],
+    ['chapter-lowercase', 'guest'],
+    ['chapter-uppercase', 'guest'],
+    ['chapter-padded', 'chapter'],
+    ['chapter-name-mismatch', 'chapter_partial'],
+    ['chapter-name-unsaid', 'chapter_partial'],
+    ['chapter-email-mismatch', 'chapter'],
+    ['other-group-chapter-said', 'guest'],
+    ['not-found', 'unconfirmed'],
+    ['duplicate', 'unconfirmed'],
+    ['unchecked', 'unconfirmed'],
+    ['affiliate-name-unsaid', 'affiliate_partial'],
+    ['affiliate-not-found', 'affiliate_partial'],
+    ['affiliate-chapter', 'affiliate'],
     ['other-group-unsaid', 'guest'],
     ['checked-unsaid', 'unconfirmed'],
     ['chapter-just-over', 'none'],
     ['guest-just-over', 'none'],
     ['lapsed-chapter', 'none'],
-    ['affiliate', 'affiliate'],
+    // An affiliate with no sign-up has no check at all.
+    ['affiliate', 'affiliate_partial'],
     ['affiliate-guest', 'affiliate'],
     ['affiliate-never-verified', 'none'],
     ['affiliate-2020', 'none'],
@@ -92,6 +126,10 @@ describe.skipIf(!live)('dbStanding', () => {
     ['guest', 'unconfirmed'],
     ['other-group-unsaid', 'unconfirmed'],
     ['affiliate-guest', 'affiliate'],
+    ['affiliate', 'affiliate'],
+    ['affiliate-not-found', 'affiliate'],
+    ['chapter-name-mismatch', 'unconfirmed'],
+    ['not-found', 'unconfirmed'],
     ['just-over', 'none'],
   ])('with no chapter group, %s stands as %s', async (subject, expected) => {
     expect(await dbStanding(pool, () => today, null).standingOf(subject)).toBe(expected);

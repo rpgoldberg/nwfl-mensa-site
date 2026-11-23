@@ -11,7 +11,10 @@
 // and all is as before): anyone whose officer tools wait for the membership check gets the form with
 // no account, and a notice while they wait (also the officer area's gate). A guest member's standing
 // is said in their own words, and the profile shows the local group the check reported (switched on
-// only). An account that is not the group's (no enrolee group) gets a plain line and no form. The
+// only). Fix round 3 (no dead ends): an approved account whose officer tools wait is told in plain words
+// what opens them (the API's officer_check), and when the check has not confirmed their details it gets a
+// third form, "Check my membership again": the two names, sent as a sign-up again with no number (the
+// number on file is kept), which asks for a fresh check. An account that is not the group's (no enrolee group) gets a plain line and no form. The
 // callback sends one of the group's enrolees with no account here after each sign-in until they sign
 // up, officers and the Admin never, unless their tools wait for the check (src/lib/signup.ts
 // firstStop); the header links here for every enrolee.
@@ -25,18 +28,19 @@
 import PasswordNote from '../components/PasswordNote.astro';
 import Unavailable from '../components/Unavailable.astro';
 import Base from '../layouts/Base.astro';
-import { MembershipSignInAgain, type MyAccount, type OfficerToolsState, ProfileRefused, SignupRefused, membershipApi, sessionReader } from '../lib/api/membership';
+import { MembershipSignInAgain, type MyAccount, type OfficerCheckState, type OfficerToolsState, ProfileRefused, SignupRefused, membershipApi, sessionReader } from '../lib/api/membership';
 import { markUnavailable, signInFirst } from '../lib/api/page';
 import { runtimeDeps } from '../lib/auth/flow';
 import { readForm } from '../lib/form';
 import {
   ACCOUNT_PATH,
+  FRESH_CHECK_ASKED,
+  FRESH_CHECK_REFUSED,
   MAX_FIRST_NAME,
   MAX_LAST_NAME,
   MAX_NUMBER_DIGITS,
   MAX_NUMBER_TYPED,
   NUMBER_LOCKED,
-  OFFICER_CHECK_NOTICE,
   PROFILE_REFUSED,
   PROFILE_SAVED,
   type ProfileErrors,
@@ -48,7 +52,10 @@ import {
   adminContactHref,
   errorSummary,
   formatDay,
+  freshCheckErrorSummary,
+  mayAskFreshCheck,
   maySignUp,
+  officerCheckNotice,
   parseProfileForm,
   parseSignupForm,
   prefillFirstName,
@@ -76,6 +83,9 @@ let invalid: { errors: SignupErrors; values: { firstName: string; lastName: stri
 let refused: keyof typeof SIGNUP_REFUSED | undefined;
 let profileInvalid: { errors: ProfileErrors; values: ProfileForm } | undefined;
 let profileRefused: keyof typeof PROFILE_REFUSED | undefined;
+// Fix round 3: the fresh check form, with its own problems.
+let recheckInvalid: { errors: ProfileErrors; values: ProfileForm } | undefined;
+let recheckRefused: keyof typeof FRESH_CHECK_REFUSED | undefined;
 let problem: 'sign-in' | 'unavailable' | undefined;
 const posted = Astro.request.method === 'POST';
 /** OFFICER-VERIFY: the caller's officer tools, as the API says (asked only for a sign-up from one who is not an enrolee). */
@@ -103,6 +113,30 @@ if (posted) {
       } catch (error) {
         if (error instanceof ProfileRefused) {
           profileRefused = error.reason;
+          Astro.response.status = error.reason === 'invalid' ? 400 : 409;
+        } else {
+          problem = error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
+        }
+      }
+    }
+  } else if (read.field('form') === 'recheck') {
+    // Fix round 3: an approved account whose officer tools wait sends its names again for a fresh check. The
+    // API decides whether there is one to ask for, and keeps the number on file: none is sent.
+    const names = parseProfileForm(read.field);
+    if (!names.ok) {
+      recheckInvalid = names;
+      Astro.response.status = 400;
+    } else if (api === undefined) {
+      problem = 'unavailable';
+    } else if (reader === undefined) {
+      problem = 'sign-in';
+    } else {
+      try {
+        await api.submitSignup(reader, { ...names.value, membershipNumber: '' });
+        return Astro.redirect(`${HERE}?asked=1`, 303);
+      } catch (error) {
+        if (error instanceof SignupRefused) {
+          recheckRefused = error.reason;
           Astro.response.status = error.reason === 'invalid' ? 400 : 409;
         } else {
           problem = error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
@@ -137,10 +171,11 @@ if (posted) {
 
 let account: MyAccount | undefined;
 let officerTools: OfficerToolsState = 'none';
+let officerCheck: OfficerCheckState | undefined;
 let loaded = false;
 if (api !== undefined && reader !== undefined) {
   try {
-    ({ account, officerTools } = await api.getMyStanding(reader));
+    ({ account, officerTools, officerCheck } = await api.getMyStanding(reader));
     loaded = true;
   } catch (error) {
     problem ??= error instanceof MembershipSignInAgain ? 'sign-in' : 'unavailable';
@@ -160,6 +195,12 @@ const profile = view === 'member' || view === 'affiliate' || view === 'lapsed' ?
 const profileErrors = profileInvalid?.errors ?? {};
 const profileProblems = profileErrorSummary(profileErrors);
 const profileSaved = !posted && Astro.url.searchParams.get('saved') === '1' && profile !== undefined;
+// Fix round 3: what the waiting officer tools wait for, and the fresh check when the details are theirs to confirm.
+const officerNotice = loaded ? officerCheckNotice(officerTools, officerCheck, account) : undefined;
+const askAgain = profile !== undefined && mayAskFreshCheck(officerTools, officerCheck);
+const recheckErrors = recheckInvalid?.errors ?? {};
+const recheckProblems = freshCheckErrorSummary(recheckErrors);
+const asked = !posted && Astro.url.searchParams.get('asked') === '1' && officerCheck === 'running';
 const adminHref = adminContactHref(process.env);
 const [contactBefore, contactAfter] = REJECTED_CONTACT.split('Membership Officer');
 const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Boolean).join(' ') || undefined;
@@ -174,7 +215,9 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
   {refused && <p class="notice" role="alert">{SIGNUP_REFUSED[refused]}</p>}
   {profileRefused && <p class="notice" role="alert">{PROFILE_REFUSED[profileRefused]}</p>}
   {sent && <p class="notice" role="status">Thank you. Your sign-up has been sent.</p>}
-  {officerTools === 'awaiting_check' && <p class="notice" role="note" data-officer-check>{OFFICER_CHECK_NOTICE}</p>}
+  {recheckRefused && <p class="notice" role="alert">{FRESH_CHECK_REFUSED[recheckRefused]}</p>}
+  {asked && <p class="notice" role="status">{FRESH_CHECK_ASKED}</p>}
+  {officerNotice && <p class="notice" role="note" data-officer-check>{officerNotice}</p>}
 
   {view === 'form' && problems.length > 0 && (
     <>
@@ -301,6 +344,56 @@ const describedBy = (...ids: Array<string | false | undefined>) => ids.filter(Bo
                 aria-describedby={describedBy(profileErrors.lastName && 'profile-lastName-error')}
               />
               <div class="btns"><button class="button" type="submit">Save</button></div>
+            </fieldset>
+          </form>
+        </section>
+      )}
+      {askAgain && profile && (
+        <section aria-labelledby="recheck-title" data-fresh-check>
+          <h2 id="recheck-title">Check my membership again</h2>
+          {recheckProblems.length > 0 && (
+            <>
+              <section class="error-summary" aria-labelledby="recheck-error-title" tabindex="-1" data-error-summary>
+                <h3 id="recheck-error-title">There is a problem with your names</h3>
+                <ul>
+                  {recheckProblems.map((item) => <li><a href={`#${item.field}`}>{item.text}</a></li>)}
+                </ul>
+              </section>
+              <script is:inline type="module" src="/scripts/error-summary.js"></script>
+            </>
+          )}
+          <p>The check uses the membership number above and the two names you give here, so give them as they are on your Mensa membership. They become the names on your profile.</p>
+          <form method="post" action={HERE} class="rule-form" novalidate>
+            <input type="hidden" name="form" value="recheck" />
+            <fieldset>
+              <legend>Your names for the check</legend>
+              <label for="recheck-firstName">First name</label>
+              <p class="hint" id="recheck-firstName-hint">Needed. As it is on your Mensa membership.</p>
+              {recheckErrors.firstName && <p class="error" id="recheck-firstName-error">Problem: {recheckErrors.firstName}</p>}
+              <input
+                type="text"
+                id="recheck-firstName"
+                name="firstName"
+                maxlength={MAX_FIRST_NAME}
+                required
+                value={recheckInvalid?.values.firstName ?? profile.firstName}
+                aria-invalid={recheckErrors.firstName ? 'true' : undefined}
+                aria-describedby={describedBy('recheck-firstName-hint', recheckErrors.firstName && 'recheck-firstName-error')}
+              />
+              <label for="recheck-lastName">Last name</label>
+              <p class="hint" id="recheck-lastName-hint">Needed. As it is on your Mensa membership.</p>
+              {recheckErrors.lastName && <p class="error" id="recheck-lastName-error">Problem: {recheckErrors.lastName}</p>}
+              <input
+                type="text"
+                id="recheck-lastName"
+                name="lastName"
+                maxlength={MAX_LAST_NAME}
+                required
+                value={recheckInvalid?.values.lastName ?? profile.lastName}
+                aria-invalid={recheckErrors.lastName ? 'true' : undefined}
+                aria-describedby={describedBy('recheck-lastName-hint', recheckErrors.lastName && 'recheck-lastName-error')}
+              />
+              <div class="btns"><button class="button" type="submit">Check my membership again</button></div>
             </fieldset>
           </form>
         </section>

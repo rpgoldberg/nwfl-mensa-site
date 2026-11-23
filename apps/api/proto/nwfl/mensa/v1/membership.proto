@@ -74,6 +74,26 @@ enum OfficerTools {
   OFFICER_TOOLS_AWAITING_CHECK = 2;
 }
 
+// OFFICER-VERIFY: what an approved member or affiliate whose officer tools
+// wait can do about it. An officer power needs a check that confirmed the
+// number, the last name and the first name, and either the chapter's own
+// local group or an Admin's affiliate grant. Unspecified whenever the tools do
+// not wait, and for a caller with no approved account (they sign up, or wait
+// for their first check).
+enum OfficerCheck {
+  OFFICER_CHECK_UNSPECIFIED = 0;
+  // The check has not confirmed all of it: SubmitSignup with the names again
+  // asks for a fresh check.
+  OFFICER_CHECK_CONFIRM_DETAILS = 1;
+  // A fresh check is asked for and has not answered yet.
+  OFFICER_CHECK_RUNNING = 2;
+  // The last fresh check did not confirm the details; they may ask again.
+  OFFICER_CHECK_NOT_CONFIRMED = 3;
+  // Confirmed as a member of another local group (a guest member): the tools
+  // open when the Admin or the Webmaster grants affiliate standing.
+  OFFICER_CHECK_NEEDS_GRANT = 4;
+}
+
 // GetSignupRequest: where one sign-up stands.
 enum SignupDecision {
   SIGNUP_DECISION_UNSPECIFIED = 0;
@@ -208,6 +228,15 @@ service MembershipService {
   // both required, invited or not; the membership verification service
   // confirms them, and an approver decides. A token with the invited group opens the account with
   // the invite route.
+  //
+  // OFFICER-VERIFY (switched on): an approved member or affiliate whose officer
+  // tools wait (GetMyAccount officer_check CONFIRM_DETAILS or NOT_CONFIRMED)
+  // calls this again to ask for a fresh membership check. The first and last
+  // name as sent replace the profile's; the membership number never changes
+  // (sent, it must be the one on file, else INVALID_ARGUMENT). The account
+  // keeps its standing meanwhile, and the answer carries the same request_id.
+  // While a fresh check runs, and for everyone else with a sign-up on file:
+  // ALREADY_EXISTS, as before.
   rpc SubmitSignup(SubmitSignupRequest) returns (SubmitSignupResponse);
   rpc GetMyAccount(GetMyAccountRequest) returns (GetMyAccountResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
@@ -249,7 +278,11 @@ service MembershipService {
   rpc ConfirmMember(ConfirmMemberRequest) returns (ConfirmMemberResponse);
   // Admin or Webmaster only. Member-level reading for an invited affiliate,
   // with the verifier's other-group result as its verification when there is
-  // one, and the grantor's attestation otherwise.
+  // one, and the grantor's attestation otherwise. OFFICER-VERIFY (switched
+  // on): also for an approved guest member, one the membership check confirmed
+  // as a member of another local group; any other approved member is
+  // FAILED_PRECONDITION, as before. An affiliate's officer tools open only once
+  // the check confirmed their number, last name and first name.
   rpc GrantAffiliate(GrantAffiliateRequest) returns (GrantAffiliateResponse);
   // REOPEN: the Admin or the Membership Officer only (nwfl-admin, nwfl-office-membership). The
   // rejected sign-ups that can be reopened (the account the rejection closed is still closed),
@@ -290,6 +323,9 @@ message GetMyAccountResponse {
   // OFFICER-VERIFY: whether the caller's officer tools are open, waiting for
   // the membership check, or not theirs at all.
   OfficerTools officer_tools = 3;
+  // OFFICER-VERIFY: for an approved account whose officer tools wait, what
+  // opens them.
+  OfficerCheck officer_check = 4;
 }
 
 message GetSignupRequestRequest {

@@ -13,13 +13,15 @@
 // membership check (Ross 11-23: "the officer needs to also pass the verifier") gets the form and the
 // stop after signing in, and a notice (OFFICER_CHECK_NOTICE). The API's officer_tools decides, never the
 // groups: while the API is switched off it says the tools are open, and all is as before. A guest member
-// (another local group, or none) is told their standing in their own words (GUEST_TEXT). D4: the queue is for the membership approvers and the Admin only, in plain words,
+// (another local group, or none) is told their standing in their own words (GUEST_TEXT). Fix round 3 (no
+// dead ends): an approved account whose officer tools wait is told what opens them (officerCheckNotice)
+// and, when the check has not confirmed their details, sends its names again for a fresh check. D4: the queue is for the membership approvers and the Admin only, in plain words,
 // never by colour alone. REOPEN: the Admin and the Membership Officer also see the rejections that
 // can be reopened, and reopen one after a confirmation step; the person's /account then offers the
 // form again (the API removes the account the rejection closed).
 import type { Session } from '../../server/session.mjs';
 import { isAdmin } from './approval-rules';
-import type { Check, Decision, HandApprovalState, MembershipApi, MyAccount, OfficerToolsState, PendingSignup, RejectedSignup, Route, Typed } from './api/membership';
+import type { Check, Decision, HandApprovalState, MembershipApi, MyAccount, OfficerCheckState, OfficerToolsState, PendingSignup, RejectedSignup, Route, Typed } from './api/membership';
 import { type SessionReaderDeps, sessionReader } from './api/membership';
 import { ZONE } from './calendar';
 
@@ -113,6 +115,11 @@ export function profileErrorSummary(errors: ProfileErrors): Array<{ field: strin
   return (['firstName', 'lastName'] as const).flatMap((field) => (errors[field] === undefined ? [] : [{ field: `profile-${field}`, text: errors[field] }]));
 }
 
+/** Fix round 3: the fresh check form's summary; its fields' ids carry a "recheck-" prefix. */
+export function freshCheckErrorSummary(errors: ProfileErrors): Array<{ field: string; text: string }> {
+  return (['firstName', 'lastName'] as const).flatMap((field) => (errors[field] === undefined ? [] : [{ field: `recheck-${field}`, text: errors[field] }]));
+}
+
 /** PROFILE-ID: the sign-up's first name, prefilled from the sign-in's given name when there is one. */
 export function prefillFirstName(session: Pick<Session, 'givenName'>): string {
   return (session.givenName ?? '').trim();
@@ -193,6 +200,46 @@ export function maySignUp(session: Pick<Session, 'enrolee'>, officerTools: Offic
 
 /** OFFICER-VERIFY: on /account while the person's officer tools wait for the membership check. */
 export const OFFICER_CHECK_NOTICE = 'Your officer tools open once your membership is confirmed. Until then you see what the public sees.';
+
+/**
+ * OFFICER-VERIFY fix round 3: what an approved account's waiting officer tools wait for, in plain words
+ * (the API's officer_check). The tools need a check that confirmed the number, both names and the
+ * chapter's own group, or the Admin's grant for a member of another group.
+ */
+export const OFFICER_CHECK_TEXT: Record<OfficerCheckState, string> = {
+  confirm_details:
+    'Your officer tools are waiting. They open when the membership check confirms your membership number, your last name and your first name, and that you belong to this chapter. It has not confirmed all of these yet. Check your names below, then ask for a new check.',
+  not_confirmed:
+    'Your officer tools are still waiting: the last membership check did not confirm your details. Check that your names below are as they are on your Mensa membership, then ask for a new check. If they are right, please contact the Membership Officer.',
+  running:
+    'A new membership check has been asked for. Your officer tools open when it confirms your membership number, your last name and your first name, and that you belong to this chapter. You do not need to do anything now.',
+  needs_grant:
+    'Your membership is confirmed, with another local group. Your officer tools open when the Admin or the Webmaster gives your account affiliate access. Please ask the Admin.',
+};
+
+/** Fix round 3: an approved account whose tools wait with nothing to check again here (lapsed, removed, no number on file). */
+export const OFFICER_CHECK_CONTACT = 'Your officer tools are waiting for your membership to be confirmed. Please contact the Membership Officer.';
+
+/** OFFICER-VERIFY: the notice on /account while the person's officer tools wait; none when they do not. */
+export function officerCheckNotice(officerTools: OfficerToolsState, officerCheck: OfficerCheckState | undefined, account: MyAccount | undefined): string | undefined {
+  if (officerTools !== 'awaiting_check') return undefined;
+  if (officerCheck !== undefined) return OFFICER_CHECK_TEXT[officerCheck];
+  return account === undefined || account.status === 'pending' ? OFFICER_CHECK_NOTICE : OFFICER_CHECK_CONTACT;
+}
+
+/** Fix round 3: whether /account offers the fresh check: the tools wait, and the details are theirs to confirm. */
+export function mayAskFreshCheck(officerTools: OfficerToolsState, officerCheck: OfficerCheckState | undefined): boolean {
+  return officerTools === 'awaiting_check' && (officerCheck === 'confirm_details' || officerCheck === 'not_confirmed');
+}
+
+export const FRESH_CHECK_ASKED = 'Thank you. A new membership check has been asked for.';
+
+/** Fix round 3: the fresh check the API would not take, by the sign-up's own refusals. */
+export const FRESH_CHECK_REFUSED: Record<'invalid' | 'on_file' | 'profile', string> = {
+  invalid: 'The new check was not asked for. Check your names, and try again.',
+  on_file: 'A new check could not be asked for: one is already under way, or none is needed. Nothing was changed.',
+  profile: 'A new check could not be asked for. Please contact the Membership Officer.',
+};
 
 /** OFFICER-VERIFY: a guest member's standing (Ross's GUEST ruling, 11-23). */
 export const GUEST_TEXT = 'Your account has guest member access: the public pages, and the events as members see them.';

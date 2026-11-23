@@ -7,13 +7,15 @@
 //   3. the sign-up and approval rules are develop's: no first name needed, an invited sign-up approved on
 //      the approver's word, an other-group match refused; the report's new answers are not kept, nothing is
 //      approved by a report, and the verifier is given no first name.
+// Fix round 3: none of its routes exists while switched off: no fresh check for an approved account, none
+// listed to the verifier or answered, no grant for an approved guest member, and no officer_check said.
 // Every name here is made up; local group names are public.
 import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
 import { ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService, EventVisibility, OccurrenceStatus } from '../../src/gen/nwfl/mensa/v1/event_pb.js';
-import { HandApproval, LocalGroupStanding, MembershipService, OfficerTools } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { HandApproval, LocalGroupStanding, MembershipService, OfficerCheck, OfficerTools } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { MembershipVerifierService, PendingVerificationSchema, VerificationOutcome } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { create, toBinary } from '@bufbuild/protobuf';
 import { timestampFromDate } from '@bufbuild/protobuf/wkt';
@@ -27,6 +29,7 @@ const PEOPLE: Record<string, VerifiedToken> = {
   verifier: { client: 'verifier', subject: 'svc-nwfl-verifier', groups: [], scopes: ['membership.verify'] },
   approver: person('sub-off-approver', ['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-office-publications', 'nwfl-membership-approvers']),
   powerless: person('sub-off-powerless', ['nwfl-members']),
+  admin: person('sub-off-admin', ['nwfl-members', 'nwfl-admin', 'nwfl-webmaster']),
 };
 let n = 0;
 const next = (): number => (n += 1);
@@ -214,6 +217,66 @@ describe.skipIf(!live).each([
         const { id } = await seeded('pending');
         expect(await code(report(id, VerificationOutcome.VERIFIED_LOCAL))).toBe('ok');
         expect(await code(report(id, VerificationOutcome.NOT_FOUND))).toBe('FailedPrecondition');
+      });
+    });
+
+    // Fix round 3: the fresh check and the guest's grant are the switched-on site's. Switched off, an approved
+    // officer's second sign-up gets the one answer, a fresh check asked for before a rollback is neither listed
+    // nor answered, and an approved member is not granted affiliate standing, as on develop.
+    describe('fix round 3: no fresh check and no guest grant', () => {
+      const approvedOfficer = async (verification: string, group: string | null, asked: boolean) => {
+        const token = `officer.${next()}`;
+        const sub = (await verifier.verify(token)).subject;
+        const { rows } = await api.pool.query<{ id: string }>(
+          `INSERT INTO signup_request (sub, display_name, email, first_name, last_name, membership_number, verification, verified_on, first_name_matched, local_group,
+             decision, decided_at, decided_by_sub, recheck_requested_at)
+           VALUES ($1, 'Pat Madeup', $1 || '@example.org', 'Pat', 'Madeup', $2, $3, '2026-10-01', false, $4, 'approved', now(), 'sub-off-approver', CASE WHEN $5 THEN now() END)
+           RETURNING id`,
+          [sub, String(5900000 + next()), verification, group, asked],
+        );
+        await api.pool.query(`INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES ($1, 'member', 'invite', 'sub-off-approver', now(), '2026-10-01')`, [sub]);
+        return { token, sub, id: rows[0]!.id };
+      };
+
+      it('gives an approved officer\'s second sign-up the one answer, and says no officer_check', async () => {
+        const { token, id } = await approvedOfficer('verified_local', CHAPTER, false);
+        await expect(membership().submitSignup({ membershipNumber: '', lastName: 'Madeup', firstName: 'Pat' }, as(token))).rejects.toMatchObject({
+          code: Code.AlreadyExists,
+          rawMessage: 'a sign-up is already on file for this account',
+        });
+        const mine = await membership().getMyAccount({}, as(token));
+        expect(mine.officerTools).toBe(OfficerTools.OPEN);
+        expect(mine.officerCheck).toBe(OfficerCheck.UNSPECIFIED);
+        expect((await api.pool.query(`SELECT recheck_requested_at FROM signup_request WHERE id = $1`, [id])).rows).toEqual([{ recheck_requested_at: null }]);
+      });
+
+      it('neither lists nor answers a fresh check asked for before a rollback', async () => {
+        const { id } = await approvedOfficer('verified_local', CHAPTER, true);
+        const { pending } = await api.client(MembershipVerifierService).listPendingVerifications({ pageSize: 100 }, as('verifier'));
+        expect(pending.find((p) => p.requestId === id)).toBeUndefined();
+        // As develop answers a report for a sign-up already decided: the same outcome again OK, another refused.
+        expect(await code(report(id, VerificationOutcome.VERIFIED_LOCAL, { firstNameMatched: true, localGroup: CHAPTER }))).toBe('ok');
+        expect(await code(report(id, VerificationOutcome.NOT_FOUND))).toBe('FailedPrecondition');
+        expect((await api.pool.query(`SELECT first_name_matched, recheck_requested_at IS NOT NULL AS asked, recheck_outcome FROM signup_request WHERE id = $1`, [id])).rows).toEqual([
+          { first_name_matched: false, asked: true, recheck_outcome: null },
+        ]);
+      });
+
+      it('refuses affiliate standing for an approved member, a confirmed guest member too, as develop does', async () => {
+        for (const [verification, group] of [['verified_other_group', 'Boston Mensa'], ['verified_local', 'Boston Mensa'], ['verified_local', CHAPTER]] as const) {
+          const { sub } = await approvedOfficer(verification, group, false);
+          await expect(membership().grantAffiliate({ subject: sub }, as('admin'))).rejects.toMatchObject({
+            code: Code.FailedPrecondition,
+            rawMessage: 'this account cannot be granted affiliate standing',
+          });
+        }
+      });
+
+      it('keeps what a report carries beside an outcome that did not confirm out of the row, as every other answer', async () => {
+        const id = await signUp(`joiner.${next()}`);
+        await report(id, VerificationOutcome.NOT_FOUND, { firstNameMatched: true, localGroup: CHAPTER });
+        expect(await row(id)).toMatchObject({ first_name_matched: null, local_group: null });
+        expect(await code(report(id, VerificationOutcome.NOT_FOUND))).toBe('ok');
       });
     });
 

@@ -15,12 +15,28 @@
 //                       first name, which the check compares. A repeat, or an
 //                       account already past pending, gets ONE answer
 //                       whatever the reason, so the call tells nothing.
+//                       Fix round 3, switched on only: with one way round,
+//                       so that no officer is left with tools that can
+//                       never open. An approved member or affiliate whose
+//                       powers are withheld, and whose check has not
+//                       confirmed number, last name and first name in the
+//                       chapter's group (officerCheckOf), sends their
+//                       names again and is checked afresh: the names
+//                       replace the profile's, the number never changes
+//                       (sent, it must be the one on file), and the
+//                       sign-up is marked for the verifier (0032
+//                       recheck_requested_at). Their standing is as it
+//                       was until the check answers (verifier.ts).
 //   GetMyAccount        the caller's own account and, for an approved member,
 //                       their profile: the names and the number (PROFILE-ID);
 //                       and whether their officer tools are open or wait for
 //                       the membership check (OFFICER-VERIFY: open for every
 //                       power holder while switched off). Switched on, also
-//                       the reported local group and what it makes them
+//                       the reported local group and what it makes them,
+//                       and for an approved account whose tools wait, what
+//                       opens them (officer_check): their details again
+//                       for a fresh check, the check now running, or an
+//                       Admin's grant for a confirmed guest member
 //   UpdateMyProfile     PROFILE-ID: an approved member changes their first and
 //                       last name; never the number, which no request field
 //                       carries (a request with any other field is refused)
@@ -72,7 +88,17 @@
 //   GrantAffiliate      the Admin or the Webmaster: member-level reading for
 //                       an invited affiliate, from the verifier's other-group
 //                       date when there is one, else from today on the
-//                       grantor's attestation (the audit action says which)
+//                       grantor's attestation (the audit action says which).
+//                       Fix round 3, switched on only (Ross 11-23, guests:
+//                       "officer tools if admin grants"): also for an
+//                       approved guest member, one the check confirmed in
+//                       another local group; the account keeps the date it
+//                       was last verified. Any other approved member is
+//                       refused, as before. A grant gives the standing; an
+//                       officer power still needs a check that confirmed
+//                       number, last name and first name (the caller gate,
+//                       standing-policy.ts), so a grant never opens the
+//                       tools of someone the check did not confirm.
 //   ListRejectedSignups the Admin and the Membership Officer (REOPEN): the
 //                       rejections whose closed account is still closed,
 //                       newest first, never their own, with what they typed
@@ -99,6 +125,8 @@ import { recordAudit } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
 import type { OfficerVerify } from '../auth/config.js';
 import { holdsPower, requireGrantor, requireMembershipApprover, requireSignupReopener, requireUser } from '../auth/roles.js';
+import { VERIFICATION_MONTHS } from '../auth/standing.js';
+import { fullyChecked, groupStanding, standingKind } from '../auth/standing-policy.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -114,6 +142,7 @@ import {
   LocalGroupStanding,
   MemberStatus,
   MembershipService,
+  OfficerCheck,
   OfficerTools,
   RejectedSignupSchema,
   SignupDecision,
@@ -186,6 +215,8 @@ const INVITED_GROUP = 'nwfl-invited';
 /** OFFICER-VERIFY (switched on): why an approver may not approve an invited sign-up by hand (local-group.ts handApproval). */
 const INVITE_UNCONFIRMED =
   'an invited sign-up is approved only once the membership check confirmed its number and last name, with no first-name mismatch: reject it, or reopen it for a new check';
+/** OFFICER-VERIFY fix round 3: a fresh check keeps the number on file (0028: a number is never changed). */
+const NUMBER_KEPT = 'the membership number on your account cannot be changed here';
 const DECISIONS: Record<string, SignupDecision> = { pending: SignupDecision.PENDING, approved: SignupDecision.APPROVED, rejected: SignupDecision.REJECTED };
 
 interface AccountRow {
@@ -222,6 +253,43 @@ interface DecidableRow extends SignupRow {
   first_name_matched: boolean | null;
   local_group: string | null;
 }
+
+/** OFFICER-VERIFY fix round 3: an account and its approved sign-up, as officerCheckOf reads them. */
+interface CheckedRow {
+  status: string;
+  /** A member or an affiliate verified within the 13 months (as auth/standing.ts reads it). */
+  live: boolean;
+  /** Whether the open sign-up is the approved one. */
+  profile: boolean;
+  membership_number: string | null;
+  verification: string | null;
+  first_name_matched: boolean | null;
+  local_group: string | null;
+  rechecking: boolean;
+  recheck_outcome: string | null;
+}
+
+/**
+ * OFFICER-VERIFY fix round 3 (no dead ends): what opens the officer tools of an approved account whose powers
+ * are withheld. One rule for GetMyAccount, which says it, and SubmitSignup, which takes the fresh check.
+ */
+export function officerCheckOf(row: CheckedRow, chapterGroup: string): OfficerCheck {
+  // Past the 13 months, lapsed or removed: an approver's yearly confirmation comes first. No approved sign-up: nothing to check again.
+  if (!row.live || !row.profile) return OfficerCheck.UNSPECIFIED;
+  if (row.rechecking) return OfficerCheck.RUNNING;
+  const check = { verification: row.verification, firstNameMatched: row.first_name_matched, localGroup: row.local_group };
+  // A guest member the check confirmed in full lacks only the Admin's grant.
+  if (fullyChecked(check) && standingKind({ live: true, affiliate: row.status === 'affiliate' }, check, chapterGroup) === 'guest') return OfficerCheck.NEEDS_GRANT;
+  // A sign-up from before the number was asked of everyone has none to check, and none can be added (0028).
+  if (row.membership_number === null) return OfficerCheck.UNSPECIFIED;
+  return row.recheck_outcome !== null ? OfficerCheck.NOT_CONFIRMED : OfficerCheck.CONFIRM_DETAILS;
+}
+
+/** The columns of CheckedRow, for member_account `a` joined to its open sign-up `s`; $2 is today. */
+const CHECKED_COLUMNS = `a.status, a.status IN ('member', 'affiliate') AND a.verified_on IS NOT NULL
+    AND a.verified_on >= ($2::date - make_interval(months => ${VERIFICATION_MONTHS})) AS live,
+  s.id IS NOT NULL AS profile, s.membership_number, s.verification, s.first_name_matched, s.local_group,
+  s.recheck_requested_at IS NOT NULL AS rechecking, s.recheck_outcome`;
 
 const invalid = (message: string): ConnectError => new ConnectError(message, Code.InvalidArgument);
 const precondition = (message: string): ConnectError => new ConnectError(message, Code.FailedPrecondition);
@@ -305,6 +373,36 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const caller = callerIn(ctx);
         requireUser(caller);
         const sub = caller.subject as string;
+        // OFFICER-VERIFY fix round 3, switched on: an approved account whose officer tools wait is checked afresh.
+        if (officerVerify !== null && (caller.withheld?.length ?? 0) > 0) {
+          const again = await tx(async (client) => {
+            const row = (
+              await client.query<CheckedRow & { id: string }>(
+                `SELECT s.id, ${CHECKED_COLUMNS} FROM member_account a
+                 JOIN signup_request s ON s.sub = a.sub AND s.reopened_at IS NULL AND s.decision = 'approved'
+                 WHERE a.sub = $1 FOR UPDATE OF s`,
+                [sub, today()],
+              )
+            ).rows[0];
+            if (row === undefined) return undefined;
+            const check = officerCheckOf(row, officerVerify.chapterGroup);
+            // Running already, the Admin's to open, or nothing to check: the one answer below.
+            if (check !== OfficerCheck.CONFIRM_DETAILS && check !== OfficerCheck.NOT_CONFIRMED) return undefined;
+            // The number is not theirs to change here: left out, or the one on file as they would type it.
+            const number = request.membershipNumber.trim().replace(NUMBER_NOISE, '');
+            if (number !== '' && number !== row.membership_number) throw invalid(NUMBER_KEPT);
+            const lastName = nameOf(request.lastName, 'last name');
+            const firstName = nameOf(request.firstName, 'first name');
+            await client.query(`UPDATE signup_request SET first_name = $2, last_name = $3, recheck_requested_at = now(), recheck_outcome = NULL WHERE id = $1`, [
+              row.id,
+              firstName,
+              lastName,
+            ]);
+            await recordAudit(client, caller, { action: 'recheck_requested', subjectKind: 'signup_request', subjectId: row.id });
+            return row.id;
+          });
+          if (again !== undefined) return { requestId: again };
+        }
         // First, so an account already on file gets the one answer whatever else is wrong.
         const onFile = async (client: Pick<Db, 'query'>): Promise<void> => {
           const { rows } = await client.query(
@@ -354,13 +452,12 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         // power is never withheld, so they are open for every holder, and the web routes as before.
         const officerTools =
           (caller.withheld?.length ?? 0) > 0 ? OfficerTools.AWAITING_CHECK : holdsPower(caller) ? OfficerTools.OPEN : OfficerTools.UNSPECIFIED;
-        const { rows } = await db.query<AccountRow & TypedRow & { profile: boolean; local_group: string | null; verification: string | null }>(
-          `SELECT a.status, a.route, a.verified_on::text AS verified_on, s.local_group, s.verification,
-             s.id IS NOT NULL AS profile, s.first_name, s.last_name, s.membership_number
+        const { rows } = await db.query<AccountRow & TypedRow & CheckedRow>(
+          `SELECT a.route, a.verified_on::text AS verified_on, s.first_name, s.last_name, ${CHECKED_COLUMNS}
            FROM member_account a LEFT JOIN signup_request s
              ON s.sub = a.sub AND s.reopened_at IS NULL AND s.decision = 'approved' AND a.status IN ('member', 'affiliate', 'lapsed')
            WHERE a.sub = $1`,
-          [caller.subject],
+          [caller.subject, today()],
         );
         const row = rows[0];
         if (row === undefined) return { officerTools };
@@ -370,6 +467,8 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           account: accountMessage(row, local ? localStanding(row.local_group, row.verification ?? '', chapterGroup) : undefined),
           ...(row.profile ? { profile: create(MemberProfileSchema, { ...typedFields(row), localGroup: local ? (row.local_group ?? '') : '' }) } : {}),
           officerTools,
+          // Fix round 3: for an approved account whose tools wait (never while switched off), what opens them.
+          ...(officerVerify !== null && officerTools === OfficerTools.AWAITING_CHECK ? { officerCheck: officerCheckOf(row, officerVerify.chapterGroup) } : {}),
         };
       },
 
@@ -601,13 +700,20 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         if (sub === caller.subject) throw new ConnectError('no one grants themselves', Code.PermissionDenied);
         return tx(async (client) => {
           const current = (await client.query<{ status: string }>(`SELECT status FROM member_account WHERE sub = $1 FOR UPDATE`, [sub])).rows[0];
-          if (current !== undefined && !['pending', 'lapsed'].includes(current.status)) throw precondition('this account cannot be granted affiliate standing');
           const signup = (
-            await client.query<SignupRow>(
-              `SELECT id, sub, decision, verification, verified_on::text AS verified_on FROM signup_request WHERE sub = $1 AND reopened_at IS NULL FOR UPDATE`,
+            await client.query<SignupRow & { local_group: string | null }>(
+              `SELECT id, sub, decision, verification, verified_on::text AS verified_on, local_group FROM signup_request WHERE sub = $1 AND reopened_at IS NULL FOR UPDATE`,
               [sub],
             )
           ).rows[0];
+          // OFFICER-VERIFY fix round 3, switched on (Ross 11-23: "officer tools if admin grants"): an approved
+          // guest member, one the check confirmed in another local group, may be granted too.
+          const guest =
+            officerVerify !== null &&
+            current?.status === 'member' &&
+            signup?.decision === 'approved' &&
+            groupStanding({ verification: signup.verification, localGroup: signup.local_group }, officerVerify.chapterGroup) === 'guest';
+          if (current !== undefined && !['pending', 'lapsed'].includes(current.status) && !guest) throw precondition('this account cannot be granted affiliate standing');
           const verified = signup?.verification === 'verified_other_group' && signup.verified_on !== null;
           if (signup !== undefined && signup.decision === 'pending') {
             // The request for access is answered by this grant.
@@ -617,7 +723,8 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           const { rows } = await client.query<AccountRow>(
             `INSERT INTO member_account (sub, status, route, affiliate_granted_by_sub, affiliate_granted_at, verified_on) VALUES ($1, 'affiliate', 'admin_grant', $2, now(), $3)
              ON CONFLICT (sub) DO UPDATE SET status = 'affiliate', affiliate_granted_by_sub = EXCLUDED.affiliate_granted_by_sub, affiliate_granted_at = now(),
-               verified_on = EXCLUDED.verified_on, updated_at = now()
+               -- A member made an affiliate (a guest member, fix round 3) keeps the date they were last verified.
+               verified_on = CASE WHEN member_account.status = 'member' THEN member_account.verified_on ELSE EXCLUDED.verified_on END, updated_at = now()
              RETURNING status, route, verified_on::text AS verified_on`,
             [sub, caller.subject, verified ? signup.verified_on : today()],
           );

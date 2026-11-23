@@ -1,19 +1,37 @@
 // ============================================================================
-// OFFICER-VERIFY: what each kind of member standing (standing.ts) allows.
+// OFFICER-VERIFY: what each kind of member standing (standing.ts) allows, and
+// the ONE rule that makes a kind from an account and its sign-up's membership
+// check (standingKind below: the caller gate, the queue, the account page and
+// the grant all read it, so they cannot drift).
 //
-//   chapter      a member whose reported local group is this chapter's
-//   affiliate    Admin- or Webmaster-granted standing (R33)
-//   unconfirmed  a member approved with no local group reported (before
-//                OFFICER-VERIFY, or on a report that did not say)
-//   guest        a member of another local group, or of none (Ross 11-23)
-//   none         no standing: pending, lapsed, removed, past 13 months, no row
+//   chapter            a member the check confirmed in full (number, last name
+//                      and first name) in this chapter's own local group
+//   chapter_partial    the same, but the first name was not confirmed
+//   affiliate          Admin- or Webmaster-granted standing (R33), with a check
+//                      that confirmed number, last name and first name
+//   affiliate_partial  granted standing with no such check
+//   unconfirmed        a member whose check did not confirm them, or reported
+//                      no local group (approved on an approver's word, or
+//                      before OFFICER-VERIFY)
+//   guest              a member the check confirmed in another local group, or
+//                      in none (Ross 11-23)
+//   none               no standing: pending, lapsed, removed, past 13 months,
+//                      no row
+//
+// A check CONFIRMS a person only by its outcome: a local or other-group match,
+// or an email mismatch (the number and the last name matched). Not found, an
+// error, a duplicate claim and unchecked confirm nothing, whatever else the
+// report carried, and an approver's hand approval never makes one (fix round
+// 3, B1). The chapter's name is compared exactly, after trimming.
 //
 // Reading at member level: every kind but none (a guest by the guest policy),
 // and the same for events alone (a guest by its own flag). An officer power
-// (when OFFICER_VERIFY is on, caller.ts): chapter and affiliate only (a guest
-// by the guest policy); an unconfirmed member never, so a power always rests
-// on a reported local group or an Admin's grant. Submitting an article
-// (MEMBER-SUBMIT, not built yet): chapter members, and guests by the policy.
+// (when OFFICER_VERIFY is on, caller.ts): chapter and affiliate only, so a
+// power always rests on a check that confirmed the number, the last name AND
+// the first name (Ross 11-23: "confirm their membership number, last name,
+// first name"), in the chapter's own group or with an Admin's grant. Submitting
+// an article (MEMBER-SUBMIT, not built yet): chapter members, and guests by the
+// policy.
 //
 // Guests follow ONE policy, guestPolicy(). Ross decided it 11-23 (desk GUEST):
 // "public pages and events only, ability to create/submit an article, and
@@ -23,7 +41,52 @@
 // affiliate standing; and may submit an article.
 // ============================================================================
 
-export type StandingKind = 'chapter' | 'affiliate' | 'unconfirmed' | 'guest' | 'none';
+export type StandingKind = 'chapter' | 'chapter_partial' | 'affiliate' | 'affiliate_partial' | 'unconfirmed' | 'guest' | 'none';
+
+/** The outcomes that confirm a sign-up's number and last name. */
+const CONFIRMING: ReadonlySet<string> = new Set(['verified_local', 'verified_other_group', 'email_mismatch']);
+
+/** Whether a check's outcome confirmed the person (their number and last name) at all. */
+export function confirmsMember(verification: string | null): boolean {
+  return verification !== null && CONFIRMING.has(verification);
+}
+
+/** What a sign-up's membership check said, as stored (0032); all null with no sign-up. */
+export interface MembershipCheck {
+  verification: string | null;
+  firstNameMatched: boolean | null;
+  localGroup: string | null;
+}
+
+/** Whether the check confirmed the number, the last name and the first name: what every officer power needs. */
+export function fullyChecked(check: Pick<MembershipCheck, 'verification' | 'firstNameMatched'>): boolean {
+  return confirmsMember(check.verification) && check.firstNameMatched === true;
+}
+
+/**
+ * Whose member a confirming check makes the person: the chapter's own, a guest (another group, or an
+ * other-group match that named none), or not said. A check that did not confirm them says nothing.
+ */
+export function groupStanding(check: Pick<MembershipCheck, 'verification' | 'localGroup'>, chapterGroup: string): 'chapter' | 'guest' | 'unreported' {
+  if (!confirmsMember(check.verification)) return 'unreported';
+  if (check.verification === 'verified_other_group') return 'guest';
+  const group = (check.localGroup ?? '').trim();
+  if (group === '') return 'unreported';
+  return group === chapterGroup ? 'chapter' : 'guest';
+}
+
+/**
+ * The standing of an account: `live` is a member or an affiliate verified within the 13 months
+ * (standing.ts). With no chapter group (switched off) there is no check to read: as before.
+ */
+export function standingKind(account: { live: boolean; affiliate: boolean }, check: MembershipCheck, chapterGroup: string | null): StandingKind {
+  if (!account.live) return 'none';
+  if (chapterGroup === null) return account.affiliate ? 'affiliate' : 'unconfirmed';
+  if (account.affiliate) return fullyChecked(check) ? 'affiliate' : 'affiliate_partial';
+  const group = groupStanding(check, chapterGroup);
+  if (group === 'chapter') return fullyChecked(check) ? 'chapter' : 'chapter_partial';
+  return group === 'guest' ? 'guest' : 'unconfirmed';
+}
 
 export interface GuestPolicy {
   /** Members-only pages, news and newsletters. */
@@ -55,7 +118,7 @@ export function readsEventsAsMember(kind: StandingKind, guests: GuestPolicy = gu
 /** MEMBER-SUBMIT (not built yet): whether this standing may submit an article. */
 export function canSubmitArticle(kind: StandingKind, guests: GuestPolicy = guestPolicy()): boolean {
   if (kind === 'guest') return guests.canSubmitArticle;
-  return kind === 'chapter';
+  return kind === 'chapter' || kind === 'chapter_partial';
 }
 
 /** Whether this standing may hold an officer power (with OFFICER_VERIFY on). */

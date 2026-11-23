@@ -39,7 +39,11 @@
 // the invite route and needs the first name. In the queue, the cards the API switched on would describe
 // carry the first-name check, the local group and what an approver may do by hand (handApproval: Indy
 // waits for the check, Lou is approved as a guest), and the stand-in holds to it; the others are as
-// before (Harper, found in another group, is not approved). GetSignupRequest says where one sign-up
+// before (Harper, found in another group, is not approved). Fix round 3, also as the API switched on:
+// "officer-recheck" is an approved member whose officer tools wait for a check that confirms the first
+// name (officer_check CONFIRM_DETAILS): sending the names again asks for a fresh check (RUNNING for the
+// rest of that sign-in, and a second one is refused); "officer-guest" is an approved guest member whose
+// tools wait for the Admin's grant (NEEDS_GRANT). GetSignupRequest says where one sign-up
 // stands, for this sign-in's decisions and the reopenings (WEB-SMALL-1).
 // PROFILE-ID: the queue and the rejections carry what each sign-up typed (names and number), and a
 // duplicate claim what its earlier claim typed (none once closed). The member "Jordan Example" has a
@@ -66,7 +70,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility, LinkTargetKind, LinkTargetStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
-import { AccountRoute, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerTools, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerCheck, OfficerTools, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
 import { createEventModel } from './events-model.mjs';
@@ -652,6 +656,17 @@ const APPROVER_SUBJECT = '00000000-0000-4000-8000-0000000000d3';
 /** OFFICER-VERIFY: an officer whose tools wait for the membership check (e2e/idp.mjs officer-unverified). */
 const UNVERIFIED_OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000fa';
 const CHAPTER = 'Northwest Florida Mensa';
+/** OFFICER-VERIFY fix round 3: approved accounts whose officer tools wait (e2e/idp.mjs officer-recheck, officer-guest). */
+const RECHECK_OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000fb';
+const GUEST_OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000fc';
+const WAITING_OFFICERS = new Set([UNVERIFIED_OFFICER_SUBJECT, RECHECK_OFFICER_SUBJECT, GUEST_OFFICER_SUBJECT]);
+/** Their profiles, as approved. */
+const WAITING_PROFILES = {
+  [RECHECK_OFFICER_SUBJECT]: { firstName: 'Robbie', lastName: 'Placeholder', membershipNumber: '000033011', localGroup: CHAPTER },
+  [GUEST_OFFICER_SUBJECT]: { firstName: 'Gale', lastName: 'Placeholder', membershipNumber: '000033012', localGroup: 'Boston Mensa' },
+};
+/** @type {Set<string>} the sign-ins that asked for a fresh check, by the token's jti */
+const RECHECKS = new Set();
 /** OFFICER-VERIFY: the groups that carry an officer power (the API's groups.ts isPowerGroup). @param {string[]} groups */
 const holdsPower = (groups) => groups.some((g) => ['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers'].includes(g) || /^nwfl-office-./.test(g));
 const CHECKED = { year: 2026, month: 10, day: 20 };
@@ -724,6 +739,9 @@ function accountOf({ sub, session }) {
   const route = SIGNUPS.get(session);
   if (route !== undefined) return { status: MemberStatus.PENDING, route };
   if (MEMBER_SUBJECTS.has(sub)) return { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, verifiedOn: CHECKED };
+  // OFFICER-VERIFY fix round 3: approved before they held a power; a chapter member, and a guest member.
+  if (sub === RECHECK_OFFICER_SUBJECT) return { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP, verifiedOn: CHECKED, localGroupStanding: LocalGroupStanding.CHAPTER };
+  if (sub === GUEST_OFFICER_SUBJECT) return { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP, verifiedOn: CHECKED, localGroupStanding: LocalGroupStanding.GUEST };
   if (sub === ENROLEE_PENDING_SUBJECT) return { status: MemberStatus.PENDING, route: AccountRoute.SIGNUP };
   if (sub === TURNED_DOWN_SUBJECT) return { status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP };
   // REOPEN: rejected and removed until reopened; then no account, as for one who never signed up.
@@ -733,7 +751,10 @@ function accountOf({ sub, session }) {
 }
 
 /** OFFICER-VERIFY: the officer tools, as the API's GetMyAccount says them. @param {{ sub: string, groups: string[] }} person */
-const toolsOf = ({ sub, groups }) => (!holdsPower(groups) ? OfficerTools.UNSPECIFIED : sub === UNVERIFIED_OFFICER_SUBJECT ? OfficerTools.AWAITING_CHECK : OfficerTools.OPEN);
+const toolsOf = ({ sub, groups }) => (!holdsPower(groups) ? OfficerTools.UNSPECIFIED : WAITING_OFFICERS.has(sub) ? OfficerTools.AWAITING_CHECK : OfficerTools.OPEN);
+/** OFFICER-VERIFY fix round 3: what opens an approved account's waiting tools. @param {{ sub: string, session: string }} person */
+const checkOf = ({ sub, session }) =>
+  sub === GUEST_OFFICER_SUBJECT ? OfficerCheck.NEEDS_GRANT : sub !== RECHECK_OFFICER_SUBJECT ? OfficerCheck.UNSPECIFIED : RECHECKS.has(session) ? OfficerCheck.RUNNING : OfficerCheck.CONFIRM_DETAILS;
 
 
 /** The approvers and the Admin, as requireMembershipApprover. @param {import('@connectrpc/connect').HandlerContext} ctx */
@@ -859,6 +880,8 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       const account = accountOf(person);
       const officerTools = toolsOf(person);
       if (account === undefined) return { officerTools };
+      const waiting = WAITING_PROFILES[person.sub];
+      if (waiting !== undefined) return { account, profile: { ...waiting, ...RENAMED.get(person.session) }, officerTools, officerCheck: checkOf(person) };
       return person.sub === SUBJECT.member ? { account, profile: { ...MEMBER_PROFILE, ...RENAMED.get(person.session) }, officerTools } : { account, officerTools };
     },
     updateMyProfile: async (req, ctx) => {
@@ -873,6 +896,16 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     },
     submitSignup: async (req, ctx) => {
       const person = await personOf(ctx);
+      // OFFICER-VERIFY fix round 3: the names again, with no number, ask for a fresh check; one at a time.
+      if (person.sub === RECHECK_OFFICER_SUBJECT && !RECHECKS.has(person.session)) {
+        if (req.membershipNumber.trim() !== '') throw new ConnectError('the membership number on your account cannot be changed here', Code.InvalidArgument);
+        const firstName = req.firstName.trim();
+        const lastName = req.lastName.trim();
+        if (!nameOk(firstName) || !nameOk(lastName)) throw new ConnectError('a name is needed', Code.InvalidArgument);
+        RECHECKS.add(person.session);
+        RENAMED.set(person.session, { firstName, lastName });
+        return { requestId: randomUUID() };
+      }
       if (accountOf(person) !== undefined) throw new ConnectError('a sign-up is already on file for this account', Code.AlreadyExists);
       const number = req.membershipNumber.trim();
       const lastName = req.lastName.trim();

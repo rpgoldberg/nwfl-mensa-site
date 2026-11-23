@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { newSession } from '../../../server/session.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
-import { AccountRoute, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerTools, RejectedSignupSchema, SignupDecision, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerCheck, OfficerTools, RejectedSignupSchema, SignupDecision, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
 import { DecisionRefused, MembershipSignInAgain, ProfileRefused, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
@@ -438,6 +438,30 @@ describe('grpcMembership: failures', () => {
 
 // OFFICER-VERIFY: the officer tools, the local group, the first-name check, and one sign-up's decision.
 describe('grpcMembership: OFFICER-VERIFY', () => {
+  // Fix round 3: what opens the tools of an approved account whose officer tools wait.
+  it('reads what opens waiting officer tools, and leaves out a value it does not know', async () => {
+    const account = { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP };
+    let officerCheck: number = OfficerCheck.CONFIRM_DETAILS;
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, { getMyAccount: () => ({ account, officerTools: OfficerTools.AWAITING_CHECK, officerCheck: officerCheck as OfficerCheck }) }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    for (const [wire, name] of [
+      [OfficerCheck.CONFIRM_DETAILS, 'confirm_details'],
+      [OfficerCheck.RUNNING, 'running'],
+      [OfficerCheck.NOT_CONFIRMED, 'not_confirmed'],
+      [OfficerCheck.NEEDS_GRANT, 'needs_grant'],
+    ] as const) {
+      officerCheck = wire;
+      expect(await api.getMyStanding(PERSON)).toEqual({ account: { status: 'member', route: 'signup' }, officerTools: 'awaiting_check', officerCheck: name });
+    }
+    // None said, or one a newer API added: the page still loads, with the plain notice.
+    for (const wire of [OfficerCheck.UNSPECIFIED, 9]) {
+      officerCheck = wire;
+      expect(await api.getMyStanding(PERSON)).toEqual({ account: { status: 'member', route: 'signup' }, officerTools: 'awaiting_check' });
+    }
+  });
+
   it('reads the officer tools with the account, and with no account at all', async () => {
     let answer: object = { officerTools: OfficerTools.AWAITING_CHECK };
     const server = await grpcServer((router) => router.service(MembershipService, { getMyAccount: () => answer }));

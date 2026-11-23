@@ -25,13 +25,29 @@
 //                             first-name answer for a sign-up that typed
 //                             none, or a group longer than 120 characters or
 //                             holding a control character, is
-//                             INVALID_ARGUMENT); switched off, both are
-//                             ignored, as before. VET: a duplicate claim
+//                             INVALID_ARGUMENT), but only beside an outcome
+//                             that confirmed the number and the last name
+//                             (standing-policy.ts confirmsMember): with not
+//                             found, an error or a duplicate claim both are
+//                             dropped, so a check that did not confirm the
+//                             person says nothing about them (fix round 3,
+//                             B1). Switched off, both are ignored, as
+//                             before. Fix round 3, switched on: an approved
+//                             sign-up whose owner asked for a fresh check
+//                             (MembershipService SubmitSignup) is listed
+//                             again under the same id, while its account
+//                             still stands; its report replaces the earlier
+//                             answers when the outcome confirms, and
+//                             otherwise only notes the outcome
+//                             (recheck_outcome): the earlier answers stand,
+//                             so a failed fresh check changes no one's
+//                             standing. It never decides. VET: a duplicate claim
 //                             may name the earlier sign-up, which must exist
 //                             and be another; no other outcome may name one.
 //                             SIGNOUT (C): the same report again (outcome,
 //                             earlier sign-up, first-name answer and local
-//                             group) after it landed is a no-op
+//                             group; a fresh check's noted outcome too)
+//                             after it landed is a no-op
 //                             answered OK, decided since or not; another
 //                             outcome stays FAILED_PRECONDITION, and a sign-up
 //                             that is gone NOT_FOUND (the table on the RPC).
@@ -50,6 +66,7 @@ import { type TxClient, inTransaction } from '../db/tx.js';
 import { todayIn } from '../events/zone.js';
 import { ClaimReleaseKind, MembershipVerifierService, VerificationOutcome } from '../gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import type { OfficerVerify } from '../auth/config.js';
+import { confirmsMember } from '../auth/standing-policy.js';
 import { LocalGroupStanding } from '../gen/nwfl/mensa/v1/membership_pb.js';
 import { approveAccount } from './approve.js';
 import { localStanding } from './local-group.js';
@@ -86,6 +103,11 @@ const RELEASE_KINDS: Record<string, ClaimReleaseKind> = {
 };
 // What a sign-up the verifier may act on looks like.
 const WAITING = `verification = 'unchecked' AND decision = 'pending' AND membership_number IS NOT NULL`;
+// OFFICER-VERIFY (switched on): an approved sign-up whose owner asked for a fresh check (0032).
+const RECHECK = `recheck_requested_at IS NOT NULL AND decision = 'approved' AND reopened_at IS NULL`;
+// The same, for the list: with a number to check, and an account that still stands.
+const RECHECK_LISTED = `${RECHECK} AND membership_number IS NOT NULL
+  AND EXISTS (SELECT 1 FROM member_account a WHERE a.sub = signup_request.sub AND a.status IN ('member', 'affiliate'))`;
 
 /** OFFICER-VERIFY (switched on): the sign-up decided and the account a member from the report's date, as the verifier. */
 async function approveByReport(client: TxClient, caller: Caller, reported: { id: string; sub: string; verified_on: string }): Promise<void> {
@@ -117,7 +139,12 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
         const caller = callerOf(ctx.values);
         return tx(async (client) => {
           const { rows } = await client.query<{ id: string; membership_number: string; last_name: string; email: string }>(
-            `SELECT id, membership_number, last_name, email FROM signup_request WHERE ${WAITING} ORDER BY created_at, id LIMIT $1`,
+            // Switched off, the query is as before. Switched on, the fresh checks asked for are listed with the
+            // first checks, each by when it was asked.
+            officerVerify === null
+              ? `SELECT id, membership_number, last_name, email FROM signup_request WHERE ${WAITING} ORDER BY created_at, id LIMIT $1`
+              : `SELECT id, membership_number, last_name, email FROM signup_request WHERE (${WAITING}) OR (${RECHECK_LISTED})
+                 ORDER BY coalesce(recheck_requested_at, created_at), id LIMIT $1`,
             [size],
           );
           for (const row of rows) await recordAudit(client, caller, { action: 'verification_listed', subjectKind: 'signup_request', subjectId: row.id });
@@ -144,11 +171,15 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
         }
         // OFFICER-VERIFY, switched on only: the local group as reported, trimmed (empty is not reported), and the
         // first-name answer. Switched off, both are ignored, as an API before them ignored them.
-        const localGroup = officerVerify === null || request.localGroup.trim() === '' ? null : request.localGroup.trim();
-        if (localGroup !== null && ([...localGroup].length > MAX_LOCAL_GROUP || CONTROL.test(localGroup))) {
+        const reportedGroup = officerVerify === null || request.localGroup.trim() === '' ? null : request.localGroup.trim();
+        if (reportedGroup !== null && ([...reportedGroup].length > MAX_LOCAL_GROUP || CONTROL.test(reportedGroup))) {
           throw new ConnectError(`local_group is at most ${MAX_LOCAL_GROUP} characters, with no control character`, Code.InvalidArgument);
         }
-        const firstNameMatched = officerVerify === null ? null : (request.firstNameMatched ?? null);
+        // Fix round 3 (B1): both are kept only beside an outcome that confirmed the person. With any other, a
+        // group or a first-name answer says nothing, and is dropped here (0032 refuses to store it).
+        const confirming = confirmsMember(outcome);
+        const localGroup = confirming ? reportedGroup : null;
+        const firstNameMatched = officerVerify === null || !confirming ? null : (request.firstNameMatched ?? null);
         const caller = callerOf(ctx.values);
         return tx(async (client) => {
           if (firstNameMatched !== null) {
@@ -166,12 +197,30 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
             [request.requestId, outcome, todayIn(deps.now()), conflicting, firstNameMatched, localGroup],
           );
           const reported = rows[0];
+          if (reported === undefined && officerVerify !== null) {
+            // Fix round 3: the answer to a fresh check an approved member asked for. A confirming outcome
+            // replaces the earlier answers; any other is only noted, and the earlier answers stand. The
+            // decision and the account are never touched.
+            const { rows: again } = await client.query(
+              confirming
+                ? `UPDATE signup_request SET verification = $2, verified_on = $3, conflicting_request_id = NULL, first_name_matched = $4, local_group = $5,
+                     recheck_requested_at = NULL, recheck_outcome = NULL
+                   WHERE id = $1 AND ${RECHECK} RETURNING id`
+                : `UPDATE signup_request SET recheck_outcome = $2, recheck_requested_at = NULL WHERE id = $1 AND ${RECHECK} RETURNING id`,
+              confirming ? [request.requestId, outcome, todayIn(deps.now()), firstNameMatched, localGroup] : [request.requestId, outcome],
+            );
+            if (again.length > 0) {
+              await recordAudit(client, caller, { action: 'recheck_report', subjectKind: 'signup_request', subjectId: request.requestId, fromState: 'asked', toState: outcome });
+              return {};
+            }
+          }
           if (reported === undefined) {
             // SIGNOUT (C): a retry of the report that landed (the same outcome, earlier sign-up and, OFFICER-VERIFY,
             // the same answers) is a no-op, decided since or not; anything else is refused as before.
             const { rows: known } = await client.query<{ landed: boolean }>(
-              `SELECT verification = $2 AND conflicting_request_id IS NOT DISTINCT FROM $3::uuid
-                 AND (NOT $6::boolean OR (first_name_matched IS NOT DISTINCT FROM $4::boolean AND local_group IS NOT DISTINCT FROM $5::text)) AS landed
+              `SELECT (verification = $2 AND conflicting_request_id IS NOT DISTINCT FROM $3::uuid
+                 AND (NOT $6::boolean OR (first_name_matched IS NOT DISTINCT FROM $4::boolean AND local_group IS NOT DISTINCT FROM $5::text)))
+                 OR ($6::boolean AND recheck_requested_at IS NULL AND recheck_outcome IS NOT DISTINCT FROM $2) AS landed
                FROM signup_request WHERE id = $1`,
               [request.requestId, outcome, conflicting, firstNameMatched, localGroup, officerVerify !== null],
             );
