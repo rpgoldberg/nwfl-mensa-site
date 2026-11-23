@@ -639,7 +639,8 @@ test.describe('a reviewer with part of the piece hidden', () => {
     await expect(page.locator('form[data-review] button')).toHaveText(['Send back']);
     await page.getByLabel('Note for the writer').fill('Please check the phone number with the member first.');
     await page.getByRole('button', { name: 'Send back' }).click();
-    await expect(page).toHaveURL(/\/officer-area\/approvals\?done=sent-back$/);
+    // WEB-SMALL-1: the queue's done banner names the piece sent back (its id), so it can read it.
+    await expect(page).toHaveURL(new RegExp(`/officer-area/approvals\\?done=sent-back&id=${waiting}$`));
     expect((await itemAs(waiting)).working!.status).toBe(VersionStatus.DRAFT);
     await context.close();
   });
