@@ -62,9 +62,9 @@ const fakeVerifier: TokenVerifier = {
     return Promise.reject(new ConnectError('kid unknown: details an attacker should not see', Code.PermissionDenied));
   },
 };
-const standing: MemberStanding = { isMember: (subject) => Promise.resolve(subject === 'sub-member') };
+const standing: MemberStanding = { standingOf: (subject) => Promise.resolve(subject === 'sub-member' ? 'unconfirmed' : 'none') };
 
-function harness(verifier: TokenVerifier = fakeVerifier, memberStanding: MemberStanding = standing, groupPrefix?: string) {
+function harness(verifier: TokenVerifier = fakeVerifier, memberStanding: MemberStanding = standing, groupPrefix?: string, officerVerify?: boolean) {
   let seen: Caller | undefined;
   const record = (values: Parameters<typeof callerOf>[0]): void => {
     seen = callerOf(values);
@@ -102,7 +102,18 @@ function harness(verifier: TokenVerifier = fakeVerifier, memberStanding: MemberS
         },
       });
     },
-    { router: { interceptors: [authInterceptor({ verifier, standing: memberStanding, ...(groupPrefix === undefined ? {} : { groupPrefix }) })] } },
+    {
+      router: {
+        interceptors: [
+          authInterceptor({
+            verifier,
+            standing: memberStanding,
+            ...(groupPrefix === undefined ? {} : { groupPrefix }),
+            ...(officerVerify === undefined ? {} : { officerVerify }),
+          }),
+        ],
+      },
+    },
   );
   const as = (headers: Record<string, string>) => ({ headers });
   const capture = async (call: () => Promise<unknown>): Promise<Caller> => {
@@ -204,6 +215,83 @@ describe('authInterceptor: the chapter\'s group prefix (CF-ISO-0)', () => {
   it('by default (nwfl-), today\'s nwfl-officers token is an officer and a mensa-nwfl-officers one is not', async () => {
     expect(await harness(holding('nwfl-officers'), noStanding).events(bearer('t'))).toMatchObject({ audience: 'officers', groups: ['nwfl-officers'] });
     expect(await harness(holding('mensa-nwfl-officers'), noStanding).events(bearer('t'))).toMatchObject({ audience: 'public', groups: [] });
+  });
+});
+
+// OFFICER-VERIFY: with the switch on, an officer power needs member standing too. A holder without it keeps
+// only the groups that carry no power, reads as the public, and the withheld groups ride apart (for the
+// sign-up route and GetMyAccount only). With the switch off (the default), nothing changes.
+describe('authInterceptor: officer powers need member standing (OFFICER-VERIFY)', () => {
+  const ALL = ['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers', 'nwfl-invited', 'nwfl-role-rvc'];
+  const holding = (subject: string): TokenVerifier => ({ verify: () => Promise.resolve({ client: 'site', subject, groups: ALL, scopes: [] }) });
+  const verified: MemberStanding = {
+    standingOf: (subject) =>
+      Promise.resolve(({ 'sub-verified': 'chapter', 'sub-affiliate': 'affiliate', 'sub-guest': 'guest', 'sub-unconfirmed': 'unconfirmed' } as const)[subject] ?? 'none'),
+  };
+
+  it('switched on, withholds every power from a holder without standing, who then reads as the public', async () => {
+    const caller = await harness(holding('sub-unverified'), verified, undefined, true).events(bearer('t'));
+    expect(caller).toEqual({
+      kind: 'user',
+      subject: 'sub-unverified',
+      groups: ['nwfl-members', 'nwfl-invited', 'nwfl-role-rvc'],
+      withheld: ['nwfl-officers', 'nwfl-office-membership', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers'],
+      scopes: [],
+      audience: 'public',
+    });
+  });
+
+  it('switched on, keeps every power of a holder with standing, at the officers audience, with nothing withheld', async () => {
+    const caller = await harness(holding('sub-verified'), verified, undefined, true).events(bearer('t'));
+    expect(caller).toEqual({ kind: 'user', subject: 'sub-verified', groups: ALL, scopes: [], audience: 'officers' });
+  });
+
+  it('switched on, an affiliate keeps every power; an unconfirmed member reads as a member, a guest as the public but events as a member, powers withheld', async () => {
+    expect(await harness(holding('sub-affiliate'), verified, undefined, true).events(bearer('t'))).toMatchObject({ groups: ALL, audience: 'officers' });
+    const kept = ['nwfl-members', 'nwfl-invited', 'nwfl-role-rvc'];
+    const unconfirmed = await harness(holding('sub-unconfirmed'), verified, undefined, true).events(bearer('t'));
+    expect(unconfirmed).toMatchObject({ groups: kept, audience: 'members' });
+    expect(unconfirmed).not.toHaveProperty('eventsAudience');
+    expect(await harness(holding('sub-guest'), verified, undefined, true).events(bearer('t'))).toMatchObject({ groups: kept, audience: 'public', eventsAudience: 'members' });
+  });
+
+  it('reads a guest as the public with events as a member with the switch off too', async () => {
+    const guest: TokenVerifier = { verify: () => Promise.resolve({ client: 'site', subject: 'sub-guest', groups: ['nwfl-members'], scopes: [] }) };
+    expect(await harness(guest, verified).events(bearer('t'))).toEqual({
+      kind: 'user',
+      subject: 'sub-guest',
+      groups: ['nwfl-members'],
+      scopes: [],
+      audience: 'public',
+      eventsAudience: 'members',
+    });
+  });
+
+  it('switched on, a member without a power is untouched', async () => {
+    expect(await harness(fakeVerifier, standing, undefined, true).events(bearer('member-token'))).toEqual({
+      kind: 'user',
+      subject: 'sub-member',
+      groups: ['nwfl-members'],
+      scopes: [],
+      audience: 'members',
+    });
+  });
+
+  it('switched off (and by default), a holder without standing keeps every power, as before', async () => {
+    for (const api of [harness(holding('sub-unverified'), verified, undefined, false), harness(holding('sub-unverified'), verified)]) {
+      const caller = await api.events(bearer('t'));
+      expect(caller).toEqual({ kind: 'user', subject: 'sub-unverified', groups: ALL, scopes: [], audience: 'officers' });
+    }
+  });
+
+  it('switched on, machine callers are untouched: the link checker still reads at the officers audience', async () => {
+    expect(await harness(fakeVerifier, noStanding, undefined, true).linkcheck(bearer('linkcheck-token'))).toEqual({
+      kind: 'linkcheck',
+      subject: 'svc-nwfl-linkcheck',
+      groups: [],
+      scopes: ['links.check'],
+      audience: 'officers',
+    });
   });
 });
 

@@ -34,19 +34,28 @@ describe('/privacy', () => {
     text = mainText(html);
   });
 
-  it('is a page in the site layout, headed Privacy, under 520 words, and never says draft', () => {
+  // OFFICER-VERIFY: 560 (was 520) for the local group and the first-name check the membership check now reports.
+  it('is a page in the site layout, headed Privacy, under 560 words, and never says draft', () => {
     expect(html).toContain('<title>Privacy | Northwest Florida Mensa</title>');
     expect(html).toMatch(/<h1[^>]*>Privacy<\/h1>/);
     expect(html).toContain('class="skip-link"');
-    expect(text.split(' ').length).toBeLessThan(520);
+    expect(text.split(' ').length).toBeLessThan(560);
     expect(text.split(' ').length).toBeGreaterThan(150);
     expect(text).not.toMatch(/draft/i);
   });
 
-  it('lists what a sign-up stores: the columns of signup_request and member_account (migrations 0005 to 0028)', () => {
+  it('lists what a sign-up stores: the columns of signup_request and member_account (migrations 0005 to 0032)', () => {
     for (const words of ['first name and last name', 'Mensa membership number', 'name and email address on your sign-in', 'date you signed up', 'who decided', 'result of the membership check', 'last confirmed']) expect(text, words).toContain(words);
-    const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql'].map((f) => readFileSync(`../api/migrations/${f}`, 'utf8')).join('\n');
-    for (const column of ['first_name', 'last_name', 'membership_number', 'display_name', 'email', 'created_at', 'decided_by_sub', 'decided_at', 'verification', 'verified_on']) expect(schema, column).toMatch(new RegExp(`\\b${column}\\b`));
+    const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql', '0032_officer_verify.sql']
+      .map((f) => readFileSync(`../api/migrations/${f}`, 'utf8'))
+      .join('\n');
+    for (const column of ['first_name', 'last_name', 'membership_number', 'display_name', 'email', 'created_at', 'decided_by_sub', 'decided_at', 'verification', 'verified_on', 'first_name_matched', 'local_group', 'chapter_member']) {
+      expect(schema, column).toMatch(new RegExp(`\\b${column}\\b`));
+    }
+    // OFFICER-VERIFY (0032): the local group the check reports, whether that makes a chapter or a guest member,
+    // whether it confirmed the first name; and that an invited person's check may decide.
+    expect(text).toContain('your local group as the check reports it (it makes you a chapter or a guest member), and whether the check confirmed your first name;');
+    expect(text).toContain('who decided (an officer, or the check) and when;');
     // What the page says we do not keep has no column anywhere in the schema.
     expect(text).toContain('We do not keep your address, phone number or birthday.');
     expect(schema).not.toMatch(/^\s+(address|street|phone|birth\w*|password)\s/m);
@@ -69,23 +78,30 @@ describe('/privacy', () => {
     expect(roles).toContain('if (!roles.admin && !roles.offices.includes(MEMBERSHIP_OFFICE)) throw denied();');
   });
 
-  it('lists exactly who can see it, the membership check with the three fields it is sent (api/src/membership/verifier.ts), and that no page shows it to anyone else', () => {
+  it('lists exactly who can see it, the membership check with the four fields it is sent (api/src/membership/verifier.ts), and that no page shows it to anyone else', () => {
     const who = /<h2[^>]*>Who can see it<\/h2>\s*<ul>([\s\S]*?)<\/ul>/.exec(html)?.[1] ?? '';
     expect([...who.matchAll(/<li>([\s\S]*?)<\/li>/g)].map((m) => m[1]!.replace(/&#39;/g, "'"))).toEqual([
       'You.',
       "The officers who approve sign-ups, and the site's Admin: what you typed, your email address and the result of the membership check.",
       'The Admin and the Membership Officer can also see a sign-up that was not approved.',
-      'The membership check: your membership number, last name and email address, to confirm you are a member.',
+      'The membership check: your membership number, first name, last name and email address, to confirm you are a member.',
     ]);
     expect(text).toContain('No page on this site shows it to other members or to the public.');
     // What the check is sent: the columns ListPendingVerifications reads, and the fields it returns.
     const verifier = readFileSync('../api/src/membership/verifier.ts', 'utf8');
-    expect(/SELECT id, ([a-z_, ]+) FROM signup_request WHERE \$\{WAITING\}/.exec(verifier)?.[1]?.split(', ')).toEqual(['membership_number', 'last_name', 'email']);
-    expect(verifier).toContain('pending: rows.map((row) => ({ requestId: row.id, membershipNumber: row.membership_number, lastName: row.last_name, email: row.email }))');
+    expect(/SELECT id, ([a-z_, ]+) FROM signup_request WHERE \$\{WAITING\}/.exec(verifier)?.[1]?.split(', ')).toEqual(['membership_number', 'last_name', 'email', 'first_name']);
+    expect(verifier).toContain(
+      "pending: rows.map((row) => ({ requestId: row.id, membershipNumber: row.membership_number, lastName: row.last_name, email: row.email, firstName: row.first_name ?? '' }))",
+    );
   });
 
-  it('says the Your account page shows the name and number, and the name can be corrected there', () => {
-    expect(text).toContain('Once you are approved, the Your account page shows your name and number, and you can correct your name there.');
+  it('says the Your account page shows the name, number and local group, and the name can be corrected there', () => {
+    expect(text).toContain('Once you are approved, the Your account page shows your name, number and local group, and you can correct your name there.');
+  });
+
+  it('OFFICER-VERIFY: says officers pass the same check before their officer tools open (api/src/auth/caller.ts)', () => {
+    expect(text).toContain("Before the members' pages or an officer's tools open for you, we have to know you are a member.");
+    expect(readFileSync('../api/src/auth/caller.ts', 'utf8')).toContain('officerVerify && !holdsOfficerPower(kind) ? withholdPower(all)');
   });
 
   it('gives the 13 months of api/src/auth/standing.ts, and that access then pauses until an officer confirms it', () => {
@@ -176,15 +192,17 @@ describe('/privacy', () => {
     expect(text).toBe(
       [
         'Privacy What this site keeps about you, who can see it, and how to ask about it.',
-        "What we keep when you sign up Before the members' pages open for you, an officer has to know you are a member. So we keep:",
+        "What we keep when you sign up Before the members' pages or an officer's tools open for you, we have to know you are a member. So we keep:",
         'your first name and last name, as you typed them; your Mensa membership number, as you typed it; the name and email address on your sign-in;',
-        'the date you signed up, whether your sign-up was approved, who decided and when; the result of the membership check, and the date your membership was last confirmed.',
-        'Once you are approved, the Your account page shows your name and number, and you can correct your name there.',
+        'the date you signed up, whether your sign-up was approved, who decided (an officer, or the check) and when;',
+        'your local group as the check reports it (it makes you a chapter or a guest member), and whether the check confirmed your first name;',
+        'the result of the membership check, and the date your membership was last confirmed.',
+        'Once you are approved, the Your account page shows your name, number and local group, and you can correct your name there.',
         "What we do not keep We never ask for the user name or password you use at American Mensa's website, and we do not keep them. We check your membership with Mensa's own records.",
         "Your password for this site is kept by our sign-in service; the site's own pages never see it. We do not keep your address, phone number or birthday.",
         "Who can see it You. The officers who approve sign-ups, and the site's Admin: what you typed, your email address and the result of the membership check.",
         'The Admin and the Membership Officer can also see a sign-up that was not approved.',
-        'The membership check: your membership number, last name and email address, to confirm you are a member.',
+        'The membership check: your membership number, first name, last name and email address, to confirm you are a member.',
         'No page on this site shows it to other members or to the public.',
         'How long we keep it Member access lasts 13 months from the last time your membership was confirmed. After that it is paused until an officer confirms it again.',
         'If your account is removed, your member access ends, but the record of your sign-up stays. We keep that record so a decision can be checked later. If you ask us to remove it, we remove it by hand.',

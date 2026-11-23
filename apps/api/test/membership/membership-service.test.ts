@@ -94,7 +94,9 @@ describe.skipIf(!live)('MembershipService', () => {
     it('W-SIGNUP D2: stores an invited person\'s sign-up with the invite route, still pending, still needing the number', async () => {
       const INVITEE = as('invitee-token');
       await expect(membership.submitSignup({ lastName: LAST }, INVITEE)).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: 'a membership number is needed' });
-      const { requestId } = await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, INVITEE);
+      // OFFICER-VERIFY: and a first name, which the membership check compares.
+      await expect(membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, INVITEE)).rejects.toMatchObject({ code: Code.InvalidArgument, rawMessage: 'a first name is needed' });
+      const { requestId } = await membership.submitSignup({ firstName: 'Taylor', lastName: LAST, membershipNumber: NUMBER }, INVITEE);
       expect(await signupRow('sub-invitee')).toMatchObject({ id: requestId, display_name: 'Taylor Example', membership_number: NUMBER, decision: 'pending' });
       expect(await account('sub-invitee')).toMatchObject({ status: 'pending', route: 'invite' });
       expect((await membership.getMyAccount({}, INVITEE)).account).toMatchObject({ status: MemberStatus.PENDING, route: AccountRoute.INVITE });
@@ -220,7 +222,8 @@ describe.skipIf(!live)('MembershipService', () => {
     });
 
     it('lets no one decide their own sign-up, and lets another approver do it', async () => {
-      const { requestId } = await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, APPROVER);
+      // OFFICER-VERIFY: an officer's own sign-up takes the invite route, so it carries a first name.
+      const { requestId } = await membership.submitSignup({ firstName: 'Avery', lastName: LAST, membershipNumber: NUMBER }, APPROVER);
       await expect(membership.approveSignup({ requestId }, APPROVER)).rejects.toMatchObject({ code: Code.PermissionDenied, rawMessage: 'no one decides their own sign-up' });
       await expect(membership.rejectSignup({ requestId }, APPROVER)).rejects.toMatchObject({ code: Code.PermissionDenied });
       await membership.rejectSignup({ requestId }, ADMIN);
@@ -266,11 +269,14 @@ describe.skipIf(!live)('MembershipService', () => {
       expect((await audits('sub-raced-grant')).map((a) => a.action)).toEqual([]);
     });
 
-    it('does not approve an other-group match as a member: it is rejected or granted as an affiliate', async () => {
+    // OFFICER-VERIFY (G, H) replaces R33's refusal: an other-group match may now be approved as a guest member
+    // (test/membership/officer-verify.test.ts). Here it only waits, so GrantAffiliate below can grant it.
+    it('leaves an other-group match waiting for a decision: approved as a guest, granted as an affiliate, or rejected', async () => {
       await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, as('affiliate-token'));
       const row = await signupRow('sub-affiliate');
       await report(row?.id as string, 'verified_other_group');
-      await expect(membership.approveSignup({ requestId: row?.id as string }, APPROVER)).rejects.toMatchObject({ code: Code.FailedPrecondition });
+      const listed = (await membership.listSignupRequests({}, APPROVER)).requests.find((r) => r.requestId === row?.id);
+      expect(listed).toMatchObject({ verification: Verification.VERIFIED_OTHER_GROUP });
       expect(await signupRow('sub-affiliate')).toMatchObject({ decision: 'pending' });
     });
 
@@ -474,7 +480,8 @@ describe.skipIf(!live)('MembershipService: the invited marker, exactly', () => {
 
       it.each(list.map(([label, group, route], i) => [label, group, route, i] as const))('%s (%j) stores the route %s', async (_label, _group, route, i) => {
         const membership = api.client(MembershipService);
-        await membership.submitSignup({ lastName: LAST, membershipNumber: NUMBER }, { headers: { authorization: `Bearer t${i}` } });
+        // OFFICER-VERIFY: the invite route needs a first name; the sign-up route takes one as well.
+        await membership.submitSignup({ firstName: 'Pat', lastName: LAST, membershipNumber: NUMBER }, { headers: { authorization: `Bearer t${i}` } });
         expect(await routeOf(api, `sub-marker-${i}`)).toBe(route);
       });
     });

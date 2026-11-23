@@ -8,14 +8,16 @@
 // shows their profile, the two names editable and the number shown only; one line by the sign-up's
 // number field says it cannot be changed once sent, except through the site administrator. D3: an enrolee with no account gets
 // the form; a pending account the waiting line; a rejected sign-up says it was not approved; anyone
-// else their standing. Officers and the Admin need no account (fix 1): no form and no stop after
-// signing in. D4: the queue is for the membership approvers and the Admin only, in plain words,
+// else their standing. OFFICER-VERIFY: officers, the Admin, the Webmaster and the approvers confirm
+// their membership too (Ross 11-23: "the officer needs to also pass the verifier"): with no account
+// they get the form and the stop after signing in, and while the check is pending their officer tools
+// wait (OFFICER_CHECK_NOTICE). A guest member (another local group, or none) is told their standing in
+// their own words (GUEST_TEXT). D4: the queue is for the membership approvers and the Admin only, in plain words,
 // never by colour alone. REOPEN: the Admin and the Membership Officer also see the rejections that
 // can be reopened, and reopen one after a confirmation step; the person's /account then offers the
 // form again (the API removes the account the rejection closed).
 import type { Session } from '../../server/session.mjs';
-import { isAdmin } from './approval-rules';
-import type { Check, MembershipApi, MyAccount, PendingSignup, RejectedSignup, Route, Typed } from './api/membership';
+import type { Check, Decision, MembershipApi, MyAccount, PendingSignup, RejectedSignup, Route, Typed } from './api/membership';
 import { type SessionReaderDeps, sessionReader } from './api/membership';
 import { ZONE } from './calendar';
 
@@ -166,21 +168,34 @@ export const PROFILE_REFUSED: Record<'invalid' | 'not_member', string> = {
 };
 
 /** What /account shows. */
-export type AccountView = 'form' | 'waiting' | 'member' | 'affiliate' | 'lapsed' | 'removed' | 'rejected' | 'officer' | 'not-club';
+export type AccountView = 'form' | 'waiting' | 'member' | 'affiliate' | 'lapsed' | 'removed' | 'rejected' | 'not-club';
 
-/** Fix 1 (SHOULD-2): officers and the Admin use the officer area with no member account. */
-export function needsNoAccount(session: Session): boolean {
-  return session.officer || isAdmin(session);
-}
+/** OFFICER-VERIFY: the groups that carry an officer power (the API's groups.ts isPowerGroup), by internal name. */
+const POWER_GROUPS = new Set(['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers']);
+const OFFICE_GROUP = 'nwfl-office-';
 
 /**
- * D3: the form only for one of the group's enrolees with no account yet who is neither an officer nor
- * the Admin (they get a plain line instead); a standing for any account. A removed account that was
+ * Who may confirm their membership here: one of the group's enrolees, or (OFFICER-VERIFY) anyone holding
+ * an officer power, whose tools need the check too.
+ */
+export function mayConfirmMembership(session: Pick<Session, 'enrolee' | 'groups'>): boolean {
+  return session.enrolee || session.groups.some((g) => POWER_GROUPS.has(g) || (g.startsWith(OFFICE_GROUP) && g.length > OFFICE_GROUP.length));
+}
+
+/** OFFICER-VERIFY: on /account while the person's officer tools wait for the membership check. */
+export const OFFICER_CHECK_NOTICE = 'Your officer tools open once your membership is confirmed. Until then you see what the public sees.';
+
+/** OFFICER-VERIFY: a guest member's standing (Ross's GUEST ruling, 11-23). */
+export const GUEST_TEXT = 'Your account has guest member access: the public pages, and the events as members see them.';
+
+/**
+ * D3: the form for one who may confirm their membership (an enrolee, or an officer power holder) with no
+ * account yet; a plain line for anyone else; a standing for any account. A removed account that was
  * never checked is a sign-up an approver rejected (the API removes it with the rejection, fix 1); a
  * member removed later was checked when approved, so the two read differently.
  */
 export function accountView(session: Session, account: MyAccount | undefined): AccountView {
-  if (account === undefined) return needsNoAccount(session) ? 'officer' : session.enrolee ? 'form' : 'not-club';
+  if (account === undefined) return mayConfirmMembership(session) ? 'form' : 'not-club';
   if (account.status === 'pending') return 'waiting';
   return account.status === 'removed' && account.verifiedOn === undefined ? 'rejected' : account.status;
 }
@@ -192,9 +207,14 @@ export const STANDING_TEXT: Record<Exclude<AccountView, 'form'>, string> = {
   lapsed: 'Your member access is paused until an officer completes the yearly membership check.',
   removed: 'Your account no longer has member access.',
   rejected: 'Your sign-up was not approved.',
-  officer: 'You need no member account to use the officer area.',
   'not-club': 'This sign-in is not one of the group’s accounts, so there is nothing to sign up for here.',
 };
+
+/** The standing line for a view, a guest member's in their own words (OFFICER-VERIFY). */
+export function standingText(view: Exclude<AccountView, 'form'>, account: MyAccount | undefined): string {
+  if (view === 'member' && (account?.localGroup === 'guest' || account?.localGroup === 'guest_unlisted')) return GUEST_TEXT;
+  return STANDING_TEXT[view];
+}
 
 /** Fix 1 (SHOULD-1): after "Your sign-up was not approved." The page links the officer's title to /officers. */
 export const REJECTED_CONTACT = "If you think this is a mistake, please contact the club's Membership Officer.";
@@ -344,9 +364,58 @@ const DONE_TEXT: Record<Done, string> = {
 };
 
 /** The outcome named by the address the queue lands on after a decision (?done=approved|rejected|reopened). */
-export function doneFromQuery(params: URLSearchParams): Done | undefined {
+/**
+ * WEB-SMALL-1: the outcome a decision's redirect names, with the sign-up it names (one id, well formed);
+ * the page shows its banner only once the API says that sign-up really is so (bannerShown).
+ */
+export function doneFromQuery(params: URLSearchParams): { done: Done; requestId: string } | undefined {
   const done = params.get('done');
-  return done === 'approved' || done === 'rejected' || done === 'reopened' ? done : undefined;
+  const ids = params.getAll('request');
+  const requestId = ids.length === 1 ? (ids[0] as string) : '';
+  if (!REQUEST_ID.test(requestId)) return undefined;
+  return done === 'approved' || done === 'rejected' || done === 'reopened' ? { done, requestId } : undefined;
+}
+
+/** Where a decision lands: the queue, naming the outcome and the sign-up. */
+export function donePath(here: string, done: Done, requestId: string): string {
+  return `${here}?done=${done}&request=${encodeURIComponent(requestId)}`;
+}
+
+/** WEB-SMALL-1: the banner only when the named sign-up's real state is the one named; no answer, no banner. */
+export function bannerShown(done: Done, decision: Decision | undefined): boolean {
+  return decision === done;
+}
+
+/**
+ * OFFICER-VERIFY: the outcomes that confirm an invited sign-up's number and last name (as the API's
+ * CONFIRMED_BY_CHECK); with no first-name mismatch reported, an approver may approve it by hand.
+ */
+const CONFIRMED_BY_CHECK = new Set<Check>(['verified_local', 'verified_other_group', 'email_mismatch']);
+
+/**
+ * The orchestrator's ruling on Ross's "the officer needs to also pass the verifier": an invited sign-up
+ * is approved by hand only once the check confirmed it; anything else is rejected (and may be reopened).
+ * A plain sign-up is approved on the approver's word, as before.
+ */
+export function approvableByHand(signup: Pick<PendingSignup, 'route' | 'verification' | 'firstNameMatched'>): boolean {
+  if (signup.route !== 'invite') return true;
+  return CONFIRMED_BY_CHECK.has(signup.verification) && signup.firstNameMatched !== false;
+}
+
+export const INVITE_UNCONFIRMED =
+  'An invited sign-up can be approved only once the membership check has confirmed the membership number and names. This one has not been, so it cannot be approved here: reject it, and it can then be reopened for a new check.';
+
+/** OFFICER-VERIFY: an other-group sign-up is approved as a guest member (Ross 11-23). */
+export const GUEST_APPROVAL = 'This person is a member of another local group, or of none. Approving gives them guest member access: the public pages, and the events as members see them.';
+
+const LOCAL_GROUP_TEXT = { chapter: 'this chapter', guest: 'guest member', guest_unlisted: 'guest member; not a known local group name: check it' } as const;
+
+/** OFFICER-VERIFY: what the check said of the first name and the local group, as label and value pairs. */
+export function checkFacts(signup: Pick<PendingSignup, 'firstNameMatched' | 'localGroup' | 'localGroupStanding'>): Array<[string, string]> {
+  const facts: Array<[string, string]> = [];
+  if (signup.firstNameMatched !== undefined) facts.push(['First name check', signup.firstNameMatched ? 'Confirmed' : 'Did not match']);
+  if (signup.localGroup !== undefined) facts.push(['Local group', signup.localGroupStanding ? `${signup.localGroup} (${LOCAL_GROUP_TEXT[signup.localGroupStanding]})` : signup.localGroup]);
+  return facts;
 }
 
 export function doneText(done: Done): string {
@@ -392,12 +461,12 @@ export function rejectedShownNote(count: number): string | undefined {
 /**
  * D3: where a sign-in goes first. One of the group's enrolees with no account yet goes to /account,
  * after each sign-in until they have signed up (then they have an account, pending or decided);
- * anyone else goes back where they were. Officers and the Admin are never stopped: they need no
- * member account (fix 1, SHOULD-2), so the API is not asked. When the API cannot say, the return is
+ * anyone else goes back where they were. OFFICER-VERIFY: officers, the Admin, the Webmaster and the
+ * approvers with no account are stopped too: their tools need their membership confirmed. When the API cannot say, the return is
  * honoured: signing in never fails for this.
  */
 export async function firstStop(session: Session, back: string, api: MembershipApi | undefined, deps: SessionReaderDeps): Promise<string> {
-  if (!session.enrolee || needsNoAccount(session) || api === undefined) return back;
+  if (!mayConfirmMembership(session) || api === undefined) return back;
   const { reader } = sessionReader(session, deps);
   if (reader === undefined) return back;
   try {

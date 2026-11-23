@@ -96,6 +96,25 @@ describe('startServer', () => {
     expect(await officerRead()).toBe(7);
   });
 
+  it('hands OFFICER_VERIFY to the caller gate: on, an officer with no member standing is refused; off by default', async () => {
+    const { sink } = captureLogs();
+    const officer: TokenVerifier = { verify: () => Promise.resolve({ client: 'site', subject: 'sub-officer', groups: ['nwfl-officers'], scopes: [] }) };
+    // No member_account row: no standing.
+    const db = fakeDb(() => Promise.resolve({ rows: [] }));
+    const officerRead = async (officerVerify?: boolean): Promise<unknown> => {
+      const server = await startServer({ ...base, db, logger: createStructuredLogger({ sink }), verifier: officer, ...(officerVerify === undefined ? {} : { officerVerify }) });
+      try {
+        const client = createClient(RedactionPolicyService, createGrpcTransport({ baseUrl: `http://127.0.0.1:${server.grpcPort}` }));
+        return await client.getRedactionPolicy({}, { headers: { authorization: 'Bearer t' } }).then(() => 'ok', (error: { code?: number }) => error.code);
+      } finally {
+        await server.close();
+      }
+    };
+    expect(await officerRead(true)).toBe(7);
+    expect(await officerRead(false)).toBe('ok');
+    expect(await officerRead()).toBe('ok');
+  });
+
   it('hands the configured edge identities and its verifier to the caller gate and the edge admission', async () => {
     const { sink } = captureLogs();
     const server = await startServer({ ...base, db: fakeDb(() => Promise.resolve({})), logger: createStructuredLogger({ sink }), edgeClientIds: ['edge.example'], verifier: edgeVerifier });

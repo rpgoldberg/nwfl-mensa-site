@@ -2,7 +2,8 @@
 // at member level, not the groups in a token that can be a month old.
 // A member or an affiliate reads at member level while verified within the
 // last 13 months; unverified for longer, either falls back to public (R24;
-// STACK-FIX ruling: affiliates lapse like members).
+// STACK-FIX ruling: affiliates lapse like members). OFFICER-VERIFY: a member is
+// a chapter member, a guest member or unconfirmed by member_account.chapter_member.
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { dbStanding } from '../../src/auth/standing.js';
@@ -18,10 +19,10 @@ describe.skipIf(!live)('dbStanding', () => {
     const run = await migrate(db);
     if (run.code !== 0) throw new Error(run.stderr);
     pool = testPool({ connectionString: urlFor(APP, APP_PW, db) });
-    const insert = (sub: string, status: string, verifiedOn: string | null): Promise<unknown> =>
+    const insert = (sub: string, status: string, verifiedOn: string | null, chapter: boolean | null = null): Promise<unknown> =>
       pool.query(
-        `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on, affiliate_granted_by_sub, affiliate_granted_at, removed_at)
-         VALUES ($1, $2, 'signup', $3, $4, $5::date, $6, $7, $8)`,
+        `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on, affiliate_granted_by_sub, affiliate_granted_at, removed_at, chapter_member)
+         VALUES ($1, $2, 'signup', $3, $4, $5::date, $6, $7, $8, $9)`,
         [
           sub,
           status,
@@ -31,9 +32,15 @@ describe.skipIf(!live)('dbStanding', () => {
           status === 'affiliate' ? 'sub-admin' : null,
           status === 'affiliate' ? today : null,
           status === 'removed' ? today : null,
+          chapter,
         ],
       );
     await insert('current', 'member', '2026-10-01');
+    await insert('chapter', 'member', '2026-10-01', true);
+    await insert('guest', 'member', '2026-10-01', false);
+    await insert('chapter-just-over', 'member', '2025-09-21', true);
+    await insert('guest-just-over', 'member', '2025-09-21', false);
+    await insert('lapsed-chapter', 'lapsed', '2026-10-01', true);
     await insert('thirteen-months', 'member', '2025-09-22');
     await insert('just-over', 'member', '2025-09-21');
     await insert('affiliate', 'affiliate', '2026-10-01');
@@ -54,22 +61,27 @@ describe.skipIf(!live)('dbStanding', () => {
   });
 
   it('reads today from the real clock by default', async () => {
-    expect(await dbStanding(pool).isMember('verified-today')).toBe(true);
+    expect(await dbStanding(pool).standingOf('verified-today')).toBe('unconfirmed');
   });
 
   it.each([
-    ['current', true],
-    ['thirteen-months', true],
-    ['just-over', false],
-    ['affiliate', true],
-    ['affiliate-never-verified', false],
-    ['affiliate-2020', false],
-    ['affiliate-just-over', false],
-    ['pending', false],
-    ['lapsed', false],
-    ['removed', false],
-    ['no-account', false],
-  ])('%s reads at member level: %s', async (subject, expected) => {
-    expect(await dbStanding(pool, () => today).isMember(subject)).toBe(expected);
+    ['current', 'unconfirmed'],
+    ['thirteen-months', 'unconfirmed'],
+    ['just-over', 'none'],
+    ['chapter', 'chapter'],
+    ['guest', 'guest'],
+    ['chapter-just-over', 'none'],
+    ['guest-just-over', 'none'],
+    ['lapsed-chapter', 'none'],
+    ['affiliate', 'affiliate'],
+    ['affiliate-never-verified', 'none'],
+    ['affiliate-2020', 'none'],
+    ['affiliate-just-over', 'none'],
+    ['pending', 'none'],
+    ['lapsed', 'none'],
+    ['removed', 'none'],
+    ['no-account', 'none'],
+  ])('%s stands as %s', async (subject, expected) => {
+    expect(await dbStanding(pool, () => today).standingOf(subject)).toBe(expected);
   });
 });

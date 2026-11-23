@@ -220,6 +220,18 @@ plain line and retries, waiting 1 s at first and doubling up to 15 s. Only a
 positive mismatch (another tenant's row, no row, or several rows) logs the
 reason and exits 1.
 
+OFFICER-VERIFY: an officer power (officers, a seat, Admin, Webmaster,
+membership approvers) needs member standing as well as its group once
+`OFFICER_VERIFY=on` (default off; unset or empty is off; any other value
+refuses to start). The caller gate (`src/auth/caller.ts`) then withholds every
+power group from a holder without a chapter member's or an affiliate's
+standing (`src/auth/standing-policy.ts`), so no role check and no SQL function
+sees one. `CHAPTER_GROUP_NAME` (e.g. `Northwest Florida Mensa`, one of
+`src/membership/local-groups.ts`; required when the switch is on) tells a
+chapter member from a guest by the local group the membership check reports.
+Guests follow one policy (`guestPolicy`): the public's pages, events as
+members see them, no officer power. One startup line names the mode.
+
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
 placeholder with no text, length, link or image; a node the API cannot vouch

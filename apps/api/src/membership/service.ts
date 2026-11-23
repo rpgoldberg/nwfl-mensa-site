@@ -7,13 +7,18 @@
 //                       every sign-up, invited or not (W-SIGNUP D1), with
 //                       no control character in the last name; the first
 //                       name as typed, optional (PROFILE-ID). A token
-//                       with the invited group (fc INVITE1) opens the
-//                       account with the invite route; it still waits for
+//                       with the invited group (fc INVITE1), or with any
+//                       officer power, held or withheld (OFFICER-VERIFY),
+//                       opens the account with the invite route, which
+//                       needs the first name too; it still waits for
 //                       the verifier or an approver (D2). A repeat, or an
 //                       account already past pending, gets ONE answer
 //                       whatever the reason, so the call tells nothing.
 //   GetMyAccount        the caller's own account and, for an approved member,
-//                       their profile: the names and the number (PROFILE-ID)
+//                       their profile: the names, the number (PROFILE-ID)
+//                       and the reported local group; and whether their
+//                       officer tools are open or wait for the membership
+//                       check (OFFICER-VERIFY)
 //   UpdateMyProfile     PROFILE-ID: an approved member changes their first and
 //                       last name; never the number, which no request field
 //                       carries (a request with any other field is refused)
@@ -24,6 +29,9 @@
 //                       display name, date and what it typed; one rejected or
 //                       reopened since is shown as closed, by date alone
 //                       (fix 1)
+//   GetSignupRequest    approvers and the Admin: one sign-up's decision
+//                       (pending, approved, rejected, reopened), so the site
+//                       says "approved" only when it is
 //   ApproveSignup /     approvers and the Admin, never on their own sign-up.
 //   RejectSignup        What the sign-up typed is kept (0028). A rejection removes
 //                       the account still waiting on it, in the same
@@ -35,8 +43,17 @@
 //                       a local match, so it is approved only that way, and
 //                       only with confirmed_warning, which the audit records:
 //                       fix 1);
-//                       an other-group match is never approved as a member
-//                       (R33): it is rejected or granted as an affiliate.
+//                       OFFICER-VERIFY (the orchestrator's ruling on Ross's
+//                       "the officer needs to also pass the verifier"): an
+//                       invited sign-up is approved by hand only once the
+//                       check confirmed its number and last name (a local or
+//                       other-group match, or an email mismatch, confirmed)
+//                       and reported no first-name mismatch; anything else is
+//                       rejected or reopened for a new check. An other-group
+//                       match is approved as a guest member (Ross 11-23,
+//                       superseding R33's never), or rejected, or granted as
+//                       an affiliate. The account records whether its
+//                       reported local group is the chapter's (local-group.ts).
 //   ListMembers         approvers and the Admin: accounts with member-level
 //                       standing or past it, flagged for the yearly re-check
 //                       once verified more than 12 months ago (the 13th month
@@ -74,7 +91,7 @@ import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@connectrpc/connect';
 import { recordAudit } from '../audit/audit.js';
 import { type Caller, callerOf } from '../auth/caller.js';
-import { requireGrantor, requireMembershipApprover, requireSignupReopener, requireUser } from '../auth/roles.js';
+import { holdsPower, requireGrantor, requireMembershipApprover, requireSignupReopener, requireUser } from '../auth/roles.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -88,14 +105,20 @@ import {
   MemberSchema,
   MemberStatus,
   MembershipService,
+  OfficerTools,
   RejectedSignupSchema,
+  SignupDecision,
   SignupRequestSchema,
   Verification,
 } from '../gen/nwfl/mensa/v1/membership_pb.js';
+import { approveAccount } from './approve.js';
+import { accountStanding, chapterMemberOf, reportedStanding } from './local-group.js';
 
 export interface MembershipDeps {
   db: Db;
   now: () => Date;
+  /** CHAPTER_GROUP_NAME (auth/config.ts): the chapter's own local group; null for none. */
+  chapterGroup?: string | null;
 }
 
 const STATUSES: Record<string, MemberStatus> = {
@@ -151,11 +174,22 @@ const MAX_REJECTED_LISTED = 50;
 const CLOSED_BY_REJECTION = `a.status = 'removed' AND a.verified_on IS NULL AND a.approved_by_sub IS NULL AND a.affiliate_granted_by_sub IS NULL`;
 /** W-SIGNUP D2: an officer invited this person (fc INVITE1's <prefix>invited, renamed by groups.ts). */
 const INVITED_GROUP = 'nwfl-invited';
+/**
+ * OFFICER-VERIFY: the outcomes that confirm an invited sign-up's number and last name, so an approver may
+ * approve it by hand (with no first-name mismatch reported; an email mismatch still needs confirmed_warning).
+ */
+const CONFIRMED_BY_CHECK = new Set(['verified_local', 'verified_other_group', 'email_mismatch']);
+const INVITE_UNCONFIRMED =
+  'an invited sign-up is approved only once the membership check confirmed its number and last name, with no first-name mismatch: reject it, or reopen it for a new check';
+const DECISIONS: Record<string, SignupDecision> = { pending: SignupDecision.PENDING, approved: SignupDecision.APPROVED, rejected: SignupDecision.REJECTED };
 
 interface AccountRow {
   status: string;
   route: string;
   verified_on: string | null;
+  /** OFFICER-VERIFY, where read: member_account.chapter_member and the sign-up's reported local group. */
+  chapter_member?: boolean | null;
+  local_group?: string | null;
 }
 
 /** PROFILE-ID: what a sign-up typed, as the approvers and the owner read it. */
@@ -180,6 +214,13 @@ interface SignupRow {
   verified_on: string | null;
 }
 
+/** OFFICER-VERIFY: what an approver needs to decide a sign-up, beyond SignupRow. */
+interface DecidableRow extends SignupRow {
+  route: string | null;
+  first_name_matched: boolean | null;
+  local_group: string | null;
+}
+
 const invalid = (message: string): ConnectError => new ConnectError(message, Code.InvalidArgument);
 const precondition = (message: string): ConnectError => new ConnectError(message, Code.FailedPrecondition);
 
@@ -188,6 +229,7 @@ function accountMessage(row: AccountRow): MemberAccount {
     status: STATUSES[row.status],
     route: ROUTES[row.route],
     ...(row.verified_on !== null ? { verifiedOn: protoDate(row.verified_on) } : {}),
+    localGroupStanding: accountStanding(row.chapter_member ?? null, row.local_group ?? null),
   });
 }
 
@@ -215,6 +257,7 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
   const { db } = deps;
   const callerIn = (ctx: HandlerContext): Caller => callerOf(ctx.values);
   const today = (): string => todayIn(deps.now());
+  const chapterGroup = deps.chapterGroup ?? null;
 
   const tx = async <T>(fn: (client: TxClient) => Promise<T>): Promise<T> => {
     try {
@@ -225,10 +268,11 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
   };
 
   /** The pending sign-up an approver may decide, locked. */
-  const decidable = async (client: TxClient, caller: Caller, id: string): Promise<SignupRow> => {
+  const decidable = async (client: TxClient, caller: Caller, id: string): Promise<DecidableRow> => {
     const row = (
-      await client.query<SignupRow>(
-        `SELECT id, sub, decision, verification, verified_on::text AS verified_on FROM signup_request WHERE id = $1 FOR UPDATE`,
+      await client.query<DecidableRow>(
+        `SELECT s.id, s.sub, s.decision, s.verification, s.verified_on::text AS verified_on, a.route, s.first_name_matched, s.local_group
+         FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub WHERE s.id = $1 FOR UPDATE OF s`,
         [id],
       )
     ).rows[0];
@@ -267,10 +311,12 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const number = typed.replace(NUMBER_NOISE, '');
         if (!NUMBER.test(number)) throw invalid('a membership number is 1 to 12 digits');
         const lastName = nameOf(request.lastName, 'last name');
-        // PROFILE-ID: optional, so a sign-up from a site that does not ask for it yet is still taken.
-        const firstName = request.firstName.trim() === '' ? null : nameOf(request.firstName, 'first name');
-        // D2: an officer's invitation (the <prefix>invited group, by its internal name) is the account's route.
-        const route = caller.groups.includes(INVITED_GROUP) ? 'invite' : 'signup';
+        // D2: an officer's invitation (the <prefix>invited group, by its internal name) is the account's route;
+        // OFFICER-VERIFY: so is any officer power, held or withheld, so an officer's check can approve them.
+        const route = caller.groups.includes(INVITED_GROUP) || holdsPower(caller) ? 'invite' : 'signup';
+        // PROFILE-ID: optional on a plain sign-up, so one from a site that does not ask for it yet is still
+        // taken; OFFICER-VERIFY: needed on the invite route, where the check confirms it.
+        const firstName = route === 'signup' && request.firstName.trim() === '' ? null : nameOf(request.firstName, 'first name');
         return tx(async (client) => {
           // A sign-up racing this one waits here for it, then gets the same one answer.
           const { rows } = await client.query<{ id: string }>(
@@ -290,16 +336,24 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const caller = callerIn(ctx);
         requireUser(caller);
         // PROFILE-ID: an approved member's profile is their approved sign-up, read by them alone.
+        // OFFICER-VERIFY: the caller's officer tools, from the gate's answer (auth/caller.ts).
+        const officerTools =
+          (caller.withheld?.length ?? 0) > 0 ? OfficerTools.AWAITING_CHECK : holdsPower(caller) ? OfficerTools.OPEN : OfficerTools.UNSPECIFIED;
         const { rows } = await db.query<AccountRow & TypedRow & { profile: boolean }>(
-          `SELECT a.status, a.route, a.verified_on::text AS verified_on, s.id IS NOT NULL AS profile, s.first_name, s.last_name, s.membership_number
+          `SELECT a.status, a.route, a.verified_on::text AS verified_on, a.chapter_member, s.local_group,
+             s.id IS NOT NULL AS profile, s.first_name, s.last_name, s.membership_number
            FROM member_account a LEFT JOIN signup_request s
              ON s.sub = a.sub AND s.reopened_at IS NULL AND s.decision = 'approved' AND a.status IN ('member', 'affiliate', 'lapsed')
            WHERE a.sub = $1`,
           [caller.subject],
         );
         const row = rows[0];
-        if (row === undefined) return {};
-        return { account: accountMessage(row), ...(row.profile ? { profile: create(MemberProfileSchema, typedFields(row)) } : {}) };
+        if (row === undefined) return { officerTools };
+        return {
+          account: accountMessage(row),
+          ...(row.profile ? { profile: create(MemberProfileSchema, { ...typedFields(row), localGroup: row.local_group ?? '' }) } : {}),
+          officerTools,
+        };
       },
 
       updateMyProfile: async (request, ctx) => {
@@ -341,12 +395,14 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
             earlier_first: string | null;
             earlier_last: string | null;
             earlier_number: string | null;
+            first_name_matched: boolean | null;
+            local_group: string | null;
           }
         >(
           // Fix 1 (N2): a rejected (or reopened) earlier sign-up's name stays with the Admin and the
           // Membership Officer (ListRejectedSignups): it is never read here, nor (PROFILE-ID) what it typed.
           `SELECT s.id, s.display_name, s.email, s.verification, s.verified_on::text AS verified_on, s.created_at, coalesce(a.route, 'signup') AS route,
-             s.first_name, s.last_name, s.membership_number,
+             s.first_name, s.last_name, s.membership_number, s.first_name_matched, s.local_group,
              CASE WHEN c.decision = 'rejected' THEN '' ELSE c.display_name END AS earlier_name, c.created_at AS earlier_at, c.decision = 'rejected' AS earlier_closed,
              CASE WHEN c.decision = 'rejected' THEN NULL ELSE c.first_name END AS earlier_first,
              CASE WHEN c.decision = 'rejected' THEN NULL ELSE c.last_name END AS earlier_last,
@@ -365,6 +421,9 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
               createdAt: timestampFromDate(row.created_at),
               route: ROUTES[row.route],
               ...typedFields(row),
+              ...(row.first_name_matched !== null ? { firstNameMatched: row.first_name_matched } : {}),
+              localGroup: row.local_group ?? '',
+              localGroupStanding: reportedStanding(row.local_group, chapterGroup),
               ...(row.earlier_name !== null
                 ? {
                     earlierClaim: create(EarlierClaimSchema, {
@@ -386,20 +445,19 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const id = requestId(request.requestId);
         return tx(async (client) => {
           const row = await decidable(client, caller, id);
-          if (row.verification === 'verified_other_group') throw precondition('an other-group member is rejected or granted affiliate standing, not approved');
+          // OFFICER-VERIFY: an invited sign-up (an officer's among them) must have passed the check.
+          if (row.route === 'invite' && (!CONFIRMED_BY_CHECK.has(row.verification) || row.first_name_matched === false)) throw precondition(INVITE_UNCONFIRMED);
           const confirmFirst = CONFIRM_FIRST[row.verification];
           if (confirmFirst !== undefined && !request.confirmedWarning) throw precondition(confirmFirst);
           await decide(client, id, 'approved', caller.subject as string);
-          const local = row.verification === 'verified_local' && row.verified_on !== null;
-          const { rows } = await client.query<AccountRow>(
-            `INSERT INTO member_account (sub, status, route, approved_by_sub, approved_at, verified_on) VALUES ($1, 'member', 'signup', $2, now(), $3)
-             ON CONFLICT (sub) DO UPDATE SET status = 'member', approved_by_sub = EXCLUDED.approved_by_sub, approved_at = now(),
-               verified_on = EXCLUDED.verified_on, updated_at = now()
-             WHERE member_account.status IN ('pending', 'lapsed')
-             RETURNING status, route, verified_on::text AS verified_on`,
-            [row.sub, caller.subject, local ? row.verified_on : today()],
-          );
-          const account = rows[0];
+          // A local or other-group match is dated by the check; anything else from today, on the approver's word.
+          const local = (row.verification === 'verified_local' || row.verification === 'verified_other_group') && row.verified_on !== null;
+          const account = await approveAccount(client, {
+            sub: row.sub,
+            by: caller.subject as string,
+            verifiedOn: local ? (row.verified_on as string) : today(),
+            chapterMember: chapterMemberOf(row.verification, row.local_group, chapterGroup),
+          });
           if (account === undefined) throw precondition('this account is not waiting for approval');
           await recordAudit(client, caller, { action: 'approve', subjectKind: 'signup_request', subjectId: id, fromState: 'pending', toState: 'approved' });
           await recordAudit(client, caller, {
@@ -411,8 +469,20 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
           // Fix 1: approved despite the warning, on the approver's confirmation (no note or payload on a
           // membership record, 0004/0009: the action says it).
           if (confirmFirst !== undefined) await recordAudit(client, caller, { action: `approve_confirmed_${row.verification}`, subjectKind: 'signup_request', subjectId: id });
-          return { account: accountMessage(account) };
+          return { account: accountMessage({ ...account, local_group: row.local_group }) };
         });
+      },
+
+      getSignupRequest: async (request, ctx) => {
+        requireMembershipApprover(callerIn(ctx));
+        const id = requestId(request.requestId);
+        const { rows } = await db.query<{ decision: string; reopened: boolean }>(
+          `SELECT decision, reopened_at IS NOT NULL AS reopened FROM signup_request WHERE id = $1`,
+          [id],
+        );
+        const row = rows[0];
+        if (row === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
+        return { decision: row.reopened ? SignupDecision.REOPENED : DECISIONS[row.decision] };
       },
 
       rejectSignup: async (request, ctx) => {

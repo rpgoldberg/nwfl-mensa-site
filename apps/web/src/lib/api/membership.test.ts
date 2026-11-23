@@ -12,7 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { newSession } from '../../../server/session.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
-import { AccountRoute, MemberStatus, MembershipService, RejectedSignupSchema, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, LocalGroupStanding, MemberStatus, MembershipService, OfficerTools, RejectedSignupSchema, SignupDecision, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
 import { DecisionRefused, MembershipSignInAgain, ProfileRefused, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
@@ -430,6 +430,116 @@ describe('grpcMembership: failures', () => {
     await expect(api.listSignupRequests(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.approveSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.rejectSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.getMyStanding(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+    // No banner when the API is down: no answer, never a failure.
+    expect(await api.getSignupDecision(PERSON, ID)).toBeUndefined();
+  });
+});
+
+// OFFICER-VERIFY: the officer tools, the local group, the first-name check, and one sign-up's decision.
+describe('grpcMembership: OFFICER-VERIFY', () => {
+  it('reads the officer tools with the account, and with no account at all', async () => {
+    let answer: object = { officerTools: OfficerTools.AWAITING_CHECK };
+    const server = await grpcServer((router) => router.service(MembershipService, { getMyAccount: () => answer }));
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.getMyStanding(PERSON)).toEqual({ officerTools: 'awaiting_check' });
+    answer = { account: { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, localGroupStanding: LocalGroupStanding.CHAPTER }, officerTools: OfficerTools.OPEN };
+    expect(await api.getMyStanding(PERSON)).toEqual({ account: { status: 'member', route: 'invite', localGroup: 'chapter' }, officerTools: 'open' });
+    answer = {};
+    expect(await api.getMyStanding(PERSON)).toEqual({ officerTools: 'none' });
+    expect(server.headers.every((h) => h['authorization'] === 'Bearer person.tok-en')).toBe(true);
+  });
+
+  it('reads a guest member and an unlisted group, and the profile\'s local group', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        getMyAccount: () => ({
+          account: { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP, localGroupStanding: LocalGroupStanding.GUEST_UNLISTED },
+          profile: { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER, localGroup: 'Atlantis Mensa' },
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.getMyAccount(PERSON)).toEqual({
+      status: 'member',
+      route: 'signup',
+      localGroup: 'guest_unlisted',
+      profile: { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER, localGroup: 'Atlantis Mensa' },
+    });
+  });
+
+  it('refuses officer tools it cannot read', async () => {
+    const server = await grpcServer((router) => router.service(MembershipService, { getMyAccount: () => ({ officerTools: 9 as OfficerTools }) }));
+    await expect(grpcMembership(config(server.url), () => {}).getMyStanding(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+
+  it('lists the first-name check and the reported local group with each pending sign-up', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: [
+            create(SignupRequestSchema, {
+              requestId: ID,
+              displayName: 'Jesse Example',
+              email: 'jesse@example.org',
+              route: AccountRoute.INVITE,
+              verification: Verification.VERIFIED_LOCAL,
+              firstNameMatched: false,
+              localGroup: 'Boston Mensa',
+              localGroupStanding: LocalGroupStanding.GUEST,
+            }),
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Kendall Sample', email: 'kendall@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED }),
+          ],
+        }),
+      }),
+    );
+    expect(await grpcMembership(config(server.url), () => {}).listSignupRequests(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Jesse Example', email: 'jesse@example.org', route: 'invite', verification: 'verified_local', firstNameMatched: false, localGroup: 'Boston Mensa', localGroupStanding: 'guest' },
+      { requestId: ID, displayName: 'Kendall Sample', email: 'kendall@example.org', route: 'signup', verification: 'unchecked' },
+    ]);
+  });
+
+  it('reads one sign-up\'s decision by its id, and nothing at all on any failure', async () => {
+    let decision: SignupDecision | Error = SignupDecision.APPROVED;
+    const seen: string[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        getSignupRequest: (req) => {
+          seen.push(req.requestId);
+          if (decision instanceof Error) throw decision;
+          return { decision };
+        },
+      }),
+    );
+    const logs: string[] = [];
+    const api = grpcMembership(config(server.url), (line) => logs.push(line));
+    expect(await api.getSignupDecision(PERSON, ID)).toBe('approved');
+    expect(seen).toEqual([ID]);
+    for (const [answer, name] of [
+      [SignupDecision.PENDING, 'pending'],
+      [SignupDecision.REJECTED, 'rejected'],
+      [SignupDecision.REOPENED, 'reopened'],
+    ] as const) {
+      decision = answer;
+      expect(await api.getSignupDecision(PERSON, ID)).toBe(name);
+    }
+    for (const failure of [SignupDecision.UNSPECIFIED, new ConnectError('gone', Code.NotFound), new ConnectError('no', Code.PermissionDenied), new ConnectError('down', Code.Unavailable)]) {
+      decision = failure;
+      expect(await api.getSignupDecision(PERSON, ID)).toBeUndefined();
+    }
+    // A bearer that cannot be sent, and an id that is not one, never reach the API.
+    expect(await api.getSignupDecision({ bearer: 'two words' }, ID)).toBeUndefined();
+    expect(await api.getSignupDecision(PERSON, 'approved')).toBeUndefined();
+    expect(seen).toHaveLength(8);
+    expect(logs.join('\n')).not.toContain(ID);
+    // Gone or not theirs is a refusal (warn); the API down is a failure (error).
+    expect(logs.map((l) => JSON.parse(l) as { level: string; msg: string; code: string })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ level: 'warn', msg: 'api gave no sign-up for the banner', code: 'not_found' }),
+        expect.objectContaining({ level: 'warn', msg: 'api gave no sign-up for the banner', code: 'permission_denied' }),
+        expect.objectContaining({ level: 'error', msg: 'api call failed', code: 'unavailable' }),
+      ]),
+    );
   });
 });
 

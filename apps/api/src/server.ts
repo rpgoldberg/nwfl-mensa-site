@@ -38,6 +38,10 @@ export interface ServerOptions {
   edgeClientIds?: readonly string[];
   /** The chapter's group prefix (SITE_GROUP_PREFIX, auth/groups.ts). Default nwfl-. */
   groupPrefix?: string;
+  /** OFFICER_VERIFY (auth/config.ts): an officer power needs member standing too. Default off. */
+  officerVerify?: boolean;
+  /** CHAPTER_GROUP_NAME (auth/config.ts): the chapter's own local group. Default none. */
+  chapterGroup?: string | null;
   /** Not ready until it is verified (CF-ISO-0, tenant.ts startTenantGate). */
   tenantGate?: { readonly verified: boolean };
 }
@@ -58,13 +62,14 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
   const shutdown = new AbortController();
 
   const grpc = createGrpcServer({
-    routes: apiRoutes({ db: options.db, logger, readiness }),
+    routes: apiRoutes({ db: options.db, logger, readiness, chapterGroup: options.chapterGroup ?? null }),
     interceptors: apiInterceptors({
       logger,
       verifier: options.verifier ?? rejectAllTokens,
       standing: options.standing ?? dbStanding(options.db),
       ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),
       groupPrefix: options.groupPrefix,
+      officerVerify: options.officerVerify === true,
     }),
     shutdownSignal: shutdown.signal,
     ...(options.edgeClientIds !== undefined ? { edgeClientIds: options.edgeClientIds } : {}),

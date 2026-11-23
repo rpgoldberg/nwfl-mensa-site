@@ -50,3 +50,19 @@ export function parseGroupPrefix(value: string | undefined): string {
 export function internalGroups(groups: readonly string[], prefix: string): string[] {
   return groups.filter((group) => group.startsWith(prefix)).map((group) => INTERNAL_GROUP_PREFIX + group.slice(prefix.length));
 }
+
+// OFFICER-VERIFY: the internal groups that carry an officer power (roles.ts), which need member standing
+// too once the switch is on (caller.ts establish). nwfl-affiliates, nwfl-role-<x>, nwfl-invited and the
+// enrolee groups carry none.
+const POWER_GROUPS = new Set(['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers']);
+const OFFICE_GROUP = 'nwfl-office-';
+
+/** Whether an internal group carries an officer power: a role above, or a seat (nwfl-office-<slug>). */
+export function isPowerGroup(group: string): boolean {
+  return POWER_GROUPS.has(group) || (group.startsWith(OFFICE_GROUP) && group.length > OFFICE_GROUP.length);
+}
+
+/** The groups split into those kept and those withheld (each with a power), both in the token's order. */
+export function withholdPower(groups: readonly string[]): { kept: string[]; withheld: string[] } {
+  return { kept: groups.filter((group) => !isPowerGroup(group)), withheld: groups.filter(isPowerGroup) };
+}

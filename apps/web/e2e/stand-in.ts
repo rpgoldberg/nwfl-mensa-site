@@ -94,13 +94,16 @@ export const ACCOUNTS = {
   'writer-lapsing': '00000000-0000-4000-8000-0000000000f7',
   treasurer: '00000000-0000-4000-8000-0000000000f8',
   'two-seats': '00000000-0000-4000-8000-0000000000f9',
+  'officer-unverified': '00000000-0000-4000-8000-0000000000fa',
 };
 
 /**
  * W-SIGNUP: the sign-ups waiting in api.mjs's queue (SIGNUP_QUEUE there), oldest first. The stand-in
  * keeps sign-ups and decisions per sign-in (the access token's jti), so tests in parallel cannot
  * disturb each other. "Blair Example" is the approver's own sign-up, which they may not decide;
- * "Harper Placeholder" was found in another local group, so it is never approved as a member.
+ * "Harper Placeholder" was found in another local group, so it is approved as a guest member
+ * (OFFICER-VERIFY); "Indy Unconfirmed" is an invited sign-up the check did not confirm, so it has no
+ * Approve; "Lou Unlisted" reported a local group name the site does not know.
  * The member accounts were last checked on October 20, 2026.
  */
 export const SIGNUP_QUEUE = [
@@ -111,7 +114,25 @@ export const SIGNUP_QUEUE = [
   { name: 'Dana Mismatch', first: 'Dana', last: 'Mismatch', number: '000011005', email: 'dana@example.org', route: 'Signed up on the site', check: 'Number and last name confirmed by the membership verification service, but the email differs, on November 4, 2026' },
   { name: 'Drew Secondclaim', first: 'Drew', last: 'Secondclaim', number: '000011006', email: 'drew@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 4, 2026' },
   { name: 'Eli Thirdclaim', first: 'Eli', last: 'Thirdclaim', number: '000011007', email: 'eli@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 5, 2026' },
+  { name: 'Indy Unconfirmed', first: 'Indy', last: 'Unconfirmed', number: '000011008', email: 'indy@example.org', route: 'Invited by an officer', check: 'Not confirmed by the membership verification service, on November 6, 2026' },
+  { name: 'Lou Unlisted', first: 'Lou', last: 'Unlisted', number: '000011009', email: 'lou@example.org', route: 'Signed up on the site', check: 'Confirmed by the membership verification service, on November 6, 2026' },
 ] as const;
+
+/** OFFICER-VERIFY: the request ids (api.mjs) of the queue's sign-ups the tests below decide or name. */
+export const QUEUE_IDS = {
+  'Jesse Example': 'b1000000-0000-4000-8000-000000000001',
+  'Kendall Sample': 'b1000000-0000-4000-8000-000000000002',
+  'Harper Placeholder': 'b1000000-0000-4000-8000-000000000003',
+  'Dana Mismatch': 'b1000000-0000-4000-8000-000000000005',
+  'Indy Unconfirmed': 'b1000000-0000-4000-8000-000000000008',
+} as const;
+
+/** OFFICER-VERIFY: what each card says of the first-name check and the local group (api.mjs), by name. */
+export const CHECK_FACTS = {
+  'Jesse Example': [['First name check', 'Confirmed'], ['Local group', 'Northwest Florida Mensa (this chapter)']],
+  'Harper Placeholder': [['First name check', 'Confirmed'], ['Local group', 'Boston Mensa (guest member)']],
+  'Lou Unlisted': [['First name check', 'Did not match'], ['Local group', 'Atlantis Mensa (guest member; not a known local group name: check it)']],
+} as const;
 
 /**
  * VET: what the queue says before approving the two sign-ups that never approve by themselves: an

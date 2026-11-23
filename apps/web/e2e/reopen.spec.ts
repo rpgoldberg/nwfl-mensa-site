@@ -203,7 +203,7 @@ test.describe('REOPEN: a reopened person signs up again', () => {
     expect(await axe(officer)).toEqual([]);
     await fits(officer);
     await yes.click();
-    await expect(officer).toHaveURL(`${SITE_URL}${QUEUE}?done=reopened`);
+    await expect(officer).toHaveURL(`${SITE_URL}${QUEUE}?done=reopened&request=${REJECTED_IDS[login]}`);
     await expect(officer.getByRole('status')).toHaveText('Reopened. The person can now send the sign-up form again from their account page.');
     await expect(rejectedCard(officer, person.name)).toHaveCount(0);
 

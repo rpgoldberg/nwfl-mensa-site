@@ -103,7 +103,14 @@ export interface Api {
 /** Thursday 2026-10-22, 10:00 Central. */
 export const NOW = new Date('2026-10-22T15:00:00Z');
 
-export async function startApi(prefix: string, options: { verifier?: TokenVerifier; now?: () => Date; groupPrefix?: string } = {}): Promise<Api> {
+export async function startApi(prefix: string, options: {
+    verifier?: TokenVerifier;
+    now?: () => Date;
+    groupPrefix?: string;
+    officerVerify?: boolean;
+    /** CHAPTER_GROUP_NAME; default the chapter's own, null for none. */
+    chapterGroup?: string | null;
+  } = {},): Promise<Api> {
   const now = options.now ?? ((): Date => NOW);
   const db = await freshDatabase(prefix);
   const run = await migrate(db);
@@ -117,8 +124,8 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const { lines, sink } = captureLogs();
   const logger = createStructuredLogger({ sink });
   const server: http2.Http2Server = createGrpcServer({
-    routes: apiRoutes({ db: pool, logger, now, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
-    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now), groupPrefix: options.groupPrefix }),
+    routes: apiRoutes({ db: pool, logger, now, chapterGroup: options.chapterGroup === undefined ? 'Northwest Florida Mensa' : options.chapterGroup, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
+    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now), groupPrefix: options.groupPrefix, officerVerify: options.officerVerify === true }),
     // As in production: the gate's verifier also admits edge streams.
     verifier: options.verifier ?? fakeVerifier,
   });

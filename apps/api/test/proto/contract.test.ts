@@ -174,16 +174,19 @@ describe(`${PKG}: the membership verifier`, () => {
     ]);
   });
 
-  it('lists a pending verification as request id, membership number, last name and the sign-up\'s email only, a page at a time', () => {
+  // OFFICER-VERIFY (D): and the first name the sign-up typed, so the check can compare it too.
+  it('lists a pending verification as request id, membership number, last name, the sign-up\'s email and first name only, a page at a time', () => {
     const list = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ListPendingVerifications');
     expect(fieldNames(list?.input)).toEqual(['page_size']);
     const item = list?.output.fields.map(fieldMessage).find((m) => m !== undefined);
-    expect(fieldNames(item)).toEqual(['request_id', 'membership_number', 'last_name', 'email']);
+    expect(fieldNames(item)).toEqual(['request_id', 'membership_number', 'last_name', 'email', 'first_name']);
   });
 
-  it('takes back a request id, an outcome and, for a duplicate claim, the earlier sign-up: nothing else', () => {
+  // OFFICER-VERIFY: and whether the first name matched, and the local group the check found.
+  it('takes back a request id, an outcome, for a duplicate claim the earlier sign-up, the first-name answer and the local group: nothing else', () => {
     const report = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ReportVerification');
-    expect(fieldNames(report?.input)).toEqual(['request_id', 'outcome', 'conflicting_request_id']);
+    expect(fieldNames(report?.input)).toEqual(['request_id', 'outcome', 'conflicting_request_id', 'first_name_matched', 'local_group']);
+    expect(report?.input.fields.find((f) => f.name === 'first_name_matched')?.proto.proto3Optional).toBe(true);
     expect(fieldNames(report?.output)).toEqual([]);
     const outcome = report?.input.fields.map(fieldEnum).find((e) => e !== undefined);
     expect(outcome?.values.map((v) => v.name)).toEqual([
@@ -230,7 +233,8 @@ describe(`${PKG}: the membership verifier`, () => {
 
   it('PROFILE-ID: shows the approvers what each sign-up typed, pending or rejected', () => {
     const message = (name: string) => allMessages().find((m) => m.typeName === `${PKG}.${name}`);
-    expect(fieldNames(message('SignupRequest')).slice(-3)).toEqual(['first_name', 'last_name', 'membership_number']);
+    // OFFICER-VERIFY: then the check's first-name answer and local group.
+    expect(fieldNames(message('SignupRequest')).slice(-6)).toEqual(['first_name', 'last_name', 'membership_number', 'first_name_matched', 'local_group', 'local_group_standing']);
     expect(fieldNames(message('RejectedSignup')).slice(-3)).toEqual(['first_name', 'last_name', 'membership_number']);
     expect(fieldNames(message('SubmitSignupRequest'))).toEqual(['last_name', 'membership_number', 'first_name']);
   });
@@ -239,13 +243,14 @@ describe(`${PKG}: the membership verifier`, () => {
     const membership = service('MembershipService');
     const mine = membership?.methods.find((m) => m.name === 'GetMyAccount');
     const profile = mine?.output.fields.find((f) => f.name === 'profile');
-    expect(fieldNames(profile === undefined ? undefined : fieldMessage(profile))).toEqual(['first_name', 'last_name', 'membership_number']);
+    // OFFICER-VERIFY: and the local group the check reported, read only.
+    expect(fieldNames(profile === undefined ? undefined : fieldMessage(profile))).toEqual(['first_name', 'last_name', 'membership_number', 'local_group']);
     const update = membership?.methods.find((m) => m.name === 'UpdateMyProfile');
     expect(update?.idempotency).not.toBe(Idempotency.NO_SIDE_EFFECTS);
     expect(fieldNames(update?.input)).toEqual(['first_name', 'last_name']);
     expect(fieldNames(update?.output)).toEqual([]);
     // The account the approvers' calls return carries no profile: only GetMyAccount does.
-    expect(fieldNames(allMessages().find((m) => m.typeName === `${PKG}.MemberAccount`))).toEqual(['status', 'route', 'verified_on']);
+    expect(fieldNames(allMessages().find((m) => m.typeName === `${PKG}.MemberAccount`))).toEqual(['status', 'route', 'verified_on', 'local_group_standing']);
     expect(fieldNames(allMessages().find((m) => m.typeName === `${PKG}.Member`))).not.toContain('membership_number');
   });
 
@@ -279,10 +284,9 @@ describe(`${PKG}: the membership verifier`, () => {
     expect(carriersOf('last_name')).toEqual([...NUMBER_CARRIERS, 'MembershipService.UpdateMyProfile in'].sort());
   });
 
-  it('PROFILE-ID: lets the first name reach the same places but the verifier\'s', () => {
-    expect(carriersOf('first_name')).toEqual(
-      [...NUMBER_CARRIERS.filter((c) => !c.startsWith('MembershipVerifierService')), 'MembershipService.UpdateMyProfile in'].sort(),
-    );
+  // OFFICER-VERIFY (D) replaces PROFILE-ID's "but the verifier's": the check now compares the first name too.
+  it('PROFILE-ID, OFFICER-VERIFY: lets the first name reach the same places, the verifier\'s pending list included', () => {
+    expect(carriersOf('first_name')).toEqual([...NUMBER_CARRIERS, 'MembershipService.UpdateMyProfile in'].sort());
   });
 });
 
@@ -346,9 +350,9 @@ describe(`${PKG}: rules by name as well as by type`, () => {
     expect(offenders).toEqual(['NewsletterService.ExportEdition.audience']);
   });
 
-  it('returns the verifier exactly its pending list of four fields (VET: the sign-up\'s email), nothing reachable besides', () => {
+  it('returns the verifier exactly its pending list of five fields (VET: the email; OFFICER-VERIFY: the first name), nothing reachable besides', () => {
     const list = service('MembershipVerifierService')?.methods.find((m) => m.name === 'ListPendingVerifications');
-    expect(list === undefined ? [] : reachableFields(list.output).map((f) => f.name)).toEqual(['pending', 'request_id', 'membership_number', 'last_name', 'email']);
+    expect(list === undefined ? [] : reachableFields(list.output).map((f) => f.name)).toEqual(['pending', 'request_id', 'membership_number', 'last_name', 'email', 'first_name']);
   });
 
   it('lets a membership number under any name reach only the places it is shown (PROFILE-ID), and never in to change it', () => {

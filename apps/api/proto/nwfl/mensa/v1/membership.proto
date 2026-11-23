@@ -48,11 +48,48 @@ enum Verification {
   VERIFICATION_DUPLICATE_CLAIM = 7;
 }
 
+// OFFICER-VERIFY: what the membership check's local group says about a person.
+enum LocalGroupStanding {
+  // No local group was reported.
+  LOCAL_GROUP_STANDING_UNSPECIFIED = 0;
+  // The chapter's own group (CHAPTER_GROUP_NAME): a chapter member.
+  LOCAL_GROUP_STANDING_CHAPTER = 1;
+  // Another local group, or none: a guest member.
+  LOCAL_GROUP_STANDING_GUEST = 2;
+  // A name not among the known local groups: a guest member, flagged for the
+  // approvers.
+  LOCAL_GROUP_STANDING_GUEST_UNLISTED = 3;
+}
+
+// OFFICER-VERIFY: the officer tools for the caller, from their groups and
+// standing (auth/caller.ts).
+enum OfficerTools {
+  // The caller holds no officer power.
+  OFFICER_TOOLS_UNSPECIFIED = 0;
+  // The caller's powers are in force.
+  OFFICER_TOOLS_OPEN = 1;
+  // The caller holds a power that waits for their membership check.
+  OFFICER_TOOLS_AWAITING_CHECK = 2;
+}
+
+// GetSignupRequest: where one sign-up stands.
+enum SignupDecision {
+  SIGNUP_DECISION_UNSPECIFIED = 0;
+  SIGNUP_DECISION_PENDING = 1;
+  SIGNUP_DECISION_APPROVED = 2;
+  SIGNUP_DECISION_REJECTED = 3;
+  // Rejected, then reopened (REOPEN).
+  SIGNUP_DECISION_REOPENED = 4;
+}
+
 message MemberAccount {
   MemberStatus status = 1;
   AccountRoute route = 2;
   // The last time the account's membership was confirmed.
   Date verified_on = 3;
+  // OFFICER-VERIFY: a chapter member or a guest member, by the reported local
+  // group; unspecified when none was reported.
+  LocalGroupStanding local_group_standing = 4;
 }
 
 // A pending sign-up as the approver sees it: what the person typed, and
@@ -75,6 +112,13 @@ message SignupRequest {
   string last_name = 10;
   // Digits only.
   string membership_number = 11;
+  // OFFICER-VERIFY: whether the check confirmed the typed first name; unset
+  // when it did not say.
+  optional bool first_name_matched = 12;
+  // OFFICER-VERIFY: the local group the check reported, and what it makes the
+  // person; empty and unspecified when none was reported.
+  string local_group = 13;
+  LocalGroupStanding local_group_standing = 14;
 }
 
 // VET: the earlier sign-up that claimed the same number, as the site already
@@ -118,6 +162,9 @@ message MemberProfile {
   string first_name = 1;
   string last_name = 2;
   string membership_number = 3;
+  // OFFICER-VERIFY: the local group the membership check reported; empty when
+  // none was. Not changed by the member.
+  string local_group = 4;
 }
 
 // An account as the approvers see it, for removal and the yearly re-check.
@@ -155,12 +202,21 @@ service MembershipService {
   rpc ListSignupRequests(ListSignupRequestsRequest) returns (ListSignupRequestsResponse) {
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+  // Approvers only (and the Admin): where one sign-up stands, by its id. No
+  // such sign-up: NOT_FOUND.
+  rpc GetSignupRequest(GetSignupRequestRequest) returns (GetSignupRequestResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
   // Approves or rejects a pending sign-up; what it typed is kept (PROFILE-ID).
-  // No approver decides their own sign-up. A sign-up the verifier found in
-  // another local group is not approved as a member: it is rejected, or the
-  // account is granted affiliate standing. VET fix 1: an email mismatch or a
-  // duplicate claim is approved only with confirmed_warning set; without it,
-  // FAILED_PRECONDITION, and nothing changes.
+  // No approver decides their own sign-up. OFFICER-VERIFY: a sign-up the
+  // verifier found in another local group is approved as a guest member (or
+  // rejected, or granted affiliate standing). An invited sign-up is approved
+  // only once the verifier confirmed its number and last name (a local or
+  // other-group match, or an email mismatch) and did not report a first-name
+  // mismatch; anything else is FAILED_PRECONDITION: reject or reopen it. VET
+  // fix 1: an email mismatch or a duplicate claim is approved only with
+  // confirmed_warning set; without it, FAILED_PRECONDITION, and nothing
+  // changes.
   rpc ApproveSignup(ApproveSignupRequest) returns (ApproveSignupResponse);
   rpc RejectSignup(RejectSignupRequest) returns (RejectSignupResponse);
   // Accounts with member-level standing or past it: for removal and the yearly re-check.
@@ -195,8 +251,9 @@ message SubmitSignupRequest {
   // Typed by the member from their card or renewal email. Kept on the sign-up
   // and the member's profile, never changed (PROFILE-ID).
   string membership_number = 2;
-  // PROFILE-ID: for the approvers and the profile; the verifier never gets it.
-  // Optional here, so a sign-up from a site that does not ask yet is still taken.
+  // PROFILE-ID: for the approvers and the profile, and (OFFICER-VERIFY) for
+  // the verifier to confirm. Optional on a plain sign-up; REQUIRED on the
+  // invite route (an invited person, or one holding an officer power).
   string first_name = 3;
 }
 
@@ -211,6 +268,17 @@ message GetMyAccountResponse {
   // PROFILE-ID: set for an approved member (member, affiliate or lapsed)
   // whose sign-up holds it.
   MemberProfile profile = 2;
+  // OFFICER-VERIFY: whether the caller's officer tools are open, waiting for
+  // the membership check, or not theirs at all.
+  OfficerTools officer_tools = 3;
+}
+
+message GetSignupRequestRequest {
+  string request_id = 1;
+}
+
+message GetSignupRequestResponse {
+  SignupDecision decision = 1;
 }
 
 message UpdateMyProfileRequest {

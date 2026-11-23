@@ -47,6 +47,8 @@ export interface ApiDeps {
   readiness: Readiness;
   /** The clock "today" is read from. Tests pin it. */
   now?: () => Date;
+  /** CHAPTER_GROUP_NAME (auth/config.ts): the chapter's own local group; null or unset for none. */
+  chapterGroup?: string | null;
 }
 
 export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
@@ -56,8 +58,8 @@ export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
     eventRoutes({ db: deps.db, logger: deps.logger.child({ component: 'events' }), now }),
     contentRoutes({ db: deps.db, logger: deps.logger.child({ component: 'content' }), now }),
     newsletterRoutes({ db: deps.db, logger: deps.logger.child({ component: 'newsletter' }) }),
-    membershipRoutes({ db: deps.db, now }),
-    verifierRoutes({ db: deps.db, now }),
+    membershipRoutes({ db: deps.db, now, chapterGroup: deps.chapterGroup ?? null }),
+    verifierRoutes({ db: deps.db, now, chapterGroup: deps.chapterGroup ?? null }),
     linkCheckRoutes({ db: deps.db, logger: deps.logger.child({ component: 'linkcheck' }), now }),
     redactionRoutes({ db: deps.db }),
     approvalRoutes({ db: deps.db }),
