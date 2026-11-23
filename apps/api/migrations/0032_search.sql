@@ -19,10 +19,9 @@
 -- publication ledger's CURRENT output for the subject and audience is the sha it is given:
 --   * search_page_put(file, audience, sha, text_version, pages[], extras[]): the worker's, for a
 --     file whose current ledger row says the audience is served a copy, and that the audience may
---     open now (servableFile: the live version of a published item that is not officers-only, and
---     not posted on behalf of a member while the audience's member_name action is hide; or a
---     published edition); else 55000. It replaces the audience's rows for the file. Caps: 1 to
---     300 pages, 64 KiB a page and an extra, 4 MiB in all.
+--     open now (search_file_servable, below: what content/files.ts servableFile serves); else
+--     55000. It replaces the audience's rows for the file. Caps: 1 to 300 pages, 64 KiB a page and
+--     an extra, 4 MiB in all.
 --   * search_item_put(version, audience, sha, title, text): the app's. With a NULL sha (the ledger
 --     says the audience is given nothing) or a NULL title (given something with nothing to index: a
 --     withdrawn item's stub) it deletes the version's row instead.
@@ -114,6 +113,53 @@ CREATE INDEX search_item_members_version ON search_item_members (version_id);
 REVOKE ALL ON search_page_public, search_page_members, search_item_public, search_item_members FROM nwfl;
 GRANT SELECT ON search_page_public, search_page_members, search_item_public, search_item_members TO nwfl;
 
+-- servableFile (content/files.ts) as one predicate: whether it gives the audience (public or members) the file now.
+-- servableFile answers null when:
+--   * the file is not a PDF, or is neither a PDF of the live version of a published item that is not officers-only nor
+--     one of a published edition (its SQL);
+--   * for an item's PDF, itemHidden (content/redact.ts) holds:
+--     - the version is posted on behalf of a member and the audience's member_name action is hide;
+--     - lens.hidden (redaction/render.ts lensFor), over the item's active marks (redaction/lens.ts loadLens): a mark
+--       whose category the audience hides; a whole-item mark it does not show; a file mark it redacts that is not
+--       anchored in a PDF of this version; a passage mark it redacts whose quote is not in this version's texts.
+-- An action is resolveAction's (redaction/policy.ts): a missing cell reads as hide (0012's CHECK lets no other action
+-- be stored). The last test runs quoteMatches (folding, look-alikes, whole words) and cannot be written here. For it
+-- the predicate reads the app's own answer: the ledger's current row for this version and audience, which
+-- renderVersion (ledger/ledger.ts) records with no output exactly when itemHidden holds, and which every mark and policy
+-- change records again in its own transaction (redaction/marks.ts, redaction/service.ts). No row, or no output: refused.
+-- An invoker function with no grant: search_page_put, a definer, calls it as the owner.
+CREATE FUNCTION search_file_servable(p_file uuid, p_audience text) RETURNS boolean
+  LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
+  SELECT EXISTS (
+    SELECT 1
+      FROM stored_file f
+      LEFT JOIN content_version v ON v.id = f.version_id
+      LEFT JOIN content_item i ON i.live_version_id = v.id AND i.state = 'published' AND v.visibility <> 'officers'
+      LEFT JOIN edition e ON e.id = f.edition_id AND e.status = 'published'
+     WHERE f.id = p_file AND f.mime_type = 'application/pdf' AND (i.id IS NOT NULL OR e.id IS NOT NULL)
+       AND (i.id IS NULL OR (
+         NOT (v.on_behalf_of IS NOT NULL
+              AND coalesce((SELECT p.action FROM redaction_policy p
+                             WHERE p.tenant_id = 'nwflorida' AND p.audience = p_audience AND p.category = 'member_name'), 'hide') = 'hide')
+         AND NOT EXISTS (
+           SELECT 1
+             FROM redaction_mark m
+            CROSS JOIN LATERAL (
+              SELECT coalesce((SELECT p.action FROM redaction_policy p
+                                WHERE p.tenant_id = 'nwflorida' AND p.audience = p_audience AND p.category = m.category), 'hide') AS action) a
+            WHERE m.tenant_id = 'nwflorida' AND m.status = 'active' AND m.content_item_id = i.id
+              AND (a.action = 'hide'
+                   OR (m.quote IS NULL AND a.action <> 'show')
+                   OR (m.field = 'file' AND a.action = 'redact'
+                       AND NOT EXISTS (SELECT 1 FROM redaction_mark_anchor x JOIN stored_file af ON af.id = x.file_id
+                                        WHERE x.tenant_id = 'nwflorida' AND x.mark_id = m.id AND af.version_id = v.id))
+                   OR (m.field <> 'file' AND a.action = 'redact'
+                       AND NOT EXISTS (SELECT 1 FROM publication_ledger l
+                                        WHERE l.tenant_id = 'nwflorida' AND l.subject_kind = 'content_version' AND l.subject_id = v.id
+                                          AND l.audience = p_audience AND l.current_to IS NULL AND l.output_sha256 IS NOT NULL)))))))
+$fn$;
+REVOKE EXECUTE ON FUNCTION search_file_servable(uuid, text) FROM PUBLIC;
+
 -- The worker's write: the pages of the copy this audience is served, replacing the file's rows.
 CREATE FUNCTION search_page_put(p_file uuid, p_audience text, p_sha bytea, p_text_version integer, p_pages text[], p_extras text[])
   RETURNS integer
@@ -157,25 +203,10 @@ BEGIN
   IF NOT FOUND OR v_output IS DISTINCT FROM p_sha OR v_served IS DISTINCT FROM 'copy' THEN
     RAISE EXCEPTION 'the ledger does not say this audience is served this copy now' USING ERRCODE = '55000';
   END IF;
-  -- What the audience may open (content/files.ts servableFile, its SQL): a PDF of the live version of a published
-  -- item that is not officers-only, or of a published edition. Read after the file lock, so a change that stops it
-  -- (search_page_unservable, below) either is seen here or waits for this put and then deletes its rows.
-  IF NOT EXISTS (
-    SELECT 1 FROM stored_file f
-      LEFT JOIN content_version v ON v.id = f.version_id
-      LEFT JOIN content_item i ON i.live_version_id = v.id AND i.state = 'published' AND v.visibility <> 'officers'
-      LEFT JOIN edition e ON e.id = f.edition_id AND e.status = 'published'
-     WHERE f.id = p_file AND f.mime_type = 'application/pdf' AND (i.id IS NOT NULL OR e.id IS NOT NULL)) THEN
-    RAISE EXCEPTION 'the audience may not open this file now' USING ERRCODE = '55000';
-  END IF;
-  -- And what servableFile hides through the lens (content/redact.ts itemHidden): an item posted on behalf of a member
-  -- while the audience's member_name action is hide. A missing cell, or an action the category does not allow, reads
-  -- as hide (redaction/policy.ts resolveAction). on_behalf_of is frozen once a version leaves draft
-  -- (content_version_freeze); a policy change locks this file (pdf_stale_on_policy) and deletes its rows.
-  IF EXISTS (SELECT 1 FROM content_version v WHERE v.id = v_file.version_id AND v.on_behalf_of IS NOT NULL)
-     AND NOT EXISTS (SELECT 1 FROM redaction_policy p
-                      WHERE p.tenant_id = 'nwflorida' AND p.audience = p_audience AND p.category = 'member_name'
-                        AND p.action IN ('show', 'redact')) THEN
+  -- What the audience may open now (search_file_servable). Read after the file lock, so a change that stops it either is
+  -- seen here or waits for this put and then deletes its rows: search_page_unservable for an item, version or edition;
+  -- pdf_regen_request for a mark or a policy change, whose ledger rows the app records in that transaction.
+  IF NOT search_file_servable(p_file, p_audience) THEN
     RAISE EXCEPTION 'the audience may not open this file now' USING ERRCODE = '55000';
   END IF;
   SELECT v.item_id INTO v_item FROM content_version v WHERE v.id = v_file.version_id;
