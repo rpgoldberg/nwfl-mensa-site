@@ -19,8 +19,9 @@
 -- publication ledger's CURRENT output for the subject and audience is the sha it is given:
 --   * search_page_put(file, audience, sha, text_version, pages[], extras[]): the worker's, for a
 --     file whose current ledger row says the audience is served a copy, and that the audience may
---     open now (servableFile's SQL: the live version of a published item that is not officers-only,
---     or a published edition); else 55000. It replaces the audience's rows for the file. Caps: 1 to
+--     open now (servableFile: the live version of a published item that is not officers-only, and
+--     not posted on behalf of a member while the audience's member_name action is hide; or a
+--     published edition); else 55000. It replaces the audience's rows for the file. Caps: 1 to
 --     300 pages, 64 KiB a page and an extra, 4 MiB in all.
 --   * search_item_put(version, audience, sha, title, text): the app's. With a NULL sha (the ledger
 --     says the audience is given nothing) or a NULL title (given something with nothing to index: a
@@ -44,6 +45,10 @@
 --   * search_page_unservable (a trigger) deletes both audiences' page rows for an item's files when
 --     its state or live version changes, for a version's when its visibility changes, and for an
 --     edition's when it leaves published, under the same file locks, in the change's transaction.
+--   * search_page_put takes the item's row lock (FOR KEY SHARE) before the file's. A withdrawal or a
+--     publish locks the item first (FOR UPDATE: workflow.ts loadItem, load.ts findIssue) and the
+--     trigger then locks the files, so a put that meets one waits for it on the item, and the two
+--     never hold one lock each and wait for the other (40P01).
 --   A row still outlives its sha when the ledger moves on WITHOUT pdf_regen_request (the worker
 --   finishing a new copy): the read side must return a row only when its sha is the ledger's
 --   current output (S3), and the worker replaces the rows after each copy (S2).
@@ -135,6 +140,10 @@ BEGIN
      OR (SELECT sum(octet_length(u.page)::bigint + octet_length(u.extra)) FROM unnest(p_pages, p_extras) AS u(page, extra)) > 4194304 THEN
     RAISE EXCEPTION 'a page is at most 64 KiB, and a file 4 MiB in all' USING ERRCODE = '22023';
   END IF;
+  -- The item's lock first, as a withdrawal or a publish takes it (FOR UPDATE, then the files): a put that meets one
+  -- waits here, holding no file. KEY SHARE is what the page row's item_id reference takes on the INSERT below anyway.
+  PERFORM 1 FROM content_item i JOIN content_version v ON v.item_id = i.id JOIN stored_file f ON f.version_id = v.id
+    WHERE f.id = p_file FOR KEY SHARE OF i;
   -- The lock pdf_regen_request takes: a change to what this file's copies hold waits, or is waited for.
   SELECT * INTO v_file FROM stored_file WHERE id = p_file FOR NO KEY UPDATE;
   IF NOT FOUND THEN
@@ -157,6 +166,16 @@ BEGIN
       LEFT JOIN content_item i ON i.live_version_id = v.id AND i.state = 'published' AND v.visibility <> 'officers'
       LEFT JOIN edition e ON e.id = f.edition_id AND e.status = 'published'
      WHERE f.id = p_file AND f.mime_type = 'application/pdf' AND (i.id IS NOT NULL OR e.id IS NOT NULL)) THEN
+    RAISE EXCEPTION 'the audience may not open this file now' USING ERRCODE = '55000';
+  END IF;
+  -- And what servableFile hides through the lens (content/redact.ts itemHidden): an item posted on behalf of a member
+  -- while the audience's member_name action is hide. A missing cell, or an action the category does not allow, reads
+  -- as hide (redaction/policy.ts resolveAction). on_behalf_of is frozen once a version leaves draft
+  -- (content_version_freeze); a policy change locks this file (pdf_stale_on_policy) and deletes its rows.
+  IF EXISTS (SELECT 1 FROM content_version v WHERE v.id = v_file.version_id AND v.on_behalf_of IS NOT NULL)
+     AND NOT EXISTS (SELECT 1 FROM redaction_policy p
+                      WHERE p.tenant_id = 'nwflorida' AND p.audience = p_audience AND p.category = 'member_name'
+                        AND p.action IN ('show', 'redact')) THEN
     RAISE EXCEPTION 'the audience may not open this file now' USING ERRCODE = '55000';
   END IF;
   SELECT v.item_id INTO v_item FROM content_version v WHERE v.id = v_file.version_id;

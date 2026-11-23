@@ -1,6 +1,7 @@
 // ARCHIVE-SEARCH S1 fix 1 (challenge M1): the page writer stores only text its audience may open,
 // and the rows go, in the change's own transaction, when the audience may open it no longer.
-// P1a, P1b, P1c and P1e are the challenger's probes, kept as tests. Synthetic data only.
+// P1a, P1b, P1c and P1e are the challenger's probes, kept as tests; R1a and R1b (fix 2) are the recheck's,
+// for an item posted on behalf of a member. Synthetic data only.
 import { createHash } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -48,7 +49,11 @@ describe.skipIf(!live)('search_page_put: only a file the audience may open, and 
     expect.fail('the second connection was never blocked on a lock');
   };
   /** A published item with one public PDF, attached before approval, and its stored original. */
-  const seeded = async (title: string, visibility: 'public' | 'members' | 'officers' = 'public'): Promise<{ itemId: string; versionId: string; fileId: string }> => {
+  const seeded = async (
+    title: string,
+    visibility: 'public' | 'members' | 'officers' = 'public',
+    onBehalfOf?: string,
+  ): Promise<{ itemId: string; versionId: string; fileId: string }> => {
     const k = ++n;
     const bytes = Buffer.from(`synthetic servable pdf ${k}`);
     const made = await publishItem(api.pool, {
@@ -58,6 +63,7 @@ describe.skipIf(!live)('search_page_put: only a file the audience may open, and 
       visibility,
       body: { blocks: [paragraph(text(`${title}.`))] },
       files: [{ objectKey: `servable-${k}.pdf`, audience: 'public', bytes }],
+      ...(onBehalfOf === undefined ? {} : { onBehalfOf }),
     });
     const fileId = (await api.pool.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [made.versionId])).rows[0]!.id;
     await owner.query(`SELECT pdf_original_put($1, $2, 'sub-author', ARRAY['nwfl-officers'], NULL)`, [fileId, bytes]);
@@ -284,6 +290,102 @@ describe.skipIf(!live)('search_page_put: only a file the audience may open, and 
       await other.query('COMMIT');
       expect(await put).toBe('55000');
       expect(await rows('search_page_public', item.fileId)).toEqual([]);
+    });
+  });
+
+  // Last: these change the policy, and put it back.
+  describe('an item posted on behalf of a member, which servableFile hides when the audience\'s member_name is hide (redact.ts itemHidden)', () => {
+    const setCell = (audience: string, action: string) =>
+      owner.query(`UPDATE redaction_policy SET action = $2 WHERE tenant_id = 'nwflorida' AND audience = $1 AND category = 'member_name'`, [audience, action]);
+    const cellNow = async (audience: string): Promise<string | undefined> =>
+      (
+        await owner.query<{ action: string }>(`SELECT action FROM redaction_policy WHERE tenant_id = 'nwflorida' AND audience = $1 AND category = 'member_name'`, [
+          audience,
+        ])
+      ).rows[0]?.action;
+    /** Runs `body` with the cells set so, then puts each back as it was. */
+    const withCells = async (cells: Record<string, string>, body: () => Promise<void>): Promise<void> => {
+      const before = new Map<string, string | undefined>();
+      for (const audience of Object.keys(cells)) before.set(audience, await cellNow(audience));
+      try {
+        for (const [audience, action] of Object.entries(cells)) await setCell(audience, action);
+        await body();
+      } finally {
+        for (const [audience, action] of before) await setCell(audience, action as string);
+      }
+    };
+
+    it('R1a: the public\'s member_name at hide: the public\'s put is refused, though the ledger says a copy is served; members\' is put', async () => {
+      await withCells({ public: 'hide', members: 'show' }, async () => {
+        const item = await seeded('Picnic hosted for a member', 'public', 'Avery Quill');
+        const s = await copyFor(item.fileId, 'public');
+        await recordItems(api.pool, [item.itemId]);
+        expect(await ledgerFile(item.fileId, 'public')).toEqual({ output: s, served: 'copy' });
+        expect(await servableFile(api.pool, item.fileId, 'public')).toBeNull();
+        expect(await outcome(worker, PUT, [item.fileId, 'public', s, 1, ['picnic at the home of Avery Quill, gate code zorbleflax'], ['']])).toBe('55000');
+        expect(await rows('search_page_public', item.fileId)).toEqual([]);
+        expect(await servableFile(api.pool, item.fileId, 'members')).not.toBeNull();
+        await serve(item.fileId, 'members', sha('picnic-members'));
+        expect(await outcome(worker, PUT, [item.fileId, 'members', sha('picnic-members'), 1, ['picnic, members'], ['']])).toBe('ok');
+        expect(await rows('search_page_members', item.fileId)).toEqual(['picnic, members']);
+      });
+    });
+
+    it('R1b: already indexed, then the public\'s member_name set to hide: the change deletes the rows, and a put of the new copy is refused', async () => {
+      const item = await seeded('Potluck hosted for a member', 'public', 'Blake Zephyr');
+      const s = await copyFor(item.fileId, 'public');
+      await recordItems(api.pool, [item.itemId]);
+      expect(await outcome(worker, PUT, [item.fileId, 'public', s, 1, ['potluck at the home of Blake Zephyr'], ['']])).toBe('ok');
+      await withCells({ public: 'hide' }, async () => {
+        expect(await servableFile(api.pool, item.fileId, 'public')).toBeNull();
+        expect(await rows('search_page_public', item.fileId)).toEqual([]);
+        await serve(item.fileId, 'public', sha('potluck-new-copy'));
+        expect(await outcome(worker, PUT, [item.fileId, 'public', sha('potluck-new-copy'), 1, ['potluck at the home of Blake Zephyr, again'], ['']])).toBe('55000');
+        expect(await rows('search_page_public', item.fileId)).toEqual([]);
+      });
+    });
+
+    it('the members\' member_name at hide and the public\'s at show: only the members\' put is refused', async () => {
+      await withCells({ public: 'show', members: 'hide' }, async () => {
+        const item = await seeded('Garden tour hosted for a member', 'public', 'Casey Thornwick');
+        await serve(item.fileId, 'members', sha('garden-members'));
+        await serve(item.fileId, 'public', sha('garden-public'));
+        expect(await servableFile(api.pool, item.fileId, 'members')).toBeNull();
+        expect(await outcome(worker, PUT, [item.fileId, 'members', sha('garden-members'), 1, ['garden tour, members'], ['']])).toBe('55000');
+        expect(await servableFile(api.pool, item.fileId, 'public')).not.toBeNull();
+        expect(await outcome(worker, PUT, [item.fileId, 'public', sha('garden-public'), 1, ['garden tour'], ['']])).toBe('ok');
+        expect(await both(item.fileId)).toEqual(['garden tour']);
+      });
+    });
+
+    it('a missing member_name cell reads as hide, as resolveAction reads it', async () => {
+      const item = await seeded('Book swap hosted for a member', 'public', 'Dana Ferrowick');
+      await serve(item.fileId, 'public', sha('swap-public'));
+      const before = await cellNow('public');
+      await owner.query(`DELETE FROM redaction_policy WHERE tenant_id = 'nwflorida' AND audience = 'public' AND category = 'member_name'`);
+      try {
+        expect(await servableFile(api.pool, item.fileId, 'public')).toBeNull();
+        expect(await outcome(worker, PUT, [item.fileId, 'public', sha('swap-public'), 1, ['book swap at the home of Dana Ferrowick'], ['']])).toBe('55000');
+        expect(await rows('search_page_public', item.fileId)).toEqual([]);
+      } finally {
+        await owner.query(`INSERT INTO redaction_policy (tenant_id, audience, category, action) VALUES ('nwflorida', 'public', 'member_name', $1)`, [before]);
+      }
+    });
+
+    it('is put at redact (the name withheld, the item kept), and at hide for an item posted on behalf of no one', async () => {
+      await withCells({ public: 'redact' }, async () => {
+        const item = await seeded('Hike hosted for a member', 'public', 'Emery Valcourt');
+        await serve(item.fileId, 'public', sha('hike-public'));
+        expect(await servableFile(api.pool, item.fileId, 'public')).not.toBeNull();
+        expect(await outcome(worker, PUT, [item.fileId, 'public', sha('hike-public'), 1, ['hike, the name withheld'], ['']])).toBe('ok');
+      });
+      await withCells({ public: 'hide' }, async () => {
+        const item = await seeded('Club picnic');
+        await serve(item.fileId, 'public', sha('club-public'));
+        expect(await servableFile(api.pool, item.fileId, 'public')).not.toBeNull();
+        expect(await outcome(worker, PUT, [item.fileId, 'public', sha('club-public'), 1, ['club picnic'], ['']])).toBe('ok');
+        expect(await rows('search_page_public', item.fileId)).toEqual(['club picnic']);
+      });
     });
   });
 });
