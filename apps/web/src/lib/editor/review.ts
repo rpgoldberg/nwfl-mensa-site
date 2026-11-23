@@ -386,32 +386,55 @@ export function takenDown(steps: readonly HistoryStep[]): { by: string; on?: str
 }
 
 const SENT_BACK = 'Sent back to the writer with your note.';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The roles an answer by this viewer is given under, as the API names who answered (by role, never by name):
+ * the office acted for, or with none held, the Admin, the Webmaster or an officer. Offices unread: none known.
+ */
+export function answerLabels(choice: ActingChoice): string[] {
+  if (choice.kind === 'one') return [choice.office.title];
+  if (choice.kind === 'pick') return choice.offices.map((o) => o.title);
+  return choice.kind === 'none' ? [choice.label] : [];
+}
 
 /**
  * A step just done on a piece: its words, and how the piece read from the API shows that it happened
- * (E7B-N5). The redirect's ?done= only names the step; the address alone never says it.
+ * (E7B-N5). The redirect's ?done= only names the step; the address alone never says it. "Your answers"
+ * needs an answer on the piece given under one of this viewer's roles (WEB-SMALL-1 fix round 1, S2).
  */
-const DONE: Record<string, { text: string; shown: (status: StatusKey, links: readonly PieceLink[]) => boolean }> = {
+const DONE: Record<string, { text: string; shown: (status: StatusKey, links: readonly PieceLink[], mine: readonly string[]) => boolean }> = {
   approved: { text: `Approved. ${APPROVE_NOTE}`, shown: (status) => status === 'cleared' || status === 'published_change_cleared' },
   published: { text: 'Published. It is on the website now.', shown: (status) => status === 'published' },
   'taken-down': { text: 'Taken down. It is no longer on the website.', shown: (status) => status === 'taken_down' },
-  answers: { text: 'Your answers are saved.', shown: (_status, links) => links.some((l) => l.reviewerAnswer !== 'none') },
+  answers: { text: 'Your answers are saved.', shown: (_status, links, mine) => links.some((l) => l.reviewerAnswer !== 'none' && l.answeredByLabel !== '' && mine.includes(l.answeredByLabel)) },
 };
 
 /**
  * The words for a step just done on this piece, from the redirect's ?done=: only when the piece as read
  * from the API (its status, and its links' answers) shows the step. A piece that was not read says nothing.
+ * `mine`: the viewer's roles (answerLabels).
  */
-export function doneText(params: URLSearchParams, item: EditorItem | undefined, links: readonly PieceLink[]): string | undefined {
+export function doneText(params: URLSearchParams, item: EditorItem | undefined, links: readonly PieceLink[], mine: readonly string[]): string | undefined {
   const done = params.get('done') ?? '';
   if (item === undefined || !Object.hasOwn(DONE, done)) return undefined;
   const step = DONE[done]!;
-  return step.shown(statusOf(item).key, links) ? step.text : undefined;
+  return step.shown(statusOf(item).key, links, mine) ? step.text : undefined;
 }
 
-/** The queue's words for a step just done: only "sent back", which leaves the piece's page. The queue reads no single piece, so it says nothing else. */
-export function queueDoneText(params: URLSearchParams): string | undefined {
-  return params.get('done') === 'sent-back' ? SENT_BACK : undefined;
+/**
+ * The queue's words for a step just done: only "sent back", the one step that lands on the queue, and only
+ * when the piece the address names (?done=sent-back&id=<id>) reads from the API as sent back (WEB-SMALL-1
+ * fix round 1, B1). No id, a malformed one, a piece that cannot be read, or nothing to read with: nothing.
+ */
+export async function queueDoneText(params: URLSearchParams, read: ((id: string) => Promise<EditorItem>) | undefined): Promise<string | undefined> {
+  const id = params.get('id') ?? '';
+  if (params.get('done') !== 'sent-back' || !UUID.test(id) || read === undefined) return undefined;
+  try {
+    return statusOf(await read(id)).key === 'sent_back' ? SENT_BACK : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** What the review page and the confirm pages keep of what was typed, for the page again. */
@@ -577,7 +600,7 @@ export async function runReview(api: EditorApi, reader: Reader | undefined, item
   if (!parsed.ok || !acting.ok) return { status: 400, errors: { ...actingError, ...(parsed.ok ? {} : (parsed.errors as Record<string, string>)) }, kept };
   try {
     await api.sendBack(reader, { itemId, note: parsed.value.note, actingAsOfficeId });
-    return { redirect: `${REVIEW_LINKS.queue}?done=sent-back` };
+    return { redirect: `${REVIEW_LINKS.queue}?done=sent-back&id=${encodeURIComponent(itemId)}` };
   } catch (error) {
     return refused(error, 'sent back', 'send it back', kept);
   }

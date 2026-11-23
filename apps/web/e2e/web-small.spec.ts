@@ -3,7 +3,7 @@
 // settings; Chromium only, where the test can set it), with axe.
 //   1. EV-CARDS200: an event card's long words wrap; the events list never scrolls sideways, also at 300 px.
 //   2. E4-FOLLOWUPS: a long title on the officers' review page wraps.
-//   3. E7B-N5: the review page's "done" banner says only what the piece read from the API shows.
+//   3. E7B-N5: the review page's and the queue's "done" banner says only what the piece read from the API shows.
 //   4. SERIES-UI-2: the series form shows only the follow-up questions that match the choice, by CSS alone.
 import AxeBuilder from '@axe-core/playwright';
 import { type Locator, type Page, type TestInfo, expect, test } from '@playwright/test';
@@ -100,6 +100,12 @@ test.describe('EV-CARDS200: event cards wrap long words', () => {
         await shot(page, info, `cards-long-${width}-${text}`);
         expect(await spilling(cards), 'a card with long words').toEqual([]);
         expect(await sideways(page), 'the page with long words').toEqual([]);
+        // A status with no place to break wraps inside its chip, which keeps its outline.
+        const chip = page.locator('.ecard .chip').first();
+        await chip.evaluate((el, word) => (el.textContent = word), LONG_WORD);
+        expect(await spilling(cards), 'a card with a long status').toEqual([]);
+        expect(await sideways(page), 'the page with a long status').toEqual([]);
+        expect(await chip.evaluate((el) => getComputedStyle(el).borderTopStyle)).toBe('solid');
         // Still readable: the title keeps its size, and the whole card can be opened.
         expect(await cards.first().locator('h3').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(Math.min(20, width * 0.09) - 0.01);
         expect((await cards.first().boundingBox())!.height).toBeGreaterThanOrEqual(48);
@@ -194,16 +200,30 @@ test.describe('E7B-N5: the "done" banner is the piece’s real state', () => {
     await expect(page.getByRole('status')).toHaveCount(0);
   });
 
-  test('the queue, which reads no single piece, says only "sent back"', async ({ page }) => {
+  // Fix round 1 (B1): the queue reads the piece the address names, and says "sent back" only when it is.
+  // A real send-back lands here with the banner (editor-review.spec.ts, "send back needs a note").
+  test('the queue says "sent back" only for a piece that reads as sent back', async ({ page }, info) => {
     await page.goto('/');
     await signIn(page, 'webmaster');
-    for (const step of ['published', 'approved', 'taken-down', 'answers']) {
-      await page.goto(`${QUEUE}?done=${step}`);
-      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-      await expect(page.getByRole('status'), step).toHaveCount(0);
+    const crafted = [
+      'done=sent-back',
+      'done=sent-back&id=',
+      'done=sent-back&id=not-a-piece',
+      `done=sent-back&id=${WORKFLOW.waiting.id}`,
+      `done=sent-back&id=${WORKFLOW.published.id}`,
+      `done=sent-back&id=${WORKFLOW.cleared.id}`,
+      'done=sent-back&id=c0e20000-0000-4000-8000-0000000000ff',
+      ...['published', 'approved', 'taken-down', 'answers'].map((step) => `done=${step}&id=${WORKFLOW.waiting.id}`),
+    ];
+    for (const query of crafted) {
+      const res = await page.goto(`${QUEUE}?${query}`);
+      expect(res?.status(), query).toBe(200);
+      await expect(page.getByRole('heading', { name: /^Waiting for approval \(\d+\)$/ }), query).toBeVisible();
+      await expect(page.getByRole('status'), query).toHaveCount(0);
+      await expect(page.getByText('Sent back to the writer with your note.'), query).toHaveCount(0);
     }
     await page.goto(`${QUEUE}?done=sent-back`);
-    await expect(page.getByRole('status')).toHaveText('Sent back to the writer with your note.');
+    await shot(page, info, 'queue-crafted-sent-back');
   });
 });
 
@@ -303,6 +323,23 @@ test.describe('SERIES-UI-2: the series form asks only what matches the choice, w
     await shows(page, ['days', 'monthly'], 'monthly, the days still with a problem');
     await summary.getByRole('link', { name: /Days of the week/ }).click();
     await expect(page.getByRole('checkbox', { name: 'Monday' })).toBeInViewport();
+  });
+
+  test('a monthly question with a problem stays shown when the choice changes', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'officer');
+    await page.goto(NEW);
+    await page.getByLabel('Title').fill('Half filled monthly');
+    await page.getByRole('radio', { name: 'Once a month' }).check();
+    await page.getByRole('button', { name: 'Start it' }).click();
+    const summary = page.locator('[data-error-summary]');
+    await expect(summary).toContainText('Choose which day of the month.');
+    await shows(page, ['monthly'], 'monthly, with its problem');
+    // Changed to weekly before sending again: the monthly question, with its problem, stays until the form is sent.
+    await page.getByRole('radio', { name: 'Every week', exact: true }).check();
+    await shows(page, ['days', 'monthly'], 'weekly, the monthly question still with a problem');
+    await summary.getByRole('link', { name: /Which day of the month/ }).click();
+    await expect(followUps(page).monthly).toBeInViewport();
   });
 
   test('a series opened to change shows the questions of its own pattern', async ({ page }) => {

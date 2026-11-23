@@ -73,8 +73,8 @@ if (Astro.request.method === 'POST') {
   } else {
     try {
       const { scope, rule, reason, revision } = parsed.value;
-      const { changed } = await api.setApprovalRule(reader, { scope, rule, reason, expectedRevision: revision });
-      return Astro.redirect(`${HERE}?done=${scope}&changed=${changed ? 1 : 0}`, 303);
+      const saved = await api.setApprovalRule(reader, { scope, rule, reason, expectedRevision: revision });
+      return Astro.redirect(`${HERE}?done=${scope}&changed=${saved.changed ? 1 : 0}&rev=${encodeURIComponent(saved.revision)}`, 303);
     } catch (error) {
       problem = error instanceof OfficerSignInAgain ? 'sign-in' : error instanceof ApprovalSettingMoved ? 'moved' : 'unavailable';
       if (problem === 'moved') Astro.response.status = 409;
@@ -95,7 +95,8 @@ if (api !== undefined && reader !== undefined) {
 if (problem === 'sign-in') Astro.response.headers.set('Cache-Control', 'no-store');
 else if (settings === undefined || problem === 'unavailable') markUnavailable(Astro.response);
 
-const done = Astro.request.method === 'GET' ? doneFromQuery(Astro.url.searchParams) : undefined;
+// WEB-SMALL-1 fix round 1: said only when the setting read now is the one the save left.
+const done = Astro.request.method === 'GET' ? doneFromQuery(Astro.url.searchParams, settings) : undefined;
 const current = (scope: Scope): Setting | undefined => settings?.find((s) => s.scope === scope);
 const errorsFor = (scope: Scope): FormErrors => (invalid !== undefined && (invalid.scope === scope || invalid.scope === undefined) ? invalid.errors : {});
 const valuesFor = (scope: Scope) => (invalid?.scope === scope ? invalid.values : undefined);

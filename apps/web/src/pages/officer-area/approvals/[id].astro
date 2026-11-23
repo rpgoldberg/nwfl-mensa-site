@@ -36,7 +36,7 @@ import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
 import { documentHtml } from '../../../lib/document';
 import { NOTE_MAX, hashHex } from '../../../lib/editor/form';
-import { APPROVE_NOTE, type ActingChoice, type Outcome, PARTS_HIDDEN, REVIEW_LINKS, TOO_LARGE, actingChoice, answerWords, doneText, machineWords, enteredForOffice, errorList, isPublisher, linkRows, linksPanel, loadFailure, reviewOffers, runReview } from '../../../lib/editor/review';
+import { APPROVE_NOTE, type ActingChoice, type Outcome, PARTS_HIDDEN, REVIEW_LINKS, TOO_LARGE, actingChoice, answerLabels, answerWords, doneText, machineWords, enteredForOffice, errorList, isPublisher, linkRows, linksPanel, loadFailure, reviewOffers, runReview } from '../../../lib/editor/review';
 import { type RosterOffice, signInLine } from '../../../lib/editor/writer';
 import { readForm } from '../../../lib/form';
 
@@ -130,7 +130,7 @@ const entered = working !== undefined && enteredForOffice(history, working.numbe
 const tokens = deps.tokens.get(session.sid, deps.now());
 const line = item ? signInLine(tokens?.expires_at, deps.now()) : undefined;
 // E7B-N5: the step named in the address is said only when the piece just read from the API shows it.
-const done = Astro.request.method === 'GET' ? doneText(Astro.url.searchParams, item, links?.links ?? []) : undefined;
+const done = Astro.request.method === 'GET' ? doneText(Astro.url.searchParams, item, links?.links ?? [], answerLabels(choice)) : undefined;
 const title = working?.title ?? item?.live?.title ?? 'Review';
 const live = item?.live && working ? item.live : undefined;
 /** The choice shown: the one posted (the page again), else the latest answer. */

@@ -74,7 +74,8 @@ const lists = [
     when: (item: EditorItem) => `Approved ${lastChangeText(item.working?.approvedAt)}${item.working?.approvedAsLabel ? ` by the ${item.working.approvedAsLabel}` : ''}`,
   },
 ];
-const done = queueDoneText(Astro.url.searchParams);
+// WEB-SMALL-1 fix round 1 (B1): "sent back" only when the piece the address names reads as sent back.
+const done = await queueDoneText(Astro.url.searchParams, api !== undefined && reader !== undefined && problem === undefined ? (id) => api.getWorkingItem(reader, id) : undefined);
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
