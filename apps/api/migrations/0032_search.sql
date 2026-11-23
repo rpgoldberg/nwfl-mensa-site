@@ -129,6 +129,8 @@ CREATE TABLE version_rerecorded (
   PRIMARY KEY (version_id, audience)
 );
 REVOKE ALL ON policy_change_epoch, version_rerecorded FROM nwfl;
+-- The boot backfill (search/backfill.ts) reads them, to re-record what a policy write outside the API left unconfirmed.
+GRANT SELECT ON policy_change_epoch, version_rerecorded TO nwfl;
 REVOKE ALL ON SEQUENCE rerecord_seq FROM nwfl;
 
 -- servableFile (content/files.ts) as one predicate: whether it gives the audience (public or members) the file now.

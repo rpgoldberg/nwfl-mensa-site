@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MarkField, MarkSubjectKind, RedactionAction, RedactionAudience, RedactionCategory, RedactionPolicyService } from '../../src/gen/nwfl/mensa/v1/redaction_pb.js';
 import { servableFile } from '../../src/content/files.js';
 import { recordItems, renderFile, renderVersion } from '../../src/ledger/ledger.js';
+import { backfillItems } from '../../src/search/backfill.js';
 import { ENGINE_VERSION, inputsFor } from '../../src/pdf/store.js';
 import { type Api, OFFICER, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
@@ -26,6 +27,7 @@ interface Attempt {
 describe.skipIf(!live)('a policy cell written outside the API: the put refuses a passage-marked item until the app re-records it', () => {
   let api: Api;
   let owner: pg.Client;
+  let holder: pg.Client;
   let worker: pg.Client;
   let office: string;
   let n = 0;
@@ -132,16 +134,37 @@ describe.skipIf(!live)('a policy cell written outside the API: the put refuses a
     return attempt(fileId, 'public', page);
   };
 
+  const pid = async (client: pg.ClientBase): Promise<number> => (await client.query<{ pid: number }>(`SELECT pg_backend_pid() AS pid`)).rows[0]!.pid;
+  /**
+   * Waits until `work` settles or the backend `backend` waits on a lock, whichever comes first, and says which. No
+   * sleep decides it: each arm ends the wait as soon as it holds.
+   */
+  const settledOrBlocked = async (work: Promise<unknown>, backend: number): Promise<'settled' | 'blocked'> => {
+    let settled = false;
+    work.then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    for (;;) {
+      if (settled) return 'settled';
+      const { rows: found } = await owner.query<{ wait: string | null }>(`SELECT wait_event_type AS wait FROM pg_stat_activity WHERE pid = $1`, [backend]);
+      if (found[0]?.wait === 'Lock') return 'blocked';
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  const RAW_TIGHTEN = `UPDATE redaction_policy SET action = 'redact' WHERE tenant_id = 'nwflorida' AND audience = 'public' AND category = 'member_phone'`;
+
   beforeAll(async () => {
     api = await startApi('nwfl_searchstale');
     office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
     const database = (await api.pool.query<{ db: string }>(`SELECT current_database() AS db`)).rows[0]!.db;
     owner = await connect(urlFor('postgres', new URL(url as string).password, database));
+    holder = await connect(urlFor('postgres', new URL(url as string).password, database));
     worker = await connect(urlFor(WORKER, WORKER_PW, database));
   });
 
   afterAll(async () => {
-    for (const client of [owner, worker]) await client?.end();
+    for (const client of [owner, holder, worker]) await client?.end();
     await api?.close();
   });
 
@@ -269,6 +292,111 @@ describe.skipIf(!live)('a policy cell written outside the API: the put refuses a
       expect(await cell('public', 'member_phone')).toBe('redact');
       expect(await regenerated(hidden.fileId, 'moth night regenerated')).toEqual({ put: '55000', served: 'copy', servable: false, rows: [] });
       expect(await regenerated(carried.fileId, 'frog chorus regenerated')).toEqual({ put: 'ok', served: 'copy', servable: true, rows: ['frog chorus regenerated'] });
+    });
+  });
+
+  describe('the two ledger locks a re-record is ordered by (0016): recordItems takes it before it renders, a policy write before it writes', () => {
+    it('a policy write in SQL holds (uncommitted) when a re-record starts: the re-record waits, then renders the new policy; the hidden item is refused', async () => {
+      await withCells(
+        [
+          ['public', 'member_phone', 'show'],
+          ['public', 'member_email', 'redact'],
+        ],
+        async () => {
+          // One item, so its version is the first subject recorded and the public its first audience: nothing about
+          // the order of uuids can let a render run before the lock is taken.
+          const item = await indexedUnderShow('Rail survey', 'Morgan Pike 850-555-0149');
+          await holder.query('BEGIN');
+          const recorder = await api.pool.connect();
+          let state: 'settled' | 'blocked' | undefined;
+          try {
+            await holder.query(RAW_TIGHTEN);
+            // Asked before the work starts: a client runs one query at a time.
+            const recorderPid = await pid(recorder);
+            await recorder.query('BEGIN');
+            const record = recordItems(recorder, [item.itemId]);
+            // The write holds the ledger lock (its BEFORE trigger), so the re-record's first statement waits on it.
+            state = await settledOrBlocked(record, recorderPid);
+            await holder.query('COMMIT');
+            await record;
+            await recorder.query('COMMIT');
+          } finally {
+            // Never leave the write open for the next test, whatever failed above (a no-op once committed).
+            await holder.query('ROLLBACK');
+            recorder.release();
+          }
+          expect(state).toBe('blocked');
+          expect(await versionRow(item.versionId, 'public')).toBe('null');
+          expect(await regenerated(item.fileId, 'rail survey regenerated')).toEqual({ put: '55000', served: 'copy', servable: false, rows: [] });
+        },
+      );
+    });
+
+    it('a re-record holds (uncommitted, rendered under the old policy) when a policy write in SQL starts: the write waits; the stamp predates it', async () => {
+      await withCells(
+        [
+          ['public', 'member_phone', 'show'],
+          ['public', 'member_email', 'redact'],
+        ],
+        async () => {
+          const item = await indexedUnderShow('Fern walk', 'Fern walk');
+          const recorder = await api.pool.connect();
+          let state: 'settled' | 'blocked' | undefined;
+          try {
+            const holderPid = await pid(holder);
+            await recorder.query('BEGIN');
+            await recordItems(recorder, [item.itemId]);
+            const write = holder.query(RAW_TIGHTEN);
+            state = await settledOrBlocked(write, holderPid);
+            await recorder.query('COMMIT');
+            await write;
+          } finally {
+            recorder.release();
+          }
+          expect(state).toBe('blocked');
+          // Recorded under show, before the write: no longer trusted, though the quote is carried.
+          expect(await regenerated(item.fileId, 'fern walk regenerated')).toMatchObject({ put: '55000', servable: true });
+          await recordItems(api.pool, [item.itemId]);
+          expect((await attempt(item.fileId, 'public', 'fern walk re-recorded')).put).toBe('ok');
+        },
+      );
+    });
+  });
+
+  describe('the boot backfill re-records what a policy write in SQL left unconfirmed', () => {
+    it('after the write the items are refused; the backfill, in batches, brings back exactly those servableFile serves, and a second run has nothing to do', async () => {
+      await withCells(
+        [
+          ['public', 'member_phone', 'show'],
+          ['public', 'member_email', 'redact'],
+          ['members', 'member_email', 'redact'],
+        ],
+        async () => {
+          const carried = await indexedUnderShow('Crane watch', 'Crane watch');
+          const hidden = await indexedUnderShow('Snipe count', 'Jordan Vale 850-555-0152');
+          await setCell('public', 'member_phone', 'redact');
+          expect(await regenerated(carried.fileId, 'crane watch regenerated')).toMatchObject({ put: '55000', servable: true });
+          expect(await regenerated(hidden.fileId, 'snipe count regenerated')).toMatchObject({ put: '55000', servable: false });
+          const first = await backfillItems(api.pool, { batch: 1 });
+          for (const item of [carried, hidden]) {
+            for (const audience of ['public', 'members'] as const) {
+              await copyFor(item.fileId, audience);
+              await workerRecordsFile(item.fileId);
+              const after = await attempt(item.fileId, audience, `${audience} after the backfill`);
+              expect(after.put === 'ok', `${audience} ${JSON.stringify(after)}`).toBe(after.servable);
+            }
+          }
+          expect((await attempt(carried.fileId, 'public', 'crane watch back')).put).toBe('ok');
+          expect(await attempt(hidden.fileId, 'public', 'snipe count still hidden')).toMatchObject({ put: '55000', servable: false });
+          expect(first.rerecorded).toBeGreaterThanOrEqual(2);
+          expect((await backfillItems(api.pool, { batch: 1 })).rerecorded).toBe(0);
+          // A write in SQL that changes nothing is still a write: refused until the backfill re-records again.
+          await owner.query(`UPDATE redaction_policy SET action = action WHERE tenant_id = 'nwflorida' AND audience = 'public' AND category = 'member_address'`);
+          expect((await attempt(carried.fileId, 'public', 'crane watch after a no-op write')).put).toBe('55000');
+          expect((await backfillItems(api.pool)).rerecorded).toBeGreaterThanOrEqual(1);
+          expect((await attempt(carried.fileId, 'public', 'crane watch back again')).put).toBe('ok');
+        },
+      );
     });
   });
 });
