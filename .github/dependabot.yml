@@ -17,8 +17,10 @@ updates:
           - minor
           - patch
     ignore:
-      # PDFJS-6.5: pdf.js is the redaction gate's reader, so a new version is its own unit with a red-team.
+      # PDFJS-6.5: pdf.js is the redaction gate's reader, so a new minor or major is its own unit with a red-team.
+      # Patch releases and security updates still come through.
       - dependency-name: "pdfjs-dist"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       # TypeScript 7 is its own later unit.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]

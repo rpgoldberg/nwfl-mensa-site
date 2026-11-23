@@ -109,7 +109,7 @@ describe('dependabot.yml', () => {
     expect(blocks.find((x) => x.startsWith('"github-actions"'))).toMatch(/^ {4}directory: "\/"$/m);
   });
 
-  /** One block's ignore rules as "name" or "name major", each under its own comment line. */
+  /** One block's ignore rules as "name major" or "name minor+major", each under its own comment line; none holds a package whole. */
   function ignores(kind: string): string[] {
     const b = t.split(/^ {2}- package-ecosystem: /m).find((x) => x.startsWith(`"${kind}"`)) ?? '';
     const at = b.search(/^ {4}ignore:$/m);
@@ -122,19 +122,18 @@ describe('dependabot.yml', () => {
       const name = /^ {6}- dependency-name: "([^"]+)"$/.exec(l)?.[1];
       if (name === undefined) return;
       expect(lines[i - 1], `a comment says why ${name} is held`).toMatch(/^ {6}# \S/);
-      const next = lines[i + 1] ?? '';
-      if (next === '        update-types: ["version-update:semver-major"]') out.push(`${name} major`);
-      else {
-        expect(next, `${name} is held whole or for majors only`).not.toMatch(/^ {8}\S/);
-        out.push(name);
-      }
+      const kinds = /^ {8}update-types: \[(.*)\]$/.exec(lines[i + 1] ?? '')?.[1];
+      // Patch releases (and so security fixes) always come through.
+      const held = { '"version-update:semver-major"': 'major', '"version-update:semver-minor", "version-update:semver-major"': 'minor+major' }[kinds ?? ''];
+      expect(held, `${name} is held for majors, or minors and majors, only`).toBeDefined();
+      out.push(`${name} ${held}`);
     });
     return out.sort();
   }
 
-  it('holds pdf.js whole (PDFJS-6.5) and stops the TypeScript and @types/node majors (DEP-89)', () => {
-    expect(ignores('npm')).toEqual(['@types/node major', 'pdfjs-dist', 'typescript major']);
-    expect(t).toMatch(/^ {6}# .*PDFJS-6\.5.*\n {6}- dependency-name: "pdfjs-dist"$/m);
+  it('holds pdf.js minors and majors (PDFJS-6.5) but lets its patches through, and stops the TypeScript and @types/node majors (DEP-89)', () => {
+    expect(ignores('npm')).toEqual(['@types/node major', 'pdfjs-dist minor+major', 'typescript major']);
+    expect(t).toMatch(/^ {6}# .*PDFJS-6\.5.*\n(?: {6}# .*\n)* {6}- dependency-name: "pdfjs-dist"$/m);
   });
 
   it('stops the postgres image majors, so the tests stay on production Postgres 17 (DEP-89)', () => {
