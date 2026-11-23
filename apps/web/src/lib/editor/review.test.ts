@@ -22,6 +22,7 @@ import {
   loadFailure,
   parseActing,
   parseAnswers,
+  queueDoneText,
   reviewQueue,
   reviewOffers,
   rowKey,
@@ -407,14 +408,44 @@ describe('what the history tells the review page', () => {
     expect(takenDown([step({})])).toBeUndefined();
   });
 
-  it('puts each finished step in words', () => {
-    expect(doneText(new URLSearchParams('done=approved'))).toBe(`Approved. ${APPROVE_NOTE}`);
-    expect(doneText(new URLSearchParams('done=published'))).toBe('Published. It is on the website now.');
-    expect(doneText(new URLSearchParams('done=taken-down'))).toBe('Taken down. It is no longer on the website.');
-    expect(doneText(new URLSearchParams('done=answers'))).toBe('Your answers are saved.');
-    expect(doneText(new URLSearchParams('done=sent-back'))).toBe('Sent back to the writer with your note.');
-    expect(doneText(new URLSearchParams('done=other'))).toBeUndefined();
-    expect(doneText(new URLSearchParams(''))).toBeUndefined();
+  // E7B-N5: the banner is the piece's real state (read from the API), never the address alone.
+  it('puts a finished step in words only when the piece read from the API shows it', () => {
+    const done = (step: string, it: EditorItem | undefined, links: PieceLink[] = []) => doneText(new URLSearchParams(`done=${step}`), it, links);
+    const waiting = item();
+    const cleared = item({}, { status: 'cleared' });
+    /** With no working version: what is live is all there is. */
+    const settled = (over: Partial<EditorItem>): EditorItem => ({ id: ID, slug: 's', kind: 'announcement', officeId: ROSTER[0]!.id, state: 'published', ...over });
+    const published = settled({ live: version({ status: 'approved' }) });
+    const changeCleared = item({ state: 'published', live: version({ status: 'approved' }) }, { status: 'cleared', number: 2 });
+    const changeWaiting = item({ state: 'published', live: version({ status: 'approved' }) }, { status: 'ready', number: 2 });
+    const down = settled({ state: 'withdrawn' });
+
+    expect(done('approved', cleared)).toBe(`Approved. ${APPROVE_NOTE}`);
+    expect(done('approved', changeCleared)).toBe(`Approved. ${APPROVE_NOTE}`);
+    expect(done('published', published)).toBe('Published. It is on the website now.');
+    expect(done('taken-down', down)).toBe('Taken down. It is no longer on the website.');
+    expect(done('answers', waiting, [link({ reviewerAnswer: 'none' }), link({ reviewerAnswer: 'no' })])).toBe('Your answers are saved.');
+    expect(done('answers', cleared, [link({ reviewerAnswer: 'yes' })])).toBe('Your answers are saved.');
+
+    // A crafted address: the step named did not happen to this piece.
+    for (const it of [waiting, cleared, changeCleared, changeWaiting, down, undefined]) expect(done('published', it), it?.state).toBeUndefined();
+    for (const it of [waiting, published, changeWaiting, down, undefined]) expect(done('approved', it), it?.state).toBeUndefined();
+    for (const it of [waiting, cleared, published, changeCleared, undefined]) expect(done('taken-down', it), it?.state).toBeUndefined();
+    expect(done('answers', waiting)).toBeUndefined();
+    expect(done('answers', waiting, [link({ reviewerAnswer: 'none' })])).toBeUndefined();
+    expect(done('answers', undefined, [link({ reviewerAnswer: 'yes' })])).toBeUndefined();
+    // Sent back is the queue's, and a word that is no step is nothing.
+    for (const step of ['sent-back', 'other', 'constructor', '']) expect(done(step, cleared, [link({ reviewerAnswer: 'yes' })]), step).toBeUndefined();
+    expect(doneText(new URLSearchParams(''), published, [])).toBeUndefined();
+  });
+
+  it('says only "sent back" on the queue, which reads no single piece', () => {
+    expect(queueDoneText(new URLSearchParams('done=sent-back'))).toBe('Sent back to the writer with your note.');
+    for (const step of ['published', 'approved', 'taken-down', 'answers', 'other', 'constructor']) expect(queueDoneText(new URLSearchParams(`done=${step}`)), step).toBeUndefined();
+    expect(queueDoneText(new URLSearchParams(''))).toBeUndefined();
+  });
+
+  it('names each screen by its address', () => {
     expect(REVIEW_LINKS.review(ID)).toBe(`/officer-area/approvals/${ID}`);
     expect(REVIEW_LINKS.publish(ID)).toBe(`/officer-area/approvals/${ID}/publish`);
     expect(REVIEW_LINKS.takeDown(ID)).toBe(`/officer-area/approvals/${ID}/take-down`);

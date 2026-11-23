@@ -129,7 +129,8 @@ const mayTakeDown = item?.state === 'published' && (admin || session.groups.incl
 const entered = working !== undefined && enteredForOffice(history, working.number);
 const tokens = deps.tokens.get(session.sid, deps.now());
 const line = item ? signInLine(tokens?.expires_at, deps.now()) : undefined;
-const done = Astro.request.method === 'GET' ? doneText(Astro.url.searchParams) : undefined;
+// E7B-N5: the step named in the address is said only when the piece just read from the API shows it.
+const done = Astro.request.method === 'GET' ? doneText(Astro.url.searchParams, item, links?.links ?? []) : undefined;
 const title = working?.title ?? item?.live?.title ?? 'Review';
 const live = item?.live && working ? item.live : undefined;
 /** The choice shown: the one posted (the page again), else the latest answer. */

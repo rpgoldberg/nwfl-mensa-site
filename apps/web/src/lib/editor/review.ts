@@ -27,6 +27,7 @@ import { EditorRefused, type EditorApi, type EditorItem, type EditorVersion, typ
 import type { Reader } from '../api/client';
 import { formatSetDate } from '../approval-rules';
 import { NOTE_MAX, hashFromHex, parseApprove, parseSendBack } from './form';
+import { type StatusKey, statusOf } from './status';
 import type { RosterOffice } from './writer';
 
 export const REVIEW_LINKS = {
@@ -384,18 +385,33 @@ export function takenDown(steps: readonly HistoryStep[]): { by: string; on?: str
   return { by: last.actorLabel.trim() || 'someone', ...(last.at === undefined ? {} : { on: formatSetDate(last.at) }) };
 }
 
-const DONE: Record<string, string> = {
-  approved: `Approved. ${APPROVE_NOTE}`,
-  published: 'Published. It is on the website now.',
-  'taken-down': 'Taken down. It is no longer on the website.',
-  answers: 'Your answers are saved.',
-  'sent-back': 'Sent back to the writer with your note.',
+const SENT_BACK = 'Sent back to the writer with your note.';
+
+/**
+ * A step just done on a piece: its words, and how the piece read from the API shows that it happened
+ * (E7B-N5). The redirect's ?done= only names the step; the address alone never says it.
+ */
+const DONE: Record<string, { text: string; shown: (status: StatusKey, links: readonly PieceLink[]) => boolean }> = {
+  approved: { text: `Approved. ${APPROVE_NOTE}`, shown: (status) => status === 'cleared' || status === 'published_change_cleared' },
+  published: { text: 'Published. It is on the website now.', shown: (status) => status === 'published' },
+  'taken-down': { text: 'Taken down. It is no longer on the website.', shown: (status) => status === 'taken_down' },
+  answers: { text: 'Your answers are saved.', shown: (_status, links) => links.some((l) => l.reviewerAnswer !== 'none') },
 };
 
-/** The words for a step just done, from the redirect's ?done=. */
-export function doneText(params: URLSearchParams): string | undefined {
+/**
+ * The words for a step just done on this piece, from the redirect's ?done=: only when the piece as read
+ * from the API (its status, and its links' answers) shows the step. A piece that was not read says nothing.
+ */
+export function doneText(params: URLSearchParams, item: EditorItem | undefined, links: readonly PieceLink[]): string | undefined {
   const done = params.get('done') ?? '';
-  return Object.hasOwn(DONE, done) ? DONE[done] : undefined;
+  if (item === undefined || !Object.hasOwn(DONE, done)) return undefined;
+  const step = DONE[done]!;
+  return step.shown(statusOf(item).key, links) ? step.text : undefined;
+}
+
+/** The queue's words for a step just done: only "sent back", which leaves the piece's page. The queue reads no single piece, so it says nothing else. */
+export function queueDoneText(params: URLSearchParams): string | undefined {
+  return params.get('done') === 'sent-back' ? SENT_BACK : undefined;
 }
 
 /** What the review page and the confirm pages keep of what was typed, for the page again. */

@@ -16,7 +16,7 @@ import Base from '../../../layouts/Base.astro';
 import { type EditorItem, SignInAgain, editorAdmits, editorApi, editorReader } from '../../../lib/api/editor';
 import { markUnavailable, signInFirst } from '../../../lib/api/page';
 import { runtimeDeps } from '../../../lib/auth/flow';
-import { PARTS_HIDDEN, REVIEW_LINKS, doneText, isPublisher, reviewQueue, seesPartOnly } from '../../../lib/editor/review';
+import { PARTS_HIDDEN, REVIEW_LINKS, queueDoneText, isPublisher, reviewQueue, seesPartOnly } from '../../../lib/editor/review';
 import { KIND_WORDS, statusOf } from '../../../lib/editor/status';
 import { type RosterOffice, lastChangeText } from '../../../lib/editor/writer';
 import { page } from '../../../lib/site';
@@ -74,7 +74,7 @@ const lists = [
     when: (item: EditorItem) => `Approved ${lastChangeText(item.working?.approvedAt)}${item.working?.approvedAsLabel ? ` by the ${item.working.approvedAsLabel}` : ''}`,
   },
 ];
-const done = doneText(Astro.url.searchParams);
+const done = queueDoneText(Astro.url.searchParams);
 ---
 <Base {...p}>
   <h1>{p.title}</h1>
