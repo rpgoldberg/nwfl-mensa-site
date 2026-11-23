@@ -465,14 +465,23 @@ describe('what the history tells the review page', () => {
   });
 
   // Fix round 1 (B1): the queue says "sent back" only when the piece named in the address reads as sent back.
-  it('says "sent back" on the queue only when the piece named reads as sent back', async () => {
-    const SENT = 'Sent back to the writer with your note.';
+  it('says "sent back" on the queue only when the piece named reads as sent back; "your note" only to the role that sent it', async () => {
+    const MINE = 'Sent back to the writer with your note.';
+    const NEUTRAL = 'This piece was sent back to the writer.';
     const back = item({ state: 'draft' }, { status: 'draft', sendBackNote: 'Shorter.' });
-    const q = (query: string, read: ((id: string) => Promise<EditorItem>) | undefined) => queueDoneText(new URLSearchParams(query), read);
-    const reads = vi.fn(async (id: string) => (id === ID ? back : item()));
+    const history = [step({ action: 'send_back', actorLabel: 'Webmaster', versionNumber: 1 }), step({ action: 'mark_ready', actorLabel: 'President' }), step({ action: 'send_back', actorLabel: 'Treasurer', versionNumber: 2 })];
+    type Read = (id: string) => Promise<{ item: EditorItem; history: HistoryStep[] }>;
+    const q = (query: string, read: Read | undefined, mine: readonly string[] = ['Treasurer']) => queueDoneText(new URLSearchParams(query), read, mine);
+    const reads = vi.fn(async (id: string) => ({ item: id === ID ? back : item(), history }));
     expect(statusOf(back).key).toBe('sent_back');
-    expect(await q(`done=sent-back&id=${ID}`, reads)).toBe(SENT);
+    // The role that sent it back (the latest send-back step) is told "your note"; anyone else, the neutral line.
+    expect(await q(`done=sent-back&id=${ID}`, reads)).toBe(MINE);
     expect(reads).toHaveBeenCalledWith(ID);
+    expect(await q(`done=sent-back&id=${ID}`, reads, ['Webmaster'])).toBe(NEUTRAL);
+    expect(await q(`done=sent-back&id=${ID}`, reads, ['Officer'])).toBe(NEUTRAL);
+    expect(await q(`done=sent-back&id=${ID}`, reads, [])).toBe(NEUTRAL);
+    expect(await q(`done=sent-back&id=${ID}`, async () => ({ item: back, history: [] }))).toBe(NEUTRAL);
+    expect(await q(`done=sent-back&id=${ID}`, async () => ({ item: back, history: [step({ action: 'send_back', actorLabel: '' })] }), [''])).toBe(NEUTRAL);
     // A crafted address: no id, a malformed one, a piece that was not sent back, one that cannot be read.
     reads.mockClear();
     for (const query of ['done=sent-back', 'done=sent-back&id=', 'done=sent-back&id=abc', `done=sent-back&id=${ID.toUpperCase()}x`, `done=published&id=${ID}`, `done=other&id=${ID}`, `id=${ID}`, '']) expect(await q(query, reads), query).toBeUndefined();

@@ -386,6 +386,7 @@ export function takenDown(steps: readonly HistoryStep[]): { by: string; on?: str
 }
 
 const SENT_BACK = 'Sent back to the writer with your note.';
+const SENT_BACK_NEUTRAL = 'This piece was sent back to the writer.';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
@@ -425,13 +426,22 @@ export function doneText(params: URLSearchParams, item: EditorItem | undefined, 
 /**
  * The queue's words for a step just done: only "sent back", the one step that lands on the queue, and only
  * when the piece the address names (?done=sent-back&id=<id>) reads from the API as sent back (WEB-SMALL-1
- * fix round 1, B1). No id, a malformed one, a piece that cannot be read, or nothing to read with: nothing.
+ * fix round 1, B1). "Your note" only to the role that sent it back (the latest send-back step in its
+ * history, by role, as `mine` names the viewer's: answerLabels); anyone else is told the neutral line
+ * (recheck 1). No id, a malformed one, a piece that cannot be read, or nothing to read with: nothing.
  */
-export async function queueDoneText(params: URLSearchParams, read: ((id: string) => Promise<EditorItem>) | undefined): Promise<string | undefined> {
+export async function queueDoneText(
+  params: URLSearchParams,
+  read: ((id: string) => Promise<{ item: EditorItem; history: readonly HistoryStep[] }>) | undefined,
+  mine: readonly string[],
+): Promise<string | undefined> {
   const id = params.get('id') ?? '';
   if (params.get('done') !== 'sent-back' || !UUID.test(id) || read === undefined) return undefined;
   try {
-    return statusOf(await read(id)).key === 'sent_back' ? SENT_BACK : undefined;
+    const { item, history } = await read(id);
+    if (statusOf(item).key !== 'sent_back') return undefined;
+    const by = history.filter((s) => s.action === 'send_back').at(-1)?.actorLabel ?? '';
+    return by !== '' && mine.includes(by) ? SENT_BACK : SENT_BACK_NEUTRAL;
   } catch {
     return undefined;
   }

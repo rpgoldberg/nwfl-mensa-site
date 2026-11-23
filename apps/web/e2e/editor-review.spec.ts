@@ -432,7 +432,7 @@ test.describe('approving, with no script', () => {
     await expect(status(page)).toHaveText('Waiting for approval');
   });
 
-  test('send back needs a note, then goes to the writer', async ({ page }) => {
+  test('send back needs a note, then goes to the writer', async ({ browser, page }) => {
     const { sendBack } = own();
     await page.goto('/');
     await signIn(page, 'treasurer');
@@ -443,6 +443,14 @@ test.describe('approving, with no script', () => {
     await page.getByRole('button', { name: 'Send back' }).click();
     await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=sent-back&id=${sendBack.id}`);
     await expect(page.getByRole('status')).toHaveText('Sent back to the writer with your note.');
+    // Recheck 1: the same address, opened by another role (the Webmaster), says it neutrally: "your note" is not theirs.
+    const second = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true });
+    const webmaster = await second.newPage();
+    await webmaster.goto(SITE_URL);
+    await signIn(webmaster, 'webmaster');
+    await webmaster.goto(`${SITE_URL}${QUEUE}?done=sent-back&id=${sendBack.id}`);
+    await expect(webmaster.getByRole('status')).toHaveText('This piece was sent back to the writer.');
+    await second.close();
     await page.goto(review(sendBack.id));
     await expect(status(page)).toHaveText('Sent back – please read the note');
   });
