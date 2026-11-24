@@ -31,10 +31,11 @@
 // 0032's search_file_servable mirrors, with the lens run now (S2-N1). A row
 // that fails is not current: the worker's boot sweep makes and reads the copy
 // again (pdf/regenerate.ts sweepCopies; 0034 search_page_lacking for a new
-// TEXT_VERSION), and the boot backfill re-records each item the ledger
-// recorded under another TEXT_ENGINE or before a policy cell written by SQL
-// (search/backfill.ts); anything else waits for the item's next recorded
-// change, and is not found until then.
+// TEXT_VERSION), and the boot backfill re-records each item whose render now
+// is not its ledger row's output, or not re-recorded since a policy cell was
+// written by SQL (search/backfill.ts); until then it is not found. A row whose
+// item has a mark written after it never reaches this check: the statement
+// refuses it (sql.ts), so the check's cost cannot say that it matched.
 //
 // Hidden hits are left out BEFORE the page is cut, so neither the number of
 // hits on a page nor has_more can say that something withheld matched. A

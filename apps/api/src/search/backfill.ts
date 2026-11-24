@@ -10,7 +10,21 @@
 // search_item_put refuses anything else, and a version whose render has drifted
 // from its ledger row is left for the change that records it.
 //
-// Then it re-records (recordItems) each published item with a passage mark
+// Then it re-records (recordItems) each published item whose live
+// version renders now, for an audience, other than its ledger row's current
+// output says: a deploy that changed the lens (quoteMatches, normalizeTree and
+// the rest of what renderVersion runs), whether or not it bumped TEXT_ENGINE
+// (ledger.ts), or a mark or policy cell written by SQL with no re-record. The
+// search read (service.ts) counts none of those rows as current until this
+// re-records them (ARCHIVE-SEARCH S3, P1d, D7a). Every published item is
+// rendered, for both audiences, in batches by item id. The choice is the
+// render, not the engine named in the ledger's row: the ledger appends only a
+// changed output, so after a bump an item whose render did not change keeps
+// a row naming the former engine, and re-recording on that name would re-record
+// it at every boot. A re-record appends the render it compared, so a second
+// run finds none (challenge S3-1, S1 and S2).
+//
+// Last, it re-records, the same way, each published item with a passage mark
 // whose live version the app has not re-recorded, for an audience, since the
 // last write to a policy cell (0032's version_rerecorded against
 // policy_change_epoch); only such an item's PDF waits on that. A write made
@@ -18,14 +32,6 @@
 // re-record the page writer refuses the item's PDF if it has a passage mark:
 // this brings such items back, or keeps them out, as the policy now says. In
 // batches of items, one transaction each, by item id; a second run finds none.
-//
-// It re-records too, the same way, each published item whose live version's
-// current ledger row names another TEXT_ENGINE (ledger.ts) than this one: a
-// deploy that changes the lens (quoteMatches, normalizeTree and the rest of
-// what renderVersion runs) bumps TEXT_ENGINE, and the search read (service.ts)
-// then counts none of those rows as current until this re-records them
-// (ARCHIVE-SEARCH S3, P1d). A row that names no engine is left alone (NULL is
-// not unequal).
 //
 // After each batch it asks the database to queue again (0034 search_page_requeue) each
 // of those items' files an audience is served a copy of and may open now, but whose
@@ -39,7 +45,7 @@
 // ============================================================================
 import type pg from 'pg';
 import { inTransaction } from '../db/tx.js';
-import { TEXT_ENGINE, recordItems, renderVersion } from '../ledger/ledger.js';
+import { recordItems, renderVersion } from '../ledger/ledger.js';
 import { TENANT } from '../redaction/policy.js';
 import { putItem } from './items.js';
 import { SEARCH_AUDIENCES, SEARCH_TABLES, type SearchAudience } from './tables.js';
@@ -54,7 +60,7 @@ export interface BackfillResult {
   written: number;
   /** Versions whose render is not what the ledger holds: nothing written. */
   skipped: number;
-  /** Items re-recorded because a policy cell was written since their live version was, or another lens recorded it. */
+  /** Items re-recorded because their live version renders now other than the ledger's output, or a policy cell was written since it was re-recorded. */
   rerecorded: number;
   /** Files of those items queued for the worker again, because a copy their audience may open has no index rows. */
   requeued: number;
@@ -79,15 +85,9 @@ export const UNCONFIRMED_ITEMS_SQL = `SELECT i.id FROM content_item i
                                        AND c.seq > coalesce((SELECT e.seq FROM policy_change_epoch e), 0)))
    ORDER BY i.id LIMIT $2`;
 
-/**
- * Published items after `$1` (by id, at most `$2`) whose live version has a current ledger row, for any audience,
- * recorded under another lens than `$3` (this TEXT_ENGINE).
- */
-export const OTHER_ENGINE_ITEMS_SQL = `SELECT i.id FROM content_item i
+/** Published items after `$1` (by id, at most `$2`), with their live versions. */
+export const PUBLISHED_ITEMS_SQL = `SELECT i.id, i.live_version_id AS version FROM content_item i
    WHERE i.state = 'published' AND i.live_version_id IS NOT NULL AND i.id > $1
-     AND EXISTS (SELECT 1 FROM publication_ledger l
-                  WHERE l.tenant_id = '${TENANT}' AND l.subject_kind = 'content_version' AND l.subject_id = i.live_version_id
-                    AND l.current_to IS NULL AND l.inputs ->> 'engine' <> $3)
    ORDER BY i.id LIMIT $2`;
 
 const CURRENT = (audience: SearchAudience): string =>
@@ -141,19 +141,38 @@ export async function backfillItems(pool: pg.Pool, options: { batch?: number } =
       }
       let rerecorded = 0;
       let requeued = 0;
-      for (const [sql, third] of [
-        [OTHER_ENGINE_ITEMS_SQL, TEXT_ENGINE],
-        [UNCONFIRMED_ITEMS_SQL, SEARCH_AUDIENCES],
-      ] as const) {
-        for (let after = NO_ITEM; ; ) {
-          const batch = (await holder.query<{ id: string }>(sql, [after, options.batch ?? RERECORD_BATCH, third])).rows.map((row) => row.id);
-          if (batch.length === 0) break;
-          await recordItems(pool, batch);
-          rerecorded += batch.length;
-          // After the re-record committed: a put that read the old stamp was refused and left no rows; one after it is put.
-          requeued += (await holder.query<{ n: number }>(`SELECT search_page_requeue($1::uuid[]) AS n`, [batch])).rows[0]?.n ?? 0;
-          after = batch.at(-1) as string;
+      const rerecord = async (batch: string[]): Promise<void> => {
+        await recordItems(pool, batch);
+        rerecorded += batch.length;
+        // After the re-record committed: a put that read the old stamp was refused and left no rows; one after it is put.
+        requeued += (await holder.query<{ n: number }>(`SELECT search_page_requeue($1::uuid[]) AS n`, [batch])).rows[0]?.n ?? 0;
+      };
+      const size = options.batch ?? RERECORD_BATCH;
+      for (let after = NO_ITEM; ; ) {
+        const items = (await holder.query<{ id: string; version: string }>(PUBLISHED_ITEMS_SQL, [after, size])).rows;
+        if (items.length === 0) break;
+        const drifted: string[] = [];
+        for (const { id, version } of items) {
+          for (const audience of SEARCH_AUDIENCES) {
+            const rendering = await renderVersion(pool, version, audience);
+            const current = await pool.query<{ output: Buffer | null }>(
+              `SELECT l.output_sha256 AS output FROM publication_ledger l WHERE ${CURRENT(audience)} AND l.subject_id = $1`,
+              [version],
+            );
+            if (!same(rendering.output, current.rows[0]?.output ?? null)) {
+              drifted.push(id);
+              break;
+            }
+          }
         }
+        if (drifted.length > 0) await rerecord(drifted);
+        after = items.at(-1)?.id as string;
+      }
+      for (let after = NO_ITEM; ; ) {
+        const batch = (await holder.query<{ id: string }>(UNCONFIRMED_ITEMS_SQL, [after, size, SEARCH_AUDIENCES])).rows.map((row) => row.id);
+        if (batch.length === 0) break;
+        await rerecord(batch);
+        after = batch.at(-1) as string;
       }
       return { ran: true, written, skipped, rerecorded, requeued };
     } finally {

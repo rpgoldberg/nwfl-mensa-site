@@ -971,15 +971,23 @@ answers a query with ten hits a page: pages of issues and published items.
 - **Current now, not only when recorded** (`service.ts`). The ledger's row
   can outlive what it describes: a deploy that changes the lens or the
   engine, or a mark or policy cell written by SQL with no re-record. So a
-  page counts only while the copy its audience is served now has the input
-  hash the ledger's row names, and was read under this `TEXT_VERSION`; an
+  page counts only while the copy its audience is served now is ready and is
+  the copy (by its sha) the row was read from, under this `TEXT_VERSION`; an
   item only while a render of its version now is the row's own sha. Nothing
-  here reads the re-record stamps, so a reset `rerecord_seq` changes no
-  answer. Rows that fail come back when they are made again: the worker's
-  boot sweep makes and reads each copy of a new engine or `TEXT_VERSION`;
-  the boot backfill re-records each item recorded under another
-  `TEXT_ENGINE`, or not since a policy cell was written by SQL. A lens change
-  must bump `TEXT_ENGINE`; until an item is re-recorded it is not found.
+  here reads the re-record stamps' sequence, so a reset `rerecord_seq`
+  changes no answer.
+- **Stale rows cost nothing to refuse** (`sql.ts`). A row whose item has an
+  active mark, in a category the audience is not shown, written after the
+  row (after the version's last re-record for an item, 0035
+  `version_rerecorded.at`; after the file's newest ready copy for a page) is
+  no row of the statement. No live check runs for it, so a search's time
+  cannot say that a word the mark withholds matched.
+- **How stale rows come back.** The worker's boot sweep makes and reads each
+  copy of a new engine or `TEXT_VERSION`. The boot backfill renders every
+  published item for both audiences and re-records each whose render is not
+  its ledger row's output (a lens change, bumped or not, or a mark or cell
+  written by SQL), then each not re-recorded since a policy cell was written
+  by SQL. Until then such an item is not found.
 - **Snippets.** `ts_headline` over the row's own text, for the page answered
   only. The words found sit between U+E000 and U+E001; the text is plain,
   never markup.

@@ -14,12 +14,14 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentKind, ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { type SearchResponse, SearchService } from '../../src/gen/nwfl/mensa/v1/search_pb.js';
-import { recordItems } from '../../src/ledger/ledger.js';
+import { TEXT_ENGINE, recordItems } from '../../src/ledger/ledger.js';
 import { textReply } from '../../src/pdf/gate-text.js';
 import { drain, sweepCopies } from '../../src/pdf/regenerate.js';
 import { storeOriginal } from '../../src/pdf/store.js';
 import { backfillItems } from '../../src/search/backfill.js';
 import { type Texter, indexFile, indexSweeper } from '../../src/search/pages.js';
+import { parseQuery } from '../../src/search/query.js';
+import { type SearchRow, searchSql } from '../../src/search/sql.js';
 import { TEXT_VERSION } from '../../src/search/text.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
@@ -93,6 +95,9 @@ describe.skipIf(!live)('SearchService.Search: the write side\'s handoffs, closed
   const sqlMark = (itemId: string, quote: string, category: string): Promise<unknown> =>
     api.pool.query(`SELECT redaction_mark_add('content_item', $1, 'body', $2, $3, $4, $5, NULL)`, [itemId, quote, category, STORER.sub, STORER.groups]);
   const work = (): Promise<number> => drain(api.worker, { index: (fileId) => indexFile(api.worker, fileId, { text: reader }) });
+  /** What the search statement itself gives (sql.ts), before any live check runs: the ids of its rows. */
+  const matched = async (audience: 'public' | 'members', query: string): Promise<string[]> =>
+    (await api.pool.query<SearchRow>(searchSql(audience), [parseQuery(query).text, 300])).rows.map((row) => row.id);
   const rows = async (table: string, fileId: string): Promise<number> => (await owner.query(`SELECT 1 FROM ${table} WHERE file_id = $1`, [fileId])).rowCount ?? 0;
 
   beforeAll(async () => {
@@ -307,6 +312,123 @@ describe.skipIf(!live)('SearchService.Search: the write side\'s handoffs, closed
       expect(response.hasMore).toBe(false);
       // Members are shown venues: their page stands.
       expect(pagesOf(await find('solarium', MEMBER))).toEqual([[made.files['members']!, 1]]);
+    });
+  });
+  // Challenge S3-1. A stale row the read refuses only after its live check (a render, a copy's sha) costs that check, so
+  // "no hits, but slow" said a withheld word matched (S1); and the boot backfill must bring such rows back, and stop (S2).
+  describe('stale rows: refused by the statement itself, and re-recorded at boot (challenge S1, S2)', () => {
+    // An earlier test here tightened members' phones by SQL; these tests read the policy as 0012 seeds it: members are shown phones.
+    beforeAll(async () => {
+      await owner.query(`UPDATE redaction_policy SET action = 'show' WHERE tenant_id = 'nwflorida' AND audience = 'members' AND category = 'member_phone'`);
+      await backfillItems(api.pool);
+    });
+
+    it('S1 (A1, D7a): after a passage mark written by SQL with no re-record, the public\'s statement gives no row of the item, so no live check runs', async () => {
+      const made = await publish('stale-canoe', 'Canoe club', 'The canoe club meets at the marina. Call Ondine Paxley at 850-555-0171 or 850-555-0172 for a seat.');
+      expect(await matched('public', '"850-555-0171"')).toEqual([made.itemId]);
+      await sqlMark(made.itemId, '850-555-0171', 'member_phone');
+      // The public is not shown phones: a mark newer than the item's last re-record for the public refuses its row here.
+      for (const query of ['"850-555-0171"', 'marina', 'canoe']) expect(await matched('public', query), query).toEqual([]);
+      // Members are shown phones: the mark changes nothing they read, and their row is still a row of the statement.
+      expect(await matched('members', '"850-555-0171"')).toEqual([made.itemId]);
+      expect(slugsOf(await find('"850-555-0171"', MEMBER))).toEqual(['stale-canoe']);
+      // Re-recorded: the row is the item as read now, and the statement gives it again, without the number.
+      await inTx((client) => recordItems(client, [made.itemId]));
+      expect(await matched('public', 'marina')).toEqual([made.itemId]);
+      expect(await matched('public', '"850-555-0171"')).toEqual([]);
+      // A mark made as the API makes it, with its re-record in the same transaction, refuses nothing it should not.
+      await inTx(async (client) => {
+        await client.query(`SELECT redaction_mark_add('content_item', $1, 'body', '850-555-0172', 'member_phone', $2, $3, NULL)`, [made.itemId, STORER.sub, STORER.groups]);
+        await recordItems(client, [made.itemId]);
+      });
+      expect(await matched('public', 'marina')).toEqual([made.itemId]);
+      expect(await matched('public', '"850-555-0172"')).toEqual([]);
+      expect(slugsOf(await find('marina'))).toEqual([made.itemId]);
+    });
+
+    it('S1 (pages): a page of an item given a hiding mark by SQL after its copy was made is no row of the statement; a mark the audience is shown leaves the row', async () => {
+      const made = await issue('Handoff issue, kiln', { public: [['The glassblowers meet at the kiln yard']], members: [['The glassblowers meet at the kiln yard']] }, 'Glassblowers news.');
+      // Its two files, and any the policy write above queued again.
+      expect(await work()).toBeGreaterThanOrEqual(2);
+      expect(await matched('public', 'kiln')).toContain(made.files['public']);
+      expect(await matched('members', 'kiln')).toContain(made.files['members']);
+      type PageRow = { file_id: string; item_id: string; page: number; served_sha256: Buffer; text_version: number; text: string; extra: string };
+      const columns = 'file_id, item_id, page, served_sha256, text_version, text, extra';
+      const kept = {
+        public: (await owner.query<PageRow>(`SELECT ${columns} FROM search_page_public WHERE file_id = $1`, [made.files['public']])).rows,
+        members: (await owner.query<PageRow>(`SELECT ${columns} FROM search_page_members WHERE file_id = $1`, [made.files['members']])).rows,
+      };
+      // A phone mark whose passage is in no text of the item: the public redacts phones and the lens fails closed on it,
+      // members are shown phones. No re-record follows.
+      await sqlMark(made.itemId, '850-555-0188', 'member_phone');
+      for (const audience of ['public', 'members'] as const) {
+        await owner.query(`DELETE FROM search_page_${audience} WHERE file_id = $1`, [made.files[audience]]);
+        for (const row of kept[audience]) {
+          await owner.query(`INSERT INTO search_page_${audience} (file_id, item_id, page, served_sha256, text_version, text, extra) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [
+            row.file_id, row.item_id, row.page, row.served_sha256, row.text_version, row.text, row.extra,
+          ]);
+        }
+      }
+      expect(await matched('public', 'kiln')).not.toContain(made.files['public']);
+      expect(await matched('public', 'glassblowers')).not.toContain(made.files['public']);
+      expect(await matched('members', 'kiln')).toContain(made.files['members']);
+      // With every copy of the file gone (as after a deploy, before the sweep makes them again), the mark is after any copy.
+      await owner.query(`DELETE FROM pdf_copy WHERE file_id = $1`, [made.files['public']]);
+      expect(await matched('public', 'kiln')).not.toContain(made.files['public']);
+    });
+
+    it('S1 (A2): a lens change deployed with no TEXT_ENGINE bump: the boot backfill re-records the item, and the former lens\'s row leaves the index', async () => {
+      const made = await publish('stale-lens', 'Owl prowl', 'The owl prowl meets at the cedar gate.');
+      expect(slugsOf(await find('cedar'))).toEqual(['stale-lens']);
+      // As such a deploy leaves them: the ledger row and the index row of the former lens, naming THIS engine, holding a
+      // word the lens now withholds.
+      await owner.query(`SELECT publication_ledger_record('content_version', $1, 'public', sha256('former lens same engine'), $2::jsonb, 0)`, [made.versionId, JSON.stringify({ v: 1, engine: TEXT_ENGINE, version_id: made.versionId })]);
+      await owner.query(`UPDATE search_item_public SET rendered_sha256 = sha256('former lens same engine'), text = text || ' Ask for Wrenna Thistlecombe.' WHERE item_id = $1`, [made.itemId]);
+      for (const query of ['Thistlecombe', 'cedar']) expect((await find(query)).hits, query).toEqual([]);
+      expect((await backfillItems(api.pool)).rerecorded).toBeGreaterThanOrEqual(1);
+      expect((await owner.query(`SELECT 1 FROM search_item_public WHERE item_id = $1 AND text LIKE '%Thistlecombe%'`, [made.itemId])).rowCount).toBe(0);
+      const current = await owner.query<{ same: boolean }>(
+        `SELECT l.output_sha256 = s.rendered_sha256 AND l.output_sha256 <> sha256('former lens same engine') AS same FROM publication_ledger l JOIN search_item_public s ON s.version_id = l.subject_id
+          WHERE l.subject_kind = 'content_version' AND l.subject_id = $1 AND l.audience = 'public' AND l.current_to IS NULL`,
+        [made.versionId],
+      );
+      expect(current.rows).toEqual([{ same: true }]);
+      expect(slugsOf(await find('cedar'))).toEqual(['stale-lens']);
+      expect(await matched('public', 'Thistlecombe')).toEqual([]);
+    });
+
+    it('S1 (A2, members, in batches): a drift in members\' render alone is re-recorded too, whichever batch its item falls in', async () => {
+      const made = [await publish('stale-kite-day', 'Kite day', 'Kite day is on the bluff.'), await publish('stale-kite-repair', 'Kite repair', 'Kite repair is in the barn.')];
+      for (const [n, item] of made.entries()) {
+        const former = `former members lens ${n}`;
+        await owner.query(`SELECT publication_ledger_record('content_version', $1, 'members', sha256(convert_to($2, 'UTF8')), $3::jsonb, 0)`, [item.versionId, former, JSON.stringify({ v: 1, engine: TEXT_ENGINE, version_id: item.versionId })]);
+        await owner.query(`UPDATE search_item_members SET rendered_sha256 = sha256(convert_to($2, 'UTF8')), text = text || ' Ask for Peregrine Oddleaf.' WHERE item_id = $1`, [item.itemId, former]);
+      }
+      expect((await find('Oddleaf', MEMBER)).hits).toEqual([]);
+      // Batches of one item: two drifted items cannot both be in the first.
+      expect((await backfillItems(api.pool, { batch: 1 })).rerecorded).toBeGreaterThanOrEqual(2);
+      expect((await owner.query(`SELECT 1 FROM search_item_members WHERE text LIKE '%Oddleaf%'`)).rowCount).toBe(0);
+      expect(slugsOf(await find('kite', MEMBER)).sort()).toEqual(['stale-kite-day', 'stale-kite-repair']);
+    });
+
+    it('S2 (A3): a TEXT_ENGINE bump whose render is unchanged: the backfill re-records nothing for it, and a second run nothing at all', async () => {
+      const made = await publish('stale-engine', 'Star party', 'The star party meets on the levee.');
+      const cur = (await owner.query<{ output: Buffer; inputs: Record<string, unknown>; w: number }>(
+        `SELECT output_sha256 AS output, inputs, passages_withheld AS w FROM publication_ledger WHERE subject_kind = 'content_version' AND subject_id = $1 AND audience = 'public' AND current_to IS NULL`,
+        [made.versionId],
+      )).rows[0]!;
+      // The former build recorded the same output under its engine's name (an interim row first: the ledger appends a change only).
+      const older = JSON.stringify({ ...cur.inputs, engine: 'lens-older' });
+      await owner.query(`SELECT publication_ledger_record('content_version', $1, 'public', sha256('interim'), $2::jsonb, $3)`, [made.versionId, older, cur.w]);
+      await owner.query(`SELECT publication_ledger_record('content_version', $1, 'public', $2, $3::jsonb, $4)`, [made.versionId, cur.output, older, cur.w]);
+      expect(slugsOf(await find('levee'))).toEqual(['stale-engine']);
+      const ledgerRows = async (): Promise<number> =>
+        (await owner.query<{ n: number }>(`SELECT count(*)::int AS n FROM publication_ledger WHERE subject_kind = 'content_version' AND subject_id = $1`, [made.versionId])).rows[0]!.n;
+      const before = await ledgerRows();
+      await backfillItems(api.pool);
+      expect((await backfillItems(api.pool)).rerecorded).toBe(0);
+      expect(await ledgerRows()).toBe(before);
+      expect(slugsOf(await find('levee'))).toEqual(['stale-engine']);
     });
   });
 });
