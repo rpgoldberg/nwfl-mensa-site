@@ -12,6 +12,8 @@
 //   - Nothing derived is stored (fix round 1): member_account has no chapter or guest column; the
 //     standing is decided when read, from the reported group (auth/standing.ts).
 // Every subject here is made up.
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type pg from 'pg';
 import pgLib from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -173,16 +175,26 @@ describe.skipIf(!live)('OFFICER-VERIFY as 0033, after 0032', () => {
     expect(run.stdout.trim().split('\n').sort()).toEqual(['0032_search.sql', '0033_officer_verify.sql', '0033_officer_verify.sql']);
   });
 
-  it('applies alone on a database already migrated to 0032, and the ledger ends with it', async () => {
-    await dockerExec(['sh', '-c', `rm -rf ${upTo0032()} && mkdir -p ${upTo0032()} && cp /repo/migrations/*.sql ${upTo0032()}/ && rm ${upTo0032()}/0033_*.sql`]);
+  it('applies on a database already migrated to 0032, first of what follows it, and the ledger holds it after 0032', async () => {
+    // Every file numbered above 0032 is left out of the first run (0034 and on came after OFFICER-VERIFY; the runner
+    // refuses a file numbered below one already applied), and the second run applies 0033 first, then the rest.
+    const later = readdirSync(fileURLToPath(new URL('../../migrations/', import.meta.url)))
+      .filter((name) => /^\d{4}_[a-z0-9_]+\.sql$/.test(name) && Number(name.slice(0, 4)) > 32)
+      .sort();
+    expect(later[0]).toBe('0033_officer_verify.sql');
+    await dockerExec([
+      'sh',
+      '-c',
+      `rm -rf ${upTo0032()} && mkdir -p ${upTo0032()} && cp /repo/migrations/*.sql ${upTo0032()}/ && for f in ${upTo0032()}/*.sql; do n=$(basename "$f" | cut -c1-4); [ "$n" -gt 32 ] && rm "$f"; done; true`,
+    ]);
     const first = await migrate(db, upTo0032());
     expect(first.code, first.stderr).toBe(0);
     const second = await migrate(db);
     expect(second.code, second.stderr).toBe(0);
-    expect(second.stdout).toMatch(/done — applied=1 skipped=\d+/);
+    expect(second.stdout).toMatch(new RegExp(`done — applied=${later.length} skipped=\\d+`));
     const ledger = await withClient(urlFor(MIGRATOR, MIGRATOR_PW, db), async (client) =>
       (await client.query<{ filename: string }>('SELECT filename FROM schema_migrations ORDER BY filename')).rows.map((r) => r.filename),
     );
-    expect(ledger.slice(-2)).toEqual(['0032_search.sql', '0033_officer_verify.sql']);
+    expect(ledger.slice(ledger.indexOf('0032_search.sql'))).toEqual(['0032_search.sql', ...later]);
   });
 });
