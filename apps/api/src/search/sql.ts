@@ -17,6 +17,11 @@
 //      content/service.ts): the live version of a published item that is not
 //      officers-only, or, for a file, a published edition. Officers read the
 //      members' index, so officers-only items are in no one's results.
+//   A page must also have been read under this TEXT_VERSION (text.ts): a row
+//   of another join rule is not current (P1d), and the worker's sweep reads
+//   the copy again (0034 search_page_lacking).
+// Each hit also carries its row's own sha, for service.ts to ask the live
+// code whether the row is still what the served read gives (P1d, D7a).
 //
 // For members, an issue's hits come from the members' file alone: a public
 // file's pages are left out while the same version has a members' file the
@@ -28,6 +33,7 @@
 // ============================================================================
 import { TENANT } from '../redaction/policy.js';
 import { SEARCH_AUDIENCES, SEARCH_TABLES, type SearchAudience } from './tables.js';
+import { TEXT_VERSION } from './text.js';
 
 /** Private-use characters around each word found. The site escapes the snippet, then turns only these into a highlight. */
 export const SNIPPET_START = '';
@@ -46,6 +52,8 @@ export interface SearchRow {
   version_id: string | null;
   on_behalf_of: string | null;
   published_at: Date | null;
+  /** The sha the row was put with: a page's copy, an item's render (the ledger's output then). */
+  sha: Buffer;
 }
 
 export interface SnippetRow {
@@ -68,6 +76,7 @@ function tablesOf(audience: SearchAudience): { item: string; page: string } {
 /** The hits, best first, then newest first. $1 the query as parsed (query.ts), $2 the most rows to give. */
 export function searchSql(audience: SearchAudience): string {
   const { item, page } = tablesOf(audience);
+  const textVersion = String(Math.trunc(TEXT_VERSION));
   // Members only: the public file of a version that also has a members' file they are served a copy of.
   const membersCopyOnly =
     audience === 'public'
@@ -81,19 +90,20 @@ export function searchSql(audience: SearchAudience): string {
     SELECT t.q FROM (SELECT ${QUERY} AS q) t WHERE numnode(t.q) > 0 AND querytree(t.q) <> 'T'
   )
   SELECT 'page' AS kind, p.file_id AS id, p.page AS page, ts_rank_cd(p.tsv, q.q) AS rank, coalesce(v.published_at, e.period_start::timestamptz) AS dated,
-         NULL::text AS slug, NULL::text AS title, NULL::text AS item_kind, NULL::uuid AS version_id, NULL::text AS on_behalf_of, NULL::timestamptz AS published_at
+         NULL::text AS slug, NULL::text AS title, NULL::text AS item_kind, NULL::uuid AS version_id, NULL::text AS on_behalf_of, NULL::timestamptz AS published_at,
+         p.served_sha256 AS sha
     FROM q
     JOIN ${page} p ON p.tsv @@ q.q
     JOIN stored_file f ON f.id = p.file_id AND f.mime_type = 'application/pdf'
     LEFT JOIN content_version v ON v.id = f.version_id
     LEFT JOIN content_item i ON i.live_version_id = v.id AND i.state = 'published' AND v.visibility <> 'officers'
     LEFT JOIN edition e ON e.id = f.edition_id AND e.status = 'published'
-   WHERE (i.id IS NOT NULL OR e.id IS NOT NULL)
+   WHERE (i.id IS NOT NULL OR e.id IS NOT NULL) AND p.text_version = ${textVersion}
      AND EXISTS (SELECT 1 FROM publication_ledger l WHERE ${current(audience, 'stored_file', 'p.file_id', 'p.served_sha256')} AND l.inputs ->> 'served' = 'copy')
      ${membersCopyOnly}
   UNION ALL
   SELECT 'item' AS kind, s.item_id AS id, 0 AS page, ts_rank_cd(s.tsv, q.q) AS rank, v.published_at AS dated,
-         i.slug, s.title, i.kind AS item_kind, s.version_id, v.on_behalf_of, v.published_at
+         i.slug, s.title, i.kind AS item_kind, s.version_id, v.on_behalf_of, v.published_at, s.rendered_sha256 AS sha
     FROM q
     JOIN ${item} s ON s.tsv @@ q.q
     JOIN content_item i ON i.id = s.item_id AND i.live_version_id = s.version_id AND i.state = 'published'

@@ -929,8 +929,12 @@ own transaction (0032), before the worker has made the next copy.
 
 When it runs: after each regeneration run that finished, and in a sweep
 after each drain. Each step deletes every row whose copy its audience is
-served no longer, or whose file it may not open (`search_page_sweep`), so a
-withdrawn or re-scoped item's text is gone a drain later. From each boot it
+served no longer, or whose file is not one the public or members may open at
+all: an item not published, officers-only or no longer live, an edition not
+published (`search_page_sweep`, which asks `search_page_servable`). It does
+not ask whether a mark or the policy hides the file from that audience
+(`search_file_servable`): the page writer refuses those, and the search
+refuses any such row it meets (below). From each boot it
 also reads each served copy with no rows at this `TEXT_VERSION`
 (`search_page_lacking`, 0034), ten copies a step. Raising `TEXT_VERSION` reads
 every copy again. A reading that fails writes and deletes nothing, and is
@@ -964,6 +968,18 @@ answers a query with ten hits a page: pages of issues and published items.
   reads put it (`servableFile`, `itemHidden`, `slugFor`). A hit it hides is
   left out before the page is cut, so neither a page's length nor `has_more`
   says that something withheld matched.
+- **Current now, not only when recorded** (`service.ts`). The ledger's row
+  can outlive what it describes: a deploy that changes the lens or the
+  engine, or a mark or policy cell written by SQL with no re-record. So a
+  page counts only while the copy its audience is served now has the input
+  hash the ledger's row names, and was read under this `TEXT_VERSION`; an
+  item only while a render of its version now is the row's own sha. Nothing
+  here reads the re-record stamps, so a reset `rerecord_seq` changes no
+  answer. Rows that fail come back when they are made again: the worker's
+  boot sweep makes and reads each copy of a new engine or `TEXT_VERSION`;
+  the boot backfill re-records each item recorded under another
+  `TEXT_ENGINE`, or not since a policy cell was written by SQL. A lens change
+  must bump `TEXT_ENGINE`; until an item is re-recorded it is not found.
 - **Snippets.** `ts_headline` over the row's own text, for the page answered
   only. The words found sit between U+E000 and U+E001; the text is plain,
   never markup.
