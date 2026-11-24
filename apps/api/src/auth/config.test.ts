@@ -8,7 +8,49 @@ const ISS = 'https://login.nwflorida.us/application/o/nwfl-site/';
 
 describe('readAuthConfig', () => {
   it('accepts no client at all when nothing is set: every token is then refused', () => {
-    expect(readAuthConfig({})).toEqual({ clients: [], edgeClientIds: DEFAULT_EDGE_CLIENT_IDS, groupPrefix: 'nwfl-' });
+    expect(readAuthConfig({})).toEqual({ clients: [], edgeClientIds: DEFAULT_EDGE_CLIENT_IDS, groupPrefix: 'nwfl-', officerVerify: null });
+  });
+
+  // OFFICER-VERIFY: the switch rolls dark. Unset, empty or off is off; on is on, with the chapter's own local
+  // group; anything else refuses to start, so a typo never leaves an operator believing the check is on.
+  it.each([
+    [undefined, null],
+    ['', null],
+    ['off', null],
+    ['on', { chapterGroup: 'Northwest Florida Mensa' }],
+  ])('reads OFFICER_VERIFY=%j as %j', (value, mode) => {
+    const chapter = { CHAPTER_GROUP_NAME: 'Northwest Florida Mensa' };
+    expect(readAuthConfig(value === undefined ? chapter : { ...chapter, OFFICER_VERIFY: value }).officerVerify).toEqual(mode);
+  });
+
+  it.each(['ON', 'true', '1', ' on', 'yes'])('refuses to start on OFFICER_VERIFY=%j', (value) => {
+    expect(() => readAuthConfig({ OFFICER_VERIFY: value, CHAPTER_GROUP_NAME: 'Northwest Florida Mensa' })).toThrow(/OFFICER_VERIFY must be on or off/);
+  });
+
+  // OFFICER-VERIFY: the chapter's own local group name, which tells a chapter member from a guest; switched on only.
+  it('switched on, reads CHAPTER_GROUP_NAME, trimmed, when it is one of the known local groups', () => {
+    expect(readAuthConfig({ OFFICER_VERIFY: 'on', CHAPTER_GROUP_NAME: 'Northwest Florida Mensa' }).officerVerify).toEqual({ chapterGroup: 'Northwest Florida Mensa' });
+    expect(readAuthConfig({ OFFICER_VERIFY: 'on', CHAPTER_GROUP_NAME: '  Boston Mensa ' }).officerVerify).toEqual({ chapterGroup: 'Boston Mensa' });
+  });
+
+  it.each(['Northwest Florida', 'northwest florida mensa', 'No group assigned'])('switched on, refuses to start on CHAPTER_GROUP_NAME=%j', (value) => {
+    expect(() => readAuthConfig({ OFFICER_VERIFY: 'on', CHAPTER_GROUP_NAME: value })).toThrow(/CHAPTER_GROUP_NAME must be one of the local group names/);
+  });
+
+  it.each([undefined, '', '   '])('refuses to start with OFFICER_VERIFY on and CHAPTER_GROUP_NAME %j: no officer could ever be a chapter member', (value) => {
+    const env = value === undefined ? { OFFICER_VERIFY: 'on' } : { OFFICER_VERIFY: 'on', CHAPTER_GROUP_NAME: value };
+    expect(() => readAuthConfig(env)).toThrow(/CHAPTER_GROUP_NAME must be set when OFFICER_VERIFY is on/);
+  });
+
+  // Fix round 1: switched off, CHAPTER_GROUP_NAME is not read at all (develop never read it): unset, empty,
+  // blank or not a known group, the API starts, and no chapter group is in use.
+  it.each([undefined, '', '   ', 'Northwest Florida', 'No group assigned', 'Northwest Florida Mensa'])('switched off, ignores CHAPTER_GROUP_NAME=%j', (value) => {
+    for (const off of [undefined, '', 'off']) {
+      const env: Record<string, string> = {};
+      if (off !== undefined) env['OFFICER_VERIFY'] = off;
+      if (value !== undefined) env['CHAPTER_GROUP_NAME'] = value;
+      expect(readAuthConfig(env).officerVerify).toBeNull();
+    }
   });
 
   it('reads the chapter\'s group prefix from SITE_GROUP_PREFIX (CF-ISO-0), and refuses to start on a bad one', () => {

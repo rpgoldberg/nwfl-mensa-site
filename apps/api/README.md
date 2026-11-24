@@ -220,6 +220,29 @@ plain line and retries, waiting 1 s at first and doubling up to 15 s. Only a
 positive mismatch (another tenant's row, no row, or several rows) logs the
 reason and exits 1.
 
+OFFICER-VERIFY: an officer power (officers, a seat, Admin, Webmaster,
+membership approvers) needs member standing as well as its group once
+`OFFICER_VERIFY=on` (default off; unset or empty is off; any other value
+refuses to start). The caller gate (`src/auth/caller.ts`) then withholds every
+power group from a holder without a chapter member's or an affiliate's
+standing (`src/auth/standing-policy.ts`), so no role check and no SQL function
+sees one. Either standing holds a power only once the membership check
+confirmed the holder's number, last name and first name: a check that did not
+confirm them (not found, an error, a duplicate claim) says nothing about them,
+whatever it carried, and an approver's hand approval is no check. A holder who
+is already approved asks for a fresh check from /account (`SubmitSignup`
+again), and a confirmed guest member's tools open on the Admin's affiliate
+grant. `CHAPTER_GROUP_NAME` (e.g. `Northwest Florida Mensa`, one of
+`src/membership/local-groups.ts`; required when the switch is on, ignored
+when off) tells a chapter member from a guest by the local group the
+membership check reported, compared each time a standing is read
+(`src/auth/standing.ts`): only the reported group is stored. Guests follow one
+policy (`guestPolicy`): the public's pages, events as members see them, no
+officer power but by that grant. Every rule of the unit (the invite route for officers, the first
+name, the hand-approval rule, guest approval, approval by the report) applies
+only with the switch on; off, the API behaves as before. One startup line
+names the mode.
+
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
 placeholder with no text, length, link or image; a node the API cannot vouch
