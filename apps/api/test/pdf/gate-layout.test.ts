@@ -462,6 +462,12 @@ describe('text develop refused that nobody can see stays refused (fix round 1)',
     ['white text on a white shape drawn in a form between (PDFium\'s drawing shows nothing of it)', () => page([cell(), '/Fm1 Do', hidden('1 g'), BODY], { form: `1 g ${rect(COVER)} f` })],
     ['white text on a black cell its clip leaves out, over the white page', () => page([`q ${CELL.x} ${CELL.y + 200} 1 1 re W n ${cell()} Q`, onCell(WHITE), BODY])],
     ['white text on a black cell clipped by a triangle that leaves it out', () => page([`q ${CELL.x} ${CELL.y} m ${CELL.x + 5} ${CELL.y} l ${CELL.x} ${CELL.y + 5} l h W n ${cell()} Q`, onCell(WHITE), BODY])],
+    ['white text in a form the page clips away from it', () => page([cell(), `q ${CELL.x} ${CELL.y} 1 1 re W n /Fm1 Do Q`, BODY], { form: `1 g BT /F1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET` })],
+    ['white text on a black cell clipped by a triangle whose bounds hold the text but which leaves it out', () => page([`q ${CELL.x} ${CELL.y} m ${CELL.x + CELL.w} ${CELL.y} l ${CELL.x} ${CELL.y + CELL.h} l h W n ${cell()} Q`, `q 1 g BT /F2 14 Tf ${CELL.x + 60} ${CELL.y + 28} Td (Mon) Tj ET Q`, BODY])],
+    ['black text on a white shape, under a black cell clipped by a triangle round the text', () => page([`1 g ${rect(CELL)} f`, `q ${CELL.x} ${CELL.y} m ${CELL.x + CELL.w} ${CELL.y} l ${CELL.x} ${CELL.y + CELL.h} l h W n ${cell()} Q`, `q 0 g BT /F2 14 Tf ${CELL.x + 5} ${CELL.y + 4} Td (Mo) Tj ET Q`, BODY])],
+    ['Type 3 glyphs (d0) whose procs paint nothing, filled white', async () => withType3(await page([cell(), hidden('1 g', 'F9'), BODY]), '600 0 d0')],
+    ['Type 3 glyphs (d0) whose procs paint white and black, filled white', async () => withType3(await page([cell(), hidden('1 g', 'F9'), BODY]), '600 0 d0 1 g 50 0 250 700 re f 0 g 300 0 250 700 re f')],
+    ['white text on a light grey shape drawn in a form between (2:1)', () => page([cell(), '/Fm1 Do', hidden('1 g'), BODY], { form: `0.7 g ${rect(COVER)} f` })],
     ['K6: white text in a form drawn with blend mode Multiply', () => page([cell(), 'q /GS0 gs /Fm1 Do Q', BODY], { form: `1 g BT /F1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET`, ...MULTIPLY })],
   ];
 
@@ -903,6 +909,41 @@ describe('pageLabels, on readings made by hand: what lies under a glyph and over
     };
     expect(many(24)).toEqual([]);
     expect(many(25)).toBe(UNSEEN());
+  });
+
+  it('judges a glyph half on the original\'s rectangles, and a dark one only on a light piece round it and a margin', () => {
+    // Half its ink on the cell (97.5 to 102.5 across its right edge at 100): judged, and black on the black cell and
+    // the white page, unseen.
+    expect(judge([], [], [BLACK_TEXT], [glyph(97)])).toBe(UNSEEN());
+    // 0.095 is dark (under 0.1): on a white shape that holds its ink but not 0.1 pt round it, unseen; 0.105 is not.
+    const tightly = fill(1, [square(10.5, 5, 15.5, 11)]);
+    expect(judge([tightly], [], [{ luminance: 0.095, opaque: true }])).toBe(UNSEEN());
+    expect(judge([tightly], [], [{ luminance: 0.105, opaque: true }])).toEqual([]);
+    // A white shape round it and its margin, clipped to its ink and 0.05 pt: the clip leaves the margin out.
+    const roomy = fill(1, [square(5, 0, 20, 16)]);
+    expect(judge([roomy], [], [BLACK_TEXT])).toEqual([]);
+    expect(judge([fill(1, [square(5, 0, 20, 16)], { clips: [[square(10.45, 4.95, 15.55, 11.05)]] })], [], [BLACK_TEXT])).toBe(UNSEEN());
+    // 3:1 for the lighter glyph: 0.71 on 0.2 is (0.76 / 0.25), 0.69 is under it.
+    const grey = fill(0.2, [square(5, 0, 20, 16)]);
+    expect(judge([grey], [], [{ luminance: 0.71, opaque: true }])).toEqual([]);
+    expect(judge([grey], [], [{ luminance: 0.69, opaque: true }])).toBe(UNSEEN());
+  });
+
+  it('takes a glyph read before another of its object for under it, not over it', () => {
+    // A tall glyph of the same object read first, over the whole ink of the next but mostly off the cell (not judged).
+    const tall: PageChar = { ...glyph(10, 'y'), ink: { left: 10, right: 16, bottom: 5, top: 60 } };
+    expect(judge([], [], [WHITE_TEXT, WHITE_TEXT], [tall, glyph(10)])).toEqual([]);
+    // Read after it, it lies over it.
+    expect(judge([], [], [WHITE_TEXT, WHITE_TEXT], [glyph(10), tall])).toBe(UNSEEN());
+  });
+
+  it('takes away nothing for a fill or a stroke drawn after a glyph that its clip leaves out', () => {
+    const away = [square(60, 0, 70, 20)];
+    expect(judge([], [fill(0, [square(0, 0, 100, 20)], { clips: [away] })])).toEqual([]);
+    expect(judge([], [fill(0, [square(0, 0, 100, 20)])])).toBe(UNSEEN());
+    const stroke = (clips: Shape['clips']): Shape => ({ luminance: null, evenOdd: false, outline: [[[0, 8], [100, 8]]], clips, stroke: { luminance: 0, width: 30, mitred: false } });
+    expect(judge([], [stroke([away])])).toEqual([]);
+    expect(judge([], [stroke([])])).toBe(UNSEEN());
   });
 
   it('refuses a page whose glyphs take more work to judge than it allows', () => {
