@@ -496,7 +496,11 @@ one colour PDFium paints it), not lie under another glyph drawn after it,
 and show over at least half its ink once its clips, whatever is drawn after
 it and whatever under it is under 3:1 against its paint are taken away;
 where a picture, form or shading lies on it or under it, PDFium's drawing of
-the page must also show it. A glyph not seen where it is drawn passes only
+the page must also show it. A stroke's mitred corner is taken to reach as
+far as its angle lets (PDFium gives no miter limit); PDFium, drawing the
+glyph's text object alone, must paint 5 % or more of its ink box (a glyph its
+font draws nothing for is not seen); and on a page that draws text as a clip
+no glyph on such a rectangle is seen. A glyph not seen where it is drawn passes only
 when the same glyph drawn again there is seen. An original that cannot be
 opened refuses the
 copy too; `ENGINE_VERSION` gained `+layout-2`, so files refused before for

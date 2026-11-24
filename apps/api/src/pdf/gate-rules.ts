@@ -106,9 +106,10 @@
 //      one (GATE-LAYOUT): the gate reads the original for them itself, each
 //      page flattened as the engine flattens it. A glyph nobody can see on
 //      such rectangles (half its ink or more on them: not filled opaque, out
-//      of its clips, drawn over after, or under 3:1 against what lies under
-//      it; gate-labels.ts has the rule), and an original that cannot be
-//      opened, are "rules".
+//      of its clips, drawn over after, sharp mitres included, under 3:1
+//      against what lies under it, painted too little by PDFium drawn alone,
+//      or on a page with text drawn as a clip; gate-labels.ts has the rule),
+//      and an original that cannot be opened, are "rules".
 //
 //   6. Graphics states (BOXLABEL fix round 1, F4): every ExtGState, and
 //      every /ExtGState list, is a dictionary, and a soft mask is /None or
