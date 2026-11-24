@@ -304,7 +304,7 @@ describe('B1 (round 4): the other reader that recurses fails closed', () => {
   // takes the throw as no copy ("unfinished"). A quote that is a label's own text makes the gate read it.
   it('refuses, and stores nothing of, a copy whose page lists its content streams in a list that holds itself, when it reads the labels', async () => {
     const { original, pdf } = await quillon();
-    const marks = await labelMarks(pdf);
+    const marks = await labelMarks(pdf, original);
     if (typeof marks === 'string') throw new Error(marks);
     const cyclic = await edited(pdf, (doc) => {
       const list = doc.context.obj([contentRef(doc)]);
@@ -339,8 +339,8 @@ describe('R3-1: the engine gives no copy whose names pdf-lib reads apart from th
   });
 
   it('labels are found and taken out of the engine\'s copy as before', async () => {
-    const { pdf } = await quillon();
-    const marks = await labelMarks(pdf);
+    const { original, pdf } = await quillon();
+    const marks = await labelMarks(pdf, original);
     if (typeof marks === 'string') throw new Error(marks);
     expect(await unlabelled(pdf, marks)).toBeInstanceOf(Uint8Array);
   });

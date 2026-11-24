@@ -84,8 +84,8 @@ function drawsOther(context: PDFContext, label: string, glyphs: string): PDFRef 
 const readsOther = (context: PDFContext, label: string, reads: string): PDFRef => context.register(context.obj({ ...PDFIUM_HELVETICA, ToUnicode: toUnicode(context, label, reads) }));
 
 const pagesOf = async (pdf: Uint8Array): Promise<PageRef[]> => (await load(pdf)).getPages().map((page) => ({ num: page.ref.objectNumber, gen: page.ref.generationNumber }));
-const marksOf = async (pdf: Uint8Array): Promise<PlacedLabel[][]> => {
-  const marks = await labelMarks(pdf);
+const marksOf = async (pdf: Uint8Array, original: Uint8Array): Promise<PlacedLabel[][]> => {
+  const marks = await labelMarks(pdf, original);
   if (typeof marks === 'string') throw new Error(marks);
   return marks;
 };
@@ -108,14 +108,14 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
   it.each(CASES.map((c) => [c.label, c] as const))('refuses a "%s" label whose font\'s /Differences draw the quote it covers: "withheld"', async (label, c) => {
     const original = await c.original();
     const { pdf } = copyOf(await redactPdf(original, { quotes: c.quotes, membersWithhold: c.membersWithhold, redactsAny: true }));
-    const marks = await marksOf(pdf);
+    const marks = await marksOf(pdf, original);
     expect(marks).toEqual([[{ text: label, x: expect.any(Number) as unknown, y: expect.any(Number) as unknown }]]);
     expect((await gateReply({ copy: pdf, original, quotes: c.quotes, image: 'show' })).verdict).toEqual({ pass: true });
     // The same copy with only the label's font changed: every text layer still reads the label, pdf.js draws the quote.
     const lying = await withLabelFont(pdf, (context) => drawsOther(context, label, c.glyphs));
     expect.soft(await gateVerdict({ copy: lying, original, quotes: c.quotes, image: 'show' })).toEqual({ pass: false, code: 'withheld' });
     expect.soft((await gateReply({ copy: lying, original, quotes: c.quotes, image: 'show' })).verdict).toEqual({ pass: false, code: 'withheld' });
-    expect.soft(await labelMarks(lying)).toEqual(marks);
+    expect.soft(await labelMarks(lying, original)).toEqual(marks);
     const pages = await pagesOf(lying);
     expect.soft(await drawnBreak(lying, 'show', c.quotes, pages)).toEqual(WITHHELD_GLYPHS);
     // Each layer alone holds: (a) the font is not PDFium's, so no label is taken out; (b) the glyphs do not spell the label.
@@ -141,7 +141,7 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
     expect(await drawnBreak(glyphsLie, 'show', ['Quillon'], pages, [['Private']])).toEqual(WITHHELD_GLYPHS);
     const textLie = await withLabelFont(pdf, (context) => readsOther(context, 'Private', 'Quillon'));
     expect(await drawnBreak(textLie, 'show', ['Quillon'], pages, [['Private']])).toEqual(WITHHELD_GLYPHS);
-    expect(await unlabelled(textLie, await marksOf(pdf))).toBeNull();
+    expect(await unlabelled(textLie, await marksOf(pdf, original))).toBeNull();
   });
 
   const FONTS: ReadonlyArray<[string, (context: PDFContext) => PDFObject | undefined]> = [
@@ -164,15 +164,15 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
   ];
 
   it.each(FONTS)('(a) takes no label out when the label\'s font has %s', async (_name, make) => {
-    const { pdf } = await quillon();
-    const marks = await marksOf(pdf);
+    const { original, pdf } = await quillon();
+    const marks = await marksOf(pdf, original);
     expect(await unlabelled(await withLabelFont(pdf, (context) => context.register(context.obj({ ...PDFIUM_HELVETICA }))), marks)).toBeInstanceOf(Uint8Array);
     expect(await unlabelled(await withLabelFont(pdf, make), marks)).toBeNull();
   });
 
   it('(a) reads the font through the name the label\'s own op uses, and no other', async () => {
-    const { pdf } = await quillon();
-    const marks = await marksOf(pdf);
+    const { original, pdf } = await quillon();
+    const marks = await marksOf(pdf, original);
     // The label drawn in a lying font under a new name, PDFium's own font left beside it under the old one.
     const renamed = await patched(
       pdf,
@@ -199,7 +199,7 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
   it.each(ESCAPES)('(a) finds no label whose op names its font with %s: PDFium writes FXF<n> (R2-1)', async (_name, escaped) => {
     const original = await twoMarksFixture();
     const { pdf } = copyOf(await redactPdf(original, { quotes: ['Quillon'], membersWithhold: [true], redactsAny: true }));
-    const marks = await marksOf(pdf);
+    const marks = await marksOf(pdf, original);
     const bad = await patched(
       pdf,
       (content) => content.replace(LABEL_OP, (op, _x, _y, name: string) => op.replace(`/${name} `, `/${escaped} `)),
@@ -211,7 +211,7 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
     );
     expect(Buffer.from(bad).toString('latin1')).toContain('/FX#234a9');
     // PDFium still reads the label, in its box; pdf.js draws the quote under it.
-    expect(await labelMarks(bad)).toEqual(marks);
+    expect(await labelMarks(bad, original)).toEqual(marks);
     expect.soft(await unlabelled(bad, marks)).toBeNull();
     // The key FX#4a9 holds "#" once decoded, so since fix round 3 (R3-1) the gate refuses the copy before any label is read.
     expect.soft(await verdictOf(bad, original, ['Quillon'])).toEqual({ pass: false, code: 'rules' });
@@ -219,15 +219,15 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
   });
 
   it('(a) finds no label whose op has any #XX escape, even one that names PDFium\'s own font (R2-1)', async () => {
-    const { pdf } = await quillon();
-    const marks = await marksOf(pdf);
+    const { original, pdf } = await quillon();
+    const marks = await marksOf(pdf, original);
     // "/FX#46" is FXF to every reader, and FXF holds PDFium's own font: honest, but not as PDFium writes it.
     const escaped = await patched(
       pdf,
       (content) => content.replace(LABEL_OP, (op, _x, _y, name: string) => op.replace(`/${name} `, '/FX#46 ')),
       (doc) => (doc.getPage(0).node.Resources()?.lookup(PDFName.of('Font'), PDFDict) as PDFDict).set(PDFName.of('FXF'), doc.context.register(doc.context.obj({ ...PDFIUM_HELVETICA }))),
     );
-    expect(await labelMarks(escaped)).toEqual(marks);
+    expect(await labelMarks(escaped, original)).toEqual(marks);
     expect(await unlabelled(escaped, marks)).toBeNull();
     // The same font under a plain name is a label's.
     const plain = await patched(
@@ -242,8 +242,8 @@ describe('F1: a label counts as one only in PDFium\'s own font, and its glyphs m
     ['no /Font list', (resources: PDFDict) => resources.delete(PDFName.of('Font'))],
     ['a /Font list that is not a dictionary', (resources: PDFDict) => resources.set(PDFName.of('Font'), PDFName.of('Helvetica'))],
   ] as const)('(a) takes no label out of a page whose resources have %s', async (_name, change) => {
-    const { pdf } = await quillon();
-    const marks = await marksOf(pdf);
+    const { original, pdf } = await quillon();
+    const marks = await marksOf(pdf, original);
     const bad = await patched(pdf, (content) => content, (doc) => change(doc.getPage(0).node.Resources() as PDFDict));
     expect(await unlabelled(bad, marks)).toBeNull();
   });
@@ -269,8 +269,8 @@ describe('F5: the labels are taken out only of content streams written as PDFium
   ];
 
   it.each(STREAMS)('takes no label out of a content stream with %s', async (_name, make) => {
-    const { pdf } = await quillon();
-    const marks = await marksOf(pdf);
+    const { original, pdf } = await quillon();
+    const marks = await marksOf(pdf, original);
     expect(await unlabelled(await withContentStream(pdf, (context, content) => context.flateStream(content)), marks)).toBeInstanceOf(Uint8Array);
     expect(await unlabelled(await withContentStream(pdf, make), marks)).toBeNull();
   });
@@ -303,7 +303,7 @@ describe('F3 and F2: a box is one rectangle, drawn round and closed, opaque blac
         states.set(PDFName.of('GSm'), doc.context.obj({ Type: 'ExtGState', SMask: { Type: 'Mask', S: 'Luminosity', G: group } }));
       },
     );
-    expect(await labelMarks(bad)).toBe('page 1: a label is drawn outside a box');
+    expect(await labelMarks(bad, original)).toBe('page 1: a label is drawn outside a box');
     expect((await verdictOf(bad, original)).pass).toBe(false);
   });
 
@@ -315,7 +315,7 @@ describe('F3 and F2: a box is one rectangle, drawn round and closed, opaque blac
         return `q 0 0 0 rg 0 G ${X} ${Y} m ${X + W} ${Y} l ${X + W} ${Y + H} l ${X} ${Y + H} l h f* Q`;
       }),
     );
-    expect(await labelMarks(drawn)).toEqual(await labelMarks(pdf));
+    expect(await labelMarks(drawn, original)).toEqual(await labelMarks(pdf, original));
     expect(await verdictOf(drawn, original)).toEqual({ pass: true });
   });
 });
@@ -328,7 +328,7 @@ describe('F2: the label rules the mutants showed untested', () => {
   ])('refuses a label set %s', async (_name, edit) => {
     const { original, pdf } = await quillon();
     const bad = await patched(pdf, (content) => content.replace(LABEL_OP, edit));
-    expect(await labelMarks(bad)).toBe("page 1: a label is not in the labels' style");
+    expect(await labelMarks(bad, original)).toBe("page 1: a label is not in the labels' style");
     expect(await verdictOf(bad, original)).toEqual({ pass: false, code: 'rules' });
   });
 
@@ -339,37 +339,37 @@ describe('F2: the label rules the mutants showed untested', () => {
       return `${content}\nq 1 1 1 rg 0 G 1 0 0 1 ${box.left + 1.5} ${box.bottom + 0.5} cm BT 1 0 0 1 0 0 Tm /${font} 7 Tf 0 Tr <${hex('Private')}> Tj ET Q`;
     });
     // Not the duplicate's path: PDFium reads both labels whole, and the box holds two.
-    expect(await labelMarks(second)).toBe('page 1: a box holds more than one label');
+    expect(await labelMarks(second, original)).toBe('page 1: a box holds more than one label');
     expect(await verdictOf(second, original)).toEqual({ pass: false, code: 'rules' });
   });
 
   it('refuses a label whose reading needs a space PDFium makes up (M26)', async () => {
     const { original, pdf } = await quillon();
     const spaced = await patched(pdf, (content) => content.replace(`<${hex('Members Only')}> Tj`, `[<${hex('Members')}> -278 <${hex('Only')}>] TJ`));
-    expect(await labelMarks(spaced)).toBe('page 1: text other than its label is in a box');
+    expect(await labelMarks(spaced, original)).toBe('page 1: text other than its label is in a box');
     expect(await verdictOf(spaced, original)).toEqual({ pass: false, code: 'rules' });
   });
 
   it('refuses a glyph over a box that PDFium names no drawing object for, and passes one drawn under the box (M5)', () => {
     const box: Box = { left: 0, right: 100, bottom: 0, top: 20 };
     const chars: PageChar[] = [{ text: 'x', generated: false, hyphen: false, box: { left: 10, right: 16, bottom: 5, top: 12 }, ink: null, fontSize: 10 }];
-    const reading = (places: number[]): LabelReading => ({ top: [{ kind: 'other', object: 7 }, { kind: 'box', object: 1, bounds: box }], nested: 0, owners: [7], places });
-    expect(pageLabels(reading([0]), chars, 0)).toEqual([]);
-    expect(pageLabels(reading([-1]), chars, 0)).toBe('page 1: text other than its label is in a box');
-    expect(pageLabels(reading([]), chars, 0)).toBe('page 1: text other than its label is in a box');
+    const reading = (places: number[]): LabelReading => ({ top: [{ kind: 'other', object: 7 }, { kind: 'box', object: 1, bounds: box }], nested: 0, owners: [7], places, paints: [{ luminance: 1, opaque: true }] });
+    expect(pageLabels(reading([0]), chars, 0, [], () => null)).toEqual([]);
+    expect(pageLabels(reading([-1]), chars, 0, [], () => null)).toBe('page 1: text other than its label is in a box');
+    expect(pageLabels(reading([]), chars, 0, [], () => null)).toBe('page 1: text other than its label is in a box');
   });
 
   it('judges a copy whose labels fail by what it shows: a quote in it is "withheld", not only "rules" (M19)', async () => {
     const { original, pdf } = await quillon();
     const font = (LABEL_OP.exec(await contentOf(pdf)) as RegExpExecArray)[3] as string;
     const bad = await patched(pdf, (content) => `${content.replace(hex('Members Only'), hex('withheld'))}\nq 0 0 0 rg BT /${font} 12 Tf 20 120 Td (Quillon Brask) Tj ET Q`);
-    expect(typeof (await labelMarks(bad))).toBe('string');
+    expect(typeof (await labelMarks(bad, original))).toBe('string');
     expect(await verdictOf(bad, original)).toEqual({ pass: false, code: 'withheld' });
   });
 
   it('takes each label out once, at its own place, and nowhere else (M6, M7)', async () => {
-    const { pdf } = await quillon();
-    const marks = await marksOf(pdf);
+    const { original, pdf } = await quillon();
+    const marks = await marksOf(pdf, original);
     const [mark] = marks[0] as [PlacedLabel];
     const out = await unlabelled(pdf, marks);
     expect(await contentOf(out as Uint8Array)).not.toContain(hex('Members Only'));

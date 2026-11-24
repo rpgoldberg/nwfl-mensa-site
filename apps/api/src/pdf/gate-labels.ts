@@ -21,6 +21,29 @@
 // there only when PDFium could not remove it (an invisible copy, before as
 // now), and the leak checks read it like any other.
 //
+// GATE-LAYOUT: a newsletter draws rectangles of its own in that very style (a
+// calendar's black header cells, a bar behind a heading, a hairline rule), so
+// the style alone does not make a box. The check is given the original, opens
+// it itself (the gate takes nothing the engine says of it), flattens each
+// page as the engine does and reads its rectangles in the boxes' style
+// (layoutOf). A rectangle of the copy with exactly the bounds of one the
+// original draws on the same page is the layout's, one for one in drawing
+// order; every other is a box, under every rule above. So a rectangle the
+// copy adds, moves, draws once more than the original or on another page is
+// a box, and the engine's box drawn exactly on a rectangle of the original,
+// in its place, is not: its label is then outside a box, and refused. An
+// original that cannot be opened is refused.
+// On a rectangle of the layout the labels' rules do not hold (its white
+// heading is the newsletter's), and one does: a glyph nobody can see there is
+// refused. That is a glyph drawn after the rectangle, its ink wholly inside
+// it, that is dark (its fill's luminance under 0.1, under 3:1 against black)
+// or not opaque (its fill or a form that draws it transparent, or its glyphs
+// not filled), unless a shape drawn between the two covers its ink: a path
+// directly on the page, filled opaque in a light colour (luminance 0.4 or
+// over), at the identity, whose fill and every clip hold the ink and 0.1 pt
+// round it (pdfium.ts Page.shape). Text hidden any other way is not this
+// check's to find.
+//
 // The leak checks (gate.ts checkCopy, drawn.ts's glyphs, the engine's own
 // PDFium reading) do not count the labels' text (leakBreak). A check that
 // finds withheld text in a copy whose labels pass is run once more on the
@@ -55,7 +78,7 @@ import { PDFArray, PDFDict, PDFDocument, PDFName, type PDFObject, PDFRawStream, 
 import { decodePDFRawStream } from '@cantoo/pdf-lib';
 import { type Label, isLabel } from './labels.js';
 import type { Box, PageChar } from './match.js';
-import { Document, type LabelReading, pdfium } from './pdfium.js';
+import { Document, type LabelReading, type Outline, type Shape, pdfium } from './pdfium.js';
 
 /** A label as read from a copy: its text, and its place (the origin PDFium draws it from). */
 export interface PlacedLabel {
@@ -76,17 +99,93 @@ const centreIn = (box: Box, { left, right, bottom, top }: Box): boolean => {
   return x > box.left + SLACK && x < box.right - SLACK && y > box.bottom + SLACK && y < box.top - SLACK;
 };
 
-/** One page's labels, or why they are not the engine's (see the header). */
-export function pageLabels(reading: LabelReading, chars: readonly PageChar[], index: number): PlacedLabel[] | string {
+/** A glyph's fill under this luminance is under 3:1 against black (WCAG contrast (L + 0.05) / 0.05): unseen on it. */
+const DARK = 0.1;
+/** A shape's fill at this luminance or over is 3:1 or more against any glyph under DARK: it shows the glyph. */
+const LIGHT = 0.4;
+/** How far past a glyph's ink a shape must reach, on every side, to cover it: more than the chords of a curve miss by. */
+const COVER_MARGIN = 0.1;
+
+const UNREAD_ORIGINAL = 'the original could not be opened to read its layout';
+
+/** Whether the line from (x1, y1) to (x2, y2) meets the box, its edge included (Liang and Barsky's clip). */
+function meetsBox(box: Box, x1: number, y1: number, x2: number, y2: number): boolean {
+  let from = 0;
+  let to = 1;
+  const sides: ReadonlyArray<readonly [number, number]> = [
+    [x1 - x2, x1 - box.left],
+    [x2 - x1, box.right - x1],
+    [y1 - y2, y1 - box.bottom],
+    [y2 - y1, box.top - y1],
+  ];
+  for (const [p, q] of sides) {
+    if (p === 0) {
+      if (q < 0) return false;
+      continue;
+    }
+    const t = q / p;
+    if (p < 0) from = Math.max(from, t);
+    else to = Math.min(to, t);
+    if (from > to) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether an outline's fill holds the whole box: no edge of it meets the box, so the box lies wholly in or wholly
+ * out, and its corner lies in. `evenOdd`: by that rule, or by the nonzero winding rule; null: by both (a clip, whose
+ * rule PDFium does not give).
+ */
+function fills(outline: Outline, evenOdd: boolean | null, box: Box): boolean {
+  let winding = 0;
+  let crossings = 0;
+  for (const ring of outline) {
+    for (const [i, [x1, y1]] of ring.entries()) {
+      const [x2, y2] = ring[(i + 1) % ring.length] as [number, number];
+      if (meetsBox(box, x1, y1, x2, y2)) return false;
+      // A ray from the box's corner to the right: each edge it crosses, and which way that edge runs.
+      if (y1 <= box.bottom === y2 <= box.bottom || x1 + ((box.bottom - y1) * (x2 - x1)) / (y2 - y1) <= box.left) continue;
+      winding += y2 > y1 ? 1 : -1;
+      crossings += 1;
+    }
+  }
+  const odd = crossings % 2 === 1;
+  return evenOdd === null ? odd && winding !== 0 : evenOdd ? odd : winding !== 0;
+}
+
+/** Whether a shape covers a glyph's ink whole, and a margin round it: its fill holds it, and so does every clip on it. */
+function covers(shape: Shape, ink: Box): boolean {
+  const area = { left: ink.left - COVER_MARGIN, right: ink.right + COVER_MARGIN, bottom: ink.bottom - COVER_MARGIN, top: ink.top + COVER_MARGIN };
+  return fills(shape.outline, shape.evenOdd, area) && shape.clips.every((clip) => fills(clip, null, area));
+}
+
+const boundsKey = ({ left, right, bottom, top }: Box): string => `${left},${right},${bottom},${top}`;
+
+/**
+ * One page's labels, or why they are not the engine's (see the header). `layout`: the rectangles the original draws
+ * on this page in the boxes' style (layoutOf); `shapeAt`: the page's object at a place in its drawing order, as a
+ * shape that hides what is under it (pdfium.ts Page.shape).
+ */
+export function pageLabels(reading: LabelReading, chars: readonly PageChar[], index: number, layout: readonly Box[], shapeAt: (at: number) => Shape | null): PlacedLabel[] | string {
   const where = `page ${index + 1}`;
   const outside = `${where}: a label is drawn outside a box`;
   const other = `${where}: text other than its label is in a box`;
   if (reading.nested > 0) return outside;
+  // The original's rectangles not yet found in the copy, by their bounds: each excuses one rectangle of the copy.
+  const spare = new Map<string, number>();
+  for (const box of layout) spare.set(boundsKey(box), (spare.get(boundsKey(box)) ?? 0) + 1);
   const boxes: Array<{ at: number; bounds: Box; held: number }> = [];
+  const ruled: Array<{ at: number; bounds: Box }> = [];
   const labels = new Set<number>();
   const out: PlacedLabel[] = [];
   for (const [at, mark] of reading.top.entries()) {
-    if (mark.kind === 'box') boxes.push({ at, bounds: mark.bounds, held: 0 });
+    if (mark.kind === 'box') {
+      const left = spare.get(boundsKey(mark.bounds)) ?? 0;
+      if (left > 0) {
+        spare.set(boundsKey(mark.bounds), left - 1);
+        ruled.push({ at, bounds: mark.bounds });
+      } else boxes.push({ at, bounds: mark.bounds, held: 0 });
+    }
     if (mark.kind !== 'lettering') continue;
     // Held by a box drawn before it: a label, and nothing else, in the labels' style, one to a box.
     const box = boxes.find((b) => holds(b.bounds, mark.bounds));
@@ -100,25 +199,71 @@ export function pageLabels(reading: LabelReading, chars: readonly PageChar[], in
     labels.add(mark.object);
     out.push({ text: mark.text, x: mark.x, y: mark.y });
   }
-  // Any other glyph drawn over a box (after it), with its centre in the box. One drawn before it, under the opaque box, is
-  // hidden by it: as before the labels, the leak checks read it.
+  const shapes = new Map<number, Shape | null>();
+  const shape = (at: number): Shape | null => {
+    if (!shapes.has(at)) shapes.set(at, shapeAt(at));
+    return shapes.get(at) ?? null;
+  };
+  /** Whether a light shape drawn after the rectangle at `from` and before the glyph's object at `to` covers the ink. */
+  const shown = (from: number, to: number, ink: Box): boolean => {
+    for (let at = from + 1; at < to; at++) {
+      const found = shape(at);
+      if (found !== null && found.luminance >= LIGHT && covers(found, ink)) return true;
+    }
+    return false;
+  };
   for (const [i, c] of chars.entries()) {
     const place = c.box ?? c.ink;
     if (c.generated || place === null || /^\s*$/u.test(c.text) || labels.has(reading.owners[i] ?? 0)) continue;
     const drawnAt = reading.places[i] ?? -1;
+    // Any other glyph drawn over a box (after it), with its centre in the box. One drawn before it, under the opaque box,
+    // is hidden by it: as before the labels, the leak checks read it.
     if (boxes.some((box) => (drawnAt < 0 || box.at < drawnAt) && centreIn(box.bounds, place))) return other;
+    // A glyph nobody can see on a rectangle of the original (GATE-LAYOUT): dark or not opaque, its ink wholly inside
+    // the rectangle, drawn after it, and no light shape drawn between the two under it.
+    const paint = reading.paints[i];
+    if (paint !== undefined && paint.opaque && paint.luminance >= DARK) continue;
+    const ink = c.ink ?? place;
+    const end = drawnAt < 0 ? reading.top.length : drawnAt;
+    if (ruled.some((rule) => rule.at < end && holds(rule.bounds, ink) && !shown(rule.at, end, ink))) return `${where}: text nobody can see lies on a black rectangle of the original`;
   }
   return out;
 }
 
-/** Each page's labels (0-based), or why the copy's labels are not the engine's: see the header. */
-export async function labelMarks(pdf: Uint8Array): Promise<PlacedLabel[][] | string> {
+/**
+ * Each page of the original's rectangles in the boxes' style (0-based), or why they cannot be read. Each page is
+ * flattened first, as the engine flattens it (redact.ts redactPage), so what an annotation draws is read as the
+ * copy holds it.
+ */
+export async function layoutOf(original: Uint8Array): Promise<Box[][] | string> {
+  const doc = Document.open(await pdfium(), original);
+  if (doc === null) return UNREAD_ORIGINAL;
+  try {
+    const out: Box[][] = [];
+    for (let index = 0; index < doc.pageCount; index++) {
+      doc.flatten(index);
+      out.push(doc.page(index, (page) => page.boxes()));
+    }
+    return out;
+  } finally {
+    doc.close();
+  }
+}
+
+/**
+ * Each page's labels (0-based), or why the copy's labels are not the engine's: see the header. `original`: the file
+ * the copy was made from, whose own rectangles in the boxes' style are not boxes (layoutOf); a page the original has
+ * not has none.
+ */
+export async function labelMarks(pdf: Uint8Array, original: Uint8Array): Promise<PlacedLabel[][] | string> {
+  const layout = await layoutOf(original);
+  if (typeof layout === 'string') return layout;
   const doc = Document.open(await pdfium(), pdf);
   if (doc === null) return 'the copy could not be opened to read its labels';
   try {
     const out: PlacedLabel[][] = [];
     for (let index = 0; index < doc.pageCount; index++) {
-      const found = doc.page(index, (page) => pageLabels(page.labelReading(), page.chars().chars, index));
+      const found = doc.page(index, (page) => pageLabels(page.labelReading(), page.chars().chars, index, layout[index] ?? [], (at) => page.shape(at)));
       if (typeof found === 'string') return found;
       out.push(found);
     }
