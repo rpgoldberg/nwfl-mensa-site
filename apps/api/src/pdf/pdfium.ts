@@ -142,8 +142,10 @@ export class Document {
 export class Page {
   /** Each text object in a form XObject, as labelReading found it: the matrix from its space to the page's. */
   private readonly formMatrix = new Map<number, Matrix>();
-  /** The last text object drawn alone (Page.inked): its alpha, a row at a time, and where it lies. */
-  private alone: { object: number; alpha: Uint8Array; width: number; height: number; scale: number; bounds: Box } | null = null;
+  /** The last INK_CACHE text objects drawn alone (Page.inked), by object: each pixel's alpha, a row at a time, and where it lies. */
+  private readonly alone = new Map<number, { alpha: Uint8Array; width: number; height: number; scale: number; bounds: Box }>();
+  /** The pixels drawn so far for Page.inked (at most MAX_INK_PIXELS a page). */
+  private inkPixels = 0;
 
   constructor(
     private readonly m: Module,
@@ -560,14 +562,19 @@ export class Page {
     }
   }
 
-  /** A text object drawn alone at up to INK_SCALE (Page.inked): its pixels' alpha and where they lie; null when PDFium cannot draw it. */
-  private drawnAlone(object: number): Page['alone'] {
+  /**
+   * A text object drawn alone at up to INK_SCALE (Page.inked): its pixels' alpha and where they lie; null when PDFium
+   * cannot draw it, or drawing it would take the page past MAX_INK_PIXELS.
+   */
+  private drawnAlone(object: number): { alpha: Uint8Array; width: number; height: number; scale: number; bounds: Box } | null {
     const m = this.m;
     const at = rt(m).wasmExports.malloc(16);
     try {
       if (!m.FPDFPageObj_GetBounds(object, at, at + 4, at + 8, at + 12)) return null;
       const [left = 0, bottom = 0, right = 0, top = 0] = new Float32Array(rt(m).HEAPU8.buffer, at, 4);
       const scale = Math.min(INK_SCALE, Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, (right - left) * (top - bottom))));
+      this.inkPixels += (right - left) * (top - bottom) * scale * scale;
+      if (this.inkPixels > MAX_INK_PIXELS) return null;
       const bitmap = m.FPDFTextObj_GetRenderedBitmap(this.doc.handle, this.handle, object, scale);
       if (bitmap === 0) return null;
       try {
@@ -578,7 +585,7 @@ export class Page {
         const alpha = new Uint8Array(width * height);
         // Blue, green, red, alpha.
         for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) alpha[y * width + x] = rt(m).HEAPU8[start + y * stride + x * 4 + 3] as number;
-        return { object, alpha, width, height, scale, bounds: { left, bottom, right, top } };
+        return { alpha, width, height, scale, bounds: { left, bottom, right, top } };
       } finally {
         m.FPDFBitmap_Destroy(bitmap);
       }
@@ -593,11 +600,17 @@ export class Page {
    * of its size on each side (else the one at its centre), with any paint at all. A glyph a font draws nothing for
    * (a glyph name PDFium finds no glyph by, a space a /ToUnicode reads as a letter) paints none. The box is in page
    * points; a text object in a form is drawn in the form's space, so the box is carried there (labelReading has read
-   * the form's matrix). Null when PDFium cannot draw it, or its matrix cannot be undone.
+   * the form's matrix). Null when PDFium cannot draw it, the page's text objects have taken MAX_INK_PIXELS, or its
+   * matrix cannot be undone.
    */
   inked(object: number, ink: Box): number | null {
-    const alone = this.alone?.object === object ? this.alone : (this.alone = this.drawnAlone(object));
-    if (alone === null) return null;
+    let alone = this.alone.get(object) ?? null;
+    if (alone === null) {
+      alone = this.drawnAlone(object);
+      if (alone === null) return null;
+      if (this.alone.size >= INK_CACHE) this.alone.delete(this.alone.keys().next().value as number);
+      this.alone.set(object, alone);
+    }
     const { alpha, width, height, scale, bounds } = alone;
     // The box in the object's own space: through the inverse of its form's matrix, the box round its four corners.
     const [a, b, c, d, e, f] = this.formMatrix.get(object) ?? IDENTITY;
@@ -868,6 +881,10 @@ const MAX_RENDER_PIXELS = 4_000_000;
 const COLOUR_SLACK = 8;
 /** The scale a text object is drawn at alone to tell whether a glyph of it paints (Page.inked): 4 pixels a point. */
 const INK_SCALE = 4;
+/** The most text objects drawn alone kept at once (Page.inked), the oldest let go first. */
+const INK_CACHE = 8;
+/** The most pixels a page's text objects may be drawn alone at between them (Page.inked): past it, none is drawn. */
+const MAX_INK_PIXELS = 64_000_000;
 
 /** The WCAG relative luminance (0 black to 1 white) of an sRGB colour, each channel 0 to 255. */
 export function luminance(r: number, g: number, b: number): number {

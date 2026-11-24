@@ -1133,6 +1133,19 @@ describe('what may hide a glyph on a rectangle of the original, as PDFium draws 
     expect(await verdict(original, original)).toEqual({ pass: false, code: 'rules' });
   });
 
+  it('draws at most 64 million pixels of text objects alone a page: past that, a glyph is not seen', async () => {
+    // Each text object holds a glyph on the cell and a stop 20,000 pt to the right of it (PDFium makes a text object
+    // of each show), so it is drawn alone at about 1.4 million pixels: thirty fit the page's budget, sixty do not.
+    const objects = (n: number): string =>
+      Array.from({ length: n }, (_, k) => `q 1 g BT /F1 8 Tf ${CELL.x + 2 + 5 * (k % 20)} ${CELL.y + 5 + 11 * Math.floor(k / 20)} Td [(n) -2500000 (.)] TJ ET Q`).join('\n');
+    const some = await page([cell(), objects(30), BODY]);
+    expect(await labelMarks(some, some)).toEqual([[]]);
+    const many = await page([cell(), objects(60), BODY]);
+    const started = performance.now();
+    expect(await labelMarks(many, many)).toBe(UNSEEN());
+    expect(performance.now() - started).toBeLessThan(10_000);
+  }, 60_000);
+
   it('refuses, in the gate, white text on a cell drawn inside a clip of text far from it (the engine refuses text clips)', async () => {
     const original = await page([`q BT 7 Tr /F1 30 Tf 20 300 Td (X) Tj ET ${cell()} Q`, onCell(WHITE), BODY]);
     expect(refusal(await redact(original, QUOTE))).toBe('page 1 has text drawn as a clip, which removal would lose');
