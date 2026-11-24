@@ -131,7 +131,11 @@ describe('what a membership check makes a person', () => {
     ['a duplicate claim with the chapter\'s group (B1)', member, check('duplicate_claim', true, CHAPTER), 'unconfirmed'],
     ['no sign-up', member, check(null), 'unconfirmed'],
     ['an affiliate with a full check', affiliate, check('verified_other_group', true, 'Boston Mensa'), 'affiliate'],
-    ['an affiliate with a full check in the chapter\'s group', affiliate, check('verified_local', true, CHAPTER), 'affiliate'],
+    // Fix round 5 (S6, G2b/G2c): an affiliate whose check names the chapter's own group stands as the chapter's own.
+    ['an affiliate with a full check in the chapter\'s group', affiliate, check('verified_local', true, CHAPTER), 'chapter'],
+    ['an affiliate in the chapter\'s group, first name not matched', affiliate, check('verified_local', false, CHAPTER), 'chapter_partial'],
+    ['an affiliate whose email mismatch an approver confirmed in the chapter\'s group', affiliate, check('email_mismatch', true, ` ${CHAPTER} `), 'chapter'],
+    ['an affiliate with the chapter\'s name in lower case (exact compare)', affiliate, check('verified_local', true, CHAPTER.toLowerCase()), 'affiliate'],
     ['an affiliate whose first name was not confirmed', affiliate, check('verified_other_group', null, 'Boston Mensa'), 'affiliate_partial'],
     ['an affiliate the check did not confirm', affiliate, check('not_found', true, CHAPTER), 'affiliate_partial'],
     ['an affiliate with no sign-up', affiliate, check(null), 'affiliate_partial'],

@@ -28,7 +28,7 @@ const PEOPLE: Record<string, VerifiedToken> = {
   // Both fully checked chapter members (seeded below).
   approver: person('sub-ovr-approver', ['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-membership-approvers']),
   admin: person('sub-ovr-admin', ['nwfl-members', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-officers']),
-  // A Webmaster who may grant but neither approve nor see the approvers' queue (fix round 4).
+  // A Webmaster who may neither approve nor see the approvers' queue (fix round 4), nor, switched on, grant (fix round 5).
   webmaster: person('sub-ovr-webmaster', ['nwfl-members', 'nwfl-webmaster']),
 };
 const verifier: TokenVerifier = {
@@ -424,7 +424,8 @@ describe.skipIf(!live)('OFFICER-VERIFY fix round 3: a confirmed check for every 
       await report(person.id, O.EMAIL_MISMATCH, { localGroup: group, firstNameMatched: true });
       const token = `officer.${person.i}`;
       expect(await power(token)).toBe('PermissionDenied');
-      await expect(m().grantAffiliate({ subject: person.sub }, as(who))).rejects.toMatchObject({ code: Code.FailedPrecondition });
+      // Fix round 5: switched on, the grant is the Admin's alone, so the Webmaster is refused before the check is read.
+      await expect(m().grantAffiliate({ subject: person.sub }, as(who))).rejects.toMatchObject({ code: who === 'webmaster' ? Code.PermissionDenied : Code.FailedPrecondition });
       expect(await decisionOf(person.id)).toEqual({ decision: 'pending', decided_by_sub: null });
       expect(await row(person.id)).toMatchObject({ verification: 'email_mismatch', status: 'pending' });
       expect(await kindOf(person.sub)).toBe('none');
@@ -444,7 +445,8 @@ describe.skipIf(!live)('OFFICER-VERIFY fix round 3: a confirmed check for every 
       expect(await grantBy(person.sub, 'admin')).toBe('FailedPrecondition');
       expect(await approve(person.id)).toBe('ok');
       expect(await kindOf(person.sub)).toBe('guest');
-      expect(await grantBy(person.sub, 'webmaster')).toBe('ok');
+      expect(await grantBy(person.sub, 'webmaster')).toBe('PermissionDenied');
+      expect(await grantBy(person.sub, 'admin')).toBe('ok');
       expect(await kindOf(person.sub)).toBe('affiliate');
       expect(await power(`officer.${person.i}`)).toBe('ok');
     });
@@ -469,13 +471,158 @@ describe.skipIf(!live)('OFFICER-VERIFY fix round 3: a confirmed check for every 
       expect(await grantBy('sub-ovr-lapsed-2', 'admin')).toBe('ok');
       expect(await kindOf('sub-ovr-lapsed-2')).toBe('affiliate');
       await seedAccount(on.pool, { sub: 'sub-ovr-lapsed-3', status: 'lapsed', check: { verification: 'not_found' } });
-      expect(await grantBy('sub-ovr-lapsed-3', 'webmaster')).toBe('ok');
+      expect(await grantBy('sub-ovr-lapsed-3', 'admin')).toBe('ok');
       expect(await kindOf('sub-ovr-lapsed-3')).toBe('affiliate_partial');
       const other = await signUp('joiner');
       await report(other.id, O.VERIFIED_OTHER_GROUP, { localGroup: 'Tampa Bay Mensa', firstNameMatched: true });
       expect(await grantBy(other.sub, 'admin')).toBe('ok');
       expect(await decisionOf(other.id)).toEqual({ decision: 'approved', decided_by_sub: 'sub-ovr-admin' });
       expect(await kindOf(other.sub)).toBe('affiliate');
+    });
+  });
+
+  // Fix round 5 (the orchestrator's rulings on the challenger's Recheck 3), switched on:
+  //   S6  A grant on a PENDING sign-up takes only what an approved one would: a guest, or a person the check did
+  //       not confirm (affiliate_partial, no power). A confirmed person whose check reported no group is the
+  //       approvers' to approve, and the chapter's own are never granted, so no chapter-group affiliate holds power.
+  //   S9  A pending email mismatch with no group reported is refused for the approvers (mutant X7).
+  //   The grant is the Admin's alone (Ross: "officer tools if admin grants"); switched off, R33 as develop.
+  describe('fix round 5: a grant takes from a pending sign-up only what an approved one would give', () => {
+    const grantBy = (sub: string, who: 'admin' | 'webmaster' = 'admin') => code(m().grantAffiliate({ subject: sub }, as(who)));
+    const decisionOf = async (id: string) =>
+      (await on.pool.query<{ decision: string; decided_by_sub: string | null }>(`SELECT decision, decided_by_sub FROM signup_request WHERE id = $1`, [id])).rows[0];
+    const NOT_REPORTED = 'the check reported no local group: an approver approves the sign-up, not an affiliate grant';
+    const AFTER_APPROVER = 'the membership verification service did not confirm the email: an approver confirms it in the queue first';
+
+    it.each<[string, Extra]>([
+      ['no group at all (G1_VL_no_group)', { firstNameMatched: true }],
+      ['an empty group', { localGroup: '', firstNameMatched: true }],
+      ['a group of spaces', { localGroup: '   ', firstNameMatched: true }],
+    ])('refuses an officer\'s pending local match with %s, as it refuses the same member approved (S6)', async (_what, extra) => {
+      const person = await signUp('officer');
+      const token = `officer.${person.i}`;
+      await report(person.id, O.VERIFIED_LOCAL, extra);
+      await expect(m().grantAffiliate({ subject: person.sub }, as('admin'))).rejects.toMatchObject({ code: Code.FailedPrecondition, rawMessage: NOT_REPORTED });
+      expect(await decisionOf(person.id)).toEqual({ decision: 'pending', decided_by_sub: null });
+      expect(await kindOf(person.sub)).toBe('none');
+      expect(await power(token)).toBe('PermissionDenied');
+      expect(await audits(person.sub)).toEqual([]);
+      expect(await audits(person.id)).not.toContain('approve');
+      // The approved path refuses the same person; an approver approves them, and a check naming the group decides.
+      expect(await approve(person.id)).toBe('ok');
+      expect(await kindOf(person.sub)).toBe('unconfirmed');
+      expect(await grantBy(person.sub)).toBe('FailedPrecondition');
+      expect(await code(m().submitSignup({ membershipNumber: numberOf(person.i), lastName: 'Madeup', firstName: 'Sam' }, as(token)))).toBe('ok');
+      await report(person.id, O.VERIFIED_LOCAL, { localGroup: CHAPTER, firstNameMatched: true });
+      expect(await kindOf(person.sub)).toBe('chapter');
+      expect(await power(token)).toBe('ok');
+    });
+
+    it('refuses an officer\'s pending local match with no group and the first name unconfirmed; the way through is a new sign-up (S6)', async () => {
+      const person = await signUp('officer');
+      const token = `officer.${person.i}`;
+      await report(person.id, O.VERIFIED_LOCAL, { firstNameMatched: false });
+      await expect(m().grantAffiliate({ subject: person.sub }, as('admin'))).rejects.toMatchObject({ code: Code.FailedPrecondition, rawMessage: NOT_REPORTED });
+      expect(await decisionOf(person.id)).toEqual({ decision: 'pending', decided_by_sub: null });
+      expect(await audits(person.sub)).toEqual([]);
+      // An invited sign-up is approved by hand only once its check is full; it is rejected, reopened and sent again.
+      expect(await approve(person.id)).toBe('FailedPrecondition');
+      expect(await code(m().rejectSignup({ requestId: person.id }, as('approver')))).toBe('ok');
+      expect(await code(m().reopenSignup({ requestId: person.id }, as('approver')))).toBe('ok');
+      const { requestId } = await m().submitSignup({ membershipNumber: numberOf(person.i), lastName: 'Madeup', firstName: 'Sam' }, as(token));
+      expect(requestId).not.toBe(person.id);
+      await report(requestId, O.VERIFIED_LOCAL, { localGroup: CHAPTER, firstNameMatched: true });
+      expect(await kindOf(person.sub)).toBe('chapter');
+      expect(await power(token)).toBe('ok');
+    });
+
+    it('refuses a pending email mismatch with no group reported for the approvers, not for want of a group (S9: mutant X7)', async () => {
+      const person = await signUp('officer');
+      await report(person.id, O.EMAIL_MISMATCH, { firstNameMatched: true });
+      await expect(m().grantAffiliate({ subject: person.sub }, as('admin'))).rejects.toMatchObject({ code: Code.FailedPrecondition, rawMessage: AFTER_APPROVER });
+      expect(await decisionOf(person.id)).toEqual({ decision: 'pending', decided_by_sub: null });
+      expect(await kindOf(person.sub)).toBe('none');
+    });
+
+    it.each<[string, string]>([
+      ['in lower case', CHAPTER.toLowerCase()],
+      ['in upper case', CHAPTER.toUpperCase()],
+      ['with a zero-width space', `${CHAPTER}\u200b`],
+      ['with a double space', 'Northwest  Florida Mensa'],
+      ['"No group assigned"', 'No group assigned'],
+    ])('reads the chapter\'s name %s as the approved path does: another group, whose member may be granted either way (S6, exact compare)', async (_what, group) => {
+      const pending = await signUp('officer');
+      await report(pending.id, O.VERIFIED_LOCAL, { localGroup: group, firstNameMatched: true });
+      expect(await grantBy(pending.sub)).toBe('ok');
+      expect(await kindOf(pending.sub)).toBe('affiliate');
+      const approved = await officer(O.VERIFIED_LOCAL, { localGroup: group, firstNameMatched: true });
+      expect(await kindOf(approved.sub)).toBe('guest');
+      expect(await grantBy(approved.sub)).toBe('ok');
+      expect(await kindOf(approved.sub)).toBe('affiliate');
+    });
+
+    it.each<[string, O, boolean, string]>([
+      ['a full local match (G2b)', O.VERIFIED_LOCAL, true, 'chapter'],
+      ['a local match, the first name unconfirmed', O.VERIFIED_LOCAL, false, 'chapter_partial'],
+    ])('makes no chapter-group affiliate: a person granted unchecked whose fresh check is %s in the chapter\'s group stands as the chapter\'s own', async (_what, outcome, first, kind) => {
+      const person = await signUp('officer');
+      const token = `officer.${person.i}`;
+      expect(await grantBy(person.sub)).toBe('ok');
+      expect(await kindOf(person.sub)).toBe('affiliate_partial');
+      expect(await code(m().submitSignup({ membershipNumber: numberOf(person.i), lastName: 'Madeup', firstName: 'Sam' }, as(token)))).toBe('ok');
+      await report(person.id, outcome, { localGroup: CHAPTER, firstNameMatched: first });
+      expect(await kindOf(person.sub)).toBe(kind);
+      expect(await power(token)).toBe(first ? 'ok' : 'PermissionDenied');
+      await expect(m().grantAffiliate({ subject: person.sub }, as('admin'))).rejects.toMatchObject({ code: Code.FailedPrecondition });
+    });
+
+    it('makes no chapter-group affiliate of a granted person whose fresh check\'s email mismatch in the chapter\'s group an approver confirms', async () => {
+      const person = await signUp('officer');
+      const token = `officer.${person.i}`;
+      expect(await grantBy(person.sub)).toBe('ok');
+      await m().submitSignup({ membershipNumber: numberOf(person.i), lastName: 'Madeup', firstName: 'Sam' }, as(token));
+      await report(person.id, O.EMAIL_MISMATCH, { localGroup: CHAPTER, firstNameMatched: true });
+      expect((await mine(token)).officerCheck).toBe(OfficerCheck.AWAITING_APPROVER);
+      expect(await power(token)).toBe('PermissionDenied');
+      expect(await approve(person.id)).toBe('ok');
+      expect(await kindOf(person.sub)).toBe('chapter');
+      expect(await power(token)).toBe('ok');
+    });
+
+    it('makes no chapter-group affiliate of a granted guest whose fresh check reports the chapter\'s group (G2c)', async () => {
+      const guest = await joined(O.VERIFIED_OTHER_GROUP, { localGroup: 'Tampa Bay Mensa', firstNameMatched: false });
+      expect(await grantBy(guest.sub)).toBe('ok');
+      expect(await kindOf(guest.sub)).toBe('affiliate_partial');
+      await m().submitSignup({ membershipNumber: '', lastName: 'Madeup', firstName: 'Sam' }, as(guest.token));
+      await report(guest.id, O.VERIFIED_LOCAL, { localGroup: CHAPTER, firstNameMatched: true });
+      expect(await kindOf(guest.sub)).toBe('chapter');
+      expect(await power(guest.token)).toBe('ok');
+    });
+
+    it('still grants a pending other-group match that named no group: a guest', async () => {
+      const person = await signUp('officer');
+      await report(person.id, O.VERIFIED_OTHER_GROUP, { firstNameMatched: true });
+      expect(await grantBy(person.sub)).toBe('ok');
+      expect(await kindOf(person.sub)).toBe('affiliate');
+    });
+
+    it('leaves the lapsed path as it was (the ruling is for pending sign-ups): a lapsed member confirmed with no group is still granted', async () => {
+      await seedAccount(on.pool, { sub: 'sub-ovr-lapsed-5', status: 'lapsed', check: { verification: 'verified_local', localGroup: null } });
+      expect(await grantBy('sub-ovr-lapsed-5')).toBe('ok');
+      expect(await kindOf('sub-ovr-lapsed-5')).toBe('affiliate');
+    });
+
+    it('is the Admin\'s alone: a Webmaster is refused before anything is read or changed', async () => {
+      const guest = await officer(O.VERIFIED_OTHER_GROUP, { localGroup: 'Boston Mensa', firstNameMatched: true });
+      await expect(m().grantAffiliate({ subject: guest.sub }, as('webmaster'))).rejects.toMatchObject({ code: Code.PermissionDenied });
+      expect(await kindOf(guest.sub)).toBe('guest');
+      expect(await audits(guest.sub)).not.toContain('grant_affiliate_verified');
+      expect(await grantBy('sub-ovr-nobody', 'webmaster')).toBe('PermissionDenied');
+      const pending = await signUp('officer');
+      expect(await grantBy(pending.sub, 'webmaster')).toBe('PermissionDenied');
+      expect(await decisionOf(pending.id)).toEqual({ decision: 'pending', decided_by_sub: null });
+      expect(await grantBy(guest.sub, 'admin')).toBe('ok');
+      expect(await kindOf(guest.sub)).toBe('affiliate');
     });
   });
 

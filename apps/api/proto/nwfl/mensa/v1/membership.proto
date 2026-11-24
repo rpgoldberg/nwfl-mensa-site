@@ -90,7 +90,7 @@ enum OfficerCheck {
   // The last fresh check did not confirm the details; they may ask again.
   OFFICER_CHECK_NOT_CONFIRMED = 3;
   // Confirmed as a member of another local group (a guest member): the tools
-  // open when the Admin or the Webmaster grants affiliate standing.
+  // open when the Admin grants affiliate standing.
   OFFICER_CHECK_NEEDS_GRANT = 4;
   // The fresh check matched the number and the names but not the email: an
   // approver confirms it with the member, as for a first sign-up.
@@ -290,7 +290,8 @@ service MembershipService {
   // on): also for an approved guest member, one the membership check confirmed
   // as a member of another local group; any other approved member is
   // FAILED_PRECONDITION, as before. An affiliate's officer tools open only once
-  // the check confirmed their number, last name and first name.
+  // the check confirmed their number, last name and first name. Switched on,
+  // the Admin only, and a pending sign-up only as a guest or unconfirmed.
   rpc GrantAffiliate(GrantAffiliateRequest) returns (GrantAffiliateResponse);
   // REOPEN: the Admin or the Membership Officer only (nwfl-admin, nwfl-office-membership). The
   // rejected sign-ups that can be reopened (the account the rejection closed is still closed),

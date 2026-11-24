@@ -105,6 +105,10 @@
 //                       number, last name and first name (the caller gate,
 //                       standing-policy.ts), so a grant never opens the
 //                       tools of someone the check did not confirm.
+//                       Fix round 5, switched on: the Admin only, and a
+//                       pending sign-up is granted only as a guest or as
+//                       one the check did not confirm; a check that names
+//                       the chapter's group makes no affiliate but chapter.
 //   ListRejectedSignups the Admin and the Membership Officer (REOPEN): the
 //                       rejections whose closed account is still closed,
 //                       newest first, never their own, with what they typed
@@ -132,7 +136,7 @@ import { type Caller, callerOf } from '../auth/caller.js';
 import type { OfficerVerify } from '../auth/config.js';
 import { holdsPower, requireGrantor, requireMembershipApprover, requireSignupReopener, requireUser } from '../auth/roles.js';
 import { VERIFICATION_MONTHS } from '../auth/standing.js';
-import { fullyChecked, groupStanding, standingKind } from '../auth/standing-policy.js';
+import { confirmsMember, fullyChecked, groupStanding, standingKind } from '../auth/standing-policy.js';
 import { dbError } from '../db/errors.js';
 import type { Db } from '../db/pool.js';
 import { type TxClient, inTransaction } from '../db/tx.js';
@@ -221,6 +225,7 @@ const INVITED_GROUP = 'nwfl-invited';
 // OFFICER-VERIFY fix round 4 (B2), switched on: what GrantAffiliate leaves to the approvers.
 const GRANT_AFTER_APPROVER = 'the membership verification service did not confirm the email: an approver confirms it in the queue first';
 const GRANT_NOT_CHAPTER = "the check reported the chapter's own group: approve or confirm the member, not an affiliate grant";
+const GRANT_NOT_REPORTED = 'the check reported no local group: an approver approves the sign-up, not an affiliate grant';
 /** OFFICER-VERIFY (switched on): why an approver may not approve an invited sign-up by hand (local-group.ts handApproval). */
 const INVITE_UNCONFIRMED =
   'an invited sign-up is approved only once the membership check confirmed its number and last name, with no first-name mismatch: reject it, or reopen it for a new check';
@@ -770,7 +775,8 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
 
       grantAffiliate: async (request, ctx) => {
         const caller = callerIn(ctx);
-        requireGrantor(caller);
+        // Fix round 5, switched on: the Admin alone (Ross: "officer tools if admin grants"); off, R33 as develop.
+        requireGrantor(caller, officerVerify !== null);
         const sub = subjectOf(request.subject);
         if (sub === caller.subject) throw new ConnectError('no one grants themselves', Code.PermissionDenied);
         return tx(async (client) => {
@@ -792,7 +798,11 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
             // Fix round 4 (B2), switched on: a grant never settles what the approvers' queue must (rulings B and 3).
             if (signup.decision === 'pending' && signup.verification === 'email_mismatch') throw precondition(GRANT_AFTER_APPROVER);
             // The chapter's own are approved or confirmed, never granted (DESIGN J S2b).
-            if (groupStanding({ verification: signup.verification, localGroup: signup.local_group }, officerVerify.chapterGroup) === 'chapter') throw precondition(GRANT_NOT_CHAPTER);
+            const group = groupStanding({ verification: signup.verification, localGroup: signup.local_group }, officerVerify.chapterGroup);
+            if (group === 'chapter') throw precondition(GRANT_NOT_CHAPTER);
+            // Fix round 5 (S6): a pending sign-up is granted only what an approved one would be: a guest, or a person
+            // the check did not confirm (no power). A confirmed person with no group reported is the approvers'.
+            if (signup.decision === 'pending' && group === 'unreported' && confirmsMember(signup.verification)) throw precondition(GRANT_NOT_REPORTED);
           }
           if (current !== undefined && !['pending', 'lapsed'].includes(current.status) && !guest) throw precondition('this account cannot be granted affiliate standing');
           const verified = signup?.verification === 'verified_other_group' && signup.verified_on !== null;

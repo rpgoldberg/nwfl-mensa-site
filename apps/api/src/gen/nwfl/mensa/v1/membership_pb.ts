@@ -1133,7 +1133,7 @@ export enum OfficerCheck {
 
   /**
    * Confirmed as a member of another local group (a guest member): the tools
-   * open when the Admin or the Webmaster grants affiliate standing.
+   * open when the Admin grants affiliate standing.
    *
    * @generated from enum value: OFFICER_CHECK_NEEDS_GRANT = 4;
    */
@@ -1370,7 +1370,8 @@ export const MembershipService: GenService<{
    * on): also for an approved guest member, one the membership check confirmed
    * as a member of another local group; any other approved member is
    * FAILED_PRECONDITION, as before. An affiliate's officer tools open only once
-   * the check confirmed their number, last name and first name.
+   * the check confirmed their number, last name and first name. Switched on,
+   * the Admin only, and a pending sign-up only as a guest or unconfirmed.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.GrantAffiliate
    */
