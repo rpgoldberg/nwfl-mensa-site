@@ -93,10 +93,10 @@ afterEach(() => {
 describe('a black rectangle the original draws is layout, not a box', () => {
   const calendar = (): Promise<Uint8Array> => page([cell(), onCell(WHITE), BODY]);
 
-  it.each([
-    ['nothing marked', [] as string[], 'show' as ImageAction],
-    ['a quote marked elsewhere on the page', QUOTE, 'show' as ImageAction],
-    ['a quote marked elsewhere, the pictures hidden (every stream written again)', QUOTE, 'hide' as ImageAction],
+  it.each<[string, readonly string[], ImageAction]>([
+    ['nothing marked', [], 'show'],
+    ['a quote marked elsewhere on the page', QUOTE, 'show'],
+    ['a quote marked elsewhere, the pictures hidden (every stream written again)', QUOTE, 'hide'],
   ])('makes a copy of header cells with white text on them, labelled, and the gate passes it: %s', async (_name, quotes, image) => {
     const original = await calendar();
     const copy = copyOf(await redact(original, quotes, image));
