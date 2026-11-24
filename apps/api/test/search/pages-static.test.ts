@@ -1,6 +1,6 @@
 // ARCHIVE-SEARCH S2 (plan test 8, for the issue text): nothing the worker's index job runs can cross
 // audiences. src/search/pages.ts names no table at all (it calls three functions and passes the
-// audience as a value the database checks against the ledger), and each statement of 0033 that
+// audience as a value the database checks against the ledger), and each statement of 0034 that
 // names one audience's page table names that audience's ledger rows and nothing of the other's.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -32,8 +32,8 @@ describe('the index job: no statement crosses audiences', () => {
     }
   });
 
-  it('pairs each page table in 0033 with its own audience\'s ledger rows, statement by statement', () => {
-    const all = code(read('../../migrations/0033_search_worker.sql'));
+  it('pairs each page table in 0034 with its own audience\'s ledger rows, statement by statement', () => {
+    const all = code(read('../../migrations/0034_search_worker.sql'));
     // 0032's writer, restated with one more refusal: checked on its own below.
     const sql = all.slice(0, all.indexOf('CREATE OR REPLACE FUNCTION search_page_put')) + all.slice(all.indexOf('CREATE OR REPLACE FUNCTION nwfl_worker_grants'));
     const statements = sql.split(/\bUNION ALL\b|;/).filter((statement) => /search_page_(?:public|members)\b/.test(statement) && !/\b(?:GRANT|REVOKE)\b/.test(statement));
@@ -64,15 +64,15 @@ describe('the index job: no statement crosses audiences', () => {
     expect(servable).toContain(`e.status = 'published'`);
   });
 
-  it('restates 0032\'s search_page_put in 0033 with exactly one more refusal: a file no audience here may open', () => {
+  it('restates 0032\'s search_page_put in 0034 with exactly one more refusal: a file no audience here may open', () => {
     const body = (source: string, head: string): string => {
       const from = source.indexOf(head);
       return source.slice(from, source.indexOf('$fn$;', from) + 5);
     };
     const before = body(read('../../migrations/0032_search.sql'), 'CREATE FUNCTION search_page_put(');
-    const after = body(read('../../migrations/0033_search_worker.sql'), 'CREATE OR REPLACE FUNCTION search_page_put(');
+    const after = body(read('../../migrations/0034_search_worker.sql'), 'CREATE OR REPLACE FUNCTION search_page_put(');
     const added = [
-      '  -- 0033: and only a file the public or members may open now (search_page_servable).',
+      '  -- 0034: and only a file the public or members may open now (search_page_servable).',
       '  IF NOT search_page_servable(p_file) THEN',
       "    RAISE EXCEPTION 'this file is not one the public or members may open now' USING ERRCODE = '55000';",
       '  END IF;',

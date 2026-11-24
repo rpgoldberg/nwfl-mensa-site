@@ -42,6 +42,15 @@ describe('PRIMARY_NAV (R30)', () => {
   });
 });
 
+describe('the privacy page (LAUNCH-FIX-1)', () => {
+  it('is a registered page, built at deploy time, under no nav item and not a row of More', () => {
+    expect(page('/privacy')).toEqual({ path: '/privacy', title: 'Privacy', description: 'What this site keeps about you, who can see it, and how to ask about it.', prerender: true });
+    expect(currentNav('/privacy')).toBeUndefined();
+    expect(MORE_PAGES.map((p) => p.path)).not.toContain('/privacy');
+    expect(trailFor('/privacy', 'Privacy')).toEqual([{ label: 'Home', href: '/' }, { label: 'Privacy', href: '/privacy' }]);
+  });
+});
+
 describe('MORE_PAGES', () => {
   it('lists every section but Home, then Search and Help (no longer in the header or the bar), and not the sign-in page', () => {
     expect(MORE_PAGES.map((p) => p.path)).toEqual([

@@ -2,7 +2,9 @@
 // callback takes a transaction only from this browser's own cookie, matches its
 // state exactly, uses it once, within ten minutes, and has openid-client check
 // the nonce. A refusal is told to the reader in plain words; what the provider
-// said is never repeated, and only its error code (tidied) is logged.
+// said is never repeated, and only its error code (tidied) is logged. SIGNIN-SLOW: a refusal another
+// round may mend (used, or a slow or broken path to the provider), with a current transaction, starts one fresh sign-in first,
+// marked in its own transaction so it is never taken twice running.
 import { timingSafeEqual } from 'node:crypto';
 import { safeBack } from '../../../server/prefs.mjs';
 import {
@@ -10,6 +12,7 @@ import {
   SESSION_COOKIE,
   type Session,
   TRANSACTION_SECONDS,
+  type Transaction,
   clearCookie,
   newSession,
   openTransaction,
@@ -85,7 +88,7 @@ const OURS = new Set(PUBLIC_HOSTS.map((h) => h.hostname));
  * URL. undefined on the home host itself. Only that origin, a fixed path and a sanitised return go
  * in: never an open redirect.
  */
-function signInElsewhere(config: AuthConfig, host: string | null | undefined, to: string, again: boolean): string | undefined {
+function signInElsewhere(config: AuthConfig, host: string | null | undefined, to: string, again: boolean, fresh: boolean): string | undefined {
   const asked = host?.trim().toLowerCase() ?? '';
   const name = /^[a-z0-9.-]+(:\d{1,5})?$/.test(asked) ? asked.split(':')[0] : undefined;
   let home: URL;
@@ -99,6 +102,7 @@ function signInElsewhere(config: AuthConfig, host: string | null | undefined, to
   const params = new URLSearchParams();
   if (to !== '/') params.set('return', to);
   if (again) params.set('again', '1');
+  if (fresh) params.set('fresh', '1');
   const query = params.toString();
   return `${home.origin}/sign-in${query ? `?${query}` : ''}`;
 }
@@ -106,10 +110,18 @@ function signInElsewhere(config: AuthConfig, host: string | null | undefined, to
 /**
  * `again`: a fresh sign-in even for someone signed in, for a new token ("Sign in again" on /news, A14).
  * `host`: the Host the reader asked for (S2): on another host (signInElsewhere), sign-in starts on the profile's.
+ * `fresh`: the sign-in a refused callback started in its place (SIGNIN-SLOW, /sign-in?fresh=1), marked in
+ * its transaction so its own callback never starts another. A reader may send it: it only gives up a round.
  */
 export async function beginSignIn(
   d: Deps,
-  { cookieHeader, back, again = false, host }: { cookieHeader: string | null | undefined; back: string | null | undefined; again?: boolean; host?: string | null | undefined },
+  {
+    cookieHeader,
+    back,
+    again = false,
+    fresh = false,
+    host,
+  }: { cookieHeader: string | null | undefined; back: string | null | undefined; again?: boolean; fresh?: boolean; host?: string | null | undefined },
 ): Promise<Outcome> {
   const now = d.now();
   if (!d.setup.enabled || !d.key) {
@@ -117,17 +129,83 @@ export async function beginSignIn(
     return { kind: 'unavailable' };
   }
   const to = safeBack(back);
-  const elsewhere = signInElsewhere(d.setup.config, host, to, again);
+  const elsewhere = signInElsewhere(d.setup.config, host, to, again, fresh);
   if (elsewhere) return { kind: 'redirect', location: elsewhere, cookies: [], cache: 'private, no-store' };
   if (!again && readSession(cookieHeader, d.key, now, d.tokens)) return { kind: 'redirect', location: to, cookies: [] };
   try {
     const start = await d.oidc.startSignIn(d.setup.config);
-    const tx = { state: start.state, nonce: start.nonce, verifier: start.verifier, back: to };
+    const tx = { state: start.state, nonce: start.nonce, verifier: start.verifier, back: to, ...(fresh && { fresh: true as const }), ...(again && { again: true as const }) };
     return { kind: 'redirect', location: start.location.href, cookies: [transactionSetCookie(tx, d.key, now)] };
   } catch (error) {
     log(d, 'error', 'the sign-in provider could not be reached', { err: redactText(String(error)) });
     return { kind: 'unavailable' };
   }
+}
+
+/** The error codes of a path to the provider that stalled or broke: openid-client's timeout and abort, Node's and undici's network codes. */
+const PASSING_CODES = /^(OAUTH_TIMEOUT|OAUTH_ABORT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|UND_ERR_[A-Z_]+)$/;
+/** A fetch cut by its timeout or an abort, as openid-client meets it when the body stalls after the headers. */
+const PASSING_NAMES = /^(TimeoutError|AbortError)$/;
+/** openid-client 6.8.8's own chain for a socket closed mid-body is four deep: ClientError, OperationProcessingError, TypeError, SocketError. */
+const CAUSE_DEPTH = 4;
+
+/** An edge's 5xx body is read this far and this long, no further: an OAuth error object is short. */
+const BODY_MAX_BYTES = 16_384;
+const BODY_MAX_MS = 500;
+
+/**
+ * Whether a 5xx body is an OAuth error object (a string `error`: invalid_grant, the code was refused, not
+ * lost on the way). openid-client 6.8.8 leaves a 5xx body unread, so it is read here, bounded. Anything
+ * else (a page, nothing, Cloudflare's JSON error with its numeric error_code, a body too long or too slow)
+ * is an edge's, not the provider's.
+ */
+async function oauthErrorBody(res: Response): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'late'>((resolve) => {
+    timer = setTimeout(() => resolve('late'), BODY_MAX_MS);
+  });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try {
+    if (!res.body) return false;
+    reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    for (let size = 0; ; ) {
+      const next = await Promise.race([reader.read(), late]);
+      if (next === 'late') return false;
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > BODY_MAX_BYTES) return false;
+      chunks.push(next.value);
+    }
+    const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string';
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    reader?.cancel().catch(() => {});
+  }
+}
+
+/**
+ * SIGNIN-SLOW: a failure on the way to the provider that another round may well not meet: a timeout (the
+ * body's too), a broken connection, or a 5xx whose body is not an OAuth error object (an edge in between,
+ * whatever its body: Cloudflare's 52x and 530 answer JSON too). Read along the error's causes, four deep.
+ * A refusal the provider gave, a token that failed its checks, or a bug is not one.
+ */
+export async function passing(err: unknown): Promise<boolean> {
+  let e = err;
+  for (let depth = 0; depth < CAUSE_DEPTH && typeof e === 'object' && e !== null; depth++) {
+    const { code, name, status, cause, error } = e as { code?: unknown; name?: unknown; status?: unknown; cause?: unknown; error?: unknown };
+    if (typeof code === 'string' && PASSING_CODES.test(code)) return true;
+    if (typeof name === 'string' && PASSING_NAMES.test(name)) return true;
+    if (typeof status === 'number' && status >= 500 && status <= 599) {
+      if (typeof error === 'string') return false;
+      return !(e instanceof Response && (await oauthErrorBody(e)));
+    }
+    e = cause;
+  }
+  return false;
 }
 
 /**
@@ -147,13 +225,31 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
     log(d, 'warn', 'sign-in refused', { reason, ...extra });
     return { kind: 'refused', reason, cookies };
   };
+  const error = url.searchParams.get('error');
+  /**
+   * SIGNIN-SLOW: one fresh sign-in instead of the refusal, back to the reader's page (by the return rules)
+   * and asking again if they had, marked fresh=1 so beginSignIn seals the mark into its transaction. Never
+   * for a transaction that was itself the fresh round, nor when the provider sent an error (a cancel).
+   */
+  const afresh = (reason: Refusal, tx: Transaction, extra: Record<string, unknown> = {}): Outcome => {
+    if (tx.fresh === true || error !== null) return refuse(reason, extra);
+    log(d, 'warn', 'sign-in refused', { reason, ...extra, fresh_round: true });
+    const to = safeBack(tx.back);
+    const params = new URLSearchParams();
+    if (to !== '/') params.set('return', to);
+    if (tx.again === true) params.set('again', '1');
+    params.set('fresh', '1');
+    return { kind: 'redirect', location: `/sign-in?${params}`, cookies };
+  };
+  // No current transaction (none, older than ten minutes, dated ahead, or not ours): the page, never a
+  // round, exactly as before SIGNIN-SLOW. A browser that keeps no cookie of ours, or replays an old one,
+  // would otherwise go round for ever; and the state below is checked before anything else.
   const tx = openTransaction(cookieHeader, d.key, now);
   if (!tx) return refuse('expired');
   const state = url.searchParams.get('state') ?? '';
   if (!sameText(state, tx.state)) return refuse('mismatch');
-  if (d.consumed.has(state, now)) return refuse('used');
+  if (d.consumed.has(state, now)) return afresh('used', tx);
   d.consumed.add(state, tx.at + TRANSACTION_SECONDS);
-  const error = url.searchParams.get('error');
   if (error !== null) {
     return refuse(error === 'access_denied' ? 'cancelled' : 'failed', { error: error.replace(/[^a-z_]/g, '').slice(0, 40) });
   }
@@ -167,7 +263,9 @@ export async function completeSignIn(d: Deps, { url, cookieHeader }: { url: URL;
     log(d, 'info', 'signed in', { officer: session.officer, member: session.member });
     return { kind: 'redirect', location: tx.back, cookies: [...cookies, sessionSetCookie(session, d.key, now)], session };
   } catch (err) {
-    return refuse('failed', { err: redactText(String(err)) });
+    // Never the same code again (it is single-use): a passing failure starts afresh, with a new one.
+    const extra = { err: redactText(String(err)) };
+    return (await passing(err)) ? afresh('failed', tx, extra) : refuse('failed', extra);
   }
 }
 

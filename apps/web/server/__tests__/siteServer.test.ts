@@ -1,5 +1,5 @@
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import net, { type AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_HEADERS, SESSION_COOKIE } from '../policy.mjs';
 import { SIZES, SIZE_COOKIE, THEME_COOKIE, sizeSlider } from '../prefs.mjs';
@@ -8,8 +8,9 @@ import { accountHtml } from '../account.mjs';
 import { newSession, sessionSetCookie } from '../session.mjs';
 import { sharedTokenStore } from '../token-store.mjs';
 import { randomBytes } from 'node:crypto';
-import { createSiteServer, normalisePath, withSitePolicy } from '../siteServer.mjs';
+import { createSiteServer, normalisePath, originFormUrl, withSitePolicy } from '../siteServer.mjs';
 import { currentTrace } from '../trace.mjs';
+import { writeResponse } from 'astro/app/node';
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => unknown;
 
@@ -309,6 +310,25 @@ describe('withSitePolicy', () => {
     }
   });
 
+  it('answers 500 for a fault in code a request runs before the handler, and logs it by class only', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const pages = new Map<string, string>();
+      pages.get = () => {
+        throw new TypeError('made-up fault');
+      };
+      const base = await serve(() => undefined, pages);
+      const res = await fetch(`${base}/about`);
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('Internal Server Error');
+      expectSecurityHeaders(res);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(unstamped(error.mock.calls[0]?.[0])).toEqual({ level: 'error', msg: 'request failed', path: '/about', err: 'TypeError' });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('logs a thrown non-Error as a fixed name, not its text', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -335,6 +355,73 @@ describe('withSitePolicy', () => {
       const line = String(error.mock.calls[0]?.[0]);
       expect(line).not.toContain('SECRETCODE');
       expect(JSON.parse(line)).toMatchObject({ err: 'Error' });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  // LAUNCH-FIX-1: the site's own error page (src/pages/500.astro, prerendered), never bare text.
+  const ERROR_PAGE = '<!doctype html><html lang="en" data-size="100" data-theme="auto" data-links="ask"><body><h1>Something went wrong on our side</h1><a href="/officers">tell an officer</a></body></html>';
+
+  for (const [how, handler] of [
+    ['throws', () => { throw new RangeError('boom SECRETTEXT at /srv/app/secret.mjs:12'); }],
+    ['rejects', async () => { throw new RangeError('boom SECRETTEXT at /srv/app/secret.mjs:12'); }],
+  ] as const) {
+    it(`shows the error page, status 500 and never stored, when the handler ${how}: no error text, no stack`, async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const base = await serve(handler, new Map([['/500', ERROR_PAGE]]));
+        const res = await fetch(`${base}/officer-area?x=1`, { headers: { cookie: `${SIZE_COOKIE}=175; ${THEME_COOKIE}=dark` } });
+        expect(res.status).toBe(500);
+        expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+        expect(res.headers.get('cache-control')).toBe('no-store');
+        expectSecurityHeaders(res);
+        const body = await res.text();
+        expect(body).toContain('<h1>Something went wrong on our side</h1>');
+        expect(body).toContain('<a href="/officers">tell an officer</a>');
+        // In the reader's own text size and theme, as every prerendered page is.
+        expect(body).toContain('<html lang="en" data-size="175" data-theme="dark"');
+        expect(body).not.toMatch(/SECRETTEXT|boom|RangeError|secret\.mjs|\bat \/|Internal Server Error/);
+        expect(Number(res.headers.get('content-length'))).toBe(Buffer.byteLength(body));
+        // The log line stays as it was: the path and the error's class.
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(unstamped(error.mock.calls[0]?.[0])).toEqual({ level: 'error', msg: 'request failed', path: '/officer-area', err: 'RangeError' });
+      } finally {
+        error.mockRestore();
+      }
+    });
+  }
+
+  it('answers a failed HEAD with the error page\'s headers and no body', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => { throw new Error('boom'); }, new Map([['/500', ERROR_PAGE]]));
+      const res = await fetch(`${base}/x`, { method: 'HEAD' });
+      expect(res.status).toBe(500);
+      expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+      expect(await res.text()).toBe('');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it('answers the error page\'s own address with 500, never 200, and never asks the handler', async () => {
+    const base = await serve(() => { throw new Error('the handler must not see the error page'); }, new Map([['/500', ERROR_PAGE], ['/500.html', ERROR_PAGE]]));
+    for (const path of ['/500', '/500.html']) {
+      const res = await fetch(`${base}${path}`);
+      expect(res.status, path).toBe(500);
+      expect(res.headers.get('cache-control'), path).toBe('no-store');
+      expect(await res.text(), path).toContain('Something went wrong on our side');
+    }
+  });
+
+  it('keeps the plain 500 when no error page was built, still with no error text', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => { throw new Error('boom SECRETTEXT'); });
+      const res = await fetch(`${base}/x`);
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe('Internal Server Error');
     } finally {
       error.mockRestore();
     }
@@ -631,7 +718,8 @@ describe('the calendar feed log', () => {
     res.write(body.slice(0, 5));
     res.end(Buffer.from(body.slice(5)));
   };
-  const lines = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.map((c) => unstamped(c[0]));
+  // SIGNIN-SLOW: every other request has its access line on the same stream; the feed's own line is read here.
+  const lines = (log: { mock: { calls: unknown[][] } }) => log.mock.calls.map((c) => unstamped(c[0])).filter((l) => l['msg'] === 'calendar feed');
 
   it('logs a fetch of /calendar.ics or /events.ics, with the query, as one JSON line: path, status, bytes and UA, and no address', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -670,7 +758,7 @@ describe('the calendar feed log', () => {
     const base = await serve(feed('x'.repeat(10)));
     for (const path of ['/events', '/events/abc.ics', '/calendar.ics/x', '/', '/calendar.icsx']) await (await fetch(`${base}${path}`)).text();
     await new Promise((r) => setTimeout(r, 20));
-    expect(log).not.toHaveBeenCalled();
+    expect(lines(log)).toEqual([]);
     log.mockRestore();
   });
 
@@ -829,6 +917,410 @@ describe('request trace and log hygiene (LG-N3)', () => {
       expect(error.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/SECRETCODE|%3f|%23/i);
     } finally {
       error.mockRestore();
+    }
+  });
+});
+
+// SIGNIN-SLOW: one access line per request, so a slow page (the sign-in callback among them) can be
+// measured at the origin: the method, the path without its query, the status and the time taken, with
+// the request's trace id (LG-N3) as its request id. Never the query, a header, a cookie or the body.
+// The health probe has none, and the calendar feed keeps its own line (CALFEED), so no request has two.
+describe('the access line', () => {
+  const access = (log: { mock: { calls: unknown[][] } }) =>
+    log.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>).filter((l) => l['msg'] === 'request');
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+
+  it('logs method, path, status and milliseconds, stamped with the request’s trace id, and nothing else', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      let id: string | undefined;
+      const base = await serve((_req, res) => {
+        id = currentTrace()?.traceId;
+        setTimeout(() => res.end('page'), 120);
+      });
+      await (await fetch(`${base}/about`)).text();
+      await settle();
+      const [line, ...more] = access(log);
+      expect(more).toEqual([]);
+      expect(unstamped(JSON.stringify(line))).toEqual({ level: 'info', msg: 'request', method: 'GET', path: '/about', status: 200, ms: expect.any(Number) });
+      expect(line!['trace_id']).toBe(id);
+      expect(line!['ms']).toBeGreaterThanOrEqual(100);
+      expect(Number.isInteger(line!['ms'])).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('never logs the query (the callback’s code and state), a header, a cookie or the body', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve(async (req, res) => {
+        await new Promise((resolve) => req.resume().on('end', resolve));
+        res.statusCode = 303;
+        res.setHeader('Location', '/sign-in');
+        res.end();
+      });
+      const headers = { Cookie: '__Host-nwfl-auth=SECRETCOOKIE', Authorization: 'Bearer SECRETBEARER', 'User-Agent': 'SECRETAGENT', Referer: 'https://example.org/?SECRETREF' };
+      for (const target of ['/auth/callback?code=SECRET1&state=SECRET2', '/auth/callback%3Fcode=SECRET3', '/auth/callback?code=SECRET4#SECRET5']) {
+        await (await fetch(`${base}${target}`, { headers, redirect: 'manual' })).text();
+      }
+      await (await fetch(`${base}/account`, { method: 'POST', headers: { ...headers, Origin: base }, body: 'code=SECRETBODY', redirect: 'manual' })).text();
+      await settle();
+      const lines = access(log);
+      expect(lines.map((l) => [l['method'], l['path'], l['status']])).toEqual([
+        ['GET', '/auth/callback', 303],
+        ['GET', '/auth/callback', 303],
+        ['GET', '/auth/callback', 303],
+        ['POST', '/account', expect.any(Number)],
+      ]);
+      expect(log.mock.calls.map((c) => String(c[0])).join('\n')).not.toMatch(/SECRET|%3f|code=|state=/i);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('logs no health probe, and a refused or failed request with its status', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve((req) => {
+        if (req.url === '/boom') throw new TypeError('x');
+      });
+      for (let i = 0; i < 3; i++) await (await fetch(`${base}/healthz`)).text();
+      await (await fetch(`${base}/boom`)).text();
+      await (await fetch(`${base}/a%2fb`)).text();
+      await settle();
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([
+        ['/boom', 500],
+        ['/a%2fb', 400],
+      ]);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  // A reader who gives up on a slow page is not a 200.
+  it('logs a request the client abandoned before the answer as 499, not the status it never got', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const ids: Record<string, string | undefined> = {};
+      const base = await serve((req, res) => {
+        ids[String(req.url)] = currentTrace()?.traceId;
+        setTimeout(() => res.end('late'), 400);
+      });
+      const { port } = new URL(base);
+      await new Promise<void>((resolve) => {
+        const socket = net.connect(Number(port), '127.0.0.1', () => {
+          socket.write('GET /news HTTP/1.1\r\nHost: localhost\r\n\r\n');
+          setTimeout(() => {
+            socket.destroy();
+            resolve();
+          }, 100);
+        });
+      });
+      await new Promise((r) => setTimeout(r, 500));
+      await (await fetch(`${base}/about`)).text();
+      await settle();
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([
+        ['/news', 499],
+        ['/about', 200],
+      ]);
+      // The reader's socket closes outside the request's context: the line still carries its trace id.
+      expect(access(log).map((l) => l['trace_id'])).toEqual([ids['/news'], ids['/about']]);
+      expect(ids['/news']).toMatch(/^[0-9a-f]{32}$/);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('cuts a long path to 512 characters, and says it did', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => res.end('x'));
+      for (const path of [`/${'a'.repeat(511)}`, `/${'b'.repeat(512)}`, `/${'c'.repeat(9000)}`]) await (await fetch(`${base}${path}`)).text();
+      await settle();
+      const lines = access(log);
+      expect(lines.map((l) => [String(l['path']).length, l['path_cut']])).toEqual([
+        [512, undefined],
+        [512, true],
+        [512, true],
+      ]);
+      expect(lines[1]!['path']).toBe(`/${'b'.repeat(511)}`);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('leaves the calendar feed to its own line: one line per request', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => res.end('BEGIN:VCALENDAR'));
+      await (await fetch(`${base}/calendar.ics`)).text();
+      await settle();
+      expect(log.mock.calls.map((c) => (JSON.parse(String(c[0])) as Record<string, unknown>)['msg'])).toEqual(['calendar feed']);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+// SIGNIN-SLOW round 3, on main's request-target reading (#77) and machine route (#79): which logger owns a
+// request. The access line has every request but the health probe, the calendar feed (its own line), a target
+// that is no path (its own fixed warning) and a machine call (machine-route.mjs logs each).
+describe('the access line, after the request-target hotfix', () => {
+  const access = (log: { mock: { calls: unknown[][] } }) =>
+    log.mock.calls.map((c) => JSON.parse(String(c[0])) as Record<string, unknown>).filter((l) => l['msg'] === 'request');
+  const settle = () => new Promise((r) => setTimeout(r, 30));
+
+  it('logs the path #77 reads, // and all, cut at 512', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => res.end('x'));
+      for (const target of ['//ok/news', '//ok/news?code=SECRET', `//${'d'.repeat(600)}`]) await (await fetch(`${base}${target}`)).text();
+      await settle();
+      expect(access(log).map((l) => [l['path'], l['path_cut']])).toEqual([
+        ['//ok/news', undefined],
+        ['//ok/news', undefined],
+        [`//${'d'.repeat(510)}`, true],
+      ]);
+      expect(log.mock.calls.join('\n')).not.toContain('SECRET');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('skips only the health probe itself: /healthz?x and /healthzz are pages like any other', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve((_req, res) => {
+        res.statusCode = 404;
+        res.end('nope');
+      });
+      for (const target of ['/healthz', '/healthz?x', '/healthzz', '/healthz/']) await (await fetch(`${base}${target}`)).text();
+      await settle();
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([
+        ['/healthz', 404],
+        ['/healthzz', 404],
+        ['/healthz/', 404],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  // end() was called, so writableEnded is true; the body never reached the reader, so it is not a 200.
+  it('logs 499 when the reader leaves while a body it was sent is still in flight', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      let ended: () => void = () => {};
+      const sent = new Promise<void>((resolve) => (ended = resolve));
+      const base = await serve((_req, res) => {
+        res.end(Buffer.alloc(32 * 1024 * 1024, 'x'));
+        ended();
+      });
+      const socket = net.connect(Number(new URL(base).port), '127.0.0.1');
+      socket.on('error', () => undefined);
+      socket.write('GET /big HTTP/1.1\r\nHost: localhost\r\n\r\n');
+      socket.pause();
+      await sent;
+      await new Promise((r) => setTimeout(r, 50));
+      socket.destroy();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([['/big', 499]]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('leaves a target that is no path to its one fixed warning, and logs a machine path with no route mounted', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve(() => undefined);
+      await new Promise<void>((resolve) => {
+        const s = net.connect(Number(new URL(base).port), '127.0.0.1');
+        s.on('data', () => undefined);
+        s.on('close', () => resolve());
+        s.write('GET http://example.org/news HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      });
+      await (await fetch(`${base}/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict`, { method: 'POST', body: '' })).text();
+      await settle();
+      expect(log.mock.calls.map((c) => {
+        const l = JSON.parse(String(c[0])) as Record<string, unknown>;
+        return [l['msg'], l['path'], l['status']];
+      })).toEqual([
+        ['bad request target', undefined, undefined],
+        ['request', '/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict', 404],
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  // 499 says only that the reader left before the answer ended. An answer a fault on the site's side cut short
+  // after its headers went out (fail destroys it) is a fault: 500, or the 5xx it had already sent. An answer that
+  // ended has the status the reader got, whether the fault came after it in step (a throw) or later (a rejection).
+  it('logs a fault after the headers as 500 (or the 5xx sent), never 499; a reader who leaves is 499: each once', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const ids: Record<string, string | undefined> = {};
+      const base = await serve((req, res) => {
+        const url = String(req.url);
+        ids[url] = currentTrace()?.traceId;
+        if (url === '/leave') {
+          setTimeout(() => res.end('late'), 400);
+          return;
+        }
+        res.writeHead(url === '/503-then-throw' ? 503 : 200, { 'Content-Type': 'text/plain' });
+        if (url.startsWith('/end-then-')) res.end('whole');
+        else res.write('part');
+        if (url.includes('reject')) return new Promise((_, reject) => setTimeout(() => reject(new RangeError('x')), 20));
+        throw new RangeError('x');
+      });
+      const port = Number(new URL(base).port);
+      const ask = (path: string, leaveAfter?: number) =>
+        new Promise<void>((resolve) => {
+          const s = net.connect(port, '127.0.0.1');
+          s.on('error', () => undefined);
+          s.on('data', () => undefined);
+          s.on('close', () => resolve());
+          s.write(`GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`);
+          if (leaveAfter !== undefined) setTimeout(() => s.destroy(), leaveAfter);
+        });
+      const faults = ['/throw-after-headers', '/reject-after-headers', '/503-then-throw', '/end-then-throw', '/end-then-reject'];
+      for (const path of faults) await ask(path);
+      await ask('/leave', 100);
+      await new Promise((r) => setTimeout(r, 500));
+      const lines = access(log);
+      expect(lines.map((l) => [l['path'], l['status']])).toEqual([
+        ['/throw-after-headers', 500],
+        ['/reject-after-headers', 500],
+        ['/503-then-throw', 503],
+        ['/end-then-throw', 200],
+        ['/end-then-reject', 200],
+        ['/leave', 499],
+      ]);
+      expect(lines.map((l) => l['trace_id'])).toEqual([...faults, '/leave'].map((p) => ids[p]));
+      expect(error.mock.calls.map((c) => (JSON.parse(String(c[0])) as Record<string, unknown>)['path'])).toEqual(faults);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  // Pages stream by default, and Astro's own writer (writeResponse) catches a fault partway through a page: it
+  // destroys the answer with the error and never throws, so fail does not run. The answer's error is the mark:
+  // set by that destroy, never by a reader leaving (a close or a reset), so the fault is 500 and the reader 499.
+  it("logs a fault partway through a page Astro's writer streams as 500; a reader who leaves mid-stream is 499", async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const ids: Record<string, string | undefined> = {};
+      const base = await serve(async (req, res) => {
+        const url = String(req.url);
+        ids[url] = currentTrace()?.traceId;
+        let n = 0;
+        const body = new ReadableStream<Uint8Array>({
+          async pull(c) {
+            if (n++ === 0) return c.enqueue(new TextEncoder().encode('<html>head'));
+            if (url === '/stream-fault') return c.error(new Error('render fault'));
+            await new Promise((r) => setTimeout(r, 20));
+            c.enqueue(new TextEncoder().encode('more'));
+          },
+        });
+        await writeResponse(new Response(body, { status: 200, headers: { 'Content-Type': 'text/html' } }), res);
+      });
+      const port = Number(new URL(base).port);
+      const ask = (path: string, leave?: (s: net.Socket) => void) =>
+        new Promise<string>((resolve) => {
+          let got = '';
+          const s = net.connect(port, '127.0.0.1');
+          s.on('error', () => undefined);
+          s.on('data', (d: Buffer) => {
+            got += d.toString();
+            if (leave && got.includes('head')) leave(s);
+          });
+          s.on('close', () => resolve(got));
+          s.write(`GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`);
+        });
+      expect(await ask('/stream-fault')).toMatch(/^HTTP\/1\.1 200 OK/);
+      await ask('/leave-mid-stream', (s) => s.destroy());
+      await ask('/reset-mid-stream', (s) => s.resetAndDestroy());
+      await new Promise((r) => setTimeout(r, 200));
+      const lines = access(log);
+      expect(lines.map((l) => [l['path'], l['status']])).toEqual([
+        ['/stream-fault', 500],
+        ['/leave-mid-stream', 499],
+        ['/reset-mid-stream', 499],
+      ]);
+      expect(lines.map((l) => l['trace_id'])).toEqual(['/stream-fault', '/leave-mid-stream', '/reset-mid-stream'].map((p) => ids[p]));
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('logs a fault before the handler with its status: one access line, beside the error line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const base = await serve(() => undefined);
+      // A Host header read by dropForwardedHost that throws: the route never reaches the handler.
+      server!.prependListener('request', (req: http.IncomingMessage) => {
+        if (req.url === '/early') Object.defineProperty(req, 'headers', { get: () => { throw new TypeError('x'); } });
+      });
+      const res = await fetch(`${base}/early`);
+      await res.text();
+      await settle();
+      expect(res.status).toBe(500);
+      expect(access(log).map((l) => [l['path'], l['status']])).toEqual([['/early', 500]]);
+      expect(error.mock.calls.map((c) => (JSON.parse(String(c[0])) as Record<string, unknown>)['msg'])).toEqual(['request failed']);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+});
+
+describe('originFormUrl', () => {
+  it('reads an origin-form target after a fixed authority, // and all', () => {
+    expect(originFormUrl('/news?page=2')?.href).toBe('http://site.invalid/news?page=2');
+    expect(originFormUrl('//ok/news')?.pathname).toBe('//ok/news');
+    expect(originFormUrl('//[::1')?.pathname).toBe('//[::1');
+    expect(originFormUrl('//a:99999/')?.host).toBe('site.invalid');
+  });
+
+  it('keeps a backslash in the path as %5C, and leaves the query as sent', () => {
+    expect(originFormUrl('/\\[::1')?.pathname).toBe('/%5C[::1');
+    expect(originFormUrl('/\\\\[::1')?.pathname).toBe('/%5C%5C[::1');
+    expect(originFormUrl('/a?b=\\')?.search).toBe('?b=\\');
+  });
+
+  it.each([undefined, '', '*', 'news', 'http://[/news', 'https://evil.example/news', 'evil.example:443'])('reads %j as no path', (target) => {
+    expect(originFormUrl(target)).toBeNull();
+  });
+});
+
+describe('a target that is no path, in process', () => {
+  it('answers 400 with fixed text and logs one fixed line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const base = await serve(() => undefined);
+      const reply = await new Promise<string>((resolve) => {
+        const s = net.connect(Number(new URL(base).port), '127.0.0.1');
+        let out = '';
+        s.on('data', (d) => (out += d.toString('latin1')));
+        s.on('close', () => resolve(out));
+        s.write('GET http://[zq7/news HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      });
+      expect(reply.slice(0, 12)).toBe('HTTP/1.1 400');
+      expect(reply.slice(reply.indexOf('\r\n\r\n') + 4)).toBe('Bad request');
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(unstamped(log.mock.calls[0]?.[0])).toEqual({ level: 'warn', msg: 'bad request target', reason: 'not a path on this site' });
+      expect(String(log.mock.calls[0]?.[0])).not.toContain('zq7');
+    } finally {
+      log.mockRestore();
     }
   });
 });

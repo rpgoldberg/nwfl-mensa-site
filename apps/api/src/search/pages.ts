@@ -1,6 +1,6 @@
 // ============================================================================
 // ARCHIVE-SEARCH S2: the issue text in the search index (the two page tables
-// of 0032, with 0033's functions). The PDF worker's job, as nwfl_worker.
+// of 0032, with 0034's functions). The PDF worker's job, as nwfl_worker.
 //
 // What is indexed for an audience is the text of the COPY that audience is
 // served now, and nothing else (finding F1):

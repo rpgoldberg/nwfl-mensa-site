@@ -19,6 +19,7 @@ const cfg: AuthConfig = {
   scope: 'openid profile',
   allowInsecure: false,
   groupPrefix: 'nwfl-',
+  timeoutMs: 8000,
 };
 // Made-up: an address and a bearer token, the shapes an HTTP client's error can echo.
 const EMAIL = 'pat.example@example.org';

@@ -35,6 +35,14 @@ describe('search/text: the page text the index stores', () => {
     }
   });
 
+  it('puts a space between items that meet on a line, so a word beside a label is not fused with it', () => {
+    const { text, extra } = pageText([{ str: 'Call today' }, { str: 'Private' }, { str: ' or later' }]);
+    expect(text.split(' ')).toEqual(['Call', 'today', 'Private', 'or', 'later']);
+    expect(extra).toBe('todayPrivate');
+    // A line end between them is still a line end: the hyphen join is unchanged.
+    expect(pageText([{ str: 'Call Quil-' }, { str: '', hasEOL: true }, { str: 'lon today' }])).toEqual({ text: 'Call Quillon today', extra: 'Quil-lon' });
+  });
+
   it('plain() gives item text one form: NFKC, no soft hyphen, single spaces, lines kept', () => {
     expect(plain(' mem­bers  of\tthe oﬃce \n\n next ')).toBe('members of the office\nnext');
     expect(plain('')).toBe('');

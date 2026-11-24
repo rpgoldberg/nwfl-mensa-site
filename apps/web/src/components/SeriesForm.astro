@@ -7,6 +7,10 @@
 // never a native <select>; no script and no inline style (CSP). Two buttons: "Show the next dates" (nothing
 // is saved) and Save. The next dates, and any date changed one by one that the new pattern drops, show
 // above the buttons once asked for.
+// SERIES-UI-2: each follow-up question carries the choice it belongs to (when-weeks, when-every-n,
+// when-monthly, when-month-weekday, when-month-date, when-ends-count, when-ends-until); site.css shows it
+// only once that choice is made, where the browser has :has(). Every question stays in the page, labelled
+// with what it is for ("For a weekly event: ..."), so a browser without :has() shows them all.
 import { formatDate } from '../data/format';
 import { TITLE_MAX, DETAIL_MAX, VISIBILITY_CHOICES, type VenueChoice } from '../lib/editor/events';
 import {
@@ -99,14 +103,14 @@ const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefine
     ))}
   </fieldset>
 
-  <div class="field">
+  <div class="field when-every-n">
     <label for="everyN">For "Every few weeks": how many weeks apart</label>
     <p class="hint" id="everyN-hint">A number from 1 to 52, such as 3 for every third week.</p>
     {errors['everyN']?.map((text) => <p class="error" id="everyN-error">Problem: {text}</p>)}
     <input type="text" id="everyN" name="everyN" inputmode="numeric" size="3" maxlength="2" autocomplete="off" value={values.everyN} aria-invalid={invalid('everyN')} aria-describedby={describedBy('everyN-hint', errorId('everyN'))} />
   </div>
 
-  <fieldset aria-describedby={describedBy('days-hint', errorId('days'))}>
+  <fieldset class="when-weeks" aria-describedby={describedBy('days-hint', errorId('days'))}>
     <legend>For a weekly event: on which days</legend>
     <p class="hint" id="days-hint">Tick each day it meets.</p>
     {errors['days']?.map((text) => <p class="error" id="days-error">Problem: {text}</p>)}
@@ -118,7 +122,7 @@ const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefine
     ))}
   </fieldset>
 
-  <fieldset aria-describedby={errorId('monthly')}>
+  <fieldset class="when-monthly" aria-describedby={errorId('monthly')}>
     <legend>For a monthly event: which day of the month</legend>
     {errors['monthly']?.map((text) => <p class="error" id="monthly-error">Problem: {text}</p>)}
     {MONTHLY_CHOICES.map((c) => (
@@ -129,7 +133,7 @@ const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefine
     ))}
   </fieldset>
 
-  <fieldset aria-describedby={describedBy('ordinal-hint', errorId('ordinal'))}>
+  <fieldset class="when-monthly when-month-weekday" aria-describedby={describedBy('ordinal-hint', errorId('ordinal'))}>
     <legend>For a monthly event on a day of the week: which one in the month</legend>
     <p class="hint" id="ordinal-hint">"Last" is the last one in every month. "Fourth" is not always the last: some months have five.</p>
     {errors['ordinal']?.map((text) => <p class="error" id="ordinal-error">Problem: {text}</p>)}
@@ -141,7 +145,7 @@ const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefine
     ))}
   </fieldset>
 
-  <fieldset aria-describedby={errorId('weekday')}>
+  <fieldset class="when-monthly when-month-weekday" aria-describedby={errorId('weekday')}>
     <legend>For a monthly event on a day of the week: which day</legend>
     {errors['weekday']?.map((text) => <p class="error" id="weekday-error">Problem: {text}</p>)}
     {DAY_CODES.map((d) => (
@@ -152,7 +156,7 @@ const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefine
     ))}
   </fieldset>
 
-  <div class="field">
+  <div class="field when-monthly when-month-date">
     <label for="monthDay">For a monthly event on a date: the day of the month</label>
     <p class="hint" id="monthDay-hint">A number from 1 to 31. A month without that day (such as the 31st in April) is skipped: to meet every month at its end, choose "On the last day of the month".</p>
     {errors['monthDay']?.map((text) => <p class="error" id="monthDay-error">Problem: {text}</p>)}
@@ -236,14 +240,14 @@ const errorId = (field: string) => (invalid(field) ? `${field}-error` : undefine
     ))}
   </fieldset>
 
-  <div class="field">
+  <div class="field when-ends-count">
     <label for="count">For "After a number of dates": how many dates</label>
     <p class="hint" id="count-hint">Counted from the first date, such as 10.</p>
     {errors['count']?.map((text) => <p class="error" id="count-error">Problem: {text}</p>)}
     <input type="text" id="count" name="count" inputmode="numeric" size="5" maxlength="4" autocomplete="off" value={values.count} aria-invalid={invalid('count')} aria-describedby={describedBy('count-hint', errorId('count'))} />
   </div>
 
-  <div class="field">
+  <div class="field when-ends-until">
     <label for="until">For "On a date": the last date</label>
     <p class="hint" id="until-hint">Year, month and day, such as 2027-12-31. A date on the pattern that day is the last one.</p>
     {errors['until']?.map((text) => <p class="error" id="until-error">Problem: {text}</p>)}

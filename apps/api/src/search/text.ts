@@ -20,11 +20,20 @@
 //   * The line end may be on the item or on an empty item right after it (pdf.js
 //     gives both). A blank line, white space, a digit or anything else that is
 //     no letter cancels the join.
+//   * Two items on one line that meet with no white space (a font change, a drop
+//     capital, a redaction box's label drawn beside a word) are two words: a
+//     space goes between them, so "today" beside a "Private" label is found as
+//     "today". The word as drawn, without that space ("Welcome" from "W" and
+//     "elcome"), goes to `extra`, so it is still found as typed.
 //
-// Joining adds no exposure: the PDF gate already reads the joined and the kept
-// forms (pdf/match.ts), so a withheld word split across a line is a refused
-// copy, and a refused copy is never indexed. A wrong join only changes which
-// word finds the page.
+// What is proven about exposure, and what is not. The PDF gate reads a page as
+// drawn (a space between items) and by position (pdf/gate.ts), each in the
+// joined and kept forms (pdf/match.ts). This text is not always one of those
+// readings: a hyphen before an empty line-end item, and the drawn form of runs
+// that meet with no space, are not shown to be. So the gate does not cover what
+// is joined here; S2's text job refuses a page whose joined `text` or `extra`
+// matches a withheld passage, and the end-to-end parity test (synthetic PDFs
+// through the gate's reader, then pageText) is unit GATE-HYPH-JOIN.
 //
 // A change to this rule bumps TEXT_VERSION, and every page is extracted again.
 // ============================================================================
@@ -62,11 +71,22 @@ export function pageText(items: readonly TextItem[]): PageText {
   let pending: 'hyphen' | 'soft' | null = null;
   // The last character read was a soft hyphen.
   let soft = false;
+  // The word as drawn: the text's word without the spaces put between items that meet, and whether one was put.
+  let drawn = '';
+  let split = false;
+  // The last item ended on this line, with no white space after it.
+  let meets = false;
 
-  const space = (): void => {
+  const endWord = (): void => {
     if (joined) kept.push(word);
     word = '';
     joined = false;
+  };
+  const space = (): void => {
+    endWord();
+    if (split) kept.push(drawn);
+    drawn = '';
+    split = false;
     if (text !== '' && !text.endsWith(' ')) text += ' ';
   };
 
@@ -79,14 +99,23 @@ export function pageText(items: readonly TextItem[]): PageText {
       soft = false;
       if (SPACE.test(c)) {
         pending = null;
+        meets = false;
         space();
         continue;
+      }
+      if (meets) {
+        // Two items meet on a line: two words in the text, one as drawn.
+        meets = false;
+        endWord();
+        text += ' ';
+        split = true;
       }
       if (pending !== null) {
         if (!LETTER.test(c)) space();
         else if (pending === 'hyphen') {
           // The hyphen leaves the text and stays, as "-", in the kept form.
           text = text.slice(0, -1);
+          drawn = drawn.slice(0, -1);
           word = `${word.slice(0, -1)}-`;
           joined = true;
         }
@@ -94,8 +123,11 @@ export function pageText(items: readonly TextItem[]): PageText {
       }
       text += c;
       word += c;
+      drawn += c;
     }
-    if (hasEOL === true) {
+    if (hasEOL !== true) meets = text !== '' && !text.endsWith(' ') && pending === null;
+    else {
+      meets = false;
       if (pending !== null) {
         // A second line end in a row: a blank line, not a split word.
         pending = null;
@@ -106,7 +138,8 @@ export function pageText(items: readonly TextItem[]): PageText {
       soft = false;
     }
   }
-  if (joined) kept.push(word);
+  endWord();
+  if (split) kept.push(drawn);
   return { text: text.trimEnd(), extra: kept.join(' ') };
 }
 

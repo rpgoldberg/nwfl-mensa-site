@@ -82,7 +82,7 @@ test.describe('approving, with no script', () => {
     await expect(card.getByRole('link', { name: `Review ${REVIEW.frozen.title}` })).toHaveAttribute('href', review(REVIEW.frozen.id));
   });
 
-  test('a reviewer checks the links by hand: a no holds Approve, a sign-in link needs a yes, then Approve does not publish', async ({ page }) => {
+  test('a reviewer checks the links by hand: a no holds Approve, a sign-in link needs a yes, then Approve does not publish', async ({ browser, page }) => {
     const { links } = own();
     await page.goto('/');
     await signIn(page, 'treasurer');
@@ -114,6 +114,20 @@ test.describe('approving, with no script', () => {
     await expect(page.getByText('1 of 3 links checked.')).toBeVisible();
     await expect(facebook).toContainText('Checked by Treasurer: it shows the right page.');
     await expect(row(page, REVIEW.urls.map)).toContainText('Treasurer answered no: it does not show the right page.');
+
+    // WEB-SMALL-1 fix round 1 (S2): "Your answers" are this viewer's. A second reviewer, who answered nothing
+    // on this piece, is not told so by the same address; the Treasurer, who answered, still is.
+    const second = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true });
+    const webmaster = await second.newPage();
+    await webmaster.goto(SITE_URL);
+    await signIn(webmaster, 'webmaster');
+    await webmaster.goto(`${SITE_URL}${review(links.id)}?done=answers`);
+    await expect(row(webmaster, REVIEW.urls.map)).toContainText('Treasurer answered no');
+    await expect(webmaster.getByRole('status')).toHaveCount(0);
+    await expect(webmaster.getByText('Your answers are saved.')).toHaveCount(0);
+    await second.close();
+    await page.goto(`${review(links.id)}?done=answers`);
+    await expect(page.getByRole('status')).toHaveText('Your answers are saved.');
 
     await page.getByRole('button', { name: 'Approve', exact: true }).click();
     await expect(page.getByRole('alert').filter({ hasText: 'It was not approved' })).toContainText(`a reviewer answered no for the link "${REVIEW.urls.map}"`);
@@ -262,7 +276,7 @@ test.describe('approving, with no script', () => {
       await page.getByRole('textbox', { name: 'Note for the writer' }).fill(NOTE);
       const [sent] = await Promise.all([page.waitForResponse((r) => r.request().method() === 'POST'), page.getByRole('button', { name: 'Send back' }).click()]);
       console.log(`S1 ${back.title}: Send back posted ${sent.request().postDataBuffer()?.length} bytes -> ${sent.status()}`);
-      await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=sent-back`);
+      await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=sent-back&id=${back.id}`);
     }
   });
 
@@ -418,7 +432,7 @@ test.describe('approving, with no script', () => {
     await expect(status(page)).toHaveText('Waiting for approval');
   });
 
-  test('send back needs a note, then goes to the writer', async ({ page }) => {
+  test('send back needs a note, then goes to the writer', async ({ browser, page }) => {
     const { sendBack } = own();
     await page.goto('/');
     await signIn(page, 'treasurer');
@@ -427,8 +441,16 @@ test.describe('approving, with no script', () => {
     await expect(page.locator('[data-error-summary]')).toContainText('Write a note for the author.');
     await page.getByRole('textbox', { name: 'Note for the writer' }).fill('Please add the start time.');
     await page.getByRole('button', { name: 'Send back' }).click();
-    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=sent-back`);
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=sent-back&id=${sendBack.id}`);
     await expect(page.getByRole('status')).toHaveText('Sent back to the writer with your note.');
+    // Recheck 1: the same address, opened by another role (the Webmaster), says it neutrally: "your note" is not theirs.
+    const second = await browser.newContext({ javaScriptEnabled: false, ignoreHTTPSErrors: true });
+    const webmaster = await second.newPage();
+    await webmaster.goto(SITE_URL);
+    await signIn(webmaster, 'webmaster');
+    await webmaster.goto(`${SITE_URL}${QUEUE}?done=sent-back&id=${sendBack.id}`);
+    await expect(webmaster.getByRole('status')).toHaveText('This piece was sent back to the writer.');
+    await second.close();
     await page.goto(review(sendBack.id));
     await expect(status(page)).toHaveText('Sent back – please read the note');
   });

@@ -46,6 +46,21 @@ export function securityHeaders({ formAction = [] }) {
 }
 
 /**
+ * MACHINE-ROUTE: the two services the site forwards for the machine clients (machine-route.mjs), by
+ * their exact Connect path prefixes, case and all.
+ */
+export const MACHINE_PREFIXES = Object.freeze(['/nwfl.mensa.v1.LinkCheckService/', '/nwfl.mensa.v1.NewsletterService/']);
+
+/**
+ * Whether a path, as the site decodes it (siteServer.mjs normalisePath), is under the machine route.
+ *
+ * @param {string | undefined} path
+ */
+export function isMachinePath(path) {
+  return path !== undefined && MACHINE_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+/**
  * LINKS L4: the leaving page /out/<id>, and anything under /out, in any case, behind
  * any number of slashes (the router serves //out/<id> as the page).
  */
@@ -157,7 +172,8 @@ const SHARED = [
  * A handler may make its response private (A14: a members copy read with a
  * reader's token), never looser: any other Cache-Control it set is overridden.
  * The leaving page (LINKS L4) depends on the reader's cookie and token, so every
- * answer under it, the 301 of a trailing slash too, is private.
+ * answer under it, the 301 of a trailing slash too, is private. So is every answer
+ * of the machine route (MACHINE-ROUTE): it is a caller's own, by its token.
  *
  * @param {{ path: string, served?: ReadonlyArray<string | undefined>, cookieHeader: string | undefined, status: number, setsCookie: boolean, handler?: string | number | string[] | undefined }} r
  *   served: the other forms of the path the handler may serve it as (decoded, or as the request
@@ -165,7 +181,8 @@ const SHARED = [
  */
 export function cacheControl(r) {
   const handlerPrivate = r.handler !== undefined && /(^|,)\s*private\s*(,|$)/i.test(String(r.handler));
-  if (r.setsCookie || handlerPrivate || hasCookie(r.cookieHeader, SESSION_COOKIE) || isLeavingPage(r.path, ...(r.served ?? []))) return 'private, no-store';
+  const machine = [r.path, ...(r.served ?? [])].some(isMachinePath);
+  if (r.setsCookie || handlerPrivate || machine || hasCookie(r.cookieHeader, SESSION_COOKIE) || isLeavingPage(r.path, ...(r.served ?? []))) return 'private, no-store';
   if (r.status >= 400 || r.path === '/healthz') return 'no-store';
   if (HASHED_ASSET.test(r.path) && r.status === 200) return 'public, max-age=31536000, immutable';
   return SHARED.some((shared) => shared.test(r.path)) ? PUBLIC_CACHE : PRIVATE_CACHE;

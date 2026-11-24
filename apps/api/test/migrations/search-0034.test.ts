@@ -1,4 +1,4 @@
-// ARCHIVE-SEARCH S2: 0033_search_worker.sql. What the worker's index job needs beside the page
+// ARCHIVE-SEARCH S2: 0034_search_worker.sql. What the worker's index job needs beside the page
 // writer, and no more: which files lack their text (search_page_lacking) and the removal of rows no
 // audience is served any longer (search_page_sweep). Both are definer functions, so the worker reads
 // neither the index nor the ledger. Run against a real Postgres as the app role, the worker role and
@@ -14,7 +14,7 @@ const sha = (seed: string): Buffer => createHash('sha256').update(seed).digest()
 const PUT = `SELECT search_page_put($1, $2, $3, $4, $5::text[], $6::text[]) AS pages`;
 const PAGE_TABLES = ['search_page_public', 'search_page_members'] as const;
 
-describe.skipIf(!live)('0033: what the worker\'s index job may do', () => {
+describe.skipIf(!live)('0034: what the worker\'s index job may do', () => {
   let api: Api;
   let owner: pg.Client;
   let app: pg.Client;
@@ -51,7 +51,7 @@ describe.skipIf(!live)('0033: what the worker\'s index job may do', () => {
     owner.query(`INSERT INTO ${table} (file_id, page, served_sha256, text_version, text, extra) VALUES ($1, 1, $2, 1, $3, '')`, [fileId, sha(seed), words]);
 
   beforeAll(async () => {
-    api = await startApi('nwfl_search0033');
+    api = await startApi('nwfl_search0034');
     office = await insertId(api.pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
     const database = (await api.pool.query<{ db: string }>(`SELECT current_database() AS db`)).rows[0]!.db;
     const connect = async (connectionString: string): Promise<pg.Client> => {

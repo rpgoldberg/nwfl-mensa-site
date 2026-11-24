@@ -1,4 +1,4 @@
--- 0033_search_worker.sql: what the worker's index job needs beside the page writer (ARCHIVE-SEARCH S2).
+-- 0034_search_worker.sql: what the worker's index job needs beside the page writer (ARCHIVE-SEARCH S2).
 --
 -- The PDF worker keeps the issue text of the search index (src/search/pages.ts): after each copy it
 -- makes, and in a sweep at each start. 0032 gave it search_page_put. The sweep needs two more things,
@@ -36,8 +36,8 @@
 -- that read the item just before its change committed is deleted by that same next sweep. The read side
 -- (S3) applies the same rule again.
 --
--- ADDITIVE and forward-only: three new functions, their grants, and 0032's search_page_put with one
--- more refusal. Nothing else that ran on 0032 changes.
+-- ADDITIVE and forward-only: three new functions, their grants, and 0032's search_page_put (as S1
+-- left it) with one more refusal. Nothing else that ran on 0032 changes.
 
 -- Whether the public or members may open the file at all now (content/files.ts servableFile, for an
 -- audience other than officers). Called by the three definers below, as their owner: no grant.
@@ -118,7 +118,8 @@ BEGIN
 END
 $fn$;
 
--- 0032's writer, refusing a file no audience here may open. Its owner and grants are kept.
+-- 0032's writer as S1 left it (the item lock, the ledger check, search_file_servable), with one more refusal before
+-- S1's: a file no audience here may open. Its owner and grants are kept.
 CREATE OR REPLACE FUNCTION search_page_put(p_file uuid, p_audience text, p_sha bytea, p_text_version integer, p_pages text[], p_extras text[])
   RETURNS integer
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
@@ -144,6 +145,10 @@ BEGIN
      OR (SELECT sum(octet_length(u.page)::bigint + octet_length(u.extra)) FROM unnest(p_pages, p_extras) AS u(page, extra)) > 4194304 THEN
     RAISE EXCEPTION 'a page is at most 64 KiB, and a file 4 MiB in all' USING ERRCODE = '22023';
   END IF;
+  -- The item's lock first, as a withdrawal or a publish takes it (FOR UPDATE, then the files): a put that meets one
+  -- waits here, holding no file. KEY SHARE is what the page row's item_id reference takes on the INSERT below anyway.
+  PERFORM 1 FROM content_item i JOIN content_version v ON v.item_id = i.id JOIN stored_file f ON f.version_id = v.id
+    WHERE f.id = p_file FOR KEY SHARE OF i;
   -- The lock pdf_regen_request takes: a change to what this file's copies hold waits, or is waited for.
   SELECT * INTO v_file FROM stored_file WHERE id = p_file FOR NO KEY UPDATE;
   IF NOT FOUND THEN
@@ -157,9 +162,15 @@ BEGIN
   IF NOT FOUND OR v_output IS DISTINCT FROM p_sha OR v_served IS DISTINCT FROM 'copy' THEN
     RAISE EXCEPTION 'the ledger does not say this audience is served this copy now' USING ERRCODE = '55000';
   END IF;
-  -- 0033: and only a file the public or members may open now (search_page_servable).
+  -- 0034: and only a file the public or members may open now (search_page_servable).
   IF NOT search_page_servable(p_file) THEN
     RAISE EXCEPTION 'this file is not one the public or members may open now' USING ERRCODE = '55000';
+  END IF;
+  -- What the audience may open now (search_file_servable). Read after the file lock, so a change that stops it either is
+  -- seen here or waits for this put and then deletes its rows: search_page_unservable for an item, version or edition;
+  -- pdf_regen_request for a mark or a policy change, whose ledger rows the app records in that transaction.
+  IF NOT search_file_servable(p_file, p_audience) THEN
+    RAISE EXCEPTION 'the audience may not open this file now' USING ERRCODE = '55000';
   END IF;
   SELECT v.item_id INTO v_item FROM content_version v WHERE v.id = v_file.version_id;
   IF p_audience = 'public' THEN

@@ -36,8 +36,15 @@ describe('Dockerfile', () => {
     expect(runtime).toMatch(/rm -rf .*\/usr\/local\/lib\/node_modules\/npm/);
     // Host files keep their mode in COPY; a 0600 checkout would be unreadable to uid 10001.
     for (const line of runtime.match(/^COPY (?!--from).*$/gm) ?? []) expect(line).toMatch(/^COPY --chown=root:root --chmod=0644 /);
-    expect(stages[0]).toMatch(/^RUN chmod -R a\+rX dist server$/m);
+    expect(stages[0]).toMatch(/^RUN chmod -R a\+rX dist server src\/gen$/m);
     expect(runtime).toMatch(/^COPY --from=build --chown=root:root \/app\/server \.\/server$/m);
+  });
+
+  // MACHINE-ROUTE: server/machine-route.mjs runs outside Astro's bundle and reads the two services' generated
+  // code from src/gen, so the runtime has that folder (JavaScript only) and no other source.
+  it('ships the generated API code the machine route reads, and no other source', () => {
+    expect(runtime).toMatch(/^COPY --from=build --chown=root:root \/app\/src\/gen \.\/src\/gen$/m);
+    expect(runtime.match(/^COPY --from=build .*\/app\/src.*$/gm)).toHaveLength(1);
   });
 
   // LG-N3: the site redactor is the API's: its import-free key module and its vendored fc-shared, from the
