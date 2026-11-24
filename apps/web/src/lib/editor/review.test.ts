@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiNotFound, ApiUnavailable } from '../api/client';
 import { EditorRefused, type EditorApi, type EditorItem, type EditorVersion, type HistoryStep, LinksChanged, NotAllowed, type PieceLink, SignInAgain, VersionChanged } from '../api/editor';
 import { hashHex } from './form';
+import { statusOf } from './status';
 import {
   APPROVE_NOTE,
   REVIEW_LINKS,
@@ -22,6 +23,8 @@ import {
   loadFailure,
   parseActing,
   parseAnswers,
+  queueDoneText,
+  answerLabels,
   reviewQueue,
   reviewOffers,
   rowKey,
@@ -407,14 +410,92 @@ describe('what the history tells the review page', () => {
     expect(takenDown([step({})])).toBeUndefined();
   });
 
-  it('puts each finished step in words', () => {
-    expect(doneText(new URLSearchParams('done=approved'))).toBe(`Approved. ${APPROVE_NOTE}`);
-    expect(doneText(new URLSearchParams('done=published'))).toBe('Published. It is on the website now.');
-    expect(doneText(new URLSearchParams('done=taken-down'))).toBe('Taken down. It is no longer on the website.');
-    expect(doneText(new URLSearchParams('done=answers'))).toBe('Your answers are saved.');
-    expect(doneText(new URLSearchParams('done=sent-back'))).toBe('Sent back to the writer with your note.');
-    expect(doneText(new URLSearchParams('done=other'))).toBeUndefined();
-    expect(doneText(new URLSearchParams(''))).toBeUndefined();
+  // E7B-N5: the banner is the piece's real state (read from the API), never the address alone.
+  it('puts a finished step in words only when the piece read from the API shows it', () => {
+    const done = (step: string, it: EditorItem | undefined, links: PieceLink[] = []) => doneText(new URLSearchParams(`done=${step}`), it, links, ['Webmaster']);
+    const waiting = item();
+    const cleared = item({}, { status: 'cleared' });
+    /** With no working version: what is live is all there is. */
+    const settled = (over: Partial<EditorItem>): EditorItem => ({ id: ID, slug: 's', kind: 'announcement', officeId: ROSTER[0]!.id, state: 'published', ...over });
+    const published = settled({ live: version({ status: 'approved' }) });
+    const changeCleared = item({ state: 'published', live: version({ status: 'approved' }) }, { status: 'cleared', number: 2 });
+    const changeWaiting = item({ state: 'published', live: version({ status: 'approved' }) }, { status: 'ready', number: 2 });
+    const down = settled({ state: 'withdrawn' });
+
+    expect(done('approved', cleared)).toBe(`Approved. ${APPROVE_NOTE}`);
+    expect(done('approved', changeCleared)).toBe(`Approved. ${APPROVE_NOTE}`);
+    expect(done('published', published)).toBe('Published. It is on the website now.');
+    expect(done('taken-down', down)).toBe('Taken down. It is no longer on the website.');
+    expect(done('answers', waiting, [link({ reviewerAnswer: 'none' }), link({ reviewerAnswer: 'no', answeredByLabel: 'Webmaster' })])).toBe('Your answers are saved.');
+    expect(done('answers', cleared, [link({ reviewerAnswer: 'yes', answeredByLabel: 'Webmaster' })])).toBe('Your answers are saved.');
+
+    // A crafted address: the step named did not happen to this piece.
+    for (const it of [waiting, cleared, changeCleared, changeWaiting, down, undefined]) expect(done('published', it), it?.state).toBeUndefined();
+    for (const it of [waiting, published, changeWaiting, down, undefined]) expect(done('approved', it), it?.state).toBeUndefined();
+    for (const it of [waiting, cleared, published, changeCleared, undefined]) expect(done('taken-down', it), it?.state).toBeUndefined();
+    expect(done('answers', waiting)).toBeUndefined();
+    expect(done('answers', waiting, [link({ reviewerAnswer: 'none' })])).toBeUndefined();
+    expect(done('answers', undefined, [link({ reviewerAnswer: 'yes' })])).toBeUndefined();
+    // Sent back is the queue's, and a word that is no step is nothing.
+    for (const step of ['sent-back', 'other', 'constructor', '']) expect(done(step, cleared, [link({ reviewerAnswer: 'yes' })]), step).toBeUndefined();
+    expect(doneText(new URLSearchParams(''), published, [], ['Webmaster'])).toBeUndefined();
+  });
+
+  // Fix round 1 (S2): "Your answers" only when this viewer's answer (by role, as the API names who answered) is on the piece.
+  it('says "Your answers are saved." only when an answer on the piece is this viewer\'s', () => {
+    const answers = (links: PieceLink[], mine: readonly string[]) => doneText(new URLSearchParams('done=answers'), item(), links, mine);
+    const byTreasurer = link({ reviewerAnswer: 'yes', answeredByLabel: 'Treasurer' });
+    const byWebmaster = link({ url: 'https://club.example/b', reviewerAnswer: 'no', answeredByLabel: 'Webmaster' });
+    // Two reviewers: the Treasurer answered; the Webmaster did not.
+    expect(answers([byTreasurer], ['Treasurer'])).toBe('Your answers are saved.');
+    expect(answers([byTreasurer], ['Webmaster'])).toBeUndefined();
+    expect(answers([byTreasurer, byWebmaster], ['Webmaster'])).toBe('Your answers are saved.');
+    // A label with no answer is no answer; a viewer whose role is unknown has none.
+    expect(answers([link({ reviewerAnswer: 'none', answeredByLabel: 'Webmaster' })], ['Webmaster'])).toBeUndefined();
+    expect(answers([byTreasurer], [])).toBeUndefined();
+    expect(answers([link({ reviewerAnswer: 'yes', answeredByLabel: '' })], [''])).toBeUndefined();
+  });
+
+  it('names the roles an answer by this viewer is given under, as the API words them', () => {
+    const [president, treasurer] = [ROSTER[0]!, ROSTER[1]!];
+    expect(answerLabels({ kind: 'one', office: president })).toEqual([president.title]);
+    expect(answerLabels({ kind: 'pick', offices: [president, treasurer] })).toEqual([president.title, treasurer.title]);
+    expect(answerLabels({ kind: 'none', label: 'Webmaster' })).toEqual(['Webmaster']);
+    expect(answerLabels({ kind: 'unknown' })).toEqual([]);
+  });
+
+  // Fix round 1 (B1): the queue says "sent back" only when the piece named in the address reads as sent back.
+  it('says "sent back" on the queue only when the piece named reads as sent back; "your note" only to the role that sent it', async () => {
+    const MINE = 'Sent back to the writer with your note.';
+    const NEUTRAL = 'This piece was sent back to the writer.';
+    const back = item({ state: 'draft' }, { status: 'draft', sendBackNote: 'Shorter.' });
+    const history = [step({ action: 'send_back', actorLabel: 'Webmaster', versionNumber: 1 }), step({ action: 'mark_ready', actorLabel: 'President' }), step({ action: 'send_back', actorLabel: 'Treasurer', versionNumber: 2 })];
+    type Read = (id: string) => Promise<{ item: EditorItem; history: HistoryStep[] }>;
+    const q = (query: string, read: Read | undefined, mine: readonly string[] = ['Treasurer']) => queueDoneText(new URLSearchParams(query), read, mine);
+    const reads = vi.fn(async (id: string) => ({ item: id === ID ? back : item(), history }));
+    expect(statusOf(back).key).toBe('sent_back');
+    // The role that sent it back (the latest send-back step) is told "your note"; anyone else, the neutral line.
+    expect(await q(`done=sent-back&id=${ID}`, reads)).toBe(MINE);
+    expect(reads).toHaveBeenCalledWith(ID);
+    expect(await q(`done=sent-back&id=${ID}`, reads, ['Webmaster'])).toBe(NEUTRAL);
+    expect(await q(`done=sent-back&id=${ID}`, reads, ['Officer'])).toBe(NEUTRAL);
+    expect(await q(`done=sent-back&id=${ID}`, reads, [])).toBe(NEUTRAL);
+    expect(await q(`done=sent-back&id=${ID}`, async () => ({ item: back, history: [] }))).toBe(NEUTRAL);
+    expect(await q(`done=sent-back&id=${ID}`, async () => ({ item: back, history: [step({ action: 'send_back', actorLabel: '' })] }), [''])).toBe(NEUTRAL);
+    // A crafted address: no id, a malformed one, a piece that was not sent back, one that cannot be read.
+    reads.mockClear();
+    for (const query of ['done=sent-back', 'done=sent-back&id=', 'done=sent-back&id=abc', `done=sent-back&id=${ID.toUpperCase()}x`, `done=published&id=${ID}`, `done=other&id=${ID}`, `id=${ID}`, '']) expect(await q(query, reads), query).toBeUndefined();
+    expect(reads).not.toHaveBeenCalled();
+    const other = 'c0e20000-0000-4000-8000-000000000002';
+    expect(await q(`done=sent-back&id=${other}`, reads)).toBeUndefined();
+    for (const error of [new ApiNotFound('GetWorkingItem'), new NotAllowed('GetWorkingItem'), new SignInAgain('GetWorkingItem'), new Error('down')]) {
+      expect(await q(`done=sent-back&id=${ID}`, () => Promise.reject(error)), error.name).toBeUndefined();
+    }
+    // No API or no sign-in: nothing is read, so nothing is said.
+    expect(await q(`done=sent-back&id=${ID}`, undefined)).toBeUndefined();
+  });
+
+  it('names each screen by its address', () => {
     expect(REVIEW_LINKS.review(ID)).toBe(`/officer-area/approvals/${ID}`);
     expect(REVIEW_LINKS.publish(ID)).toBe(`/officer-area/approvals/${ID}/publish`);
     expect(REVIEW_LINKS.takeDown(ID)).toBe(`/officer-area/approvals/${ID}/take-down`);
@@ -562,7 +643,7 @@ describe('runReview: the review page\'s posts', () => {
     expect(getWorkingItem).toHaveBeenCalledWith(reader, ID);
     for (const rpc of [api.getItemLinks, api.confirmLinks, api.approve]) expect(rpc).not.toHaveBeenCalled();
     getWorkingItem.mockClear();
-    expect(await runReview(api, reader, ID, form({ step: 'send-back', note: 'Fix it' }), one)).toEqual({ redirect: `${REVIEW_LINKS.queue}?done=sent-back` });
+    expect(await runReview(api, reader, ID, form({ step: 'send-back', note: 'Fix it' }), one)).toEqual({ redirect: `${REVIEW_LINKS.queue}?done=sent-back&id=${ID}` });
     expect(getWorkingItem).not.toHaveBeenCalled();
     // A view seen whole goes on to the API as before.
     expect(await runReview(fakeApi({ approve: vi.fn().mockResolvedValue(item()) }), reader, ID, form({ step: 'approve', hash: hashHex(HASH) }), one)).toEqual({ redirect: `${REVIEW_LINKS.review(ID)}?done=approved` });
@@ -659,7 +740,7 @@ describe('runReview: the review page\'s posts', () => {
 
   it('sends back with a note, and goes to the queue', async () => {
     const sendBack = vi.fn().mockResolvedValue(item());
-    expect(await runReview(fakeApi({ sendBack }), reader, ID, form({ step: 'send-back', note: ' Add the time. ' }), one)).toEqual({ redirect: `${REVIEW_LINKS.queue}?done=sent-back` });
+    expect(await runReview(fakeApi({ sendBack }), reader, ID, form({ step: 'send-back', note: ' Add the time. ' }), one)).toEqual({ redirect: `${REVIEW_LINKS.queue}?done=sent-back&id=${ID}` });
     expect(sendBack).toHaveBeenCalledWith(reader, { itemId: ID, note: 'Add the time.', actingAsOfficeId: ROSTER[1]!.id });
     expect(await runReview(fakeApi({ sendBack }), reader, ID, form({ step: 'send-back', note: ' ' }), one)).toMatchObject({ status: 400, errors: { note: 'Write a note for the author.' } });
   });

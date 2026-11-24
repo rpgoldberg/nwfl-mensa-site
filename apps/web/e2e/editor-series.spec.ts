@@ -178,7 +178,7 @@ test.describe('axe in every theme, and 320 px at the largest text', () => {
           if (overflow > 0) wide.push(`${label}: ${overflow} px`);
         });
         expect(wide).toEqual([]);
-        for (const choice of await page.locator('.series-form .choice').all()) expect((await choice.boundingBox())!.height).toBeGreaterThanOrEqual(48);
+        for (const choice of await page.locator('.series-form .choice:visible').all()) expect((await choice.boundingBox())!.height).toBeGreaterThanOrEqual(48);
         await page.screenshot({ path: info.outputPath(`series-new-320-${size}.png`) });
       });
     }

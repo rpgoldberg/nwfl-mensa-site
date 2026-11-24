@@ -8,6 +8,7 @@ import {
   SCOPE_LABEL,
   confirmText,
   doneFromQuery,
+  type Setting,
   doneText,
   formatSetDate,
   isAdmin,
@@ -148,12 +149,28 @@ describe('the switch form', () => {
     expect(confirmText('redaction_policy', 'two_person')).toBe("You are about to require another officer's approval again before a public privacy setting is loosened.");
   });
 
-  it('reports the outcome from the address it lands on after saving', () => {
-    expect(doneFromQuery(new URLSearchParams('done=content&changed=1'))).toEqual({ scope: 'content', changed: true });
-    expect(doneFromQuery(new URLSearchParams('done=redaction_policy&changed=0'))).toEqual({ scope: 'redaction_policy', changed: false });
-    expect(doneFromQuery(new URLSearchParams('done=members&changed=1'))).toBeUndefined();
-    expect(doneFromQuery(new URLSearchParams('done=content&changed=yes'))).toBeUndefined();
-    expect(doneFromQuery(new URLSearchParams(''))).toBeUndefined();
+  // WEB-SMALL-1 fix round 1: the outcome is said only when the setting read now is the one the save left
+  // (its revision, from the API's answer, in the address), never from the address alone.
+  it('reports the outcome only when the setting read now is the one the save left', () => {
+    const REV = '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10';
+    const settings: Setting[] = [
+      { scope: 'content', rule: 'one_approver', setAt: new Date('2026-11-03T15:00:00Z'), revision: REV },
+      { scope: 'redaction_policy', rule: 'two_person', revision: '' },
+    ];
+    const done = (query: string, read: Setting[] | undefined = settings) => doneFromQuery(new URLSearchParams(query), read);
+    expect(done(`done=content&changed=1&rev=${REV}`)).toEqual({ scope: 'content', changed: true });
+    expect(done(`done=content&changed=0&rev=${REV}`)).toEqual({ scope: 'content', changed: false });
+    // Saved again on the default: no change, and still no revision.
+    expect(done('done=redaction_policy&changed=0&rev=')).toEqual({ scope: 'redaction_policy', changed: false });
+    // Crafted: no revision, another revision, a change that left no revision, or nothing read.
+    for (const query of ['done=content&changed=1', 'done=content&changed=0', 'done=content&changed=1&rev=', `done=content&changed=1&rev=${REV.replace('0b', '1b')}`, 'done=redaction_policy&changed=1&rev=', `done=redaction_policy&changed=0&rev=${REV}`]) {
+      expect(done(query), query).toBeUndefined();
+    }
+    expect(doneFromQuery(new URLSearchParams(`done=content&changed=1&rev=${REV}`), undefined)).toBeUndefined();
+    expect(done(`done=content&changed=1&rev=${REV}`, [])).toBeUndefined();
+    expect(done(`done=members&changed=1&rev=${REV}`)).toBeUndefined();
+    expect(done(`done=content&changed=yes&rev=${REV}`)).toBeUndefined();
+    expect(done('')).toBeUndefined();
     expect(doneText(true)).toBe('Saved.');
     expect(doneText(false)).toBe('No change: it was already set that way.');
   });
