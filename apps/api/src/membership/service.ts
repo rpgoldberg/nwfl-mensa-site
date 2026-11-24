@@ -218,6 +218,9 @@ const MAX_REJECTED_LISTED = 50;
 const CLOSED_BY_REJECTION = `a.status = 'removed' AND a.verified_on IS NULL AND a.approved_by_sub IS NULL AND a.affiliate_granted_by_sub IS NULL`;
 /** W-SIGNUP D2: an officer invited this person (fc INVITE1's <prefix>invited, renamed by groups.ts). */
 const INVITED_GROUP = 'nwfl-invited';
+// OFFICER-VERIFY fix round 4 (B2), switched on: what GrantAffiliate leaves to the approvers.
+const GRANT_AFTER_APPROVER = 'the membership verification service did not confirm the email: an approver confirms it in the queue first';
+const GRANT_NOT_CHAPTER = "the check reported the chapter's own group: approve or confirm the member, not an affiliate grant";
 /** OFFICER-VERIFY (switched on): why an approver may not approve an invited sign-up by hand (local-group.ts handApproval). */
 const INVITE_UNCONFIRMED =
   'an invited sign-up is approved only once the membership check confirmed its number and last name, with no first-name mismatch: reject it, or reopen it for a new check';
@@ -785,6 +788,12 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
             current?.status === 'member' &&
             signup?.decision === 'approved' &&
             groupStanding({ verification: signup.verification, localGroup: signup.local_group }, officerVerify.chapterGroup) === 'guest';
+          if (officerVerify !== null && signup !== undefined) {
+            // Fix round 4 (B2), switched on: a grant never settles what the approvers' queue must (rulings B and 3).
+            if (signup.decision === 'pending' && signup.verification === 'email_mismatch') throw precondition(GRANT_AFTER_APPROVER);
+            // The chapter's own are approved or confirmed, never granted (DESIGN J S2b).
+            if (groupStanding({ verification: signup.verification, localGroup: signup.local_group }, officerVerify.chapterGroup) === 'chapter') throw precondition(GRANT_NOT_CHAPTER);
+          }
           if (current !== undefined && !['pending', 'lapsed'].includes(current.status) && !guest) throw precondition('this account cannot be granted affiliate standing');
           const verified = signup?.verification === 'verified_other_group' && signup.verified_on !== null;
           if (signup !== undefined && signup.decision === 'pending') {

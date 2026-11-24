@@ -22,6 +22,7 @@ import { timestampFromDate } from '@bufbuild/protobuf/wkt';
 import { type Api, insertId, startApi } from '../helpers/api.js';
 import { membersSpan, paragraph, publishItem } from '../helpers/content.js';
 import { live } from '../helpers/pg.js';
+import { seedAccount } from '../helpers/standing.js';
 
 const CHAPTER = 'Northwest Florida Mensa';
 const person = (subject: string, groups: string[]): VerifiedToken => ({ client: 'site', subject, groups, scopes: [], name: `Sam ${subject}`, email: `${subject}@example.org` });
@@ -270,6 +271,17 @@ describe.skipIf(!live).each([
             rawMessage: 'this account cannot be granted affiliate standing',
           });
         }
+      });
+
+      it('grants, as develop does, a pending sign-up whose check found only an email mismatch, and a lapsed member of the chapter (fix round 4)', async () => {
+        const id = await signUp(`joiner.${next()}`);
+        await report(id, VerificationOutcome.EMAIL_MISMATCH, { firstNameMatched: true, localGroup: CHAPTER });
+        const sub = (await api.pool.query<{ sub: string }>(`SELECT sub FROM signup_request WHERE id = $1`, [id])).rows[0]!.sub;
+        expect(await code(membership().grantAffiliate({ subject: sub }, as('admin')))).toBe('ok');
+        expect(await row(id)).toMatchObject({ decision: 'approved', status: 'affiliate' });
+        const lapsed = `sub-off-lapsed-${next()}`;
+        await seedAccount(api.pool, { sub: lapsed, status: 'lapsed', check: { localGroup: CHAPTER } });
+        expect(await code(membership().grantAffiliate({ subject: lapsed }, as('admin')))).toBe('ok');
       });
 
       it('keeps what a report carries beside an outcome that did not confirm out of the row, as every other answer', async () => {
