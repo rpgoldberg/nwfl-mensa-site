@@ -1122,6 +1122,26 @@ describe('what may hide a glyph on a rectangle of the original, as PDFium draws 
     ['white text in an embedded Type 1 font whose glyph names PDFium draws nothing for', async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`, BODY]), (doc) => font(doc.context, { kind: 'embedded Type1', codes: 'Hidden', names: namesOf(UNREAD_CLASSES.gNNN as (c: string) => string, 'Hidden'), reads: 'Hidden' }))],
     ['white text drawn as spaces a /ToUnicode reads as letters', async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td <${identityCodes('      ')}> Tj ET Q`, BODY]), (doc) => identityType0(doc.context, '      ', 'Hidden'))],
     ['white text clipped by a path of 600 lines that leaves it out', () => page([cell(), `q ${longClip} 1 g BT /F2 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`, BODY])],
+    [
+      'white text drawn as spaces a /ToUnicode reads as letters, turned a quarter (ink with no width)',
+      async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf 0 1 -1 0 ${CELL.x + 40} ${CELL.y + 4} Tm <${identityCodes('   ')}> Tj ET Q`, BODY]), (doc) => identityType0(doc.context, '   ', 'Hid')),
+    ],
+    [
+      'a white glyph in a form whose own clip holds two fifths of it',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 30, 'H', CELL.x + 40, CELL.y + 6)}`, 'H');
+        return page([cell(), '/Fm1 Do', BODY], { form: `${ink.left - 5} ${ink.bottom - 5} ${5 + 0.4 * (ink.right - ink.left)} ${ink.top - ink.bottom + 10} re W n ${small(WHITE, 30, 'H', CELL.x + 40, CELL.y + 6)}` });
+      },
+    ],
+    [
+      'a white glyph clipped by a path of 600 lines round two fifths of it',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 30, 'H', CELL.x + 40, CELL.y + 6)}`, 'H');
+        const [x0, x1, y0, y1] = [ink.left - 5, ink.left + 0.4 * (ink.right - ink.left), ink.bottom - 5, ink.top + 5];
+        const traced = `${x0} ${y0} m ${Array.from({ length: 599 }, (_, k) => (k < 300 ? `${x0 + ((k + 1) * (x1 - x0)) / 300} ${y0} l` : `${x1 - ((k - 299) * (x1 - x0)) / 300} ${y1} l`)).join(' ')} h W n`;
+        return page([cell(), `q ${traced} ${small(WHITE, 30, 'H', CELL.x + 40, CELL.y + 6)} Q`, BODY]);
+      },
+    ],
     ['white text on a cell clipped by a path of 600 lines that leaves the cell out', () => page([`q ${longClip} ${cell()} Q`, onCell(WHITE), BODY])],
   ];
 
@@ -1176,6 +1196,7 @@ describe('what may hide a glyph on a rectangle of the original, as PDFium draws 
         return page([cell(), small(WHITE, 30, 'I', CELL.x + 40, CELL.y + 6), BODY], { picture: { left: ink.left - 2, bottom: ink.bottom - 2, width: 2 + 0.5 * (ink.right - ink.left), height: ink.top - ink.bottom + 4 } });
       },
     ],
+    ['white text ending in a full stop (a glyph low in its text object)', () => page([cell(), onCell(WHITE, 'Mon.'), BODY])],
     ['white text in an embedded TrueType font whose glyph names PDFium reads', async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`, BODY]), (doc) => font(doc.context, { kind: 'embedded TrueType', codes: 'Hidden', names: [...'Hidden'], reads: 'Hidden' }))],
     ['white text drawn in its own glyphs through a /ToUnicode', async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td <${identityCodes('Hidden')}> Tj ET Q`, BODY]), (doc) => identityType0(doc.context, 'Hidden', 'Hidden'))],
     // The form turns a quarter: its text runs up the cell from (CELL.x + 50, CELL.y + 10).
