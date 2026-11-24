@@ -142,10 +142,14 @@ export function requireSignupReopener(caller: Caller): void {
   if (!roles.admin && !roles.offices.includes(MEMBERSHIP_OFFICE)) throw denied();
 }
 
-/** Who may grant affiliate standing (R33): the Admin or the Webmaster. Its own rule: who publishes may change, who grants does not. */
-export function requireGrantor(caller: Caller): void {
+/**
+ * Who may grant affiliate standing (R33): the Admin or the Webmaster. Its own rule: who publishes may change, who
+ * grants does not. With OFFICER_VERIFY on (`adminOnly`), the Admin alone: the grant opens officer tools (Ross: "officer
+ * tools if admin grants").
+ */
+export function requireGrantor(caller: Caller, adminOnly = false): void {
   const roles = requireUser(caller);
-  if (!roles.admin && !roles.webmaster) throw denied();
+  if (!roles.admin && (adminOnly || !roles.webmaster)) throw denied();
 }
 
 /** A machine client's scope, beyond the one its client config already requires. */

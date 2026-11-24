@@ -114,6 +114,16 @@ describe('approvers and grants', () => {
     expect(() => requireGrantor(agent)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
   });
 
+  it('lets only the Admin grant affiliate standing when OFFICER_VERIFY is on (fix round 5: "officer tools if admin grants")', () => {
+    expect(() => requireGrantor(adminEditor, true)).not.toThrow();
+    expect(() => requireGrantor(webmaster, true)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    expect(() => requireGrantor(approver, true)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    expect(() => requireGrantor(ANONYMOUS, true)).toThrow(expect.objectContaining({ code: Code.Unauthenticated }));
+    expect(() => requireGrantor(agent, true)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));
+    // Switched off, R33 as before.
+    expect(() => requireGrantor(webmaster, false)).not.toThrow();
+  });
+
   it('lets every officer read drafts, and nobody else', () => {
     expect(() => requireOfficer(treasurer)).not.toThrow();
     expect(() => requireOfficer(rvc)).toThrow(expect.objectContaining({ code: Code.PermissionDenied }));

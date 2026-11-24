@@ -214,7 +214,7 @@ export const OFFICER_CHECK_TEXT: Record<OfficerCheckState, string> = {
   running:
     'A new membership check has been asked for. Your officer tools open when it confirms your membership number, your last name and your first name, and that you belong to this chapter. You do not need to do anything now.',
   needs_grant:
-    'Your membership is confirmed, with another local group. Your officer tools open when the Admin or the Webmaster gives your account affiliate access. Please ask the Admin.',
+    'Your membership is confirmed, with another local group. Your officer tools open when the Admin gives your account affiliate access. Please ask the Admin.',
   awaiting_approver:
     'The new membership check confirmed your membership number and names, but the email on your Mensa membership is different. Your officer tools open once the Membership Officer or another approver confirms with you that it is yours. You do not need to do anything now.',
 };

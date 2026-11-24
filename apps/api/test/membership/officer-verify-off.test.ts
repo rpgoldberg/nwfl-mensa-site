@@ -31,6 +31,7 @@ const PEOPLE: Record<string, VerifiedToken> = {
   approver: person('sub-off-approver', ['nwfl-members', 'nwfl-officers', 'nwfl-office-membership', 'nwfl-office-publications', 'nwfl-membership-approvers']),
   powerless: person('sub-off-powerless', ['nwfl-members']),
   admin: person('sub-off-admin', ['nwfl-members', 'nwfl-admin', 'nwfl-webmaster']),
+  webmaster: person('sub-off-webmaster', ['nwfl-members', 'nwfl-webmaster']),
 };
 let n = 0;
 const next = (): number => (n += 1);
@@ -282,6 +283,19 @@ describe.skipIf(!live).each([
         const lapsed = `sub-off-lapsed-${next()}`;
         await seedAccount(api.pool, { sub: lapsed, status: 'lapsed', check: { localGroup: CHAPTER } });
         expect(await code(membership().grantAffiliate({ subject: lapsed }, as('admin')))).toBe('ok');
+      });
+
+      it('lets the Webmaster grant affiliate standing, as develop does (R33; fix round 5 makes it the Admin\'s only when switched on)', async () => {
+        const id = await signUp(`joiner.${next()}`);
+        const sub = (await api.pool.query<{ sub: string }>(`SELECT sub FROM signup_request WHERE id = $1`, [id])).rows[0]!.sub;
+        expect(await code(membership().grantAffiliate({ subject: sub }, as('webmaster')))).toBe('ok');
+        expect(await row(id)).toMatchObject({ decision: 'approved', status: 'affiliate' });
+        expect((await api.pool.query(`SELECT affiliate_granted_by_sub FROM member_account WHERE sub = $1`, [sub])).rows).toEqual([{ affiliate_granted_by_sub: 'sub-off-webmaster' }]);
+        // A pending local match with no group reported is granted too, as develop does (fix round 5's S6 refusal is switched on only).
+        const unreported = await signUp(`joiner.${next()}`);
+        await report(unreported, VerificationOutcome.VERIFIED_LOCAL, { firstNameMatched: true });
+        const other = (await api.pool.query<{ sub: string }>(`SELECT sub FROM signup_request WHERE id = $1`, [unreported])).rows[0]!.sub;
+        expect(await code(membership().grantAffiliate({ subject: other }, as('webmaster')))).toBe('ok');
       });
 
       it('keeps what a report carries beside an outcome that did not confirm out of the row, as every other answer', async () => {

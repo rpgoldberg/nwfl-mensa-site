@@ -99,7 +99,8 @@ describe.skipIf(!live)('dbStanding', () => {
     ['unchecked', 'unconfirmed'],
     ['affiliate-name-unsaid', 'affiliate_partial'],
     ['affiliate-not-found', 'affiliate_partial'],
-    ['affiliate-chapter', 'affiliate'],
+    // Fix round 5 (S6, G2b/G2c): the chapter's own are never granted; a check naming the chapter's group outranks a grant.
+    ['affiliate-chapter', 'chapter'],
     ['other-group-unsaid', 'guest'],
     ['checked-unsaid', 'unconfirmed'],
     ['chapter-just-over', 'none'],
@@ -126,6 +127,7 @@ describe.skipIf(!live)('dbStanding', () => {
     ['guest', 'unconfirmed'],
     ['other-group-unsaid', 'unconfirmed'],
     ['affiliate-guest', 'affiliate'],
+    ['affiliate-chapter', 'affiliate'],
     ['affiliate', 'affiliate'],
     ['affiliate-not-found', 'affiliate'],
     ['chapter-name-mismatch', 'unconfirmed'],

@@ -15,7 +15,7 @@ const CONFIRM =
   'Your officer tools are waiting. They open when the membership check confirms your membership number, your last name and your first name, and that you belong to this chapter. It has not confirmed all of these yet. Check your names below, then ask for a new check.';
 const RUNNING =
   'A new membership check has been asked for. Your officer tools open when it confirms your membership number, your last name and your first name, and that you belong to this chapter. You do not need to do anything now.';
-const GRANT = 'Your membership is confirmed, with another local group. Your officer tools open when the Admin or the Webmaster gives your account affiliate access. Please ask the Admin.';
+const GRANT = 'Your membership is confirmed, with another local group. Your officer tools open when the Admin gives your account affiliate access. Please ask the Admin.';
 
 async function axe(page: Page): Promise<string[]> {
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));

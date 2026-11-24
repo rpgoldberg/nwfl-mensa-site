@@ -7,8 +7,10 @@
 //   chapter            a member the check confirmed in full (number, last name
 //                      and first name) in this chapter's own local group
 //   chapter_partial    the same, but the first name was not confirmed
-//   affiliate          Admin- or Webmaster-granted standing (R33), with a check
-//                      that confirmed number, last name and first name
+//   affiliate          Admin-granted standing (Webmaster too while switched off,
+//                      R33), with a check that confirmed number, last name and
+//                      first name, in a group that is not the chapter's own (a
+//                      check naming the chapter's group stands as chapter)
 //   affiliate_partial  granted standing with no such check
 //   unconfirmed        a member whose check did not confirm them, or reported
 //                      no local group (approved on an approver's word, or
@@ -82,9 +84,10 @@ export function groupStanding(check: Pick<MembershipCheck, 'verification' | 'loc
 export function standingKind(account: { live: boolean; affiliate: boolean }, check: MembershipCheck, chapterGroup: string | null): StandingKind {
   if (!account.live) return 'none';
   if (chapterGroup === null) return account.affiliate ? 'affiliate' : 'unconfirmed';
-  if (account.affiliate) return fullyChecked(check) ? 'affiliate' : 'affiliate_partial';
   const group = groupStanding(check, chapterGroup);
+  // Fix round 5 (S6): the chapter's own are never granted, so a check naming the chapter's group outranks a grant.
   if (group === 'chapter') return fullyChecked(check) ? 'chapter' : 'chapter_partial';
+  if (account.affiliate) return fullyChecked(check) ? 'affiliate' : 'affiliate_partial';
   return group === 'guest' ? 'guest' : 'unconfirmed';
 }
 
