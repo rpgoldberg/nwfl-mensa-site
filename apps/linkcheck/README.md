@@ -78,11 +78,16 @@ time (flock). OpenBao is asked with the cron's own token only: a periodic (72 h)
 that one secret, kept in `LINKCHECK_BAO_TOKEN_FILE` (by its full path; by default
 `~/.config/nwfl-linkcheck/bao.token`). That file must be a plain file (not a link, a folder or a pipe) of yours,
 mode exactly 0600, in a folder that neither group nor others may write; otherwise the run ends with exit 1 and
-the rule it breaks. The shell reads the token itself and gives it to each `bao` call in that call's environment
-(`BAO_TOKEN`) only: never as an argument, never to docker, never printed. A `BAO_TOKEN`, `BAO_TOKEN_PATH` or
-`VAULT_TOKEN` the run inherits is dropped first, and `~/.vault-token` is not read, so a token of another login
-is never used. After `bao status`, every run renews the token (`bao token renew`, the renew-self endpoint);
-when the file is missing or empty, or the renewal fails, the run ends with exit 1 and `the cron token is gone
+the rule it breaks. The file holds the token alone, on one line: spaces and tabs around it are trimmed and
+nothing else is, and a file with a Windows line ending, a second line, a blank inside the token or a character
+outside ASCII is refused before OpenBao is asked, with exit 1 and words that name the file and the re-mint
+step. The shell reads the token itself and gives it to each `bao` call in that call's environment
+(`BAO_TOKEN`) only: never as an argument, never to docker, never printed; a variable named like one of the
+wrapper's own in the caller's environment does not change that. A `BAO_TOKEN`, `BAO_TOKEN_PATH` or
+`VAULT_TOKEN` (or a `VAULT_TOKEN_PATH`) the run inherits is dropped first, and `~/.vault-token` is not read,
+so a token of another login is never used. After `bao status`, every run renews the token (`bao token renew`,
+the renew-self endpoint), and gives the renewal 30 seconds; when the file is missing or empty, or the renewal
+fails or does not end in time, the run ends with exit 1 and `the cron token is gone
 or expired: re-mint: tenants/nwfl/APPLY.md step 35j (LINKCRON-TOKEN)`. It then reads `client_id`, `username`
 and `password` at `secret/nwfl-mensa/linkcheck/client` with the OpenBao CLI, writes the password to a 0600
 file in a fresh 0700 folder, and runs `linkcheck.sh items`; a run over 20 minutes is stopped. docker writes the container's id into that folder (`--cidfile`), and as the wrapper

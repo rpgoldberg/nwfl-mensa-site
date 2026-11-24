@@ -13,7 +13,8 @@
 #   BAO_ADDR             optional: OpenBao's address, for a crontab that does not set it
 #   LINKCHECK_BAO_TOKEN_FILE  optional: the cron's own OpenBao token, by its full path; by default
 #                        ~/.config/nwfl-linkcheck/bao.token. A plain file of yours, mode 0600, in a folder
-#                        that only you may write. It is renewed on every run (`bao token renew`).
+#                        that only you may write, holding the token alone on one line. It is renewed
+#                        on every run (`bao token renew`, which is given 30 seconds).
 #
 # Exit codes: 0 done; 1 the run failed (the log says why); 2 OpenBao is unreachable or sealed, and
 # nothing else; 3 another run is still going.
@@ -35,7 +36,10 @@ log=$state/items.log
 lock=$state/items.lock
 secret=secret/nwfl-mensa/linkcheck/client
 limit=1200
-remint='the cron token is gone or expired: re-mint: tenants/nwfl/APPLY.md step 35j (LINKCRON-TOKEN)'
+# The renewal's own time limit, in seconds: an OpenBao that never answers is a failed renewal.
+renewlimit=30
+step='re-mint: tenants/nwfl/APPLY.md step 35j (LINKCRON-TOKEN)'
+remint="the cron token is gone or expired: $step"
 
 if ! mkdir -p -- "$state" || ! chmod 700 -- "$state"; then
   echo "items-cron: $state cannot be made" >&2
@@ -136,15 +140,27 @@ fi
 
 # The cron's own token: whoever can write its file or folder chooses what OpenBao is asked as, and
 # whoever can read it reads the secret. It is read by the shell itself into a variable that is never
-# exported: each bao call is given it in its own environment, and nothing here prints it.
+# exported: each bao call is given it in its own environment, and nothing here prints it. A shell takes
+# a variable it inherits as an exported one, so the two that hold what the file says are dropped first:
+# a `token` or a `more` in the caller's environment must not make every child's environment hold it.
 case $tokenfile in /*) ;; *) finish 1 "LINKCHECK_BAO_TOKEN_FILE in $conf must be a full path (starting with /)" ;; esac
 plain "$tokenfile" || finish 1 "$tokenfile must be a plain file: not a link, a folder or a pipe"
 [ -e "$tokenfile" ] || finish 1 "$remint"
 [ -n "$(find "$tokenfile" -prune -user "$(id -u)")" ] || finish 1 "$tokenfile must be a file of yours"
 [ -n "$(find "$tokenfile" -prune -perm 0600)" ] || finish 1 "$tokenfile must be readable and writable by you alone (chmod 600)"
 [ -z "$(find "${tokenfile%/*}/." -prune -perm /022)" ] || finish 1 "the folder of $tokenfile must be writable by you alone (chmod go-w)"
-token=''
-{ IFS= read -r token < "$tokenfile"; } 2> /dev/null
+unset token more
+token='' more=''
+# The file holds the token alone, on one line. Blanks (spaces and tabs) around it are trimmed and
+# nothing else is; `more` ends up empty only when no second line follows, not even an empty one. A
+# token that is not plain text (a Windows line ending, a blank inside, a letter outside ASCII) is the
+# file's fault, not OpenBao's: it is never sent, so that the run does not call a good token expired.
+blanks=$(printf ' \t')
+{ { IFS=$blanks read -r token; IFS= read -r more && more=x; } < "$tokenfile"; } 2> /dev/null
+case $token in
+  *[![:graph:]]*) more=x ;;
+esac
+[ -z "$more" ] || finish 1 "$tokenfile must hold the token and nothing else, on one line of plain text (it holds a Windows line ending, a second line, a blank inside the token or a character outside ASCII): $step"
 [ -n "$token" ] || finish 1 "$remint"
 
 command -v bao > /dev/null 2>&1 || finish 2 "OpenBao cannot be reached: there is no bao command"
@@ -157,8 +173,10 @@ case $? in
   *) finish 2 "OpenBao cannot be reached" ;;
 esac
 # A periodic token lives while it is renewed: every run renews it (the renew-self endpoint), before
-# the secret is read. Its answer holds the token, so none of it is kept.
-BAO_TOKEN=$token bao token renew > /dev/null 2>&1 || finish 1 "$remint"
+# the secret is read. Its answer holds the token, so none of it is kept. A renewal that does not end
+# in time is stopped (and killed 5 seconds later if it ignores that): a failed renewal like any other.
+# --foreground keeps it in this run's process group, so a signal to the group still reaches it.
+BAO_TOKEN=$token timeout --foreground -k 5 "$renewlimit" bao token renew > /dev/null 2>&1 || finish 1 "$remint"
 
 # The password goes from OpenBao straight into a 0600 file (umask 077) in a fresh 0700 folder: it is
 # never in a variable, an argument or an environment value, and nothing here prints a field. It is the
