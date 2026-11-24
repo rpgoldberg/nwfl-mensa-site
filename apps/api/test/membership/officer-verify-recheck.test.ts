@@ -298,6 +298,13 @@ describe.skipIf(!live)('OFFICER-VERIFY fix round 3: a confirmed check for every 
       expect(await again('approver')).toBe('AlreadyExists');
     });
 
+    it('is not for a guest the check confirmed in full: the Admin\'s grant is their route', async () => {
+      const guest = await officer(O.VERIFIED_OTHER_GROUP, { localGroup: 'Boston Mensa', firstNameMatched: true });
+      expect((await mine(guest.token)).officerCheck).toBe(OfficerCheck.NEEDS_GRANT);
+      expect(await code(m().submitSignup({ membershipNumber: '', lastName: 'Madeup', firstName: 'Sam' }, as(guest.token)))).toBe('AlreadyExists');
+      expect((await pendingIds()).find((p) => p.requestId === guest.id)).toBeUndefined();
+    });
+
     it('does not offer a fresh check to a member past the 13 months: an approver confirms them first', async () => {
       const person = await joined(O.VERIFIED_LOCAL, { localGroup: CHAPTER });
       await on.pool.query(`UPDATE member_account SET verified_on = '2025-09-21' WHERE sub = $1`, [person.sub]);
@@ -336,6 +343,21 @@ describe.skipIf(!live)('OFFICER-VERIFY fix round 3: a confirmed check for every 
       expect(await grant(mismatch.sub)).toBe('ok');
       expect(await power(mismatch.token)).toBe('ok');
       expect(await audits(mismatch.sub)).toContain('grant_affiliate_attested');
+    });
+
+    it('keeps the date the guest was last confirmed', async () => {
+      const guest = await officer(O.VERIFIED_OTHER_GROUP, { localGroup: 'Boston Mensa', firstNameMatched: true });
+      await on.pool.query(`UPDATE member_account SET verified_on = '2026-09-15' WHERE sub = $1`, [guest.sub]);
+      expect(await grant(guest.sub)).toBe('ok');
+      const { rows } = await on.pool.query<{ verified_on: string }>(`SELECT verified_on::text AS verified_on FROM member_account WHERE sub = $1`, [guest.sub]);
+      expect(rows[0]?.verified_on).toBe('2026-09-15');
+    });
+
+    it('is refused for a guest whose account was removed', async () => {
+      const guest = await officer(O.VERIFIED_OTHER_GROUP, { localGroup: 'Boston Mensa', firstNameMatched: true });
+      await m().removeMember({ subject: guest.sub }, as('approver'));
+      expect(await grant(guest.sub)).toBe('FailedPrecondition');
+      expect(await power(guest.token)).toBe('PermissionDenied');
     });
 
     it('is refused for an approved member who is no confirmed guest: not confirmed at all, or the chapter\'s own', async () => {
