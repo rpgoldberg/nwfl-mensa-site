@@ -27,18 +27,24 @@
 // relayChildLog). The in-pod worker passes a smaller cap (worker.ts,
 // IN_POD_GATE_MAX_RSS_BYTES, S5).
 //
+// ARCHIVE-SEARCH S2: the same child, under the same limits, also answers a job
+// of kind "text" with the text of a stored copy's pages (isolatedText,
+// gate-text.ts), for the search index. Only a text reply within the index's
+// caps is an answer; anything else is "unfinished", and nothing is indexed.
+//
 // Anything but a well-formed verdict (a crash, a kill, a timeout, a reply
 // that is not a verdict) is "unfinished": no pass, so a refused copy, never a
 // retry. Used by the gate sidecar (gate-service.ts) for each check, and by the
 // worker in the in-pod mode (worker.ts), so no mode parses a copy uncapped.
 // ============================================================================
-import { fork } from 'node:child_process';
+import { type Serializable, fork } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { type CheckedCopy, GATE_CODES, type GateCode, type GateVerdict, MAX_OUTPUT_BYTES } from './engine-protocol.js';
 import type { ImageAction } from './images.js';
 import type { LinkRequest } from './link-annots.js';
 import { engineExecArgv, killGroup, relayChildLog } from './isolated.js';
+import { type TextReply, asTextReply } from './text-protocol.js';
 import { CHILD_PERMISSION, type LimitForks, guardFlag, isGuardMessage, limitForks, viaChoom, watchGuard } from './no-fork.js';
 
 /** The built child next to this module (dist/pdf/gate-child.js). */
@@ -69,6 +75,9 @@ export interface GateOutcome {
   /** Set when the child gave no verdict. */
   cause?: UnfinishedCause;
 }
+
+/** What a text reading comes to: the child's reply, or "unfinished" with no hash (and why) when it gave none. */
+export type TextOutcome = TextReply | { sha256: null; code: 'unfinished'; cause?: UnfinishedCause };
 
 export interface IsolatedGateOptions {
   /** The child (default the built gate-child.js); another module, for tests. */
@@ -138,21 +147,29 @@ function asOutcome(message: unknown): GateOutcome | undefined {
   return undefined;
 }
 
-/** A gate that checks each copy in a new capped child process. Never rejects. */
-export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) => Promise<GateOutcome> {
+/** What a child came to: its answer, or why it gave none. */
+type Ran<T> = { answer: T } | { cause: UnfinishedCause };
+
+/**
+ * Runs each job in a new capped child: `read` says whether the child's message is an answer (undefined: it is not, and
+ * the child "crashed"). Never rejects. A check and a text reading (ARCHIVE-SEARCH S2) both run through here, so neither
+ * has a limit the other lacks.
+ */
+function childRunner<T>(options: IsolatedGateOptions, read: (message: unknown) => T | undefined): (job: Serializable) => Promise<Ran<T>> {
   const timeoutMs = options.timeoutMs ?? GATE_TIMEOUT_MS;
   const maxRss = options.maxRssBytes ?? GATE_MAX_RSS_BYTES;
   const { signal } = options;
   return (job) =>
-    new Promise<GateOutcome>((resolve) => {
+    new Promise<Ran<T>>((resolve) => {
       if (signal?.aborted === true) {
-        resolve(unfinished('signal'));
+        resolve({ cause: 'signal' });
         return;
       }
       const execArgv = gateExecArgv(process.execArgv, options.nodeFlags, options.guard, options.permission !== false);
       const child = fork(options.module ?? GATE_CHILD, [], { env: {}, ...viaChoom(execArgv), serialization: 'advanced', stdio: ['ignore', 'ignore', 'pipe', 'ipc'], detached: true });
       const log = relayChildLog(child.stderr, options.log);
-      let answer: GateOutcome | undefined;
+      /** The child's first message that is not the guard's: its answer, or (value undefined) something else. */
+      let answer: { value: T | undefined } | undefined;
       let settled = false;
       let cause: UnfinishedCause | undefined;
       const rss = options.rss ?? rssOf;
@@ -167,7 +184,7 @@ export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) 
         if (child.pid !== undefined && rss(child.pid) > maxRss) stopFor('memory');
       }, RSS_POLL_MS);
       signal?.addEventListener('abort', onAbort, { once: true });
-      const settle = (outcome: GateOutcome): void => {
+      const settle = (outcome: Ran<T>): void => {
         if (settled) return;
         settled = true;
         clearTimeout(deadline);
@@ -177,7 +194,7 @@ export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) 
         resolve(outcome);
       };
       child.on('message', (message) => {
-        if (!isGuardMessage(message) && answer === undefined) answer = asOutcome(message) ?? { ...unfinished('crash') };
+        if (!isGuardMessage(message) && answer === undefined) answer = { value: read(message) };
       });
       watchGuard(
         child,
@@ -190,9 +207,13 @@ export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) 
       );
       // A child killed for its deadline, its memory or the signal may have answered first: no answer then.
       child.once('exit', (code, killedBy) => {
-        const done = cause === undefined && code === 0 && killedBy === null && answer !== undefined && answer.cause === undefined;
-        if (done || cause !== undefined) {
-          settle(done ? (answer as GateOutcome) : unfinished(cause as UnfinishedCause));
+        const value = answer?.value;
+        if (cause === undefined && code === 0 && killedBy === null && value !== undefined) {
+          settle({ answer: value });
+          return;
+        }
+        if (cause !== undefined) {
+          settle({ cause });
           return;
         }
         // It ended on its own: V8's heap-out-of-memory line, if any, may still be in its stderr (N1).
@@ -202,9 +223,30 @@ export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) 
         });
         void Promise.race([log.ended, waited]).then(() => {
           clearTimeout(grace);
-          settle(unfinished(log.heapOutOfMemory() ? 'memory' : 'crash'));
+          settle({ cause: log.heapOutOfMemory() ? 'memory' : 'crash' });
         });
       });
-      child.once('error', () => settle(unfinished('crash')));
+      child.once('error', () => settle({ cause: 'crash' }));
     });
+}
+
+/** A gate that checks each copy in a new capped child process. Never rejects. */
+export function isolatedGate(options: IsolatedGateOptions = {}): (job: GateJob) => Promise<GateOutcome> {
+  const run = childRunner(options, asOutcome);
+  return async (job) => {
+    const ran = await run(job);
+    return 'answer' in ran ? ran.answer : unfinished(ran.cause);
+  };
+}
+
+/**
+ * A reader that takes the text of each copy's pages in a new capped child process (ARCHIVE-SEARCH S2, gate-text.ts):
+ * the gate's child, with a job of kind "text". Only a text reply within the caps is an answer. Never rejects.
+ */
+export function isolatedText(options: IsolatedGateOptions = {}): (job: { copy: Uint8Array; quotes: readonly string[] }) => Promise<TextOutcome> {
+  const run = childRunner(options, asTextReply);
+  return async (job) => {
+    const ran = await run({ kind: 'text', copy: job.copy, quotes: [...job.quotes] });
+    return 'answer' in ran ? ran.answer : { sha256: null, code: 'unfinished', cause: ran.cause };
+  };
 }

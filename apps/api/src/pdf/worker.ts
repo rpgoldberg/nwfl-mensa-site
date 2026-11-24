@@ -22,16 +22,22 @@
 // (the tenant verified), the worker sweeps once before its first run (regenerate.ts sweepCopies):
 // every file with no copy for its current inputs is queued, so an engine bump
 // or a new origin is made good without waiting for a trigger.
+//
+// ARCHIVE-SEARCH S2: the worker also keeps the search index's issue text
+// (search/pages.ts): the text of each copy an audience is served, read by the
+// gate (workerText: the sidecar, or the in-pod child), never here, and written
+// through search_page_put. After each finished run, and in a sweep of its own.
 // ============================================================================
 import pg from 'pg';
 import { type Env, type Warn, onIdleError, poolConfigFromEnv } from '../db/pool.js';
-import { isolatedGate } from './gate-isolated.js';
+import { type IsolatedGateOptions, isolatedGate, isolatedText } from './gate-isolated.js';
 import { isolatedRedact } from './isolated.js';
 import { type Redact, type RegenerateOptions, startRegenerator, sweepCopies } from './regenerate.js';
 import { linkOrigin } from './link-annots.js';
 import { type Gate, withGateRerun } from './rerun.js';
 import { socketRedact, workerSockets } from './socket-engine.js';
-import { socketGate } from './socket-gate.js';
+import { socketGate, socketText } from './socket-gate.js';
+import { type Texter, indexFile, indexSweeper } from '../search/pages.js';
 import { type TenantGate, type TenantGateOptions, policyTenants, startTenantGate } from '../tenant.js';
 import { UNTRUSTED_PDF_READY } from './untrusted.js';
 
@@ -109,16 +115,29 @@ export function workerRedact(env: Env, options: EngineOptions): Redact {
       ? isolatedRedact(options.engine === undefined ? {} : { module: options.engine })
       : socketRedact({ path: sockets.engine, ...(options.engineTimeoutMs === undefined ? {} : { timeoutMs: options.engineTimeoutMs }) }));
   const gate: Gate =
-    sockets.gate === undefined
-      ? isolatedGate({
-          ...(options.gateChild === undefined ? {} : { module: options.gateChild }),
-          ...(options.gateNodeFlags === undefined ? {} : { nodeFlags: options.gateNodeFlags }),
-          ...(options.gateChildTimeoutMs === undefined ? {} : { timeoutMs: options.gateChildTimeoutMs }),
-          maxRssBytes: options.gateMaxRssBytes ?? IN_POD_GATE_MAX_RSS_BYTES,
-          ...(options.gateRss === undefined ? {} : { rss: options.gateRss }),
-        })
-      : socketGate({ path: sockets.gate, ...(options.gateTimeoutMs === undefined ? {} : { timeoutMs: options.gateTimeoutMs }) });
+    sockets.gate === undefined ? isolatedGate(inPodChild(options)) : socketGate({ path: sockets.gate, ...(options.gateTimeoutMs === undefined ? {} : { timeoutMs: options.gateTimeoutMs }) });
   return withGateRerun(engine, gate);
+}
+
+/** The in-pod gate child's limits (the pre-sidecar mode): a check's and a text reading's are the same. */
+function inPodChild(options: EngineOptions): IsolatedGateOptions {
+  return {
+    ...(options.gateChild === undefined ? {} : { module: options.gateChild }),
+    ...(options.gateNodeFlags === undefined ? {} : { nodeFlags: options.gateNodeFlags }),
+    ...(options.gateChildTimeoutMs === undefined ? {} : { timeoutMs: options.gateChildTimeoutMs }),
+    maxRssBytes: options.gateMaxRssBytes ?? IN_POD_GATE_MAX_RSS_BYTES,
+    ...(options.gateRss === undefined ? {} : { rss: options.gateRss }),
+  };
+}
+
+/**
+ * How the worker reads the text of a stored copy's pages for the search index (ARCHIVE-SEARCH S2), never in this
+ * process: the gate sidecar when PDF_GATE_SOCKET is set, and then only the sidecar; else the gate's capped in-pod
+ * child (the pre-sidecar mode). Throws as workerRedact does for a socket outside its directory.
+ */
+export function workerText(env: Env, options: EngineOptions): Texter {
+  const sockets = workerSockets(env, { engineDirs: options.socketDirs, gateDirs: options.gateSocketDirs });
+  return sockets.gate === undefined ? isolatedText(inPodChild(options)) : socketText({ path: sockets.gate, ...(options.gateTimeoutMs === undefined ? {} : { timeoutMs: options.gateTimeoutMs }) });
 }
 
 /**
@@ -141,10 +160,23 @@ export function runWorker(
   },
 ): { stop(): Promise<void> } {
   const redact = workerRedact(options.env, options);
+  const text = workerText(options.env, options);
   const origin = options.origin ?? linkOrigin(options.env);
   const pool = createWorkerPool(options.env, options.warn);
-  // The boot sweep runs before the first drain (regenerate.ts startRegenerator).
-  const start = (): { stop(): Promise<void> } => startRegenerator({ ...options, origin, redact, db: pool, before: () => sweepCopies(pool, { origin }) });
+  const indexing = { text, origin, ...(options.warn === undefined ? {} : { warn: options.warn }) };
+  // The boot sweep runs before the first drain (regenerate.ts startRegenerator). Each copy made is indexed once its
+  // run is done, and the index's own sweep (search/pages.ts) goes a batch at a time after each drain until it is
+  // through, so a first deploy or a new TEXT_VERSION never holds the copies up.
+  const start = (): { stop(): Promise<void> } =>
+    startRegenerator({
+      ...options,
+      origin,
+      redact,
+      db: pool,
+      before: () => sweepCopies(pool, { origin }),
+      index: (fileId) => indexFile(pool, fileId, indexing),
+      after: indexSweeper(pool, indexing),
+    });
   let job: { stop(): Promise<void> } | undefined;
   let gate: TenantGate | undefined;
   let stopping = false;
