@@ -43,7 +43,7 @@ describe('ENGINE_VERSION', () => {
   });
 
   it('names the layout\'s revision (GATE-LAYOUT), so a file refused for the original\'s own black rectangles is made again', () => {
-    expect(ENGINE_VERSION).toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1+glyphs-1+ligature-1+lineend-1+layout-1');
+    expect(ENGINE_VERSION).toBe('pdfium-2.15.1+pdf-lib-2.11.1+pdfjs-6.4.299+gate-r3b+box-exact+links-1+labels-1+glyphs-1+ligature-1+lineend-1+layout-2');
   });
 });
 

@@ -466,11 +466,18 @@ being there; the leak checks read it as before. A rectangle in that style
 that the original draws on the same page at exactly the same bounds is the
 newsletter's own layout (a calendar's header cell, a rule), not a box, one
 for one (GATE-LAYOUT): the gate opens the original itself and flattens each
-page as the engine does. A glyph nobody can see on such a rectangle (dark,
-or not opaque, wholly inside it, with no light shape drawn between the two)
-refuses the copy (`rules`), and so does an original that cannot be opened;
-`ENGINE_VERSION` gained `+layout-1`, so files refused before for those
-rectangles are made again. No label's own text counts
+page as the engine does. Text nobody can see on such a rectangle refuses
+the copy (`rules`), as before GATE-LAYOUT all text on it did: a glyph half
+or more on such rectangles must be painted opaque (a Type 3 glyph in the
+one colour PDFium paints it), not lie under another glyph drawn after it,
+and show over at least half its ink once its clips, whatever is drawn after
+it and whatever under it is under 3:1 against its paint are taken away;
+where a picture, form or shading lies on it or under it, PDFium's drawing of
+the page must also show it. A glyph not seen where it is drawn passes only
+when the same glyph drawn again there is seen. An original that cannot be
+opened refuses the
+copy too; `ENGINE_VERSION` gained `+layout-2`, so files refused before for
+those rectangles are made again. No label's own text counts
 as withheld text: a leak check that finds a quote is run once more on the
 copy with exactly those labels' strings turned to spaces, each in the very
 bytes PDFium writes for a label at that label's place, as many as PDFium

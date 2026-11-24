@@ -10,7 +10,7 @@ import { type PlacedLabel, labelMarks, layoutOf, pageLabels } from '../../src/pd
 import { gateReply, gateVerdict } from '../../src/pdf/gate-rules.js';
 import type { ImageAction } from '../../src/pdf/images.js';
 import type { Box, PageChar } from '../../src/pdf/match.js';
-import { Document, type LabelReading, type Shape, luminance, pdfium } from '../../src/pdf/pdfium.js';
+import { Document, type LabelReading, type Paint, type Shape, type Twin, type Unread, luminance, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { type PageOptions, askLine, fitPdf } from './fit-fixtures.js';
 
@@ -37,6 +37,15 @@ const WHITE = '1 g';
 const BODY = askLine('(Quillon Brask) Tj', { y: 40 });
 const QUOTE = ['Quillon Brask'];
 const page = (parts: readonly string[], options?: PageOptions): Promise<Uint8Array> => fitPdf(parts.join('\n'), options);
+/** A white shape under the word on the cell. */
+const COVER: Rect = { x: CELL.x + 10, y: CELL.y + 6, w: 80, h: 30 };
+const rect = (r: Rect): string => `${r.x} ${r.y} ${r.w} ${r.h} re`;
+/** An ellipse round `r`, drawn as four curves (as Publisher draws a callout). */
+const ellipse = (r: Rect): string => {
+  const [cx, cy, rx, ry, k] = [r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0.5523];
+  return `${cx + rx} ${cy} m ${cx + rx} ${cy + k * ry} ${cx + k * rx} ${cy + ry} ${cx} ${cy + ry} c ${cx - k * rx} ${cy + ry} ${cx - rx} ${cy + k * ry} ${cx - rx} ${cy} c ${cx - rx} ${cy - k * ry} ${cx - k * rx} ${cy - ry} ${cx} ${cy - ry} c ${cx + k * rx} ${cy - ry} ${cx + rx} ${cy - k * ry} ${cx + rx} ${cy} c h`;
+};
+const GS = { extGState: { Type: 'ExtGState', ca: 0.5, CA: 0.5 } };
 
 const redact = (original: Uint8Array, quotes: readonly string[] = [], image: ImageAction = 'show'): Promise<RedactResult> =>
   redactPdf(original, { quotes: [...quotes], membersWithhold: quotes.map(() => false), redactsAny: true, image });
@@ -124,6 +133,28 @@ describe('a black rectangle the original draws is layout, not a box', () => {
     expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
     expect(await verdict(copy, original, QUOTE)).toEqual({ pass: true });
   });
+
+  it('looks for the text drawn again as it is at the 8 nearest places after it, and reads a page of many in time', async () => {
+    // Hidden under a white cover, then drawn again as it is 7 or 8 times after it: the last, on top, is seen.
+    const again = (n: number): Promise<Uint8Array> => page([cell(), onCell(WHITE), `1 g ${rect(COVER)} f`, ...Array.from({ length: n }, () => `${cell()}\n${onCell(WHITE)}`), BODY]);
+    const passes = async (n: number): Promise<boolean> => Array.isArray(await labelMarks(await again(n), await again(n)));
+    expect(await passes(8)).toBe(true);
+    expect(await passes(9)).toBe(false);
+    const original = await again(9);
+    expect(await redact(original, QUOTE)).toEqual({ kind: 'refused', reason: UNSEEN() });
+    // 20,000 text objects drawn as one is: each one's list stays short, and reading them takes no time to speak of.
+    const many = await fitPdf(Array.from({ length: 20_000 }, () => 'BT /F1 4 Tf 12 115 Td 1 g (n) Tj ET').join('\n'));
+    const doc = Document.open(await pdfium(), many);
+    if (doc === null) throw new Error('fixture did not open');
+    try {
+      const started = performance.now();
+      const twins = doc.page(0, (p) => p.labelReading().twins ?? []);
+      expect(performance.now() - started).toBeLessThan(4000);
+      expect(twins.reduce((most, list) => Math.max(most, list.length), 0)).toBe(8);
+    } finally {
+      doc.close();
+    }
+  }, 120_000);
 
   it('takes a hairline rule through the centre of a black glyph', async () => {
     // "H" at 5 pt spans 249 to 252.6; the rule, 0.6 pt wide, runs through its middle.
@@ -243,16 +274,6 @@ describe('every other rectangle is still a box: the rules hold as they did', () 
 });
 
 describe('text nobody can see on a rectangle of the original is refused', () => {
-  /** A white shape under the word on the cell. */
-  const COVER: Rect = { x: CELL.x + 10, y: CELL.y + 6, w: 80, h: 30 };
-  const rect = (r: Rect): string => `${r.x} ${r.y} ${r.w} ${r.h} re`;
-  /** An ellipse round `r`, drawn as four curves (as Publisher draws a callout). */
-  const ellipse = (r: Rect): string => {
-    const [cx, cy, rx, ry, k] = [r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0.5523];
-    return `${cx + rx} ${cy} m ${cx + rx} ${cy + k * ry} ${cx + k * rx} ${cy + ry} ${cx} ${cy + ry} c ${cx - k * rx} ${cy + ry} ${cx - rx} ${cy + k * ry} ${cx - rx} ${cy} c ${cx - rx} ${cy - k * ry} ${cx - k * rx} ${cy - ry} ${cx} ${cy - ry} c ${cx + k * rx} ${cy - ry} ${cx + rx} ${cy - k * ry} ${cx + rx} ${cy} c h`;
-  };
-  const GS = { extGState: { Type: 'ExtGState', ca: 0.5, CA: 0.5 } };
-
   const UNSEEN_PAINTS: ReadonlyArray<[string, string, PageOptions?]> = [
     ['black', '0 g'],
     ['0.05 grey', '0.05 g'],
@@ -279,7 +300,8 @@ describe('text nobody can see on a rectangle of the original is refused', () => 
     expect(await verdict(copy, seen, QUOTE)).toEqual({ pass: false, code: 'rules' });
   });
 
-  it.each(UNSEEN_PAINTS.slice(0, 4))('passes %s text there once a white shape drawn between the two shows it', async (_name, paint, options) => {
+  // Fix round 1 (S2): half-transparent white on a white shape is white on white, so it is refused (below), not passed.
+  it.each(UNSEEN_PAINTS.slice(0, 3))('passes %s text there once a white shape drawn between the two shows it', async (_name, paint, options) => {
     const original = await page([cell(), `1 g ${rect(COVER)} f`, onCell(paint), BODY], options);
     const copy = copyOf(await redact(original, QUOTE));
     expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
@@ -339,14 +361,141 @@ describe('text nobody can see on a rectangle of the original is refused', () => 
     expect(refusal(await redact(deep, QUOTE))).toBe(UNSEEN());
   });
 
-  it('leaves dark text alone that is not wholly inside the rectangle, and dark text under it', async () => {
-    // The word starts inside the cell and runs out of it to the right: it shows on the page.
-    const out = `q 0 g BT /F2 14 Tf ${CELL.x + CELL.w - 12} ${CELL.y + 16} Td (Mo) Tj ET Q`;
+  it('leaves dark text alone that is mostly outside the rectangle, and dark text under it', async () => {
+    // The word starts inside the cell and runs out of it to the right: it shows on the page. Fix round 1 (D): each
+    // glyph is judged by how much of its ink lies on the cell, so the word starts 4 pt in, not 12.
+    const out = `q 0 g BT /F2 14 Tf ${CELL.x + CELL.w - 4} ${CELL.y + 16} Td (Mo) Tj ET Q`;
     const original = await page([`q 0 g BT /F2 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Under) Tj ET Q`, cell(), out, BODY]);
     const copy = copyOf(await redact(original, QUOTE));
     expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
     expect(await verdict(copy, original, QUOTE)).toEqual({ pass: true });
   });
+});
+
+describe('text develop refused that nobody can see stays refused (fix round 1)', () => {
+  /** A Type 3 font /F9 whose one glyph is d0: its proc sets its own colour (`proc`) and paints a block in it. */
+  async function withType3(pdf: Uint8Array, proc = '600 0 d0 0 g 50 0 500 700 re f'): Promise<Uint8Array> {
+    const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+    const { context } = doc;
+    const glyph = context.register(context.flateStream(proc));
+    const codes = [0x48, 0x69, 0x64, 0x65, 0x6e];
+    const cmap = `/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Fix1 def /CIDSystemInfo <</Registry (F) /Ordering (F) /Supplement 0>> def 1 begincodespacerange <00> <FF> endcodespacerange ${codes.length} beginbfchar ${codes.map((c) => `<${c.toString(16)}> <00${c.toString(16)}>`).join(' ')} endbfchar endcmap CMapName currentdict /CMap defineresource pop end end`;
+    const font = context.obj({
+      Type: 'Font',
+      Subtype: 'Type3',
+      FontBBox: [0, 0, 600, 700],
+      FontMatrix: [0.001, 0, 0, 0.001, 0, 0],
+      CharProcs: { g: glyph },
+      Encoding: { Type: 'Encoding', Differences: [0x41, ...Array.from({ length: 0x7a - 0x41 + 1 }, () => PDFName.of('g'))] },
+      FirstChar: 0x41,
+      LastChar: 0x7a,
+      Widths: Array.from({ length: 0x7a - 0x41 + 1 }, () => 600),
+      Resources: {},
+      ToUnicode: context.register(context.flateStream(cmap)),
+    } as never);
+    doc.getPage(0).node.setFontDictionary(PDFName.of('F9'), context.register(font));
+    return doc.save({ useObjectStreams: false });
+  }
+  /** A luminosity soft mask /GS0 whose group is all black: whatever it is set for is not drawn at all. */
+  async function withBlackSoftMask(pdf: Uint8Array): Promise<Uint8Array> {
+    const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+    const { context } = doc;
+    const group = context.register(context.flateStream('0 g 0 0 400 140 re f', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 400, 140], Group: { S: 'Transparency', CS: 'DeviceGray' } }));
+    doc.getPage(0).node.setExtGState(PDFName.of('GS0'), context.register(context.obj({ Type: 'ExtGState', SMask: { Type: 'Mask', S: 'Luminosity', G: group } } as never)));
+    return doc.save({ useObjectStreams: false });
+  }
+  const MULTIPLY = { extGState: { Type: 'ExtGState', BM: 'Multiply' } };
+  const hidden = (paint: string, font = 'F2'): string => `q ${paint} BT /${font} 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`;
+  const LOWER: Rect = { x: CELL.x, y: CELL.y, w: CELL.w, h: 20 };
+  const UPPER: Rect = { x: CELL.x, y: CELL.y + 20, w: CELL.w, h: 23.4719 };
+  /** A cell whose top is 0.05 pt under the top of the ink of every glyph of "nnmmnu" drawn at 14 pt from (CELL.x + 10, CELL.y + 16). */
+  const tight = async (): Promise<Rect> => {
+    const doc = Document.open(await pdfium(), await page([`q 0 g BT /F1 14 Tf ${CELL.x + 10} ${CELL.y + 16} Td (nnmmnu) Tj ET Q`]));
+    if (doc === null) throw new Error('unopenable');
+    try {
+      const inks = doc.page(0, (p) => p.chars().chars).flatMap((c) => (c.ink === null ? [] : [c.ink]));
+      const [left, right, bottom, top] = [Math.min(...inks.map((b) => b.left)), Math.max(...inks.map((b) => b.right)), Math.min(...inks.map((b) => b.bottom)), Math.min(...inks.map((b) => b.top))];
+      return { x: left - 3, y: bottom - 3, w: right - left + 6, h: top - 0.05 - (bottom - 3) };
+    } finally {
+      doc.close();
+    }
+  };
+
+  const CASES: ReadonlyArray<[string, () => Promise<Uint8Array>]> = [
+    // S1: dark ink on a rectangle of the original, made to look shown.
+    ['A1: black text, a white shape, then a black rectangle filled nonzero over it', () => page([cell(), `1 g ${rect(COVER)} f`, `0 g ${rect(COVER)} f`, hidden('0 g'), BODY])],
+    ['A2: black text, a white shape, then a near-black rectangle filled even-odd over it', () => page([cell(), `1 g ${rect(COVER)} f`, `0.02 g ${rect(COVER)} f*`, hidden('0 g'), BODY])],
+    ['A3: black text, a white shape, then a black ellipse over it', () => page([cell(), `1 g ${rect(COVER)} f`, `0 g ${ellipse({ x: CELL.x + 2, y: CELL.y - 8, w: 100, h: 60 })} f`, hidden('0 g'), BODY])],
+    ['A4: black text, a white shape, then a black rectangle in a form over it', () => page([cell(), `1 g ${rect(COVER)} f`, '/Fm1 Do', hidden('0 g'), BODY], { form: `0 g ${rect(COVER)} f` })],
+    ['A5: black text, a white shape, then a black rectangle over half of it', () => page([cell(), `1 g ${rect(COVER)} f`, `0 g ${rect({ ...COVER, w: 40 })} f`, hidden('0 g'), BODY])],
+    ['D1: black text across the seam of two cells', () => page([cell(LOWER), cell(UPPER), `q 0 g BT /F1 14 Tf ${CELL.x + 10} ${CELL.y + 17} Td (Hidden phone) Tj ET Q`, BODY])],
+    ['D2: black text whose ink pokes 0.05 pt out of its cell', async () => page([cell(await tight()), `q 0 g BT /F1 14 Tf ${CELL.x + 10} ${CELL.y + 16} Td (nnmmnu) Tj ET Q`, BODY])],
+    ['F1: Type 3 glyphs (d0) whose procs paint black, filled white', async () => withType3(await page([cell(), hidden('1 g', 'F9'), BODY]))],
+    // S2: light ink on a rectangle of the original, hidden another way.
+    ['B1: white text on a white shape on the cell', () => page([cell(), `1 g ${rect(COVER)} f`, hidden('1 g'), BODY])],
+    ['B2: yellow text on a yellow shape on the cell', () => page([cell(), `1 1 0 rg ${rect(COVER)} f`, hidden('1 1 0 rg'), BODY])],
+    ['C1: white text, then a black rectangle over it', () => page([cell(), hidden('1 g'), `0 g ${rect(COVER)} f`, BODY])],
+    ['C2: white text, then a picture over it', () => page([cell(), hidden('1 g'), BODY], { picture: { left: COVER.x, bottom: COVER.y, width: COVER.w, height: COVER.h } })],
+    ['C3: white text, then a white stroke 30 pt wide over it', () => page([cell(), hidden('1 g'), `1 G 30 w ${CELL.x + 10} ${CELL.y + 20} m ${CELL.x + 95} ${CELL.y + 20} l S`, BODY])],
+    ['E1: white text clipped to a 1 pt square', () => page([cell(), `q ${CELL.x} ${CELL.y} 1 1 re W n 1 g BT /F2 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`, BODY])],
+    ['E2: white text in a form, clipped there to a 1 pt square', () => page([cell(), '/Fm1 Do', BODY], { form: `${CELL.x} ${CELL.y} 1 1 re W n 1 g BT /F1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET` })],
+    ['E3: white text in a form, and a white shape under it in the form', () => page([cell(), '/Fm1 Do', BODY], { form: `1 g ${rect(COVER)} f BT /F1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET` })],
+    // S3: blend modes and soft masks, on the text, on the shape, in a form.
+    ['K1: white text, blend mode Multiply', () => page([cell(), hidden('/GS0 gs 1 g'), BODY], MULTIPLY)],
+    ['K2: white text, blend mode Darken', () => page([cell(), hidden('/GS0 gs 1 g'), BODY], { extGState: { Type: 'ExtGState', BM: 'Darken' } })],
+    ['K3: black text on a white shape drawn with blend mode Multiply', () => page([cell(), `q /GS0 gs 1 g ${rect(COVER)} f Q`, hidden('0 g'), BODY], MULTIPLY)],
+    ['K4: white text under a black soft mask', async () => withBlackSoftMask(await page([cell(), hidden('/GS0 gs 1 g'), BODY]))],
+    ['K5: black text on a white shape under a black soft mask', async () => withBlackSoftMask(await page([cell(), `q /GS0 gs 1 g ${rect(COVER)} f Q`, hidden('0 g'), BODY]))],
+    ['half-transparent white text on a white shape on the cell', () => page([cell(), `1 g ${rect(COVER)} f`, hidden('/GS0 gs 1 g'), BODY], GS)],
+    ['white text on a white shape drawn in a form between (PDFium\'s drawing shows nothing of it)', () => page([cell(), '/Fm1 Do', hidden('1 g'), BODY], { form: `1 g ${rect(COVER)} f` })],
+    ['white text on a black cell its clip leaves out, over the white page', () => page([`q ${CELL.x} ${CELL.y + 200} 1 1 re W n ${cell()} Q`, onCell(WHITE), BODY])],
+    ['white text on a black cell clipped by a triangle that leaves it out', () => page([`q ${CELL.x} ${CELL.y} m ${CELL.x + 5} ${CELL.y} l ${CELL.x} ${CELL.y + 5} l h W n ${cell()} Q`, onCell(WHITE), BODY])],
+    ['K6: white text in a form drawn with blend mode Multiply', () => page([cell(), 'q /GS0 gs /Fm1 Do Q', BODY], { form: `1 g BT /F1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET`, ...MULTIPLY })],
+  ];
+
+  it.each(CASES)('refuses %s, in the engine and in the gate', async (_name, build) => {
+    const original = await build();
+    expect(refusal(await redact(original, QUOTE))).toBe(UNSEEN());
+    expect(refusal(await redact(original))).toBe(UNSEEN());
+    // The gate reads the original as a copy of itself the same way: it takes nothing from the engine.
+    expect(await labelMarks(original, original)).toBe(UNSEEN());
+    expect(await verdict(original, original)).toEqual({ pass: false, code: 'rules' });
+  });
+
+  // The gate refuses these Type 3 fonts by rules of its own (gate-rules.ts, the Type 3 glyph procs); the labels pass.
+  it.each<[string, () => Promise<Uint8Array>]>([
+    ['Type 3 glyphs (d1) filled white', () => page([cell(), `q 1 g BT /F3 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (BHI) Tj ET Q`, BODY])],
+    ['Type 3 glyphs (d0) whose procs paint white, filled black', async () => withType3(await page([cell(), hidden('0 g', 'F9'), BODY]), '600 0 d0 1 g 50 0 500 700 re f')],
+  ])('takes %s for seen: their labels pass', async (_name, build) => {
+    const original = await build();
+    const copy = copyOf(await redact(original, QUOTE));
+    expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
+  });
+
+  it.each<[string, () => Promise<Uint8Array>]>([
+    ['K7: white text filled and stroked (2 Tr)', () => page([cell(), hidden('1 g 1 G 2 Tr'), BODY])],
+    ['black text on a white shape, under a black frame stroked round the shape', () => page([cell(), `1 g ${rect(COVER)} f`, `0 G 0.75 w ${rect({ x: COVER.x - 2, y: COVER.y - 2, w: COVER.w + 4, h: COVER.h + 4 })} S`, hidden('0 g'), BODY])],
+    ['white text in a form drawn 20 pt lower, clipped in the form round itself', () => page([cell(), 'q 1 0 0 1 0 -20 cm /Fm1 Do Q', BODY], { form: `${rect({ ...COVER, y: COVER.y + 20 })} W n 1 g BT /F1 14 Tf ${CELL.x + 20} ${CELL.y + 36} Td (Monday) Tj ET` })],
+    ['white text on a grey shape drawn in a form between (PDFium\'s drawing shows it, 4:1)', () => page([cell(), '/Fm1 Do', hidden('1 g'), BODY], { form: `0.5 g ${rect(COVER)} f` })],
+    ['white text on a cell, both drawn again where a clip leaves them out (as Publisher does)', () => page([cell(), onCell(WHITE), `q ${CELL.x} ${CELL.y + 200} 1 1 re W n ${cell()} ${onCell(WHITE)} Q`, BODY])],
+    ['white text on a cell, both drawn again in a clip shaped as a triangle round them', () => page([cell(), onCell(WHITE), `q ${CELL.x - 300} ${CELL.y - 300} m ${CELL.x + 600} ${CELL.y - 300} l ${CELL.x - 300} ${CELL.y + 600} l h W n ${cell()} ${onCell(WHITE)} Q`, BODY])],
+    ['white text across the seam of two cells', () => page([cell(LOWER), cell(UPPER), `q 1 g BT /F1 14 Tf ${CELL.x + 10} ${CELL.y + 17} Td (Hidden phone) Tj ET Q`, BODY])],
+    ['black text mostly off the cell, its first glyph a third on it', () => page([cell(), `q 0 g BT /F1 14 Tf ${CELL.x + CELL.w - 4} ${CELL.y + 16} Td (Mo) Tj ET Q`, BODY])],
+  ])('passes %s', async (_name, build) => {
+    const original = await build();
+    const copy = copyOf(await redact(original, QUOTE));
+    expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
+    expect(await verdict(copy, original, QUOTE)).toEqual({ pass: true });
+  });
+
+  it('reads a page of 1,600 cells under 800 glyphs in well under the gate\'s time (develop: 52 ms; quadratic: 16 s)', async () => {
+    const cells = Array.from({ length: 1600 }, () => '0 g 10 10 380 120 re f*').join('\n');
+    const text = `q 0 g BT /F1 4 Tf 12 115 Td ${Array.from({ length: 10 }, () => `(${'n'.repeat(80)}) Tj 0 -5 Td`).join(' ')} ET Q`;
+    const pdf = await fitPdf(`${cells}\n1 g 11 11 378 118 re f\n${text}`);
+    const started = performance.now();
+    expect(await labelMarks(pdf, pdf)).toEqual([[]]);
+    expect(performance.now() - started).toBeLessThan(4000);
+  }, 60_000);
 });
 
 describe('pageLabels, on readings made by hand', () => {
@@ -395,13 +544,16 @@ describe('pageLabels, on readings made by hand', () => {
     expect(pageLabels(reading(1), chars, 0, layout, none)).toEqual([]);
   });
 
-  it('judges by the glyph\'s ink where PDFium gives it, else by its box, and leaves blank and made-up glyphs', () => {
+  it('judges by the glyph\'s ink where PDFium gives it, else by its box, half of it or more on the rectangle, and leaves blank and made-up glyphs', () => {
     const layout = [cellBox];
     // The box reaches past the rectangle's right; the ink does not.
     const edge = { ...glyph(95), box: { left: 95, right: 101, bottom: 5, top: 12 }, ink: { left: 95.5, right: 99.5, bottom: 5, top: 11 } };
     expect(pageLabels(reading(3), [edge], 0, layout, none)).toBe(UNSEEN());
-    expect(pageLabels(reading(3), [{ ...edge, ink: null }], 0, layout, none)).toEqual([]);
-    expect(pageLabels(reading(3), [{ ...edge, ink: { ...edge.ink, right: 100.5 } }], 0, layout, none)).toEqual([]);
+    // Fix round 1 (D): a glyph mostly on the rectangle is judged on it, though some of it lies off it.
+    expect(pageLabels(reading(3), [{ ...edge, ink: null }], 0, layout, none)).toBe(UNSEEN());
+    expect(pageLabels(reading(3), [{ ...edge, ink: { ...edge.ink, right: 100.5 } }], 0, layout, none)).toBe(UNSEEN());
+    expect(pageLabels(reading(3), [{ ...edge, ink: { ...edge.ink, left: 97.4, right: 102.4 } }], 0, layout, none)).toBe(UNSEEN());
+    expect(pageLabels(reading(3), [{ ...edge, ink: { ...edge.ink, left: 97.51, right: 102.51 } }], 0, layout, none)).toEqual([]);
     expect(pageLabels(reading(3), [{ ...glyph(10), box: null }], 0, layout, none)).toBe(UNSEEN());
     expect(pageLabels(reading(3), [{ ...glyph(10), box: null, ink: null }], 0, layout, none)).toEqual([]);
     expect(pageLabels(reading(3), [glyph(10, ' ')], 0, layout, none)).toEqual([]);
@@ -431,11 +583,12 @@ describe('pageLabels, on readings made by hand', () => {
   });
 
   it('asks for each shape once, however many glyphs lie on the rectangle', () => {
-    const chars = [glyph(10), glyph(11), glyph(12)];
+    // Fix round 1: the glyphs stand apart (a glyph drawn over most of another is now a cover).
+    const chars = [glyph(10), glyph(20), glyph(30)];
     const three = reading(3, [DARK, DARK, DARK]);
     three.owners = [9, 9, 9];
     three.places = [3, 3, 3];
-    const shapeAt = vi.fn((at: number): Shape | null => (at === 2 ? white([square(8, 3, 20, 14)]) : null));
+    const shapeAt = vi.fn((at: number): Shape | null => (at === 2 ? white([square(8, 3, 40, 14)]) : null));
     expect(pageLabels(three, chars, 0, [cellBox], shapeAt)).toEqual([]);
     expect(shapeAt.mock.calls).toEqual([[2]]);
   });
@@ -485,6 +638,291 @@ describe('pageLabels, on readings made by hand', () => {
     // White lettering that is no label, on a rectangle of the original: a heading, left alone.
     const heading: LabelReading['top'][number] = { kind: 'lettering', object: 5, text: 'Monday', styled: true, x: 10, y: 4, bounds: { left: 10, right: 60, bottom: 4, top: 12 } };
     expect(pageLabels(both(heading), [], 0, [cellBox], none)).toEqual([]);
+  });
+});
+
+describe('pageLabels, on readings made by hand: what lies under a glyph and over it (fix round 1)', () => {
+  const cellBox: Box = { left: 0, right: 100, bottom: 0, top: 20 };
+  const ink = (left: number, more: Partial<Box> = {}): Box => ({ left: left + 0.5, right: left + 5.5, bottom: 5, top: 11, ...more });
+  const glyph = (left: number, text = 'x', more: Partial<Box> = {}): PageChar => ({ text, generated: false, hyphen: false, box: { left, right: left + 6, bottom: 5, top: 12 }, ink: ink(left, more), fontSize: 10 });
+  const WHITE_TEXT = { luminance: 1, opaque: true };
+  const BLACK_TEXT = { luminance: 0, opaque: true };
+  const square = (left: number, bottom: number, right: number, top: number): Array<[number, number]> => [[left, bottom], [right, bottom], [right, top], [left, top]];
+  const fill = (luminance: number, outline: Shape['outline'], more: Partial<Shape> = {}): Shape => ({ luminance, evenOdd: false, outline, clips: [], ...more });
+  /** The cell at 1, then the objects `between` (2, 3, ...), the glyphs' object, then the objects `after`. */
+  const page_ = (between: Array<Shape | Unread | null>, after: Array<Shape | Unread | null> = [], paints: Paint[] = [WHITE_TEXT], places?: number[]) => {
+    const drawn = [null, null, ...between, null, ...after];
+    const text = 2 + between.length;
+    const reading: LabelReading = {
+      top: drawn.map((_, at) => (at === 1 ? { kind: 'box' as const, object: 1, bounds: cellBox } : { kind: 'other' as const, object: 100 + at })),
+      nested: 0,
+      owners: paints.map(() => 100 + text),
+      places: places ?? paints.map(() => text),
+      paints,
+    };
+    return { reading, shapeAt: (at: number) => drawn[at] ?? null, text };
+  };
+  const judge = (between: Array<Shape | Unread | null>, after: Array<Shape | Unread | null> = [], paints: Paint[] = [WHITE_TEXT], chars: PageChar[] = [glyph(10)], places?: number[]): PlacedLabel[] | string => {
+    const { reading, shapeAt } = page_(between, after, paints, places);
+    return pageLabels(reading, chars, 0, [cellBox], shapeAt);
+  };
+
+  it('refuses light text on a light shape, and passes text 3:1 or more against what it lies on', () => {
+    const cover = square(8, 3, 18, 14);
+    expect(judge([fill(1, [cover])])).toBe(UNSEEN());
+    expect(judge([fill(1, [cover])], [], [{ luminance: 0.2, opaque: true }])).toEqual([]);
+    expect(judge([fill(0.9, [cover])], [], [{ luminance: 0.3, opaque: true }])).toBe(UNSEEN());
+    // 3:1 is (L + 0.05) against 3 (l + 0.05): 0.2 needs 0.7 under it, and 0.0001 needs 0.1003 over it.
+    expect(judge([fill(0.7001, [cover])], [], [{ luminance: 0.2, opaque: true }])).toEqual([]);
+    expect(judge([fill(0.6999, [cover])], [], [{ luminance: 0.2, opaque: true }])).toBe(UNSEEN());
+    expect(judge([fill(0.4001, [cover])], [], [{ luminance: 0.1001, opaque: true }])).toBe(UNSEEN());
+    expect(judge([fill(0.0001, [cover])], [], [{ luminance: 0.1004, opaque: true }])).toEqual([]);
+    expect(judge([fill(0.0001, [cover])], [], [{ luminance: 0.1002, opaque: true }])).toBe(UNSEEN());
+  });
+
+  it('judges light text across two rectangles by both, and by the page where neither reaches (seen when half its ink shows)', () => {
+    const lower: Box = { left: 0, right: 100, bottom: 0, top: 8 };
+    const upper: Box = { left: 0, right: 100, bottom: 8, top: 20 };
+    const two = (top: Box): LabelReading => ({
+      top: [{ kind: 'box', object: 1, bounds: lower }, { kind: 'box', object: 2, bounds: top }, { kind: 'other', object: 3 }],
+      nested: 0,
+      owners: [3],
+      places: [2],
+      paints: [WHITE_TEXT],
+    });
+    expect(pageLabels(two(upper), [glyph(10)], 0, [lower, upper], () => null)).toEqual([]);
+    // A gap between the two: the white page shows there, under white ink; the rest shows.
+    const gapped = { ...upper, bottom: 8.5 };
+    expect(pageLabels(two(gapped), [glyph(10)], 0, [lower, gapped], () => null)).toEqual([]);
+    // Light grey on two black rectangles, and on a light grey one between them over most of the ink.
+    const grey: Paint = { luminance: 0.5, opaque: true };
+    const three: LabelReading = { ...two(upper), top: [...two(upper).top.slice(0, 2), { kind: 'other', object: 5 }, { kind: 'other', object: 3 }], places: [3], paints: [grey] };
+    const band = (top: number): Shape => ({ luminance: 0.45, evenOdd: false, outline: [[[0, 0], [100, 0], [100, top], [0, top]]], clips: [] });
+    expect(pageLabels(three, [glyph(10)], 0, [lower, upper], (at) => (at === 2 ? band(7.9) : null))).toEqual([]);
+    expect(pageLabels(three, [glyph(10)], 0, [lower, upper], (at) => (at === 2 ? band(8.1) : null))).toBe(UNSEEN());
+    // Mid grey is 3:1 or more against both black and white.
+    expect(pageLabels({ ...two(gapped), paints: [{ luminance: 0.2, opaque: true }] }, [glyph(10)], 0, [lower, gapped], () => null)).toEqual([]);
+  });
+
+  it('takes a stroke for a piece of what lies under the ink, where it comes within reach of it', () => {
+    const cover = fill(1, [square(8, 3, 18, 14)]);
+    const frame = (width: number, mitred: boolean, outline = [square(5, -0.5, 21, 16.5)]): Shape => ({ luminance: null, evenOdd: false, outline, clips: [], stroke: { luminance: 0, width, mitred } });
+    // Each side of the frame is 5.5 pt from the ink, and each corner 5.5 pt across and up from the ink's.
+    expect(judge([cover, frame(7.7, false)], [], [BLACK_TEXT])).toEqual([]);
+    expect(judge([cover, frame(7.8, false)], [], [BLACK_TEXT])).toBe(UNSEEN());
+    expect(judge([cover, frame(1.09, true)], [], [BLACK_TEXT])).toEqual([]);
+    expect(judge([cover, frame(1.11, true)], [], [BLACK_TEXT])).toBe(UNSEEN());
+    expect(judge([cover, frame(1.11, false)], [], [BLACK_TEXT])).toEqual([]);
+    // A stroked light shape under black text: its black edge shows the glyph only where it does not reach.
+    expect(judge([{ ...cover, stroke: { luminance: 0, width: 1, mitred: false } }], [], [BLACK_TEXT])).toEqual([]);
+    expect(judge([{ ...cover, stroke: { luminance: 0, width: 6, mitred: false } }], [], [BLACK_TEXT])).toBe(UNSEEN());
+    // A clip on a stroke keeps it away from the ink.
+    expect(judge([cover, { ...frame(30, true), clips: [[square(40, 0, 60, 20)]] }], [], [BLACK_TEXT])).toEqual([]);
+    // A white stroke under white text, and a white one 30 pt wide drawn over it.
+    expect(judge([{ ...frame(30, false), stroke: { luminance: 1, width: 30, mitred: false } }])).toBe(UNSEEN());
+    expect(judge([], [{ ...frame(30, false), stroke: { luminance: 1, width: 30, mitred: false } }])).toBe(UNSEEN());
+  });
+
+  it('refuses a glyph over what it cannot read, and anything drawn over it after; passes one drawn again where it was', () => {
+    // Over 2.6 pt of the 5 pt ink (more than half), and over 2.4 pt.
+    const near: Unread = { unread: { left: 12.9, right: 30, bottom: 0, top: 20 } };
+    const far: Unread = { unread: { left: 13.1, right: 30, bottom: 0, top: 20 } };
+    expect(judge([near])).toBe(UNSEEN());
+    expect(judge([far])).toEqual([]);
+    expect(judge([], [near])).toBe(UNSEEN());
+    expect(judge([], [far])).toEqual([]);
+    expect(judge([], [fill(1, [square(12.9, 0, 30, 20)])])).toBe(UNSEEN());
+    expect(judge([], [fill(1, [square(13.1, 0, 30, 20)])])).toEqual([]);
+    expect(judge([], [fill(1, [square(15.4, 0, 30, 20)]), fill(1, [square(0, 0, 13, 20)])])).toBe(UNSEEN());
+    // Drawn again where it was (the same text over half its ink or more), and seen there: the glyph drawn again shows it.
+    const again = (dx: number, text = 'x'): PageChar => ({ ...glyph(10 + dx, text), ink: ink(10, { left: 10.5 + dx, right: 15.5 + dx }) });
+    const twice = (second: PageChar, places = [2, 4]): PlacedLabel[] | string => {
+      const reading: LabelReading = {
+        top: [{ kind: 'other', object: 9 }, { kind: 'box', object: 1, bounds: cellBox }, { kind: 'other', object: 2 }, { kind: 'box', object: 3, bounds: cellBox }, { kind: 'other', object: 4 }],
+        nested: 0,
+        owners: [2, 4],
+        places,
+        paints: [WHITE_TEXT, WHITE_TEXT],
+      };
+      return pageLabels(reading, [glyph(10), second], 0, [cellBox, cellBox], () => null);
+    };
+    expect(twice(again(2.5))).toEqual([]);
+    expect(twice(again(-2.5))).toEqual([]);
+    expect(twice(again(2.51))).toBe(UNSEEN());
+    expect(twice(again(0, 'y'))).toBe(UNSEEN());
+    expect(twice({ ...again(0), ink: null })).toBe(UNSEEN());
+    // Drawn again by a later object, though earlier in the reading; or by an earlier one, where that one is not seen.
+    expect(twice(again(0), [4, 2])).toEqual([]);
+    expect(twice(again(0), [2, 0])).toBe(UNSEEN());
+    // By the same object: the cover reaches over half of the first only; or over half of both.
+    const sameObject = (first: PageChar, second: PageChar): PlacedLabel[] | string => {
+      const reading: LabelReading = {
+        top: [{ kind: 'other', object: 9 }, { kind: 'box', object: 1, bounds: cellBox }, { kind: 'other', object: 2 }, { kind: 'other', object: 3 }],
+        nested: 0,
+        owners: [2, 2],
+        places: [2, 2],
+        paints: [WHITE_TEXT, WHITE_TEXT],
+      };
+      return pageLabels(reading, [first, second], 0, [cellBox], (at) => (at === 3 ? { unread: { left: 10.2, right: 13.2, bottom: 0, top: 20 } } : null));
+    };
+    expect(sameObject(glyph(10), again(0.2))).toEqual([]);
+    expect(sameObject(again(0.2), glyph(10))).toEqual([]);
+    expect(sameObject(glyph(10), again(-0.5))).toBe(UNSEEN());
+  });
+
+  it('takes another glyph drawn over half a glyph\'s ink or more for a cover, but not the same glyph again, an earlier one or a blank', () => {
+    const over = (second: PageChar, places = [2, 3]): PlacedLabel[] | string => {
+      const reading: LabelReading = {
+        top: [{ kind: 'other', object: 9 }, { kind: 'box', object: 1, bounds: cellBox }, { kind: 'other', object: 2 }, { kind: 'other', object: 3 }],
+        nested: 0,
+        owners: [2, 3],
+        places,
+        paints: [WHITE_TEXT, WHITE_TEXT],
+      };
+      return pageLabels(reading, [glyph(10), second], 0, [cellBox], () => null);
+    };
+    const shifted = (dx: number, text = 'y'): PageChar => ({ ...glyph(10 + dx, text), ink: ink(10 + dx) });
+    expect(over(shifted(2.5))).toBe(UNSEEN());
+    expect(over(shifted(2.51))).toEqual([]);
+    // The same text over half of it or more is the glyph drawn again, not a cover.
+    expect(over(shifted(0.5, 'x'))).toEqual([]);
+    expect(over(shifted(2.5, 'x'))).toEqual([]);
+    // A big glyph over the whole of the small one: it covers it when drawn after it, and is not covered by it.
+    const big: PageChar = { ...glyph(9, 'Y'), ink: { left: 9, right: 17, bottom: 3, top: 13 } };
+    expect(over(big)).toBe(UNSEEN());
+    expect(over(big, [3, 2])).toEqual([]);
+    expect(over({ ...big, text: ' ' })).toEqual([]);
+    expect(over({ ...big, generated: true })).toEqual([]);
+    expect(over({ ...big, ink: null, box: null })).toEqual([]);
+  });
+
+  it('judges a glyph whose text object is drawn again as it is (which PDFium does not read again) where that is drawn', () => {
+    // The cell at 1, the text at 2, the cell again at 3, the text object again at 4, then whatever is at 5.
+    const at = (place: number, paint: Paint = WHITE_TEXT): Twin => ({ at: place, object: 100 + place, paint });
+    const twice = (twins: Twin[], last: Unread | null = null, paint: Paint = WHITE_TEXT): PlacedLabel[] | string => {
+      const reading: LabelReading = {
+        top: [{ kind: 'other', object: 9 }, { kind: 'box', object: 1, bounds: cellBox }, { kind: 'other', object: 2 }, { kind: 'box', object: 3, bounds: cellBox }, { kind: 'other', object: 4 }, { kind: 'other', object: 5 }],
+        nested: 0,
+        owners: [2],
+        places: [2],
+        paints: [paint],
+        twins: [twins],
+      };
+      return pageLabels(reading, [glyph(10)], 0, [cellBox, cellBox], (at) => (at === 5 ? last : null));
+    };
+    expect(twice([at(4)])).toEqual([]);
+    expect(twice([])).toBe(UNSEEN());
+    expect(twice([at(4)], { unread: { left: 0, right: 100, bottom: 0, top: 20 } })).toBe(UNSEEN());
+    expect(twice([at(4, BLACK_TEXT)], null, BLACK_TEXT)).toBe(UNSEEN());
+    // The twin is judged by its own paint: clipped away, or not, whatever the first's is.
+    expect(twice([at(4, { ...WHITE_TEXT, clips: [[square(0, 0, 1, 1)]] })])).toBe(UNSEEN());
+    expect(twice([at(4)], null, { ...WHITE_TEXT, clips: [[square(0, 0, 1, 1)]] })).toEqual([]);
+    // A twin at the glyph's own place, or before it, is not drawn after it.
+    const early: LabelReading = {
+      top: [{ kind: 'box', object: 1, bounds: cellBox }, { kind: 'other', object: 2 }, { kind: 'other', object: 3 }, { kind: 'box', object: 4, bounds: cellBox }],
+      nested: 0,
+      owners: [3],
+      places: [2],
+      paints: [WHITE_TEXT],
+      twins: [[at(1)]],
+    };
+    expect(pageLabels(early, [glyph(10)], 0, [cellBox, cellBox], () => null)).toBe(UNSEEN());
+    expect(pageLabels({ ...early, twins: [[at(2)]] }, [glyph(10)], 0, [cellBox, cellBox], () => null)).toBe(UNSEEN());
+  });
+
+  it('refuses a glyph a clip on it holds only in part, or drawn in a form beside anything else', () => {
+    expect(judge([], [], [{ ...WHITE_TEXT, clips: [[square(0, 0, 100, 20)]] }])).toEqual([]);
+    // An upright rectangle by the share of the ink it lets show; any other shape only when it holds the ink.
+    expect(judge([], [], [{ ...WHITE_TEXT, clips: [[square(0, 0, 100, 20)], [square(0, 0, 12.9, 20)]] }])).toBe(UNSEEN());
+    expect(judge([], [], [{ ...WHITE_TEXT, clips: [[square(0, 0, 100, 20)], [square(0, 0, 13.1, 20)]] }])).toEqual([]);
+    expect(judge([], [], [{ ...WHITE_TEXT, clips: [[[...square(0, 0, 13.1, 20), [0, 0]]]] }])).toEqual([]);
+    expect(judge([], [], [{ ...WHITE_TEXT, clips: [[[[0, 0], [30, 0], [0, 30]]]] }])).toEqual([]);
+    expect(judge([], [], [{ ...WHITE_TEXT, clips: [[[[0, 0], [14, 0], [0, 14]]]] }])).toBe(UNSEEN());
+    expect(judge([], [], [{ ...WHITE_TEXT, clips: [[[[0, 0], [14, 0], [14, 20], [0, 20], [0, 10]]]] }])).toBe(UNSEEN());
+    expect(judge([], [], [{ ...WHITE_TEXT, clips: [[square(0, 0, 13.1, 20), square(0, 0, 13.1, 20)]] }])).toBe(UNSEEN());
+    expect(judge([], [], [{ ...WHITE_TEXT, beside: [{ left: 13.1, right: 40, bottom: 0, top: 20 }] }])).toEqual([]);
+    expect(judge([], [], [{ ...WHITE_TEXT, beside: [{ left: 12.9, right: 40, bottom: 0, top: 20 }] }])).toBe(UNSEEN());
+  });
+
+  it('judges a glyph on at most 32 pieces of what lies under it', () => {
+    const strips = (n: number): Shape[] => Array.from({ length: n }, (_, k) => fill(0, [square(10 + k * 0.1, 0, 10.6 + k * 0.1, 20)]));
+    expect(judge(strips(31))).toEqual([]);
+    expect(judge(strips(32))).toBe(UNSEEN());
+  });
+
+  it('asks PDFium\'s drawing of the page about a glyph only where a picture, form or shading lies on its ink or under it', () => {
+    const picture: Unread = { unread: { left: 0, right: 100, bottom: 0, top: 20 } };
+    const asked: Array<[number, Box]> = [];
+    const drawn = (share: number | null) => (object: number, at: Box): number | null => {
+      asked.push([object, at]);
+      return share;
+    };
+    const run = (between: Array<Shape | Unread | null>, after: Array<Shape | Unread | null>, share: number | null, paints: Paint[] = [WHITE_TEXT]): PlacedLabel[] | string => {
+      const { reading, shapeAt } = page_(between, after, paints);
+      return pageLabels(reading, [glyph(10)], 0, [cellBox], shapeAt, { shows: drawn(share) });
+    };
+    expect(run([], [picture], 0.05)).toEqual([]);
+    expect(asked).toEqual([[102, ink(10)]]);
+    expect(run([], [picture], 0.0499)).toBe(UNSEEN());
+    expect(run([], [picture], null)).toBe(UNSEEN());
+    expect(run([picture], [], 0.05)).toEqual([]);
+    expect(run([picture], [], 0)).toBe(UNSEEN());
+    expect(run([], [], 0, [{ ...WHITE_TEXT, beside: [picture.unread] }])).toBe(UNSEEN());
+    expect(run([], [], 1, [{ ...WHITE_TEXT, beside: [picture.unread] }])).toEqual([]);
+    // Not asked where nothing it cannot read lies there, nor where the rest already leaves it unseen.
+    asked.length = 0;
+    expect(run([], [], 0)).toEqual([]);
+    expect(run([picture], [], 1, [BLACK_TEXT])).toBe(UNSEEN());
+    expect(asked).toEqual([]);
+  });
+
+  it('draws the page without at most 24 text objects', () => {
+    const picture: Unread = { unread: { left: 0, right: 400, bottom: 0, top: 20 } };
+    const wide: Box = { left: 0, right: 400, bottom: 0, top: 20 };
+    const many = (n: number): PlacedLabel[] | string => {
+      const reading: LabelReading = {
+        top: [{ kind: 'box', object: 1, bounds: wide }, ...Array.from({ length: n }, (_, k) => ({ kind: 'other' as const, object: 10 + k })), { kind: 'other', object: 99 }],
+        nested: 0,
+        owners: Array.from({ length: n }, (_, k) => 10 + k),
+        places: Array.from({ length: n }, (_, k) => 1 + k),
+        paints: Array.from({ length: n }, () => WHITE_TEXT),
+      };
+      return pageLabels(reading, Array.from({ length: n }, (_, k) => glyph(10 * k + 1)), 0, [wide], (at) => (at === n + 1 ? picture : null), { shows: () => 1 });
+    };
+    expect(many(24)).toEqual([]);
+    expect(many(25)).toBe(UNSEEN());
+  });
+
+  it('refuses a page whose glyphs take more work to judge than it allows', () => {
+    const { reading, shapeAt } = page_([fill(0, [square(0, 0, 1, 1)])]);
+    const chars = [glyph(10), glyph(20), glyph(30)];
+    reading.owners = [104, 104, 104];
+    reading.places = [3, 3, 3];
+    reading.paints = [WHITE_TEXT, WHITE_TEXT, WHITE_TEXT];
+    expect(pageLabels(reading, chars, 1, [cellBox], shapeAt)).toEqual([]);
+    expect(pageLabels(reading, chars, 1, [cellBox], shapeAt, { budget: 20 })).toBe('page 2: too much is drawn on the black rectangles of the original to check');
+  });
+
+  it('finds the rectangles under a glyph wherever they lie, many or wide, and a glyph with no area by whether one holds it', () => {
+    const many = Array.from({ length: 40 }, (_, k): Box => ({ left: k * 2.5, right: k * 2.5 + 2.5, bottom: 0, top: 20 }));
+    const reading = (boxes: Box[], paints: Paint[] = [BLACK_TEXT]): LabelReading => ({
+      top: [...boxes.map((bounds, k) => ({ kind: 'box' as const, object: k + 1, bounds })), { kind: 'other', object: 99 }],
+      nested: 0,
+      owners: [99],
+      places: [boxes.length],
+      paints,
+    });
+    // Forty strips side by side under it (more than 32 distinct): all of it is taken as on them.
+    expect(pageLabels(reading(many), [{ ...glyph(10), ink: { left: 0.5, right: 99.5, bottom: 5, top: 11 } }], 0, many, () => null)).toBe(UNSEEN());
+    // A rectangle far wider than the grid's cells, and a glyph far from any rectangle.
+    const wide: Box = { left: -5000, right: 5000, bottom: 0, top: 20 };
+    expect(pageLabels(reading([wide]), [glyph(10)], 0, [wide], () => null)).toBe(UNSEEN());
+    expect(pageLabels(reading([cellBox]), [{ ...glyph(10), ink: { left: 300, right: 305, bottom: 300, top: 306 } }], 0, [cellBox], () => null)).toEqual([]);
+    // A glyph whose ink spans the whole grid.
+    expect(pageLabels(reading([cellBox]), [{ ...glyph(10), ink: { left: -1000, right: 1000, bottom: -1000, top: 1000 } }], 0, [cellBox], () => null)).toEqual([]);
+    // Ink with no area: judged when a rectangle holds it.
+    expect(pageLabels(reading([cellBox]), [{ ...glyph(10), ink: { left: 10, right: 10, bottom: 5, top: 11 } }], 0, [cellBox], () => null)).toBe(UNSEEN());
+    expect(pageLabels(reading([cellBox]), [{ ...glyph(10), ink: { left: 10, right: 10, bottom: 15, top: 21 } }], 0, [cellBox], () => null)).toEqual([]);
   });
 });
 
