@@ -24,7 +24,7 @@
 //                       names again and is checked afresh: the names
 //                       replace the profile's, the number never changes
 //                       (sent, it must be the one on file), and the
-//                       sign-up is marked for the verifier (0032
+//                       sign-up is marked for the verifier (0033
 //                       recheck_requested_at). Their standing is as it
 //                       was until the check answers (verifier.ts). A fresh
 //                       check that finds an email mismatch opens nothing

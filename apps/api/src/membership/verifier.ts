@@ -21,7 +21,7 @@
 //                             verifier (decided_by_sub and approved_by_sub
 //                             are its subject; audited approve_auto and
 //                             approve_verified). Switched on, the report also
-//                             keeps first_name_matched and local_group (0032; a
+//                             keeps first_name_matched and local_group (0033; a
 //                             first-name answer for a sign-up that typed
 //                             none, or a group longer than 120 characters or
 //                             holding a control character, is
@@ -81,7 +81,7 @@ export interface VerifierDeps {
   officerVerify?: OfficerVerify | null;
 }
 
-/** The most characters in a reported local group (0032). */
+/** The most characters in a reported local group (0033). */
 const MAX_LOCAL_GROUP = 120;
 const CONTROL = /\p{Cc}/u;
 
@@ -106,7 +106,7 @@ const RELEASE_KINDS: Record<string, ClaimReleaseKind> = {
 };
 // What a sign-up the verifier may act on looks like.
 const WAITING = `verification = 'unchecked' AND decision = 'pending' AND membership_number IS NOT NULL`;
-// OFFICER-VERIFY (switched on): an approved sign-up whose owner asked for a fresh check (0032).
+// OFFICER-VERIFY (switched on): an approved sign-up whose owner asked for a fresh check (0033).
 const RECHECK = `recheck_requested_at IS NOT NULL AND decision = 'approved' AND reopened_at IS NULL`;
 // The same, for the list: with a number to check, and an account that still stands.
 const RECHECK_LISTED = `${RECHECK} AND membership_number IS NOT NULL
@@ -179,7 +179,7 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
           throw new ConnectError(`local_group is at most ${MAX_LOCAL_GROUP} characters, with no control character`, Code.InvalidArgument);
         }
         // Fix round 3 (B1): both are kept only beside an outcome that confirmed the person. With any other, a
-        // group or a first-name answer says nothing, and is dropped here (0032 refuses to store it).
+        // group or a first-name answer says nothing, and is dropped here (0033 refuses to store it).
         const confirming = confirmsMember(outcome);
         const localGroup = confirming ? reportedGroup : null;
         const firstNameMatched = officerVerify === null || !confirming ? null : (request.firstNameMatched ?? null);

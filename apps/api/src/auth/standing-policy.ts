@@ -51,7 +51,7 @@ export function confirmsMember(verification: string | null): boolean {
   return verification !== null && CONFIRMING.has(verification);
 }
 
-/** What a sign-up's membership check said, as stored (0032); all null with no sign-up. */
+/** What a sign-up's membership check said, as stored (0033); all null with no sign-up. */
 export interface MembershipCheck {
   verification: string | null;
   firstNameMatched: boolean | null;

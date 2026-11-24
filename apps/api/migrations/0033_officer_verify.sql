@@ -1,4 +1,4 @@
--- 0032_officer_verify.sql: what the membership check reports beyond its outcome (OFFICER-VERIFY).
+-- 0033_officer_verify.sql: what the membership check reports beyond its outcome (OFFICER-VERIFY).
 --
 --   * signup_request.first_name_matched: whether the check confirmed the first name the person typed.
 --     NULL until the report, and NULL when the report does not say (a check that does not compare first
@@ -22,7 +22,7 @@
 --     each time a standing is read (auth/standing.ts), against CHAPTER_GROUP_NAME, so a missing or wrong
 --     setting never fixes anyone as a guest. The API writes all of these only with OFFICER_VERIFY on.
 --
--- ADDITIVE. The API before OFFICER-VERIFY never writes these columns, so it runs unchanged on 0032.
+-- ADDITIVE. The API before OFFICER-VERIFY never writes these columns, so it runs unchanged on 0033.
 
 -- 1. The report's two new answers, and the fresh check.
 ALTER TABLE signup_request
