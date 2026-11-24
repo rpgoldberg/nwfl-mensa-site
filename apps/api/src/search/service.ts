@@ -26,16 +26,18 @@
 // they are now) is made, ready, and has the sha the row was read from; and
 // an item only while a render of its version now (renderVersion, the
 // ledger's own) is the row's sha. Neither
-// trusts version_rerecorded or rerecord_seq, so a reset sequence (D6a) moves
-// nothing here, and every page hit is put to servableFile itself, the rule
+// trusts version_rerecorded or rerecord_seq, so a reset sequence (D6a) makes
+// no row a hit here, and every page hit is put to servableFile itself, the rule
 // 0032's search_file_servable mirrors, with the lens run now (S2-N1). A row
 // that fails is not current: the worker's boot sweep makes and reads the copy
 // again (pdf/regenerate.ts sweepCopies; 0034 search_page_lacking for a new
 // TEXT_VERSION), and the boot backfill re-records each item whose render now
 // is not its ledger row's output, or not re-recorded since a policy cell was
-// written by SQL (search/backfill.ts); until then it is not found. A row whose
-// item has a mark written after it never reaches this check: the statement
-// refuses it (sql.ts), so the check's cost cannot say that it matched.
+// written (search/backfill.ts); until then it is not found. A row whose item
+// has a mark written after it, or whose version was not re-recorded since a
+// policy cell was written, never reaches this check: the statement refuses it
+// (sql.ts), so the check's cost does not say that it matched, while the
+// stamps it reads there rise (an owner can break that; see sql.ts).
 //
 // Hidden hits are left out BEFORE the page is cut, so neither the number of
 // hits on a page nor has_more can say that something withheld matched. A

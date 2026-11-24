@@ -230,7 +230,12 @@ describe.skipIf(!live)('search: the news-item rows', () => {
         hidden.versionId,
       ]);
       const result = await backfillItems(api.pool);
-      expect(result).toEqual({ ran: true, written: 2, skipped: 0, rerecorded: 0, requeued: 0 });
+      // Changed by ARCHIVE-SEARCH S3 (challenge S3-2, S1): the backfill now also re-records each published item never
+      // re-recorded since the last policy change, marked or not, since the search read refuses its row until then. The
+      // officers item above was published by SQL with no re-record: it is the one (rerecorded 1).
+      expect(result).toEqual({ ran: true, written: 2, skipped: 0, rerecorded: 1, requeued: 0 });
+      const confirmed = await owner.query(`SELECT audience FROM version_rerecorded WHERE version_id = $1 ORDER BY audience`, [hidden.versionId]);
+      expect(confirmed.rows).toEqual([{ audience: 'members' }, { audience: 'public' }]);
       expect(await row('search_item_public', itemId)).toEqual(good);
       expect(await row('search_item_members', hidden.itemId)).toBeUndefined();
     });

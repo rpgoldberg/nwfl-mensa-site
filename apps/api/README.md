@@ -973,21 +973,31 @@ answers a query with ten hits a page: pages of issues and published items.
   engine, or a mark or policy cell written by SQL with no re-record. So a
   page counts only while the copy its audience is served now is ready and is
   the copy (by its sha) the row was read from, under this `TEXT_VERSION`; an
-  item only while a render of its version now is the row's own sha. Nothing
-  here reads the re-record stamps' sequence, so a reset `rerecord_seq`
-  changes no answer.
-- **Stale rows cost nothing to refuse** (`sql.ts`). A row whose item has an
-  active mark, in a category the audience is not shown, written after the
-  row (after the version's last re-record for an item, 0035
-  `version_rerecorded.at`; after the file's newest ready copy for a page) is
-  no row of the statement. No live check runs for it, so a search's time
-  cannot say that a word the mark withholds matched.
+  item only while a render of its version now is the row's own sha. This
+  check reads no re-record stamp, so a reset `rerecord_seq` makes no row a
+  hit.
+- **Stale rows cost nothing to refuse** (`sql.ts`). A row is no row of the
+  statement while its item has an active mark, in a category the audience is
+  not shown, written after the row (after the version's last re-record for
+  an item, 0035 `version_rerecorded.at`; after the file's newest ready copy
+  for a page, an edition's file taking the marks of every item it prints).
+  Nor is an item's row while its version has not been re-recorded since the
+  last write to a policy cell (0032 `version_rerecorded.seq` against
+  `policy_change_epoch`): a cell written by SQL, or by the app role through
+  `redaction_propose`, re-records nothing. No live check runs for such a
+  row, so a search's time does not say that a word it withholds matched.
+  This holds while the stamps rise. An owner who resets `rerecord_seq`, or
+  a ledger head stamp ahead of the clock (two transactions then share a
+  stamp), can let such a row reach the live check again (time only; the
+  check still refuses it) or keep a current one out, never make it a hit.
+  No role the app or the worker holds can do either.
 - **How stale rows come back.** The worker's boot sweep makes and reads each
   copy of a new engine or `TEXT_VERSION`. The boot backfill renders every
   published item for both audiences and re-records each whose render is not
   its ledger row's output (a lens change, bumped or not, or a mark or cell
-  written by SQL), then each not re-recorded since a policy cell was written
-  by SQL. Until then such an item is not found.
+  written by SQL), then each not re-recorded since a policy cell was last
+  written. Until then such an item is not found; after a cell written
+  outside the API that is until the next boot.
 - **Snippets.** `ts_headline` over the row's own text, for the page answered
   only. The words found sit between U+E000 and U+E001; the text is plain,
   never markup.

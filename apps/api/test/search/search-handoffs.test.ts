@@ -9,6 +9,7 @@
 //
 // Each refusal has its positive control beside it. Real gRPC, real Postgres, the real engine and the
 // real reader. The PDFs are synthetic, made here; every person and place is made up.
+import { createHash } from 'node:crypto';
 import { type Client } from '@connectrpc/connect';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -375,6 +376,105 @@ describe.skipIf(!live)('SearchService.Search: the write side\'s handoffs, closed
       // With every copy of the file gone (as after a deploy, before the sweep makes them again), the mark is after any copy.
       await owner.query(`DELETE FROM pdf_copy WHERE file_id = $1`, [made.files['public']]);
       expect(await matched('public', 'kiln')).not.toContain(made.files['public']);
+    });
+
+    // Challenge S3-2, S1. The app role writes no policy cell itself, but it may call the owner's definer
+    // redaction_propose (0013), which applies a tightening at once and re-records nothing, as a mark written by SQL
+    // re-records nothing (S1 above). Every item row not re-recorded since the last policy change (0032
+    // version_rerecorded against policy_change_epoch) is then no row of the statement, so no live check runs for it,
+    // and the boot backfill re-records each such item, marked or not.
+    it('S1 (policy cells, challenge S3-2): after a cell the app role tightens through redaction_propose with no re-record, no item row is a row of the statement until the boot backfill re-records it', async () => {
+      // The policy as 0012 seeds it: the D6a test above tightened the public's venues by SQL.
+      await owner.query(`UPDATE redaction_policy SET action = 'show' WHERE tenant_id = 'nwflorida' AND audience = 'public' AND category = 'business_venue'`);
+      await backfillItems(api.pool);
+      const phone = await publish('stale-ibis', 'Ibis count', 'The ibis count meets at the boardwalk. Call 850-555-0119 to join.');
+      const venue = await publish('stale-plover', 'Plover watch', 'The plover watch starts at the sandbar by the Quillon Boathouse.');
+      const plain = await publish('stale-heron', 'Heron walk', 'The heron walk follows the estuary trail.');
+      await inTx(async (client) => {
+        await client.query(`SELECT redaction_mark_add('content_item', $1, 'body', '850-555-0119', 'member_phone', $2, $3, NULL)`, [phone.itemId, STORER.sub, STORER.groups]);
+        await client.query(`SELECT redaction_mark_add('content_item', $1, 'body', 'Quillon Boathouse', 'business_venue', $2, $3, NULL)`, [venue.itemId, STORER.sub, STORER.groups]);
+        await recordItems(client, [phone.itemId, venue.itemId]);
+      });
+      expect(await matched('members', '"850-555-0119"')).toEqual([phone.itemId]);
+      expect(await matched('public', 'Quillon')).toEqual([venue.itemId]);
+      expect(await matched('public', 'estuary')).toEqual([plain.itemId]);
+      const code = await api.pool.query(`UPDATE redaction_policy SET action = action WHERE false`).then(() => 'ok', (error: { code?: string }) => error.code);
+      expect(code).toBe('42501');
+      const propose = async (audience: string, category: string): Promise<string | undefined> =>
+        (await api.pool.query<{ status: string }>(`SELECT status FROM redaction_propose('nwflorida', $1, $2, 'redact', $3, $4, NULL)`, [audience, category, STORER.sub, STORER.groups])).rows[0]?.status;
+      expect(await propose('members', 'member_phone')).toBe('applied');
+      expect(await propose('public', 'business_venue')).toBe('applied');
+      const queries = [
+        ['members', '"850-555-0119"'], ['members', 'boardwalk'], ['public', 'boardwalk'], ['public', 'Quillon'], ['public', 'sandbar'],
+        ['members', 'sandbar'], ['members', 'estuary'], ['public', 'estuary'],
+      ] as const;
+      for (const [audience, query] of queries) expect(await matched(audience, query), `${audience} ${query}`).toEqual([]);
+      expect((await find('"850-555-0119"', MEMBER)).hits).toEqual([]);
+      expect((await find('Quillon')).hits).toEqual([]);
+      // The boot backfill re-records every item not re-recorded since: the marked ones by their new render, the plain
+      // one with its render unchanged; a second run finds none.
+      expect((await backfillItems(api.pool)).rerecorded).toBeGreaterThanOrEqual(3);
+      expect((await backfillItems(api.pool)).rerecorded).toBe(0);
+      expect(await matched('members', '"850-555-0119"')).toEqual([]);
+      expect(await matched('members', 'boardwalk')).toEqual([phone.itemId]);
+      expect(await matched('public', 'Quillon')).toEqual([]);
+      expect(await matched('public', 'sandbar')).toEqual([venue.itemId]);
+      expect(said(await find('sandbar'))).not.toContain('Quillon');
+      for (const audience of ['public', 'members'] as const) expect(await matched(audience, 'estuary'), audience).toEqual([plain.itemId]);
+      expect(slugsOf(await find('estuary'))).toEqual(['stale-heron']);
+      await owner.query(`UPDATE redaction_policy SET action = 'show' WHERE tenant_id = 'nwflorida' AND audience = 'members' AND category = 'member_phone'`);
+      await owner.query(`UPDATE redaction_policy SET action = 'show' WHERE tenant_id = 'nwflorida' AND audience = 'public' AND category = 'business_venue'`);
+      await backfillItems(api.pool);
+    });
+
+    // Challenge S3-2, N3. An edition's file takes the marks of the items it prints (0015 pdf_file_items), though it
+    // belongs to no version: its page rows are refused for a newer mark the audience is not shown, as a version's are.
+    it('S1 (edition pages, challenge S3-2 N3): a page of an edition whose item is given a hiding mark by SQL after its copy was made is no row of the statement', async () => {
+      const made = await publish('stale-skiff', 'Skiff notes', 'The skiff crews meet at the slipway.');
+      const edition = (await owner.query<{ id: string }>(`INSERT INTO edition (slug, title, kind, period_start, period_end, status) VALUES ('2026-07', 'Pensa Mensa, July 2026', 'regular', '2026-07-01', '2026-07-28', 'drafting') RETURNING id`)).rows[0]!.id;
+      await owner.query(`INSERT INTO edition_item (edition_id, item_id, version_id) VALUES ($1, $2, $3)`, [edition, made.itemId, made.versionId]);
+      await owner.query(`UPDATE edition SET status = 'published' WHERE id = $1`, [edition]);
+      const bytes = await pagesPdf([['The skiff crews meet at the slipway by the oarlock shed']]);
+      const fileId = (await owner.query<{ id: string }>(
+        `INSERT INTO stored_file (edition_id, object_key, filename, mime_type, size_bytes, sha256, audience) VALUES ($1, 'stale-2026-07.pdf', 'stale-2026-07.pdf', 'application/pdf', $2, $3, 'public') RETURNING id`,
+        [edition, bytes.length, createHash('sha256').update(bytes).digest()],
+      )).rows[0]!.id;
+      await storeOriginal(api.pool, { fileId, bytes, ...STORER });
+      await owner.query(`UPDATE edition SET public_pdf_file_id = $2 WHERE id = $1`, [edition, fileId]);
+      await inTx((client) => recordItems(client, [made.itemId]));
+      expect(await work()).toBeGreaterThanOrEqual(1);
+      expect(await matched('public', 'oarlock')).toEqual([fileId]);
+      type PageRow = { file_id: string; item_id: string | null; page: number; served_sha256: Buffer; text_version: number; text: string; extra: string };
+      const kept = (await owner.query<PageRow>(`SELECT file_id, item_id, page, served_sha256, text_version, text, extra FROM search_page_public WHERE file_id = $1`, [fileId])).rows;
+      // A phone mark whose passage is in no text of the item: the public redacts phones and the lens fails closed on it.
+      await sqlMark(made.itemId, '850-555-0154', 'member_phone');
+      await owner.query(`DELETE FROM search_page_public WHERE file_id = $1`, [fileId]);
+      for (const row of kept) {
+        await owner.query(`INSERT INTO search_page_public (file_id, item_id, page, served_sha256, text_version, text, extra) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [
+          row.file_id, row.item_id, row.page, row.served_sha256, row.text_version, row.text, row.extra,
+        ]);
+      }
+      expect(await matched('public', 'oarlock')).toEqual([]);
+      expect((await find('oarlock')).hits).toEqual([]);
+    });
+
+    // Challenge S3-2, N1 (G11). Each audience's row is set against that audience's own re-record: a confirmation or a
+    // stamp taken for one audience does not stand for the other.
+    it('S1 (per audience, challenge S3-2 N1): an audience\'s row is read against its own re-record, never the other audience\'s', async () => {
+      const made = await publish('stale-tern', 'Tern survey', 'The tern survey meets at the spit. Call 850-555-0157 to help.');
+      expect(await matched('public', 'tern')).toEqual([made.itemId]);
+      expect(await matched('members', 'tern')).toEqual([made.itemId]);
+      // The public alone not re-recorded since the last policy change: its row goes; members' stays.
+      await owner.query(`UPDATE version_rerecorded SET seq = 0 WHERE version_id = $1 AND audience = 'public'`, [made.versionId]);
+      expect(await matched('public', 'tern')).toEqual([]);
+      expect(await matched('members', 'tern')).toEqual([made.itemId]);
+      await inTx((client) => recordItems(client, [made.itemId]));
+      expect(await matched('public', 'tern')).toEqual([made.itemId]);
+      // A phone mark written by SQL, then members' stamp alone taken again: the public's row, older than the mark, goes.
+      await sqlMark(made.itemId, '850-555-0157', 'member_phone');
+      await owner.query(`UPDATE version_rerecorded SET seq = seq WHERE version_id = $1 AND audience = 'members'`, [made.versionId]);
+      expect(await matched('public', 'tern')).toEqual([]);
+      expect(await matched('members', 'tern')).toEqual([made.itemId]);
     });
 
     it('S1 (A2): a lens change deployed with no TEXT_ENGINE bump: the boot backfill re-records the item, and the former lens\'s row leaves the index', async () => {

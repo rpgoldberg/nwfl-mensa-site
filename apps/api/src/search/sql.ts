@@ -24,10 +24,22 @@
 //   audience is not shown, written after the row: for an item, after the app
 //   last re-recorded its version for the audience (0035 version_rerecorded.at;
 //   search_item_put stamps it, changed or not); for a page, after the file's
-//   newest ready copy was made. A mark written by SQL with no re-record (D7a)
-//   leaves such a row standing; it is refused here, in the statement, so the
-//   live check (service.ts) never runs for it and a search's time cannot say
-//   that a word the mark withholds matched (challenge S3-1, S1).
+//   newest ready copy was made, where a version's file takes its item's marks
+//   and an edition's file the marks of every item it prints (0015
+//   pdf_file_items). Nor does an item row count while its version has not been
+//   re-recorded for the audience since the last write to a policy cell (0032
+//   version_rerecorded.seq against policy_change_epoch, as
+//   search_file_servable reads them): a cell written by SQL, or by the app
+//   role through redaction_propose, re-records nothing. A mark or cell written
+//   so (D7a) leaves such a row standing; it is refused here, in the statement,
+//   so the live check (service.ts) never runs for it and a search's time does
+//   not say that a word it withholds matched (challenge S3-1 S1, S3-2 S1).
+//   These read the stamps only to spare that check, and hold while the stamps
+//   rise. An owner who resets rerecord_seq, or a ledger head stamp ahead of
+//   the clock (0016 publication_ledger_stamp then gives two transactions one
+//   stamp), can let a stale row reach the live check again (time only; the
+//   check still refuses it) or keep a current one out (fail closed), never
+//   make one a hit. No role the app or the worker holds can do either.
 // Each hit also carries its row's own sha, for service.ts to ask the live
 // code whether the row is still what the served read gives (P1d, D7a).
 //
@@ -75,13 +87,14 @@ const current = (audience: SearchAudience, kind: 'stored_file' | 'content_versio
   `l.tenant_id = '${TENANT}' AND l.subject_kind = '${kind}' AND l.subject_id = ${subject} AND l.audience = '${audience}' AND l.current_to IS NULL AND l.output_sha256 = ${sha}`;
 
 /**
- * Whether an active mark on `itemId` that this audience is not shown (its policy cell is not 'show', as resolveAction
- * reads it) was written after `since`. Such a mark is not in the row: the row is not the item as read now, and is no
- * row of the statement, so no live check runs for it and the time a search takes cannot say that it matched.
+ * Whether an active mark on one of `items` (an SQL set) that this audience is not shown (its policy cell is not 'show',
+ * as resolveAction reads it) was written after `since`. Such a mark is not in the row: the row is not the item as read
+ * now, and is no row of the statement, so no live check runs for it and the time a search takes does not say that it
+ * matched.
  */
-const markSince = (audience: SearchAudience, itemId: string, since: string): string =>
+const markSince = (audience: SearchAudience, items: string, since: string): string =>
   `EXISTS (SELECT 1 FROM redaction_mark m
-            WHERE m.tenant_id = '${TENANT}' AND m.content_item_id = ${itemId} AND m.status = 'active'
+            WHERE m.tenant_id = '${TENANT}' AND m.content_item_id IN (${items}) AND m.status = 'active'
               AND m.created_at > coalesce(${since}, '-infinity'::timestamptz)
               AND NOT EXISTS (SELECT 1 FROM redaction_policy r
                                WHERE r.tenant_id = '${TENANT}' AND r.audience = '${audience}' AND r.category = m.category AND r.action = 'show'))`;
@@ -121,7 +134,7 @@ export function searchSql(audience: SearchAudience): string {
    WHERE (i.id IS NOT NULL OR e.id IS NOT NULL) AND p.text_version = ${textVersion}
      AND EXISTS (SELECT 1 FROM publication_ledger l WHERE ${current(audience, 'stored_file', 'p.file_id', 'p.served_sha256')} AND l.inputs ->> 'served' = 'copy')
      ${membersCopyOnly}
-     AND NOT ${markSince(audience, 'v.item_id', `(SELECT max(c.created_at) FROM pdf_copy c WHERE c.file_id = p.file_id AND c.status = 'ready')`)}
+     AND NOT ${markSince(audience, 'SELECT pdf_file_items(p.file_id)', `(SELECT max(c.created_at) FROM pdf_copy c WHERE c.file_id = p.file_id AND c.status = 'ready')`)}
   UNION ALL
   SELECT 'item' AS kind, s.item_id AS id, 0 AS page, ts_rank_cd(s.tsv, q.q) AS rank, v.published_at AS dated,
          i.slug, s.title, i.kind AS item_kind, s.version_id, v.on_behalf_of, v.published_at, s.rendered_sha256 AS sha
@@ -131,6 +144,8 @@ export function searchSql(audience: SearchAudience): string {
     JOIN content_version v ON v.id = s.version_id AND v.visibility <> 'officers'
    WHERE EXISTS (SELECT 1 FROM publication_ledger l WHERE ${current(audience, 'content_version', 's.version_id', 's.rendered_sha256')})
      AND NOT ${markSince(audience, 's.item_id', `(SELECT c.at FROM version_rerecorded c WHERE c.version_id = s.version_id AND c.audience = '${audience}')`)}
+     AND EXISTS (SELECT 1 FROM version_rerecorded c
+                  WHERE c.version_id = s.version_id AND c.audience = '${audience}' AND c.seq > coalesce((SELECT e.seq FROM policy_change_epoch e), 0))
    ORDER BY rank DESC, dated DESC NULLS LAST, kind, id, page
    LIMIT $2`;
 }

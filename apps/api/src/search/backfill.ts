@@ -24,13 +24,14 @@
 // it at every boot. A re-record appends the render it compared, so a second
 // run finds none (challenge S3-1, S1 and S2).
 //
-// Last, it re-records, the same way, each published item with a passage mark
-// whose live version the app has not re-recorded, for an audience, since the
-// last write to a policy cell (0032's version_rerecorded against
-// policy_change_epoch); only such an item's PDF waits on that. A write made
-// outside the API (as 0022 made its change) re-records nothing, and until a
-// re-record the page writer refuses the item's PDF if it has a passage mark:
-// this brings such items back, or keeps them out, as the policy now says. In
+// Last, it re-records, the same way, each published item whose live version
+// the app has not re-recorded, for an audience, since the last write to a
+// policy cell (0032's version_rerecorded against policy_change_epoch). A
+// write made outside the API (as 0022 made its change), or by the app role
+// through redaction_propose, re-records nothing; until a re-record the page
+// writer refuses the item's PDF if it has a passage mark, and the search read
+// (sql.ts) refuses the item's row, marked or not (challenge S3-2, S1): this
+// brings such items back, or keeps them out, as the policy now says. In
 // batches of items, one transaction each, by item id; a second run finds none.
 //
 // After each batch it asks the database to queue again (0034 search_page_requeue) each
@@ -71,14 +72,12 @@ export const RERECORD_BATCH = 25;
 const NO_ITEM = '00000000-0000-0000-0000-000000000000';
 
 /**
- * Published items after `$1` (by id, at most `$2`), with an active passage mark (search_file_servable reads the stamp
- * for no other), whose live version the app has not re-recorded for one of the audiences `$3` since the last write to
- * a policy cell.
+ * Published items after `$1` (by id, at most `$2`) whose live version the app has not re-recorded for one of the
+ * audiences `$3` since the last write to a policy cell: search_file_servable refuses the PDF of such an item with a
+ * passage mark, and the search read (sql.ts) refuses the row of any such item, marked or not.
  */
 export const UNCONFIRMED_ITEMS_SQL = `SELECT i.id FROM content_item i
    WHERE i.state = 'published' AND i.live_version_id IS NOT NULL AND i.id > $1
-     AND EXISTS (SELECT 1 FROM redaction_mark m
-                  WHERE m.tenant_id = '${TENANT}' AND m.status = 'active' AND m.content_item_id = i.id AND m.field <> 'file')
      AND EXISTS (SELECT 1 FROM unnest($3::text[]) AS a (audience)
                   WHERE NOT EXISTS (SELECT 1 FROM version_rerecorded c
                                      WHERE c.version_id = i.live_version_id AND c.audience = a.audience
