@@ -412,6 +412,11 @@ describe.skipIf(!live)('a policy cell written outside the API: the put refuses a
           ['members', 'member_email', 'redact'],
           ['public', 'business_venue', 'show'],
           ['members', 'business_venue', 'show'],
+          // One category each audience alone redacts: the item marked with it lacks rows for that audience only.
+          ['public', 'private_venue', 'redact'],
+          ['members', 'private_venue', 'show'],
+          ['public', 'officer_contact', 'show'],
+          ['members', 'officer_contact', 'redact'],
         ],
         async () => {
           const queued = async (fileId: string): Promise<boolean> => (await owner.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [fileId])).rows.length === 1;
@@ -423,7 +428,27 @@ describe.skipIf(!live)('a policy cell written outside the API: the put refuses a
           await api
             .client(RedactionPolicyService)
             .addRedactionMark({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: shown.itemId, field: MarkField.BODY, quote: 'Kite festival', category: RedactionCategory.BUSINESS_VENUE }, OFFICER);
+          /** Carried, indexed for both before the write; after it, the audience that redacts `category` is refused. */
+          const oneSided = async (title: string, category: RedactionCategory): Promise<{ itemId: string; fileId: string }> => {
+            const item = await seeded(title);
+            await api
+              .client(RedactionPolicyService)
+              .addRedactionMark({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: item.itemId, field: MarkField.BODY, quote: title, category }, OFFICER);
+            return item;
+          };
+          const publicOnly = await oneSided('Heron count', RedactionCategory.PRIVATE_VENUE);
+          const membersOnly = await oneSided('Osprey nest', RedactionCategory.OFFICER_CONTACT);
           await setCell('public', 'member_phone', 'redact');
+          for (const [item, refused] of [
+            [publicOnly, 'public'],
+            [membersOnly, 'members'],
+          ] as const) {
+            for (const audience of ['public', 'members'] as const) await copyFor(item.fileId, audience);
+            await workerRecordsFile(item.fileId);
+            for (const audience of ['public', 'members'] as const) {
+              expect((await attempt(item.fileId, audience, `${item.fileId} ${audience}`)).put, `${refused}-only ${audience}`).toBe(audience === refused ? '55000' : 'ok');
+            }
+          }
           expect(await regenerated(carried.fileId, 'ibis roost regenerated')).toMatchObject({ put: '55000', servable: true });
           expect(await regenerated(hidden.fileId, 'rail survey regenerated')).toMatchObject({ put: '55000', servable: false });
           expect((await attempt(hidden.fileId, 'members', 'rail survey members')).servable).toBe(false);
@@ -431,27 +456,34 @@ describe.skipIf(!live)('a policy cell written outside the API: the put refuses a
           await workerRecordsFile(shown.fileId);
           for (const audience of ['public', 'members'] as const) expect((await attempt(shown.fileId, audience, `kite festival ${audience}`)).put).toBe('ok');
           // The worker's runs finished (pdf_regen_finish): nothing of the three is queued.
-          const files = [carried.fileId, hidden.fileId, shown.fileId];
+          const files = [carried.fileId, hidden.fileId, shown.fileId, publicOnly.fileId, membersOnly.fileId];
           await owner.query(`DELETE FROM pdf_regen WHERE file_id = ANY ($1::uuid[])`, [files]);
           // The worker's boot listing (0034 search_page_lacking) asks what the put asks: until the re-record it lists
-          // none of the three (two refused, one indexed); after it, the carried item's file.
+          // none of them (refused or indexed); after it, the carried item's file for both, and each one-sided item's for the
+          // audience that was refused.
           const listed = async (): Promise<Record<string, string[]>> => {
             const found = (await worker.query<{ file_id: string; audience: string }>(`SELECT file_id, audience FROM search_page_lacking(1)`)).rows;
             const of = (fileId: string): string[] => found.filter((row) => row.file_id === fileId).map((row) => row.audience);
-            return { carried: of(carried.fileId), hidden: of(hidden.fileId), shown: of(shown.fileId) };
+            return { carried: of(carried.fileId), hidden: of(hidden.fileId), shown: of(shown.fileId), publicOnly: of(publicOnly.fileId), membersOnly: of(membersOnly.fileId) };
           };
-          expect(await listed()).toEqual({ carried: [], hidden: [], shown: [] });
+          expect(await listed()).toEqual({ carried: [], hidden: [], shown: [], publicOnly: [], membersOnly: [] });
           const first = await backfillItems(api.pool, { batch: 1 });
-          expect(await listed()).toEqual({ carried: ['members', 'public'], hidden: [], shown: [] });
-          expect(first.rerecorded).toBeGreaterThanOrEqual(3);
-          expect(first.requeued).toBeGreaterThanOrEqual(1);
-          expect({ carried: await queued(carried.fileId), hidden: await queued(hidden.fileId), shown: await queued(shown.fileId) }).toEqual({ carried: true, hidden: false, shown: false });
+          expect(await listed()).toEqual({ carried: ['members', 'public'], hidden: [], shown: [], publicOnly: ['public'], membersOnly: ['members'] });
+          expect(first.rerecorded).toBeGreaterThanOrEqual(5);
+          expect(first.requeued).toBeGreaterThanOrEqual(3);
+          expect({
+            carried: await queued(carried.fileId),
+            hidden: await queued(hidden.fileId),
+            shown: await queued(shown.fileId),
+            publicOnly: await queued(publicOnly.fileId),
+            membersOnly: await queued(membersOnly.fileId),
+          }).toEqual({ carried: true, hidden: false, shown: false, publicOnly: true, membersOnly: true });
           // The worker's run of the queued file: its copy is put now, and the PDF is back in search.
           expect(await regenerated(carried.fileId, 'ibis roost back')).toMatchObject({ put: 'ok', servable: true, rows: ['ibis roost back'] });
           await owner.query(`DELETE FROM pdf_regen WHERE file_id = ANY ($1::uuid[])`, [files]);
           // Nothing left to re-record, so nothing is queued again.
           expect(await backfillItems(api.pool)).toMatchObject({ ran: true, rerecorded: 0, requeued: 0 });
-          expect(await Promise.all(files.map(queued))).toEqual([false, false, false]);
+          expect(await Promise.all(files.map(queued))).toEqual([false, false, false, false, false]);
         },
       );
     });
