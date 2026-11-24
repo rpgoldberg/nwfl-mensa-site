@@ -37,7 +37,8 @@ describe('the index job: no statement crosses audiences', () => {
     // 0032's writer, restated with one more refusal: checked on its own below.
     const sql = all.slice(0, all.indexOf('CREATE OR REPLACE FUNCTION search_page_put')) + all.slice(all.indexOf('CREATE OR REPLACE FUNCTION nwfl_worker_grants'));
     const statements = sql.split(/\bUNION ALL\b|;/).filter((statement) => /search_page_(?:public|members)\b/.test(statement) && !/\b(?:GRANT|REVOKE)\b/.test(statement));
-    expect(statements).toHaveLength(6);
+    // Six of the sweep and the listing, two of the backfill's re-queue (S1 recheck 5 N2).
+    expect(statements).toHaveLength(8);
     for (const statement of statements) {
       const tables = new Set([...statement.matchAll(/search_page_(public|members)\b/g)].map((match) => match[1]));
       expect([...tables], statement).toHaveLength(1);
@@ -56,7 +57,7 @@ describe('the index job: no statement crosses audiences', () => {
     expect(functions.length).toBeGreaterThan(1000);
     expect(functions).not.toMatch(/search_item_|content_version|content_item|\bedition\b|\bsearch_public\b|\bsearch_members\b|\.text\b|\.extra\b/);
     // S2 challenge M2: each listing and each delete asks the servable rule of the very file it names.
-    expect(statements.filter((statement) => /search_page_servable\((?:l\.subject_id|p\.file_id)\)/.test(statement))).toHaveLength(6);
+    expect(statements.filter((statement) => /search_page_servable\((?:l\.subject_id|p\.file_id)\)/.test(statement))).toHaveLength(8);
     // The rule reads the item, version and edition state alone: the index, the ledger and no text.
     expect(servable).toMatch(/LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp/);
     expect(servable).not.toMatch(/SECURITY DEFINER|search_page_(?:public|members)|publication_ledger|\btext\b|_ast\b/);

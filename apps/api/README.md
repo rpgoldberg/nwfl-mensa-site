@@ -914,6 +914,14 @@ logged by file, audience and code, never by content: `a PDF copy was not
 indexed`. Both functions are the worker's alone; it reads no index table and
 no ledger row.
 
+A policy cell written outside the API queues every file but re-records no
+version, so a run that finishes before the app's boot backfill re-records the
+item has its put refused. After each batch it re-records, the backfill calls
+`search_page_requeue` (0034, the app's): each of those items' files that an
+audience is served a copy of and may open, but that has no rows of that copy,
+is queued again, without marking its copies stale. The run finds its copies
+made and indexes them.
+
 ### The api-gate check
 
 `.github/workflows/api-gate.yml` runs every test in `test/gates` on every push

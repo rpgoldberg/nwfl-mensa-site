@@ -36,7 +36,11 @@
 -- that read the item just before its change committed is deleted by that same next sweep. The read side
 -- (S3) applies the same rule again.
 --
--- ADDITIVE and forward-only: three new functions, their grants, and 0032's search_page_put (as S1
+--   * search_page_requeue(items): the boot backfill's (search/backfill.ts), for the app role. Each
+--     file of the items it has just re-recorded that an audience is served a copy of and may open,
+--     but that has no rows of that copy, is queued for the worker again (S1 recheck 5, N2; below).
+--
+-- ADDITIVE and forward-only: four new functions, their grants, and 0032's search_page_put (as S1
 -- left it) with one more refusal. Nothing else that ran on 0032 changes.
 
 -- Whether the public or members may open the file at all now (content/files.ts servableFile, for an
@@ -117,6 +121,54 @@ BEGIN
   RETURN v_total + v_rows;
 END
 $fn$;
+
+-- The boot backfill's re-queue (S1 recheck 5, N2). A policy cell written outside the API queues every file and deletes
+-- its rows (pdf_stale_on_policy, pdf_regen_request) but re-records no version: a worker run that finishes before the
+-- backfill re-records the item has its put refused (search_file_servable, 55000), and nothing would run it again until
+-- another change. After each batch it re-records, the backfill passes those items here: each of their files that an
+-- audience is served a copy of, may open now, and has no rows of that copy for, is queued again (pdf_regen, a new
+-- generation). Only the queue: the copies are not marked stale and no row is deleted, so the run finds its copies made,
+-- records the ledger again and indexes them (regenerate.ts regenerateOne). A file is queued only while its copy is
+-- stored and ready, so the run never needs the original. Takes the file lock pdf_regen_request takes, in its order.
+-- Returns how many files it queued. For the app role, which runs the backfill; at most 1000 items a call.
+CREATE FUNCTION search_page_requeue(p_items uuid[]) RETURNS integer
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_items uuid[] := coalesce(p_items, '{}');
+  v_files uuid[];
+BEGIN
+  IF cardinality(v_items) > 1000 THEN
+    RAISE EXCEPTION 'at most 1000 items a call' USING ERRCODE = '22023';
+  END IF;
+  v_files := ARRAY(
+    SELECT l.subject_id FROM publication_ledger l
+      WHERE l.tenant_id = 'nwflorida' AND l.subject_kind = 'stored_file' AND l.audience = 'public' AND l.current_to IS NULL
+        AND l.output_sha256 IS NOT NULL AND l.inputs ->> 'served' = 'copy'
+        AND l.subject_id IN (SELECT f.id FROM unnest(v_items) AS t(item_id) CROSS JOIN LATERAL unnest(pdf_files_of_item(t.item_id)) AS f(id))
+        AND EXISTS (SELECT 1 FROM pdf_copy c WHERE c.file_id = l.subject_id AND c.status = 'ready' AND encode(c.input_hash, 'hex') = l.inputs ->> 'input_hash')
+        AND search_page_servable(l.subject_id) AND search_file_servable(l.subject_id, 'public')
+        AND NOT EXISTS (SELECT 1 FROM search_page_public p WHERE p.file_id = l.subject_id AND p.served_sha256 = l.output_sha256));
+  v_files := v_files || ARRAY(
+    SELECT l.subject_id FROM publication_ledger l
+      WHERE l.tenant_id = 'nwflorida' AND l.subject_kind = 'stored_file' AND l.audience = 'members' AND l.current_to IS NULL
+        AND l.output_sha256 IS NOT NULL AND l.inputs ->> 'served' = 'copy'
+        AND l.subject_id IN (SELECT f.id FROM unnest(v_items) AS t(item_id) CROSS JOIN LATERAL unnest(pdf_files_of_item(t.item_id)) AS f(id))
+        AND EXISTS (SELECT 1 FROM pdf_copy c WHERE c.file_id = l.subject_id AND c.status = 'ready' AND encode(c.input_hash, 'hex') = l.inputs ->> 'input_hash')
+        AND search_page_servable(l.subject_id) AND search_file_servable(l.subject_id, 'members')
+        AND NOT EXISTS (SELECT 1 FROM search_page_members p WHERE p.file_id = l.subject_id AND p.served_sha256 = l.output_sha256));
+  v_files := ARRAY(SELECT DISTINCT u.id FROM unnest(v_files) AS u(id) ORDER BY u.id);
+  IF cardinality(v_files) = 0 THEN
+    RETURN 0;
+  END IF;
+  PERFORM 1 FROM stored_file f WHERE f.id = ANY (v_files) ORDER BY f.id FOR NO KEY UPDATE OF f;
+  INSERT INTO pdf_regen (file_id, generation)
+    SELECT u.id, nextval('pdf_regen_generation') FROM unnest(v_files) AS u(id)
+    ON CONFLICT (file_id) DO UPDATE SET generation = EXCLUDED.generation;
+  RETURN cardinality(v_files);
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION search_page_requeue(uuid[]) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION search_page_requeue(uuid[]) TO nwfl;
 
 -- 0032's writer as S1 left it (the item lock, the ledger check, search_file_servable), with one more refusal before
 -- S1's: a file no audience here may open. Its owner and grants are kept.

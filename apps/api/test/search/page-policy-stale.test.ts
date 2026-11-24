@@ -398,5 +398,53 @@ describe.skipIf(!live)('a policy cell written outside the API: the put refuses a
         },
       );
     });
+
+    // S1 recheck 5, N2: the policy write queued every file (pdf_stale_on_policy) and deleted its rows; a worker run
+    // that finished BEFORE the backfill restored the stamp had its put refused (55000), and nothing ran it again.
+    it('queues again each file of a re-recorded item that its audience may open now but whose copy has no rows; not a hidden one, nor one indexed', async () => {
+      await withCells(
+        [
+          ['public', 'member_phone', 'show'],
+          ['public', 'member_email', 'redact'],
+          // Members redact phones too, so the item whose quote is not carried is hidden from both audiences. (With
+          // members shown phones, members may open it, and its members copy lacking rows is rightly queued.)
+          ['members', 'member_phone', 'redact'],
+          ['members', 'member_email', 'redact'],
+          ['public', 'business_venue', 'show'],
+          ['members', 'business_venue', 'show'],
+        ],
+        async () => {
+          const queued = async (fileId: string): Promise<boolean> => (await owner.query(`SELECT 1 FROM pdf_regen WHERE file_id = $1`, [fileId])).rows.length === 1;
+          const carried = await indexedUnderShow('Ibis roost', 'Ibis roost');
+          const hidden = await indexedUnderShow('Rail survey', 'Morgan Fallow 850-555-0181');
+          // Indexed for both audiences and re-recorded by the backfill too, but its mark is shown everywhere: no stamp
+          // is needed, so its regenerated copy is put before the backfill and it has its rows.
+          const shown = await seeded('Kite festival');
+          await api
+            .client(RedactionPolicyService)
+            .addRedactionMark({ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: shown.itemId, field: MarkField.BODY, quote: 'Kite festival', category: RedactionCategory.BUSINESS_VENUE }, OFFICER);
+          await setCell('public', 'member_phone', 'redact');
+          expect(await regenerated(carried.fileId, 'ibis roost regenerated')).toMatchObject({ put: '55000', servable: true });
+          expect(await regenerated(hidden.fileId, 'rail survey regenerated')).toMatchObject({ put: '55000', servable: false });
+          expect((await attempt(hidden.fileId, 'members', 'rail survey members')).servable).toBe(false);
+          for (const audience of ['public', 'members'] as const) await copyFor(shown.fileId, audience);
+          await workerRecordsFile(shown.fileId);
+          for (const audience of ['public', 'members'] as const) expect((await attempt(shown.fileId, audience, `kite festival ${audience}`)).put).toBe('ok');
+          // The worker's runs finished (pdf_regen_finish): nothing of the three is queued.
+          const files = [carried.fileId, hidden.fileId, shown.fileId];
+          await owner.query(`DELETE FROM pdf_regen WHERE file_id = ANY ($1::uuid[])`, [files]);
+          const first = await backfillItems(api.pool, { batch: 1 });
+          expect(first.rerecorded).toBeGreaterThanOrEqual(3);
+          expect(first.requeued).toBeGreaterThanOrEqual(1);
+          expect({ carried: await queued(carried.fileId), hidden: await queued(hidden.fileId), shown: await queued(shown.fileId) }).toEqual({ carried: true, hidden: false, shown: false });
+          // The worker's run of the queued file: its copy is put now, and the PDF is back in search.
+          expect(await regenerated(carried.fileId, 'ibis roost back')).toMatchObject({ put: 'ok', servable: true, rows: ['ibis roost back'] });
+          await owner.query(`DELETE FROM pdf_regen WHERE file_id = ANY ($1::uuid[])`, [files]);
+          // Nothing left to re-record, so nothing is queued again.
+          expect(await backfillItems(api.pool)).toMatchObject({ ran: true, rerecorded: 0, requeued: 0 });
+          expect(await Promise.all(files.map(queued))).toEqual([false, false, false]);
+        },
+      );
+    });
   });
 });

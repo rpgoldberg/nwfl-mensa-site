@@ -109,6 +109,9 @@ const FROZEN: Record<Name, unknown[]> = {
     // index rows. Neither reads or writes pdf_original or pdf_copy.
     { function: 'search_page_lacking(integer)', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     { function: 'search_page_put(uuid,text,bytea,integer,text[],text[])', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
+    // ARCHIVE-SEARCH S2 (0034, S1 recheck 5 N2): the boot backfill's re-queue of a re-recorded item's files that lack
+    // their rows. It reads the ledger, the index and pdf_copy's status, and queues pdf_regen; never a PDF's bytes.
+    { function: 'search_page_requeue(uuid[])', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'search_page_sweep()', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     // S1 fix 1: the trigger that deletes a file's page rows when its audience may no longer open it; it reads no PDF.
     { function: 'search_page_unservable()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },

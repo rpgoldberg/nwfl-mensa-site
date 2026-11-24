@@ -213,11 +213,11 @@ describe.skipIf(!live)('search: the news-item rows', () => {
       await owner.query(`DELETE FROM search_item_public WHERE item_id = $1`, [itemId]);
       await owner.query(`DELETE FROM search_item_members WHERE item_id = $1`, [itemId]);
       const first = await backfillItems(api.pool);
-      expect(first).toEqual({ ran: true, written: 2, skipped: 0, rerecorded: 0 });
+      expect(first).toEqual({ ran: true, written: 2, skipped: 0, rerecorded: 0, requeued: 0 });
       expect(await row('search_item_public', itemId)).toEqual(before.open);
       expect(await row('search_item_members', itemId)).toEqual(before.members);
       expect((await row('search_item_public', itemId))!.text).not.toContain(SECRET);
-      expect(await backfillItems(api.pool)).toEqual({ ran: true, written: 0, skipped: 0, rerecorded: 0 });
+      expect(await backfillItems(api.pool)).toEqual({ ran: true, written: 0, skipped: 0, rerecorded: 0, requeued: 0 });
     });
 
     it('rewrites a row that is not the ledger\'s current output, and deletes one whose version is given nothing', async () => {
@@ -230,7 +230,7 @@ describe.skipIf(!live)('search: the news-item rows', () => {
         hidden.versionId,
       ]);
       const result = await backfillItems(api.pool);
-      expect(result).toEqual({ ran: true, written: 2, skipped: 0, rerecorded: 0 });
+      expect(result).toEqual({ ran: true, written: 2, skipped: 0, rerecorded: 0, requeued: 0 });
       expect(await row('search_item_public', itemId)).toEqual(good);
       expect(await row('search_item_members', hidden.itemId)).toBeUndefined();
     });
@@ -239,14 +239,14 @@ describe.skipIf(!live)('search: the news-item rows', () => {
       await owner.query(`DELETE FROM search_item_public WHERE item_id = $1`, [itemId]);
       // The ledger is made to hold another output than a render gives now (as after a renderer change with no ledger write).
       await owner.query(`SELECT publication_ledger_record('content_version', $1, 'public', sha256('elsewhere'), '{"v":1}', 0)`, [versionId]);
-      expect(await backfillItems(api.pool)).toEqual({ ran: true, written: 0, skipped: 1, rerecorded: 0 });
+      expect(await backfillItems(api.pool)).toEqual({ ran: true, written: 0, skipped: 1, rerecorded: 0, requeued: 0 });
       expect(await row('search_item_public', itemId)).toBeUndefined();
     });
 
     it('does not run while another process holds the backfill lock', async () => {
       await owner.query(`SELECT pg_advisory_lock(hashtext($1))`, [BACKFILL_LOCK]);
       try {
-        expect(await backfillItems(api.pool)).toEqual({ ran: false, written: 0, skipped: 0, rerecorded: 0 });
+        expect(await backfillItems(api.pool)).toEqual({ ran: false, written: 0, skipped: 0, rerecorded: 0, requeued: 0 });
       } finally {
         await owner.query(`SELECT pg_advisory_unlock(hashtext($1))`, [BACKFILL_LOCK]);
       }
@@ -260,7 +260,7 @@ describe.skipIf(!live)('search: the news-item rows', () => {
         warn: (fields: Record<string, unknown>, message: string) => lines.push({ level: 'warn', fields, message }),
       };
       await runBackfill(api.pool, logger);
-      expect(lines).toEqual([{ level: 'info', fields: { ran: true, written: 0, skipped: 1, rerecorded: 0 }, message: 'search backfill' }]);
+      expect(lines).toEqual([{ level: 'info', fields: { ran: true, written: 0, skipped: 1, rerecorded: 0, requeued: 0 }, message: 'search backfill' }]);
       const broken = { connect: () => Promise.reject(Object.assign(new Error(`could not reach ${SECRET}`), { code: '08006' })) };
       await runBackfill(broken as unknown as pg.Pool, logger);
       expect(lines[1]).toEqual({ level: 'warn', fields: { code: '08006' }, message: 'search backfill failed' });

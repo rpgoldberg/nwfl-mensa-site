@@ -91,6 +91,24 @@ describe.skipIf(!live)('0034: what the worker\'s index job may do', () => {
       }
     });
 
+    it('gives the backfill\'s re-queue to the app alone (S1 recheck 5 N2): not the worker, not PUBLIC; a definer with a pinned path', async () => {
+      const sql = `SELECT search_page_requeue(ARRAY[]::uuid[])`;
+      expect(await sqlstate(app, sql)).toBe('ok');
+      expect(await sqlstate(worker, sql)).toBe('42501');
+      await other.query(`SET ROLE ${nobody}`);
+      try {
+        expect(await sqlstate(other, sql)).toBe('42501');
+      } finally {
+        await other.query(`RESET ROLE`);
+      }
+      expect(await sqlstate(app, `SELECT search_page_requeue(NULL)`)).toBe('ok');
+      expect(await sqlstate(app, `SELECT search_page_requeue(array_fill('00000000-0000-4000-8000-000000000001'::uuid, ARRAY[1001]))`)).toBe('22023');
+      const { rows } = await owner.query<{ prosecdef: boolean; proconfig: string[] | null; owner: string }>(
+        `SELECT prosecdef, proconfig, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname = 'search_page_requeue'`,
+      );
+      expect(rows).toEqual([{ prosecdef: true, proconfig: ['search_path=pg_catalog, public, pg_temp'], owner: 'nwfl_migrator' }]);
+    });
+
     it('runs both as their owner with a pinned search_path', async () => {
       const { rows } = await owner.query<{ proname: string; prosecdef: boolean; proconfig: string[] | null; owner: string }>(
         `SELECT proname, prosecdef, proconfig, pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE proname IN ('search_page_sweep', 'search_page_lacking') ORDER BY proname`,

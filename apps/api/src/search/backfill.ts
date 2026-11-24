@@ -19,6 +19,11 @@
 // this brings such items back, or keeps them out, as the policy now says. In
 // batches of items, one transaction each, by item id; a second run finds none.
 //
+// After each batch it asks the database to queue again (0034 search_page_requeue) each
+// of those items' files an audience is served a copy of and may open now, but whose
+// copy has no index rows: a worker run that finished before this re-record had its
+// put refused (55000), and nothing else would run it again (S1 recheck 5, N2).
+//
 // One process at a time: a session advisory lock. A second replica booting
 // meanwhile does nothing.
 //
@@ -43,6 +48,8 @@ export interface BackfillResult {
   skipped: number;
   /** Items re-recorded because a policy cell was written since their live version was. */
   rerecorded: number;
+  /** Files of those items queued for the worker again, because a copy their audience may open has no index rows. */
+  requeued: number;
 }
 
 /** Items re-recorded in one transaction. */
@@ -91,7 +98,7 @@ export async function backfillItems(pool: pg.Pool, options: { batch?: number } =
   const holder = await pool.connect();
   try {
     const lock = await holder.query<{ held: boolean }>(`SELECT pg_try_advisory_lock(hashtext($1)) AS held`, [BACKFILL_LOCK]);
-    if (lock.rows[0]?.held !== true) return { ran: false, written: 0, skipped: 0, rerecorded: 0 };
+    if (lock.rows[0]?.held !== true) return { ran: false, written: 0, skipped: 0, rerecorded: 0, requeued: 0 };
     try {
       let written = 0;
       let skipped = 0;
@@ -114,14 +121,17 @@ export async function backfillItems(pool: pg.Pool, options: { batch?: number } =
         }
       }
       let rerecorded = 0;
+      let requeued = 0;
       for (let after = NO_ITEM; ; ) {
         const batch = (await holder.query<{ id: string }>(UNCONFIRMED_ITEMS_SQL, [after, options.batch ?? RERECORD_BATCH, SEARCH_AUDIENCES])).rows.map((row) => row.id);
         if (batch.length === 0) break;
         await recordItems(pool, batch);
         rerecorded += batch.length;
+        // After the re-record committed: a put that read the old stamp was refused and left no rows; one after it is put.
+        requeued += (await holder.query<{ n: number }>(`SELECT search_page_requeue($1::uuid[]) AS n`, [batch])).rows[0]?.n ?? 0;
         after = batch.at(-1) as string;
       }
-      return { ran: true, written, skipped, rerecorded };
+      return { ran: true, written, skipped, rerecorded, requeued };
     } finally {
       await holder.query(`SELECT pg_advisory_unlock(hashtext($1))`, [BACKFILL_LOCK]);
     }
