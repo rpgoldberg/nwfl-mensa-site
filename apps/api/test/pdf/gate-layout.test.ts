@@ -387,7 +387,7 @@ describe('text nobody can see on a rectangle of the original is refused', () => 
 
 describe('text develop refused that nobody can see stays refused (fix round 1)', () => {
   /** A Type 3 font /F9 whose one glyph is d0: its proc sets its own colour (`proc`) and paints a block in it. */
-  async function withType3(pdf: Uint8Array, proc = '600 0 d0 0 g 50 0 500 700 re f'): Promise<Uint8Array> {
+  async function withType3(pdf: Uint8Array, proc = '600 0 d0 0 g 50 0 500 700 re f', resources: Record<string, unknown> = {}): Promise<Uint8Array> {
     const doc = await PDFDocument.load(pdf, { updateMetadata: false });
     const { context } = doc;
     const glyph = context.register(context.flateStream(proc));
@@ -403,7 +403,7 @@ describe('text develop refused that nobody can see stays refused (fix round 1)',
       FirstChar: 0x41,
       LastChar: 0x7a,
       Widths: Array.from({ length: 0x7a - 0x41 + 1 }, () => 600),
-      Resources: {},
+      Resources: resources,
       ToUnicode: context.register(context.flateStream(cmap)),
     } as never);
     doc.getPage(0).node.setFontDictionary(PDFName.of('F9'), context.register(font));
@@ -448,6 +448,12 @@ describe('text develop refused that nobody can see stays refused (fix round 1)',
     ['B1: white text on a white shape on the cell', () => page([cell(), `1 g ${rect(COVER)} f`, hidden('1 g'), BODY])],
     ['B2: yellow text on a yellow shape on the cell', () => page([cell(), `1 1 0 rg ${rect(COVER)} f`, hidden('1 1 0 rg'), BODY])],
     ['C1: white text, then a black rectangle over it', () => page([cell(), hidden('1 g'), `0 g ${rect(COVER)} f`, BODY])],
+    // Its letters drawn again over the rectangle in another order: the same bounds, font, size, place and fill, but
+    // read (PDFium drops only the letters drawn again where they were), so not the same text object drawn again.
+    ['C1 again: white text, a black rectangle over it, then the same letters in another order over that', () => page([cell(), hidden('1 g'), `0 g ${rect(COVER)} f`, `q 1 g BT /F2 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hdiden) Tj ET Q`, BODY])],
+    // One glyph changed for one as wide (the TJ gap makes up the drawn widths): PDFium reads only the changed glyph of the
+    // second; the rest of the first must not be taken as drawn again by it.
+    ['C1 again: white text, a black rectangle over it, then over that the same text with one glyph changed, in the same bounds', () => page([cell(), `q 1 g BT /F2 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hren) Tj ET Q`, `0 g ${rect(COVER)} f`, `q 1 g BT /F2 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td [(H-) -56 (en)] TJ ET Q`, BODY])],
     ['C2: white text, then a picture over it', () => page([cell(), hidden('1 g'), BODY], { picture: { left: COVER.x, bottom: COVER.y, width: COVER.w, height: COVER.h } })],
     ['C3: white text, then a white stroke 30 pt wide over it', () => page([cell(), hidden('1 g'), `1 G 30 w ${CELL.x + 10} ${CELL.y + 20} m ${CELL.x + 95} ${CELL.y + 20} l S`, BODY])],
     ['E1: white text clipped to a 1 pt square', () => page([cell(), `q ${CELL.x} ${CELL.y} 1 1 re W n 1 g BT /F2 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`, BODY])],
@@ -468,6 +474,10 @@ describe('text develop refused that nobody can see stays refused (fix round 1)',
     ['black text on a white shape, under a black cell clipped by a triangle round the text', () => page([`1 g ${rect(CELL)} f`, `q ${CELL.x} ${CELL.y} m ${CELL.x + CELL.w} ${CELL.y} l ${CELL.x} ${CELL.y + CELL.h} l h W n ${cell()} Q`, `q 0 g BT /F2 14 Tf ${CELL.x + 5} ${CELL.y + 4} Td (Mo) Tj ET Q`, BODY])],
     ['Type 3 glyphs (d0) whose procs paint nothing, filled white', async () => withType3(await page([cell(), hidden('1 g', 'F9'), BODY]), '600 0 d0')],
     ['Type 3 glyphs (d0) whose procs paint white and black, filled white', async () => withType3(await page([cell(), hidden('1 g', 'F9'), BODY]), '600 0 d0 1 g 50 0 250 700 re f 0 g 300 0 250 700 re f')],
+    [
+      'Type 3 glyphs (d0) whose procs paint white at 2 % opacity, filled white (no pixel of them opaque)',
+      async () => withType3(await page([cell(), hidden('1 g', 'F9'), BODY]), '600 0 d0 /G1 gs 1 g 50 0 500 700 re f', { ExtGState: { G1: { Type: 'ExtGState', ca: 0.02 } } }),
+    ],
     ['white text on a light grey shape drawn in a form between (2:1)', () => page([cell(), '/Fm1 Do', hidden('1 g'), BODY], { form: `0.7 g ${rect(COVER)} f` })],
     ['K6: white text in a form drawn with blend mode Multiply', () => page([cell(), 'q /GS0 gs /Fm1 Do Q', BODY], { form: `1 g BT /F1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET`, ...MULTIPLY })],
   ];
@@ -994,6 +1004,38 @@ describe('pageLabels, on readings made by hand: what lies under a glyph and over
     // Closed, its first corner is a join too; a point drawn twice at the corner is one corner.
     expect(judge([], [{ ...corner(-45, true), outline: [[[-45, 8], [-105, 9], [-105, 7], [-45, 8]]], closed: [true] }])).toBe(UNSEEN());
     expect(judge([], [{ ...corner(-45, true), outline: [[[-105, 9], [-45, 8], [-45, 8], [-105, 7]]], closed: [false] }])).toBe(UNSEEN());
+  });
+
+  it('draws a sharp corner\'s mitre out through the outer edges of its two lines, to a few hundredths of a point (fix round 1b)', () => {
+    // A corner of 7° at (-191.5, y), opening to the left, its line 40 pt wide: its mitre reaches 20 / sin 3.5° = 327.6 pt
+    // to the right, through the stroke's outer edges, each 20 pt out from its line. 202 pt from the corner (past five
+    // widths), the upper edge is 7.6825 pt over the corner; the ink's lower left corner (10.5, 5) lies 0.028 pt under it,
+    // or 0.03 pt over it. A kite through the lines' inner edges instead would pass 7.6255 pt over the corner, under the ink.
+    const half = (3.5 * Math.PI) / 180;
+    const corner = (y: number): Shape => ({
+      luminance: null,
+      evenOdd: false,
+      outline: [[[-191.5 - 60 * Math.cos(half), y + 60 * Math.sin(half)], [-191.5, y], [-191.5 - 60 * Math.cos(half), y - 60 * Math.sin(half)]]],
+      clips: [],
+      stroke: { luminance: 0, width: 40, mitred: true },
+    });
+    const edge = 20 * Math.cos(half) * ((20 / Math.sin(half) - 202) / (20 / Math.sin(half) - 20 * Math.sin(half)));
+    expect(judge([], [corner(5 - edge + 0.028)])).toBe(UNSEEN());
+    expect(judge([], [corner(5 - edge - 0.03)])).toEqual([]);
+  });
+
+  it('takes a path whose subpaths are not known open or closed for closed: its first corner is joined (fix round 1b)', () => {
+    // The 4° corner of the test above at (-45, 8), its first point; no `closed` given.
+    const half = (2 * Math.PI) / 180;
+    const first: Shape = {
+      luminance: null,
+      evenOdd: false,
+      outline: [[[-45, 8], [-45 - 60 * Math.cos(half), 8 + 60 * Math.sin(half)], [-45 - 60 * Math.cos(half), 8 - 60 * Math.sin(half)]]],
+      clips: [],
+      stroke: { luminance: 0, width: 10, mitred: true },
+    };
+    expect(judge([], [first])).toBe(UNSEEN());
+    expect(judge([], [{ ...first, closed: [false] }])).toEqual([]);
   });
 
   it('takes a glyph whose ink has no area for covered by what meets it (fix round 1b)', () => {
