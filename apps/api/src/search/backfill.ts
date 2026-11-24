@@ -24,7 +24,8 @@
 // deploy that changes the lens (quoteMatches, normalizeTree and the rest of
 // what renderVersion runs) bumps TEXT_ENGINE, and the search read (service.ts)
 // then counts none of those rows as current until this re-records them
-// (ARCHIVE-SEARCH S3, P1d). A row that names no engine is left alone.
+// (ARCHIVE-SEARCH S3, P1d). A row that names no engine is left alone (NULL is
+// not unequal).
 //
 // After each batch it asks the database to queue again (0034 search_page_requeue) each
 // of those items' files an audience is served a copy of and may open now, but whose
@@ -86,7 +87,7 @@ export const OTHER_ENGINE_ITEMS_SQL = `SELECT i.id FROM content_item i
    WHERE i.state = 'published' AND i.live_version_id IS NOT NULL AND i.id > $1
      AND EXISTS (SELECT 1 FROM publication_ledger l
                   WHERE l.tenant_id = '${TENANT}' AND l.subject_kind = 'content_version' AND l.subject_id = i.live_version_id
-                    AND l.current_to IS NULL AND l.inputs ? 'engine' AND l.inputs ->> 'engine' <> $3)
+                    AND l.current_to IS NULL AND l.inputs ->> 'engine' <> $3)
    ORDER BY i.id LIMIT $2`;
 
 const CURRENT = (audience: SearchAudience): string =>

@@ -197,6 +197,23 @@ describe.skipIf(!live)('SearchService.Search: the write side\'s handoffs, closed
       expect(pagesOf(await find('causeway'))).toEqual([[fileId, 2]]);
     });
 
+    it('P1d: does not count a page whose row and ledger row name a copy other than the one the audience is served now', async () => {
+      const fileId = march.files['public']!;
+      expect(pagesOf(await find('causeway'))).toEqual([[fileId, 2]]);
+      const kept = (await owner.query<{ output: Buffer; inputs: Record<string, unknown> }>(
+        `SELECT output_sha256 AS output, inputs FROM publication_ledger WHERE subject_kind = 'stored_file' AND subject_id = $1 AND audience = 'public' AND current_to IS NULL`,
+        [fileId],
+      )).rows[0]!;
+      // A former copy's: the ledger's row and the index rows both name it, while the copy of the current hash, made and ready, is another.
+      await owner.query(`SELECT publication_ledger_record('stored_file', $1, 'public', sha256('a former copy'), $2::jsonb, 0)`, [fileId, JSON.stringify(kept.inputs)]);
+      await owner.query(`UPDATE search_page_public SET served_sha256 = sha256('a former copy') WHERE file_id = $1`, [fileId]);
+      expect(pagesOf(await find('causeway'))).toEqual([]);
+      // Put back as they were: the ledger's row of the copy served now, and the rows read from it.
+      await owner.query(`SELECT publication_ledger_record('stored_file', $1, 'public', $2, $3::jsonb, 0)`, [fileId, kept.output, JSON.stringify(kept.inputs)]);
+      await owner.query(`UPDATE search_page_public SET served_sha256 = $2 WHERE file_id = $1`, [fileId, kept.output]);
+      expect(pagesOf(await find('causeway'))).toEqual([[fileId, 2]]);
+    });
+
     it('S2-N1 and D7a: gives no one a page or an item a mark hides, though rows for it stand with the ledger behind them and survive the sweep', async () => {
       const made = await issue('Handoff issue, hidden', { public: [['The quilting bee meets in the orangery']], members: [['The quilting bee meets in the orangery']] }, 'Quilting bee news.');
       expect(await work()).toBe(2);
