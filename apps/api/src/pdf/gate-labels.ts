@@ -37,11 +37,15 @@
 // heading is the newsletter's), and one does: text nobody can see there is
 // refused, as develop refused all text on it. A glyph is judged when half of
 // its ink or more lies on rectangles of the original drawn before it (so a
-// hairline rule through a glyph does not make it judged). It is seen when its
+// hairline rule through a glyph does not make it judged), or (fix round 2,
+// as develop refused it) its box's centre does; one judged by its centre
+// alone is judged on what may hide it, not on the page round what lies under
+// it (a black glyph a rule runs through shows on the page). It is seen when its
 // text object is painted opaque (no transparency, blend mode or soft mask on
 // it or a form that draws it; filled, alone or with a stroke; in a Type 3
 // font, PDFium draws its glyphs alone in one opaque colour, which is then its
-// paint: pdfium.ts Page.labelReading), no other glyph drawn after it lies
+// paint: pdfium.ts Page.labelReading), it is MIN_SEEN_PT or more (fix round
+// 2: text too small to read is a classic way to hide it), no other glyph drawn after it lies
 // over half its ink or more, and at least half its ink shows, taking away
 // (each by the most it may cover):
 //   - what its clips, and its forms' clips, leave out (a clip that does not
@@ -57,10 +61,15 @@
 // What the check cannot read (a picture, a form, a shading, a path
 // see-through or drawn through a matrix, or longer than it reads, a box a
 // clip cuts to another shape) on the ink or under it, or anything but text beside it in its form, is not taken away
-// by its bounds (as it is when pageLabels is given no drawing): the glyph is
-// then seen only if, besides, PDFium's drawing of the page shows its text
-// object there (pdfium.ts Page.shows: 5 % or more of
-// the ink box changes by 3:1 without it), for at most 24 text objects a page.
+// by its bounds (as it is when pageLabels is given no drawing). Fix round 2:
+// nor can it read what a text object drawn over the glyph paints, or a
+// pattern fill (PDFium gives a stand-in colour for one), so every glyph seen
+// so far is seen only if, besides, PDFium's drawing of the page shows it
+// (pdfium.ts Page.shows): drawn without its text object and every other that
+// draws the same text again there (at most 32), at least half as much of its
+// inner ink box changes by 3:1 as PDFium paints solid (alpha half or more)
+// drawing its text object alone, less one row or column of its pixels, and
+// SHOWN_PIXELS at least; at most MAX_SHOWS times a page.
 // Fix round 1b: a stroke's mitred corner may reach as far as its angle lets
 // (PDFium gives no miter limit); a glyph is seen only when PDFium, drawing
 // its text object alone, paints 5 % or more of its ink box (a glyph a font
@@ -71,7 +80,9 @@
 // after it) and is seen there, as Publisher draws a heading twice; and a text
 // object drawn again as it is (whose glyphs PDFium does not read again) is
 // judged where that is drawn (the 8 nearest such).
-// A page whose glyphs take more than MAX_WORK steps to judge is refused.
+// A page whose glyphs take more than MAX_WORK steps to judge is refused; each
+// glyph is judged where it is drawn once, and the search for one drawn again
+// stops at the budget (fix round 2: it was quadratic within one glyph).
 //
 // The leak checks (gate.ts checkCopy, drawn.ts's glyphs, the engine's own
 // PDFium reading) do not count the labels' text (leakBreak). A check that
@@ -107,7 +118,7 @@ import { PDFArray, PDFDict, PDFDocument, PDFName, type PDFObject, PDFRawStream, 
 import { decodePDFRawStream } from '@cantoo/pdf-lib';
 import { type Label, isLabel } from './labels.js';
 import type { Box, PageChar } from './match.js';
-import { Document, type LabelReading, type Outline, type Shape, type Unread, pdfium } from './pdfium.js';
+import { Document, type LabelReading, type Outline, type Shape, type Unread, pdfium, showPixel } from './pdfium.js';
 
 /** A label as read from a copy: its text, and its place (the origin PDFium draws it from). */
 export interface PlacedLabel {
@@ -138,10 +149,19 @@ const COVER_MARGIN = 0.1;
 const ON_SHARE = 0.5;
 /** A glyph is seen when this share of its ink or more shows: inside its clips, not drawn over, on what it contrasts with. */
 const SEEN_SHARE = 0.5;
-/** Where a picture, form or shading lies over a glyph or under it, the share of its inner ink box (Page.shows) its text object must change by 3:1 or more, as PDFium draws the page. */
+/**
+ * The least share of a glyph's inner ink box PDFium paints drawing its text object alone (Page.inked), and that its
+ * text objects change by 3:1 or more as PDFium draws the page (Page.shows).
+ */
 const SHOWN_PIXELS = 0.05;
-/** The most text objects a page is drawn without (Page.shows): past them, a glyph that needs it is not seen. */
-const MAX_SHOWS = 24;
+/** The most times a page is drawn without a glyph's text objects (Page.shows): past them, a glyph is not seen. */
+const MAX_SHOWS = 2048;
+/** The most text objects drawn again where a glyph is that a page is drawn without besides its own (Page.shows): past them, it is not seen. */
+const MAX_COPIES = 32;
+/** A glyph smaller than this (its font size, as the page scales it) is not seen: too small to read (fix round 2). */
+const MIN_SEEN_PT = 4;
+/** The alpha a pixel of a text object drawn alone needs to count as solid paint (Page.inked): half of it or more. */
+const SOLID = 128;
 /** The most pieces of what lies under a glyph's ink it is judged on: past them, it is not seen. */
 const MAX_PIECES = 32;
 /** The most work (objects, rectangles and edges looked at) judging one page's glyphs may take: past it, the page is refused. */
@@ -412,9 +432,11 @@ const boundsKey = ({ left, right, bottom, top }: Box): string => `${left},${righ
  * One page's labels, or why they are not the engine's (see the header). `layout`: the rectangles the original draws
  * on this page in the boxes' style (layoutOf); `shapeAt`: what the page's object at a place in its drawing order
  * paints (pdfium.ts Page.shape); `budget`: the most work judging its glyphs may take (MAX_WORK); `shows`: how much of a
- * box a text object changes as PDFium draws the page (Page.shows). Without `shows`, whatever the check cannot read is
- * taken to hide what it may cover. `inked`: how much of a glyph's ink box PDFium paints drawing its text object alone
- * (Page.inked); a glyph seen otherwise is seen only when that is SHOWN_PIXELS or more (without it, not asked).
+ * box a text object, with the others `also` names, changes as PDFium draws the page (Page.shows). Without `shows`,
+ * whatever the check cannot read is taken to hide what it may cover, and the drawing is not asked. `inked`: how much of
+ * a glyph's ink box PDFium paints drawing its text object alone, with alpha `least` or more (Page.inked); a glyph seen
+ * otherwise is seen only when that is SHOWN_PIXELS or more (without it, not asked), and its share painted solid sets
+ * the bar for `shows`.
  */
 export function pageLabels(
   reading: LabelReading,
@@ -422,7 +444,11 @@ export function pageLabels(
   index: number,
   layout: readonly Box[],
   shapeAt: (at: number) => Shape | Unread | null,
-  { budget = MAX_WORK, shows, inked }: { budget?: number; shows?: (object: number, ink: Box) => number | null; inked?: (object: number, ink: Box) => number | null } = {},
+  {
+    budget = MAX_WORK,
+    shows,
+    inked,
+  }: { budget?: number; shows?: (object: number, ink: Box, also: readonly number[]) => number | null; inked?: (object: number, ink: Box, least?: number) => number | null } = {},
 ): PlacedLabel[] | string {
   const where = `page ${index + 1}`;
   const outside = `${where}: a label is drawn outside a box`;
@@ -469,6 +495,15 @@ export function pageLabels(
     return [...near].flatMap((n) => {
       const rule = rules[n] as { at: number; bounds: Box };
       return rule.at < end && overlap(rule.bounds, ink) ? [rule.bounds] : [];
+    });
+  };
+  /** Whether the box's centre lies in a rectangle of the original drawn before `end`. */
+  const centred = (box: Box, end: number): boolean => {
+    const near = index_.around(box);
+    work += near.size;
+    return [...near].some((n) => {
+      const rule = rules[n] as { at: number; bounds: Box };
+      return rule.at < end && centreIn(rule.bounds, box);
     });
   };
   const shapes = new Map<number, Shape | Unread | null>();
@@ -530,14 +565,39 @@ export function pageLabels(
     if (list === undefined) byText.set(c.text, [i]);
     else list.push(i);
   }
-  /** Whether glyph `i` is drawn again where it is, before or after it, and seen there (as Publisher draws a heading twice). */
-  const redrawn = (i: number, ink: Box): boolean => {
+  /**
+   * Whether glyph `i` is drawn again where it is, before or after it, and seen there (as Publisher draws a heading
+   * twice). Each glyph is judged where it is drawn once (seenAt); past the page's budget, it is not seen.
+   */
+  const redrawn = (i: number, ink: Box, page: boolean): boolean => {
     const same = byText.get((chars[i] as PageChar).text) ?? [];
-    work += same.length;
-    return same.some((j) => {
-      const drawnAt = reading.places[j] ?? -1;
-      return again(j, i, ink) && seen(j, (chars[j] as PageChar).ink as Box, drawnAt, drawnAt < 0 ? reading.top.length : drawnAt, reading.owners[j] ?? 0);
-    });
+    for (const j of same) {
+      work += 1;
+      if (work > budget) return false;
+      if (again(j, i, ink) && seenAt(j, page)) return true;
+    }
+    return false;
+  };
+  /**
+   * The text objects, besides glyph `i`'s own, that draw it again where it is (a glyph of the same text over half its
+   * ink or more, PDFium's reading of it or a text object drawn again as it is), so PDFium's drawing of the page without
+   * them all tells whether any of them shows it; null past MAX_COPIES.
+   */
+  const copies = new Map<number, number[] | null>();
+  const copiesOf = (i: number, ink: Box): number[] | null => {
+    if (!copies.has(i)) {
+      const near = inks.around(ink);
+      work += near.size;
+      const found = new Set<number>((reading.twins?.[i] ?? []).map((twin) => twin.object));
+      for (const j of near) {
+        if (!again(j, i, ink)) continue;
+        found.add(reading.owners[j] ?? 0);
+        for (const twin of reading.twins?.[j] ?? []) found.add(twin.object);
+      }
+      found.delete(reading.owners[i] ?? 0);
+      copies.set(i, found.size > MAX_COPIES ? null : [...found]);
+    }
+    return copies.get(i) ?? null;
   };
   let drawings = 0;
   /**
@@ -547,14 +607,12 @@ export function pageLabels(
    * that its paint is under 3:1 against, or that cannot be read (each piece by the most it may cover). `object`: the text
    * object PDFium's drawing of the page is asked about (Page.shows) where a picture, form or shading lies there.
    */
-  const seen = (i: number, ink: Box, drawnAt: number, end: number, object: number, paint = reading.paints[i]): boolean => {
-    if (reading.clipText === true || paint === undefined || !paint.opaque || textOver(i, ink, drawnAt)) return false;
+  const seen = (i: number, ink: Box, drawnAt: number, end: number, object: number, page: boolean, paint = reading.paints[i]): boolean => {
+    if (work > budget || reading.clipText === true || paint === undefined || !paint.opaque || (chars[i] as PageChar).fontSize < MIN_SEEN_PT || textOver(i, ink, drawnAt)) return false;
     let left = (paint.clips ?? []).reduce((least, clip) => Math.min(least, clipShare(clip, ink)), 1);
-    // What the check cannot read on the ink: taken away, or, with PDFium's drawing of the page, asked of that at the end.
-    let unread = false;
+    // What the check cannot read on the ink: taken away, or, with PDFium's drawing of the page, left to that at the end.
     const unknown = (share: number): void => {
       if (shows === undefined) left -= share;
-      else if (share > 0) unread = true;
     };
     for (const box of paint.beside ?? []) unknown(shareIn(box, ink));
     for (let at = end + 1; at < reading.top.length && left >= SEEN_SHARE; at++) {
@@ -594,17 +652,36 @@ export function pageLabels(
       }
     }
     if (pieces > MAX_PIECES) return false;
-    if (!whole && !contrasts(paint.luminance, 1, false)) left -= 1 - shareOf(ink, rects);
+    // The page round what lies under it, for a glyph half on the rectangles or more; one whose centre alone is on them
+    // is judged only on what may hide it (fix round 2), not on the page.
+    if (page && !whole && !contrasts(paint.luminance, 1, false)) left -= 1 - shareOf(ink, rects);
     if (left < SEEN_SHARE) return false;
     // A glyph its font draws nothing for, or a speck: PDFium paints too little of its ink drawing its object alone.
     if (inked !== undefined && (inked(object, ink) ?? 0) < SHOWN_PIXELS) return false;
-    if (!unread || shows === undefined) return true;
-    // A picture, form or shading lies on the ink or under it: seen only where PDFium's drawing of the page shows the
-    // glyph's text object there, 3:1 against the page drawn without it.
-    if (++drawings > MAX_SHOWS) return false;
-    return (shows(object, ink) ?? 0) >= SHOWN_PIXELS;
+    if (shows === undefined) return true;
+    // Seen only where PDFium's drawing of the page shows it (fix round 2: whatever lies there, since what a text object
+    // drawn over it or a pattern paints cannot be read): its text objects, and every other drawing it again there,
+    // change by 3:1 or more at least half as much of its inner ink box as PDFium paints solid drawing it alone, to one
+    // row or column of its pixels (where a cover's edge falls between two of them), and SHOWN_PIXELS at least.
+    const also = copiesOf(i, ink);
+    if (also === null || ++drawings > MAX_SHOWS) return false;
+    work += reading.top.length;
+    const solid = inked === undefined ? 0 : (inked(object, ink, SOLID) ?? 1);
+    return (shows(object, ink, also.filter((other) => other !== object)) ?? 0) >= Math.max(SHOWN_PIXELS, SEEN_SHARE * solid - showPixel(ink));
+  };
+  // Each glyph judged where it is drawn, once: by itself, or when another is judged drawn again where it was.
+  const judged = new Map<string, boolean>();
+  const seenAt = (k: number, page: boolean): boolean => {
+    const key = `${k}:${page}`;
+    if (!judged.has(key)) {
+      const c = chars[k] as PageChar;
+      const drawnAt = reading.places[k] ?? -1;
+      judged.set(key, seen(k, c.ink ?? (c.box as Box), drawnAt, drawnAt < 0 ? reading.top.length : drawnAt, reading.owners[k] ?? 0, page));
+    }
+    return judged.get(key) === true;
   };
   const unseen = `${where}: text nobody can see lies on a black rectangle of the original`;
+  const tooMuch = `${where}: too much is drawn on the black rectangles of the original to check`;
   for (const [i, c] of chars.entries()) {
     const place = c.box ?? c.ink;
     if (c.generated || place === null || /^\s*$/u.test(c.text) || labels.has(reading.owners[i] ?? 0)) continue;
@@ -615,13 +692,18 @@ export function pageLabels(
     // A glyph on rectangles of the original drawn before it (GATE-LAYOUT), ON_SHARE of its ink or more: it must be seen,
     // where it is drawn, or drawn again where it was (a glyph PDFium reads there, judged in its turn, or its text object
     // drawn again as it is, whose glyphs PDFium does not read again, judged where that is drawn).
+    // Or one whose box's centre is in a rectangle of the original drawn before it (fix round 2: develop refused each such
+    // glyph), judged on what may hide it.
     const ink = c.ink ?? place;
     const end = drawnAt < 0 ? reading.top.length : drawnAt;
     const found = under(ink, end);
-    if (found.length > 0 && shareOf(ink, found) >= ON_SHARE) {
-      if (!seen(i, ink, drawnAt, end, reading.owners[i] ?? 0) && !redrawn(i, ink) && !(reading.twins?.[i] ?? []).some((twin) => twin.at > end && seen(i, ink, twin.at, twin.at, twin.object, twin.paint))) return unseen;
+    const on = found.length > 0 && shareOf(ink, found) >= ON_SHARE;
+    if (on || centred(place, end)) {
+      const ok = seenAt(i, on) || redrawn(i, ink, on) || (reading.twins?.[i] ?? []).some((twin) => twin.at > end && seen(i, ink, twin.at, twin.at, twin.object, on, twin.paint));
+      if (work > budget) return tooMuch;
+      if (!ok) return unseen;
     }
-    if (work > budget) return `${where}: too much is drawn on the black rectangles of the original to check`;
+    if (work > budget) return tooMuch;
   }
   return out;
 }
@@ -659,7 +741,7 @@ export async function labelMarks(pdf: Uint8Array, original: Uint8Array): Promise
   try {
     const out: PlacedLabel[][] = [];
     for (let index = 0; index < doc.pageCount; index++) {
-      const found = doc.page(index, (page) => pageLabels(page.labelReading(), page.chars().chars, index, layout[index] ?? [], (at) => page.shape(at), { shows: (object, ink) => page.shows(object, ink), inked: (object, ink) => page.inked(object, ink) }));
+      const found = doc.page(index, (page) => pageLabels(page.labelReading(), page.chars().chars, index, layout[index] ?? [], (at) => page.shape(at), { shows: (object, ink, also) => page.shows(object, ink, also), inked: (object, ink, least) => page.inked(object, ink, least) }));
       if (typeof found === 'string') return found;
       out.push(found);
     }

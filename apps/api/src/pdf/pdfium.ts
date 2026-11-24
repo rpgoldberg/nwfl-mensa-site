@@ -146,6 +146,8 @@ export class Page {
   private readonly alone = new Map<number, { alpha: Uint8Array; width: number; height: number; scale: number; bounds: Box }>();
   /** The pixels drawn so far for Page.inked (at most MAX_INK_PIXELS a page). */
   private inkPixels = 0;
+  /** The last SHOW_CACHE areas drawn for Page.shows, by the objects left out and the area. */
+  private readonly drawn = new Map<string, { whole: Float32Array; without: Float32Array; width: number; height: number }>();
 
   constructor(
     private readonly m: Module,
@@ -477,18 +479,65 @@ export class Page {
   }
 
   /**
-   * How much of a box an object draws, as PDFium renders the page (GATE-LAYOUT fix round 1): the box and SHOW_MARGIN
-   * round it are drawn at SHOW_SCALE with every object, then without `object` (a text object drawn directly on the
-   * page or in a form), and the share of the box's pixels, inside it by SHOW_INSET of its size on each side, whose
-   * luminance the object changes by 3:1 or more (WCAG contrast). Null when the box is too big to draw (MAX_SHOW_PIXELS)
-   * or PDFium cannot make the bitmap.
+   * How much of a box an object draws, as PDFium renders the page (GATE-LAYOUT fix round 1): the page is drawn at
+   * SHOW_SCALE with every object, then without `object` (a text object drawn directly on the page or in a form) and
+   * the objects `also` names (fix round 2: the same text drawn again there, so a copy of it over it does not hide it),
+   * and the share of the box's pixels, inside it by SHOW_INSET of its size on each side, whose luminance they change
+   * by 3:1 or more (WCAG contrast). The area drawn is the object's bounds on the page and SHOW_MARGIN round them, kept
+   * for the next glyph of it (the last SHOW_CACHE), or, past MAX_SHOW_PIXELS, the box and the margin alone. Null when
+   * that too is bigger, or PDFium cannot make the bitmap.
    */
-  shows(object: number, box: Box): number | null {
+  shows(object: number, box: Box, also: readonly number[] = []): number | null {
+    const near = { left: box.left - SHOW_MARGIN, right: box.right + SHOW_MARGIN, bottom: box.bottom - SHOW_MARGIN, top: box.top + SHOW_MARGIN };
+    const pixels = (b: Box): number => Math.ceil((b.right - b.left) * SHOW_SCALE) * Math.ceil((b.top - b.bottom) * SHOW_SCALE);
+    if (!(pixels(near) > 0 && pixels(near) <= MAX_SHOW_PIXELS)) return null;
+    const own = this.placed(object);
+    const round = own === null ? near : { left: Math.min(near.left, own.left - SHOW_MARGIN), right: Math.max(near.right, own.right + SHOW_MARGIN), bottom: Math.min(near.bottom, own.bottom - SHOW_MARGIN), top: Math.max(near.top, own.top + SHOW_MARGIN) };
+    const area = pixels(round) <= MAX_SHOW_PIXELS ? round : near;
+    const key = `${[object, ...also].join(',')}@${area.left},${area.right},${area.bottom},${area.top}`;
+    let drawn = this.drawn.get(key) ?? null;
+    if (drawn === null) {
+      drawn = this.drawWithout([object, ...also], area);
+      if (drawn === null) return null;
+      if (this.drawn.size >= SHOW_CACHE) this.drawn.delete(this.drawn.keys().next().value as string);
+      this.drawn.set(key, drawn);
+    }
+    const { whole, without, width, height } = drawn;
+    const [insetX, insetY] = [(box.right - box.left) * SHOW_INSET, (box.top - box.bottom) * SHOW_INSET];
+    const x0 = Math.max(0, Math.floor((box.left + insetX - area.left) * SHOW_SCALE));
+    const x1 = Math.min(width - 1, Math.ceil((box.right - insetX - area.left) * SHOW_SCALE) - 1);
+    const y0 = Math.max(0, Math.floor((area.top - (box.top - insetY)) * SHOW_SCALE));
+    const y1 = Math.min(height - 1, Math.ceil((area.top - (box.bottom + insetY)) * SHOW_SCALE) - 1);
+    let changed = 0;
+    let all = 0;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const [p = 0, q = 0] = [whole[y * width + x], without[y * width + x]];
+        all += 1;
+        if ((Math.max(p, q) + 0.05) / (Math.min(p, q) + 0.05) >= 3) changed += 1;
+      }
+    }
+    return all === 0 ? 0 : changed / all;
+  }
+
+  /** A text object's bounds on the page (through its form's matrix when it is in one), or null when PDFium gives none. */
+  private placed(object: number): Box | null {
     const m = this.m;
-    const area = { left: box.left - SHOW_MARGIN, right: box.right + SHOW_MARGIN, bottom: box.bottom - SHOW_MARGIN, top: box.top + SHOW_MARGIN };
+    const at = rt(m).wasmExports.malloc(16);
+    try {
+      if (!m.FPDFPageObj_GetBounds(object, at, at + 4, at + 8, at + 12)) return null;
+      const [left = 0, bottom = 0, right = 0, top = 0] = new Float32Array(rt(m).HEAPU8.buffer, at, 4);
+      return transformed({ left, bottom, right, top }, this.formMatrix.get(object) ?? IDENTITY);
+    } finally {
+      rt(m).wasmExports.free(at);
+    }
+  }
+
+  /** The page's area drawn at SHOW_SCALE (each pixel's luminance, a row at a time, y down) with every object, and without these; null when PDFium cannot. */
+  private drawWithout(objects: readonly number[], area: Box): { whole: Float32Array; without: Float32Array; width: number; height: number } | null {
+    const m = this.m;
     const width = Math.ceil((area.right - area.left) * SHOW_SCALE);
     const height = Math.ceil((area.top - area.bottom) * SHOW_SCALE);
-    if (!(width > 0 && height > 0 && width * height <= MAX_SHOW_PIXELS)) return null;
     const at = rt(m).wasmExports.malloc(64);
     try {
       // PDFium draws page points through the page's display matrix (to a device of the page's size in points), then
@@ -534,29 +583,14 @@ export class Page {
         }
       };
       const whole = render();
-      m.FPDFPageObj_SetIsActive(object, false);
+      for (const object of objects) m.FPDFPageObj_SetIsActive(object, false);
       let without: Float32Array | null;
       try {
         without = render();
       } finally {
-        m.FPDFPageObj_SetIsActive(object, true);
+        for (const object of objects) m.FPDFPageObj_SetIsActive(object, true);
       }
-      if (whole === null || without === null) return null;
-      const [insetX, insetY] = [(box.right - box.left) * SHOW_INSET, (box.top - box.bottom) * SHOW_INSET];
-      const x0 = Math.max(0, Math.floor((box.left + insetX - area.left) * SHOW_SCALE));
-      const x1 = Math.min(width - 1, Math.ceil((box.right - insetX - area.left) * SHOW_SCALE) - 1);
-      const y0 = Math.max(0, Math.floor((area.top - (box.top - insetY)) * SHOW_SCALE));
-      const y1 = Math.min(height - 1, Math.ceil((area.top - (box.bottom + insetY)) * SHOW_SCALE) - 1);
-      let changed = 0;
-      let all = 0;
-      for (let y = y0; y <= y1; y++) {
-        for (let x = x0; x <= x1; x++) {
-          const [p = 0, q = 0] = [whole[y * width + x], without[y * width + x]];
-          all += 1;
-          if ((Math.max(p, q) + 0.05) / (Math.min(p, q) + 0.05) >= 3) changed += 1;
-        }
-      }
-      return all === 0 ? 0 : changed / all;
+      return whole === null || without === null ? null : { whole, without, width, height };
     } finally {
       rt(m).wasmExports.free(at);
     }
@@ -600,10 +634,11 @@ export class Page {
    * of its size on each side (else the one at its centre), with any paint at all. A glyph a font draws nothing for
    * (a glyph name PDFium finds no glyph by, a space a /ToUnicode reads as a letter) paints none. The box is in page
    * points; a text object in a form is drawn in the form's space, so the box is carried there (labelReading has read
-   * the form's matrix). Null when PDFium cannot draw it, the page's text objects have taken MAX_INK_PIXELS, or its
+   * the form's matrix). `least`: the alpha (1 to 255) a pixel needs to count as painted (fix round 2: 128, for half of
+   * it or more). Null when PDFium cannot draw it, the page's text objects have taken MAX_INK_PIXELS, or its
    * matrix cannot be undone.
    */
-  inked(object: number, ink: Box): number | null {
+  inked(object: number, ink: Box, least = 1): number | null {
     let alone = this.alone.get(object) ?? null;
     if (alone === null) {
       alone = this.drawnAlone(object);
@@ -632,7 +667,7 @@ export class Page {
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         all += 1;
-        if (x >= 0 && x < width && y >= 0 && y < height && (alpha[y * width + x] as number) > 0) painted += 1;
+        if (x >= 0 && x < width && y >= 0 && y < height && (alpha[y * width + x] as number) >= least) painted += 1;
       }
     }
     return painted / all;
@@ -869,9 +904,11 @@ const SHOW_SCALE = 4;
 const SHOW_MARGIN = 1;
 /** The most pixels that drawing may take: a bigger box is not drawn. */
 const MAX_SHOW_PIXELS = 1_000_000;
-/** How far inside a glyph's ink box, by its size on each side, its pixels are looked at: off the next glyph's ink. */
+/** The most areas drawn for Page.shows kept at once, the oldest let go first. */
+const SHOW_CACHE = 4;
 /** The most places a text object drawn again as it is is looked for after it (LabelReading.twins). */
 const MAX_TWINS = 8;
+/** How far inside a glyph's ink box, by its size on each side, its pixels are looked at: off the next glyph's ink. */
 const SHOW_INSET = 0.15;
 /** The scale a Type 3 font's text object is drawn at alone to read the colour its glyphs paint in (Page.labelReading). */
 const RENDER_SCALE = 2;
@@ -885,6 +922,15 @@ const INK_SCALE = 4;
 const INK_CACHE = 8;
 /** The most pixels a page's text objects may be drawn alone at between them (Page.inked): past it, none is drawn. */
 const MAX_INK_PIXELS = 64_000_000;
+
+/**
+ * The share of a box's inner pixels (inside it by SHOW_INSET on each side, at SHOW_SCALE: Page.shows, Page.inked) that
+ * one row or one column of them makes, the larger: how finely those shares are read (one, when under a pixel).
+ */
+export function showPixel(box: Box): number {
+  const side = Math.min(box.right - box.left, box.top - box.bottom) * (1 - 2 * SHOW_INSET) * SHOW_SCALE;
+  return side > 1 ? 1 / side : 1;
+}
 
 /** The WCAG relative luminance (0 black to 1 white) of an sRGB colour, each channel 0 to 255. */
 export function luminance(r: number, g: number, b: number): number {

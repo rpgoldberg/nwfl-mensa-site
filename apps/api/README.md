@@ -491,16 +491,21 @@ newsletter's own layout (a calendar's header cell, a rule), not a box, one
 for one (GATE-LAYOUT): the gate opens the original itself and flattens each
 page as the engine does. Text nobody can see on such a rectangle refuses
 the copy (`rules`), as before GATE-LAYOUT all text on it did: a glyph half
-or more on such rectangles must be painted opaque (a Type 3 glyph in the
-one colour PDFium paints it), not lie under another glyph drawn after it,
-and show over at least half its ink once its clips, whatever is drawn after
-it and whatever under it is under 3:1 against its paint are taken away;
-where a picture, form or shading lies on it or under it, PDFium's drawing of
-the page must also show it. A stroke's mitred corner is taken to reach as
-far as its angle lets (PDFium gives no miter limit); PDFium, drawing the
-glyph's text object alone, must paint 5 % or more of its ink box (a glyph its
-font draws nothing for is not seen); and on a page that draws text as a clip
-no glyph on such a rectangle is seen. A glyph not seen where it is drawn passes only
+or more on such rectangles, or whose box's centre is on one, must be
+painted opaque (a Type 3 glyph in the one colour PDFium paints it), be
+4 pt or more, not lie under another glyph drawn after it, and show over at
+least half its ink once its clips, whatever is drawn after it and (for one
+half on the rectangles or more) whatever under it is under 3:1 against its
+paint are taken away. PDFium's drawing of the page must also show it:
+without its text object and every other drawing the same text there, at
+least half as much of its inner ink box must change by 3:1 as PDFium
+paints solid drawing it alone (to a pixel row), and 5 % at least, so a
+text object drawn over it or a pattern fill, whose paint is not read,
+cannot hide it. A stroke's mitred corner is taken to reach as far as its
+angle lets (PDFium gives no miter limit); PDFium, drawing the glyph's text
+object alone, must paint 5 % or more of its ink box (a glyph its font draws
+nothing for is not seen); and on a page that draws text as a clip no glyph
+on such a rectangle is seen. A glyph not seen where it is drawn passes only
 when the same glyph drawn again there is seen. An original that cannot be
 opened refuses the
 copy too; `ENGINE_VERSION` gained `+layout-2`, so files refused before for
