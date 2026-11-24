@@ -455,5 +455,28 @@ describe.skipIf(!live)('OFFICER-VERIFY fix round 3: a confirmed check for every 
       expect(await kindOf(guest.sub)).toBe('guest');
       expect((await mine(guest.token)).officerCheck).toBe(OfficerCheck.NEEDS_GRANT);
     });
+
+    // Switched off again (the switch turned back after a check was held): the API answers as develop does, so a
+    // decided sign-up stays decided, whatever an earlier run with the switch on left waiting.
+    it('is left alone while switched off: not listed, and neither confirmed nor declined', async () => {
+      const off = await startApi('nwfl_ovr_off_held', { verifier });
+      try {
+        await seedAccount(off.pool, { sub: 'sub-ovr-approver', route: 'invite', check: { localGroup: CHAPTER } });
+        await seedAccount(off.pool, { sub: 'sub-ovr-held', check: { localGroup: CHAPTER, firstNameMatched: false } });
+        const { rows } = await off.pool.query<{ id: string }>(
+          `UPDATE signup_request SET recheck_outcome = 'email_mismatch', recheck_first_name_matched = true, recheck_local_group = $1 WHERE sub = 'sub-ovr-held' RETURNING id`,
+          [CHAPTER],
+        );
+        const id = (rows[0] as { id: string }).id;
+        const offM = () => off.client(MembershipService);
+        expect((await offM().listSignupRequests({}, as('approver'))).requests.map((r) => r.requestId)).not.toContain(id);
+        expect(await code(offM().approveSignup({ requestId: id, confirmedWarning: true }, as('approver')))).toBe('FailedPrecondition');
+        expect(await code(offM().rejectSignup({ requestId: id }, as('approver')))).toBe('FailedPrecondition');
+        const after = (await off.pool.query<{ verification: string; first_name_matched: boolean | null; recheck_outcome: string | null }>(`SELECT verification, first_name_matched, recheck_outcome FROM signup_request WHERE id = $1`, [id])).rows[0];
+        expect(after).toEqual({ verification: 'verified_local', first_name_matched: false, recheck_outcome: 'email_mismatch' });
+      } finally {
+        await off.close();
+      }
+    });
   });
 });
