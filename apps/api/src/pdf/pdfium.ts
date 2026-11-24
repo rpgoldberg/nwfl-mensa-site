@@ -588,10 +588,13 @@ export class Page {
       // after a text object), and each glyph's object.
       const owners: number[] = [];
       const written = new Map<number, string>();
+      // Each text object PDFium reads a glyph of.
+      const read = new Set<number>();
       for (let i = 0; i < m.FPDFText_CountChars(text); i++) {
         const owner = m.FPDFText_GetTextObject(text, i);
         owners.push(owner);
         if (m.FPDFText_IsGenerated(text, i) === 1) continue;
+        read.add(owner);
         const code = m.FPDFText_GetUnicode(text, i);
         const sofar = written.get(owner) ?? '';
         if (sofar.length <= 16) written.set(owner, sofar + (code > 0x10ffff ? '\ufffd' : String.fromCodePoint(code)));
@@ -718,8 +721,8 @@ export class Page {
       // is drawn with the same bounds, font, size, matrix, mode and fill. Its own paint (its clips among it) is its own.
       const signature = (object: number): string =>
         JSON.stringify([bounds(object), m.FPDFTextObj_GetFont(object), fontSize(object), matrix(object), m.FPDFTextObj_GetTextRenderMode(object), filled(object)]);
-      /** Whether PDFium reads no glyph of a text object of its own. */
-      const bare = (object: number): boolean => m.FPDFTextObj_GetText(object, text, 0, 0) <= 2;
+      /** Whether PDFium reads no glyph of a text object of its own (from the page's reading: FPDFTextObj_GetText reads the page's every glyph for each object). */
+      const bare = (object: number): boolean => !read.has(object);
       // Each list holds the MAX_TWINS nearest after it (lists are shared, so a page of many costs no more than that).
       const twinsOf = new Map<number, Twin[]>();
       const later = new Map<string, Twin[]>();

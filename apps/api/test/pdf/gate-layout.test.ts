@@ -13,6 +13,7 @@ import type { Box, PageChar } from '../../src/pdf/match.js';
 import { Document, type LabelReading, type Paint, type Shape, type Twin, type Unread, luminance, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { type PageOptions, askLine, fitPdf } from './fit-fixtures.js';
+import { manyShows } from './hostile.js';
 
 const OTHER = (page = 1): string => `page ${page}: text other than its label is in a box`;
 const OUTSIDE = 'page 1: a label is drawn outside a box';
@@ -153,6 +154,17 @@ describe('a black rectangle the original draws is layout, not a box', () => {
       expect(twins.reduce((most, list) => Math.max(most, list.length), 0)).toBe(8);
     } finally {
       doc.close();
+    }
+    // 20,000 text objects, each read: telling which PDFium reads no glyph of takes no time to speak of (one object at a
+    // time, PDFium reads the page's every glyph for each: 5.6 s).
+    const shows = Document.open(await pdfium(), manyShows(20_000));
+    if (shows === null) throw new Error('fixture did not open');
+    try {
+      const started = performance.now();
+      shows.page(0, (p) => p.labelReading());
+      expect(performance.now() - started).toBeLessThan(2000);
+    } finally {
+      shows.close();
     }
   }, 120_000);
 
