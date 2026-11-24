@@ -7,7 +7,9 @@
 //     site      a user. Officers by the officers group in the token (its
 //               <SITE_GROUP_PREFIX>officers, carried as nwfl-officers: groups.ts);
 //               members by member_account (AC6 b: the database, not the
-//               token, which a 30-day session can leave stale).
+//               token, which a 30-day session can leave stale). A guest
+//               member (standing-policy.ts) reads as the public, but events
+//               as a member (eventsAudience, read by EventService alone).
 //     agent     the newsletter agent (audience members: it builds the issue
 //               members receive).
 //     verifier  the membership verifier (audience public).
@@ -15,6 +17,20 @@
 //               addresses from officers-only items and members-only
 //               passages, never their text). No groups, whatever its token
 //               carries.
+//   OFFICER-VERIFY (switch OFFICER_VERIFY=on): an officer power needs member
+//               standing as well as its group. A holder without standing
+//               keeps only the groups that carry no power (groups.ts
+//               withholdPower) and reads by its standing (standing-policy.ts:
+//               chapter and affiliate hold powers, and each is a standing
+//               whose membership check confirmed number, last name and first
+//               name; a guest by the one guest policy; a partly checked,
+//               unconfirmed or absent standing never); the powers ride apart
+//               in `withheld`, read only for the sign-up route and
+//               GetMyAccount. This is the ONE gate: every role check
+//               (roles.ts) and every SQL function handed caller.groups (0014,
+//               0015, 0016, 0020, 0023) sees no power. Off (the default),
+//               everything is as before: the groups pass, and any standing
+//               reads at member level, events too (no guest policy).
 //   anything else                -> UNAUTHENTICATED, never a quiet downgrade
 //   a subject starting system:   -> UNAUTHENTICATED: the database trusts the issue
 //                                   loader's subject (system:issue-loader, 0029), and
@@ -40,7 +56,8 @@
 // on their own, and the mesh policy is the first line.
 // ============================================================================
 import { Code, ConnectError, type ContextValues, type Interceptor, createContextKey } from '@connectrpc/connect';
-import { DEFAULT_SITE_GROUP_PREFIX, internalGroups } from './groups.js';
+import { DEFAULT_SITE_GROUP_PREFIX, internalGroups, withholdPower } from './groups.js';
+import { type StandingKind, holdsOfficerPower, readsAsMember, readsEventsAsMember } from './standing-policy.js';
 
 export type Audience = 'public' | 'members' | 'officers';
 export type ClientKind = 'site' | 'agent' | 'verifier' | 'linkcheck';
@@ -61,9 +78,9 @@ export interface TokenVerifier {
   verify(token: string): Promise<VerifiedToken>;
 }
 
-/** Whether a subject's member_account gives member-level reading. */
+/** A subject's standing from member_account (standing.ts); what each kind allows is standing-policy.ts. */
 export interface MemberStanding {
-  isMember(subject: string): Promise<boolean>;
+  standingOf(subject: string): Promise<StandingKind>;
 }
 
 export interface Caller {
@@ -71,8 +88,12 @@ export interface Caller {
   subject: string | null;
   /** The token's groups under the chapter's prefix, by their internal nwfl- names (groups.ts); empty for machine callers. */
   groups: readonly string[];
+  /** OFFICER-VERIFY: the power groups withheld for want of member standing; absent when none are. */
+  withheld?: readonly string[];
   scopes: readonly string[];
   audience: Audience;
+  /** OFFICER-VERIFY: the audience for events, when it differs from `audience` (a guest member: standing-policy.ts). */
+  eventsAudience?: Audience;
   /** A site user's name and email, as their token carries them; never a machine caller's. */
   name?: string;
   email?: string;
@@ -112,7 +133,7 @@ export const rejectAllTokens: TokenVerifier = {
   verify: () => Promise.reject(new ConnectError('token verification is not configured', Code.Unauthenticated)),
 };
 
-export const noStanding: MemberStanding = { isMember: () => Promise.resolve(false) };
+export const noStanding: MemberStanding = { standingOf: () => Promise.resolve('none') };
 
 /** The prefix of the subjects the API writes as itself (load.ts LOADER); never a token's. */
 export const SYSTEM_SUBJECT = 'system:';
@@ -129,9 +150,11 @@ export interface AuthOptions {
   edgeClientIds?: readonly string[];
   /** The chapter's group prefix (SITE_GROUP_PREFIX, groups.ts); default nwfl-. */
   groupPrefix?: string;
+  /** OFFICER_VERIFY (auth/config.ts): whether an officer power needs member standing too; default off. */
+  officerVerify?: boolean;
 }
 
-async function establish(header: string | null, verifier: TokenVerifier, standing: MemberStanding, groupPrefix: string): Promise<Caller> {
+async function establish(header: string | null, verifier: TokenVerifier, standing: MemberStanding, groupPrefix: string, officerVerify: boolean): Promise<Caller> {
   if (header === null) return ANONYMOUS;
   const token = BEARER.exec(header)?.[1];
   if (token === undefined) throw new ConnectError('malformed authorization header', Code.Unauthenticated);
@@ -148,14 +171,21 @@ async function establish(header: string | null, verifier: TokenVerifier, standin
   if (verified.client === 'agent') return { kind: 'agent', subject: verified.subject, groups: [], scopes, audience: 'members' };
   if (verified.client === 'verifier') return { kind: 'verifier', subject: verified.subject, groups: [], scopes, audience: 'public' };
   if (verified.client === 'linkcheck') return { kind: 'linkcheck', subject: verified.subject, groups: [], scopes, audience: 'officers' };
-  const groups = internalGroups(verified.groups, groupPrefix);
-  const member = await standing.isMember(verified.subject);
+  const kind = await standing.standingOf(verified.subject);
+  // Switched off, as before: any standing reads at member level (there is no guest), and no power waits.
+  const member = officerVerify ? readsAsMember(kind) : kind !== 'none';
+  const all = internalGroups(verified.groups, groupPrefix);
+  const { kept: groups, withheld } = officerVerify && !holdsOfficerPower(kind) ? withholdPower(all) : { kept: all, withheld: [] };
+  const audience = audienceFor(groups, member);
+  const eventsAudience = officerVerify ? audienceFor(groups, readsEventsAsMember(kind)) : audience;
   return {
     kind: 'user',
     subject: verified.subject,
     groups,
+    ...(withheld.length > 0 ? { withheld } : {}),
     scopes,
-    audience: audienceFor(groups, member),
+    audience,
+    ...(eventsAudience !== audience ? { eventsAudience } : {}),
     ...(verified.name !== undefined ? { name: verified.name } : {}),
     ...(verified.email !== undefined ? { email: verified.email } : {}),
   };
@@ -175,6 +205,7 @@ export function authInterceptor(options: AuthOptions): Interceptor {
   const standing = options.standing ?? noStanding;
   const edge = new Set(options.edgeClientIds ?? DEFAULT_EDGE_CLIENT_IDS);
   const groupPrefix = options.groupPrefix ?? DEFAULT_SITE_GROUP_PREFIX;
+  const officerVerify = options.officerVerify === true;
   return (next) => async (req) => {
     const service = req.service.typeName;
     const peer = req.header.get('l5d-client-id');
@@ -182,7 +213,7 @@ export function authInterceptor(options: AuthOptions): Interceptor {
     if (peer !== null && (peer.includes(',') || (isEdgePeer(peer, edge) && !EDGE_SERVICES.has(service)))) {
       throw new ConnectError('not served on this path', Code.PermissionDenied);
     }
-    const caller = await establish(req.header.get('authorization'), options.verifier, standing, groupPrefix);
+    const caller = await establish(req.header.get('authorization'), options.verifier, standing, groupPrefix, officerVerify);
     admit(service, caller);
     req.contextValues.set(CALLER, caller);
     return next(req);

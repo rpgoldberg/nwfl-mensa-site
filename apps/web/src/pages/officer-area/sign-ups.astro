@@ -5,9 +5,18 @@
 // membership check's outcome and day. A duplicate claim also shows what the earlier claim typed, so the
 // approver can compare (none for a claim since closed, VET fix 1). Approve, or Reject after a
 // confirmation step (only the Admin or the Membership Officer can reopen it, below). No one decides
-// their own sign-up: the API refuses it, and the page says so. A sign-up the
-// check found in another local group is not approved as a member (R33): it has no Approve button,
-// and the API refuses it too. Each decision goes to the API with the approver's own token
+// their own sign-up: the API refuses it, and the page says so. A sign-up the check found in another
+// local group is not approved as a member (R33): it has no Approve button, and the API refuses it too.
+// OFFICER-VERIFY, switched on in the API, which then says for each sign-up what an approver may do by
+// hand (handApproval, the rule ApproveSignup holds to; approvableByHand and approvalNote here): a sign-up
+// the check found in another local group (or none) is approved as a guest member (Ross 11-23), and its
+// card says so (GUEST_APPROVAL); an invited sign-up (an officer's among them) has an Approve button only
+// once the check confirmed its number and names (the orchestrator's ruling B), otherwise its card says
+// to reject it (INVITE_UNCONFIRMED). Each card also shows what the check said of the first name and the
+// local group, a group name the site does not know flagged in words (checkFacts).
+// WEB-SMALL-1: after a decision the page lands on ?done=<outcome>&request=<id>, and shows its banner
+// only when the API says that sign-up really is so (GetSignupRequest); a missing, malformed, unknown
+// or foreign id, or the API down, shows none. Each decision goes to the API with the approver's own token
 // (src/lib/api/membership.ts), which alone decides who may.
 //
 // VET: an email the membership verification service did not confirm, or a number another account
@@ -51,12 +60,19 @@ import { readForm } from '../../lib/form';
 import {
   DECISION_REFUSED,
   type DecisionForm,
+  INVITE_UNCONFIRMED,
+  approvableByHand,
+  approvalNote,
+  bannerShown,
+  checkFacts,
   checkText,
   checkWarning,
   confirmText,
   decisionRefusal,
   doneFromQuery,
+  donePath,
   doneText,
+  freshCheckOf,
   isMembershipApprover,
   isSignupReopener,
   parseDecisionForm,
@@ -111,7 +127,7 @@ if (Astro.request.method === 'POST') {
       if (decision === 'approve') await api.approveSignup(reader, requestId, { confirmedWarning: parsed.value.confirmed });
       else if (decision === 'reject') await api.rejectSignup(reader, requestId);
       else await api.reopenSignup(reader, requestId);
-      return Astro.redirect(`${HERE}?done=${decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'reopened'}`, 303);
+      return Astro.redirect(donePath(HERE, decision === 'approve' ? 'approved' : decision === 'reject' ? 'rejected' : 'reopened', requestId), 303);
     } catch (error) {
       if (error instanceof DecisionRefused) {
         refusedBy = { reason: error.reason, form: parsed.value };
@@ -151,7 +167,9 @@ if (problem === 'unavailable') markUnavailable(Astro.response);
 const refused: { reason: keyof typeof DECISION_REFUSED; reopen: boolean } | undefined =
   refusedBy && { reason: decisionRefusal(refusedBy.reason, refusedBy.form, requests), reopen: refusedBy.form.decision === 'reopen' };
 
-const done = Astro.request.method === 'GET' ? doneFromQuery(Astro.url.searchParams) : undefined;
+// WEB-SMALL-1: the banner only when the named sign-up's real state is the one named.
+const named = Astro.request.method === 'GET' ? doneFromQuery(Astro.url.searchParams) : undefined;
+const done = named !== undefined && api !== undefined && reader !== undefined && bannerShown(named.done, await api.getSignupDecision(reader, named.requestId)) ? named.done : undefined;
 const confirmed = confirming?.decision === 'reject' ? requests?.find((r) => r.requestId === confirming.requestId) : undefined;
 const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.requestId === confirming.requestId) : undefined;
 ---
@@ -186,9 +204,9 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
     </section>
   ) : confirmed ? (
     <section class="card" aria-labelledby="confirm-title">
-      <h2 id="confirm-title">Reject this sign-up?</h2>
+      <h2 id="confirm-title">{freshCheckOf(confirmed) ? 'Reject this new check?' : 'Reject this sign-up?'}</h2>
       <p>{confirmed.displayName} ({confirmed.email}).</p>
-      <p><b>A rejected sign-up is removed from the queue. Only the Admin or the Membership Officer can reopen it, so the person can sign up again.</b></p>
+      <p><b>{freshCheckOf(confirmed)?.reject ?? 'A rejected sign-up is removed from the queue. Only the Admin or the Membership Officer can reopen it, so the person can sign up again.'}</b></p>
       <form method="post" action={HERE}>
         <input type="hidden" name="decision" value="reject" />
         <input type="hidden" name="request" value={confirmed.requestId} />
@@ -205,18 +223,21 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
     ) : (
       <>
         <p>{requests.length === 1 ? 'One sign-up is waiting.' : `${requests.length} sign-ups are waiting.`}</p>
-        {requests.map((r, i) => { const warning = checkWarning(r); const confirm = confirmText(r.verification); return (
+        {requests.map((r, i) => { const warning = checkWarning(r); const confirm = confirmText(r.verification); const note = approvalNote(r); const fresh = freshCheckOf(r); return (
           <section class="card signup-card" aria-labelledby={`signup-${i}`}>
             <div class="signup-who">
               <h2 id={`signup-${i}`}>{r.displayName}</h2>
               <p>{r.email}</p>
             </div>
             <dl class="facts facts--grid">
-              {pendingFacts(r).map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
+              {[...pendingFacts(r), ...checkFacts(r)].map(([label, value]) => <div><dt>{label}</dt><dd>{value}</dd></div>)}
               <div class="facts__wide"><dt>Membership check</dt><dd>{checkText(r.verification, r.verifiedOn)}</dd></div>
             </dl>
-            {r.verification === 'verified_other_group' && (
-              <p>This person is a member of another local group, so the sign-up cannot be approved as a member here. Reject it, or ask the Admin or the Webmaster about affiliate access.</p>
+            {fresh && <p class="notice" role="note"><strong>A new check:</strong> {fresh.note}</p>}
+            {note === INVITE_UNCONFIRMED ? (
+              <p class="notice" role="note" id={`signup-unconfirmed-${i}`}><strong>Cannot be approved yet:</strong> {note}</p>
+            ) : (
+              note !== undefined && <p>{note}</p>
             )}
             {warning && <p class="notice" role="note" id={`signup-warning-${i}`}><strong>Before approving:</strong> {warning}</p>}
             {r.earlierClaim && !r.earlierClaim.closed && typedFacts(r.earlierClaim).length > 0 && (
@@ -228,14 +249,14 @@ const reopening = confirming?.decision === 'reopen' ? rejected?.find((r) => r.re
               </section>
             )}
             <div class="signup-decide">
-              {confirm && (
+              {confirm && approvableByHand(r) && (
                 <div class="choice confirm-warning">
                   <input type="checkbox" id={`signup-confirm-${i}`} form={`signup-approve-${i}`} name="confirmed" value="yes" required aria-describedby={`signup-warning-${i}`} />
                   <label for={`signup-confirm-${i}`}>{confirm}</label>
                 </div>
               )}
               <div class="btns">
-                {r.verification !== 'verified_other_group' && (
+                {approvableByHand(r) && (
                   <form method="post" action={HERE} id={`signup-approve-${i}`}>
                     <input type="hidden" name="decision" value="approve" />
                     <input type="hidden" name="request" value={r.requestId} />

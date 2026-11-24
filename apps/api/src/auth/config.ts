@@ -29,11 +29,23 @@
 //                          nwfl-; e.g. mensa-nwfl-): <prefix>officers is read
 //                          as the internal nwfl-officers (groups.ts). A bad
 //                          one refuses to start
+//   OFFICER_VERIFY         on or off (default off; unset or empty is off):
+//                          on, an officer power needs member standing too
+//                          (OFFICER-VERIFY, caller.ts), with every other rule
+//                          of OFFICER-VERIFY; off, the site is as before. Any
+//                          other value refuses to start
+//   CHAPTER_GROUP_NAME     read only when OFFICER_VERIFY is on, and then
+//                          needed: the chapter's own local group, exactly as
+//                          the membership records name it (e.g. Northwest
+//                          Florida Mensa; membership/local-groups.ts). Unset,
+//                          blank or any other name then refuses to start.
+//                          Off, it is ignored, whatever it says
 //
 // The scope and subject defaults follow the plan's names; the real values come
 // from the Authentik blueprint (I4) and are set here when they differ.
 // ============================================================================
 import { type JWTVerifyGetKey, createRemoteJWKSet } from 'jose';
+import { LOCAL_GROUPS, NO_GROUP } from '../membership/local-groups.js';
 import { type ClientKind, DEFAULT_EDGE_CLIENT_IDS, type TokenVerifier, rejectAllTokens } from './caller.js';
 import { parseGroupPrefix } from './groups.js';
 import { type ClientConfig, createJwtVerifier } from './jwt.js';
@@ -55,6 +67,18 @@ export interface AuthConfig {
   edgeClientIds: readonly string[];
   /** SITE_GROUP_PREFIX (groups.ts). */
   groupPrefix: string;
+  /** OFFICER_VERIFY: on, with the chapter's own local group (CHAPTER_GROUP_NAME); null when off. */
+  officerVerify: OfficerVerify | null;
+}
+
+/**
+ * OFFICER-VERIFY switched on (OFFICER_VERIFY=on): an officer power needs member standing too (caller.ts
+ * establish), and every other rule of the unit applies. It carries the chapter's own local group, which
+ * tells a chapter member from a guest when a standing is read, so the switch is never on without it.
+ * Off is null everywhere: then nothing of OFFICER-VERIFY applies and no chapter group is in use.
+ */
+export interface OfficerVerify {
+  readonly chapterGroup: string;
 }
 
 const DEFAULTS: Record<ClientKind, { prefix: string; audience: string; scope?: string; subject?: string }> = {
@@ -121,7 +145,31 @@ export function readAuthConfig(env: Env): AuthConfig {
       throw new Error(`EDGE_CLIENT_IDS: ${id} is not an edge identity (<service account>.nwfl-edge.serviceaccount.identity.linkerd.<trust domain>)`);
     }
   }
-  return { clients, edgeClientIds, groupPrefix: parseGroupPrefix(env['SITE_GROUP_PREFIX']) };
+  // OFFICER-VERIFY: switched off, CHAPTER_GROUP_NAME is not read at all (fix round 1: off is as before).
+  const officerVerify = officerVerifyOf(env['OFFICER_VERIFY']) ? { chapterGroup: chapterGroupOf(env['CHAPTER_GROUP_NAME']) } : null;
+  return { clients, edgeClientIds, groupPrefix: parseGroupPrefix(env['SITE_GROUP_PREFIX']), officerVerify };
+}
+
+/**
+ * CHAPTER_GROUP_NAME, with OFFICER_VERIFY on: the chapter's own local group, trimmed, which must be one of
+ * the known local groups (and not "No group assigned"): a typo would make every member a guest, and none
+ * would leave no officer a chapter member.
+ */
+function chapterGroupOf(value: string | undefined): string {
+  const name = value?.trim() ?? '';
+  if (name === '') throw new Error('CHAPTER_GROUP_NAME must be set when OFFICER_VERIFY is on');
+  if (!LOCAL_GROUPS.has(name) || name === NO_GROUP) throw new Error('CHAPTER_GROUP_NAME must be one of the local group names (membership/local-groups.ts), e.g. Northwest Florida Mensa');
+  return name;
+}
+
+/**
+ * OFFICER_VERIFY, read once at startup: on, or off (unset and empty are off, the default, so the change
+ * rolls dark). Any other value refuses to start: a typo must never leave an operator believing it is on.
+ */
+function officerVerifyOf(value: string | undefined): boolean {
+  if (value === undefined || value === '' || value === 'off') return false;
+  if (value === 'on') return true;
+  throw new Error('OFFICER_VERIFY must be on or off (unset is off)');
 }
 
 /** A remote, cached key set per client (jose's defaults: 5 s timeout, 10 min cache, 30 s cooldown). */
