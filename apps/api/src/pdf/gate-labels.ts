@@ -61,6 +61,11 @@
 // then seen only if, besides, PDFium's drawing of the page shows its text
 // object there (pdfium.ts Page.shows: 5 % or more of
 // the ink box changes by 3:1 without it), for at most 24 text objects a page.
+// Fix round 1b: a stroke's mitred corner may reach as far as its angle lets
+// (PDFium gives no miter limit); a glyph is seen only when PDFium, drawing
+// its text object alone, paints 5 % or more of its ink box (a glyph a font
+// draws nothing for is not seen); and on a page that draws text as a clip
+// (whose text PDFium does not give) no glyph on a rectangle is seen.
 // A glyph not seen where it is drawn passes when the same glyph is drawn
 // again where it is (the same text over half its ink or more, before or
 // after it) and is seen there, as Publisher draws a heading twice; and a text
@@ -225,10 +230,50 @@ const holdsInk = (shape: Shape, ink: Box): boolean => shape.luminance !== null &
 /** Whether a shape's fill may paint on a glyph's ink: it, and every clip on it, may. */
 const fillMayPaint = (shape: Shape, ink: Box): boolean => shape.luminance !== null && mayPaint(shape.outline, ink) && shape.clips.every((clip) => mayPaint(clip, ink));
 
+/** How far past its corner, in widths, a mitre may reach that is not taken apart (a miter of the default limit, 10). */
+const MITRE_WIDTHS = 5;
+
+/**
+ * Each corner of a shape's mitred stroke sharper than a mitre of MITRE_WIDTHS reaches, as the most its mitre may paint
+ * (GATE-LAYOUT fix round 1b): PDFium gives no miter limit, and one raised in the file draws a sharp corner's mitre
+ * as far as its angle lets, half the width over the sine of half the angle. That is the kite from the corner out
+ * to the mitre's tip, through the stroke's two outer edges there. A corner is a point of a subpath between two
+ * others (its own repeats left out), and the first of a closed one (unknown: taken as closed); a subpath turned
+ * straight back on itself is bevelled (PDFium draws no mitre there).
+ */
+const mitres = (shape: Shape, width: number): Outline => {
+  const out: Outline = [];
+  for (const [k, raw] of shape.outline.entries()) {
+    const ring = raw.filter(([x, y], i) => i === 0 || x !== raw[i - 1]?.[0] || y !== raw[i - 1]?.[1]);
+    const closed = shape.closed?.[k] ?? true;
+    if (closed && ring.length > 1 && ring[0]?.[0] === ring.at(-1)?.[0] && ring[0]?.[1] === ring.at(-1)?.[1]) ring.pop();
+    for (const [i, [vx, vy]] of ring.entries()) {
+      if (!closed && (i === 0 || i === ring.length - 1)) continue;
+      const [px, py] = ring[(i + ring.length - 1) % ring.length] as [number, number];
+      const [nx, ny] = ring[(i + 1) % ring.length] as [number, number];
+      const [l1, l2] = [Math.hypot(vx - px, vy - py), Math.hypot(nx - vx, ny - vy)];
+      if (l1 === 0 || l2 === 0) continue;
+      const [ux, uy, wx, wy] = [(vx - px) / l1, (vy - py) / l1, (nx - vx) / l2, (ny - vy) / l2];
+      // The sine of half the angle between the two lines, and the way the mitre points (out of that angle).
+      const sine = Math.sqrt(Math.max(0, (1 + ux * wx + uy * wy) / 2));
+      if (sine * MITRE_WIDTHS * 2 >= 1 || sine === 0) continue;
+      // Sharper than that, the two lines run nearly back on each other: u - w is nearly 2 long.
+      const [dx, dy] = [ux - wx, uy - wy];
+      const out_ = Math.hypot(dx, dy);
+      const reach = Math.min(width / 2 / sine, 1e7);
+      const side = (x: number, y: number): [number, number] => (-y * dx + x * dy >= 0 ? [-y, x] : [y, -x]);
+      const [ax, ay] = side(ux, uy);
+      const [bx, by] = side(wx, wy);
+      out.push([[vx, vy], [vx + (ax * width) / 2, vy + (ay * width) / 2], [vx + (dx / out_) * reach, vy + (dy / out_) * reach], [vx + (bx * width) / 2, vy + (by * width) / 2]]);
+    }
+  }
+  return out;
+};
+
 /**
  * Whether a shape's stroke may paint on a glyph's ink: an edge comes within half the line's width of it (a square
- * cap or join reaches √2 times that), or, its corners mitred, a point of it within five widths (a miter of the
- * default limit, 10); and every clip on it may paint there.
+ * cap or join reaches √2 times that), or, its corners mitred, a point of it within MITRE_WIDTHS widths, or a sharper
+ * corner's mitre meets it (mitres); and every clip on it may paint there.
  */
 function strokeMayPaint(shape: Shape, ink: Box): boolean {
   const stroke = shape.stroke;
@@ -236,8 +281,9 @@ function strokeMayPaint(shape: Shape, ink: Box): boolean {
   const near = grown(ink, (stroke.width * Math.SQRT2) / 2);
   for (const [x1, y1, x2, y2] of edgesOf(shape.outline)) if (meetsBox(near, x1, y1, x2, y2)) return true;
   if (!stroke.mitred) return false;
-  const mitre = grown(ink, stroke.width * 5);
-  return shape.outline.some((ring) => ring.some(([x, y]) => x >= mitre.left && x <= mitre.right && y >= mitre.bottom && y <= mitre.top));
+  const mitre = grown(ink, stroke.width * MITRE_WIDTHS);
+  if (shape.outline.some((ring) => ring.some(([x, y]) => x >= mitre.left && x <= mitre.right && y >= mitre.bottom && y <= mitre.top))) return true;
+  return mitres(shape, stroke.width).some((kite) => mayPaint([kite], ink));
 }
 
 /** Whether two boxes share some area. */
@@ -275,12 +321,18 @@ function upright(outline: Outline): boolean {
 /** The share of the ink a clip lets show: all when it holds it; an upright rectangle's own share; else none. */
 const clipShare = (clip: Outline, ink: Box): number => (fills(clip, null, ink) ? 1 : upright(clip) ? shareIn(boundsOf(clip), ink) : 0);
 
-/** The most of the ink a shape may paint, by its fill and by its stroke: all when its fill holds it, else by bounds. */
+/**
+ * The most of the ink a shape may paint, by its fill and by its stroke: all when its fill holds it, else by bounds
+ * (a stroke's grown by its reach, and each sharper mitre's that meets the ink added).
+ */
 function shapeShare(shape: Shape, ink: Box): { fill: number; stroke: number } {
   const clipped = shape.clips.reduce((box, clip) => cut(box, boundsOf(clip)), EVERYWHERE);
   const fill = !fillMayPaint(shape, ink) ? 0 : holdsInk(shape, ink) ? 1 : shareIn(cut(boundsOf(shape.outline), clipped), ink);
-  const stroke = shape.stroke === undefined || !strokeMayPaint(shape, ink) ? 0 : shareIn(cut(grown(boundsOf(shape.outline), shape.stroke.mitred ? shape.stroke.width * 5 : (shape.stroke.width * Math.SQRT2) / 2), clipped), ink);
-  return { fill, stroke };
+  if (shape.stroke === undefined || !strokeMayPaint(shape, ink)) return { fill, stroke: 0 };
+  const { width, mitred } = shape.stroke;
+  let stroke = shareIn(cut(grown(boundsOf(shape.outline), mitred ? width * MITRE_WIDTHS : (width * Math.SQRT2) / 2), clipped), ink);
+  if (mitred) for (const kite of mitres(shape, width)) if (mayPaint([kite], ink)) stroke += shareIn(cut(boundsOf([kite]), clipped), ink);
+  return { fill, stroke: Math.min(1, stroke) };
 }
 
 /** The share of a box's area the rectangles cover between them (none past MAX_PIECES distinct ones: all of it). */
@@ -361,7 +413,8 @@ const boundsKey = ({ left, right, bottom, top }: Box): string => `${left},${righ
  * on this page in the boxes' style (layoutOf); `shapeAt`: what the page's object at a place in its drawing order
  * paints (pdfium.ts Page.shape); `budget`: the most work judging its glyphs may take (MAX_WORK); `shows`: how much of a
  * box a text object changes as PDFium draws the page (Page.shows). Without `shows`, whatever the check cannot read is
- * taken to hide what it may cover.
+ * taken to hide what it may cover. `inked`: how much of a glyph's ink box PDFium paints drawing its text object alone
+ * (Page.inked); a glyph seen otherwise is seen only when that is SHOWN_PIXELS or more (without it, not asked).
  */
 export function pageLabels(
   reading: LabelReading,
@@ -369,7 +422,7 @@ export function pageLabels(
   index: number,
   layout: readonly Box[],
   shapeAt: (at: number) => Shape | Unread | null,
-  { budget = MAX_WORK, shows }: { budget?: number; shows?: (object: number, ink: Box) => number | null } = {},
+  { budget = MAX_WORK, shows, inked }: { budget?: number; shows?: (object: number, ink: Box) => number | null; inked?: (object: number, ink: Box) => number | null } = {},
 ): PlacedLabel[] | string {
   const where = `page ${index + 1}`;
   const outside = `${where}: a label is drawn outside a box`;
@@ -495,7 +548,7 @@ export function pageLabels(
    * object PDFium's drawing of the page is asked about (Page.shows) where a picture, form or shading lies there.
    */
   const seen = (i: number, ink: Box, drawnAt: number, end: number, object: number, paint = reading.paints[i]): boolean => {
-    if (paint === undefined || !paint.opaque || textOver(i, ink, drawnAt)) return false;
+    if (reading.clipText === true || paint === undefined || !paint.opaque || textOver(i, ink, drawnAt)) return false;
     let left = (paint.clips ?? []).reduce((least, clip) => Math.min(least, clipShare(clip, ink)), 1);
     // What the check cannot read on the ink: taken away, or, with PDFium's drawing of the page, asked of that at the end.
     let unread = false;
@@ -543,6 +596,8 @@ export function pageLabels(
     if (pieces > MAX_PIECES) return false;
     if (!whole && !contrasts(paint.luminance, 1, false)) left -= 1 - shareOf(ink, rects);
     if (left < SEEN_SHARE) return false;
+    // A glyph its font draws nothing for, or a speck: PDFium paints too little of its ink drawing its object alone.
+    if (inked !== undefined && (inked(object, ink) ?? 0) < SHOWN_PIXELS) return false;
     if (!unread || shows === undefined) return true;
     // A picture, form or shading lies on the ink or under it: seen only where PDFium's drawing of the page shows the
     // glyph's text object there, 3:1 against the page drawn without it.
@@ -604,7 +659,7 @@ export async function labelMarks(pdf: Uint8Array, original: Uint8Array): Promise
   try {
     const out: PlacedLabel[][] = [];
     for (let index = 0; index < doc.pageCount; index++) {
-      const found = doc.page(index, (page) => pageLabels(page.labelReading(), page.chars().chars, index, layout[index] ?? [], (at) => page.shape(at), { shows: (object, ink) => page.shows(object, ink) }));
+      const found = doc.page(index, (page) => pageLabels(page.labelReading(), page.chars().chars, index, layout[index] ?? [], (at) => page.shape(at), { shows: (object, ink) => page.shows(object, ink), inked: (object, ink) => page.inked(object, ink) }));
       if (typeof found === 'string') return found;
       out.push(found);
     }

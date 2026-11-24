@@ -52,7 +52,7 @@ const FPDF_PAGEOBJ_PATH = 2;
 const FPDF_FILLMODE_NONE = 0;
 /** Text render mode 2: the glyphs filled, then stroked. */
 const FPDF_TEXTRENDERMODE_FILL_STROKE = 2;
-/** Lines joined round or bevelled (fpdf_edit.h FPDF_LINEJOIN_*); any other join is taken as mitred, whose corner may reach out ten half-widths. */
+/** Lines joined round or bevelled (fpdf_edit.h FPDF_LINEJOIN_*); any other join is taken as mitred, whose corner may reach as far as its angle lets (PDFium gives no miter limit). */
 const FPDF_LINEJOIN_ROUND = 1;
 const FPDF_LINEJOIN_BEVEL = 2;
 
@@ -140,6 +140,11 @@ export class Document {
 }
 
 export class Page {
+  /** Each text object in a form XObject, as labelReading found it: the matrix from its space to the page's. */
+  private readonly formMatrix = new Map<number, Matrix>();
+  /** The last text object drawn alone (Page.inked): its alpha, a row at a time, and where it lies. */
+  private alone: { object: number; alpha: Uint8Array; width: number; height: number; scale: number; bounds: Box } | null = null;
+
   constructor(
     private readonly m: Module,
     private readonly doc: Document,
@@ -458,11 +463,12 @@ export class Page {
         if (alpha !== 255 || !Number.isFinite(width)) return unread;
         stroke = { luminance: luminance(r, g, b), width: Math.max(width, 0), mitred: ![FPDF_LINEJOIN_ROUND, FPDF_LINEJOIN_BEVEL].includes(m.FPDFPageObj_GetLineJoin(object)) };
       }
-      const outline = outlineOf(m, m.FPDFPath_CountSegments(object), (i) => m.FPDFPath_GetPathSegment(object, i), at + 48);
+      const closed: boolean[] = [];
+      const outline = outlineOf(m, m.FPDFPath_CountSegments(object), (i) => m.FPDFPath_GetPathSegment(object, i), at + 48, closed);
       if (outline === null) return unread;
       const clips = clipsOf(m, m.FPDFPageObj_GetClipPath(object), at + 48);
       if (clips === null) return unread;
-      return { luminance: fillLuminance, evenOdd: fill === FPDF_FILLMODE_ALTERNATE, outline, clips, ...(stroke === undefined ? {} : { stroke }) };
+      return { luminance: fillLuminance, evenOdd: fill === FPDF_FILLMODE_ALTERNATE, outline, closed, clips, ...(stroke === undefined ? {} : { stroke }) };
     } finally {
       rt(m).wasmExports.free(at);
     }
@@ -552,6 +558,71 @@ export class Page {
     } finally {
       rt(m).wasmExports.free(at);
     }
+  }
+
+  /** A text object drawn alone at up to INK_SCALE (Page.inked): its pixels' alpha and where they lie; null when PDFium cannot draw it. */
+  private drawnAlone(object: number): Page['alone'] {
+    const m = this.m;
+    const at = rt(m).wasmExports.malloc(16);
+    try {
+      if (!m.FPDFPageObj_GetBounds(object, at, at + 4, at + 8, at + 12)) return null;
+      const [left = 0, bottom = 0, right = 0, top = 0] = new Float32Array(rt(m).HEAPU8.buffer, at, 4);
+      const scale = Math.min(INK_SCALE, Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, (right - left) * (top - bottom))));
+      const bitmap = m.FPDFTextObj_GetRenderedBitmap(this.doc.handle, this.handle, object, scale);
+      if (bitmap === 0) return null;
+      try {
+        const width = m.FPDFBitmap_GetWidth(bitmap);
+        const height = m.FPDFBitmap_GetHeight(bitmap);
+        const stride = m.FPDFBitmap_GetStride(bitmap);
+        const start = m.FPDFBitmap_GetBuffer(bitmap);
+        const alpha = new Uint8Array(width * height);
+        // Blue, green, red, alpha.
+        for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) alpha[y * width + x] = rt(m).HEAPU8[start + y * stride + x * 4 + 3] as number;
+        return { object, alpha, width, height, scale, bounds: { left, bottom, right, top } };
+      } finally {
+        m.FPDFBitmap_Destroy(bitmap);
+      }
+    } finally {
+      rt(m).wasmExports.free(at);
+    }
+  }
+
+  /**
+   * How much of a glyph's ink box PDFium paints when it draws the glyph's text object alone
+   * (FPDFTextObj_GetRenderedBitmap, GATE-LAYOUT fix round 1b): the share of the box's pixels, inside it by SHOW_INSET
+   * of its size on each side (else the one at its centre), with any paint at all. A glyph a font draws nothing for
+   * (a glyph name PDFium finds no glyph by, a space a /ToUnicode reads as a letter) paints none. The box is in page
+   * points; a text object in a form is drawn in the form's space, so the box is carried there (labelReading has read
+   * the form's matrix). Null when PDFium cannot draw it, or its matrix cannot be undone.
+   */
+  inked(object: number, ink: Box): number | null {
+    const alone = this.alone?.object === object ? this.alone : (this.alone = this.drawnAlone(object));
+    if (alone === null) return null;
+    const { alpha, width, height, scale, bounds } = alone;
+    // The box in the object's own space: through the inverse of its form's matrix, the box round its four corners.
+    const [a, b, c, d, e, f] = this.formMatrix.get(object) ?? IDENTITY;
+    const det = a * d - b * c;
+    if (det === 0) return null;
+    const back = ([x, y]: [number, number]): [number, number] => [(d * (x - e) - c * (y - f)) / det, (a * (y - f) - b * (x - e)) / det];
+    const corners = ([[ink.left, ink.bottom], [ink.right, ink.bottom], [ink.left, ink.top], [ink.right, ink.top]] as Array<[number, number]>).map(back);
+    const box = { left: Math.min(...corners.map(([x]) => x)), right: Math.max(...corners.map(([x]) => x)), bottom: Math.min(...corners.map(([, y]) => y)), top: Math.max(...corners.map(([, y]) => y)) };
+    // Pixels as PDFium draws the object: x from its bounds' left, y down from their top, at the scale.
+    const [insetX, insetY] = [(box.right - box.left) * SHOW_INSET, (box.top - box.bottom) * SHOW_INSET];
+    const [px0, px1] = [(box.left + insetX - bounds.left) * scale, (box.right - insetX - bounds.left) * scale];
+    const [py0, py1] = [(bounds.top - box.top + insetY) * scale, (bounds.top - box.bottom - insetY) * scale];
+    // Each pixel whose centre lies inside; none: the one at the centre.
+    let [x0, x1, y0, y1] = [Math.ceil(px0 - 0.5), Math.floor(px1 - 0.5), Math.ceil(py0 - 0.5), Math.floor(py1 - 0.5)];
+    if (x0 > x1) [x0, x1] = [Math.floor((px0 + px1) / 2), Math.floor((px0 + px1) / 2)];
+    if (y0 > y1) [y0, y1] = [Math.floor((py0 + py1) / 2), Math.floor((py0 + py1) / 2)];
+    let painted = 0;
+    let all = 0;
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        all += 1;
+        if (x >= 0 && x < width && y >= 0 && y < height && (alpha[y * width + x] as number) > 0) painted += 1;
+      }
+    }
+    return painted / all;
   }
 
   /**
@@ -650,6 +721,7 @@ export class Page {
         placeOf.set(object, place);
         if (veil) veiled.add(object);
         if (type === FPDF_PAGEOBJ_TEXT) {
+          this.formMatrix.set(object, carried);
           const own = clips === null ? null : clipped(object, carried);
           clipsIn.set(object, clips === null || own === null ? null : [...clips, ...own]);
           if (lettered(object) && isLabel(written.get(object) ?? '')) nested += 1;
@@ -733,7 +805,7 @@ export class Page {
         twinsOf.set(object, later.get(key) ?? []);
         if (bare(object)) later.set(key, [{ at: i, object, paint: paint(object) }, ...(later.get(key) ?? []).slice(0, MAX_TWINS - 1)]);
       }
-      return { top, nested, owners, places: owners.map((owner) => placeOf.get(owner) ?? -1), paints: owners.map(paint), twins: owners.map((owner) => twinsOf.get(owner) ?? []) };
+      return { top, nested, owners, places: owners.map((owner) => placeOf.get(owner) ?? -1), paints: owners.map(paint), twins: owners.map((owner) => twinsOf.get(owner) ?? []), clipText: this.hasClipText() };
     } finally {
       rt(m).wasmExports.free(at);
       m.FPDFText_ClosePage(text);
@@ -794,6 +866,8 @@ const RENDER_SCALE = 2;
 const MAX_RENDER_PIXELS = 4_000_000;
 /** How far, in any channel, a pixel's colour may be from the first one's and still be the same colour. */
 const COLOUR_SLACK = 8;
+/** The scale a text object is drawn at alone to tell whether a glyph of it paints (Page.inked): 4 pixels a point. */
+const INK_SCALE = 4;
 
 /** The WCAG relative luminance (0 black to 1 white) of an sRGB colour, each channel 0 to 255. */
 export function luminance(r: number, g: number, b: number): number {
@@ -810,9 +884,10 @@ export type Outline = Array<Array<[number, number]>>;
 /**
  * A path of `count` segments as an outline, each curve as CURVE_STEPS chords, or null when it has more than
  * MAX_SHAPE_SEGMENTS, a segment cannot be read, a point is not finite, or a line or a curve has no point before it
- * or a curve is not three points. `at`: 8 bytes of scratch memory.
+ * or a curve is not three points. `at`: 8 bytes of scratch memory; `closed`: filled with whether each subpath is
+ * closed (a join at its first point, not caps).
  */
-function outlineOf(m: Module, count: number, segmentAt: (i: number) => number, at: number): Outline | null {
+function outlineOf(m: Module, count: number, segmentAt: (i: number) => number, at: number, closed: boolean[] = []): Outline | null {
   if (count < 0 || count > MAX_SHAPE_SEGMENTS) return null;
   const out: Outline = [];
   let ring: Array<[number, number]> | null = null;
@@ -827,6 +902,7 @@ function outlineOf(m: Module, count: number, segmentAt: (i: number) => number, a
       if (controls.length > 0) return null;
       ring = [[x, y]];
       out.push(ring);
+      closed.push(false);
     } else if (ring === null) return null;
     else if (type === FPDF_SEGMENT_LINETO) {
       if (controls.length > 0) return null;
@@ -843,6 +919,7 @@ function outlineOf(m: Module, count: number, segmentAt: (i: number) => number, a
       }
       controls = [];
     } else return null;
+    if (m.FPDFPathSegment_GetClose(segment)) closed[out.length - 1] = true;
   }
   return controls.length > 0 ? null : out;
 }
@@ -889,6 +966,8 @@ export interface Shape {
   /** Filled by the even-odd rule; else by the nonzero winding rule. */
   evenOdd: boolean;
   outline: Outline;
+  /** Whether each subpath of the outline is closed (a join at its first point, not caps); unknown: taken as closed. */
+  closed?: boolean[];
   /** Each clip on it: it paints only inside every one. */
   clips: Outline[];
   /** Its stroke, when it is stroked: the colour's luminance, the line's width, and whether its corners are mitred. */
@@ -915,6 +994,11 @@ export type PageMark =
 
 export interface LabelReading {
   top: PageMark[];
+  /**
+   * The page draws text as a clip (render mode 4 to 7; hasClipText). PDFium gives a clip's paths but not its text,
+   * so what such a clip leaves out cannot be read (GATE-LAYOUT fix round 1b).
+   */
+  clipText?: boolean;
   /** Text objects in a form XObject that read as a label, in the labels' font and colour. */
   nested: number;
   /** For each character of the page's reading (Page.chars, in its order), the text object it was read from. */

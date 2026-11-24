@@ -13,6 +13,7 @@ import type { Box, PageChar } from '../../src/pdf/match.js';
 import { Document, type LabelReading, type Paint, type Shape, type Twin, type Unread, luminance, pdfium } from '../../src/pdf/pdfium.js';
 import { type RedactResult, redactPdf } from '../../src/pdf/redact.js';
 import { type PageOptions, askLine, fitPdf } from './fit-fixtures.js';
+import { UNREAD_CLASSES, font, identityCodes, identityType0, namesOf } from './glyph-fonts.js';
 import { manyShows } from './hostile.js';
 
 const OTHER = (page = 1): string => `page ${page}: text other than its label is in a box`;
@@ -956,6 +957,70 @@ describe('pageLabels, on readings made by hand: what lies under a glyph and over
     expect(pageLabels(reading, chars, 1, [cellBox], shapeAt, { budget: 20 })).toBe('page 2: too much is drawn on the black rectangles of the original to check');
   });
 
+  it('reaches as far as a square cap does, across its corner (fix round 1b)', () => {
+    // A line 40 pt wide from (3, -25.2) to (13, -15.2), not mitred: its square cap's corner reaches 20√2 pt past the
+    // end, over the ink (10.5 to 15.5 across, 5 to 10.5 up), which lies wholly under the cap and past half its width.
+    const line = (dy: number): Shape => ({ luminance: null, evenOdd: false, outline: [[[3, -25.2 + dy], [13, -15.2 + dy]]], clips: [], stroke: { luminance: 0, width: 40, mitred: false } });
+    const capped = (dy: number): PlacedLabel[] | string => judge([], [line(dy)], [WHITE_TEXT], [{ ...glyph(10), ink: ink(10, { top: 10.5 }) }]);
+    expect(capped(0)).toBe(UNSEEN());
+    // Past its reach, 20√2 pt and more from the ink: seen.
+    expect(capped(-8.4)).toEqual([]);
+  });
+
+  it('reaches as far as a sharp mitred corner may, whatever its limit, and only that way (fix round 1b)', () => {
+    // A corner of 4° at (-45, 8), opening to the left, its line 10 pt wide: its mitre may reach 10 / (2 sin 2°) =
+    // 143 pt to the right, past five widths (50 pt), over the glyph 55.5 pt from it.
+    const half = (2 * Math.PI) / 180;
+    const corner = (x: number, mitred: boolean): Shape => ({
+      luminance: null,
+      evenOdd: false,
+      outline: [[[x - 60 * Math.cos(half), 8 + 60 * Math.sin(half)], [x, 8], [x - 60 * Math.cos(half), 8 - 60 * Math.sin(half)]]],
+      clips: [],
+      stroke: { luminance: 0, width: 10, mitred },
+    });
+    expect(judge([], [corner(-45, true)])).toBe(UNSEEN());
+    // Bevelled or round, it reaches half its width.
+    expect(judge([], [corner(-45, false)])).toEqual([]);
+    // A corner 89 pt over the glyph, its lines 30 pt long (no point of it within five widths): its mitre points down
+    // at the glyph, or up, away from it.
+    const [dx, dy] = [30 * Math.sin(half), 30 * Math.cos(half)];
+    const above = (way: number): Shape => ({ ...corner(-45, true), outline: [[[13 - dx, 100 + way * dy], [13, 100], [13 + dx, 100 + way * dy]]] });
+    expect(judge([], [above(1)])).toBe(UNSEEN());
+    expect(judge([], [above(-1)])).toEqual([]);
+    // Turned straight back on itself, PDFium bevels it (no mitre), and an open path's ends are capped, not joined.
+    expect(judge([], [{ ...corner(-45, true), outline: [[[-105, 8], [-45, 8], [-105, 8]]] }])).toEqual([]);
+    expect(judge([], [{ ...corner(-45, true), outline: [[[-105, 9], [-45, 8], [-105, 7]]], closed: [false] }])).toBe(UNSEEN());
+    expect(judge([], [{ ...corner(-45, true), outline: [[[-45, 8], [-105, 9], [-105, 7]]], closed: [false] }])).toEqual([]);
+    // Closed, its first corner is a join too.
+    expect(judge([], [{ ...corner(-45, true), outline: [[[-45, 8], [-105, 9], [-105, 7], [-45, 8]]], closed: [true] }])).toBe(UNSEEN());
+  });
+
+  it('takes a glyph whose ink has no area for covered by what meets it (fix round 1b)', () => {
+    const line = { ...glyph(10), ink: { left: 13, right: 13, bottom: 5, top: 11 } };
+    // A fill over the foot of it (which does not hold it): all of it, as the check reads no area.
+    expect(judge([], [fill(1, [square(12, 0, 30, 8)])], [WHITE_TEXT], [line])).toBe(UNSEEN());
+    expect(judge([], [fill(1, [square(14, 0, 30, 8)])], [WHITE_TEXT], [line])).toEqual([]);
+  });
+
+  it('refuses a glyph on a page with text drawn as a clip, which it cannot read (fix round 1b)', () => {
+    const { reading, shapeAt } = page_([]);
+    expect(pageLabels(reading, [glyph(10)], 0, [cellBox], shapeAt)).toEqual([]);
+    expect(pageLabels({ ...reading, clipText: true }, [glyph(10)], 0, [cellBox], shapeAt)).toBe(UNSEEN());
+  });
+
+  it('refuses a glyph PDFium paints too little of when it draws its text object alone (fix round 1b)', () => {
+    const { reading, shapeAt } = page_([]);
+    const asked: Array<[number, Box]> = [];
+    const inked = (share: number | null) => (object: number, at: Box): number | null => {
+      asked.push([object, at]);
+      return share;
+    };
+    expect(pageLabels(reading, [glyph(10)], 0, [cellBox], shapeAt, { inked: inked(0.05) })).toEqual([]);
+    expect(asked).toEqual([[102, ink(10)]]);
+    expect(pageLabels(reading, [glyph(10)], 0, [cellBox], shapeAt, { inked: inked(0.0499) })).toBe(UNSEEN());
+    expect(pageLabels(reading, [glyph(10)], 0, [cellBox], shapeAt, { inked: inked(null) })).toBe(UNSEEN());
+  });
+
   it('finds the rectangles under a glyph wherever they lie, many or wide, and a glyph with no area by whether one holds it', () => {
     const many = Array.from({ length: 40 }, (_, k): Box => ({ left: k * 2.5, right: k * 2.5 + 2.5, bottom: 0, top: 20 }));
     const reading = (boxes: Box[], paints: Paint[] = [BLACK_TEXT]): LabelReading => ({
@@ -976,6 +1041,128 @@ describe('pageLabels, on readings made by hand: what lies under a glyph and over
     // Ink with no area: judged when a rectangle holds it.
     expect(pageLabels(reading([cellBox]), [{ ...glyph(10), ink: { left: 10, right: 10, bottom: 5, top: 11 } }], 0, [cellBox], () => null)).toBe(UNSEEN());
     expect(pageLabels(reading([cellBox]), [{ ...glyph(10), ink: { left: 10, right: 10, bottom: 15, top: 21 } }], 0, [cellBox], () => null)).toEqual([]);
+  });
+});
+
+describe('what may hide a glyph on a rectangle of the original, as PDFium draws it (fix round 1b)', () => {
+  /** The ink of the first glyph `ch` PDFium reads on a page of this content. */
+  async function inkOf(content: string, ch: string): Promise<Box> {
+    const doc = Document.open(await pdfium(), await page([content]));
+    if (doc === null) throw new Error('unopenable');
+    try {
+      const found = doc.page(0, (p) => p.chars().chars.find((c) => c.text === ch)?.ink);
+      if (found === undefined || found === null) throw new Error(`no ink for ${ch}`);
+      return found;
+    } finally {
+      doc.close();
+    }
+  }
+  /** `pdf` with the font `make` gives as /FXA1 on page 1. */
+  async function withFXA1(pdf: Uint8Array, make: (doc: PDFDocument) => ReturnType<typeof font>): Promise<Uint8Array> {
+    const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+    (doc.getPage(0).node.Resources()?.lookup(PDFName.of('Font'), PDFDict) as PDFDict).set(PDFName.of('FXA1'), make(doc));
+    return doc.save({ useObjectStreams: false });
+  }
+  const small = (paint: string, size: number, text = 'n', x = CELL.x + 50, y = CELL.y + 16): string => `q ${paint} BT /F1 ${size} Tf ${x} ${y} Td (${text}) Tj ET Q`;
+  /** An open path of two lines meeting at (vx, vy) at `degrees`, opening to the left, stroked black `width` wide. */
+  const corner = (vx: number, vy: number, degrees: number, width: number, join: string): string => {
+    const a = ((degrees / 2) * Math.PI) / 180;
+    return `0 G ${width} w ${join} ${vx - 60 * Math.cos(a)} ${vy + 60 * Math.sin(a)} m ${vx} ${vy} l ${vx - 60 * Math.cos(a)} ${vy - 60 * Math.sin(a)} l S`;
+  };
+  /** A clip of 600 lines round a square far from the cell: more than the check reads (MAX_SHAPE_SEGMENTS). */
+  const longClip = `20 300 m ${Array.from({ length: 599 }, (_, k) => (k < 300 ? `${20 + (k + 1) * 0.1} 300 l` : `${50 - (k - 299) * 0.1} 330 l`)).join(' ')} h W n`;
+
+  const REFUSED: ReadonlyArray<[string, () => Promise<Uint8Array>]> = [
+    [
+      'a white glyph under the square cap of a black line drawn after it, past half its width',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 6)}`, 'n');
+        const [cx, y] = [(ink.left + ink.right) / 2, ink.top - 20 * Math.SQRT2 + (ink.right - ink.left) / 2 + 0.3];
+        return page([cell(), small(WHITE, 6), `0 G 40 w 2 J 1 j ${cx - 10} ${y - 10} m ${cx} ${y} l S`, BODY]);
+      },
+    ],
+    [
+      'a white glyph under the mitre of a 20° corner drawn after it (the default limit)',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 12, 'n', CELL.x + 60)}`, 'n');
+        return page([cell(), small(WHITE, 12, 'n', CELL.x + 60), corner(ink.left - 17, (ink.bottom + ink.top) / 2, 20, 20, '0 j'), BODY]);
+      },
+    ],
+    [
+      'a white glyph under the mitre of a 4° corner, its limit raised to 100, past five widths',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 8, 'n', CELL.x + 60)}`, 'n');
+        return page([cell(), small(WHITE, 8, 'n', CELL.x + 60), corner(ink.left - 55, (ink.bottom + ink.top) / 2, 4, 10, '0 j 100 M'), BODY]);
+      },
+    ],
+    [
+      'a white glyph between a black ellipse drawn after it and the diamond of its four ends',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 6, 'n', CELL.x + 50, CELL.y + 20)}`, 'n');
+        const [cx, cy] = [ink.left - 28, ink.bottom - 16];
+        return page([cell(), small(WHITE, 6, 'n', CELL.x + 50, CELL.y + 20), `0 g ${ellipse({ x: cx - 50, y: cy - 30, w: 100, h: 60 })} f`, BODY]);
+      },
+    ],
+    [
+      'a white "I" nine tenths under a picture drawn after it',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 30, 'I', CELL.x + 40, CELL.y + 6)}`, 'I');
+        return page([cell(), small(WHITE, 30, 'I', CELL.x + 40, CELL.y + 6), BODY], { picture: { left: ink.left - 2, bottom: ink.bottom - 2, width: 2 + 0.9 * (ink.right - ink.left), height: ink.top - ink.bottom + 4 } });
+      },
+    ],
+    ['white text in an embedded Type 1 font whose glyph names PDFium draws nothing for', async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`, BODY]), (doc) => font(doc.context, { kind: 'embedded Type1', codes: 'Hidden', names: namesOf(UNREAD_CLASSES.gNNN as (c: string) => string, 'Hidden'), reads: 'Hidden' }))],
+    ['white text drawn as spaces a /ToUnicode reads as letters', async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td <${identityCodes('      ')}> Tj ET Q`, BODY]), (doc) => identityType0(doc.context, '      ', 'Hidden'))],
+    ['white text clipped by a path of 600 lines that leaves it out', () => page([cell(), `q ${longClip} 1 g BT /F2 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`, BODY])],
+    ['white text on a cell clipped by a path of 600 lines that leaves the cell out', () => page([`q ${longClip} ${cell()} Q`, onCell(WHITE), BODY])],
+  ];
+
+  it.each(REFUSED)('refuses %s, in the engine and in the gate', async (_name, build) => {
+    const original = await build();
+    expect(refusal(await redact(original, QUOTE))).toBe(UNSEEN());
+    expect(refusal(await redact(original))).toBe(UNSEEN());
+    expect(await labelMarks(original, original)).toBe(UNSEEN());
+    expect(await verdict(original, original)).toEqual({ pass: false, code: 'rules' });
+  });
+
+  it('refuses, in the gate, white text on a cell drawn inside a clip of text far from it (the engine refuses text clips)', async () => {
+    const original = await page([`q BT 7 Tr /F1 30 Tf 20 300 Td (X) Tj ET ${cell()} Q`, onCell(WHITE), BODY]);
+    expect(refusal(await redact(original, QUOTE))).toBe('page 1 has text drawn as a clip, which removal would lose');
+    expect(await labelMarks(original, original)).toBe(UNSEEN());
+    expect(await verdict(original, original)).toEqual({ pass: false, code: 'rules' });
+  });
+
+  it.each<[string, () => Promise<Uint8Array>]>([
+    [
+      'a white glyph beside a bevelled 20° corner drawn after it',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 12, 'n', CELL.x + 60)}`, 'n');
+        return page([cell(), small(WHITE, 12, 'n', CELL.x + 60), corner(ink.left - 17, (ink.bottom + ink.top) / 2, 20, 20, '2 j'), BODY]);
+      },
+    ],
+    [
+      'a white glyph beyond a black line turned back on itself, its limit raised to 100 (PDFium bevels it)',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 8, 'n', CELL.x + 80)}`, 'n');
+        const [vx, vy] = [ink.left - 60, (ink.bottom + ink.top) / 2];
+        return page([cell(), small(WHITE, 8, 'n', CELL.x + 80), `0 G 10 w 0 j 100 M ${vx - 40} ${vy} m ${vx} ${vy} l ${vx - 40} ${vy} l S`, BODY]);
+      },
+    ],
+    [
+      'a white "I" half under a picture drawn after it',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 30, 'I', CELL.x + 40, CELL.y + 6)}`, 'I');
+        return page([cell(), small(WHITE, 30, 'I', CELL.x + 40, CELL.y + 6), BODY], { picture: { left: ink.left - 2, bottom: ink.bottom - 2, width: 2 + 0.5 * (ink.right - ink.left), height: ink.top - ink.bottom + 4 } });
+      },
+    ],
+    ['white text in an embedded TrueType font whose glyph names PDFium reads', async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (Hidden) Tj ET Q`, BODY]), (doc) => font(doc.context, { kind: 'embedded TrueType', codes: 'Hidden', names: [...'Hidden'], reads: 'Hidden' }))],
+    ['white text drawn in its own glyphs through a /ToUnicode', async () => withFXA1(await page([cell(), `q 1 g BT /FXA1 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td <${identityCodes('Hidden')}> Tj ET Q`, BODY]), (doc) => identityType0(doc.context, 'Hidden', 'Hidden'))],
+    // The form turns a quarter: its text runs up the cell from (CELL.x + 50, CELL.y + 10).
+    ['white text in a form turned a quarter (its glyphs drawn alone where they lie)', () => page([cell(), `q 0 1 -1 0 ${CELL.x + 60} ${CELL.y - 60} cm /Fm1 Do Q`, BODY], { form: '1 g BT /F1 10 Tf 70 10 Td (Mon) Tj ET' })],
+  ])('passes %s', async (_name, build) => {
+    const original = await build();
+    const copy = copyOf(await redact(original, QUOTE));
+    expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
+    expect(await verdict(copy, original, QUOTE)).toEqual({ pass: true });
   });
 });
 
