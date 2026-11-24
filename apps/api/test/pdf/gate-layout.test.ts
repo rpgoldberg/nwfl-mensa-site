@@ -991,8 +991,9 @@ describe('pageLabels, on readings made by hand: what lies under a glyph and over
     expect(judge([], [{ ...corner(-45, true), outline: [[[-105, 8], [-45, 8], [-105, 8]]] }])).toEqual([]);
     expect(judge([], [{ ...corner(-45, true), outline: [[[-105, 9], [-45, 8], [-105, 7]]], closed: [false] }])).toBe(UNSEEN());
     expect(judge([], [{ ...corner(-45, true), outline: [[[-45, 8], [-105, 9], [-105, 7]]], closed: [false] }])).toEqual([]);
-    // Closed, its first corner is a join too.
+    // Closed, its first corner is a join too; a point drawn twice at the corner is one corner.
     expect(judge([], [{ ...corner(-45, true), outline: [[[-45, 8], [-105, 9], [-105, 7], [-45, 8]]], closed: [true] }])).toBe(UNSEEN());
+    expect(judge([], [{ ...corner(-45, true), outline: [[[-105, 9], [-45, 8], [-45, 8], [-105, 7]]], closed: [false] }])).toBe(UNSEEN());
   });
 
   it('takes a glyph whose ink has no area for covered by what meets it (fix round 1b)', () => {
@@ -1093,6 +1094,14 @@ describe('what may hide a glyph on a rectangle of the original, as PDFium draws 
       async () => {
         const ink = await inkOf(`${cell()}\n${small(WHITE, 8, 'n', CELL.x + 60)}`, 'n');
         return page([cell(), small(WHITE, 8, 'n', CELL.x + 60), corner(ink.left - 55, (ink.bottom + ink.top) / 2, 4, 10, '0 j 100 M'), BODY]);
+      },
+    ],
+    [
+      'a white glyph under the mitre of a closed path\'s first corner, 4°, its limit raised to 100',
+      async () => {
+        const ink = await inkOf(`${cell()}\n${small(WHITE, 8, 'n', CELL.x + 60)}`, 'n');
+        const [vx, vy, a] = [ink.left - 55, (ink.bottom + ink.top) / 2, (2 * Math.PI) / 180];
+        return page([cell(), small(WHITE, 8, 'n', CELL.x + 60), `0 G 10 w 0 j 100 M ${vx} ${vy} m ${vx - 60 * Math.cos(a)} ${vy + 60 * Math.sin(a)} l ${vx - 60 * Math.cos(a)} ${vy - 60 * Math.sin(a)} l h S`, BODY]);
       },
     ],
     [
