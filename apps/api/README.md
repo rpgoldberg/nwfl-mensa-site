@@ -462,7 +462,15 @@ holds it, any other text in the labels' font and colour inside a box (the old
 two labels in one box, or any other glyph drawn over a box refuses the copy
 (`rules`). A box is one rectangle drawn round its corners and closed, as
 `re` draws it. A glyph under a box is hidden by it and is not refused for
-being there; the leak checks read it as before. No label's own text counts
+being there; the leak checks read it as before. A rectangle in that style
+that the original draws on the same page at exactly the same bounds is the
+newsletter's own layout (a calendar's header cell, a rule), not a box, one
+for one (GATE-LAYOUT): the gate opens the original itself and flattens each
+page as the engine does. A glyph nobody can see on such a rectangle (dark,
+or not opaque, wholly inside it, with no light shape drawn between the two)
+refuses the copy (`rules`), and so does an original that cannot be opened;
+`ENGINE_VERSION` gained `+layout-1`, so files refused before for those
+rectangles are made again. No label's own text counts
 as withheld text: a leak check that finds a quote is run once more on the
 copy with exactly those labels' strings turned to spaces, each in the very
 bytes PDFium writes for a label at that label's place, as many as PDFium
