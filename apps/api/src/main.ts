@@ -10,8 +10,8 @@ import { readAuthConfig, verifierFrom } from './auth/config.js';
 import { readConfig } from './config.js';
 import { createPool, describeTarget } from './db/pool.js';
 import { createStructuredLogger } from './platform/logger.js';
+import { logTraceExport, logTraceExportCounts, startTelemetry } from './platform/telemetry.js';
 import { runBackfill } from './search/backfill.js';
-import { startTelemetry } from './platform/telemetry.js';
 import { startServer } from './server.js';
 import { refuseToStart, startTenantGate, tenantRows } from './tenant.js';
 
@@ -19,6 +19,7 @@ const config = readConfig();
 const auth = readAuthConfig(process.env);
 const telemetry = startTelemetry();
 const logger = createStructuredLogger({ name: telemetry.state.serviceName, level: config.logLevel });
+logTraceExport(telemetry, logger);
 const pool = createPool(process.env, (fields, message) => logger.warn(fields, message));
 
 // The database target is logged once here, for operators; no endpoint reports it.
@@ -66,6 +67,7 @@ const stop = (signal: string): void => {
     .close()
     .then(() => pool.end())
     .then(() => telemetry.shutdown())
+    .then(() => logTraceExportCounts(telemetry, logger))
     .then(() => process.exit(0));
 };
 

@@ -342,7 +342,7 @@ test.describe('the event screens, signed in', () => {
     expect((await page.getByRole('link', { name: 'Add a one-off event' }).boundingBox())!.height).toBeGreaterThanOrEqual(48);
     await change.click();
     for (const target of [page.getByRole('button', { name: 'Save' }), page.locator('.event-form').getByRole('link', { name: 'Back to our events' })]) expect((await target.boundingBox())!.height).toBeGreaterThanOrEqual(48);
-    for (const choice of await page.locator('.event-form .choice').all()) expect((await choice.boundingBox())!.height).toBeGreaterThanOrEqual(48);
+    for (const choice of await page.locator('.event-form .choice:visible').all()) expect((await choice.boundingBox())!.height).toBeGreaterThanOrEqual(48);
   });
 });
 

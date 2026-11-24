@@ -53,6 +53,8 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
     await expect(page.getByRole('link', { name: 'site administrator' })).toHaveAttribute('href', '/officers');
     await expect(page.getByLabel('Mensa membership number')).toHaveAccessibleDescription(new RegExp(`${locked.replace(/[.?]/g, '\\$&')}$`));
     await expect(page.locator('main')).not.toContainText(/erase|never shown|not kept/i);
+    // LAUNCH-FIX-1: what we keep is one link away, before the fields.
+    await expect(page.locator('main').getByRole('link', { name: 'What we keep about you, and who can see it' })).toHaveAttribute('href', '/privacy');
     expect(await axe(page)).toEqual([]);
     await fits(page);
   });
@@ -143,6 +145,8 @@ test.describe('the first sign-in (D3) and the sign-up (D1)', () => {
     await expect(page.locator('.lead')).toHaveText('Your account has member access.');
     await expect(page.getByText(`It was last confirmed on ${MEMBER_CHECKED_ON}.`)).toBeVisible();
     await expect(page.getByRole('button', { name: 'Send my sign-up' })).toHaveCount(0);
+    // LAUNCH-FIX-1
+    await expect(page.locator('main').getByRole('link', { name: 'What we keep about you, and who can see it' })).toHaveAttribute('href', '/privacy');
     expect(await axe(page)).toEqual([]);
   });
 

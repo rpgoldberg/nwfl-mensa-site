@@ -165,8 +165,16 @@ test.describe('the Admin\'s switch', () => {
     await expect(page.getByRole('link', { name: 'Cancel' })).toHaveAttribute('href', HERE);
     await page.getByRole('button', { name: 'Yes, make this change' }).click();
 
-    await expect(page).toHaveURL(new RegExp(`${HERE}\\?done=content&changed=1$`));
+    await expect(page).toHaveURL(new RegExp(`${HERE}\\?done=content&changed=1&rev=[0-9a-f-]{36}$`));
     await expect(page.getByRole('status')).toHaveText('Publishing content: Saved.');
+    // WEB-SMALL-1 fix round 1: the address alone says nothing: without the revision the save left, or with
+    // another one, no "Saved." (the setting read now is not shown to be the one saved).
+    const saved = new URL(page.url()).searchParams.get('rev') ?? '';
+    for (const query of ['done=content&changed=1', 'done=content&changed=1&rev=', `done=content&changed=1&rev=${saved.replace(/^./, (c) => (c === 'a' ? 'b' : 'a'))}`, `done=redaction_policy&changed=1&rev=${saved}`]) {
+      await page.goto(`${HERE}?${query}`);
+      await expect(page.getByRole('heading', { level: 1 }), query).toBeVisible();
+      await expect(page.getByRole('status'), query).toHaveCount(0);
+    }
     const note = `One approver: a second person's approval is not required right now (set by the Admin on ${today()}).`;
     await expect(page.getByRole('note').filter({ hasText: 'One approver' })).toHaveText(note);
     await page.goto('/officer-area');
@@ -175,8 +183,8 @@ test.describe('the Admin\'s switch', () => {
     // The confirmation posted again (back, then resubmit): nothing changes.
     const again = await post(page, { step: 'apply', scope: 'content', rule: 'one_approver', reason: 'The Webmaster is away until Monday', revision: '' });
     expect(again.status()).toBe(303);
-    expect(again.headers()['location']).toBe(`${HERE}?done=content&changed=0`);
-    await page.goto(`${HERE}?done=content&changed=0`);
+    expect(again.headers()['location']).toBe(`${HERE}?done=content&changed=0&rev=${saved}`);
+    await page.goto(`${HERE}?done=content&changed=0&rev=${saved}`);
     await expect(page.getByRole('status')).toHaveText('Publishing content: No change: it was already set that way.');
 
     group = page.getByRole('group', { name: 'Publishing content', exact: true });

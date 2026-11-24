@@ -174,9 +174,41 @@ const app = provider.callback();
 
 // The sign-in step (the library's own interaction pages are off): a login
 // form, any password, and a Cancel link that answers access_denied.
+// SIGNIN-SLOW (e2e/signin-slow.spec.ts only, with IDP_TEST_CONTROL=1): counts of /auth and /token, and
+// the next N token calls taken and never answered, as a slow path out through the edge would.
+const control = env['IDP_TEST_CONTROL'] === '1';
+const counts = { auth: 0, token: 0 };
+let stalls = 0;
+
+/** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {string} pathname @returns {boolean} handled */
+function testControl(req, res, pathname) {
+  if (pathname === '/auth') counts.auth++;
+  if (pathname === '/token') {
+    counts.token++;
+    if (stalls > 0) {
+      stalls--;
+      req.resume();
+      return true;
+    }
+  }
+  if (pathname === '/test/stall-tokens') {
+    stalls = Number(new URL(req.url ?? '/', issuer).searchParams.get('n') ?? 0);
+    counts.auth = counts.token = 0;
+    res.writeHead(204).end();
+    return true;
+  }
+  if (pathname === '/test/counts') {
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(counts));
+    return true;
+  }
+  return false;
+}
+
 /** @param {http.IncomingMessage} req @param {http.ServerResponse} res */
 async function listener(req, res) {
-  const match = /^\/interaction\/([\w-]+)(\/abort)?$/.exec(new URL(req.url ?? '/', issuer).pathname);
+  const pathname = new URL(req.url ?? '/', issuer).pathname;
+  if (control && testControl(req, res, pathname)) return;
+  const match = /^\/interaction\/([\w-]+)(\/abort)?$/.exec(pathname);
   if (!match) return app(req, res);
   try {
     const details = await provider.interactionDetails(req, res);

@@ -113,9 +113,12 @@ describe('api workflow', () => {
     expect(migrate).toContain('run: sh scripts/smoke-migrate-image.sh nwfl-mensa-api-migrate:ci');
   });
 
-  it('publishes to ghcr.io/rpgoldberg/nwfl-mensa-site/api on a push to main only, once every check passed', () => {
+  it('publishes to ghcr.io/rpgoldberg/nwfl-mensa-site/api on a push to develop or main only, once every check passed', () => {
     const publish = job('publish');
-    expect(publish).toMatch(/^ {4}if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m);
+    expect(publish).toMatch(/^ {4}if: github\.event_name == 'push' && \(github\.ref == 'refs\/heads\/develop' \|\| github\.ref == 'refs\/heads\/main'\)$/m);
+    expect(publish).toMatch(/^ {4}name: Publish the image \(develop and main\)$/m);
+    expect(ci).toMatch(/^ {2}push:\n {4}branches: \[develop, main\]$/m);
+    expect(ci).toMatch(/^ {2}pull_request:\n {4}types: \[opened, synchronize, reopened\]\n {4}branches: \[develop, main\]$/m);
     expect(publish).toMatch(/^ {4}needs: \[test, proto, image, migrate-image\]$/m);
     expect(publish).toMatch(/^ {4}permissions:\n {6}contents: read\n {6}packages: write$/m);
     expect(publish).toMatch(/uses: docker\/login-action@[0-9a-f]{40}/);

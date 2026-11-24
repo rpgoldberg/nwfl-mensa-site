@@ -5,6 +5,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { authConfig } from './auth-config.mjs';
 import { readBuildInfo } from './build-info.mjs';
+import { machineRouteFromEnv } from './machine-route.mjs';
 import { compileRedirects } from './redirects.mjs';
 import { sessionKey } from './session.mjs';
 import { stamped } from './log.mjs';
@@ -96,8 +97,11 @@ export async function start({ env, loadHandler, proc, clientDir, oldSite, buildI
   // Sessions and their tokens live in this process (W5a moves them to a shared
   // store): until then the site runs as one replica.
   log(JSON.stringify({ level: 'info', msg: publicOnly ? 'session_store: none (public-only build)' : 'session_store: memory (single replica)' }));
+  // MACHINE-ROUTE: the machine clients' Connect route, with an API to forward to; never in a public-only build.
+  const machine = publicOnly ? undefined : machineRouteFromEnv(env);
   const server = createSiteServer(handler, {
     pages,
+    ...(machine ? { machine } : {}),
     ...(redirects ? { redirects } : {}),
     sessionKey: key,
     formAction: auth?.enabled ? [auth.config.issuer.origin] : [],

@@ -163,7 +163,9 @@ test.describe('/news signed in as a member', () => {
     const failed: string[] = [];
     for (const url of crawlSeeds({ eventIds: [BOARD_GAMES], months: [centralToday().slice(0, 7)], fileIds: [current!.publicPdf, current!.membersPdf] })) {
       const res = await page.request.get(url, { maxRedirects: 0 });
-      if (res.status() >= 500) failed.push(`${url}: ${res.status()}`);
+      // The error page's own address answers 500 by design (LAUNCH-FIX-1); every other route answers below 500.
+      const bad = url === '/500' ? res.status() !== 500 : res.status() >= 500;
+      if (bad) failed.push(`${url}: ${res.status()}`);
     }
     expect(failed).toEqual([]);
   });

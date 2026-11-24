@@ -6,9 +6,10 @@
 // theme stamped on <html>, as the layout does for on-request pages.
 import { AsyncResource } from 'node:async_hooks';
 import http from 'node:http';
+import { performance } from 'node:perf_hooks';
 import { stampAccount } from './account.mjs';
 import { logEntry } from './log.mjs';
-import { cacheControl, cdnCacheControl, isHostOnlyCookie, isLeavingPage, referrerPolicy, securityHeaders } from './policy.mjs';
+import { cacheControl, cdnCacheControl, isHostOnlyCookie, isLeavingPage, isMachinePath, referrerPolicy, securityHeaders } from './policy.mjs';
 import { readPrefs, stampHtml } from './prefs.mjs';
 import { renamedPath, resolveOldUrl } from './redirects.mjs';
 import { readSession } from './session.mjs';
@@ -144,12 +145,43 @@ function servePrerendered(req, res, html, key) {
   res.end(req.method === 'HEAD' ? undefined : body);
 }
 
+/**
+ * LAUNCH-FIX-1: the paths of the site's own error page (src/pages/500.astro, built at deploy time).
+ * Asked for by name it answers 500, as it does when a request fails: never 200, so nothing stores it
+ * or lists it as a page.
+ */
+const ERROR_PAGE = '/500';
+const ERROR_PATHS = new Set([ERROR_PAGE, `${ERROR_PAGE}.html`]);
+
+/**
+ * MACHINE-ROUTE: a fault on a call under the machine route's prefixes, as a Connect error with the
+ * route's own fixed words for `internal` (machine-route.mjs CODE_MESSAGES).
+ */
+export const MACHINE_FAULT = JSON.stringify({ code: 'internal', message: 'the call failed' });
+
+/**
+ * The error page, status 500, in the reader's text size and theme. Signed out as it was built: it
+ * reads no session, so what failed cannot fail it too. Nothing of the failure is in it.
+ *
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {string} html
+ */
+function serveErrorPage(req, res, html) {
+  const body = stampHtml(html, readPrefs(req.headers.cookie));
+  res.statusCode = 500;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Length', Buffer.byteLength(body));
+  res.end(req.method === 'HEAD' ? undefined : body);
+}
+
 /** @typedef {import('./redirects.mjs').Tables} Redirects */
 /**
- * @typedef {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects, sessionKey?: Buffer | undefined, formAction?: string[] }} SiteOptions
+ * @typedef {{ pages?: ReadonlyMap<string, string>, redirects?: Redirects, sessionKey?: Buffer | undefined, formAction?: string[], machine?: import('./machine-route.mjs').MachineHandler }} SiteOptions
  * pages: prerendered HTML by path; redirects: the old-site table; sessionKey: to
  * read the session on prerendered pages; formAction: origins a form may lead to
- * (the sign-in provider)
+ * (the sign-in provider); machine: the machine clients' route (MACHINE-ROUTE), none
+ * in a public-only build or with no API
  */
 
 const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
@@ -172,7 +204,11 @@ function dropForwardedHost(req) {
  * A state-changing request must say where it comes from. Astro's origin check
  * lets one through that carries neither an Origin nor a Sec-Fetch-Site header;
  * every browser sends at least one, so such a request is refused here. One that
- * does carry them goes on to Astro, which compares the origin.
+ * does carry them goes on to Astro, which compares the origin. The one exception,
+ * in serve: a POST to the machine route (MACHINE-ROUTE), whose clients are no
+ * browser and send none. It reads and sets no cookie, so a cross-site form has no
+ * session to ride on, and it is refused without a bearer, which a cross-site
+ * browser cannot attach (that takes a preflight, and the route answers none).
  *
  * @param {http.IncomingMessage} req
  */
@@ -221,6 +257,43 @@ function errorName(err) {
   return /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name) ? err.name : 'Error';
 }
 
+/** The longest path an access line holds (SIGNIN-SLOW); a longer one is cut, and the line says so. */
+const ACCESS_PATH_MAX = 512;
+
+/**
+ * SIGNIN-SLOW: one line per request, once its response closes, so a slow page (the sign-in callback
+ * among them) can be measured at the origin: the method, the path without its query (logPath, cut to
+ * 512 characters), the status and the milliseconds taken. A request the client gave up on before the
+ * answer was sent logs 499 (nginx's "client closed request"), never the status it did not get; an answer
+ * cut short by a fault on the site's side (fail ran after the headers went out, or Astro's writer destroyed
+ * a streamed page with its error) logs 500, or the 5xx sent. Its
+ * request id is the trace id every line carries (LG-N3): the close is bound to the request's context.
+ * Never the query, a header, a cookie or the body. Registered before anything else runs, so a fault
+ * anywhere is logged with its status; a request another line owns sets `call.logged` and has none here:
+ * the health probe (no line at all), the calendar feed (logFeedFetch), a target that is no path (its
+ * fixed warning) and a machine call (machine-route.mjs logs each, `aborted` too). One line per request.
+ *
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {string} raw the URL's pathname, as originFormUrl reads it ('//ok/news' stays '//ok/news')
+ * @param {number} started when the request came in (performance.now())
+ * @param {{ logged: boolean, failed: boolean }} call
+ */
+function logAccess(req, res, raw, started, call) {
+  const method = req.method;
+  res.once('close', AsyncResource.bind(() => {
+    if (call.logged) return;
+    const path = logPath(raw);
+    const cut = path.length > ACCESS_PATH_MAX ? { path_cut: true } : {};
+    // An answer that ended has its status. One cut short by a fault is ours, never the reader's: 500, or
+    // the 5xx it had already sent. A fault is fail having run, or the answer destroyed with an error, as
+    // Astro's writer does when a streamed page fails partway (it catches the error, so fail never runs);
+    // a reader leaving (a close or a reset) sets no error on the answer. Only a reader who left first is 499.
+    const status = res.writableFinished ? res.statusCode : call.failed || res.errored ? Math.max(res.statusCode, 500) : 499;
+    console.log(logEntry({ level: 'info', msg: 'request', method, path: path.slice(0, ACCESS_PATH_MAX), ...cut, status, ms: Math.round(performance.now() - started) }));
+  }));
+}
+
 /** The calendar feed's two paths (fc CALFEED): /calendar.ics, and /events.ics, the same feed. */
 const FEED_PATHS = new Set(['/calendar.ics', '/events.ics']);
 const UA_MAX = 200;
@@ -259,6 +332,32 @@ function logFeedFetch(req, res, path) {
 }
 
 /**
+ * The request's URL, read as a path on this site and never as an authority: only an origin-form
+ * target (one that starts with "/") is read, after a fixed authority, so //host/x is the path
+ * //host/x and nothing in a target can make the URL unreadable. A backslash in the path is kept
+ * as one (%5C, which normalisePath refuses), never read as a "/". null for anything else: an
+ * absolute-form target, the asterisk form.
+ *
+ * @param {string | undefined} target
+ * @returns {URL | null}
+ */
+export function originFormUrl(target) {
+  if (!target?.startsWith('/')) return null;
+  const path = target.replace(/^[^?#]*/, (p) => p.replaceAll('\\', '%5C'));
+  return URL.parse(`http://site.invalid${path}`);
+}
+
+/**
+ * A decoded path as a Location value: each segment percent-encoded again, so a renamed page whose
+ * path decodes to a non-ASCII or reserved character redirects to that same path.
+ *
+ * @param {string} path
+ */
+function encodePath(path) {
+  return path.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
  * Wrap a request handler so every response carries the site policy, answer
  * old URLs (R16) and the site's own renamed pages, serve the prerendered pages, and answer the health probe
  * without touching Astro.
@@ -267,24 +366,92 @@ function logFeedFetch(req, res, path) {
  * @param {SiteOptions} [opts]
  * @returns {http.RequestListener}
  */
-export function withSitePolicy(handler, { pages = new Map(), redirects, sessionKey, formAction = [] } = {}) {
+export function withSitePolicy(handler, { pages = new Map(), redirects, sessionKey, formAction = [], machine } = {}) {
   const headers = securityHeaders({ formAction });
   // LG-N3: each request is served inside a trace minted here (trace.mjs: never a browser's).
   return (req, res) => runWithTrace(newTrace(), () => serve(req, res));
   /** @type {http.RequestListener} */
   function serve(req, res) {
+    const started = performance.now();
+    const url = originFormUrl(req.url);
+    const raw = url?.pathname ?? '';
+    /**
+     * What a fault answers: set once the path is read. logged: another line owns this request (logAccess).
+     * failed: fail ran, so an answer it cut short logs as a fault, not 499.
+     */
+    const call = { machine: false, logged: false, failed: false };
+    /** @param {unknown} err */
+    const fail = (err) => {
+      call.failed = true;
+      // The pathname only (logPath): the query of /auth/callback carries the OIDC code and state. The
+      // error's name only: its message can echo what the request sent.
+      console.error(logEntry({ level: 'error', msg: 'request failed', path: logPath(raw), err: errorName(err) }));
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      // LAUNCH-FIX-1: the site's own error page, for a fault before the handler as for one in it. The
+      // plain line where none was built, or where reading or sending it fails too: fail never throws.
+      try {
+        // MACHINE-ROUTE: a call under the two prefixes gets a Connect error, as the route's own
+        // refusals are, never the page; its client reads no HTML.
+        if (call.machine) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(MACHINE_FAULT);
+          return;
+        }
+        const errorPage = pages.get(ERROR_PAGE);
+        if (errorPage !== undefined) {
+          serveErrorPage(req, res, errorPage);
+          return;
+        }
+      } catch {
+        // Fall through to the plain line.
+      }
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Internal Server Error');
+    };
+    // Everything a request runs here is inside the guard: no request may end the process.
+    try {
+      logAccess(req, res, raw, started, call);
+      route(req, res, url, raw, fail, call);
+    } catch (err) {
+      fail(err);
+    }
+  }
+
+  /**
+   * @param {http.IncomingMessage} req
+   * @param {http.ServerResponse} res
+   * @param {URL | null} url
+   * @param {string} raw
+   * @param {(err: unknown) => void} fail
+   * @param {{ machine: boolean, logged: boolean, failed: boolean }} call
+   */
+  function route(req, res, url, raw, fail, call) {
     dropForwardedHost(req);
-    const url = new URL(req.url ?? '/', 'http://site.invalid');
-    const raw = url.pathname;
-    const path = normalisePath(raw);
-    const renamed = path === undefined ? undefined : renamedPath(path);
-    const old = redirects && path !== undefined && !renamed ? resolveOldUrl(path, redirects) : undefined;
+    // A fixed reason only: the target is the caller's text.
+    if (!url) {
+      call.logged = true;
+      console.log(logEntry({ level: 'warn', msg: 'bad request target', reason: 'not a path on this site' }));
+    }
+    const path = url ? normalisePath(raw) : undefined;
+    // MACHINE-ROUTE: by the decoded path, exactly the two prefixes; no old URL or renamed page is under them.
+    const machinePath = isMachinePath(path);
+    call.machine = machinePath;
+    const renamed = path === undefined || machinePath ? undefined : renamedPath(path);
+    const old = redirects && path !== undefined && !renamed && !machinePath ? resolveOldUrl(path, redirects) : undefined;
     beforeHeaders(res, () => {
       if (old?.status === 410) res.statusCode = 410;
       // The cache rule reads the raw path: only a plain /_astro/ name is immutable.
       applyPolicy(req, res, raw, headers, path);
     });
-    if (path !== undefined && FEED_PATHS.has(path)) logFeedFetch(req, res, path);
+    if (path !== undefined && FEED_PATHS.has(path)) {
+      call.logged = true;
+      logFeedFetch(req, res, path);
+    }
     if (path === undefined) {
       res.statusCode = 400;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -292,6 +459,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       return;
     }
     if (req.url === '/healthz') {
+      call.logged = true;
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('ok');
@@ -299,7 +467,7 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
     }
     if (renamed) {
       // The query goes along: a month of the calendar is still that month.
-      res.writeHead(301, { Location: `${renamed}${url.search}` });
+      res.writeHead(301, { Location: `${encodePath(renamed)}${/** @type {URL} */ (url).search}` });
       res.end();
       return;
     }
@@ -316,30 +484,32 @@ export function withSitePolicy(handler, { pages = new Map(), redirects, sessionK
       }
       req.url = '/gone';
     }
-    if (originUnknown(req)) {
+    if (originUnknown(req) && !(machinePath && req.method === 'POST')) {
       res.statusCode = 403;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       res.end('Forbidden');
       return;
     }
-    const html = pages.get(path);
-    if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
-      servePrerendered(req, res, html, sessionKey);
+    if (machinePath) {
+      // Never Astro: the route, or nothing at all. Inside the guard, as Astro is: no request may end the process.
+      // A throw before its first await reaches serve's own guard; a rejection, fail.
+      // Its own line (machine call) from here on: the access line stands aside.
+      if (machine) {
+        call.logged = true;
+        Promise.resolve(machine(req, res, /** @type {string} */ (path))).catch(fail);
+      } else {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not found');
+      }
       return;
     }
-    /** @param {unknown} err */
-    const fail = (err) => {
-      // The pathname only (logPath): the query of /auth/callback carries the OIDC code and state. The
-      // error's name only: its message can echo what the request sent.
-      console.error(logEntry({ level: 'error', msg: 'request failed', path: logPath(raw), err: errorName(err) }));
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-      res.statusCode = 500;
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.end('Internal Server Error');
-    };
+    const html = pages.get(path);
+    if (html !== undefined && (req.method === 'GET' || req.method === 'HEAD')) {
+      if (ERROR_PATHS.has(path)) serveErrorPage(req, res, html);
+      else servePrerendered(req, res, html, sessionKey);
+      return;
+    }
     try {
       Promise.resolve(handler(req, res)).catch(fail);
     } catch (err) {
