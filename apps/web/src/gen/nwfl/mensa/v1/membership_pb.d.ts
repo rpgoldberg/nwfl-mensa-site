@@ -39,6 +39,14 @@ export declare type MemberAccount = Message<"nwfl.mensa.v1.MemberAccount"> & {
    * @generated from field: nwfl.mensa.v1.Date verified_on = 3;
    */
   verifiedOn?: Date | undefined;
+
+  /**
+   * OFFICER-VERIFY: a chapter member or a guest member, by the reported local
+   * group; unspecified when none was reported.
+   *
+   * @generated from field: nwfl.mensa.v1.LocalGroupStanding local_group_standing = 4;
+   */
+  localGroupStanding: LocalGroupStanding;
 };
 
 /**
@@ -119,6 +127,47 @@ export declare type SignupRequest = Message<"nwfl.mensa.v1.SignupRequest"> & {
    * @generated from field: string membership_number = 11;
    */
   membershipNumber: string;
+
+  /**
+   * OFFICER-VERIFY: whether the check confirmed the typed first name; unset
+   * when it did not say.
+   *
+   * @generated from field: optional bool first_name_matched = 12;
+   */
+  firstNameMatched?: boolean | undefined;
+
+  /**
+   * OFFICER-VERIFY: the local group the check reported, and what it makes the
+   * person; empty and unspecified when none was reported.
+   *
+   * @generated from field: string local_group = 13;
+   */
+  localGroup: string;
+
+  /**
+   * @generated from field: nwfl.mensa.v1.LocalGroupStanding local_group_standing = 14;
+   */
+  localGroupStanding: LocalGroupStanding;
+
+  /**
+   * OFFICER-VERIFY: whether an approver may approve this sign-up by hand, and
+   * why not; ApproveSignup holds to the same answer. Unspecified while
+   * OFFICER_VERIFY is off, when the rule is as before: an other-group match is
+   * not approved as a member.
+   *
+   * @generated from field: nwfl.mensa.v1.HandApproval hand_approval = 15;
+   */
+  handApproval: HandApproval;
+
+  /**
+   * OFFICER-VERIFY: not a sign-up waiting for its first decision, but an
+   * approved member's fresh check that found an email mismatch. It never opens
+   * officer tools by itself: ApproveSignup with confirmed_warning confirms the
+   * check, RejectSignup declines it, and neither changes the account.
+   *
+   * @generated from field: bool fresh_check = 16;
+   */
+  freshCheck: boolean;
 };
 
 /**
@@ -266,6 +315,14 @@ export declare type MemberProfile = Message<"nwfl.mensa.v1.MemberProfile"> & {
    * @generated from field: string membership_number = 3;
    */
   membershipNumber: string;
+
+  /**
+   * OFFICER-VERIFY: the local group the membership check reported; empty when
+   * none was. Not changed by the member.
+   *
+   * @generated from field: string local_group = 4;
+   */
+  localGroup: string;
 };
 
 /**
@@ -349,8 +406,9 @@ export declare type SubmitSignupRequest = Message<"nwfl.mensa.v1.SubmitSignupReq
   membershipNumber: string;
 
   /**
-   * PROFILE-ID: for the approvers and the profile; the verifier never gets it.
-   * Optional here, so a sign-up from a site that does not ask yet is still taken.
+   * PROFILE-ID: for the approvers and the profile, and (OFFICER-VERIFY) for
+   * the verifier to confirm. Optional on a plain sign-up; REQUIRED on the
+   * invite route (an invited person, or one holding an officer power).
    *
    * @generated from field: string first_name = 3;
    */
@@ -407,6 +465,22 @@ export declare type GetMyAccountResponse = Message<"nwfl.mensa.v1.GetMyAccountRe
    * @generated from field: nwfl.mensa.v1.MemberProfile profile = 2;
    */
   profile?: MemberProfile | undefined;
+
+  /**
+   * OFFICER-VERIFY: whether the caller's officer tools are open, waiting for
+   * the membership check, or not theirs at all.
+   *
+   * @generated from field: nwfl.mensa.v1.OfficerTools officer_tools = 3;
+   */
+  officerTools: OfficerTools;
+
+  /**
+   * OFFICER-VERIFY: for an approved account whose officer tools wait, what
+   * opens them.
+   *
+   * @generated from field: nwfl.mensa.v1.OfficerCheck officer_check = 4;
+   */
+  officerCheck: OfficerCheck;
 };
 
 /**
@@ -414,6 +488,38 @@ export declare type GetMyAccountResponse = Message<"nwfl.mensa.v1.GetMyAccountRe
  * Use `create(GetMyAccountResponseSchema)` to create a new message.
  */
 export declare const GetMyAccountResponseSchema: GenMessage<GetMyAccountResponse>;
+
+/**
+ * @generated from message nwfl.mensa.v1.GetSignupRequestRequest
+ */
+export declare type GetSignupRequestRequest = Message<"nwfl.mensa.v1.GetSignupRequestRequest"> & {
+  /**
+   * @generated from field: string request_id = 1;
+   */
+  requestId: string;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.GetSignupRequestRequest.
+ * Use `create(GetSignupRequestRequestSchema)` to create a new message.
+ */
+export declare const GetSignupRequestRequestSchema: GenMessage<GetSignupRequestRequest>;
+
+/**
+ * @generated from message nwfl.mensa.v1.GetSignupRequestResponse
+ */
+export declare type GetSignupRequestResponse = Message<"nwfl.mensa.v1.GetSignupRequestResponse"> & {
+  /**
+   * @generated from field: nwfl.mensa.v1.SignupDecision decision = 1;
+   */
+  decision: SignupDecision;
+};
+
+/**
+ * Describes the message nwfl.mensa.v1.GetSignupRequestResponse.
+ * Use `create(GetSignupRequestResponseSchema)` to create a new message.
+ */
+export declare const GetSignupRequestResponseSchema: GenMessage<GetSignupRequestResponse>;
 
 /**
  * @generated from message nwfl.mensa.v1.UpdateMyProfileRequest
@@ -870,6 +976,222 @@ export enum Verification {
 export declare const VerificationSchema: GenEnum<Verification>;
 
 /**
+ * OFFICER-VERIFY: what the membership check's local group says about a person,
+ * decided when read against CHAPTER_GROUP_NAME; always unspecified while
+ * OFFICER_VERIFY is off.
+ *
+ * @generated from enum nwfl.mensa.v1.LocalGroupStanding
+ */
+export enum LocalGroupStanding {
+  /**
+   * No local group was reported.
+   *
+   * @generated from enum value: LOCAL_GROUP_STANDING_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The chapter's own group (CHAPTER_GROUP_NAME): a chapter member.
+   *
+   * @generated from enum value: LOCAL_GROUP_STANDING_CHAPTER = 1;
+   */
+  CHAPTER = 1,
+
+  /**
+   * Another local group, or none: a guest member.
+   *
+   * @generated from enum value: LOCAL_GROUP_STANDING_GUEST = 2;
+   */
+  GUEST = 2,
+
+  /**
+   * A name not among the known local groups: a guest member, flagged for the
+   * approvers.
+   *
+   * @generated from enum value: LOCAL_GROUP_STANDING_GUEST_UNLISTED = 3;
+   */
+  GUEST_UNLISTED = 3,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.LocalGroupStanding.
+ */
+export declare const LocalGroupStandingSchema: GenEnum<LocalGroupStanding>;
+
+/**
+ * OFFICER-VERIFY: the officer tools for the caller, from their groups and
+ * standing (auth/caller.ts).
+ *
+ * @generated from enum nwfl.mensa.v1.OfficerTools
+ */
+export enum OfficerTools {
+  /**
+   * The caller holds no officer power.
+   *
+   * @generated from enum value: OFFICER_TOOLS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The caller's powers are in force.
+   *
+   * @generated from enum value: OFFICER_TOOLS_OPEN = 1;
+   */
+  OPEN = 1,
+
+  /**
+   * The caller holds a power that waits for their membership check.
+   *
+   * @generated from enum value: OFFICER_TOOLS_AWAITING_CHECK = 2;
+   */
+  AWAITING_CHECK = 2,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.OfficerTools.
+ */
+export declare const OfficerToolsSchema: GenEnum<OfficerTools>;
+
+/**
+ * OFFICER-VERIFY: what an approved member or affiliate whose officer tools
+ * wait can do about it. An officer power needs a check that confirmed the
+ * number, the last name and the first name, and either the chapter's own
+ * local group or an Admin's affiliate grant. Unspecified whenever the tools do
+ * not wait, and for a caller with no approved account (they sign up, or wait
+ * for their first check).
+ *
+ * @generated from enum nwfl.mensa.v1.OfficerCheck
+ */
+export enum OfficerCheck {
+  /**
+   * @generated from enum value: OFFICER_CHECK_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The check has not confirmed all of it: SubmitSignup with the names again
+   * asks for a fresh check.
+   *
+   * @generated from enum value: OFFICER_CHECK_CONFIRM_DETAILS = 1;
+   */
+  CONFIRM_DETAILS = 1,
+
+  /**
+   * A fresh check is asked for and has not answered yet.
+   *
+   * @generated from enum value: OFFICER_CHECK_RUNNING = 2;
+   */
+  RUNNING = 2,
+
+  /**
+   * The last fresh check did not confirm the details; they may ask again.
+   *
+   * @generated from enum value: OFFICER_CHECK_NOT_CONFIRMED = 3;
+   */
+  NOT_CONFIRMED = 3,
+
+  /**
+   * Confirmed as a member of another local group (a guest member): the tools
+   * open when the Admin grants affiliate standing.
+   *
+   * @generated from enum value: OFFICER_CHECK_NEEDS_GRANT = 4;
+   */
+  NEEDS_GRANT = 4,
+
+  /**
+   * The fresh check matched the number and the names but not the email: an
+   * approver confirms it with the member, as for a first sign-up.
+   *
+   * @generated from enum value: OFFICER_CHECK_AWAITING_APPROVER = 5;
+   */
+  AWAITING_APPROVER = 5,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.OfficerCheck.
+ */
+export declare const OfficerCheckSchema: GenEnum<OfficerCheck>;
+
+/**
+ * GetSignupRequest: where one sign-up stands.
+ *
+ * @generated from enum nwfl.mensa.v1.SignupDecision
+ */
+export enum SignupDecision {
+  /**
+   * @generated from enum value: SIGNUP_DECISION_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: SIGNUP_DECISION_PENDING = 1;
+   */
+  PENDING = 1,
+
+  /**
+   * @generated from enum value: SIGNUP_DECISION_APPROVED = 2;
+   */
+  APPROVED = 2,
+
+  /**
+   * @generated from enum value: SIGNUP_DECISION_REJECTED = 3;
+   */
+  REJECTED = 3,
+
+  /**
+   * Rejected, then reopened (REOPEN).
+   *
+   * @generated from enum value: SIGNUP_DECISION_REOPENED = 4;
+   */
+  REOPENED = 4,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.SignupDecision.
+ */
+export declare const SignupDecisionSchema: GenEnum<SignupDecision>;
+
+/**
+ * OFFICER-VERIFY (switched on): what an approver may do with a sign-up by hand.
+ *
+ * @generated from enum nwfl.mensa.v1.HandApproval
+ */
+export enum HandApproval {
+  /**
+   * OFFICER_VERIFY off: the rule as before.
+   *
+   * @generated from enum value: HAND_APPROVAL_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * May be approved, a chapter member or (a plain sign-up) on the approver's word.
+   *
+   * @generated from enum value: HAND_APPROVAL_OPEN = 1;
+   */
+  OPEN = 1,
+
+  /**
+   * May be approved, as a guest member: another local group, or none.
+   *
+   * @generated from enum value: HAND_APPROVAL_AS_GUEST = 2;
+   */
+  AS_GUEST = 2,
+
+  /**
+   * An invited sign-up the check has not confirmed: reject it, or reopen it.
+   *
+   * @generated from enum value: HAND_APPROVAL_NEEDS_CHECK = 3;
+   */
+  NEEDS_CHECK = 3,
+}
+
+/**
+ * Describes the enum nwfl.mensa.v1.HandApproval.
+ */
+export declare const HandApprovalSchema: GenEnum<HandApproval>;
+
+/**
  * Accounts and approvals. The subject, display name and email come from the
  * verified token, never from a request field.
  *
@@ -881,6 +1203,15 @@ export declare const MembershipService: GenService<{
    * both required, invited or not; the membership verification service
    * confirms them, and an approver decides. A token with the invited group opens the account with
    * the invite route.
+   *
+   * OFFICER-VERIFY (switched on): an approved member or affiliate whose officer
+   * tools wait (GetMyAccount officer_check CONFIRM_DETAILS or NOT_CONFIRMED)
+   * calls this again to ask for a fresh membership check. The first and last
+   * name as sent replace the profile's; the membership number never changes
+   * (sent, it must be the one on file, else INVALID_ARGUMENT). The account
+   * keeps its standing meanwhile, and the answer carries the same request_id.
+   * While a fresh check runs, and for everyone else with a sign-up on file:
+   * ALREADY_EXISTS, as before.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.SubmitSignup
    */
@@ -921,12 +1252,27 @@ export declare const MembershipService: GenService<{
     output: typeof ListSignupRequestsResponseSchema;
   },
   /**
+   * Approvers only (and the Admin): where one sign-up stands, by its id. No
+   * such sign-up: NOT_FOUND.
+   *
+   * @generated from rpc nwfl.mensa.v1.MembershipService.GetSignupRequest
+   */
+  getSignupRequest: {
+    methodKind: "unary";
+    input: typeof GetSignupRequestRequestSchema;
+    output: typeof GetSignupRequestResponseSchema;
+  },
+  /**
    * Approves or rejects a pending sign-up; what it typed is kept (PROFILE-ID).
-   * No approver decides their own sign-up. A sign-up the verifier found in
-   * another local group is not approved as a member: it is rejected, or the
-   * account is granted affiliate standing. VET fix 1: an email mismatch or a
-   * duplicate claim is approved only with confirmed_warning set; without it,
-   * FAILED_PRECONDITION, and nothing changes.
+   * No approver decides their own sign-up. OFFICER-VERIFY: a sign-up the
+   * verifier found in another local group is approved as a guest member (or
+   * rejected, or granted affiliate standing). An invited sign-up is approved
+   * only once the verifier confirmed its number and last name (a local or
+   * other-group match, or an email mismatch) and did not report a first-name
+   * mismatch; anything else is FAILED_PRECONDITION: reject or reopen it. VET
+   * fix 1: an email mismatch or a duplicate claim is approved only with
+   * confirmed_warning set; without it, FAILED_PRECONDITION, and nothing
+   * changes.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.ApproveSignup
    */
@@ -976,7 +1322,12 @@ export declare const MembershipService: GenService<{
   /**
    * Admin or Webmaster only. Member-level reading for an invited affiliate,
    * with the verifier's other-group result as its verification when there is
-   * one, and the grantor's attestation otherwise.
+   * one, and the grantor's attestation otherwise. OFFICER-VERIFY (switched
+   * on): also for an approved guest member, one the membership check confirmed
+   * as a member of another local group; any other approved member is
+   * FAILED_PRECONDITION, as before. An affiliate's officer tools open only once
+   * the check confirmed their number, last name and first name. Switched on,
+   * the Admin only, and a pending sign-up only as a guest or unconfirmed.
    *
    * @generated from rpc nwfl.mensa.v1.MembershipService.GrantAffiliate
    */

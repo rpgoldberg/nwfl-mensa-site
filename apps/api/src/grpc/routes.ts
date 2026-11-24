@@ -7,6 +7,7 @@
 import type { DescService } from '@bufbuild/protobuf';
 import type { ConnectRouter } from '@connectrpc/connect';
 import { approvalRoutes } from '../approval/service.js';
+import type { OfficerVerify } from '../auth/config.js';
 import { linkCheckRoutes } from '../content/link-check.js';
 import { contentRoutes } from '../content/service.js';
 import { ApprovalRuleService } from '../gen/nwfl/mensa/v1/approval_pb.js';
@@ -47,6 +48,8 @@ export interface ApiDeps {
   readiness: Readiness;
   /** The clock "today" is read from. Tests pin it. */
   now?: () => Date;
+  /** OFFICER_VERIFY (auth/config.ts): on, with the chapter's own local group; null or absent is off. */
+  officerVerify?: OfficerVerify | null;
 }
 
 export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
@@ -56,8 +59,8 @@ export function apiRoutes(deps: ApiDeps): (router: ConnectRouter) => void {
     eventRoutes({ db: deps.db, logger: deps.logger.child({ component: 'events' }), now }),
     contentRoutes({ db: deps.db, logger: deps.logger.child({ component: 'content' }), now }),
     newsletterRoutes({ db: deps.db, logger: deps.logger.child({ component: 'newsletter' }) }),
-    membershipRoutes({ db: deps.db, now }),
-    verifierRoutes({ db: deps.db, now }),
+    membershipRoutes({ db: deps.db, now, officerVerify: deps.officerVerify ?? null }),
+    verifierRoutes({ db: deps.db, now, officerVerify: deps.officerVerify ?? null }),
     linkCheckRoutes({ db: deps.db, logger: deps.logger.child({ component: 'linkcheck' }), now }),
     redactionRoutes({ db: deps.db }),
     approvalRoutes({ db: deps.db }),

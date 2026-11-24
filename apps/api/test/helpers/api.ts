@@ -7,6 +7,7 @@ import type { DescService } from '@bufbuild/protobuf';
 import type http2 from 'node:http2';
 import pg from 'pg';
 import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
+import type { OfficerVerify } from '../../src/auth/config.js';
 import { dbStanding } from '../../src/auth/standing.js';
 import { loginWalled } from '../../src/content/item-links.js';
 import { MachineVerdict } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
@@ -103,8 +104,20 @@ export interface Api {
 /** Thursday 2026-10-22, 10:00 Central. */
 export const NOW = new Date('2026-10-22T15:00:00Z');
 
-export async function startApi(prefix: string, options: { verifier?: TokenVerifier; now?: () => Date; groupPrefix?: string } = {}): Promise<Api> {
+export async function startApi(prefix: string, options: {
+    verifier?: TokenVerifier;
+    now?: () => Date;
+    groupPrefix?: string;
+    /** OFFICER_VERIFY=on; default off. */
+    officerVerify?: boolean;
+    /** CHAPTER_GROUP_NAME; default the chapter's own. Read only when switched on, as the API reads it. */
+    chapterGroup?: string | null;
+  } = {},): Promise<Api> {
   const now = options.now ?? ((): Date => NOW);
+  // As auth/config.ts: switched on, with the chapter's group (it refuses to start without one); off, none.
+  const chapterGroup = options.chapterGroup === undefined ? 'Northwest Florida Mensa' : options.chapterGroup;
+  if (options.officerVerify === true && chapterGroup === null) throw new Error('switched on needs a chapter group, as the API does');
+  const mode: OfficerVerify | null = options.officerVerify === true ? { chapterGroup: chapterGroup as string } : null;
   const db = await freshDatabase(prefix);
   const run = await migrate(db);
   if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
@@ -117,8 +130,8 @@ export async function startApi(prefix: string, options: { verifier?: TokenVerifi
   const { lines, sink } = captureLogs();
   const logger = createStructuredLogger({ sink });
   const server: http2.Http2Server = createGrpcServer({
-    routes: apiRoutes({ db: pool, logger, now, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
-    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now), groupPrefix: options.groupPrefix }),
+    routes: apiRoutes({ db: pool, logger, now, officerVerify: mode, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
+    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now, mode?.chapterGroup ?? null), groupPrefix: options.groupPrefix, officerVerify: mode !== null }),
     // As in production: the gate's verifier also admits edge streams.
     verifier: options.verifier ?? fakeVerifier,
   });

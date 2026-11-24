@@ -17,7 +17,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file nwfl/mensa/v1/membership_verifier.proto.
  */
 export const file_nwfl_mensa_v1_membership_verifier: GenFile = /*@__PURE__*/
-  fileDesc("Cidud2ZsL21lbnNhL3YxL21lbWJlcnNoaXBfdmVyaWZpZXIucHJvdG8SDW53ZmwubWVuc2EudjEiNAofTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVxdWVzdBIRCglwYWdlX3NpemUYASABKAUiVwogTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVzcG9uc2USMwoHcGVuZGluZxgBIAMoCzIiLm53ZmwubWVuc2EudjEuUGVuZGluZ1ZlcmlmaWNhdGlvbiJmChNQZW5kaW5nVmVyaWZpY2F0aW9uEhIKCnJlcXVlc3RfaWQYASABKAkSGQoRbWVtYmVyc2hpcF9udW1iZXIYAiABKAkSEQoJbGFzdF9uYW1lGAMgASgJEg0KBWVtYWlsGAQgASgJIoQBChlSZXBvcnRWZXJpZmljYXRpb25SZXF1ZXN0EhIKCnJlcXVlc3RfaWQYASABKAkSMwoHb3V0Y29tZRgCIAEoDjIiLm53ZmwubWVuc2EudjEuVmVyaWZpY2F0aW9uT3V0Y29tZRIeChZjb25mbGljdGluZ19yZXF1ZXN0X2lkGAMgASgJIhwKGlJlcG9ydFZlcmlmaWNhdGlvblJlc3BvbnNlIj0KGUxpc3RSZWxlYXNlZENsYWltc1JlcXVlc3QSDQoFYWZ0ZXIYASABKAkSEQoJcGFnZV9zaXplGAIgASgFImEKGkxpc3RSZWxlYXNlZENsYWltc1Jlc3BvbnNlEi4KCHJlbGVhc2VkGAEgAygLMhwubndmbC5tZW5zYS52MS5SZWxlYXNlZENsYWltEhMKC25leHRfY3Vyc29yGAIgASgJIoMBCg1SZWxlYXNlZENsYWltEhIKCnJlcXVlc3RfaWQYASABKAkSLwoLcmVsZWFzZWRfYXQYAiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEi0KBGtpbmQYAyABKA4yHy5ud2ZsLm1lbnNhLnYxLkNsYWltUmVsZWFzZUtpbmQqqgIKE1ZlcmlmaWNhdGlvbk91dGNvbWUSJAogVkVSSUZJQ0FUSU9OX09VVENPTUVfVU5TUEVDSUZJRUQQABInCiNWRVJJRklDQVRJT05fT1VUQ09NRV9WRVJJRklFRF9MT0NBTBABEi0KKVZFUklGSUNBVElPTl9PVVRDT01FX1ZFUklGSUVEX09USEVSX0dST1VQEAISIgoeVkVSSUZJQ0FUSU9OX09VVENPTUVfTk9UX0ZPVU5EEAMSHgoaVkVSSUZJQ0FUSU9OX09VVENPTUVfRVJST1IQBBInCiNWRVJJRklDQVRJT05fT1VUQ09NRV9FTUFJTF9NSVNNQVRDSBAFEigKJFZFUklGSUNBVElPTl9PVVRDT01FX0RVUExJQ0FURV9DTEFJTRAGKsABChBDbGFpbVJlbGVhc2VLaW5kEiIKHkNMQUlNX1JFTEVBU0VfS0lORF9VTlNQRUNJRklFRBAAEh8KG0NMQUlNX1JFTEVBU0VfS0lORF9SRUpFQ1RFRBABEh8KG0NMQUlNX1JFTEVBU0VfS0lORF9SRU9QRU5FRBACEiYKIkNMQUlNX1JFTEVBU0VfS0lORF9BQ0NPVU5UX0RFTEVURUQQAxIeChpDTEFJTV9SRUxFQVNFX0tJTkRfREVMRVRFRBAEMvkCChlNZW1iZXJzaGlwVmVyaWZpZXJTZXJ2aWNlEoABChhMaXN0UGVuZGluZ1ZlcmlmaWNhdGlvbnMSLi5ud2ZsLm1lbnNhLnYxLkxpc3RQZW5kaW5nVmVyaWZpY2F0aW9uc1JlcXVlc3QaLy5ud2ZsLm1lbnNhLnYxLkxpc3RQZW5kaW5nVmVyaWZpY2F0aW9uc1Jlc3BvbnNlIgOQAgESaQoSUmVwb3J0VmVyaWZpY2F0aW9uEigubndmbC5tZW5zYS52MS5SZXBvcnRWZXJpZmljYXRpb25SZXF1ZXN0GikubndmbC5tZW5zYS52MS5SZXBvcnRWZXJpZmljYXRpb25SZXNwb25zZRJuChJMaXN0UmVsZWFzZWRDbGFpbXMSKC5ud2ZsLm1lbnNhLnYxLkxpc3RSZWxlYXNlZENsYWltc1JlcXVlc3QaKS5ud2ZsLm1lbnNhLnYxLkxpc3RSZWxlYXNlZENsYWltc1Jlc3BvbnNlIgOQAgFiBnByb3RvMw", [file_google_protobuf_timestamp]);
+  fileDesc("Cidud2ZsL21lbnNhL3YxL21lbWJlcnNoaXBfdmVyaWZpZXIucHJvdG8SDW53ZmwubWVuc2EudjEiNAofTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVxdWVzdBIRCglwYWdlX3NpemUYASABKAUiVwogTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zUmVzcG9uc2USMwoHcGVuZGluZxgBIAMoCzIiLm53ZmwubWVuc2EudjEuUGVuZGluZ1ZlcmlmaWNhdGlvbiJ6ChNQZW5kaW5nVmVyaWZpY2F0aW9uEhIKCnJlcXVlc3RfaWQYASABKAkSGQoRbWVtYmVyc2hpcF9udW1iZXIYAiABKAkSEQoJbGFzdF9uYW1lGAMgASgJEg0KBWVtYWlsGAQgASgJEhIKCmZpcnN0X25hbWUYBSABKAki0QEKGVJlcG9ydFZlcmlmaWNhdGlvblJlcXVlc3QSEgoKcmVxdWVzdF9pZBgBIAEoCRIzCgdvdXRjb21lGAIgASgOMiIubndmbC5tZW5zYS52MS5WZXJpZmljYXRpb25PdXRjb21lEh4KFmNvbmZsaWN0aW5nX3JlcXVlc3RfaWQYAyABKAkSHwoSZmlyc3RfbmFtZV9tYXRjaGVkGAQgASgISACIAQESEwoLbG9jYWxfZ3JvdXAYBSABKAlCFQoTX2ZpcnN0X25hbWVfbWF0Y2hlZCIcChpSZXBvcnRWZXJpZmljYXRpb25SZXNwb25zZSI9ChlMaXN0UmVsZWFzZWRDbGFpbXNSZXF1ZXN0Eg0KBWFmdGVyGAEgASgJEhEKCXBhZ2Vfc2l6ZRgCIAEoBSJhChpMaXN0UmVsZWFzZWRDbGFpbXNSZXNwb25zZRIuCghyZWxlYXNlZBgBIAMoCzIcLm53ZmwubWVuc2EudjEuUmVsZWFzZWRDbGFpbRITCgtuZXh0X2N1cnNvchgCIAEoCSKDAQoNUmVsZWFzZWRDbGFpbRISCgpyZXF1ZXN0X2lkGAEgASgJEi8KC3JlbGVhc2VkX2F0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBItCgRraW5kGAMgASgOMh8ubndmbC5tZW5zYS52MS5DbGFpbVJlbGVhc2VLaW5kKqoCChNWZXJpZmljYXRpb25PdXRjb21lEiQKIFZFUklGSUNBVElPTl9PVVRDT01FX1VOU1BFQ0lGSUVEEAASJwojVkVSSUZJQ0FUSU9OX09VVENPTUVfVkVSSUZJRURfTE9DQUwQARItCilWRVJJRklDQVRJT05fT1VUQ09NRV9WRVJJRklFRF9PVEhFUl9HUk9VUBACEiIKHlZFUklGSUNBVElPTl9PVVRDT01FX05PVF9GT1VORBADEh4KGlZFUklGSUNBVElPTl9PVVRDT01FX0VSUk9SEAQSJwojVkVSSUZJQ0FUSU9OX09VVENPTUVfRU1BSUxfTUlTTUFUQ0gQBRIoCiRWRVJJRklDQVRJT05fT1VUQ09NRV9EVVBMSUNBVEVfQ0xBSU0QBirAAQoQQ2xhaW1SZWxlYXNlS2luZBIiCh5DTEFJTV9SRUxFQVNFX0tJTkRfVU5TUEVDSUZJRUQQABIfChtDTEFJTV9SRUxFQVNFX0tJTkRfUkVKRUNURUQQARIfChtDTEFJTV9SRUxFQVNFX0tJTkRfUkVPUEVORUQQAhImCiJDTEFJTV9SRUxFQVNFX0tJTkRfQUNDT1VOVF9ERUxFVEVEEAMSHgoaQ0xBSU1fUkVMRUFTRV9LSU5EX0RFTEVURUQQBDL5AgoZTWVtYmVyc2hpcFZlcmlmaWVyU2VydmljZRKAAQoYTGlzdFBlbmRpbmdWZXJpZmljYXRpb25zEi4ubndmbC5tZW5zYS52MS5MaXN0UGVuZGluZ1ZlcmlmaWNhdGlvbnNSZXF1ZXN0Gi8ubndmbC5tZW5zYS52MS5MaXN0UGVuZGluZ1ZlcmlmaWNhdGlvbnNSZXNwb25zZSIDkAIBEmkKElJlcG9ydFZlcmlmaWNhdGlvbhIoLm53ZmwubWVuc2EudjEuUmVwb3J0VmVyaWZpY2F0aW9uUmVxdWVzdBopLm53ZmwubWVuc2EudjEuUmVwb3J0VmVyaWZpY2F0aW9uUmVzcG9uc2USbgoSTGlzdFJlbGVhc2VkQ2xhaW1zEigubndmbC5tZW5zYS52MS5MaXN0UmVsZWFzZWRDbGFpbXNSZXF1ZXN0GikubndmbC5tZW5zYS52MS5MaXN0UmVsZWFzZWRDbGFpbXNSZXNwb25zZSIDkAIBYgZwcm90bzM", [file_google_protobuf_timestamp]);
 
 /**
  * @generated from message nwfl.mensa.v1.ListPendingVerificationsRequest
@@ -82,6 +82,14 @@ export type PendingVerification = Message<"nwfl.mensa.v1.PendingVerification"> &
    * @generated from field: string email = 4;
    */
   email: string;
+
+  /**
+   * OFFICER-VERIFY: the first name as typed, for the verifier to confirm
+   * (first_name_matched); empty when the sign-up did not give one.
+   *
+   * @generated from field: string first_name = 5;
+   */
+  firstName: string;
 };
 
 /**
@@ -113,6 +121,26 @@ export type ReportVerificationRequest = Message<"nwfl.mensa.v1.ReportVerificatio
    * @generated from field: string conflicting_request_id = 3;
    */
   conflictingRequestId: string;
+
+  /**
+   * OFFICER-VERIFY: whether the typed first name matches the member's record.
+   * Unset when the verifier did not compare it (always unset for a sign-up
+   * with no first name). Never auto-approves unless set and true.
+   *
+   * @generated from field: optional bool first_name_matched = 4;
+   */
+  firstNameMatched?: boolean | undefined;
+
+  /**
+   * OFFICER-VERIFY: the member's local group as the record names it, exactly
+   * (e.g. "No group assigned"); empty when not reported. The site keeps it and
+   * compares it with the chapter's own group name: a member of it is a
+   * chapter member, anyone else a guest member. Not reported: unknown, and
+   * never auto-approved. At most 120 characters, no control character.
+   *
+   * @generated from field: string local_group = 5;
+   */
+  localGroup: string;
 };
 
 /**
@@ -322,7 +350,10 @@ export const MembershipVerifierService: GenService<{
   /**
    * The sign-ups that typed a number and have not been checked yet, with the
    * email stored on each (VET). This is the only RPC of this service that
-   * returns a membership number.
+   * returns a membership number. OFFICER-VERIFY: an approved sign-up whose
+   * owner asked for a fresh check is listed again, under the same request id,
+   * with the names as they are now; check it afresh (its own earlier claim on
+   * its number is not a duplicate).
    *
    * @generated from rpc nwfl.mensa.v1.MembershipVerifierService.ListPendingVerifications
    */
@@ -333,8 +364,19 @@ export const MembershipVerifierService: GenService<{
   },
   /**
    * Records the outcome and the date; the sign-up then leaves the pending
-   * list. A local match does not approve the sign-up: an
-   * officer still does.
+   * list. A local match does not approve the sign-up: an officer still does,
+   * with one exception (OFFICER-VERIFY): an invited sign-up whose report is
+   * VERIFIED_LOCAL with first_name_matched true and a local_group naming the
+   * chapter's own group is approved by the report itself, as the verifier.
+   * OFFICER-VERIFY: first_name_matched and local_group are kept only with an
+   * outcome that confirms the number and the last name (VERIFIED_LOCAL,
+   * VERIFIED_OTHER_GROUP, EMAIL_MISMATCH); with any other outcome they are
+   * dropped. The report of a fresh check (an approved sign-up listed again)
+   * replaces the earlier answers when its outcome is VERIFIED_LOCAL or
+   * VERIFIED_OTHER_GROUP; an EMAIL_MISMATCH is held for an approver to confirm,
+   * as for a first sign-up, and the earlier answers stand until then; with any
+   * other outcome the earlier answers stand and only the outcome is noted.
+   * It never changes the decision.
    *
    * VET fix 1: a report refused with FAILED_PRECONDITION or NOT_FOUND records
    * nothing here. The verifier must then not keep a claim for it: a sign-up

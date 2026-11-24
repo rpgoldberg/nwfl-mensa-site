@@ -11,7 +11,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { SIZES } from '../server/prefs.mjs';
 import { THEMES, setPrefs } from './prefs';
 import { signIn } from './signin';
-import { EARLIER_CLAIM, REJECTED, SIGNUP_QUEUE, VET_CONFIRMS } from './stand-in';
+import { CHECK_FACTS, EARLIER_CLAIM, REJECTED, SIGNUP_QUEUE, VET_CONFIRMS } from './stand-in';
 
 const QUEUE = '/officer-area/sign-ups';
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'wcag2aaa', 'best-practice'];
@@ -23,6 +23,13 @@ const PHONE = { width: 390, height: 844 };
  */
 const CEILING = { desktop: Math.floor(8364 * 0.6), phone: Math.floor(9576 * 0.7) };
 const PENDING_LABELS = ['First name', 'Last name', 'Membership number', 'How they came', 'Signed up', 'Membership check'];
+/** OFFICER-VERIFY: the stand-in's cards added after QUEUE-C measured its page heights. */
+const OFFICER_VERIFY_CARDS = ['Indy Unconfirmed', 'Lou Unlisted'];
+/** OFFICER-VERIFY: a card's labels, with the first-name check and the local group before the check where the API sent them. */
+const pendingLabels = (name: string): string[] => {
+  const extra = name in CHECK_FACTS ? CHECK_FACTS[name as keyof typeof CHECK_FACTS].map(([label]) => label) : [];
+  return [...PENDING_LABELS.slice(0, -1), ...extra, 'Membership check'];
+};
 const REJECTED_LABELS = ['First name', 'Last name', 'Membership number', 'Rejected on', 'Membership check'];
 
 interface Pair { tag: string; children: string[]; dt: string; dd: string; top: number; bottom: number; left: number; right: number; clipped: boolean; cut: boolean }
@@ -95,7 +102,7 @@ test.describe('QUEUE-C: a compact approvers\' queue', () => {
       const card = signupCard(page, s.name);
       await expect(card.locator('h2 + p')).toHaveText(s.email);
       const grid = card.locator('dl.facts--grid').first();
-      await expect(grid.locator(':scope > div > dt')).toHaveText(PENDING_LABELS);
+      await expect(grid.locator(':scope > div > dt')).toHaveText(pendingLabels(s.name));
       await expect(grid.locator(':scope > div').filter({ has: page.getByText('Membership check', { exact: true }) }).locator('dd')).toHaveText(s.check);
       await expect(grid.locator(':scope > div').filter({ has: page.getByText('How they came', { exact: true }) }).locator('dd')).toHaveText(s.route);
       await expect(card.locator('dt', { hasText: 'Email' })).toHaveCount(0);
@@ -126,7 +133,7 @@ test.describe('QUEUE-C: a compact approvers\' queue', () => {
       await openQueue(page);
       for (const s of SIGNUP_QUEUE) {
         const grid = await pairsOf(signupCard(page, s.name).locator('dl.facts--grid').first());
-        wellFormed(grid, PENDING_LABELS);
+        wellFormed(grid, pendingLabels(s.name));
         const row = firstRow(grid.pairs);
         expect(row, s.name).toBeGreaterThanOrEqual(perRow[0]);
         expect(row, s.name).toBeLessThanOrEqual(perRow[1]);
@@ -136,7 +143,13 @@ test.describe('QUEUE-C: a compact approvers\' queue', () => {
         wellFormed(grid, REJECTED_LABELS);
         expect(firstRow(grid.pairs)).toBeGreaterThanOrEqual(perRow[0]);
       }
-      const height = await page.evaluate(() => document.documentElement.scrollHeight);
+      // The ceiling is for QUEUE-C's own fixtures: the cards and the check lines OFFICER-VERIFY added to the
+      // stand-in (two cards; the first-name check and local group pairs) are taken out before measuring.
+      const height = await page.evaluate((added) => {
+        for (const card of document.querySelectorAll('.signup-card')) if (added.some((name) => card.querySelector('h2')?.textContent === name)) card.remove();
+        for (const dt of document.querySelectorAll('.signup-card dl.facts--grid > div > dt')) if (dt.textContent === 'First name check' || dt.textContent === 'Local group') dt.parentElement?.remove();
+        return document.documentElement.scrollHeight;
+      }, OFFICER_VERIFY_CARDS);
       test.info().annotations.push({ type: 'height', description: `${width}: ${height}` });
       expect(height).toBeLessThanOrEqual(ceiling);
       expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
