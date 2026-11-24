@@ -231,6 +231,25 @@ describe('grpcMembership: the approvers\' queue', () => {
     expect(seen).toEqual([false, true, false]);
   });
 
+  // Ruling 3: an approved member's fresh check that found an email mismatch waits in the queue, marked as such.
+  it('reads a fresh check held for an approver as one, and a first sign-up as not', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: [
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Robin Again', email: 'robin@example.org', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH, freshCheck: true }),
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Robin First', email: 'robin@example.net', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH }),
+          ],
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.listSignupRequests(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Robin Again', email: 'robin@example.org', route: 'signup', verification: 'email_mismatch', freshCheck: true },
+      { requestId: ID, displayName: 'Robin First', email: 'robin@example.net', route: 'signup', verification: 'email_mismatch' },
+    ]);
+  });
+
   it('VET fix 1: reads an earlier claim since closed as closed, with no name', async () => {
     const EARLIER = new Date('2026-09-15T14:00:00Z');
     const server = await grpcServer((router) =>
@@ -451,6 +470,7 @@ describe('grpcMembership: OFFICER-VERIFY', () => {
       [OfficerCheck.RUNNING, 'running'],
       [OfficerCheck.NOT_CONFIRMED, 'not_confirmed'],
       [OfficerCheck.NEEDS_GRANT, 'needs_grant'],
+      [OfficerCheck.AWAITING_APPROVER, 'awaiting_approver'],
     ] as const) {
       officerCheck = wire;
       expect(await api.getMyStanding(PERSON)).toEqual({ account: { status: 'member', route: 'signup' }, officerTools: 'awaiting_check', officerCheck: name });

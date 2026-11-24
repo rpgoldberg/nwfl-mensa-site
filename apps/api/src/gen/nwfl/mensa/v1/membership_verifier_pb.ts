@@ -372,8 +372,10 @@ export const MembershipVerifierService: GenService<{
    * outcome that confirms the number and the last name (VERIFIED_LOCAL,
    * VERIFIED_OTHER_GROUP, EMAIL_MISMATCH); with any other outcome they are
    * dropped. The report of a fresh check (an approved sign-up listed again)
-   * replaces the earlier answers when its outcome confirms; otherwise the
-   * earlier answers stand and only the outcome of the fresh check is noted.
+   * replaces the earlier answers when its outcome is VERIFIED_LOCAL or
+   * VERIFIED_OTHER_GROUP; an EMAIL_MISMATCH is held for an approver to confirm,
+   * as for a first sign-up, and the earlier answers stand until then; with any
+   * other outcome the earlier answers stand and only the outcome is noted.
    * It never changes the decision.
    *
    * VET fix 1: a report refused with FAILED_PRECONDITION or NOT_FOUND records

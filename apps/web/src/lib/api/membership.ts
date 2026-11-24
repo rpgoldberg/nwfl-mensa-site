@@ -60,7 +60,7 @@ export type HandApprovalState = 'open' | 'as_guest' | 'needs_check';
 /** OFFICER-VERIFY: the person's officer tools. */
 export type OfficerToolsState = 'open' | 'awaiting_check' | 'none';
 /** OFFICER-VERIFY (fix round 3): what opens the officer tools of an approved account while they wait. */
-export type OfficerCheckState = 'confirm_details' | 'running' | 'not_confirmed' | 'needs_grant';
+export type OfficerCheckState = 'confirm_details' | 'running' | 'not_confirmed' | 'needs_grant' | 'awaiting_approver';
 /** GetSignupRequest: where one sign-up stands. */
 export type Decision = 'pending' | 'approved' | 'rejected' | 'reopened';
 
@@ -126,6 +126,8 @@ export interface PendingSignup extends Typed {
   localGroupStanding?: LocalGroup;
   /** OFFICER-VERIFY: what an approver may do by hand; absent while switched off (the rule as before). */
   handApproval?: HandApprovalState;
+  /** Ruling 3: not a first sign-up but an approved member's fresh check, held for an approver (an email mismatch). */
+  freshCheck?: true;
 }
 
 /** REOPEN: a rejected sign-up that can be reopened, as the Admin or the Membership Officer sees it. */
@@ -220,6 +222,7 @@ const OFFICER_CHECK: Partial<Record<OfficerCheck, OfficerCheckState>> = {
   [OfficerCheck.RUNNING]: 'running',
   [OfficerCheck.NOT_CONFIRMED]: 'not_confirmed',
   [OfficerCheck.NEEDS_GRANT]: 'needs_grant',
+  [OfficerCheck.AWAITING_APPROVER]: 'awaiting_approver',
 };
 const DECISION: Record<Decision, SignupDecision> = {
   pending: SignupDecision.PENDING,
@@ -284,6 +287,7 @@ function pendingOf(request: SignupRequest): PendingSignup {
     ...(request.localGroup !== '' ? { localGroup: request.localGroup } : {}),
     ...(standing !== undefined ? { localGroupStanding: standing } : {}),
     ...(request.handApproval !== HandApproval.UNSPECIFIED ? { handApproval: nameOf(HAND_APPROVAL, request.handApproval) } : {}),
+    ...(request.freshCheck ? { freshCheck: true as const } : {}),
     ...(request.earlierClaim
       ? {
           earlierClaim: {

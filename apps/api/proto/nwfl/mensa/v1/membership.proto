@@ -92,6 +92,9 @@ enum OfficerCheck {
   // Confirmed as a member of another local group (a guest member): the tools
   // open when the Admin or the Webmaster grants affiliate standing.
   OFFICER_CHECK_NEEDS_GRANT = 4;
+  // The fresh check matched the number and the names but not the email: an
+  // approver confirms it with the member, as for a first sign-up.
+  OFFICER_CHECK_AWAITING_APPROVER = 5;
 }
 
 // GetSignupRequest: where one sign-up stands.
@@ -146,6 +149,11 @@ message SignupRequest {
   // OFFICER_VERIFY is off, when the rule is as before: an other-group match is
   // not approved as a member.
   HandApproval hand_approval = 15;
+  // OFFICER-VERIFY: not a sign-up waiting for its first decision, but an
+  // approved member's fresh check that found an email mismatch. It never opens
+  // officer tools by itself: ApproveSignup with confirmed_warning confirms the
+  // check, RejectSignup declines it, and neither changes the account.
+  bool fresh_check = 16;
 }
 
 // OFFICER-VERIFY (switched on): what an approver may do with a sign-up by hand.

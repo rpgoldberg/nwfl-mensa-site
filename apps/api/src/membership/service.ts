@@ -26,7 +26,13 @@
 //                       (sent, it must be the one on file), and the
 //                       sign-up is marked for the verifier (0032
 //                       recheck_requested_at). Their standing is as it
-//                       was until the check answers (verifier.ts).
+//                       was until the check answers (verifier.ts). A fresh
+//                       check that finds an email mismatch opens nothing
+//                       by itself (ruling 3): it joins the approvers'
+//                       queue (fresh_check), where ApproveSignup with
+//                       confirmed_warning makes it the sign-up's check
+//                       and RejectSignup declines it; neither touches the
+//                       decision or the account.
 //   GetMyAccount        the caller's own account and, for an approved member,
 //                       their profile: the names and the number (PROFILE-ID);
 //                       and whether their officer tools are open or wait for
@@ -252,6 +258,10 @@ interface DecidableRow extends SignupRow {
   route: string | null;
   first_name_matched: boolean | null;
   local_group: string | null;
+  /** Ruling 3: an approved sign-up whose fresh check found an email mismatch, held for an approver. */
+  held: boolean;
+  recheck_first_name_matched: boolean | null;
+  recheck_local_group: string | null;
 }
 
 /** OFFICER-VERIFY fix round 3: an account and its approved sign-up, as officerCheckOf reads them. */
@@ -269,6 +279,9 @@ interface CheckedRow {
   recheck_outcome: string | null;
 }
 
+/** Ruling 3: a fresh check's email mismatch, held for an approver; for signup_request aliased `s`. */
+const HELD_FOR_APPROVER = `s.recheck_outcome = 'email_mismatch' AND s.decision = 'approved' AND s.reopened_at IS NULL`;
+
 /**
  * OFFICER-VERIFY fix round 3 (no dead ends): what opens the officer tools of an approved account whose powers
  * are withheld. One rule for GetMyAccount, which says it, and SubmitSignup, which takes the fresh check.
@@ -277,6 +290,8 @@ export function officerCheckOf(row: CheckedRow, chapterGroup: string): OfficerCh
   // Past the 13 months, lapsed or removed: an approver's yearly confirmation comes first. No approved sign-up: nothing to check again.
   if (!row.live || !row.profile) return OfficerCheck.UNSPECIFIED;
   if (row.rechecking) return OfficerCheck.RUNNING;
+  // Ruling 3: an email mismatch waits for an approver, as on a first sign-up.
+  if (row.recheck_outcome === 'email_mismatch') return OfficerCheck.AWAITING_APPROVER;
   const check = { verification: row.verification, firstNameMatched: row.first_name_matched, localGroup: row.local_group };
   // A guest member the check confirmed in full lacks only the Admin's grant.
   if (fullyChecked(check) && standingKind({ live: true, affiliate: row.status === 'affiliate' }, check, chapterGroup) === 'guest') return OfficerCheck.NEEDS_GRANT;
@@ -344,15 +359,35 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
   const decidable = async (client: TxClient, caller: Caller, id: string): Promise<DecidableRow> => {
     const row = (
       await client.query<DecidableRow>(
-        `SELECT s.id, s.sub, s.decision, s.verification, s.verified_on::text AS verified_on, a.route, s.first_name_matched, s.local_group
+        `SELECT s.id, s.sub, s.decision, s.verification, s.verified_on::text AS verified_on, a.route, s.first_name_matched, s.local_group,
+           $2::boolean AND coalesce(${HELD_FOR_APPROVER}, false) AS held, s.recheck_first_name_matched, s.recheck_local_group
          FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub WHERE s.id = $1 FOR UPDATE OF s`,
-        [id],
+        [id, officerVerify !== null],
       )
     ).rows[0];
     if (row === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
     if (row.sub === caller.subject) throw new ConnectError('no one decides their own sign-up', Code.PermissionDenied);
-    if (row.decision !== 'pending') throw precondition('this sign-up is already decided');
+    // Ruling 3 (switched on only): an approved sign-up's fresh check, held for an approver, is theirs to settle too.
+    if (row.decision !== 'pending' && !row.held) throw precondition('this sign-up is already decided');
     return row;
+  };
+
+  /**
+   * Ruling 3: an approver settles the email mismatch a fresh check found. Confirmed, it becomes the sign-up's
+   * check (dated today, on the approver's word); declined, the earlier answers stand and the member may ask
+   * again. Neither touches the decision or the account.
+   */
+  const settleHeld = async (client: TxClient, caller: Caller, row: DecidableRow, confirm: boolean): Promise<void> => {
+    await client.query(
+      confirm
+        ? `UPDATE signup_request SET verification = 'email_mismatch', verified_on = $2, conflicting_request_id = NULL,
+             first_name_matched = recheck_first_name_matched, local_group = recheck_local_group,
+             recheck_outcome = NULL, recheck_first_name_matched = NULL, recheck_local_group = NULL
+           WHERE id = $1`
+        : `UPDATE signup_request SET recheck_outcome = 'declined', recheck_first_name_matched = NULL, recheck_local_group = NULL WHERE id = $1 AND $2::date IS NOT NULL`,
+      [row.id, today()],
+    );
+    await recordAudit(client, caller, { action: confirm ? 'recheck_confirmed_email_mismatch' : 'recheck_declined', subjectKind: 'signup_request', subjectId: row.id });
   };
 
   /** OFFICER-VERIFY: a sign-up row as local-group.ts handApproval reads it. */
@@ -526,6 +561,16 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
            FROM signup_request s LEFT JOIN member_account a ON a.sub = s.sub LEFT JOIN signup_request c ON c.id = s.conflicting_request_id
            WHERE s.decision = 'pending' ORDER BY s.created_at, s.id`,
         );
+        // Ruling 3, switched on only: the fresh checks held for an approver (an email mismatch), after the sign-ups.
+        const { rows: held } =
+          officerVerify === null
+            ? { rows: [] }
+            : await db.query<TypedRow & { id: string; display_name: string; email: string; created_at: Date; route: string; recheck_first_name_matched: boolean | null; recheck_local_group: string | null }>(
+                `SELECT s.id, s.display_name, s.email, s.created_at, coalesce(a.route, 'signup') AS route, s.first_name, s.last_name, s.membership_number,
+                   s.recheck_first_name_matched, s.recheck_local_group
+                 FROM signup_request s JOIN member_account a ON a.sub = s.sub AND a.status IN ('member', 'affiliate')
+                 WHERE ${HELD_FOR_APPROVER} ORDER BY s.created_at, s.id`,
+              );
         return {
           requests: rows.map((row) =>
             create(SignupRequestSchema, {
@@ -557,6 +602,23 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
                   }
                 : {}),
             }),
+          ).concat(
+            held.map((row) =>
+              create(SignupRequestSchema, {
+                requestId: row.id,
+                displayName: row.display_name,
+                email: row.email,
+                verification: Verification.EMAIL_MISMATCH,
+                createdAt: timestampFromDate(row.created_at),
+                route: ROUTES[row.route],
+                ...typedFields(row),
+                ...(row.recheck_first_name_matched !== null ? { firstNameMatched: row.recheck_first_name_matched } : {}),
+                localGroup: row.recheck_local_group ?? '',
+                localGroupStanding: localStanding(row.recheck_local_group, 'email_mismatch', chapterGroup),
+                handApproval: HandApproval.OPEN,
+                freshCheck: true,
+              }),
+            ),
           ),
         };
       },
@@ -567,6 +629,12 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const id = requestId(request.requestId);
         return tx(async (client) => {
           const row = await decidable(client, caller, id);
+          if (row.held) {
+            if (!request.confirmedWarning) throw precondition(CONFIRM_FIRST['email_mismatch'] as string);
+            await settleHeld(client, caller, row, true);
+            const { rows } = await client.query<AccountRow>(`SELECT status, route, verified_on::text AS verified_on FROM member_account WHERE sub = $1`, [row.sub]);
+            return { account: accountMessage(rows[0] as AccountRow, localStanding(row.recheck_local_group, 'email_mismatch', chapterGroup)) };
+          }
           if (officerVerify === null) {
             // As before (R33): an other-group member is never approved as a member.
             if (row.verification === 'verified_other_group') throw precondition('an other-group member is rejected or granted affiliate standing, not approved');
@@ -614,6 +682,10 @@ export function membershipRoutes(deps: MembershipDeps): (router: ConnectRouter) 
         const id = requestId(request.requestId);
         return tx(async (client) => {
           const row = await decidable(client, caller, id);
+          if (row.held) {
+            await settleHeld(client, caller, row, false);
+            return {};
+          }
           await decide(client, id, 'rejected', caller.subject as string);
           await recordAudit(client, caller, { action: 'reject', subjectKind: 'signup_request', subjectId: id, fromState: 'pending', toState: 'rejected' });
           // W-SIGNUP fix 1: the account waiting on it is removed with it, so GetMyAccount tells the person; an

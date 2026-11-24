@@ -25,6 +25,9 @@ import {
   GUEST_TEXT,
   INVITE_UNCONFIRMED,
   FRESH_CHECK_ASKED,
+  FRESH_CHECK_QUEUED,
+  FRESH_CHECK_REJECT,
+  freshCheckOf,
   FRESH_CHECK_REFUSED,
   OFFICER_CHECK_CONTACT,
   OFFICER_CHECK_NOTICE,
@@ -222,8 +225,10 @@ describe('accountView (D3)', () => {
           'A new membership check has been asked for. Your officer tools open when it confirms your membership number, your last name and your first name, and that you belong to this chapter. You do not need to do anything now.',
         needs_grant:
           'Your membership is confirmed, with another local group. Your officer tools open when the Admin or the Webmaster gives your account affiliate access. Please ask the Admin.',
+        awaiting_approver:
+          'The new membership check confirmed your membership number and names, but the email on your Mensa membership is different. Your officer tools open once the Membership Officer or another approver confirms with you that it is yours. You do not need to do anything now.',
       });
-      for (const check of ['confirm_details', 'not_confirmed', 'running', 'needs_grant'] as const) {
+      for (const check of ['confirm_details', 'not_confirmed', 'running', 'needs_grant', 'awaiting_approver'] as const) {
         expect(officerCheckNotice('awaiting_check', check, account('member'))).toBe(OFFICER_CHECK_TEXT[check]);
       }
     });
@@ -240,6 +245,7 @@ describe('accountView (D3)', () => {
       expect(mayAskFreshCheck('awaiting_check', 'not_confirmed')).toBe(true);
       expect(mayAskFreshCheck('awaiting_check', 'running')).toBe(false);
       expect(mayAskFreshCheck('awaiting_check', 'needs_grant')).toBe(false);
+      expect(mayAskFreshCheck('awaiting_check', 'awaiting_approver')).toBe(false);
       expect(mayAskFreshCheck('awaiting_check', undefined)).toBe(false);
     });
 
@@ -728,6 +734,16 @@ describe('the queue after OFFICER-VERIFY', () => {
     expect(OTHER_GROUP_TEXT).toBe(
       'This person is a member of another local group, so the sign-up cannot be approved as a member here. Reject it, or ask the Admin or the Webmaster about affiliate access.',
     );
+  });
+
+  // Ruling 3: a fresh check held for an approver says what it is, and what approving and rejecting it do.
+  it('says a fresh check is one, and that deciding it never changes the account', () => {
+    expect(freshCheckOf(pending({ verification: 'email_mismatch', freshCheck: true }))).toEqual({ note: FRESH_CHECK_QUEUED, reject: FRESH_CHECK_REJECT });
+    expect(freshCheckOf(pending({ verification: 'email_mismatch' }))).toBeUndefined();
+    expect(FRESH_CHECK_QUEUED).toBe(
+      'Already a member: this is a new membership check they asked for, so that their officer tools can open. Approving confirms the check; rejecting leaves things as they were. Neither changes their account.',
+    );
+    expect(FRESH_CHECK_REJECT).toBe('Their account stays as it is, and the officer tools stay closed. They can ask for a new check again from their account page.');
   });
 
   it('shows the banner only when the named sign-up really is in that state', () => {

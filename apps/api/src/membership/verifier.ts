@@ -37,8 +37,11 @@
 //                             (MembershipService SubmitSignup) is listed
 //                             again under the same id, while its account
 //                             still stands; its report replaces the earlier
-//                             answers when the outcome confirms, and
-//                             otherwise only notes the outcome
+//                             answers when the outcome is a local or an
+//                             other-group match; an email mismatch is held
+//                             for an approver to confirm, as for a first
+//                             sign-up (ruling 3: it never opens officer
+//                             tools by itself); anything else only notes the outcome
 //                             (recheck_outcome): the earlier answers stand,
 //                             so a failed fresh check changes no one's
 //                             standing. It never decides. VET: a duplicate claim
@@ -201,13 +204,16 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
             // Fix round 3: the answer to a fresh check an approved member asked for. A confirming outcome
             // replaces the earlier answers; any other is only noted, and the earlier answers stand. The
             // decision and the account are never touched.
+            // Ruling 3: an email mismatch is held, with its answers, for an approver (MembershipService ApproveSignup).
+            const replaces = confirming && outcome !== 'email_mismatch';
             const { rows: again } = await client.query(
-              confirming
+              replaces
                 ? `UPDATE signup_request SET verification = $2, verified_on = $3, conflicting_request_id = NULL, first_name_matched = $4, local_group = $5,
                      recheck_requested_at = NULL, recheck_outcome = NULL
                    WHERE id = $1 AND ${RECHECK} RETURNING id`
-                : `UPDATE signup_request SET recheck_outcome = $2, recheck_requested_at = NULL WHERE id = $1 AND ${RECHECK} RETURNING id`,
-              confirming ? [request.requestId, outcome, todayIn(deps.now()), firstNameMatched, localGroup] : [request.requestId, outcome],
+                : `UPDATE signup_request SET recheck_outcome = $2, recheck_first_name_matched = $3, recheck_local_group = $4, recheck_requested_at = NULL
+                   WHERE id = $1 AND ${RECHECK} RETURNING id`,
+              replaces ? [request.requestId, outcome, todayIn(deps.now()), firstNameMatched, localGroup] : [request.requestId, outcome, firstNameMatched, localGroup],
             );
             if (again.length > 0) {
               await recordAudit(client, caller, { action: 'recheck_report', subjectKind: 'signup_request', subjectId: request.requestId, fromState: 'asked', toState: outcome });
@@ -220,7 +226,8 @@ export function verifierRoutes(deps: VerifierDeps): (router: ConnectRouter) => v
             const { rows: known } = await client.query<{ landed: boolean }>(
               `SELECT (verification = $2 AND conflicting_request_id IS NOT DISTINCT FROM $3::uuid
                  AND (NOT $6::boolean OR (first_name_matched IS NOT DISTINCT FROM $4::boolean AND local_group IS NOT DISTINCT FROM $5::text)))
-                 OR ($6::boolean AND recheck_requested_at IS NULL AND recheck_outcome IS NOT DISTINCT FROM $2) AS landed
+                 OR ($6::boolean AND recheck_requested_at IS NULL AND recheck_outcome IS NOT DISTINCT FROM $2
+                   AND recheck_first_name_matched IS NOT DISTINCT FROM $4::boolean AND recheck_local_group IS NOT DISTINCT FROM $5::text) AS landed
                FROM signup_request WHERE id = $1`,
               [request.requestId, outcome, conflicting, firstNameMatched, localGroup, officerVerify !== null],
             );

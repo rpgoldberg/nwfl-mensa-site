@@ -14,7 +14,7 @@ import { Code, ConnectError } from '@connectrpc/connect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
 import { dbStanding } from '../../src/auth/standing.js';
-import { LocalGroupStanding, MemberStatus, MembershipService, OfficerCheck, OfficerTools } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { LocalGroupStanding, MemberStatus, MembershipService, OfficerCheck, OfficerTools, Verification } from '../../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { MembershipVerifierService, VerificationOutcome as O } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { type Api, NOW, startApi } from '../helpers/api.js';
 import { live } from '../helpers/pg.js';
@@ -379,6 +379,81 @@ describe.skipIf(!live)('OFFICER-VERIFY fix round 3: a confirmed check for every 
       await report(guest.id, O.VERIFIED_OTHER_GROUP, { localGroup: 'Boston Mensa', firstNameMatched: true });
       expect(await kindOf(guest.sub)).toBe('affiliate');
       expect(await power(guest.token)).toBe('ok');
+    });
+  });
+
+  // The orchestrator's ruling (3): an email-only mismatch never opens officer tools by itself, on a fresh check
+  // as on a first sign-up (ruling B). It waits in the approvers' queue for an approver's confirmation.
+  describe('a fresh check that finds an email mismatch', () => {
+    const fresh = async () => {
+      const person = await joined(O.VERIFIED_LOCAL, { localGroup: CHAPTER, firstNameMatched: false });
+      await m().submitSignup({ membershipNumber: '', lastName: 'Madeup', firstName: 'Samuel' }, as(person.token));
+      await report(person.id, O.EMAIL_MISMATCH, { localGroup: CHAPTER, firstNameMatched: true });
+      return person;
+    };
+    const queued = async (id: string) => (await m().listSignupRequests({}, as('approver'))).requests.find((r) => r.requestId === id);
+
+    it('does not open the tools: the earlier answers stand, the officer is told an approver confirms it, and the approvers see it', async () => {
+      const person = await fresh();
+      expect(await row(person.id)).toMatchObject({ verification: 'verified_local', first_name_matched: false, local_group: CHAPTER, decision: 'approved', status: 'member' });
+      expect(await kindOf(person.sub)).toBe('chapter_partial');
+      const account = await mine(person.token);
+      expect(account.officerTools).toBe(OfficerTools.AWAITING_CHECK);
+      expect(account.officerCheck).toBe(OfficerCheck.AWAITING_APPROVER);
+      expect(await power(person.token)).toBe('PermissionDenied');
+      expect(await queued(person.id)).toMatchObject({ freshCheck: true, verification: Verification.EMAIL_MISMATCH, firstNameMatched: true, localGroup: CHAPTER, localGroupStanding: LocalGroupStanding.CHAPTER, firstName: 'Samuel' });
+      // The same report again is OK; it is not theirs to ask again while an approver has it; the verifier is not given it.
+      expect(await code(report(person.id, O.EMAIL_MISMATCH, { localGroup: CHAPTER, firstNameMatched: true }))).toBe('ok');
+      expect(await code(report(person.id, O.EMAIL_MISMATCH, { localGroup: CHAPTER, firstNameMatched: false }))).toBe('FailedPrecondition');
+      expect(await code(m().submitSignup({ membershipNumber: '', lastName: 'Madeup', firstName: 'Sam' }, as(person.token)))).toBe('AlreadyExists');
+      expect((await pendingIds()).find((p) => p.requestId === person.id)).toBeUndefined();
+    });
+
+    it('opens them once an approver confirms the warning, and only then', async () => {
+      const person = await fresh();
+      const before = await on.pool.query(`SELECT * FROM member_account WHERE sub = $1`, [person.sub]);
+      await expect(m().approveSignup({ requestId: person.id }, as('approver'))).rejects.toMatchObject({ code: Code.FailedPrecondition });
+      expect(await power(person.token)).toBe('PermissionDenied');
+      // Never their own, and never by one whose own powers wait.
+      expect(await code(m().approveSignup({ requestId: person.id, confirmedWarning: true }, as(person.token)))).toBe('PermissionDenied');
+      expect(await code(m().approveSignup({ requestId: person.id, confirmedWarning: true }, as('approver')))).toBe('ok');
+      expect(await row(person.id)).toMatchObject({ verification: 'email_mismatch', first_name_matched: true, local_group: CHAPTER, decision: 'approved', status: 'member' });
+      expect(await kindOf(person.sub)).toBe('chapter');
+      const account = await mine(person.token);
+      expect(account.officerTools).toBe(OfficerTools.OPEN);
+      expect(account.officerCheck).toBe(OfficerCheck.UNSPECIFIED);
+      expect(await power(person.token)).toBe('ok');
+      expect(await queued(person.id)).toBeUndefined();
+      expect((await on.pool.query(`SELECT * FROM member_account WHERE sub = $1`, [person.sub])).rows).toEqual(before.rows);
+      expect((await audits(person.id)).slice(-2)).toEqual(['recheck_report', 'recheck_confirmed_email_mismatch']);
+      // Done: a second confirmation is refused, and the verifier's retry is still answered OK.
+      expect(await code(m().approveSignup({ requestId: person.id, confirmedWarning: true }, as('approver')))).toBe('FailedPrecondition');
+      expect(await code(report(person.id, O.EMAIL_MISMATCH, { localGroup: CHAPTER, firstNameMatched: true }))).toBe('ok');
+    });
+
+    it('is declined by an approver without touching the account, and may then be asked again', async () => {
+      const person = await fresh();
+      expect(await code(m().rejectSignup({ requestId: person.id }, as(person.token)))).toBe('PermissionDenied');
+      expect(await code(m().rejectSignup({ requestId: person.id }, as('approver')))).toBe('ok');
+      expect(await row(person.id)).toMatchObject({ verification: 'verified_local', first_name_matched: false, local_group: CHAPTER, decision: 'approved', status: 'member' });
+      expect(await kindOf(person.sub)).toBe('chapter_partial');
+      expect(await queued(person.id)).toBeUndefined();
+      expect((await mine(person.token)).officerCheck).toBe(OfficerCheck.NOT_CONFIRMED);
+      expect((await audits(person.id)).at(-1)).toBe('recheck_declined');
+      expect(await code(m().approveSignup({ requestId: person.id, confirmedWarning: true }, as('approver')))).toBe('FailedPrecondition');
+      expect(await code(m().rejectSignup({ requestId: person.id }, as('approver')))).toBe('FailedPrecondition');
+      expect(await code(m().submitSignup({ membershipNumber: '', lastName: 'Madeup', firstName: 'Sam' }, as(person.token)))).toBe('ok');
+    });
+
+    it('confirmed for a guest, keeps them a guest: an email mismatch in another group', async () => {
+      const guest = await officer(O.VERIFIED_OTHER_GROUP, { localGroup: 'Boston Mensa' });
+      await m().submitSignup({ membershipNumber: '', lastName: 'Madeup', firstName: 'Sam' }, as(guest.token));
+      await report(guest.id, O.EMAIL_MISMATCH, { localGroup: 'Boston Mensa', firstNameMatched: true });
+      expect(await kindOf(guest.sub)).toBe('guest');
+      expect(await queued(guest.id)).toMatchObject({ freshCheck: true, localGroupStanding: LocalGroupStanding.GUEST });
+      expect(await code(m().approveSignup({ requestId: guest.id, confirmedWarning: true }, as('approver')))).toBe('ok');
+      expect(await kindOf(guest.sub)).toBe('guest');
+      expect((await mine(guest.token)).officerCheck).toBe(OfficerCheck.NEEDS_GRANT);
     });
   });
 });

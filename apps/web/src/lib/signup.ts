@@ -215,6 +215,8 @@ export const OFFICER_CHECK_TEXT: Record<OfficerCheckState, string> = {
     'A new membership check has been asked for. Your officer tools open when it confirms your membership number, your last name and your first name, and that you belong to this chapter. You do not need to do anything now.',
   needs_grant:
     'Your membership is confirmed, with another local group. Your officer tools open when the Admin or the Webmaster gives your account affiliate access. Please ask the Admin.',
+  awaiting_approver:
+    'The new membership check confirmed your membership number and names, but the email on your Mensa membership is different. Your officer tools open once the Membership Officer or another approver confirms with you that it is yours. You do not need to do anything now.',
 };
 
 /** Fix round 3: an approved account whose tools wait with nothing to check again here (lapsed, removed, no number on file). */
@@ -230,6 +232,17 @@ export function officerCheckNotice(officerTools: OfficerToolsState, officerCheck
 /** Fix round 3: whether /account offers the fresh check: the tools wait, and the details are theirs to confirm. */
 export function mayAskFreshCheck(officerTools: OfficerToolsState, officerCheck: OfficerCheckState | undefined): boolean {
   return officerTools === 'awaiting_check' && (officerCheck === 'confirm_details' || officerCheck === 'not_confirmed');
+}
+
+/** Ruling 3: on the queue, a fresh check an approved member asked for that found an email mismatch. */
+export const FRESH_CHECK_QUEUED =
+  'Already a member: this is a new membership check they asked for, so that their officer tools can open. Approving confirms the check; rejecting leaves things as they were. Neither changes their account.';
+/** Ruling 3: what rejecting such a fresh check does, said where the approver confirms the rejection. */
+export const FRESH_CHECK_REJECT = 'Their account stays as it is, and the officer tools stay closed. They can ask for a new check again from their account page.';
+
+/** Ruling 3: the queue's words for a fresh check held for an approver; none for a first sign-up. */
+export function freshCheckOf(signup: Pick<PendingSignup, 'freshCheck'>): { note: string; reject: string } | undefined {
+  return signup.freshCheck ? { note: FRESH_CHECK_QUEUED, reject: FRESH_CHECK_REJECT } : undefined;
 }
 
 export const FRESH_CHECK_ASKED = 'Thank you. A new membership check has been asked for.';

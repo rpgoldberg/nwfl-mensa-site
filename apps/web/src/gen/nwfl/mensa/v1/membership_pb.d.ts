@@ -158,6 +158,16 @@ export declare type SignupRequest = Message<"nwfl.mensa.v1.SignupRequest"> & {
    * @generated from field: nwfl.mensa.v1.HandApproval hand_approval = 15;
    */
   handApproval: HandApproval;
+
+  /**
+   * OFFICER-VERIFY: not a sign-up waiting for its first decision, but an
+   * approved member's fresh check that found an email mismatch. It never opens
+   * officer tools by itself: ApproveSignup with confirmed_warning confirms the
+   * check, RejectSignup declines it, and neither changes the account.
+   *
+   * @generated from field: bool fresh_check = 16;
+   */
+  freshCheck: boolean;
 };
 
 /**
@@ -1087,6 +1097,14 @@ export enum OfficerCheck {
    * @generated from enum value: OFFICER_CHECK_NEEDS_GRANT = 4;
    */
   NEEDS_GRANT = 4,
+
+  /**
+   * The fresh check matched the number and the names but not the email: an
+   * approver confirms it with the member, as for a first sign-up.
+   *
+   * @generated from enum value: OFFICER_CHECK_AWAITING_APPROVER = 5;
+   */
+  AWAITING_APPROVER = 5,
 }
 
 /**
