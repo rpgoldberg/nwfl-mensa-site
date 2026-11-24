@@ -21,9 +21,9 @@ function job(name: string): string {
 const JOBS = ['lint', 'typecheck', 'unit', 'e2e', 'docker', 'publish'];
 
 describe('web workflow', () => {
-  it('runs only for changes to the web app, the API protos its client is generated from, the API the leak test runs, or itself, on pushes and pull requests', () => {
+  it('runs only for changes to the web app, the API protos its client is generated from, the API the leak test runs, the checker the machine route test drives, or itself, on pushes and pull requests', () => {
     const triggers = ci.slice(0, ci.search(/^permissions:/m));
-    const paths = String.raw`    paths: \['apps/web/\*\*', 'apps/api/proto/\*\*', 'apps/api/src/\*\*', 'apps/api/migrations/\*\*', 'apps/api/scripts/\*\*', 'apps/api/vendor/\*\*', '\.github/workflows/web\.yml'\]$`;
+    const paths = String.raw`    paths: \['apps/web/\*\*', 'apps/api/proto/\*\*', 'apps/api/src/\*\*', 'apps/api/migrations/\*\*', 'apps/api/scripts/\*\*', 'apps/api/vendor/\*\*', 'apps/api/test/helpers/\*\*', 'apps/linkcheck/src/\*\*', 'apps/linkcheck/test/helpers/\*\*', 'apps/linkcheck/package-lock\.json', '\.github/workflows/web\.yml'\]$`;
     for (const event of ['push', 'pull_request']) expect(triggers).toMatch(new RegExp(`^  ${event}:\\n(?:    .*\\n)*?${paths}`, 'm'));
   });
 
@@ -66,6 +66,19 @@ describe('web workflow', () => {
   it('runs the unit tests with the coverage gate, and keeps the report', () => {
     expect(job('unit')).toMatch(/run: npm run test:coverage$/m);
     expect(job('unit')).toMatch(/path: apps\/web\/coverage\/$/m);
+  });
+
+  it('runs them with the throwaway Postgres and the checker installed: the machine route test drives the real API and checker (MACHINE-ROUTE)', () => {
+    const unit = job('unit');
+    const order = [
+      String.raw`run: npm ci --ignore-scripts\n {8}working-directory: apps/api`,
+      String.raw`run: npm ci --ignore-scripts\n {8}working-directory: apps/linkcheck`,
+      String.raw`run: sh \.\./api/scripts/test-db\.sh start >> "\$GITHUB_ENV"`,
+      'run: npm run test:coverage',
+      String.raw`- if: always\(\) && env\.NWFL_TEST_PG_CONTAINER != ''\n {8}run: sh \.\./api/scripts/test-db\.sh stop "\$NWFL_TEST_PG_CONTAINER"`,
+    ].map((step) => unit.search(new RegExp(step, 'm')));
+    for (const at of order) expect(at).toBeGreaterThan(-1);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
   it('runs one e2e job: the built site, then the public-only canary, with one browser install', () => {
@@ -118,9 +131,13 @@ describe('web workflow', () => {
     }
   });
 
-  it('publishes to ghcr.io/rpgoldberg/nwfl-mensa-site/web on a push to main only, once every check passed', () => {
+  it('publishes to ghcr.io/rpgoldberg/nwfl-mensa-site/web on a push to develop, main or a release/web-* branch only, once every check passed', () => {
     const publish = job('publish');
-    expect(publish).toMatch(/^ {4}if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'$/m);
+    expect(publish).toMatch(/^ {4}if: github\.event_name == 'push' && \(github\.ref == 'refs\/heads\/develop' \|\| github\.ref == 'refs\/heads\/main' \|\| startsWith\(github\.ref, 'refs\/heads\/release\/web-'\)\)$/m);
+    expect(publish).toMatch(/^ {4}name: Publish the image \(develop, main and release branches\)$/m);
+    // A release/web-* push must run the workflow at all (never release/**: other apps' release branches stay out).
+    expect(ci).toMatch(/^ {2}push:\n {4}branches: \[develop, main, 'release\/web-\*'\]$/m);
+    expect(ci).toMatch(/^ {2}pull_request:\n {4}branches: \[develop, main\]$/m);
     expect(publish).toMatch(/^ {4}needs: \[lint, typecheck, unit, e2e, docker\]$/m);
     expect(publish).toMatch(/uses: docker\/login-action@/);
     expect(publish).toMatch(/registry: ghcr\.io$/m);

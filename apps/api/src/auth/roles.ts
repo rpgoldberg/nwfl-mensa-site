@@ -25,6 +25,7 @@
 // or a user without the role is PERMISSION_DENIED.
 // ============================================================================
 import { Code, ConnectError } from '@connectrpc/connect';
+import { isPowerGroup } from './groups.js';
 import type { Caller } from './caller.js';
 
 export interface Roles {
@@ -59,6 +60,14 @@ export function rolesOf(caller: Pick<Caller, 'groups'>): Roles {
 const denied = (): ConnectError => new ConnectError('not permitted', Code.PermissionDenied);
 
 /** A signed-in person: not anonymous, not a machine client. */
+/**
+ * OFFICER-VERIFY: whether the caller holds any officer power, in force or withheld for want of member
+ * standing (caller.ts). For the sign-up route and GetMyAccount only: never a permission.
+ */
+export function holdsPower(caller: Pick<Caller, 'groups' | 'withheld'>): boolean {
+  return caller.groups.some(isPowerGroup) || (caller.withheld?.length ?? 0) > 0;
+}
+
 export function requireUser(caller: Caller): Roles {
   if (caller.kind === 'anonymous') throw new ConnectError('sign in first', Code.Unauthenticated);
   if (caller.kind !== 'user') throw denied();
@@ -133,10 +142,14 @@ export function requireSignupReopener(caller: Caller): void {
   if (!roles.admin && !roles.offices.includes(MEMBERSHIP_OFFICE)) throw denied();
 }
 
-/** Who may grant affiliate standing (R33): the Admin or the Webmaster. Its own rule: who publishes may change, who grants does not. */
-export function requireGrantor(caller: Caller): void {
+/**
+ * Who may grant affiliate standing (R33): the Admin or the Webmaster. Its own rule: who publishes may change, who
+ * grants does not. With OFFICER_VERIFY on (`adminOnly`), the Admin alone: the grant opens officer tools (Ross: "officer
+ * tools if admin grants").
+ */
+export function requireGrantor(caller: Caller, adminOnly = false): void {
   const roles = requireUser(caller);
-  if (!roles.admin && !roles.webmaster) throw denied();
+  if (!roles.admin && (adminOnly || !roles.webmaster)) throw denied();
 }
 
 /** A machine client's scope, beyond the one its client config already requires. */

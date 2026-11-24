@@ -42,7 +42,7 @@ function harness(answer: (text: string, values: unknown[] | undefined) => Answer
     warn: (fields: Record<string, unknown>, message: string) => void logs.push({ level: 'warn', fields, message }),
   } as unknown as StructuredLogger;
   const transport = createRouterTransport(searchRoutes({ db, logger, ...(limits === undefined ? {} : { limits }), ...(clock === undefined ? {} : { clock }) }), {
-    router: { interceptors: [authInterceptor({ verifier, standing: { isMember: (subject) => Promise.resolve(subject !== 'sub-lapsed') } })] },
+    router: { interceptors: [authInterceptor({ verifier, standing: { standingOf: (subject) => Promise.resolve(subject === 'sub-lapsed' ? 'none' : 'chapter') } })] },
   });
   const client = createClient(SearchService, transport);
   const search = (query_: string, token?: string, page = 0) => client.search({ query: query_, page }, token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } });

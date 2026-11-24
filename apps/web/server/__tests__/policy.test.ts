@@ -3,7 +3,7 @@ import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { SIZE_COOKIE, THEME_COOKIE } from '../prefs.mjs';
-import { SECURITY_HEADERS, SESSION_COOKIE, cacheControl, cdnCacheControl, hasCookie, isHostOnlyCookie, parseCsp, referrerPolicy, securityHeaders } from '../policy.mjs';
+import { MACHINE_PREFIXES, SECURITY_HEADERS, SESSION_COOKIE, cacheControl, cdnCacheControl, hasCookie, isHostOnlyCookie, isMachinePath, parseCsp, referrerPolicy, securityHeaders } from '../policy.mjs';
 
 describe('security headers', () => {
   it('sends CSP, HSTS, nosniff, Referrer-Policy, Permissions-Policy and COOP, and nothing else', () => {
@@ -211,6 +211,43 @@ describe('the leaving page is never stored (LINKS L4)', () => {
     expect(cacheControl({ ...anon, path: '/%6Fut/x/', served: ['/out/x/'], status: 301 })).toBe('private, no-store');
     expect(cacheControl({ ...anon, path: '/x/', served: [undefined, '//out/x/'], status: 301 })).toBe('private, no-store');
     expect(cacheControl({ ...anon, path: '/outings', served: ['/outings', undefined], status: 200 })).toBe('private, max-age=60, stale-while-revalidate=60');
+  });
+});
+
+// MACHINE-ROUTE: the two services the site forwards for the machine clients (machine-route.mjs).
+describe('the machine route', () => {
+  const anon = { cookieHeader: undefined, setsCookie: false };
+
+  it('is the two service prefixes exactly, by the decoded path', () => {
+    expect(MACHINE_PREFIXES).toEqual(['/nwfl.mensa.v1.LinkCheckService/', '/nwfl.mensa.v1.NewsletterService/']);
+    for (const path of ['/nwfl.mensa.v1.LinkCheckService/', '/nwfl.mensa.v1.LinkCheckService/RecordLinkVerdicts', '/nwfl.mensa.v1.NewsletterService/ExportEdition', '/nwfl.mensa.v1.NewsletterService/x/y']) {
+      expect(isMachinePath(path), path).toBe(true);
+    }
+    for (const path of [
+      undefined,
+      '/',
+      '/nwfl.mensa.v1.LinkCheckService',
+      '/nwfl.mensa.v1.LinkCheckServiceX/RecordLinkVerdicts',
+      '/nwfl.mensa.v1.linkcheckservice/RecordLinkVerdicts',
+      '/NWFL.mensa.v1.NewsletterService/ExportEdition',
+      '/x/nwfl.mensa.v1.LinkCheckService/RecordLinkVerdicts',
+      '//nwfl.mensa.v1.LinkCheckService/RecordLinkVerdicts',
+      '/nwfl.mensa.v1.ContentService/ListPublishedItems',
+      '/nwfl.mensa.v1.%4CinkCheckService/RecordLinkVerdicts',
+    ]) {
+      expect(isMachinePath(path), String(path)).toBe(false);
+    }
+  });
+
+  it('is never stored, whatever its answer, cookie or not', () => {
+    for (const status of [200, 401, 404, 413, 429, 503]) {
+      for (const cookieHeader of [undefined, `${SESSION_COOKIE}=abc`]) {
+        const cache = cacheControl({ ...anon, cookieHeader, path: '/nwfl.mensa.v1.LinkCheckService/ListLinksAwaitingVerdict', status });
+        expect(cache, `${status} ${cookieHeader}`).toBe('private, no-store');
+        expect(cdnCacheControl(cache)).toBe('no-store');
+      }
+    }
+    expect(cacheControl({ ...anon, path: '/nwfl.mensa.v1.%4EewsletterService/ListEditions', served: ['/nwfl.mensa.v1.NewsletterService/ListEditions'], status: 200 })).toBe('private, no-store');
   });
 });
 

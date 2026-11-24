@@ -2,7 +2,7 @@
 // internal role groups the code and SQL use (nwfl-officers). The prefix comes from config
 // (SITE_GROUP_PREFIX), nwfl- by default, so today's tokens keep today's roles.
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SITE_GROUP_PREFIX, INTERNAL_GROUP_PREFIX, internalGroups, parseGroupPrefix } from './groups.js';
+import { DEFAULT_SITE_GROUP_PREFIX, INTERNAL_GROUP_PREFIX, internalGroups, isPowerGroup, parseGroupPrefix, withholdPower } from './groups.js';
 
 describe('parseGroupPrefix', () => {
   it('defaults to nwfl-, today\'s group names, and keeps the internal names nwfl-', () => {
@@ -57,5 +57,28 @@ describe('internalGroups', () => {
 
   it('with mensa-nwfl-, a bare nwfl- group and another chapter\'s groups grant nothing', () => {
     expect(internalGroups(['nwfl-officers', 'nwfl-admin', 'mensa-other-officers', 'mensa-other-admin', 'mensa-officers', 'xmensa-nwfl-officers'], 'mensa-nwfl-')).toEqual([]);
+  });
+});
+
+// OFFICER-VERIFY: the groups that carry an officer power, withheld from a holder without member standing.
+describe('isPowerGroup and withholdPower', () => {
+  it.each(['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers', 'nwfl-office-membership', 'nwfl-office-x'])('counts %s as a power', (group) => {
+    expect(isPowerGroup(group)).toBe(true);
+  });
+
+  it.each(['nwfl-members', 'nwfl-pending', 'nwfl-users', 'nwfl-invited', 'nwfl-affiliates', 'nwfl-role-rvc', 'nwfl-office-', 'officers', 'NWFL-ADMIN'])(
+    'counts %s as no power',
+    (group) => {
+      expect(isPowerGroup(group)).toBe(false);
+    },
+  );
+
+  it('keeps every group without a power and withholds every one with, in order', () => {
+    const groups = ['nwfl-members', 'nwfl-officers', 'nwfl-invited', 'nwfl-office-publications', 'nwfl-admin', 'nwfl-role-rvc', 'nwfl-webmaster', 'nwfl-membership-approvers'];
+    expect(withholdPower(groups)).toEqual({
+      kept: ['nwfl-members', 'nwfl-invited', 'nwfl-role-rvc'],
+      withheld: ['nwfl-officers', 'nwfl-office-publications', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers'],
+    });
+    expect(withholdPower(['nwfl-members'])).toEqual({ kept: ['nwfl-members'], withheld: [] });
   });
 });

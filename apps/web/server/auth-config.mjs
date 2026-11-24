@@ -71,8 +71,9 @@ function profileIssuer(issuer, raw, profile) {
  * @typedef {{
  *   issuer: URL, clientId: string, clientSecret: string, redirectUri: string,
  *   postLogoutRedirectUri: string, scope: string, allowInsecure: boolean, groupPrefix: string,
- *   siteOrigin?: string | undefined,
+ *   siteOrigin?: string | undefined, timeoutMs: number,
  * }} AuthConfig allowInsecure: a plain-http issuer, the local test provider, never in production.
+ *   timeoutMs: how long one call to the provider (discovery, the token call) may take (SIGNIN-SLOW).
  *   siteOrigin: in production, the SITE_ORIGIN profile's origin, the one host sign-in starts on (a
  *   /sign-in on any other is sent there, src/lib/auth/flow.ts); undefined outside production.
  * @typedef {{ enabled: true, config: AuthConfig } | { enabled: false, reason: string }} AuthSetup
@@ -80,6 +81,8 @@ function profileIssuer(issuer, raw, profile) {
 
 const REQUIRED = /** @type {const} */ (['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URI', 'OIDC_POST_LOGOUT_REDIRECT_URI']);
 const LOOPBACK = ['localhost', '127.0.0.1'];
+/** OIDC_TIMEOUT_MS unset: each call to the provider gets 8 s. */
+const DEFAULT_TIMEOUT_MS = 8000;
 
 /** @param {string} value */
 function parse(value) {
@@ -127,6 +130,12 @@ export function authConfig(env) {
   const scopes = scope.split(' ');
   if (!scopes.includes('openid')) return { enabled: false, reason: 'OIDC_SCOPE must include openid' };
   if (!scopes.includes('email')) return { enabled: false, reason: 'OIDC_SCOPE must include email: the sign-up needs it' };
+  // SIGNIN-SLOW: openid-client waits 30 s by default, too long for a reader at the callback.
+  const timeout = env['OIDC_TIMEOUT_MS'] ?? String(DEFAULT_TIMEOUT_MS);
+  const timeoutMs = Number(timeout);
+  if (!/^\d+$/.test(timeout) || timeoutMs < 1000 || timeoutMs > 30_000) {
+    return { enabled: false, reason: 'OIDC_TIMEOUT_MS must be a whole number of milliseconds from 1000 to 30000' };
+  }
   let groupPrefix;
   try {
     groupPrefix = parseGroupPrefix(env['SITE_GROUP_PREFIX']);
@@ -136,6 +145,6 @@ export function authConfig(env) {
 
   return {
     enabled: true,
-    config: { issuer, clientId: value('OIDC_CLIENT_ID'), clientSecret: value('OIDC_CLIENT_SECRET'), redirectUri, postLogoutRedirectUri, scope, allowInsecure, groupPrefix, siteOrigin: production ? env['SITE_ORIGIN'] : undefined },
+    config: { issuer, clientId: value('OIDC_CLIENT_ID'), clientSecret: value('OIDC_CLIENT_SECRET'), redirectUri, postLogoutRedirectUri, scope, allowInsecure, groupPrefix, siteOrigin: production ? env['SITE_ORIGIN'] : undefined, timeoutMs },
   };
 }

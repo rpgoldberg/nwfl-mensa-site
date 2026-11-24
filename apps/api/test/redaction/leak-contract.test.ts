@@ -105,6 +105,8 @@ describe.skipIf(!live)('the redaction leak contract', () => {
     'nwfl.mensa.v1.MembershipService': {
       GetMyAccount: () => [{}],
       ListSignupRequests: () => [{}],
+      // OFFICER-VERIFY: the queue banner's lookup; this database has no sign-up, so a made-up id.
+      GetSignupRequest: () => [{ requestId: '6a1f0c8e-0000-4000-8000-0000000000aa' }],
       ListMembers: () => [{}],
       ListRejectedSignups: () => [{}],
     },

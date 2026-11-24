@@ -33,6 +33,72 @@ Postgres hangs during the drain, closing the pool can hang too; a backstop
 then exits with code 1, 5 s after the drain deadline and before the kubelet's
 SIGKILL. That exit code is accepted: the pod is going away either way.
 
+## Trace export
+
+Off by default. The API always makes a span per call, so that log lines carry
+a trace id; the spans go nowhere unless an endpoint is set
+(`src/platform/telemetry.ts`).
+
+| Variable | Meaning |
+|----------|---------|
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The OTLP gRPC collector for traces, as `http://host:port` (plain; the mesh adds mTLS) or `https://host:port`. Wins when both are set. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The same, read when the traces one is unset or blank. |
+| `OTEL_SDK_DISABLED` | `true`, in any case: export is off whatever the endpoint says. Spans are still made, for the trace ids in the log. |
+| `OTEL_TRACES_EXPORTER` | Unset or `otlp`: as the endpoint says. Anything else, `none` included: off. |
+| `SERVICE_VERSION` | Sent as `service.version` when set. |
+
+Unset, empty or made only of characters that draw nothing means off: no span
+processor, nothing sent. The first of the two that is set decides. A value
+that is not a bare http or https URL (another scheme, a user, a path, a query,
+a fragment, a hidden character) is refused with one warning at start,
+`trace export refused: nothing is exported`, naming the variable and the
+reason but not the value; the API then runs without export. A URL with no
+port gets its scheme's (80 or 443). When export is on, one line at start says
+`trace export on` with the endpoint; when a switch turned it off, one line
+says `trace export off` and names the variable. The exporter library also reads the
+other `OTEL_EXPORTER_OTLP_*` variables (headers, certificates, compression);
+none is needed on the mesh.
+
+Leave both unset until the receiver for this tenant exists on the app
+cluster's gateway. Until then the image ships with export dark.
+
+What is sent (`src/platform/span-redaction.ts`). No free text leaves: a mask
+can spot an address or a number, never a name, so a text is sent only in a
+fixed form that a sentence cannot have.
+
+- Span name: only in the gRPC form `package.Service/Method`; anything else
+  is sent as `span`.
+- Status: the code. Never the message.
+- Span attributes, three keys, each only with a value of its own kind:
+  `rpc.system` (`grpc`), `rpc.method` (a method name in that same form) and
+  `rpc.grpc.status_code` (a number, 0 to 16). Any other key is left out. To
+  export a new attribute, add its key and a rule for its value there.
+- Events: the name `exception`, or `event` for any other. Of the attributes
+  only `exception.type`, as an identifier. No message and no stack trace.
+- Scope: the tracer's name and version in an identifier form, else `scope`.
+- Ids and flags only from a span context: no `tracestate`, no baggage, no
+  link attributes.
+- The resource is `service.name`, and `service.version` when it looks like a
+  release or a commit id. No host name, no process or environment detail.
+- What is kept still goes through the log redaction
+  (`src/platform/shared.ts`) and, after percent-decoding and Unicode
+  folding, has query strings, `token=` style pairs, anything around an at
+  sign and runs of four or more digits masked.
+
+Export never holds a call up. Ending a span puts it on a queue of 2,048;
+batches of up to 512 go out every 5 s, each with a 5 s deadline. A full queue
+drops the span; a collector that is down, slow or refusing costs that batch.
+Nothing is retried. After three failed batches in a row the exporter is
+replaced by a new one (a new gRPC client) and the old one is closed, since a
+client can stay unusable after the collector recovers (seen with an answer
+over the client's size limit). The new client may share the old one's
+connection while that is still open, so a rebuild does not promise a new
+connection. On shutdown the queue is flushed for at most 2 s, and one
+line, `trace export stopped`, gives the counts: `accepted`, `exported`,
+`dropped_queue_full`, `dropped_export_failed`, `dropped_at_shutdown`. It is a
+warning when anything was dropped. A caller that sends `traceparent` with the
+sampled flag off gets no exported span.
+
 ## Testing
 
     npm run lint && npm run typecheck && npm run test:coverage
@@ -154,6 +220,29 @@ database is down the API runs but reports not ready (`/readyz` shows
 plain line and retries, waiting 1 s at first and doubling up to 15 s. Only a
 positive mismatch (another tenant's row, no row, or several rows) logs the
 reason and exits 1.
+
+OFFICER-VERIFY: an officer power (officers, a seat, Admin, Webmaster,
+membership approvers) needs member standing as well as its group once
+`OFFICER_VERIFY=on` (default off; unset or empty is off; any other value
+refuses to start). The caller gate (`src/auth/caller.ts`) then withholds every
+power group from a holder without a chapter member's or an affiliate's
+standing (`src/auth/standing-policy.ts`), so no role check and no SQL function
+sees one. Either standing holds a power only once the membership check
+confirmed the holder's number, last name and first name: a check that did not
+confirm them (not found, an error, a duplicate claim) says nothing about them,
+whatever it carried, and an approver's hand approval is no check. A holder who
+is already approved asks for a fresh check from /account (`SubmitSignup`
+again), and a confirmed guest member's tools open on the Admin's affiliate
+grant. `CHAPTER_GROUP_NAME` (e.g. `Northwest Florida Mensa`, one of
+`src/membership/local-groups.ts`; required when the switch is on, ignored
+when off) tells a chapter member from a guest by the local group the
+membership check reported, compared each time a standing is read
+(`src/auth/standing.ts`): only the reported group is stored. Guests follow one
+policy (`guestPolicy`): the public's pages, events as members see them, no
+officer power but by that grant. Every rule of the unit (the invite route for officers, the first
+name, the hand-approval rule, guest approval, approval by the report) applies
+only with the switch on; off, the API behaves as before. One startup line
+names the mode.
 
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
@@ -823,8 +912,9 @@ sha256 and what the audience withholds, to the gate as a request of kind
 `PDF_GATE_SOCKET` is set, else the gate's capped in-pod child. The same child,
 under the same limits, reads the pages with pdf.js as a check reads them and
 joins words split at a line end (`src/search/text.ts`). It looks for the
-withheld passages again and answers no text at all if it finds one, so a
-fault upstream cannot put a withheld passage in an index. It answers by code
+withheld passages again, with the gate's own test and then in the joined text
+it would hand over, and answers no text at all if it finds one, so a fault
+upstream cannot put a withheld passage in an index. It answers by code
 only when there is no text: `withheld`, `over-cap` (more than 300 pages,
 64 KiB a page, or 4 MiB in all), `unfinished` or `mismatch`. A check's
 frames are unchanged, so the protocol version stays 3; a gate that does not
@@ -832,18 +922,29 @@ know `text` gives no answer, and the worker logs a reading that failed.
 
 The rows are written only by `search_page_put`, which takes them only while
 the publication ledger says this audience is served the copy with this
-sha256. A mark, a policy change or a new link deletes a file's rows in its
+sha256, and only for a file the public or members may open at all
+(`search_page_servable`, 0034: a PDF on its item's live version, the item
+published and not officers-only, or a PDF of a published edition). A mark, a policy change or a new link deletes a file's rows in its
 own transaction (0032), before the worker has made the next copy.
 
-When it runs: after each regeneration run that finished, and in a sweep that
-starts at each boot and goes ten copies at a time after each drain. The
-sweep first deletes every row whose copy its audience is served no longer
-(`search_page_sweep`), then reads each served copy with no rows at this
-`TEXT_VERSION` (`search_page_lacking`, 0033). Raising `TEXT_VERSION` reads
+When it runs: after each regeneration run that finished, and in a sweep
+after each drain. Each step deletes every row whose copy its audience is
+served no longer, or whose file it may not open (`search_page_sweep`), so a
+withdrawn or re-scoped item's text is gone a drain later. From each boot it
+also reads each served copy with no rows at this `TEXT_VERSION`
+(`search_page_lacking`, 0034), ten copies a step. Raising `TEXT_VERSION` reads
 every copy again. A reading that fails writes and deletes nothing, and is
 logged by file, audience and code, never by content: `a PDF copy was not
 indexed`. Both functions are the worker's alone; it reads no index table and
 no ledger row.
+
+A policy cell written outside the API queues every file but re-records no
+version, so a run that finishes before the app's boot backfill re-records the
+item has its put refused. After each batch it re-records, the backfill calls
+`search_page_requeue` (0034, the app's): each of those items' files that an
+audience is served a copy of and may open, but that has no rows of that copy,
+is queued again, without marking its copies stale. The run finds its copies
+made and indexes them.
 
 ### Searching the index (ARCHIVE-SEARCH S3)
 
@@ -952,3 +1053,6 @@ Accepted residual risks, with no code against them:
 - yaml 2.9.1, a dev dependency, parses the workflows in the api-gate
   self-check.
 - jose 6.2.13 verifies tokens (RS256 and ES256 only).
+- `@opentelemetry/exporter-trace-otlp-grpc` 0.300.0 is the release built on
+  sdk-trace 3.0.0 and core 3.0.0, the versions pinned here; 0.301.x needs
+  sdk-trace 3.1.x, so the four move together or not at all.
