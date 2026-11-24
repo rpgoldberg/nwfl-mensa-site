@@ -915,8 +915,8 @@ describe('pageLabels, on readings made by hand: what lies under a glyph and over
     // Half its ink on the cell (97.5 to 102.5 across its right edge at 100): judged, and black on the black cell and
     // the white page, unseen.
     expect(judge([], [], [BLACK_TEXT], [glyph(97)])).toBe(UNSEEN());
-    // 0.095 is dark (under 0.1): on a white shape that holds its ink but not 0.1 pt round it, unseen; 0.105 is not.
-    const tightly = fill(1, [square(10.5, 5, 15.5, 11)]);
+    // 0.095 is dark (under 0.1): on a white shape that holds its ink and 0.05 pt round it, not 0.1, unseen; 0.105 is not.
+    const tightly = fill(1, [square(10.45, 4.95, 15.55, 11.05)]);
     expect(judge([tightly], [], [{ luminance: 0.095, opaque: true }])).toBe(UNSEEN());
     expect(judge([tightly], [], [{ luminance: 0.105, opaque: true }])).toEqual([]);
     // A white shape round it and its margin, clipped to its ink and 0.05 pt: the clip leaves the margin out.
