@@ -433,7 +433,16 @@ describe.skipIf(!live)('a policy cell written outside the API: the put refuses a
           // The worker's runs finished (pdf_regen_finish): nothing of the three is queued.
           const files = [carried.fileId, hidden.fileId, shown.fileId];
           await owner.query(`DELETE FROM pdf_regen WHERE file_id = ANY ($1::uuid[])`, [files]);
+          // The worker's boot listing (0034 search_page_lacking) asks what the put asks: until the re-record it lists
+          // none of the three (two refused, one indexed); after it, the carried item's file.
+          const listed = async (): Promise<Record<string, string[]>> => {
+            const found = (await worker.query<{ file_id: string; audience: string }>(`SELECT file_id, audience FROM search_page_lacking(1)`)).rows;
+            const of = (fileId: string): string[] => found.filter((row) => row.file_id === fileId).map((row) => row.audience);
+            return { carried: of(carried.fileId), hidden: of(hidden.fileId), shown: of(shown.fileId) };
+          };
+          expect(await listed()).toEqual({ carried: [], hidden: [], shown: [] });
           const first = await backfillItems(api.pool, { batch: 1 });
+          expect(await listed()).toEqual({ carried: ['members', 'public'], hidden: [], shown: [] });
           expect(first.rerecorded).toBeGreaterThanOrEqual(3);
           expect(first.requeued).toBeGreaterThanOrEqual(1);
           expect({ carried: await queued(carried.fileId), hidden: await queued(hidden.fileId), shown: await queued(shown.fileId) }).toEqual({ carried: true, hidden: false, shown: false });

@@ -52,8 +52,9 @@ describe('textReply', () => {
   });
 
   it('still puts the gate\'s own readings first: a name drawn out of order, which the index\'s join does not read, is withheld on any page', async () => {
-    // "Quill today" is drawn before "Call Avery" on the same line: the items, in drawn order, read "Quill todayCall
-    // Avery"; the gate's placed reading reads the line left to right. Only the gate's test finds the name here.
+    // "Quill today" is drawn before "Call Avery" on the same line: the items, in drawn order, read "Quill today Call
+    // Avery" (S1's join puts a space between items on a line); the gate's placed reading reads the line left to right.
+    // Only the gate's test finds the name here.
     const doc = await PDFDocument.create({ updateMetadata: false });
     const font = await doc.embedFont(StandardFonts.Helvetica);
     doc.addPage([612, 792]).drawText('Notes from the board', { x: 72, y: 700, size: 12, font });
@@ -62,7 +63,7 @@ describe('textReply', () => {
     second.drawText('Call Avery', { x: 72, y: 700, size: 12, font });
     const copy = await doc.save({ useObjectStreams: false });
     const read = await textReply(job(copy, ['Ottoline Varga']));
-    expect(read).toMatchObject({ pages: [{ text: 'Notes from the board' }, { text: 'Quill todayCall Avery' }] });
+    expect(read).toMatchObject({ pages: [{ text: 'Notes from the board' }, { text: 'Quill today Call Avery' }] });
     expect(await textReply(job(copy, ['Avery Quill']))).toEqual({ sha256: sha256Hex(copy), code: 'withheld' });
   });
 

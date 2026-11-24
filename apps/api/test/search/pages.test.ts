@@ -69,12 +69,19 @@ describe.skipIf(!live)('the issue-text index job', () => {
     await storeOriginal(api.pool, { fileId, bytes, ...STORER });
     return { itemId, fileId };
   };
-  /** A mark as the API adds one (redaction/marks.ts): the mark and the ledger's rows in one transaction. */
+  /**
+   * A mark as the API adds one (redaction/marks.ts): the mark and the ledger's rows in one transaction. A file mark,
+   * found in the item's PDFs (redaction/file-marks.ts): the passages are in the issue, not in the item's own text, and
+   * a passage mark whose quote the version's text does not hold hides the item (S1's search_file_servable, 0032).
+   */
   const mark = async (itemId: string, quote: string, category: string): Promise<void> => {
     const client = await api.pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(`SELECT redaction_mark_add('content_item', $1, 'body', $2, $3, $4, $5, NULL)`, [itemId, quote, category, STORER.sub, STORER.groups]);
+      await client.query(
+        `SELECT redaction_mark_add_file($1, $2, $3, ARRAY(SELECT f.id FROM stored_file f JOIN content_version v ON v.id = f.version_id WHERE v.item_id = $1), $4, $5, NULL)`,
+        [itemId, quote, category, STORER.sub, STORER.groups],
+      );
       await recordItems(client, [itemId]);
       await client.query('COMMIT');
     } catch (error) {
@@ -522,8 +529,9 @@ describe.skipIf(!live)('the issue-text index job', () => {
         await client.query(`UPDATE content_item SET live_version_id = $2, updated_at = now() WHERE id = $1`, [rescoped.itemId, revision]);
         await recordItems(client, [rescoped.itemId]);
       });
-      // The same sweep, a drain later: no restart.
-      expect(await step()).toEqual({ deleted: 4, indexed: 0, left: 0 });
+      // The rows went in each change's own transaction (S1's trigger, 0032 search_page_unservable): the same sweep, a
+      // drain later, finds none left to delete.
+      expect(await step()).toEqual({ deleted: 0, indexed: 0, left: 0 });
       for (const { fileId } of [withdrawn, rescoped]) for (const audience of ['public', 'members'] as const) expect(await rows(audience, fileId), `${fileId} ${audience}`).toEqual([]);
       for (const word of ['quokka', 'wombat']) expect([await hits('public', word), await hits('members', word)], word).toEqual([0, 0]);
       for (const audience of ['public', 'members'] as const) expect(words(await rows(audience, kept.fileId))).toContain('Kite festival at the beach');

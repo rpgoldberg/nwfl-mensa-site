@@ -5,8 +5,9 @@
 -- and each is a SECURITY DEFINER function, so the worker still reads no index table and no ledger row:
 --
 --   * search_page_lacking(text_version): each (file, audience) the publication ledger says is served
---     a COPY now, of a file the public or members may open, with no page row of that copy at that
---     text version. File ids and audiences only:
+--     a COPY now, of a file the public or members may open and that audience may open now (S1's
+--     search_file_servable, which the put asks too: what the put would refuse is not listed, so it is
+--     not read at each start), with no page row of that copy at that text version. File ids and audiences only:
 --     no sha, no text. A new TEXT_VERSION (src/search/text.ts) lists every served copy again.
 --   * search_page_sweep(): deletes every page row whose served_sha256 is not the ledger's current
 --     output for its file and that table's audience, or whose audience is not served a copy at all
@@ -67,6 +68,7 @@ BEGIN
       WHERE l.tenant_id = 'nwflorida' AND l.subject_kind = 'stored_file' AND l.audience = 'public' AND l.current_to IS NULL
         AND l.output_sha256 IS NOT NULL AND l.inputs ->> 'served' = 'copy'
         AND EXISTS (SELECT 1 FROM stored_file f WHERE f.id = l.subject_id) AND search_page_servable(l.subject_id)
+        AND search_file_servable(l.subject_id, 'public')
         AND NOT EXISTS (SELECT 1 FROM search_page_public p
                          WHERE p.file_id = l.subject_id AND p.served_sha256 = l.output_sha256 AND p.text_version = p_text_version)
     UNION ALL
@@ -74,6 +76,7 @@ BEGIN
       WHERE l.tenant_id = 'nwflorida' AND l.subject_kind = 'stored_file' AND l.audience = 'members' AND l.current_to IS NULL
         AND l.output_sha256 IS NOT NULL AND l.inputs ->> 'served' = 'copy'
         AND EXISTS (SELECT 1 FROM stored_file f WHERE f.id = l.subject_id) AND search_page_servable(l.subject_id)
+        AND search_file_servable(l.subject_id, 'members')
         AND NOT EXISTS (SELECT 1 FROM search_page_members p
                          WHERE p.file_id = l.subject_id AND p.served_sha256 = l.output_sha256 AND p.text_version = p_text_version)
     ORDER BY 1, 2;
