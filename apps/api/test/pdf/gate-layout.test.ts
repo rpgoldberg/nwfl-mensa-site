@@ -1602,6 +1602,32 @@ describe('only what a glyph paints itself, inside the page, in bounded time (fix
     twinned.top.push({ kind: 'other', object: 70 });
     expect(pageLabels(twinned, [s, far], 0, [cellBox], () => null, { shows })).toEqual([]);
     expect(pageLabels({ ...twinned, owners: [50, 50] }, [s, far], 0, [cellBox], () => null, { shows })).toBe(UNSEEN());
+    // Judged where its twin is drawn (the page drawn without the twin alone), a Type 3 font read off the first.
+    expect(pageLabels({ ...twinned, owners: [50, 50], twins: [[twin], [twin]], type3: [50] }, [s, far], 0, [cellBox], () => null, { shows })).toBe(UNSEEN());
+    // A glyph PDFium makes up (a space between words) is no glyph of the object: seen.
+    expect(pageLabels(readingOf([50, 50], [50], { type3: [50] }), [s, { ...glyphAt(30, ' '), generated: true }], 0, [cellBox], () => null, { shows })).toEqual([]);
+    // Without PDFium's drawing nothing of it is asked.
+    expect(pageLabels(readingOf([50, 50], [50], { type3: [50] }), [s, far], 0, [cellBox], () => null)).toEqual([]);
+  });
+
+  it('leaves out the ink of the other glyphs of the object a twin draws again, judged where the twin is drawn', () => {
+    const [s, x] = [glyphAt(10, 'S'), glyphAt(13, 'x')];
+    const twin = { at: 2, object: 70, paint: WHITE_TEXT };
+    const reading = readingOf([50, 50], [50], { twins: [[twin], [twin]] });
+    reading.top.push({ kind: 'other', object: 70 });
+    const masks: Array<[number, Box[]]> = [];
+    // Not seen where it is first drawn; seen where the twin draws it.
+    const found = pageLabels(reading, [s, x], 0, [cellBox], () => null, {
+      shows: (object, ink, _also, mask = []) => {
+        if (ink.left === (s.ink as Box).left) masks.push([object, [...mask]]);
+        return object === 70 ? 1 : 0;
+      },
+    });
+    expect(found).toEqual([]);
+    expect(masks).toEqual([
+      [50, [x.ink]],
+      [70, [x.ink]],
+    ]);
   });
 
   it('refuses a page once drawing it has taken as long as it may, as too much to check', () => {
