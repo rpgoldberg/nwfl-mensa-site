@@ -34,6 +34,12 @@
 //   so (D7a) leaves such a row standing; it is refused here, in the statement,
 //   so the live check (service.ts) never runs for it and a search's time does
 //   not say that a word it withholds matched (challenge S3-1 S1, S3-2 S1).
+//   That holds only until the next put for that version. search_item_put,
+//   which the app role holds, stamps the re-record on any put whose sha is
+//   still the ledger's current output, so after a mark written by SQL a put
+//   of the stale row (by the app role, or a render taken before the mark and
+//   put after it) brings the row back to the live check: time only, the check
+//   still refuses it, and the next re-record replaces the row (S3 N1).
 //   These read the stamps only to spare that check, and hold while the stamps
 //   rise. An owner who resets rerecord_seq, or a ledger head stamp ahead of
 //   the clock (0016 publication_ledger_stamp then gives two transactions one

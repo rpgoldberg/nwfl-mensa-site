@@ -26,8 +26,10 @@ interface Props {
   membersOnly?: boolean | undefined;
   /** An article: a members item the reader may not read, by title and summary only. */
   teaser?: boolean | undefined;
+  /** An article on /news: its id, which a search result opens it by (ARCHIVE-SEARCH S4). */
+  anchor?: string | undefined;
 }
-const { layout, title, summary, bodyHtml, files, publishedOn, source, labelId, membersOnly = false, teaser = false } = Astro.props;
+const { layout, title, summary, bodyHtml, files, publishedOn, source, labelId, membersOnly = false, teaser = false, anchor } = Astro.props;
 ---
 {layout === 'report' ? (
   <article class="item" data-source={source}>
@@ -45,7 +47,7 @@ const { layout, title, summary, bodyHtml, files, publishedOn, source, labelId, m
     <ItemFiles files={files} />
   </article>
 ) : (
-  <article class="item" data-source={source}>
+  <article class="item" id={anchor} data-source={source}>
     <h3>{title}</h3>
     {membersOnly && !teaser && <p class="members-rule">{MEMBERS_RULE}</p>}
     {publishedOn && <p class="muted">{formatDate(publishedOn)}</p>}

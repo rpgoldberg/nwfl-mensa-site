@@ -1010,11 +1010,18 @@ answers a query with ten hits a page: pages of issues and published items.
   `policy_change_epoch`): a cell written by SQL, or by the app role through
   `redaction_propose`, re-records nothing. No live check runs for such a
   row, so a search's time does not say that a word it withholds matched.
-  This holds while the stamps rise. An owner who resets `rerecord_seq`, or
-  a ledger head stamp ahead of the clock (two transactions then share a
-  stamp), can let such a row reach the live check again (time only; the
-  check still refuses it) or keep a current one out, never make it a hit.
-  No role the app or the worker holds can do either.
+  That holds only until the next put for that version: `search_item_put`,
+  which the app role holds, stamps the re-record on any put whose sha is
+  still the ledger's current output, so after a mark written by SQL a put of
+  the stale row (by the app role, or a render taken before the mark and put
+  after it) brings it back to the live check (time only; the check still
+  refuses it) until the next re-record replaces it.
+  And the refusal holds only while the stamps rise. An owner who resets
+  `rerecord_seq`, or a ledger head stamp ahead of the clock (two
+  transactions then share a stamp), can let such a row reach the live
+  check again (time only; the check still refuses it) or keep a current one
+  out, never make it a hit. No role the app or the worker holds can do
+  either.
 - **How stale rows come back.** The worker's boot sweep makes and reads each
   copy of a new engine or `TEXT_VERSION`. The boot backfill renders every
   published item for both audiences and re-records each whose render is not

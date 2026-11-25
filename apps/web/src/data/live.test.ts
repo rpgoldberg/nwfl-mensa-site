@@ -78,6 +78,7 @@ function reads(over: Partial<ApiReads> = {}): ApiReads {
     listPublishedItems: () => Promise.resolve([]),
     readFile: () => Promise.resolve({ kind: 'not_found' }),
     getLinkTarget: () => Promise.resolve({ kind: 'not_found' }),
+    search: () => Promise.resolve({ kind: 'ok', hits: [], hasMore: false }),
     ...over,
   };
 }
@@ -1174,6 +1175,47 @@ describe('liveData.link (LINKS L4)', () => {
     const live = liveData(reads({ getLinkTarget: () => (asked++, Promise.reject(new ApiUnavailable('GetLinkTarget'))) }));
     await expect(live.link(LINK, { bearer: 'member.token', enrolee: true })).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(live.link(LINK)).rejects.toBeInstanceOf(ApiUnavailable);
+    expect(asked).toBe(2);
+  });
+});
+
+describe('liveData.search (ARCHIVE-SEARCH S4)', () => {
+  const MEMBER: Reader = { bearer: 'member.token', enrolee: true };
+  const OK = { kind: 'ok' as const, hits: [], hasMore: true };
+
+  it('asks as the public with no reader, and hands the answer on as it is', async () => {
+    const asked: unknown[][] = [];
+    const live = liveData(reads({ search: (...args) => (asked.push(args), Promise.resolve(OK)) }));
+    expect(await live.search('spring picnic', 3)).toBe(OK);
+    expect(asked).toEqual([['spring picnic', 3]]);
+  });
+
+  it("sends an enrolee's token, and never the token of a session with no nwfl enrolee group or a bearer that is no token (D4)", async () => {
+    const asked: (Reader | undefined)[] = [];
+    const live = liveData(reads({ search: (_q, _p, as) => (asked.push(as), Promise.resolve(OK)) }));
+    await live.search('picnic', 1, MEMBER);
+    await live.search('picnic', 1, { bearer: 'other.token', enrolee: false });
+    await live.search('picnic', 1, { bearer: 'other.token' });
+    await live.search('picnic', 1, { bearer: 'not a token', enrolee: true });
+    expect(asked).toEqual([MEMBER, undefined, undefined, undefined]);
+  });
+
+  it('asks again as the public when the API refuses the token: the public answer, never a 503, marked tokenRefused as news() is', async () => {
+    const asked: (Reader | undefined)[] = [];
+    const live = liveData(reads({ search: (_q, _p, as) => (asked.push(as), as ? Promise.reject(new ApiTokenRefused('Search')) : Promise.resolve(OK)) }));
+    expect(await live.search('picnic', 2, MEMBER)).toEqual({ ...OK, tokenRefused: true });
+    expect(asked).toEqual([MEMBER, undefined]);
+    // An answered token, and no token, are never marked.
+    const answered = liveData(reads({ search: () => Promise.resolve(OK) }));
+    expect(await answered.search('picnic', 1, MEMBER)).toBe(OK);
+    expect(await answered.search('picnic', 1)).toBe(OK);
+  });
+
+  it('lets any other failure through, with or without a reader, and does not ask twice', async () => {
+    let asked = 0;
+    const live = liveData(reads({ search: () => (asked++, Promise.reject(new ApiUnavailable('Search'))) }));
+    await expect(live.search('picnic', 1, MEMBER)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(live.search('picnic', 1)).rejects.toBeInstanceOf(ApiUnavailable);
     expect(asked).toBe(2);
   });
 });

@@ -5,8 +5,9 @@
 // members event or item never reaches a page or a feed, even if the API sent
 // more than it should.
 //
-// /news alone (A14: news() and file()), and the links in its PDFs (LINKS L4:
-// link(), the leaving page), may be read as a signed-in reader, with
+// /news alone (A14: news() and file()), the links in its PDFs (LINKS L4:
+// link(), the leaving page) and the archive search (ARCHIVE-SEARCH: search(),
+// /search) may be read as a signed-in reader, with
 // their token. The API decides what the token may see; the view here follows
 // the API's answer, gated by the session's nwfl enrolee claim (D4): a members
 // copy, a members item, a members passage or a members file only where the
@@ -27,7 +28,7 @@ import { type Timestamp, timestampDate } from '@bufbuild/protobuf/wkt';
 import { type ContentItem, ContentKind, FileAudience, FileRole, ItemVisibility, type StoredFile } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { Area, EventCategory, type EventOccurrence, EventVisibility, OccurrenceStatus, type Venue, VenueKind } from '../gen/nwfl/mensa/v1/event_pb.js';
 import { TermStatus } from '../gen/nwfl/mensa/v1/roster_pb.js';
-import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type FileRead, type LinkRead, type Reader, sendable } from '../lib/api/client';
+import { ApiNotFound, type ApiReads, ApiTokenRefused, ApiUnavailable, type FileRead, type LinkRead, type Reader, type SearchRead, sendable } from '../lib/api/client';
 import { type CalendarEvent, type CalendarVenue, type EventCategoryName, type EventStatus, centralParts, eventPath } from '../lib/calendar';
 import { type View, documentHtml, hasMembers, hasRedacted, withheldHtml } from '../lib/document';
 import { LINK_ID } from '../lib/out';
@@ -108,7 +109,15 @@ export interface LiveData {
   file(id: string, as?: Reader): Promise<FileRead>;
   /** LINKS L4: where a link in a PDF leads, as for file(); not found for anything that is not a link id. */
   link(id: string, as?: Reader): Promise<LinkRead>;
+  /**
+   * ARCHIVE-SEARCH: one page of the API's hits for the public, or the reader (as for file()). The API alone
+   * decides which index answers; nothing here reads, keeps or filters the text. `page` is 1-based.
+   */
+  search(query: string, page: number, as?: Reader): Promise<SearchAnswer>;
 }
+
+/** search()'s answer: the API's, marked tokenRefused when the API refused the reader's token and the public's answer is given instead (as news()). */
+export type SearchAnswer = SearchRead & { tokenRefused?: true };
 
 export interface LiveOptions {
   /** D1: list members items to the public by title and summary, with the box. Off: they are not listed at all. On in production (index.ts). */
@@ -430,6 +439,19 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
       } catch (error) {
         if (!(error instanceof ApiTokenRefused)) throw error;
         return reads.getLinkTarget(id);
+      }
+    },
+
+    // The token goes as it does for file(): only with the nwfl enrolee claim, and a refused one is asked again as the
+    // public, and the answer says so, so the page can tell the reader as /news does.
+    search: async (query, page, given) => {
+      const as = withEnroleeClaim(sendable(given));
+      if (as === undefined) return reads.search(query, page);
+      try {
+        return await reads.search(query, page, as);
+      } catch (error) {
+        if (!(error instanceof ApiTokenRefused)) throw error;
+        return { ...(await reads.search(query, page)), tokenRefused: true };
       }
     },
   };
