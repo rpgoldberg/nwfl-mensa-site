@@ -1656,13 +1656,13 @@ describe('only what a glyph paints itself, inside the page, in bounded time (fix
   const withSX = (pdf: Uint8Array): Promise<Uint8Array> =>
     edited(pdf, (doc) => {
       const { context } = doc;
-      const make = (xBox: string): unknown => {
+      const make = (xBox: readonly number[]): unknown => {
         const cmap = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Fix3 def /CIDSystemInfo <</Registry (F) /Ordering (F) /Supplement 0>> def 1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <53> <0053> <78> <0078> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end';
-        const procs = { gs: context.register(context.flateStream('1000 0 0 0 1000 1000 d1 0 0 200 1000 re f 0 0 1000 200 re f')), gx: context.register(context.flateStream(`1000 0 ${xBox} d1 300 300 700 700 re f`)) };
+        const procs = { gs: context.register(context.flateStream('1000 0 0 0 1000 1000 d1 0 0 200 1000 re f 0 0 1000 200 re f')), gx: context.register(context.flateStream(`1000 0 ${xBox.join(' ')} d1 300 300 700 700 re f`)) };
         return context.obj({ Type: 'Font', Subtype: 'Type3', FontBBox: [0, 0, 1000, 1000], FontMatrix: [0.001, 0, 0, 0.001, 0, 0], CharProcs: procs, Encoding: { Type: 'Encoding', Differences: [0x53, PDFName.of('gs'), 0x78, PDFName.of('gx')] }, FirstChar: 0x53, LastChar: 0x78, Widths: Array.from({ length: 0x78 - 0x53 + 1 }, () => 1000), Resources: {}, ToUnicode: context.register(context.flateStream(cmap)) } as never);
       };
-      doc.getPage(0).node.setFontDictionary(PDFName.of('F5'), context.register(make('300 300 1000 1000') as never));
-      doc.getPage(0).node.setFontDictionary(PDFName.of('FA'), context.register(make('870 300 1000 1000') as never));
+      doc.getPage(0).node.setFontDictionary(PDFName.of('F5'), context.register(make([300, 300, 1000, 1000]) as never));
+      doc.getPage(0).node.setFontDictionary(PDFName.of('FA'), context.register(make([870, 300, 1000, 1000]) as never));
     });
   const [SX, SY] = [CELL.x + 20, CELL.y + 4];
   const sx = (font: string): string => `q 1 g BT /${font} 36 Tf ${SX} ${SY} Td [(S) 1000 (x)] TJ ET Q`;
