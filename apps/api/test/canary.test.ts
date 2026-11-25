@@ -25,7 +25,9 @@ import { Audience } from '../src/gen/nwfl/mensa/v1/common_pb.js';
 import { ContentKind, ContentService, ItemVisibility } from '../src/gen/nwfl/mensa/v1/content_pb.js';
 import { EventService } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { MarkSubjectKind } from '../src/gen/nwfl/mensa/v1/redaction_pb.js';
+import { SearchService } from '../src/gen/nwfl/mensa/v1/search_pb.js';
 import { SERVED_SERVICES } from '../src/grpc/routes.js';
+import { recordAll } from '../src/ledger/ledger.js';
 import { type Api, MEMBER, OFFICER, as, dump, insertId, startApi } from './helpers/api.js';
 import { membersSpan, paragraph, publishItem, text } from './helpers/content.js';
 import { live, url, withClient } from './helpers/pg.js';
@@ -111,6 +113,10 @@ describe.skipIf(!live)('the members-only canary', () => {
       GetApprovalRules: () => [{}],
       ListApprovalRuleChanges: () => [{}, { pageSize: 5 }],
     },
+    // ARCHIVE-SEARCH S3: the token itself, and the plain words beside it.
+    'nwfl.mensa.v1.SearchService': {
+      Search: () => [{ query: TOKEN }, { query: 'Picnic or Notice or Officers' }, { query: 'Span or Block or File' }],
+    },
     'nwfl.mensa.v1.RedactionPolicyService': {
       GetRedactionPolicy: () => [{}],
       ListRedactionMarks: () => [{ subjectKind: MarkSubjectKind.CONTENT_ITEM, subjectId: ids['publicItem'] }],
@@ -162,7 +168,8 @@ describe.skipIf(!live)('the members-only canary', () => {
   }
 
   beforeAll(async () => {
-    api = await startApi('nwfl_canary');
+    // The sweeps search faster than ten a second: a refused search would read as a search that found nothing.
+    api = await startApi('nwfl_canary', { search: { perSecond: 100_000, burst: 100_000 } });
     const { pool } = api;
     const office = await insertId(pool, `INSERT INTO office (slug, title, kind) VALUES ('publications', 'Publications Officer', 'appointed') RETURNING id`);
     const publicItem = await publishItem(pool, {
@@ -388,5 +395,39 @@ describe.skipIf(!live)('the members-only canary', () => {
     );
     expect(rows[0]).toEqual({ in_public: false, in_members: true });
   });
-});
 
+  // ARCHIVE-SEARCH S3. The seeded items have no ledger rows, so no index rows, until a change records them; this is that
+  // change, last in the file. Then a search is a read like any other: the token for a member, never for the public, and
+  // the officers item for no one (an officer's search reads the members' index).
+  it('keeps the token out of the public\'s search results and gives it to a member\'s; the officers item is in no one\'s', async () => {
+    const client = await api.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await recordAll(client);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+    const search = api.client(SearchService);
+    const queries = [TOKEN, 'Picnic or Notice or Officers', 'Span or Block or File', 'Saturday', 'Monthly meeting'];
+    // One at a time: the API answers four searches at once and refuses a fifth.
+    const said = async (who: { headers?: Record<string, string> }): Promise<string> => {
+      const parts: string[] = [];
+      for (const query of queries) parts.push(dump(await search.search({ query }, who)));
+      return parts.join('\n').replaceAll('\uE000', '').replaceAll('\uE001', '');
+    };
+    const open = await said({});
+    expect(open).toContain('canary-public');
+    expect(open).not.toContain(TOKEN);
+    const member = await said(MEMBER);
+    expect(member).toContain(`Notice ${TOKEN}`);
+    expect(member).toContain(`Block ${TOKEN}`);
+    for (const text of [open, member, await said(OFFICER)]) {
+      expect(text).not.toContain(`Officers ${TOKEN}`);
+      expect(text).not.toContain('canary-officers');
+    }
+  });
+});

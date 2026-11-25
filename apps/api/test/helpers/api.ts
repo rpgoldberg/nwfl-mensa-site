@@ -16,6 +16,7 @@ import { apiRoutes } from '../../src/grpc/routes.js';
 import { apiInterceptors } from '../../src/grpc/interceptors.js';
 import { createGrpcServer } from '../../src/grpc/server.js';
 import { createStructuredLogger } from '../../src/platform/logger.js';
+import type { SearchLimits } from '../../src/search/limits.js';
 import { APP, APP_PW, WORKER, WORKER_PW, dropDatabase, freshDatabase, migrate, urlFor, testPool } from './pg.js';
 import { captureLogs, closeHard, listen } from './servers.js';
 
@@ -121,6 +122,8 @@ export async function startApi(prefix: string, options: {
     officerVerify?: boolean;
     /** CHAPTER_GROUP_NAME; default the chapter's own. Read only when switched on, as the API reads it. */
     chapterGroup?: string | null;
+    /** The search limits to run with, where a suite searches faster than production allows (ARCHIVE-SEARCH S3). */
+    search?: Partial<SearchLimits>;
   } = {},): Promise<Api> {
   const now = options.now ?? ((): Date => NOW);
   // As auth/config.ts: switched on, with the chapter's group (it refuses to start without one); off, none.
@@ -139,7 +142,7 @@ export async function startApi(prefix: string, options: {
   const { lines, sink } = captureLogs();
   const logger = createStructuredLogger({ sink });
   const server: http2.Http2Server = createGrpcServer({
-    routes: apiRoutes({ db: pool, logger, now, officerVerify: mode, readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
+    routes: apiRoutes({ db: pool, logger, now, officerVerify: mode, ...(options.search === undefined ? {} : { search: options.search }), readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
     interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now, mode?.chapterGroup ?? null), groupPrefix: options.groupPrefix, officerVerify: mode !== null }),
     // As in production: the gate's verifier also admits edge streams.
     verifier: options.verifier ?? fakeVerifier,

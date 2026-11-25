@@ -1993,5 +1993,22 @@
   "RedactionPolicyService.VerifyLedger": {
     "input": "nwfl.mensa.v1.VerifyLedgerRequest",
     "fields": []
+  },
+  "SearchService.Search": {
+    "input": "nwfl.mensa.v1.SearchRequest",
+    "fields": [
+      {
+        "name": "query",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "page",
+        "number": 2,
+        "type": "int32",
+        "label": "optional"
+      }
+    ]
   }
 }
