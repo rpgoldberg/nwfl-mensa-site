@@ -70,6 +70,17 @@
 // inner ink box changes by 3:1 as PDFium paints solid (alpha half or more)
 // drawing its text object alone, less one row or column of its pixels, and
 // SHOWN_PIXELS at least; at most MAX_SHOWS times a page.
+// Fix round 3: PDFium draws page space past what a viewer shows, and drawing
+// a page without a text object takes away all its glyphs, so only pixels
+// inside the crop box and the media box count, and not those in the ink of
+// any other glyph that drawing takes away (but the same glyph again), both
+// there and in what PDFium paints solid; a glyph drawn with any other glyph
+// of a Type 3 text object taken away is not seen (a Type 3 glyph's box is
+// only what its font claims, and PDFium draws its paint past it); and once
+// PDFium has taken MAX_DRAWING_MS drawing the copy for this check, the page
+// being judged is refused as too much to check (a drawing costs as much as
+// the page holds, which counting objects does not see). This shows that
+// paint shows where a glyph is, not that its letter can be read.
 // Fix round 1b: a stroke's mitred corner may reach as far as its angle lets
 // (PDFium gives no miter limit); a glyph is seen only when PDFium, drawing
 // its text object alone, paints 5 % or more of its ink box (a glyph a font

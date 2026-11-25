@@ -526,7 +526,13 @@ without its text object and every other drawing the same text there, at
 least half as much of its inner ink box must change by 3:1 as PDFium
 paints solid drawing it alone (to a pixel row), and 5 % at least, so a
 text object drawn over it or a pattern fill, whose paint is not read,
-cannot hide it. A stroke's mitred corner is taken to reach as far as its
+cannot hide it. Only pixels inside the crop box and the media box count,
+and not those in the ink of other glyphs that drawing takes away; a glyph
+drawn with other glyphs of a Type 3 text object is not seen (such a
+glyph's box is only what its font claims), and drawing the copy for this
+check may take 20 s at most before the page is refused as too much to
+check. This proves that paint shows where the glyph is, not that the
+letter can be read: a font may draw any shape for a letter. A stroke's mitred corner is taken to reach as far as its
 angle lets (PDFium gives no miter limit); PDFium, drawing the glyph's text
 object alone, must paint 5 % or more of its ink box (a glyph its font draws
 nothing for is not seen); and on a page that draws text as a clip no glyph
