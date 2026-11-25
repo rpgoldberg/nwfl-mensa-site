@@ -78,6 +78,12 @@ function transformed(box: Box, [a, b, c, d, e, f]: Matrix): Box {
 
 /** An open document: the bytes stay in wasm memory until it is closed. */
 export class Document {
+  /**
+   * The milliseconds its pages have taken PDFium to draw so far for Page.shows and Page.inked (GATE-LAYOUT fix round 3:
+   * the label check bounds the time, not only the count, as a page's drawing costs as much as the page holds).
+   */
+  drawingMs = 0;
+
   private constructor(
     private readonly m: Module,
     readonly handle: number,
@@ -148,6 +154,8 @@ export class Page {
   private inkPixels = 0;
   /** The last SHOW_CACHE areas drawn for Page.shows, by the objects left out and the area. */
   private readonly drawn = new Map<string, { whole: Float32Array; without: Float32Array; width: number; height: number }>();
+  /** What a viewer shows of the page (Page.visible), once read. */
+  private shown: Box | null | undefined;
 
   constructor(
     private readonly m: Module,
@@ -486,8 +494,12 @@ export class Page {
    * by 3:1 or more (WCAG contrast). The area drawn is the object's bounds on the page and SHOW_MARGIN round them, kept
    * for the next glyph of it (the last SHOW_CACHE), or, past MAX_SHOW_PIXELS, the box and the margin alone. Null when
    * that too is bigger, or PDFium cannot make the bitmap.
+   *
+   * Fix round 3: a pixel counts as changed only where a viewer shows the page (Page.visible: PDFium draws page space
+   * past the crop box and the media box too) and outside every box of `mask` (in page points: the ink of the other
+   * glyphs the drawing takes away, whose pixels are theirs, not the glyph's).
    */
-  shows(object: number, box: Box, also: readonly number[] = []): number | null {
+  shows(object: number, box: Box, also: readonly number[] = [], mask: readonly Box[] = []): number | null {
     const near = { left: box.left - SHOW_MARGIN, right: box.right + SHOW_MARGIN, bottom: box.bottom - SHOW_MARGIN, top: box.top + SHOW_MARGIN };
     const pixels = (b: Box): number => Math.ceil((b.right - b.left) * SHOW_SCALE) * Math.ceil((b.top - b.bottom) * SHOW_SCALE);
     if (!(pixels(near) > 0 && pixels(near) <= MAX_SHOW_PIXELS)) return null;
@@ -503,6 +515,7 @@ export class Page {
       this.drawn.set(key, drawn);
     }
     const { whole, without, width, height } = drawn;
+    const visible = this.visible();
     const [insetX, insetY] = [(box.right - box.left) * SHOW_INSET, (box.top - box.bottom) * SHOW_INSET];
     const x0 = Math.max(0, Math.floor((box.left + insetX - area.left) * SHOW_SCALE));
     const x1 = Math.min(width - 1, Math.ceil((box.right - insetX - area.left) * SHOW_SCALE) - 1);
@@ -514,10 +527,32 @@ export class Page {
       for (let x = x0; x <= x1; x++) {
         const [p = 0, q = 0] = [whole[y * width + x], without[y * width + x]];
         all += 1;
+        // The pixel's centre in page points.
+        const [px, py] = [area.left + (x + 0.5) / SHOW_SCALE, area.top - (y + 0.5) / SHOW_SCALE];
+        if (visible === null || !inside(visible, px, py) || mask.some((other) => inside(other, px, py))) continue;
         if ((Math.max(p, q) + 0.05) / (Math.min(p, q) + 0.05) >= 3) changed += 1;
       }
     }
     return all === 0 ? 0 : changed / all;
+  }
+
+  /**
+   * What a viewer shows of the page, in page points: its crop box cut by its media box (FPDF_GetPageBoundingBox); null
+   * when PDFium cannot give it (then nothing of the page is taken as shown).
+   */
+  visible(): Box | null {
+    if (this.shown === undefined) {
+      const m = this.m;
+      const at = rt(m).wasmExports.malloc(16);
+      try {
+        // FS_RECTF: left, top, right, bottom.
+        const [left = NaN, top = NaN, right = NaN, bottom = NaN] = m.FPDF_GetPageBoundingBox(this.handle, at) ? new Float32Array(rt(m).HEAPU8.buffer, at, 4) : [];
+        this.shown = [left, top, right, bottom].every(Number.isFinite) ? { left: Math.min(left, right), right: Math.max(left, right), bottom: Math.min(bottom, top), top: Math.max(bottom, top) } : null;
+      } finally {
+        rt(m).wasmExports.free(at);
+      }
+    }
+    return this.shown;
   }
 
   /** A text object's bounds on the page (through its form's matrix when it is in one), or null when PDFium gives none. */
@@ -582,6 +617,7 @@ export class Page {
           m.FPDFBitmap_Destroy(bitmap);
         }
       };
+      const started = performance.now();
       const whole = render();
       for (const object of objects) m.FPDFPageObj_SetIsActive(object, false);
       let without: Float32Array | null;
@@ -589,6 +625,7 @@ export class Page {
         without = render();
       } finally {
         for (const object of objects) m.FPDFPageObj_SetIsActive(object, true);
+        this.doc.drawingMs += performance.now() - started;
       }
       return whole === null || without === null ? null : { whole, without, width, height };
     } finally {
@@ -609,7 +646,9 @@ export class Page {
       const scale = Math.min(INK_SCALE, Math.sqrt(MAX_RENDER_PIXELS / Math.max(1, (right - left) * (top - bottom))));
       this.inkPixels += (right - left) * (top - bottom) * scale * scale;
       if (this.inkPixels > MAX_INK_PIXELS) return null;
+      const started = performance.now();
       const bitmap = m.FPDFTextObj_GetRenderedBitmap(this.doc.handle, this.handle, object, scale);
+      this.doc.drawingMs += performance.now() - started;
       if (bitmap === 0) return null;
       try {
         const width = m.FPDFBitmap_GetWidth(bitmap);
@@ -636,9 +675,10 @@ export class Page {
    * points; a text object in a form is drawn in the form's space, so the box is carried there (labelReading has read
    * the form's matrix). `least`: the alpha (1 to 255) a pixel needs to count as painted (fix round 2: 128, for half of
    * it or more). Null when PDFium cannot draw it, the page's text objects have taken MAX_INK_PIXELS, or its
-   * matrix cannot be undone.
+   * matrix cannot be undone. Fix round 3: a pixel whose centre lies in a box of `mask` (page points: the ink of the
+   * object's other glyphs) is not counted as painted.
    */
-  inked(object: number, ink: Box, least = 1): number | null {
+  inked(object: number, ink: Box, least = 1, mask: readonly Box[] = []): number | null {
     let alone = this.alone.get(object) ?? null;
     if (alone === null) {
       alone = this.drawnAlone(object);
@@ -664,10 +704,16 @@ export class Page {
     if (y0 > y1) [y0, y1] = [Math.floor((py0 + py1) / 2), Math.floor((py0 + py1) / 2)];
     let painted = 0;
     let all = 0;
+    // A pixel's centre, from the object's space to the page's.
+    const masked = (x: number, y: number): boolean => {
+      const [ox, oy] = [bounds.left + (x + 0.5) / scale, bounds.top - (y + 0.5) / scale];
+      const [px, py] = [a * ox + c * oy + e, b * ox + d * oy + f];
+      return mask.some((other) => inside(other, px, py));
+    };
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
         all += 1;
-        if (x >= 0 && x < width && y >= 0 && y < height && (alpha[y * width + x] as number) >= least) painted += 1;
+        if (x >= 0 && x < width && y >= 0 && y < height && (alpha[y * width + x] as number) >= least && !masked(x, y)) painted += 1;
       }
     }
     return painted / all;
@@ -814,6 +860,11 @@ export class Page {
         const font = m.FPDFTextObj_GetFont(owner);
         return font === 0 || (m.FPDFFont_GetFontData(font, 0, 0, at + 144) && new Uint32Array(rt(m).HEAPU8.buffer, at + 144, 1)[0] === 0);
       };
+      /** Exactly a Type 3 font (fix round 3): PDFium takes it for embedded, yet holds no font program for it. */
+      const inType3 = (object: number): boolean => {
+        const font = m.FPDFTextObj_GetFont(object);
+        return font === 0 || (m.FPDFFont_GetIsEmbedded(font) === 1 && type3(object));
+      };
       // How each glyph's text object is painted (GATE-LAYOUT): read once an object.
       const paintOf = new Map<number, Paint>();
       const paint = (owner: number): Paint => {
@@ -853,7 +904,9 @@ export class Page {
         twinsOf.set(object, later.get(key) ?? []);
         if (bare(object)) later.set(key, [{ at: i, object, paint: paint(object) }, ...(later.get(key) ?? []).slice(0, MAX_TWINS - 1)]);
       }
-      return { top, nested, owners, places: owners.map((owner) => placeOf.get(owner) ?? -1), paints: owners.map(paint), twins: owners.map((owner) => twinsOf.get(owner) ?? []), clipText: this.hasClipText() };
+      const twins = owners.map((owner) => twinsOf.get(owner) ?? []);
+      const drawers = new Set<number>([...owners.filter((owner) => owner !== 0), ...twins.flatMap((list) => list.map((twin) => twin.object))]);
+      return { top, nested, owners, places: owners.map((owner) => placeOf.get(owner) ?? -1), paints: owners.map(paint), twins, clipText: this.hasClipText(), type3: [...drawers].filter(inType3) };
     } finally {
       rt(m).wasmExports.free(at);
       m.FPDFText_ClosePage(text);
@@ -931,6 +984,9 @@ export function showPixel(box: Box): number {
   const side = Math.min(box.right - box.left, box.top - box.bottom) * (1 - 2 * SHOW_INSET) * SHOW_SCALE;
   return side > 1 ? 1 / side : 1;
 }
+
+/** Whether the point lies in the box, its edge included. */
+const inside = (box: Box, x: number, y: number): boolean => x >= box.left && x <= box.right && y >= box.bottom && y <= box.top;
 
 /** The WCAG relative luminance (0 black to 1 white) of an sRGB colour, each channel 0 to 255. */
 export function luminance(r: number, g: number, b: number): number {
@@ -1075,4 +1131,9 @@ export interface LabelReading {
    * nearest (none for one in a form).
    */
   twins?: Twin[][];
+  /**
+   * The text objects (each character's, and each drawn again as it is) whose font is a Type 3 font, whose glyphs' boxes
+   * are only what the font claims: PDFium draws a glyph's paint past its box (fix round 3).
+   */
+  type3?: number[];
 }

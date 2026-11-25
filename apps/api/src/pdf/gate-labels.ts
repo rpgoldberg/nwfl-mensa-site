@@ -166,6 +166,12 @@ const SOLID = 128;
 const MAX_PIECES = 32;
 /** The most work (objects, rectangles and edges looked at) judging one page's glyphs may take: past it, the page is refused. */
 const MAX_WORK = 10_000_000;
+/**
+ * The most time, in milliseconds, PDFium may take drawing a copy's pages for the label check (Page.shows, Page.inked;
+ * fix round 3): past it, the page being judged is refused as too much to check. A drawing costs as much as the page
+ * holds, which counting objects does not see (a form drawn 400 times over).
+ */
+const MAX_DRAWING_MS = 20_000;
 
 const UNREAD_ORIGINAL = 'the original could not be opened to read its layout';
 
@@ -448,7 +454,13 @@ export function pageLabels(
     budget = MAX_WORK,
     shows,
     inked,
-  }: { budget?: number; shows?: (object: number, ink: Box, also: readonly number[]) => number | null; inked?: (object: number, ink: Box, least?: number) => number | null } = {},
+    spent,
+  }: {
+    budget?: number;
+    shows?: (object: number, ink: Box, also: readonly number[], mask?: readonly Box[]) => number | null;
+    inked?: (object: number, ink: Box, least?: number, mask?: readonly Box[]) => number | null;
+    spent?: () => boolean;
+  } = {},
 ): PlacedLabel[] | string {
   const where = `page ${index + 1}`;
   const outside = `${where}: a label is drawn outside a box`;
@@ -599,6 +611,42 @@ export function pageLabels(
     }
     return copies.get(i) ?? null;
   };
+  // Each text object's glyphs (fix round 3), the object each text object drawn again as it is draws the glyphs of, and
+  // the text objects in a Type 3 font.
+  const glyphsOf = new Map<number, number[]>();
+  for (const [k, c] of chars.entries()) {
+    const list = glyphsOf.get(reading.owners[k] ?? 0);
+    if (c.generated) continue;
+    if (list === undefined) glyphsOf.set(reading.owners[k] ?? 0, [k]);
+    else list.push(k);
+  }
+  const sourceOf = new Map<number, number>();
+  for (const [k, list] of (reading.twins ?? []).entries()) for (const twin of list) sourceOf.set(twin.object, reading.owners[k] ?? 0);
+  const type3 = new Set(reading.type3 ?? []);
+  /**
+   * The ink of every other glyph that the text objects `drawers` draw (PDFium's drawing of the page without them takes
+   * it away too) on glyph `i`'s ink, but the same glyph again: what changes there is that glyph's, not glyph `i`'s
+   * (fix round 3). Null when any of them is in a Type 3 font and draws a glyph besides glyph `i` and the same glyph
+   * again: such a glyph's box is only what its font claims, and it may paint anywhere.
+   */
+  const theirs = (i: number, ink: Box, drawers: readonly number[]): Box[] | null => {
+    const sources = new Set(drawers.map((object) => sourceOf.get(object) ?? object));
+    for (const object of drawers) {
+      if (!type3.has(object) && !type3.has(sourceOf.get(object) ?? object)) continue;
+      for (const k of glyphsOf.get(sourceOf.get(object) ?? object) ?? []) {
+        work += 1;
+        if (work > budget || (k !== i && !again(k, i, ink))) return null;
+      }
+    }
+    const near = inks.around(ink);
+    work += near.size;
+    const out: Box[] = [];
+    for (const j of near) {
+      const other = chars[j] as PageChar;
+      if (j !== i && !other.generated && other.ink !== null && sources.has(reading.owners[j] ?? 0) && !again(j, i, ink) && overlap(other.ink, ink)) out.push(other.ink);
+    }
+    return out;
+  };
   let drawings = 0;
   /**
    * Whether glyph `i`, drawn as the page's object at `end` draws it (`drawnAt` that object, or -1), is seen there: it is
@@ -656,18 +704,30 @@ export function pageLabels(
     // is judged only on what may hide it (fix round 2), not on the page.
     if (page && !whole && !contrasts(paint.luminance, 1, false)) left -= 1 - shareOf(ink, rects);
     if (left < SEEN_SHARE) return false;
+    if (shows === undefined && inked === undefined) return true;
+    // Its text objects, and every other drawing it again there (Page.shows takes them all away), and the ink of their
+    // other glyphs on its own, which neither drawing counts as its (fix round 3).
+    const also = copiesOf(i, ink);
+    if (also === null) return false;
+    const drawers = [object, ...also.filter((other) => other !== object)];
+    const mask = theirs(i, ink, drawers);
+    if (mask === null) return false;
+    // Drawing the page has taken as long as it may (fix round 3): the page is too much to check.
+    if (spent?.() === true) {
+      work = budget + 1;
+      return false;
+    }
     // A glyph its font draws nothing for, or a speck: PDFium paints too little of its ink drawing its object alone.
-    if (inked !== undefined && (inked(object, ink) ?? 0) < SHOWN_PIXELS) return false;
+    if (inked !== undefined && (inked(object, ink, undefined, mask) ?? 0) < SHOWN_PIXELS) return false;
     if (shows === undefined) return true;
     // Seen only where PDFium's drawing of the page shows it (fix round 2: whatever lies there, since what a text object
     // drawn over it or a pattern paints cannot be read): its text objects, and every other drawing it again there,
     // change by 3:1 or more at least half as much of its inner ink box as PDFium paints solid drawing it alone, to one
     // row or column of its pixels (where a cover's edge falls between two of them), and SHOWN_PIXELS at least.
-    const also = copiesOf(i, ink);
-    if (also === null || ++drawings > MAX_SHOWS) return false;
+    if (++drawings > MAX_SHOWS) return false;
     work += reading.top.length;
-    const solid = inked === undefined ? 0 : (inked(object, ink, SOLID) ?? 1);
-    return (shows(object, ink, also.filter((other) => other !== object)) ?? 0) >= Math.max(SHOWN_PIXELS, SEEN_SHARE * solid - showPixel(ink));
+    const solid = inked === undefined ? 0 : (inked(object, ink, SOLID, mask) ?? 1);
+    return (shows(object, ink, drawers.slice(1), mask) ?? 0) >= Math.max(SHOWN_PIXELS, SEEN_SHARE * solid - showPixel(ink));
   };
   // Each glyph judged where it is drawn, once: by itself, or when another is judged drawn again where it was.
   const judged = new Map<string, boolean>();
@@ -741,7 +801,13 @@ export async function labelMarks(pdf: Uint8Array, original: Uint8Array): Promise
   try {
     const out: PlacedLabel[][] = [];
     for (let index = 0; index < doc.pageCount; index++) {
-      const found = doc.page(index, (page) => pageLabels(page.labelReading(), page.chars().chars, index, layout[index] ?? [], (at) => page.shape(at), { shows: (object, ink, also) => page.shows(object, ink, also), inked: (object, ink, least) => page.inked(object, ink, least) }));
+      const found = doc.page(index, (page) =>
+        pageLabels(page.labelReading(), page.chars().chars, index, layout[index] ?? [], (at) => page.shape(at), {
+          shows: (object, ink, also, mask) => page.shows(object, ink, also, mask),
+          inked: (object, ink, least, mask) => page.inked(object, ink, least, mask),
+          spent: () => doc.drawingMs > MAX_DRAWING_MS,
+        }),
+      );
       if (typeof found === 'string') return found;
       out.push(found);
     }

@@ -493,12 +493,23 @@ describe('text develop refused that nobody can see stays refused (fix round 1)',
 
   // The gate refuses these Type 3 fonts by rules of its own (gate-rules.ts, the Type 3 glyph procs); the labels pass.
   it.each<[string, () => Promise<Uint8Array>]>([
-    ['Type 3 glyphs (d1) filled white', () => page([cell(), `q 1 g BT /F3 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (BHI) Tj ET Q`, BODY])],
-    ['Type 3 glyphs (d0) whose procs paint white, filled black', async () => withType3(await page([cell(), hidden('0 g', 'F9'), BODY]), '600 0 d0 1 g 50 0 500 700 re f')],
+    ['a Type 3 glyph (d1) alone in its text object, filled white', () => page([cell(), `q 1 g BT /F3 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (B) Tj ET Q`, BODY])],
+    ['a Type 3 glyph (d0) alone in its text object whose proc paints white, filled black', async () => withType3(await page([cell(), `q 0 g BT /F9 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (H) Tj ET Q`, BODY]), '600 0 d0 1 g 50 0 500 700 re f')],
   ])('takes %s for seen: their labels pass', async (_name, build) => {
     const original = await build();
     const copy = copyOf(await redact(original, QUOTE));
     expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
+  });
+
+  // Fix round 3: a Type 3 glyph's box is only what its font claims (PDFium draws past it), so which glyph of a Type 3
+  // text object paints where cannot be told: one drawn with other glyphs of its object is not seen (develop refused these).
+  it.each<[string, () => Promise<Uint8Array>]>([
+    ['Type 3 glyphs (d1) filled white', () => page([cell(), `q 1 g BT /F3 14 Tf ${CELL.x + 20} ${CELL.y + 16} Td (BHI) Tj ET Q`, BODY])],
+    ['Type 3 glyphs (d0) whose procs paint white, filled black', async () => withType3(await page([cell(), hidden('0 g', 'F9'), BODY]), '600 0 d0 1 g 50 0 500 700 re f')],
+  ])('refuses %s, drawn with others of their Type 3 text object (fix round 3)', async (_name, build) => {
+    const original = await build();
+    expect(refusal(await redact(original, QUOTE))).toBe(UNSEEN());
+    expect(await labelMarks(original, original)).toBe(UNSEEN());
   });
 
   it.each<[string, () => Promise<Uint8Array>]>([
@@ -1528,6 +1539,183 @@ describe('text develop refused stays refused, judged as PDFium draws it (fix rou
     expect(await labelMarks(pdf, pdf)).toMatch(/^page 1: (text nobody can see|too much is drawn)/u);
     expect(performance.now() - started).toBeLessThan(8000);
   }, 120_000);
+});
+
+describe('only what a glyph paints itself, inside the page, in bounded time (fix round 3)', () => {
+  const TOO_MUCH = 'page 1: too much is drawn on the black rectangles of the original to check';
+  const cellBox: Box = { left: 0, right: 100, bottom: 0, top: 20 };
+  const glyphAt = (left: number, text = 'x'): PageChar => ({ text, generated: false, hyphen: false, box: { left, right: left + 6, bottom: 5, top: 12 }, ink: { left: left + 0.5, right: left + 5.5, bottom: 5, top: 11 }, fontSize: 10 });
+  const WHITE_TEXT = { luminance: 1, opaque: true };
+  /** A cell drawn first, then each text object of `order` in turn; `owners`: each glyph's text object. */
+  const readingOf = (owners: number[], order: number[], more: Partial<LabelReading> = {}): LabelReading => ({
+    top: [{ kind: 'box', object: 1, bounds: cellBox }, ...order.map((object) => ({ kind: 'other' as const, object }))],
+    nested: 0,
+    owners,
+    places: owners.map((owner) => 1 + order.indexOf(owner)),
+    paints: owners.map(() => WHITE_TEXT),
+    ...more,
+  });
+  const byLeft = (boxes: readonly Box[]): Box[] => [...boxes].sort((a, b) => a.left - b.left);
+
+  it('leaves the ink of every other glyph its drawing takes away out of what it counts, but not the same glyph again', () => {
+    // S (object 50) and x over a third of it, in the same object; y far off in it; S again (object 52) over S; z, of
+    // object 51 drawn before them, over S's ink in part. Drawing the page without S's objects takes away S, x, y and
+    // S again: x's ink is not S's, nor S's ink x's.
+    const [s, x, y, again, z] = [glyphAt(10, 'S'), glyphAt(13, 'x'), glyphAt(60, 'y'), glyphAt(10.2, 'S'), glyphAt(7, 'z')];
+    const reading = readingOf([51, 50, 50, 50, 52], [51, 50, 52]);
+    const asked = new Map<string, { object: number; also: readonly number[]; mask: Box[]; inkedMasks: Box[][] }>();
+    const key = (ink: Box): string => String(ink.left);
+    const found = pageLabels(reading, [z, s, x, y, again], 0, [cellBox], () => null, {
+      shows: (object, ink, also, mask = []) => {
+        asked.set(key(ink), { ...(asked.get(key(ink)) ?? { inkedMasks: [] }), object, also, mask: byLeft(mask) });
+        return 1;
+      },
+      inked: (_object, ink, _least, mask = []) => {
+        const before = asked.get(key(ink)) ?? { object: 0, also: [], mask: [], inkedMasks: [] };
+        asked.set(key(ink), { ...before, inkedMasks: [...before.inkedMasks, byLeft(mask)] });
+        return 1;
+      },
+    });
+    expect(found).toEqual([]);
+    expect(asked.get(key(s.ink as Box))).toEqual({ object: 50, also: [52], mask: [x.ink], inkedMasks: [[x.ink], [x.ink]] });
+    expect(asked.get(key(x.ink as Box))).toEqual({ object: 50, also: [], mask: [s.ink], inkedMasks: [[s.ink], [s.ink]] });
+    expect(asked.get(key(y.ink as Box))).toEqual({ object: 50, also: [], mask: [], inkedMasks: [[], []] });
+    expect(asked.get(key(again.ink as Box))).toEqual({ object: 52, also: [50], mask: [x.ink], inkedMasks: [[x.ink], [x.ink]] });
+    // z's object is not taken away for any of them: its ink is no one's mask.
+    expect(asked.get(key(z.ink as Box))?.mask).toEqual([]);
+  });
+
+  it('does not see a glyph whose drawing takes away another glyph in a Type 3 font, whose box is only what the font claims', () => {
+    const shows = (): number => 1;
+    const [s, far, again, q] = [glyphAt(10, 'S'), glyphAt(60, 'x'), glyphAt(10.2, 'S'), glyphAt(80, 'q')];
+    // Alone in its object, or with itself again: seen.
+    expect(pageLabels(readingOf([50], [50], { type3: [50] }), [s], 0, [cellBox], () => null, { shows })).toEqual([]);
+    expect(pageLabels(readingOf([50, 50], [50], { type3: [50] }), [s, again], 0, [cellBox], () => null, { shows })).toEqual([]);
+    // With any other glyph in its object, anywhere, or in an object that draws it again: not seen.
+    expect(pageLabels(readingOf([50, 50], [50], { type3: [50] }), [s, far], 0, [cellBox], () => null, { shows })).toBe(UNSEEN());
+    expect(pageLabels(readingOf([50, 52, 52], [50, 52], { type3: [52] }), [s, again, q], 0, [cellBox], () => null, { shows })).toBe(UNSEEN());
+    // Not in a Type 3 font: seen.
+    expect(pageLabels(readingOf([50, 50], [50]), [s, far], 0, [cellBox], () => null, { shows })).toEqual([]);
+    // A Type 3 text object drawn again as it is (its twin, which PDFium does not read): its glyphs are the first's.
+    const twin = { at: 3, object: 70, paint: WHITE_TEXT };
+    const twinned = readingOf([50, 51], [50, 51], { twins: [[twin], []], type3: [70] });
+    twinned.top.push({ kind: 'other', object: 70 });
+    expect(pageLabels(twinned, [s, far], 0, [cellBox], () => null, { shows })).toEqual([]);
+    expect(pageLabels({ ...twinned, owners: [50, 50] }, [s, far], 0, [cellBox], () => null, { shows })).toBe(UNSEEN());
+  });
+
+  it('refuses a page once drawing it has taken as long as it may, as too much to check', () => {
+    const reading = readingOf([50, 51, 52], [50, 51, 52]);
+    const chars = [glyphAt(10), glyphAt(30), glyphAt(50)];
+    let drawings = 0;
+    const shows = (): number => {
+      drawings += 1;
+      return 1;
+    };
+    expect(pageLabels(reading, chars, 0, [cellBox], () => null, { shows, spent: () => false })).toEqual([]);
+    expect(drawings).toBe(3);
+    drawings = 0;
+    expect(pageLabels(reading, chars, 0, [cellBox], () => null, { shows, spent: () => drawings >= 1 })).toBe(TOO_MUCH);
+    expect(drawings).toBe(1);
+  });
+
+  const X0 = CELL.x + 20;
+  const Y0 = CELL.y + 16;
+  const hid = (paint: string, text = 'Hidden', font = 'F2', size = 14): string => `q ${paint} BT /${font} ${size} Tf ${X0} ${Y0} Td (${text}) Tj ET Q`;
+  async function edited(pdf: Uint8Array, change: (doc: PDFDocument) => void): Promise<Uint8Array> {
+    const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+    change(doc);
+    return doc.save({ useObjectStreams: false });
+  }
+  const boxes = (keys: readonly string[], box: readonly number[]) => (pdf: Uint8Array): Promise<Uint8Array> =>
+    edited(pdf, (doc) => {
+      for (const key of keys) doc.getPage(0).node.set(PDFName.of(key), doc.context.obj([...box]));
+    });
+  async function inksOf(pdf: Uint8Array): Promise<Box[]> {
+    const doc = Document.open(await pdfium(), pdf);
+    if (doc === null) throw new Error('unopenable');
+    try {
+      return doc.page(0, (p) => p.chars().chars.flatMap((c) => (c.ink === null || /^\s*$/u.test(c.text) ? [] : [c.ink])));
+    } finally {
+      doc.close();
+    }
+  }
+  const re = (b: Box): string => `${b.left} ${b.bottom} ${b.right - b.left} ${b.top - b.bottom} re`;
+  /** An "H" at (X0, Y0) on the cell whose page box ends `at` its ink's left plus this share of its width. */
+  const cropped = async (share: number): Promise<Uint8Array> => {
+    const original = await page([cell(), hid(WHITE, 'H'), BODY]);
+    const [ink] = await inksOf(original);
+    const h = ink as Box;
+    return boxes(['CropBox'], [0, 0, h.left + share * (h.right - h.left), 140])(original);
+  };
+  /**
+   * Type 3 fonts /F5 and /FA: "S" (0x53) an L of two bars in its 1000 box; "x" (0x78) a square from 300 to 1000 in it,
+   * 49 % of S's box (under the half that makes it a cover). In /F5 x's box (d1) is its square; in /FA it claims only a
+   * strip at the right of it.
+   */
+  const withSX = (pdf: Uint8Array): Promise<Uint8Array> =>
+    edited(pdf, (doc) => {
+      const { context } = doc;
+      const make = (xBox: string): unknown => {
+        const cmap = '/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /Fix3 def /CIDSystemInfo <</Registry (F) /Ordering (F) /Supplement 0>> def 1 begincodespacerange <00> <FF> endcodespacerange 2 beginbfchar <53> <0053> <78> <0078> endbfchar endcmap CMapName currentdict /CMap defineresource pop end end';
+        const procs = { gs: context.register(context.flateStream('1000 0 0 0 1000 1000 d1 0 0 200 1000 re f 0 0 1000 200 re f')), gx: context.register(context.flateStream(`1000 0 ${xBox} d1 300 300 700 700 re f`)) };
+        return context.obj({ Type: 'Font', Subtype: 'Type3', FontBBox: [0, 0, 1000, 1000], FontMatrix: [0.001, 0, 0, 0.001, 0, 0], CharProcs: procs, Encoding: { Type: 'Encoding', Differences: [0x53, PDFName.of('gs'), 0x78, PDFName.of('gx')] }, FirstChar: 0x53, LastChar: 0x78, Widths: Array.from({ length: 0x78 - 0x53 + 1 }, () => 1000), Resources: {}, ToUnicode: context.register(context.flateStream(cmap)) } as never);
+      };
+      doc.getPage(0).node.setFontDictionary(PDFName.of('F5'), context.register(make('300 300 1000 1000') as never));
+      doc.getPage(0).node.setFontDictionary(PDFName.of('FA'), context.register(make('870 300 1000 1000') as never));
+    });
+  const [SX, SY] = [CELL.x + 20, CELL.y + 4];
+  const sx = (font: string): string => `q 1 g BT /${font} 36 Tf ${SX} ${SY} Td [(S) 1000 (x)] TJ ET Q`;
+  /** A black L over S's bars, 0.43 pt round them, drawn through a matrix (which the check does not read). */
+  const L = ((): string => {
+    const u = (x: number, y: number): string => `${(SX + x * 0.036).toFixed(3)} ${(SY + y * 0.036).toFixed(3)}`;
+    return `${u(-12, -12)} m ${u(1012, -12)} l ${u(1012, 212)} l ${u(212, 212)} l ${u(212, 1012)} l ${u(-12, 1012)} l h`;
+  })();
+  /** "S" then "M" over 47 % of its ink, in one Helvetica text object, white on the cell; then black over S's ink but M's. */
+  const coveredBesideM = async (cover: boolean): Promise<Uint8Array> => {
+    const text = `q 1 g BT /F1 30 Tf ${CELL.x + 10} ${CELL.y + 8} Td [(S) 400 (M)] TJ ET Q`;
+    const [s, m] = (await inksOf(await page([cell(), text, BODY]))) as [Box, Box];
+    const both = { left: Math.max(s.left, m.left), right: Math.min(s.right, m.right), bottom: Math.max(s.bottom, m.bottom), top: Math.min(s.top, m.top) };
+    return page([cell(), text, ...(cover ? [`q 1 0 0 1 0.001 0 cm 0 g ${re(s)} ${re(both)} f* Q`] : []), BODY]);
+  };
+
+  it.each<[string, () => Promise<Uint8Array>]>([
+    ['P1: white text on the cell past the crop box', async () => boxes(['CropBox'], [0, 0, 205, 140])(await page([cell(), hid(WHITE), BODY]))],
+    ['P2: white text on the cell past the media box', async () => boxes(['MediaBox'], [0, 0, 205, 140])(await page([cell(), hid(WHITE), BODY]))],
+    ['P6: white text on the cell past the crop, trim, art and bleed boxes', async () => boxes(['CropBox', 'TrimBox', 'ArtBox', 'BleedBox'], [0, 0, 205, 140])(await page([cell(), hid(WHITE), BODY]))],
+    ['white "H" on the cell two thirds past the crop box', () => cropped(1 / 3)],
+    ['X1: Type 3 "S" under a black L, "x" in its box beside the L', async () => withSX(await page([cell(), sx('F5'), `q 1 0 0 1 0.001 0 cm 0 g ${L} f Q`, BODY]))],
+    ['X2: Type 3 "S" white on a white L, "x" in its box beside the L', async () => withSX(await page([cell(), `q 1 0 0 1 0.001 0 cm 1 g ${L} f Q`, sx('F5'), BODY]))],
+    ['Type 3 "S" under a black L, "x" whose box claims a strip beside its square', async () => withSX(await page([cell(), sx('FA'), `q 1 0 0 1 0.001 0 cm 0 g ${L} f Q`, BODY]))],
+    ['Type 3 "S" white on a white L, "x" whose box claims a strip beside its square', async () => withSX(await page([cell(), `q 1 0 0 1 0.001 0 cm 1 g ${L} f Q`, sx('FA'), BODY]))],
+    ['Helvetica "S" covered but where "M" of its text object lies over it', () => coveredBesideM(true)],
+  ])('refuses %s, in the engine and in the gate', async (_name, build) => {
+    const original = await build();
+    expect(refusal(await redact(original, QUOTE))).toBe(UNSEEN());
+    expect(await labelMarks(original, original)).toBe(UNSEEN());
+    expect(await verdict(original, original)).toEqual({ pass: false, code: 'rules' });
+  });
+
+  it.each<[string, () => Promise<Uint8Array>]>([
+    ['white "H" on the cell inside a crop box that ends 3 pt past it', () => cropped(1 + 3 / 8)],
+    ['white "H" on the cell a fifth past the crop box', () => cropped(0.8)],
+    ['Helvetica "S" and "M" over part of it, white on the cell', () => coveredBesideM(false)],
+  ])('passes %s', async (_name, build) => {
+    const original = await build();
+    const copy = copyOf(await redact(original, QUOTE));
+    expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
+    expect(await verdict(copy, original, QUOTE)).toEqual({ pass: true });
+  });
+
+  it('refuses, as too much to check, a page whose drawing is slow, in well under the gate\'s time (fix round 2: 146 s)', async () => {
+    // 20 draws of a form that draws 20 times a black zigzag of 20,000 points on the black cell, and 25 white glyphs on it.
+    const zigzag = `0 g 12 12 m ${Array.from({ length: 20_000 }, (_, k) => `${(12 + (376 * k) / 20_000).toFixed(3)} ${k % 2 === 0 ? 128 : 12} l`).join(' ')} h f`;
+    const glyphs = Array.from({ length: 25 }, (_, n) => `BT /F1 5 Tf ${14 + 4 * n} 14 Td (n) Tj ET`).join('\n');
+    const pdf = await fitPdf(`0 g 10 10 380 120 re f*\n${Array.from({ length: 20 }, () => '/Fm1 Do').join('\n')}\nq 1 g\n${glyphs}\nQ`, { form: Array.from({ length: 20 }, () => '/Fm2 Do').join(' '), innerForm: zigzag });
+    const started = performance.now();
+    expect(await labelMarks(pdf, pdf)).toBe(TOO_MUCH);
+    expect(performance.now() - started).toBeLessThan(60_000);
+  }, 300_000);
 });
 
 describe('luminance', () => {
