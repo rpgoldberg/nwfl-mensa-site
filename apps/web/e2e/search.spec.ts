@@ -233,6 +233,14 @@ test.describe('a search', () => {
     expect(referers.filter((r) => r.includes('refword'))).toEqual([]);
   });
 
+  test("the header's Sign in and the Aa controls return to /search alone, never with the words", async ({ page }) => {
+    await page.goto('/search?q=picnic+backword&page=2');
+    await expect(page.getByRole('banner').getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/sign-in?return=%2Fsearch');
+    const backs = await page.locator('input[type="hidden"][name="back"]').evaluateAll((inputs) => inputs.map((i) => (i as HTMLInputElement).value));
+    expect(backs.length).toBeGreaterThan(0);
+    expect(new Set(backs)).toEqual(new Set(['/search']));
+  });
+
   test('tells a reader whose sign-in has lapsed that only the public copies were searched, and how to sign in again', async ({ page }) => {
     await page.goto('/');
     await signIn(page, 'lapsed');
@@ -287,6 +295,16 @@ test.describe('a search', () => {
     expect(res?.headers()['cache-control']).toBe('private, no-store');
     await expect(hits(page).first()).toContainText('From the members copy:');
     await expect(hits(page).first().getByRole('link', { name: `${newest.title}, page 2`, exact: true })).toHaveAttribute('href', new RegExp(`^/read/${newest.membersPdf}#page=2`));
+  });
+
+  test('a reader whose token the API refuses gets the public results, and is told members-only reading is not available, as on /news', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'refused');
+    await page.goto('/search?q=picnic');
+    await expect(hits(page).first()).toContainText('From the public copy:');
+    const note = page.getByRole('main').getByRole('note').filter({ hasText: 'Members-only reading is not available for this sign-in.' });
+    await expect(note).toHaveText('Members-only reading is not available for this sign-in. Ask for help.');
+    await expect(note.getByRole('link', { name: 'Ask for help' })).toHaveAttribute('href', '/help');
   });
 
   test('the public search is asked with no token, signed in or not as someone with no member access', async ({ page }) => {
