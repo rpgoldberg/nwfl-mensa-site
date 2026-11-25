@@ -1836,15 +1836,15 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
   });
 
   /** A black cell; one draw of a form that draws a form `n` times, that draws a third `n` times: a black zigzag of `k` points on the cell (black on black). Then a white "n" of `size` points. */
-  const zigzag = (k: number): string => `0 g 12 12 m ${Array.from({ length: k }, (_, i) => `${(12 + (376 * i) / k).toFixed(3)} ${i % 2 === 0 ? 128 : 12} l`).join(' ')} h f`;
-  async function deep(k: number, n: number, size: number, x = 150, y = 40, zigzagAt = ''): Promise<Uint8Array> {
+  const zigzag = (k: number, paint = 'h f'): string => `0 g 12 12 m ${Array.from({ length: k }, (_, i) => `${(12 + (376 * i) / k).toFixed(3)} ${i % 2 === 0 ? 128 : 12} l`).join(' ')} ${paint}`;
+  async function deep(k: number, n: number, size: number, x = 150, y = 40, zigzagAt = '', paint = 'h f'): Promise<Uint8Array> {
     const pdf = await fitPdf(`0 g 10 10 380 120 re f*\n/Fm1 Do\nq 1 g BT /F1 ${size} Tf ${x} ${y} Td (n) Tj ET Q`, {
       form: Array.from({ length: n }, () => '/Fm2 Do').join(' '),
       innerForm: Array.from({ length: n }, () => `${zigzagAt} /Fm3 Do`).join(' '),
     });
     const doc = await PDFDocument.load(pdf, { updateMetadata: false });
     const c = doc.context;
-    const fm3 = c.register(c.flateStream(zigzag(k), { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 400, 140], Resources: {} }));
+    const fm3 = c.register(c.flateStream(zigzag(k, paint), { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 400, 140], Resources: {} }));
     const forms = (holder: PDFDict): PDFDict => holder.lookup(PDFName.of('XObject'), PDFDict);
     const fm1 = forms(doc.getPage(0).node.Resources() as PDFDict).lookup(PDFName.of('Fm1')) as unknown as { dict: PDFDict };
     const fm2 = forms(fm1.dict.lookup(PDFName.of('Resources'), PDFDict)).lookup(PDFName.of('Fm2')) as unknown as { dict: PDFDict };
@@ -1877,8 +1877,9 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
     } finally {
       doc.close();
     }
-    // The same zigzags moved off the glyph (above the page): nothing heavy meets its area, so it is drawn.
-    const away = await deep(20_000, 20, 100, 150, 40, '1 0 0 1 0 400 cm');
+    // The same zigzags moved off the glyph (past the page's right edge, each form's matrix 400 pt on): over the same
+    // rows, but nothing heavy meets its area, so it is drawn.
+    const away = await deep(20_000, 20, 100, 150, 40, '1 0 0 1 400 0 cm');
     const doc2 = Document.open(await pdfium(), away);
     if (doc2 === null) throw new Error('unopenable');
     try {
@@ -1892,6 +1893,32 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
       doc2.close();
     }
   }, 120_000);
+
+  it('weighs each path by its segments times the pixel rows of the area it meets, a stroke three times a fill', async () => {
+    const costs = async (paint: string): Promise<number[]> => {
+      const doc = Document.open(await pdfium(), await deep(100, 2, 10, 150, 40, '', paint));
+      if (doc === null) throw new Error('unopenable');
+      try {
+        const area = (bottom: number, top: number): Box => ({ left: 100, right: 110, bottom, top });
+        // 1 pt and 9 pt high on the zigzags and the cell (4 and 36 rows), and well below both (PDFium's bounds of a stroke reach past its points).
+        return doc.page(0, (p) => [p.drawCost(area(50, 51)), p.drawCost(area(50, 59)), p.drawCost(area(-40, -30))]);
+      } finally {
+        doc.close();
+      }
+    };
+    // The cell alone (the zigzags painted with nothing), then the zigzags filled, stroked, both, and used as a clip.
+    const cell = await costs('h n');
+    const zigzags = async (paint: string): Promise<number[]> => (await costs(paint)).map((cost, k) => cost - (cell[k] as number));
+    const [fill, stroke, both, clip] = [await zigzags('h f'), await zigzags('h S'), await zigzags('h B'), await zigzags('h W n')];
+    const [one, nine, below] = fill as [number, number, number];
+    expect(one).toBeGreaterThan(0);
+    expect(nine / one).toBe(37 / 5);
+    expect((cell[1] as number) / (cell[0] as number)).toBe(37 / 5);
+    expect([below, cell[2]]).toEqual([0, 0]);
+    expect(stroke).toEqual(fill.map((cost) => 3 * cost));
+    expect(both).toEqual(fill.map((cost) => 4 * cost));
+    expect(clip).toEqual([0, 0, 0]);
+  });
 });
 
 describe('luminance', () => {
