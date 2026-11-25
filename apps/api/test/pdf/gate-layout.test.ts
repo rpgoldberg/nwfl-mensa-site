@@ -1502,6 +1502,8 @@ describe('text develop refused stays refused, judged as PDFium draws it (fix rou
     ['a white "I" two fifths under a black rectangle drawn through a matrix', async () => page([cell(), I30, `q 1 0 0 1 0.001 0 cm 0 g ${rect(await iCovered(0.4))} f Q`, BODY])],
     ['white text a third under a black rectangle drawn through a matrix', async () => page([cell(), hid(WHITE), `q 1 0 0 1 0.001 0 cm 0 g ${rect(await coveredTo(0.33))} f Q`, BODY])],
     ['white text at 4 pt', () => page([cell(), hid(WHITE, 'Hidden', 'F1', 4), BODY])],
+    // Drawn without one of them, the other still paints it: PDFium's drawing is asked without both.
+    ['white text on a cell drawn twice as it is, one over the other', () => page([cell(), onCell(WHITE), onCell(WHITE), BODY])],
   ])('passes %s', async (_name, build) => {
     const original = await build();
     const copy = copyOf(await redact(original, QUOTE));
