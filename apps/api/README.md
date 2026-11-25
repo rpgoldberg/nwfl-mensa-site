@@ -315,7 +315,9 @@ by the handler for a precise answer, and by the database (`0007`).
   their own sign-up. `ListSignupRecords` lists the decided sign-ups not yet
   erased. `EraseSignup` erases a person's record when they ask: the display
   name, the email, the first and last name and the membership number of every
-  decided sign-up of theirs. The date and the decision stay, an approved
+  decided sign-up of theirs, with what the membership check reported (the
+  local group and the first-name answer, `0033`) and any fresh check. The
+  check's outcome and date, the date and the decision stay, an approved
   member's account is removed with it, and a pending sign-up is decided first.
   `CorrectMembershipNumber` is the one way a stored number changes: the
   number is checked as at sign-up, and the reason is one of three fixed
@@ -324,8 +326,10 @@ by the handler for a precise answer, and by the database (`0007`).
   when. There is no free text, so the log never holds a number or a name. A
   number already on another sign-up that is waiting or approved is refused.
 - **Removing a member** (`RemoveMember`): the removal erases the first name,
-  the last name and the membership number on every decided sign-up of the
-  member, a reopened earlier one included, in the same statement (a trigger of
+  the last name, the membership number and what the check reported (the
+  local group and the first-name answer, and any fresh check, `0033`) on
+  every decided sign-up of the member, a reopened earlier one included, in
+  the same statement (a trigger of
   `0036`), audited by each sign-up's id. A person removed while still waiting
   is rejected and keeps what was typed, until the Admin erases it on request.
   `0036` itself erased the members removed before it. Each erasure analyses

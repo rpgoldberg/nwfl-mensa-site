@@ -22,6 +22,12 @@
 --            removal of a person still waiting, which rejects their sign-up) keeps what was typed, so
 --            a mistaken rejection can be judged and reopened; the Admin erases it on request.
 --            A member removed before 0036 is erased here, once (section 8).
+--   CHECK    What the membership check reported (OFFICER-VERIFY, 0033) is National's record of the person:
+--            the local group, whether the typed first name matched, and a fresh check's own two answers.
+--            Both erasures take them with the profile, and end a fresh check that waits or is held
+--            (recheck_requested_at, recheck_outcome), so no later answer lands on the row. What stays
+--            is the check's outcome and its date (verification, verified_on), as before. 0033's guard on
+--            the answers (signup_request_report_final) lets the two erasures through, and nothing else.
 --   STATS    Each erasure ends by analysing the table again, so pg_stats (which the app role reads)
 --            holds no erased value. The dead row versions, the WAL and the backups keep the values
 --            until vacuum and pg-nwfl's backup retention remove them.
@@ -48,7 +54,8 @@ ALTER TABLE signup_request
   ADD CONSTRAINT signup_request_erase_recorded CHECK ((erased_at IS NULL) = (erased_by_sub IS NULL)),
   ADD CONSTRAINT signup_request_erase_only_decided CHECK (erased_at IS NULL OR decision <> 'pending'),
   ADD CONSTRAINT signup_request_erased_holds_nothing
-    CHECK (erased_at IS NULL OR num_nonnulls(display_name, email, first_name, last_name, membership_number) = 0),
+    CHECK (erased_at IS NULL OR num_nonnulls(display_name, email, first_name, last_name, membership_number, first_name_matched, local_group,
+                                               recheck_requested_at, recheck_outcome, recheck_first_name_matched, recheck_local_group) = 0),
   ADD CONSTRAINT signup_request_named_until_erased
     CHECK (erased_at IS NOT NULL OR (display_name IS NOT NULL AND email IS NOT NULL));
 
@@ -75,9 +82,11 @@ BEGIN
   IF OLD.erased_at IS NULL AND NEW.erased_at IS NOT NULL THEN
     IF current_setting('nwfl.signup_erase', true) IS DISTINCT FROM OLD.id::text
        OR OLD.decision = 'pending'
-       OR (to_jsonb(NEW) - ARRAY['display_name', 'email', 'first_name', 'last_name', 'membership_number', 'erased_at', 'erased_by_sub'])
+       OR (to_jsonb(NEW) - ARRAY['display_name', 'email', 'first_name', 'last_name', 'membership_number', 'erased_at', 'erased_by_sub',
+                                 'first_name_matched', 'local_group', 'recheck_requested_at', 'recheck_outcome', 'recheck_first_name_matched', 'recheck_local_group'])
           IS DISTINCT FROM
-          (to_jsonb(OLD) - ARRAY['display_name', 'email', 'first_name', 'last_name', 'membership_number', 'erased_at', 'erased_by_sub'])
+          (to_jsonb(OLD) - ARRAY['display_name', 'email', 'first_name', 'last_name', 'membership_number', 'erased_at', 'erased_by_sub',
+                                 'first_name_matched', 'local_group', 'recheck_requested_at', 'recheck_outcome', 'recheck_first_name_matched', 'recheck_local_group'])
        OR NOT EXISTS (SELECT 1 FROM audit_event e WHERE e.subject_kind = 'signup_request' AND e.subject_id = OLD.id::text
                         AND e.action = 'erase' AND e.at = now() AND e.actor_sub = NEW.erased_by_sub AND 'nwfl-admin' = ANY (e.actor_groups)) THEN
       RAISE EXCEPTION 'signup_request %: a sign-up is erased only by signup_request_erase, with its record', OLD.id
@@ -92,12 +101,14 @@ BEGIN
   END IF;
   -- REMOVAL: a removed member's profile goes from every decided sign-up of theirs, a reopened one too, only
   -- inside signup_request_erase_profile (a transaction-local marker naming the person): the three typed
-  -- fields, all three to nothing, nothing else, and only for a person who was approved and is removed.
+  -- fields and what the check reported (0033), all to nothing, nothing else, and only for a person who was
+  -- approved and is removed.
   IF current_setting('nwfl.profile_erase', true) = OLD.sub
      AND OLD.decision <> 'pending'
-     AND num_nonnulls(NEW.first_name, NEW.last_name, NEW.membership_number) = 0
-     AND (to_jsonb(NEW) - ARRAY['first_name', 'last_name', 'membership_number'])
-         = (to_jsonb(OLD) - ARRAY['first_name', 'last_name', 'membership_number'])
+     AND num_nonnulls(NEW.first_name, NEW.last_name, NEW.membership_number, NEW.first_name_matched, NEW.local_group, NEW.recheck_requested_at,
+                      NEW.recheck_outcome, NEW.recheck_first_name_matched, NEW.recheck_local_group) = 0
+     AND (to_jsonb(NEW) - ARRAY['first_name', 'last_name', 'membership_number', 'first_name_matched', 'local_group', 'recheck_requested_at', 'recheck_outcome', 'recheck_first_name_matched', 'recheck_local_group'])
+         = (to_jsonb(OLD) - ARRAY['first_name', 'last_name', 'membership_number', 'first_name_matched', 'local_group', 'recheck_requested_at', 'recheck_outcome', 'recheck_first_name_matched', 'recheck_local_group'])
      AND EXISTS (SELECT 1 FROM member_account a WHERE a.sub = OLD.sub AND a.status = 'removed')
      AND EXISTS (SELECT 1 FROM signup_request s WHERE s.sub = OLD.sub AND s.decision = 'approved') THEN
     RETURN NEW;
@@ -132,6 +143,13 @@ BEGIN
       RAISE EXCEPTION 'signup_request %: a removed account''s profile stays erased', OLD.id USING ERRCODE = 'object_not_in_prerequisite_state';
     END IF;
   END IF;
+  -- REMOVAL: nor does a check's answer (0033), or a fresh check, land on a removed member's sign-up.
+  IF v_removed AND OLD.decision = 'approved'
+     AND num_nonnulls(NEW.first_name_matched, NEW.local_group, NEW.recheck_requested_at, NEW.recheck_outcome, NEW.recheck_first_name_matched, NEW.recheck_local_group) > 0
+     AND (NEW.first_name_matched, NEW.local_group, NEW.recheck_requested_at, NEW.recheck_outcome, NEW.recheck_first_name_matched, NEW.recheck_local_group)
+         IS DISTINCT FROM (OLD.first_name_matched, OLD.local_group, OLD.recheck_requested_at, OLD.recheck_outcome, OLD.recheck_first_name_matched, OLD.recheck_local_group) THEN
+    RAISE EXCEPTION 'signup_request %: a removed account''s profile stays erased', OLD.id USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
   IF OLD.decision <> 'pending'
      AND (NEW.decision, NEW.decided_at, NEW.decided_by_sub) IS DISTINCT FROM (OLD.decision, OLD.decided_at, OLD.decided_by_sub) THEN
     RAISE EXCEPTION 'signup_request % is decided', OLD.id USING ERRCODE = 'object_not_in_prerequisite_state';
@@ -142,6 +160,25 @@ $fn$;
 
 COMMENT ON TRIGGER signup_request_decision_final ON signup_request IS
   'Refuses every role''s other changes of a decided, reopened or erased row, the owner''s included; the owner can disable or drop it, as for every guard trigger (0019).';
+
+-- 4b. 0033's guard on the check's answers, as it was, but for the two erasures: inside one, with the outcome
+--     unchanged and both answers to nothing, it gives way, and signup_request_decision_final (above, first by
+--     name) holds the rest. The same conditions as there, so a marker set by hand opens nothing more.
+CREATE OR REPLACE FUNCTION signup_request_report_final() RETURNS trigger LANGUAGE plpgsql
+  SET search_path = pg_catalog, public, pg_temp AS $fn$
+BEGIN
+  IF OLD.verification <> 'unchecked' AND OLD.recheck_requested_at IS NULL AND OLD.recheck_outcome IS DISTINCT FROM 'email_mismatch'
+     AND (NEW.verification, NEW.first_name_matched, NEW.local_group) IS DISTINCT FROM (OLD.verification, OLD.first_name_matched, OLD.local_group)
+     AND NOT (NEW.verification = OLD.verification AND NEW.first_name_matched IS NULL AND NEW.local_group IS NULL
+              AND ((current_setting('nwfl.signup_erase', true) = OLD.id::text AND OLD.erased_at IS NULL AND NEW.erased_at IS NOT NULL)
+                   OR (current_setting('nwfl.profile_erase', true) = OLD.sub
+                       AND EXISTS (SELECT 1 FROM member_account a WHERE a.sub = OLD.sub AND a.status = 'removed')
+                       AND EXISTS (SELECT 1 FROM signup_request s WHERE s.sub = OLD.sub AND s.decision = 'approved')))) THEN
+    RAISE EXCEPTION 'signup_request %: the report''s answers never change', OLD.id USING ERRCODE = 'object_not_in_prerequisite_state';
+  END IF;
+  RETURN NEW;
+END
+$fn$;
 
 -- 5. REMOVAL: an account that becomes removed loses the profile on every decided sign-up of the person,
 --    in the same statement, whoever removes it, when the person was approved: a member's account. (A
@@ -159,8 +196,12 @@ BEGIN
     RETURN 0;
   END IF;
   PERFORM set_config('nwfl.profile_erase', p_sub, true);
-  UPDATE signup_request s SET first_name = NULL, last_name = NULL, membership_number = NULL
-   WHERE s.sub = p_sub AND s.decision <> 'pending' AND num_nonnulls(s.first_name, s.last_name, s.membership_number) > 0;
+  UPDATE signup_request s SET first_name = NULL, last_name = NULL, membership_number = NULL,
+         first_name_matched = NULL, local_group = NULL, recheck_requested_at = NULL, recheck_outcome = NULL,
+         recheck_first_name_matched = NULL, recheck_local_group = NULL
+   WHERE s.sub = p_sub AND s.decision <> 'pending'
+     AND num_nonnulls(s.first_name, s.last_name, s.membership_number, s.first_name_matched, s.local_group, s.recheck_requested_at,
+                      s.recheck_outcome, s.recheck_first_name_matched, s.recheck_local_group) > 0;
   GET DIAGNOSTICS v_count = ROW_COUNT;
   PERFORM set_config('nwfl.profile_erase', '', true);
   RETURN v_count;
@@ -211,7 +252,8 @@ BEGIN
               CASE WHEN v_each.reopened_at IS NOT NULL THEN 'reopened' ELSE v_each.decision END, 'erased');
     PERFORM set_config('nwfl.signup_erase', v_each.id::text, true);
     UPDATE signup_request s SET display_name = NULL, email = NULL, first_name = NULL, last_name = NULL, membership_number = NULL,
-           erased_at = now(), erased_by_sub = p_sub
+           first_name_matched = NULL, local_group = NULL, recheck_requested_at = NULL, recheck_outcome = NULL,
+           recheck_first_name_matched = NULL, recheck_local_group = NULL, erased_at = now(), erased_by_sub = p_sub
      WHERE s.id = v_each.id;
     PERFORM set_config('nwfl.signup_erase', '', true);
     v_count := v_count + 1;
@@ -281,7 +323,9 @@ $fn$;
 INSERT INTO audit_event (actor_kind, action, subject_kind, subject_id, from_state, to_state)
   SELECT 'system', 'erase_profile', 'signup_request', s.id::text, CASE WHEN s.reopened_at IS NOT NULL THEN 'reopened' ELSE s.decision END, 'profile_erased'
     FROM signup_request s JOIN member_account a ON a.sub = s.sub AND a.status = 'removed'
-   WHERE s.decision <> 'pending' AND num_nonnulls(s.first_name, s.last_name, s.membership_number) > 0
+   WHERE s.decision <> 'pending'
+     AND num_nonnulls(s.first_name, s.last_name, s.membership_number, s.first_name_matched, s.local_group, s.recheck_requested_at,
+                      s.recheck_outcome, s.recheck_first_name_matched, s.recheck_local_group) > 0
      AND EXISTS (SELECT 1 FROM signup_request x WHERE x.sub = s.sub AND x.decision = 'approved')
    ORDER BY s.created_at, s.id;
 SELECT signup_request_erase_profile(a.sub) FROM member_account a WHERE a.status = 'removed' ORDER BY a.sub;

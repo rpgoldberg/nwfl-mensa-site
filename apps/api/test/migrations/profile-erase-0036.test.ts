@@ -92,6 +92,35 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
   const audit = async (id: string): Promise<Record<string, unknown>[]> =>
     (await app.query<Record<string, unknown>>(`SELECT action, actor_sub, from_state, to_state, note, payload, at IS NOT NULL AS dated FROM audit_event WHERE subject_id = $1 ORDER BY id`, [id])).rows;
   const ERASED = { ...PII, erased: true, erased_by_sub: 'admin-1', dated: true, created: true, decided_by_sub: 'officer-1' };
+  /** OFFICER-VERIFY (0033): the check's report on a sign-up still waiting, as the verifier writes it. */
+  const report = (id: string, group: string, verification = 'verified_local') =>
+    app.query(`UPDATE signup_request SET verification = $2, verified_on = current_date, first_name_matched = true, local_group = $3 WHERE id = $1`, [id, verification, group]);
+  /** An approved member whose check reported a local group. */
+  const reportedMember = async (sub: string, number: string, group: string): Promise<string> => {
+    const id = await signup(sub, number);
+    await report(id, group);
+    await decide(id, 'approved');
+    await app.query(`UPDATE member_account SET status = 'member', approved_by_sub = 'officer-1', approved_at = now(), verified_on = current_date WHERE sub = $1`, [sub]);
+    return id;
+  };
+  /** A rejected, then reopened, sign-up whose check reported another group. */
+  const reportedReopened = async (sub: string, group: string): Promise<string> => {
+    const id = await signup(sub);
+    await report(id, group, 'verified_other_group');
+    await decide(id, 'rejected');
+    await app.query(`UPDATE member_account SET status = 'removed', removed_at = now() WHERE sub = $1`, [sub]);
+    await app.query(`UPDATE signup_request SET reopened_at = now(), reopened_by_sub = 'admin-1' WHERE id = $1`, [id]);
+    await app.query(`DELETE FROM member_account WHERE sub = $1`, [sub]);
+    return id;
+  };
+  /** What the check reported, and any fresh check (0033), beside the check's outcome and date, which stay. */
+  const answers = (id: string) =>
+    one<Record<string, unknown>>(
+      `SELECT verification, verified_on IS NOT NULL AS confirmed, first_name_matched, local_group, recheck_requested_at, recheck_outcome,
+              recheck_first_name_matched, recheck_local_group FROM signup_request WHERE id = $1`,
+      [id],
+    );
+  const NO_ANSWERS = { first_name_matched: null, local_group: null, recheck_requested_at: null, recheck_outcome: null, recheck_first_name_matched: null, recheck_local_group: null };
 
   /** Runs fn in a transaction that is always rolled back, so a failed expectation never leaves one open. */
   const rolledBack = async (client: pg.Client, fn: () => Promise<void>): Promise<void> => {
@@ -150,6 +179,16 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
       expect(await row(first)).toEqual({ ...ERASED, decision: 'rejected' });
       expect(await row(second)).toEqual({ ...ERASED, decision: 'approved' });
       expect((await audit(first))[0]).toMatchObject({ action: 'erase', from_state: 'reopened', to_state: 'erased' });
+    });
+
+    it('erases what the membership check reported (0033) and any fresh check, and keeps the check\'s outcome and date', async () => {
+      const earlier = await reportedReopened('e-reported', 'Synthetic Bay Mensa');
+      const id = await reportedMember('e-reported', '5200001', 'Synthetic Coast Mensa');
+      await app.query(`UPDATE signup_request SET recheck_requested_at = now() WHERE id = $1`, [id]);
+      expect(await erase(id)).toBe('ok');
+      expect(await answers(id)).toEqual({ verification: 'verified_local', confirmed: true, ...NO_ANSWERS });
+      expect(await answers(earlier)).toEqual({ verification: 'verified_other_group', confirmed: true, ...NO_ANSWERS });
+      expect(await row(id)).toEqual({ ...ERASED, decision: 'approved' });
     });
 
     it('writes nothing the second time', async () => {
@@ -229,6 +268,18 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
           expect(await sqlstate(app, `${BLANK.replace('WHERE', `, decision = 'approved' WHERE`)}`, [id])).toBe(NOT_IN_PREREQUISITE_STATE);
           await app.query('ROLLBACK TO s');
           expect(await sqlstate(app, `UPDATE signup_request SET display_name = NULL, email = NULL, erased_at = now(), erased_by_sub = 'admin-1' WHERE id = $1`, [id])).toBe(CHECK_VIOLATION);
+        });
+        // Nor what the membership check reported (0033): an erased row keeps no local group back.
+        const reportedRow = await signup('e-partial-reported');
+        await report(reportedRow, 'Synthetic Coast Mensa');
+        await decide(reportedRow, 'rejected');
+        await rolledBack(app, async () => {
+          await app.query(
+            `INSERT INTO audit_event (actor_kind, actor_sub, actor_groups, action, subject_kind, subject_id) VALUES ('user', 'admin-1', $2, 'erase', 'signup_request', $1)`,
+            [reportedRow, ADMIN],
+          );
+          await app.query(`SELECT set_config('nwfl.signup_erase', $1, true)`, [reportedRow]);
+          expect(await sqlstate(app, BLANK, [reportedRow])).toBe(CHECK_VIOLATION);
         });
       });
 
@@ -561,6 +612,70 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
       for (const client of [app, owner]) await marked(client, 'r-narrow-c', `UPDATE signup_request SET email = 'other@example.org' WHERE id = $1`, gone);
     });
 
+    it('takes what the membership check reported (0033) with it, on every decided sign-up, and ends a fresh check; the check\'s outcome stays', async () => {
+      const earlier = await reportedReopened('r-reported', 'Synthetic Bay Mensa');
+      const id = await reportedMember('r-reported', '5400001', 'Synthetic Coast Mensa');
+      await app.query(`UPDATE signup_request SET recheck_requested_at = now() WHERE id = $1`, [id]);
+      const rest = async (key: string) =>
+        (
+          await one<{ rest: unknown }>(
+            `SELECT to_jsonb(s) - ARRAY['first_name', 'last_name', 'membership_number', 'first_name_matched', 'local_group', 'recheck_requested_at',
+                                        'recheck_outcome', 'recheck_first_name_matched', 'recheck_local_group'] AS rest FROM signup_request s WHERE id = $1`,
+            [key],
+          )
+        ).rest;
+      const before = [await rest(earlier), await rest(id)];
+      await remove('r-reported');
+      expect(await answers(id)).toEqual({ verification: 'verified_local', confirmed: true, ...NO_ANSWERS });
+      expect(await answers(earlier)).toEqual({ verification: 'verified_other_group', confirmed: true, ...NO_ANSWERS });
+      expect([await typed(earlier), await typed(id)]).toEqual([NO_PROFILE, NO_PROFILE]);
+      expect([await rest(earlier), await rest(id)]).toEqual(before);
+    });
+
+    it('takes a fresh check held for an approver (an email mismatch) with its answers', async () => {
+      const id = await reportedMember('r-held', '5400002', 'Synthetic Coast Mensa');
+      await app.query(`UPDATE signup_request SET recheck_outcome = 'email_mismatch', recheck_first_name_matched = false, recheck_local_group = 'Synthetic Held Mensa' WHERE id = $1`, [id]);
+      await remove('r-held');
+      expect(await answers(id)).toEqual({ verification: 'verified_local', confirmed: true, ...NO_ANSWERS });
+    });
+
+    it.each([
+      ['a local group', `local_group = 'Synthetic Coast Mensa'`],
+      ['a first-name answer', `first_name_matched = true`],
+      ['a fresh check asked for', `recheck_requested_at = now()`],
+      ['a fresh check held', `recheck_outcome = 'email_mismatch', recheck_first_name_matched = true, recheck_local_group = 'Synthetic Held Mensa'`],
+      ['a fresh check noted', `recheck_outcome = 'not_found'`],
+    ])('stays erased: %s does not land on a removed member\'s sign-up, by the app role or the owner', async (what, set) => {
+      const sub = `r-answer-${what.replace(/\W/g, '')}`;
+      const id = await reportedMember(sub, '5400003', 'Synthetic Coast Mensa');
+      await remove(sub);
+      for (const client of [app, owner]) expect(await sqlstate(client, `UPDATE signup_request SET ${set} WHERE id = $1`, [id]), what).toBe(NOT_IN_PREREQUISITE_STATE);
+      expect(await answers(id)).toEqual({ verification: 'verified_local', confirmed: true, ...NO_ANSWERS });
+    });
+
+    it('opens no standing member\'s check answers to a marker set by hand: 0033\'s guard still holds them, for the app role and the owner', async () => {
+      const id = await reportedMember('r-forged', '5400005', 'Synthetic Coast Mensa');
+      for (const client of [app, owner]) {
+        for (const marker of [['nwfl.profile_erase', 'r-forged'], ['nwfl.signup_erase', id]] as const) {
+          await rolledBack(client, async () => {
+            await client.query(`SELECT set_config($1, $2, true)`, [marker[0], marker[1]]);
+            expect(await sqlstate(client, `UPDATE signup_request SET first_name_matched = NULL, local_group = NULL WHERE id = $1`, [id]), marker[0]).toBe(NOT_IN_PREREQUISITE_STATE);
+          });
+        }
+      }
+      expect(await answers(id)).toMatchObject({ first_name_matched: true, local_group: 'Synthetic Coast Mensa' });
+    });
+
+    it('leaves what the check reported on a person removed while still waiting, as it leaves what they typed (F3)', async () => {
+      const id = await signup('r-waiting-reported', '5400004');
+      await report(id, 'Synthetic Coast Mensa');
+      await app.query('BEGIN');
+      await remove('r-waiting-reported');
+      await decide(id, 'rejected');
+      await app.query('COMMIT');
+      expect(await answers(id)).toMatchObject({ verification: 'verified_local', first_name_matched: true, local_group: 'Synthetic Coast Mensa' });
+    });
+
     it('is not erased when a person still waiting is removed: the sign-up is rejected and keeps what was typed (F3)', async () => {
       const id = await signup('r-waiting', '5300001');
       await app.query('BEGIN');
@@ -583,7 +698,7 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
     let statsDb: string;
     let a: pg.Client;
     let o: pg.Client;
-    const COLUMNS = ['display_name', 'email', 'first_name', 'last_name', 'membership_number'];
+    const COLUMNS = ['display_name', 'email', 'first_name', 'last_name', 'local_group', 'membership_number', 'recheck_local_group'];
     /** The columns whose statistics, as the app role reads them, still hold a value matching marks. */
     const leaked = async (marks: RegExp): Promise<string[]> =>
       (
@@ -607,8 +722,11 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
           )
         ).rows[0] as { id: string };
         await a.query(`INSERT INTO member_account (sub, status, route) VALUES ($1, 'pending', 'signup')`, [sub]);
+        // OFFICER-VERIFY (0033): a reported local group, and a fresh check held with its own.
+        await a.query(`UPDATE signup_request SET verification = 'verified_local', verified_on = current_date, first_name_matched = true, local_group = $2 WHERE id = $1`, [id, `${tag} Group ${i}`]);
         await a.query(`UPDATE signup_request SET decision = 'approved', decided_at = now(), decided_by_sub = 'officer-1' WHERE id = $1`, [id]);
         await a.query(`UPDATE member_account SET status = 'member', approved_by_sub = 'officer-1', approved_at = now(), verified_on = current_date WHERE sub = $1`, [sub]);
+        await a.query(`UPDATE signup_request SET recheck_outcome = 'email_mismatch', recheck_first_name_matched = true, recheck_local_group = $2 WHERE id = $1`, [id, `${tag} Held ${i}`]);
         made.push({ id, sub });
       }
       return made;
@@ -644,8 +762,8 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
       await o.query('ANALYZE signup_request');
       expect(await leaked(/statsremove|55000\d/i)).toEqual(COLUMNS);
       for (const { sub } of people) await a.query(`UPDATE member_account SET status = 'removed', removed_at = now() WHERE sub = $1`, [sub]);
-      // The sign-in's name and email stay until the person asks; the three typed fields are gone, from the statistics too.
-      expect((await leaked(/statsremove|55000\d/i)).filter((c) => ['first_name', 'last_name', 'membership_number'].includes(c))).toEqual([]);
+      // The sign-in's name and email stay until the person asks; the three typed fields and the reported groups are gone, from the statistics too.
+      expect(await leaked(/statsremove|55000\d/i)).toEqual(['display_name', 'email']);
     });
   });
 
@@ -686,17 +804,24 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
           await pre.query(`UPDATE member_account SET status = 'member', approved_by_sub = 'officer-1', approved_at = now(), verified_on = current_date WHERE sub = $1`, [sub]);
         };
         const removeOld = (sub: string) => pre.query(`UPDATE member_account SET status = 'removed', removed_at = now() WHERE sub = $1`, [sub]);
+        // OFFICER-VERIFY (0033, before 0036): what the check reported.
+        const reportOld = (key: string, group: string, verification = 'verified_local') =>
+          pre.query(`UPDATE signup_request SET verification = $2, verified_on = current_date, first_name_matched = true, local_group = $3 WHERE id = $1`, [ids[key], verification, group]);
         // Removed member, with a reopened earlier sign-up.
         await put('earlier', 'b-gone', '6100001');
+        await reportOld('earlier', 'Synthetic Bay Mensa', 'verified_other_group');
         await decideOld('earlier', 'rejected');
         await removeOld('b-gone');
         await pre.query(`UPDATE signup_request SET reopened_at = now(), reopened_by_sub = 'admin-1' WHERE id = $1`, [ids['earlier']]);
         await pre.query(`DELETE FROM member_account WHERE sub = 'b-gone'`);
         await put('gone', 'b-gone', '6100002');
+        await reportOld('gone', 'Synthetic Coast Mensa');
         await approveOld('gone', 'b-gone');
+        await pre.query(`UPDATE signup_request SET recheck_requested_at = now() WHERE id = $1`, [ids['gone']]);
         await removeOld('b-gone');
         // A member still standing, and a rejected person: both keep what was typed.
         await put('standing', 'b-standing', '6100003');
+        await reportOld('standing', 'Synthetic Coast Mensa');
         await approveOld('standing', 'b-standing');
         await put('rejected', 'b-rejected', '6100004');
         await decideOld('rejected', 'rejected');
@@ -724,6 +849,12 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
         expect(by('gone')).toMatchObject({ ...NO_PROFILE, ...KEPT, decision: 'approved', reopened: false });
         expect(by('standing')).toMatchObject({ first_name: 'Pat', last_name: 'Backfill', membership_number: '6100003', ...KEPT });
         expect(by('rejected')).toMatchObject({ first_name: 'Pat', last_name: 'Backfill', membership_number: '6100004', ...KEPT });
+        // What the check reported (0033) goes with the profile, and a fresh check ends; a standing member's stays.
+        const reported = async (key: string): Promise<Record<string, unknown> | undefined> =>
+          (await after.query<Record<string, unknown>>(`SELECT verification, first_name_matched, local_group, recheck_requested_at, recheck_outcome, recheck_first_name_matched, recheck_local_group FROM signup_request WHERE id = $1`, [ids[key]])).rows[0];
+        expect(await reported('earlier')).toEqual({ verification: 'verified_other_group', ...NO_ANSWERS });
+        expect(await reported('gone')).toEqual({ verification: 'verified_local', ...NO_ANSWERS });
+        expect(await reported('standing')).toEqual({ verification: 'verified_local', ...NO_ANSWERS, first_name_matched: true, local_group: 'Synthetic Coast Mensa' });
         // Audited by the system, by the sign-up's id alone.
         const audited = (await after.query(`SELECT actor_kind, actor_sub, action, subject_id, from_state, to_state, note, payload FROM audit_event WHERE action = 'erase_profile' ORDER BY from_state`)).rows;
         expect(audited).toEqual([

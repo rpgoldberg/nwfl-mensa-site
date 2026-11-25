@@ -45,8 +45,9 @@ describe('/privacy', () => {
 
   it('lists what a sign-up stores: the columns of signup_request and member_account (migrations 0005 to 0036)', () => {
     for (const words of ['first name and last name', 'Mensa membership number', 'name and email address on your sign-in', 'date you signed up', 'who decided', 'result of the membership check', 'last confirmed']) expect(text, words).toContain(words);
-    const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql', '0036_profile_erase.sql'].map((f) => readFileSync(`../api/migrations/${f}`, 'utf8')).join('\n');
-    for (const column of ['first_name', 'last_name', 'membership_number', 'display_name', 'email', 'created_at', 'decided_by_sub', 'decided_at', 'verification', 'verified_on']) expect(schema, column).toMatch(new RegExp(`\\b${column}\\b`));
+    const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql', '0033_officer_verify.sql', '0036_profile_erase.sql'].map((f) => readFileSync(`../api/migrations/${f}`, 'utf8')).join('\n');
+    // OFFICER-VERIFY (0033): the check also reports the member's local group, and whether the typed first name matched.
+    for (const column of ['first_name', 'last_name', 'membership_number', 'display_name', 'email', 'created_at', 'decided_by_sub', 'decided_at', 'verification', 'verified_on', 'local_group', 'first_name_matched', 'recheck_local_group']) expect(schema, column).toMatch(new RegExp(`\\b${column}\\b`));
     // What the page says we do not keep has no column anywhere in the schema.
     expect(text).toContain('We do not keep your address, phone number or birthday.');
     expect(schema).not.toMatch(/^\s+(address|street|phone|birth\w*|password)\s/m);
@@ -100,12 +101,14 @@ describe('/privacy', () => {
   // reopened earlier one included. A person removed while still waiting is rejected and keeps what was typed;
   // the Admin's erasure on request covers that. The API suite (apps/api test/membership/profile-erase.test.ts)
   // holds this same sentence to the database's outcome.
-  it('says a member\'s removal erases the names and the number at once: migration 0036\'s trigger, on every decided sign-up of that member, in the same statement', () => {
-    expect(text).toContain("If an officer removes a member's account, we erase their first name, last name and membership number.");
+  // Merge with OFFICER-VERIFY: the local group the check reported (0033) goes with them, and so does whatever a
+  // fresh check holds (the recheck_* columns).
+  it('says a member\'s removal erases the names, the number and the local group at once: migration 0036\'s trigger, on every decided sign-up of that member, in the same statement', () => {
+    expect(text).toContain("If an officer removes a member's account, we erase their names, membership number and local group.");
     expect(text).not.toContain('If an officer removes your account');
     const m0036 = readFileSync('../api/migrations/0036_profile_erase.sql', 'utf8');
     expect(m0036).toMatch(
-      /CREATE FUNCTION signup_request_erase_profile\(p_sub text\)[\s\S]*?a\.status = 'removed'[\s\S]*?s\.decision = 'approved'[\s\S]*?UPDATE signup_request s SET first_name = NULL, last_name = NULL, membership_number = NULL\s+WHERE s\.sub = p_sub AND s\.decision <> 'pending'/,
+      /CREATE FUNCTION signup_request_erase_profile\(p_sub text\)[\s\S]*?a\.status = 'removed'[\s\S]*?s\.decision = 'approved'[\s\S]*?UPDATE signup_request s SET first_name = NULL, last_name = NULL, membership_number = NULL,\s+first_name_matched = NULL, local_group = NULL, recheck_requested_at = NULL, recheck_outcome = NULL,\s+recheck_first_name_matched = NULL, recheck_local_group = NULL\s+WHERE s\.sub = p_sub AND s\.decision <> 'pending'/,
     );
     expect(m0036).toMatch(/CREATE TRIGGER member_account_removed_erases_profile AFTER INSERT OR UPDATE ON member_account\s+FOR EACH ROW WHEN \(NEW\.status = 'removed'\)/);
     expect(m0036).toMatch(/CREATE FUNCTION member_account_removed_erases_profile\(\)[\s\S]*?signup_request_erase_profile\(NEW\.sub\)/);
@@ -119,7 +122,8 @@ describe('/privacy', () => {
     // The removal's erasure touches the three profile columns only.
     const erase = /CREATE FUNCTION signup_request_erase_profile\([\s\S]*?\$fn\$;/.exec(readFileSync('../api/migrations/0036_profile_erase.sql', 'utf8'))?.[0] ?? '';
     expect(erase).toContain('UPDATE signup_request s SET');
-    for (const column of ['display_name', 'email', 'created_at', 'decision', 'decided_at']) expect(erase, column).not.toMatch(new RegExp(`\\b${column}\\s*=\\s*NULL`));
+    // Nor the check's outcome and its date: the result stays, what it reported about the person goes.
+    for (const column of ['display_name', 'email', 'created_at', 'decision', 'decided_at', 'verification', 'verified_on']) expect(erase, column).not.toMatch(new RegExp(`\\b${column}\\s*=\\s*NULL`));
   });
 
   it('says the Admin erases the rest on request, and what is then left: migration 0036\'s signup_request_erase, which only the Admin may call', () => {
@@ -129,14 +133,21 @@ describe('/privacy', () => {
     const erase = /CREATE FUNCTION signup_request_erase\([\s\S]*?\$fn\$;/.exec(m0036)?.[0] ?? '';
     // Only the Admin, by the verified token's groups; every name, the number and the email, and nothing else.
     expect(erase).toContain("NOT coalesce('nwfl-admin' = ANY (p_groups), false)");
-    expect(erase).toContain('UPDATE signup_request s SET display_name = NULL, email = NULL, first_name = NULL, last_name = NULL, membership_number = NULL,\n           erased_at = now(), erased_by_sub = p_sub');
+    expect(erase).toContain(
+      'UPDATE signup_request s SET display_name = NULL, email = NULL, first_name = NULL, last_name = NULL, membership_number = NULL,\n' +
+        '           first_name_matched = NULL, local_group = NULL, recheck_requested_at = NULL, recheck_outcome = NULL,\n' +
+        '           recheck_first_name_matched = NULL, recheck_local_group = NULL, erased_at = now(), erased_by_sub = p_sub',
+    );
     expect([...erase.matchAll(/UPDATE signup_request/g)]).toHaveLength(1);
     // An approved member's account is removed with it.
     expect(erase).toContain("UPDATE member_account a SET status = 'removed'");
     // The dates and the decision stay: the erasure sets no other column, and an erased row holds none of the five, by a CHECK.
     const set = /UPDATE signup_request s SET([\s\S]*?)WHERE/.exec(erase)?.[1] ?? 'created_at';
-    for (const column of ['created_at', 'decided_at', 'decision']) expect(set, column).not.toMatch(new RegExp(`\\b${column}\\b`));
-    expect(m0036).toContain('CHECK (erased_at IS NULL OR num_nonnulls(display_name, email, first_name, last_name, membership_number) = 0)');
+    for (const column of ['created_at', 'decided_at', 'decision', 'verification', 'verified_on']) expect(set, column).not.toMatch(new RegExp(`\\b${column}\\b`));
+    expect(m0036).toContain(
+      'CHECK (erased_at IS NULL OR num_nonnulls(display_name, email, first_name, last_name, membership_number, first_name_matched, local_group,\n' +
+        '                                               recheck_requested_at, recheck_outcome, recheck_first_name_matched, recheck_local_group) = 0)',
+    );
     // The API's call is the Admin's alone, and the Admin's page is what makes it.
     const service = readFileSync('../api/src/membership/service.ts', 'utf8');
     expect(/eraseSignup: async \(request, ctx\) => \{\s+const caller = callerIn\(ctx\);\s+requireAdmin\(caller\);/.test(service)).toBe(true);
@@ -244,7 +255,7 @@ describe('/privacy', () => {
         'The membership check: your membership number, last name and email address, to confirm you are a member.',
         'No page on this site shows it to other members or to the public.',
         'How long we keep it Member access lasts 13 months from the last time your membership was confirmed. After that it is paused until an officer confirms it again.',
-        "If an officer removes a member's account, we erase their first name, last name and membership number.",
+        "If an officer removes a member's account, we erase their names, membership number and local group.",
         'If you ask us to remove your record, the Admin also erases your name and email, and your access ends. The dates and decisions stay.',
         'Backups keep erased details for about three months.',
         'Cookies A cookie is a small note a site leaves in your browser.',

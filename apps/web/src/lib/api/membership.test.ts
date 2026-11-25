@@ -814,8 +814,12 @@ describe('grpcMembership: PROFILE-ERASE, the Admin\'s records', () => {
     expect(server.headers[0]?.['authorization']).toBe('Bearer person.tok-en');
   });
 
-  it('refuses a record whose decision it cannot read', async () => {
-    const server = await grpcServer((router) => router.service(MembershipService, { listSignupRecords: () => ({ records: [{ requestId: ID, decision: SignupDecision.UNSPECIFIED }] }) }));
+  // Merge with OFFICER-VERIFY: the shared SignupDecision now has PENDING too (GetSignupRequest); a record is decided.
+  it.each([
+    ['unset', SignupDecision.UNSPECIFIED],
+    ['pending', SignupDecision.PENDING],
+  ])('refuses a record whose decision it cannot read: %s', async (_what, decision) => {
+    const server = await grpcServer((router) => router.service(MembershipService, { listSignupRecords: () => ({ records: [{ requestId: ID, decision }] }) }));
     await expect(grpcMembership(config(server.url), () => {}).listSignupRecords(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
   });
 

@@ -18,13 +18,14 @@ import { CorrectionReason, MemberStatus, MembershipService, SignupDecision } fro
 import { MembershipVerifierService, VerificationOutcome } from '../../src/gen/nwfl/mensa/v1/membership_verifier_pb.js';
 import { type Api, PEOPLE, as, dump, startApi } from '../helpers/api.js';
 import { live } from '../helpers/pg.js';
+import { seedAccount } from '../helpers/standing.js';
 
 const APPROVER = as('approver-token');
 const ADMIN = as('admin-token');
 const VERIFIER = as('verifier-token');
 const NO_ID = '00000000-0000-4000-8000-000000000000';
 /** The privacy page's sentence on a removal (apps/web src/pages/privacy.astro). */
-const REMOVAL_SENTENCE = "If an officer removes a member's account, we erase their first name, last name and membership number.";
+const REMOVAL_SENTENCE = "If an officer removes a member's account, we erase their names, membership number and local group.";
 
 type Token = Parameters<typeof as>[0];
 
@@ -522,9 +523,10 @@ describe.skipIf(!live)('PROFILE-ERASE: erase on request, correct a number, erase
       // The sentence, as the page has it ...
       const page = readFileSync(new URL('../../../web/src/pages/privacy.astro', import.meta.url), 'utf8');
       expect(page).toContain(REMOVAL_SENTENCE);
-      // ... is the outcome: after a removal, no first name, last name or number of the member is held on any of their sign-ups.
+      // ... is the outcome: after a removal, no first name, last name, number or local group (0033, with a fresh check's) of the
+      // member is held on any of their sign-ups.
       const { rows } = await api.pool.query<{ sub: string; held: number }>(
-        `SELECT a.sub, count(*) FILTER (WHERE num_nonnulls(s.first_name, s.last_name, s.membership_number) > 0)::int AS held
+        `SELECT a.sub, count(*) FILTER (WHERE num_nonnulls(s.first_name, s.last_name, s.membership_number, s.local_group, s.recheck_local_group) > 0)::int AS held
          FROM member_account a JOIN signup_request s ON s.sub = a.sub
          WHERE a.status = 'removed' AND EXISTS (SELECT 1 FROM signup_request x WHERE x.sub = a.sub AND x.decision = 'approved')
          GROUP BY a.sub ORDER BY a.sub`,
@@ -546,5 +548,60 @@ describe.skipIf(!live)('PROFILE-ERASE: erase on request, correct a number, erase
     const logged = JSON.stringify(api.logs);
     for (const number of numbers) expect(logged).not.toContain(number);
     expect(logged).not.toContain('Two digits were swapped');
+  });
+});
+
+// Merge with OFFICER-VERIFY (0033): switched on, the check reports a local group, and the site keeps it with the
+// sign-up. It is National's record of the person, so it goes with the profile: at a removal, and on request.
+describe.skipIf(!live)('PROFILE-ERASE with OFFICER-VERIFY switched on: what the check reported goes too', () => {
+  const GROUP = 'Synthetic Coast Mensa';
+  let on: Api;
+  let membership: Client<typeof MembershipService>;
+  const placesOf = async (value: string): Promise<string[]> => {
+    const { rows: columns } = await on.pool.query<{ table_name: string; column_name: string }>(
+      `SELECT c.table_name, c.column_name FROM information_schema.columns c
+       WHERE c.table_schema = 'public' AND has_table_privilege(format('%I.%I', c.table_schema, c.table_name), 'SELECT') ORDER BY 1, 2`,
+    );
+    const found: string[] = [];
+    for (const { table_name: table, column_name: column } of columns) {
+      if ((await on.pool.query(`SELECT 1 FROM "${table}" WHERE "${column}"::text LIKE '%' || $1 || '%' LIMIT 1`, [value])).rows.length > 0) found.push(`${table}.${column}`);
+    }
+    return found;
+  };
+  /** A sign-up the check confirmed in GROUP, approved by hand (as a guest member). */
+  const reportedMember = async (token: 'joiner-token' | 'joiner2-token', number: string): Promise<string> => {
+    const { requestId } = await membership.submitSignup({ firstName: 'Pat', lastName: 'Madeup', membershipNumber: number }, as(token));
+    await on.client(MembershipVerifierService).reportVerification({ requestId, outcome: VerificationOutcome.VERIFIED_LOCAL, firstNameMatched: true, localGroup: GROUP }, VERIFIER);
+    await membership.approveSignup({ requestId }, APPROVER);
+    return requestId;
+  };
+
+  beforeAll(async () => {
+    on = await startApi('nwfl_profile_erase_ov', { officerVerify: true });
+    membership = on.client(MembershipService);
+    // The approver and the Admin hold their powers once their own check confirmed them in the chapter.
+    for (const sub of ['sub-approver', 'sub-admin']) {
+      await on.pool.query(`DELETE FROM member_account WHERE sub = $1`, [sub]);
+      await seedAccount(on.pool, { sub, route: 'invite', check: { localGroup: 'Northwest Florida Mensa' } });
+    }
+  });
+
+  afterAll(async () => {
+    await on?.close();
+  });
+
+  it('keeps the reported group while the member stands, and holds it nowhere once an officer removes them', async () => {
+    const id = await reportedMember('joiner-token', '5600001');
+    expect(await placesOf(GROUP)).toEqual(['signup_request.local_group']);
+    await membership.removeMember({ subject: 'sub-joiner' }, APPROVER);
+    expect(await placesOf(GROUP)).toEqual([]);
+    expect((await on.pool.query(`SELECT verification, first_name_matched FROM signup_request WHERE id = $1`, [id])).rows).toEqual([{ verification: 'verified_local', first_name_matched: null }]);
+  });
+
+  it('holds it nowhere once the Admin erases the record on request', async () => {
+    await reportedMember('joiner2-token', '5600002');
+    const id = (await on.pool.query<{ id: string }>(`SELECT id FROM signup_request WHERE sub = 'sub-joiner2'`)).rows[0]?.id as string;
+    await membership.eraseSignup({ requestId: id }, ADMIN);
+    expect(await placesOf(GROUP)).toEqual([]);
   });
 });
