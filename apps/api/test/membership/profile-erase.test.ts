@@ -25,7 +25,7 @@ const ADMIN = as('admin-token');
 const VERIFIER = as('verifier-token');
 const NO_ID = '00000000-0000-4000-8000-000000000000';
 /** The privacy page's sentence on a removal (apps/web src/pages/privacy.astro). */
-const REMOVAL_SENTENCE = "If an officer removes a member's account, we erase their names, membership number and local group.";
+const REMOVAL_SENTENCE = "If an officer removes a member's account, we erase their typed names, membership number and local group.";
 
 type Token = Parameters<typeof as>[0];
 
@@ -596,6 +596,31 @@ describe.skipIf(!live)('PROFILE-ERASE with OFFICER-VERIFY switched on: what the 
     await membership.removeMember({ subject: 'sub-joiner' }, APPROVER);
     expect(await placesOf(GROUP)).toEqual([]);
     expect((await on.pool.query(`SELECT verification, first_name_matched FROM signup_request WHERE id = $1`, [id])).rows).toEqual([{ verification: 'verified_local', first_name_matched: null }]);
+  });
+
+  // Recheck 1 (S2): RemoveMember audits an erased profile only for a person who was approved. A person rejected,
+  // reopened and waiting again is rejected by the removal, and their reopened sign-up keeps what was typed: no
+  // erase_profile record may say otherwise.
+  it('audits no erasure when a person rejected, reopened and waiting again is removed: nothing of theirs was erased', async () => {
+    const typed = { firstName: 'Pat', lastName: 'Returnsagain', membershipNumber: '5700004' };
+    const { requestId: first } = await membership.submitSignup(typed, as('returner-token'));
+    await membership.rejectSignup({ requestId: first }, APPROVER);
+    await membership.reopenSignup({ requestId: first }, ADMIN);
+    const { requestId: second } = await membership.submitSignup(typed, as('returner-token'));
+    const mark = Number((await on.pool.query<{ m: string }>(`SELECT coalesce(max(id), 0) AS m FROM audit_event`)).rows[0]?.m);
+    await membership.removeMember({ subject: 'sub-returner' }, APPROVER);
+    const actions = (await on.pool.query<{ action: string }>(`SELECT action FROM audit_event WHERE id > $1 ORDER BY id`, [mark])).rows.map((r) => r.action);
+    expect(actions).not.toContain('erase_profile');
+    expect(actions).toContain('remove');
+    const rows = (
+      await on.pool.query<{ id: string; last_name: string | null; membership_number: string | null; decision: string; reopened: boolean }>(
+        `SELECT id, last_name, membership_number, decision, reopened_at IS NOT NULL AS reopened FROM signup_request WHERE sub = 'sub-returner' ORDER BY created_at, id`,
+      )
+    ).rows;
+    expect(rows).toEqual([
+      { id: first, last_name: 'Returnsagain', membership_number: '5700004', decision: 'rejected', reopened: true },
+      { id: second, last_name: 'Returnsagain', membership_number: '5700004', decision: 'rejected', reopened: false },
+    ]);
   });
 
   it('holds it nowhere once the Admin erases the record on request', async () => {

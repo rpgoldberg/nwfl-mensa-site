@@ -104,7 +104,7 @@ describe('/privacy', () => {
   // Merge with OFFICER-VERIFY: the local group the check reported (0033) goes with them, and so does whatever a
   // fresh check holds (the recheck_* columns).
   it('says a member\'s removal erases the names, the number and the local group at once: migration 0036\'s trigger, on every decided sign-up of that member, in the same statement', () => {
-    expect(text).toContain("If an officer removes a member's account, we erase their names, membership number and local group.");
+    expect(text).toContain("If an officer removes a member's account, we erase their typed names, membership number and local group.");
     expect(text).not.toContain('If an officer removes your account');
     const m0036 = readFileSync('../api/migrations/0036_profile_erase.sql', 'utf8');
     expect(m0036).toMatch(
@@ -255,7 +255,7 @@ describe('/privacy', () => {
         'The membership check: your membership number, last name and email address, to confirm you are a member.',
         'No page on this site shows it to other members or to the public.',
         'How long we keep it Member access lasts 13 months from the last time your membership was confirmed. After that it is paused until an officer confirms it again.',
-        "If an officer removes a member's account, we erase their names, membership number and local group.",
+        "If an officer removes a member's account, we erase their typed names, membership number and local group.",
         'If you ask us to remove your record, the Admin also erases your name and email, and your access ends. The dates and decisions stay.',
         'Backups keep erased details for about three months.',
         'Cookies A cookie is a small note a site leaves in your browser.',

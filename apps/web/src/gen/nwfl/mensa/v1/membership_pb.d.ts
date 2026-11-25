@@ -407,7 +407,7 @@ export declare type SignupRecord = Message<"nwfl.mensa.v1.SignupRecord"> & {
   displayName: string;
 
   /**
-   * As the member typed it.
+   * From the sign-in, as the display name is; empty once the record is erased.
    *
    * @generated from field: string email = 3;
    */

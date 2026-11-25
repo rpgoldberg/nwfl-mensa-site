@@ -249,7 +249,7 @@ enum CorrectionReason {
 message SignupRecord {
   string request_id = 1;
   string display_name = 2;
-  // As the member typed it.
+  // From the sign-in, as the display name is; empty once the record is erased.
   string email = 3;
   // As typed at sign-up. Empty once a member's account is removed: the profile
   // is erased from every decided sign-up of theirs.
