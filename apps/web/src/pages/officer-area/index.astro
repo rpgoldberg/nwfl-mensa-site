@@ -3,7 +3,8 @@
 // membership approvers (server/account.mjs officerAreaFor, which the header's link follows too; W-SIGNUP
 // fix 1): anyone not signed in is sent to sign in first; anyone else signed in is told it is not
 // theirs (403). Each person sees only the links for what they may do: the approval setting for the
-// Admin alone (whether or not in the officers group: the switch serves them); the sign-ups waiting
+// Admin alone (whether or not in the officers group: the switch serves them), and the member records
+// for the Admin alone (PROFILE-ERASE); the sign-ups waiting
 // for approval for the membership approvers and the Admin (W-SIGNUP D4), and the rejections alone for
 // the Membership Officer's seat without the approvers group (REOPEN).
 // SOLO-APPROVE: an officer sees the one-approver note here while the Admin has set a scope to one
@@ -27,6 +28,7 @@ import { runtimeDeps } from '../../lib/auth/flow';
 import { mayUseEvents } from '../../lib/editor/events';
 import { REVIEW_LINKS, homeCounts, homeLines, isPublisher } from '../../lib/editor/review';
 import { EDIT_LINKS, OUR_EVENTS } from '../../lib/editor/writer';
+import { RECORDS_LINK, RECORDS_PATH } from '../../lib/member-records';
 import { signUpsLink } from '../../lib/signup';
 import { page } from '../../lib/site';
 
@@ -47,6 +49,8 @@ const links = [
   // E6: only for whom the events pages admit (an officer or the Admin), never a link to a page that turns them away.
   ...(mayUseEvents(session.groups) && OUR_EVENTS !== undefined ? [{ href: OUR_EVENTS, text: 'Our events' }] : []),
   ...(signUps !== undefined ? [{ href: '/officer-area/sign-ups', text: signUps }] : []),
+  // PROFILE-ERASE: the Admin's alone, as the API decides.
+  ...(admin ? [{ href: RECORDS_PATH, text: RECORDS_LINK }] : []),
   ...(admin ? [{ href: '/officer-area/approval-rules', text: 'Approval setting' }] : []),
 ];
 if (!admitted) Astro.response.status = 403;

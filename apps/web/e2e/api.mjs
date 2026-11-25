@@ -70,7 +70,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility, LinkTargetKind, LinkTargetStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
-import { AccountRoute, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerCheck, OfficerTools, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, CorrectionReason, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerCheck, OfficerTools, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
 import { createEventModel } from './events-model.mjs';
@@ -703,6 +703,27 @@ const DECIDED = new Map();
 const MEMBER_PROFILE = { firstName: 'Jordan', lastName: 'Example', membershipNumber: '000033001' };
 /** @type {Map<string, { firstName: string, lastName: string }>} PROFILE-ID: a sign-in's change of names, by the token's jti */
 const RENAMED = new Map();
+/** PROFILE-ERASE: the Admin's subject (e2e/idp.mjs admin), whose own record is never listed and never theirs to change. */
+const ADMIN_SUBJECT = '00000000-0000-4000-8000-0000000000ad';
+/**
+ * PROFILE-ERASE: the decided sign-ups the Admin's member-records page lists, newest first (e2e/stand-in.ts
+ * RECORDS): an approved member, a removed member (the removal erased the profile), a rejected sign-up, one
+ * rejected then reopened, and the Admin's own, which the API never lists for them.
+ */
+const RECORDS = [
+  { requestId: 'd1000000-0000-4000-8000-000000000001', sub: '00000000-0000-4000-8000-0000000001f1', displayName: 'Robin Member', email: 'robin@example.org', firstName: 'Robin', lastName: 'Member', membershipNumber: '000044001', decision: SignupDecision.APPROVED, decidedAt: new Date('2026-11-06T18:00:00Z'), accountStatus: MemberStatus.MEMBER },
+  { requestId: 'd1000000-0000-4000-8000-000000000002', sub: '00000000-0000-4000-8000-0000000001f2', displayName: 'Sage Leaver', email: 'sage@example.org', firstName: '', lastName: '', membershipNumber: '', decision: SignupDecision.APPROVED, decidedAt: new Date('2026-11-05T18:00:00Z'), accountStatus: MemberStatus.REMOVED },
+  { requestId: 'd1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000001f3', displayName: 'Toby Declined', email: 'toby@example.org', firstName: 'Toby', lastName: 'Declined', membershipNumber: '000044003', decision: SignupDecision.REJECTED, decidedAt: new Date('2026-11-04T18:00:00Z'), accountStatus: MemberStatus.REMOVED },
+  { requestId: 'd1000000-0000-4000-8000-000000000004', sub: '00000000-0000-4000-8000-0000000001f4', displayName: 'Uma Again', email: 'uma@example.org', firstName: 'Uma', lastName: 'Again', membershipNumber: '000044004', decision: SignupDecision.REOPENED, decidedAt: new Date('2026-11-03T18:00:00Z'), accountStatus: MemberStatus.UNSPECIFIED },
+  { requestId: 'd1000000-0000-4000-8000-00000000000a', sub: ADMIN_SUBJECT, displayName: 'Pat Example', email: 'pat@example.org', firstName: 'Pat', lastName: 'Example', membershipNumber: '000044010', decision: SignupDecision.APPROVED, decidedAt: new Date('2026-11-01T18:00:00Z'), accountStatus: MemberStatus.MEMBER },
+];
+/** @type {Map<string, Set<string>>} PROFILE-ERASE: a sign-in's erasures, by the token's jti, so browsers in parallel never disturb each other */
+const ERASED = new Map();
+/** @type {Map<string, Map<string, string>>} PROFILE-ERASE: a sign-in's corrections, by the token's jti: the new number by request id */
+const CORRECTED = new Map();
+/** An account that still stands, as the API's rule for a correction. */
+const STANDS = [MemberStatus.MEMBER, MemberStatus.AFFILIATE, MemberStatus.LAPSED];
+
 /** As the API's: 1 to 80 characters, no control character. @param {string} name */
 const nameOk = (name) => name !== '' && [...name].length <= 80 && !/\p{Cc}/u.test(name);
 
@@ -769,6 +790,21 @@ async function reopenerOf(ctx) {
   const person = await personOf(ctx);
   if (!person.groups.includes('nwfl-admin') && !person.groups.includes('nwfl-office-membership')) throw new ConnectError('not permitted', Code.PermissionDenied);
   return person;
+}
+
+/** PROFILE-ERASE: the Admin alone, as requireAdmin. @param {import('@connectrpc/connect').HandlerContext} ctx */
+async function adminOf(ctx) {
+  const person = await personOf(ctx);
+  if (!person.groups.includes('nwfl-admin')) throw new ConnectError('not permitted', Code.PermissionDenied);
+  return person;
+}
+
+/** PROFILE-ERASE: a record the Admin may change: one that exists and is not their own. @param {{ sub: string }} person @param {string} id */
+function recordFor(person, id) {
+  const record = RECORDS.find((r) => r.requestId === id);
+  if (record === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
+  if (record.sub === person.sub) throw new ConnectError('not permitted', Code.PermissionDenied);
+  return record;
 }
 
 /** A pending sign-up this sign-in may decide, marked decided. @param {{ sub: string, session: string }} person @param {string} id @param {boolean} approve */
@@ -994,6 +1030,54 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       if (rejected.sub === person.sub) throw new ConnectError('no one reopens their own sign-up', Code.PermissionDenied);
       if (REOPENED.has(rejected.requestId)) throw new ConnectError('only a rejected sign-up is reopened, and only once', Code.FailedPrecondition);
       REOPENED.add(rejected.requestId);
+      return {};
+    },
+    // PROFILE-ERASE: as the API, the Admin alone, never their own record.
+    listSignupRecords: async (_req, ctx) => {
+      const { sub, session } = await adminOf(ctx);
+      const erased = ERASED.get(session) ?? new Set();
+      const corrected = CORRECTED.get(session) ?? new Map();
+      return {
+        // The subject stays here: the API never sends it.
+        records: RECORDS.filter((r) => r.sub !== sub && !erased.has(r.requestId)).map((r) => ({
+          requestId: r.requestId,
+          displayName: r.displayName,
+          email: r.email,
+          firstName: r.firstName,
+          lastName: r.lastName,
+          membershipNumber: corrected.get(r.requestId) ?? r.membershipNumber,
+          decision: r.decision,
+          decidedAt: timestampFromDate(r.decidedAt),
+          accountStatus: r.accountStatus,
+        })),
+      };
+    },
+    eraseSignup: async (req, ctx) => {
+      const person = await adminOf(ctx);
+      const record = recordFor(person, req.requestId);
+      const erased = ERASED.get(person.session) ?? new Set();
+      if (erased.has(record.requestId)) return { erased: 0, accessEnded: false };
+      erased.add(record.requestId);
+      ERASED.set(person.session, erased);
+      return { erased: 1, accessEnded: record.decision === SignupDecision.APPROVED && STANDS.includes(record.accountStatus) };
+    },
+    correctMembershipNumber: async (req, ctx) => {
+      const person = await adminOf(ctx);
+      const number = req.membershipNumber.trim().replace(/[\p{Zs}\p{Pd}\u2212]/gu, '');
+      if (!/^[0-9]{1,12}$/.test(number)) throw new ConnectError('a membership number is 1 to 12 digits', Code.InvalidArgument);
+      if (![CorrectionReason.TYPED_WRONG, CorrectionReason.CARD_DIFFERS, CorrectionReason.NEW_NUMBER].includes(req.reason)) throw new ConnectError('choose one of the three reasons', Code.InvalidArgument);
+      const record = recordFor(person, req.requestId);
+      const corrected = CORRECTED.get(person.session) ?? new Map();
+      const now = corrected.get(record.requestId) ?? record.membershipNumber;
+      const erased = ERASED.get(person.session)?.has(record.requestId) === true;
+      if (erased || record.decision !== SignupDecision.APPROVED || now === '' || !STANDS.includes(record.accountStatus) || now === number) {
+        throw new ConnectError('only an approved member\'s number is corrected', Code.FailedPrecondition);
+      }
+      // As the API's: never a number another live sign-up holds (one waiting, or an approved one).
+      const live = [...SIGNUP_QUEUE.map((r) => r.membershipNumber), ...RECORDS.filter((r) => r.requestId !== record.requestId && r.decision === SignupDecision.APPROVED).map((r) => r.membershipNumber)];
+      if (live.includes(number)) throw new ConnectError('that number is already on another sign-up', Code.AlreadyExists);
+      corrected.set(record.requestId, number);
+      CORRECTED.set(person.session, corrected);
       return {};
     },
   });

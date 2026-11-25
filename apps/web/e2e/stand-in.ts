@@ -169,6 +169,21 @@ export const REJECTED = {
   kept: { name: 'Harley Sample', first: 'Harley', last: 'Sample', number: '000022004', email: 'harley@example.org', check: 'Confirmed by the membership verification service as a member of another local group, on November 2, 2026', rejected: 'November 3, 2026' },
 } as const;
 
+/**
+ * PROFILE-ERASE: the decided sign-ups api.mjs lists to the Admin (RECORDS there), newest first: an approved
+ * member, a removed member whose profile the removal erased, a rejected sign-up and one rejected then
+ * reopened. The Admin's own (ownId) is never listed. The stand-in keeps an erasure or a correction per
+ * sign-in, so browsers in parallel never disturb each other.
+ */
+export const RECORDS = {
+  member: { id: 'd1000000-0000-4000-8000-000000000001', name: 'Robin Member', email: 'robin@example.org', first: 'Robin', last: 'Member', number: '000044001', decision: 'Approved on November 6, 2026', account: 'Member' },
+  removed: { id: 'd1000000-0000-4000-8000-000000000002', name: 'Sage Leaver', email: 'sage@example.org', decision: 'Approved on November 5, 2026', account: 'Removed' },
+  rejected: { id: 'd1000000-0000-4000-8000-000000000003', name: 'Toby Declined', email: 'toby@example.org', first: 'Toby', last: 'Declined', number: '000044003', decision: 'Rejected on November 4, 2026', account: 'Removed' },
+  reopened: { id: 'd1000000-0000-4000-8000-000000000004', name: 'Uma Again', email: 'uma@example.org', first: 'Uma', last: 'Again', number: '000044004', decision: 'Rejected on November 3, 2026, then reopened', account: 'None' },
+  ownId: 'd1000000-0000-4000-8000-00000000000a',
+  ownNumber: '000044010',
+} as const;
+
 /** PROFILE-ID: what the duplicate claim's earlier claim typed (api.mjs), shown beside it; none for a claim since closed. */
 export const EARLIER_CLAIM = { 'Drew Secondclaim': { name: 'Jordan Firstclaim', first: 'Jordan', last: 'Firstclaim', number: '000011006' } } as const;
 
@@ -176,7 +191,15 @@ export const EARLIER_CLAIM = { 'Drew Secondclaim': { name: 'Jordan Firstclaim', 
 export const MEMBER_PROFILE = { first: 'Jordan', last: 'Example', number: '000033001' } as const;
 
 /** PROFILE-ID: every membership number the stand-in holds, none of which another member may ever see. */
-export const ALL_NUMBERS = [...SIGNUP_QUEUE.map((s) => s.number), ...Object.values(REJECTED).map((r) => r.number), MEMBER_PROFILE.number];
+export const ALL_NUMBERS = [
+  ...SIGNUP_QUEUE.map((s) => s.number),
+  ...Object.values(REJECTED).map((r) => r.number),
+  MEMBER_PROFILE.number,
+  RECORDS.member.number,
+  RECORDS.rejected.number,
+  RECORDS.reopened.number,
+  RECORDS.ownNumber,
+];
 
 /**
  * SOLO-APPROVE: the approval rule as api.mjs answers each officer. The real API holds one setting for

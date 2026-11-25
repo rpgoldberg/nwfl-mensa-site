@@ -3,7 +3,9 @@
 // approval screens have no free-text notes. PROFILE-ID: what the member typed
 // (first name, last name, membership number) is kept on the sign-up, shown to
 // the approvers and the Admin, and once approved is the member's profile: the
-// names editable, the number never.
+// names editable by the member, the number by the Admin's correction alone.
+// PROFILE-ERASE: a removed member's profile is erased, and the Admin erases a
+// sign-up record whole when the person asks.
 syntax = "proto3";
 
 package nwfl.mensa.v1;
@@ -229,6 +231,37 @@ message Member {
   bool recheck_due = 7;
 }
 
+// PROFILE-ERASE: why the Admin corrects a membership number: a fixed choice,
+// never free text, so the audit log never holds a number or a name.
+enum CorrectionReason {
+  CORRECTION_REASON_UNSPECIFIED = 0;
+  // Typed wrong at sign-up.
+  CORRECTION_REASON_TYPED_WRONG = 1;
+  // The member's card shows a different number.
+  CORRECTION_REASON_CARD_DIFFERS = 2;
+  // Mensa issued a new number.
+  CORRECTION_REASON_NEW_NUMBER = 3;
+}
+
+// PROFILE-ERASE: a decided sign-up as the Admin alone sees it, to erase it at
+// the person's request or to correct its number. Never an erased one: it holds
+// nothing to show.
+message SignupRecord {
+  string request_id = 1;
+  string display_name = 2;
+  // From the sign-in, as the display name is; empty once the record is erased.
+  string email = 3;
+  // As typed at sign-up. Empty once a member's account is removed: the profile
+  // is erased from every decided sign-up of theirs.
+  string first_name = 4;
+  string last_name = 5;
+  string membership_number = 6;
+  SignupDecision decision = 7;
+  google.protobuf.Timestamp decided_at = 8;
+  // The account's standing now; unset when the person has no account.
+  MemberStatus account_status = 9;
+}
+
 // Accounts and approvals. The subject, display name and email come from the
 // verified token, never from a request field.
 service MembershipService {
@@ -304,13 +337,31 @@ service MembershipService {
   // rejected sign-up stays, marked reopened by whom and when, with what it typed. A sign-up
   // that is not rejected, already reopened, or whose account is no longer closed is refused.
   rpc ReopenSignup(ReopenSignupRequest) returns (ReopenSignupResponse);
+  // PROFILE-ERASE: the Admin only (nwfl-admin). The decided sign-ups not yet
+  // erased, newest first, never the caller's own.
+  rpc ListSignupRecords(ListSignupRecordsRequest) returns (ListSignupRecordsResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  // PROFILE-ERASE: the Admin only, never on their own sign-up. Erases a
+  // person's sign-up record at their request: the display name, the email, the
+  // first and last name and the membership number of every decided sign-up of
+  // that person. The date and the decision stay. An approved member's account
+  // is removed with it. A pending sign-up is decided first: FAILED_PRECONDITION.
+  rpc EraseSignup(EraseSignupRequest) returns (EraseSignupResponse);
+  // PROFILE-ERASE: the Admin only, never on their own sign-up. Corrects a
+  // wrong membership number on an approved member's profile: the one way a
+  // stored number changes. The number is checked as at sign-up. The reason is
+  // one of three fixed choices, kept in the audit log as its code with who and
+  // when; no reason, or one not listed, is INVALID_ARGUMENT. A number already
+  // on another sign-up still waiting or approved is ALREADY_EXISTS.
+  rpc CorrectMembershipNumber(CorrectMembershipNumberRequest) returns (CorrectMembershipNumberResponse);
 }
 
 message SubmitSignupRequest {
   // Matched with the number by the verifier.
   string last_name = 1;
   // Typed by the member from their card or renewal email. Kept on the sign-up
-  // and the member's profile, never changed (PROFILE-ID).
+  // and the member's profile (PROFILE-ID); only the Admin's correction changes it.
   string membership_number = 2;
   // PROFILE-ID: for the approvers and the profile, and (OFFICER-VERIFY) for
   // the verifier to confirm. Optional on a plain sign-up; REQUIRED on the
@@ -421,3 +472,30 @@ message ReopenSignupRequest {
 }
 
 message ReopenSignupResponse {}
+
+message ListSignupRecordsRequest {}
+
+message ListSignupRecordsResponse {
+  repeated SignupRecord records = 1;
+}
+
+message EraseSignupRequest {
+  string request_id = 1;
+}
+
+message EraseSignupResponse {
+  // How many sign-ups of the person were erased: none when all were already.
+  int32 erased = 1;
+  // The person's member access ended with it (an approved member).
+  bool access_ended = 2;
+}
+
+message CorrectMembershipNumberRequest {
+  string request_id = 1;
+  // Digits only, as at sign-up.
+  string membership_number = 2;
+  // Why: one of the three fixed choices.
+  CorrectionReason reason = 3;
+}
+
+message CorrectMembershipNumberResponse {}

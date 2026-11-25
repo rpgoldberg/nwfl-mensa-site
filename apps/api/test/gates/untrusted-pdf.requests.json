@@ -1541,6 +1541,41 @@
       }
     ]
   },
+  "MembershipService.CorrectMembershipNumber": {
+    "input": "nwfl.mensa.v1.CorrectMembershipNumberRequest",
+    "fields": [
+      {
+        "name": "request_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "membership_number",
+        "number": 2,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "reason",
+        "number": 3,
+        "type": "enum",
+        "label": "optional",
+        "message": "nwfl.mensa.v1.CorrectionReason"
+      }
+    ]
+  },
+  "MembershipService.EraseSignup": {
+    "input": "nwfl.mensa.v1.EraseSignupRequest",
+    "fields": [
+      {
+        "name": "request_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
   "MembershipService.GetMyAccount": {
     "input": "nwfl.mensa.v1.GetMyAccountRequest",
     "fields": []
@@ -1580,6 +1615,10 @@
   },
   "MembershipService.ListRejectedSignups": {
     "input": "nwfl.mensa.v1.ListRejectedSignupsRequest",
+    "fields": []
+  },
+  "MembershipService.ListSignupRecords": {
+    "input": "nwfl.mensa.v1.ListSignupRecordsRequest",
     "fields": []
   },
   "MembershipService.ListSignupRequests": {

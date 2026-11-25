@@ -89,6 +89,8 @@ describe.skipIf(!live)('the members-only canary', () => {
       GetSignupRequest: () => [{ requestId: ids['signup'] }],
       ListMembers: () => [{}, { recheckDueOnly: true }],
       ListRejectedSignups: () => [{}],
+      // PROFILE-ERASE: the Admin's decided sign-ups.
+      ListSignupRecords: () => [{}],
     },
     'nwfl.mensa.v1.NewsletterService': {
       ListEditions: () => [{}],

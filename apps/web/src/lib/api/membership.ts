@@ -13,6 +13,8 @@
 // reopen, or no longer reopenable). PROFILE-ID: the approvers' queue and rejections carry what each
 // sign-up typed (names and number), and an approved member's own account carries their profile; the
 // member changes the two names (a change the API refuses is ProfileRefused), never the number.
+// PROFILE-ERASE: the Admin alone lists the decided sign-ups, erases one at the person's request (a
+// refusal is DecisionRefused) and corrects a wrong number with a reason (CorrectionRefused).
 // Anything else is ApiUnavailable. Each failure is logged by call and code only: never the API's
 // message, the token, a name or the membership number (D6).
 //
@@ -34,6 +36,7 @@ import type { TokenStore } from '../../../server/token-store.mjs';
 import type { Date as ProtoDate } from '../../gen/nwfl/mensa/v1/common_pb.js';
 import {
   AccountRoute,
+  CorrectionReason,
   type EarlierClaim as EarlierClaimMessage,
   HandApproval,
   LocalGroupStanding,
@@ -43,6 +46,7 @@ import {
   OfficerTools,
   type RejectedSignup as RejectedSignupMessage,
   SignupDecision,
+  type SignupRecord as SignupRecordMessage,
   type SignupRequest,
   Verification,
 } from '../../gen/nwfl/mensa/v1/membership_pb.js';
@@ -140,6 +144,19 @@ export interface RejectedSignup extends Typed {
   rejectedAt?: Date;
 }
 
+/** PROFILE-ERASE: a decided sign-up's decision; a record is never pending. */
+export type Decided = Exclude<Decision, 'pending'>;
+
+/** PROFILE-ERASE: a decided sign-up as the Admin sees it; status is the account's standing now, if there is one. */
+export interface SignupRecord extends Typed {
+  requestId: string;
+  displayName: string;
+  email: string;
+  decision: Decided;
+  decidedAt?: Date;
+  status?: Standing;
+}
+
 /** The person's token was refused, has run out, or is not one to send: sign in again. */
 export class MembershipSignInAgain extends Error {
   constructor(readonly rpc: string) {
@@ -172,6 +189,17 @@ export class DecisionRefused extends Error {
   }
 }
 
+/**
+ * PROFILE-ERASE. invalid: a number or a reason the API would not take; own: not theirs to correct; closed: not an
+ * approved member's, gone, or the same number; taken: the number is on another live sign-up (fix 1, F7).
+ */
+export class CorrectionRefused extends Error {
+  constructor(readonly reason: 'invalid' | 'own' | 'closed' | 'taken') {
+    super(`the correction was refused (${reason})`);
+    this.name = 'CorrectionRefused';
+  }
+}
+
 export interface MembershipApi {
   /** Undefined: the person has no account yet. */
   getMyAccount(as: Reader): Promise<MyAccount | undefined>;
@@ -189,7 +217,20 @@ export interface MembershipApi {
   /** REOPEN: the Admin and the Membership Officer only. */
   listRejectedSignups(as: Reader): Promise<RejectedSignup[]>;
   reopenSignup(as: Reader, requestId: string): Promise<void>;
+  /** PROFILE-ERASE: the Admin only. */
+  listSignupRecords(as: Reader): Promise<SignupRecord[]>;
+  /** The person's decided sign-ups erased (none when already), and whether their member access ended with it. */
+  eraseSignup(as: Reader, requestId: string): Promise<{ erased: number; accessEnded: boolean }>;
+  correctMembershipNumber(as: Reader, requestId: string, correction: { membershipNumber: string; reason: CorrectionCode }): Promise<void>;
 }
+
+/** PROFILE-ERASE fix 1: a correction's reason, one of three fixed choices, by the code the API keeps. */
+export type CorrectionCode = 'typed_wrong' | 'card_differs' | 'new_number';
+const CORRECTION_REASON: Record<CorrectionCode, CorrectionReason> = {
+  typed_wrong: CorrectionReason.TYPED_WRONG,
+  card_differs: CorrectionReason.CARD_DIFFERS,
+  new_number: CorrectionReason.NEW_NUMBER,
+};
 
 const STANDING: Record<Standing, MemberStatus> = {
   pending: MemberStatus.PENDING,
@@ -234,6 +275,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** A reported local group's standing, left out when none was reported. */
 const localGroupOf = (standing: LocalGroupStanding) => (standing === LocalGroupStanding.UNSPECIFIED ? undefined : nameOf(LOCAL_GROUP, standing));
+const DECIDED: Record<Decided, SignupDecision> = { approved: SignupDecision.APPROVED, rejected: SignupDecision.REJECTED, reopened: SignupDecision.REOPENED };
 
 /** The name for a wire value; an unset or unknown one is an answer the site cannot read. */
 function nameOf<K extends string, V>(table: Record<K, V>, value: V): K {
@@ -255,6 +297,13 @@ const SIGNUP_REFUSALS: Partial<Record<Code, SignupRefused['reason']>> = {
 const PROFILE_REFUSALS: Partial<Record<Code, ProfileRefused['reason']>> = {
   [Code.InvalidArgument]: 'invalid',
   [Code.FailedPrecondition]: 'not_member',
+};
+const CORRECTION_REFUSALS: Partial<Record<Code, CorrectionRefused['reason']>> = {
+  [Code.InvalidArgument]: 'invalid',
+  [Code.PermissionDenied]: 'own',
+  [Code.FailedPrecondition]: 'closed',
+  [Code.NotFound]: 'closed',
+  [Code.AlreadyExists]: 'taken',
 };
 const DECISION_REFUSALS: Partial<Record<Code, DecisionRefused['reason']>> = {
   [Code.PermissionDenied]: 'own',
@@ -313,10 +362,24 @@ function rejectedOf(request: RejectedSignupMessage): RejectedSignup {
   };
 }
 
+function recordOf(record: SignupRecordMessage): SignupRecord {
+  return {
+    requestId: record.requestId,
+    displayName: record.displayName,
+    email: record.email,
+    ...typedOf(record),
+    decision: nameOf(DECIDED, record.decision),
+    ...(record.decidedAt ? { decidedAt: timestampDate(record.decidedAt) } : {}),
+    // Unset: the person has no account.
+    ...(record.accountStatus !== MemberStatus.UNSPECIFIED ? { status: nameOf(STANDING, record.accountStatus) } : {}),
+  };
+}
+
 const REFUSED_MSG: Record<string, string> = {
   SubmitSignup: 'api refused the sign-up',
   UpdateMyProfile: 'api refused the profile change',
   GetSignupRequest: 'api gave no sign-up for the banner',
+  CorrectMembershipNumber: 'api refused the correction',
 };
 
 export function grpcMembership(config: ApiConfig, log: (line: string) => void): MembershipApi {
@@ -352,6 +415,10 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
   const profileRefused = (code: Code) => {
     const reason = PROFILE_REFUSALS[code];
     return reason === undefined ? undefined : new ProfileRefused(reason);
+  };
+  const correctionRefused = (code: Code) => {
+    const reason = CORRECTION_REFUSALS[code];
+    return reason === undefined ? undefined : new CorrectionRefused(reason);
   };
   const decisionRefused = (code: Code) => {
     const reason = DECISION_REFUSALS[code];
@@ -448,6 +515,26 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
         },
         decisionRefused,
       ),
+    listSignupRecords: (as) => call('ListSignupRecords', as, async (headers) => (await membership.listSignupRecords({}, { headers })).records.map(recordOf)),
+    eraseSignup: (as, requestId) =>
+      call(
+        'EraseSignup',
+        as,
+        async (headers) => {
+          const { erased, accessEnded } = await membership.eraseSignup({ requestId }, { headers });
+          return { erased, accessEnded };
+        },
+        decisionRefused,
+      ),
+    correctMembershipNumber: (as, requestId, correction) =>
+      call(
+        'CorrectMembershipNumber',
+        as,
+        async (headers) => {
+          await membership.correctMembershipNumber({ requestId, membershipNumber: correction.membershipNumber, reason: CORRECTION_REASON[correction.reason] }, { headers });
+        },
+        correctionRefused,
+      ),
   };
 }
 
@@ -465,6 +552,9 @@ export function unavailableMembership(): MembershipApi {
     rejectSignup: fail('RejectSignup'),
     listRejectedSignups: fail('ListRejectedSignups'),
     reopenSignup: fail('ReopenSignup'),
+    listSignupRecords: fail('ListSignupRecords'),
+    eraseSignup: fail('EraseSignup'),
+    correctMembershipNumber: fail('CorrectMembershipNumber'),
   };
 }
 
