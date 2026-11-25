@@ -1744,6 +1744,156 @@ describe('only what a glyph paints itself, inside the page, in bounded time (fix
   }, 300_000);
 });
 
+describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', () => {
+  const TOO_MUCH = 'page 1: too much is drawn on the black rectangles of the original to check';
+  const cellBox: Box = { left: 0, right: 100, bottom: 0, top: 20 };
+  const WHITE_TEXT = { luminance: 1, opaque: true };
+  const glyphAt = (ink: Box, fontSize = 10, text = 'H'): PageChar => ({ text, generated: false, hyphen: false, box: ink, ink, fontSize });
+  /** The cell, then glyph 0's object 50 (not seen: its drawing changes nothing), then glyph 1's object 52 (seen). */
+  const twice = (second: PageChar): PlacedLabel[] | string => {
+    const reading: LabelReading = {
+      top: [{ kind: 'box', object: 1, bounds: cellBox }, { kind: 'other', object: 50 }, { kind: 'other', object: 52 }],
+      nested: 0,
+      owners: [50, 52],
+      places: [1, 2],
+      paints: [WHITE_TEXT, WHITE_TEXT],
+    };
+    const first = glyphAt({ left: 10, right: 15, bottom: 5, top: 11 });
+    return pageLabels(reading, [first, second], 0, [cellBox], () => null, { shows: (object) => (object === 52 ? 1 : 0) });
+  };
+
+  it('takes a glyph as drawn again only at about its place and size: each ink box over half of the other, the size within a tenth', () => {
+    const same: Box = { left: 10, right: 15, bottom: 5, top: 11 };
+    expect(twice(glyphAt(same))).toEqual([]);
+    // A glyph of the same text four times the size, whose box holds the first: not the first drawn again.
+    expect(twice(glyphAt({ left: 4, right: 24, bottom: 2, top: 26 }, 40))).toBe(UNSEEN());
+    // At the same size, a box over all of the first's but twice as wide (the first over 45 % of it), or 1.9 times (53 %).
+    expect(twice(glyphAt({ left: 10, right: 21, bottom: 5, top: 11 }))).toBe(UNSEEN());
+    expect(twice(glyphAt({ left: 10, right: 19.5, bottom: 5, top: 11 }))).toEqual([]);
+    // The same box at a size a tenth off or less, or more.
+    expect(twice(glyphAt(same, 10.9))).toEqual([]);
+    expect(twice(glyphAt(same, 9))).toEqual([]);
+    expect(twice(glyphAt(same, 11.5))).toBe(UNSEEN());
+    expect(twice(glyphAt(same, 8.5))).toBe(UNSEEN());
+  });
+
+  // White Helvetica on the cell: a 10 pt "H" in the box of a 44 pt one (GT, the checker's recheck 3).
+  const giant = (paint = WHITE, size = 44, x = 250, y = 88, text = 'H'): string => `q ${paint} BT /F1 ${size} Tf ${x} ${y} Td (${text}) Tj ET Q`;
+  const small = (paint = WHITE, size = 10, x = 259, y = 108.5, text = 'H'): string => `q ${paint} BT /F1 ${size} Tf ${x} ${y} Td (${text}) Tj ET Q`;
+  async function inkOf(content: string, text: string): Promise<Box> {
+    const doc = Document.open(await pdfium(), await page([content]));
+    if (doc === null) throw new Error('unopenable');
+    try {
+      return doc.page(0, (p) => p.chars().chars.find((c) => c.text === text)?.ink as Box);
+    } finally {
+      doc.close();
+    }
+  }
+  const cover = (b: Box): string => `0 g ${b.left - 0.6} ${b.bottom - 0.6} ${b.right - b.left + 1.2} ${b.top - b.bottom + 1.2} re f`;
+  const ON = 'q 1 g BT /F1 40 Tf 225 90 Td (ON) Tj ET Q';
+  const at14 = (x: number): string => small(WHITE, 14, x, 100);
+
+  it.each<[string, () => Promise<Uint8Array>]>([
+    ['GT1: a 10 pt "H" under a black cover, a 44 pt "H" round it after', async () => page([cell(), small(), cover(await inkOf(small(), 'H')), giant(), BODY])],
+    ['GT4: a black 10 pt "H" on the cell, a white 44 pt "H" round it after', () => page([cell(), small('0 g'), giant(), BODY])],
+    ['GT5: a 10 pt "H" drawn invisible (Tr 3), a 44 pt "H" round it after', () => page([cell(), small('1 g 3 Tr'), giant(), BODY])],
+    ['GT9: "N" and "O" at 10 pt under covers, a 40 pt "ON" round them', async () => {
+      const [n, o] = [small(WHITE, 10, 262, 100, 'N'), small(WHITE, 10, 232, 100, 'O')];
+      return page([cell(), n, o, cover(await inkOf(n, 'N')), cover(await inkOf(o, 'O')), ON, BODY]);
+    }],
+    ['GT10: a 14 pt "H" under a cover, the same "H" 45 % of its width to the right', async () => {
+      const ink = await inkOf(at14(240), 'H');
+      return page([cell(), at14(240), cover(ink), at14(240 + 0.45 * (ink.right - ink.left)), BODY]);
+    }],
+    ['GT11: a 14 pt "H" under a cover, the same "H" 0.3 pt to the right', async () => page([cell(), at14(240), cover(await inkOf(at14(240), 'H')), at14(240.3), BODY])],
+  ])('refuses %s, in the engine and in the gate', async (_name, build) => {
+    const original = await build();
+    expect(refusal(await redact(original, QUOTE))).toBe(UNSEEN());
+    expect(await labelMarks(original, original)).toBe(UNSEEN());
+    expect(await verdict(original, original)).toEqual({ pass: false, code: 'rules' });
+  });
+
+  it.each<[string, () => Promise<Uint8Array>]>([
+    ['GT0: a white 10 pt "H" seen in the box of a 44 pt one', () => page([cell(), giant(), small(), BODY])],
+    ['GT9c: a white 40 pt "ON" alone', () => page([cell(), ON, BODY])],
+  ])('passes %s', async (_name, build) => {
+    const original = await build();
+    const copy = copyOf(await redact(original, QUOTE));
+    expect(await labelMarks(copy, original)).toEqual([[MEMBERS]]);
+    expect(await verdict(copy, original, QUOTE)).toEqual({ pass: true });
+  });
+
+  it('refuses the page as too much to check once a drawing is refused as too costly', () => {
+    const reading: LabelReading = { top: [{ kind: 'box', object: 1, bounds: cellBox }, { kind: 'other', object: 50 }], nested: 0, owners: [50], places: [1], paints: [WHITE_TEXT] };
+    const glyph = glyphAt({ left: 10, right: 15, bottom: 5, top: 11 });
+    let over = false;
+    const shows = (): null => {
+      over = true;
+      return null;
+    };
+    expect(pageLabels(reading, [glyph], 0, [cellBox], () => null, { shows, spent: () => over })).toBe(TOO_MUCH);
+    expect(pageLabels(reading, [glyph], 0, [cellBox], () => null, { shows: () => null, spent: () => false })).toBe(UNSEEN());
+  });
+
+  /** A black cell; one draw of a form that draws a form `n` times, that draws a third `n` times: a black zigzag of `k` points on the cell (black on black). Then a white "n" of `size` points. */
+  const zigzag = (k: number): string => `0 g 12 12 m ${Array.from({ length: k }, (_, i) => `${(12 + (376 * i) / k).toFixed(3)} ${i % 2 === 0 ? 128 : 12} l`).join(' ')} h f`;
+  async function deep(k: number, n: number, size: number, x = 150, y = 40, zigzagAt = ''): Promise<Uint8Array> {
+    const pdf = await fitPdf(`0 g 10 10 380 120 re f*\n/Fm1 Do\nq 1 g BT /F1 ${size} Tf ${x} ${y} Td (n) Tj ET Q`, {
+      form: Array.from({ length: n }, () => '/Fm2 Do').join(' '),
+      innerForm: Array.from({ length: n }, () => `${zigzagAt} /Fm3 Do`).join(' '),
+    });
+    const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+    const c = doc.context;
+    const fm3 = c.register(c.flateStream(zigzag(k), { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 400, 140], Resources: {} }));
+    const forms = (holder: PDFDict): PDFDict => holder.lookup(PDFName.of('XObject'), PDFDict);
+    const fm1 = forms(doc.getPage(0).node.Resources() as PDFDict).lookup(PDFName.of('Fm1')) as unknown as { dict: PDFDict };
+    const fm2 = forms(fm1.dict.lookup(PDFName.of('Resources'), PDFDict)).lookup(PDFName.of('Fm2')) as unknown as { dict: PDFDict };
+    fm2.dict.lookup(PDFName.of('Resources'), PDFDict).set(PDFName.of('XObject'), c.obj({ Fm3: fm3 }));
+    return doc.save({ useObjectStreams: false });
+  }
+
+  it('refuses, as too much to check, a page one glyph of which is slow to draw, in well under the gate\'s time (recheck 3: 120 s)', async () => {
+    // 400 draws of a 20,000-point zigzag, and one 100 pt "n" (67 KB).
+    const pdf = await deep(20_000, 20, 100);
+    const started = performance.now();
+    expect(await labelMarks(pdf, pdf)).toBe(TOO_MUCH);
+    expect(await verdict(pdf, pdf)).toEqual({ pass: false, code: 'rules' });
+    expect(performance.now() - started).toBeLessThan(30_000);
+  }, 300_000);
+
+  it('weighs a drawing by the paths that meet the area drawn, at any depth of forms', async () => {
+    const heavy = await deep(20_000, 20, 100);
+    const doc = Document.open(await pdfium(), heavy);
+    if (doc === null) throw new Error('unopenable');
+    try {
+      doc.page(0, (p) => {
+        const object = p.labelReading().owners[0] as number;
+        const box = p.chars().chars.find((c) => c.text === 'n')?.ink as Box;
+        const started = performance.now();
+        expect(p.shows(object, box)).toBeNull();
+        expect(doc.overdrawn).toBe(true);
+        expect(performance.now() - started).toBeLessThan(1_000);
+      });
+    } finally {
+      doc.close();
+    }
+    // The same zigzags moved off the glyph (above the page): nothing heavy meets its area, so it is drawn.
+    const away = await deep(20_000, 20, 100, 150, 40, '1 0 0 1 0 400 cm');
+    const doc2 = Document.open(await pdfium(), away);
+    if (doc2 === null) throw new Error('unopenable');
+    try {
+      doc2.page(0, (p) => {
+        const object = p.labelReading().owners[0] as number;
+        const box = p.chars().chars.find((c) => c.text === 'n')?.ink as Box;
+        expect(p.shows(object, box)).toBeGreaterThan(0);
+        expect(doc2.overdrawn).toBe(false);
+      });
+    } finally {
+      doc2.close();
+    }
+  }, 120_000);
+});
+
 describe('luminance', () => {
   it('is the WCAG relative luminance of an sRGB colour', () => {
     expect(luminance(0, 0, 0)).toBe(0);

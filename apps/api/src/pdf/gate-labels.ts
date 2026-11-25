@@ -79,7 +79,9 @@
 // only what its font claims, and PDFium draws its paint past it); and once
 // PDFium has taken MAX_DRAWING_MS drawing the copy for this check, the page
 // being judged is refused as too much to check (a drawing costs as much as
-// the page holds, which counting objects does not see). This shows that
+// the page holds, which counting objects does not see). Fix round 4: so is
+// it when one drawing would cost too much (Page.shows weighs the paths that
+// meet the area before drawing it). This shows that
 // paint shows where a glyph is, not that its letter can be read.
 // Fix round 1b: a stroke's mitred corner may reach as far as its angle lets
 // (PDFium gives no miter limit); a glyph is seen only when PDFium, drawing
@@ -88,7 +90,8 @@
 // (whose text PDFium does not give) no glyph on a rectangle is seen.
 // A glyph not seen where it is drawn passes when the same glyph is drawn
 // again where it is (the same text over half its ink or more, before or
-// after it) and is seen there, as Publisher draws a heading twice; and a text
+// after it; fix round 4: its ink over half of the other's too, at a font
+// size within a tenth) and is seen there, as Publisher draws a heading twice; and a text
 // object drawn again as it is (whose glyphs PDFium does not read again) is
 // judged where that is drawn (the 8 nearest such).
 // A page whose glyphs take more than MAX_WORK steps to judge is refused; each
@@ -183,6 +186,8 @@ const MAX_WORK = 10_000_000;
  * holds, which counting objects does not see (a form drawn 400 times over).
  */
 const MAX_DRAWING_MS = 20_000;
+/** How far apart two glyphs' font sizes may be, by the bigger, for one to be the other drawn again (fix round 4). */
+const SAME_SIZE = 0.1;
 
 const UNREAD_ORIGINAL = 'the original could not be opened to read its layout';
 
@@ -565,10 +570,15 @@ export function pageLabels(
     const later = reading.places[j] ?? -1;
     return later > drawnAt || (later === drawnAt && j > i);
   };
-  /** Whether glyph `j` is glyph `i` drawn again: the same text, its ink over half of glyph `i`'s or more. */
+  /**
+   * Whether glyph `j` is glyph `i` drawn again: the same text at about its place and size (fix round 4: a glyph of the
+   * same letter far bigger, whose box holds glyph `i`, is not it), each ink box over half of the other or more, and
+   * the font size within SAME_SIZE of the bigger.
+   */
   const again = (j: number, i: number, ink: Box): boolean => {
-    const other = chars[j] as PageChar;
-    return j !== i && other.text === (chars[i] as PageChar).text && other.ink !== null && shareIn(other.ink, ink) >= 0.5 && areaOf(cut(other.ink, ink)) > 0;
+    const [other, mine] = [chars[j] as PageChar, chars[i] as PageChar];
+    if (j === i || other.text !== mine.text || other.ink === null || areaOf(cut(other.ink, ink)) <= 0) return false;
+    return shareIn(other.ink, ink) >= 0.5 && shareIn(ink, other.ink) >= 0.5 && Math.abs(other.fontSize - mine.fontSize) <= SAME_SIZE * Math.max(other.fontSize, mine.fontSize);
   };
   /** Whether another glyph drawn after glyph `i` (drawn by the object at `drawnAt`) lies over half its ink or more. */
   const textOver = (i: number, ink: Box, drawnAt: number): boolean => {
@@ -738,7 +748,13 @@ export function pageLabels(
     if (++drawings > MAX_SHOWS) return false;
     work += reading.top.length;
     const solid = inked === undefined ? 0 : (inked(object, ink, SOLID, mask) ?? 1);
-    return (shows(object, ink, drawers.slice(1), mask) ?? 0) >= Math.max(SHOWN_PIXELS, SEEN_SHARE * solid - showPixel(ink));
+    const shown = shows(object, ink, drawers.slice(1), mask) ?? 0;
+    // A drawing refused as costing too much (fix round 4: Page.shows weighs it before drawing): too much to check.
+    if (spent?.() === true) {
+      work = budget + 1;
+      return false;
+    }
+    return shown >= Math.max(SHOWN_PIXELS, SEEN_SHARE * solid - showPixel(ink));
   };
   // Each glyph judged where it is drawn, once: by itself, or when another is judged drawn again where it was.
   const judged = new Map<string, boolean>();
@@ -816,7 +832,7 @@ export async function labelMarks(pdf: Uint8Array, original: Uint8Array): Promise
         pageLabels(page.labelReading(), page.chars().chars, index, layout[index] ?? [], (at) => page.shape(at), {
           shows: (object, ink, also, mask) => page.shows(object, ink, also, mask),
           inked: (object, ink, least, mask) => page.inked(object, ink, least, mask),
-          spent: () => doc.drawingMs > MAX_DRAWING_MS,
+          spent: () => doc.overdrawn || doc.drawingMs > MAX_DRAWING_MS,
         }),
       );
       if (typeof found === 'string') return found;

@@ -83,6 +83,11 @@ export class Document {
    * the label check bounds the time, not only the count, as a page's drawing costs as much as the page holds).
    */
   drawingMs = 0;
+  /**
+   * Whether a page has had a drawing for Page.shows refused as costing too much (GATE-LAYOUT fix round 4: one drawing
+   * runs to its end, so the time it takes is bounded by weighing it before, not after).
+   */
+  overdrawn = false;
 
   private constructor(
     private readonly m: Module,
@@ -156,6 +161,8 @@ export class Page {
   private readonly drawn = new Map<string, { whole: Float32Array; without: Float32Array; width: number; height: number }>();
   /** What a viewer shows of the page (Page.visible), once read. */
   private shown: Box | null | undefined;
+  /** Each path the page draws, at any depth of forms (Page.drawCost), once read. */
+  private paths: Array<{ bounds: Box; weight: number }> | undefined;
 
   constructor(
     private readonly m: Module,
@@ -568,8 +575,58 @@ export class Page {
     }
   }
 
-  /** The page's area drawn at SHOW_SCALE (each pixel's luminance, a row at a time, y down) with every object, and without these; null when PDFium cannot. */
+  /**
+   * What drawing an area of the page at SHOW_SCALE costs PDFium (GATE-LAYOUT fix round 4): for each path that meets
+   * it, at any depth of forms, its segments times the rows of pixels it meets, a stroked path STROKE_WEIGHT times a
+   * filled one. PDFium skips an object whose bounds miss the area, and a fill or stroke costs about each segment for
+   * each row it crosses (a page of 400 draws of a 20,000-point zigzag takes minutes over a 100 pt glyph).
+   */
+  drawCost(area: Box): number {
+    if (this.paths === undefined) {
+      const m = this.m;
+      const paths: Array<{ bounds: Box; weight: number }> = [];
+      // FS_RECTF's four floats (FPDFPageObj_GetBounds), FS_MATRIX's six, then the draw mode's two ints.
+      const at = rt(m).wasmExports.malloc(48);
+      try {
+        const pending: Array<[number, Matrix]> = [];
+        for (let i = 0; i < this.objectCount; i++) pending.push([m.FPDFPage_GetObject(this.handle, i), IDENTITY]);
+        for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+          const [object, matrix] = next;
+          const type = m.FPDFPageObj_GetType(object);
+          if (type === FPDF_PAGEOBJ_PATH && m.FPDFPath_GetDrawMode(object, at + 40, at + 44) && m.FPDFPageObj_GetBounds(object, at, at + 4, at + 8, at + 12)) {
+            const [fill = 0, stroke = 0] = new Int32Array(rt(m).HEAPU8.buffer, at + 40, 2);
+            const [left = 0, bottom = 0, right = 0, top = 0] = new Float32Array(rt(m).HEAPU8.buffer, at, 4);
+            const weight = m.FPDFPath_CountSegments(object) * ((fill === 0 ? 0 : 1) + (stroke === 0 ? 0 : STROKE_WEIGHT));
+            if (weight > 0) paths.push({ bounds: transformed({ left, bottom, right, top }, matrix), weight });
+          } else if (type === FPDF_PAGEOBJ_FORM) {
+            m.FPDFPageObj_GetMatrix(object, at + 16);
+            const inner = [...new Float32Array(rt(m).HEAPU8.buffer, at + 16, 6)] as Matrix;
+            for (let i = 0; i < m.FPDFFormObj_CountObjects(object); i++) pending.push([m.FPDFFormObj_GetObject(object, i), times(inner, matrix)]);
+          }
+        }
+      } finally {
+        rt(m).wasmExports.free(at);
+      }
+      this.paths = paths;
+    }
+    let cost = 0;
+    for (const { bounds, weight } of this.paths) {
+      const meets = bounds.left <= area.right && area.left <= bounds.right && bounds.bottom <= area.top && area.bottom <= bounds.top;
+      if (meets) cost += weight * (1 + Math.ceil((Math.min(area.top, bounds.top) - Math.max(area.bottom, bounds.bottom)) * SHOW_SCALE));
+    }
+    return cost;
+  }
+
+  /**
+   * The page's area drawn at SHOW_SCALE (each pixel's luminance, a row at a time, y down) with every object, and without
+   * these; null when PDFium cannot, or (fix round 4) when drawing it would cost more than MAX_DRAW_COST (Page.drawCost),
+   * which marks the document overdrawn.
+   */
   private drawWithout(objects: readonly number[], area: Box): { whole: Float32Array; without: Float32Array; width: number; height: number } | null {
+    if (this.drawCost(area) > MAX_DRAW_COST) {
+      this.doc.overdrawn = true;
+      return null;
+    }
     const m = this.m;
     const width = Math.ceil((area.right - area.left) * SHOW_SCALE);
     const height = Math.ceil((area.top - area.bottom) * SHOW_SCALE);
@@ -957,6 +1014,13 @@ const SHOW_SCALE = 4;
 const SHOW_MARGIN = 1;
 /** The most pixels that drawing may take: a bigger box is not drawn. */
 const MAX_SHOW_PIXELS = 1_000_000;
+/**
+ * The most a drawing for Page.shows may cost (Page.drawCost: path segments times the pixel rows they meet), about 5 s
+ * of PDFium's drawing on the gate's box (0.05 microseconds each, both drawings; fix round 4): past it, it is not drawn.
+ */
+const MAX_DRAW_COST = 100_000_000;
+/** What a stroked path's segment costs to draw, by a filled one's: its outline is made first (about 2 to 3 times). */
+const STROKE_WEIGHT = 3;
 /** The most areas drawn for Page.shows kept at once, the oldest let go first. */
 const SHOW_CACHE = 4;
 /** The most places a text object drawn again as it is is looked for after it (LabelReading.twins). */

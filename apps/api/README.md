@@ -531,13 +531,15 @@ and not those in the ink of other glyphs that drawing takes away; a glyph
 drawn with other glyphs of a Type 3 text object is not seen (such a
 glyph's box is only what its font claims), and drawing the copy for this
 check may take 20 s at most before the page is refused as too much to
-check. This proves that paint shows where the glyph is, not that the
+check, as is one drawing whose paths, weighed before it is drawn (segments
+times the pixel rows they meet), would take more than about 5 s. This proves that paint shows where the glyph is, not that the
 letter can be read: a font may draw any shape for a letter. A stroke's mitred corner is taken to reach as far as its
 angle lets (PDFium gives no miter limit); PDFium, drawing the glyph's text
 object alone, must paint 5 % or more of its ink box (a glyph its font draws
 nothing for is not seen); and on a page that draws text as a clip no glyph
 on such a rectangle is seen. A glyph not seen where it is drawn passes only
-when the same glyph drawn again there is seen. An original that cannot be
+when the same glyph drawn again there is seen: the same text, each ink box
+over half of the other, at a font size within a tenth. An original that cannot be
 opened refuses the
 copy too; `ENGINE_VERSION` gained `+layout-2`, so files refused before for
 those rectangles are made again. No label's own text counts
