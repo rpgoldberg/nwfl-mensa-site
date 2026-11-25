@@ -529,7 +529,7 @@ export class Page {
         all += 1;
         // The pixel's centre in page points.
         const [px, py] = [area.left + (x + 0.5) / SHOW_SCALE, area.top - (y + 0.5) / SHOW_SCALE];
-        if (visible === null || !inside(visible, px, py) || mask.some((other) => inside(other, px, py))) continue;
+        if (visible === null || !holdsPoint(visible, px, py) || mask.some((other) => holdsPoint(other, px, py))) continue;
         if ((Math.max(p, q) + 0.05) / (Math.min(p, q) + 0.05) >= 3) changed += 1;
       }
     }
@@ -708,7 +708,7 @@ export class Page {
     const masked = (x: number, y: number): boolean => {
       const [ox, oy] = [bounds.left + (x + 0.5) / scale, bounds.top - (y + 0.5) / scale];
       const [px, py] = [a * ox + c * oy + e, b * ox + d * oy + f];
-      return mask.some((other) => inside(other, px, py));
+      return mask.some((other) => holdsPoint(other, px, py));
     };
     for (let y = y0; y <= y1; y++) {
       for (let x = x0; x <= x1; x++) {
@@ -986,7 +986,7 @@ export function showPixel(box: Box): number {
 }
 
 /** Whether the point lies in the box, its edge included. */
-const inside = (box: Box, x: number, y: number): boolean => x >= box.left && x <= box.right && y >= box.bottom && y <= box.top;
+const holdsPoint = (box: Box, x: number, y: number): boolean => x >= box.left && x <= box.right && y >= box.bottom && y <= box.top;
 
 /** The WCAG relative luminance (0 black to 1 white) of an sRGB colour, each channel 0 to 255. */
 export function luminance(r: number, g: number, b: number): number {
