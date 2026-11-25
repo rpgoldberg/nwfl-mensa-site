@@ -1,0 +1,76 @@
+// The archive search (ARCHIVE-SEARCH, R29): one read. The site calls it for a
+// visitor; nothing else does.
+//
+// The audience is never a field here. The API takes it from the caller's
+// verified token and from nothing in the request: no token reads the public
+// index, a member or an officer reads the members' index, and there is no
+// third one. Each index holds only what its audience is served: a page of the
+// redacted copy of an issue, a news item after the lens. So a hit, its title
+// and its snippet are words that audience can already read.
+//
+// The answer carries no total and does not repeat the query.
+syntax = "proto3";
+
+package nwfl.mensa.v1;
+
+import "nwfl/mensa/v1/common.proto";
+import "nwfl/mensa/v1/content.proto";
+
+service SearchService {
+  // The hits for a query, best first, then newest first; ten a page.
+  // INVALID_ARGUMENT for a query or a page outside the limits below;
+  // RESOURCE_EXHAUSTED when the API is answering as many searches as it will
+  // (ask again shortly); DEADLINE_EXCEEDED when a search ran over its time.
+  rpc Search(SearchRequest) returns (SearchResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+message SearchRequest {
+  // What the visitor typed. After trimming and Unicode NFKC: 2 to 100
+  // characters and at most 8 words. Quotes make a phrase, `or` either side,
+  // a leading hyphen leaves a word out; nothing else is an operator.
+  string query = 1;
+  // 1 to 10; 0 reads as 1.
+  int32 page = 2;
+}
+
+message SearchResponse {
+  // At most ten.
+  repeated SearchHit hits = 1;
+  // A next page exists. Never true on page 10.
+  bool has_more = 2;
+}
+
+message SearchHit {
+  // A page of an issue's PDF, as the caller's audience is served it.
+  message IssuePage {
+    // The file ContentService.ReadFile serves.
+    string file_id = 1;
+    // The issue's title, as the audience is given it.
+    string issue_label = 2;
+    // 1-based.
+    int32 page = 3;
+    // Plain text, never markup. The words found sit between U+E000 and U+E001;
+    // the site escapes the text, then turns only those two into a highlight.
+    string snippet = 4;
+  }
+
+  // A published item: its title, summary and text, as the audience is given them.
+  message NewsItem {
+    // The item's slug, or its id where the audience is not given the slug.
+    string slug = 1;
+    string title = 2;
+    // The day it was published, in the chapter's time zone.
+    Date published_on = 3;
+    // As IssuePage.snippet.
+    string snippet = 4;
+    // So the site can link to where that kind of item is shown.
+    ContentKind kind = 5;
+  }
+
+  oneof hit {
+    IssuePage issue_page = 1;
+    NewsItem news_item = 2;
+  }
+}
