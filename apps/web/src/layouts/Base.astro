@@ -29,12 +29,14 @@ interface Props {
   description: string;
   /** Kept out of search engines (LINKS L4: the leaving page). */
   noindex?: boolean;
+  /** ARCHIVE-SEARCH: the words of the <title> alone, where they say more than the page's name (the breadcrumb keeps `title`). */
+  headTitle?: string | undefined;
   /** Where the Aa controls and Sign in return to; this page's own path by default (the error page: Home). */
   back?: string;
 }
-const { path, title, description, noindex = false, back: backProp } = Astro.props;
+const { path, title, description, noindex = false, headTitle = title, back: backProp } = Astro.props;
 const trail = trailFor(path, title);
-const documentTitle = path === '/' ? SITE_NAME : `${title} | ${SITE_NAME}`;
+const documentTitle = path === '/' ? SITE_NAME : `${headTitle} | ${SITE_NAME}`;
 // A prerendered page is built with the defaults; the server wrapper stamps the
 // reader's settings on its <html> tag when it serves the file.
 const prefs = readPrefs(Astro.isPrerendered ? undefined : Astro.request.headers.get('cookie'));

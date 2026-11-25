@@ -310,6 +310,31 @@ describe('withSitePolicy', () => {
     }
   });
 
+  it('ARCHIVE-SEARCH S4: a search is logged by its path alone, answered or failed, never the words', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const access = () => log.mock.calls.map((c) => { const { ms, ...rest } = unstamped(c[0]); expect(typeof ms).toBe('number'); return rest; });
+    try {
+      const base = await serve((req, res) => {
+        if (req.url?.includes('boom')) throw new RangeError(`could not search ${req.url}`);
+        res.end('results');
+      });
+      expect((await fetch(`${base}/search?q=quokka+picnic&page=2`)).status).toBe(200);
+      // The one access line every request has (logAccess): the path and the status, never the query.
+      await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(1));
+      expect(access()).toEqual([{ level: 'info', msg: 'request', method: 'GET', path: '/search', status: 200 }]);
+      expect(error).not.toHaveBeenCalled();
+      expect((await fetch(`${base}/search?q=quokka+boom`)).status).toBe(500);
+      await vi.waitFor(() => expect(log).toHaveBeenCalledTimes(2));
+      expect(access()[1]).toEqual({ level: 'info', msg: 'request', method: 'GET', path: '/search', status: 500 });
+      expect(error.mock.calls.map((c) => unstamped(c[0]))).toEqual([{ level: 'error', msg: 'request failed', path: '/search', err: 'RangeError' }]);
+      for (const line of [...log.mock.calls, ...error.mock.calls]) expect(String(line[0])).not.toMatch(/quokka|picnic|boom|page=|\?/);
+    } finally {
+      error.mockRestore();
+      log.mockRestore();
+    }
+  });
+
   it('answers 500 for a fault in code a request runs before the handler, and logs it by class only', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

@@ -20,12 +20,15 @@
 // is unchanged till then. Articles the API cannot give a signed-in reader leave
 // the issues listed, with a line saying so in their place and a 503, as Home
 // does for one section; for the public, the page is as it was before articles.
+// ARCHIVE-SEARCH S4: each article carries the id a search result opens it by, item-<slug>, with the slug as
+// the API sent it to this reader (the item's id where a mark changes what they read).
 import { PUBLIC_ONLY } from 'astro:env/server';
 import IssueCard from '../components/IssueCard.astro';
 import ItemFiles from '../components/ItemFiles.astro';
 import CopyNotice from '../components/CopyNotice.astro';
 import PasswordNote from '../components/PasswordNote.astro';
 import SampleNotice from '../components/SampleNotice.astro';
+import TokenRefusedNote from '../components/TokenRefusedNote.astro';
 import Unavailable from '../components/Unavailable.astro';
 import { liveData, siteData } from '../data';
 import { formatDate } from '../data/format';
@@ -37,6 +40,7 @@ import { runtimeDeps } from '../lib/auth/flow';
 import { visibleContent } from '../lib/content';
 import { MEMBERS_RULE } from '../lib/document';
 import { PUBLIC_COPY_ONLY, readerPath } from '../lib/reader';
+import { itemAnchor } from '../lib/search';
 import { page } from '../lib/site';
 
 const p = page('/news');
@@ -64,7 +68,7 @@ const items = news?.items ?? [];
   <p class="lead">Pensa Mensa, our newsletter: {p.description.charAt(0).toLowerCase()}{p.description.slice(1)}</p>
   {lapsed && <p class="notice" role="note">Your sign-in has expired for members-only reading. {signIn ? <a href={signIn}>Sign in again</a> : 'Sign in again'}.</p>}
   {(membersSignIn || (lapsed && signIn)) && <PasswordNote />}
-  {news?.tokenRefused && <p class="notice" role="note">Members-only reading is not available for this sign-in. <a href="/help">Ask for help</a>.</p>}
+  {news?.tokenRefused && <TokenRefusedNote />}
   {!loaded.ok ? <Unavailable what="The list of issues" /> : (
     <>
       {shown.sample && siteData.isSample && <SampleNotice />}
@@ -100,7 +104,7 @@ const items = news?.items ?? [];
         <section class="articles" aria-labelledby="articles-title">
           <h2 id="articles-title">From the newsletter</h2>
           {items.map((a) => (
-            <article class="item" data-source={a.source}>
+            <article class="item" id={itemAnchor(a.slug)} data-source={a.source}>
               <h3>{a.title}</h3>
               {a.membersOnly && !a.teaser && <p class="members-rule">{MEMBERS_RULE}</p>}
               {a.publishedOn && <p class="muted">{formatDate(a.publishedOn)}</p>}

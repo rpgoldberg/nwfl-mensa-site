@@ -10,17 +10,20 @@ import { LINKS } from './stand-in';
 // With the test identity provider configured, forms may lead to it (sign-out).
 const SECURITY_HEADERS = securityHeaders({ formAction: [IDP_ORIGIN] });
 
-function expectSecurityHeaders(res: APIResponse): void {
+function expectSecurityHeaders(res: APIResponse, path?: string): void {
   const headers = res.headers();
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) expect(headers[name.toLowerCase()], name).toBe(value);
+  // ARCHIVE-SEARCH S4: /search sends no Referer at all, so the words never ride on to the next page.
+  const expected = path === '/search' ? { ...SECURITY_HEADERS, 'Referrer-Policy': 'no-referrer' } : SECURITY_HEADERS;
+  for (const [name, value] of Object.entries(expected)) expect(headers[name.toLowerCase()], `${path ?? ''} ${name}`).toBe(value);
 }
 
 test('every page, prerendered or not, carries the security headers and the anonymous cache rule: private, as its bytes differ by cookie (CACHEPREF)', async ({ request }) => {
   for (const path of ALL_PAGES) {
     const res = await request.get(path);
     expect(res.status(), path).toBe(200);
-    expectSecurityHeaders(res);
-    expect(res.headers()['cache-control'], path).toBe('private, max-age=60, stale-while-revalidate=60');
+    expectSecurityHeaders(res, path);
+    // ARCHIVE-SEARCH S4: /search is a visitor's own answer, never stored at all (e2e/search.spec.ts).
+    expect(res.headers()['cache-control'], path).toBe(path === '/search' ? 'private, no-store' : 'private, max-age=60, stale-while-revalidate=60');
     expect(res.headers()['cdn-cache-control'], path).toBe('no-store');
     expect(res.headers()['vary'], path).toBe('Cookie');
   }

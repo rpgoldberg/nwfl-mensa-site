@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ContentKind, ContentService, LinkTargetKind, LinkTargetStatus } from '../../gen/nwfl/mensa/v1/content_pb.js';
 import { EventOccurrenceSchema, EventService, EventVisibility } from '../../gen/nwfl/mensa/v1/event_pb.js';
+import { SearchService } from '../../gen/nwfl/mensa/v1/search_pb.js';
 import { ApiNotFound, ApiTokenRefused, ApiUnavailable, type ApiReads, type Reader, apiSetup, grpcReads, unavailableReads } from './client';
 
 const SERIES = '0b9c1f5e-4c1a-4d55-9a3e-2f7d8e6a1b20';
@@ -564,3 +565,93 @@ export function onlyTheNewsReadsTakeAReader(reads: ApiReads, as: Reader): void {
   // @ts-expect-error getRoster takes no reader
   void reads.getRoster(as);
 }
+
+describe('grpcReads.search (ARCHIVE-SEARCH S4)', () => {
+  const FILE = 'f0000000-0000-4000-8000-0000000000e1';
+  const TOKEN = 'test.member-token.sig~nature+/=';
+  const SECRET = 'zebra crossing';
+  const hit = { hit: { case: 'issuePage' as const, value: { fileId: FILE, issueLabel: 'Pensa Mensa, March 2019', page: 4, snippet: 'a \uE000zebra\uE001' } } };
+
+  it('asks as the public: the query and the page, with no Authorization or Cookie, and hands back the hits and whether there are more', async () => {
+    const asked: unknown[] = [];
+    const { url, seen } = await grpcServer((router) => {
+      router.service(SearchService, { search: (req) => (asked.push({ query: req.query, page: req.page }), { hits: [hit], hasMore: true }) });
+    });
+    const { lines, log } = logs();
+    const got = await grpcReads({ baseUrl: url, timeoutMs: 2000 }, log).search(SECRET, 2);
+    expect(asked).toEqual([{ query: SECRET, page: 2 }]);
+    expect(got).toMatchObject({ kind: 'ok', hasMore: true });
+    expect(got.kind === 'ok' && got.hits.map((h) => h.hit.value)).toMatchObject([{ fileId: FILE, page: 4 }]);
+    expect(seen[0]!.path).toBe('/nwfl.mensa.v1.SearchService/Search');
+    expect(seen[0]!.headers['content-type']).toMatch(/^application\/grpc/);
+    expect(seen[0]!.headers['authorization']).toBeUndefined();
+    expect(seen[0]!.headers['cookie']).toBeUndefined();
+    // The query travels in the message alone: never in the path or a header, and nothing is logged.
+    expect(JSON.stringify(seen)).not.toContain('zebra');
+    expect(lines).toEqual([]);
+  });
+
+  it("sends a signed-in reader's token, and no header for a bearer that is not one b64token", async () => {
+    const { url, seen } = await grpcServer((router) => {
+      router.service(SearchService, { search: () => ({ hits: [], hasMore: false }) });
+    });
+    const reads = grpcReads({ baseUrl: url, timeoutMs: 2000 }, () => {});
+    expect(await reads.search(SECRET, 1, { bearer: TOKEN })).toEqual({ kind: 'ok', hits: [], hasMore: false });
+    await reads.search(SECRET, 1, { bearer: 'not a token\r\nx: y' });
+    expect(seen.map((s) => s.headers['authorization'])).toEqual([`Bearer ${TOKEN}`, undefined]);
+  });
+
+  it('reads INVALID_ARGUMENT as invalid, and the API at its limit or out of time as busy, logging the call and the code and never the query', async () => {
+    const codes: Record<string, Code> = { 'not plain': Code.InvalidArgument, [SECRET]: Code.ResourceExhausted, 'zebra slow': Code.DeadlineExceeded };
+    const { url } = await grpcServer((router) => {
+      router.service(SearchService, {
+        search: (req) => {
+          throw new ConnectError(`refused: ${req.query}`, codes[req.query]!);
+        },
+      });
+    });
+    const { lines, log } = logs();
+    const reads = grpcReads({ baseUrl: url, timeoutMs: 2000 }, log);
+    expect(await reads.search('not plain', 1)).toEqual({ kind: 'invalid' });
+    expect(await reads.search(SECRET, 1)).toEqual({ kind: 'busy' });
+    expect(await reads.search('zebra slow', 1)).toEqual({ kind: 'busy' });
+    expect(lines).toEqual([
+      { level: 'warn', msg: 'api search refused', rpc: 'Search', code: 'invalid_argument' },
+      { level: 'warn', msg: 'api search busy', rpc: 'Search', code: 'resource_exhausted' },
+      { level: 'warn', msg: 'api search busy', rpc: 'Search', code: 'deadline_exceeded' },
+    ]);
+    expect(JSON.stringify(lines)).not.toMatch(/zebra|plain/);
+  });
+
+  it('reads an API that never answers as busy once the timeout has passed', async () => {
+    const { lines, log } = logs();
+    expect(await grpcReads({ baseUrl: await silentServer(), timeoutMs: 150 }, log).search(SECRET, 1)).toEqual({ kind: 'busy' });
+    expect(JSON.stringify(lines)).not.toContain('zebra');
+  });
+
+  it('turns UNAUTHENTICATED with a token into ApiTokenRefused, and any other failure into ApiUnavailable, never logging the query or the token', async () => {
+    const { url } = await grpcServer((router) => {
+      router.service(SearchService, {
+        search: (req) => {
+          throw new ConnectError(`no: ${req.query}`, req.page === 1 ? Code.Unauthenticated : Code.Internal);
+        },
+      });
+    });
+    const { lines, log } = logs();
+    const reads = grpcReads({ baseUrl: url, timeoutMs: 2000 }, log);
+    expect(await reads.search(SECRET, 1, { bearer: TOKEN }).catch((e: unknown) => e)).toBeInstanceOf(ApiTokenRefused);
+    expect(await reads.search(SECRET, 1).catch((e: unknown) => e)).toBeInstanceOf(ApiUnavailable);
+    expect(await reads.search(SECRET, 2, { bearer: TOKEN }).catch((e: unknown) => e)).toBeInstanceOf(ApiUnavailable);
+    expect(lines).toEqual([
+      { level: 'warn', msg: 'api refused the token', rpc: 'Search', code: 'unauthenticated' },
+      { level: 'error', msg: 'api call failed', rpc: 'Search', code: 'unauthenticated' },
+      { level: 'error', msg: 'api call failed', rpc: 'Search', code: 'internal' },
+    ]);
+    expect(JSON.stringify(lines)).not.toMatch(/zebra|member-token/);
+    expect(await grpcReads({ baseUrl: await closedPort(), timeoutMs: 500 }, () => {}).search(SECRET, 1).catch((e: unknown) => e)).toBeInstanceOf(ApiUnavailable);
+  });
+
+  it('is unavailable when the API is set up wrongly', async () => {
+    await expect(unavailableReads().search(SECRET, 1)).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+});

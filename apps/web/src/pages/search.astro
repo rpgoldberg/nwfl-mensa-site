@@ -1,26 +1,90 @@
 ---
-// A plain GET form, so it works with no JavaScript. Results arrive with the
-// archive search (R29); until then the page says so.
+// The archive search (ARCHIVE-SEARCH S4, R29). A plain GET form, so it works with no JavaScript, and a
+// page of results: the count in the title (announced when the page loads) and in a heading, then a
+// numbered list of large links, each to an issue's page in the reader or to a published item, with the
+// words found marked in a few lines of its text. Previous and Next are links.
 //
-// SEARCH CONTRACT (REDACT R2b): when search is built it queries only the API,
-// as the public like every other read, and the API answers from its own
-// per-audience index of that audience's redacted copy. The site never builds an
+// SEARCH CONTRACT (REDACT R2b): the page queries only the API, like every other read, and the API answers
+// from its own per-audience index of that audience's redacted copy. The site never builds an
 // index or a snippet of its own: not from its bundled content, not from pages it
-// rendered, not with a search library or an outside search service.
-// test/search-contract.test.ts holds this page to it.
+// rendered, not with a search library or an outside search service. A signed-in reader's token goes
+// with the search as it goes with /read: auth only picks the token; the API decides the audience.
+// test/search-contract.test.ts holds this page, and src/lib/search.ts which shapes the answer, to it.
+//
+// The words searched for are in the request's own query and nowhere else the site writes: no log line
+// (the site logs paths, never queries), no cookie, and in a result's link only after the #, which no
+// server is sent. The answer is the visitor's alone: private, never stored, never indexed. And no page
+// opened from it is told where the reader came from (Referrer-Policy: no-referrer), so the words never
+// ride on to the next page in a Referer header, on this site or any other.
+//
+// A reader whose sign-in has lapsed is searched for as the public, and told so, with a way to sign in
+// again back to /search alone: the way back never holds the words. The header's Sign in and Aa controls
+// also return to /search alone (Base's back). A reader whose token the API refuses is given the public's
+// answer and told, in /news's words, that members-only reading is not available for this sign-in.
+import { PUBLIC_ONLY } from 'astro:env/server';
+import PasswordNote from '../components/PasswordNote.astro';
+import TokenRefusedNote from '../components/TokenRefusedNote.astro';
 import Base from '../layouts/Base.astro';
+import { liveData } from '../data';
+import { readerFor, signInLink } from '../lib/auth/bearer';
+import { runtimeDeps } from '../lib/auth/flow';
+import { LAPSED_NOTE, searchView, siteVisitorLimit, visitorKey } from '../lib/search';
 import { page } from '../lib/site';
 
+export const prerender = false;
+
 const p = page('/search');
-const q = Astro.url.searchParams.get('q')?.trim() ?? '';
+const auth = runtimeDeps();
+const { reader, lapsed } = readerFor(Astro.locals.session, auth);
+const view = await searchView({ live: liveData(), params: Astro.url.searchParams, reader, lapsed, visitor: visitorKey(Astro.request.headers), limit: siteVisitorLimit(), now: Date.now() });
+
+Astro.response.status = view.status;
+if (view.retryAfter !== undefined) Astro.response.headers.set('Retry-After', String(view.retryAfter));
+// The site policy turns a handler's private into private, no-store (server/policy.mjs).
+Astro.response.headers.set('Cache-Control', 'private');
+Astro.response.headers.set('X-Robots-Tag', 'noindex');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+// Back to /search alone: never the words, which would then ride in the sign-in's return path.
+const signIn = view.lapsed ? signInLink(auth, PUBLIC_ONLY, '/search') : undefined;
+const listed = view.state === 'results' || view.state === 'none';
+const note = !listed && view.message !== undefined;
 ---
-<Base {...p}>
+<Base {...p} headTitle={view.title} back="/search" noindex>
   <h1>{p.title}</h1>
   <p class="lead">{p.description}</p>
   <form class="search-form" role="search" method="get" action="/search">
     <label for="q">Search the newsletter archive</label>
-    <input id="q" name="q" type="search" value={q} autocomplete="off" />
+    <input id="q" name="q" type="search" value={view.query} autocomplete="off" maxlength="100" enterkeyhint="search" aria-describedby={note ? 'search-note' : undefined} />
     <button type="submit">Search</button>
   </form>
-  {q && <p>Searching for “{q}” is not ready yet. The archive search arrives in a later update.</p>}
+  {note && <p class="notice" id="search-note">{view.message}</p>}
+  {view.lapsed && <p class="notice" role="note">{LAPSED_NOTE.lead} {signIn ? <a href={signIn}>Sign in again</a> : 'Sign in again'} {LAPSED_NOTE.rest}</p>}
+  {signIn && <PasswordNote />}
+  {view.tokenRefused && <TokenRefusedNote />}
+  {listed && (
+    <section class="search-results" aria-labelledby="results-title">
+      <h2 id="results-title">{view.heading}</h2>
+      <div data-search-results>
+        {view.hits.length > 0 && (
+          <ol class="hits" start={view.start === 1 ? undefined : view.start}>
+            {view.hits.map((hit) => (
+              <li class="hit">
+                <a class="hit__link" href={hit.href}>{hit.label}</a>
+                {hit.kind === 'item' && <p class="hit__meta muted">{hit.meta}</p>}
+                <p class="hit__snippet" set:html={hit.snippetHtml} />
+                {hit.kind === 'issue' && <p class="pdf-files"><a href={hit.pdf}>{hit.pdfLabel}<span class="visually-hidden"> of {hit.label.replace(/, page \d+$/, '')}</span></a></p>}
+              </li>
+            ))}
+          </ol>
+        )}
+        {view.message && <p class="hits__note">{view.message}</p>}
+      </div>
+      {(view.previous || view.next) && (
+        <nav class="pager" aria-label="More results">
+          {view.previous && <a class="button" href={view.previous} rel="prev">Previous results</a>}
+          {view.next && <a class="button" href={view.next} rel="next">Next results</a>}
+        </nav>
+      )}
+    </section>
+  )}
 </Base>

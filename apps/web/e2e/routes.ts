@@ -40,6 +40,8 @@ export const LIVE: Readonly<Record<string, (c: RouteContext) => string[]>> = {
   // The newsletter's issues, once the issue loader has published one; the bundled sample until then.
   '/news': () => ['/news'],
   '/officers': () => ['/officers'],
+  // ARCHIVE-SEARCH S4: the form, and a search; test/search-contract.test.ts holds what the page may read.
+  '/search': () => ['/search', '/search?q=picnic'],
 };
 
 /**
@@ -98,8 +100,6 @@ export const STATIC: Readonly<Record<string, readonly string[]>> = {
   '/prefs': ['/prefs'],
   '/privacy': ['/privacy'],
   '/robots.txt': ['/robots.txt'],
-  // A placeholder: test/search-contract.test.ts holds what it may read once built (R29).
-  '/search': ['/search', '/search?q=picnic'],
   '/sign-in': ['/sign-in'],
   '/sign-out': ['/sign-out'],
   '/signed-out': ['/signed-out'],
