@@ -11,6 +11,7 @@ import { readConfig } from './config.js';
 import { createPool, describeTarget } from './db/pool.js';
 import { createStructuredLogger } from './platform/logger.js';
 import { logTraceExport, logTraceExportCounts, startTelemetry } from './platform/telemetry.js';
+import { runBackfill } from './search/backfill.js';
 import { startServer } from './server.js';
 import { refuseToStart, startTenantGate, tenantRows } from './tenant.js';
 
@@ -25,6 +26,11 @@ const pool = createPool(process.env, (fields, message) => logger.warn(fields, me
 logger.info({ db_target: describeTarget(), service_version: process.env['SERVICE_VERSION'] ?? 'dev' }, 'starting');
 // Which token clients are on, by kind only (a key named token_* is redacted). With none, every token is refused.
 logger.info({ enabled_clients: auth.clients.map((client) => client.kind), group_prefix: auth.groupPrefix }, 'auth');
+// OFFICER-VERIFY: one line naming the mode, read once here (auth/config.ts OFFICER_VERIFY; default off).
+logger.info(
+  { officer_verify: auth.officerVerify !== null ? 'on' : 'off', chapter_group: auth.officerVerify?.chapterGroup ?? '' },
+  auth.officerVerify !== null ? 'officer powers need member standing' : 'officer powers do not need member standing',
+);
 
 // The chapter this process serves must be the database's one tenant row (CF-ISO-0, tenant.ts). Checked in
 // the background: with the database down the server starts and reports not ready, as before; only a
@@ -45,10 +51,14 @@ const server = await startServer({
   verifier: verifierFrom(auth),
   edgeClientIds: auth.edgeClientIds,
   groupPrefix: auth.groupPrefix,
+  officerVerify: auth.officerVerify,
   tenantGate,
 });
 
 // The redacted PDF copies are made by the worker process (src/worker.ts), as its own database role.
+
+// ARCHIVE-SEARCH S1: the news-item rows no change has written since 0032. In the background; it never throws.
+void runBackfill(pool, logger);
 
 let stopping = false;
 const stop = (signal: string): void => {

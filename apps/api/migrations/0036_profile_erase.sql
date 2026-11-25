@@ -1,4 +1,4 @@
--- 0034_profile_erase.sql: PROFILE-ERASE (Ross, 2026-11-22). Three rules on the sign-up record, which
+-- 0036_profile_erase.sql: PROFILE-ERASE (Ross, 2026-11-22). Three rules on the sign-up record, which
 -- 0028 kept whole in every state with no way to remove it:
 --
 --   REMOVE   The Admin erases a person's sign-up record when they ask (the privacy page's promise).
@@ -21,7 +21,7 @@
 --            whoever makes the change. It stays erased. A person never approved (a rejection, or the
 --            removal of a person still waiting, which rejects their sign-up) keeps what was typed, so
 --            a mistaken rejection can be judged and reopened; the Admin erases it on request.
---            A member removed before 0034 is erased here, once (section 8).
+--            A member removed before 0036 is erased here, once (section 8).
 --   STATS    Each erasure ends by analysing the table again, so pg_stats (which the app role reads)
 --            holds no erased value. The dead row versions, the WAL and the backups keep the values
 --            until vacuum and pg-nwfl's backup retention remove them.
@@ -277,7 +277,7 @@ BEGIN
 END
 $fn$;
 
--- 8. REMOVAL, for a member removed before 0034: erased once, here, audited by the system by the sign-up's id.
+-- 8. REMOVAL, for a member removed before 0036: erased once, here, audited by the system by the sign-up's id.
 INSERT INTO audit_event (actor_kind, action, subject_kind, subject_id, from_state, to_state)
   SELECT 'system', 'erase_profile', 'signup_request', s.id::text, CASE WHEN s.reopened_at IS NOT NULL THEN 'reopened' ELSE s.decision END, 'profile_erased'
     FROM signup_request s JOIN member_account a ON a.sub = s.sub AND a.status = 'removed'

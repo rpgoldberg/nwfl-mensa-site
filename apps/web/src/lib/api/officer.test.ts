@@ -72,13 +72,13 @@ describe('grpcOfficer', () => {
       router.service(ApprovalRuleService, {
         setApprovalRule: (req) => {
           seen.push({ scope: req.scope, rule: req.rule, reason: req.reason, expectedRevision: req.expectedRevision });
-          return { setting: { scope: req.scope, rule: req.rule, setAt: timestampFromDate(NOV_3) }, changed: true };
+          return { setting: { scope: req.scope, rule: req.rule, setAt: timestampFromDate(NOV_3), revision: `rev-${req.reason}` }, changed: true };
         },
       }),
     );
     const api = grpcOfficer({ baseUrl: server.url, timeoutMs: 2000 }, () => {});
-    expect(await api.setApprovalRule(OFFICER, { scope: 'redaction_policy', rule: 'one_approver', reason: 'away', expectedRevision: '' })).toEqual({ changed: true });
-    expect(await api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'back', expectedRevision: '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10' })).toEqual({ changed: true });
+    expect(await api.setApprovalRule(OFFICER, { scope: 'redaction_policy', rule: 'one_approver', reason: 'away', expectedRevision: '' })).toEqual({ changed: true, revision: 'rev-away' });
+    expect(await api.setApprovalRule(OFFICER, { scope: 'content', rule: 'two_person', reason: 'back', expectedRevision: '0b0e7a52-6d5c-4c43-9d55-3f0a3a1c2b10' })).toEqual({ changed: true, revision: 'rev-back' });
     // The revision is always sent, the default's empty one too: present, so the API checks it.
     expect(seen).toEqual([
       { scope: ApprovalScope.REDACTION_POLICY, rule: ApprovalRule.ONE_APPROVER, reason: 'away', expectedRevision: '' },

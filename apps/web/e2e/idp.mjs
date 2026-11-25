@@ -89,6 +89,12 @@ const LOGINS = {
   treasurer: { id: '00000000-0000-4000-8000-0000000000f8', name: 'Treasurer Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer'] },
   // EDITOR E4: an officer in two seats, the Member at Large's and the Secretary's, who picks which one they act for.
   'two-seats': { id: '00000000-0000-4000-8000-0000000000f9', name: 'Rory Placeholder', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-member-at-large', 'nwfl-office-secretary'] },
+  // OFFICER-VERIFY: an officer with no member account, whose tools wait for the membership check (api.mjs).
+  'officer-unverified': { id: '00000000-0000-4000-8000-0000000000fa', name: 'Avery Placeholder', givenName: 'Avery', groups: ['nwfl-users', 'nwfl-officers', 'nwfl-office-treasurer'] },
+  // OFFICER-VERIFY fix round 3: an approved member given an officer power later, whose first name the check never
+  // confirmed (a fresh check is theirs to ask for), and an approved guest member who waits for the Admin's grant.
+  'officer-recheck': { id: '00000000-0000-4000-8000-0000000000fb', name: 'Robbie Placeholder', givenName: 'Robbie', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-secretary'] },
+  'officer-guest': { id: '00000000-0000-4000-8000-0000000000fc', name: 'Gale Placeholder', givenName: 'Gale', groups: ['nwfl-members', 'nwfl-officers'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 

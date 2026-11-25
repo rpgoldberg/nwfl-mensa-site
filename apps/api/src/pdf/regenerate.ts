@@ -67,6 +67,11 @@ export interface RegenerateOptions {
   origin?: string;
   /** Hears a copy made without its links and why (LINKS L3 fix 1, N9), by file and input hash: the worker's log, for officers. */
   warn?: Warn;
+  /**
+   * ARCHIVE-SEARCH S2: indexes the text of a file's copies (search/pages.ts indexFile), once the run that made them is
+   * done. Its failure is heard by `warn` and changes nothing of the run.
+   */
+  index?: (fileId: string) => Promise<unknown>;
 }
 
 interface Made {
@@ -99,6 +104,16 @@ async function currentCopies(db: Query, fileId: string, origin: string): Promise
     if (inputs?.kind === 'copy') targets.set(inputs.hash.toString('hex'), inputs);
   }
   return targets;
+}
+
+/**
+ * The copy one audience is served of a file now, as a read finds it (store.ts inputsFor): its input hash and what the
+ * audience withholds; null when it is served no copy (the original, nothing, no such file). For the search index's
+ * job (ARCHIVE-SEARCH S2, search/pages.ts), which reaches the store only through here.
+ */
+export async function copyInputs(db: Query, fileId: string, audience: string, origin: string = linkOrigin()): Promise<{ hash: Buffer; quotes: readonly string[] } | null> {
+  const inputs = await inputsFor(db, fileId, audience, undefined, origin);
+  return inputs?.kind === 'copy' ? { hash: inputs.hash, quotes: inputs.request.quotes } : null;
 }
 
 /**
@@ -166,6 +181,16 @@ export async function regenerateOne(db: Query, options: RegenerateOptions = {}):
       ]);
       return finished.rows[0]?.done === true;
     });
+    // Outside the claim: the copies are stored and the ledger says who is served which (search_page_put checks it).
+    if (done && options.index !== undefined) {
+      try {
+        await options.index(fileId);
+      } catch (error) {
+        // By name and code only: a message could hold a page's words.
+        const code = (error as { code?: unknown }).code;
+        options.warn?.({ file_id: fileId, error_name: error instanceof Error ? error.name : 'unknown', ...(typeof code === 'string' ? { error_code: code } : {}) }, 'a PDF copy was made but not indexed');
+      }
+    }
     return { fileId, done };
   } catch (error) {
     // The lease ran out and another run holds the file now.
@@ -181,9 +206,13 @@ export async function drain(db: Query, options: RegenerateOptions & { max?: numb
   return runs;
 }
 
-/** Drains the queue every `intervalMs` until stopped, after `before` once. `onError` hears a failed drain; the next one still runs. */
+/**
+ * Drains the queue every `intervalMs` until stopped, after `before` once. `onError` hears a failed drain; the next one
+ * still runs. `after` runs once each drain is over (ARCHIVE-SEARCH S2: a batch of the index's sweep); its failure is
+ * heard the same way.
+ */
 export function startRegenerator(
-  options: RegenerateOptions & { db: Query; intervalMs?: number; onError?: (error: unknown) => void; before?: () => Promise<unknown> },
+  options: RegenerateOptions & { db: Query; intervalMs?: number; onError?: (error: unknown) => void; before?: () => Promise<unknown>; after?: () => Promise<unknown> },
 ): { stop(): Promise<void> } {
   const interval = options.intervalMs ?? 5_000;
   let stopped = false;
@@ -198,10 +227,13 @@ export function startRegenerator(
   function tick(): void {
     const before = first;
     first = undefined;
-    current = (before === undefined ? Promise.resolve() : before().then(() => undefined, (error: unknown) => options.onError?.(error))).then(() => drain(options.db, options)).then(
-      () => undefined,
-      (error: unknown) => options.onError?.(error),
-    );
+    current = (before === undefined ? Promise.resolve() : before().then(() => undefined, (error: unknown) => options.onError?.(error)))
+      .then(() => drain(options.db, options))
+      .then(() => options.after?.())
+      .then(
+        () => undefined,
+        (error: unknown) => options.onError?.(error),
+      );
     void current.then(() => {
       if (!stopped) schedule();
     });

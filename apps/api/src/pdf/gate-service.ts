@@ -17,10 +17,17 @@
 // copy checked; a pass also carries the bytes the child checked, its own
 // writing of the copy (fix round 3, M1), and the worker stores only those,
 // on a pass naming the copy's hash.
+//
+// ARCHIVE-SEARCH S2: a request of kind "text" (text-protocol.ts) is answered
+// with the text of the copy's pages, for the search index: the same hash rule
+// before any child reads it, the same capped child (gate-text.ts), the same
+// "mismatch" for a child that names other bytes, "unfinished" for one that
+// gives no text. It reads a copy the worker has stored; it changes none.
 // ============================================================================
-import { GATE_REQUEST_MAGIC, MAX_GATE_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, decodeGateRequest, encodeGateReply, sha256Hex } from './engine-protocol.js';
-import { GATE_CHILD, isolatedGate } from './gate-isolated.js';
+import { GATE_REQUEST_MAGIC, type GateRequest, MAX_GATE_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, decodeGateRequest, encodeGateReply, sha256Hex } from './engine-protocol.js';
+import { GATE_CHILD, type IsolatedGateOptions, isolatedGate, isolatedText } from './gate-isolated.js';
 import { linkRequestOf } from './link-annots.js';
+import { type TextRequest, decodeTextRequest, encodeTextReply, isTextFrame } from './text-protocol.js';
 import { type MainOptions, type ServeOptions, type Sidecar, type SidecarSpec, prepareSidecar, serveFrames, startPrepared, wholeArgument } from './sidecar.js';
 
 export const GATE_SOCKET_DIR = '/run/pdf-gate';
@@ -40,22 +47,38 @@ export interface GateSidecarOptions extends ServeOptions {
 
 /** The gate sidecar: a verdict per connection, each from a capped child of its own. */
 export function startGateSidecar(options: GateSidecarOptions): Promise<Sidecar> {
-  return serveFrames(options, {
+  /** Each child's limits: a check's and a text reading's are the same. */
+  const child = (signal: AbortSignal): IsolatedGateOptions => ({
+    module: options.module ?? GATE_CHILD,
+    signal,
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+    ...(options.maxRssBytes === undefined ? {} : { maxRssBytes: options.maxRssBytes }),
+    ...(options.nodeFlags === undefined ? {} : { nodeFlags: options.nodeFlags }),
+    permission: options.childPermission !== false,
+  });
+  /** A text request's answer (ARCHIVE-SEARCH S2): the pages a child of its own read, or the code that says why none. */
+  const text = async (request: TextRequest, signal: AbortSignal): Promise<Buffer> => {
+    const sha256 = sha256Hex(request.copy);
+    if (sha256 !== request.sha256) return encodeTextReply({ sha256, code: 'mismatch' });
+    const outcome = await isolatedText(child(signal))(request);
+    if (outcome.sha256 === null) {
+      options.log(`a text reading was unfinished (${outcome.cause ?? 'crash'})`);
+      return encodeTextReply({ sha256, code: 'unfinished' });
+    }
+    if (outcome.sha256 !== sha256) return encodeTextReply({ sha256, code: 'mismatch' });
+    return encodeTextReply(outcome);
+  };
+  return serveFrames<{ check: GateRequest } | { text: TextRequest }>(options, {
     magic: GATE_REQUEST_MAGIC,
     maxHeader: MAX_REQUEST_HEADER_BYTES,
     maxBody: MAX_GATE_BODY_BYTES,
-    decode: decodeGateRequest,
-    run: async (request, signal) => {
+    decode: (frame) => (isTextFrame(frame) ? { text: decodeTextRequest(frame) } : { check: decodeGateRequest(frame) }),
+    run: async (message, signal) => {
+      if ('text' in message) return text(message.text, signal);
+      const request = message.check;
       const sha256 = sha256Hex(request.copy);
       if (sha256 !== request.sha256 || sha256Hex(request.original) !== request.originalSha256) return encodeGateReply({ verdict: { pass: false, code: 'mismatch' }, sha256 });
-      const outcome = await isolatedGate({
-        module: options.module ?? GATE_CHILD,
-        signal,
-        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-        ...(options.maxRssBytes === undefined ? {} : { maxRssBytes: options.maxRssBytes }),
-        ...(options.nodeFlags === undefined ? {} : { nodeFlags: options.nodeFlags }),
-        permission: options.childPermission !== false,
-      })({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image, ...linkRequestOf(request) });
+      const outcome = await isolatedGate(child(signal))({ copy: request.copy, original: request.original, quotes: request.quotes, image: request.image, ...linkRequestOf(request) });
       if (outcome.cause !== undefined) options.log(`a check was unfinished (${outcome.cause})`);
       if (outcome.sha256 !== null && outcome.sha256 !== sha256) return encodeGateReply({ verdict: { pass: false, code: 'mismatch' }, sha256 });
       // A pass carries the bytes the child checked, its own writing of the copy (M1): the worker stores only those.

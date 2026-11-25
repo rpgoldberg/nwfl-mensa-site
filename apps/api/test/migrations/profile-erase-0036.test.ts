@@ -1,4 +1,4 @@
-// PROFILE-ERASE (0034), exercised as the APPLICATION role and as the owner.
+// PROFILE-ERASE (0036), exercised as the APPLICATION role and as the owner.
 //   REMOVE   signup_request_erase, the Admin's alone, blanks the display name, the email, the two names
 //            and the number of every decided sign-up of a person: approved, rejected, reopened, and one
 //            whose account is already removed. The date and the decision stay. No other write erases a
@@ -11,7 +11,7 @@
 //   REMOVAL  a member's account that becomes removed loses the profile (first name, last name, number)
 //            on every decided sign-up of that person, a reopened earlier one included, in the same
 //            statement, and it stays erased. A rejection, or the removal of a person still waiting,
-//            keeps what was typed. A member removed before 0034 is erased by 0034 itself.
+//            keeps what was typed. A member removed before 0036 is erased by 0036 itself.
 //   STATS    after an erasure the table is analysed again, so pg_stats, which the app role reads, holds
 //            no erased value.
 // Every subject and value here is made up.
@@ -26,7 +26,7 @@ const INSUFFICIENT_PRIVILEGE = '42501';
 const INVALID_PARAMETER = '22023';
 const NO_DATA_FOUND = 'P0002';
 const UNIQUE_VIOLATION = '23505';
-/** The three fixed reasons for a correction, as stored (0034). */
+/** The three fixed reasons for a correction, as stored (0036). */
 const REASONS = ['typed_wrong', 'card_differs', 'new_number'];
 const NO_PROFILE = { first_name: null, last_name: null, membership_number: null };
 
@@ -42,7 +42,7 @@ const NOT_ADMIN: [string, string[]][] = [
 ];
 const PII = { display_name: null, email: null, first_name: null, last_name: null, membership_number: null };
 
-describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
+describe.skipIf(!live)('schema after PROFILE-ERASE (0036)', () => {
   let db: string;
   let app: pg.Client;
   let owner: pg.Client;
@@ -104,7 +104,7 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
   };
 
   beforeAll(async () => {
-    db = await freshDatabase('nwfl_erase0034');
+    db = await freshDatabase('nwfl_erase0036');
     const run = await migrate(db);
     if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
     app = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, db) });
@@ -615,7 +615,7 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
     };
 
     beforeAll(async () => {
-      statsDb = await freshDatabase('nwfl_erase0034_stats');
+      statsDb = await freshDatabase('nwfl_erase0036_stats');
       const run = await migrate(statsDb);
       if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
       a = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, statsDb) });
@@ -649,7 +649,7 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
     });
   });
 
-  describe('BACKFILL: a member removed before 0034 is erased by 0034 (builder Q5)', () => {
+  describe('BACKFILL: a member removed before 0036 is erased by 0036 (builder Q5)', () => {
     let old: string;
 
     afterAll(async () => {
@@ -660,10 +660,10 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
     });
 
     it('erases the profile on every decided sign-up of a removed member, and nothing else, of no one else', async () => {
-      old = await freshDatabase('nwfl_erase0034_pre');
+      old = await freshDatabase('nwfl_erase0036_pre');
       const dir = `/tmp/${old}-pre`;
-      // 0034 and every later migration left out, so the copy is the schema just before 0034.
-      await dockerExec(['sh', '-c', `rm -rf ${dir} && mkdir -p ${dir} && cp /repo/migrations/*.sql ${dir}/ && for f in ${dir}/*.sql; do n=$(basename "$f"); n=\${n%%_*}; if [ "$n" -ge 34 ]; then rm "$f"; fi; done`]);
+      // 0036 and every later migration left out, so the copy is the schema just before 0036.
+      await dockerExec(['sh', '-c', `rm -rf ${dir} && mkdir -p ${dir} && cp /repo/migrations/*.sql ${dir}/ && for f in ${dir}/*.sql; do n=$(basename "$f"); n=\${n%%_*}; if [ "$n" -ge 36 ]; then rm "$f"; fi; done`]);
       const first = await migrate(old, dir);
       expect(first.code, first.stderr).toBe(0);
       const pre = new pgLib.Client({ connectionString: urlFor(APP, APP_PW, old) });
@@ -701,7 +701,7 @@ describe.skipIf(!live)('schema after PROFILE-ERASE (0034)', () => {
         await put('rejected', 'b-rejected', '6100004');
         await decideOld('rejected', 'rejected');
         await removeOld('b-rejected');
-        // Before 0034 the removed member's profile is still held.
+        // Before 0036 the removed member's profile is still held.
         expect((await pre.query(`SELECT count(*)::int AS n FROM signup_request WHERE membership_number IN ('6100001', '6100002')`)).rows[0]).toEqual({ n: 2 });
       } finally {
         await pre.end();

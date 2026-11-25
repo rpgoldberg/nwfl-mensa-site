@@ -17,6 +17,14 @@
 // refusal is DecisionRefused) and corrects a wrong number with a reason (CorrectionRefused).
 // Anything else is ApiUnavailable. Each failure is logged by call and code only: never the API's
 // message, the token, a name or the membership number (D6).
+//
+// OFFICER-VERIFY: GetMyAccount also says whether the person's officer tools are open, wait for their
+// membership check, or are not theirs (getMyStanding, for /account and the officer area's gate), and an
+// account and a pending sign-up carry the reported local group: a chapter member, a guest, or a guest
+// in a group the site does not know. getSignupDecision reads one sign-up's decision for the approvers'
+// banner; on any failure at all it answers nothing, so no banner is shown. Fix round 3: for an approved
+// account whose tools wait, GetMyAccount's officer_check says what opens them (their details again for a
+// fresh check, a check running, or the Admin's grant); a value the site does not know is left out.
 import { PUBLIC_ONLY } from 'astro:env/server';
 import { timestampDate } from '@bufbuild/protobuf/wkt';
 import { Code, ConnectError, createClient } from '@connectrpc/connect';
@@ -30,8 +38,12 @@ import {
   AccountRoute,
   CorrectionReason,
   type EarlierClaim as EarlierClaimMessage,
+  HandApproval,
+  LocalGroupStanding,
   MemberStatus,
   MembershipService,
+  OfficerCheck,
+  OfficerTools,
   type RejectedSignup as RejectedSignupMessage,
   SignupDecision,
   type SignupRecord as SignupRecordMessage,
@@ -45,6 +57,16 @@ import { type ApiConfig, ApiUnavailable, READ_MAX_BYTES, type Reader, apiSetup, 
 export type Standing = 'pending' | 'member' | 'affiliate' | 'lapsed' | 'removed';
 export type Route = 'invite' | 'signup' | 'admin_grant';
 export type Check = 'unchecked' | 'verified_local' | 'verified_other_group' | 'not_found' | 'error' | 'email_mismatch' | 'duplicate_claim';
+/** OFFICER-VERIFY: what the reported local group makes the person; none reported is left out. */
+export type LocalGroup = 'chapter' | 'guest' | 'guest_unlisted';
+/** OFFICER-VERIFY (switched on): what an approver may do with a sign-up by hand, as the API decides and enforces it. */
+export type HandApprovalState = 'open' | 'as_guest' | 'needs_check';
+/** OFFICER-VERIFY: the person's officer tools. */
+export type OfficerToolsState = 'open' | 'awaiting_check' | 'none';
+/** OFFICER-VERIFY (fix round 3): what opens the officer tools of an approved account while they wait. */
+export type OfficerCheckState = 'confirm_details' | 'running' | 'not_confirmed' | 'needs_grant' | 'awaiting_approver';
+/** GetSignupRequest: where one sign-up stands. */
+export type Decision = 'pending' | 'approved' | 'rejected' | 'reopened';
 
 /** PROFILE-ID: what a sign-up typed, as the API sends it to the approvers; a value not held is left out. */
 export interface Typed {
@@ -67,6 +89,8 @@ export interface Profile {
   firstName: string;
   lastName: string;
   membershipNumber: string;
+  /** OFFICER-VERIFY: the local group the membership check reported, when it did. */
+  localGroup?: string;
 }
 
 /** The person's own account; verifiedOn is the day it was last checked, YYYY-MM-DD. */
@@ -74,8 +98,18 @@ export interface MyAccount {
   status: Standing;
   route: Route;
   verifiedOn?: string;
+  /** OFFICER-VERIFY: a chapter member or a guest, when a local group was reported. */
+  localGroup?: LocalGroup;
   /** PROFILE-ID: for an approved member. */
   profile?: Profile;
+}
+
+/** OFFICER-VERIFY: the person's account, if any, and their officer tools. */
+export interface MyStanding {
+  account?: MyAccount;
+  officerTools: OfficerToolsState;
+  /** Fix round 3: for an approved account whose tools wait, what opens them, when the API says. */
+  officerCheck?: OfficerCheckState;
 }
 
 /** A pending sign-up as an approver sees it, with what it typed (PROFILE-ID). */
@@ -89,6 +123,15 @@ export interface PendingSignup extends Typed {
   createdAt?: Date;
   /** VET: for a duplicate claim, the earlier sign-up the verifier named, if any. */
   earlierClaim?: EarlierClaim;
+  /** OFFICER-VERIFY: whether the check confirmed the typed first name, when it said. */
+  firstNameMatched?: boolean;
+  /** OFFICER-VERIFY: the reported local group and what it makes the person, when one was reported. */
+  localGroup?: string;
+  localGroupStanding?: LocalGroup;
+  /** OFFICER-VERIFY: what an approver may do by hand; absent while switched off (the rule as before). */
+  handApproval?: HandApprovalState;
+  /** Ruling 3: not a first sign-up but an approved member's fresh check, held for an approver (an email mismatch). */
+  freshCheck?: true;
 }
 
 /** REOPEN: a rejected sign-up that can be reopened, as the Admin or the Membership Officer sees it. */
@@ -101,14 +144,15 @@ export interface RejectedSignup extends Typed {
   rejectedAt?: Date;
 }
 
-export type Decision = 'approved' | 'rejected' | 'reopened';
+/** PROFILE-ERASE: a decided sign-up's decision; a record is never pending. */
+export type Decided = Exclude<Decision, 'pending'>;
 
 /** PROFILE-ERASE: a decided sign-up as the Admin sees it; status is the account's standing now, if there is one. */
 export interface SignupRecord extends Typed {
   requestId: string;
   displayName: string;
   email: string;
-  decision: Decision;
+  decision: Decided;
   decidedAt?: Date;
   status?: Standing;
 }
@@ -159,6 +203,10 @@ export class CorrectionRefused extends Error {
 export interface MembershipApi {
   /** Undefined: the person has no account yet. */
   getMyAccount(as: Reader): Promise<MyAccount | undefined>;
+  /** OFFICER-VERIFY: the account, if any, and the officer tools, in one call. */
+  getMyStanding(as: Reader): Promise<MyStanding>;
+  /** One sign-up's decision, for the approvers; undefined on any failure (no banner). Never throws. */
+  getSignupDecision(as: Reader, requestId: string): Promise<Decision | undefined>;
   submitSignup(as: Reader, signup: { firstName: string; lastName: string; membershipNumber: string }): Promise<void>;
   /** PROFILE-ID: an approved member's two names; never the number. */
   updateMyProfile(as: Reader, names: { firstName: string; lastName: string }): Promise<void>;
@@ -202,7 +250,32 @@ const CHECK: Record<Check, Verification> = {
   duplicate_claim: Verification.DUPLICATE_CLAIM,
 };
 
-const DECISION: Record<Decision, SignupDecision> = { approved: SignupDecision.APPROVED, rejected: SignupDecision.REJECTED, reopened: SignupDecision.REOPENED };
+const LOCAL_GROUP: Record<LocalGroup, LocalGroupStanding> = {
+  chapter: LocalGroupStanding.CHAPTER,
+  guest: LocalGroupStanding.GUEST,
+  guest_unlisted: LocalGroupStanding.GUEST_UNLISTED,
+};
+const HAND_APPROVAL: Record<HandApprovalState, HandApproval> = { open: HandApproval.OPEN, as_guest: HandApproval.AS_GUEST, needs_check: HandApproval.NEEDS_CHECK };
+const TOOLS: Record<OfficerToolsState, OfficerTools> = { none: OfficerTools.UNSPECIFIED, open: OfficerTools.OPEN, awaiting_check: OfficerTools.AWAITING_CHECK };
+/** Fix round 3. Read leniently: a value a newer API adds is no hint, never a page that cannot load. */
+const OFFICER_CHECK: Partial<Record<OfficerCheck, OfficerCheckState>> = {
+  [OfficerCheck.CONFIRM_DETAILS]: 'confirm_details',
+  [OfficerCheck.RUNNING]: 'running',
+  [OfficerCheck.NOT_CONFIRMED]: 'not_confirmed',
+  [OfficerCheck.NEEDS_GRANT]: 'needs_grant',
+  [OfficerCheck.AWAITING_APPROVER]: 'awaiting_approver',
+};
+const DECISION: Record<Decision, SignupDecision> = {
+  pending: SignupDecision.PENDING,
+  approved: SignupDecision.APPROVED,
+  rejected: SignupDecision.REJECTED,
+  reopened: SignupDecision.REOPENED,
+};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** A reported local group's standing, left out when none was reported. */
+const localGroupOf = (standing: LocalGroupStanding) => (standing === LocalGroupStanding.UNSPECIFIED ? undefined : nameOf(LOCAL_GROUP, standing));
+const DECIDED: Record<Decided, SignupDecision> = { approved: SignupDecision.APPROVED, rejected: SignupDecision.REJECTED, reopened: SignupDecision.REOPENED };
 
 /** The name for a wire value; an unset or unknown one is an answer the site cannot read. */
 function nameOf<K extends string, V>(table: Record<K, V>, value: V): K {
@@ -249,6 +322,7 @@ function typedOf(message: Pick<EarlierClaimMessage, 'firstName' | 'lastName' | '
 }
 
 function pendingOf(request: SignupRequest): PendingSignup {
+  const standing = localGroupOf(request.localGroupStanding);
   return {
     requestId: request.requestId,
     displayName: request.displayName,
@@ -258,6 +332,11 @@ function pendingOf(request: SignupRequest): PendingSignup {
     ...typedOf(request),
     ...day(request.verifiedOn),
     ...(request.createdAt ? { createdAt: timestampDate(request.createdAt) } : {}),
+    ...(request.firstNameMatched !== undefined ? { firstNameMatched: request.firstNameMatched } : {}),
+    ...(request.localGroup !== '' ? { localGroup: request.localGroup } : {}),
+    ...(standing !== undefined ? { localGroupStanding: standing } : {}),
+    ...(request.handApproval !== HandApproval.UNSPECIFIED ? { handApproval: nameOf(HAND_APPROVAL, request.handApproval) } : {}),
+    ...(request.freshCheck ? { freshCheck: true as const } : {}),
     ...(request.earlierClaim
       ? {
           earlierClaim: {
@@ -289,7 +368,7 @@ function recordOf(record: SignupRecordMessage): SignupRecord {
     displayName: record.displayName,
     email: record.email,
     ...typedOf(record),
-    decision: nameOf(DECISION, record.decision),
+    decision: nameOf(DECIDED, record.decision),
     ...(record.decidedAt ? { decidedAt: timestampDate(record.decidedAt) } : {}),
     // Unset: the person has no account.
     ...(record.accountStatus !== MemberStatus.UNSPECIFIED ? { status: nameOf(STANDING, record.accountStatus) } : {}),
@@ -299,6 +378,7 @@ function recordOf(record: SignupRecordMessage): SignupRecord {
 const REFUSED_MSG: Record<string, string> = {
   SubmitSignup: 'api refused the sign-up',
   UpdateMyProfile: 'api refused the profile change',
+  GetSignupRequest: 'api gave no sign-up for the banner',
   CorrectMembershipNumber: 'api refused the correction',
 };
 
@@ -345,18 +425,49 @@ export function grpcMembership(config: ApiConfig, log: (line: string) => void): 
     return reason === undefined ? undefined : new DecisionRefused(reason);
   };
 
-  return {
-    getMyAccount: (as) =>
-      call('GetMyAccount', as, async (headers) => {
-        const { account, profile } = await membership.getMyAccount({}, { headers });
-        if (account === undefined) return undefined;
-        return {
+  const getMyStanding = (as: Reader): Promise<MyStanding> =>
+    call('GetMyAccount', as, async (headers) => {
+      const { account, profile, officerTools, officerCheck } = await membership.getMyAccount({}, { headers });
+      const tools = nameOf(TOOLS, officerTools);
+      if (account === undefined) return { officerTools: tools };
+      const check = OFFICER_CHECK[officerCheck];
+      const group = localGroupOf(account.localGroupStanding);
+      return {
+        account: {
           status: nameOf(STANDING, account.status),
           route: nameOf(ROUTE, account.route),
           ...day(account.verifiedOn),
-          ...(profile ? { profile: { firstName: profile.firstName, lastName: profile.lastName, membershipNumber: profile.membershipNumber } } : {}),
-        };
-      }),
+          ...(group !== undefined ? { localGroup: group } : {}),
+          ...(profile
+            ? {
+                profile: {
+                  firstName: profile.firstName,
+                  lastName: profile.lastName,
+                  membershipNumber: profile.membershipNumber,
+                  ...(profile.localGroup !== '' ? { localGroup: profile.localGroup } : {}),
+                },
+              }
+            : {}),
+        },
+        officerTools: tools,
+        ...(check !== undefined ? { officerCheck: check } : {}),
+      };
+    });
+
+  return {
+    getMyAccount: async (as) => (await getMyStanding(as)).account,
+    getMyStanding,
+    getSignupDecision: async (as, requestId) => {
+      if (!UUID.test(requestId)) return undefined;
+      try {
+        // A sign-up gone or not theirs is an answer, logged as a refusal, not a failure.
+        const { decision } = await call('GetSignupRequest', as, (headers) => membership.getSignupRequest({ requestId }, { headers }), decisionRefused);
+        return nameOf(DECISION, decision);
+      } catch {
+        // Gone, not theirs, unreadable or the API down: no banner (each failure is logged by call() by code).
+        return undefined;
+      }
+    },
     updateMyProfile: (as, names) =>
       call(
         'UpdateMyProfile',
@@ -432,6 +543,8 @@ export function unavailableMembership(): MembershipApi {
   const fail = (rpc: string) => () => Promise.reject(new ApiUnavailable(rpc));
   return {
     getMyAccount: fail('GetMyAccount'),
+    getMyStanding: fail('GetMyAccount'),
+    getSignupDecision: () => Promise.resolve(undefined),
     submitSignup: fail('SubmitSignup'),
     updateMyProfile: fail('UpdateMyProfile'),
     listSignupRequests: fail('ListSignupRequests'),

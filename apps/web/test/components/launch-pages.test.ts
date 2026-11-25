@@ -43,9 +43,9 @@ describe('/privacy', () => {
     expect(text).not.toMatch(/draft/i);
   });
 
-  it('lists what a sign-up stores: the columns of signup_request and member_account (migrations 0005 to 0034)', () => {
+  it('lists what a sign-up stores: the columns of signup_request and member_account (migrations 0005 to 0036)', () => {
     for (const words of ['first name and last name', 'Mensa membership number', 'name and email address on your sign-in', 'date you signed up', 'who decided', 'result of the membership check', 'last confirmed']) expect(text, words).toContain(words);
-    const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql', '0034_profile_erase.sql'].map((f) => readFileSync(`../api/migrations/${f}`, 'utf8')).join('\n');
+    const schema = ['0005_membership.sql', '0007_a2_fix.sql', '0009_membership_fix.sql', '0026_signup_reopen.sql', '0027_signup_vetting.sql', '0028_member_profile.sql', '0036_profile_erase.sql'].map((f) => readFileSync(`../api/migrations/${f}`, 'utf8')).join('\n');
     for (const column of ['first_name', 'last_name', 'membership_number', 'display_name', 'email', 'created_at', 'decided_by_sub', 'decided_at', 'verification', 'verified_on']) expect(schema, column).toMatch(new RegExp(`\\b${column}\\b`));
     // What the page says we do not keep has no column anywhere in the schema.
     expect(text).toContain('We do not keep your address, phone number or birthday.');
@@ -100,33 +100,33 @@ describe('/privacy', () => {
   // reopened earlier one included. A person removed while still waiting is rejected and keeps what was typed;
   // the Admin's erasure on request covers that. The API suite (apps/api test/membership/profile-erase.test.ts)
   // holds this same sentence to the database's outcome.
-  it('says a member\'s removal erases the names and the number at once: migration 0034\'s trigger, on every decided sign-up of that member, in the same statement', () => {
+  it('says a member\'s removal erases the names and the number at once: migration 0036\'s trigger, on every decided sign-up of that member, in the same statement', () => {
     expect(text).toContain("If an officer removes a member's account, we erase their first name, last name and membership number.");
     expect(text).not.toContain('If an officer removes your account');
-    const m0034 = readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8');
-    expect(m0034).toMatch(
+    const m0036 = readFileSync('../api/migrations/0036_profile_erase.sql', 'utf8');
+    expect(m0036).toMatch(
       /CREATE FUNCTION signup_request_erase_profile\(p_sub text\)[\s\S]*?a\.status = 'removed'[\s\S]*?s\.decision = 'approved'[\s\S]*?UPDATE signup_request s SET first_name = NULL, last_name = NULL, membership_number = NULL\s+WHERE s\.sub = p_sub AND s\.decision <> 'pending'/,
     );
-    expect(m0034).toMatch(/CREATE TRIGGER member_account_removed_erases_profile AFTER INSERT OR UPDATE ON member_account\s+FOR EACH ROW WHEN \(NEW\.status = 'removed'\)/);
-    expect(m0034).toMatch(/CREATE FUNCTION member_account_removed_erases_profile\(\)[\s\S]*?signup_request_erase_profile\(NEW\.sub\)/);
+    expect(m0036).toMatch(/CREATE TRIGGER member_account_removed_erases_profile AFTER INSERT OR UPDATE ON member_account\s+FOR EACH ROW WHEN \(NEW\.status = 'removed'\)/);
+    expect(m0036).toMatch(/CREATE FUNCTION member_account_removed_erases_profile\(\)[\s\S]*?signup_request_erase_profile\(NEW\.sub\)/);
     // And it stays erased: the sign-up's own trigger refuses putting it back.
-    expect(m0034).toContain("a removed account''s profile stays erased");
+    expect(m0036).toContain("a removed account''s profile stays erased");
     // The officer's removal is that status change (api/src/membership/service.ts RemoveMember).
     expect(readFileSync('../api/src/membership/service.ts', 'utf8')).toContain("UPDATE member_account SET status = 'removed', removed_at = now(), updated_at = now() WHERE sub = $1");
   });
 
   it('erases no more than that at a removal: the sign-in\'s name and email wait for the person to ask', () => {
     // The removal's erasure touches the three profile columns only.
-    const erase = /CREATE FUNCTION signup_request_erase_profile\([\s\S]*?\$fn\$;/.exec(readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8'))?.[0] ?? '';
+    const erase = /CREATE FUNCTION signup_request_erase_profile\([\s\S]*?\$fn\$;/.exec(readFileSync('../api/migrations/0036_profile_erase.sql', 'utf8'))?.[0] ?? '';
     expect(erase).toContain('UPDATE signup_request s SET');
     for (const column of ['display_name', 'email', 'created_at', 'decision', 'decided_at']) expect(erase, column).not.toMatch(new RegExp(`\\b${column}\\s*=\\s*NULL`));
   });
 
-  it('says the Admin erases the rest on request, and what is then left: migration 0034\'s signup_request_erase, which only the Admin may call', () => {
+  it('says the Admin erases the rest on request, and what is then left: migration 0036\'s signup_request_erase, which only the Admin may call', () => {
     expect(text).toContain('If you ask us to remove your record, the Admin also erases your name and email, and your access ends. The dates and decisions stay.');
     expect(text).not.toContain('we remove it by hand');
-    const m0034 = readFileSync('../api/migrations/0034_profile_erase.sql', 'utf8');
-    const erase = /CREATE FUNCTION signup_request_erase\([\s\S]*?\$fn\$;/.exec(m0034)?.[0] ?? '';
+    const m0036 = readFileSync('../api/migrations/0036_profile_erase.sql', 'utf8');
+    const erase = /CREATE FUNCTION signup_request_erase\([\s\S]*?\$fn\$;/.exec(m0036)?.[0] ?? '';
     // Only the Admin, by the verified token's groups; every name, the number and the email, and nothing else.
     expect(erase).toContain("NOT coalesce('nwfl-admin' = ANY (p_groups), false)");
     expect(erase).toContain('UPDATE signup_request s SET display_name = NULL, email = NULL, first_name = NULL, last_name = NULL, membership_number = NULL,\n           erased_at = now(), erased_by_sub = p_sub');
@@ -136,7 +136,7 @@ describe('/privacy', () => {
     // The dates and the decision stay: the erasure sets no other column, and an erased row holds none of the five, by a CHECK.
     const set = /UPDATE signup_request s SET([\s\S]*?)WHERE/.exec(erase)?.[1] ?? 'created_at';
     for (const column of ['created_at', 'decided_at', 'decision']) expect(set, column).not.toMatch(new RegExp(`\\b${column}\\b`));
-    expect(m0034).toContain('CHECK (erased_at IS NULL OR num_nonnulls(display_name, email, first_name, last_name, membership_number) = 0)');
+    expect(m0036).toContain('CHECK (erased_at IS NULL OR num_nonnulls(display_name, email, first_name, last_name, membership_number) = 0)');
     // The API's call is the Admin's alone, and the Admin's page is what makes it.
     const service = readFileSync('../api/src/membership/service.ts', 'utf8');
     expect(/eraseSignup: async \(request, ctx\) => \{\s+const caller = callerIn\(ctx\);\s+requireAdmin\(caller\);/.test(service)).toBe(true);

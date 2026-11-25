@@ -133,13 +133,13 @@ function byPosition(items: readonly Item[]): string {
     .join('\n');
 }
 
-type TextContent = Awaited<ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['getTextContent']>>;
+export type TextContent = Awaited<ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['getTextContent']>>;
 
 /**
  * Why page `n` is no copy: a quote in its text, in the order it is drawn or by position, or (LIGATURE, unreadable.ts)
  * a glyph pdf.js reads as no text (U+FFFD, private use) where, read as up to three letters, it could finish one.
  */
-function spells(content: TextContent, quotes: readonly string[], n: number): string | null {
+export function spells(content: TextContent, quotes: readonly string[], n: number): string | null {
   const items = content.items.flatMap((item): Item[] =>
     'str' in item ? [{ str: item.str, x: item.transform[4] as number, y: item.transform[5] as number, width: item.width, height: item.height, eol: item.hasEOL }] : [],
   );

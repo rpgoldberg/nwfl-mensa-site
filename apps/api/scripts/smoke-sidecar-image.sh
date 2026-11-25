@@ -23,6 +23,9 @@
 #      a real PDF with PDF_ENGINE_SOCKET and PDF_GATE_SOCKET (the gate re-run
 #      in the gate sidecar), and the gate sidecar refuses a marked copy: the
 #      real children, each unable to start a process (prlimit, no-fork.ts);
+#      and (ARCHIVE-SEARCH S2) the gate sidecar answers the worker the text of
+#      that copy's pages, without the withheld passage, and no text at all for
+#      a copy that still holds it;
 #   5. a stranger, uid 10005 without the group, is refused at both sockets;
 #   6. SIGTERM stops each sidecar with exit 0;
 #   7. node is non-dumpable (0711, fix round 3, S6): a process of the same uid
@@ -41,7 +44,8 @@ engine=
 gate=
 ENGINE_SOCK=/run/pdf-engine/engine.sock
 GATE_SOCK=/run/pdf-gate/gate.sock
-LOCKED='--read-only --cap-drop ALL --security-opt no-new-privileges --network none'
+# SMOKE_CAPS: more `docker run` flags for every container here, for a shared box (say "--memory=2g --pids-limit=512").
+LOCKED="--read-only --cap-drop ALL --security-opt no-new-privileges --network none ${SMOKE_CAPS:-}"
 AS_ENGINE="--user 10002:10002 --group-add 10003 -v $engine_vol:/run/pdf-engine"
 AS_GATE="--user 10004:10004 --group-add 10003 -v $gate_vol:/run/pdf-gate"
 # As fc's manifest's `command` runs each sidecar: node is the entrypoint, so it is PID 1; and no
@@ -129,7 +133,7 @@ import { sha256Hex } from './dist/pdf/engine-protocol.js';
 import { checkCopy } from './dist/pdf/gate.js';
 import { withoutCanvasWarnings } from './dist/pdf/isolated.js';
 import { socketGate } from './dist/pdf/socket-gate.js';
-import { workerRedact } from './dist/pdf/worker.js';
+import { workerRedact, workerText } from './dist/pdf/worker.js';
 console.warn = withoutCanvasWarnings(console.warn.bind(console));
 const [engineSocket, gateSocket] = process.argv.slice(1);
 const doc = await PDFDocument.create({ updateMetadata: false });
@@ -137,6 +141,8 @@ const page = doc.addPage([612, 792]);
 const font = await doc.embedFont(StandardFonts.Helvetica);
 page.drawText('Picnic flyer', { x: 72, y: 720, size: 12, font });
 page.drawText('Rides: call Kestrel Ambry.', { x: 72, y: 700, size: 12, font });
+page.drawText('All mem-', { x: 72, y: 680, size: 12, font });
+page.drawText('bers are welcome.', { x: 72, y: 660, size: 12, font });
 const original = await doc.save({ useObjectStreams: false });
 // The worker's own engine: the two sockets pick the engine sidecar, and the gate re-run in the gate sidecar.
 const env = { PDF_ENGINE_SOCKET: engineSocket, PDF_GATE_SOCKET: gateSocket };
@@ -148,6 +154,17 @@ console.log(`smoke-sidecar: redacted copy, ${result.pdf.byteLength} bytes, gate 
 const marked = await socketGate({ path: gateSocket })({ copy: original, original, quotes: ['Kestrel Ambry'], image: 'show', sha256: sha256Hex(original) });
 if (marked.verdict.pass || marked.verdict.code !== 'withheld' || marked.sha256 !== sha256Hex(original)) throw new Error(`the gate sidecar passed a marked copy: ${JSON.stringify(marked)}`);
 console.log('smoke-sidecar: gate sidecar refused a marked copy (withheld)');
+// ARCHIVE-SEARCH S2: the worker's reader over the same socket. The copy's text for the search index, with a word split
+// at a line end read as one; and no text for a copy in which the reader still finds what its audience withholds.
+const read = await workerText(env, {})({ copy: result.pdf, sha256: sha256Hex(result.pdf), quotes: ['Kestrel Ambry'] });
+const text = 'pages' in read ? read.pages.map((one) => one.text).join(' / ') : '';
+if (!('pages' in read) || read.sha256 !== sha256Hex(result.pdf) || read.pages.length !== 1 || !text.includes('Picnic flyer') || !text.includes('All members are welcome.') || text.includes('Kestrel') || text.includes('Ambry') || read.pages[0].extra !== 'mem-bers') {
+  throw new Error(`the gate sidecar gave no usable text for the copy: ${JSON.stringify(read)}`);
+}
+console.log(`smoke-sidecar: gate sidecar read the copy's text, ${read.pages.length} page`);
+const kept = await workerText(env, {})({ copy: original, sha256: sha256Hex(original), quotes: ['Kestrel Ambry'] });
+if ('pages' in kept || kept.code !== 'withheld' || kept.sha256 !== sha256Hex(original)) throw new Error(`the gate sidecar gave text for a marked copy: ${JSON.stringify(kept)}`);
+console.log('smoke-sidecar: gate sidecar gave no text for a marked copy (withheld)');
 EOF
 )
 # A failure exits here (set -e on the assignment).
@@ -157,6 +174,8 @@ out=$(docker run --rm $LOCKED --user 10001:10001 --group-add 10003 -v "$engine_v
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q 'gate sidecar passed it' || { echo "smoke-sidecar: no redacted copy" >&2; exit 1; }
 printf '%s\n' "$out" | grep -q 'refused a marked copy' || { echo "smoke-sidecar: the marked copy was not refused" >&2; exit 1; }
+printf '%s\n' "$out" | grep -q "read the copy's text" || { echo "smoke-sidecar: no text of the copy" >&2; exit 1; }
+printf '%s\n' "$out" | grep -q 'gave no text for a marked copy' || { echo "smoke-sidecar: text was given for a marked copy" >&2; exit 1; }
 
 # 5. A uid without the group cannot connect to either.
 for pair in "$engine_vol:/run/pdf-engine:$ENGINE_SOCK" "$gate_vol:/run/pdf-gate:$GATE_SOCK"; do

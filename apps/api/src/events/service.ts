@@ -368,7 +368,11 @@ export function eventRoutes(deps: EventDeps): (router: ConnectRouter) => void {
   const { db, logger } = deps;
   const { loadVenues, loadSeries, loadStored, ruleOf, calendar } = calendarSource(db, logger);
 
-  const audienceOf = (ctx: HandlerContext): Audience => callerOf(ctx.values).audience;
+  // OFFICER-VERIFY: a guest member reads events as a member (standing-policy.ts), everything else as the public.
+  const audienceOf = (ctx: HandlerContext): Audience => {
+    const caller = callerOf(ctx.values);
+    return caller.eventsAudience ?? caller.audience;
+  };
 
   return (router) => {
     router.service(EventService, {

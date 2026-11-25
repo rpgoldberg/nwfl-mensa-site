@@ -10,7 +10,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { SITE_URL } from './servers';
 import { openAccount, signIn, signOutButton } from './signin';
 import { ALL_PAGES } from './pages';
-import { ALL_NUMBERS, EARLIER_CLAIM, MEMBER_CHECKED_ON, MEMBER_PROFILE, SIGNUP_QUEUE, VET_CONFIRMS, VET_WARNINGS } from './stand-in';
+import { ALL_NUMBERS, CHECK_FACTS, EARLIER_CLAIM, MEMBER_CHECKED_ON, MEMBER_PROFILE, QUEUE_IDS, SIGNUP_QUEUE, VET_CONFIRMS, VET_WARNINGS } from './stand-in';
 
 const ACCOUNT = '/account';
 const QUEUE = '/officer-area/sign-ups';
@@ -210,6 +210,23 @@ test.describe('the approvers\' queue (D4)', () => {
     await expect(other.getByRole('button', { name: 'Approve' })).toHaveCount(0);
     await expect(other.getByRole('button', { name: 'Reject' })).toHaveCount(1);
     await expect(other).toContainText('cannot be approved as a member here');
+    // OFFICER-VERIFY, as the API switched on says it: another group's member approved as a guest, in words.
+    const guest = cards.filter({ hasText: 'Lou Unlisted' });
+    await expect(guest.getByRole('button', { name: 'Approve' })).toHaveCount(1);
+    await expect(guest).toContainText('Approving gives them guest member access: the public pages, and the events as members see them.');
+    // An invited sign-up the check did not confirm: no Approve, only Reject, and words saying why.
+    const unconfirmed = cards.filter({ hasText: 'Indy Unconfirmed' });
+    await expect(unconfirmed.getByRole('button', { name: 'Approve' })).toHaveCount(0);
+    await expect(unconfirmed.getByRole('button', { name: 'Reject' })).toHaveCount(1);
+    await expect(unconfirmed.getByRole('note')).toHaveText(
+      'Cannot be approved yet: An invited sign-up can be approved only once the membership check has confirmed the membership number and names. This one has not been, so it cannot be approved here: reject it, and it can then be reopened for a new check.',
+    );
+    // What the check said of the first name and the local group, in words; an unknown group flagged.
+    for (const [name, facts] of Object.entries(CHECK_FACTS)) {
+      for (const [label, value] of facts) {
+        await expect(cards.filter({ hasText: name }).locator('dl.facts').first().locator('div').filter({ has: page.getByText(label, { exact: true }) }).locator('dd')).toHaveText(value);
+      }
+    }
     expect(await axe(page)).toEqual([]);
     await fits(page);
   });
@@ -248,7 +265,7 @@ test.describe('the approvers\' queue (D4)', () => {
       await expect(box).toHaveAccessibleDescription(`Before approving: ${warning}`);
     }
     // No warning and no box on the others: a local match, not found, another group, not checked.
-    for (const s of SIGNUP_QUEUE.filter((q) => !(q.name in VET_WARNINGS))) {
+    for (const s of SIGNUP_QUEUE.filter((q) => !(q.name in VET_WARNINGS) && q.name !== 'Indy Unconfirmed')) {
       await expect(cardOf(s.name).getByRole('note')).toHaveCount(0);
       await expect(cardOf(s.name).getByRole('checkbox')).toHaveCount(0);
     }
@@ -271,7 +288,7 @@ test.describe('the approvers\' queue (D4)', () => {
     await dana.getByText(VET_CONFIRMS['Dana Mismatch']).click();
     await expect(dana.getByRole('checkbox')).toBeChecked();
     await dana.getByRole('button', { name: 'Approve' }).click();
-    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=approved`);
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=approved&request=${QUEUE_IDS['Dana Mismatch']}`);
     await expect(cardOf('Dana Mismatch')).toHaveCount(0);
     // A post without the box (no browser check at all) is refused by the API, and the page says why.
     const drew = 'b1000000-0000-4000-8000-000000000006';
@@ -282,12 +299,12 @@ test.describe('the approvers\' queue (D4)', () => {
     await expect(cardOf('Drew Secondclaim')).toHaveCount(1);
     const done = await post(page, QUEUE, { decision: 'approve', request: drew, confirmed: 'yes' });
     expect(done.status()).toBe(303);
-    expect(done.headers()['location']).toBe(`${QUEUE}?done=approved`);
+    expect(done.headers()['location']).toBe(`${QUEUE}?done=approved&request=${drew}`);
     await page.goto(QUEUE);
     await expect(cardOf('Drew Secondclaim')).toHaveCount(0);
     // The other outcomes are approved as before, one press, no box.
     await cardOf('Kendall Sample').getByRole('button', { name: 'Approve' }).click();
-    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=approved`);
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=approved&request=${QUEUE_IDS['Kendall Sample']}`);
     expect(await axe(page)).toEqual([]);
   });
 
@@ -298,7 +315,7 @@ test.describe('the approvers\' queue (D4)', () => {
     const card = (name: string) => page.locator('.signup-card').filter({ hasText: name });
 
     await card('Kendall Sample').getByRole('button', { name: 'Approve' }).click();
-    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=approved`);
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=approved&request=${QUEUE_IDS['Kendall Sample']}`);
     await expect(page.getByRole('status')).toHaveText('Approved. The account now has member access.');
     await expect(card('Kendall Sample')).toHaveCount(0);
 
@@ -307,12 +324,31 @@ test.describe('the approvers\' queue (D4)', () => {
     await expect(page.getByText('A rejected sign-up is removed from the queue. Only the Admin or the Membership Officer can reopen it, so the person can sign up again.')).toBeVisible();
     expect(await axe(page)).toEqual([]);
     await page.getByRole('button', { name: 'Yes, reject it' }).click();
-    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=rejected`);
+    await expect(page).toHaveURL(`${SITE_URL}${QUEUE}?done=rejected&request=${QUEUE_IDS['Jesse Example']}`);
+    await expect(page.getByRole('status')).toHaveText('Rejected. The sign-up has been removed from the queue.');
     await expect(card('Jesse Example')).toHaveCount(0);
 
     await card('Blair Example').getByRole('button', { name: 'Approve' }).click();
     await expect(page.getByRole('alert')).toHaveText('Nothing was changed: no one approves or rejects their own sign-up.');
     await expect(card('Blair Example')).toHaveCount(1);
+  });
+
+  test('WEB-SMALL-1: a crafted outcome in the address shows no banner unless the named sign-up really is so', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'approver');
+    for (const query of [
+      `done=approved&request=${QUEUE_IDS['Indy Unconfirmed']}`,
+      `done=rejected&request=${QUEUE_IDS['Harper Placeholder']}`,
+      'done=approved',
+      'done=approved&request=not-an-id',
+      'done=approved&request=0b6c1e5a-3d2f-4a8b-9c7d-1e2f3a4b5c6d',
+      `done=approved&request=${QUEUE_IDS['Kendall Sample']}&request=${QUEUE_IDS['Kendall Sample']}`,
+    ]) {
+      await page.goto(`${QUEUE}?${query}`);
+      await expect(page.locator('.signup-card').first()).toBeVisible();
+      await expect(page.getByRole('status'), query).toHaveCount(0);
+    }
+    expect(await axe(page)).toEqual([]);
   });
 
   test('a stale or forged decision changes nothing and says so', async ({ page }) => {
@@ -322,6 +358,10 @@ test.describe('the approvers\' queue (D4)', () => {
     const res = await post(page, QUEUE, { decision: 'approve', request: 'b1000000-0000-4000-8000-000000000003' });
     expect(res.status()).toBe(409);
     expect(await res.text()).toContain('Nothing was changed: this sign-up was already decided, or it cannot be approved as a member.');
+    // OFFICER-VERIFY: an invited sign-up the check did not confirm (the API switched on), posted anyway.
+    const unconfirmed = await post(page, QUEUE, { decision: 'approve', request: QUEUE_IDS['Indy Unconfirmed'] });
+    expect(unconfirmed.status()).toBe(409);
+    expect(await unconfirmed.text()).toContain('Nothing was changed: this sign-up was already decided, or it cannot be approved as a member.');
     expect((await post(page, QUEUE, { decision: 'grant', request: 'b1000000-0000-4000-8000-000000000002' })).status()).toBe(400);
     expect((await post(page, QUEUE, { decision: 'approve', request: 'b1000000-0000-4000-8000-000000000002' }, 'https://evil.example.org')).status()).toBe(403);
   });
@@ -392,6 +432,7 @@ test.describe('fix 1: officers and the Admin need no member account (SHOULD-2, N
       await expect(page.getByRole('link', { name: 'Go to the officer area' })).toHaveAttribute('href', '/officer-area');
       await expect(page.getByRole('button', { name: 'Send my sign-up' })).toHaveCount(0);
       await expect(page.locator('main')).not.toContainText('not one of the group');
+      await expect(page.locator('[data-officer-check]')).toHaveCount(0);
       expect(await axe(page)).toEqual([]);
     });
   }
@@ -409,6 +450,51 @@ test.describe('fix 1: officers and the Admin need no member account (SHOULD-2, N
     await page.goto('/news');
     await signIn(page, 'lone-approver');
     await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
+  });
+});
+
+// OFFICER-VERIFY, with the API switched on (Ross 11-23: "the officer needs to also pass the verifier"): an
+// officer whose officer tools wait for the membership check confirms their membership like anyone else;
+// until it passes the officer area sends them to /account. The API's officer_tools decides, never the groups.
+test.describe('OFFICER-VERIFY: an officer whose check waits confirms their membership', () => {
+  const NOTICE = 'Your officer tools open once your membership is confirmed. Until then you see what the public sees.';
+
+  test('an officer whose check waits lands on /account after signing in, with the form and the notice', async ({ page }) => {
+    await page.goto('/about');
+    await signIn(page, 'officer-unverified');
+    await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
+    await expect(page.getByRole('note').filter({ hasText: NOTICE })).toHaveText(NOTICE);
+    await expect(page.getByLabel('First name')).toHaveValue('Avery');
+    await expect(page.getByRole('button', { name: 'Send my sign-up' })).toBeVisible();
+    expect(await axe(page)).toEqual([]);
+    await fits(page);
+  });
+
+  test('the officer area sends an officer whose check waits to /account, from every page in it', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'officer-unverified');
+    for (const path of ['/officer-area', QUEUE, '/officer-area/news', '/officer-area/events']) {
+      const res = await page.request.get(`${SITE_URL}${path}`, { maxRedirects: 0 });
+      expect(res.status(), path).toBe(303);
+      expect(res.headers()['location']).toBe(ACCOUNT);
+      expect(res.headers()['cache-control']).toBe('private, no-store');
+    }
+    await page.goto('/officer-area');
+    await expect(page).toHaveURL(`${SITE_URL}${ACCOUNT}`);
+    await expect(page.getByRole('note').filter({ hasText: NOTICE })).toBeVisible();
+  });
+
+  test('an officer whose check waits sends the sign-up, and is told it waits, the notice still there', async ({ page }) => {
+    await page.goto('/');
+    await signIn(page, 'officer-unverified');
+    await page.goto(ACCOUNT);
+    await page.getByLabel('Last name').fill('Fakename');
+    await page.getByLabel('Mensa membership number').fill(FAKE_NUMBER);
+    await page.getByRole('button', { name: 'Send my sign-up' }).click();
+    await expect(page.locator('.lead')).toHaveText(WAITING);
+    await expect(page.getByRole('note').filter({ hasText: NOTICE })).toBeVisible();
+    expect(await axe(page)).toEqual([]);
+    await fits(page);
   });
 });
 

@@ -34,13 +34,14 @@ import type { Audience } from '../auth/caller.js';
 import { type ItemRow, itemQuery, publishedItem } from '../content/service.js';
 import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
-import { ContentItemSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
+import { type ContentItem, ContentItemSchema } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { type RedactRequest, redactPdf } from '../pdf/redact.js';
 import { withLinkFallback } from '../pdf/rerun.js';
 import { ENGINE_VERSION, type Inputs, inputsFor, linkOrigin } from '../pdf/store.js';
 import { loadLens, markActive, policyCells } from '../redaction/lens.js';
 import { AUDIENCES, CATEGORIES, TENANT, cellKey, resolveAction } from '../redaction/policy.js';
 import { subjectKey } from '../redaction/render.js';
+import { putItem } from '../search/items.js';
 
 type Query = Pick<Db, 'query'>;
 
@@ -62,6 +63,8 @@ export interface Rendering {
   output: Buffer | null;
   withheld: number;
   inputs: Record<string, unknown>;
+  /** A content version's: the very item `output` is the hash of, for the search index (search/items.ts). */
+  item?: ContentItem | null;
 }
 
 /** The fields a row's hash covers, as the database prints them (0016's publication_ledger_canonical). */
@@ -146,6 +149,7 @@ export async function renderVersion(db: Query, versionId: string, audience: Audi
   const byline = row.state !== 'withdrawn' && row.on_behalf_of !== null && lens.action('member_name') !== 'show' ? 1 : 0;
   return {
     output: item === null ? null : sha256(toBinary(ContentItemSchema, item)),
+    item,
     withheld: lens.withheld([subjectKey('content_item', row.id)]) + byline,
     inputs: {
       ...base,
@@ -239,6 +243,8 @@ async function recordSubjects(db: Query, subjects: Array<[LedgerKind, string]>):
         rendering.withheld,
       ]);
       if (rows[0]?.seq !== null && rows[0]?.seq !== undefined) written++;
+      // ARCHIVE-SEARCH S1: the item's search row, from the item just hashed, in this same transaction. Officers read the members index.
+      if (kind === 'content_version' && audience !== 'officers') await putItem(db, subject, audience, rendering);
     }
   }
   return written;

@@ -1580,6 +1580,17 @@
     "input": "nwfl.mensa.v1.GetMyAccountRequest",
     "fields": []
   },
+  "MembershipService.GetSignupRequest": {
+    "input": "nwfl.mensa.v1.GetSignupRequestRequest",
+    "fields": [
+      {
+        "name": "request_id",
+        "number": 1,
+        "type": "string",
+        "label": "optional"
+      }
+    ]
+  },
   "MembershipService.GrantAffiliate": {
     "input": "nwfl.mensa.v1.GrantAffiliateRequest",
     "fields": [
@@ -1734,6 +1745,18 @@
       {
         "name": "conflicting_request_id",
         "number": 3,
+        "type": "string",
+        "label": "optional"
+      },
+      {
+        "name": "first_name_matched",
+        "number": 4,
+        "type": "bool",
+        "label": "proto3_optional"
+      },
+      {
+        "name": "local_group",
+        "number": 5,
         "type": "string",
         "label": "optional"
       }

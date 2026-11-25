@@ -220,6 +220,29 @@ plain line and retries, waiting 1 s at first and doubling up to 15 s. Only a
 positive mismatch (another tenant's row, no row, or several rows) logs the
 reason and exits 1.
 
+OFFICER-VERIFY: an officer power (officers, a seat, Admin, Webmaster,
+membership approvers) needs member standing as well as its group once
+`OFFICER_VERIFY=on` (default off; unset or empty is off; any other value
+refuses to start). The caller gate (`src/auth/caller.ts`) then withholds every
+power group from a holder without a chapter member's or an affiliate's
+standing (`src/auth/standing-policy.ts`), so no role check and no SQL function
+sees one. Either standing holds a power only once the membership check
+confirmed the holder's number, last name and first name: a check that did not
+confirm them (not found, an error, a duplicate claim) says nothing about them,
+whatever it carried, and an approver's hand approval is no check. A holder who
+is already approved asks for a fresh check from /account (`SubmitSignup`
+again), and a confirmed guest member's tools open on the Admin's affiliate
+grant. `CHAPTER_GROUP_NAME` (e.g. `Northwest Florida Mensa`, one of
+`src/membership/local-groups.ts`; required when the switch is on, ignored
+when off) tells a chapter member from a guest by the local group the
+membership check reported, compared each time a standing is read
+(`src/auth/standing.ts`): only the reported group is stored. Guests follow one
+policy (`guestPolicy`): the public's pages, events as members see them, no
+officer power but by that grant. Every rule of the unit (the invite route for officers, the first
+name, the hand-approval rule, guest approval, approval by the report) applies
+only with the switch on; off, the API behaves as before. One startup line
+names the mode.
+
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
 placeholder with no text, length, link or image; a node the API cannot vouch
@@ -287,7 +310,7 @@ by the handler for a precise answer, and by the database (`0007`).
   with no paging (`MAX_REJECTED_LISTED`); when it is full the site says
   "Showing the latest 50", so an older one is never hidden without a word.
 - **Erasing a sign-up record, and correcting a number** (PROFILE-ERASE,
-  `src/membership/service.ts`, migration `0034`): the Admin alone, never on
+  `src/membership/service.ts`, migration `0036`): the Admin alone, never on
   their own sign-up. `ListSignupRecords` lists the decided sign-ups not yet
   erased. `EraseSignup` erases a person's record when they ask: the display
   name, the email, the first and last name and the membership number of every
@@ -302,9 +325,9 @@ by the handler for a precise answer, and by the database (`0007`).
 - **Removing a member** (`RemoveMember`): the removal erases the first name,
   the last name and the membership number on every decided sign-up of the
   member, a reopened earlier one included, in the same statement (a trigger of
-  `0034`), audited by each sign-up's id. A person removed while still waiting
+  `0036`), audited by each sign-up's id. A person removed while still waiting
   is rejected and keeps what was typed, until the Admin erases it on request.
-  `0034` itself erased the members removed before it. Each erasure analyses
+  `0036` itself erased the members removed before it. Each erasure analyses
   the table again, so `pg_stats` holds no erased value.
 
 ## Seeding the calendar and roster
@@ -892,6 +915,56 @@ engine), limits of 1 CPU and 1Gi,
 memory of the container that writes them. No HEALTHCHECK or exec probe runs
 in either sidecar: any process exec'd into its namespace makes it exit 1.
 
+### The issue text in the search index (ARCHIVE-SEARCH S2)
+
+The worker also keeps the search index's issue text: the tables
+`search_page_public` and `search_page_members` (0032), one per audience with
+no audience column. What is indexed for an audience is the text of the
+**copy** that audience is served now, and nothing else
+(`src/search/pages.ts`). An audience served the original, nothing or a
+refusal has no issue text. Nothing reads `content_version`'s own search
+columns: they are derived at approval and hold passages a mark withholds.
+
+The worker parses no PDF for this either. It sends the stored copy, with its
+sha256 and what the audience withholds, to the gate as a request of kind
+`text` (`src/pdf/text-protocol.ts`): the gate sidecar's socket when
+`PDF_GATE_SOCKET` is set, else the gate's capped in-pod child. The same child,
+under the same limits, reads the pages with pdf.js as a check reads them and
+joins words split at a line end (`src/search/text.ts`). It looks for the
+withheld passages again, with the gate's own test and then in the joined text
+it would hand over, and answers no text at all if it finds one, so a fault
+upstream cannot put a withheld passage in an index. It answers by code
+only when there is no text: `withheld`, `over-cap` (more than 300 pages,
+64 KiB a page, or 4 MiB in all), `unfinished` or `mismatch`. A check's
+frames are unchanged, so the protocol version stays 3; a gate that does not
+know `text` gives no answer, and the worker logs a reading that failed.
+
+The rows are written only by `search_page_put`, which takes them only while
+the publication ledger says this audience is served the copy with this
+sha256, and only for a file the public or members may open at all
+(`search_page_servable`, 0034: a PDF on its item's live version, the item
+published and not officers-only, or a PDF of a published edition). A mark, a policy change or a new link deletes a file's rows in its
+own transaction (0032), before the worker has made the next copy.
+
+When it runs: after each regeneration run that finished, and in a sweep
+after each drain. Each step deletes every row whose copy its audience is
+served no longer, or whose file it may not open (`search_page_sweep`), so a
+withdrawn or re-scoped item's text is gone a drain later. From each boot it
+also reads each served copy with no rows at this `TEXT_VERSION`
+(`search_page_lacking`, 0034), ten copies a step. Raising `TEXT_VERSION` reads
+every copy again. A reading that fails writes and deletes nothing, and is
+logged by file, audience and code, never by content: `a PDF copy was not
+indexed`. Both functions are the worker's alone; it reads no index table and
+no ledger row.
+
+A policy cell written outside the API queues every file but re-records no
+version, so a run that finishes before the app's boot backfill re-records the
+item has its put refused. After each batch it re-records, the backfill calls
+`search_page_requeue` (0034, the app's): each of those items' files that an
+audience is served a copy of and may open, but that has no rows of that copy,
+is queued again, without marking its copies stale. The run finds its copies
+made and indexes them.
+
 ### The api-gate check
 
 `.github/workflows/api-gate.yml` runs every test in `test/gates` on every push
@@ -936,12 +1009,12 @@ The rules the database itself enforces:
 - a sign-up keeps the first name, last name and membership number it typed
   (0028) until a member's account is removed, which erases them from every
   decided sign-up of that person, or the Admin erases
-  the record whole (0034); the number changes only by the Admin's correction,
+  the record whole (0036); the number changes only by the Admin's correction,
   with its audit row, and the names change only on an approved sign-up, the
   member's profile; `affiliate` needs a recorded grant;
 - a decided sign-up keeps its decision (0009); only a rejected one can be
   reopened, by whom and when recorded together, and a reopened row never
-  changes again but to be erased (0026, 0034). An erased row holds no name,
+  changes again but to be erased (0026, 0036). An erased row holds no name,
   number or email, and changes no more, but that a rejected one can still be
   reopened. A person has one sign-up at most that is not
   reopened, and an account row is deleted only as a reopening deletes it: a
@@ -957,7 +1030,7 @@ Accepted residual risks, with no code against them:
   row versions until vacuum, in Postgres WAL and in backups until they age
   out; pg-nwfl's backup retention (fc-infra `tenants/nwfl/pg-nwfl.yaml`, `retentionPolicy: "3m"`, a daily base backup) bounds how long: about three months.
   The planner's statistics (pg_stats, which the app role reads) are
-  refreshed by every erasure (0034), so they hold none of it.
+  refreshed by every erasure (0036), so they hold none of it.
 - Free-text fields (an event's detail, a send-back note) could hold someone's
   contact details if an officer types them. The approval screens for members
   have no notes field at all.
