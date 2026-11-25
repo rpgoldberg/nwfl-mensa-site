@@ -113,8 +113,11 @@ export interface LiveData {
    * ARCHIVE-SEARCH: one page of the API's hits for the public, or the reader (as for file()). The API alone
    * decides which index answers; nothing here reads, keeps or filters the text. `page` is 1-based.
    */
-  search(query: string, page: number, as?: Reader): Promise<SearchRead>;
+  search(query: string, page: number, as?: Reader): Promise<SearchAnswer>;
 }
+
+/** search()'s answer: the API's, marked tokenRefused when the API refused the reader's token and the public's answer is given instead (as news()). */
+export type SearchAnswer = SearchRead & { tokenRefused?: true };
 
 export interface LiveOptions {
   /** D1: list members items to the public by title and summary, with the box. Off: they are not listed at all. On in production (index.ts). */
@@ -439,7 +442,8 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
       }
     },
 
-    // The token goes as it does for file(): only with the nwfl enrolee claim, and a refused one is asked again as the public.
+    // The token goes as it does for file(): only with the nwfl enrolee claim, and a refused one is asked again as the
+    // public, and the answer says so, so the page can tell the reader as /news does.
     search: async (query, page, given) => {
       const as = withEnroleeClaim(sendable(given));
       if (as === undefined) return reads.search(query, page);
@@ -447,7 +451,7 @@ export function liveData(reads: ApiReads, { membersTeasers = false }: LiveOption
         return await reads.search(query, page, as);
       } catch (error) {
         if (!(error instanceof ApiTokenRefused)) throw error;
-        return reads.search(query, page);
+        return { ...(await reads.search(query, page)), tokenRefused: true };
       }
     },
   };

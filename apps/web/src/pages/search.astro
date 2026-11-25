@@ -18,9 +18,12 @@
 // ride on to the next page in a Referer header, on this site or any other.
 //
 // A reader whose sign-in has lapsed is searched for as the public, and told so, with a way to sign in
-// again back to /search alone: the way back never holds the words.
+// again back to /search alone: the way back never holds the words. The header's Sign in and Aa controls
+// also return to /search alone (Base's back). A reader whose token the API refuses is given the public's
+// answer and told, in /news's words, that members-only reading is not available for this sign-in.
 import { PUBLIC_ONLY } from 'astro:env/server';
 import PasswordNote from '../components/PasswordNote.astro';
+import TokenRefusedNote from '../components/TokenRefusedNote.astro';
 import Base from '../layouts/Base.astro';
 import { liveData } from '../data';
 import { readerFor, signInLink } from '../lib/auth/bearer';
@@ -46,7 +49,7 @@ const signIn = view.lapsed ? signInLink(auth, PUBLIC_ONLY, '/search') : undefine
 const listed = view.state === 'results' || view.state === 'none';
 const note = !listed && view.message !== undefined;
 ---
-<Base {...p} headTitle={view.title} noindex>
+<Base {...p} headTitle={view.title} back="/search" noindex>
   <h1>{p.title}</h1>
   <p class="lead">{p.description}</p>
   <form class="search-form" role="search" method="get" action="/search">
@@ -57,6 +60,7 @@ const note = !listed && view.message !== undefined;
   {note && <p class="notice" id="search-note">{view.message}</p>}
   {view.lapsed && <p class="notice" role="note">{LAPSED_NOTE.lead} {signIn ? <a href={signIn}>Sign in again</a> : 'Sign in again'} {LAPSED_NOTE.rest}</p>}
   {signIn && <PasswordNote />}
+  {view.tokenRefused && <TokenRefusedNote />}
   {listed && (
     <section class="search-results" aria-labelledby="results-title">
       <h2 id="results-title">{view.heading}</h2>

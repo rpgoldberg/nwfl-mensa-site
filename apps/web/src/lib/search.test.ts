@@ -372,6 +372,14 @@ describe('searchView', () => {
     expect((await view(answer({ kind: 'busy' }).live, 'q=picnic', { lapsed: true })).lapsed).toBeUndefined();
   });
 
+  it('carries a refused token to the page on results and on none, so the reader is told as on /news; never otherwise', async () => {
+    const refused = (read: SearchRead) => ({ search: () => Promise.resolve({ ...read, tokenRefused: true as const }) });
+    expect(await view(refused({ kind: 'ok', hits: [issue()], hasMore: false }), 'q=picnic')).toMatchObject({ state: 'results', tokenRefused: true });
+    expect(await view(refused({ kind: 'ok', hits: [], hasMore: false }), 'q=zebra')).toMatchObject({ state: 'none', tokenRefused: true });
+    expect((await view(answer({ kind: 'ok', hits: [issue()], hasMore: false }).live, 'q=picnic')).tokenRefused).toBeUndefined();
+    expect((await view(answer({ kind: 'ok', hits: [], hasMore: false }).live, 'q=zebra')).tokenRefused).toBeUndefined();
+  });
+
   it('says busy, 503 with a time to come back, when the API is at its limit or ran out of time', async () => {
     expect(await view(answer({ kind: 'busy' }).live, 'q=picnic')).toEqual({
       state: 'busy',

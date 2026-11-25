@@ -259,6 +259,8 @@ export interface SearchView {
   hits: HitView[];
   /** Set when a sign-in has lapsed and a search was made: only the public copies were searched (LAPSED_NOTE). */
   lapsed?: true;
+  /** Set when the API refused the reader's token: the public's answer is shown, and the page says so as /news does. */
+  tokenRefused?: true;
   /** The number the first hit carries in the list. */
   start?: number;
   previous?: string;
@@ -357,7 +359,7 @@ export async function searchView({ live, params, reader, lapsed, visitor, limit,
     ...(page > 1 ? { previous: pageHref(q, page - 1) } : {}),
     ...(next === undefined ? {} : { next }),
   };
-  const note = lapsed ? { lapsed: true as const } : {};
+  const note = { ...(lapsed ? { lapsed: true as const } : {}), ...(read.tokenRefused ? { tokenRefused: true as const } : {}) };
   if (hits.length === 0) {
     const [heading, message] = noneWords(page, read.hits.length > 0, next !== undefined);
     return { state: 'none', status: 200, query: q, title: `Search: ${heading.toLowerCase()} for ${q}`, heading, message, ...note, hits, ...paging };

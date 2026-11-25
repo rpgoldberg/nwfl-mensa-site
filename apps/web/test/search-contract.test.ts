@@ -10,20 +10,25 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
+// Every module a source names at the top level: `import ... from`, a side-effect `import '...'`, and the
+// re-exports `export * from` and `export { ... } from`, in either quote.
+const moduleNames = (source: string) =>
+  [...source.matchAll(/^\s*(?:import|export)\s[^;]*?\bfrom\s*(["'])([^"']+)\1|^\s*import\s*(["'])([^"']+)\3/gm)].map((m) => m[2] ?? m[4]);
+
 const page = readFileSync('src/pages/search.astro', 'utf8');
 const frontmatter = /^---\n([\s\S]*?)\n---/.exec(page)?.[1] ?? '';
-const imports = [...frontmatter.matchAll(/^import\s[^;]*?from\s+'([^']+)'/gm)].map((m) => m[1]);
+const imports = moduleNames(frontmatter);
 
 // What the search page may read: the layout and page list, the API (src/data's liveData, over src/lib/api/client.ts),
 // the reader whose token goes with the read (as src/pages/read/[id].astro), and the shaping of the API's answer; for a
-// lapsed sign-in, the way to sign in again (PUBLIC_ONLY and the password note, as on /news).
-const ALLOWED_IMPORTS = ['astro:env/server', '../components/PasswordNote.astro', '../layouts/Base.astro', '../lib/site', '../data', '../lib/api/client', '../lib/api/page', '../lib/auth/bearer', '../lib/auth/flow', '../lib/search'];
+// lapsed sign-in, the way to sign in again (PUBLIC_ONLY and the password note, as on /news); for a refused token, /news's note.
+const ALLOWED_IMPORTS = ['astro:env/server', '../components/PasswordNote.astro', '../components/TokenRefusedNote.astro', '../layouts/Base.astro', '../lib/site', '../data', '../lib/api/client', '../lib/api/page', '../lib/auth/bearer', '../lib/auth/flow', '../lib/search'];
 
 const shaping = readFileSync('src/lib/search.ts', 'utf8');
-const shapingImports = [...shaping.matchAll(/^import\s[^;]*?from\s+'([^']+)'/gm)].map((m) => m[1]);
+const shapingImports = moduleNames(shaping);
 // What the shaping may read: the API's answer and its types, the date format, and node's address check for the visitor limit.
 const SHAPING_IMPORTS = ['node:net', '../data/format', '../data/live', '../gen/nwfl/mensa/v1/content_pb.js', '../gen/nwfl/mensa/v1/search_pb.js', './api/client'];
-const READS_ITS_OWN_COPY = /astro:content|getCollection|getEntry|import\.meta\.glob|data\/fixtures|siteData|site-data|lib\/content|\.\/content\b|node:fs|\bfetch\(/;
+const READS_ITS_OWN_COPY = /astro:content|getCollection|getEntry|import\.meta\.glob|data\/fixtures|siteData|site-data|lib\/content|\.\/content\b|node:fs|["']fs(?:\/promises)?["']|\bfetch\(/;
 // A module loaded at run time, which the import lists above never see: none is allowed in either source.
 const LOADS_AT_RUN_TIME = /\bimport\s*\(|\brequire\s*\(|createRequire/;
 // Index builders and outside search services: each would index the site's own copy, never the API's per-audience one.
@@ -82,6 +87,27 @@ describe('the search contract', () => {
   it('lets the search page import only the layout, the page list and the API reads', () => {
     expect(imports.length).toBeGreaterThan(0);
     expect(imports.filter((m) => !ALLOWED_IMPORTS.includes(m!))).toEqual([]);
+  });
+
+  it('sees every way a source names a module: either quote, a side-effect import and both re-exports', () => {
+    const forms = [
+      ['import EventList from "../components/EventList.astro";', '../components/EventList.astro'],
+      ['import * as reader from "./reader";', './reader'],
+      ['import { readFileSync } from "fs";', 'fs'],
+      ["import type { X } from './x';", './x'],
+      ['import {\n  a,\n  b,\n} from "./multi";', './multi'],
+      ["import './side-effect';", './side-effect'],
+      ['import "./side-effect-2";', './side-effect-2'],
+      ["export * from './reader';", './reader'],
+      ['export * as all from "./all";', './all'],
+      ["export { a, b as c } from './some';", './some'],
+      ['export type { T } from "./types";', './types'],
+    ] as const;
+    for (const [line, name] of forms) expect(moduleNames(line), line).toEqual([name]);
+    // A local export names no module.
+    expect(moduleNames("export const from = 'x';\nexport function f() {}")).toEqual([]);
+    // And reading the file system by its bare name is the site's own copy too.
+    for (const fs of ["'fs'", '"fs"', "'fs/promises'", "'node:fs/promises'"]) expect(fs).toMatch(READS_ITS_OWN_COPY);
   });
 
   it('never reads the bundled content, the file system or a fetched page from the search page', () => {

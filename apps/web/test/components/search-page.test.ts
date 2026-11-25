@@ -22,12 +22,14 @@ const article = { hit: { case: 'newsItem' as const, value: { slug: 'spring-picni
 const HOSTILE = `<script>alert(1)</script><img src=x onerror=alert(2)> ${START}picnic${STOP} <mark>fake</mark>`;
 
 // A sign-in that has lapsed (src/lib/auth/bearer.ts readerFor) and sign-in set up, while `lapsed` is set; the real ones otherwise.
-const auth = vi.hoisted(() => ({ lapsed: false, backs: [] as string[] }));
+// `reader`: a signed-in reader whose token goes with the search, while set.
+const auth = vi.hoisted(() => ({ lapsed: false, backs: [] as string[], reader: undefined as { bearer: string; enrolee: boolean } | undefined }));
 vi.mock('../../src/lib/auth/bearer', async (actual) => {
   const real = await actual<typeof import('../../src/lib/auth/bearer')>();
   return {
     ...real,
-    readerFor: (...args: Parameters<typeof real.readerFor>) => (auth.lapsed ? { reader: undefined, lapsed: true } : real.readerFor(...args)),
+    readerFor: (...args: Parameters<typeof real.readerFor>) =>
+      auth.lapsed ? { reader: undefined, lapsed: true } : auth.reader ? { reader: auth.reader, lapsed: false } : real.readerFor(...args),
     signInLink: (...args: Parameters<typeof real.signInLink>) => {
       if (!auth.lapsed) return real.signInLink(...args);
       auth.backs.push(args[2]);
@@ -45,6 +47,7 @@ beforeAll(async () => {
     router.service(SearchService, {
       search: (req, ctx) => {
         asked.push({ query: req.query, page: req.page, authorization: ctx.requestHeader.get('authorization') });
+        if (ctx.requestHeader.get('authorization') === 'Bearer refused.token') throw new ConnectError('token refused', Code.Unauthenticated);
         if (req.query === 'busy day') throw new ConnectError('at the limit', Code.ResourceExhausted);
         if (req.query === 'down day') throw new ConnectError('down', Code.Unavailable);
         if (req.query === 'zebra') return { hits: [], hasMore: false };
@@ -245,7 +248,7 @@ describe('/search', () => {
       expect(text(note?.[0] ?? '').replace(/&#39;/g, "'").trim()).toBe(`${LAPSED_NOTE.lead} Sign in again ${LAPSED_NOTE.rest}`);
       expect(text(html)).toContain(PASSWORD_NOTE.lead);
       expect(auth.backs).toEqual(['/search']);
-      // The way back holds no words. (The header's own Sign in, on every page, returns to the page as it is.)
+      // The way back holds no words. (The header's own Sign in returns to /search alone too: its own test, below.)
       expect(html.match(/href="\/sign-in[^"]*again=1"/g)).toEqual(['href="/sign-in?return=%2Fsearch&amp;again=1"']);
       expect(await (await get('?q=zebra')).text()).toContain(LAPSED_NOTE.lead);
       // Nothing was searched for the form alone or a refused query: no word about copies.
@@ -255,6 +258,34 @@ describe('/search', () => {
       auth.lapsed = false;
     }
     expect(await (await get('?q=spring+picnic')).text()).not.toContain(LAPSED_NOTE.lead);
+  });
+
+  it('tells a reader whose token the API refuses that members-only reading is not available, as /news does, on results and on none', async () => {
+    const REFUSED = 'Members-only reading is not available for this sign-in. <a href="/help">Ask for help</a>.';
+    auth.reader = { bearer: 'refused.token', enrolee: true };
+    try {
+      const found = await (await get('?q=spring+picnic')).text();
+      expect(found).toContain(`<p class="notice" role="note">${REFUSED}</p>`);
+      // The public's answer is still shown.
+      expect(found).toMatch(/<h2 id="results-title"[^>]*>2 results<\/h2>/);
+      expect(asked.slice(-2).map((a) => a.authorization)).toEqual(['Bearer refused.token', null]);
+      expect(await (await get('?q=zebra')).text()).toContain(REFUSED);
+      auth.reader = { bearer: 'member.token', enrolee: true };
+      expect(await (await get('?q=spring+picnic')).text()).not.toContain('Members-only reading is not available');
+    } finally {
+      auth.reader = undefined;
+    }
+    expect(await (await get('?q=spring+picnic')).text()).not.toContain('Members-only reading is not available');
+  });
+
+  it("gives the header's Sign in and Aa controls /search alone to return to, never the words", async () => {
+    const html = await (await get('?q=spring+picnic&page=2')).text();
+    const header = /<header[\s\S]*?<\/header>/.exec(html)?.[0] ?? '';
+    expect(header).toContain('href="/sign-in?return=%2Fsearch"');
+    const returns = [...html.matchAll(/(?:return=|name="(?:back|return)" value=")([^"&]*)/g)].map((m) => decodeURIComponent(m[1]!.replace(/&amp;/g, '&')));
+    expect(returns.length).toBeGreaterThan(0);
+    for (const r of returns) expect(r).toBe('/search');
+    expect(html).not.toMatch(/return=[^"]*spring|name="back" value="[^"]*spring/);
   });
 
   it('says what is true when no hit on the page can be opened here, and keeps Next', async () => {

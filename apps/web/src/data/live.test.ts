@@ -1200,11 +1200,15 @@ describe('liveData.search (ARCHIVE-SEARCH S4)', () => {
     expect(asked).toEqual([MEMBER, undefined, undefined, undefined]);
   });
 
-  it('asks again as the public when the API refuses the token: the public answer, never a 503', async () => {
+  it('asks again as the public when the API refuses the token: the public answer, never a 503, marked tokenRefused as news() is', async () => {
     const asked: (Reader | undefined)[] = [];
     const live = liveData(reads({ search: (_q, _p, as) => (asked.push(as), as ? Promise.reject(new ApiTokenRefused('Search')) : Promise.resolve(OK)) }));
-    expect(await live.search('picnic', 2, MEMBER)).toBe(OK);
+    expect(await live.search('picnic', 2, MEMBER)).toEqual({ ...OK, tokenRefused: true });
     expect(asked).toEqual([MEMBER, undefined]);
+    // An answered token, and no token, are never marked.
+    const answered = liveData(reads({ search: () => Promise.resolve(OK) }));
+    expect(await answered.search('picnic', 1, MEMBER)).toBe(OK);
+    expect(await answered.search('picnic', 1)).toBe(OK);
   });
 
   it('lets any other failure through, with or without a reader, and does not ask twice', async () => {
