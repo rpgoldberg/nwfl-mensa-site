@@ -1750,7 +1750,7 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
   const WHITE_TEXT = { luminance: 1, opaque: true };
   const glyphAt = (ink: Box, fontSize = 10, text = 'H'): PageChar => ({ text, generated: false, hyphen: false, box: ink, ink, fontSize });
   /** The cell, then glyph 0's object 50 (not seen: its drawing changes nothing), then glyph 1's object 52 (seen). */
-  const twice = (second: PageChar): PlacedLabel[] | string => {
+  const twice = (second: PageChar, first = glyphAt({ left: 10, right: 15, bottom: 5, top: 11 })): PlacedLabel[] | string => {
     const reading: LabelReading = {
       top: [{ kind: 'box', object: 1, bounds: cellBox }, { kind: 'other', object: 50 }, { kind: 'other', object: 52 }],
       nested: 0,
@@ -1758,7 +1758,6 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
       places: [1, 2],
       paints: [WHITE_TEXT, WHITE_TEXT],
     };
-    const first = glyphAt({ left: 10, right: 15, bottom: 5, top: 11 });
     return pageLabels(reading, [first, second], 0, [cellBox], () => null, { shows: (object) => (object === 52 ? 1 : 0) });
   };
 
@@ -1770,6 +1769,11 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
     // At the same size, a box over all of the first's but twice as wide (the first over 45 % of it), or 1.9 times (53 %).
     expect(twice(glyphAt({ left: 10, right: 21, bottom: 5, top: 11 }))).toBe(UNSEEN());
     expect(twice(glyphAt({ left: 10, right: 19.5, bottom: 5, top: 11 }))).toEqual([]);
+    // At the same size (another font's), a box inside the first's lower part, over 42 % of it: not the first drawn again.
+    expect(twice(glyphAt({ left: 10, right: 15, bottom: 5, top: 7.5 }))).toBe(UNSEEN());
+    // Two glyphs whose ink has no width, on the same line: nothing of one lies on the other.
+    const line: Box = { left: 12, right: 12, bottom: 5, top: 11 };
+    expect(twice(glyphAt(line), glyphAt(line))).toBe(UNSEEN());
     // The same box at a size a tenth off or less, or more.
     expect(twice(glyphAt(same, 10.9))).toEqual([]);
     expect(twice(glyphAt(same, 9))).toEqual([]);
@@ -1862,20 +1866,22 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
   }, 300_000);
 
   it('weighs a drawing by the paths that meet the area drawn, at any depth of forms', async () => {
-    const heavy = await deep(20_000, 20, 100);
-    const doc = Document.open(await pdfium(), heavy);
-    if (doc === null) throw new Error('unopenable');
-    try {
-      doc.page(0, (p) => {
-        const object = p.labelReading().owners[0] as number;
-        const box = p.chars().chars.find((c) => c.text === 'n')?.ink as Box;
-        const started = performance.now();
-        expect(p.shows(object, box)).toBeNull();
-        expect(doc.overdrawn).toBe(true);
-        expect(performance.now() - started).toBeLessThan(1_000);
-      });
-    } finally {
-      doc.close();
+    // Over a 100 pt "n" and a 14 pt one (about 18 s to draw on the gate's box, in recheck 3): neither is drawn.
+    for (const size of [100, 14]) {
+      const doc = Document.open(await pdfium(), await deep(20_000, 20, size));
+      if (doc === null) throw new Error('unopenable');
+      try {
+        doc.page(0, (p) => {
+          const object = p.labelReading().owners[0] as number;
+          const box = p.chars().chars.find((c) => c.text === 'n')?.ink as Box;
+          const started = performance.now();
+          expect(p.shows(object, box)).toBeNull();
+          expect(doc.overdrawn).toBe(true);
+          expect(performance.now() - started).toBeLessThan(1_000);
+        });
+      } finally {
+        doc.close();
+      }
     }
     // The same zigzags moved off the glyph (past the page's right edge, each form's matrix 400 pt on): over the same
     // rows, but nothing heavy meets its area, so it is drawn.
@@ -1900,8 +1906,9 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
       if (doc === null) throw new Error('unopenable');
       try {
         const area = (bottom: number, top: number): Box => ({ left: 100, right: 110, bottom, top });
-        // 1 pt and 9 pt high on the zigzags and the cell (4 and 36 rows), and well below both (PDFium's bounds of a stroke reach past its points).
-        return doc.page(0, (p) => [p.drawCost(area(50, 51)), p.drawCost(area(50, 59)), p.drawCost(area(-40, -30))]);
+        // 1 pt and 9 pt high on the zigzags and the cell (4 and 36 rows), well below both (PDFium's bounds of a stroke
+        // reach past its points), and 20 pt high from 8 pt under the zigzags' top (32 rows of them).
+        return doc.page(0, (p) => [p.drawCost(area(50, 51)), p.drawCost(area(50, 59)), p.drawCost(area(-40, -30)), p.drawCost(area(120, 140))]);
       } finally {
         doc.close();
       }
@@ -1910,14 +1917,16 @@ describe('the same glyph drawn again, and one drawing, bounded (fix round 4)', (
     const cell = await costs('h n');
     const zigzags = async (paint: string): Promise<number[]> => (await costs(paint)).map((cost, k) => cost - (cell[k] as number));
     const [fill, stroke, both, clip] = [await zigzags('h f'), await zigzags('h S'), await zigzags('h B'), await zigzags('h W n')];
-    const [one, nine, below] = fill as [number, number, number];
+    const [one, nine, below, top] = fill as [number, number, number, number];
     expect(one).toBeGreaterThan(0);
     expect(nine / one).toBe(37 / 5);
+    expect(top / one).toBe(33 / 5);
     expect((cell[1] as number) / (cell[0] as number)).toBe(37 / 5);
     expect([below, cell[2]]).toEqual([0, 0]);
-    expect(stroke).toEqual(fill.map((cost) => 3 * cost));
-    expect(both).toEqual(fill.map((cost) => 4 * cost));
-    expect(clip).toEqual([0, 0, 0]);
+    // Where an area lies wholly in both bounds (PDFium's bounds of a stroke are not its fill's near their edge).
+    expect(stroke.slice(0, 3)).toEqual(fill.slice(0, 3).map((cost) => 3 * cost));
+    expect(both.slice(0, 3)).toEqual(fill.slice(0, 3).map((cost) => 4 * cost));
+    expect(clip).toEqual([0, 0, 0, 0]);
   });
 });
 
