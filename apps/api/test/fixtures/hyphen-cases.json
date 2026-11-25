@@ -3,7 +3,7 @@
     "The one line-end hyphen rule (ARCHIVE-SEARCH, SEARCH-HYPH), shared by the search index (apps/api/src/search/text.ts)",
     "and the reader's find (apps/web/public/scripts/viewer-find.js). Both apps keep a byte-equal copy of this file.",
     "items: a page's text items as pdf.js getTextContent gives them. text: the joined reading. extra: the kept-hyphen",
-    "forms of the words the rule joined, space-separated. finds / misses: what a reader may type, compared without case.",
+    "forms of the words the rule joined, and the drawn forms of words it split between items, space-separated. finds / misses: what a reader may type, compared without case.",
     "The index keeps case and applies NFKC; the reader folds further (case, accents), so it compares its own fold of text."
   ],
   "rule": [
@@ -11,7 +11,8 @@
     "U+00AD (soft hyphen) folds to nothing.",
     "A line that ends in a letter and then \"-\" or U+2010, when the next character after the line end is a letter, joins: no hyphen, no space. The word with its hyphen kept (as \"-\") goes to extra.",
     "A line that ends in a letter and then U+00AD joins the same way, with nothing for extra.",
-    "The line end may be on the item itself or on an empty item right after it. A second line end in a row (a blank line), white space, a digit or any other non-letter cancels the join: the hyphen stays and a space follows."
+    "The line end may be on the item itself or on an empty item right after it. A second line end in a row (a blank line), white space, a digit or any other non-letter cancels the join: the hyphen stays and a space follows.",
+    "Two items on one line (no line end between them) that meet with no white space are two words: a space goes between them. The word as drawn, without that space, goes to extra."
   ],
   "cases": [
     {
@@ -370,6 +371,130 @@
       "extra": "",
       "finds": [],
       "misses": []
+    },
+    {
+      "name": "a label drawn beside a word is its own word",
+      "items": [
+        {
+          "str": "Call today"
+        },
+        {
+          "str": "Private"
+        },
+        {
+          "str": " or later"
+        }
+      ],
+      "text": "Call today Private or later",
+      "extra": "todayPrivate",
+      "finds": [
+        "today",
+        "call today",
+        "private or later"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a drop capital is found as the word it starts",
+      "items": [
+        {
+          "str": "W"
+        },
+        {
+          "str": "elcome to the picnic"
+        }
+      ],
+      "text": "W elcome to the picnic",
+      "extra": "Welcome",
+      "finds": [
+        "welcome",
+        "picnic"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a name in two runs on one line is two words, and as drawn",
+      "items": [
+        {
+          "str": "Call Quil"
+        },
+        {
+          "str": "lon today"
+        }
+      ],
+      "text": "Call Quil lon today",
+      "extra": "Quillon",
+      "finds": [
+        "quillon",
+        "today"
+      ],
+      "misses": [
+        "call quillon"
+      ]
+    },
+    {
+      "name": "runs that meet at white space are unchanged",
+      "items": [
+        {
+          "str": "Call "
+        },
+        {
+          "str": "today"
+        },
+        {
+          "str": " now"
+        }
+      ],
+      "text": "Call today now",
+      "extra": "",
+      "finds": [
+        "call today now"
+      ],
+      "misses": []
+    },
+    {
+      "name": "an empty item between two runs on one line",
+      "items": [
+        {
+          "str": "to"
+        },
+        {
+          "str": ""
+        },
+        {
+          "str": "day"
+        }
+      ],
+      "text": "to day",
+      "extra": "today",
+      "finds": [
+        "today"
+      ],
+      "misses": []
+    },
+    {
+      "name": "a word split at a line end, then a run on the next line",
+      "items": [
+        {
+          "str": "All mem-",
+          "hasEOL": true
+        },
+        {
+          "str": "bers"
+        },
+        {
+          "str": "Only"
+        }
+      ],
+      "text": "All members Only",
+      "extra": "mem-bers membersOnly",
+      "finds": [
+        "members",
+        "only"
+      ],
+      "misses": [
+        "mem bers"
+      ]
     }
   ]
 }

@@ -18,8 +18,10 @@
 -- writes them. Each write goes through a SECURITY DEFINER function that refuses (55000) unless the
 -- publication ledger's CURRENT output for the subject and audience is the sha it is given:
 --   * search_page_put(file, audience, sha, text_version, pages[], extras[]): the worker's, for a
---     file whose current ledger row says the audience is served a copy. It replaces the audience's
---     rows for the file. Caps: 1 to 300 pages, 64 KiB a page and an extra, 4 MiB in all.
+--     file whose current ledger row says the audience is served a copy, and that the audience may
+--     open now (search_file_servable, below: what content/files.ts servableFile serves); else
+--     55000. It replaces the audience's rows for the file. Caps: 1 to 300 pages, 64 KiB a page and
+--     an extra, 4 MiB in all.
 --   * search_item_put(version, audience, sha, title, text): the app's. With a NULL sha (the ledger
 --     says the audience is given nothing) or a NULL title (given something with nothing to index: a
 --     withdrawn item's stub) it deletes the version's row instead.
@@ -39,6 +41,13 @@
 --     a put that meets an append waits for it and then no longer finds the row current; and an
 --     append that meets a put waits for the put. The worker's own append (a new copy becomes
 --     current) takes no file lock, and this is what holds a put against it.
+--   * search_page_unservable (a trigger) deletes both audiences' page rows for an item's files when
+--     its state or live version changes, for a version's when its visibility changes, and for an
+--     edition's when it leaves published, under the same file locks, in the change's transaction.
+--   * search_page_put takes the item's row lock (FOR KEY SHARE) before the file's. A withdrawal or a
+--     publish locks the item first (FOR UPDATE: workflow.ts loadItem, load.ts findIssue) and the
+--     trigger then locks the files, so a put that meets one waits for it on the item, and the two
+--     never hold one lock each and wait for the other (40P01).
 --   A row still outlives its sha when the ledger moves on WITHOUT pdf_regen_request (the worker
 --   finishing a new copy): the read side must return a row only when its sha is the ledger's
 --   current output (S3), and the worker replaces the rows after each copy (S2).
@@ -104,6 +113,82 @@ CREATE INDEX search_item_members_version ON search_item_members (version_id);
 REVOKE ALL ON search_page_public, search_page_members, search_item_public, search_item_members FROM nwfl;
 GRANT SELECT ON search_page_public, search_page_members, search_item_public, search_item_members TO nwfl;
 
+-- When the app last re-recorded a version for an audience, against when a policy cell last changed, on one sequence
+-- (search_file_servable's passage-mark answer must postdate the last policy change; see there). A sequence, not a
+-- time: values follow the order of the calls, and a re-record takes the ledger lock before it renders, as a policy
+-- change does before it writes.
+CREATE SEQUENCE rerecord_seq;
+CREATE TABLE policy_change_epoch (
+  id  boolean PRIMARY KEY DEFAULT true CHECK (id),
+  seq bigint  NOT NULL
+);
+CREATE TABLE version_rerecorded (
+  version_id uuid    NOT NULL REFERENCES content_version (id) ON DELETE CASCADE,
+  audience   text    NOT NULL CHECK (audience IN ('public', 'members')),
+  seq        bigint  NOT NULL,
+  PRIMARY KEY (version_id, audience)
+);
+REVOKE ALL ON policy_change_epoch, version_rerecorded FROM nwfl;
+-- The boot backfill (search/backfill.ts) reads them, to re-record what a policy write outside the API left unconfirmed.
+GRANT SELECT ON policy_change_epoch, version_rerecorded TO nwfl;
+REVOKE ALL ON SEQUENCE rerecord_seq FROM nwfl;
+
+-- servableFile (content/files.ts) as one predicate: whether it gives the audience (public or members) the file now.
+-- servableFile answers null when:
+--   * the file is not a PDF, or is neither a PDF of the live version of a published item that is not officers-only nor
+--     one of a published edition (its SQL);
+--   * for an item's PDF, itemHidden (content/redact.ts) holds:
+--     - the version is posted on behalf of a member and the audience's member_name action is hide;
+--     - lens.hidden (redaction/render.ts lensFor), over the item's active marks (redaction/lens.ts loadLens): a mark
+--       whose category the audience hides; a whole-item mark it does not show; a file mark it redacts that is not
+--       anchored in a PDF of this version; a passage mark it redacts whose quote is not in this version's texts.
+-- An action is resolveAction's (redaction/policy.ts): a missing cell reads as hide (0012's CHECK lets no other action
+-- be stored). The last test runs quoteMatches (folding, look-alikes, whole words) and cannot be written here. For it
+-- the predicate reads the app's own answer: the ledger's current row for this version and audience, which
+-- renderVersion (ledger/ledger.ts) records with no output exactly when itemHidden holds, and which every mark and policy
+-- change made through the API records again in its own transaction (redaction/marks.ts, redaction/service.ts). No row,
+-- or no output: refused. A policy cell written outside the API (as 0022 wrote its change) re-records nothing, so the row
+-- counts only if the app re-recorded the version after the last policy change (version_rerecorded against
+-- policy_change_epoch, below): until it does, refused. A version never re-recorded since 0032 is refused too (its row
+-- may predate a change written as 0022 wrote its own); the boot backfill re-records each one whose render still is
+-- its row (search/backfill.ts). NOT covered: a change to the lens CODE (quoteMatches,
+-- normalizeTree) deployed without a re-record leaves the rows as they were; that is ARCHIVE-SEARCH S3's (with P1d).
+-- An invoker function with no grant: search_page_put, a definer, calls it as the owner.
+CREATE FUNCTION search_file_servable(p_file uuid, p_audience text) RETURNS boolean
+  LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
+  SELECT EXISTS (
+    SELECT 1
+      FROM stored_file f
+      LEFT JOIN content_version v ON v.id = f.version_id
+      LEFT JOIN content_item i ON i.live_version_id = v.id AND i.state = 'published' AND v.visibility <> 'officers'
+      LEFT JOIN edition e ON e.id = f.edition_id AND e.status = 'published'
+     WHERE f.id = p_file AND f.mime_type = 'application/pdf' AND (i.id IS NOT NULL OR e.id IS NOT NULL)
+       AND (i.id IS NULL OR (
+         NOT (v.on_behalf_of IS NOT NULL
+              AND coalesce((SELECT p.action FROM redaction_policy p
+                             WHERE p.tenant_id = 'nwflorida' AND p.audience = p_audience AND p.category = 'member_name'), 'hide') = 'hide')
+         AND NOT EXISTS (
+           SELECT 1
+             FROM redaction_mark m
+            CROSS JOIN LATERAL (
+              SELECT coalesce((SELECT p.action FROM redaction_policy p
+                                WHERE p.tenant_id = 'nwflorida' AND p.audience = p_audience AND p.category = m.category), 'hide') AS action) a
+            WHERE m.tenant_id = 'nwflorida' AND m.status = 'active' AND m.content_item_id = i.id
+              AND (a.action = 'hide'
+                   OR (m.quote IS NULL AND a.action <> 'show')
+                   OR (m.field = 'file' AND a.action = 'redact'
+                       AND NOT EXISTS (SELECT 1 FROM redaction_mark_anchor x JOIN stored_file af ON af.id = x.file_id
+                                        WHERE x.tenant_id = 'nwflorida' AND x.mark_id = m.id AND af.version_id = v.id))
+                   OR (m.field <> 'file' AND a.action = 'redact'
+                       AND NOT (EXISTS (SELECT 1 FROM publication_ledger l
+                                         WHERE l.tenant_id = 'nwflorida' AND l.subject_kind = 'content_version' AND l.subject_id = v.id
+                                           AND l.audience = p_audience AND l.current_to IS NULL AND l.output_sha256 IS NOT NULL)
+                                AND EXISTS (SELECT 1 FROM version_rerecorded c
+                                             WHERE c.version_id = v.id AND c.audience = p_audience
+                                               AND c.seq > coalesce((SELECT s.seq FROM policy_change_epoch s), 0)))))))))
+$fn$;
+REVOKE EXECUTE ON FUNCTION search_file_servable(uuid, text) FROM PUBLIC;
+
 -- The worker's write: the pages of the copy this audience is served, replacing the file's rows.
 CREATE FUNCTION search_page_put(p_file uuid, p_audience text, p_sha bytea, p_text_version integer, p_pages text[], p_extras text[])
   RETURNS integer
@@ -130,6 +215,10 @@ BEGIN
      OR (SELECT sum(octet_length(u.page)::bigint + octet_length(u.extra)) FROM unnest(p_pages, p_extras) AS u(page, extra)) > 4194304 THEN
     RAISE EXCEPTION 'a page is at most 64 KiB, and a file 4 MiB in all' USING ERRCODE = '22023';
   END IF;
+  -- The item's lock first, as a withdrawal or a publish takes it (FOR UPDATE, then the files): a put that meets one
+  -- waits here, holding no file. KEY SHARE is what the page row's item_id reference takes on the INSERT below anyway.
+  PERFORM 1 FROM content_item i JOIN content_version v ON v.item_id = i.id JOIN stored_file f ON f.version_id = v.id
+    WHERE f.id = p_file FOR KEY SHARE OF i;
   -- The lock pdf_regen_request takes: a change to what this file's copies hold waits, or is waited for.
   SELECT * INTO v_file FROM stored_file WHERE id = p_file FOR NO KEY UPDATE;
   IF NOT FOUND THEN
@@ -142,6 +231,12 @@ BEGIN
     FOR SHARE;
   IF NOT FOUND OR v_output IS DISTINCT FROM p_sha OR v_served IS DISTINCT FROM 'copy' THEN
     RAISE EXCEPTION 'the ledger does not say this audience is served this copy now' USING ERRCODE = '55000';
+  END IF;
+  -- What the audience may open now (search_file_servable). Read after the file lock, so a change that stops it either is
+  -- seen here or waits for this put and then deletes its rows: search_page_unservable for an item, version or edition;
+  -- pdf_regen_request for a mark or a policy change, whose ledger rows the app records in that transaction.
+  IF NOT search_file_servable(p_file, p_audience) THEN
+    RAISE EXCEPTION 'the audience may not open this file now' USING ERRCODE = '55000';
   END IF;
   SELECT v.item_id INTO v_item FROM content_version v WHERE v.id = v_file.version_id;
   IF p_audience = 'public' THEN
@@ -178,6 +273,11 @@ BEGIN
   IF v_output IS DISTINCT FROM p_sha THEN
     RAISE EXCEPTION 'the ledger does not say this audience is given this output now' USING ERRCODE = '55000';
   END IF;
+  -- The app re-recorded this version for the audience now (recordSubjects calls this put for every version it renders,
+  -- changed or not): its ledger row answers for the policy as it now stands.
+  INSERT INTO version_rerecorded (version_id, audience, seq)
+    SELECT p_version, p_audience, nextval('rerecord_seq') WHERE EXISTS (SELECT 1 FROM content_version WHERE id = p_version)
+    ON CONFLICT (version_id, audience) DO UPDATE SET seq = EXCLUDED.seq;
   IF p_sha IS NULL OR p_title IS NULL THEN
     IF p_audience = 'public' THEN
       DELETE FROM search_item_public WHERE version_id = p_version;
@@ -228,6 +328,58 @@ BEGIN
   UPDATE pdf_copy SET stale = true WHERE file_id = ANY (p_files) AND NOT stale;
 END
 $fn$;
+
+-- A change that can stop an audience opening a file deletes both audiences' page rows for it, in the change's own
+-- transaction: an item's state or live version (withdrawn, superseded, back to draft), a version's visibility, an
+-- edition leaving published. The live version's visibility and an edition's status are frozen today (0029, 0011);
+-- the trigger holds if that changes. It takes the file locks search_page_put takes, in id order, so a put either
+-- waits for the change and is then refused, or is waited for and its rows deleted. A definer: the app role, which
+-- makes these changes, may not write the page tables.
+CREATE FUNCTION search_page_unservable() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $fn$
+DECLARE
+  v_files uuid[];
+BEGIN
+  IF TG_TABLE_NAME = 'content_item' THEN
+    v_files := ARRAY(SELECT f.id FROM stored_file f JOIN content_version v ON v.id = f.version_id WHERE v.item_id = NEW.id);
+  ELSIF TG_TABLE_NAME = 'content_version' THEN
+    v_files := ARRAY(SELECT f.id FROM stored_file f WHERE f.version_id = NEW.id);
+  ELSE
+    v_files := ARRAY(SELECT f.id FROM stored_file f WHERE f.edition_id = NEW.id);
+  END IF;
+  PERFORM 1 FROM stored_file f WHERE f.id = ANY (v_files) ORDER BY f.id FOR NO KEY UPDATE OF f;
+  DELETE FROM search_page_public WHERE file_id = ANY (v_files);
+  DELETE FROM search_page_members WHERE file_id = ANY (v_files);
+  RETURN NULL;
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION search_page_unservable() FROM PUBLIC;
+
+CREATE TRIGGER content_item_search_pages AFTER UPDATE OF state, live_version_id ON content_item
+  FOR EACH ROW WHEN (OLD.state IS DISTINCT FROM NEW.state OR OLD.live_version_id IS DISTINCT FROM NEW.live_version_id)
+  EXECUTE FUNCTION search_page_unservable();
+CREATE TRIGGER content_version_search_pages AFTER UPDATE OF visibility ON content_version
+  FOR EACH ROW WHEN (OLD.visibility IS DISTINCT FROM NEW.visibility)
+  EXECUTE FUNCTION search_page_unservable();
+CREATE TRIGGER edition_search_pages AFTER UPDATE OF status ON edition
+  FOR EACH ROW WHEN (OLD.status = 'published' AND NEW.status <> 'published')
+  EXECUTE FUNCTION search_page_unservable();
+
+-- Any write to a policy cell, by any path, in its own transaction: until the app re-records a version
+-- (search_item_put), its ledger row no longer answers for a passage mark (search_file_servable). Writes nothing to the
+-- ledger, and touches no guarded table. An invoker: only the owner writes policy cells (0013 revoked the app's
+-- writes; redaction_propose and redaction_approve are the owner's definers), and the owner owns these two tables.
+CREATE FUNCTION policy_change_epoch_bump() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = pg_catalog, public, pg_temp AS $fn$
+BEGIN
+  INSERT INTO policy_change_epoch (id, seq) VALUES (true, nextval('rerecord_seq'))
+    ON CONFLICT (id) DO UPDATE SET seq = EXCLUDED.seq;
+  RETURN NULL;
+END
+$fn$;
+REVOKE EXECUTE ON FUNCTION policy_change_epoch_bump() FROM PUBLIC;
+CREATE TRIGGER redaction_policy_epoch AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON redaction_policy
+  FOR EACH STATEMENT EXECUTE FUNCTION policy_change_epoch_bump();
 
 -- 0025's function, with the page writer: the worker's alone once the role exists.
 CREATE OR REPLACE FUNCTION nwfl_worker_grants() RETURNS boolean

@@ -33,6 +33,72 @@ Postgres hangs during the drain, closing the pool can hang too; a backstop
 then exits with code 1, 5 s after the drain deadline and before the kubelet's
 SIGKILL. That exit code is accepted: the pod is going away either way.
 
+## Trace export
+
+Off by default. The API always makes a span per call, so that log lines carry
+a trace id; the spans go nowhere unless an endpoint is set
+(`src/platform/telemetry.ts`).
+
+| Variable | Meaning |
+|----------|---------|
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The OTLP gRPC collector for traces, as `http://host:port` (plain; the mesh adds mTLS) or `https://host:port`. Wins when both are set. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The same, read when the traces one is unset or blank. |
+| `OTEL_SDK_DISABLED` | `true`, in any case: export is off whatever the endpoint says. Spans are still made, for the trace ids in the log. |
+| `OTEL_TRACES_EXPORTER` | Unset or `otlp`: as the endpoint says. Anything else, `none` included: off. |
+| `SERVICE_VERSION` | Sent as `service.version` when set. |
+
+Unset, empty or made only of characters that draw nothing means off: no span
+processor, nothing sent. The first of the two that is set decides. A value
+that is not a bare http or https URL (another scheme, a user, a path, a query,
+a fragment, a hidden character) is refused with one warning at start,
+`trace export refused: nothing is exported`, naming the variable and the
+reason but not the value; the API then runs without export. A URL with no
+port gets its scheme's (80 or 443). When export is on, one line at start says
+`trace export on` with the endpoint; when a switch turned it off, one line
+says `trace export off` and names the variable. The exporter library also reads the
+other `OTEL_EXPORTER_OTLP_*` variables (headers, certificates, compression);
+none is needed on the mesh.
+
+Leave both unset until the receiver for this tenant exists on the app
+cluster's gateway. Until then the image ships with export dark.
+
+What is sent (`src/platform/span-redaction.ts`). No free text leaves: a mask
+can spot an address or a number, never a name, so a text is sent only in a
+fixed form that a sentence cannot have.
+
+- Span name: only in the gRPC form `package.Service/Method`; anything else
+  is sent as `span`.
+- Status: the code. Never the message.
+- Span attributes, three keys, each only with a value of its own kind:
+  `rpc.system` (`grpc`), `rpc.method` (a method name in that same form) and
+  `rpc.grpc.status_code` (a number, 0 to 16). Any other key is left out. To
+  export a new attribute, add its key and a rule for its value there.
+- Events: the name `exception`, or `event` for any other. Of the attributes
+  only `exception.type`, as an identifier. No message and no stack trace.
+- Scope: the tracer's name and version in an identifier form, else `scope`.
+- Ids and flags only from a span context: no `tracestate`, no baggage, no
+  link attributes.
+- The resource is `service.name`, and `service.version` when it looks like a
+  release or a commit id. No host name, no process or environment detail.
+- What is kept still goes through the log redaction
+  (`src/platform/shared.ts`) and, after percent-decoding and Unicode
+  folding, has query strings, `token=` style pairs, anything around an at
+  sign and runs of four or more digits masked.
+
+Export never holds a call up. Ending a span puts it on a queue of 2,048;
+batches of up to 512 go out every 5 s, each with a 5 s deadline. A full queue
+drops the span; a collector that is down, slow or refusing costs that batch.
+Nothing is retried. After three failed batches in a row the exporter is
+replaced by a new one (a new gRPC client) and the old one is closed, since a
+client can stay unusable after the collector recovers (seen with an answer
+over the client's size limit). The new client may share the old one's
+connection while that is still open, so a rebuild does not promise a new
+connection. On shutdown the queue is flushed for at most 2 s, and one
+line, `trace export stopped`, gives the counts: `accepted`, `exported`,
+`dropped_queue_full`, `dropped_export_failed`, `dropped_at_shutdown`. It is a
+warning when anything was dropped. A caller that sends `traceparent` with the
+sampled flag off gets no exported span.
+
 ## Testing
 
     npm run lint && npm run typecheck && npm run test:coverage
@@ -155,6 +221,29 @@ plain line and retries, waiting 1 s at first and doubling up to 15 s. Only a
 positive mismatch (another tenant's row, no row, or several rows) logs the
 reason and exits 1.
 
+OFFICER-VERIFY: an officer power (officers, a seat, Admin, Webmaster,
+membership approvers) needs member standing as well as its group once
+`OFFICER_VERIFY=on` (default off; unset or empty is off; any other value
+refuses to start). The caller gate (`src/auth/caller.ts`) then withholds every
+power group from a holder without a chapter member's or an affiliate's
+standing (`src/auth/standing-policy.ts`), so no role check and no SQL function
+sees one. Either standing holds a power only once the membership check
+confirmed the holder's number, last name and first name: a check that did not
+confirm them (not found, an error, a duplicate claim) says nothing about them,
+whatever it carried, and an approver's hand approval is no check. A holder who
+is already approved asks for a fresh check from /account (`SubmitSignup`
+again), and a confirmed guest member's tools open on the Admin's affiliate
+grant. `CHAPTER_GROUP_NAME` (e.g. `Northwest Florida Mensa`, one of
+`src/membership/local-groups.ts`; required when the switch is on, ignored
+when off) tells a chapter member from a guest by the local group the
+membership check reported, compared each time a standing is read
+(`src/auth/standing.ts`): only the reported group is stored. Guests follow one
+policy (`guestPolicy`): the public's pages, events as members see them, no
+officer power but by that grant. Every rule of the unit (the invite route for officers, the first
+name, the hand-approval rule, guest approval, approval by the report) applies
+only with the switch on; off, the API behaves as before. One startup line
+names the mode.
+
 Members-only content is filtered in one place (`src/content/tree.ts`,
 `bodyFor` in `src/content/service.ts`): a members passage becomes a bare
 placeholder with no text, length, link or image; a node the API cannot vouch
@@ -221,6 +310,30 @@ by the handler for a precise answer, and by the database (`0007`).
   changes no group or account there. The list holds the latest 50 rejections,
   with no paging (`MAX_REJECTED_LISTED`); when it is full the site says
   "Showing the latest 50", so an older one is never hidden without a word.
+- **Erasing a sign-up record, and correcting a number** (PROFILE-ERASE,
+  `src/membership/service.ts`, migration `0036`): the Admin alone, never on
+  their own sign-up. `ListSignupRecords` lists the decided sign-ups not yet
+  erased. `EraseSignup` erases a person's record when they ask: the display
+  name, the email, the first and last name and the membership number of every
+  decided sign-up of theirs, with what the membership check reported (the
+  local group and the first-name answer, `0033`) and any fresh check. The
+  check's outcome and date, the date and the decision stay, an approved
+  member's account is removed with it, and a pending sign-up is decided first.
+  `CorrectMembershipNumber` is the one way a stored number changes: the
+  number is checked as at sign-up, and the reason is one of three fixed
+  choices (typed wrong at sign-up, the member's card shows a different number,
+  Mensa issued a new number), kept in the audit log as its code with who and
+  when. There is no free text, so the log never holds a number or a name. A
+  number already on another sign-up that is waiting or approved is refused.
+- **Removing a member** (`RemoveMember`): the removal erases the first name,
+  the last name, the membership number and what the check reported (the
+  local group and the first-name answer, and any fresh check, `0033`) on
+  every decided sign-up of the member, a reopened earlier one included, in
+  the same statement (a trigger of
+  `0036`), audited by each sign-up's id. A person removed while still waiting
+  is rejected and keeps what was typed, until the Admin erases it on request.
+  `0036` itself erased the members removed before it. Each erasure analyses
+  the table again, so `pg_stats` holds no erased value.
 
 ## Seeding the calendar and roster
 
@@ -823,8 +936,9 @@ sha256 and what the audience withholds, to the gate as a request of kind
 `PDF_GATE_SOCKET` is set, else the gate's capped in-pod child. The same child,
 under the same limits, reads the pages with pdf.js as a check reads them and
 joins words split at a line end (`src/search/text.ts`). It looks for the
-withheld passages again and answers no text at all if it finds one, so a
-fault upstream cannot put a withheld passage in an index. It answers by code
+withheld passages again, with the gate's own test and then in the joined text
+it would hand over, and answers no text at all if it finds one, so a fault
+upstream cannot put a withheld passage in an index. It answers by code
 only when there is no text: `withheld`, `over-cap` (more than 300 pages,
 64 KiB a page, or 4 MiB in all), `unfinished` or `mismatch`. A check's
 frames are unchanged, so the protocol version stays 3; a gate that does not
@@ -832,18 +946,33 @@ know `text` gives no answer, and the worker logs a reading that failed.
 
 The rows are written only by `search_page_put`, which takes them only while
 the publication ledger says this audience is served the copy with this
-sha256. A mark, a policy change or a new link deletes a file's rows in its
+sha256, and only for a file the public or members may open at all
+(`search_page_servable`, 0034: a PDF on its item's live version, the item
+published and not officers-only, or a PDF of a published edition). A mark, a policy change or a new link deletes a file's rows in its
 own transaction (0032), before the worker has made the next copy.
 
-When it runs: after each regeneration run that finished, and in a sweep that
-starts at each boot and goes ten copies at a time after each drain. The
-sweep first deletes every row whose copy its audience is served no longer
-(`search_page_sweep`), then reads each served copy with no rows at this
-`TEXT_VERSION` (`search_page_lacking`, 0033). Raising `TEXT_VERSION` reads
+When it runs: after each regeneration run that finished, and in a sweep
+after each drain. Each step deletes every row whose copy its audience is
+served no longer, or whose file is not one the public or members may open at
+all: an item not published, officers-only or no longer live, an edition not
+published (`search_page_sweep`, which asks `search_page_servable`). It does
+not ask whether a mark or the policy hides the file from that audience
+(`search_file_servable`): the page writer refuses those, and the search
+refuses any such row it meets (below). From each boot it
+also reads each served copy with no rows at this `TEXT_VERSION`
+(`search_page_lacking`, 0034), ten copies a step. Raising `TEXT_VERSION` reads
 every copy again. A reading that fails writes and deletes nothing, and is
 logged by file, audience and code, never by content: `a PDF copy was not
 indexed`. Both functions are the worker's alone; it reads no index table and
 no ledger row.
+
+A policy cell written outside the API queues every file but re-records no
+version, so a run that finishes before the app's boot backfill re-records the
+item has its put refused. After each batch it re-records, the backfill calls
+`search_page_requeue` (0034, the app's): each of those items' files that an
+audience is served a copy of and may open, but that has no rows of that copy,
+is queued again, without marking its copies stale. The run finds its copies
+made and indexes them.
 
 ### Searching the index (ARCHIVE-SEARCH S3)
 
@@ -863,6 +992,36 @@ answers a query with ten hits a page: pages of issues and published items.
   reads put it (`servableFile`, `itemHidden`, `slugFor`). A hit it hides is
   left out before the page is cut, so neither a page's length nor `has_more`
   says that something withheld matched.
+- **Current now, not only when recorded** (`service.ts`). The ledger's row
+  can outlive what it describes: a deploy that changes the lens or the
+  engine, or a mark or policy cell written by SQL with no re-record. So a
+  page counts only while the copy its audience is served now is ready and is
+  the copy (by its sha) the row was read from, under this `TEXT_VERSION`; an
+  item only while a render of its version now is the row's own sha. This
+  check reads no re-record stamp, so a reset `rerecord_seq` makes no row a
+  hit.
+- **Stale rows cost nothing to refuse** (`sql.ts`). A row is no row of the
+  statement while its item has an active mark, in a category the audience is
+  not shown, written after the row (after the version's last re-record for
+  an item, 0035 `version_rerecorded.at`; after the file's newest ready copy
+  for a page, an edition's file taking the marks of every item it prints).
+  Nor is an item's row while its version has not been re-recorded since the
+  last write to a policy cell (0032 `version_rerecorded.seq` against
+  `policy_change_epoch`): a cell written by SQL, or by the app role through
+  `redaction_propose`, re-records nothing. No live check runs for such a
+  row, so a search's time does not say that a word it withholds matched.
+  This holds while the stamps rise. An owner who resets `rerecord_seq`, or
+  a ledger head stamp ahead of the clock (two transactions then share a
+  stamp), can let such a row reach the live check again (time only; the
+  check still refuses it) or keep a current one out, never make it a hit.
+  No role the app or the worker holds can do either.
+- **How stale rows come back.** The worker's boot sweep makes and reads each
+  copy of a new engine or `TEXT_VERSION`. The boot backfill renders every
+  published item for both audiences and re-records each whose render is not
+  its ledger row's output (a lens change, bumped or not, or a mark or cell
+  written by SQL), then each not re-recorded since a policy cell was last
+  written. Until then such an item is not found; after a cell written
+  outside the API that is until the next boot.
 - **Snippets.** `ts_headline` over the row's own text, for the page answered
   only. The words found sit between U+E000 and U+E001; the text is plain,
   never markup.
@@ -918,13 +1077,17 @@ The rules the database itself enforces:
   version is never deleted;
 - a member's home has no street address, city or link; a `.docx` is
   officers-only; an edition's hosted PDF is a public file of that edition;
-- a sign-up keeps the first name, last name and membership number it typed in
-  every state (0028); the number never changes once stored, for any role, and
-  the names change only on an approved sign-up, the member's profile;
-  `affiliate` needs a recorded grant;
+- a sign-up keeps the first name, last name and membership number it typed
+  (0028) until a member's account is removed, which erases them from every
+  decided sign-up of that person, or the Admin erases
+  the record whole (0036); the number changes only by the Admin's correction,
+  with its audit row, and the names change only on an approved sign-up, the
+  member's profile; `affiliate` needs a recorded grant;
 - a decided sign-up keeps its decision (0009); only a rejected one can be
   reopened, by whom and when recorded together, and a reopened row never
-  changes again (0026). A person has one sign-up at most that is not
+  changes again but to be erased (0026, 0036). An erased row holds no name,
+  number or email, and changes no more, but that a rejected one can still be
+  reopened. A person has one sign-up at most that is not
   reopened, and an account row is deleted only as a reopening deletes it: a
   rejection's closed account (removed, never approved, granted or checked).
   A sign-up row is never deleted: the app role holds no DELETE on it, and a
@@ -934,8 +1097,11 @@ Accepted residual risks, with no code against them:
 
 - The schema owner can disable a trigger or drop a constraint. The migrator
   role runs migrations only; the service never connects as it.
-- A deleted sign-up's membership number still exists in Postgres WAL and in
-  backups until they age out; pg-nwfl's backup retention bounds how long.
+- A deleted or erased sign-up's names, number and email still exist in dead
+  row versions until vacuum, in Postgres WAL and in backups until they age
+  out; pg-nwfl's backup retention (fc-infra `tenants/nwfl/pg-nwfl.yaml`, `retentionPolicy: "3m"`, a daily base backup) bounds how long: about three months.
+  The planner's statistics (pg_stats, which the app role reads) are
+  refreshed by every erasure (0036), so they hold none of it.
 - Free-text fields (an event's detail, a send-back note) could hold someone's
   contact details if an officer types them. The approval screens for members
   have no notes field at all.
@@ -952,3 +1118,6 @@ Accepted residual risks, with no code against them:
 - yaml 2.9.1, a dev dependency, parses the workflows in the api-gate
   self-check.
 - jose 6.2.13 verifies tokens (RS256 and ES256 only).
+- `@opentelemetry/exporter-trace-otlp-grpc` 0.300.0 is the release built on
+  sdk-trace 3.0.0 and core 3.0.0, the versions pinned here; 0.301.x needs
+  sdk-trace 3.1.x, so the four move together or not at all.

@@ -745,6 +745,23 @@ main:focus:not(:focus-visible) { outline: none; }
 .site-footer p { margin: 0 0 var(--space-3); max-width: var(--measure); }
 .site-footer a { display: inline-flex; align-items: center; min-height: var(--target); font-weight: 700; }
 .foot-links { display: flex; flex-wrap: wrap; gap: 0 var(--space-5); }
+/* LOGO-UNIT: the Mensa logo beside the group's name; the name drops below it where the two do not
+   fit a row. The picture is a white mark on clear with its clear space built in (half the mark's
+   width on every side), so the tile is its own background: one solid colour, a theme's own. It is
+   238 by 77 px and does not grow with the reader's size; on a narrower page it shrinks in
+   proportion. Where the system or a printer drops backgrounds the tile stays, or the mark would vanish. */
+.foot-brand { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-4); }
+.foot-brand p { flex: 1 1 12rem; min-width: 0; margin: 0; }
+.foot-logo {
+  display: block;
+  flex: none;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  background: var(--logo-tile);
+  forced-color-adjust: none;
+  print-color-adjust: exact;
+}
 
 /* The home-screen how-to: a drawn phone beside each step. */
 .steps { display: grid; gap: var(--space-6); padding-left: 1.5em; }
@@ -1158,7 +1175,9 @@ a.tile:focus-visible { outline-offset: 2px; }
 .ecards { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); container: ecards / inline-size; }
 .ecard { position: relative; display: grid; grid-template-columns: 3.5rem auto minmax(0, 1fr) auto; gap: var(--space-2); align-items: start; padding: var(--space-3) var(--space-2) var(--space-3) var(--space-3); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); scroll-margin-top: var(--space-4); }
 .ecard > .evicon { width: 1.75rem; height: 1.75rem; margin-top: 0.125rem; color: var(--accent); }
-.ecard__t { display: grid; gap: 2px; min-width: 0; }
+/* EV-CARDS200: a word wider than the card (large browser text on a 300 px screen) wraps inside it,
+   rather than push the page sideways; a word that fits is never broken. */
+.ecard__t { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .ecard__t > * { margin: 0; }
 .ecard h3 { font-size: min(1.25rem, 9vw); }
 .ecard__link { color: var(--ink); text-decoration: none; }
@@ -1177,6 +1196,18 @@ a.tile:focus-visible { outline-offset: 2px; }
   .ecard .dt { grid-column: 1 / -1; justify-self: start; display: flex; align-items: baseline; gap: var(--space-2); padding: 0 var(--space-2); }
   .ecard .dt b { font-size: 1.25rem; }
 }
+/* EV-CARDS200: narrower still in text sizes (large text on a 300 to 320 px screen), the words take the
+   card's whole width under the icon, so an ordinary word ("Wednesday", "Scheduled") stays whole, and
+   the date wraps rather than run off the card. */
+@container ecards (width < 15rem) {
+  .ecard .dt { flex-wrap: wrap; max-width: 100%; }
+  .ecard .status .chip { padding-inline: 0.375rem; }
+  .ecard > .evicon { grid-area: 2 / 1; }
+  .ecard__chev { grid-area: 2 / 3; }
+  .ecard__t { grid-area: 3 / 1 / auto / -1; }
+}
+/* A status wider than the card wraps inside its chip; on one line it is the same pill as before. */
+.ecard .chip { white-space: normal; overflow-wrap: anywhere; border-radius: 1rem; }
 /* An unfolded phone, a tablet: the cards two abreast. */
 @container calendar (min-width: 46rem) {
   .ecards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1184,7 +1215,9 @@ a.tile:focus-visible { outline-offset: 2px; }
 
 /* "Add our calendar": one compact disclosure beneath the listings. */
 .addcal { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.addcal__sum { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-3); font-weight: 700; color: var(--ink); cursor: pointer; list-style: none; border-radius: 11px; }
+/* EV-CARDS200: at 200 % browser text on a 300 px screen the words do not fit beside the icon: they go
+   under it, whole, rather than push the page sideways. Wider, it is one row as before. */
+.addcal__sum { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); min-height: 44px; padding: 0 var(--space-3); font-weight: 700; color: var(--ink); cursor: pointer; list-style: none; border-radius: 11px; }
 .addcal__sum::-webkit-details-marker { display: none; }
 .addcal__sum svg { width: 1.5rem; height: 1.5rem; flex: none; color: var(--accent); }
 .addcal__sum span { flex: 1; }
@@ -1308,7 +1341,24 @@ span.members-note { padding: 0 var(--space-1); border-left-width: 0.1875rem; }
 .event-form .choice { align-items: flex-start; padding-top: var(--space-2); }
 .event-form .choice input { margin-top: 0.125rem; }
 .event-form .choice > div { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
+/* SERIES-UI-2: a choice's own label too ("Wednesday" at 200 % browser text on a 320 px screen). */
+.event-form .choice > label { min-width: 0; overflow-wrap: anywhere; }
 .event-form .field-text { margin: 0; }
+/* SERIES-UI-2: the series form asks a follow-up question only once its choice is made: the weekly days
+   for a weekly pattern, the monthly questions one choice at a time, the end's number or date. By CSS
+   alone, so it works with no script; a question that carries a problem stays shown until the form is
+   sent again, so its link from the list of problems always lands. A browser without :has() skips this
+   block and shows every question, each labelled with the choice it is for. Nothing is removed from the
+   form: a hidden answer is still sent, and the server reads only the answers of the pattern chosen. */
+@supports selector(:has(*)) {
+  .series-form:not(:has(input[name="repeat"]:is([value="weekly"], [value="fortnightly"], [value="every-n"]):checked)) .when-weeks:not(:has(.error)),
+  .series-form:not(:has(input[name="repeat"][value="every-n"]:checked)) .when-every-n:not(:has(.error)),
+  .series-form:not(:has(input[name="repeat"][value="monthly"]:checked)) .when-monthly:not(:has(.error)),
+  .series-form:not(:has(input[name="monthly"][value="weekday"]:checked)) .when-month-weekday:not(:has(.error)),
+  .series-form:not(:has(input[name="monthly"][value="day"]:checked)) .when-month-date:not(:has(.error)),
+  .series-form:not(:has(input[name="ends"][value="count"]:checked)) .when-ends-count:not(:has(.error)),
+  .series-form:not(:has(input[name="ends"][value="until"]:checked)) .when-ends-until:not(:has(.error)) { display: none; }
+}
 .event-form .save-note { margin: 0; padding: var(--space-2) var(--space-3); border: var(--border) solid var(--warn); border-left-width: 0.375rem; border-radius: var(--radius); background: var(--warn-bg); color: var(--ink); font-weight: 700; }
 .our-day { margin: var(--space-5) 0 0; }
 .our-day h2 { overflow-wrap: anywhere; }
@@ -1322,13 +1372,17 @@ dl.kept dd { margin: 0; overflow-wrap: anywhere; }
 dl.kept .kept__text { white-space: pre-wrap; }
 
 /* W-SIGNUP: the approvers' queue: one card per sign-up, its decisions as plain buttons below. */
-.signup-card form, .rejected-card form { margin: 0; }
+.signup-card form, .rejected-card form, .record-card form { margin: 0; }
 /* QUEUE-C: compact cards. The name with its email right under it; then the details as label and value
    pairs (dl.facts--grid): as many to a row as fit at 8.5rem each, never more than four, so two on a
    phone and one at the largest text on a 320 px screen. A value wraps, even inside a long email, and
    is never cut short. The membership check's sentence runs across the card. The cards are set closer
    than the site's other cards (the editor: less wasted height), their type at full size. */
-.signup-card, .rejected-card { gap: var(--space-2); margin: var(--space-3) 0; padding: var(--space-3); }
+.signup-card, .rejected-card, .record-card { gap: var(--space-2); margin: var(--space-3) 0; padding: var(--space-3); }
+/* PROFILE-ERASE: the steps that name a person: a long email or name wraps, even at 200 % text on a phone. */
+.record-step p, .record-step li, .record-step legend { overflow-wrap: anywhere; }
+/* PROFILE-ERASE: a correction's reason as typed, its line breaks kept. */
+dl.facts--grid .reason-text { white-space: pre-wrap; }
 .signup-who { display: grid; gap: 0; }
 .signup-who > * { margin: 0; }
 .signup-who p { overflow-wrap: anywhere; line-height: 1.4; }
@@ -1834,6 +1888,8 @@ html[data-size="175"] .viewer-bar { font-size: 18px; }
    inside its chip, which keeps its outline and rounds less, rather than run off a narrow screen. */
 .writer-card .chip, .item-header .chip { white-space: normal; border-radius: var(--radius); overflow-wrap: anywhere; }
 .editor-form .choice label { min-width: 0; overflow-wrap: anywhere; }
+/* E4-FOLLOWUPS: a title with a word wider than a 320 px screen wraps inside the header, whole and readable. */
+.item-header h1 { overflow-wrap: anywhere; }
 /* A long address in a preview's text wraps, rather than push the frame past a narrow screen. */
 .previews .prose { overflow-wrap: anywhere; }
 /* EDITOR E3 fix 1: "Our news" is a table where the list is wide enough (Title, Office, Status, Last change,

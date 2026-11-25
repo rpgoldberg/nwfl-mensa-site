@@ -85,8 +85,12 @@ describe.skipIf(!live)('the members-only canary', () => {
     'nwfl.mensa.v1.MembershipService': {
       GetMyAccount: () => [{}],
       ListSignupRequests: () => [{}],
+      // OFFICER-VERIFY: one sign-up's decision state, for the queue's banner.
+      GetSignupRequest: () => [{ requestId: ids['signup'] }],
       ListMembers: () => [{}, { recheckDueOnly: true }],
       ListRejectedSignups: () => [{}],
+      // PROFILE-ERASE: the Admin's decided sign-ups.
+      ListSignupRecords: () => [{}],
     },
     'nwfl.mensa.v1.NewsletterService': {
       ListEditions: () => [{}],
@@ -240,10 +244,11 @@ describe.skipIf(!live)('the members-only canary', () => {
   });
 
   beforeAll(async () => {
-    await api.pool.query(
-      `INSERT INTO signup_request (sub, display_name, email, last_name, membership_number) VALUES ('sub-canary-signup', 'Canary Signup', 'canary@example.org', $1, $2)`,
+    const { rows } = await api.pool.query<{ id: string }>(
+      `INSERT INTO signup_request (sub, display_name, email, last_name, membership_number) VALUES ('sub-canary-signup', 'Canary Signup', 'canary@example.org', $1, $2) RETURNING id`,
       [LAST_NAME, NUMBER],
     );
+    ids['signup'] = rows[0]!.id;
   });
 
   it('has a request for every read RPC the port serves', () => {

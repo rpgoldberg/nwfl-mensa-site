@@ -7,6 +7,7 @@ import type { DescService } from '@bufbuild/protobuf';
 import type http2 from 'node:http2';
 import pg from 'pg';
 import type { TokenVerifier, VerifiedToken } from '../../src/auth/caller.js';
+import type { OfficerVerify } from '../../src/auth/config.js';
 import { dbStanding } from '../../src/auth/standing.js';
 import { loginWalled } from '../../src/content/item-links.js';
 import { MachineVerdict } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
@@ -53,6 +54,15 @@ export const PEOPLE: Record<string, VerifiedToken> = {
   'spacer-token': { client: 'site', subject: 'sub-spacer', groups: ['nwfl-pending'], scopes: [], name: 'Sky Spacer', email: 'sky@example.org' },
   // PROFILE-ID: a person whose sign-up is refused for a mistyped number, so no error is seen to give it back.
   'typo-token': { client: 'site', subject: 'sub-typo', groups: ['nwfl-pending'], scopes: [], name: 'Lee Typo', email: 'lee@example.org' },
+  // PROFILE-ERASE: a member an officer removes, and a person whose sign-up claims a number already claimed.
+  'leaver-token': { client: 'site', subject: 'sub-leaver', groups: ['nwfl-pending'], scopes: [], name: 'Blake Leaver', email: 'blake@example.org' },
+  'claimant-token': { client: 'site', subject: 'sub-claimant', groups: ['nwfl-pending'], scopes: [], name: 'Reese Claimant', email: 'reese@example.org' },
+  // PROFILE-ERASE fix 1: a member once turned down and reopened, then removed; a person removed while still
+  // waiting; a member and a person waiting whose numbers a correction may not take.
+  'returner-token': { client: 'site', subject: 'sub-returner', groups: ['nwfl-pending'], scopes: [], name: 'Casey Returner', email: 'casey@example.org' },
+  'waiter-token': { client: 'site', subject: 'sub-waiter', groups: ['nwfl-pending'], scopes: [], name: 'Drew Waiting', email: 'drew@example.org' },
+  'holder-token': { client: 'site', subject: 'sub-holder', groups: ['nwfl-pending'], scopes: [], name: 'Jordan Holder', email: 'jordan@example.org' },
+  'pender-token': { client: 'site', subject: 'sub-pender', groups: ['nwfl-pending'], scopes: [], name: 'Riley Pending', email: 'riley@example.org' },
   // The Membership Officer: approves sign-ups; also signs up once, to show no one decides their own.
   'approver-token': {
     client: 'site',
@@ -104,12 +114,22 @@ export interface Api {
 /** Thursday 2026-10-22, 10:00 Central. */
 export const NOW = new Date('2026-10-22T15:00:00Z');
 
-export async function startApi(
-  prefix: string,
-  /** `search`: the search limits to run with, where a suite searches faster than production allows (ARCHIVE-SEARCH S3). */
-  options: { verifier?: TokenVerifier; now?: () => Date; groupPrefix?: string; search?: Partial<SearchLimits> } = {},
-): Promise<Api> {
+export async function startApi(prefix: string, options: {
+    verifier?: TokenVerifier;
+    now?: () => Date;
+    groupPrefix?: string;
+    /** OFFICER_VERIFY=on; default off. */
+    officerVerify?: boolean;
+    /** CHAPTER_GROUP_NAME; default the chapter's own. Read only when switched on, as the API reads it. */
+    chapterGroup?: string | null;
+    /** The search limits to run with, where a suite searches faster than production allows (ARCHIVE-SEARCH S3). */
+    search?: Partial<SearchLimits>;
+  } = {},): Promise<Api> {
   const now = options.now ?? ((): Date => NOW);
+  // As auth/config.ts: switched on, with the chapter's group (it refuses to start without one); off, none.
+  const chapterGroup = options.chapterGroup === undefined ? 'Northwest Florida Mensa' : options.chapterGroup;
+  if (options.officerVerify === true && chapterGroup === null) throw new Error('switched on needs a chapter group, as the API does');
+  const mode: OfficerVerify | null = options.officerVerify === true ? { chapterGroup: chapterGroup as string } : null;
   const db = await freshDatabase(prefix);
   const run = await migrate(db);
   if (run.code !== 0) throw new Error(`migrate failed: ${run.stderr}`);
@@ -122,8 +142,8 @@ export async function startApi(
   const { lines, sink } = captureLogs();
   const logger = createStructuredLogger({ sink });
   const server: http2.Http2Server = createGrpcServer({
-    routes: apiRoutes({ db: pool, logger, now, ...(options.search === undefined ? {} : { search: options.search }), readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
-    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now), groupPrefix: options.groupPrefix }),
+    routes: apiRoutes({ db: pool, logger, now, officerVerify: mode, ...(options.search === undefined ? {} : { search: options.search }), readiness: { draining: false, startDraining: () => {}, check: () => Promise.resolve({ ready: true, db: 'ok', draining: false }) } }),
+    interceptors: apiInterceptors({ logger, verifier: options.verifier ?? fakeVerifier, standing: dbStanding(pool, now, mode?.chapterGroup ?? null), groupPrefix: options.groupPrefix, officerVerify: mode !== null }),
     // As in production: the gate's verifier also admits edge streams.
     verifier: options.verifier ?? fakeVerifier,
   });

@@ -12,10 +12,10 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { newSession } from '../../../server/session.mjs';
 import { TokenStore } from '../../../server/token-store.mjs';
-import { AccountRoute, MemberStatus, MembershipService, RejectedSignupSchema, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, CorrectionReason, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerCheck, OfficerTools, RejectedSignupSchema, SignupDecision, SignupRequestSchema, Verification } from '../../gen/nwfl/mensa/v1/membership_pb.js';
 import type { Tokens } from '../auth/oidc';
 import { ApiUnavailable } from './client';
-import { DecisionRefused, MembershipSignInAgain, ProfileRefused, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
+import { CorrectionRefused, DecisionRefused, MembershipSignInAgain, ProfileRefused, SignupRefused, grpcMembership, membershipApi, membershipFromEnv, sessionReader, unavailableMembership } from './membership';
 
 const closers: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -231,6 +231,25 @@ describe('grpcMembership: the approvers\' queue', () => {
     expect(seen).toEqual([false, true, false]);
   });
 
+  // Ruling 3: an approved member's fresh check that found an email mismatch waits in the queue, marked as such.
+  it('reads a fresh check held for an approver as one, and a first sign-up as not', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: [
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Robin Again', email: 'robin@example.org', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH, freshCheck: true }),
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Robin First', email: 'robin@example.net', route: AccountRoute.SIGNUP, verification: Verification.EMAIL_MISMATCH }),
+          ],
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.listSignupRequests(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Robin Again', email: 'robin@example.org', route: 'signup', verification: 'email_mismatch', freshCheck: true },
+      { requestId: ID, displayName: 'Robin First', email: 'robin@example.net', route: 'signup', verification: 'email_mismatch' },
+    ]);
+  });
+
   it('VET fix 1: reads an earlier claim since closed as closed, with no name', async () => {
     const EARLIER = new Date('2026-09-15T14:00:00Z');
     const server = await grpcServer((router) =>
@@ -430,6 +449,161 @@ describe('grpcMembership: failures', () => {
     await expect(api.listSignupRequests(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.approveSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
     await expect(api.rejectSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(api.getMyStanding(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+    // No banner when the API is down: no answer, never a failure.
+    expect(await api.getSignupDecision(PERSON, ID)).toBeUndefined();
+  });
+});
+
+// OFFICER-VERIFY: the officer tools, the local group, the first-name check, and one sign-up's decision.
+describe('grpcMembership: OFFICER-VERIFY', () => {
+  // Fix round 3: what opens the tools of an approved account whose officer tools wait.
+  it('reads what opens waiting officer tools, and leaves out a value it does not know', async () => {
+    const account = { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP };
+    let officerCheck: number = OfficerCheck.CONFIRM_DETAILS;
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, { getMyAccount: () => ({ account, officerTools: OfficerTools.AWAITING_CHECK, officerCheck: officerCheck as OfficerCheck }) }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    for (const [wire, name] of [
+      [OfficerCheck.CONFIRM_DETAILS, 'confirm_details'],
+      [OfficerCheck.RUNNING, 'running'],
+      [OfficerCheck.NOT_CONFIRMED, 'not_confirmed'],
+      [OfficerCheck.NEEDS_GRANT, 'needs_grant'],
+      [OfficerCheck.AWAITING_APPROVER, 'awaiting_approver'],
+    ] as const) {
+      officerCheck = wire;
+      expect(await api.getMyStanding(PERSON)).toEqual({ account: { status: 'member', route: 'signup' }, officerTools: 'awaiting_check', officerCheck: name });
+    }
+    // None said, or one a newer API added: the page still loads, with the plain notice.
+    for (const wire of [OfficerCheck.UNSPECIFIED, 9]) {
+      officerCheck = wire;
+      expect(await api.getMyStanding(PERSON)).toEqual({ account: { status: 'member', route: 'signup' }, officerTools: 'awaiting_check' });
+    }
+  });
+
+  it('reads the officer tools with the account, and with no account at all', async () => {
+    let answer: object = { officerTools: OfficerTools.AWAITING_CHECK };
+    const server = await grpcServer((router) => router.service(MembershipService, { getMyAccount: () => answer }));
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.getMyStanding(PERSON)).toEqual({ officerTools: 'awaiting_check' });
+    answer = { account: { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, localGroupStanding: LocalGroupStanding.CHAPTER }, officerTools: OfficerTools.OPEN };
+    expect(await api.getMyStanding(PERSON)).toEqual({ account: { status: 'member', route: 'invite', localGroup: 'chapter' }, officerTools: 'open' });
+    answer = {};
+    expect(await api.getMyStanding(PERSON)).toEqual({ officerTools: 'none' });
+    expect(server.headers.every((h) => h['authorization'] === 'Bearer person.tok-en')).toBe(true);
+  });
+
+  it('reads a guest member and an unlisted group, and the profile\'s local group', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        getMyAccount: () => ({
+          account: { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP, localGroupStanding: LocalGroupStanding.GUEST_UNLISTED },
+          profile: { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER, localGroup: 'Atlantis Mensa' },
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.getMyAccount(PERSON)).toEqual({
+      status: 'member',
+      route: 'signup',
+      localGroup: 'guest_unlisted',
+      profile: { firstName: 'Jordan', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER, localGroup: 'Atlantis Mensa' },
+    });
+  });
+
+  it('refuses officer tools it cannot read', async () => {
+    const server = await grpcServer((router) => router.service(MembershipService, { getMyAccount: () => ({ officerTools: 9 as OfficerTools }) }));
+    await expect(grpcMembership(config(server.url), () => {}).getMyStanding(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+
+  it('lists the first-name check and the reported local group with each pending sign-up', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: [
+            create(SignupRequestSchema, {
+              requestId: ID,
+              displayName: 'Jesse Example',
+              email: 'jesse@example.org',
+              route: AccountRoute.INVITE,
+              verification: Verification.VERIFIED_LOCAL,
+              firstNameMatched: false,
+              localGroup: 'Boston Mensa',
+              localGroupStanding: LocalGroupStanding.GUEST,
+            }),
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Kendall Sample', email: 'kendall@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED }),
+          ],
+        }),
+      }),
+    );
+    expect(await grpcMembership(config(server.url), () => {}).listSignupRequests(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Jesse Example', email: 'jesse@example.org', route: 'invite', verification: 'verified_local', firstNameMatched: false, localGroup: 'Boston Mensa', localGroupStanding: 'guest' },
+      { requestId: ID, displayName: 'Kendall Sample', email: 'kendall@example.org', route: 'signup', verification: 'unchecked' },
+    ]);
+  });
+
+  // Fix round 1: the API says (switched on only) whether each sign-up may be approved by hand; unspecified
+  // (switched off) is left out, and the page then keeps the rule as before.
+  it('reads what an approver may do with each sign-up by hand, and refuses an answer it cannot read', async () => {
+    let answer = [HandApproval.OPEN, HandApproval.AS_GUEST, HandApproval.NEEDS_CHECK, HandApproval.UNSPECIFIED];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRequests: () => ({
+          requests: answer.map((handApproval) =>
+            create(SignupRequestSchema, { requestId: ID, displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, handApproval }),
+          ),
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect((await api.listSignupRequests(PERSON)).map((r) => r.handApproval)).toEqual(['open', 'as_guest', 'needs_check', undefined]);
+    expect((await api.listSignupRequests(PERSON)).at(-1)).not.toHaveProperty('handApproval');
+    answer = [9 as HandApproval];
+    await expect(api.listSignupRequests(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+
+  it('reads one sign-up\'s decision by its id, and nothing at all on any failure', async () => {
+    let decision: SignupDecision | Error = SignupDecision.APPROVED;
+    const seen: string[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        getSignupRequest: (req) => {
+          seen.push(req.requestId);
+          if (decision instanceof Error) throw decision;
+          return { decision };
+        },
+      }),
+    );
+    const logs: string[] = [];
+    const api = grpcMembership(config(server.url), (line) => logs.push(line));
+    expect(await api.getSignupDecision(PERSON, ID)).toBe('approved');
+    expect(seen).toEqual([ID]);
+    for (const [answer, name] of [
+      [SignupDecision.PENDING, 'pending'],
+      [SignupDecision.REJECTED, 'rejected'],
+      [SignupDecision.REOPENED, 'reopened'],
+    ] as const) {
+      decision = answer;
+      expect(await api.getSignupDecision(PERSON, ID)).toBe(name);
+    }
+    for (const failure of [SignupDecision.UNSPECIFIED, new ConnectError('gone', Code.NotFound), new ConnectError('no', Code.PermissionDenied), new ConnectError('down', Code.Unavailable)]) {
+      decision = failure;
+      expect(await api.getSignupDecision(PERSON, ID)).toBeUndefined();
+    }
+    // A bearer that cannot be sent, and an id that is not one, never reach the API.
+    expect(await api.getSignupDecision({ bearer: 'two words' }, ID)).toBeUndefined();
+    expect(await api.getSignupDecision(PERSON, 'approved')).toBeUndefined();
+    expect(seen).toHaveLength(8);
+    expect(logs.join('\n')).not.toContain(ID);
+    // Gone or not theirs is a refusal (warn); the API down is a failure (error).
+    expect(logs.map((l) => JSON.parse(l) as { level: string; msg: string; code: string })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ level: 'warn', msg: 'api gave no sign-up for the banner', code: 'not_found' }),
+        expect.objectContaining({ level: 'warn', msg: 'api gave no sign-up for the banner', code: 'permission_denied' }),
+        expect.objectContaining({ level: 'error', msg: 'api call failed', code: 'unavailable' }),
+      ]),
+    );
   });
 });
 
@@ -613,5 +787,147 @@ describe('grpcMembership: what was typed, and the member\'s profile (PROFILE-ID)
     expect(lines).toHaveLength(4);
     expect(lines.join('\n')).not.toMatch(new RegExp(`${FAKE_NUMBER}|${FAKE_LAST}|Jordan`));
     await expect(unavailableMembership().updateMyProfile(PERSON, { firstName: 'Jordan', lastName: FAKE_LAST })).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+});
+
+describe('grpcMembership: PROFILE-ERASE, the Admin\'s records', () => {
+  const DECIDED = new Date('2026-11-05T16:00:00Z');
+
+  it('lists the decided sign-ups by name, with what was typed, the decision and the account', async () => {
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        listSignupRecords: () => ({
+          records: [
+            { requestId: ID, displayName: 'Kai Example', email: 'kai@example.org', firstName: 'Kai', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER, decision: SignupDecision.APPROVED, decidedAt: timestampFromDate(DECIDED), accountStatus: MemberStatus.MEMBER },
+            { requestId: ID, displayName: 'Lee Example', email: 'lee@example.org', decision: SignupDecision.REJECTED, accountStatus: MemberStatus.REMOVED },
+            { requestId: ID, displayName: 'Sam Example', email: 'sam@example.org', decision: SignupDecision.REOPENED },
+          ],
+        }),
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    expect(await api.listSignupRecords(PERSON)).toEqual([
+      { requestId: ID, displayName: 'Kai Example', email: 'kai@example.org', firstName: 'Kai', lastName: FAKE_LAST, membershipNumber: FAKE_NUMBER, decision: 'approved', decidedAt: DECIDED, status: 'member' },
+      { requestId: ID, displayName: 'Lee Example', email: 'lee@example.org', decision: 'rejected', status: 'removed' },
+      { requestId: ID, displayName: 'Sam Example', email: 'sam@example.org', decision: 'reopened' },
+    ]);
+    expect(server.headers[0]?.['authorization']).toBe('Bearer person.tok-en');
+  });
+
+  // Merge with OFFICER-VERIFY: the shared SignupDecision now has PENDING too (GetSignupRequest); a record is decided.
+  it.each([
+    ['unset', SignupDecision.UNSPECIFIED],
+    ['pending', SignupDecision.PENDING],
+  ])('refuses a record whose decision it cannot read: %s', async (_what, decision) => {
+    const server = await grpcServer((router) => router.service(MembershipService, { listSignupRecords: () => ({ records: [{ requestId: ID, decision }] }) }));
+    await expect(grpcMembership(config(server.url), () => {}).listSignupRecords(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+  });
+
+  it('erases a record with the Admin\'s bearer, and says how many and whether access ended', async () => {
+    const seen: string[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        eraseSignup: (req) => {
+          seen.push(req.requestId);
+          return { erased: 2, accessEnded: true };
+        },
+      }),
+    );
+    expect(await grpcMembership(config(server.url), () => {}).eraseSignup(PERSON, ID)).toEqual({ erased: 2, accessEnded: true });
+    expect(seen).toEqual([ID]);
+    expect(server.headers[0]?.['authorization']).toBe('Bearer person.tok-en');
+  });
+
+  it.each([
+    [Code.PermissionDenied, 'own'],
+    [Code.FailedPrecondition, 'closed'],
+    [Code.NotFound, 'closed'],
+    [Code.InvalidArgument, 'closed'],
+  ] as const)('says an erasure the API refuses (%s) by kind, logged by call and code only', async (code, reason) => {
+    const lines: string[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        eraseSignup: () => {
+          throw new ConnectError(`secret ${FAKE_NUMBER}`, code);
+        },
+      }),
+    );
+    const error = await grpcMembership(config(server.url), (line) => lines.push(line)).eraseSignup(PERSON, ID).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(DecisionRefused);
+    expect((error as DecisionRefused).reason).toBe(reason);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ level: 'warn', rpc: 'EraseSignup' });
+    expect(lines.join('')).not.toContain(FAKE_NUMBER);
+    expect(lines.join('')).not.toContain('person.tok-en');
+  });
+
+  it('corrects a number with the Admin\'s bearer, sending the number and the reason as its code', async () => {
+    const seen: object[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        correctMembershipNumber: (req) => {
+          seen.push({ requestId: req.requestId, membershipNumber: req.membershipNumber, reason: req.reason });
+          return {};
+        },
+      }),
+    );
+    const api = grpcMembership(config(server.url), () => {});
+    for (const reason of ['typed_wrong', 'card_differs', 'new_number'] as const) await api.correctMembershipNumber(PERSON, ID, { membershipNumber: FAKE_NUMBER, reason });
+    expect(seen).toEqual([
+      { requestId: ID, membershipNumber: FAKE_NUMBER, reason: CorrectionReason.TYPED_WRONG },
+      { requestId: ID, membershipNumber: FAKE_NUMBER, reason: CorrectionReason.CARD_DIFFERS },
+      { requestId: ID, membershipNumber: FAKE_NUMBER, reason: CorrectionReason.NEW_NUMBER },
+    ]);
+  });
+
+  it.each([
+    [Code.InvalidArgument, 'invalid'],
+    [Code.PermissionDenied, 'own'],
+    [Code.FailedPrecondition, 'closed'],
+    [Code.NotFound, 'closed'],
+    [Code.AlreadyExists, 'taken'],
+  ] as const)('says a correction the API refuses (%s) by kind, and never logs the number or the reason', async (code, reason) => {
+    const lines: string[] = [];
+    const server = await grpcServer((router) =>
+      router.service(MembershipService, {
+        correctMembershipNumber: () => {
+          throw new ConnectError(`secret ${FAKE_NUMBER}`, code);
+        },
+      }),
+    );
+    const error = await grpcMembership(config(server.url), (line) => lines.push(line))
+      .correctMembershipNumber(PERSON, ID, { membershipNumber: FAKE_NUMBER, reason: 'card_differs' })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CorrectionRefused);
+    expect((error as CorrectionRefused).reason).toBe(reason);
+    expect(JSON.parse(lines[0] as string)).toMatchObject({ level: 'warn', msg: 'api refused the correction', rpc: 'CorrectMembershipNumber' });
+    expect(lines.join('')).not.toContain(FAKE_NUMBER);
+    expect(lines.join('')).not.toContain('card_differs');
+  });
+
+  it('asks to sign in again when the token is refused, and is unavailable when the API is set up wrongly or fails', async () => {
+    const refuse = () => {
+      throw new ConnectError('invalid token', Code.Unauthenticated);
+    };
+    const server = await grpcServer((router) => router.service(MembershipService, { listSignupRecords: refuse, eraseSignup: refuse, correctMembershipNumber: refuse }));
+    const api = grpcMembership(config(server.url), () => {});
+    await expect(api.listSignupRecords(PERSON)).rejects.toBeInstanceOf(MembershipSignInAgain);
+    await expect(api.eraseSignup(PERSON, ID)).rejects.toBeInstanceOf(MembershipSignInAgain);
+    await expect(api.correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'typed_wrong' })).rejects.toBeInstanceOf(MembershipSignInAgain);
+    await expect(unavailableMembership().listSignupRecords(PERSON)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(unavailableMembership().eraseSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(unavailableMembership().correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'typed_wrong' })).rejects.toBeInstanceOf(ApiUnavailable);
+    const down = await grpcServer((router) =>
+      router.service(MembershipService, {
+        eraseSignup: () => {
+          throw new ConnectError('boom', Code.Internal);
+        },
+        correctMembershipNumber: () => {
+          throw new ConnectError('boom', Code.Internal);
+        },
+      }),
+    );
+    await expect(grpcMembership(config(down.url), () => {}).eraseSignup(PERSON, ID)).rejects.toBeInstanceOf(ApiUnavailable);
+    await expect(grpcMembership(config(down.url), () => {}).correctMembershipNumber(PERSON, ID, { membershipNumber: '1', reason: 'typed_wrong' })).rejects.toBeInstanceOf(ApiUnavailable);
   });
 });

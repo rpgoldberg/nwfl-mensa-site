@@ -8,6 +8,7 @@
 // positive control beside it, so a search that finds nothing for everyone cannot pass.
 //
 // The PDFs are synthetic, made here with pdf-lib: never a real issue. Every person is made up.
+import { createHash } from 'node:crypto';
 import { Code, ConnectError, type Client } from '@connectrpc/connect';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -468,7 +469,13 @@ describe.skipIf(!live)('SearchService.Search', () => {
 
     it('drops an issue\'s pages when the issue is taken down, though its rows and its ledger row stand (read rule c)', async () => {
       expect(issuePages(await find(MARMALADE, MEMBER))).toHaveLength(1);
+      const columns = 'file_id, item_id, page, served_sha256, text_version, text, extra';
+      const kept = (await owner.query<Record<string, unknown>>(`SELECT ${columns} FROM search_page_members WHERE file_id = $1`, [inner.files['members']])).rows;
       await content.withdraw({ itemId: inner.itemId }, WEBMASTER);
+      // Merged rule (S1, 0032 search_page_unservable): the withdrawal itself drops the rows. They are put back as a put that
+      // raced the withdrawal would leave them, so the read's own rule c is what is tested here.
+      expect((await owner.query(`SELECT 1 FROM search_page_members WHERE file_id = $1`, [inner.files['members']])).rowCount).toBe(0);
+      for (const row of kept) await owner.query(`INSERT INTO search_page_members (${columns}) VALUES ($1, $2, $3, $4, $5, $6, $7)`, Object.values(row));
       expect((await owner.query(`SELECT 1 FROM search_page_members WHERE file_id = $1`, [inner.files['members']])).rowCount).toBe(1);
       for (const who of [ANYONE, MEMBER, OFFICER]) expect((await find(MARMALADE, who)).hits).toEqual([]);
       // The ledger's row for the file did not move: the item's state alone stands in the way.
@@ -494,7 +501,19 @@ describe.skipIf(!live)('SearchService.Search', () => {
       expect((await owner.query<{ action: string }>(`SELECT action FROM redaction_policy WHERE audience = 'public' AND category = 'member_name'`)).rows.map((row) => row.action)).toEqual(['hide']);
       const made = await issue('Synthetic issue, guest', { public: Array.from({ length: 12 }, (_unused, n) => [`The zucchini census, part ${n + 1}`]) }, 'Perrin Vale');
       expect(await work()).toBe(1);
-      // The control: the file's rule (pdf/store.ts) knows nothing of the byline, so the public's index does hold the pages, with the ledger's sha.
+      // Merged rule (S1 fix 2, B1: the page writer refuses a file servableFile refuses): no page of it is put. The file's rule
+      // (pdf/store.ts) knows nothing of the byline, so the ledger says the public is served a copy; the twelve pages are planted
+      // under that copy's sha, as a put that slipped through would leave them, so the read's own refusal is what is tested.
+      expect((await owner.query(`SELECT 1 FROM search_page_public WHERE file_id = $1`, [made.files['public']])).rowCount).toBe(0);
+      const copy = await owner.query<{ output: Buffer }>(
+        `SELECT output_sha256 AS output FROM publication_ledger WHERE subject_kind = 'stored_file' AND subject_id = $1 AND audience = 'public' AND current_to IS NULL AND inputs ->> 'served' = 'copy'`,
+        [made.files['public']],
+      );
+      for (let n = 1; n <= 12; n++) {
+        await owner.query(`INSERT INTO search_page_public (file_id, item_id, page, served_sha256, text_version, text, extra) VALUES ($1, $2, $3, $4, 1, $5, '')`, [
+          made.files['public'], made.itemId, n, copy.rows[0]!.output, `The zucchini census, part ${n}`,
+        ]);
+      }
       const held = await owner.query(
         `SELECT 1 FROM search_page_public p JOIN publication_ledger l ON l.subject_kind = 'stored_file' AND l.subject_id = p.file_id AND l.audience = 'public' AND l.current_to IS NULL AND l.output_sha256 = p.served_sha256
           WHERE p.file_id = $1`,
@@ -521,20 +540,31 @@ describe.skipIf(!live)('SearchService.Search', () => {
     });
 
     it('labels a published edition\'s own PDF by the edition, and gives nothing of an edition not yet published', async () => {
+      // Fixture made through the real store and worker since the merge round: the read now also asks whether the copy the
+      // public is served now is the one the ledger's row names (P1d), which a planted ledger row with no original cannot say.
       const edition = async (slug: string, title: string, status: string, word: string): Promise<string> => {
+        const bytes = await pagesPdf([['Cover of the issue'], ['Contents of the issue'], [`The ${word} trophy goes to the trivia team`]]);
         const id = await insertId(api.pool, `INSERT INTO edition (slug, title, kind, period_start, period_end, status) VALUES ($1, $2, 'regular', $3, $4, $5) RETURNING id`, [slug, title, `${slug}-01`, `${slug}-28`, status]);
         const fileId = (
           await owner.query<{ id: string }>(
-            `INSERT INTO stored_file (edition_id, object_key, filename, mime_type, size_bytes, sha256, audience) VALUES ($1, $2, $2, 'application/pdf', 10, sha256(convert_to($2, 'UTF8')), 'public') RETURNING id`,
-            [id, `${slug}.pdf`],
+            `INSERT INTO stored_file (edition_id, object_key, filename, mime_type, size_bytes, sha256, audience) VALUES ($1, $2, $2, 'application/pdf', $3, $4, 'public') RETURNING id`,
+            [id, `${slug}.pdf`, bytes.length, createHash('sha256').update(bytes).digest()],
           )
         ).rows[0]!.id;
-        await owner.query(`SELECT publication_ledger_record('stored_file', $1, 'public', sha256('edition copy'), '{"v":1,"served":"copy"}', 0)`, [fileId]);
-        await owner.query(`INSERT INTO search_page_public (file_id, page, served_sha256, text_version, text, extra) VALUES ($1, 3, sha256('edition copy'), 1, $2, '')`, [fileId, `The ${word} trophy goes to the trivia team`]);
+        await storeOriginal(api.pool, { fileId, bytes, ...STORER });
         return fileId;
       };
       const out = await edition('2026-02', 'Pensa Mensa, February 2026', 'published', 'gyroscope');
-      await edition('2026-03', 'Pensa Mensa, March 2026', 'proof', 'theodolite');
+      const proof = await edition('2026-03', 'Pensa Mensa, March 2026', 'proof', 'theodolite');
+      expect(await work()).toBe(2);
+      // The proof's copy is made and recorded, but none of its pages is put (read rule c on the write side). A row planted for
+      // it under the ledger's current output is not returned either.
+      const ledger = await owner.query<{ output: Buffer }>(
+        `SELECT output_sha256 AS output FROM publication_ledger WHERE subject_kind = 'stored_file' AND subject_id = $1 AND audience = 'public' AND current_to IS NULL AND inputs ->> 'served' = 'copy'`,
+        [proof],
+      );
+      expect(ledger.rows).toHaveLength(1);
+      await owner.query(`INSERT INTO search_page_public (file_id, page, served_sha256, text_version, text, extra) VALUES ($1, 3, $2, 1, 'The theodolite trophy goes to the trivia team', '')`, [proof, ledger.rows[0]!.output]);
       expect(issuePages(await find('gyroscope')).map((hit) => [hit.fileId, hit.issueLabel, hit.page])).toEqual([[out, 'Pensa Mensa, February 2026', 3]]);
       expect((await find('theodolite')).hits).toEqual([]);
       expect(issuePages(await find('trophy'))).toHaveLength(1);

@@ -33,6 +33,18 @@
 // REOPEN: the Admin and the Membership Officer's seat list the rejections and reopen one, never their
 // own; a reopening is kept for everyone, as in the API, so the rejected person's own sign-in sees its
 // account gone and gets the form again. Each browser project reopens its own person (REJECTED).
+// OFFICER-VERIFY: as the API with OFFICER_VERIFY off, every officer persona's tools are open and it needs
+// no account, as before; "officer-unverified" (UNVERIFIED_OFFICER_SUBJECT) is the API switched on: its
+// tools wait for the check (AWAITING_CHECK) until an approval this stand-in never makes, its sign-up takes
+// the invite route and needs the first name. In the queue, the cards the API switched on would describe
+// carry the first-name check, the local group and what an approver may do by hand (handApproval: Indy
+// waits for the check, Lou is approved as a guest), and the stand-in holds to it; the others are as
+// before (Harper, found in another group, is not approved). Fix round 3, also as the API switched on:
+// "officer-recheck" is an approved member whose officer tools wait for a check that confirms the first
+// name (officer_check CONFIRM_DETAILS): sending the names again asks for a fresh check (RUNNING for the
+// rest of that sign-in, and a second one is refused); "officer-guest" is an approved guest member whose
+// tools wait for the Admin's grant (NEEDS_GRANT). GetSignupRequest says where one sign-up
+// stands, for this sign-in's decisions and the reopenings (WEB-SMALL-1).
 // PROFILE-ID: the queue and the rejections carry what each sign-up typed (names and number), and a
 // duplicate claim what its earlier claim typed (none once closed). The member "Jordan Example" has a
 // profile (MEMBER_PROFILE), changed per sign-in by UpdateMyProfile, which takes the two names only.
@@ -58,7 +70,7 @@ import http2 from 'node:http2';
 import net from 'node:net';
 import { ApprovalRule, ApprovalRuleService, ApprovalScope } from '../src/gen/nwfl/mensa/v1/approval_pb.js';
 import { ContentItemSchema, ContentKind, ContentService, FileAudience, FileRole, ItemState, ItemVisibility, LinkTargetKind, LinkTargetStatus } from '../src/gen/nwfl/mensa/v1/content_pb.js';
-import { AccountRoute, MemberStatus, MembershipService, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
+import { AccountRoute, CorrectionReason, HandApproval, LocalGroupStanding, MemberStatus, MembershipService, OfficerCheck, OfficerTools, SignupDecision, Verification } from '../src/gen/nwfl/mensa/v1/membership_pb.js';
 import { Area, EventCategory, EventOccurrenceSchema, EventService, EventVisibility, OccurrenceStatus, VenueKind } from '../src/gen/nwfl/mensa/v1/event_pb.js';
 import { OfficeKind, TermStatus } from '../src/gen/nwfl/mensa/v1/roster_pb.js';
 import { SearchService } from '../src/gen/nwfl/mensa/v1/search_pb.js';
@@ -642,9 +654,25 @@ const ENROLEE_PENDING_SUBJECT = '00000000-0000-4000-8000-0000000000c2';
 /** W-SIGNUP fix 1: a sign-up an approver rejected; the API removed the account with it, never checked. */
 const TURNED_DOWN_SUBJECT = '00000000-0000-4000-8000-0000000000d5';
 const APPROVER_SUBJECT = '00000000-0000-4000-8000-0000000000d3';
+/** OFFICER-VERIFY: an officer whose tools wait for the membership check (e2e/idp.mjs officer-unverified). */
+const UNVERIFIED_OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000fa';
+const CHAPTER = 'Northwest Florida Mensa';
+/** OFFICER-VERIFY fix round 3: approved accounts whose officer tools wait (e2e/idp.mjs officer-recheck, officer-guest). */
+const RECHECK_OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000fb';
+const GUEST_OFFICER_SUBJECT = '00000000-0000-4000-8000-0000000000fc';
+const WAITING_OFFICERS = new Set([UNVERIFIED_OFFICER_SUBJECT, RECHECK_OFFICER_SUBJECT, GUEST_OFFICER_SUBJECT]);
+/** @type {Record<string, { firstName: string, lastName: string, membershipNumber: string, localGroup: string }>} their profiles, as approved */
+const WAITING_PROFILES = {
+  [RECHECK_OFFICER_SUBJECT]: { firstName: 'Robbie', lastName: 'Placeholder', membershipNumber: '000033011', localGroup: CHAPTER },
+  [GUEST_OFFICER_SUBJECT]: { firstName: 'Gale', lastName: 'Placeholder', membershipNumber: '000033012', localGroup: 'Boston Mensa' },
+};
+/** @type {Set<string>} the sign-ins that asked for a fresh check, by the token's jti */
+const RECHECKS = new Set();
+/** OFFICER-VERIFY: the groups that carry an officer power (the API's groups.ts isPowerGroup). @param {string[]} groups */
+const holdsPower = (groups) => groups.some((g) => ['nwfl-officers', 'nwfl-admin', 'nwfl-webmaster', 'nwfl-membership-approvers'].includes(g) || /^nwfl-office-./.test(g));
 const CHECKED = { year: 2026, month: 10, day: 20 };
 const SIGNUP_QUEUE = [
-  { requestId: 'b1000000-0000-4000-8000-000000000001', firstName: 'Jesse', lastName: 'Example', membershipNumber: '000011001', sub: '00000000-0000-4000-8000-0000000001e1', displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T15:00:00Z') },
+  { requestId: 'b1000000-0000-4000-8000-000000000001', firstName: 'Jesse', lastName: 'Example', membershipNumber: '000011001', sub: '00000000-0000-4000-8000-0000000001e1', displayName: 'Jesse Example', email: 'jesse@example.org', route: AccountRoute.INVITE, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T15:00:00Z'), firstNameMatched: true, localGroup: CHAPTER, localGroupStanding: LocalGroupStanding.CHAPTER, handApproval: HandApproval.OPEN },
   { requestId: 'b1000000-0000-4000-8000-000000000002', firstName: 'Kendall', lastName: 'Sample', membershipNumber: '000011002', sub: '00000000-0000-4000-8000-0000000001e2', displayName: 'Kendall Sample', email: 'kendall@example.org', route: AccountRoute.SIGNUP, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 2 }, createdAt: new Date('2026-11-01T16:00:00Z') },
   { requestId: 'b1000000-0000-4000-8000-000000000003', firstName: 'Harper', lastName: 'Placeholder', membershipNumber: '000011003', sub: '00000000-0000-4000-8000-0000000001e3', displayName: 'Harper Placeholder', email: 'harper@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_OTHER_GROUP, verifiedOn: { year: 2026, month: 11, day: 3 }, createdAt: new Date('2026-11-02T15:00:00Z') },
   { requestId: 'b1000000-0000-4000-8000-000000000004', firstName: 'Blair', lastName: 'Example', membershipNumber: '000011004', sub: APPROVER_SUBJECT, displayName: 'Blair Example', email: 'blair@example.org', route: AccountRoute.SIGNUP, verification: Verification.UNCHECKED, createdAt: new Date('2026-11-03T15:00:00Z') },
@@ -653,6 +681,9 @@ const SIGNUP_QUEUE = [
   { requestId: 'b1000000-0000-4000-8000-000000000006', firstName: 'Drew', lastName: 'Secondclaim', membershipNumber: '000011006', sub: '00000000-0000-4000-8000-0000000001e6', displayName: 'Drew Secondclaim', email: 'drew@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 4 }, createdAt: new Date('2026-11-04T16:00:00Z'), earlierClaim: { displayName: 'Jordan Firstclaim', signedUpAt: new Date('2026-10-28T15:00:00Z'), firstName: 'Jordan', lastName: 'Firstclaim', membershipNumber: '000011006' } },
   // VET fix 1 (N2): a number an earlier sign-up claimed, since rejected: the API sends no name, only that it is closed.
   { requestId: 'b1000000-0000-4000-8000-000000000007', firstName: 'Eli', lastName: 'Thirdclaim', membershipNumber: '000011007', sub: '00000000-0000-4000-8000-0000000001e7', displayName: 'Eli Thirdclaim', email: 'eli@example.org', route: AccountRoute.SIGNUP, verification: Verification.DUPLICATE_CLAIM, verifiedOn: { year: 2026, month: 11, day: 5 }, createdAt: new Date('2026-11-05T15:00:00Z'), earlierClaim: { displayName: '', closed: true, signedUpAt: new Date('2026-10-20T15:00:00Z') } },
+  // OFFICER-VERIFY (as the API switched on): an invited officer the check did not find (no Approve: reject it), and a local match in a group name the site does not know (approved as a guest).
+  { requestId: 'b1000000-0000-4000-8000-000000000008', firstName: 'Indy', lastName: 'Unconfirmed', membershipNumber: '000011008', sub: '00000000-0000-4000-8000-0000000001e8', displayName: 'Indy Unconfirmed', email: 'indy@example.org', route: AccountRoute.INVITE, verification: Verification.NOT_FOUND, verifiedOn: { year: 2026, month: 11, day: 6 }, createdAt: new Date('2026-11-06T15:00:00Z'), handApproval: HandApproval.NEEDS_CHECK },
+  { requestId: 'b1000000-0000-4000-8000-000000000009', firstName: 'Lou', lastName: 'Unlisted', membershipNumber: '000011009', sub: '00000000-0000-4000-8000-0000000001e9', displayName: 'Lou Unlisted', email: 'lou@example.org', route: AccountRoute.SIGNUP, verification: Verification.VERIFIED_LOCAL, verifiedOn: { year: 2026, month: 11, day: 6 }, createdAt: new Date('2026-11-06T16:00:00Z'), firstNameMatched: false, localGroup: 'Atlantis Mensa', localGroupStanding: LocalGroupStanding.GUEST_UNLISTED, handApproval: HandApproval.AS_GUEST },
 ];
 /** REOPEN: rejected sign-ups, newest first; the first three are reopened by one browser project each (e2e/stand-in.ts REJECTED). */
 const REJECTED = [
@@ -667,12 +698,33 @@ const REFUSED_SEAT_SUBJECT = '00000000-0000-4000-8000-0000000000e7';
 const REOPENED = new Set();
 /** @type {Map<string, number>} a sign-in's own sign-up, by the token's jti: its route */
 const SIGNUPS = new Map();
-/** @type {Map<string, Set<string>>} a sign-in's decisions, by the token's jti */
+/** @type {Map<string, Map<string, number>>} a sign-in's decisions, by the token's jti: each sign-up's SignupDecision */
 const DECIDED = new Map();
 /** PROFILE-ID: the member's profile as approved (e2e/stand-in.ts MEMBER_PROFILE); the others have none. */
 const MEMBER_PROFILE = { firstName: 'Jordan', lastName: 'Example', membershipNumber: '000033001' };
 /** @type {Map<string, { firstName: string, lastName: string }>} PROFILE-ID: a sign-in's change of names, by the token's jti */
 const RENAMED = new Map();
+/** PROFILE-ERASE: the Admin's subject (e2e/idp.mjs admin), whose own record is never listed and never theirs to change. */
+const ADMIN_SUBJECT = '00000000-0000-4000-8000-0000000000ad';
+/**
+ * PROFILE-ERASE: the decided sign-ups the Admin's member-records page lists, newest first (e2e/stand-in.ts
+ * RECORDS): an approved member, a removed member (the removal erased the profile), a rejected sign-up, one
+ * rejected then reopened, and the Admin's own, which the API never lists for them.
+ */
+const RECORDS = [
+  { requestId: 'd1000000-0000-4000-8000-000000000001', sub: '00000000-0000-4000-8000-0000000001f1', displayName: 'Robin Member', email: 'robin@example.org', firstName: 'Robin', lastName: 'Member', membershipNumber: '000044001', decision: SignupDecision.APPROVED, decidedAt: new Date('2026-11-06T18:00:00Z'), accountStatus: MemberStatus.MEMBER },
+  { requestId: 'd1000000-0000-4000-8000-000000000002', sub: '00000000-0000-4000-8000-0000000001f2', displayName: 'Sage Leaver', email: 'sage@example.org', firstName: '', lastName: '', membershipNumber: '', decision: SignupDecision.APPROVED, decidedAt: new Date('2026-11-05T18:00:00Z'), accountStatus: MemberStatus.REMOVED },
+  { requestId: 'd1000000-0000-4000-8000-000000000003', sub: '00000000-0000-4000-8000-0000000001f3', displayName: 'Toby Declined', email: 'toby@example.org', firstName: 'Toby', lastName: 'Declined', membershipNumber: '000044003', decision: SignupDecision.REJECTED, decidedAt: new Date('2026-11-04T18:00:00Z'), accountStatus: MemberStatus.REMOVED },
+  { requestId: 'd1000000-0000-4000-8000-000000000004', sub: '00000000-0000-4000-8000-0000000001f4', displayName: 'Uma Again', email: 'uma@example.org', firstName: 'Uma', lastName: 'Again', membershipNumber: '000044004', decision: SignupDecision.REOPENED, decidedAt: new Date('2026-11-03T18:00:00Z'), accountStatus: MemberStatus.UNSPECIFIED },
+  { requestId: 'd1000000-0000-4000-8000-00000000000a', sub: ADMIN_SUBJECT, displayName: 'Pat Example', email: 'pat@example.org', firstName: 'Pat', lastName: 'Example', membershipNumber: '000044010', decision: SignupDecision.APPROVED, decidedAt: new Date('2026-11-01T18:00:00Z'), accountStatus: MemberStatus.MEMBER },
+];
+/** @type {Map<string, Set<string>>} PROFILE-ERASE: a sign-in's erasures, by the token's jti, so browsers in parallel never disturb each other */
+const ERASED = new Map();
+/** @type {Map<string, Map<string, string>>} PROFILE-ERASE: a sign-in's corrections, by the token's jti: the new number by request id */
+const CORRECTED = new Map();
+/** An account that still stands, as the API's rule for a correction. */
+const STANDS = [MemberStatus.MEMBER, MemberStatus.AFFILIATE, MemberStatus.LAPSED];
+
 /** As the API's: 1 to 80 characters, no control character. @param {string} name */
 const nameOk = (name) => name !== '' && [...name].length <= 80 && !/\p{Cc}/u.test(name);
 
@@ -709,6 +761,9 @@ function accountOf({ sub, session }) {
   const route = SIGNUPS.get(session);
   if (route !== undefined) return { status: MemberStatus.PENDING, route };
   if (MEMBER_SUBJECTS.has(sub)) return { status: MemberStatus.MEMBER, route: AccountRoute.INVITE, verifiedOn: CHECKED };
+  // OFFICER-VERIFY fix round 3: approved before they held a power; a chapter member, and a guest member.
+  if (sub === RECHECK_OFFICER_SUBJECT) return { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP, verifiedOn: CHECKED, localGroupStanding: LocalGroupStanding.CHAPTER };
+  if (sub === GUEST_OFFICER_SUBJECT) return { status: MemberStatus.MEMBER, route: AccountRoute.SIGNUP, verifiedOn: CHECKED, localGroupStanding: LocalGroupStanding.GUEST };
   if (sub === ENROLEE_PENDING_SUBJECT) return { status: MemberStatus.PENDING, route: AccountRoute.SIGNUP };
   if (sub === TURNED_DOWN_SUBJECT) return { status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP };
   // REOPEN: rejected and removed until reopened; then no account, as for one who never signed up.
@@ -716,6 +771,13 @@ function accountOf({ sub, session }) {
   if (rejected !== undefined && !REOPENED.has(rejected.requestId)) return { status: MemberStatus.REMOVED, route: AccountRoute.SIGNUP };
   return undefined;
 }
+
+/** OFFICER-VERIFY: the officer tools, as the API's GetMyAccount says them. @param {{ sub: string, groups: string[] }} person */
+const toolsOf = ({ sub, groups }) => (!holdsPower(groups) ? OfficerTools.UNSPECIFIED : WAITING_OFFICERS.has(sub) ? OfficerTools.AWAITING_CHECK : OfficerTools.OPEN);
+/** OFFICER-VERIFY fix round 3: what opens an approved account's waiting tools. @param {{ sub: string, session: string }} person */
+const checkOf = ({ sub, session }) =>
+  sub === GUEST_OFFICER_SUBJECT ? OfficerCheck.NEEDS_GRANT : sub !== RECHECK_OFFICER_SUBJECT ? OfficerCheck.UNSPECIFIED : RECHECKS.has(session) ? OfficerCheck.RUNNING : OfficerCheck.CONFIRM_DETAILS;
+
 
 /** The approvers and the Admin, as requireMembershipApprover. @param {import('@connectrpc/connect').HandlerContext} ctx */
 async function approverOf(ctx) {
@@ -731,19 +793,38 @@ async function reopenerOf(ctx) {
   return person;
 }
 
+/** PROFILE-ERASE: the Admin alone, as requireAdmin. @param {import('@connectrpc/connect').HandlerContext} ctx */
+async function adminOf(ctx) {
+  const person = await personOf(ctx);
+  if (!person.groups.includes('nwfl-admin')) throw new ConnectError('not permitted', Code.PermissionDenied);
+  return person;
+}
+
+/** PROFILE-ERASE: a record the Admin may change: one that exists and is not their own. @param {{ sub: string }} person @param {string} id */
+function recordFor(person, id) {
+  const record = RECORDS.find((r) => r.requestId === id);
+  if (record === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
+  if (record.sub === person.sub) throw new ConnectError('not permitted', Code.PermissionDenied);
+  return record;
+}
+
 /** A pending sign-up this sign-in may decide, marked decided. @param {{ sub: string, session: string }} person @param {string} id @param {boolean} approve */
 function decide(person, id, approve, confirmedWarning = false) {
   const request = SIGNUP_QUEUE.find((r) => r.requestId === id);
   if (request === undefined) throw new ConnectError('sign-up not found', Code.NotFound);
   if (request.sub === person.sub) throw new ConnectError('no one decides their own sign-up', Code.PermissionDenied);
-  const decided = DECIDED.get(person.session) ?? new Set();
+  const decided = DECIDED.get(person.session) ?? new Map();
   if (decided.has(id)) throw new ConnectError('this sign-up is already decided', Code.FailedPrecondition);
-  if (approve && request.verification === Verification.VERIFIED_OTHER_GROUP) throw new ConnectError('an other-group member is not approved', Code.FailedPrecondition);
+  // OFFICER-VERIFY: what the card says an approver may do by hand; with nothing said, as before (R33).
+  if (approve && request.handApproval === HandApproval.NEEDS_CHECK) {
+    throw new ConnectError('an invited sign-up is approved only once the membership check confirmed it', Code.FailedPrecondition);
+  }
+  if (approve && request.handApproval === undefined && request.verification === Verification.VERIFIED_OTHER_GROUP) throw new ConnectError('an other-group member is not approved', Code.FailedPrecondition);
   // VET fix 1: as the API, an email mismatch or a duplicate claim only with the approver's confirmation.
   if (approve && !confirmedWarning && (request.verification === Verification.EMAIL_MISMATCH || request.verification === Verification.DUPLICATE_CLAIM)) {
     throw new ConnectError('confirm the warning, then approve with confirmed_warning', Code.FailedPrecondition);
   }
-  decided.add(id);
+  decided.set(id, approve ? SignupDecision.APPROVED : SignupDecision.REJECTED);
   DECIDED.set(person.session, decided);
 }
 
@@ -877,8 +958,11 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     getMyAccount: async (_req, ctx) => {
       const person = await personOf(ctx);
       const account = accountOf(person);
-      if (account === undefined) return {};
-      return person.sub === SUBJECT.member ? { account, profile: { ...MEMBER_PROFILE, ...RENAMED.get(person.session) } } : { account };
+      const officerTools = toolsOf(person);
+      if (account === undefined) return { officerTools };
+      const waiting = WAITING_PROFILES[person.sub];
+      if (waiting !== undefined) return { account, profile: { ...waiting, ...RENAMED.get(person.session) }, officerTools, officerCheck: checkOf(person) };
+      return person.sub === SUBJECT.member ? { account, profile: { ...MEMBER_PROFILE, ...RENAMED.get(person.session) }, officerTools } : { account, officerTools };
     },
     updateMyProfile: async (req, ctx) => {
       const person = await personOf(ctx);
@@ -892,18 +976,32 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
     },
     submitSignup: async (req, ctx) => {
       const person = await personOf(ctx);
+      // OFFICER-VERIFY fix round 3: the names again, with no number, ask for a fresh check; one at a time.
+      if (person.sub === RECHECK_OFFICER_SUBJECT && !RECHECKS.has(person.session)) {
+        if (req.membershipNumber.trim() !== '') throw new ConnectError('the membership number on your account cannot be changed here', Code.InvalidArgument);
+        const firstName = req.firstName.trim();
+        const lastName = req.lastName.trim();
+        if (!nameOk(firstName) || !nameOk(lastName)) throw new ConnectError('a name is needed', Code.InvalidArgument);
+        RECHECKS.add(person.session);
+        RENAMED.set(person.session, { firstName, lastName });
+        return { requestId: randomUUID() };
+      }
       if (accountOf(person) !== undefined) throw new ConnectError('a sign-up is already on file for this account', Code.AlreadyExists);
       const number = req.membershipNumber.trim();
       const lastName = req.lastName.trim();
       if (number === '') throw new ConnectError('a membership number is needed', Code.InvalidArgument);
       if (!/^[0-9]{1,12}$/.test(number)) throw new ConnectError('a membership number is 1 to 12 digits', Code.InvalidArgument);
       if (lastName === '' || [...lastName].length > 80) throw new ConnectError('a last name is needed', Code.InvalidArgument);
-      SIGNUPS.set(person.session, person.groups.includes('nwfl-invited') ? AccountRoute.INVITE : AccountRoute.SIGNUP);
+      // OFFICER-VERIFY: switched on (the one persona), an officer power takes the invite route, which needs the first name.
+      const on = person.sub === UNVERIFIED_OFFICER_SUBJECT;
+      const route = person.groups.includes('nwfl-invited') || (on && holdsPower(person.groups)) ? AccountRoute.INVITE : AccountRoute.SIGNUP;
+      if (on && route === AccountRoute.INVITE && !nameOk(req.firstName.trim())) throw new ConnectError('a first name is needed', Code.InvalidArgument);
+      SIGNUPS.set(person.session, route);
       return { requestId: randomUUID() };
     },
     listSignupRequests: async (_req, ctx) => {
       const { session } = await approverOf(ctx);
-      const decided = DECIDED.get(session) ?? new Set();
+      const decided = DECIDED.get(session) ?? new Map();
       return {
         // The subject stays here: the API never sends it.
         requests: SIGNUP_QUEUE.filter((r) => !decided.has(r.requestId)).map((r) => ({
@@ -917,6 +1015,9 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
           firstName: r.firstName,
           lastName: r.lastName,
           membershipNumber: r.membershipNumber,
+          ...(r.firstNameMatched !== undefined ? { firstNameMatched: r.firstNameMatched } : {}),
+          ...(r.localGroup !== undefined ? { localGroup: r.localGroup, localGroupStanding: r.localGroupStanding } : {}),
+          ...(r.handApproval !== undefined ? { handApproval: r.handApproval } : {}),
           ...(r.earlierClaim
             ? {
                 earlierClaim: {
@@ -931,6 +1032,15 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
             : {}),
         })),
       };
+    },
+    // WEB-SMALL-1: where one sign-up stands, for the approvers and the Admin.
+    getSignupRequest: async (req, ctx) => {
+      const { session } = await approverOf(ctx);
+      const decided = DECIDED.get(session)?.get(req.requestId);
+      if (decided !== undefined) return { decision: decided };
+      if (SIGNUP_QUEUE.some((r) => r.requestId === req.requestId)) return { decision: SignupDecision.PENDING };
+      if (REJECTED.some((r) => r.requestId === req.requestId)) return { decision: REOPENED.has(req.requestId) ? SignupDecision.REOPENED : SignupDecision.REJECTED };
+      throw new ConnectError('sign-up not found', Code.NotFound);
     },
     approveSignup: async (req, ctx) => {
       decide(await approverOf(ctx), req.requestId, true, req.confirmedWarning);
@@ -964,6 +1074,54 @@ const routes = ({ issues }) => (/** @type {import('@connectrpc/connect').Connect
       if (rejected.sub === person.sub) throw new ConnectError('no one reopens their own sign-up', Code.PermissionDenied);
       if (REOPENED.has(rejected.requestId)) throw new ConnectError('only a rejected sign-up is reopened, and only once', Code.FailedPrecondition);
       REOPENED.add(rejected.requestId);
+      return {};
+    },
+    // PROFILE-ERASE: as the API, the Admin alone, never their own record.
+    listSignupRecords: async (_req, ctx) => {
+      const { sub, session } = await adminOf(ctx);
+      const erased = ERASED.get(session) ?? new Set();
+      const corrected = CORRECTED.get(session) ?? new Map();
+      return {
+        // The subject stays here: the API never sends it.
+        records: RECORDS.filter((r) => r.sub !== sub && !erased.has(r.requestId)).map((r) => ({
+          requestId: r.requestId,
+          displayName: r.displayName,
+          email: r.email,
+          firstName: r.firstName,
+          lastName: r.lastName,
+          membershipNumber: corrected.get(r.requestId) ?? r.membershipNumber,
+          decision: r.decision,
+          decidedAt: timestampFromDate(r.decidedAt),
+          accountStatus: r.accountStatus,
+        })),
+      };
+    },
+    eraseSignup: async (req, ctx) => {
+      const person = await adminOf(ctx);
+      const record = recordFor(person, req.requestId);
+      const erased = ERASED.get(person.session) ?? new Set();
+      if (erased.has(record.requestId)) return { erased: 0, accessEnded: false };
+      erased.add(record.requestId);
+      ERASED.set(person.session, erased);
+      return { erased: 1, accessEnded: record.decision === SignupDecision.APPROVED && STANDS.includes(record.accountStatus) };
+    },
+    correctMembershipNumber: async (req, ctx) => {
+      const person = await adminOf(ctx);
+      const number = req.membershipNumber.trim().replace(/[\p{Zs}\p{Pd}\u2212]/gu, '');
+      if (!/^[0-9]{1,12}$/.test(number)) throw new ConnectError('a membership number is 1 to 12 digits', Code.InvalidArgument);
+      if (![CorrectionReason.TYPED_WRONG, CorrectionReason.CARD_DIFFERS, CorrectionReason.NEW_NUMBER].includes(req.reason)) throw new ConnectError('choose one of the three reasons', Code.InvalidArgument);
+      const record = recordFor(person, req.requestId);
+      const corrected = CORRECTED.get(person.session) ?? new Map();
+      const now = corrected.get(record.requestId) ?? record.membershipNumber;
+      const erased = ERASED.get(person.session)?.has(record.requestId) === true;
+      if (erased || record.decision !== SignupDecision.APPROVED || now === '' || !STANDS.includes(record.accountStatus) || now === number) {
+        throw new ConnectError('only an approved member\'s number is corrected', Code.FailedPrecondition);
+      }
+      // As the API's: never a number another live sign-up holds (one waiting, or an approved one).
+      const live = [...SIGNUP_QUEUE.map((r) => r.membershipNumber), ...RECORDS.filter((r) => r.requestId !== record.requestId && r.decision === SignupDecision.APPROVED).map((r) => r.membershipNumber)];
+      if (live.includes(number)) throw new ConnectError('that number is already on another sign-up', Code.AlreadyExists);
+      corrected.set(record.requestId, number);
+      CORRECTED.set(person.session, corrected);
       return {};
     },
   });

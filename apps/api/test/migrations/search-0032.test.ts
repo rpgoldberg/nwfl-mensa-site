@@ -64,7 +64,7 @@ describe.skipIf(!live)('0032: the search index tables and their guarded writers'
       if (rows[0]?.wait === 'Lock') return;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    throw new Error('the second connection was never blocked on a lock');
+    expect.fail('the second connection was never blocked on a lock');
   };
   /** A query's outcome, never a rejection, so it can be left running while the other connection goes on. */
   const outcome = (client: pg.Client, sql: string, values: unknown[]): Promise<string> =>
@@ -183,14 +183,15 @@ describe.skipIf(!live)('0032: the search index tables and their guarded writers'
       }
     });
 
-    it('runs both writers as their owner with a pinned search_path, and keeps pdf_regen_request an invoker function with one', async () => {
+    it('runs both writers and the unservable trigger as their owner with a pinned search_path, and keeps pdf_regen_request an invoker function with one', async () => {
       const { rows } = await owner.query<{ proname: string; prosecdef: boolean; proconfig: string[] | null }>(
-        `SELECT proname, prosecdef, proconfig FROM pg_proc WHERE proname IN ('search_page_put', 'search_item_put', 'pdf_regen_request') ORDER BY proname`,
+        `SELECT proname, prosecdef, proconfig FROM pg_proc WHERE proname IN ('search_page_put', 'search_item_put', 'search_page_unservable', 'pdf_regen_request') ORDER BY proname`,
       );
       expect(rows.map((row) => [row.proname, row.prosecdef])).toEqual([
         ['pdf_regen_request', false],
         ['search_item_put', true],
         ['search_page_put', true],
+        ['search_page_unservable', true],
       ]);
       for (const row of rows) expect(row.proconfig, row.proname).toEqual(['search_path=pg_catalog, public, pg_temp']);
     });
@@ -234,6 +235,34 @@ describe.skipIf(!live)('0032: the search index tables and their guarded writers'
       expect(await sqlstate(worker, PUT, [fileId, 'public', sha('c'), 1, ['withdrawn'], ['']])).toBe('55000');
     });
 
+    it('reads only the file\'s own ledger row: not a version\'s row with the same id, nor another tenant\'s (55000)', async () => {
+      const { fileId } = await fileItem();
+      await owner.query('BEGIN');
+      try {
+        // A content_version row carrying the file's id, saying a copy is served.
+        await serve('content_version', fileId, 'public', sha('kind'), COPY, owner);
+        expect(await sqlstate(owner, PUT, [fileId, 'public', sha('kind'), 1, ['a version row'], ['']])).toBe('55000');
+      } finally {
+        await owner.query('ROLLBACK');
+      }
+      await owner.query('BEGIN');
+      try {
+        // A stored_file row for this file under another tenant, saying a copy is served.
+        await owner.query(`INSERT INTO tenant (id, name) VALUES ('other-group', 'Another synthetic group')`);
+        await owner.query(
+          `INSERT INTO publication_ledger (seq, tenant_id, subject_kind, subject_id, audience, output_sha256, inputs, passages_withheld, current_from, prev_hash, row_hash)
+           VALUES (9000000000000000, 'other-group', 'stored_file', $1, 'public', $2, $3, 0, now(), $4, $5)`,
+          [fileId, sha('tenant'), COPY, sha('prev'), sha(`row-${fileId}`)],
+        );
+        expect(await sqlstate(owner, PUT, [fileId, 'public', sha('tenant'), 1, ['another tenant'], ['']])).toBe('55000');
+      } finally {
+        await owner.query('ROLLBACK');
+      }
+      // The control: the file's own row, under this tenant, is read.
+      await serve('stored_file', fileId, 'public', sha('own'));
+      expect(await sqlstate(worker, PUT, [fileId, 'public', sha('own'), 1, ['its own row'], ['']])).toBe('ok');
+    });
+
     it('refuses an audience served the original: only a copy is indexed (55000)', async () => {
       const { fileId } = await fileItem();
       await serve('stored_file', fileId, 'members', sha('original'), { v: 1, served: 'original' });
@@ -273,7 +302,7 @@ describe.skipIf(!live)('0032: the search index tables and their guarded writers'
       expect(await pages('search_page_public', fileId)).toHaveLength(300);
     });
 
-    it('finds a word split at a line end, a soft-hyphened word and a compound as typed (the hyphen fixture, through the index)', async () => {
+    it('finds a word split at a line end, a soft-hyphened word, a compound and a word beside a label as typed (the hyphen fixture, through the index)', async () => {
       const { fileId } = await fileItem();
       await serve('stored_file', fileId, 'public', sha('hyphens'));
       const fixture = JSON.parse(readFileSync(new URL('../fixtures/hyphen-cases.json', import.meta.url), 'utf8')) as {
@@ -285,6 +314,8 @@ describe.skipIf(!live)('0032: the search index tables and their guarded writers'
         byName('a soft hyphen inside a word folds to nothing'),
         byName('a real compound split at a line end keeps its typed form in extra'),
         byName('a soft hyphen at a line end joins, with no kept form'),
+        byName('a label drawn beside a word is its own word'),
+        byName('a drop capital is found as the word it starts'),
       ];
       await worker.query(PUT, [fileId, 'public', sha('hyphens'), 1, made.map((page) => page.text), made.map((page) => page.extra)]);
       const hits = async (typed: string): Promise<number[]> =>
@@ -296,6 +327,10 @@ describe.skipIf(!live)('0032: the search index tables and their guarded writers'
       expect(await hits('well-known')).toEqual([3]);
       expect(await hits('wellknown')).toEqual([3]);
       expect(await hits('zephyrine')).toEqual([]);
+      // Items that meet on a line: the word beside a label is found on its own, and the label is a word of its own.
+      expect(await hits('today')).toEqual([5]);
+      expect(await hits('"today private"')).toEqual([5]);
+      expect(await hits('welcome')).toEqual([6]);
     });
   });
 
@@ -368,6 +403,25 @@ describe.skipIf(!live)('0032: the search index tables and their guarded writers'
       await worker.query('COMMIT');
       expect(await change).toBe('ok');
       expect(await pages('search_page_public', fileId)).toEqual([]);
+    });
+
+    it('two puts on one file: the second waits for the first, and its pages replace the first\'s whole', async () => {
+      const { fileId } = await fileItem();
+      await serve('stored_file', fileId, 'public', sha('race-two'));
+      const second = new pg.Client({ connectionString: urlFor(WORKER, WORKER_PW, database) });
+      await second.connect();
+      try {
+        const secondPid = await pid(second);
+        await worker.query('BEGIN');
+        await worker.query(PUT, [fileId, 'public', sha('race-two'), 1, ['a1', 'a2', 'a3'], ['', '', '']]);
+        const put = outcome(second, PUT, [fileId, 'public', sha('race-two'), 1, ['b1'], ['']]);
+        await blocked(secondPid);
+        await worker.query('COMMIT');
+        expect(await put).toBe('ok');
+        expect((await pages('search_page_public', fileId)).map((row) => row.text)).toEqual(['b1']);
+      } finally {
+        await second.end();
+      }
     });
 
     it('a put that arrives while the ledger row is being replaced waits, then refuses the old sha', async () => {

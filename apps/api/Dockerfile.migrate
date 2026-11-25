@@ -15,7 +15,7 @@
 #     advisory-lock FIFO) and psql's home both live under /tmp, which the Job
 #     mounts as an emptyDir;
 #   - exit codes are migrate.sh's own (0, 2, 4, 5, 6, or psql's).
-FROM postgres:17.11-alpine3.24@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
+FROM postgres:17.12-alpine3.24@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
 
 LABEL org.opencontainers.image.title="nwfl-mensa-api-migrate"
 LABEL org.opencontainers.image.description="Database migrations for the NW Florida Mensa API"

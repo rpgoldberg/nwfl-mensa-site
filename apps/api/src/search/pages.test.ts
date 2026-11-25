@@ -82,7 +82,8 @@ describe('indexSweeper', () => {
     const step = indexSweeper(db, { text: never });
     expect(await step()).toEqual({ deleted: 0, indexed: 0, left: 0 });
     expect(asked).toHaveLength(2);
+    // Through: a step after that only sweeps (S2 challenge M2: a withdrawn item's rows go a drain later), and lists nothing.
     expect(await step()).toEqual({ deleted: 0, indexed: 0, left: 0 });
-    expect(asked).toHaveLength(2);
+    expect(asked.slice(2)).toEqual(['SELECT search_page_sweep() AS n']);
   });
 });

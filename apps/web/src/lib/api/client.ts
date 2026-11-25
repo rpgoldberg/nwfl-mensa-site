@@ -44,7 +44,7 @@ export interface ApiConfig {
 /** Off (no API_URL), on, or on but set up wrongly: then every read is unavailable. */
 export type ApiSetup = { enabled: false } | { enabled: true; config: ApiConfig } | { enabled: true; error: string };
 
-export const DEFAULT_TIMEOUT_MS = 3000;
+export { DEFAULT_TIMEOUT_MS } from '../../../server/api-setup.mjs';
 /** The API's own cap on a message; a bigger answer is refused, not held. */
 export const READ_MAX_BYTES = 4 * 1024 * 1024;
 
@@ -120,25 +120,8 @@ export class ApiNotFound extends Error {
   }
 }
 
-/** API_URL (http: or https:, the bare origin) and API_TIMEOUT_MS (1 to 60000, default 3000). */
-export function apiSetup(env: Record<string, string | undefined>): ApiSetup {
-  const raw = env['API_URL'];
-  if (!raw) return { enabled: false };
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return { enabled: true, error: 'API_URL is not a URL' };
-  }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return { enabled: true, error: 'API_URL must be http: or https:' };
-  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-    return { enabled: true, error: 'API_URL must be an origin only: no credentials, path, query or fragment' };
-  }
-  const timeout = env['API_TIMEOUT_MS'] ?? String(DEFAULT_TIMEOUT_MS);
-  const timeoutMs = Number(timeout);
-  if (!/^\d+$/.test(timeout) || timeoutMs < 1 || timeoutMs > 60_000) return { enabled: true, error: 'API_TIMEOUT_MS must be a whole number of milliseconds from 1 to 60000' };
-  return { enabled: true, config: { baseUrl: url.origin, timeoutMs } };
-}
+/** API_URL (http: or https:, the bare origin) and API_TIMEOUT_MS (1 to 60000, default 3000): server/api-setup.mjs, shared with the machine route. */
+export { apiSetup } from '../../../server/api-setup.mjs';
 
 /** What the site reads, and nothing it could write with. */
 export interface ApiReads {

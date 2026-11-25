@@ -17,6 +17,28 @@
 // ledger row for an audience whose policy hides the item itself, and only the
 // lens says so, exactly as it does for ContentService.ReadFile.
 //
+// Read rule b is then asked again of the live code (P1d, D7a). The ledger's
+// row says what was served when it was recorded; a lens or engine deployed
+// since, or a mark or policy cell written by SQL with no re-record, leaves
+// it, and the index row with it, standing for what is served no longer. So a
+// page counts only while the copy the audience is served now (servedInputs,
+// as readPdf picks it: the engine, the marks, the policy and the links as
+// they are now) is made, ready, and has the sha the row was read from; and
+// an item only while a render of its version now (renderVersion, the
+// ledger's own) is the row's sha. Neither
+// trusts version_rerecorded or rerecord_seq, so a reset sequence (D6a) makes
+// no row a hit here, and every page hit is put to servableFile itself, the rule
+// 0032's search_file_servable mirrors, with the lens run now (S2-N1). A row
+// that fails is not current: the worker's boot sweep makes and reads the copy
+// again (pdf/regenerate.ts sweepCopies; 0034 search_page_lacking for a new
+// TEXT_VERSION), and the boot backfill re-records each item whose render now
+// is not its ledger row's output, or not re-recorded since a policy cell was
+// written (search/backfill.ts); until then it is not found. A row whose item
+// has a mark written after it, or whose version was not re-recorded since a
+// policy cell was written, never reaches this check: the statement refuses it
+// (sql.ts), so the check's cost does not say that it matched, while the
+// stamps it reads there rise (an owner can break that; see sql.ts).
+//
 // Hidden hits are left out BEFORE the page is cut, so neither the number of
 // hits on a page nor has_more can say that something withheld matched. A
 // search reads at most MAX_ROWS rows of the ranking to fill its page.
@@ -37,10 +59,11 @@ import { Code, ConnectError, type ConnectRouter, type HandlerContext } from '@co
 import type { MessageInitShape } from '@bufbuild/protobuf';
 import { callerOf } from '../auth/caller.js';
 import { KINDS } from '../content/enums.js';
-import { servableFile } from '../content/files.js';
+import { servableFile, servedInputs } from '../content/files.js';
 import { itemHidden, slugFor } from '../content/redact.js';
 import type { Db } from '../db/pool.js';
 import { inTransaction } from '../db/tx.js';
+import { renderVersion } from '../ledger/ledger.js';
 import { localDateOf, protoDate } from '../events/zone.js';
 import { type SearchHitSchema, type SearchResponseSchema, SearchService } from '../gen/nwfl/mensa/v1/search_pb.js';
 import type { StructuredLogger } from '../platform/logger.js';
@@ -57,7 +80,30 @@ export interface SearchDeps {
   limits?: Partial<SearchLimits>;
   /** Milliseconds, for the limits and the log line. Tests pin it. */
   clock?: () => number;
+  /** Whether a hit's row is what the audience is served now; the live code's answer (LIVE) when not given. Unit tests stand in for it. */
+  current?: Currency;
 }
+
+/** Read rule b asked again of the live code: whether a hit's row is what the audience is served now. */
+export interface Currency {
+  /** A page: the copy the audience is served now is made, ready, and the one the row was read from (its sha). */
+  page(db: Query, fileId: string, audience: SearchAudience, sha: Buffer): Promise<boolean>;
+  /** An item: a render of the version now is the sha the row was put with. */
+  item(db: Query, versionId: string, audience: SearchAudience, sha: Buffer): Promise<boolean>;
+}
+
+export const LIVE: Currency = {
+  async page(db, fileId, audience, sha) {
+    const served = await servedInputs(db, fileId, audience);
+    if (served.kind !== 'copy') return false;
+    const { rows } = await db.query(`SELECT 1 FROM pdf_copy WHERE file_id = $1 AND input_hash = $2 AND status = 'ready' AND sha256(bytes) = $3`, [fileId, served.hash, sha]);
+    return rows.length === 1;
+  },
+  async item(db, versionId, audience, sha) {
+    const { output } = await renderVersion(db, versionId, audience);
+    return output !== null && output.equals(sha);
+  },
+};
 
 type Hit = MessageInitShape<typeof SearchHitSchema>;
 type Response = MessageInitShape<typeof SearchResponseSchema>;
@@ -77,7 +123,7 @@ interface Shown {
 }
 
 /** The first `need` rows the lens does not hide from this audience, in order. Asks about no further file once `late` says the time is up. */
-async function shownTo(db: Query, audience: SearchAudience, rows: readonly SearchRow[], need: number, late: () => boolean): Promise<Shown[]> {
+async function shownTo(db: Query, audience: SearchAudience, rows: readonly SearchRow[], need: number, late: () => boolean, current: Currency): Promise<Shown[]> {
   const items = rows.filter((row) => row.kind === 'item');
   const lens = await loadLens(db, audience, { items: items.map((row) => row.id), versions: items.map((row) => row.version_id as string) });
   const files = new Map<string, { title: string | null } | null>();
@@ -85,14 +131,17 @@ async function shownTo(db: Query, audience: SearchAudience, rows: readonly Searc
   for (const row of rows) {
     if (shown.length >= need) break;
     if (row.kind === 'page') {
-      if (!files.has(row.id)) {
+      const key = `${row.id}:${row.sha.toString('hex')}`;
+      if (!files.has(key)) {
         if (late()) throw overtime();
-        files.set(row.id, await servableFile(db, row.id, audience));
+        const file = await servableFile(db, row.id, audience);
+        files.set(key, file !== null && (await current.page(db, row.id, audience, row.sha)) ? file : null);
       }
-      const file = files.get(row.id) ?? null;
+      const file = files.get(key) ?? null;
       if (file !== null) shown.push({ row, label: file.title ?? '' });
     } else if (!itemHidden({ id: row.id, on_behalf_of: row.on_behalf_of }, row.version_id as string, lens)) {
-      shown.push({ row, label: slugFor({ id: row.id, slug: row.slug as string }, lens) });
+      if (late()) throw overtime();
+      if (await current.item(db, row.version_id as string, audience, row.sha)) shown.push({ row, label: slugFor({ id: row.id, slug: row.slug as string }, lens) });
     }
   }
   return shown;
@@ -111,9 +160,9 @@ function hitOf({ row, label }: Shown, snippet: string): Hit {
 }
 
 /** One page of hits for the audience, and whether a hit follows it. `late` says the search's time is up. */
-async function searchPage(db: Query, audience: SearchAudience, text: string, page: number, late: () => boolean): Promise<{ hits: Hit[]; hasMore: boolean }> {
+async function searchPage(db: Query, audience: SearchAudience, text: string, page: number, late: () => boolean, current: Currency): Promise<{ hits: Hit[]; hasMore: boolean }> {
   const { rows } = await db.query<SearchRow>(searchSql(audience), [text, MAX_ROWS]);
-  const shown = await shownTo(db, audience, rows, page * PAGE_SIZE + 1, late);
+  const shown = await shownTo(db, audience, rows, page * PAGE_SIZE + 1, late, current);
   const onPage = shown.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   if (onPage.length === 0) return { hits: [], hasMore: false };
   if (late()) throw overtime();
@@ -126,6 +175,7 @@ export function searchHandlers(deps: SearchDeps): { search: (request: { query: s
   const limits = limitsFrom(deps.limits);
   const clock = deps.clock ?? ((): number => performance.now());
   const gate = admission(limits, clock);
+  const current = deps.current ?? LIVE;
   return {
     async search(request, ctx) {
       const caller = callerOf(ctx.values).audience;
@@ -141,7 +191,7 @@ export function searchHandlers(deps: SearchDeps): { search: (request: { query: s
         const answer = await inTransaction(deps.db, async (tx) => {
           await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
           await tx.query(`SELECT set_config('statement_timeout', $1, true)`, [String(limits.timeoutMs)]);
-          return searchPage(tx, audience, query.text, page, () => clock() - started > limits.timeoutMs);
+          return searchPage(tx, audience, query.text, page, () => clock() - started > limits.timeoutMs, current);
         });
         deps.logger.info({ ...sizes, hits: answer.hits.length, ms: ms() }, 'search');
         return answer;

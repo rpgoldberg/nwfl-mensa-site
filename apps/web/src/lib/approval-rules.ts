@@ -114,11 +114,19 @@ export function confirmText(scope: Scope, rule: Rule): string {
     : "You are about to require another officer's approval again before a public privacy setting is loosened.";
 }
 
-/** The outcome named by the address the page lands on after saving (?done=<scope>&changed=0|1). */
-export function doneFromQuery(params: URLSearchParams): { scope: Scope; changed: boolean } | undefined {
+/**
+ * The outcome named by the address the page lands on after saving (?done=<scope>&changed=0|1&rev=<revision>),
+ * said only when the setting as read now is the one the save left: the revision in the API's answer
+ * (WEB-SMALL-1 fix round 1: never from the address alone). A change always leaves a revision; the default
+ * has none. Settings not read: nothing.
+ */
+export function doneFromQuery(params: URLSearchParams, settings: readonly Setting[] | undefined): { scope: Scope; changed: boolean } | undefined {
   const scope = params.get('done') ?? undefined;
   const changed = params.get('changed');
-  if (!isScope(scope) || (changed !== '0' && changed !== '1')) return undefined;
+  const revision = params.get('rev');
+  if (!isScope(scope) || (changed !== '0' && changed !== '1') || revision === null) return undefined;
+  const now = settings?.find((s) => s.scope === scope);
+  if (now === undefined || now.revision !== revision || (changed === '1' && revision === '')) return undefined;
   return { scope, changed: changed === '1' };
 }
 

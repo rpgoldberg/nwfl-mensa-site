@@ -10,10 +10,16 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ContentKind, ContentService } from '../../src/gen/nwfl/mensa/v1/content_pb.js';
 import { type SearchResponse, SearchService } from '../../src/gen/nwfl/mensa/v1/search_pb.js';
+import { recordItems } from '../../src/ledger/ledger.js';
+import { textReply } from '../../src/pdf/gate-text.js';
+import { drain } from '../../src/pdf/regenerate.js';
+import { storeOriginal } from '../../src/pdf/store.js';
+import { indexFile } from '../../src/search/pages.js';
 import { searchSql } from '../../src/search/sql.js';
 import { type Api, MEMBER, OFFICER, as, insertId, startApi } from '../helpers/api.js';
 import { paragraph, publishItem, text } from '../helpers/content.js';
 import { live, url, urlFor } from '../helpers/pg.js';
+import { pagesPdf } from './synthetic.js';
 
 const PUB = as('pub-token');
 const WEBMASTER = as('webmaster-token');
@@ -74,8 +80,15 @@ describe.skipIf(!live)('SearchService.Search: items that are not served', () => 
     owner = new pg.Client({ connectionString: urlFor('postgres', new URL(url as string).password, database) });
     await owner.connect();
 
-    const published = await publishItem(api.pool, { slug: 'state-published', officeId: office, title: 'Published', body: { blocks: [paragraph(text('x'))] }, files: [{ objectKey: 'planted-published.pdf', audience: 'public' }] });
-    await plant('published', published.itemId, published.versionId);
+    // The control is made as production makes it, not planted (since the merge round): the read now also asks the live code
+    // whether a hit's row is what the audience is served now (P1d), which a planted row and ledger row cannot pass.
+    const bytes = await pagesPdf([[`Page one: the ${WORDS.published} again.`]]);
+    const published = await publishItem(api.pool, { slug: 'state-published', officeId: office, title: `Notes ${WORDS.published}`, body: { blocks: [paragraph(text(`The ${WORDS.published} was discussed.`))] }, files: [{ objectKey: 'planted-published.pdf', audience: 'public', bytes }] });
+    const publishedFile = (await owner.query<{ id: string }>(`SELECT id FROM stored_file WHERE version_id = $1`, [published.versionId])).rows[0]!.id;
+    await storeOriginal(api.pool, { fileId: publishedFile, bytes, sub: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'] });
+    await recordItems(api.pool, [published.itemId]);
+    expect(await drain(api.worker, { index: (fileId) => indexFile(api.worker, fileId, { text: ({ copy, quotes }) => textReply({ kind: 'text', copy, quotes }) }) })).toBe(1);
+    planted['published'] = { itemId: published.itemId, versionId: published.versionId, fileId: publishedFile };
     const officers = await publishItem(api.pool, { slug: 'state-officers', officeId: office, title: 'Officers', visibility: 'officers', body: { blocks: [paragraph(text('x'))] }, files: [{ objectKey: 'planted-officers.pdf', audience: 'public' }] });
     await plant('officers', officers.itemId, officers.versionId);
     // Never published: a draft, a version marked ready, and one approved and waiting to be published.

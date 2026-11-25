@@ -9,25 +9,32 @@ import { ContentKind } from '../gen/nwfl/mensa/v1/content_pb.js';
 import { SearchService } from '../gen/nwfl/mensa/v1/search_pb.js';
 import type { StructuredLogger } from '../platform/logger.js';
 import type { SearchLimits } from './limits.js';
-import { MAX_ROWS, searchRoutes } from './service.js';
+import { type Currency, MAX_ROWS, searchRoutes } from './service.js';
 import { searchSql, snippetSql } from './sql.js';
 
 const ITEM = '11111111-1111-4111-8111-111111111111';
 const VERSION = '22222222-2222-4222-8222-222222222222';
 const FILE = '33333333-3333-4333-8333-333333333333';
+/** The sha a page row was read from (the statement gives it since the merge round, for the live check). */
+const PAGE_SHA = Buffer.alloc(32, 9);
 
 const verifier: TokenVerifier = {
   verify: (token) => {
     if (token === 'member') return Promise.resolve({ client: 'site', subject: 'sub-member', groups: ['nwfl-members'], scopes: [] });
     if (token === 'officer') return Promise.resolve({ client: 'site', subject: 'sub-officer', groups: ['nwfl-members', 'nwfl-officers'], scopes: [] });
     if (token === 'lapsed') return Promise.resolve({ client: 'site', subject: 'sub-lapsed', groups: ['nwfl-members'], scopes: [] });
+    // OFFICER-VERIFY (merged): a member another local group confirmed, who reads as the public but for events.
+    if (token === 'guest') return Promise.resolve({ client: 'site', subject: 'sub-guest', groups: ['nwfl-members'], scopes: [] });
     return Promise.reject(new Error('unknown token'));
   },
 };
 
 type Answer = { rows: unknown[] } | Error;
 
-function harness(answer: (text: string, values: unknown[] | undefined) => Answer = () => ({ rows: [] }), limits?: Partial<SearchLimits>, clock?: () => number) {
+/** The live code's answer stood in for (the real one, against a real Postgres: test/search/search-handoffs.test.ts): every hit current. */
+const CURRENT: Currency = { page: () => Promise.resolve(true), item: () => Promise.resolve(true) };
+
+function harness(answer: (text: string, values: unknown[] | undefined) => Answer = () => ({ rows: [] }), limits?: Partial<SearchLimits>, clock?: () => number, current: Currency = CURRENT) {
   const statements: Array<{ text: string; values: unknown[] | undefined }> = [];
   const logs: Array<{ level: string; fields: Record<string, unknown>; message: string }> = [];
   let released = 0;
@@ -41,8 +48,8 @@ function harness(answer: (text: string, values: unknown[] | undefined) => Answer
     info: (fields: Record<string, unknown>, message: string) => void logs.push({ level: 'info', fields, message }),
     warn: (fields: Record<string, unknown>, message: string) => void logs.push({ level: 'warn', fields, message }),
   } as unknown as StructuredLogger;
-  const transport = createRouterTransport(searchRoutes({ db, logger, ...(limits === undefined ? {} : { limits }), ...(clock === undefined ? {} : { clock }) }), {
-    router: { interceptors: [authInterceptor({ verifier, standing: { isMember: (subject) => Promise.resolve(subject !== 'sub-lapsed') } })] },
+  const transport = createRouterTransport(searchRoutes({ db, logger, current, ...(limits === undefined ? {} : { limits }), ...(clock === undefined ? {} : { clock }) }), {
+    router: { interceptors: [authInterceptor({ verifier, standing: { standingOf: (subject) => Promise.resolve(subject === 'sub-lapsed' ? 'none' : subject === 'sub-guest' ? 'guest' : 'chapter') } })] },
   });
   const client = createClient(SearchService, transport);
   const search = (query_: string, token?: string, page = 0) => client.search({ query: query_, page }, token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } });
@@ -84,9 +91,26 @@ describe('search: the handler', () => {
     };
     expect(await read()).toBe(searchSql('public'));
     expect(await read('lapsed')).toBe(searchSql('public'));
+    // OFFICER_VERIFY switched off (this harness): any standing reads at member level, a guest's too.
+    expect(await read('guest')).toBe(searchSql('members'));
     expect(await read('member')).toBe(searchSql('members'));
     expect(await read('officer')).toBe(searchSql('members'));
     expect(searchSql('public')).not.toBe(searchSql('members'));
+  });
+
+  it('reads the public\'s index for a guest member once OFFICER_VERIFY is on, as caller.ts decides (merged rule), and the members\' for a chapter member', async () => {
+    const read = async (token: string): Promise<string | undefined> => {
+      const statements: string[] = [];
+      const query = (text: string): Promise<{ rows: unknown[]; rowCount: number }> => (statements.push(text), Promise.resolve({ rows: [], rowCount: 0 }));
+      const db = { query, connect: () => Promise.resolve({ query, release: () => undefined }) } as unknown as Db;
+      const logger = { info: () => undefined, warn: () => undefined } as unknown as StructuredLogger;
+      const standing = { standingOf: (subject: string) => Promise.resolve(subject === 'sub-guest' ? ('guest' as const) : ('chapter' as const)) };
+      const transport = createRouterTransport(searchRoutes({ db, logger }), { router: { interceptors: [authInterceptor({ verifier, standing, officerVerify: true })] } });
+      await createClient(SearchService, transport).search({ query: 'picnic', page: 0 }, { headers: { authorization: `Bearer ${token}` } });
+      return statements.find((text) => text.includes('websearch_to_tsquery'));
+    };
+    expect(await read('guest')).toBe(searchSql('public'));
+    expect(await read('member')).toBe(searchSql('members'));
   });
 
   it('refuses a token it cannot verify rather than searching as the public', async () => {
@@ -98,7 +122,7 @@ describe('search: the handler', () => {
   it('makes snippets for the page answered alone, by key, and answers each hit as the lens gives it', async () => {
     const rows = [
       { kind: 'item', id: ITEM, page: 0, slug: 'spring-picnic', title: 'Spring picnic', item_kind: 'announcement', version_id: VERSION, on_behalf_of: null, published_at: new Date('2026-03-08T02:30:00Z') },
-      { kind: 'page', id: FILE, page: 4, slug: null, title: null, item_kind: null, version_id: null, on_behalf_of: null, published_at: null },
+      { kind: 'page', id: FILE, page: 4, slug: null, title: null, item_kind: null, version_id: null, on_behalf_of: null, published_at: null, sha: PAGE_SHA },
     ];
     const h = harness((text) => {
       if (text === searchSql('public')) return { rows };
@@ -120,7 +144,7 @@ describe('search: the handler', () => {
   });
 
   it('leaves out a page whose file the served read would not give, before the page of hits is cut', async () => {
-    const page = (n: number) => ({ kind: 'page', id: FILE, page: n, slug: null, title: null, item_kind: null, version_id: null, on_behalf_of: null, published_at: null });
+    const page = (n: number) => ({ kind: 'page', id: FILE, page: n, slug: null, title: null, item_kind: null, version_id: null, on_behalf_of: null, published_at: null, sha: PAGE_SHA });
     // servableFile finds no row for the file: every page of it is hidden, however many matched.
     const h = harness((text) => (text === searchSql('members') ? { rows: Array.from({ length: 40 }, (_unused, n) => page(n + 1)) } : { rows: [] }));
     const response = await h.search('picnic', 'member');
@@ -128,6 +152,37 @@ describe('search: the handler', () => {
     expect(response.hasMore).toBe(false);
     // The file was asked about once, not forty times.
     expect(h.statements.filter((statement) => statement.text.includes('FROM stored_file f'))).toHaveLength(1);
+  });
+
+  it('asks the live code whether each hit is current before the page is cut, and leaves out each that is not', async () => {
+    const SHA = Buffer.alloc(32, 7);
+    const item = (n: number) => ({ kind: 'item', id: `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`, page: 0, slug: `item-${n}`, title: `Item ${n}`, item_kind: 'article', version_id: `${String(n).padStart(8, '0')}-2222-4222-8222-222222222222`, on_behalf_of: null, published_at: new Date('2026-01-01T12:00:00Z'), sha: SHA });
+    const page = (n: number) => ({ kind: 'page', id: FILE, page: n, slug: null, title: null, item_kind: null, version_id: null, on_behalf_of: null, published_at: null, sha: PAGE_SHA });
+    // Twelve items, the odd ones no longer current; three pages of one file whose copy is.
+    const rows = [...Array.from({ length: 12 }, (_unused, n) => item(n + 1)), page(1), page(2), page(3)];
+    const asked: unknown[] = [];
+    const current: Currency = {
+      page: (_db, fileId, audience, sha) => (asked.push(['page', fileId, audience, sha]), Promise.resolve(true)),
+      item: (_db, versionId, audience, sha) => (asked.push(['item', versionId, audience, sha]), Promise.resolve(Number(versionId.slice(0, 8)) % 2 === 0)),
+    };
+    const answer = (text: string): Answer => {
+      if (text === searchSql('members')) return { rows };
+      if (text.includes('FROM stored_file f')) return { rows: [{ item_id: null, version_id: null, title: 'An edition', on_behalf_of: null, edition_title: 'An edition' }] };
+      return { rows: [] };
+    };
+    const first = await harness(answer, undefined, undefined, current).search('item', 'member');
+    // Six current items, then the file's three pages; the six that are not current take no place.
+    expect(first.hits.map((hit) => (hit.hit.case === 'newsItem' ? hit.hit.value.slug : `page ${(hit.hit.value as { page: number }).page}`))).toEqual([
+      'item-2', 'item-4', 'item-6', 'item-8', 'item-10', 'item-12', 'page 1', 'page 2', 'page 3',
+    ]);
+    expect(first.hasMore).toBe(false);
+    // Each item asked once, by its version, the members' audience and the row's own sha; the file once for its three pages, by their copy's sha.
+    expect(asked.filter((call) => (call as unknown[])[0] === 'item')).toHaveLength(12);
+    expect(asked).toContainEqual(['item', item(1).version_id, 'members', SHA]);
+    expect(asked.filter((call) => (call as unknown[])[0] === 'page')).toEqual([['page', FILE, 'members', PAGE_SHA]]);
+    // A file whose copy is not current: none of its pages.
+    const stale = await harness(answer, undefined, undefined, { ...current, page: () => Promise.resolve(false) }).search('item', 'member');
+    expect(stale.hits.some((hit) => hit.hit.case === 'issuePage')).toBe(false);
   });
 
   it('reads no further down the ranking than the page asked for needs', async () => {
@@ -170,7 +225,7 @@ describe('search: the handler', () => {
 
   it('starts no further statement once its two seconds have gone, though each statement was quick: DEADLINE_EXCEEDED', async () => {
     let now = 0;
-    const file = (n: number) => ({ kind: 'page', id: `${String(n).padStart(8, '0')}-3333-4333-8333-333333333333`, page: 1, slug: null, title: null, item_kind: null, version_id: null, on_behalf_of: null, published_at: null });
+    const file = (n: number) => ({ kind: 'page', id: `${String(n).padStart(8, '0')}-3333-4333-8333-333333333333`, page: 1, slug: null, title: null, item_kind: null, version_id: null, on_behalf_of: null, published_at: null, sha: PAGE_SHA });
     const answer = (text: string): Answer => {
       if (text === searchSql('public')) return { rows: Array.from({ length: 40 }, (_unused, n) => file(n)) };
       // Each look at a file takes 300 ms, and finds a file the public may not have.
@@ -184,6 +239,18 @@ describe('search: the handler', () => {
     expect(h.statements.filter((statement) => statement.text.includes('FROM stored_file f'))).toHaveLength(7);
     expect(h.statements.at(-1)?.text).toBe('ROLLBACK');
     expect(h.logs).toEqual([{ level: 'warn', fields: { audience: 'public', query_chars: 6, words: 1, ms: 2100 }, message: 'search timed out' }]);
+  });
+
+  it('renders no further item once its two seconds have gone: DEADLINE_EXCEEDED', async () => {
+    let now = 0;
+    let renders = 0;
+    const item = (n: number) => ({ kind: 'item', id: `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`, page: 0, slug: `item-${n}`, title: `Item ${n}`, item_kind: 'article', version_id: VERSION, on_behalf_of: null, published_at: new Date('2026-01-01T12:00:00Z'), sha: Buffer.alloc(32) });
+    // Each render takes 300 ms and finds the row no longer current.
+    const slow: Currency = { page: () => Promise.resolve(true), item: () => ((now += 300), renders++, Promise.resolve(false)) };
+    const h = harness((text) => (text === searchSql('public') ? { rows: Array.from({ length: 40 }, (_unused, n) => item(n)) } : { rows: [] }), undefined, () => now, slow);
+    expect((await h.refusal(() => h.search('item'))).code).toBe(Code.DeadlineExceeded);
+    // 2000 ms at 300 ms a render: the seventh ends at 2100 ms, and no eighth begins.
+    expect(renders).toBe(7);
   });
 
   it('makes no snippets once its time has gone', async () => {

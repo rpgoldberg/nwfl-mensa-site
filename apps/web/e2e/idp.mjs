@@ -89,6 +89,12 @@ const LOGINS = {
   treasurer: { id: '00000000-0000-4000-8000-0000000000f8', name: 'Treasurer Sample', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-treasurer'] },
   // EDITOR E4: an officer in two seats, the Member at Large's and the Secretary's, who picks which one they act for.
   'two-seats': { id: '00000000-0000-4000-8000-0000000000f9', name: 'Rory Placeholder', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-member-at-large', 'nwfl-office-secretary'] },
+  // OFFICER-VERIFY: an officer with no member account, whose tools wait for the membership check (api.mjs).
+  'officer-unverified': { id: '00000000-0000-4000-8000-0000000000fa', name: 'Avery Placeholder', givenName: 'Avery', groups: ['nwfl-users', 'nwfl-officers', 'nwfl-office-treasurer'] },
+  // OFFICER-VERIFY fix round 3: an approved member given an officer power later, whose first name the check never
+  // confirmed (a fresh check is theirs to ask for), and an approved guest member who waits for the Admin's grant.
+  'officer-recheck': { id: '00000000-0000-4000-8000-0000000000fb', name: 'Robbie Placeholder', givenName: 'Robbie', groups: ['nwfl-members', 'nwfl-officers', 'nwfl-office-secretary'] },
+  'officer-guest': { id: '00000000-0000-4000-8000-0000000000fc', name: 'Gale Placeholder', givenName: 'Gale', groups: ['nwfl-members', 'nwfl-officers'] },
 };
 const BY_ID = new Map(Object.values(LOGINS).map((a) => [a.id, a]));
 
@@ -174,9 +180,41 @@ const app = provider.callback();
 
 // The sign-in step (the library's own interaction pages are off): a login
 // form, any password, and a Cancel link that answers access_denied.
+// SIGNIN-SLOW (e2e/signin-slow.spec.ts only, with IDP_TEST_CONTROL=1): counts of /auth and /token, and
+// the next N token calls taken and never answered, as a slow path out through the edge would.
+const control = env['IDP_TEST_CONTROL'] === '1';
+const counts = { auth: 0, token: 0 };
+let stalls = 0;
+
+/** @param {http.IncomingMessage} req @param {http.ServerResponse} res @param {string} pathname @returns {boolean} handled */
+function testControl(req, res, pathname) {
+  if (pathname === '/auth') counts.auth++;
+  if (pathname === '/token') {
+    counts.token++;
+    if (stalls > 0) {
+      stalls--;
+      req.resume();
+      return true;
+    }
+  }
+  if (pathname === '/test/stall-tokens') {
+    stalls = Number(new URL(req.url ?? '/', issuer).searchParams.get('n') ?? 0);
+    counts.auth = counts.token = 0;
+    res.writeHead(204).end();
+    return true;
+  }
+  if (pathname === '/test/counts') {
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(counts));
+    return true;
+  }
+  return false;
+}
+
 /** @param {http.IncomingMessage} req @param {http.ServerResponse} res */
 async function listener(req, res) {
-  const match = /^\/interaction\/([\w-]+)(\/abort)?$/.exec(new URL(req.url ?? '/', issuer).pathname);
+  const pathname = new URL(req.url ?? '/', issuer).pathname;
+  if (control && testControl(req, res, pathname)) return;
+  const match = /^\/interaction\/([\w-]+)(\/abort)?$/.exec(pathname);
   if (!match) return app(req, res);
   try {
     const details = await provider.interactionDetails(req, res);

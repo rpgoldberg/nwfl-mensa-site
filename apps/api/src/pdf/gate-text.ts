@@ -10,8 +10,11 @@
 // pageText), so the text stored is the text the reader's find will see.
 //
 // Before a page's text is taken, the gate's own test is put to it again
-// (gate.ts spells) with what the copy's audience withholds: one finding and
-// the answer is "withheld", with no text of any page. The gate passed these
+// (gate.ts spells) with what the copy's audience withholds, and then the same
+// quotes are looked for in the very text that would be indexed (match.ts
+// textMatches, after the line-end join: S2 challenge M1, a split the gate's
+// readings do not join). One finding either way and the answer is
+// "withheld", with no text of any page. The gate passed these
 // bytes for these quotes, so this never fires on a sound copy; it is there so
 // that a fault upstream (the wrong copy, the wrong audience's quotes, a
 // stored copy older than the gate's rule) cannot reach an index.
@@ -24,6 +27,7 @@
 import { type PageText, pageText } from '../search/text.js';
 import { sha256Hex } from './engine-protocol.js';
 import { loadPdfJs, spells } from './gate.js';
+import { textMatches } from './match.js';
 import { TEXT_MAX_BYTES, TEXT_MAX_PAGES, TEXT_MAX_PAGE_BYTES, type TextReply } from './text-protocol.js';
 
 /** What the gate's child is sent for a reading: the copy and what its audience withholds. */
@@ -64,6 +68,9 @@ export async function textReply(job: TextJob, caps: { pageBytes?: number; bytes?
         const content = await (await doc.getPage(n)).getTextContent();
         if (spells(content, job.quotes, n) !== null) return { sha256, code: 'withheld' };
         const page = pageOf(content.items);
+        // And to the text itself, as it would be indexed: the line-end join can read a name the gate's readings do not
+        // (a hyphen, then an empty item that ends the line in another font). Not the gate's word on it: the index's.
+        if (textMatches(page.text, job.quotes) || textMatches(page.extra, job.quotes)) return { sha256, code: 'withheld' };
         const [textBytes, extraBytes] = [bytesOf(page.text), bytesOf(page.extra)];
         total += textBytes + extraBytes;
         if (textBytes > pageBytes || extraBytes > pageBytes || total > allBytes) return { sha256, code: 'over-cap' };

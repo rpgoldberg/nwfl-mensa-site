@@ -94,13 +94,18 @@ export const ACCOUNTS = {
   'writer-lapsing': '00000000-0000-4000-8000-0000000000f7',
   treasurer: '00000000-0000-4000-8000-0000000000f8',
   'two-seats': '00000000-0000-4000-8000-0000000000f9',
+  'officer-unverified': '00000000-0000-4000-8000-0000000000fa',
+  'officer-recheck': '00000000-0000-4000-8000-0000000000fb',
+  'officer-guest': '00000000-0000-4000-8000-0000000000fc',
 };
 
 /**
  * W-SIGNUP: the sign-ups waiting in api.mjs's queue (SIGNUP_QUEUE there), oldest first. The stand-in
  * keeps sign-ups and decisions per sign-in (the access token's jti), so tests in parallel cannot
  * disturb each other. "Blair Example" is the approver's own sign-up, which they may not decide;
- * "Harper Placeholder" was found in another local group, so it is never approved as a member.
+ * "Harper Placeholder" was found in another local group, so it is approved as a guest member
+ * (OFFICER-VERIFY); "Indy Unconfirmed" is an invited sign-up the check did not confirm, so it has no
+ * Approve; "Lou Unlisted" reported a local group name the site does not know.
  * The member accounts were last checked on October 20, 2026.
  */
 export const SIGNUP_QUEUE = [
@@ -111,7 +116,24 @@ export const SIGNUP_QUEUE = [
   { name: 'Dana Mismatch', first: 'Dana', last: 'Mismatch', number: '000011005', email: 'dana@example.org', route: 'Signed up on the site', check: 'Number and last name confirmed by the membership verification service, but the email differs, on November 4, 2026' },
   { name: 'Drew Secondclaim', first: 'Drew', last: 'Secondclaim', number: '000011006', email: 'drew@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 4, 2026' },
   { name: 'Eli Thirdclaim', first: 'Eli', last: 'Thirdclaim', number: '000011007', email: 'eli@example.org', route: 'Signed up on the site', check: 'This membership number was already claimed by another account, on November 5, 2026' },
+  { name: 'Indy Unconfirmed', first: 'Indy', last: 'Unconfirmed', number: '000011008', email: 'indy@example.org', route: 'Invited by an officer', check: 'Not confirmed by the membership verification service, on November 6, 2026' },
+  { name: 'Lou Unlisted', first: 'Lou', last: 'Unlisted', number: '000011009', email: 'lou@example.org', route: 'Signed up on the site', check: 'Confirmed by the membership verification service, on November 6, 2026' },
 ] as const;
+
+/** OFFICER-VERIFY: the request ids (api.mjs) of the queue's sign-ups the tests below decide or name. */
+export const QUEUE_IDS = {
+  'Jesse Example': 'b1000000-0000-4000-8000-000000000001',
+  'Kendall Sample': 'b1000000-0000-4000-8000-000000000002',
+  'Harper Placeholder': 'b1000000-0000-4000-8000-000000000003',
+  'Dana Mismatch': 'b1000000-0000-4000-8000-000000000005',
+  'Indy Unconfirmed': 'b1000000-0000-4000-8000-000000000008',
+} as const;
+
+/** OFFICER-VERIFY: what each card says of the first-name check and the local group (api.mjs), by name. */
+export const CHECK_FACTS = {
+  'Jesse Example': [['First name check', 'Confirmed'], ['Local group', 'Northwest Florida Mensa (this chapter)']],
+  'Lou Unlisted': [['First name check', 'Did not match'], ['Local group', 'Atlantis Mensa (guest member; not a known local group name: check it)']],
+} as const;
 
 /**
  * VET: what the queue says before approving the two sign-ups that never approve by themselves: an
@@ -147,6 +169,21 @@ export const REJECTED = {
   kept: { name: 'Harley Sample', first: 'Harley', last: 'Sample', number: '000022004', email: 'harley@example.org', check: 'Confirmed by the membership verification service as a member of another local group, on November 2, 2026', rejected: 'November 3, 2026' },
 } as const;
 
+/**
+ * PROFILE-ERASE: the decided sign-ups api.mjs lists to the Admin (RECORDS there), newest first: an approved
+ * member, a removed member whose profile the removal erased, a rejected sign-up and one rejected then
+ * reopened. The Admin's own (ownId) is never listed. The stand-in keeps an erasure or a correction per
+ * sign-in, so browsers in parallel never disturb each other.
+ */
+export const RECORDS = {
+  member: { id: 'd1000000-0000-4000-8000-000000000001', name: 'Robin Member', email: 'robin@example.org', first: 'Robin', last: 'Member', number: '000044001', decision: 'Approved on November 6, 2026', account: 'Member' },
+  removed: { id: 'd1000000-0000-4000-8000-000000000002', name: 'Sage Leaver', email: 'sage@example.org', decision: 'Approved on November 5, 2026', account: 'Removed' },
+  rejected: { id: 'd1000000-0000-4000-8000-000000000003', name: 'Toby Declined', email: 'toby@example.org', first: 'Toby', last: 'Declined', number: '000044003', decision: 'Rejected on November 4, 2026', account: 'Removed' },
+  reopened: { id: 'd1000000-0000-4000-8000-000000000004', name: 'Uma Again', email: 'uma@example.org', first: 'Uma', last: 'Again', number: '000044004', decision: 'Rejected on November 3, 2026, then reopened', account: 'None' },
+  ownId: 'd1000000-0000-4000-8000-00000000000a',
+  ownNumber: '000044010',
+} as const;
+
 /** PROFILE-ID: what the duplicate claim's earlier claim typed (api.mjs), shown beside it; none for a claim since closed. */
 export const EARLIER_CLAIM = { 'Drew Secondclaim': { name: 'Jordan Firstclaim', first: 'Jordan', last: 'Firstclaim', number: '000011006' } } as const;
 
@@ -154,7 +191,15 @@ export const EARLIER_CLAIM = { 'Drew Secondclaim': { name: 'Jordan Firstclaim', 
 export const MEMBER_PROFILE = { first: 'Jordan', last: 'Example', number: '000033001' } as const;
 
 /** PROFILE-ID: every membership number the stand-in holds, none of which another member may ever see. */
-export const ALL_NUMBERS = [...SIGNUP_QUEUE.map((s) => s.number), ...Object.values(REJECTED).map((r) => r.number), MEMBER_PROFILE.number];
+export const ALL_NUMBERS = [
+  ...SIGNUP_QUEUE.map((s) => s.number),
+  ...Object.values(REJECTED).map((r) => r.number),
+  MEMBER_PROFILE.number,
+  RECORDS.member.number,
+  RECORDS.rejected.number,
+  RECORDS.reopened.number,
+  RECORDS.ownNumber,
+];
 
 /**
  * SOLO-APPROVE: the approval rule as api.mjs answers each officer. The real API holds one setting for
