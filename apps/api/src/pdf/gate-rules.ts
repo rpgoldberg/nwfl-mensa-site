@@ -101,6 +101,17 @@
 //      checks (gate.ts, and drawn.ts's glyphs) do not count those labels'
 //      own strings, drawn in PDFium's own label font, and nothing more
 //      (leakBreak; the glyphs only where they spell the label, fix round 1).
+//      A rectangle in the boxes' style that the original draws on the same
+//      page at exactly the same bounds is its layout, not a box, one for
+//      one (GATE-LAYOUT): the gate reads the original for them itself, each
+//      page flattened as the engine flattens it. A glyph nobody can see on
+//      such rectangles (half its ink or more on them, or its box's centre:
+//      not filled opaque, under 4 pt, out of its clips, drawn over after,
+//      sharp mitres included, under 3:1 against what lies under it, painted
+//      too little by PDFium drawn alone, shown too little by PDFium's
+//      drawing of the page, or on a page with text drawn as a clip;
+//      gate-labels.ts has the rule), and an original that cannot be opened,
+//      are "rules".
 //
 //   6. Graphics states (BOXLABEL fix round 1, F4): every ExtGState, and
 //      every /ExtGState list, is a dictionary, and a soft mask is /None or
@@ -730,7 +741,8 @@ export async function gateVerdict(job: GateJob): Promise<GateVerdict> {
     // are quotes it cannot read it for, else rules: readRules takes nameBreak's reason). Every other break is rules.
     const names = await nameBreak(job.copy);
     if ((names !== null && names !== NAMES_UNPARSED) || (await nestedPast(job.copy)) !== null) return { pass: false, code: 'rules' };
-    const labels = await labelMarks(job.copy);
+    // The original's own rectangles in the boxes' style are read from the original here, not taken from the engine.
+    const labels = await labelMarks(job.copy, job.original);
     // The text layers, then the text the glyph names draw (GLYPHMAP), then PDFium's reading as the engine reads its copy,
     // where a glyph PDFium has no Unicode for counts as unreadable (LIGATURE fix 1), each with the labels taken out where
     // they can be.

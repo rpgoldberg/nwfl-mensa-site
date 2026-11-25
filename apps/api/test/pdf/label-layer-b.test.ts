@@ -72,7 +72,7 @@ describe('layer (b) refuses a lying label when layer (a) is bypassed', () => {
     const name = (new RegExp(LABEL_OP.source).exec(content) as RegExpExecArray)[1] as string;
     (doc.getPage(0).node.Resources()?.lookup(PDFName.of('Font'), PDFDict) as PDFDict).set(PDFName.of(name), drawsOther(doc.context, 'Private', 'Quillon'));
     const lying = await doc.save({ useObjectStreams: false });
-    const marks = await labels.labelMarks(lying);
+    const marks = await labels.labelMarks(lying, original);
     expect(marks).toEqual([[{ text: 'Private', x: expect.any(Number) as unknown, y: expect.any(Number) as unknown }]]);
 
     // The bypassed (a) hands over masked bytes in which nothing is left to find: reading them would pass (Nb5).

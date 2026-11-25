@@ -510,7 +510,39 @@ holds it, any other text in the labels' font and colour inside a box (the old
 two labels in one box, or any other glyph drawn over a box refuses the copy
 (`rules`). A box is one rectangle drawn round its corners and closed, as
 `re` draws it. A glyph under a box is hidden by it and is not refused for
-being there; the leak checks read it as before. No label's own text counts
+being there; the leak checks read it as before. A rectangle in that style
+that the original draws on the same page at exactly the same bounds is the
+newsletter's own layout (a calendar's header cell, a rule), not a box, one
+for one (GATE-LAYOUT): the gate opens the original itself and flattens each
+page as the engine does. Text nobody can see on such a rectangle refuses
+the copy (`rules`), as before GATE-LAYOUT all text on it did: a glyph half
+or more on such rectangles, or whose box's centre is on one, must be
+painted opaque (a Type 3 glyph in the one colour PDFium paints it), be
+4 pt or more, not lie under another glyph drawn after it, and show over at
+least half its ink once its clips, whatever is drawn after it and (for one
+half on the rectangles or more) whatever under it is under 3:1 against its
+paint are taken away. PDFium's drawing of the page must also show it:
+without its text object and every other drawing the same text there, at
+least half as much of its inner ink box must change by 3:1 as PDFium
+paints solid drawing it alone (to a pixel row), and 5 % at least, so a
+text object drawn over it or a pattern fill, whose paint is not read,
+cannot hide it. Only pixels inside the crop box and the media box count,
+and not those in the ink of other glyphs that drawing takes away; a glyph
+drawn with other glyphs of a Type 3 text object is not seen (such a
+glyph's box is only what its font claims), and drawing the copy for this
+check may take 20 s at most before the page is refused as too much to
+check, as is one drawing whose paths, weighed before it is drawn (segments
+times the pixel rows they meet), would take more than about 5 s. This proves that paint shows where the glyph is, not that the
+letter can be read: a font may draw any shape for a letter. A stroke's mitred corner is taken to reach as far as its
+angle lets (PDFium gives no miter limit); PDFium, drawing the glyph's text
+object alone, must paint 5 % or more of its ink box (a glyph its font draws
+nothing for is not seen); and on a page that draws text as a clip no glyph
+on such a rectangle is seen. A glyph not seen where it is drawn passes only
+when the same glyph drawn again there is seen: the same text, each ink box
+over half of the other, at a font size within a tenth. An original that cannot be
+opened refuses the
+copy too; `ENGINE_VERSION` gained `+layout-2`, so files refused before for
+those rectangles are made again. No label's own text counts
 as withheld text: a leak check that finds a quote is run once more on the
 copy with exactly those labels' strings turned to spaces, each in the very
 bytes PDFium writes for a label at that label's place, as many as PDFium

@@ -26,6 +26,9 @@
 // either finds any passage, there is no copy. The labels are read first as
 // the gate reads them (gate-labels.ts): any other text in a box, or a label
 // outside one, is no copy, and no label's own text counts as a passage.
+// A black rectangle the original itself draws in the boxes' style is its
+// layout, not a box (GATE-LAYOUT): the check is given the original to tell
+// them apart, and text nobody can see on such a rectangle is no copy.
 //
 // No copy (the reason is for an officer):
 //   - the file cannot be opened;
@@ -293,11 +296,12 @@ export async function redactPdf(original: Uint8Array, request: RedactRequest, de
     return { kind: 'refused', reason: LINKS_UNWRITTEN };
   }
   // The labels are read as the gate reads them (gate-labels.ts): any other text in a box, or a label outside one, is no
-  // copy, and no label's own text counts as withheld text. First, as the gate does (R3-1), no copy holds a name pdf-lib
-  // reads apart from pdf.js and PDFium, so the font a label's op names is the one each of them finds.
+  // copy, and no label's own text counts as withheld text. The original's own rectangles in the boxes' style are not
+  // boxes (GATE-LAYOUT), and text nobody can see on one is no copy. First, as the gate does (R3-1), no copy holds a name
+  // pdf-lib reads apart from pdf.js and PDFium, so the font a label's op names is the one each of them finds.
   const names = await nameBreak(pdf);
   if (names !== null) return { kind: 'refused', reason: names };
-  const labels = await labelMarks(pdf);
+  const labels = await labelMarks(pdf, original);
   if (typeof labels === 'string') return { kind: 'refused', reason: labels };
   // And the text the glyph names draw, as the gate reads it (GLYPHMAP, glyph-names.ts).
   const left = await leakBreak(pdf, labels, async (bytes) => (await verifyRedacted(bytes, quotes)) ?? (await namedBreak(bytes, quotes)) ?? (await checkCopy(bytes, quotes)));

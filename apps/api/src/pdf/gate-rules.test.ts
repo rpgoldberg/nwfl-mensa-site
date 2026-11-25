@@ -237,14 +237,19 @@ describe('gateVerdict and gateReply (the gate child\'s answer)', () => {
     expect(made.kind).toBe('redacted');
     expect(await gateVerdict({ copy: (made as { pdf: Uint8Array }).pdf, original, quotes: [], image: 'blur' })).toEqual({ pass: true });
     expect(await gateVerdict({ copy: original, original, quotes: [], image: 'hide' })).toEqual({ pass: false, code: 'rules' });
-    expect(await gateVerdict({ copy: await linesPdf(['Picnic flyer']), original: Uint8Array.from([1]), quotes: [], image: 'blur' })).toEqual({ pass: true });
+    // An original that cannot be read: no windows are read from it, and since GATE-LAYOUT the label check refuses the
+    // copy first, as it cannot read the original's layout.
+    expect(await gateVerdict({ copy: await linesPdf(['Picnic flyer']), original: Uint8Array.from([1]), quotes: [], image: 'blur' })).toEqual({ pass: false, code: 'rules' });
   });
 
   it('answers with the sha256 of the copy it was sent, and on a pass the bytes it checked: its own writing of the copy (M1)', async () => {
     // The engine writes with pdf-lib's writer, so its copy written again is the same bytes.
-    const made = await redactPdf(await linesPdf(['Picnic flyer', 'Rides: call Kestrel Ambry.']), { quotes: ['Kestrel Ambry'], redactsAny: true, image: 'blur' });
+    const original = await linesPdf(['Picnic flyer', 'Rides: call Kestrel Ambry.']);
+    const made = await redactPdf(original, { quotes: ['Kestrel Ambry'], redactsAny: true, image: 'blur' });
     const engineCopy = (made as { pdf: Uint8Array }).pdf;
-    const job = { copy: engineCopy, original: engineCopy, quotes: ['Kestrel Ambry'], image: 'hide' as const };
+    // The original itself (GATE-LAYOUT): the copy given as its own original would make its box the original's layout.
+    const job = { copy: engineCopy, original, quotes: ['Kestrel Ambry'], image: 'hide' as const };
+    expect(await gateVerdict({ ...job, original: engineCopy })).toEqual({ pass: false, code: 'rules' });
     expect(await gateReply(job)).toEqual({ verdict: { pass: true }, sha256: sha256Hex(engineCopy), checked: { pdf: engineCopy, sha256: sha256Hex(engineCopy) } });
     // A copy written another way is stored as the gate wrote it, and those bytes are what it checked.
     const plain = plainCopy();

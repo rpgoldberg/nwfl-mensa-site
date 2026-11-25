@@ -178,8 +178,8 @@ describe('the gate takes exactly the three labels, inside boxes, in the label st
   const verdict = (copy: Uint8Array, original: Uint8Array, quotes: readonly string[] = ['Quillon Brask']) => gateVerdict({ copy, original, quotes, image: 'show' });
 
   it('reads the honest copy\'s one label in its box', async () => {
-    const { pdf, boxes } = await honest();
-    const marks = await labelMarks(pdf);
+    const { original, pdf, boxes } = await honest();
+    const marks = await labelMarks(pdf, original);
     expect(typeof marks).not.toBe('string');
     expect(marks).toEqual([[{ text: 'Members Only', x: expect.any(Number) as unknown, y: expect.any(Number) as unknown }]]);
     expect(LABEL_OP.exec(Buffer.from(await contentOf(pdf)).toString('latin1'))?.[5]).toBe(hex('Members Only'));
@@ -194,29 +194,29 @@ describe('the gate takes exactly the three labels, inside boxes, in the label st
   ])('refuses %s, drawn in the label style inside the box', async (_name, text) => {
     const { original, pdf } = await honest();
     const bad = await patched(pdf, (content) => content.replace(hex('Members Only'), hex(text)));
-    expect(typeof (await labelMarks(bad))).toBe('string');
+    expect(typeof (await labelMarks(bad, original))).toBe('string');
     expect(await verdict(bad, original)).toEqual({ pass: false, code: 'rules' });
   });
 
   it('refuses a label drawn outside any box', async () => {
     const { original, pdf } = await honest();
     const moved = await patched(pdf, (content) => content.replace(LABEL_OP, (op, x: string) => op.replace(` ${x} `, ' 300 ')));
-    expect(await labelMarks(moved)).toMatch(/a label is drawn outside a box/);
+    expect(await labelMarks(moved, original)).toMatch(/a label is drawn outside a box/);
     expect(await verdict(moved, original)).toEqual({ pass: false, code: 'rules' });
     const extra = await patched(pdf, (content) => `${content}\n${(LABEL_OP.exec(content) as RegExpExecArray)[0].replace(/ 1 0 0 1 \S+ \S+ cm/, ' 1 0 0 1 300 20 cm')}`);
-    expect(await labelMarks(extra)).toMatch(/a label is drawn outside a box/);
+    expect(await labelMarks(extra, original)).toMatch(/a label is drawn outside a box/);
     expect(await verdict(extra, original)).toEqual({ pass: false, code: 'rules' });
   });
 
   it('refuses a label in a form, and a label set in another style (black, or rotated)', async () => {
     const { original, pdf } = await honest();
     const inForm = await withForm(pdf, 'q 1 1 1 rg BT /F1 9 Tf 300 20 Td (Private) Tj ET Q');
-    expect(await labelMarks(inForm)).toMatch(/a label is drawn outside a box/);
+    expect(await labelMarks(inForm, original)).toMatch(/a label is drawn outside a box/);
     expect(await verdict(inForm, original)).toEqual({ pass: false, code: 'rules' });
     const turned = await patched(pdf, (content) => content.replace(LABEL_OP, (op) => op.replace(/ 1 0 0 1 (\S+) (\S+) cm BT/, ' 0.9 0 0 0.9 $1 $2 cm BT')));
-    expect(await labelMarks(turned)).toMatch(/a label is not in the labels' style/);
+    expect(await labelMarks(turned, original)).toMatch(/a label is not in the labels' style/);
     const black = await patched(pdf, (content) => content.replace(LABEL_OP, (op) => op.replace('q 1 1 1 rg', 'q 0.5 0.5 0.5 rg')));
-    expect(await labelMarks(black)).toMatch(/text other than its label is in a box/);
+    expect(await labelMarks(black, original)).toMatch(/text other than its label is in a box/);
     expect(await verdict(turned, original)).toEqual({ pass: false, code: 'rules' });
   });
 
@@ -224,15 +224,15 @@ describe('the gate takes exactly the three labels, inside boxes, in the label st
     const { original, pdf, boxes } = await honest();
     const box = boxes[0] as Region;
     const over = await patched(pdf, (content) => `${content}\nq 1 1 1 rg BT /FXF1 6 Tf ${box.left + 2} ${box.bottom + 2} Td (x) Tj ET Q`);
-    expect(await labelMarks(over)).toMatch(/text other than its label is in a box/);
+    expect(await labelMarks(over, original)).toMatch(/text other than its label is in a box/);
     expect(await verdict(over, original)).toEqual({ pass: false, code: 'rules' });
     const blue = await patched(pdf, (content) => `${content}\nq 0 0 1 rg BT /FXF1 6 Tf ${box.left + 2} ${box.bottom + 2} Td (Kestrel) Tj ET Q`);
-    expect(await labelMarks(blue)).toMatch(/text other than its label is in a box/);
+    expect(await labelMarks(blue, original)).toMatch(/text other than its label is in a box/);
     const inForm = await withForm(pdf, `BT /F1 6 Tf ${box.left + 2} ${box.bottom + 2} Td (Kestrel) Tj ET`);
-    expect(await labelMarks(inForm)).toMatch(/text other than its label is in a box/);
+    expect(await labelMarks(inForm, original)).toMatch(/text other than its label is in a box/);
     expect(await verdict(inForm, original)).toEqual({ pass: false, code: 'rules' });
     const under = await patched(pdf, (content) => content.replace(/q 0 0 0 rg 0 G/, `q 0 0 1 rg BT /FXF1 6 Tf ${box.left + 2} ${box.bottom + 2} Td (Kestrel) Tj ET Q\nq 0 0 0 rg 0 G`));
-    expect(await labelMarks(under)).toEqual([[{ text: 'Members Only', x: expect.any(Number) as unknown, y: expect.any(Number) as unknown }]]);
+    expect(await labelMarks(under, original)).toEqual([[{ text: 'Members Only', x: expect.any(Number) as unknown, y: expect.any(Number) as unknown }]]);
     expect(await verdict(under, original)).toEqual({ pass: true });
     expect(await verdict(under, original, ['Quillon Brask', 'Kestrel'])).toEqual({ pass: false, code: 'withheld' });
   });
@@ -240,7 +240,7 @@ describe('the gate takes exactly the three labels, inside boxes, in the label st
   it('refuses two labels in one box', async () => {
     const { original, pdf } = await honest();
     const twice = await patched(pdf, (content) => `${content}\n${(LABEL_OP.exec(content) as RegExpExecArray)[0]}`);
-    expect(typeof (await labelMarks(twice))).toBe('string');
+    expect(typeof (await labelMarks(twice, original))).toBe('string');
     expect(await verdict(twice, original)).toEqual({ pass: false, code: 'rules' });
   });
 
