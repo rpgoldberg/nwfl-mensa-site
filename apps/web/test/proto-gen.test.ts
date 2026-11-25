@@ -38,6 +38,8 @@ describe('src/gen', () => {
       'nwfl/mensa/v1/membership_pb.js',
       'nwfl/mensa/v1/newsletter_pb.js',
       'nwfl/mensa/v1/roster_pb.js',
+      // ARCHIVE-SEARCH S3: SearchService, for the search page (S4).
+      'nwfl/mensa/v1/search_pb.js',
     ]);
   });
 });

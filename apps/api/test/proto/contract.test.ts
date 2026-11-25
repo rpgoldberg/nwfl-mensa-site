@@ -92,9 +92,9 @@ beforeAll(async () => {
 });
 
 describe(`${PKG}: services`, () => {
-  it('declares the eight services and nothing else', () => {
+  it('declares the nine services and nothing else', () => {
     expect(services().map((s) => s.name).sort()).toEqual(
-      ['ApprovalRuleService', 'ContentService', 'EventService', 'LinkCheckService', 'MembershipService', 'MembershipVerifierService', 'NewsletterService', 'RedactionPolicyService'].sort(),
+      ['ApprovalRuleService', 'ContentService', 'EventService', 'LinkCheckService', 'MembershipService', 'MembershipVerifierService', 'NewsletterService', 'RedactionPolicyService', 'SearchService'].sort(),
     );
   });
 
@@ -104,12 +104,38 @@ describe(`${PKG}: services`, () => {
     for (const m of methods()) expect(m.methodKind, rpc(m)).toBe(rpc(m) === 'ContentService.ReadFile' ? 'server_streaming' : 'unary');
   });
 
-  // EDITOR E1: Preview names a read too (ContentService.PreviewWorkingItem).
-  it('marks every List/Get/Export/Read/Preview RPC as a read (NO_SIDE_EFFECTS), and nothing else', () => {
+  // EDITOR E1: Preview names a read too (ContentService.PreviewWorkingItem). ARCHIVE-SEARCH S3: so does Search.
+  it('marks every List/Get/Export/Read/Preview/Search RPC as a read (NO_SIDE_EFFECTS), and nothing else', () => {
     for (const m of methods()) {
-      const isRead = /^(List|Get|Export|Read|Preview)/.test(m.name);
+      const isRead = /^(List|Get|Export|Read|Preview|Search)/.test(m.name);
       expect(m.idempotency === Idempotency.NO_SIDE_EFFECTS, rpc(m)).toBe(isRead);
     }
+  });
+});
+
+describe(`${PKG}: the archive search (ARCHIVE-SEARCH S3)`, () => {
+  it('is its own service of one read', () => {
+    expect(service('SearchService')?.methods.map((m) => [m.name, m.methodKind, m.idempotency === Idempotency.NO_SIDE_EFFECTS])).toEqual([['Search', 'unary', true]]);
+  });
+
+  it('takes the words and a page, and nothing that could name an audience, a table or a filter', () => {
+    const search = service('SearchService')?.methods.find((m) => m.name === 'Search');
+    expect(fieldNames(search?.input)).toEqual(['query', 'page']);
+    expect(search?.input.fields.map((f) => [f.name, f.fieldKind === 'scalar' ? f.scalar : f.fieldKind])).toEqual([
+      ['query', 9 /* string */],
+      ['page', 5 /* int32 */],
+    ]);
+  });
+
+  it('answers with hits and whether more follow: no total, and no copy of the query', () => {
+    const search = service('SearchService')?.methods.find((m) => m.name === 'Search');
+    expect(fieldNames(search?.output)).toEqual(['hits', 'has_more']);
+    const hit = search?.output.fields.map(fieldMessage).find((m) => m !== undefined);
+    expect(hit?.oneofs.map((o) => [o.name, o.fields.map((f) => f.name)])).toEqual([['hit', ['issue_page', 'news_item']]]);
+    expect(hit?.nestedMessages.map((m) => [m.name, fieldNames(m)])).toEqual([
+      ['IssuePage', ['file_id', 'issue_label', 'page', 'snippet']],
+      ['NewsItem', ['slug', 'title', 'published_on', 'snippet', 'kind']],
+    ]);
   });
 });
 
@@ -262,9 +288,12 @@ describe(`${PKG}: the membership verifier`, () => {
   });
 
   // PROFILE-ID: the owner (GetMyAccount) and the approvers (the queue and the rejections) see it too.
+  // PROFILE-ERASE: the Admin's list of decided sign-ups shows them (ListSignupRecords out); the names never go
+  // in there, and only the number goes in, by the Admin's correction (CorrectMembershipNumber in, below).
   const NUMBER_CARRIERS = [
     'MembershipService.GetMyAccount out',
     'MembershipService.ListRejectedSignups out',
+    'MembershipService.ListSignupRecords out',
     'MembershipService.ListSignupRequests out',
     'MembershipService.SubmitSignup in',
     'MembershipVerifierService.ListPendingVerifications out',
@@ -277,8 +306,8 @@ describe(`${PKG}: the membership verifier`, () => {
       ])
       .sort();
 
-  it('lets the membership number reach only the pending list, the sign-up call, the owner and the approvers\' two lists', () => {
-    expect(carriersOf('membership_number')).toEqual(NUMBER_CARRIERS);
+  it('lets the membership number reach only the pending list, the sign-up call, the owner and the approvers\' two lists, and the Admin\'s list and correction', () => {
+    expect(carriersOf('membership_number')).toEqual([...NUMBER_CARRIERS, 'MembershipService.CorrectMembershipNumber in'].sort());
   });
 
   it('lets the last name reach the same places, and the owner\'s change of name (in)', () => {
@@ -332,8 +361,11 @@ describe(`${PKG}: nothing National-sourced has a field`, () => {
     expect(membershipFiles.length).toBeGreaterThanOrEqual(2);
     const offenders = membershipFiles
       .flatMap((f) => f.messages)
-      .flatMap((m) => m.fields.filter((f) => /note|comment|remark|reason/.test(f.name)).map((f) => `${m.name}.${f.name}`));
+      // PROFILE-ERASE fix 1: a correction's reason is a fixed choice (an enum), not free text; any other kind still fails.
+      .flatMap((m) => m.fields.filter((f) => /note|comment|remark|reason/.test(f.name) && f.fieldKind !== 'enum').map((f) => `${m.name}.${f.name}`));
     expect(offenders).toEqual([]);
+    const reason = allMessages().find((m) => m.typeName === `${PKG}.CorrectMembershipNumberRequest`)?.fields.find((f) => f.name === 'reason');
+    expect(reason?.fieldKind === 'enum' ? reason.enum.typeName : reason?.fieldKind).toBe(`${PKG}.CorrectionReason`);
   });
 });
 
@@ -361,9 +393,12 @@ describe(`${PKG}: rules by name as well as by type`, () => {
       ...(reachableFields(m.input).some((f) => NUMBER_LIKE.test(f.name)) ? [`${rpc(m)} in`] : []),
       ...(reachableFields(m.output).some((f) => NUMBER_LIKE.test(f.name)) ? [`${rpc(m)} out`] : []),
     ]);
+    // PROFILE-ERASE: "never in to change it" now has one exception, the Admin's correction (PID-S1).
     expect(carriers.sort()).toEqual([
+      'MembershipService.CorrectMembershipNumber in',
       'MembershipService.GetMyAccount out',
       'MembershipService.ListRejectedSignups out',
+      'MembershipService.ListSignupRecords out',
       'MembershipService.ListSignupRequests out',
       'MembershipService.SubmitSignup in',
       'MembershipVerifierService.ListPendingVerifications out',

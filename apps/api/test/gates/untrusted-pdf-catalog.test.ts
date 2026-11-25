@@ -70,6 +70,8 @@ const FROZEN: Record<Name, unknown[]> = {
     // SOLO-APPROVE (0023): the approval rule's reader and writer; neither touches a PDF.
     { function: 'approval_rule_read(text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
     { function: 'approval_rule_set(text,text,text,text,text[],text,text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
+    // PROFILE-ERASE (0036): the removal's trigger (it erases the profile and analyses signup_request); no PDF.
+    { function: 'member_account_removed_erases_profile()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
     // LINKS L3 (0025): the put records the copy's kept link ids; it still takes bytes only from the worker's claim.
     { function: 'pdf_copy_put(uuid,uuid,bytea,text,bytea,text,text[])', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     // LINKS L2 (0024): the link writer and disabler, and the triggers that stamp and queue; none reads a PDF.
@@ -115,6 +117,10 @@ const FROZEN: Record<Name, unknown[]> = {
     { function: 'search_page_sweep()', owner: 'nwfl_migrator', executors: ['nwfl_migrator', 'nwfl_worker'] },
     // S1 fix 1: the trigger that deletes a file's page rows when its audience may no longer open it; it reads no PDF.
     { function: 'search_page_unservable()', owner: 'nwfl_migrator', executors: ['nwfl_migrator'] },
+    // PROFILE-ERASE (0036): the Admin's number correction and erasure on request; each writes signup_request and
+    // audit_event only, and neither reads or writes a PDF.
+    { function: 'signup_request_correct_number(uuid,text,text,text,text[],text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
+    { function: 'signup_request_erase(uuid,text,text[],text)', owner: 'nwfl_migrator', executors: ['nwfl', 'nwfl_migrator'] },
   ],
   members: [],
   putOwner: [

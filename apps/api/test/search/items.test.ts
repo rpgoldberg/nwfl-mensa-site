@@ -230,7 +230,12 @@ describe.skipIf(!live)('search: the news-item rows', () => {
         hidden.versionId,
       ]);
       const result = await backfillItems(api.pool);
-      expect(result).toEqual({ ran: true, written: 2, skipped: 0, rerecorded: 0, requeued: 0 });
+      // Changed by ARCHIVE-SEARCH S3 (challenge S3-2, S1): the backfill now also re-records each published item never
+      // re-recorded since the last policy change, marked or not, since the search read refuses its row until then. The
+      // officers item above was published by SQL with no re-record: it is the one (rerecorded 1).
+      expect(result).toEqual({ ran: true, written: 2, skipped: 0, rerecorded: 1, requeued: 0 });
+      const confirmed = await owner.query(`SELECT audience FROM version_rerecorded WHERE version_id = $1 ORDER BY audience`, [hidden.versionId]);
+      expect(confirmed.rows).toEqual([{ audience: 'members' }, { audience: 'public' }]);
       expect(await row('search_item_public', itemId)).toEqual(good);
       expect(await row('search_item_members', hidden.itemId)).toBeUndefined();
     });
@@ -239,8 +244,17 @@ describe.skipIf(!live)('search: the news-item rows', () => {
       await owner.query(`DELETE FROM search_item_public WHERE item_id = $1`, [itemId]);
       // The ledger is made to hold another output than a render gives now (as after a renderer change with no ledger write).
       await owner.query(`SELECT publication_ledger_record('content_version', $1, 'public', sha256('elsewhere'), '{"v":1}', 0)`, [versionId]);
-      expect(await backfillItems(api.pool)).toEqual({ ran: true, written: 0, skipped: 1, rerecorded: 0, requeued: 0 });
-      expect(await row('search_item_public', itemId)).toBeUndefined();
+      // Changed by ARCHIVE-SEARCH S3 (challenge S3-1, S1): the put still skips it (skipped 1, written 0), and no row is put
+      // from a render the ledger does not hold; the same run then re-records the item, since its render is not the
+      // ledger's output, and the re-record appends the render and writes its row (rerecorded 1).
+      expect(await backfillItems(api.pool)).toEqual({ ran: true, written: 0, skipped: 1, rerecorded: 1, requeued: 0 });
+      const now = await owner.query<{ same: boolean }>(
+        `SELECT l.output_sha256 = s.rendered_sha256 AND l.output_sha256 <> sha256('elsewhere') AS same FROM publication_ledger l JOIN search_item_public s ON s.version_id = l.subject_id
+          WHERE l.subject_kind = 'content_version' AND l.subject_id = $1 AND l.audience = 'public' AND l.current_to IS NULL`,
+        [versionId],
+      );
+      expect(now.rows).toEqual([{ same: true }]);
+      expect((await row('search_item_public', itemId))!.text).not.toContain(SECRET);
     });
 
     it('does not run while another process holds the backfill lock', async () => {
@@ -259,8 +273,11 @@ describe.skipIf(!live)('search: the news-item rows', () => {
         info: (fields: Record<string, unknown>, message: string) => lines.push({ level: 'info', fields, message }),
         warn: (fields: Record<string, unknown>, message: string) => lines.push({ level: 'warn', fields, message }),
       };
+      // The state the test above leaves, made again (ARCHIVE-SEARCH S3: that test's backfill now re-records the item).
+      await owner.query(`DELETE FROM search_item_public WHERE item_id = $1`, [itemId]);
+      await owner.query(`SELECT publication_ledger_record('content_version', $1, 'public', sha256('elsewhere'), '{"v":1}', 0)`, [versionId]);
       await runBackfill(api.pool, logger);
-      expect(lines).toEqual([{ level: 'info', fields: { ran: true, written: 0, skipped: 1, rerecorded: 0, requeued: 0 }, message: 'search backfill' }]);
+      expect(lines).toEqual([{ level: 'info', fields: { ran: true, written: 0, skipped: 1, rerecorded: 1, requeued: 0 }, message: 'search backfill' }]);
       const broken = { connect: () => Promise.reject(Object.assign(new Error(`could not reach ${SECRET}`), { code: '08006' })) };
       await runBackfill(broken as unknown as pg.Pool, logger);
       expect(lines[1]).toEqual({ level: 'warn', fields: { code: '08006' }, message: 'search backfill failed' });

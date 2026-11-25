@@ -171,7 +171,8 @@ This repository's whole history is meant to be publishable.
 ## Contract
 
 `proto/nwfl/mensa/v1` holds the API: `EventService`, `ContentService`,
-`MembershipService`, `NewsletterService` and `MembershipVerifierService`. The
+`MembershipService`, `NewsletterService`, `MembershipVerifierService` and
+`SearchService`. The
 generated code under `src/gen` is committed; CI regenerates it and fails on a
 diff. `test/proto/contract.test.ts` walks the generated descriptors and holds
 the rules a handler cannot be trusted to keep:
@@ -309,6 +310,30 @@ by the handler for a precise answer, and by the database (`0007`).
   changes no group or account there. The list holds the latest 50 rejections,
   with no paging (`MAX_REJECTED_LISTED`); when it is full the site says
   "Showing the latest 50", so an older one is never hidden without a word.
+- **Erasing a sign-up record, and correcting a number** (PROFILE-ERASE,
+  `src/membership/service.ts`, migration `0036`): the Admin alone, never on
+  their own sign-up. `ListSignupRecords` lists the decided sign-ups not yet
+  erased. `EraseSignup` erases a person's record when they ask: the display
+  name, the email, the first and last name and the membership number of every
+  decided sign-up of theirs, with what the membership check reported (the
+  local group and the first-name answer, `0033`) and any fresh check. The
+  check's outcome and date, the date and the decision stay, an approved
+  member's account is removed with it, and a pending sign-up is decided first.
+  `CorrectMembershipNumber` is the one way a stored number changes: the
+  number is checked as at sign-up, and the reason is one of three fixed
+  choices (typed wrong at sign-up, the member's card shows a different number,
+  Mensa issued a new number), kept in the audit log as its code with who and
+  when. There is no free text, so the log never holds a number or a name. A
+  number already on another sign-up that is waiting or approved is refused.
+- **Removing a member** (`RemoveMember`): the removal erases the first name,
+  the last name, the membership number and what the check reported (the
+  local group and the first-name answer, and any fresh check, `0033`) on
+  every decided sign-up of the member, a reopened earlier one included, in
+  the same statement (a trigger of
+  `0036`), audited by each sign-up's id. A person removed while still waiting
+  is rejected and keeps what was typed, until the Admin erases it on request.
+  `0036` itself erased the members removed before it. Each erasure analyses
+  the table again, so `pg_stats` holds no erased value.
 
 ## Seeding the calendar and roster
 
@@ -952,8 +977,12 @@ own transaction (0032), before the worker has made the next copy.
 
 When it runs: after each regeneration run that finished, and in a sweep
 after each drain. Each step deletes every row whose copy its audience is
-served no longer, or whose file it may not open (`search_page_sweep`), so a
-withdrawn or re-scoped item's text is gone a drain later. From each boot it
+served no longer, or whose file is not one the public or members may open at
+all: an item not published, officers-only or no longer live, an edition not
+published (`search_page_sweep`, which asks `search_page_servable`). It does
+not ask whether a mark or the policy hides the file from that audience
+(`search_file_servable`): the page writer refuses those, and the search
+refuses any such row it meets (below). From each boot it
 also reads each served copy with no rows at this `TEXT_VERSION`
 (`search_page_lacking`, 0034), ten copies a step. Raising `TEXT_VERSION` reads
 every copy again. A reading that fails writes and deletes nothing, and is
@@ -968,6 +997,68 @@ item has its put refused. After each batch it re-records, the backfill calls
 audience is served a copy of and may open, but that has no rows of that copy,
 is queued again, without marking its copies stale. The run finds its copies
 made and indexes them.
+
+### Searching the index (ARCHIVE-SEARCH S3)
+
+`SearchService.Search` (`proto/nwfl/mensa/v1/search.proto`, `src/search/`)
+answers a query with ten hits a page: pages of issues and published items.
+
+- **Audience.** From the verified caller only; the request has no such
+  field. No token reads the public tables. A member or an officer reads the
+  members tables; officers have none of their own.
+- **What is a hit** (`sql.ts`). A row counts only while the publication
+  ledger's current output for its subject and that audience is the row's own
+  sha, and, for a page, the ledger says the audience is served a copy. Its
+  item must be the live version of a published item that is not
+  officers-only, or its file a published edition's. For members, an issue's
+  hits come from the members file alone.
+- **The lens** (`service.ts`). Each hit is then put to the lens as the served
+  reads put it (`servableFile`, `itemHidden`, `slugFor`). A hit it hides is
+  left out before the page is cut, so neither a page's length nor `has_more`
+  says that something withheld matched.
+- **Current now, not only when recorded** (`service.ts`). The ledger's row
+  can outlive what it describes: a deploy that changes the lens or the
+  engine, or a mark or policy cell written by SQL with no re-record. So a
+  page counts only while the copy its audience is served now is ready and is
+  the copy (by its sha) the row was read from, under this `TEXT_VERSION`; an
+  item only while a render of its version now is the row's own sha. This
+  check reads no re-record stamp, so a reset `rerecord_seq` makes no row a
+  hit.
+- **Stale rows cost nothing to refuse** (`sql.ts`). A row is no row of the
+  statement while its item has an active mark, in a category the audience is
+  not shown, written after the row (after the version's last re-record for
+  an item, 0035 `version_rerecorded.at`; after the file's newest ready copy
+  for a page, an edition's file taking the marks of every item it prints).
+  Nor is an item's row while its version has not been re-recorded since the
+  last write to a policy cell (0032 `version_rerecorded.seq` against
+  `policy_change_epoch`): a cell written by SQL, or by the app role through
+  `redaction_propose`, re-records nothing. No live check runs for such a
+  row, so a search's time does not say that a word it withholds matched.
+  This holds while the stamps rise. An owner who resets `rerecord_seq`, or
+  a ledger head stamp ahead of the clock (two transactions then share a
+  stamp), can let such a row reach the live check again (time only; the
+  check still refuses it) or keep a current one out, never make it a hit.
+  No role the app or the worker holds can do either.
+- **How stale rows come back.** The worker's boot sweep makes and reads each
+  copy of a new engine or `TEXT_VERSION`. The boot backfill renders every
+  published item for both audiences and re-records each whose render is not
+  its ledger row's output (a lens change, bumped or not, or a mark or cell
+  written by SQL), then each not re-recorded since a policy cell was last
+  written. Until then such an item is not found; after a cell written
+  outside the API that is until the next boot.
+- **Snippets.** `ts_headline` over the row's own text, for the page answered
+  only. The words found sit between U+E000 and U+E001; the text is plain,
+  never markup.
+- **Limits** (`query.ts`, `limits.ts`). 2 to 100 characters after trimming
+  and NFKC, at most 8 words, pages 1 to 10. Ten searches a second with a
+  burst of twenty and four at once, for the whole API, else
+  `RESOURCE_EXHAUSTED`. One read-only snapshot whose statements end after two
+  seconds (`DEADLINE_EXCEEDED`).
+- **Query language.** `websearch_to_tsquery`: words, a quoted phrase, `or`
+  and a leading hyphen. No prefix or wildcard. A query of stop words only,
+  or one that only leaves words out, finds nothing.
+- **Log.** One line a search: audience, query length, word count, hits and
+  milliseconds. Never the query. No audit row.
 
 ### The api-gate check
 
@@ -1010,13 +1101,17 @@ The rules the database itself enforces:
   version is never deleted;
 - a member's home has no street address, city or link; a `.docx` is
   officers-only; an edition's hosted PDF is a public file of that edition;
-- a sign-up keeps the first name, last name and membership number it typed in
-  every state (0028); the number never changes once stored, for any role, and
-  the names change only on an approved sign-up, the member's profile;
-  `affiliate` needs a recorded grant;
+- a sign-up keeps the first name, last name and membership number it typed
+  (0028) until a member's account is removed, which erases them from every
+  decided sign-up of that person, or the Admin erases
+  the record whole (0036); the number changes only by the Admin's correction,
+  with its audit row, and the names change only on an approved sign-up, the
+  member's profile; `affiliate` needs a recorded grant;
 - a decided sign-up keeps its decision (0009); only a rejected one can be
   reopened, by whom and when recorded together, and a reopened row never
-  changes again (0026). A person has one sign-up at most that is not
+  changes again but to be erased (0026, 0036). An erased row holds no name,
+  number or email, and changes no more, but that a rejected one can still be
+  reopened. A person has one sign-up at most that is not
   reopened, and an account row is deleted only as a reopening deletes it: a
   rejection's closed account (removed, never approved, granted or checked).
   A sign-up row is never deleted: the app role holds no DELETE on it, and a
@@ -1026,8 +1121,11 @@ Accepted residual risks, with no code against them:
 
 - The schema owner can disable a trigger or drop a constraint. The migrator
   role runs migrations only; the service never connects as it.
-- A deleted sign-up's membership number still exists in Postgres WAL and in
-  backups until they age out; pg-nwfl's backup retention bounds how long.
+- A deleted or erased sign-up's names, number and email still exist in dead
+  row versions until vacuum, in Postgres WAL and in backups until they age
+  out; pg-nwfl's backup retention (fc-infra `tenants/nwfl/pg-nwfl.yaml`, `retentionPolicy: "3m"`, a daily base backup) bounds how long: about three months.
+  The planner's statistics (pg_stats, which the app role reads) are
+  refreshed by every erasure (0036), so they hold none of it.
 - Free-text fields (an event's detail, a send-back note) could hold someone's
   contact details if an officer types them. The approval screens for members
   have no notes field at all.

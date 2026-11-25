@@ -20,6 +20,8 @@ inputs:
       # MACHINE-ROUTE: the two services the site forwards for the machine clients (server/machine-route.mjs).
       - ../api/proto/nwfl/mensa/v1/link_check.proto
       - ../api/proto/nwfl/mensa/v1/newsletter.proto
+      # ARCHIVE-SEARCH: the archive search, one read; the API picks the index from the reader's token.
+      - ../api/proto/nwfl/mensa/v1/search.proto
 plugins:
   - local: protoc-gen-es
     out: src/gen
